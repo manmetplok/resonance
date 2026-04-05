@@ -3,6 +3,7 @@
 pub type TrackId = u64;
 pub type ClipId = u64;
 pub type SamplePos = u64;
+pub type PluginInstanceId = u64;
 
 /// Commands sent from the GUI to the audio engine.
 #[derive(Debug, Clone)]
@@ -55,6 +56,15 @@ pub enum AudioCommand {
     SetMetronomeEnabled {
         enabled: bool,
     },
+    AddPlugin {
+        track_id: TrackId,
+        clap_file_path: String,
+        clap_plugin_id: String,
+    },
+    RemovePlugin {
+        track_id: TrackId,
+        instance_id: PluginInstanceId,
+    },
 }
 
 /// Events sent from the audio engine back to the GUI.
@@ -101,6 +111,15 @@ pub enum AudioEvent {
         duration_samples: u64,
         name: String,
     },
+    PluginAdded {
+        track_id: TrackId,
+        instance_id: PluginInstanceId,
+        plugin_name: String,
+    },
+    PluginRemoved {
+        track_id: TrackId,
+        instance_id: PluginInstanceId,
+    },
 }
 
 /// An audio clip stored in memory.
@@ -137,6 +156,8 @@ pub struct Track {
     pub name: String,
     pub record_armed: bool,
     pub input_device_name: Option<String>,
+    /// Ordered list of plugin instance IDs forming the insert chain.
+    pub plugin_ids: Vec<PluginInstanceId>,
 }
 
 impl Track {
@@ -148,6 +169,7 @@ impl Track {
             name,
             record_armed: false,
             input_device_name: None,
+            plugin_ids: Vec::new(),
         }
     }
 }
@@ -165,6 +187,14 @@ impl std::fmt::Display for InputDeviceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.description)
     }
+}
+
+/// Describes a plugin available in a .clap bundle.
+#[derive(Debug, Clone)]
+pub struct PluginDescInfo {
+    pub id: String,
+    pub name: String,
+    pub vendor: String,
 }
 
 /// Tempo and time signature state.

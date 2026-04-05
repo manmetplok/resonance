@@ -40,6 +40,14 @@ pub struct TrackState {
     pub order: usize,
     pub record_armed: bool,
     pub input_device_name: Option<String>,
+    pub plugins: Vec<PluginSlotState>,
+}
+
+/// GUI-side plugin instance state.
+#[derive(Debug, Clone)]
+pub struct PluginSlotState {
+    pub instance_id: PluginInstanceId,
+    pub plugin_name: String,
 }
 
 /// GUI-side clip state.
@@ -76,6 +84,9 @@ enum Message {
     ToggleMetronome,
     CycleTimeSignature,
     ScrollY(f32),
+    AddPluginToTrack(TrackId),
+    PluginFileSelected(TrackId, Option<String>),
+    RemovePluginFromTrack(TrackId, PluginInstanceId),
 }
 
 fn main() -> iced::Result {
@@ -254,6 +265,34 @@ impl Resonance {
                     denominator: den,
                 });
             }
+            Message::AddPluginToTrack(track_id) => {
+                return iced::Task::perform(
+                    async move {
+                        let result = rfd::AsyncFileDialog::new()
+                            .add_filter("CLAP Plugin", &["clap"])
+                            .set_title("Select CLAP Plugin")
+                            .pick_file()
+                            .await;
+                        let path = result.map(|f| f.path().to_string_lossy().to_string());
+                        (track_id, path)
+                    },
+                    move |(tid, path)| Message::PluginFileSelected(tid, path),
+                );
+            }
+            Message::PluginFileSelected(track_id, Some(path)) => {
+                self.engine.send(AudioCommand::AddPlugin {
+                    track_id,
+                    clap_file_path: path,
+                    clap_plugin_id: String::new(), // auto-select first plugin
+                });
+            }
+            Message::PluginFileSelected(_, None) => {}
+            Message::RemovePluginFromTrack(track_id, instance_id) => {
+                self.engine.send(AudioCommand::RemovePlugin {
+                    track_id,
+                    instance_id,
+                });
+            }
             Message::ScrollY(delta) => {
                 self.scroll_offset_y = (self.scroll_offset_y + delta).max(0.0);
                 // Clamp to max content height
@@ -303,6 +342,7 @@ impl Resonance {
                     order,
                     record_armed: false,
                     input_device_name: None,
+                    plugins: Vec::new(),
                 });
             }
             AudioEvent::TrackRemoved { track_id } => {
@@ -356,6 +396,26 @@ impl Resonance {
                     name,
                 });
                 self.recording = false;
+            }
+            AudioEvent::PluginAdded {
+                track_id,
+                instance_id,
+                plugin_name,
+            } => {
+                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                    track.plugins.push(PluginSlotState {
+                        instance_id,
+                        plugin_name,
+                    });
+                }
+            }
+            AudioEvent::PluginRemoved {
+                track_id,
+                instance_id,
+            } => {
+                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                    track.plugins.retain(|p| p.instance_id != instance_id);
+                }
             }
         }
     }
@@ -681,6 +741,37 @@ impl Resonance {
             .align_y(alignment::Vertical::Center);
             content = content.push(clip_row);
         }
+
+        // Plugin chain with remove buttons + add button
+        for plugin in &track.plugins {
+            let pname: String = if plugin.plugin_name.chars().count() > 12 {
+                let mut s: String = plugin.plugin_name.chars().take(10).collect();
+                s.push_str("..");
+                s
+            } else {
+                plugin.plugin_name.clone()
+            };
+            let track_id = track.id;
+            let pid = plugin.instance_id;
+            let plugin_del = button(text("×").size(9).color(theme::TEXT_DIM))
+                .on_press(Message::RemovePluginFromTrack(track_id, pid))
+                .style(|_theme, status| theme::small_button_style(status))
+                .padding(1);
+            let plugin_row = row![
+                text(pname).size(9).color(theme::ACCENT),
+                Space::with_width(Length::Fill),
+                plugin_del,
+            ]
+            .spacing(2)
+            .align_y(alignment::Vertical::Center);
+            content = content.push(plugin_row);
+        }
+
+        let fx_btn = button(text("+ FX").size(10).color(theme::TEXT_DIM))
+            .on_press(Message::AddPluginToTrack(track.id))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(2);
+        content = content.push(fx_btn);
 
         // Input device picker (shown when track is record-armed)
         if track.record_armed && !self.input_devices.is_empty() {
