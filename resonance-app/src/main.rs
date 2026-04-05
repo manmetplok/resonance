@@ -28,6 +28,7 @@ struct Resonance {
     time_sig_num: u8,
     time_sig_den: u8,
     metronome_enabled: bool,
+    available_plugins: Vec<ScannedPlugin>,
 }
 
 /// GUI-side track state.
@@ -84,8 +85,7 @@ enum Message {
     ToggleMetronome,
     CycleTimeSignature,
     ScrollY(f32),
-    AddPluginToTrack(TrackId),
-    PluginFileSelected(TrackId, Option<String>),
+    AddPluginToTrack(TrackId, ScannedPlugin),
     RemovePluginFromTrack(TrackId, PluginInstanceId),
 }
 
@@ -101,8 +101,9 @@ impl Resonance {
     fn new() -> (Self, iced::Task<Message>) {
         let engine = AudioEngine::new().expect("Failed to initialize audio engine");
 
-        // Request input device list on startup
+        // Request input device list and plugin scan on startup
         engine.send(AudioCommand::ListInputDevices);
+        engine.send(AudioCommand::ScanPlugins);
 
         let app = Self {
             engine,
@@ -123,6 +124,7 @@ impl Resonance {
             time_sig_num: 4,
             time_sig_den: 4,
             metronome_enabled: false,
+            available_plugins: Vec::new(),
         };
 
         (app, iced::Task::none())
@@ -265,28 +267,13 @@ impl Resonance {
                     denominator: den,
                 });
             }
-            Message::AddPluginToTrack(track_id) => {
-                return iced::Task::perform(
-                    async move {
-                        let result = rfd::AsyncFileDialog::new()
-                            .add_filter("CLAP Plugin", &["clap"])
-                            .set_title("Select CLAP Plugin")
-                            .pick_file()
-                            .await;
-                        let path = result.map(|f| f.path().to_string_lossy().to_string());
-                        (track_id, path)
-                    },
-                    move |(tid, path)| Message::PluginFileSelected(tid, path),
-                );
-            }
-            Message::PluginFileSelected(track_id, Some(path)) => {
+            Message::AddPluginToTrack(track_id, plugin) => {
                 self.engine.send(AudioCommand::AddPlugin {
                     track_id,
-                    clap_file_path: path,
-                    clap_plugin_id: String::new(), // auto-select first plugin
+                    clap_file_path: plugin.clap_file_path,
+                    clap_plugin_id: plugin.clap_plugin_id,
                 });
             }
-            Message::PluginFileSelected(_, None) => {}
             Message::RemovePluginFromTrack(track_id, instance_id) => {
                 self.engine.send(AudioCommand::RemovePlugin {
                     track_id,
@@ -416,6 +403,9 @@ impl Resonance {
                 if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
                     track.plugins.retain(|p| p.instance_id != instance_id);
                 }
+            }
+            AudioEvent::PluginsScanned { plugins } => {
+                self.available_plugins = plugins;
             }
         }
     }
@@ -767,11 +757,18 @@ impl Resonance {
             content = content.push(plugin_row);
         }
 
-        let fx_btn = button(text("+ FX").size(10).color(theme::TEXT_DIM))
-            .on_press(Message::AddPluginToTrack(track.id))
-            .style(|_theme, status| theme::small_button_style(status))
-            .padding(2);
-        content = content.push(fx_btn);
+        if !self.available_plugins.is_empty() {
+            let track_id = track.id;
+            let fx_picker = pick_list(
+                self.available_plugins.clone(),
+                None::<ScannedPlugin>,
+                move |plugin: ScannedPlugin| Message::AddPluginToTrack(track_id, plugin),
+            )
+            .placeholder("+ FX")
+            .text_size(10)
+            .width(Length::Fill);
+            content = content.push(fx_picker);
+        }
 
         // Input device picker (shown when track is record-armed)
         if track.record_armed && !self.input_devices.is_empty() {
