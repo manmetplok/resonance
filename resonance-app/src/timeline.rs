@@ -5,6 +5,8 @@ use iced::{mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 use crate::theme;
 use crate::{ClipState, TrackState};
 
+use resonance_audio::types::TrackId;
+
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug, Clone)]
 pub struct TimelineCanvas {
@@ -14,6 +16,7 @@ pub struct TimelineCanvas {
     pub sample_rate: u32,
     pub zoom: f32,
     pub scroll_offset: f32,
+    pub recording_tracks: Vec<TrackId>,
 }
 
 impl<Message> canvas::Program<Message> for TimelineCanvas {
@@ -44,7 +47,7 @@ impl<Message> canvas::Program<Message> for TimelineCanvas {
         let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
         sorted_tracks.sort_by_key(|t| t.order);
 
-        for (i, _track) in sorted_tracks.iter().enumerate() {
+        for (i, track) in sorted_tracks.iter().enumerate() {
             let y = ruler_height + i as f32 * theme::TRACK_HEIGHT;
             let bg = if i % 2 == 0 {
                 theme::BG
@@ -56,6 +59,19 @@ impl<Message> canvas::Program<Message> for TimelineCanvas {
                 Size::new(bounds.width, theme::TRACK_HEIGHT),
                 bg,
             );
+
+            // Recording overlay on armed tracks
+            if self.recording_tracks.contains(&track.id) {
+                let playhead_seconds = self.playhead as f32 / self.sample_rate as f32;
+                let playhead_x = playhead_seconds * self.zoom - self.scroll_offset;
+                if playhead_x > 0.0 {
+                    frame.fill_rectangle(
+                        Point::new(0.0_f32.max(-self.scroll_offset), y),
+                        Size::new(playhead_x.min(bounds.width), theme::TRACK_HEIGHT),
+                        Color::from_rgba(0.8, 0.2, 0.2, 0.08),
+                    );
+                }
+            }
 
             // Track separator line
             frame.fill_rectangle(

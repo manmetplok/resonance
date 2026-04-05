@@ -1,4 +1,4 @@
-use iced::widget::{button, canvas, column, container, row, scrollable, slider, text, Space};
+use iced::widget::{button, canvas, column, container, pick_list, row, scrollable, slider, text, Space};
 use iced::{alignment, Element, Font, Length, Size, Subscription};
 use resonance_audio::types::*;
 use resonance_audio::AudioEngine;
@@ -15,10 +15,13 @@ struct Resonance {
     clips: Vec<ClipState>,
     playhead: u64,
     playing: bool,
+    recording: bool,
     sample_rate: u32,
     zoom: f32,          // pixels per second
     scroll_offset: f32, // horizontal scroll in pixels
     next_track_order: usize,
+    input_devices: Vec<InputDeviceInfo>,
+    default_input_device_index: Option<usize>,
 }
 
 /// GUI-side track state.
@@ -29,6 +32,8 @@ pub struct TrackState {
     pub volume: f32,
     pub muted: bool,
     pub order: usize,
+    pub record_armed: bool,
+    pub input_device_index: Option<usize>,
 }
 
 /// GUI-side clip state.
@@ -59,6 +64,8 @@ enum Message {
     ZoomIn,
     ZoomOut,
     Tick,
+    ToggleRecordArm(TrackId),
+    SetTrackInputDevice(TrackId, Option<usize>),
 }
 
 fn main() -> iced::Result {
@@ -73,16 +80,22 @@ impl Resonance {
     fn new() -> (Self, iced::Task<Message>) {
         let engine = AudioEngine::new().expect("Failed to initialize audio engine");
 
+        // Request input device list on startup
+        engine.send(AudioCommand::ListInputDevices);
+
         let app = Self {
             engine,
             tracks: Vec::new(),
             clips: Vec::new(),
             playhead: 0,
             playing: false,
+            recording: false,
             sample_rate: 44100,
             zoom: 100.0,
             scroll_offset: 0.0,
             next_track_order: 0,
+            input_devices: Vec::new(),
+            default_input_device_index: None,
         };
 
         (app, iced::Task::none())
@@ -170,6 +183,24 @@ impl Resonance {
             Message::ZoomOut => {
                 self.zoom = (self.zoom / 1.5).max(10.0);
             }
+            Message::ToggleRecordArm(id) => {
+                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
+                    track.record_armed = !track.record_armed;
+                    self.engine.send(AudioCommand::SetTrackRecordArm {
+                        track_id: id,
+                        armed: track.record_armed,
+                    });
+                }
+            }
+            Message::SetTrackInputDevice(id, device_index) => {
+                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
+                    track.input_device_index = device_index;
+                    self.engine.send(AudioCommand::SetTrackInputDevice {
+                        track_id: id,
+                        device_index,
+                    });
+                }
+            }
             Message::Tick => {
                 while let Some(event) = self.engine.try_recv() {
                     self.handle_engine_event(event);
@@ -207,6 +238,8 @@ impl Resonance {
                     volume: 1.0,
                     muted: false,
                     order,
+                    record_armed: false,
+                    input_device_index: None,
                 });
             }
             AudioEvent::TrackRemoved { track_id } => {
@@ -228,10 +261,37 @@ impl Resonance {
             }
             AudioEvent::Stopped => {
                 self.playing = false;
+                self.recording = false;
                 self.playhead = 0;
             }
             AudioEvent::Error(e) => {
                 eprintln!("Audio engine error: {}", e);
+            }
+            AudioEvent::InputDevicesListed {
+                devices,
+                default_index,
+            } => {
+                self.input_devices = devices;
+                self.default_input_device_index = default_index;
+            }
+            AudioEvent::RecordingStarted => {
+                self.recording = true;
+            }
+            AudioEvent::RecordingFinished {
+                clip_id,
+                track_id,
+                start_sample,
+                duration_samples,
+                name,
+            } => {
+                self.clips.push(ClipState {
+                    id: clip_id,
+                    track_id,
+                    start_sample,
+                    duration_samples,
+                    name,
+                });
+                self.recording = false;
             }
         }
     }
@@ -298,6 +358,13 @@ impl Resonance {
             .on_press(Message::AddTrack)
             .style(|_theme, status| theme::transport_button_style(status));
 
+        // Recording indicator
+        let rec_indicator = if self.recording {
+            text("● REC").size(14).color(theme::RECORD_RED)
+        } else {
+            text("").size(14)
+        };
+
         let transport_row = row![
             Space::with_width(10),
             skip_back,
@@ -306,6 +373,8 @@ impl Resonance {
             skip_fwd,
             Space::with_width(20),
             time_display,
+            Space::with_width(10),
+            rec_indicator,
             Space::with_width(Length::Fill),
             zoom_out,
             text("Zoom").size(12).color(theme::TEXT_DIM),
@@ -383,6 +452,24 @@ impl Resonance {
     fn view_track_header(&self, track: TrackState) -> Element<'_, Message> {
         let name = text(track.name.clone()).size(13).color(theme::TEXT);
 
+        // Record arm button
+        let rec_color = if track.record_armed {
+            theme::RECORD_RED
+        } else {
+            theme::TEXT_DIM
+        };
+        let armed = track.record_armed;
+        let rec_btn = button(text("R").size(11).color(rec_color))
+            .on_press(Message::ToggleRecordArm(track.id))
+            .style(move |_theme, status| {
+                if armed {
+                    theme::record_armed_button_style(status)
+                } else {
+                    theme::small_button_style(status)
+                }
+            })
+            .padding(2);
+
         let mute_color = if track.muted {
             theme::ACCENT
         } else {
@@ -415,23 +502,63 @@ impl Resonance {
             .style(|_theme, status| theme::small_button_style(status))
             .padding(2);
 
-        let top_row = row![name, Space::with_width(Length::Fill), mute_btn, import_btn, del_btn]
-            .spacing(4)
-            .align_y(alignment::Vertical::Center);
+        let top_row = row![
+            name,
+            Space::with_width(Length::Fill),
+            rec_btn,
+            mute_btn,
+            import_btn,
+            del_btn
+        ]
+        .spacing(4)
+        .align_y(alignment::Vertical::Center);
 
         let bottom_row = row![vol_slider, vol_text]
             .spacing(4)
             .align_y(alignment::Vertical::Center);
 
-        let content = column![top_row, bottom_row].spacing(4).padding(6);
+        let mut content = column![top_row, bottom_row].spacing(4).padding(6);
+
+        // Input device picker (shown when track is record-armed)
+        if track.record_armed && !self.input_devices.is_empty() {
+            let selected = track
+                .input_device_index
+                .and_then(|idx| self.input_devices.iter().find(|d| d.index == idx))
+                .cloned();
+
+            let track_id = track.id;
+            let device_picker = pick_list(
+                self.input_devices.clone(),
+                selected,
+                move |device: InputDeviceInfo| {
+                    Message::SetTrackInputDevice(track_id, Some(device.index))
+                },
+            )
+            .placeholder("Select input...")
+            .text_size(10)
+            .width(Length::Fill);
+
+            content = content.push(device_picker);
+        }
+
+        let bg = if track.record_armed {
+            theme::PANEL_ARMED
+        } else {
+            theme::PANEL_DARK
+        };
+        let border_color = if track.record_armed {
+            theme::RECORD_RED
+        } else {
+            theme::SEPARATOR
+        };
 
         container(content)
             .width(Length::Fill)
             .height(theme::TRACK_HEIGHT)
-            .style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::PANEL_DARK)),
+            .style(move |_theme| container::Style {
+                background: Some(iced::Background::Color(bg)),
                 border: iced::Border {
-                    color: theme::SEPARATOR,
+                    color: border_color,
                     width: 0.5,
                     radius: 0.0.into(),
                 },
@@ -441,6 +568,16 @@ impl Resonance {
     }
 
     fn view_timeline(&self) -> Element<'_, Message> {
+        let recording_tracks: Vec<TrackId> = if self.recording {
+            self.tracks
+                .iter()
+                .filter(|t| t.record_armed)
+                .map(|t| t.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         let timeline_data = TimelineCanvas {
             tracks: self.tracks.clone(),
             clips: self.clips.clone(),
@@ -448,6 +585,7 @@ impl Resonance {
             sample_rate: self.sample_rate,
             zoom: self.zoom,
             scroll_offset: self.scroll_offset,
+            recording_tracks,
         };
 
         canvas(timeline_data)
