@@ -39,7 +39,7 @@ static PIPEWIRE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 impl AudioEngine {
     /// Create and start the audio engine. Returns the engine handle.
-    pub fn new() -> Result<Self, String> {
+    pub fn new(buffer_size: u32) -> Result<Self, String> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -83,7 +83,7 @@ impl AudioEngine {
 
         // Build the cpal stream
         let mut stream_config: cpal::StreamConfig = config.into();
-        stream_config.buffer_size = cpal::BufferSize::Fixed(256);
+        stream_config.buffer_size = cpal::BufferSize::Fixed(buffer_size);
         let audio_sample_rate = sample_rate;
 
         // Pre-allocated per-track processing buffers (moved into audio callback closure)
@@ -148,6 +148,7 @@ impl AudioEngine {
                     plugins_ctrl,
                     monitor_prod_audio,
                     sample_rate,
+                    buffer_size,
                 );
             })
             .map_err(|e| format!("Failed to spawn engine thread: {}", e))?;
@@ -246,6 +247,7 @@ fn build_input_stream(
     shared: Arc<SharedState>,
     mut rec_producer: Option<ringbuf::HeapProd<f32>>,
     mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
+    buffer_size: u32,
 ) -> Result<(cpal::Stream, u32, u16), String> {
     let _env_guard = PIPEWIRE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -265,7 +267,7 @@ fn build_input_stream(
     let sample_rate = config.sample_rate().0;
     let channels = config.channels();
     let mut stream_config: cpal::StreamConfig = config.into();
-    stream_config.buffer_size = cpal::BufferSize::Fixed(256);
+    stream_config.buffer_size = cpal::BufferSize::Fixed(buffer_size);
 
     let stream = device
         .build_input_stream(
@@ -400,6 +402,7 @@ fn engine_thread(
     plugins: Arc<parking_lot::RwLock<HashMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
     monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     sample_rate: u32,
+    buffer_size: u32,
 ) {
     let mut next_track_id: TrackId = 1;
     let mut next_clip_id: ClipId = 1;
@@ -463,7 +466,7 @@ fn engine_thread(
                         }
                         shared.recording.store(true, Ordering::SeqCst);
 
-                        match build_input_stream(source_name.as_deref(), Arc::clone(&shared), Some(prod), Arc::clone(&monitor_prod)) {
+                        match build_input_stream(source_name.as_deref(), Arc::clone(&shared), Some(prod), Arc::clone(&monitor_prod), buffer_size) {
                             Ok((stream, in_sr, in_ch)) => {
                                 _input_stream = Some(stream);
                                 input_sample_rate = in_sr;
@@ -654,6 +657,7 @@ fn engine_thread(
                             Arc::clone(&shared),
                             None,
                             Arc::clone(&monitor_prod),
+                            buffer_size,
                         ) {
                             Ok((stream, in_sr, in_ch)) => {
                                 _input_stream = Some(stream);
