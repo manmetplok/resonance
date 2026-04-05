@@ -21,7 +21,7 @@ struct Resonance {
     scroll_offset: f32, // horizontal scroll in pixels
     next_track_order: usize,
     input_devices: Vec<InputDeviceInfo>,
-    default_input_device_index: Option<usize>,
+    default_input_device_name: Option<String>,
 }
 
 /// GUI-side track state.
@@ -33,7 +33,7 @@ pub struct TrackState {
     pub muted: bool,
     pub order: usize,
     pub record_armed: bool,
-    pub input_device_index: Option<usize>,
+    pub input_device_name: Option<String>,
 }
 
 /// GUI-side clip state.
@@ -65,7 +65,7 @@ enum Message {
     ZoomOut,
     Tick,
     ToggleRecordArm(TrackId),
-    SetTrackInputDevice(TrackId, Option<usize>),
+    SetTrackInputDevice(TrackId, Option<String>),
 }
 
 fn main() -> iced::Result {
@@ -95,7 +95,7 @@ impl Resonance {
             scroll_offset: 0.0,
             next_track_order: 0,
             input_devices: Vec::new(),
-            default_input_device_index: None,
+            default_input_device_name: None,
         };
 
         (app, iced::Task::none())
@@ -192,12 +192,12 @@ impl Resonance {
                     });
                 }
             }
-            Message::SetTrackInputDevice(id, device_index) => {
+            Message::SetTrackInputDevice(id, device_name) => {
                 if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
-                    track.input_device_index = device_index;
+                    track.input_device_name = device_name.clone();
                     self.engine.send(AudioCommand::SetTrackInputDevice {
                         track_id: id,
-                        device_index,
+                        device_name,
                     });
                 }
             }
@@ -239,7 +239,7 @@ impl Resonance {
                     muted: false,
                     order,
                     record_armed: false,
-                    input_device_index: None,
+                    input_device_name: None,
                 });
             }
             AudioEvent::TrackRemoved { track_id } => {
@@ -269,10 +269,10 @@ impl Resonance {
             }
             AudioEvent::InputDevicesListed {
                 devices,
-                default_index,
+                default_name,
             } => {
                 self.input_devices = devices;
-                self.default_input_device_index = default_index;
+                self.default_input_device_name = default_name;
             }
             AudioEvent::RecordingStarted => {
                 self.recording = true;
@@ -522,8 +522,9 @@ impl Resonance {
         // Input device picker (shown when track is record-armed)
         if track.record_armed && !self.input_devices.is_empty() {
             let selected = track
-                .input_device_index
-                .and_then(|idx| self.input_devices.iter().find(|d| d.index == idx))
+                .input_device_name
+                .as_ref()
+                .and_then(|name| self.input_devices.iter().find(|d| &d.name == name))
                 .cloned();
 
             let track_id = track.id;
@@ -531,7 +532,7 @@ impl Resonance {
                 self.input_devices.clone(),
                 selected,
                 move |device: InputDeviceInfo| {
-                    Message::SetTrackInputDevice(track_id, Some(device.index))
+                    Message::SetTrackInputDevice(track_id, Some(device.name))
                 },
             )
             .placeholder("Select input...")

@@ -42,7 +42,7 @@ pub enum AudioCommand {
     },
     SetTrackInputDevice {
         track_id: TrackId,
-        device_index: Option<usize>,
+        device_name: Option<String>,
     },
     ListInputDevices,
 }
@@ -75,7 +75,7 @@ pub enum AudioEvent {
     Error(String),
     InputDevicesListed {
         devices: Vec<InputDeviceInfo>,
-        default_index: Option<usize>,
+        default_name: Option<String>,
     },
     RecordingStarted,
     RecordingFinished {
@@ -120,7 +120,7 @@ pub struct Track {
     pub muted: bool,
     pub name: String,
     pub record_armed: bool,
-    pub input_device_index: Option<usize>,
+    pub input_device_name: Option<String>,
 }
 
 impl Track {
@@ -131,20 +131,22 @@ impl Track {
             muted: false,
             name,
             record_armed: false,
-            input_device_index: None,
+            input_device_name: None,
         }
     }
 }
 
-/// Describes an available audio input device.
+/// Describes an available audio input source (PipeWire/PulseAudio source).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputDeviceInfo {
-    pub index: usize,
+    /// PipeWire source name (e.g. "alsa_input.usb-...").
     pub name: String,
+    /// Human-readable description (e.g. "USB Microphone Analog Stereo").
+    pub description: String,
 }
 
 impl std::fmt::Display for InputDeviceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
+        write!(f, "{}", self.description)
     }
 }

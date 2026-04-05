@@ -139,41 +139,82 @@ impl AudioEngine {
     }
 }
 
-/// Enumerate available input devices. Returns (devices_list, default_device_index).
-fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<usize>) {
-    let host = cpal::default_host();
-    let default_name = host
-        .default_input_device()
-        .and_then(|d| d.name().ok());
-
+/// Enumerate available PipeWire/PulseAudio input sources via `pactl`.
+fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>) {
     let mut devices = Vec::new();
-    let mut default_index = None;
+    let mut default_name = None;
 
-    if let Ok(input_devices) = host.input_devices() {
-        for (i, device) in input_devices.enumerate() {
-            if let Ok(name) = device.name() {
-                if Some(&name) == default_name.as_ref() {
-                    default_index = Some(i);
+    // Get the default source name
+    if let Ok(output) = std::process::Command::new("pactl")
+        .args(["get-default-source"])
+        .output()
+    {
+        if output.status.success() {
+            default_name = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
+        }
+    }
+
+    // Get source names from short listing
+    let short_output = std::process::Command::new("pactl")
+        .args(["list", "sources", "short"])
+        .output();
+
+    // Get descriptions from full listing
+    let full_output = std::process::Command::new("pactl")
+        .args(["list", "sources"])
+        .output();
+
+    if let (Ok(short), Ok(full)) = (short_output, full_output) {
+        let short_text = String::from_utf8_lossy(&short.stdout);
+        let full_text = String::from_utf8_lossy(&full.stdout);
+
+        // Parse descriptions from full output (pairs of Name: and Description: lines)
+        let mut descriptions: HashMap<String, String> = HashMap::new();
+        let mut current_name = None;
+        for line in full_text.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = trimmed.strip_prefix("Name: ") {
+                current_name = Some(name.to_string());
+            } else if let Some(desc) = trimmed.strip_prefix("Description: ") {
+                if let Some(name) = current_name.take() {
+                    descriptions.insert(name, desc.to_string());
                 }
-                devices.push(InputDeviceInfo { index: i, name });
+            }
+        }
+
+        // Parse short listing for source names
+        for line in short_text.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 2 {
+                let name = parts[1].to_string();
+                let description = descriptions
+                    .get(&name)
+                    .cloned()
+                    .unwrap_or_else(|| name.clone());
+                devices.push(InputDeviceInfo { name, description });
             }
         }
     }
-    (devices, default_index)
+
+    (devices, default_name)
 }
 
 /// Build a cpal input stream that pushes samples into a ring buffer producer.
+/// Uses PIPEWIRE_NODE env var to route to the desired PipeWire source.
 fn build_input_stream(
-    device_index: usize,
+    source_name: Option<&str>,
     shared: Arc<SharedState>,
     mut producer: ringbuf::HeapProd<f32>,
 ) -> Result<(cpal::Stream, u32, u16), String> {
+    // Set PIPEWIRE_NODE to route CPAL's ALSA stream to the desired PipeWire source
+    if let Some(name) = source_name {
+        std::env::set_var("PIPEWIRE_NODE", name);
+    }
+
     let host = cpal::default_host();
     let device = host
-        .input_devices()
-        .map_err(|e| format!("Cannot list input devices: {}", e))?
-        .nth(device_index)
-        .ok_or_else(|| format!("Input device index {} not found", device_index))?;
+        .default_input_device()
+        .ok_or_else(|| "No input device found".to_string())?;
 
     let config = device
         .default_input_config()
@@ -201,6 +242,9 @@ fn build_input_stream(
     stream
         .play()
         .map_err(|e| format!("Failed to start input stream: {}", e))?;
+
+    // Clean up env var after stream is created
+    std::env::remove_var("PIPEWIRE_NODE");
 
     Ok((stream, sample_rate, channels))
 }
@@ -337,24 +381,20 @@ fn engine_thread(
                     shared.playing.store(true, Ordering::SeqCst);
 
                     // Check if any tracks are armed for recording
-                    let armed_tracks: Vec<(TrackId, Option<usize>)> = {
+                    let armed_tracks: Vec<(TrackId, Option<String>)> = {
                         let tracks_guard = tracks.read();
                         tracks_guard
                             .values()
                             .filter(|t| t.record_armed)
-                            .map(|t| (t.id, t.input_device_index))
+                            .map(|t| (t.id, t.input_device_name.clone()))
                             .collect()
                     };
 
                     if !armed_tracks.is_empty() {
-                        // Determine which input device to use
-                        let device_idx = armed_tracks
+                        // Determine which input source to use
+                        let source_name: Option<String> = armed_tracks
                             .iter()
-                            .find_map(|(_, idx)| *idx)
-                            .unwrap_or_else(|| {
-                                let (_, default_idx) = enumerate_input_devices();
-                                default_idx.unwrap_or(0)
-                            });
+                            .find_map(|(_, name)| name.clone());
 
                         // Create ring buffer: 10 seconds at 48kHz stereo
                         let ring_size = 48000 * 2 * 10;
@@ -362,7 +402,7 @@ fn engine_thread(
                         let (prod, cons) = ring.split();
                         ring_consumer = Some(cons);
 
-                        match build_input_stream(device_idx, Arc::clone(&shared), prod) {
+                        match build_input_stream(source_name.as_deref(), Arc::clone(&shared), prod) {
                             Ok((stream, in_sr, in_ch)) => {
                                 _input_stream = Some(stream);
                                 input_sample_rate = in_sr;
@@ -518,17 +558,17 @@ fn engine_thread(
                 }
                 AudioCommand::SetTrackInputDevice {
                     track_id,
-                    device_index,
+                    device_name,
                 } => {
                     if let Some(track) = tracks.write().get_mut(&track_id) {
-                        track.input_device_index = device_index;
+                        track.input_device_name = device_name;
                     }
                 }
                 AudioCommand::ListInputDevices => {
-                    let (devices, default_index) = enumerate_input_devices();
+                    let (devices, default_name) = enumerate_input_devices();
                     let _ = event_tx.send(AudioEvent::InputDevicesListed {
                         devices,
-                        default_index,
+                        default_name,
                     });
                 }
             },
