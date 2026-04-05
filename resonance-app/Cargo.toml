@@ -1,0 +1,9 @@
+[package]
+name = "resonance-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+resonance-audio = { path = "../resonance-audio" }
+iced = { version = "0.13", features = ["canvas", "wgpu", "tokio"] }
+rfd = "0.15"
