@@ -3,14 +3,6 @@
 use serde::Deserialize;
 use std::path::Path;
 
-fn null_as_empty_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<Vec<T>>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
-}
-
 use super::lstm::LstmModel;
 use super::wavenet::WaveNetModel;
 use super::NamInference;
@@ -24,21 +16,218 @@ struct NamFile {
     weights: Vec<f32>,
 }
 
-#[derive(Deserialize)]
+/// Internal WaveNet config used by the inference engine.
 pub struct WaveNetConfig {
     pub input_size: usize,
-    pub condition_size: usize,
     pub head_size: usize,
     pub channels: usize,
-    /// Number of layers per stack, e.g. [10, 10] = 2 stacks of 10 layers.
-    #[serde(deserialize_with = "null_as_empty_vec")]
-    pub layers: Vec<usize>,
+    /// Explicit dilations per stack, e.g. [[1,2,4,8,...], [1,2,4,8,...]].
+    pub dilations: Vec<Vec<usize>>,
     /// Head hidden layer sizes, e.g. [8].
-    #[serde(deserialize_with = "null_as_empty_vec")]
     pub head: Vec<usize>,
-    pub activation: String,
     pub gated: bool,
     pub head_bias: bool,
+}
+
+// -- Old NAM format (flat config with layer counts) --------------------------
+
+#[derive(Deserialize)]
+struct OldWaveNetConfig {
+    input_size: usize,
+    #[allow(dead_code)]
+    condition_size: usize,
+    head_size: usize,
+    channels: usize,
+    layers: Vec<usize>,
+    head: Vec<usize>,
+    #[allow(dead_code)]
+    activation: String,
+    gated: bool,
+    head_bias: bool,
+}
+
+impl OldWaveNetConfig {
+    fn into_config(self) -> WaveNetConfig {
+        let dilations = self
+            .layers
+            .iter()
+            .map(|&n| (0..n).map(|i| 1usize << i).collect())
+            .collect();
+        WaveNetConfig {
+            input_size: self.input_size,
+            head_size: self.head_size,
+            channels: self.channels,
+            dilations,
+            head: self.head,
+            gated: self.gated,
+            head_bias: self.head_bias,
+        }
+    }
+}
+
+// -- New NAM format (explicit layer array configs) ---------------------------
+
+#[derive(Deserialize)]
+struct NewLayerArrayConfig {
+    input_size: usize,
+    #[allow(dead_code)]
+    condition_size: usize,
+    #[allow(dead_code)]
+    head_size: usize,
+    channels: usize,
+    dilations: Vec<usize>,
+    #[serde(default)]
+    kernel_size: Option<usize>,
+    #[serde(default)]
+    kernel_sizes: Option<Vec<usize>>,
+    #[serde(default)]
+    gated: Option<bool>,
+    #[serde(default)]
+    gating_mode: Option<serde_json::Value>,
+    #[serde(default = "default_true")]
+    head_bias: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+struct NewHeadConfig {
+    channels: usize,
+    num_layers: usize,
+    out_channels: usize,
+}
+
+#[derive(Deserialize)]
+struct NewWaveNetConfig {
+    layers: Vec<NewLayerArrayConfig>,
+    head: Option<NewHeadConfig>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    head_scale: Option<f32>,
+}
+
+impl NewWaveNetConfig {
+    fn into_config(self) -> Result<WaveNetConfig, String> {
+        let first = self
+            .layers
+            .first()
+            .ok_or("WaveNet config has no layer arrays")?;
+
+        // Validate kernel sizes are 2 (the only size our inference engine supports).
+        for layer in &self.layers {
+            if let Some(ref ks) = layer.kernel_sizes {
+                if ks.iter().any(|&k| k != 2) {
+                    return Err(format!(
+                        "Unsupported kernel_sizes {:?} (only 2 is supported)",
+                        ks
+                    ));
+                }
+            }
+            if let Some(k) = layer.kernel_size {
+                if k != 2 {
+                    return Err(format!(
+                        "Unsupported kernel_size {} (only 2 is supported)",
+                        k
+                    ));
+                }
+            }
+        }
+
+        // All stacks must share the same channel count.
+        let channels = first.channels;
+        for (i, layer) in self.layers.iter().enumerate() {
+            if layer.channels != channels {
+                return Err(format!(
+                    "Layer array {} has {} channels, expected {} (mixed channel counts not supported)",
+                    i, layer.channels, channels
+                ));
+            }
+        }
+
+        // Determine gating mode. Check gating_mode first (new field), fall back to gated bool.
+        let gated = determine_gated(first)?;
+        for (i, layer) in self.layers.iter().enumerate().skip(1) {
+            if determine_gated(layer)? != gated {
+                return Err(format!(
+                    "Layer array {} has different gating than layer array 0 (mixed gating not supported)",
+                    i
+                ));
+            }
+        }
+
+        let dilations = self.layers.iter().map(|l| l.dilations.clone()).collect();
+
+        let (head, head_size) = match self.head {
+            Some(h) => {
+                let hidden = if h.num_layers > 0 {
+                    vec![h.channels; h.num_layers]
+                } else {
+                    vec![]
+                };
+                (hidden, h.out_channels)
+            }
+            None => (vec![], 1),
+        };
+
+        Ok(WaveNetConfig {
+            input_size: first.input_size,
+            head_size,
+            channels,
+            dilations,
+            head,
+            gated,
+            head_bias: first.head_bias,
+        })
+    }
+}
+
+/// Extract the boolean gated flag from a layer array config.
+fn determine_gated(layer: &NewLayerArrayConfig) -> Result<bool, String> {
+    if let Some(ref gm) = layer.gating_mode {
+        match gm {
+            serde_json::Value::String(s) => match s.as_str() {
+                "none" => Ok(false),
+                "gated" => Ok(true),
+                other => Err(format!("Unsupported gating_mode: {other}")),
+            },
+            serde_json::Value::Array(arr) => {
+                // All elements must be the same mode.
+                let first = arr
+                    .first()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("none");
+                if first != "gated" && first != "none" {
+                    return Err(format!("Unsupported gating_mode: {first}"));
+                }
+                for v in arr {
+                    if v.as_str().unwrap_or("none") != first {
+                        return Err(
+                            "Mixed per-layer gating modes not supported".into(),
+                        );
+                    }
+                }
+                Ok(first == "gated")
+            }
+            _ => Ok(false),
+        }
+    } else {
+        Ok(layer.gated.unwrap_or(false))
+    }
+}
+
+// -- Shared -----------------------------------------------------------------
+
+fn parse_wavenet_config(value: serde_json::Value) -> Result<WaveNetConfig, String> {
+    // Try old format first (flat config with integer layer counts).
+    if let Ok(old) = serde_json::from_value::<OldWaveNetConfig>(value.clone()) {
+        return Ok(old.into_config());
+    }
+    // Try new format (layer array config objects).
+    let new_cfg: NewWaveNetConfig =
+        serde_json::from_value(value).map_err(|e| format!("Invalid WaveNet config: {e}"))?;
+    new_cfg.into_config()
 }
 
 #[derive(Deserialize)]
@@ -89,8 +278,7 @@ pub fn load_model_from_file(path: &str) -> Result<Box<dyn NamInference>, String>
 
     match nam_file.architecture.as_str() {
         "WaveNet" => {
-            let config: WaveNetConfig = serde_json::from_value(nam_file.config)
-                .map_err(|e| format!("Invalid WaveNet config: {e}"))?;
+            let config = parse_wavenet_config(nam_file.config)?;
             let model = WaveNetModel::from_config_and_weights(config, &mut reader)?;
             if reader.remaining() > 0 {
                 nih_plug::nih_log!(

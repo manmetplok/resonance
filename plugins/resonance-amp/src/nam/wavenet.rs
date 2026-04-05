@@ -116,15 +116,14 @@ impl WaveNetModel {
         let input_bias = reader.read(ch)?;
 
         // Layers per stack
-        let mut stacks = Vec::with_capacity(config.layers.len());
-        let mut ring_buffers = Vec::with_capacity(config.layers.len());
+        let mut stacks = Vec::with_capacity(config.dilations.len());
+        let mut ring_buffers = Vec::with_capacity(config.dilations.len());
 
-        for &num_layers in &config.layers {
-            let mut layers = Vec::with_capacity(num_layers);
-            let mut rings = Vec::with_capacity(num_layers);
+        for stack_dilations in &config.dilations {
+            let mut layers = Vec::with_capacity(stack_dilations.len());
+            let mut rings = Vec::with_capacity(stack_dilations.len());
 
-            for layer_idx in 0..num_layers {
-                let dilation = 1 << layer_idx;
+            for &dilation in stack_dilations {
 
                 // Dilated convolution weights (kernel_size = 2)
                 // Stored as [out_channels, in_channels, kernel_size]
