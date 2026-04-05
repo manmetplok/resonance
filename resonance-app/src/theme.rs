@@ -69,6 +69,18 @@ pub const TRACK_LINE: Color = Color::from_rgb(
     0x22 as f32 / 255.0,
 );
 
+pub const RECORD_RED: Color = Color::from_rgb(
+    0xcc as f32 / 255.0,
+    0x33 as f32 / 255.0,
+    0x33 as f32 / 255.0,
+);
+
+pub const PANEL_ARMED: Color = Color::from_rgb(
+    0x1f as f32 / 255.0,
+    0x14 as f32 / 255.0,
+    0x14 as f32 / 255.0,
+);
+
 pub const TRACK_HEIGHT: f32 = 80.0;
 
 pub fn resonance_theme() -> Theme {
@@ -89,6 +101,25 @@ pub fn transport_button_style(status: button::Status) -> button::Style {
             color: SEPARATOR,
             width: 1.0,
             radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+pub fn record_armed_button_style(status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Color::from_rgb(0.35, 0.12, 0.12),
+        button::Status::Pressed => Color::from_rgb(0.25, 0.08, 0.08),
+        _ => Color::from_rgb(0.30, 0.10, 0.10),
+    };
+
+    button::Style {
+        background: Some(iced::Background::Color(bg)),
+        text_color: RECORD_RED,
+        border: iced::Border {
+            color: RECORD_RED,
+            width: 1.0,
+            radius: 2.0.into(),
         },
         ..Default::default()
     }

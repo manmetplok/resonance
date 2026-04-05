@@ -36,6 +36,15 @@ pub enum AudioCommand {
     RemoveTrack {
         track_id: TrackId,
     },
+    SetTrackRecordArm {
+        track_id: TrackId,
+        armed: bool,
+    },
+    SetTrackInputDevice {
+        track_id: TrackId,
+        device_index: Option<usize>,
+    },
+    ListInputDevices,
 }
 
 /// Events sent from the audio engine back to the GUI.
@@ -64,6 +73,18 @@ pub enum AudioEvent {
     },
     Stopped,
     Error(String),
+    InputDevicesListed {
+        devices: Vec<InputDeviceInfo>,
+        default_index: Option<usize>,
+    },
+    RecordingStarted,
+    RecordingFinished {
+        clip_id: ClipId,
+        track_id: TrackId,
+        start_sample: SamplePos,
+        duration_samples: u64,
+        name: String,
+    },
 }
 
 /// An audio clip stored in memory.
@@ -98,6 +119,8 @@ pub struct Track {
     pub volume: f32,
     pub muted: bool,
     pub name: String,
+    pub record_armed: bool,
+    pub input_device_index: Option<usize>,
 }
 
 impl Track {
@@ -107,6 +130,21 @@ impl Track {
             volume: 1.0,
             muted: false,
             name,
+            record_armed: false,
+            input_device_index: None,
         }
+    }
+}
+
+/// Describes an available audio input device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputDeviceInfo {
+    pub index: usize,
+    pub name: String,
+}
+
+impl std::fmt::Display for InputDeviceInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
     }
 }

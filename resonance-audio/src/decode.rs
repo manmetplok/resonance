@@ -118,7 +118,7 @@ fn to_stereo_interleaved(samples: &[f32], channels: usize) -> Vec<f32> {
 }
 
 /// Simple linear interpolation resampler for stereo interleaved audio.
-fn linear_resample(input: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
+pub fn linear_resample(input: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
     let source_frames = input.len() / 2;
     let ratio = source_rate as f64 / target_rate as f64;
     let target_frames = (source_frames as f64 / ratio) as usize;

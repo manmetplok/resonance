@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
+use ringbuf::traits::{Consumer, Producer, Split};
 
 use crate::decode;
 use crate::types::*;
@@ -15,6 +16,8 @@ struct SharedState {
     playhead: AtomicU64,
     /// Whether playback is active.
     playing: AtomicBool,
+    /// Whether recording is active.
+    recording: AtomicBool,
 }
 
 /// The audio engine.
@@ -48,6 +51,7 @@ impl AudioEngine {
         let shared = Arc::new(SharedState {
             playhead: AtomicU64::new(0),
             playing: AtomicBool::new(false),
+            recording: AtomicBool::new(false),
         });
 
         // Timeline state lives on the engine thread
@@ -135,6 +139,165 @@ impl AudioEngine {
     }
 }
 
+/// Enumerate available input devices. Returns (devices_list, default_device_index).
+fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<usize>) {
+    let host = cpal::default_host();
+    let default_name = host
+        .default_input_device()
+        .and_then(|d| d.name().ok());
+
+    let mut devices = Vec::new();
+    let mut default_index = None;
+
+    if let Ok(input_devices) = host.input_devices() {
+        for (i, device) in input_devices.enumerate() {
+            if let Ok(name) = device.name() {
+                if Some(&name) == default_name.as_ref() {
+                    default_index = Some(i);
+                }
+                devices.push(InputDeviceInfo { index: i, name });
+            }
+        }
+    }
+    (devices, default_index)
+}
+
+/// Build a cpal input stream that pushes samples into a ring buffer producer.
+fn build_input_stream(
+    device_index: usize,
+    shared: Arc<SharedState>,
+    mut producer: ringbuf::HeapProd<f32>,
+) -> Result<(cpal::Stream, u32, u16), String> {
+    let host = cpal::default_host();
+    let device = host
+        .input_devices()
+        .map_err(|e| format!("Cannot list input devices: {}", e))?
+        .nth(device_index)
+        .ok_or_else(|| format!("Input device index {} not found", device_index))?;
+
+    let config = device
+        .default_input_config()
+        .map_err(|e| format!("No default input config: {}", e))?;
+
+    let sample_rate = config.sample_rate().0;
+    let channels = config.channels();
+    let stream_config: cpal::StreamConfig = config.into();
+
+    let stream = device
+        .build_input_stream(
+            &stream_config,
+            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                if shared.recording.load(Ordering::Relaxed) {
+                    let _ = producer.push_slice(data);
+                }
+            },
+            |err| {
+                eprintln!("Input stream error: {}", err);
+            },
+            None,
+        )
+        .map_err(|e| format!("Failed to build input stream: {}", e))?;
+
+    stream
+        .play()
+        .map_err(|e| format!("Failed to start input stream: {}", e))?;
+
+    Ok((stream, sample_rate, channels))
+}
+
+/// Drain all available samples from the ring buffer consumer into per-track recording buffers.
+fn drain_ring_to_buffers(
+    consumer: &mut ringbuf::HeapCons<f32>,
+    buffers: &mut HashMap<TrackId, Vec<f32>>,
+    input_channels: u16,
+) {
+    let mut temp = [0.0f32; 4096];
+    loop {
+        let count = consumer.pop_slice(&mut temp);
+        if count == 0 {
+            break;
+        }
+        let chunk = &temp[..count];
+        let stereo = to_stereo_chunk(chunk, input_channels as usize);
+        for buffer in buffers.values_mut() {
+            buffer.extend_from_slice(&stereo);
+        }
+    }
+}
+
+/// Convert a chunk of interleaved multi-channel audio to stereo interleaved.
+fn to_stereo_chunk(input: &[f32], channels: usize) -> Vec<f32> {
+    if channels == 2 {
+        return input.to_vec();
+    }
+    let frames = input.len() / channels;
+    let mut stereo = Vec::with_capacity(frames * 2);
+    for f in 0..frames {
+        let base = f * channels;
+        let left = input[base];
+        let right = if channels > 1 { input[base + 1] } else { left };
+        stereo.push(left);
+        stereo.push(right);
+    }
+    stereo
+}
+
+/// Finalize recording: drain remaining samples, create clips, emit events.
+fn finalize_recording(
+    ring_consumer: &mut Option<ringbuf::HeapCons<f32>>,
+    recording_buffers: &mut HashMap<TrackId, Vec<f32>>,
+    input_channels: u16,
+    input_sample_rate: u32,
+    output_sample_rate: u32,
+    recording_start_sample: SamplePos,
+    next_clip_id: &mut ClipId,
+    clips: &parking_lot::RwLock<Vec<AudioClip>>,
+    event_tx: &Sender<AudioEvent>,
+) {
+    // Drain any remaining samples
+    if let Some(ref mut cons) = ring_consumer {
+        drain_ring_to_buffers(cons, recording_buffers, input_channels);
+    }
+
+    for (track_id, buffer) in recording_buffers.drain() {
+        if buffer.is_empty() {
+            continue;
+        }
+
+        let clip_id = *next_clip_id;
+        *next_clip_id += 1;
+
+        // Resample if input and output sample rates differ
+        let final_data = if input_sample_rate != output_sample_rate {
+            decode::linear_resample(&buffer, input_sample_rate, output_sample_rate)
+        } else {
+            buffer
+        };
+
+        let duration_samples = (final_data.len() / 2) as u64;
+        let name = format!("Recording {}", clip_id);
+
+        let clip = AudioClip {
+            id: clip_id,
+            track_id,
+            start_sample: recording_start_sample,
+            data: final_data,
+            name: name.clone(),
+        };
+        clips.write().push(clip);
+
+        let _ = event_tx.send(AudioEvent::RecordingFinished {
+            clip_id,
+            track_id,
+            start_sample: recording_start_sample,
+            duration_samples,
+            name,
+        });
+    }
+
+    *ring_consumer = None;
+}
+
 /// The engine control thread processes commands and sends events.
 fn engine_thread(
     cmd_rx: Receiver<AudioCommand>,
@@ -148,6 +311,14 @@ fn engine_thread(
     let mut next_clip_id: ClipId = 1;
     let mut playhead_report_counter: u32 = 0;
     let playhead_report_interval = sample_rate / 60; // ~60Hz
+
+    // Recording state (engine thread local)
+    let mut recording_buffers: HashMap<TrackId, Vec<f32>> = HashMap::new();
+    let mut recording_start_sample: SamplePos = 0;
+    let mut ring_consumer: Option<ringbuf::HeapCons<f32>> = None;
+    let mut _input_stream: Option<cpal::Stream> = None;
+    let mut input_channels: u16 = 2;
+    let mut input_sample_rate: u32 = sample_rate;
 
     // Add a default track
     {
@@ -164,13 +335,102 @@ fn engine_thread(
             Ok(cmd) => match cmd {
                 AudioCommand::Play => {
                     shared.playing.store(true, Ordering::SeqCst);
+
+                    // Check if any tracks are armed for recording
+                    let armed_tracks: Vec<(TrackId, Option<usize>)> = {
+                        let tracks_guard = tracks.read();
+                        tracks_guard
+                            .values()
+                            .filter(|t| t.record_armed)
+                            .map(|t| (t.id, t.input_device_index))
+                            .collect()
+                    };
+
+                    if !armed_tracks.is_empty() {
+                        // Determine which input device to use
+                        let device_idx = armed_tracks
+                            .iter()
+                            .find_map(|(_, idx)| *idx)
+                            .unwrap_or_else(|| {
+                                let (_, default_idx) = enumerate_input_devices();
+                                default_idx.unwrap_or(0)
+                            });
+
+                        // Create ring buffer: 10 seconds at 48kHz stereo
+                        let ring_size = 48000 * 2 * 10;
+                        let ring = ringbuf::HeapRb::<f32>::new(ring_size);
+                        let (prod, cons) = ring.split();
+                        ring_consumer = Some(cons);
+
+                        match build_input_stream(device_idx, Arc::clone(&shared), prod) {
+                            Ok((stream, in_sr, in_ch)) => {
+                                _input_stream = Some(stream);
+                                input_sample_rate = in_sr;
+                                input_channels = in_ch;
+
+                                recording_start_sample =
+                                    shared.playhead.load(Ordering::SeqCst);
+                                for (track_id, _) in &armed_tracks {
+                                    recording_buffers.insert(
+                                        *track_id,
+                                        Vec::with_capacity(sample_rate as usize * 2 * 60),
+                                    );
+                                }
+
+                                shared.recording.store(true, Ordering::SeqCst);
+                                let _ = event_tx.send(AudioEvent::RecordingStarted);
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(AudioEvent::Error(format!(
+                                    "Failed to start recording: {}",
+                                    e
+                                )));
+                                ring_consumer = None;
+                            }
+                        }
+                    }
                 }
                 AudioCommand::Pause => {
+                    let was_recording = shared.recording.load(Ordering::SeqCst);
                     shared.playing.store(false, Ordering::SeqCst);
+                    shared.recording.store(false, Ordering::SeqCst);
+
+                    if was_recording {
+                        finalize_recording(
+                            &mut ring_consumer,
+                            &mut recording_buffers,
+                            input_channels,
+                            input_sample_rate,
+                            sample_rate,
+                            recording_start_sample,
+                            &mut next_clip_id,
+                            &clips,
+                            &event_tx,
+                        );
+                        _input_stream = None;
+                    }
                 }
                 AudioCommand::Stop => {
+                    let was_recording = shared.recording.load(Ordering::SeqCst);
                     shared.playing.store(false, Ordering::SeqCst);
+                    shared.recording.store(false, Ordering::SeqCst);
                     shared.playhead.store(0, Ordering::SeqCst);
+
+                    if was_recording {
+                        finalize_recording(
+                            &mut ring_consumer,
+                            &mut recording_buffers,
+                            input_channels,
+                            input_sample_rate,
+                            sample_rate,
+                            recording_start_sample,
+                            &mut next_clip_id,
+                            &clips,
+                            &event_tx,
+                        );
+                        _input_stream = None;
+                    }
+
                     let _ = event_tx.send(AudioEvent::Stopped);
                 }
                 AudioCommand::SeekTo(pos) => {
@@ -251,9 +511,36 @@ fn engine_thread(
                     clips.write().retain(|c| c.track_id != track_id);
                     let _ = event_tx.send(AudioEvent::TrackRemoved { track_id });
                 }
+                AudioCommand::SetTrackRecordArm { track_id, armed } => {
+                    if let Some(track) = tracks.write().get_mut(&track_id) {
+                        track.record_armed = armed;
+                    }
+                }
+                AudioCommand::SetTrackInputDevice {
+                    track_id,
+                    device_index,
+                } => {
+                    if let Some(track) = tracks.write().get_mut(&track_id) {
+                        track.input_device_index = device_index;
+                    }
+                }
+                AudioCommand::ListInputDevices => {
+                    let (devices, default_index) = enumerate_input_devices();
+                    let _ = event_tx.send(AudioEvent::InputDevicesListed {
+                        devices,
+                        default_index,
+                    });
+                }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+        }
+
+        // Drain recording ring buffer into per-track buffers
+        if shared.recording.load(Ordering::Relaxed) {
+            if let Some(ref mut cons) = ring_consumer {
+                drain_ring_to_buffers(cons, &mut recording_buffers, input_channels);
+            }
         }
 
         // Report playhead position periodically
