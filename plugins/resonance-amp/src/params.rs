@@ -1,4 +1,4 @@
-/// Plugin parameters: input/output gain and persisted model path.
+/// Plugin parameters: input/output gain, persisted model path, and file selector.
 
 use nih_plug::prelude::*;
 use nih_plug_iced::IcedState;
@@ -6,6 +6,9 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 use crate::editor;
+
+/// Maximum number of files the selector param supports.
+pub const MAX_FILE_INDEX: i32 = 999;
 
 #[derive(Params)]
 pub struct AmpParams {
@@ -16,6 +19,12 @@ pub struct AmpParams {
     #[persist = "model-path"]
     pub model_path: Arc<Mutex<String>>,
 
+    /// File selector index exposed as a DAW parameter.
+    /// The host can automate this to switch between .nam files
+    /// found in the same directory as the loaded model.
+    #[id = "file_select"]
+    pub file_select: IntParam,
+
     #[id = "input_gain"]
     pub input_gain: FloatParam,
 
@@ -25,9 +34,36 @@ pub struct AmpParams {
 
 impl Default for AmpParams {
     fn default() -> Self {
+        let file_list: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let file_list_display = file_list.clone();
+
         Self {
             editor_state: editor::default_state(),
             model_path: Arc::new(Mutex::new(String::new())),
+            file_select: IntParam::new(
+                "Model Select",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: MAX_FILE_INDEX,
+                },
+            )
+            .with_value_to_string(Arc::new(move |value| {
+                let list = file_list_display.lock();
+                let idx = value as usize;
+                if list.is_empty() {
+                    return "(no models)".to_string();
+                }
+                let clamped = idx.min(list.len() - 1);
+                std::path::Path::new(&list[clamped])
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| format!("#{}", clamped))
+            }))
+            .with_callback({
+                // Dummy callback - actual loading is handled in process()
+                Arc::new(|_| {})
+            }),
             input_gain: FloatParam::new(
                 "Input Gain",
                 1.0,

@@ -1,6 +1,6 @@
 /// Iced-based GUI for the IR convolution plugin.
 
-use nih_plug::prelude::{Editor, GuiContext};
+use nih_plug::prelude::{Editor, GuiContext, ParamSetter};
 use nih_plug_iced::widgets as nih_widgets;
 use nih_plug_iced::*;
 use parking_lot::Mutex;
@@ -10,7 +10,7 @@ use crate::params::IrParams;
 use crate::IrTask;
 
 const WINDOW_WIDTH: u32 = 400;
-const WINDOW_HEIGHT: u32 = 340;
+const WINDOW_HEIGHT: u32 = 400;
 
 pub fn default_state() -> Arc<IcedState> {
     IcedState::from_size(WINDOW_WIDTH, WINDOW_HEIGHT)
@@ -21,6 +21,7 @@ pub struct EditorFlags {
     pub params: Arc<IrParams>,
     pub ir_name: Arc<Mutex<String>>,
     pub ir_info: Arc<Mutex<String>>,
+    pub file_list: Arc<Mutex<Vec<String>>>,
     pub task_sender: Arc<dyn Fn(IrTask) + Send + Sync>,
 }
 
@@ -33,17 +34,22 @@ struct IrEditor {
     context: Arc<dyn GuiContext>,
     ir_name: Arc<Mutex<String>>,
     ir_info: Arc<Mutex<String>>,
+    file_list: Arc<Mutex<Vec<String>>>,
     task_sender: Arc<dyn Fn(IrTask) + Send + Sync>,
 
     dry_wet_slider: nih_widgets::param_slider::State,
     output_gain_slider: nih_widgets::param_slider::State,
     load_button_state: button::State,
+    prev_button_state: button::State,
+    next_button_state: button::State,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     ParamUpdate(nih_widgets::ParamMessage),
     LoadIr,
+    PrevIr,
+    NextIr,
 }
 
 impl IcedEditor for IrEditor {
@@ -61,10 +67,13 @@ impl IcedEditor for IrEditor {
                 context,
                 ir_name: flags.ir_name,
                 ir_info: flags.ir_info,
+                file_list: flags.file_list,
                 task_sender: flags.task_sender,
                 dry_wet_slider: Default::default(),
                 output_gain_slider: Default::default(),
                 load_button_state: Default::default(),
+                prev_button_state: Default::default(),
+                next_button_state: Default::default(),
             },
             Command::none(),
         )
@@ -91,6 +100,26 @@ impl IcedEditor for IrEditor {
                     (self.task_sender)(IrTask::LoadIr(path_str));
                 }
             }
+            Message::PrevIr => {
+                let list = self.file_list.lock();
+                if !list.is_empty() {
+                    let current = self.params.file_select.value() as usize;
+                    let new_idx = if current == 0 { list.len() - 1 } else { current - 1 };
+                    drop(list);
+                    let setter = ParamSetter::new(self.context.as_ref());
+                    setter.set_parameter(&self.params.file_select, new_idx as i32);
+                }
+            }
+            Message::NextIr => {
+                let list = self.file_list.lock();
+                if !list.is_empty() {
+                    let current = self.params.file_select.value() as usize;
+                    let new_idx = if current >= list.len() - 1 { 0 } else { current + 1 };
+                    drop(list);
+                    let setter = ParamSetter::new(self.context.as_ref());
+                    setter.set_parameter(&self.params.file_select, new_idx as i32);
+                }
+            }
         }
         Command::none()
     }
@@ -113,23 +142,67 @@ impl IcedEditor for IrEditor {
             .width(Length::Fill)
             .horizontal_alignment(alignment::Horizontal::Center);
 
-        // IR info (duration, channels)
+        // IR info
         let info = self.ir_info.lock().clone();
         let info_text = Text::new(info)
             .size(11)
             .width(Length::Fill)
             .horizontal_alignment(alignment::Horizontal::Center);
 
-        // Load button
+        // File count
+        let file_count = self.file_list.lock().len();
+        let count_text = if file_count > 0 {
+            Text::new(format!(
+                "{} / {} IRs",
+                self.params.file_select.value() + 1,
+                file_count
+            ))
+            .size(11)
+        } else {
+            Text::new("").size(11)
+        };
+        let count_text = count_text
+            .width(Length::Fill)
+            .horizontal_alignment(alignment::Horizontal::Center);
+
+        // Prev / Load / Next buttons
+        let prev_btn = Button::new(
+            &mut self.prev_button_state,
+            Text::new("<")
+                .size(14)
+                .horizontal_alignment(alignment::Horizontal::Center),
+        )
+        .on_press(Message::PrevIr)
+        .style(NavButtonStyle)
+        .width(Length::Units(40));
+
         let load_btn = Button::new(
             &mut self.load_button_state,
-            Text::new("Load IR")
+            Text::new("Browse...")
                 .size(13)
                 .horizontal_alignment(alignment::Horizontal::Center),
         )
         .on_press(Message::LoadIr)
         .style(LoadButtonStyle)
-        .width(Length::Units(200));
+        .width(Length::Units(120));
+
+        let next_btn = Button::new(
+            &mut self.next_button_state,
+            Text::new(">")
+                .size(14)
+                .horizontal_alignment(alignment::Horizontal::Center),
+        )
+        .on_press(Message::NextIr)
+        .style(NavButtonStyle)
+        .width(Length::Units(40));
+
+        let nav_row = Row::new()
+            .push(prev_btn)
+            .push(Space::with_width(Length::Units(8)))
+            .push(load_btn)
+            .push(Space::with_width(Length::Units(8)))
+            .push(next_btn)
+            .align_items(Alignment::Center);
 
         // Dry/wet slider
         let drywet_section = Row::new()
@@ -160,8 +233,10 @@ impl IcedEditor for IrEditor {
             .push(name_text)
             .push(Space::with_height(Length::Units(4)))
             .push(info_text)
+            .push(Space::with_height(Length::Units(4)))
+            .push(count_text)
             .push(Space::with_height(Length::Units(12)))
-            .push(load_btn)
+            .push(nav_row)
             .push(Space::with_height(Length::Units(24)))
             .push(drywet_section)
             .push(Space::with_height(Length::Units(8)))
@@ -200,6 +275,35 @@ impl button::StyleSheet for LoadButtonStyle {
     fn pressed(&self) -> button::Style {
         button::Style {
             background: Some(Background::Color(Color::from_rgb(0.18, 0.2, 0.3))),
+            ..self.active()
+        }
+    }
+}
+
+struct NavButtonStyle;
+
+impl button::StyleSheet for NavButtonStyle {
+    fn active(&self) -> button::Style {
+        button::Style {
+            background: Some(Background::Color(Color::from_rgb(0.2, 0.2, 0.24))),
+            border_radius: 4.0,
+            border_width: 1.0,
+            border_color: Color::from_rgb(0.3, 0.3, 0.35),
+            text_color: Color::WHITE,
+            ..Default::default()
+        }
+    }
+
+    fn hovered(&self) -> button::Style {
+        button::Style {
+            background: Some(Background::Color(Color::from_rgb(0.28, 0.28, 0.34))),
+            ..self.active()
+        }
+    }
+
+    fn pressed(&self) -> button::Style {
+        button::Style {
+            background: Some(Background::Color(Color::from_rgb(0.16, 0.16, 0.2))),
             ..self.active()
         }
     }
