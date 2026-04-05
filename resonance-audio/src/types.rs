@@ -41,6 +41,10 @@ pub enum AudioCommand {
         track_id: TrackId,
         armed: bool,
     },
+    SetTrackMonitor {
+        track_id: TrackId,
+        enabled: bool,
+    },
     SetTrackInputDevice {
         track_id: TrackId,
         device_name: Option<String>,
@@ -165,6 +169,7 @@ pub struct Track {
     pub muted: bool,
     pub name: String,
     pub record_armed: bool,
+    pub monitor_enabled: bool,
     pub input_device_name: Option<String>,
     /// Ordered list of plugin instance IDs forming the insert chain.
     pub plugin_ids: Vec<PluginInstanceId>,
@@ -178,6 +183,7 @@ impl Track {
             muted: false,
             name,
             record_armed: false,
+            monitor_enabled: false,
             input_device_name: None,
             plugin_ids: Vec::new(),
         }

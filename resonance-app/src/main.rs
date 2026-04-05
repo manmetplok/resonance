@@ -40,6 +40,7 @@ pub struct TrackState {
     pub muted: bool,
     pub order: usize,
     pub record_armed: bool,
+    pub monitor_enabled: bool,
     pub input_device_name: Option<String>,
     pub plugins: Vec<PluginSlotState>,
 }
@@ -82,6 +83,7 @@ enum Message {
     ZoomOut,
     Tick,
     ToggleRecordArm(TrackId),
+    ToggleMonitor(TrackId),
     SetTrackInputDevice(TrackId, Option<String>),
     SetBpm(f32),
     ToggleMetronome,
@@ -215,6 +217,15 @@ impl Resonance {
             }
             Message::ZoomOut => {
                 self.zoom = (self.zoom / 1.5).max(10.0);
+            }
+            Message::ToggleMonitor(id) => {
+                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
+                    track.monitor_enabled = !track.monitor_enabled;
+                    self.engine.send(AudioCommand::SetTrackMonitor {
+                        track_id: id,
+                        enabled: track.monitor_enabled,
+                    });
+                }
             }
             Message::ToggleRecordArm(id) => {
                 if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
@@ -356,6 +367,7 @@ impl Resonance {
                     muted: false,
                     order,
                     record_armed: false,
+                    monitor_enabled: false,
                     input_device_name: None,
                     plugins: Vec::new(),
                 });
@@ -722,9 +734,42 @@ impl Resonance {
             .style(|_theme, status| theme::small_button_style(status))
             .padding(2);
 
+        // Monitor button
+        let mon_color = if track.monitor_enabled {
+            theme::METRONOME_ON
+        } else {
+            theme::TEXT_DIM
+        };
+        let mon_enabled = track.monitor_enabled;
+        let mon_btn = button(text("I").size(11).color(mon_color))
+            .on_press(Message::ToggleMonitor(track.id))
+            .style(move |_theme, status| {
+                if mon_enabled {
+                    let bg = match status {
+                        iced::widget::button::Status::Hovered => iced::Color::from_rgb(0.15, 0.25, 0.15),
+                        iced::widget::button::Status::Pressed => iced::Color::from_rgb(0.10, 0.20, 0.10),
+                        _ => iced::Color::from_rgb(0.12, 0.20, 0.12),
+                    };
+                    iced::widget::button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: theme::METRONOME_ON,
+                        border: iced::Border {
+                            color: theme::METRONOME_ON,
+                            width: 1.0,
+                            radius: 2.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                } else {
+                    theme::small_button_style(status)
+                }
+            })
+            .padding(2);
+
         let top_row = row![
             name,
             Space::with_width(Length::Fill),
+            mon_btn,
             rec_btn,
             mute_btn,
             import_btn,
