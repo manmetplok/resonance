@@ -1,10 +1,16 @@
-use iced::widget::{button, canvas, column, container, pick_list, row, slider, text, Space};
+use iced::widget::{
+    button, canvas, column, container, mouse_area, opaque, pick_list, row, slider, stack, text,
+    Space,
+};
 use iced::{alignment, Element, Font, Length, Size, Subscription};
 use resonance_audio::types::*;
 use resonance_audio::AudioEngine;
 
+mod settings;
 mod theme;
 mod timeline;
+
+use settings::Settings;
 
 use timeline::TimelineCanvas;
 
@@ -29,6 +35,9 @@ struct Resonance {
     time_sig_den: u8,
     metronome_enabled: bool,
     available_plugins: Vec<ScannedPlugin>,
+    settings_open: bool,
+    settings: Settings,
+    applied_buffer_size: u32,
 }
 
 /// GUI-side track state.
@@ -93,6 +102,9 @@ enum Message {
     RemovePluginFromTrack(TrackId, PluginInstanceId),
     TogglePluginPanel(PluginInstanceId),
     SetPluginParam(PluginInstanceId, u32, f64),
+    OpenSettings,
+    CloseSettings,
+    SettingsSetBufferSize(u32),
 }
 
 fn main() -> iced::Result {
@@ -105,11 +117,15 @@ fn main() -> iced::Result {
 
 impl Resonance {
     fn new() -> (Self, iced::Task<Message>) {
-        let engine = AudioEngine::new().expect("Failed to initialize audio engine");
+        let settings = Settings::load();
+        let engine =
+            AudioEngine::new(settings.buffer_size).expect("Failed to initialize audio engine");
 
         // Request input device list and plugin scan on startup
         engine.send(AudioCommand::ListInputDevices);
         engine.send(AudioCommand::ScanPlugins);
+
+        let applied_buffer_size = settings.buffer_size;
 
         let app = Self {
             engine,
@@ -131,6 +147,9 @@ impl Resonance {
             time_sig_den: 4,
             metronome_enabled: false,
             available_plugins: Vec::new(),
+            settings_open: false,
+            settings,
+            applied_buffer_size,
         };
 
         (app, iced::Task::none())
@@ -325,6 +344,16 @@ impl Resonance {
                 let max_y = (self.tracks.len() as f32 * theme::TRACK_HEIGHT).max(0.0);
                 self.scroll_offset_y = self.scroll_offset_y.min(max_y);
             }
+            Message::OpenSettings => {
+                self.settings_open = true;
+            }
+            Message::CloseSettings => {
+                self.settings_open = false;
+            }
+            Message::SettingsSetBufferSize(size) => {
+                self.settings.buffer_size = size;
+                self.settings.save();
+            }
             Message::Tick => {
                 while let Some(event) = self.engine.try_recv() {
                     self.handle_engine_event(event);
@@ -463,14 +492,20 @@ impl Resonance {
 
         let content = column![transport, main_area].spacing(0);
 
-        container(content)
+        let base: Element<'_, Message> = container(content)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_theme| container::Style {
                 background: Some(iced::Background::Color(theme::BG)),
                 ..Default::default()
             })
-            .into()
+            .into();
+
+        if self.settings_open {
+            stack![base, self.view_settings_overlay()].into()
+        } else {
+            base
+        }
     }
 
     fn view_transport(&self) -> Element<'_, Message> {
@@ -575,6 +610,10 @@ impl Resonance {
             .on_press(Message::AddTrack)
             .style(|_theme, status| theme::transport_button_style(status));
 
+        let settings_btn = button(text("\u{2699}").size(16).color(theme::TEXT))
+            .on_press(Message::OpenSettings)
+            .style(|_theme, status| theme::transport_button_style(status));
+
         let transport_row = row![
             Space::with_width(10),
             skip_back,
@@ -599,6 +638,8 @@ impl Resonance {
             zoom_in,
             Space::with_width(20),
             add_track,
+            Space::with_width(6),
+            settings_btn,
             Space::with_width(10),
         ]
         .spacing(6)
@@ -617,6 +658,77 @@ impl Resonance {
                 ..Default::default()
             })
             .into()
+    }
+
+    fn view_settings_overlay(&self) -> Element<'_, Message> {
+        let backdrop = mouse_area(
+            container(Space::new(Length::Fill, Length::Fill))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_theme| container::Style {
+                    background: Some(iced::Background::Color(iced::Color::from_rgba(
+                        0.0, 0.0, 0.0, 0.6,
+                    ))),
+                    ..Default::default()
+                }),
+        )
+        .on_press(Message::CloseSettings);
+
+        let title = text("Settings").size(20).color(theme::ACCENT);
+
+        let buf_label = text("Buffer Size").size(14).color(theme::TEXT);
+        let buf_options: Vec<u32> = settings::BUFFER_SIZE_OPTIONS.to_vec();
+        let buf_picker = pick_list(buf_options, Some(self.settings.buffer_size), |size| {
+            Message::SettingsSetBufferSize(size)
+        })
+        .text_size(14)
+        .width(120);
+
+        let buf_row = row![buf_label, Space::with_width(Length::Fill), buf_picker]
+            .spacing(8)
+            .align_y(alignment::Vertical::Center);
+
+        let restart_note = if self.settings.buffer_size != self.applied_buffer_size {
+            text("Restart required to apply")
+                .size(11)
+                .color(theme::ACCENT)
+        } else {
+            text("").size(11)
+        };
+
+        let close_btn = button(text("Close").size(14).color(theme::TEXT))
+            .on_press(Message::CloseSettings)
+            .style(|_theme, status| theme::transport_button_style(status));
+
+        let dialog_content = column![
+            title,
+            Space::with_height(16),
+            buf_row,
+            restart_note,
+            Space::with_height(20),
+            close_btn,
+        ]
+        .spacing(8)
+        .padding(24)
+        .width(360);
+
+        let dialog = container(dialog_content).style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::PANEL)),
+            border: iced::Border {
+                color: theme::SEPARATOR,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        });
+
+        let centered = container(opaque(dialog))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill);
+
+        stack![backdrop, centered].into()
     }
 
     fn view_main_area(&self) -> Element<'_, Message> {

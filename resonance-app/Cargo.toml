@@ -7,3 +7,6 @@ edition = "2021"
 resonance-audio = { path = "../resonance-audio" }
 iced = { version = "0.13", features = ["canvas", "wgpu", "tokio"] }
 rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+dirs = "4"
