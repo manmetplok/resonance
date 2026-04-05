@@ -1,4 +1,4 @@
-/// Plugin parameters: dry/wet mix, output gain, and persisted IR path.
+/// Plugin parameters: dry/wet mix, output gain, persisted IR path, and file selector.
 
 use nih_plug::prelude::*;
 use nih_plug_iced::IcedState;
@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use crate::editor;
 
+pub const MAX_FILE_INDEX: i32 = 999;
+
 #[derive(Params)]
 pub struct IrParams {
     #[persist = "editor-state"]
@@ -14,6 +16,12 @@ pub struct IrParams {
 
     #[persist = "ir-path"]
     pub ir_path: Arc<Mutex<String>>,
+
+    /// File selector index exposed as a DAW parameter.
+    /// The host can automate this to switch between .wav files
+    /// found in the same directory as the loaded IR.
+    #[id = "file_select"]
+    pub file_select: IntParam,
 
     #[id = "dry_wet"]
     pub dry_wet: FloatParam,
@@ -24,9 +32,33 @@ pub struct IrParams {
 
 impl Default for IrParams {
     fn default() -> Self {
+        let file_list: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let file_list_display = file_list.clone();
+
         Self {
             editor_state: editor::default_state(),
             ir_path: Arc::new(Mutex::new(String::new())),
+            file_select: IntParam::new(
+                "IR Select",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: MAX_FILE_INDEX,
+                },
+            )
+            .with_value_to_string(Arc::new(move |value| {
+                let list = file_list_display.lock();
+                let idx = value as usize;
+                if list.is_empty() {
+                    return "(no IRs)".to_string();
+                }
+                let clamped = idx.min(list.len() - 1);
+                std::path::Path::new(&list[clamped])
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| format!("#{}", clamped))
+            }))
+            .with_callback(Arc::new(|_| {})),
             dry_wet: FloatParam::new(
                 "Dry/Wet",
                 1.0,

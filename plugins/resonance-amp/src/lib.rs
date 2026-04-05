@@ -19,14 +19,33 @@ pub enum AmpTask {
     LoadModel(String),
 }
 
+/// Scan a directory for .nam files, returning sorted paths.
+fn scan_directory(dir: &Path) -> Vec<String> {
+    let mut files: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext.eq_ignore_ascii_case("nam"))
+                .unwrap_or(false)
+        })
+        .map(|e| e.path().to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    files
+}
+
 pub struct ResonanceAmp {
     params: Arc<AmpParams>,
-    /// Currently active NAM model (None = bypass).
     active_model: Option<Box<dyn NamInference>>,
-    /// Mailbox: background task places a loaded model here for the audio thread to pick up.
     model_mailbox: Arc<Mutex<Option<Box<dyn NamInference>>>>,
-    /// Display name of the currently loaded model.
     model_name: Arc<Mutex<String>>,
+    /// List of .nam files in the current directory.
+    file_list: Arc<Mutex<Vec<String>>>,
+    /// Last file_select param value we acted on (to detect changes).
+    last_file_index: i32,
 }
 
 impl Default for ResonanceAmp {
@@ -36,6 +55,23 @@ impl Default for ResonanceAmp {
             active_model: None,
             model_mailbox: Arc::new(Mutex::new(None)),
             model_name: Arc::new(Mutex::new(String::new())),
+            file_list: Arc::new(Mutex::new(Vec::new())),
+            last_file_index: -1,
+        }
+    }
+}
+
+impl ResonanceAmp {
+    /// Scan the directory of the given file and update the file list.
+    /// Returns the index of `path` in the new list, or 0.
+    fn rescan_directory(&self, path: &str) -> usize {
+        if let Some(dir) = Path::new(path).parent() {
+            let files = scan_directory(dir);
+            let idx = files.iter().position(|f| f == path).unwrap_or(0);
+            *self.file_list.lock() = files;
+            idx
+        } else {
+            0
         }
     }
 }
@@ -48,13 +84,11 @@ impl Plugin for ResonanceAmp {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[
-        // Mono in, stereo out
         AudioIOLayout {
             main_input_channels: NonZeroU32::new(1),
             main_output_channels: NonZeroU32::new(2),
             ..AudioIOLayout::const_default()
         },
-        // Stereo in, stereo out (fallback)
         AudioIOLayout {
             main_input_channels: NonZeroU32::new(2),
             main_output_channels: NonZeroU32::new(2),
@@ -97,13 +131,23 @@ impl Plugin for ResonanceAmp {
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         let mailbox = self.model_mailbox.clone();
         let model_name_clone = self.model_name.clone();
+        let file_list = self.file_list.clone();
+        let params = self.params.clone();
 
-        // Create a task sender that puts models directly into the mailbox
-        // (task_executor runs on a background thread, but we can also load inline)
         let task_sender: Arc<dyn Fn(AmpTask) + Send + Sync> = {
             let model_name = self.model_name.clone();
+            let file_list = self.file_list.clone();
             Arc::new(move |task| match task {
                 AmpTask::LoadModel(path) => {
+                    // Rescan directory when loading via GUI file picker
+                    if let Some(dir) = Path::new(&path).parent() {
+                        let files = scan_directory(dir);
+                        let idx = files.iter().position(|f| f == &path).unwrap_or(0);
+                        *file_list.lock() = files;
+                        // Note: can't set param from here, but process() will sync
+                        let _ = idx;
+                    }
+
                     match nam::parse::load_model_from_file(&path) {
                         Ok(model) => {
                             let name = Path::new(&path)
@@ -123,8 +167,9 @@ impl Plugin for ResonanceAmp {
         };
 
         editor::create(EditorFlags {
-            params: self.params.clone(),
+            params,
             model_name: model_name_clone,
+            file_list,
             task_sender,
         })
     }
@@ -135,11 +180,12 @@ impl Plugin for ResonanceAmp {
         _buffer_config: &BufferConfig,
         context: &mut impl InitContext<Self>,
     ) -> bool {
-        // Reload persisted model path
         let path = self.params.model_path.lock().clone();
         if !path.is_empty() {
+            let idx = self.rescan_directory(&path);
+            self.last_file_index = idx as i32;
+
             context.execute(AmpTask::LoadModel(path));
-            // After synchronous execute, model should be in mailbox
             if let Some(model) = self.model_mailbox.lock().take() {
                 self.active_model = Some(model);
             }
@@ -157,12 +203,26 @@ impl Plugin for ResonanceAmp {
         &mut self,
         buffer: &mut Buffer,
         _aux: &mut AuxiliaryBuffers,
-        _context: &mut impl ProcessContext<Self>,
+        context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        // Check mailbox for newly loaded model (non-blocking)
+        // Check mailbox for newly loaded model
         if let Some(mut guard) = self.model_mailbox.try_lock() {
             if guard.is_some() {
                 self.active_model = guard.take();
+            }
+        }
+
+        // Detect file_select param change from host/DAW
+        let current_index = self.params.file_select.value();
+        if current_index != self.last_file_index {
+            self.last_file_index = current_index;
+            let file_list = self.file_list.lock();
+            if !file_list.is_empty() {
+                let idx = (current_index as usize).min(file_list.len() - 1);
+                let path = file_list[idx].clone();
+                drop(file_list);
+                *self.params.model_path.lock() = path.clone();
+                context.execute_background(AmpTask::LoadModel(path));
             }
         }
 
@@ -172,21 +232,16 @@ impl Plugin for ResonanceAmp {
                     let input_gain = self.params.input_gain.smoothed.next();
                     let output_gain = self.params.output_gain.smoothed.next();
 
-                    // Read mono input (first channel)
                     let input = *channel_samples.get_mut(0).unwrap() * input_gain;
-
-                    // Process through NAM model
                     let output = model.process_sample(input) * output_gain;
                     let output = output.clamp(-1.0, 1.0);
 
-                    // Write to all output channels
                     for sample in channel_samples {
                         *sample = output;
                     }
                 }
             }
             None => {
-                // Bypass: apply gains only
                 for channel_samples in buffer.iter_samples() {
                     let input_gain = self.params.input_gain.smoothed.next();
                     let output_gain = self.params.output_gain.smoothed.next();
