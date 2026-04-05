@@ -51,9 +51,13 @@ pub enum AudioCommand {
 #[derive(Debug, Clone)]
 pub enum AudioEvent {
     PlayheadMoved(SamplePos),
+    SampleRateDetected {
+        sample_rate: u32,
+    },
     ClipImported {
         clip_id: ClipId,
         track_id: TrackId,
+        start_sample: SamplePos,
         duration_samples: u64,
         name: String,
     },
@@ -77,7 +81,9 @@ pub enum AudioEvent {
         devices: Vec<InputDeviceInfo>,
         default_name: Option<String>,
     },
-    RecordingStarted,
+    RecordingStarted {
+        start_sample: SamplePos,
+    },
     RecordingFinished {
         clip_id: ClipId,
         track_id: TrackId,
