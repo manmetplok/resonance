@@ -17,6 +17,7 @@ pub struct TimelineCanvas {
     pub zoom: f32,
     pub scroll_offset: f32,
     pub recording_tracks: Vec<TrackId>,
+    pub recording_start_sample: u64,
 }
 
 impl<Message> canvas::Program<Message> for TimelineCanvas {
@@ -60,14 +61,19 @@ impl<Message> canvas::Program<Message> for TimelineCanvas {
                 bg,
             );
 
-            // Recording overlay on armed tracks
+            // Recording overlay on armed tracks — starts at recording origin
             if self.recording_tracks.contains(&track.id) {
+                let start_seconds =
+                    self.recording_start_sample as f32 / self.sample_rate as f32;
+                let start_x = start_seconds * self.zoom - self.scroll_offset;
                 let playhead_seconds = self.playhead as f32 / self.sample_rate as f32;
                 let playhead_x = playhead_seconds * self.zoom - self.scroll_offset;
-                if playhead_x > 0.0 {
+                let overlay_x = start_x.max(0.0);
+                let overlay_w = (playhead_x - overlay_x).max(0.0).min(bounds.width - overlay_x);
+                if overlay_w > 0.0 {
                     frame.fill_rectangle(
-                        Point::new(0.0_f32.max(-self.scroll_offset), y),
-                        Size::new(playhead_x.min(bounds.width), theme::TRACK_HEIGHT),
+                        Point::new(overlay_x, y),
+                        Size::new(overlay_w, theme::TRACK_HEIGHT),
                         Color::from_rgba(0.8, 0.2, 0.2, 0.08),
                     );
                 }
@@ -234,9 +240,11 @@ impl TimelineCanvas {
             theme::CLIP_HEADER,
         );
 
-        // Clip name
-        let display_name = if clip.name.len() > 20 {
-            format!("{}...", &clip.name[..17])
+        // Clip name (truncated safely for multi-byte UTF-8)
+        let display_name: String = if clip.name.chars().count() > 20 {
+            let mut truncated: String = clip.name.chars().take(17).collect();
+            truncated.push_str("...");
+            truncated
         } else {
             clip.name.clone()
         };

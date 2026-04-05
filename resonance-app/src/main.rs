@@ -16,6 +16,7 @@ struct Resonance {
     playhead: u64,
     playing: bool,
     recording: bool,
+    recording_start_sample: u64,
     sample_rate: u32,
     zoom: f32,          // pixels per second
     scroll_offset: f32, // horizontal scroll in pixels
@@ -90,7 +91,8 @@ impl Resonance {
             playhead: 0,
             playing: false,
             recording: false,
-            sample_rate: 44100,
+            recording_start_sample: 0,
+            sample_rate: 44100, // overwritten by SampleRateDetected event
             zoom: 100.0,
             scroll_offset: 0.0,
             next_track_order: 0,
@@ -186,6 +188,16 @@ impl Resonance {
             Message::ToggleRecordArm(id) => {
                 if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
                     track.record_armed = !track.record_armed;
+                    // Auto-select default input device when arming if none set
+                    if track.record_armed && track.input_device_name.is_none() {
+                        if let Some(default) = &self.default_input_device_name {
+                            track.input_device_name = Some(default.clone());
+                            self.engine.send(AudioCommand::SetTrackInputDevice {
+                                track_id: id,
+                                device_name: Some(default.clone()),
+                            });
+                        }
+                    }
                     self.engine.send(AudioCommand::SetTrackRecordArm {
                         track_id: id,
                         armed: track.record_armed,
@@ -215,16 +227,20 @@ impl Resonance {
             AudioEvent::PlayheadMoved(pos) => {
                 self.playhead = pos;
             }
+            AudioEvent::SampleRateDetected { sample_rate } => {
+                self.sample_rate = sample_rate;
+            }
             AudioEvent::ClipImported {
                 clip_id,
                 track_id,
+                start_sample,
                 duration_samples,
                 name,
             } => {
                 self.clips.push(ClipState {
                     id: clip_id,
                     track_id,
-                    start_sample: self.playhead,
+                    start_sample,
                     duration_samples,
                     name,
                 });
@@ -274,8 +290,9 @@ impl Resonance {
                 self.input_devices = devices;
                 self.default_input_device_name = default_name;
             }
-            AudioEvent::RecordingStarted => {
+            AudioEvent::RecordingStarted { start_sample } => {
                 self.recording = true;
+                self.recording_start_sample = start_sample;
             }
             AudioEvent::RecordingFinished {
                 clip_id,
@@ -587,6 +604,7 @@ impl Resonance {
             zoom: self.zoom,
             scroll_offset: self.scroll_offset,
             recording_tracks,
+            recording_start_sample: self.recording_start_sample,
         };
 
         canvas(timeline_data)

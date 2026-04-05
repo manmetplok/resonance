@@ -1,7 +1,7 @@
 /// The core audio engine managing tracks, clips, and the cpal output stream.
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
@@ -29,6 +29,11 @@ pub struct AudioEngine {
 
 // cpal::Stream is not Send by default on some platforms but we manage it carefully
 unsafe impl Send for AudioEngine {}
+
+/// Serializes access to PIPEWIRE_NODE env var manipulation.
+/// On Linux/glibc, setenv is thread-safe, but we serialize our own access
+/// as defense in depth since POSIX doesn't guarantee it.
+static PIPEWIRE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 impl AudioEngine {
     /// Create and start the audio engine. Returns the engine handle.
@@ -139,39 +144,39 @@ impl AudioEngine {
     }
 }
 
+/// Run a pactl command with a 2-second timeout. Returns stdout on success.
+fn run_pactl(args: &[&str]) -> Option<String> {
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    std::thread::spawn(move || {
+        let result = std::process::Command::new("pactl")
+            .args(&args)
+            .output();
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+        Ok(Ok(output)) if output.status.success() => {
+            Some(String::from_utf8_lossy(&output.stdout).to_string())
+        }
+        _ => None,
+    }
+}
+
 /// Enumerate available PipeWire/PulseAudio input sources via `pactl`.
 fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>) {
     let mut devices = Vec::new();
-    let mut default_name = None;
 
-    // Get the default source name
-    if let Ok(output) = std::process::Command::new("pactl")
-        .args(["get-default-source"])
-        .output()
-    {
-        if output.status.success() {
-            default_name = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
-        }
-    }
+    let default_name = run_pactl(&["get-default-source"])
+        .map(|s| s.trim().to_string());
 
-    // Get source names from short listing
-    let short_output = std::process::Command::new("pactl")
-        .args(["list", "sources", "short"])
-        .output();
+    let short_text = run_pactl(&["list", "sources", "short"]);
+    let full_text = run_pactl(&["list", "sources"]);
 
-    // Get descriptions from full listing
-    let full_output = std::process::Command::new("pactl")
-        .args(["list", "sources"])
-        .output();
-
-    if let (Ok(short), Ok(full)) = (short_output, full_output) {
-        let short_text = String::from_utf8_lossy(&short.stdout);
-        let full_text = String::from_utf8_lossy(&full.stdout);
-
+    if let (Some(short), Some(full)) = (short_text, full_text) {
         // Parse descriptions from full output (pairs of Name: and Description: lines)
         let mut descriptions: HashMap<String, String> = HashMap::new();
         let mut current_name = None;
-        for line in full_text.lines() {
+        for line in full.lines() {
             let trimmed = line.trim();
             if let Some(name) = trimmed.strip_prefix("Name: ") {
                 current_name = Some(name.to_string());
@@ -183,7 +188,7 @@ fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>) {
         }
 
         // Parse short listing for source names
-        for line in short_text.lines() {
+        for line in short.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 2 {
                 let name = parts[1].to_string();
@@ -206,7 +211,12 @@ fn build_input_stream(
     shared: Arc<SharedState>,
     mut producer: ringbuf::HeapProd<f32>,
 ) -> Result<(cpal::Stream, u32, u16), String> {
-    // Set PIPEWIRE_NODE to route CPAL's ALSA stream to the desired PipeWire source
+    // Serialize env var access. On Linux/glibc setenv is thread-safe, but we
+    // hold a lock as defense in depth. The env var is only read by PipeWire's
+    // ALSA plugin during device creation, and no other code in this process
+    // reads PIPEWIRE_NODE.
+    let _env_guard = PIPEWIRE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     if let Some(name) = source_name {
         std::env::set_var("PIPEWIRE_NODE", name);
     }
@@ -246,6 +256,8 @@ fn build_input_stream(
     // Clean up env var after stream is created
     std::env::remove_var("PIPEWIRE_NODE");
 
+    // _env_guard drops here, releasing the lock
+
     Ok((stream, sample_rate, channels))
 }
 
@@ -255,6 +267,7 @@ fn drain_ring_to_buffers(
     buffers: &mut HashMap<TrackId, Vec<f32>>,
     input_channels: u16,
 ) {
+    let channels = input_channels as usize;
     let mut temp = [0.0f32; 4096];
     loop {
         let count = consumer.pop_slice(&mut temp);
@@ -262,28 +275,27 @@ fn drain_ring_to_buffers(
             break;
         }
         let chunk = &temp[..count];
-        let stereo = to_stereo_chunk(chunk, input_channels as usize);
-        for buffer in buffers.values_mut() {
-            buffer.extend_from_slice(&stereo);
+
+        if channels == 2 {
+            // Direct copy for stereo input — no intermediate allocation
+            for buffer in buffers.values_mut() {
+                buffer.extend_from_slice(chunk);
+            }
+        } else {
+            // Convert to stereo interleaved inline
+            let frames = chunk.len() / channels;
+            for buffer in buffers.values_mut() {
+                buffer.reserve(frames * 2);
+                for f in 0..frames {
+                    let base = f * channels;
+                    let left = chunk[base];
+                    let right = if channels > 1 { chunk[base + 1] } else { left };
+                    buffer.push(left);
+                    buffer.push(right);
+                }
+            }
         }
     }
-}
-
-/// Convert a chunk of interleaved multi-channel audio to stereo interleaved.
-fn to_stereo_chunk(input: &[f32], channels: usize) -> Vec<f32> {
-    if channels == 2 {
-        return input.to_vec();
-    }
-    let frames = input.len() / channels;
-    let mut stereo = Vec::with_capacity(frames * 2);
-    for f in 0..frames {
-        let base = f * channels;
-        let left = input[base];
-        let right = if channels > 1 { input[base + 1] } else { left };
-        stereo.push(left);
-        stereo.push(right);
-    }
-    stereo
 }
 
 /// Finalize recording: drain remaining samples, create clips, emit events.
@@ -353,16 +365,19 @@ fn engine_thread(
 ) {
     let mut next_track_id: TrackId = 1;
     let mut next_clip_id: ClipId = 1;
-    let mut playhead_report_counter: u32 = 0;
-    let playhead_report_interval = sample_rate / 60; // ~60Hz
+    let mut last_playhead_report = std::time::Instant::now();
 
     // Recording state (engine thread local)
     let mut recording_buffers: HashMap<TrackId, Vec<f32>> = HashMap::new();
     let mut recording_start_sample: SamplePos = 0;
     let mut ring_consumer: Option<ringbuf::HeapCons<f32>> = None;
+    // Underscore prefix suppresses warnings; held to keep cpal::Stream alive
     let mut _input_stream: Option<cpal::Stream> = None;
     let mut input_channels: u16 = 2;
     let mut input_sample_rate: u32 = sample_rate;
+
+    // Report actual sample rate to GUI
+    let _ = event_tx.send(AudioEvent::SampleRateDetected { sample_rate });
 
     // Add a default track
     {
@@ -396,11 +411,22 @@ fn engine_thread(
                             .iter()
                             .find_map(|(_, name)| name.clone());
 
-                        // Create ring buffer: 10 seconds at 48kHz stereo
-                        let ring_size = 48000 * 2 * 10;
+                        // Ring buffer: 10 seconds at 96kHz stereo — generous for any config
+                        let ring_size = 96000 * 2 * 10;
                         let ring = ringbuf::HeapRb::<f32>::new(ring_size);
                         let (prod, cons) = ring.split();
                         ring_consumer = Some(cons);
+
+                        // Set recording flag BEFORE building stream so the input
+                        // callback captures samples from the very first buffer
+                        recording_start_sample = shared.playhead.load(Ordering::SeqCst);
+                        for (track_id, _) in &armed_tracks {
+                            recording_buffers.insert(
+                                *track_id,
+                                Vec::with_capacity(sample_rate as usize * 2 * 60),
+                            );
+                        }
+                        shared.recording.store(true, Ordering::SeqCst);
 
                         match build_input_stream(source_name.as_deref(), Arc::clone(&shared), prod) {
                             Ok((stream, in_sr, in_ch)) => {
@@ -408,24 +434,19 @@ fn engine_thread(
                                 input_sample_rate = in_sr;
                                 input_channels = in_ch;
 
-                                recording_start_sample =
-                                    shared.playhead.load(Ordering::SeqCst);
-                                for (track_id, _) in &armed_tracks {
-                                    recording_buffers.insert(
-                                        *track_id,
-                                        Vec::with_capacity(sample_rate as usize * 2 * 60),
-                                    );
-                                }
-
-                                shared.recording.store(true, Ordering::SeqCst);
-                                let _ = event_tx.send(AudioEvent::RecordingStarted);
+                                let _ = event_tx.send(AudioEvent::RecordingStarted {
+                                    start_sample: recording_start_sample,
+                                });
                             }
                             Err(e) => {
+                                // Undo recording state on failure
+                                shared.recording.store(false, Ordering::SeqCst);
+                                recording_buffers.clear();
+                                ring_consumer = None;
                                 let _ = event_tx.send(AudioEvent::Error(format!(
                                     "Failed to start recording: {}",
                                     e
                                 )));
-                                ring_consumer = None;
                             }
                         }
                     }
@@ -481,33 +502,45 @@ fn engine_thread(
                     path,
                     start_sample,
                 } => {
-                    match decode::decode_file(&path, sample_rate) {
-                        Ok((data, name)) => {
-                            let clip_id = next_clip_id;
-                            next_clip_id += 1;
-                            let duration = (data.len() / 2) as u64;
-                            let clip = AudioClip {
-                                id: clip_id,
-                                track_id,
-                                start_sample,
-                                data,
-                                name: name.clone(),
-                            };
-                            clips.write().push(clip);
-                            let _ = event_tx.send(AudioEvent::ClipImported {
-                                clip_id,
-                                track_id,
-                                duration_samples: duration,
-                                name,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = event_tx.send(AudioEvent::Error(format!(
-                                "Failed to import clip: {}",
-                                e
-                            )));
-                        }
-                    }
+                    // Decode on a separate thread to avoid blocking the engine
+                    // (which would stall recording buffer draining and command processing)
+                    let clips = Arc::clone(&clips);
+                    let event_tx = event_tx.clone();
+                    let clip_id = next_clip_id;
+                    next_clip_id += 1;
+                    let sr = sample_rate;
+
+                    std::thread::Builder::new()
+                        .name("resonance-decode".into())
+                        .spawn(move || {
+                            match decode::decode_file(&path, sr) {
+                                Ok((data, name)) => {
+                                    let duration = (data.len() / 2) as u64;
+                                    let clip = AudioClip {
+                                        id: clip_id,
+                                        track_id,
+                                        start_sample,
+                                        data,
+                                        name: name.clone(),
+                                    };
+                                    clips.write().push(clip);
+                                    let _ = event_tx.send(AudioEvent::ClipImported {
+                                        clip_id,
+                                        track_id,
+                                        start_sample,
+                                        duration_samples: duration,
+                                        name,
+                                    });
+                                }
+                                Err(e) => {
+                                    let _ = event_tx.send(AudioEvent::Error(format!(
+                                        "Failed to import clip: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        })
+                        .ok();
                 }
                 AudioCommand::MoveClip {
                     clip_id,
@@ -549,6 +582,8 @@ fn engine_thread(
                 AudioCommand::RemoveTrack { track_id } => {
                     tracks.write().remove(&track_id);
                     clips.write().retain(|c| c.track_id != track_id);
+                    // Clean up any active recording buffer for this track
+                    recording_buffers.remove(&track_id);
                     let _ = event_tx.send(AudioEvent::TrackRemoved { track_id });
                 }
                 AudioCommand::SetTrackRecordArm { track_id, armed } => {
@@ -583,14 +618,13 @@ fn engine_thread(
             }
         }
 
-        // Report playhead position periodically
-        if shared.playing.load(Ordering::SeqCst) {
-            playhead_report_counter += 1;
-            if playhead_report_counter >= playhead_report_interval / 60 {
-                playhead_report_counter = 0;
-                let pos = shared.playhead.load(Ordering::SeqCst);
-                let _ = event_tx.send(AudioEvent::PlayheadMoved(pos));
-            }
+        // Report playhead position at ~60Hz using wall-clock time
+        if shared.playing.load(Ordering::SeqCst)
+            && last_playhead_report.elapsed() >= std::time::Duration::from_millis(16)
+        {
+            last_playhead_report = std::time::Instant::now();
+            let pos = shared.playhead.load(Ordering::SeqCst);
+            let _ = event_tx.send(AudioEvent::PlayheadMoved(pos));
         }
     }
 }
