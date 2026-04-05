@@ -3,6 +3,14 @@
 use serde::Deserialize;
 use std::path::Path;
 
+fn null_as_empty_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<Vec<T>>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
+}
+
 use super::lstm::LstmModel;
 use super::wavenet::WaveNetModel;
 use super::NamInference;
@@ -23,8 +31,10 @@ pub struct WaveNetConfig {
     pub head_size: usize,
     pub channels: usize,
     /// Number of layers per stack, e.g. [10, 10] = 2 stacks of 10 layers.
+    #[serde(deserialize_with = "null_as_empty_vec")]
     pub layers: Vec<usize>,
     /// Head hidden layer sizes, e.g. [8].
+    #[serde(deserialize_with = "null_as_empty_vec")]
     pub head: Vec<usize>,
     pub activation: String,
     pub gated: bool,
