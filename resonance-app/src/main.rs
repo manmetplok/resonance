@@ -23,6 +23,10 @@ struct Resonance {
     next_track_order: usize,
     input_devices: Vec<InputDeviceInfo>,
     default_input_device_name: Option<String>,
+    bpm: f32,
+    time_sig_num: u8,
+    time_sig_den: u8,
+    metronome_enabled: bool,
 }
 
 /// GUI-side track state.
@@ -67,6 +71,9 @@ enum Message {
     Tick,
     ToggleRecordArm(TrackId),
     SetTrackInputDevice(TrackId, Option<String>),
+    SetBpm(f32),
+    ToggleMetronome,
+    CycleTimeSignature,
 }
 
 fn main() -> iced::Result {
@@ -98,6 +105,10 @@ impl Resonance {
             next_track_order: 0,
             input_devices: Vec::new(),
             default_input_device_name: None,
+            bpm: 120.0,
+            time_sig_num: 4,
+            time_sig_den: 4,
+            metronome_enabled: false,
         };
 
         (app, iced::Task::none())
@@ -212,6 +223,33 @@ impl Resonance {
                         device_name,
                     });
                 }
+            }
+            Message::SetBpm(bpm) => {
+                self.bpm = bpm.clamp(20.0, 999.0);
+                self.engine.send(AudioCommand::SetBpm { bpm: self.bpm });
+            }
+            Message::ToggleMetronome => {
+                self.metronome_enabled = !self.metronome_enabled;
+                self.engine.send(AudioCommand::SetMetronomeEnabled {
+                    enabled: self.metronome_enabled,
+                });
+            }
+            Message::CycleTimeSignature => {
+                // Cycle through common time signatures
+                let (num, den) = match (self.time_sig_num, self.time_sig_den) {
+                    (4, 4) => (3, 4),
+                    (3, 4) => (6, 8),
+                    (6, 8) => (5, 4),
+                    (5, 4) => (7, 8),
+                    (7, 8) => (2, 4),
+                    _ => (4, 4),
+                };
+                self.time_sig_num = num;
+                self.time_sig_den = den;
+                self.engine.send(AudioCommand::SetTimeSignature {
+                    numerator: num,
+                    denominator: den,
+                });
             }
             Message::Tick => {
                 while let Some(event) = self.engine.try_recv() {
@@ -334,7 +372,13 @@ impl Resonance {
     }
 
     fn view_transport(&self) -> Element<'_, Message> {
-        let time_str = self.format_time(self.playhead);
+        let tempo = TempoMap {
+            bpm: self.bpm,
+            numerator: self.time_sig_num,
+            denominator: self.time_sig_den,
+            metronome_enabled: self.metronome_enabled,
+        };
+        let bar_beat_str = tempo.format_position(self.playhead, self.sample_rate);
 
         let play_pause = if self.playing {
             button(text("⏸").size(18).color(theme::TEXT))
@@ -358,10 +402,64 @@ impl Resonance {
             .on_press(Message::SkipForward)
             .style(|_theme, status| theme::transport_button_style(status));
 
-        let time_display = text(time_str)
+        let time_display = text(bar_beat_str)
             .size(20)
             .font(Font::MONOSPACE)
             .color(theme::ACCENT);
+
+        // BPM slider and display
+        let bpm_slider = slider(20.0..=300.0, self.bpm, Message::SetBpm)
+            .width(80)
+            .step(1.0);
+        let bpm_text = text(format!("{:.0}", self.bpm))
+            .size(14)
+            .font(Font::MONOSPACE)
+            .color(theme::TEXT);
+        let bpm_label = text("BPM").size(10).color(theme::TEXT_DIM);
+
+        // Time signature button
+        let time_sig_str = format!("{}/{}", self.time_sig_num, self.time_sig_den);
+        let time_sig_btn = button(text(time_sig_str).size(14).font(Font::MONOSPACE).color(theme::TEXT))
+            .on_press(Message::CycleTimeSignature)
+            .style(|_theme, status| theme::transport_button_style(status));
+
+        // Metronome toggle
+        let met_color = if self.metronome_enabled {
+            theme::METRONOME_ON
+        } else {
+            theme::TEXT_DIM
+        };
+        let metronome_enabled = self.metronome_enabled;
+        let met_btn = button(text("Met").size(12).color(met_color))
+            .on_press(Message::ToggleMetronome)
+            .style(move |_theme, status| {
+                if metronome_enabled {
+                    let bg = match status {
+                        iced::widget::button::Status::Hovered => iced::Color::from_rgb(0.15, 0.25, 0.15),
+                        iced::widget::button::Status::Pressed => iced::Color::from_rgb(0.10, 0.20, 0.10),
+                        _ => iced::Color::from_rgb(0.12, 0.20, 0.12),
+                    };
+                    iced::widget::button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: theme::METRONOME_ON,
+                        border: iced::Border {
+                            color: theme::METRONOME_ON,
+                            width: 1.0,
+                            radius: 4.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                } else {
+                    theme::transport_button_style(status)
+                }
+            });
+
+        // Recording indicator
+        let rec_indicator = if self.recording {
+            text("● REC").size(14).color(theme::RECORD_RED)
+        } else {
+            text("").size(14)
+        };
 
         let zoom_out = button(text("−").size(16).color(theme::TEXT))
             .on_press(Message::ZoomOut)
@@ -375,23 +473,24 @@ impl Resonance {
             .on_press(Message::AddTrack)
             .style(|_theme, status| theme::transport_button_style(status));
 
-        // Recording indicator
-        let rec_indicator = if self.recording {
-            text("● REC").size(14).color(theme::RECORD_RED)
-        } else {
-            text("").size(14)
-        };
-
         let transport_row = row![
             Space::with_width(10),
             skip_back,
             stop_btn,
             play_pause,
             skip_fwd,
-            Space::with_width(20),
+            Space::with_width(16),
             time_display,
-            Space::with_width(10),
+            Space::with_width(6),
             rec_indicator,
+            Space::with_width(16),
+            bpm_slider,
+            bpm_text,
+            bpm_label,
+            Space::with_width(8),
+            time_sig_btn,
+            Space::with_width(4),
+            met_btn,
             Space::with_width(Length::Fill),
             zoom_out,
             text("Zoom").size(12).color(theme::TEXT_DIM),
@@ -605,6 +704,8 @@ impl Resonance {
             scroll_offset: self.scroll_offset,
             recording_tracks,
             recording_start_sample: self.recording_start_sample,
+            bpm: self.bpm,
+            time_sig_num: self.time_sig_num,
         };
 
         canvas(timeline_data)
@@ -613,10 +714,4 @@ impl Resonance {
             .into()
     }
 
-    fn format_time(&self, samples: u64) -> String {
-        let total_seconds = samples as f64 / self.sample_rate as f64;
-        let minutes = (total_seconds / 60.0) as u64;
-        let seconds = total_seconds % 60.0;
-        format!("{:02}:{:05.2}", minutes, seconds)
-    }
 }

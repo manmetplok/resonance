@@ -18,6 +18,20 @@ pub struct TimelineCanvas {
     pub scroll_offset: f32,
     pub recording_tracks: Vec<TrackId>,
     pub recording_start_sample: u64,
+    pub bpm: f32,
+    pub time_sig_num: u8,
+}
+
+impl TimelineCanvas {
+    /// Seconds per beat at current BPM.
+    fn seconds_per_beat(&self) -> f32 {
+        60.0 / self.bpm
+    }
+
+    /// Seconds per bar.
+    fn seconds_per_bar(&self) -> f32 {
+        self.seconds_per_beat() * self.time_sig_num as f32
+    }
 }
 
 impl<Message> canvas::Program<Message> for TimelineCanvas {
@@ -41,12 +55,10 @@ impl<Message> canvas::Program<Message> for TimelineCanvas {
             theme::RULER_BG,
         );
 
-        // Draw time ruler markings
-        self.draw_ruler(&mut frame, bounds.width, ruler_height);
-
         // Draw track backgrounds
         let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
         sorted_tracks.sort_by_key(|t| t.order);
+        let track_area_height = sorted_tracks.len() as f32 * theme::TRACK_HEIGHT;
 
         for (i, track) in sorted_tracks.iter().enumerate() {
             let y = ruler_height + i as f32 * theme::TRACK_HEIGHT;
@@ -87,6 +99,12 @@ impl<Message> canvas::Program<Message> for TimelineCanvas {
             );
         }
 
+        // Draw bar/beat grid lines through track area
+        self.draw_grid_lines(&mut frame, bounds.width, ruler_height, track_area_height);
+
+        // Draw bar/beat ruler
+        self.draw_ruler(&mut frame, bounds.width, ruler_height);
+
         // Draw clips
         for clip in &self.clips {
             self.draw_clip(&mut frame, clip, &sorted_tracks, ruler_height);
@@ -96,7 +114,7 @@ impl<Message> canvas::Program<Message> for TimelineCanvas {
         let playhead_seconds = self.playhead as f32 / self.sample_rate as f32;
         let playhead_x = playhead_seconds * self.zoom - self.scroll_offset;
         if playhead_x >= 0.0 && playhead_x <= bounds.width {
-            let total_height = ruler_height + self.tracks.len() as f32 * theme::TRACK_HEIGHT;
+            let total_height = ruler_height + track_area_height;
             let height = total_height.max(bounds.height);
 
             // Playhead triangle at top
@@ -121,73 +139,126 @@ impl<Message> canvas::Program<Message> for TimelineCanvas {
 }
 
 impl TimelineCanvas {
-    fn draw_ruler(&self, frame: &mut canvas::Frame, width: f32, ruler_height: f32) {
-        // Determine tick spacing based on zoom
-        let seconds_per_pixel = 1.0 / self.zoom;
-        let min_pixel_spacing = 80.0;
-        let min_seconds = seconds_per_pixel * min_pixel_spacing;
-
-        // Choose nice time intervals
-        let intervals = [0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0];
-        let major_interval = intervals
-            .iter()
-            .find(|&&i| i >= min_seconds)
-            .copied()
-            .unwrap_or(60.0);
+    /// Draw vertical bar and beat grid lines in the track area.
+    fn draw_grid_lines(
+        &self,
+        frame: &mut canvas::Frame,
+        width: f32,
+        ruler_height: f32,
+        track_area_height: f32,
+    ) {
+        let spb_seconds = self.seconds_per_beat();
+        let spbar_seconds = self.seconds_per_bar();
+        let line_height = track_area_height.max(600.0);
 
         let start_time = self.scroll_offset / self.zoom;
         let end_time = start_time + width / self.zoom;
 
-        let first_tick = (start_time / major_interval).floor() as i64;
-        let last_tick = (end_time / major_interval).ceil() as i64;
+        // Determine bar step for readability at low zoom
+        let bar_pixel_width = spbar_seconds * self.zoom;
+        let bar_step = if bar_pixel_width < 20.0 {
+            (20.0 / bar_pixel_width).ceil() as u32
+        } else {
+            1
+        };
 
-        for i in first_tick..=last_tick {
-            let time = i as f32 * major_interval;
-            let x = time * self.zoom - self.scroll_offset;
+        let first_bar = (start_time / spbar_seconds).floor() as i64;
+        let last_bar = (end_time / spbar_seconds).ceil() as i64;
+
+        for bar_idx in first_bar..=last_bar {
+            if bar_step > 1 && (bar_idx as u32) % bar_step != 0 {
+                continue;
+            }
+            let bar_time = bar_idx as f32 * spbar_seconds;
+
+            // Bar line
+            let x = bar_time * self.zoom - self.scroll_offset;
+            if x >= -1.0 && x <= width + 1.0 {
+                frame.fill_rectangle(
+                    Point::new(x, ruler_height),
+                    Size::new(1.0, line_height),
+                    theme::BAR_LINE,
+                );
+            }
+
+            // Beat lines within this bar (skip beat 1, that's the bar line)
+            if bar_pixel_width >= 40.0 {
+                for beat in 1..self.time_sig_num {
+                    let beat_time = bar_time + beat as f32 * spb_seconds;
+                    let bx = beat_time * self.zoom - self.scroll_offset;
+                    if bx >= 0.0 && bx <= width {
+                        frame.fill_rectangle(
+                            Point::new(bx, ruler_height),
+                            Size::new(1.0, line_height),
+                            theme::BEAT_LINE,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Draw the bar/beat ruler at the top.
+    fn draw_ruler(&self, frame: &mut canvas::Frame, width: f32, ruler_height: f32) {
+        let spbar_seconds = self.seconds_per_bar();
+        let spb_seconds = self.seconds_per_beat();
+
+        let start_time = self.scroll_offset / self.zoom;
+        let end_time = start_time + width / self.zoom;
+
+        // Determine bar step for readability at low zoom
+        let bar_pixel_width = spbar_seconds * self.zoom;
+        let bar_step = if bar_pixel_width < 40.0 {
+            (40.0 / bar_pixel_width).ceil() as u32
+        } else {
+            1
+        };
+
+        let first_bar = (start_time / spbar_seconds).floor() as i64;
+        let last_bar = (end_time / spbar_seconds).ceil() as i64;
+
+        for bar_idx in first_bar..=last_bar {
+            let bar_time = bar_idx as f32 * spbar_seconds;
+            let bar_number = bar_idx + 1; // 1-based
+
+            if bar_step > 1 && ((bar_idx as u32) % bar_step) != 0 {
+                continue;
+            }
+
+            let x = bar_time * self.zoom - self.scroll_offset;
 
             if x < -1.0 || x > width + 1.0 {
                 continue;
             }
 
-            // Major tick
+            // Major tick (bar)
             frame.fill_rectangle(
-                Point::new(x, ruler_height - 10.0),
-                Size::new(1.0, 10.0),
+                Point::new(x, ruler_height - 12.0),
+                Size::new(1.0, 12.0),
                 theme::TEXT_DIM,
             );
 
-            // Time label
-            let label = if major_interval >= 1.0 {
-                let mins = (time / 60.0) as u32;
-                let secs = time % 60.0;
-                if mins > 0 {
-                    format!("{}:{:02.0}", mins, secs)
-                } else {
-                    format!("{:.0}s", secs)
-                }
-            } else {
-                format!("{:.1}s", time)
-            };
-
+            // Bar number label
             frame.fill_text(canvas::Text {
-                content: label,
-                position: Point::new(x + 3.0, ruler_height - 22.0),
+                content: format!("{}", bar_number),
+                position: Point::new(x + 3.0, ruler_height - 24.0),
                 color: theme::TEXT_DIM,
                 size: 11.0.into(),
                 ..canvas::Text::default()
             });
 
-            // Minor ticks (4 subdivisions)
-            let minor_interval = major_interval / 4.0;
-            for j in 1..4 {
-                let minor_time = time + j as f32 * minor_interval;
-                let minor_x = minor_time * self.zoom - self.scroll_offset;
-                if minor_x >= 0.0 && minor_x <= width {
-                    frame.fill_rectangle(
-                        Point::new(minor_x, ruler_height - 5.0),
-                        Size::new(1.0, 5.0),
-                        Color::from_rgb(0.25, 0.25, 0.25),
-                    );
+            // Beat ticks within bar (only if enough space)
+            if bar_pixel_width >= 40.0 {
+                for beat in 1..self.time_sig_num {
+                    let beat_time = bar_time + beat as f32 * spb_seconds;
+                    let bx = beat_time * self.zoom - self.scroll_offset;
+                    if bx >= 0.0 && bx <= width {
+                        frame.fill_rectangle(
+                            Point::new(bx, ruler_height - 6.0),
+                            Size::new(1.0, 6.0),
+                            Color::from_rgb(0.25, 0.25, 0.25),
+                        );
+                    }
                 }
             }
         }

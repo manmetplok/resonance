@@ -45,6 +45,16 @@ pub enum AudioCommand {
         device_name: Option<String>,
     },
     ListInputDevices,
+    SetBpm {
+        bpm: f32,
+    },
+    SetTimeSignature {
+        numerator: u8,
+        denominator: u8,
+    },
+    SetMetronomeEnabled {
+        enabled: bool,
+    },
 }
 
 /// Events sent from the audio engine back to the GUI.
@@ -154,5 +164,54 @@ pub struct InputDeviceInfo {
 impl std::fmt::Display for InputDeviceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.description)
+    }
+}
+
+/// Tempo and time signature state.
+#[derive(Debug, Clone)]
+pub struct TempoMap {
+    pub bpm: f32,
+    pub numerator: u8,
+    pub denominator: u8,
+    pub metronome_enabled: bool,
+}
+
+impl Default for TempoMap {
+    fn default() -> Self {
+        Self {
+            bpm: 120.0,
+            numerator: 4,
+            denominator: 4,
+            metronome_enabled: false,
+        }
+    }
+}
+
+impl TempoMap {
+    /// Samples per beat at the given sample rate.
+    pub fn samples_per_beat(&self, sample_rate: u32) -> f64 {
+        sample_rate as f64 * 60.0 / self.bpm as f64
+    }
+
+    /// Samples per bar at the given sample rate.
+    pub fn samples_per_bar(&self, sample_rate: u32) -> f64 {
+        self.samples_per_beat(sample_rate) * self.numerator as f64
+    }
+
+    /// Convert a sample position to (bar, beat, fractional_beat).
+    /// Bar and beat are 1-based.
+    pub fn position_to_bars(&self, sample_pos: u64, sample_rate: u32) -> (u32, u8, f64) {
+        let spb = self.samples_per_beat(sample_rate);
+        let total_beats = sample_pos as f64 / spb;
+        let bar = (total_beats / self.numerator as f64).floor() as u32 + 1;
+        let beat_in_bar = (total_beats % self.numerator as f64).floor() as u8 + 1;
+        let frac = total_beats.fract();
+        (bar, beat_in_bar, frac)
+    }
+
+    /// Format a sample position as "bar.beat".
+    pub fn format_position(&self, sample_pos: u64, sample_rate: u32) -> String {
+        let (bar, beat, _) = self.position_to_bars(sample_pos, sample_rate);
+        format!("{}.{}", bar, beat)
     }
 }
