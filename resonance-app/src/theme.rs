@@ -81,6 +81,24 @@ pub const PANEL_ARMED: Color = Color::from_rgb(
     0x14 as f32 / 255.0,
 );
 
+pub const BAR_LINE: Color = Color::from_rgb(
+    0x30 as f32 / 255.0,
+    0x30 as f32 / 255.0,
+    0x30 as f32 / 255.0,
+);
+
+pub const BEAT_LINE: Color = Color::from_rgb(
+    0x20 as f32 / 255.0,
+    0x20 as f32 / 255.0,
+    0x20 as f32 / 255.0,
+);
+
+pub const METRONOME_ON: Color = Color::from_rgb(
+    0x4a as f32 / 255.0,
+    0xcc as f32 / 255.0,
+    0x4a as f32 / 255.0,
+);
+
 pub const TRACK_HEIGHT: f32 = 80.0;
 
 pub fn resonance_theme() -> Theme {

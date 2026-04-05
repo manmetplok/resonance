@@ -71,8 +71,14 @@ impl AudioEngine {
         let tracks_audio = Arc::clone(&tracks);
         let clips_audio = Arc::clone(&clips);
 
+        // Tempo map shared between engine thread and audio callback
+        let tempo_map: Arc<parking_lot::RwLock<TempoMap>> =
+            Arc::new(parking_lot::RwLock::new(TempoMap::default()));
+        let tempo_audio = Arc::clone(&tempo_map);
+
         // Build the cpal stream
         let stream_config: cpal::StreamConfig = config.into();
+        let audio_sample_rate = sample_rate;
 
         let stream = device
             .build_output_stream(
@@ -84,6 +90,8 @@ impl AudioEngine {
                         &shared_audio,
                         &tracks_audio,
                         &clips_audio,
+                        &tempo_audio,
+                        audio_sample_rate,
                     );
                 },
                 |err| {
@@ -101,6 +109,7 @@ impl AudioEngine {
         let shared_ctrl = Arc::clone(&shared);
         let tracks_ctrl = Arc::clone(&tracks);
         let clips_ctrl = Arc::clone(&clips);
+        let tempo_ctrl = Arc::clone(&tempo_map);
 
         std::thread::Builder::new()
             .name("resonance-engine".into())
@@ -111,6 +120,7 @@ impl AudioEngine {
                     shared_ctrl,
                     tracks_ctrl,
                     clips_ctrl,
+                    tempo_ctrl,
                     sample_rate,
                 );
             })
@@ -361,6 +371,7 @@ fn engine_thread(
     shared: Arc<SharedState>,
     tracks: Arc<parking_lot::RwLock<HashMap<TrackId, Track>>>,
     clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
+    tempo_map: Arc<parking_lot::RwLock<TempoMap>>,
     sample_rate: u32,
 ) {
     let mut next_track_id: TrackId = 1;
@@ -606,6 +617,20 @@ fn engine_thread(
                         default_name,
                     });
                 }
+                AudioCommand::SetBpm { bpm } => {
+                    tempo_map.write().bpm = bpm.clamp(20.0, 999.0);
+                }
+                AudioCommand::SetTimeSignature {
+                    numerator,
+                    denominator,
+                } => {
+                    let mut tm = tempo_map.write();
+                    tm.numerator = numerator.max(1);
+                    tm.denominator = denominator.max(1);
+                }
+                AudioCommand::SetMetronomeEnabled { enabled } => {
+                    tempo_map.write().metronome_enabled = enabled;
+                }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
@@ -637,6 +662,8 @@ fn mix_audio(
     shared: &SharedState,
     tracks: &parking_lot::RwLock<HashMap<TrackId, Track>>,
     clips: &parking_lot::RwLock<Vec<AudioClip>>,
+    tempo_map: &parking_lot::RwLock<TempoMap>,
+    sample_rate: u32,
 ) {
     // Zero the buffer first
     for sample in data.iter_mut() {
@@ -693,6 +720,37 @@ fn mix_audio(
             }
         }
     }
+
+    // Metronome click synthesis
+    let tm = tempo_map.read();
+    if tm.metronome_enabled {
+        let spb = tm.samples_per_beat(sample_rate);
+        let numerator = tm.numerator as u64;
+        let click_duration_samples = (sample_rate as f32 * 0.02) as u64; // 20ms click
+
+        for frame_offset in 0..output_frames {
+            let timeline_frame = playhead + frame_offset as u64;
+            let beat_pos = (timeline_frame as f64 % spb) as u64;
+
+            if beat_pos < click_duration_samples {
+                let t = beat_pos as f32 / sample_rate as f32;
+                let total_beats = (timeline_frame as f64 / spb) as u64;
+                let beat_in_bar = total_beats % numerator;
+                let freq = if beat_in_bar == 0 { 1500.0 } else { 1000.0 };
+                let amplitude = 0.3 * (-t * 200.0).exp();
+                let click = amplitude * (2.0 * std::f32::consts::PI * freq * t).sin();
+
+                let out_idx = frame_offset * channels;
+                if channels >= 2 {
+                    data[out_idx] += click;
+                    data[out_idx + 1] += click;
+                } else {
+                    data[out_idx] += click;
+                }
+            }
+        }
+    }
+    drop(tm);
 
     // Hard clip at [-1.0, 1.0]
     for sample in data.iter_mut() {
