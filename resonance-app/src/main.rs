@@ -1,4 +1,4 @@
-use iced::widget::{button, canvas, column, container, pick_list, row, scrollable, slider, text, Space};
+use iced::widget::{button, canvas, column, container, pick_list, row, slider, text, Space};
 use iced::{alignment, Element, Font, Length, Size, Subscription};
 use resonance_audio::types::*;
 use resonance_audio::AudioEngine;
@@ -18,8 +18,9 @@ struct Resonance {
     recording: bool,
     recording_start_sample: u64,
     sample_rate: u32,
-    zoom: f32,          // pixels per second
-    scroll_offset: f32, // horizontal scroll in pixels
+    zoom: f32,           // pixels per second
+    scroll_offset: f32,  // horizontal scroll in pixels
+    scroll_offset_y: f32, // vertical scroll in pixels
     next_track_order: usize,
     input_devices: Vec<InputDeviceInfo>,
     default_input_device_name: Option<String>,
@@ -74,6 +75,7 @@ enum Message {
     SetBpm(f32),
     ToggleMetronome,
     CycleTimeSignature,
+    ScrollY(f32),
 }
 
 fn main() -> iced::Result {
@@ -102,6 +104,7 @@ impl Resonance {
             sample_rate: 44100, // overwritten by SampleRateDetected event
             zoom: 100.0,
             scroll_offset: 0.0,
+            scroll_offset_y: 0.0,
             next_track_order: 0,
             input_devices: Vec::new(),
             default_input_device_name: None,
@@ -250,6 +253,12 @@ impl Resonance {
                     numerator: num,
                     denominator: den,
                 });
+            }
+            Message::ScrollY(delta) => {
+                self.scroll_offset_y = (self.scroll_offset_y + delta).max(0.0);
+                // Clamp to max content height
+                let max_y = (self.tracks.len() as f32 * theme::TRACK_HEIGHT).max(0.0);
+                self.scroll_offset_y = self.scroll_offset_y.min(max_y);
             }
             Message::Tick => {
                 while let Some(event) = self.engine.try_recv() {
@@ -543,16 +552,30 @@ impl Resonance {
         let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
         sorted_tracks.sort_by_key(|t| t.order);
 
-        for track in sorted_tracks {
-            let header = self.view_track_header(track.clone());
+        // Calculate which tracks are visible given scroll_offset_y
+        let visible_start = self.scroll_offset_y / theme::TRACK_HEIGHT;
+        let first_visible = visible_start.floor() as usize;
+        // Add top padding for the scrolled-away portion
+        let top_pad = first_visible as f32 * theme::TRACK_HEIGHT - self.scroll_offset_y;
+        if first_visible > 0 {
+            headers = headers.push(Space::new(Length::Fill, (first_visible as f32 * theme::TRACK_HEIGHT - self.scroll_offset_y).max(0.0)));
+        } else if self.scroll_offset_y > 0.0 {
+            // Partial first track: use negative-ish padding — just skip offset
+            headers = headers.push(Space::new(Length::Fill, top_pad.max(0.0)));
+        }
+
+        for (i, track) in sorted_tracks.iter().enumerate() {
+            if i < first_visible {
+                continue;
+            }
+            let header = self.view_track_header((*track).clone());
             headers = headers.push(header);
         }
 
-        let content = scrollable(headers).height(Length::Fill);
-
-        container(content)
+        container(headers)
             .width(180)
             .height(Length::Fill)
+            .clip(true)
             .style(|_theme| container::Style {
                 background: Some(iced::Background::Color(theme::PANEL)),
                 border: iced::Border {
@@ -633,7 +656,31 @@ impl Resonance {
             .spacing(4)
             .align_y(alignment::Vertical::Center);
 
-        let mut content = column![top_row, bottom_row].spacing(4).padding(6);
+        let mut content = column![top_row, bottom_row].spacing(2).padding(6);
+
+        // Clip entries with delete buttons
+        let track_clips: Vec<&ClipState> = self.clips.iter().filter(|c| c.track_id == track.id).collect();
+        for clip in &track_clips {
+            let clip_name: String = if clip.name.chars().count() > 12 {
+                let mut s: String = clip.name.chars().take(10).collect();
+                s.push_str("..");
+                s
+            } else {
+                clip.name.clone()
+            };
+            let clip_del = button(text("×").size(9).color(theme::TEXT_DIM))
+                .on_press(Message::DeleteClip(clip.id))
+                .style(|_theme, status| theme::small_button_style(status))
+                .padding(1);
+            let clip_row = row![
+                text(clip_name).size(9).color(theme::TEXT_DIM),
+                Space::with_width(Length::Fill),
+                clip_del,
+            ]
+            .spacing(2)
+            .align_y(alignment::Vertical::Center);
+            content = content.push(clip_row);
+        }
 
         // Input device picker (shown when track is record-armed)
         if track.record_armed && !self.input_devices.is_empty() {
@@ -671,7 +718,7 @@ impl Resonance {
 
         container(content)
             .width(Length::Fill)
-            .height(theme::TRACK_HEIGHT)
+            .height(Length::Shrink)
             .style(move |_theme| container::Style {
                 background: Some(iced::Background::Color(bg)),
                 border: iced::Border {
@@ -706,6 +753,7 @@ impl Resonance {
             recording_start_sample: self.recording_start_sample,
             bpm: self.bpm,
             time_sig_num: self.time_sig_num,
+            scroll_offset_y: self.scroll_offset_y,
         };
 
         canvas(timeline_data)
