@@ -258,10 +258,6 @@ impl ClapBundle {
             active: true,
             params_ext,
             pending_params: Vec::new(),
-            input_buf_l: vec![0.0; 8192],
-            input_buf_r: vec![0.0; 8192],
-            output_buf_l: vec![0.0; 8192],
-            output_buf_r: vec![0.0; 8192],
         })
     }
 }
@@ -285,11 +281,6 @@ pub struct ClapInstance {
     params_ext: Option<*const clap_plugin_params>,
     /// Pending parameter changes to send during next process() call.
     pending_params: Vec<(u32, f64)>,
-    // Pre-allocated de-interleaved I/O buffers
-    input_buf_l: Vec<f32>,
-    input_buf_r: Vec<f32>,
-    output_buf_l: Vec<f32>,
-    output_buf_r: Vec<f32>,
 }
 
 impl ClapInstance {
@@ -358,7 +349,8 @@ impl ClapInstance {
         self.pending_params.push((param_id, value));
     }
 
-    /// Process audio through the plugin.
+    /// Process audio through the plugin (in-place).
+    /// CLAP spec allows aliased input/output buffers.
     /// Sends any pending parameter changes as input events.
     pub fn process(&mut self, buf_l: &mut [f32], buf_r: &mut [f32], frames: usize) {
         if !self.active || frames == 0 {
@@ -367,23 +359,9 @@ impl ClapInstance {
 
         let frames = frames.min(8192);
 
-        // Copy input
-        self.input_buf_l[..frames].copy_from_slice(&buf_l[..frames]);
-        self.input_buf_r[..frames].copy_from_slice(&buf_r[..frames]);
-
-        // Zero output
-        self.output_buf_l[..frames].fill(0.0);
-        self.output_buf_r[..frames].fill(0.0);
-
-        // Set up audio buffers
-        let mut in_ptrs: [*mut f32; 2] = [
-            self.input_buf_l.as_mut_ptr(),
-            self.input_buf_r.as_mut_ptr(),
-        ];
-        let mut out_ptrs: [*mut f32; 2] = [
-            self.output_buf_l.as_mut_ptr(),
-            self.output_buf_r.as_mut_ptr(),
-        ];
+        // Point CLAP audio buffers directly at caller's data (in-place processing)
+        let mut in_ptrs: [*mut f32; 2] = [buf_l.as_mut_ptr(), buf_r.as_mut_ptr()];
+        let mut out_ptrs: [*mut f32; 2] = [buf_l.as_mut_ptr(), buf_r.as_mut_ptr()];
 
         let mut audio_in = clap_audio_buffer {
             data32: in_ptrs.as_mut_ptr(),
@@ -402,7 +380,7 @@ impl ClapInstance {
         };
 
         // Build input events from pending parameter changes
-        let mut param_events: Vec<clap_event_param_value> = self
+        let param_events: Vec<clap_event_param_value> = self
             .pending_params
             .drain(..)
             .map(|(param_id, value)| clap_event_param_value {
@@ -424,7 +402,7 @@ impl ClapInstance {
             .collect();
 
         let mut event_ctx = ParamEventListCtx {
-            events: std::mem::take(&mut param_events),
+            events: param_events,
         };
 
         let in_events = clap_input_events {
@@ -453,10 +431,6 @@ impl ClapInstance {
         if let Some(process_fn) = unsafe { (*self.plugin).process } {
             unsafe { process_fn(self.plugin, &process_data) };
         }
-
-        // Copy output back
-        buf_l[..frames].copy_from_slice(&self.output_buf_l[..frames]);
-        buf_r[..frames].copy_from_slice(&self.output_buf_r[..frames]);
     }
 }
 

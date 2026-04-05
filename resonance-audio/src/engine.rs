@@ -77,12 +77,13 @@ impl AudioEngine {
         let tempo_audio = Arc::clone(&tempo_map);
 
         // Plugin instances shared between engine thread and audio callback
-        let plugins: Arc<parking_lot::RwLock<HashMap<PluginInstanceId, SyncClapInstance>>> =
+        let plugins: Arc<parking_lot::RwLock<HashMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>> =
             Arc::new(parking_lot::RwLock::new(HashMap::new()));
         let plugins_audio = Arc::clone(&plugins);
 
         // Build the cpal stream
-        let stream_config: cpal::StreamConfig = config.into();
+        let mut stream_config: cpal::StreamConfig = config.into();
+        stream_config.buffer_size = cpal::BufferSize::Fixed(256);
         let audio_sample_rate = sample_rate;
 
         // Pre-allocated per-track processing buffers (moved into audio callback closure)
@@ -92,7 +93,7 @@ impl AudioEngine {
 
         // Monitor ring buffer: input callback → output callback
         // Separate from the recording ring buffer (which goes input → engine thread)
-        let monitor_ring = ringbuf::HeapRb::<f32>::new(96000 * 2 * 2); // ~2s stereo
+        let monitor_ring = ringbuf::HeapRb::<f32>::new(4096 * 2); // ~4096 stereo frames
         let (monitor_prod, mut monitor_cons) = monitor_ring.split();
         let monitor_prod = Arc::new(parking_lot::Mutex::new(monitor_prod));
         let monitor_prod_audio = Arc::clone(&monitor_prod);
@@ -263,7 +264,8 @@ fn build_input_stream(
 
     let sample_rate = config.sample_rate().0;
     let channels = config.channels();
-    let stream_config: cpal::StreamConfig = config.into();
+    let mut stream_config: cpal::StreamConfig = config.into();
+    stream_config.buffer_size = cpal::BufferSize::Fixed(256);
 
     let stream = device
         .build_input_stream(
@@ -395,7 +397,7 @@ fn engine_thread(
     tracks: Arc<parking_lot::RwLock<HashMap<TrackId, Track>>>,
     clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<parking_lot::RwLock<TempoMap>>,
-    plugins: Arc<parking_lot::RwLock<HashMap<PluginInstanceId, SyncClapInstance>>>,
+    plugins: Arc<parking_lot::RwLock<HashMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
     monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     sample_rate: u32,
 ) {
@@ -758,7 +760,7 @@ fn engine_thread(
                             // Query params before moving instance into shared map
                             let params = instance.query_params();
 
-                            plugins.write().insert(instance_id, SyncClapInstance(instance));
+                            plugins.write().insert(instance_id, parking_lot::Mutex::new(SyncClapInstance(instance)));
 
                             if let Some(track) = tracks.write().get_mut(&track_id) {
                                 track.plugin_ids.push(instance_id);
@@ -891,8 +893,8 @@ fn engine_thread(
                     param_id,
                     value,
                 } => {
-                    if let Some(sync_instance) = plugins.write().get_mut(&instance_id) {
-                        sync_instance.0.set_param(param_id, value);
+                    if let Some(mutex) = plugins.read().get(&instance_id) {
+                        mutex.lock().0.set_param(param_id, value);
                     }
                 }
             },
@@ -927,7 +929,7 @@ fn mix_audio(
     shared: &SharedState,
     tracks: &parking_lot::RwLock<HashMap<TrackId, Track>>,
     clips: &parking_lot::RwLock<Vec<AudioClip>>,
-    plugins: &parking_lot::RwLock<HashMap<PluginInstanceId, SyncClapInstance>>,
+    plugins: &parking_lot::RwLock<HashMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>,
     tempo_map: &parking_lot::RwLock<TempoMap>,
     sample_rate: u32,
     track_buf_l: &mut Vec<f32>,
@@ -947,11 +949,17 @@ fn mix_audio(
     let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..frames * 2]);
     let monitor_frames = monitor_samples / 2;
 
+    // Drain excess samples to prevent latency accumulation
+    {
+        let mut discard = [0.0f32; 512];
+        while monitor_cons.pop_slice(&mut discard) > 0 {}
+    }
+
     if !shared.playing.load(Ordering::Relaxed) {
         // Even when stopped, output monitored audio for armed tracks
         if monitor_frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
             let tracks_guard = tracks.read();
-            let mut plugins_guard = plugins.write();
+            let plugins_guard = plugins.read();
             let any_monitor = tracks_guard.values().any(|t| t.monitor_enabled && !t.muted);
 
             if any_monitor {
@@ -970,12 +978,14 @@ fn mix_audio(
 
                     // Process through plugin chain
                     for &plugin_id in &track.plugin_ids {
-                        if let Some(si) = plugins_guard.get_mut(&plugin_id) {
-                            si.0.process(
-                                &mut track_buf_l[..monitor_frames],
-                                &mut track_buf_r[..monitor_frames],
-                                monitor_frames,
-                            );
+                        if let Some(si) = plugins_guard.get(&plugin_id) {
+                            if let Some(mut inst) = si.try_lock() {
+                                inst.0.process(
+                                    &mut track_buf_l[..monitor_frames],
+                                    &mut track_buf_r[..monitor_frames],
+                                    monitor_frames,
+                                );
+                            }
                         }
                     }
 
@@ -1006,7 +1016,7 @@ fn mix_audio(
 
     let tracks_guard = tracks.read();
     let clips_guard = clips.read();
-    let mut plugins_guard = plugins.write();
+    let plugins_guard = plugins.read();
 
     // Per-track processing: (clips + monitor input) → plugins → volume → master
     for track in tracks_guard.values() {
@@ -1062,11 +1072,12 @@ fn mix_audio(
         // Process through plugin chain (even if no audio — plugins may generate tails)
         if !track.plugin_ids.is_empty() {
             for &plugin_id in &track.plugin_ids {
-                if let Some(sync_instance) = plugins_guard.get_mut(&plugin_id) {
-                    sync_instance
-                        .0
-                        .process(&mut track_buf_l[..frames], &mut track_buf_r[..frames], frames);
-                    has_audio = true;
+                if let Some(mutex) = plugins_guard.get(&plugin_id) {
+                    if let Some(mut inst) = mutex.try_lock() {
+                        inst.0
+                            .process(&mut track_buf_l[..frames], &mut track_buf_r[..frames], frames);
+                        has_audio = true;
+                    }
                 }
             }
         }
