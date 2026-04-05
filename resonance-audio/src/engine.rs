@@ -1,5 +1,6 @@
 /// The core audio engine managing tracks, clips, and the cpal output stream.
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -7,6 +8,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
 use ringbuf::traits::{Consumer, Producer, Split};
 
+use crate::clap_host::{ClapBundle, SyncClapInstance};
 use crate::decode;
 use crate::types::*;
 
@@ -31,8 +33,6 @@ pub struct AudioEngine {
 unsafe impl Send for AudioEngine {}
 
 /// Serializes access to PIPEWIRE_NODE env var manipulation.
-/// On Linux/glibc, setenv is thread-safe, but we serialize our own access
-/// as defense in depth since POSIX doesn't guarantee it.
 static PIPEWIRE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 impl AudioEngine {
@@ -59,10 +59,8 @@ impl AudioEngine {
             recording: AtomicBool::new(false),
         });
 
-        // Timeline state lives on the engine thread
         let shared_audio = Arc::clone(&shared);
 
-        // Tracks and clips for the mixer - shared via Arc
         let tracks: Arc<parking_lot::RwLock<HashMap<TrackId, Track>>> =
             Arc::new(parking_lot::RwLock::new(HashMap::new()));
         let clips: Arc<parking_lot::RwLock<Vec<AudioClip>>> =
@@ -71,14 +69,22 @@ impl AudioEngine {
         let tracks_audio = Arc::clone(&tracks);
         let clips_audio = Arc::clone(&clips);
 
-        // Tempo map shared between engine thread and audio callback
         let tempo_map: Arc<parking_lot::RwLock<TempoMap>> =
             Arc::new(parking_lot::RwLock::new(TempoMap::default()));
         let tempo_audio = Arc::clone(&tempo_map);
 
+        // Plugin instances shared between engine thread and audio callback
+        let plugins: Arc<parking_lot::RwLock<HashMap<PluginInstanceId, SyncClapInstance>>> =
+            Arc::new(parking_lot::RwLock::new(HashMap::new()));
+        let plugins_audio = Arc::clone(&plugins);
+
         // Build the cpal stream
         let stream_config: cpal::StreamConfig = config.into();
         let audio_sample_rate = sample_rate;
+
+        // Pre-allocated per-track processing buffers (moved into audio callback closure)
+        let mut track_buf_l = vec![0.0f32; 8192];
+        let mut track_buf_r = vec![0.0f32; 8192];
 
         let stream = device
             .build_output_stream(
@@ -90,8 +96,11 @@ impl AudioEngine {
                         &shared_audio,
                         &tracks_audio,
                         &clips_audio,
+                        &plugins_audio,
                         &tempo_audio,
                         audio_sample_rate,
+                        &mut track_buf_l,
+                        &mut track_buf_r,
                     );
                 },
                 |err| {
@@ -110,6 +119,7 @@ impl AudioEngine {
         let tracks_ctrl = Arc::clone(&tracks);
         let clips_ctrl = Arc::clone(&clips);
         let tempo_ctrl = Arc::clone(&tempo_map);
+        let plugins_ctrl = Arc::clone(&plugins);
 
         std::thread::Builder::new()
             .name("resonance-engine".into())
@@ -121,6 +131,7 @@ impl AudioEngine {
                     tracks_ctrl,
                     clips_ctrl,
                     tempo_ctrl,
+                    plugins_ctrl,
                     sample_rate,
                 );
             })
@@ -183,7 +194,6 @@ fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>) {
     let full_text = run_pactl(&["list", "sources"]);
 
     if let (Some(short), Some(full)) = (short_text, full_text) {
-        // Parse descriptions from full output (pairs of Name: and Description: lines)
         let mut descriptions: HashMap<String, String> = HashMap::new();
         let mut current_name = None;
         for line in full.lines() {
@@ -197,7 +207,6 @@ fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>) {
             }
         }
 
-        // Parse short listing for source names
         for line in short.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 2 {
@@ -215,16 +224,11 @@ fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>) {
 }
 
 /// Build a cpal input stream that pushes samples into a ring buffer producer.
-/// Uses PIPEWIRE_NODE env var to route to the desired PipeWire source.
 fn build_input_stream(
     source_name: Option<&str>,
     shared: Arc<SharedState>,
     mut producer: ringbuf::HeapProd<f32>,
 ) -> Result<(cpal::Stream, u32, u16), String> {
-    // Serialize env var access. On Linux/glibc setenv is thread-safe, but we
-    // hold a lock as defense in depth. The env var is only read by PipeWire's
-    // ALSA plugin during device creation, and no other code in this process
-    // reads PIPEWIRE_NODE.
     let _env_guard = PIPEWIRE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     if let Some(name) = source_name {
@@ -263,10 +267,7 @@ fn build_input_stream(
         .play()
         .map_err(|e| format!("Failed to start input stream: {}", e))?;
 
-    // Clean up env var after stream is created
     std::env::remove_var("PIPEWIRE_NODE");
-
-    // _env_guard drops here, releasing the lock
 
     Ok((stream, sample_rate, channels))
 }
@@ -287,12 +288,10 @@ fn drain_ring_to_buffers(
         let chunk = &temp[..count];
 
         if channels == 2 {
-            // Direct copy for stereo input — no intermediate allocation
             for buffer in buffers.values_mut() {
                 buffer.extend_from_slice(chunk);
             }
         } else {
-            // Convert to stereo interleaved inline
             let frames = chunk.len() / channels;
             for buffer in buffers.values_mut() {
                 buffer.reserve(frames * 2);
@@ -320,7 +319,6 @@ fn finalize_recording(
     clips: &parking_lot::RwLock<Vec<AudioClip>>,
     event_tx: &Sender<AudioEvent>,
 ) {
-    // Drain any remaining samples
     if let Some(ref mut cons) = ring_consumer {
         drain_ring_to_buffers(cons, recording_buffers, input_channels);
     }
@@ -333,7 +331,6 @@ fn finalize_recording(
         let clip_id = *next_clip_id;
         *next_clip_id += 1;
 
-        // Resample if input and output sample rates differ
         let final_data = if input_sample_rate != output_sample_rate {
             decode::linear_resample(&buffer, input_sample_rate, output_sample_rate)
         } else {
@@ -372,20 +369,24 @@ fn engine_thread(
     tracks: Arc<parking_lot::RwLock<HashMap<TrackId, Track>>>,
     clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<parking_lot::RwLock<TempoMap>>,
+    plugins: Arc<parking_lot::RwLock<HashMap<PluginInstanceId, SyncClapInstance>>>,
     sample_rate: u32,
 ) {
     let mut next_track_id: TrackId = 1;
     let mut next_clip_id: ClipId = 1;
+    let mut next_plugin_id: PluginInstanceId = 1;
     let mut last_playhead_report = std::time::Instant::now();
 
     // Recording state (engine thread local)
     let mut recording_buffers: HashMap<TrackId, Vec<f32>> = HashMap::new();
     let mut recording_start_sample: SamplePos = 0;
     let mut ring_consumer: Option<ringbuf::HeapCons<f32>> = None;
-    // Underscore prefix suppresses warnings; held to keep cpal::Stream alive
     let mut _input_stream: Option<cpal::Stream> = None;
     let mut input_channels: u16 = 2;
     let mut input_sample_rate: u32 = sample_rate;
+
+    // Plugin hosting state (engine thread local)
+    let mut bundles: Vec<ClapBundle> = Vec::new();
 
     // Report actual sample rate to GUI
     let _ = event_tx.send(AudioEvent::SampleRateDetected { sample_rate });
@@ -400,13 +401,11 @@ fn engine_thread(
     }
 
     loop {
-        // Process commands - use a short timeout to allow periodic playhead updates
         match cmd_rx.recv_timeout(std::time::Duration::from_millis(16)) {
             Ok(cmd) => match cmd {
                 AudioCommand::Play => {
                     shared.playing.store(true, Ordering::SeqCst);
 
-                    // Check if any tracks are armed for recording
                     let armed_tracks: Vec<(TrackId, Option<String>)> = {
                         let tracks_guard = tracks.read();
                         tracks_guard
@@ -417,19 +416,15 @@ fn engine_thread(
                     };
 
                     if !armed_tracks.is_empty() {
-                        // Determine which input source to use
                         let source_name: Option<String> = armed_tracks
                             .iter()
                             .find_map(|(_, name)| name.clone());
 
-                        // Ring buffer: 10 seconds at 96kHz stereo — generous for any config
                         let ring_size = 96000 * 2 * 10;
                         let ring = ringbuf::HeapRb::<f32>::new(ring_size);
                         let (prod, cons) = ring.split();
                         ring_consumer = Some(cons);
 
-                        // Set recording flag BEFORE building stream so the input
-                        // callback captures samples from the very first buffer
                         recording_start_sample = shared.playhead.load(Ordering::SeqCst);
                         for (track_id, _) in &armed_tracks {
                             recording_buffers.insert(
@@ -450,7 +445,6 @@ fn engine_thread(
                                 });
                             }
                             Err(e) => {
-                                // Undo recording state on failure
                                 shared.recording.store(false, Ordering::SeqCst);
                                 recording_buffers.clear();
                                 ring_consumer = None;
@@ -513,8 +507,6 @@ fn engine_thread(
                     path,
                     start_sample,
                 } => {
-                    // Decode on a separate thread to avoid blocking the engine
-                    // (which would stall recording buffer draining and command processing)
                     let clips = Arc::clone(&clips);
                     let event_tx = event_tx.clone();
                     let clip_id = next_clip_id;
@@ -591,9 +583,16 @@ fn engine_thread(
                     let _ = event_tx.send(AudioEvent::TrackAdded { track_id: id });
                 }
                 AudioCommand::RemoveTrack { track_id } => {
+                    // Remove plugins for this track
+                    if let Some(track) = tracks.read().get(&track_id) {
+                        let plugin_ids = track.plugin_ids.clone();
+                        drop(tracks.read());
+                        for pid in plugin_ids {
+                            plugins.write().remove(&pid);
+                        }
+                    }
                     tracks.write().remove(&track_id);
                     clips.write().retain(|c| c.track_id != track_id);
-                    // Clean up any active recording buffer for this track
                     recording_buffers.remove(&track_id);
                     let _ = event_tx.send(AudioEvent::TrackRemoved { track_id });
                 }
@@ -631,6 +630,95 @@ fn engine_thread(
                 AudioCommand::SetMetronomeEnabled { enabled } => {
                     tempo_map.write().metronome_enabled = enabled;
                 }
+                AudioCommand::AddPlugin {
+                    track_id,
+                    clap_file_path,
+                    clap_plugin_id,
+                } => {
+                    let path = Path::new(&clap_file_path);
+
+                    // Load bundle (or reuse existing)
+                    let bundle_idx = bundles.iter().position(|b| {
+                        b.descriptors().iter().any(|d| d.id == clap_plugin_id)
+                    });
+
+                    let bundle_idx = match bundle_idx {
+                        Some(idx) => idx,
+                        None => {
+                            match ClapBundle::load(path) {
+                                Ok(bundle) => {
+                                    bundles.push(bundle);
+                                    bundles.len() - 1
+                                }
+                                Err(e) => {
+                                    let _ = event_tx.send(AudioEvent::Error(format!(
+                                        "Failed to load plugin: {}", e
+                                    )));
+                                    continue;
+                                }
+                            }
+                        }
+                    };
+
+                    // Determine which plugin ID to instantiate
+                    let actual_plugin_id = if clap_plugin_id.is_empty() {
+                        match bundles[bundle_idx].descriptors().first() {
+                            Some(d) => d.id.clone(),
+                            None => {
+                                let _ = event_tx.send(AudioEvent::Error(
+                                    "No plugins found in file".to_string(),
+                                ));
+                                continue;
+                            }
+                        }
+                    } else {
+                        clap_plugin_id
+                    };
+
+                    let plugin_name = bundles[bundle_idx]
+                        .descriptors()
+                        .iter()
+                        .find(|d| d.id == actual_plugin_id)
+                        .map(|d| d.name.clone())
+                        .unwrap_or_else(|| actual_plugin_id.clone());
+
+                    match bundles[bundle_idx].create_instance(&actual_plugin_id, sample_rate) {
+                        Ok(instance) => {
+                            let instance_id = next_plugin_id;
+                            next_plugin_id += 1;
+
+                            plugins.write().insert(instance_id, SyncClapInstance(instance));
+
+                            if let Some(track) = tracks.write().get_mut(&track_id) {
+                                track.plugin_ids.push(instance_id);
+                            }
+
+                            let _ = event_tx.send(AudioEvent::PluginAdded {
+                                track_id,
+                                instance_id,
+                                plugin_name,
+                            });
+                        }
+                        Err(e) => {
+                            let _ = event_tx.send(AudioEvent::Error(format!(
+                                "Failed to create plugin instance: {}", e
+                            )));
+                        }
+                    }
+                }
+                AudioCommand::RemovePlugin {
+                    track_id,
+                    instance_id,
+                } => {
+                    if let Some(track) = tracks.write().get_mut(&track_id) {
+                        track.plugin_ids.retain(|&id| id != instance_id);
+                    }
+                    plugins.write().remove(&instance_id);
+                    let _ = event_tx.send(AudioEvent::PluginRemoved {
+                        track_id,
+                        instance_id,
+                    });
+                }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
@@ -655,17 +743,21 @@ fn engine_thread(
 }
 
 /// Mix audio from all active clips into the output buffer.
-/// This runs on the cpal audio callback thread — must be allocation-free.
+/// This runs on the cpal audio callback thread — must be allocation-free
+/// (uses pre-allocated track_buf_l/track_buf_r).
 fn mix_audio(
     data: &mut [f32],
     channels: usize,
     shared: &SharedState,
     tracks: &parking_lot::RwLock<HashMap<TrackId, Track>>,
     clips: &parking_lot::RwLock<Vec<AudioClip>>,
+    plugins: &parking_lot::RwLock<HashMap<PluginInstanceId, SyncClapInstance>>,
     tempo_map: &parking_lot::RwLock<TempoMap>,
     sample_rate: u32,
+    track_buf_l: &mut Vec<f32>,
+    track_buf_r: &mut Vec<f32>,
 ) {
-    // Zero the buffer first
+    // Zero the output buffer
     for sample in data.iter_mut() {
         *sample = 0.0;
     }
@@ -676,57 +768,91 @@ fn mix_audio(
 
     let playhead = shared.playhead.load(Ordering::Relaxed);
     let output_frames = data.len() / channels;
+    let frames = output_frames.min(8192);
 
     let tracks_guard = tracks.read();
     let clips_guard = clips.read();
+    let mut plugins_guard = plugins.write();
 
-    for clip in clips_guard.iter() {
-        let track = match tracks_guard.get(&clip.track_id) {
-            Some(t) => t,
-            None => continue,
-        };
-
+    // Per-track processing: clips → plugins → volume → master
+    for track in tracks_guard.values() {
         if track.muted {
             continue;
         }
 
+        // Zero per-track buffers
+        track_buf_l[..frames].fill(0.0);
+        track_buf_r[..frames].fill(0.0);
+
+        // Accumulate all clips for this track into de-interleaved track buffers
+        let mut has_audio = false;
+        for clip in clips_guard.iter() {
+            if clip.track_id != track.id {
+                continue;
+            }
+
+            let clip_frames = clip.duration_frames();
+
+            for frame_offset in 0..frames {
+                let timeline_frame = playhead + frame_offset as u64;
+
+                if timeline_frame < clip.start_sample
+                    || timeline_frame >= clip.start_sample + clip_frames
+                {
+                    continue;
+                }
+
+                let clip_frame = (timeline_frame - clip.start_sample) as usize;
+                let clip_idx = clip_frame * 2;
+
+                if clip_idx + 1 >= clip.data.len() {
+                    continue;
+                }
+
+                track_buf_l[frame_offset] += clip.data[clip_idx];
+                track_buf_r[frame_offset] += clip.data[clip_idx + 1];
+                has_audio = true;
+            }
+        }
+
+        // Process through plugin chain (even if no audio — plugins may generate tails)
+        if !track.plugin_ids.is_empty() {
+            for &plugin_id in &track.plugin_ids {
+                if let Some(sync_instance) = plugins_guard.get_mut(&plugin_id) {
+                    sync_instance
+                        .0
+                        .process(&mut track_buf_l[..frames], &mut track_buf_r[..frames], frames);
+                    has_audio = true;
+                }
+            }
+        }
+
+        if !has_audio {
+            continue;
+        }
+
+        // Apply track volume and sum to master output
         let volume = track.volume;
-        let clip_frames = clip.duration_frames();
-
-        for frame_offset in 0..output_frames {
-            let timeline_frame = playhead + frame_offset as u64;
-
-            if timeline_frame < clip.start_sample || timeline_frame >= clip.start_sample + clip_frames
-            {
-                continue;
-            }
-
-            let clip_frame = (timeline_frame - clip.start_sample) as usize;
-            let clip_idx = clip_frame * 2; // stereo interleaved
-
-            if clip_idx + 1 >= clip.data.len() {
-                continue;
-            }
-
-            let left = clip.data[clip_idx] * volume;
-            let right = clip.data[clip_idx + 1] * volume;
-
+        for frame_offset in 0..frames {
             let out_idx = frame_offset * channels;
             if channels >= 2 {
-                data[out_idx] += left;
-                data[out_idx + 1] += right;
+                data[out_idx] += track_buf_l[frame_offset] * volume;
+                data[out_idx + 1] += track_buf_r[frame_offset] * volume;
             } else {
-                data[out_idx] += (left + right) * 0.5;
+                data[out_idx] +=
+                    (track_buf_l[frame_offset] + track_buf_r[frame_offset]) * 0.5 * volume;
             }
         }
     }
+
+    drop(plugins_guard);
 
     // Metronome click synthesis
     let tm = tempo_map.read();
     if tm.metronome_enabled {
         let spb = tm.samples_per_beat(sample_rate);
         let numerator = tm.numerator as u64;
-        let click_duration_samples = (sample_rate as f32 * 0.02) as u64; // 20ms click
+        let click_duration_samples = (sample_rate as f32 * 0.02) as u64;
 
         for frame_offset in 0..output_frames {
             let timeline_frame = playhead + frame_offset as u64;
