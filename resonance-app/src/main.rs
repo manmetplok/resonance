@@ -49,6 +49,8 @@ pub struct TrackState {
 pub struct PluginSlotState {
     pub instance_id: PluginInstanceId,
     pub plugin_name: String,
+    pub params: Vec<ParamInfo>,
+    pub expanded: bool,
 }
 
 /// GUI-side clip state.
@@ -87,6 +89,8 @@ enum Message {
     ScrollY(f32),
     AddPluginToTrack(TrackId, ScannedPlugin),
     RemovePluginFromTrack(TrackId, PluginInstanceId),
+    TogglePluginPanel(PluginInstanceId),
+    SetPluginParam(PluginInstanceId, u32, f64),
 }
 
 fn main() -> iced::Result {
@@ -280,6 +284,30 @@ impl Resonance {
                     instance_id,
                 });
             }
+            Message::TogglePluginPanel(instance_id) => {
+                for track in &mut self.tracks {
+                    if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
+                        p.expanded = !p.expanded;
+                        break;
+                    }
+                }
+            }
+            Message::SetPluginParam(instance_id, param_id, value) => {
+                self.engine.send(AudioCommand::SetPluginParam {
+                    instance_id,
+                    param_id,
+                    value,
+                });
+                // Update local param state for immediate UI feedback
+                for track in &mut self.tracks {
+                    if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
+                        if let Some(param) = p.params.iter_mut().find(|pp| pp.id == param_id) {
+                            param.current_value = value;
+                        }
+                        break;
+                    }
+                }
+            }
             Message::ScrollY(delta) => {
                 self.scroll_offset_y = (self.scroll_offset_y + delta).max(0.0);
                 // Clamp to max content height
@@ -388,11 +416,14 @@ impl Resonance {
                 track_id,
                 instance_id,
                 plugin_name,
+                params,
             } => {
                 if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
                     track.plugins.push(PluginSlotState {
                         instance_id,
                         plugin_name,
+                        params,
+                        expanded: false,
                     });
                 }
             }
@@ -732,7 +763,7 @@ impl Resonance {
             content = content.push(clip_row);
         }
 
-        // Plugin chain with remove buttons + add button
+        // Plugin chain with clickable names, remove buttons, and expandable params
         for plugin in &track.plugins {
             let pname: String = if plugin.plugin_name.chars().count() > 12 {
                 let mut s: String = plugin.plugin_name.chars().take(10).collect();
@@ -743,18 +774,57 @@ impl Resonance {
             };
             let track_id = track.id;
             let pid = plugin.instance_id;
+            let expanded = plugin.expanded;
+
+            // Clickable plugin name
+            let name_color = if expanded { theme::TEXT } else { theme::ACCENT };
+            let name_btn = button(text(pname).size(9).color(name_color))
+                .on_press(Message::TogglePluginPanel(pid))
+                .style(|_theme, status| theme::small_button_style(status))
+                .padding(1);
+
             let plugin_del = button(text("×").size(9).color(theme::TEXT_DIM))
                 .on_press(Message::RemovePluginFromTrack(track_id, pid))
                 .style(|_theme, status| theme::small_button_style(status))
                 .padding(1);
             let plugin_row = row![
-                text(pname).size(9).color(theme::ACCENT),
+                name_btn,
                 Space::with_width(Length::Fill),
                 plugin_del,
             ]
             .spacing(2)
             .align_y(alignment::Vertical::Center);
             content = content.push(plugin_row);
+
+            // Expandable parameter panel
+            if expanded {
+                for param in &plugin.params {
+                    let param_id = param.id;
+                    let inst_id = pid;
+                    let range = param.min_value..=param.max_value;
+                    let param_slider = slider(
+                        range,
+                        param.current_value,
+                        move |v| Message::SetPluginParam(inst_id, param_id, v),
+                    )
+                    .width(Length::Fill)
+                    .step(0.001);
+
+                    let param_label = text(param.name.clone()).size(8).color(theme::TEXT_DIM);
+                    let param_value_text = text(format!("{:.2}", param.current_value))
+                        .size(8)
+                        .font(Font::MONOSPACE)
+                        .color(theme::TEXT_DIM);
+
+                    let param_row = column![
+                        row![param_label, Space::with_width(Length::Fill), param_value_text]
+                            .spacing(2),
+                        param_slider,
+                    ]
+                    .spacing(1);
+                    content = content.push(param_row);
+                }
+            }
         }
 
         if !self.available_plugins.is_empty() {
