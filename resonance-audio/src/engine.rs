@@ -687,6 +687,9 @@ fn engine_thread(
                             let instance_id = next_plugin_id;
                             next_plugin_id += 1;
 
+                            // Query params before moving instance into shared map
+                            let params = instance.query_params();
+
                             plugins.write().insert(instance_id, SyncClapInstance(instance));
 
                             if let Some(track) = tracks.write().get_mut(&track_id) {
@@ -697,6 +700,7 @@ fn engine_thread(
                                 track_id,
                                 instance_id,
                                 plugin_name,
+                                params,
                             });
                         }
                         Err(e) => {
@@ -813,6 +817,15 @@ fn engine_thread(
                     let _ = event_tx.send(AudioEvent::PluginsScanned {
                         plugins: scanned,
                     });
+                }
+                AudioCommand::SetPluginParam {
+                    instance_id,
+                    param_id,
+                    value,
+                } => {
+                    if let Some(sync_instance) = plugins.write().get_mut(&instance_id) {
+                        sync_instance.0.set_param(param_id, value);
+                    }
                 }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}

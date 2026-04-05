@@ -66,6 +66,11 @@ pub enum AudioCommand {
         instance_id: PluginInstanceId,
     },
     ScanPlugins,
+    SetPluginParam {
+        instance_id: PluginInstanceId,
+        param_id: u32,
+        value: f64,
+    },
 }
 
 /// Events sent from the audio engine back to the GUI.
@@ -116,6 +121,7 @@ pub enum AudioEvent {
         track_id: TrackId,
         instance_id: PluginInstanceId,
         plugin_name: String,
+        params: Vec<ParamInfo>,
     },
     PluginRemoved {
         track_id: TrackId,
@@ -199,6 +205,17 @@ pub struct PluginDescInfo {
     pub id: String,
     pub name: String,
     pub vendor: String,
+}
+
+/// A plugin parameter descriptor with current value.
+#[derive(Debug, Clone)]
+pub struct ParamInfo {
+    pub id: u32,
+    pub name: String,
+    pub min_value: f64,
+    pub max_value: f64,
+    pub default_value: f64,
+    pub current_value: f64,
 }
 
 /// A scanned plugin available for use, with its file path.
