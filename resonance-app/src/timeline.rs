@@ -3,7 +3,7 @@ use iced::widget::canvas;
 use iced::{mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::theme;
-use crate::{ClipState, TrackState};
+use crate::{ClipState, Message, TrackState};
 
 use resonance_audio::types::TrackId;
 
@@ -20,6 +20,7 @@ pub struct TimelineCanvas {
     pub recording_start_sample: u64,
     pub bpm: f32,
     pub time_sig_num: u8,
+    pub scroll_offset_y: f32,
 }
 
 impl TimelineCanvas {
@@ -34,8 +35,35 @@ impl TimelineCanvas {
     }
 }
 
-impl<Message> canvas::Program<Message> for TimelineCanvas {
+impl canvas::Program<Message> for TimelineCanvas {
     type State = ();
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: canvas::Event,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> (canvas::event::Status, Option<Message>) {
+        if let canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
+            let _ = bounds;
+            match delta {
+                mouse::ScrollDelta::Lines { y, .. } => {
+                    return (
+                        canvas::event::Status::Captured,
+                        Some(Message::ScrollY(-y * 30.0)),
+                    );
+                }
+                mouse::ScrollDelta::Pixels { y, .. } => {
+                    return (
+                        canvas::event::Status::Captured,
+                        Some(Message::ScrollY(-y)),
+                    );
+                }
+            }
+        }
+        (canvas::event::Status::Ignored, None)
+    }
 
     fn draw(
         &self,
@@ -47,6 +75,7 @@ impl<Message> canvas::Program<Message> for TimelineCanvas {
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let ruler_height = 30.0;
+        let y_off = self.scroll_offset_y;
 
         // Draw ruler background
         frame.fill_rectangle(
@@ -61,7 +90,13 @@ impl<Message> canvas::Program<Message> for TimelineCanvas {
         let track_area_height = sorted_tracks.len() as f32 * theme::TRACK_HEIGHT;
 
         for (i, track) in sorted_tracks.iter().enumerate() {
-            let y = ruler_height + i as f32 * theme::TRACK_HEIGHT;
+            let y = ruler_height + i as f32 * theme::TRACK_HEIGHT - y_off;
+
+            // Skip tracks entirely above or below the visible area
+            if y + theme::TRACK_HEIGHT < ruler_height || y > bounds.height {
+                continue;
+            }
+
             let bg = if i % 2 == 0 {
                 theme::BG
             } else {
@@ -100,22 +135,21 @@ impl<Message> canvas::Program<Message> for TimelineCanvas {
         }
 
         // Draw bar/beat grid lines through track area
-        self.draw_grid_lines(&mut frame, bounds.width, ruler_height, track_area_height);
+        self.draw_grid_lines(&mut frame, bounds.width, ruler_height, track_area_height, y_off);
 
         // Draw bar/beat ruler
         self.draw_ruler(&mut frame, bounds.width, ruler_height);
 
         // Draw clips
         for clip in &self.clips {
-            self.draw_clip(&mut frame, clip, &sorted_tracks, ruler_height);
+            self.draw_clip(&mut frame, clip, &sorted_tracks, ruler_height, y_off, bounds.height);
         }
 
         // Draw playhead
         let playhead_seconds = self.playhead as f32 / self.sample_rate as f32;
         let playhead_x = playhead_seconds * self.zoom - self.scroll_offset;
         if playhead_x >= 0.0 && playhead_x <= bounds.width {
-            let total_height = ruler_height + track_area_height;
-            let height = total_height.max(bounds.height);
+            let total_height = (ruler_height + track_area_height - y_off).max(bounds.height);
 
             // Playhead triangle at top
             let triangle = canvas::Path::new(|builder| {
@@ -129,7 +163,7 @@ impl<Message> canvas::Program<Message> for TimelineCanvas {
             // Playhead line
             frame.fill_rectangle(
                 Point::new(playhead_x - 0.5, 0.0),
-                Size::new(1.0, height),
+                Size::new(1.0, total_height),
                 theme::ACCENT,
             );
         }
@@ -146,6 +180,7 @@ impl TimelineCanvas {
         width: f32,
         ruler_height: f32,
         track_area_height: f32,
+        _y_off: f32,
     ) {
         let spb_seconds = self.seconds_per_beat();
         let spbar_seconds = self.seconds_per_bar();
@@ -277,6 +312,8 @@ impl TimelineCanvas {
         clip: &ClipState,
         sorted_tracks: &[&TrackState],
         ruler_height: f32,
+        y_off: f32,
+        visible_height: f32,
     ) {
         let track_index = sorted_tracks
             .iter()
@@ -287,7 +324,12 @@ impl TimelineCanvas {
             None => return,
         };
 
-        let y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT + 2.0;
+        let y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT + 2.0 - y_off;
+
+        // Skip clips on tracks outside visible area
+        if y + theme::TRACK_HEIGHT < ruler_height || y > visible_height {
+            return;
+        }
         let clip_height = theme::TRACK_HEIGHT - 4.0;
 
         let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
