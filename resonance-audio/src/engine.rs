@@ -20,6 +20,8 @@ struct SharedState {
     playing: AtomicBool,
     /// Whether recording is active.
     recording: AtomicBool,
+    /// Whether any track is monitoring input.
+    monitoring: AtomicBool,
 }
 
 /// The audio engine.
@@ -57,6 +59,7 @@ impl AudioEngine {
             playhead: AtomicU64::new(0),
             playing: AtomicBool::new(false),
             recording: AtomicBool::new(false),
+            monitoring: AtomicBool::new(false),
         });
 
         let shared_audio = Arc::clone(&shared);
@@ -85,6 +88,14 @@ impl AudioEngine {
         // Pre-allocated per-track processing buffers (moved into audio callback closure)
         let mut track_buf_l = vec![0.0f32; 8192];
         let mut track_buf_r = vec![0.0f32; 8192];
+        let mut monitor_temp = vec![0.0f32; 8192 * 2]; // stereo interleaved temp
+
+        // Monitor ring buffer: input callback → output callback
+        // Separate from the recording ring buffer (which goes input → engine thread)
+        let monitor_ring = ringbuf::HeapRb::<f32>::new(96000 * 2 * 2); // ~2s stereo
+        let (monitor_prod, mut monitor_cons) = monitor_ring.split();
+        let monitor_prod = Arc::new(parking_lot::Mutex::new(monitor_prod));
+        let monitor_prod_audio = Arc::clone(&monitor_prod);
 
         let stream = device
             .build_output_stream(
@@ -101,6 +112,8 @@ impl AudioEngine {
                         audio_sample_rate,
                         &mut track_buf_l,
                         &mut track_buf_r,
+                        &mut monitor_cons,
+                        &mut monitor_temp,
                     );
                 },
                 |err| {
@@ -132,6 +145,7 @@ impl AudioEngine {
                     clips_ctrl,
                     tempo_ctrl,
                     plugins_ctrl,
+                    monitor_prod_audio,
                     sample_rate,
                 );
             })
@@ -223,11 +237,14 @@ fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>) {
     (devices, default_name)
 }
 
-/// Build a cpal input stream that pushes samples into a ring buffer producer.
+/// Build a cpal input stream that pushes samples into ring buffer producers.
+/// `rec_producer` is for recording (engine thread drains it).
+/// `mon_producer` is for monitoring (audio callback reads it).
 fn build_input_stream(
     source_name: Option<&str>,
     shared: Arc<SharedState>,
-    mut producer: ringbuf::HeapProd<f32>,
+    mut rec_producer: Option<ringbuf::HeapProd<f32>>,
+    mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
 ) -> Result<(cpal::Stream, u32, u16), String> {
     let _env_guard = PIPEWIRE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -252,8 +269,17 @@ fn build_input_stream(
         .build_input_stream(
             &stream_config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                // Push to recording ring buffer
                 if shared.recording.load(Ordering::Relaxed) {
-                    let _ = producer.push_slice(data);
+                    if let Some(ref mut prod) = rec_producer {
+                        let _ = prod.push_slice(data);
+                    }
+                }
+                // Push to monitor ring buffer
+                if shared.monitoring.load(Ordering::Relaxed) {
+                    if let Some(mut prod) = mon_producer.try_lock() {
+                        let _ = prod.push_slice(data);
+                    }
                 }
             },
             |err| {
@@ -370,6 +396,7 @@ fn engine_thread(
     clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<parking_lot::RwLock<TempoMap>>,
     plugins: Arc<parking_lot::RwLock<HashMap<PluginInstanceId, SyncClapInstance>>>,
+    monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     sample_rate: u32,
 ) {
     let mut next_track_id: TrackId = 1;
@@ -434,7 +461,7 @@ fn engine_thread(
                         }
                         shared.recording.store(true, Ordering::SeqCst);
 
-                        match build_input_stream(source_name.as_deref(), Arc::clone(&shared), prod) {
+                        match build_input_stream(source_name.as_deref(), Arc::clone(&shared), Some(prod), Arc::clone(&monitor_prod)) {
                             Ok((stream, in_sr, in_ch)) => {
                                 _input_stream = Some(stream);
                                 input_sample_rate = in_sr;
@@ -599,6 +626,47 @@ fn engine_thread(
                 AudioCommand::SetTrackRecordArm { track_id, armed } => {
                     if let Some(track) = tracks.write().get_mut(&track_id) {
                         track.record_armed = armed;
+                    }
+                }
+                AudioCommand::SetTrackMonitor {
+                    track_id,
+                    enabled,
+                } => {
+                    if let Some(track) = tracks.write().get_mut(&track_id) {
+                        track.monitor_enabled = enabled;
+                    }
+                    // Update monitoring flag: true if any track has monitoring enabled
+                    let any_monitoring = tracks.read().values().any(|t| t.monitor_enabled);
+                    shared.monitoring.store(any_monitoring, Ordering::SeqCst);
+
+                    // Start input stream if monitoring and no stream active
+                    if any_monitoring && _input_stream.is_none() {
+                        let source_name: Option<String> = {
+                            let tg = tracks.read();
+                            tg.values()
+                                .find(|t| t.monitor_enabled)
+                                .and_then(|t| t.input_device_name.clone())
+                        };
+                        match build_input_stream(
+                            source_name.as_deref(),
+                            Arc::clone(&shared),
+                            None,
+                            Arc::clone(&monitor_prod),
+                        ) {
+                            Ok((stream, in_sr, in_ch)) => {
+                                _input_stream = Some(stream);
+                                input_sample_rate = in_sr;
+                                input_channels = in_ch;
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(AudioEvent::Error(format!(
+                                    "Failed to start monitoring: {}", e
+                                )));
+                            }
+                        }
+                    } else if !any_monitoring && !shared.recording.load(Ordering::SeqCst) {
+                        // Stop input stream if no monitoring and not recording
+                        _input_stream = None;
                     }
                 }
                 AudioCommand::SetTrackInputDevice {
@@ -864,25 +932,83 @@ fn mix_audio(
     sample_rate: u32,
     track_buf_l: &mut Vec<f32>,
     track_buf_r: &mut Vec<f32>,
+    monitor_cons: &mut ringbuf::HeapCons<f32>,
+    monitor_temp: &mut Vec<f32>,
 ) {
     // Zero the output buffer
     for sample in data.iter_mut() {
         *sample = 0.0;
     }
 
+    let output_frames = data.len() / channels;
+    let frames = output_frames.min(8192);
+
+    // Read monitor input (always drain to keep buffer fresh, even when not playing)
+    let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..frames * 2]);
+    let monitor_frames = monitor_samples / 2;
+
     if !shared.playing.load(Ordering::Relaxed) {
+        // Even when stopped, output monitored audio for armed tracks
+        if monitor_frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
+            let tracks_guard = tracks.read();
+            let mut plugins_guard = plugins.write();
+            let any_monitor = tracks_guard.values().any(|t| t.monitor_enabled && !t.muted);
+
+            if any_monitor {
+                for track in tracks_guard.values() {
+                    if !track.monitor_enabled || track.muted {
+                        continue;
+                    }
+
+                    // De-interleave monitor input into track buffers
+                    track_buf_l[..monitor_frames].fill(0.0);
+                    track_buf_r[..monitor_frames].fill(0.0);
+                    for f in 0..monitor_frames {
+                        track_buf_l[f] = monitor_temp[f * 2];
+                        track_buf_r[f] = monitor_temp[f * 2 + 1];
+                    }
+
+                    // Process through plugin chain
+                    for &plugin_id in &track.plugin_ids {
+                        if let Some(si) = plugins_guard.get_mut(&plugin_id) {
+                            si.0.process(
+                                &mut track_buf_l[..monitor_frames],
+                                &mut track_buf_r[..monitor_frames],
+                                monitor_frames,
+                            );
+                        }
+                    }
+
+                    // Sum to output
+                    let volume = track.volume;
+                    for f in 0..monitor_frames {
+                        let out_idx = f * channels;
+                        if channels >= 2 {
+                            data[out_idx] += track_buf_l[f] * volume;
+                            data[out_idx + 1] += track_buf_r[f] * volume;
+                        } else {
+                            data[out_idx] +=
+                                (track_buf_l[f] + track_buf_r[f]) * 0.5 * volume;
+                        }
+                    }
+                }
+
+                // Hard clip
+                for sample in data.iter_mut() {
+                    *sample = sample.clamp(-1.0, 1.0);
+                }
+            }
+        }
         return;
     }
 
     let playhead = shared.playhead.load(Ordering::Relaxed);
-    let output_frames = data.len() / channels;
-    let frames = output_frames.min(8192);
 
     let tracks_guard = tracks.read();
     let clips_guard = clips.read();
     let mut plugins_guard = plugins.write();
 
-    // Per-track processing: clips → plugins → volume → master
+    // Per-track processing: (clips + monitor input) → plugins → volume → master
     for track in tracks_guard.values() {
         if track.muted {
             continue;
@@ -892,8 +1018,18 @@ fn mix_audio(
         track_buf_l[..frames].fill(0.0);
         track_buf_r[..frames].fill(0.0);
 
-        // Accumulate all clips for this track into de-interleaved track buffers
+        // Mix monitor input for tracks with monitoring enabled
         let mut has_audio = false;
+        if track.monitor_enabled && monitor_frames > 0 {
+            let mix_frames = frames.min(monitor_frames);
+            for f in 0..mix_frames {
+                track_buf_l[f] += monitor_temp[f * 2];
+                track_buf_r[f] += monitor_temp[f * 2 + 1];
+            }
+            has_audio = true;
+        }
+
+        // Accumulate all clips for this track into de-interleaved track buffers
         for clip in clips_guard.iter() {
             if clip.track_id != track.id {
                 continue;
