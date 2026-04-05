@@ -719,6 +719,101 @@ fn engine_thread(
                         instance_id,
                     });
                 }
+                AudioCommand::ScanPlugins => {
+                    let mut scanned = Vec::new();
+                    let mut scan_dirs: Vec<std::path::PathBuf> = Vec::new();
+
+                    // ~/.clap/
+                    if let Some(home) = std::env::var_os("HOME") {
+                        let clap_dir = std::path::PathBuf::from(home).join(".clap");
+                        if clap_dir.is_dir() {
+                            scan_dirs.push(clap_dir);
+                        }
+                    }
+
+                    // /usr/lib/clap/
+                    let sys_dir = std::path::PathBuf::from("/usr/lib/clap");
+                    if sys_dir.is_dir() {
+                        scan_dirs.push(sys_dir);
+                    }
+
+                    // Bundled plugins: find target/bundled/ relative to the executable
+                    if let Ok(exe) = std::env::current_exe() {
+                        if let Some(exe_dir) = exe.parent() {
+                            // cargo run: target/debug/ → look for ../../target/bundled/
+                            let bundled = exe_dir
+                                .parent()
+                                .and_then(|p| p.parent())
+                                .map(|p| p.join("target").join("bundled"));
+                            if let Some(dir) = bundled {
+                                if dir.is_dir() {
+                                    scan_dirs.push(dir);
+                                }
+                            }
+                        }
+                    }
+
+                    // Also check workspace root target/bundled/
+                    let workspace_bundled = std::path::PathBuf::from("target/bundled");
+                    if workspace_bundled.is_dir() {
+                        scan_dirs.push(workspace_bundled);
+                    }
+
+                    for dir in &scan_dirs {
+                        let entries = match std::fs::read_dir(dir) {
+                            Ok(e) => e,
+                            Err(_) => continue,
+                        };
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            // Handle both .clap files and .clap directories (bundles)
+                            let is_clap = path
+                                .extension()
+                                .map(|e| e == "clap")
+                                .unwrap_or(false);
+                            // Also follow symlinks to .so files named *.clap
+                            let is_clap = is_clap || path.to_str().map(|s| s.ends_with(".clap")).unwrap_or(false);
+
+                            if !is_clap {
+                                continue;
+                            }
+
+                            // Resolve symlinks for loading
+                            let real_path = match std::fs::canonicalize(&path) {
+                                Ok(p) => p,
+                                Err(_) => path.clone(),
+                            };
+
+                            match ClapBundle::load(&real_path) {
+                                Ok(bundle) => {
+                                    for desc in bundle.descriptors() {
+                                        scanned.push(ScannedPlugin {
+                                            clap_file_path: real_path
+                                                .to_string_lossy()
+                                                .to_string(),
+                                            clap_plugin_id: desc.id.clone(),
+                                            name: desc.name.clone(),
+                                            vendor: desc.vendor.clone(),
+                                        });
+                                    }
+                                    // Keep bundle alive for later instantiation
+                                    bundles.push(bundle);
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "Failed to scan {}: {}",
+                                        path.display(),
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    let _ = event_tx.send(AudioEvent::PluginsScanned {
+                        plugins: scanned,
+                    });
+                }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,

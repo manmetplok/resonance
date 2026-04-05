@@ -65,6 +65,7 @@ pub enum AudioCommand {
         track_id: TrackId,
         instance_id: PluginInstanceId,
     },
+    ScanPlugins,
 }
 
 /// Events sent from the audio engine back to the GUI.
@@ -119,6 +120,9 @@ pub enum AudioEvent {
     PluginRemoved {
         track_id: TrackId,
         instance_id: PluginInstanceId,
+    },
+    PluginsScanned {
+        plugins: Vec<ScannedPlugin>,
     },
 }
 
@@ -189,12 +193,31 @@ impl std::fmt::Display for InputDeviceInfo {
     }
 }
 
-/// Describes a plugin available in a .clap bundle.
+/// Describes a plugin available in a .clap bundle (used during loading).
 #[derive(Debug, Clone)]
 pub struct PluginDescInfo {
     pub id: String,
     pub name: String,
     pub vendor: String,
+}
+
+/// A scanned plugin available for use, with its file path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScannedPlugin {
+    pub clap_file_path: String,
+    pub clap_plugin_id: String,
+    pub name: String,
+    pub vendor: String,
+}
+
+impl std::fmt::Display for ScannedPlugin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.vendor.is_empty() {
+            write!(f, "{}", self.name)
+        } else {
+            write!(f, "{} ({})", self.name, self.vendor)
+        }
+    }
 }
 
 /// Tempo and time signature state.
