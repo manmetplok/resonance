@@ -43,12 +43,18 @@ impl TimelineCanvas<'_> {
     }
 }
 
+/// Local state for the timeline canvas, tracking active drag operations.
+#[derive(Debug, Default)]
+pub struct TimelineState {
+    dragging_punch: bool,
+}
+
 impl canvas::Program<Message> for TimelineCanvas<'_> {
-    type State = ();
+    type State = TimelineState;
 
     fn update(
         &self,
-        _state: &mut Self::State,
+        state: &mut Self::State,
         event: canvas::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
@@ -90,17 +96,26 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                         if pos.y < ruler_height {
                             let punch_in_x = self.sample_to_x(self.punch_in);
                             let punch_out_x = self.sample_to_x(self.punch_out);
-                            // Hit test: within 8px of a marker handle
-                            if (pos.x - punch_in_x).abs() < 8.0 {
+                            let dist_in = (pos.x - punch_in_x).abs();
+                            let dist_out = (pos.x - punch_out_x).abs();
+                            // When both markers overlap, pick the closest one
+                            if dist_in < 8.0 || dist_out < 8.0 {
+                                let target = if dist_in < 8.0 && dist_out < 8.0 {
+                                    // Both in range — pick closest, prefer Out on tie
+                                    if dist_in < dist_out {
+                                        PunchDragTarget::In
+                                    } else {
+                                        PunchDragTarget::Out
+                                    }
+                                } else if dist_in < 8.0 {
+                                    PunchDragTarget::In
+                                } else {
+                                    PunchDragTarget::Out
+                                };
+                                state.dragging_punch = true;
                                 return (
                                     canvas::event::Status::Captured,
-                                    Some(Message::StartPunchDrag(PunchDragTarget::In)),
-                                );
-                            }
-                            if (pos.x - punch_out_x).abs() < 8.0 {
-                                return (
-                                    canvas::event::Status::Captured,
-                                    Some(Message::StartPunchDrag(PunchDragTarget::Out)),
+                                    Some(Message::StartPunchDrag(target)),
                                 );
                             }
                         }
@@ -108,18 +123,23 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                 }
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                if let Some(pos) = cursor.position_in(bounds) {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::UpdatePunchDrag(pos.x)),
-                    );
+                if state.dragging_punch {
+                    if let Some(pos) = cursor.position_in(bounds) {
+                        return (
+                            canvas::event::Status::Captured,
+                            Some(Message::UpdatePunchDrag(pos.x)),
+                        );
+                    }
                 }
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                return (
-                    canvas::event::Status::Captured,
-                    Some(Message::EndPunchDrag),
-                );
+                if state.dragging_punch {
+                    state.dragging_punch = false;
+                    return (
+                        canvas::event::Status::Captured,
+                        Some(Message::EndPunchDrag),
+                    );
+                }
             }
             _ => {}
         }

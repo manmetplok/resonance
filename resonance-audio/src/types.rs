@@ -75,6 +75,8 @@ pub enum AudioCommand {
         param_id: u32,
         value: f64,
     },
+    /// Set punch in/out range. When enabled, recording is trimmed to [punch_in, punch_out].
+    /// If punch_out <= punch_in, no clip is produced.
     SetPunchRange {
         enabled: bool,
         punch_in: SamplePos,
