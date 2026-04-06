@@ -1,3 +1,4 @@
+use iced::widget::text::Shaping;
 use iced::widget::{
     button, canvas, column, container, mouse_area, opaque, pick_list, row, slider, stack, text,
     Space,
@@ -566,24 +567,24 @@ impl Resonance {
         let bar_beat_str = tempo.format_position(self.playhead, self.sample_rate);
 
         let play_pause = if self.playing {
-            button(text("⏸").size(18).color(theme::TEXT))
+            button(text("⏸").size(18).color(theme::TEXT).shaping(Shaping::Advanced))
                 .on_press(Message::Pause)
                 .style(|_theme, status| theme::transport_button_style(status))
         } else {
-            button(text("▶").size(18).color(theme::ACCENT))
+            button(text("▶").size(18).color(theme::ACCENT).shaping(Shaping::Advanced))
                 .on_press(Message::Play)
                 .style(|_theme, status| theme::transport_button_style(status))
         };
 
-        let stop_btn = button(text("⏹").size(18).color(theme::TEXT))
+        let stop_btn = button(text("⏹").size(18).color(theme::TEXT).shaping(Shaping::Advanced))
             .on_press(Message::Stop)
             .style(|_theme, status| theme::transport_button_style(status));
 
-        let skip_back = button(text("⏪").size(16).color(theme::TEXT))
+        let skip_back = button(text("⏪").size(16).color(theme::TEXT).shaping(Shaping::Advanced))
             .on_press(Message::SkipBack)
             .style(|_theme, status| theme::transport_button_style(status));
 
-        let skip_fwd = button(text("⏩").size(16).color(theme::TEXT))
+        let skip_fwd = button(text("⏩").size(16).color(theme::TEXT).shaping(Shaping::Advanced))
             .on_press(Message::SkipForward)
             .style(|_theme, status| theme::transport_button_style(status));
 
