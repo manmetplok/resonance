@@ -45,7 +45,7 @@ pub struct ResonanceIr {
     ir_info: Arc<Mutex<String>>,
     file_list: Arc<Mutex<Vec<String>>>,
     last_file_index: i32,
-    sample_rate: f32,
+    sample_rate: Arc<Mutex<f32>>,
 }
 
 impl Default for ResonanceIr {
@@ -58,7 +58,7 @@ impl Default for ResonanceIr {
             ir_info: Arc::new(Mutex::new(String::new())),
             file_list: Arc::new(Mutex::new(Vec::new())),
             last_file_index: -1,
-            sample_rate: 44100.0,
+            sample_rate: Arc::new(Mutex::new(44100.0)),
         }
     }
 }
@@ -110,42 +110,45 @@ impl Plugin for ResonanceIr {
         let mailbox = self.convolver_mailbox.clone();
         let ir_name = self.ir_name.clone();
         let ir_info = self.ir_info.clone();
-        let sample_rate = self.sample_rate;
+        let sample_rate = self.sample_rate.clone();
 
         Box::new(move |task| match task {
-            IrTask::LoadIr(path) => match ir_loader::load_ir(&path, sample_rate) {
-                Ok(ir_data) => {
-                    let name = Path::new(&path)
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default();
+            IrTask::LoadIr(path) => {
+                let sr = *sample_rate.lock();
+                match ir_loader::load_ir(&path, sr) {
+                    Ok(ir_data) => {
+                        let name = Path::new(&path)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_default();
 
-                    let duration_ms = ir_data.left.len() as f32 / sample_rate * 1000.0;
-                    let ch_str = if ir_data.stereo { "stereo" } else { "mono" };
-                    let info = format!(
-                        "{} samples ({:.0}ms, {})",
-                        ir_data.left.len(),
-                        duration_ms,
-                        ch_str
-                    );
+                        let duration_ms = ir_data.left.len() as f32 / sr * 1000.0;
+                        let ch_str = if ir_data.stereo { "stereo" } else { "mono" };
+                        let info = format!(
+                            "{} samples ({:.0}ms, {})",
+                            ir_data.left.len(),
+                            duration_ms,
+                            ch_str
+                        );
 
-                    let right_ir = if ir_data.stereo {
-                        Some(ir_data.right.as_slice())
-                    } else {
-                        None
-                    };
-                    let conv = StereoConvolver::new(&ir_data.left, right_ir);
+                        let right_ir = if ir_data.stereo {
+                            Some(ir_data.right.as_slice())
+                        } else {
+                            None
+                        };
+                        let conv = StereoConvolver::new(&ir_data.left, right_ir);
 
-                    *ir_name.lock() = name;
-                    *ir_info.lock() = info;
-                    *mailbox.lock() = Some(conv);
+                        *ir_name.lock() = name;
+                        *ir_info.lock() = info;
+                        *mailbox.lock() = Some(conv);
+                    }
+                    Err(e) => {
+                        nih_plug::nih_log!("Failed to load IR: {e}");
+                        *ir_name.lock() = format!("Error: {e}");
+                        *ir_info.lock() = String::new();
+                    }
                 }
-                Err(e) => {
-                    nih_plug::nih_log!("Failed to load IR: {e}");
-                    *ir_name.lock() = format!("Error: {e}");
-                    *ir_info.lock() = String::new();
-                }
-            },
+            }
         })
     }
 
@@ -154,7 +157,7 @@ impl Plugin for ResonanceIr {
         let ir_name_clone = self.ir_name.clone();
         let ir_info_clone = self.ir_info.clone();
         let file_list = self.file_list.clone();
-        let sample_rate = self.sample_rate;
+        let sample_rate = self.sample_rate.clone();
         let params = self.params.clone();
 
         let task_sender: Arc<dyn Fn(IrTask) + Send + Sync> = {
@@ -168,40 +171,48 @@ impl Plugin for ResonanceIr {
                         *file_list.lock() = files;
                     }
 
-                    match ir_loader::load_ir(&path, sample_rate) {
-                        Ok(ir_data) => {
-                            let name = Path::new(&path)
-                                .file_stem()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_default();
+                    // Load IR on background thread to avoid blocking GUI
+                    let mailbox = mailbox.clone();
+                    let ir_name = ir_name.clone();
+                    let ir_info = ir_info.clone();
+                    let sample_rate = sample_rate.clone();
+                    std::thread::spawn(move || {
+                        let sr = *sample_rate.lock();
+                        match ir_loader::load_ir(&path, sr) {
+                            Ok(ir_data) => {
+                                let name = Path::new(&path)
+                                    .file_stem()
+                                    .map(|s| s.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
 
-                            let duration_ms =
-                                ir_data.left.len() as f32 / sample_rate * 1000.0;
-                            let ch_str = if ir_data.stereo { "stereo" } else { "mono" };
-                            let info = format!(
-                                "{} samples ({:.0}ms, {})",
-                                ir_data.left.len(),
-                                duration_ms,
-                                ch_str
-                            );
+                                let duration_ms =
+                                    ir_data.left.len() as f32 / sr * 1000.0;
+                                let ch_str = if ir_data.stereo { "stereo" } else { "mono" };
+                                let info = format!(
+                                    "{} samples ({:.0}ms, {})",
+                                    ir_data.left.len(),
+                                    duration_ms,
+                                    ch_str
+                                );
 
-                            let right_ir = if ir_data.stereo {
-                                Some(ir_data.right.as_slice())
-                            } else {
-                                None
-                            };
-                            let conv = StereoConvolver::new(&ir_data.left, right_ir);
+                                let right_ir = if ir_data.stereo {
+                                    Some(ir_data.right.as_slice())
+                                } else {
+                                    None
+                                };
+                                let conv = StereoConvolver::new(&ir_data.left, right_ir);
 
-                            *ir_name.lock() = name;
-                            *ir_info.lock() = info;
-                            *mailbox.lock() = Some(conv);
+                                *ir_name.lock() = name;
+                                *ir_info.lock() = info;
+                                *mailbox.lock() = Some(conv);
+                            }
+                            Err(e) => {
+                                nih_plug::nih_log!("Failed to load IR: {e}");
+                                *ir_name.lock() = format!("Error: {e}");
+                                *ir_info.lock() = String::new();
+                            }
                         }
-                        Err(e) => {
-                            nih_plug::nih_log!("Failed to load IR: {e}");
-                            *ir_name.lock() = format!("Error: {e}");
-                            *ir_info.lock() = String::new();
-                        }
-                    }
+                    });
                 }
             })
         };
@@ -221,7 +232,7 @@ impl Plugin for ResonanceIr {
         buffer_config: &BufferConfig,
         context: &mut impl InitContext<Self>,
     ) -> bool {
-        self.sample_rate = buffer_config.sample_rate;
+        *self.sample_rate.lock() = buffer_config.sample_rate;
 
         let path = self.params.ir_path.lock().clone();
         if !path.is_empty() {
@@ -232,6 +243,11 @@ impl Plugin for ResonanceIr {
             if let Some(conv) = self.convolver_mailbox.lock().take() {
                 self.active_convolver = Some(conv);
             }
+        }
+
+        // Report convolution latency to host
+        if self.active_convolver.is_some() {
+            context.set_latency_samples(convolver::BLOCK_SIZE as u32);
         }
         true
     }
@@ -248,10 +264,25 @@ impl Plugin for ResonanceIr {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        // Flush denormals to zero to prevent CPU spikes
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            std::arch::x86_64::_mm_setcsr(std::arch::x86_64::_mm_getcsr() | 0x8040);
+        }
+        #[cfg(target_arch = "x86")]
+        unsafe {
+            std::arch::x86::_mm_setcsr(std::arch::x86::_mm_getcsr() | 0x8040);
+        }
+
         // Check mailbox for newly loaded convolver
         if let Some(mut guard) = self.convolver_mailbox.try_lock() {
             if guard.is_some() {
+                let was_none = self.active_convolver.is_none();
                 self.active_convolver = guard.take();
+                // Report latency change to host when convolver is first loaded
+                if was_none {
+                    context.set_latency_samples(convolver::BLOCK_SIZE as u32);
+                }
             }
         }
 
@@ -259,13 +290,16 @@ impl Plugin for ResonanceIr {
         let current_index = self.params.file_select.value();
         if current_index != self.last_file_index {
             self.last_file_index = current_index;
-            let file_list = self.file_list.lock();
-            if !file_list.is_empty() {
-                let idx = (current_index as usize).min(file_list.len() - 1);
-                let path = file_list[idx].clone();
-                drop(file_list);
-                *self.params.ir_path.lock() = path.clone();
-                context.execute_background(IrTask::LoadIr(path));
+            if let Some(file_list) = self.file_list.try_lock() {
+                if !file_list.is_empty() {
+                    let idx = (current_index as usize).min(file_list.len() - 1);
+                    let path = file_list[idx].clone();
+                    drop(file_list);
+                    if let Some(mut ir_path) = self.params.ir_path.try_lock() {
+                        *ir_path = path.clone();
+                    }
+                    context.execute_background(IrTask::LoadIr(path));
+                }
             }
         }
 
@@ -277,9 +311,11 @@ impl Plugin for ResonanceIr {
                     let dry_wet = self.params.dry_wet.smoothed.next();
                     let output_gain = self.params.output_gain.smoothed.next();
 
-                    let dry_l = *channel_samples.get_mut(0).unwrap();
+                    let Some(sample_l) = channel_samples.get_mut(0) else { continue; };
+                    let dry_l = *sample_l;
                     let dry_r = if num_channels >= 2 {
-                        *channel_samples.get_mut(1).unwrap()
+                        let Some(sample_r) = channel_samples.get_mut(1) else { continue; };
+                        *sample_r
                     } else {
                         dry_l
                     };
@@ -290,9 +326,11 @@ impl Plugin for ResonanceIr {
                     let out_l = (dry_l * dry_amount + wet_l * dry_wet) * output_gain;
                     let out_r = (dry_r * dry_amount + wet_r * dry_wet) * output_gain;
 
-                    *channel_samples.get_mut(0).unwrap() = out_l.clamp(-1.0, 1.0);
+                    let Some(out_sample_l) = channel_samples.get_mut(0) else { continue; };
+                    *out_sample_l = out_l;
                     if num_channels >= 2 {
-                        *channel_samples.get_mut(1).unwrap() = out_r.clamp(-1.0, 1.0);
+                        let Some(out_sample_r) = channel_samples.get_mut(1) else { continue; };
+                        *out_sample_r = out_r;
                     }
                 }
             }

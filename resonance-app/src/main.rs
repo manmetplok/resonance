@@ -38,6 +38,7 @@ struct Resonance {
     settings_open: bool,
     settings: Settings,
     applied_buffer_size: u32,
+    error_message: Option<String>,
 }
 
 /// GUI-side track state.
@@ -97,6 +98,7 @@ enum Message {
     SetBpm(f32),
     ToggleMetronome,
     CycleTimeSignature,
+    ScrollX(f32),
     ScrollY(f32),
     AddPluginToTrack(TrackId, ScannedPlugin),
     RemovePluginFromTrack(TrackId, PluginInstanceId),
@@ -105,6 +107,7 @@ enum Message {
     OpenSettings,
     CloseSettings,
     SettingsSetBufferSize(u32),
+    DismissError,
 }
 
 fn main() -> iced::Result {
@@ -150,6 +153,7 @@ impl Resonance {
             settings_open: false,
             settings,
             applied_buffer_size,
+            error_message: None,
         };
 
         (app, iced::Task::none())
@@ -338,6 +342,9 @@ impl Resonance {
                     }
                 }
             }
+            Message::ScrollX(delta) => {
+                self.scroll_offset = (self.scroll_offset + delta).max(0.0);
+            }
             Message::ScrollY(delta) => {
                 self.scroll_offset_y = (self.scroll_offset_y + delta).max(0.0);
                 // Clamp to max content height
@@ -354,9 +361,24 @@ impl Resonance {
                 self.settings.buffer_size = size;
                 self.settings.save();
             }
+            Message::DismissError => {
+                self.error_message = None;
+            }
             Message::Tick => {
                 while let Some(event) = self.engine.try_recv() {
                     self.handle_engine_event(event);
+                }
+                // Auto-follow playhead during playback
+                if self.playing {
+                    let playhead_seconds = self.playhead as f64 / self.sample_rate as f64;
+                    let playhead_x = playhead_seconds as f32 * self.zoom - self.scroll_offset;
+                    // Assume ~1000px visible width (we don't have exact bounds here)
+                    let visible_width = 1000.0;
+                    if playhead_x > visible_width * 0.8 {
+                        self.scroll_offset = playhead_seconds as f32 * self.zoom - visible_width * 0.5;
+                    } else if playhead_x < 0.0 {
+                        self.scroll_offset = (playhead_seconds as f32 * self.zoom - visible_width * 0.2).max(0.0);
+                    }
                 }
             }
         }
@@ -425,6 +447,7 @@ impl Resonance {
             }
             AudioEvent::Error(e) => {
                 eprintln!("Audio engine error: {}", e);
+                self.error_message = Some(e);
             }
             AudioEvent::InputDevicesListed {
                 devices,
@@ -490,7 +513,32 @@ impl Resonance {
         let transport = self.view_transport();
         let main_area = self.view_main_area();
 
-        let content = column![transport, main_area].spacing(0);
+        let content: Element<'_, Message> = if let Some(ref err) = self.error_message {
+            let error_bar = container(
+                row![
+                    text(err).size(13).color(iced::Color::WHITE),
+                    Space::with_width(Length::Fill),
+                    button(text("\u{00d7}").size(14).color(iced::Color::WHITE))
+                        .on_press(Message::DismissError)
+                        .style(|_theme, _status| iced::widget::button::Style {
+                            background: Some(iced::Background::Color(iced::Color::TRANSPARENT)),
+                            text_color: iced::Color::WHITE,
+                            ..Default::default()
+                        })
+                ]
+                .spacing(8)
+                .align_y(alignment::Vertical::Center)
+                .padding(8),
+            )
+            .width(Length::Fill)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(theme::RECORD_RED)),
+                ..Default::default()
+            });
+            column![transport, error_bar, main_area].spacing(0).into()
+        } else {
+            column![transport, main_area].spacing(0).into()
+        };
 
         let base: Element<'_, Message> = container(content)
             .width(Length::Fill)
@@ -773,7 +821,7 @@ impl Resonance {
             if i < first_visible {
                 continue;
             }
-            let header = self.view_track_header((*track).clone());
+            let header = self.view_track_header(track);
             headers = headers.push(header);
         }
 
@@ -793,7 +841,7 @@ impl Resonance {
             .into()
     }
 
-    fn view_track_header(&self, track: TrackState) -> Element<'_, Message> {
+    fn view_track_header(&self, track: &TrackState) -> Element<'_, Message> {
         let name = text(track.name.clone()).size(13).color(theme::TEXT);
 
         // Record arm button
@@ -1058,8 +1106,8 @@ impl Resonance {
         };
 
         let timeline_data = TimelineCanvas {
-            tracks: self.tracks.clone(),
-            clips: self.clips.clone(),
+            tracks: &self.tracks,
+            clips: &self.clips,
             playhead: self.playhead,
             sample_rate: self.sample_rate,
             zoom: self.zoom,

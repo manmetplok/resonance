@@ -74,6 +74,16 @@ impl Plugin for ResonanceDrums {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        // Flush denormals to zero to prevent CPU spikes
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            std::arch::x86_64::_mm_setcsr(std::arch::x86_64::_mm_getcsr() | 0x8040);
+        }
+        #[cfg(target_arch = "x86")]
+        unsafe {
+            std::arch::x86::_mm_setcsr(std::arch::x86::_mm_getcsr() | 0x8040);
+        }
+
         // Read per-pad parameters
         let mut pad_volumes = [0.0f32; drum_map::NUM_PADS];
         let mut pad_pans = [0.0f32; drum_map::NUM_PADS];
@@ -122,10 +132,10 @@ impl Plugin for ResonanceDrums {
             // Write to output with master volume
             let mut samples = channel_samples.into_iter();
             if let Some(out_l) = samples.next() {
-                *out_l = (left * master_vol).clamp(-1.0, 1.0);
+                *out_l = left * master_vol;
             }
             if let Some(out_r) = samples.next() {
-                *out_r = (right * master_vol).clamp(-1.0, 1.0);
+                *out_r = right * master_vol;
             }
         }
 

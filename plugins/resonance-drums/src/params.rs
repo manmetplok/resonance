@@ -29,7 +29,6 @@ impl Default for DrumParams {
                 0.8,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_unit(" dB")
             .with_value_to_string(v2s_f32_rounded(2)),
             pads: Default::default(),
         }

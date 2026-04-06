@@ -8,7 +8,7 @@ use rustfft::{Fft, FftPlanner};
 use std::sync::Arc;
 
 /// Block size for partitioned convolution. Must be a power of two.
-const BLOCK_SIZE: usize = 128;
+pub const BLOCK_SIZE: usize = 128;
 /// FFT size = 2 * BLOCK_SIZE for linear convolution via circular convolution.
 const FFT_SIZE: usize = BLOCK_SIZE * 2;
 

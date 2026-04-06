@@ -14,6 +14,9 @@ pub trait NamInference: Send {
 /// Matrix-vector multiply: y = A * x, where A is [rows x cols] row-major.
 #[inline]
 pub fn matvec(a: &[f32], x: &[f32], rows: usize, cols: usize, y: &mut [f32]) {
+    debug_assert!(a.len() >= rows * cols, "matvec: a too short");
+    debug_assert!(x.len() >= cols, "matvec: x too short");
+    debug_assert!(y.len() >= rows, "matvec: y too short");
     for r in 0..rows {
         let mut sum = 0.0f32;
         let row_start = r * cols;
@@ -27,6 +30,9 @@ pub fn matvec(a: &[f32], x: &[f32], rows: usize, cols: usize, y: &mut [f32]) {
 /// Matrix-vector multiply-add: y += A * x.
 #[inline]
 pub fn matvec_add(a: &[f32], x: &[f32], rows: usize, cols: usize, y: &mut [f32]) {
+    debug_assert!(a.len() >= rows * cols, "matvec_add: a too short");
+    debug_assert!(x.len() >= cols, "matvec_add: x too short");
+    debug_assert!(y.len() >= rows, "matvec_add: y too short");
     for r in 0..rows {
         let mut sum = 0.0f32;
         let row_start = r * cols;
