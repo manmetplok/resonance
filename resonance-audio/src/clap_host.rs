@@ -271,6 +271,7 @@ impl ClapBundle {
             plugin,
             _host_data: host_data,
             active: true,
+            sample_rate,
             params_ext,
             state_ext,
             pending_params: Vec::new(),
@@ -295,6 +296,7 @@ pub struct ClapInstance {
     plugin: *const clap_plugin,
     _host_data: Pin<Box<HostData>>,
     active: bool,
+    sample_rate: u32,
     params_ext: Option<*const clap_plugin_params>,
     state_ext: Option<*const clap_plugin_state>,
     /// Pending parameter changes to send during next process() call.
@@ -445,6 +447,50 @@ impl ClapInstance {
         };
 
         unsafe { load_fn(self.plugin, &mut stream) }
+    }
+
+    /// Load state with full lifecycle cycle: stop → deactivate → load → activate → start.
+    /// This ensures `initialize()` runs again so the plugin picks up new persist fields.
+    pub fn reload_with_state(&mut self, data: &[u8]) -> bool {
+        if !self.active {
+            return self.load_state(data);
+        }
+
+        // Stop processing
+        if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
+            unsafe { stop(self.plugin) };
+        }
+        // Deactivate
+        if let Some(deactivate) = unsafe { (*self.plugin).deactivate } {
+            unsafe { deactivate(self.plugin) };
+        }
+
+        self.active = false;
+
+        // Load state
+        let ok = self.load_state(data);
+        if !ok {
+            return false;
+        }
+
+        // Reactivate
+        if let Some(activate) = unsafe { (*self.plugin).activate } {
+            let ok = unsafe { activate(self.plugin, self.sample_rate as f64, 32, 8192) };
+            if !ok {
+                return false;
+            }
+        }
+
+        // Start processing
+        if let Some(start) = unsafe { (*self.plugin).start_processing } {
+            let ok = unsafe { start(self.plugin) };
+            if !ok {
+                return false;
+            }
+        }
+
+        self.active = true;
+        true
     }
 
     /// Process audio through the plugin (in-place).

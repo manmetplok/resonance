@@ -958,7 +958,7 @@ fn engine_thread(
                 }
                 AudioCommand::LoadPluginState { instance_id, data } => {
                     if let Some(mutex) = plugins.read().get(&instance_id) {
-                        mutex.lock().0.load_state(&data);
+                        mutex.lock().0.reload_with_state(&data);
                     }
                 }
                 AudioCommand::SetPunchRange {
