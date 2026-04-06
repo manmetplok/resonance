@@ -43,6 +43,7 @@ struct Resonance {
     punch_enabled: bool,
     punch_in: u64,
     punch_out: u64,
+    punch_range_set: bool,
     dragging_punch: Option<PunchDragTarget>,
 }
 
@@ -174,6 +175,7 @@ impl Resonance {
             punch_enabled: false,
             punch_in: 0,
             punch_out: 0,
+            punch_range_set: false,
             dragging_punch: None,
         };
 
@@ -388,12 +390,13 @@ impl Resonance {
             Message::TogglePunch => {
                 self.punch_enabled = !self.punch_enabled;
                 // Set sensible defaults if enabling with no range set
-                if self.punch_enabled && self.punch_in == 0 && self.punch_out == 0 {
+                if self.punch_enabled && !self.punch_range_set {
                     // Default: 2 bars from current playhead
                     let spb = self.sample_rate as f64 * 60.0 / self.bpm as f64;
                     let two_bars = (spb * self.time_sig_num as f64 * 2.0) as u64;
                     self.punch_in = self.playhead;
                     self.punch_out = self.playhead + two_bars;
+                    self.punch_range_set = true;
                 }
                 self.engine.send(AudioCommand::SetPunchRange {
                     enabled: self.punch_enabled,
@@ -403,6 +406,7 @@ impl Resonance {
             }
             Message::SetPunchIn(pos) => {
                 self.punch_in = pos;
+                self.punch_range_set = true;
                 if self.punch_enabled {
                     self.engine.send(AudioCommand::SetPunchRange {
                         enabled: true,
@@ -413,6 +417,7 @@ impl Resonance {
             }
             Message::SetPunchOut(pos) => {
                 self.punch_out = pos;
+                self.punch_range_set = true;
                 if self.punch_enabled {
                     self.engine.send(AudioCommand::SetPunchRange {
                         enabled: true,
@@ -436,7 +441,7 @@ impl Resonance {
                         Some(PunchDragTarget::Out) => {
                             self.punch_out = sample;
                         }
-                        None => unreachable!(),
+                        None => {}
                     }
                     if self.punch_enabled {
                         self.engine.send(AudioCommand::SetPunchRange {

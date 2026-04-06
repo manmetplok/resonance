@@ -382,9 +382,14 @@ fn finalize_recording(
                 continue; // Nothing in the punch range
             }
 
-            let trim_start_idx = (trim_start_frame * 2) as usize;
-            let trim_end_idx = (trim_end_frame * 2) as usize;
-            (punch_in, final_data[trim_start_idx..trim_end_idx].to_vec())
+            // Skip copy if trim covers the full buffer
+            if trim_start_frame == 0 && trim_end_frame == total_frames {
+                (punch_in, final_data)
+            } else {
+                let trim_start_idx = (trim_start_frame * 2) as usize;
+                let trim_end_idx = (trim_end_frame * 2) as usize;
+                (punch_in, final_data[trim_start_idx..trim_end_idx].to_vec())
+            }
         } else {
             (recording_start_sample, final_data)
         };
