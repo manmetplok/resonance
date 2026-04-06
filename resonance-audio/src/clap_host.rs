@@ -258,6 +258,7 @@ impl ClapBundle {
             active: true,
             params_ext,
             pending_params: Vec::new(),
+            param_event_buf: Vec::new(),
         })
     }
 }
@@ -281,6 +282,8 @@ pub struct ClapInstance {
     params_ext: Option<*const clap_plugin_params>,
     /// Pending parameter changes to send during next process() call.
     pending_params: Vec<(u32, f64)>,
+    /// Pre-allocated buffer for CLAP parameter events (reused across process() calls).
+    param_event_buf: Vec<clap_event_param_value>,
 }
 
 impl ClapInstance {
@@ -379,30 +382,30 @@ impl ClapInstance {
             constant_mask: 0,
         };
 
-        // Build input events from pending parameter changes
-        let param_events: Vec<clap_event_param_value> = self
-            .pending_params
-            .drain(..)
-            .map(|(param_id, value)| clap_event_param_value {
-                header: clap_event_header {
-                    size: std::mem::size_of::<clap_event_param_value>() as u32,
-                    time: 0,
-                    space_id: CLAP_CORE_EVENT_SPACE_ID,
-                    type_: CLAP_EVENT_PARAM_VALUE,
-                    flags: 0,
-                },
-                param_id,
-                cookie: ptr::null_mut(),
-                note_id: -1,
-                port_index: -1,
-                channel: -1,
-                key: -1,
-                value,
-            })
-            .collect();
+        // Build input events from pending parameter changes (reuse pre-allocated buffer)
+        self.param_event_buf.clear();
+        self.param_event_buf
+            .extend(self.pending_params.drain(..).map(|(param_id, value)| {
+                clap_event_param_value {
+                    header: clap_event_header {
+                        size: std::mem::size_of::<clap_event_param_value>() as u32,
+                        time: 0,
+                        space_id: CLAP_CORE_EVENT_SPACE_ID,
+                        type_: CLAP_EVENT_PARAM_VALUE,
+                        flags: 0,
+                    },
+                    param_id,
+                    cookie: ptr::null_mut(),
+                    note_id: -1,
+                    port_index: -1,
+                    channel: -1,
+                    key: -1,
+                    value,
+                }
+            }));
 
         let mut event_ctx = ParamEventListCtx {
-            events: param_events,
+            events: std::mem::take(&mut self.param_event_buf),
         };
 
         let in_events = clap_input_events {
@@ -431,6 +434,10 @@ impl ClapInstance {
         if let Some(process_fn) = unsafe { (*self.plugin).process } {
             unsafe { process_fn(self.plugin, &process_data) };
         }
+
+        // Reclaim the event buffer for reuse (avoids allocation next call)
+        self.param_event_buf = event_ctx.events;
+        self.param_event_buf.clear();
     }
 }
 

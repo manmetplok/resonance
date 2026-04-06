@@ -3,7 +3,7 @@
 pub const MAX_VOICES: usize = 32;
 
 /// Fade-out length in samples to avoid clicks when a voice is choked or released.
-pub const RELEASE_SAMPLES: usize = 512;
+pub const RELEASE_SAMPLES: usize = 1024;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum VoiceState {

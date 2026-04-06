@@ -58,7 +58,7 @@ impl DrumSampler {
             None => return,
         };
 
-        if self.pads[pad_index].sample_frames == 0 {
+        if pad_index >= self.pads.len() || self.pads[pad_index].sample_frames == 0 {
             return;
         }
 
@@ -108,6 +108,10 @@ impl DrumSampler {
     ) {
         *left = 0.0;
         *right = 0.0;
+
+        if self.pads.is_empty() {
+            return;
+        }
 
         for voice in &mut self.voices {
             if !voice.active {

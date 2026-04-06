@@ -142,26 +142,28 @@ impl Plugin for ResonanceAmp {
                     // Rescan directory when loading via GUI file picker
                     if let Some(dir) = Path::new(&path).parent() {
                         let files = scan_directory(dir);
-                        let idx = files.iter().position(|f| f == &path).unwrap_or(0);
                         *file_list.lock() = files;
-                        // Note: can't set param from here, but process() will sync
-                        let _ = idx;
                     }
 
-                    match nam::parse::load_model_from_file(&path) {
-                        Ok(model) => {
-                            let name = Path::new(&path)
-                                .file_stem()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_default();
-                            *model_name.lock() = name;
-                            *mailbox.lock() = Some(model);
+                    // Load model on background thread to avoid blocking GUI
+                    let mailbox = mailbox.clone();
+                    let model_name = model_name.clone();
+                    std::thread::spawn(move || {
+                        match nam::parse::load_model_from_file(&path) {
+                            Ok(model) => {
+                                let name = Path::new(&path)
+                                    .file_stem()
+                                    .map(|s| s.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                *model_name.lock() = name;
+                                *mailbox.lock() = Some(model);
+                            }
+                            Err(e) => {
+                                nih_plug::nih_log!("Failed to load NAM model: {e}");
+                                *model_name.lock() = format!("Error: {e}");
+                            }
                         }
-                        Err(e) => {
-                            nih_plug::nih_log!("Failed to load NAM model: {e}");
-                            *model_name.lock() = format!("Error: {e}");
-                        }
-                    }
+                    });
                 }
             })
         };
@@ -205,6 +207,16 @@ impl Plugin for ResonanceAmp {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        // Flush denormals to zero to prevent CPU spikes
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            std::arch::x86_64::_mm_setcsr(std::arch::x86_64::_mm_getcsr() | 0x8040);
+        }
+        #[cfg(target_arch = "x86")]
+        unsafe {
+            std::arch::x86::_mm_setcsr(std::arch::x86::_mm_getcsr() | 0x8040);
+        }
+
         // Check mailbox for newly loaded model
         if let Some(mut guard) = self.model_mailbox.try_lock() {
             if guard.is_some() {
@@ -216,13 +228,16 @@ impl Plugin for ResonanceAmp {
         let current_index = self.params.file_select.value();
         if current_index != self.last_file_index {
             self.last_file_index = current_index;
-            let file_list = self.file_list.lock();
-            if !file_list.is_empty() {
-                let idx = (current_index as usize).min(file_list.len() - 1);
-                let path = file_list[idx].clone();
-                drop(file_list);
-                *self.params.model_path.lock() = path.clone();
-                context.execute_background(AmpTask::LoadModel(path));
+            if let Some(file_list) = self.file_list.try_lock() {
+                if !file_list.is_empty() {
+                    let idx = (current_index as usize).min(file_list.len() - 1);
+                    let path = file_list[idx].clone();
+                    drop(file_list);
+                    if let Some(mut model_path) = self.params.model_path.try_lock() {
+                        *model_path = path.clone();
+                    }
+                    context.execute_background(AmpTask::LoadModel(path));
+                }
             }
         }
 
@@ -232,9 +247,9 @@ impl Plugin for ResonanceAmp {
                     let input_gain = self.params.input_gain.smoothed.next();
                     let output_gain = self.params.output_gain.smoothed.next();
 
-                    let input = *channel_samples.get_mut(0).unwrap() * input_gain;
+                    let Some(input_sample) = channel_samples.get_mut(0) else { continue; };
+                    let input = *input_sample * input_gain;
                     let output = model.process_sample(input) * output_gain;
-                    let output = output.clamp(-1.0, 1.0);
 
                     for sample in channel_samples {
                         *sample = output;

@@ -8,10 +8,10 @@ use crate::{ClipState, Message, TrackState};
 use resonance_audio::types::TrackId;
 
 /// Data passed to the timeline canvas for rendering.
-#[derive(Debug, Clone)]
-pub struct TimelineCanvas {
-    pub tracks: Vec<TrackState>,
-    pub clips: Vec<ClipState>,
+#[derive(Debug)]
+pub struct TimelineCanvas<'a> {
+    pub tracks: &'a [TrackState],
+    pub clips: &'a [ClipState],
     pub playhead: u64,
     pub sample_rate: u32,
     pub zoom: f32,
@@ -23,7 +23,7 @@ pub struct TimelineCanvas {
     pub scroll_offset_y: f32,
 }
 
-impl TimelineCanvas {
+impl TimelineCanvas<'_> {
     /// Seconds per beat at current BPM.
     fn seconds_per_beat(&self) -> f32 {
         60.0 / self.bpm
@@ -35,7 +35,7 @@ impl TimelineCanvas {
     }
 }
 
-impl canvas::Program<Message> for TimelineCanvas {
+impl canvas::Program<Message> for TimelineCanvas<'_> {
     type State = ();
 
     fn update(
@@ -48,13 +48,27 @@ impl canvas::Program<Message> for TimelineCanvas {
         if let canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
             let _ = bounds;
             match delta {
-                mouse::ScrollDelta::Lines { y, .. } => {
+                mouse::ScrollDelta::Lines { x, y } => {
+                    // Vertical scroll by default, horizontal when shift is held
+                    // (most platforms send x != 0 when shift+scroll or trackpad horizontal)
+                    if x.abs() > f32::EPSILON {
+                        return (
+                            canvas::event::Status::Captured,
+                            Some(Message::ScrollX(-x * 30.0)),
+                        );
+                    }
                     return (
                         canvas::event::Status::Captured,
                         Some(Message::ScrollY(-y * 30.0)),
                     );
                 }
-                mouse::ScrollDelta::Pixels { y, .. } => {
+                mouse::ScrollDelta::Pixels { x, y } => {
+                    if x.abs() > f32::EPSILON {
+                        return (
+                            canvas::event::Status::Captured,
+                            Some(Message::ScrollX(-x)),
+                        );
+                    }
                     return (
                         canvas::event::Status::Captured,
                         Some(Message::ScrollY(-y)),
@@ -113,7 +127,7 @@ impl canvas::Program<Message> for TimelineCanvas {
                 let start_seconds =
                     self.recording_start_sample as f32 / self.sample_rate as f32;
                 let start_x = start_seconds * self.zoom - self.scroll_offset;
-                let playhead_seconds = self.playhead as f32 / self.sample_rate as f32;
+                let playhead_seconds = (self.playhead as f64 / self.sample_rate as f64) as f32;
                 let playhead_x = playhead_seconds * self.zoom - self.scroll_offset;
                 let overlay_x = start_x.max(0.0);
                 let overlay_w = (playhead_x - overlay_x).max(0.0).min(bounds.width - overlay_x);
@@ -141,12 +155,12 @@ impl canvas::Program<Message> for TimelineCanvas {
         self.draw_ruler(&mut frame, bounds.width, ruler_height);
 
         // Draw clips
-        for clip in &self.clips {
+        for clip in self.clips {
             self.draw_clip(&mut frame, clip, &sorted_tracks, ruler_height, y_off, bounds.height);
         }
 
         // Draw playhead
-        let playhead_seconds = self.playhead as f32 / self.sample_rate as f32;
+        let playhead_seconds = (self.playhead as f64 / self.sample_rate as f64) as f32;
         let playhead_x = playhead_seconds * self.zoom - self.scroll_offset;
         if playhead_x >= 0.0 && playhead_x <= bounds.width {
             let total_height = (ruler_height + track_area_height - y_off).max(bounds.height);
@@ -172,7 +186,7 @@ impl canvas::Program<Message> for TimelineCanvas {
     }
 }
 
-impl TimelineCanvas {
+impl TimelineCanvas<'_> {
     /// Draw vertical bar and beat grid lines in the track area.
     fn draw_grid_lines(
         &self,
@@ -201,7 +215,7 @@ impl TimelineCanvas {
         let last_bar = (end_time / spbar_seconds).ceil() as i64;
 
         for bar_idx in first_bar..=last_bar {
-            if bar_step > 1 && (bar_idx as u32) % bar_step != 0 {
+            if bar_step > 1 && bar_idx.rem_euclid(bar_step as i64) != 0 {
                 continue;
             }
             let bar_time = bar_idx as f32 * spbar_seconds;
@@ -256,7 +270,7 @@ impl TimelineCanvas {
             let bar_time = bar_idx as f32 * spbar_seconds;
             let bar_number = bar_idx + 1; // 1-based
 
-            if bar_step > 1 && ((bar_idx as u32) % bar_step) != 0 {
+            if bar_step > 1 && bar_idx.rem_euclid(bar_step as i64) != 0 {
                 continue;
             }
 

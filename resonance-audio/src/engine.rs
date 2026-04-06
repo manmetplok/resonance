@@ -540,12 +540,12 @@ fn engine_thread(
                     start_sample,
                 } => {
                     let clips = Arc::clone(&clips);
-                    let event_tx = event_tx.clone();
+                    let thread_event_tx = event_tx.clone();
                     let clip_id = next_clip_id;
                     next_clip_id += 1;
                     let sr = sample_rate;
 
-                    std::thread::Builder::new()
+                    let spawn_result = std::thread::Builder::new()
                         .name("resonance-decode".into())
                         .spawn(move || {
                             match decode::decode_file(&path, sr) {
@@ -559,7 +559,7 @@ fn engine_thread(
                                         name: name.clone(),
                                     };
                                     clips.write().push(clip);
-                                    let _ = event_tx.send(AudioEvent::ClipImported {
+                                    let _ = thread_event_tx.send(AudioEvent::ClipImported {
                                         clip_id,
                                         track_id,
                                         start_sample,
@@ -568,14 +568,19 @@ fn engine_thread(
                                     });
                                 }
                                 Err(e) => {
-                                    let _ = event_tx.send(AudioEvent::Error(format!(
+                                    let _ = thread_event_tx.send(AudioEvent::Error(format!(
                                         "Failed to import clip: {}",
                                         e
                                     )));
                                 }
                             }
-                        })
-                        .ok();
+                        });
+                    if let Err(e) = spawn_result {
+                        let _ = event_tx.send(AudioEvent::Error(format!(
+                            "Failed to spawn decode thread: {}",
+                            e
+                        )));
+                    }
                 }
                 AudioCommand::MoveClip {
                     clip_id,
@@ -615,12 +620,15 @@ fn engine_thread(
                     let _ = event_tx.send(AudioEvent::TrackAdded { track_id: id });
                 }
                 AudioCommand::RemoveTrack { track_id } => {
-                    // Remove plugins for this track
-                    if let Some(track) = tracks.read().get(&track_id) {
-                        let plugin_ids = track.plugin_ids.clone();
-                        drop(tracks.read());
-                        for pid in plugin_ids {
-                            plugins.write().remove(&pid);
+                    // Remove plugins for this track (extract IDs before taking write lock)
+                    let plugin_ids = tracks
+                        .read()
+                        .get(&track_id)
+                        .map(|t| t.plugin_ids.clone());
+                    if let Some(ids) = plugin_ids {
+                        let mut plugins_guard = plugins.write();
+                        for pid in ids {
+                            plugins_guard.remove(&pid);
                         }
                     }
                     tracks.write().remove(&track_id);
@@ -800,6 +808,8 @@ fn engine_thread(
                 AudioCommand::ScanPlugins => {
                     let mut scanned = Vec::new();
                     let mut scan_dirs: Vec<std::path::PathBuf> = Vec::new();
+                    // Clear previous scan results to avoid duplicates
+                    bundles.clear();
 
                     // ~/.clap/
                     if let Some(home) = std::env::var_os("HOME") {
@@ -942,9 +952,7 @@ fn mix_audio(
     monitor_temp: &mut Vec<f32>,
 ) {
     // Zero the output buffer
-    for sample in data.iter_mut() {
-        *sample = 0.0;
-    }
+    data.fill(0.0);
 
     let output_frames = data.len() / channels;
     let frames = output_frames.min(8192);
@@ -962,8 +970,10 @@ fn mix_audio(
     if !shared.playing.load(Ordering::Relaxed) {
         // Even when stopped, output monitored audio for armed tracks
         if monitor_frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
-            let tracks_guard = tracks.read();
-            let plugins_guard = plugins.read();
+            let (Some(tracks_guard), Some(plugins_guard)) = (tracks.try_read(), plugins.try_read()) else {
+                // Lock contended — output silence rather than block the audio thread
+                return;
+            };
             let any_monitor = tracks_guard.values().any(|t| t.monitor_enabled && !t.muted);
 
             if any_monitor {
@@ -1018,9 +1028,10 @@ fn mix_audio(
 
     let playhead = shared.playhead.load(Ordering::Relaxed);
 
-    let tracks_guard = tracks.read();
-    let clips_guard = clips.read();
-    let plugins_guard = plugins.read();
+    let (Some(tracks_guard), Some(clips_guard), Some(plugins_guard)) = (tracks.try_read(), clips.try_read(), plugins.try_read()) else {
+        // Lock contended — output silence for this buffer rather than block the audio thread
+        return;
+    };
 
     // Per-track processing: (clips + monitor input) → plugins → volume → master
     for track in tracks_guard.values() {
@@ -1050,26 +1061,28 @@ fn mix_audio(
             }
 
             let clip_frames = clip.duration_frames();
+            // Compute overlap between this clip and the current output buffer
+            let clip_start = clip.start_sample;
+            let clip_end = clip_start + clip_frames;
+            let buf_start = playhead;
+            let buf_end = playhead + frames as u64;
 
-            for frame_offset in 0..frames {
-                let timeline_frame = playhead + frame_offset as u64;
+            if buf_end <= clip_start || buf_start >= clip_end {
+                continue; // No overlap
+            }
 
-                if timeline_frame < clip.start_sample
-                    || timeline_frame >= clip.start_sample + clip_frames
-                {
-                    continue;
-                }
+            let overlap_start = buf_start.max(clip_start);
+            let overlap_end = buf_end.min(clip_end);
 
-                let clip_frame = (timeline_frame - clip.start_sample) as usize;
+            for timeline_frame in overlap_start..overlap_end {
+                let frame_offset = (timeline_frame - buf_start) as usize;
+                let clip_frame = (timeline_frame - clip_start) as usize;
                 let clip_idx = clip_frame * 2;
-
-                if clip_idx + 1 >= clip.data.len() {
-                    continue;
+                if clip_idx + 1 < clip.data.len() {
+                    track_buf_l[frame_offset] += clip.data[clip_idx];
+                    track_buf_r[frame_offset] += clip.data[clip_idx + 1];
+                    has_audio = true;
                 }
-
-                track_buf_l[frame_offset] += clip.data[clip_idx];
-                track_buf_r[frame_offset] += clip.data[clip_idx + 1];
-                has_audio = true;
             }
         }
 
@@ -1107,35 +1120,37 @@ fn mix_audio(
     drop(plugins_guard);
 
     // Metronome click synthesis
-    let tm = tempo_map.read();
-    if tm.metronome_enabled {
-        let spb = tm.samples_per_beat(sample_rate);
-        let numerator = tm.numerator as u64;
-        let click_duration_samples = (sample_rate as f32 * 0.02) as u64;
+    if let Some(tm) = tempo_map.try_read() {
+        if tm.metronome_enabled {
+            let spb = tm.samples_per_beat(sample_rate);
+            let numerator = tm.numerator as u64;
+            let click_duration_samples = (sample_rate as f32 * 0.02) as u64;
 
-        for frame_offset in 0..output_frames {
-            let timeline_frame = playhead + frame_offset as u64;
-            let beat_pos = (timeline_frame as f64 % spb) as u64;
+            for frame_offset in 0..output_frames {
+                let timeline_frame = playhead + frame_offset as u64;
+                // Use round() to avoid drift: find the nearest beat boundary
+                let beat_index = (timeline_frame as f64 / spb).floor();
+                let beat_start = (beat_index * spb).round() as u64;
+                let beat_pos = timeline_frame.saturating_sub(beat_start);
 
-            if beat_pos < click_duration_samples {
-                let t = beat_pos as f32 / sample_rate as f32;
-                let total_beats = (timeline_frame as f64 / spb) as u64;
-                let beat_in_bar = total_beats % numerator;
-                let freq = if beat_in_bar == 0 { 1500.0 } else { 1000.0 };
-                let amplitude = 0.3 * (-t * 200.0).exp();
-                let click = amplitude * (2.0 * std::f32::consts::PI * freq * t).sin();
+                if beat_pos < click_duration_samples {
+                    let t = beat_pos as f32 / sample_rate as f32;
+                    let beat_in_bar = (beat_index as u64) % numerator;
+                    let freq = if beat_in_bar == 0 { 1500.0 } else { 1000.0 };
+                    let amplitude = 0.3 * (-t * 200.0).exp();
+                    let click = amplitude * (2.0 * std::f32::consts::PI * freq * t).sin();
 
-                let out_idx = frame_offset * channels;
-                if channels >= 2 {
-                    data[out_idx] += click;
-                    data[out_idx + 1] += click;
-                } else {
-                    data[out_idx] += click;
+                    let out_idx = frame_offset * channels;
+                    if channels >= 2 {
+                        data[out_idx] += click;
+                        data[out_idx + 1] += click;
+                    } else {
+                        data[out_idx] += click;
+                    }
                 }
             }
         }
     }
-    drop(tm);
 
     // Hard clip at [-1.0, 1.0]
     for sample in data.iter_mut() {

@@ -23,10 +23,21 @@ impl Settings {
         let Some(path) = Self::config_path() else {
             return Self::default();
         };
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
+        let mut settings = match std::fs::read_to_string(&path) {
+            Ok(contents) => toml::from_str(&contents).unwrap_or_else(|e| {
+                eprintln!("Failed to parse settings, using defaults: {}", e);
+                Self::default()
+            }),
             Err(_) => Self::default(),
+        };
+        if !BUFFER_SIZE_OPTIONS.contains(&settings.buffer_size) {
+            eprintln!(
+                "Invalid buffer_size {} in settings, using default",
+                settings.buffer_size
+            );
+            settings.buffer_size = 256;
         }
+        settings
     }
 
     pub fn save(&self) {
