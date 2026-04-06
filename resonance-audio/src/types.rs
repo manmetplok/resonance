@@ -1,5 +1,7 @@
 /// Core types for the Resonance audio engine.
 
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
 pub type TrackId = u64;
 pub type ClipId = u64;
 pub type SamplePos = u64;
@@ -181,14 +183,17 @@ impl AudioClip {
 }
 
 /// A track containing audio clips.
-#[derive(Debug, Clone)]
+///
+/// Hot-path fields (volume, muted, monitor_enabled, record_armed) are atomic
+/// so the audio callback can read them without taking a write lock.
+#[derive(Debug)]
 pub struct Track {
     pub id: TrackId,
-    pub volume: f32,
-    pub muted: bool,
+    volume_bits: AtomicU32,
+    muted: AtomicBool,
     pub name: String,
-    pub record_armed: bool,
-    pub monitor_enabled: bool,
+    record_armed: AtomicBool,
+    monitor_enabled: AtomicBool,
     pub input_device_name: Option<String>,
     /// Ordered list of plugin instance IDs forming the insert chain.
     pub plugin_ids: Vec<PluginInstanceId>,
@@ -198,14 +203,46 @@ impl Track {
     pub fn new(id: TrackId, name: String) -> Self {
         Self {
             id,
-            volume: 1.0,
-            muted: false,
+            volume_bits: AtomicU32::new(1.0f32.to_bits()),
+            muted: AtomicBool::new(false),
             name,
-            record_armed: false,
-            monitor_enabled: false,
+            record_armed: AtomicBool::new(false),
+            monitor_enabled: AtomicBool::new(false),
             input_device_name: None,
             plugin_ids: Vec::new(),
         }
+    }
+
+    pub fn volume(&self) -> f32 {
+        f32::from_bits(self.volume_bits.load(Ordering::Relaxed))
+    }
+
+    pub fn set_volume(&self, v: f32) {
+        self.volume_bits.store(v.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn muted(&self) -> bool {
+        self.muted.load(Ordering::Relaxed)
+    }
+
+    pub fn set_muted(&self, v: bool) {
+        self.muted.store(v, Ordering::Relaxed);
+    }
+
+    pub fn record_armed(&self) -> bool {
+        self.record_armed.load(Ordering::Relaxed)
+    }
+
+    pub fn set_record_armed(&self, v: bool) {
+        self.record_armed.store(v, Ordering::Relaxed);
+    }
+
+    pub fn monitor_enabled(&self) -> bool {
+        self.monitor_enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_monitor_enabled(&self, v: bool) {
+        self.monitor_enabled.store(v, Ordering::Relaxed);
     }
 }
 

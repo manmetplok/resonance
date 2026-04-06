@@ -474,7 +474,7 @@ fn engine_thread(
                         let tracks_guard = tracks.read();
                         tracks_guard
                             .values()
-                            .filter(|t| t.record_armed)
+                            .filter(|t| t.record_armed())
                             .map(|t| (t.id, t.input_device_name.clone()))
                             .collect()
                     };
@@ -641,13 +641,13 @@ fn engine_thread(
                     let _ = event_tx.send(AudioEvent::ClipDeleted { clip_id });
                 }
                 AudioCommand::SetTrackVolume { track_id, volume } => {
-                    if let Some(track) = tracks.write().get_mut(&track_id) {
-                        track.volume = volume.clamp(0.0, 1.0);
+                    if let Some(track) = tracks.read().get(&track_id) {
+                        track.set_volume(volume.clamp(0.0, 1.0));
                     }
                 }
                 AudioCommand::SetTrackMute { track_id, muted } => {
-                    if let Some(track) = tracks.write().get_mut(&track_id) {
-                        track.muted = muted;
+                    if let Some(track) = tracks.read().get(&track_id) {
+                        track.set_muted(muted);
                     }
                 }
                 AudioCommand::AddTrack => {
@@ -675,19 +675,19 @@ fn engine_thread(
                     let _ = event_tx.send(AudioEvent::TrackRemoved { track_id });
                 }
                 AudioCommand::SetTrackRecordArm { track_id, armed } => {
-                    if let Some(track) = tracks.write().get_mut(&track_id) {
-                        track.record_armed = armed;
+                    if let Some(track) = tracks.read().get(&track_id) {
+                        track.set_record_armed(armed);
                     }
                 }
                 AudioCommand::SetTrackMonitor {
                     track_id,
                     enabled,
                 } => {
-                    if let Some(track) = tracks.write().get_mut(&track_id) {
-                        track.monitor_enabled = enabled;
+                    if let Some(track) = tracks.read().get(&track_id) {
+                        track.set_monitor_enabled(enabled);
                     }
                     // Update monitoring flag: true if any track has monitoring enabled
-                    let any_monitoring = tracks.read().values().any(|t| t.monitor_enabled);
+                    let any_monitoring = tracks.read().values().any(|t| t.monitor_enabled());
                     shared.monitoring.store(any_monitoring, Ordering::SeqCst);
 
                     // Start input stream if monitoring and no stream active
@@ -695,7 +695,7 @@ fn engine_thread(
                         let source_name: Option<String> = {
                             let tg = tracks.read();
                             tg.values()
-                                .find(|t| t.monitor_enabled)
+                                .find(|t| t.monitor_enabled())
                                 .and_then(|t| t.input_device_name.clone())
                         };
                         match build_input_stream(
@@ -1061,11 +1061,11 @@ fn mix_audio(
                 // Lock contended — output silence rather than block the audio thread
                 return;
             };
-            let any_monitor = tracks_guard.values().any(|t| t.monitor_enabled && !t.muted);
+            let any_monitor = tracks_guard.values().any(|t| t.monitor_enabled() && !t.muted());
 
             if any_monitor {
                 for track in tracks_guard.values() {
-                    if !track.monitor_enabled || track.muted {
+                    if !track.monitor_enabled() || track.muted() {
                         continue;
                     }
 
@@ -1091,7 +1091,7 @@ fn mix_audio(
                     }
 
                     // Sum to output
-                    let volume = track.volume;
+                    let volume = track.volume();
                     for f in 0..monitor_frames {
                         let out_idx = f * channels;
                         if channels >= 2 {
@@ -1122,7 +1122,7 @@ fn mix_audio(
 
     // Per-track processing: (clips + monitor input) → plugins → volume → master
     for track in tracks_guard.values() {
-        if track.muted {
+        if track.muted() {
             continue;
         }
 
@@ -1132,7 +1132,7 @@ fn mix_audio(
 
         // Mix monitor input for tracks with monitoring enabled
         let mut has_audio = false;
-        if track.monitor_enabled && monitor_frames > 0 {
+        if track.monitor_enabled() && monitor_frames > 0 {
             let mix_frames = frames.min(monitor_frames);
             for f in 0..mix_frames {
                 track_buf_l[f] += monitor_temp[f * 2];
@@ -1191,7 +1191,7 @@ fn mix_audio(
         }
 
         // Apply track volume and sum to master output
-        let volume = track.volume;
+        let volume = track.volume();
         for frame_offset in 0..frames {
             let out_idx = frame_offset * channels;
             if channels >= 2 {
