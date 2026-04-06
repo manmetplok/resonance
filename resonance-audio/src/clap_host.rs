@@ -12,7 +12,9 @@ use clap_sys::events::{
     CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE,
 };
 use clap_sys::ext::params::{clap_plugin_params, CLAP_EXT_PARAMS};
+use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
+use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::host::clap_host;
 use clap_sys::plugin::clap_plugin;
 use clap_sys::process::clap_process;
@@ -213,7 +215,7 @@ impl ClapBundle {
             }
         }
 
-        // Query params extension before activation
+        // Query extensions before activation
         let params_ext = unsafe {
             if let Some(get_ext) = (*plugin).get_extension {
                 let ext = get_ext(plugin, CLAP_EXT_PARAMS.as_ptr());
@@ -221,6 +223,19 @@ impl ClapBundle {
                     None
                 } else {
                     Some(ext as *const clap_plugin_params)
+                }
+            } else {
+                None
+            }
+        };
+
+        let state_ext = unsafe {
+            if let Some(get_ext) = (*plugin).get_extension {
+                let ext = get_ext(plugin, CLAP_EXT_STATE.as_ptr());
+                if ext.is_null() {
+                    None
+                } else {
+                    Some(ext as *const clap_plugin_state)
                 }
             } else {
                 None
@@ -257,6 +272,7 @@ impl ClapBundle {
             _host_data: host_data,
             active: true,
             params_ext,
+            state_ext,
             pending_params: Vec::new(),
             param_event_buf: Vec::new(),
         })
@@ -280,6 +296,7 @@ pub struct ClapInstance {
     _host_data: Pin<Box<HostData>>,
     active: bool,
     params_ext: Option<*const clap_plugin_params>,
+    state_ext: Option<*const clap_plugin_state>,
     /// Pending parameter changes to send during next process() call.
     pending_params: Vec<(u32, f64)>,
     /// Pre-allocated buffer for CLAP parameter events (reused across process() calls).
@@ -350,6 +367,84 @@ impl ClapInstance {
     /// Queue a parameter change to be sent during the next process() call.
     pub fn set_param(&mut self, param_id: u32, value: f64) {
         self.pending_params.push((param_id, value));
+    }
+
+    /// Save the plugin's full state (params + persisted fields) via CLAP state extension.
+    pub fn save_state(&self) -> Option<Vec<u8>> {
+        let state_ext = self.state_ext?;
+        let save_fn = unsafe { (*state_ext).save }?;
+
+        let mut buf: Vec<u8> = Vec::new();
+
+        unsafe extern "C" fn ostream_write(
+            stream: *const clap_ostream,
+            buffer: *const c_void,
+            size: u64,
+        ) -> i64 {
+            let buf = &mut *((*stream).ctx as *mut Vec<u8>);
+            let slice = std::slice::from_raw_parts(buffer as *const u8, size as usize);
+            buf.extend_from_slice(slice);
+            size as i64
+        }
+
+        let mut stream = clap_ostream {
+            ctx: &mut buf as *mut Vec<u8> as *mut c_void,
+            write: Some(ostream_write),
+        };
+
+        let ok = unsafe { save_fn(self.plugin, &mut stream) };
+        if ok {
+            Some(buf)
+        } else {
+            None
+        }
+    }
+
+    /// Load plugin state from a byte buffer via CLAP state extension.
+    pub fn load_state(&mut self, data: &[u8]) -> bool {
+        let state_ext = match self.state_ext {
+            Some(ext) => ext,
+            None => return false,
+        };
+        let load_fn = match unsafe { (*state_ext).load } {
+            Some(f) => f,
+            None => return false,
+        };
+
+        struct IstreamCtx {
+            data: *const u8,
+            len: usize,
+            pos: usize,
+        }
+
+        unsafe extern "C" fn istream_read(
+            stream: *const clap_istream,
+            buffer: *mut c_void,
+            size: u64,
+        ) -> i64 {
+            let ctx = &mut *((*stream).ctx as *mut IstreamCtx);
+            let remaining = ctx.len - ctx.pos;
+            let to_read = (size as usize).min(remaining);
+            if to_read == 0 {
+                return 0;
+            }
+            std::ptr::copy_nonoverlapping(ctx.data.add(ctx.pos), buffer as *mut u8, to_read);
+            ctx.pos += to_read;
+            to_read as i64
+        }
+
+        let mut ctx = IstreamCtx {
+            data: data.as_ptr(),
+            len: data.len(),
+            pos: 0,
+        };
+
+        let mut stream = clap_istream {
+            ctx: &mut ctx as *mut IstreamCtx as *mut c_void,
+            read: Some(istream_read),
+        };
+
+        unsafe { load_fn(self.plugin, &mut stream) }
     }
 
     /// Process audio through the plugin (in-place).

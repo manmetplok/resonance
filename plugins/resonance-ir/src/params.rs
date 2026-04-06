@@ -1,19 +1,13 @@
 /// Plugin parameters: dry/wet mix, output gain, persisted IR path, and file selector.
 
 use nih_plug::prelude::*;
-use nih_plug_iced::IcedState;
 use parking_lot::Mutex;
 use std::sync::Arc;
-
-use crate::editor;
 
 pub const MAX_FILE_INDEX: i32 = 999;
 
 #[derive(Params)]
 pub struct IrParams {
-    #[persist = "editor-state"]
-    pub editor_state: Arc<IcedState>,
-
     #[persist = "ir-path"]
     pub ir_path: Arc<Mutex<String>>,
 
@@ -36,7 +30,6 @@ impl Default for IrParams {
         let file_list_display = file_list.clone();
 
         Self {
-            editor_state: editor::default_state(),
             ir_path: Arc::new(Mutex::new(String::new())),
             file_select: IntParam::new(
                 "IR Select",

@@ -9,9 +9,7 @@ crate-type = ["cdylib", "lib"]
 
 [dependencies]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["assert_process_allocs", "standalone"] }
-nih_plug_iced = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 parking_lot = "0.12"
 atomic_float = "1"
 hound = "3.5"
 rustfft = "6"
-rfd = "0.15"

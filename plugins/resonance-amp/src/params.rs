@@ -1,20 +1,14 @@
 /// Plugin parameters: input/output gain, persisted model path, and file selector.
 
 use nih_plug::prelude::*;
-use nih_plug_iced::IcedState;
 use parking_lot::Mutex;
 use std::sync::Arc;
-
-use crate::editor;
 
 /// Maximum number of files the selector param supports.
 pub const MAX_FILE_INDEX: i32 = 999;
 
 #[derive(Params)]
 pub struct AmpParams {
-    #[persist = "editor-state"]
-    pub editor_state: Arc<IcedState>,
-
     /// Persisted model file path, reloaded on plugin init.
     #[persist = "model-path"]
     pub model_path: Arc<Mutex<String>>,
@@ -38,7 +32,6 @@ impl Default for AmpParams {
         let file_list_display = file_list.clone();
 
         Self {
-            editor_state: editor::default_state(),
             model_path: Arc::new(Mutex::new(String::new())),
             file_select: IntParam::new(
                 "Model Select",

@@ -82,6 +82,13 @@ pub enum AudioCommand {
         punch_in: SamplePos,
         punch_out: SamplePos,
     },
+    SavePluginState {
+        instance_id: PluginInstanceId,
+    },
+    LoadPluginState {
+        instance_id: PluginInstanceId,
+        data: Vec<u8>,
+    },
 }
 
 /// Events sent from the audio engine back to the GUI.
@@ -132,6 +139,7 @@ pub enum AudioEvent {
         track_id: TrackId,
         instance_id: PluginInstanceId,
         plugin_name: String,
+        clap_plugin_id: String,
         params: Vec<ParamInfo>,
     },
     PluginRemoved {
@@ -140,6 +148,10 @@ pub enum AudioEvent {
     },
     PluginsScanned {
         plugins: Vec<ScannedPlugin>,
+    },
+    PluginStateSaved {
+        instance_id: PluginInstanceId,
+        data: Vec<u8>,
     },
 }
 
