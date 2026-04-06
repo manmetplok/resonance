@@ -39,6 +39,10 @@ struct Resonance {
     settings: Settings,
     applied_buffer_size: u32,
     error_message: Option<String>,
+    punch_enabled: bool,
+    punch_in: u64,
+    punch_out: u64,
+    dragging_punch: Option<PunchDragTarget>,
 }
 
 /// GUI-side track state.
@@ -72,6 +76,12 @@ pub struct ClipState {
     pub start_sample: SamplePos,
     pub duration_samples: u64,
     pub name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PunchDragTarget {
+    In,
+    Out,
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +118,12 @@ enum Message {
     CloseSettings,
     SettingsSetBufferSize(u32),
     DismissError,
+    TogglePunch,
+    SetPunchIn(u64),
+    SetPunchOut(u64),
+    StartPunchDrag(PunchDragTarget),
+    UpdatePunchDrag(f32),
+    EndPunchDrag,
 }
 
 fn main() -> iced::Result {
@@ -154,6 +170,10 @@ impl Resonance {
             settings,
             applied_buffer_size,
             error_message: None,
+            punch_enabled: false,
+            punch_in: 0,
+            punch_out: 0,
+            dragging_punch: None,
         };
 
         (app, iced::Task::none())
@@ -363,6 +383,71 @@ impl Resonance {
             }
             Message::DismissError => {
                 self.error_message = None;
+            }
+            Message::TogglePunch => {
+                self.punch_enabled = !self.punch_enabled;
+                // Set sensible defaults if enabling with no range set
+                if self.punch_enabled && self.punch_in == 0 && self.punch_out == 0 {
+                    // Default: 2 bars from current playhead
+                    let spb = self.sample_rate as f64 * 60.0 / self.bpm as f64;
+                    let two_bars = (spb * self.time_sig_num as f64 * 2.0) as u64;
+                    self.punch_in = self.playhead;
+                    self.punch_out = self.playhead + two_bars;
+                }
+                self.engine.send(AudioCommand::SetPunchRange {
+                    enabled: self.punch_enabled,
+                    punch_in: self.punch_in,
+                    punch_out: self.punch_out,
+                });
+            }
+            Message::SetPunchIn(pos) => {
+                self.punch_in = pos;
+                if self.punch_enabled {
+                    self.engine.send(AudioCommand::SetPunchRange {
+                        enabled: true,
+                        punch_in: self.punch_in,
+                        punch_out: self.punch_out,
+                    });
+                }
+            }
+            Message::SetPunchOut(pos) => {
+                self.punch_out = pos;
+                if self.punch_enabled {
+                    self.engine.send(AudioCommand::SetPunchRange {
+                        enabled: true,
+                        punch_in: self.punch_in,
+                        punch_out: self.punch_out,
+                    });
+                }
+            }
+            Message::StartPunchDrag(target) => {
+                self.dragging_punch = Some(target);
+            }
+            Message::UpdatePunchDrag(x) => {
+                if self.dragging_punch.is_some() {
+                    // Convert pixel x to sample position
+                    let seconds = (x + self.scroll_offset) / self.zoom;
+                    let sample = (seconds.max(0.0) as f64 * self.sample_rate as f64) as u64;
+                    match self.dragging_punch {
+                        Some(PunchDragTarget::In) => {
+                            self.punch_in = sample;
+                        }
+                        Some(PunchDragTarget::Out) => {
+                            self.punch_out = sample;
+                        }
+                        None => unreachable!(),
+                    }
+                    if self.punch_enabled {
+                        self.engine.send(AudioCommand::SetPunchRange {
+                            enabled: true,
+                            punch_in: self.punch_in,
+                            punch_out: self.punch_out,
+                        });
+                    }
+                }
+            }
+            Message::EndPunchDrag => {
+                self.dragging_punch = None;
             }
             Message::Tick => {
                 while let Some(event) = self.engine.try_recv() {
@@ -662,6 +747,40 @@ impl Resonance {
             .on_press(Message::OpenSettings)
             .style(|_theme, status| theme::transport_button_style(status));
 
+        let punch_color = if self.punch_enabled {
+            theme::PUNCH_MARKER
+        } else {
+            theme::TEXT_DIM
+        };
+        let punch_enabled = self.punch_enabled;
+        let punch_btn = button(text("P").size(12).color(punch_color))
+            .on_press(Message::TogglePunch)
+            .style(move |_theme, status| {
+                if punch_enabled {
+                    let bg = match status {
+                        iced::widget::button::Status::Hovered => {
+                            iced::Color::from_rgb(0.25, 0.20, 0.10)
+                        }
+                        iced::widget::button::Status::Pressed => {
+                            iced::Color::from_rgb(0.20, 0.15, 0.08)
+                        }
+                        _ => iced::Color::from_rgb(0.22, 0.18, 0.08),
+                    };
+                    iced::widget::button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: theme::PUNCH_MARKER,
+                        border: iced::Border {
+                            color: theme::PUNCH_MARKER,
+                            width: 1.0,
+                            radius: 4.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                } else {
+                    theme::transport_button_style(status)
+                }
+            });
+
         let transport_row = row![
             Space::with_width(10),
             skip_back,
@@ -680,6 +799,8 @@ impl Resonance {
             time_sig_btn,
             Space::with_width(4),
             met_btn,
+            Space::with_width(4),
+            punch_btn,
             Space::with_width(Length::Fill),
             zoom_out,
             text("Zoom").size(12).color(theme::TEXT_DIM),
@@ -1117,6 +1238,9 @@ impl Resonance {
             bpm: self.bpm,
             time_sig_num: self.time_sig_num,
             scroll_offset_y: self.scroll_offset_y,
+            punch_enabled: self.punch_enabled,
+            punch_in: self.punch_in,
+            punch_out: self.punch_out,
         };
 
         canvas(timeline_data)

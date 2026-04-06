@@ -99,6 +99,12 @@ pub const METRONOME_ON: Color = Color::from_rgb(
     0x4a as f32 / 255.0,
 );
 
+pub const PUNCH_MARKER: Color = Color::from_rgb(
+    0xe6 as f32 / 255.0,
+    0xb8 as f32 / 255.0,
+    0x1a as f32 / 255.0,
+);
+
 pub const TRACK_HEIGHT: f32 = 80.0;
 
 pub fn resonance_theme() -> Theme {
