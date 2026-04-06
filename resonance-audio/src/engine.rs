@@ -815,6 +815,7 @@ fn engine_thread(
                                 track_id,
                                 instance_id,
                                 plugin_name,
+                                clap_plugin_id: actual_plugin_id.clone(),
                                 params,
                             });
                         }
@@ -942,6 +943,22 @@ fn engine_thread(
                 } => {
                     if let Some(mutex) = plugins.read().get(&instance_id) {
                         mutex.lock().0.set_param(param_id, value);
+                    }
+                }
+                AudioCommand::SavePluginState { instance_id } => {
+                    if let Some(mutex) = plugins.read().get(&instance_id) {
+                        let data = mutex.lock().0.save_state();
+                        if let Some(data) = data {
+                            let _ = event_tx.send(AudioEvent::PluginStateSaved {
+                                instance_id,
+                                data,
+                            });
+                        }
+                    }
+                }
+                AudioCommand::LoadPluginState { instance_id, data } => {
+                    if let Some(mutex) = plugins.read().get(&instance_id) {
+                        mutex.lock().0.load_state(&data);
                     }
                 }
                 AudioCommand::SetPunchRange {

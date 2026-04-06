@@ -6,12 +6,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub mod convolver;
-pub mod editor;
 pub mod ir_loader;
 pub mod params;
 
 use convolver::StereoConvolver;
-use editor::EditorFlags;
 use params::IrParams;
 
 #[derive(Clone)]
@@ -149,80 +147,6 @@ impl Plugin for ResonanceIr {
                     }
                 }
             }
-        })
-    }
-
-    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        let mailbox = self.convolver_mailbox.clone();
-        let ir_name_clone = self.ir_name.clone();
-        let ir_info_clone = self.ir_info.clone();
-        let file_list = self.file_list.clone();
-        let sample_rate = self.sample_rate.clone();
-        let params = self.params.clone();
-
-        let task_sender: Arc<dyn Fn(IrTask) + Send + Sync> = {
-            let ir_name = self.ir_name.clone();
-            let ir_info = self.ir_info.clone();
-            let file_list = self.file_list.clone();
-            Arc::new(move |task| match task {
-                IrTask::LoadIr(path) => {
-                    if let Some(dir) = Path::new(&path).parent() {
-                        let files = scan_directory(dir);
-                        *file_list.lock() = files;
-                    }
-
-                    // Load IR on background thread to avoid blocking GUI
-                    let mailbox = mailbox.clone();
-                    let ir_name = ir_name.clone();
-                    let ir_info = ir_info.clone();
-                    let sample_rate = sample_rate.clone();
-                    std::thread::spawn(move || {
-                        let sr = *sample_rate.lock();
-                        match ir_loader::load_ir(&path, sr) {
-                            Ok(ir_data) => {
-                                let name = Path::new(&path)
-                                    .file_stem()
-                                    .map(|s| s.to_string_lossy().into_owned())
-                                    .unwrap_or_default();
-
-                                let duration_ms =
-                                    ir_data.left.len() as f32 / sr * 1000.0;
-                                let ch_str = if ir_data.stereo { "stereo" } else { "mono" };
-                                let info = format!(
-                                    "{} samples ({:.0}ms, {})",
-                                    ir_data.left.len(),
-                                    duration_ms,
-                                    ch_str
-                                );
-
-                                let right_ir = if ir_data.stereo {
-                                    Some(ir_data.right.as_slice())
-                                } else {
-                                    None
-                                };
-                                let conv = StereoConvolver::new(&ir_data.left, right_ir);
-
-                                *ir_name.lock() = name;
-                                *ir_info.lock() = info;
-                                *mailbox.lock() = Some(conv);
-                            }
-                            Err(e) => {
-                                nih_plug::nih_log!("Failed to load IR: {e}");
-                                *ir_name.lock() = format!("Error: {e}");
-                                *ir_info.lock() = String::new();
-                            }
-                        }
-                    });
-                }
-            })
-        };
-
-        editor::create(EditorFlags {
-            params,
-            ir_name: ir_name_clone,
-            ir_info: ir_info_clone,
-            file_list,
-            task_sender,
         })
     }
 

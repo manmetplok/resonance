@@ -4,7 +4,6 @@ use nih_plug::prelude::*;
 use std::sync::Arc;
 
 mod drum_map;
-mod editor;
 mod kit;
 mod params;
 mod sampler;
@@ -48,10 +47,6 @@ impl Plugin for ResonanceDrums {
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
-    }
-
-    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create(self.params.clone())
     }
 
     fn initialize(

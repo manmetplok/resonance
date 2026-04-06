@@ -2,17 +2,12 @@
 
 use nih_plug::prelude::*;
 use nih_plug::formatters::v2s_f32_rounded;
-use nih_plug_iced::IcedState;
 use std::sync::Arc;
 
 use crate::drum_map::NUM_PADS;
-use crate::editor;
 
 #[derive(Params)]
 pub struct DrumParams {
-    #[persist = "editor-state"]
-    pub editor_state: Arc<IcedState>,
-
     #[id = "master_volume"]
     pub master_volume: FloatParam,
 
@@ -23,7 +18,6 @@ pub struct DrumParams {
 impl Default for DrumParams {
     fn default() -> Self {
         Self {
-            editor_state: editor::default_state(),
             master_volume: FloatParam::new(
                 "Master Volume",
                 0.8,

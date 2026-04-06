@@ -44,6 +44,8 @@ struct Resonance {
     punch_in: u64,
     punch_out: u64,
     dragging_punch: Option<PunchDragTarget>,
+    /// Pending file path to inject via CLAP state (instance_id, persist_key, path).
+    pending_plugin_path: Option<(PluginInstanceId, String, String)>,
 }
 
 /// GUI-side track state.
@@ -65,8 +67,19 @@ pub struct TrackState {
 pub struct PluginSlotState {
     pub instance_id: PluginInstanceId,
     pub plugin_name: String,
+    pub clap_plugin_id: String,
     pub params: Vec<ParamInfo>,
     pub expanded: bool,
+    pub custom: PluginCustomState,
+}
+
+/// Plugin-specific GUI state for bundled plugins.
+#[derive(Debug, Clone)]
+pub enum PluginCustomState {
+    Generic,
+    Drums { selected_pad: usize },
+    Amp { model_name: String, file_list: Vec<String>, current_index: usize },
+    Ir { ir_name: String, ir_info: String, file_list: Vec<String>, current_index: usize },
 }
 
 /// GUI-side clip state.
@@ -115,6 +128,11 @@ enum Message {
     RemovePluginFromTrack(TrackId, PluginInstanceId),
     TogglePluginPanel(PluginInstanceId),
     SetPluginParam(PluginInstanceId, u32, f64),
+    DrumPadSelect(PluginInstanceId, usize),
+    PluginBrowseFile(PluginInstanceId),
+    PluginFileSelected(PluginInstanceId, Option<String>),
+    PluginPrevFile(PluginInstanceId),
+    PluginNextFile(PluginInstanceId),
     OpenSettings,
     CloseSettings,
     SettingsSetBufferSize(u32),
@@ -175,6 +193,7 @@ impl Resonance {
             punch_in: 0,
             punch_out: 0,
             dragging_punch: None,
+            pending_plugin_path: None,
         };
 
         (app, iced::Task::none())
@@ -358,6 +377,223 @@ impl Resonance {
                     if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
                         if let Some(param) = p.params.iter_mut().find(|pp| pp.id == param_id) {
                             param.current_value = value;
+                        }
+                        break;
+                    }
+                }
+            }
+            Message::DrumPadSelect(instance_id, pad_idx) => {
+                for track in &mut self.tracks {
+                    if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
+                        if let PluginCustomState::Drums { ref mut selected_pad } = p.custom {
+                            *selected_pad = pad_idx;
+                        }
+                        break;
+                    }
+                }
+            }
+            Message::PluginBrowseFile(instance_id) => {
+                // Find the plugin's clap_plugin_id to determine file filter
+                let filter = self.tracks.iter()
+                    .flat_map(|t| t.plugins.iter())
+                    .find(|p| p.instance_id == instance_id)
+                    .map(|p| p.clap_plugin_id.clone());
+
+                let task = iced::Task::perform(
+                    async move {
+                        let mut dialog = rfd::AsyncFileDialog::new();
+                        dialog = match filter.as_deref() {
+                            Some("com.resonance.amp") => dialog.add_filter("NAM Model", &["nam"]),
+                            Some("com.resonance.ir") => dialog.add_filter("WAV Audio", &["wav"]),
+                            _ => dialog,
+                        };
+                        dialog.pick_file().await.map(|f| f.path().to_string_lossy().into_owned())
+                    },
+                    move |path| Message::PluginFileSelected(instance_id, path),
+                );
+                return task;
+            }
+            Message::PluginFileSelected(instance_id, path) => {
+                if let Some(path) = path {
+                    // Scan directory for sibling files
+                    let dir = std::path::Path::new(&path).parent();
+                    if let Some(dir) = dir {
+                        let ext = self.tracks.iter()
+                            .flat_map(|t| t.plugins.iter())
+                            .find(|p| p.instance_id == instance_id)
+                            .map(|p| match p.clap_plugin_id.as_str() {
+                                "com.resonance.amp" => "nam",
+                                "com.resonance.ir" => "wav",
+                                _ => "",
+                            })
+                            .unwrap_or("");
+
+                        let mut files: Vec<String> = std::fs::read_dir(dir)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|e| e.ok())
+                            .filter(|e| {
+                                e.path().extension()
+                                    .map(|x| x.eq_ignore_ascii_case(ext))
+                                    .unwrap_or(false)
+                            })
+                            .map(|e| e.path().to_string_lossy().into_owned())
+                            .collect();
+                        files.sort();
+
+                        let idx = files.iter().position(|f| f == &path).unwrap_or(0);
+
+                        // Save state with new path, then load it back into the plugin
+                        // First, save current state
+                        self.engine.send(AudioCommand::SavePluginState { instance_id });
+
+                        // Store the pending file info so we can act on it when state arrives
+                        for track in &mut self.tracks {
+                            if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
+                                match &mut p.custom {
+                                    PluginCustomState::Amp { model_name, file_list, current_index } => {
+                                        let name = std::path::Path::new(&path)
+                                            .file_stem()
+                                            .map(|s| s.to_string_lossy().into_owned())
+                                            .unwrap_or_default();
+                                        *model_name = name;
+                                        *file_list = files;
+                                        *current_index = idx;
+                                    }
+                                    PluginCustomState::Ir { ir_name, file_list, current_index, .. } => {
+                                        let name = std::path::Path::new(&path)
+                                            .file_stem()
+                                            .map(|s| s.to_string_lossy().into_owned())
+                                            .unwrap_or_default();
+                                        *ir_name = name;
+                                        *file_list = files;
+                                        *current_index = idx;
+                                    }
+                                    _ => {}
+                                }
+                                // Set file_select param to trigger loading
+                                if let Some(param) = p.params.iter().find(|pp| {
+                                    pp.name == "Model Select" || pp.name == "IR Select"
+                                }) {
+                                    self.engine.send(AudioCommand::SetPluginParam {
+                                        instance_id,
+                                        param_id: param.id,
+                                        value: idx as f64,
+                                    });
+                                }
+                                break;
+                            }
+                        }
+
+                        // Inject the path via CLAP state
+                        // Build a minimal nih_plug state JSON with the path field
+                        let persist_key = self.tracks.iter()
+                            .flat_map(|t| t.plugins.iter())
+                            .find(|p| p.instance_id == instance_id)
+                            .map(|p| match p.clap_plugin_id.as_str() {
+                                "com.resonance.amp" => "model-path",
+                                "com.resonance.ir" => "ir-path",
+                                _ => "",
+                            })
+                            .unwrap_or("");
+
+                        if !persist_key.is_empty() {
+                            // We need to modify the plugin state to include the new path.
+                            // We'll handle this in the PluginStateSaved event handler.
+                            // Store pending path for when state arrives.
+                            self.pending_plugin_path = Some((instance_id, persist_key.to_string(), path));
+                        }
+                    }
+                }
+            }
+            Message::PluginPrevFile(instance_id) => {
+                for track in &mut self.tracks {
+                    if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
+                        let (file_list_len, new_idx) = match &p.custom {
+                            PluginCustomState::Amp { file_list, current_index, .. } => {
+                                if file_list.is_empty() { continue; }
+                                let new = if *current_index == 0 { file_list.len() - 1 } else { current_index - 1 };
+                                (file_list.len(), new)
+                            }
+                            PluginCustomState::Ir { file_list, current_index, .. } => {
+                                if file_list.is_empty() { continue; }
+                                let new = if *current_index == 0 { file_list.len() - 1 } else { current_index - 1 };
+                                (file_list.len(), new)
+                            }
+                            _ => continue,
+                        };
+                        let _ = file_list_len;
+                        // Update local state
+                        match &mut p.custom {
+                            PluginCustomState::Amp { model_name, file_list, current_index } => {
+                                *current_index = new_idx;
+                                *model_name = std::path::Path::new(&file_list[new_idx])
+                                    .file_stem()
+                                    .map(|s| s.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                            }
+                            PluginCustomState::Ir { ir_name, file_list, current_index, .. } => {
+                                *current_index = new_idx;
+                                *ir_name = std::path::Path::new(&file_list[new_idx])
+                                    .file_stem()
+                                    .map(|s| s.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                            }
+                            _ => {}
+                        }
+                        // Set file_select param
+                        if let Some(param) = p.params.iter().find(|pp| {
+                            pp.name == "Model Select" || pp.name == "IR Select"
+                        }) {
+                            self.engine.send(AudioCommand::SetPluginParam {
+                                instance_id,
+                                param_id: param.id,
+                                value: new_idx as f64,
+                            });
+                        }
+                        break;
+                    }
+                }
+            }
+            Message::PluginNextFile(instance_id) => {
+                for track in &mut self.tracks {
+                    if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
+                        let new_idx = match &p.custom {
+                            PluginCustomState::Amp { file_list, current_index, .. } => {
+                                if file_list.is_empty() { continue; }
+                                if *current_index >= file_list.len() - 1 { 0 } else { current_index + 1 }
+                            }
+                            PluginCustomState::Ir { file_list, current_index, .. } => {
+                                if file_list.is_empty() { continue; }
+                                if *current_index >= file_list.len() - 1 { 0 } else { current_index + 1 }
+                            }
+                            _ => continue,
+                        };
+                        match &mut p.custom {
+                            PluginCustomState::Amp { model_name, file_list, current_index } => {
+                                *current_index = new_idx;
+                                *model_name = std::path::Path::new(&file_list[new_idx])
+                                    .file_stem()
+                                    .map(|s| s.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                            }
+                            PluginCustomState::Ir { ir_name, file_list, current_index, .. } => {
+                                *current_index = new_idx;
+                                *ir_name = std::path::Path::new(&file_list[new_idx])
+                                    .file_stem()
+                                    .map(|s| s.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                            }
+                            _ => {}
+                        }
+                        if let Some(param) = p.params.iter().find(|pp| {
+                            pp.name == "Model Select" || pp.name == "IR Select"
+                        }) {
+                            self.engine.send(AudioCommand::SetPluginParam {
+                                instance_id,
+                                param_id: param.id,
+                                value: new_idx as f64,
+                            });
                         }
                         break;
                     }
@@ -566,14 +802,32 @@ impl Resonance {
                 track_id,
                 instance_id,
                 plugin_name,
+                clap_plugin_id,
                 params,
             } => {
+                let custom = match clap_plugin_id.as_str() {
+                    "com.resonance.drums" => PluginCustomState::Drums { selected_pad: 0 },
+                    "com.resonance.amp" => PluginCustomState::Amp {
+                        model_name: String::new(),
+                        file_list: Vec::new(),
+                        current_index: 0,
+                    },
+                    "com.resonance.ir" => PluginCustomState::Ir {
+                        ir_name: String::new(),
+                        ir_info: String::new(),
+                        file_list: Vec::new(),
+                        current_index: 0,
+                    },
+                    _ => PluginCustomState::Generic,
+                };
                 if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
                     track.plugins.push(PluginSlotState {
                         instance_id,
                         plugin_name,
+                        clap_plugin_id,
                         params,
                         expanded: false,
+                        custom,
                     });
                 }
             }
@@ -587,6 +841,26 @@ impl Resonance {
             }
             AudioEvent::PluginsScanned { plugins } => {
                 self.available_plugins = plugins;
+            }
+            AudioEvent::PluginStateSaved { instance_id, data } => {
+                // If we have a pending path to inject, modify the state and reload
+                if let Some((pending_id, ref key, ref path)) = self.pending_plugin_path.clone() {
+                    if pending_id == instance_id {
+                        // nih_plug serializes state as JSON: modify the persist field
+                        if let Ok(mut state) = serde_json::from_slice::<serde_json::Value>(&data) {
+                            if let Some(fields) = state.get_mut("fields") {
+                                fields[&key] = serde_json::Value::String(path.clone());
+                            }
+                            if let Ok(new_data) = serde_json::to_vec(&state) {
+                                self.engine.send(AudioCommand::LoadPluginState {
+                                    instance_id,
+                                    data: new_data,
+                                });
+                            }
+                        }
+                        self.pending_plugin_path = None;
+                    }
+                }
             }
         }
     }
@@ -1123,33 +1397,46 @@ impl Resonance {
             .align_y(alignment::Vertical::Center);
             content = content.push(plugin_row);
 
-            // Expandable parameter panel
+            // Expandable parameter panel — custom views for bundled plugins
             if expanded {
-                for param in &plugin.params {
-                    let param_id = param.id;
-                    let inst_id = pid;
-                    let range = param.min_value..=param.max_value;
-                    let param_slider = slider(
-                        range,
-                        param.current_value,
-                        move |v| Message::SetPluginParam(inst_id, param_id, v),
-                    )
-                    .width(Length::Fill)
-                    .step(0.001);
+                match &plugin.custom {
+                    PluginCustomState::Drums { selected_pad } => {
+                        content = content.push(self.view_drums_panel(plugin, *selected_pad));
+                    }
+                    PluginCustomState::Amp { model_name, file_list, current_index } => {
+                        content = content.push(self.view_amp_panel(plugin, model_name, file_list.len(), *current_index));
+                    }
+                    PluginCustomState::Ir { ir_name, ir_info, file_list, current_index } => {
+                        content = content.push(self.view_ir_panel(plugin, ir_name, ir_info, file_list.len(), *current_index));
+                    }
+                    PluginCustomState::Generic => {
+                        for param in &plugin.params {
+                            let param_id = param.id;
+                            let inst_id = pid;
+                            let range = param.min_value..=param.max_value;
+                            let param_slider = slider(
+                                range,
+                                param.current_value,
+                                move |v| Message::SetPluginParam(inst_id, param_id, v),
+                            )
+                            .width(Length::Fill)
+                            .step(0.001);
 
-                    let param_label = text(param.name.clone()).size(8).color(theme::TEXT_DIM);
-                    let param_value_text = text(format!("{:.2}", param.current_value))
-                        .size(8)
-                        .font(Font::MONOSPACE)
-                        .color(theme::TEXT_DIM);
+                            let param_label = text(param.name.clone()).size(8).color(theme::TEXT_DIM);
+                            let param_value_text = text(format!("{:.2}", param.current_value))
+                                .size(8)
+                                .font(Font::MONOSPACE)
+                                .color(theme::TEXT_DIM);
 
-                    let param_row = column![
-                        row![param_label, Space::with_width(Length::Fill), param_value_text]
-                            .spacing(2),
-                        param_slider,
-                    ]
-                    .spacing(1);
-                    content = content.push(param_row);
+                            let param_row = column![
+                                row![param_label, Space::with_width(Length::Fill), param_value_text]
+                                    .spacing(2),
+                                param_slider,
+                            ]
+                            .spacing(1);
+                            content = content.push(param_row);
+                        }
+                    }
                 }
             }
         }
@@ -1248,6 +1535,216 @@ impl Resonance {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
+    }
+
+    // -----------------------------------------------------------------------
+    // Custom plugin views
+    // -----------------------------------------------------------------------
+
+    fn view_drums_panel<'a>(&self, plugin: &PluginSlotState, selected_pad: usize) -> Element<'a, Message> {
+        let pid = plugin.instance_id;
+        let pad_names = [
+            "Kick", "Snare", "HH Close", "HH Open",
+            "Tom Hi", "Tom Mid", "Tom Low", "Crash",
+            "Ride", "Rimshot", "Clap", "Cowbell",
+        ];
+
+        // 4x3 pad grid
+        let mut grid = column![].spacing(2);
+        for row_idx in 0..3 {
+            let mut grid_row = row![].spacing(2);
+            for col_idx in 0..4 {
+                let pad_idx = row_idx * 4 + col_idx;
+                let is_selected = pad_idx == selected_pad;
+                let name = pad_names[pad_idx];
+                let bg = if is_selected {
+                    iced::Color::from_rgb(0.25, 0.3, 0.45)
+                } else {
+                    iced::Color::from_rgb(0.2, 0.2, 0.24)
+                };
+                let border_color = if is_selected {
+                    iced::Color::from_rgb(0.4, 0.5, 0.8)
+                } else {
+                    iced::Color::from_rgb(0.3, 0.3, 0.35)
+                };
+                let pad_btn = button(
+                    container(text(name).size(7).color(theme::TEXT))
+                        .center_x(Length::Fill)
+                        .center_y(Length::Fill),
+                )
+                .on_press(Message::DrumPadSelect(pid, pad_idx))
+                .width(Length::Fill)
+                .height(28)
+                .style(move |_theme, _status| iced::widget::button::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    text_color: theme::TEXT,
+                    border: iced::Border {
+                        color: border_color,
+                        width: if is_selected { 1.5 } else { 0.5 },
+                        radius: 3.0.into(),
+                    },
+                    ..Default::default()
+                });
+                grid_row = grid_row.push(pad_btn);
+            }
+            grid = grid.push(grid_row);
+        }
+
+        // Per-pad controls: find volume/pan params for selected pad
+        // Params are nested as "Pad X > Volume", "Pad X > Pan"
+        let pad_prefix = format!("Pad {} > ", selected_pad + 1);
+        let mut pad_controls = column![
+            text(format!("Pad: {}", pad_names[selected_pad])).size(8).color(theme::TEXT)
+        ].spacing(1);
+
+        for param in &plugin.params {
+            if param.name.starts_with(&pad_prefix) || param.name == "Master Volume" {
+                let param_id = param.id;
+                let inst_id = pid;
+                let label = if param.name == "Master Volume" {
+                    "Master".to_string()
+                } else {
+                    param.name.strip_prefix(&pad_prefix).unwrap_or(&param.name).to_string()
+                };
+                let range = param.min_value..=param.max_value;
+                let param_slider = slider(range, param.current_value, move |v| {
+                    Message::SetPluginParam(inst_id, param_id, v)
+                })
+                .width(Length::Fill)
+                .step(0.001);
+                pad_controls = pad_controls.push(
+                    column![
+                        text(label).size(7).color(theme::TEXT_DIM),
+                        param_slider,
+                    ].spacing(0)
+                );
+            }
+        }
+
+        column![grid, pad_controls].spacing(4).into()
+    }
+
+    fn view_amp_panel<'a>(&self, plugin: &PluginSlotState, model_name: &str, file_count: usize, current_index: usize) -> Element<'a, Message> {
+        let pid = plugin.instance_id;
+
+        let display = if model_name.is_empty() {
+            "No model loaded".to_string()
+        } else {
+            model_name.to_string()
+        };
+        let name_text = text(display).size(8).color(theme::TEXT);
+
+        let count_text = if file_count > 0 {
+            text(format!("{}/{}", current_index + 1, file_count)).size(7).color(theme::TEXT_DIM)
+        } else {
+            text("").size(7)
+        };
+
+        let prev_btn = button(text("<").size(8).color(theme::TEXT))
+            .on_press(Message::PluginPrevFile(pid))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(1)
+            .width(20);
+
+        let browse_btn = button(text("Browse").size(7).color(theme::TEXT))
+            .on_press(Message::PluginBrowseFile(pid))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(1);
+
+        let next_btn = button(text(">").size(8).color(theme::TEXT))
+            .on_press(Message::PluginNextFile(pid))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(1)
+            .width(20);
+
+        let nav_row = row![prev_btn, browse_btn, next_btn]
+            .spacing(2)
+            .align_y(alignment::Vertical::Center);
+
+        // Gain sliders
+        let mut controls = column![name_text, count_text, nav_row].spacing(2);
+        for param in &plugin.params {
+            if param.name == "Input Gain" || param.name == "Output Gain" {
+                let param_id = param.id;
+                let inst_id = pid;
+                let range = param.min_value..=param.max_value;
+                let param_slider = slider(range, param.current_value, move |v| {
+                    Message::SetPluginParam(inst_id, param_id, v)
+                })
+                .width(Length::Fill)
+                .step(0.001);
+                controls = controls.push(
+                    column![
+                        text(param.name.clone()).size(7).color(theme::TEXT_DIM),
+                        param_slider,
+                    ].spacing(0)
+                );
+            }
+        }
+
+        controls.into()
+    }
+
+    fn view_ir_panel<'a>(&self, plugin: &PluginSlotState, ir_name: &str, ir_info: &str, file_count: usize, current_index: usize) -> Element<'a, Message> {
+        let pid = plugin.instance_id;
+
+        let display = if ir_name.is_empty() {
+            "No IR loaded".to_string()
+        } else {
+            ir_name.to_string()
+        };
+        let name_text = text(display).size(8).color(theme::TEXT);
+        let info_text = text(ir_info.to_string()).size(7).color(theme::TEXT_DIM);
+
+        let count_text = if file_count > 0 {
+            text(format!("{}/{}", current_index + 1, file_count)).size(7).color(theme::TEXT_DIM)
+        } else {
+            text("").size(7)
+        };
+
+        let prev_btn = button(text("<").size(8).color(theme::TEXT))
+            .on_press(Message::PluginPrevFile(pid))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(1)
+            .width(20);
+
+        let browse_btn = button(text("Browse").size(7).color(theme::TEXT))
+            .on_press(Message::PluginBrowseFile(pid))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(1);
+
+        let next_btn = button(text(">").size(8).color(theme::TEXT))
+            .on_press(Message::PluginNextFile(pid))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(1)
+            .width(20);
+
+        let nav_row = row![prev_btn, browse_btn, next_btn]
+            .spacing(2)
+            .align_y(alignment::Vertical::Center);
+
+        // Dry/Wet and Output Gain sliders
+        let mut controls = column![name_text, info_text, count_text, nav_row].spacing(2);
+        for param in &plugin.params {
+            if param.name == "Dry/Wet" || param.name == "Output Gain" {
+                let param_id = param.id;
+                let inst_id = pid;
+                let range = param.min_value..=param.max_value;
+                let param_slider = slider(range, param.current_value, move |v| {
+                    Message::SetPluginParam(inst_id, param_id, v)
+                })
+                .width(Length::Fill)
+                .step(0.001);
+                controls = controls.push(
+                    column![
+                        text(param.name.clone()).size(7).color(theme::TEXT_DIM),
+                        param_slider,
+                    ].spacing(0)
+                );
+            }
+        }
+
+        controls.into()
     }
 
 }

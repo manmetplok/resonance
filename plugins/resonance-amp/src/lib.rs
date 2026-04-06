@@ -5,11 +5,9 @@ use parking_lot::Mutex;
 use std::path::Path;
 use std::sync::Arc;
 
-pub mod editor;
 pub mod nam;
 pub mod params;
 
-use editor::EditorFlags;
 use nam::NamInference;
 use params::AmpParams;
 
@@ -125,54 +123,6 @@ impl Plugin for ResonanceAmp {
                     *model_name.lock() = format!("Error: {e}");
                 }
             },
-        })
-    }
-
-    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        let mailbox = self.model_mailbox.clone();
-        let model_name_clone = self.model_name.clone();
-        let file_list = self.file_list.clone();
-        let params = self.params.clone();
-
-        let task_sender: Arc<dyn Fn(AmpTask) + Send + Sync> = {
-            let model_name = self.model_name.clone();
-            let file_list = self.file_list.clone();
-            Arc::new(move |task| match task {
-                AmpTask::LoadModel(path) => {
-                    // Rescan directory when loading via GUI file picker
-                    if let Some(dir) = Path::new(&path).parent() {
-                        let files = scan_directory(dir);
-                        *file_list.lock() = files;
-                    }
-
-                    // Load model on background thread to avoid blocking GUI
-                    let mailbox = mailbox.clone();
-                    let model_name = model_name.clone();
-                    std::thread::spawn(move || {
-                        match nam::parse::load_model_from_file(&path) {
-                            Ok(model) => {
-                                let name = Path::new(&path)
-                                    .file_stem()
-                                    .map(|s| s.to_string_lossy().into_owned())
-                                    .unwrap_or_default();
-                                *model_name.lock() = name;
-                                *mailbox.lock() = Some(model);
-                            }
-                            Err(e) => {
-                                nih_plug::nih_log!("Failed to load NAM model: {e}");
-                                *model_name.lock() = format!("Error: {e}");
-                            }
-                        }
-                    });
-                }
-            })
-        };
-
-        editor::create(EditorFlags {
-            params,
-            model_name: model_name_clone,
-            file_list,
-            task_sender,
         })
     }
 
