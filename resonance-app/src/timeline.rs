@@ -3,7 +3,7 @@ use iced::widget::canvas;
 use iced::{mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::theme;
-use crate::{ClipState, Message, TrackState};
+use crate::{ClipState, Message, PunchDragTarget, TrackState};
 
 use resonance_audio::types::TrackId;
 
@@ -21,6 +21,9 @@ pub struct TimelineCanvas<'a> {
     pub bpm: f32,
     pub time_sig_num: u8,
     pub scroll_offset_y: f32,
+    pub punch_enabled: bool,
+    pub punch_in: u64,
+    pub punch_out: u64,
 }
 
 impl TimelineCanvas<'_> {
@@ -33,6 +36,11 @@ impl TimelineCanvas<'_> {
     fn seconds_per_bar(&self) -> f32 {
         self.seconds_per_beat() * self.time_sig_num as f32
     }
+
+    /// Convert a sample position to pixel x coordinate.
+    fn sample_to_x(&self, sample: u64) -> f32 {
+        (sample as f64 / self.sample_rate as f64) as f32 * self.zoom - self.scroll_offset
+    }
 }
 
 impl canvas::Program<Message> for TimelineCanvas<'_> {
@@ -43,38 +51,77 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         _state: &mut Self::State,
         event: canvas::Event,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> (canvas::event::Status, Option<Message>) {
-        if let canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
-            let _ = bounds;
-            match delta {
-                mouse::ScrollDelta::Lines { x, y } => {
-                    // Vertical scroll by default, horizontal when shift is held
-                    // (most platforms send x != 0 when shift+scroll or trackpad horizontal)
-                    if x.abs() > f32::EPSILON {
+        match event {
+            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                let _ = bounds;
+                match delta {
+                    mouse::ScrollDelta::Lines { x, y } => {
+                        if x.abs() > f32::EPSILON {
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::ScrollX(-x * 30.0)),
+                            );
+                        }
                         return (
                             canvas::event::Status::Captured,
-                            Some(Message::ScrollX(-x * 30.0)),
+                            Some(Message::ScrollY(-y * 30.0)),
                         );
                     }
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::ScrollY(-y * 30.0)),
-                    );
+                    mouse::ScrollDelta::Pixels { x, y } => {
+                        if x.abs() > f32::EPSILON {
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::ScrollX(-x)),
+                            );
+                        }
+                        return (
+                            canvas::event::Status::Captured,
+                            Some(Message::ScrollY(-y)),
+                        );
+                    }
                 }
-                mouse::ScrollDelta::Pixels { x, y } => {
-                    if x.abs() > f32::EPSILON {
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::ScrollX(-x)),
-                        );
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                if self.punch_enabled {
+                    if let Some(pos) = cursor.position_in(bounds) {
+                        let ruler_height = 30.0;
+                        if pos.y < ruler_height {
+                            let punch_in_x = self.sample_to_x(self.punch_in);
+                            let punch_out_x = self.sample_to_x(self.punch_out);
+                            // Hit test: within 8px of a marker handle
+                            if (pos.x - punch_in_x).abs() < 8.0 {
+                                return (
+                                    canvas::event::Status::Captured,
+                                    Some(Message::StartPunchDrag(PunchDragTarget::In)),
+                                );
+                            }
+                            if (pos.x - punch_out_x).abs() < 8.0 {
+                                return (
+                                    canvas::event::Status::Captured,
+                                    Some(Message::StartPunchDrag(PunchDragTarget::Out)),
+                                );
+                            }
+                        }
                     }
+                }
+            }
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                if let Some(pos) = cursor.position_in(bounds) {
                     return (
                         canvas::event::Status::Captured,
-                        Some(Message::ScrollY(-y)),
+                        Some(Message::UpdatePunchDrag(pos.x)),
                     );
                 }
             }
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                return (
+                    canvas::event::Status::Captured,
+                    Some(Message::EndPunchDrag),
+                );
+            }
+            _ => {}
         }
         (canvas::event::Status::Ignored, None)
     }
@@ -122,15 +169,17 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                 bg,
             );
 
-            // Recording overlay on armed tracks — starts at recording origin
+            // Recording overlay on armed tracks
             if self.recording_tracks.contains(&track.id) {
-                let start_seconds =
-                    self.recording_start_sample as f32 / self.sample_rate as f32;
-                let start_x = start_seconds * self.zoom - self.scroll_offset;
-                let playhead_seconds = (self.playhead as f64 / self.sample_rate as f64) as f32;
-                let playhead_x = playhead_seconds * self.zoom - self.scroll_offset;
+                let (overlay_start, overlay_end) = if self.punch_enabled {
+                    (self.punch_in, self.playhead.min(self.punch_out))
+                } else {
+                    (self.recording_start_sample, self.playhead)
+                };
+                let start_x = self.sample_to_x(overlay_start);
+                let end_x = self.sample_to_x(overlay_end);
                 let overlay_x = start_x.max(0.0);
-                let overlay_w = (playhead_x - overlay_x).max(0.0).min(bounds.width - overlay_x);
+                let overlay_w = (end_x - overlay_x).max(0.0).min(bounds.width - overlay_x);
                 if overlay_w > 0.0 {
                     frame.fill_rectangle(
                         Point::new(overlay_x, y),
@@ -157,6 +206,77 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         // Draw clips
         for clip in self.clips {
             self.draw_clip(&mut frame, clip, &sorted_tracks, ruler_height, y_off, bounds.height);
+        }
+
+        // Draw punch in/out markers
+        if self.punch_enabled {
+            let punch_in_x = self.sample_to_x(self.punch_in);
+            let punch_out_x = self.sample_to_x(self.punch_out);
+            let total_height = (ruler_height + track_area_height - y_off).max(bounds.height);
+            let punch_color = theme::PUNCH_MARKER;
+
+            // Dim overlay outside punch range (over track area only)
+            if punch_in_x > 0.0 {
+                frame.fill_rectangle(
+                    Point::new(0.0, ruler_height),
+                    Size::new(punch_in_x.min(bounds.width), total_height - ruler_height),
+                    Color::from_rgba(0.0, 0.0, 0.0, 0.15),
+                );
+            }
+            if punch_out_x < bounds.width {
+                let right_start = punch_out_x.max(0.0);
+                frame.fill_rectangle(
+                    Point::new(right_start, ruler_height),
+                    Size::new(
+                        (bounds.width - right_start).max(0.0),
+                        total_height - ruler_height,
+                    ),
+                    Color::from_rgba(0.0, 0.0, 0.0, 0.15),
+                );
+            }
+
+            // Amber range fill in ruler area
+            let range_x = punch_in_x.max(0.0);
+            let range_w = (punch_out_x - range_x).max(0.0).min(bounds.width - range_x);
+            if range_w > 0.0 {
+                frame.fill_rectangle(
+                    Point::new(range_x, 0.0),
+                    Size::new(range_w, ruler_height),
+                    Color::from_rgba(0.9, 0.72, 0.1, 0.15),
+                );
+            }
+
+            // Punch In line + handle
+            if punch_in_x >= -1.0 && punch_in_x <= bounds.width + 1.0 {
+                frame.fill_rectangle(
+                    Point::new(punch_in_x - 0.5, 0.0),
+                    Size::new(1.0, total_height),
+                    punch_color,
+                );
+                let tri = canvas::Path::new(|b| {
+                    b.move_to(Point::new(punch_in_x - 6.0, 0.0));
+                    b.line_to(Point::new(punch_in_x + 6.0, 0.0));
+                    b.line_to(Point::new(punch_in_x, 8.0));
+                    b.close();
+                });
+                frame.fill(&tri, punch_color);
+            }
+
+            // Punch Out line + handle
+            if punch_out_x >= -1.0 && punch_out_x <= bounds.width + 1.0 {
+                frame.fill_rectangle(
+                    Point::new(punch_out_x - 0.5, 0.0),
+                    Size::new(1.0, total_height),
+                    punch_color,
+                );
+                let tri = canvas::Path::new(|b| {
+                    b.move_to(Point::new(punch_out_x - 6.0, 0.0));
+                    b.line_to(Point::new(punch_out_x + 6.0, 0.0));
+                    b.line_to(Point::new(punch_out_x, 8.0));
+                    b.close();
+                });
+                frame.fill(&tri, punch_color);
+            }
         }
 
         // Draw playhead

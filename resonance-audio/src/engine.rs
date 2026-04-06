@@ -345,6 +345,9 @@ fn finalize_recording(
     input_sample_rate: u32,
     output_sample_rate: u32,
     recording_start_sample: SamplePos,
+    punch_enabled: bool,
+    punch_in: SamplePos,
+    punch_out: SamplePos,
     next_clip_id: &mut ClipId,
     clips: &parking_lot::RwLock<Vec<AudioClip>>,
     event_tx: &Sender<AudioEvent>,
@@ -367,13 +370,32 @@ fn finalize_recording(
             buffer
         };
 
+        // Trim to punch range if enabled
+        let (clip_start_sample, final_data) = if punch_enabled && punch_out > punch_in {
+            let total_frames = (final_data.len() / 2) as u64;
+            let trim_start_frame = punch_in.saturating_sub(recording_start_sample);
+            let trim_end_frame = punch_out
+                .saturating_sub(recording_start_sample)
+                .min(total_frames);
+
+            if trim_start_frame >= trim_end_frame {
+                continue; // Nothing in the punch range
+            }
+
+            let trim_start_idx = (trim_start_frame * 2) as usize;
+            let trim_end_idx = (trim_end_frame * 2) as usize;
+            (punch_in, final_data[trim_start_idx..trim_end_idx].to_vec())
+        } else {
+            (recording_start_sample, final_data)
+        };
+
         let duration_samples = (final_data.len() / 2) as u64;
         let name = format!("Recording {}", clip_id);
 
         let clip = AudioClip {
             id: clip_id,
             track_id,
-            start_sample: recording_start_sample,
+            start_sample: clip_start_sample,
             data: final_data,
             name: name.clone(),
         };
@@ -382,7 +404,7 @@ fn finalize_recording(
         let _ = event_tx.send(AudioEvent::RecordingFinished {
             clip_id,
             track_id,
-            start_sample: recording_start_sample,
+            start_sample: clip_start_sample,
             duration_samples,
             name,
         });
@@ -416,6 +438,11 @@ fn engine_thread(
     let mut _input_stream: Option<cpal::Stream> = None;
     let mut input_channels: u16 = 2;
     let mut input_sample_rate: u32 = sample_rate;
+
+    // Punch in/out state (engine thread local)
+    let mut punch_enabled: bool = false;
+    let mut punch_in: SamplePos = 0;
+    let mut punch_out: SamplePos = 0;
 
     // Plugin hosting state (engine thread local)
     let mut bundles: Vec<ClapBundle> = Vec::new();
@@ -501,6 +528,9 @@ fn engine_thread(
                             input_sample_rate,
                             sample_rate,
                             recording_start_sample,
+                            punch_enabled,
+                            punch_in,
+                            punch_out,
                             &mut next_clip_id,
                             &clips,
                             &event_tx,
@@ -522,6 +552,9 @@ fn engine_thread(
                             input_sample_rate,
                             sample_rate,
                             recording_start_sample,
+                            punch_enabled,
+                            punch_in,
+                            punch_out,
                             &mut next_clip_id,
                             &clips,
                             &event_tx,
@@ -911,6 +944,15 @@ fn engine_thread(
                         mutex.lock().0.set_param(param_id, value);
                     }
                 }
+                AudioCommand::SetPunchRange {
+                    enabled,
+                    punch_in: pi,
+                    punch_out: po,
+                } => {
+                    punch_enabled = enabled;
+                    punch_in = pi;
+                    punch_out = po;
+                }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
@@ -920,6 +962,29 @@ fn engine_thread(
         if shared.recording.load(Ordering::Relaxed) {
             if let Some(ref mut cons) = ring_consumer {
                 drain_ring_to_buffers(cons, &mut recording_buffers, input_channels);
+            }
+
+            // Auto-stop recording at punch_out (keep playing)
+            if punch_enabled && punch_out > punch_in {
+                let current_pos = shared.playhead.load(Ordering::SeqCst);
+                if current_pos >= punch_out {
+                    shared.recording.store(false, Ordering::SeqCst);
+                    finalize_recording(
+                        &mut ring_consumer,
+                        &mut recording_buffers,
+                        input_channels,
+                        input_sample_rate,
+                        sample_rate,
+                        recording_start_sample,
+                        punch_enabled,
+                        punch_in,
+                        punch_out,
+                        &mut next_clip_id,
+                        &clips,
+                        &event_tx,
+                    );
+                    _input_stream = None;
+                }
             }
         }
 

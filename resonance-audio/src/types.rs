@@ -75,6 +75,11 @@ pub enum AudioCommand {
         param_id: u32,
         value: f64,
     },
+    SetPunchRange {
+        enabled: bool,
+        punch_in: SamplePos,
+        punch_out: SamplePos,
+    },
 }
 
 /// Events sent from the audio engine back to the GUI.
