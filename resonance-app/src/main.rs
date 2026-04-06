@@ -851,10 +851,14 @@ impl Resonance {
                 // If we have a pending path to inject, modify the state and reload
                 if let Some((pending_id, ref key, ref path)) = self.pending_plugin_path.clone() {
                     if pending_id == instance_id {
-                        // nih_plug serializes state as JSON: modify the persist field
+                        // nih_plug serializes state as JSON where persist field values
+                        // are themselves JSON-serialized strings (double-serialized)
                         if let Ok(mut state) = serde_json::from_slice::<serde_json::Value>(&data) {
                             if let Some(fields) = state.get_mut("fields") {
-                                fields[&key] = serde_json::Value::String(path.clone());
+                                // Double-serialize: the value must be a JSON string of the path
+                                if let Ok(serialized) = serde_json::to_string(path.as_str()) {
+                                    fields[&key] = serde_json::Value::String(serialized);
+                                }
                             }
                             if let Ok(new_data) = serde_json::to_vec(&state) {
                                 self.engine.send(AudioCommand::LoadPluginState {
