@@ -71,6 +71,7 @@ pub struct TrackState {
     pub order: usize,
     pub record_armed: bool,
     pub monitor_enabled: bool,
+    pub mono: bool,
     pub input_device_name: Option<String>,
     pub plugins: Vec<PluginSlotState>,
 }
@@ -134,6 +135,7 @@ enum Message {
     Tick,
     ToggleRecordArm(TrackId),
     ToggleMonitor(TrackId),
+    ToggleTrackMono(TrackId),
     SetTrackInputDevice(TrackId, Option<String>),
     SetBpm(f32),
     ToggleMetronome,
@@ -329,6 +331,15 @@ impl Resonance {
                     self.engine.send(AudioCommand::SetTrackMonitor {
                         track_id: id,
                         enabled: track.monitor_enabled,
+                    });
+                }
+            }
+            Message::ToggleTrackMono(id) => {
+                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
+                    track.mono = !track.mono;
+                    self.engine.send(AudioCommand::SetTrackMono {
+                        track_id: id,
+                        mono: track.mono,
                     });
                 }
             }
@@ -659,6 +670,14 @@ impl Resonance {
             Message::SettingsSetBufferSize(size) => {
                 self.settings.buffer_size = size;
                 self.settings.save();
+                match self.engine.set_buffer_size(size) {
+                    Ok(()) => {
+                        self.applied_buffer_size = size;
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to apply buffer size: {}", e));
+                    }
+                }
             }
             Message::DismissError => {
                 self.error_message = None;
@@ -788,6 +807,7 @@ impl Resonance {
                     order,
                     record_armed: false,
                     monitor_enabled: false,
+                    mono: true,
                     input_device_name: None,
                     plugins: Vec::new(),
                 });
@@ -1196,14 +1216,6 @@ impl Resonance {
             .spacing(8)
             .align_y(alignment::Vertical::Center);
 
-        let restart_note = if self.settings.buffer_size != self.applied_buffer_size {
-            text("Restart required to apply")
-                .size(11)
-                .color(theme::ACCENT)
-        } else {
-            text("").size(11)
-        };
-
         let close_btn = button(text("Close").size(14).color(theme::TEXT))
             .on_press(Message::CloseSettings)
             .style(|_theme, status| theme::transport_button_style(status));
@@ -1212,7 +1224,6 @@ impl Resonance {
             title,
             Space::with_height(16),
             buf_row,
-            restart_note,
             Space::with_height(20),
             close_btn,
         ]
@@ -1420,9 +1431,35 @@ impl Resonance {
             })
             .padding(2);
 
+        // Mono/Stereo toggle
+        let mono_label = if track.mono { "M" } else { "S" };
+        let mono_color = theme::TEXT;
+        let is_mono = track.mono;
+        let mono_btn = button(text(mono_label).size(11).color(mono_color))
+            .on_press(Message::ToggleTrackMono(track.id))
+            .style(move |_theme, status| {
+                let bg = match status {
+                    iced::widget::button::Status::Hovered => iced::Color::from_rgb(0.20, 0.20, 0.25),
+                    iced::widget::button::Status::Pressed => iced::Color::from_rgb(0.15, 0.15, 0.20),
+                    _ => iced::Color::from_rgb(0.18, 0.18, 0.22),
+                };
+                iced::widget::button::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    text_color: if is_mono { theme::TEXT } else { theme::ACCENT },
+                    border: iced::Border {
+                        color: if is_mono { theme::SEPARATOR } else { theme::ACCENT },
+                        width: 1.0,
+                        radius: 2.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .padding(2);
+
         let top_row = row![
             name,
             Space::with_width(Length::Fill),
+            mono_btn,
             mon_btn,
             rec_btn,
             mute_btn,

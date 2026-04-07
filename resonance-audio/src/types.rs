@@ -58,6 +58,10 @@ pub enum AudioCommand {
         track_id: TrackId,
         enabled: bool,
     },
+    SetTrackMono {
+        track_id: TrackId,
+        mono: bool,
+    },
     SetTrackInputDevice {
         track_id: TrackId,
         device_name: Option<String>,
@@ -101,6 +105,10 @@ pub enum AudioCommand {
     LoadPluginState {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
+    },
+    /// Notify the engine thread of a new buffer size (for input stream creation).
+    SetBufferSize {
+        size: u32,
     },
 }
 
@@ -207,6 +215,9 @@ pub struct Track {
     pub name: String,
     record_armed: AtomicBool,
     monitor_enabled: AtomicBool,
+    /// If true, track captures a single input channel (duplicated to both L/R).
+    /// If false, track captures a stereo pair.
+    mono: AtomicBool,
     pub input_device_name: Option<String>,
     /// Ordered list of plugin instance IDs forming the insert chain.
     pub plugin_ids: Vec<PluginInstanceId>,
@@ -223,6 +234,7 @@ impl Track {
             name,
             record_armed: AtomicBool::new(false),
             monitor_enabled: AtomicBool::new(false),
+            mono: AtomicBool::new(true),
             input_device_name: None,
             plugin_ids: Vec::new(),
         }
@@ -274,6 +286,14 @@ impl Track {
 
     pub fn set_monitor_enabled(&self, v: bool) {
         self.monitor_enabled.store(v, Ordering::Relaxed);
+    }
+
+    pub fn mono(&self) -> bool {
+        self.mono.load(Ordering::Relaxed)
+    }
+
+    pub fn set_mono(&self, v: bool) {
+        self.mono.store(v, Ordering::Relaxed);
     }
 }
 

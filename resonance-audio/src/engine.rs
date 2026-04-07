@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
-use ringbuf::traits::{Consumer, Producer, Split};
+use ringbuf::traits::{Consumer, Observer, Producer, Split};
 
 use crate::clap_host::{ClapBundle, SyncClapInstance};
 use crate::decode;
@@ -32,6 +32,15 @@ pub struct AudioEngine {
     cmd_tx: Sender<AudioCommand>,
     event_rx: Receiver<AudioEvent>,
     _stream: Option<cpal::Stream>,
+    // Shared state for live stream rebuilding (e.g. buffer size changes)
+    shared: Arc<SharedState>,
+    tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>>,
+    clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
+    plugins: Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
+    tempo_map: Arc<parking_lot::RwLock<TempoMap>>,
+    monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
+    sample_rate: u32,
+    channels: usize,
 }
 
 // cpal::Stream is not Send by default on some platforms but we manage it carefully
@@ -161,7 +170,88 @@ impl AudioEngine {
             cmd_tx,
             event_rx,
             _stream: Some(stream),
+            shared,
+            tracks,
+            clips,
+            plugins,
+            tempo_map,
+            monitor_prod,
+            sample_rate,
+            channels,
         })
+    }
+
+    /// Rebuild the CPAL output stream with a new buffer size (applies immediately).
+    pub fn set_buffer_size(&mut self, buffer_size: u32) -> Result<(), String> {
+        // Notify engine thread of new buffer size (used for input stream creation)
+        self.send(AudioCommand::SetBufferSize { size: buffer_size });
+
+        let host = cpal::default_host();
+        let device = host
+            .default_output_device()
+            .ok_or_else(|| "No audio output device found".to_string())?;
+
+        let config = device
+            .default_output_config()
+            .map_err(|e| format!("Failed to get output config: {}", e))?;
+
+        let channels = config.channels() as usize;
+        let mut stream_config: cpal::StreamConfig = config.into();
+        stream_config.buffer_size = cpal::BufferSize::Fixed(buffer_size);
+
+        // Pre-allocate new processing buffers
+        let mut track_buf_l = vec![0.0f32; 8192];
+        let mut track_buf_r = vec![0.0f32; 8192];
+        let mut monitor_temp = vec![0.0f32; 8192 * 2];
+
+        // Create new monitor ring buffer and swap the producer
+        let new_ring = ringbuf::HeapRb::<f32>::new(4096 * 2);
+        let (new_prod, mut monitor_cons) = new_ring.split();
+        *self.monitor_prod.lock() = new_prod;
+
+        // Clone Arcs for the new callback closure
+        let shared = Arc::clone(&self.shared);
+        let tracks = Arc::clone(&self.tracks);
+        let clips = Arc::clone(&self.clips);
+        let plugins = Arc::clone(&self.plugins);
+        let tempo_map = Arc::clone(&self.tempo_map);
+        let sample_rate = self.sample_rate;
+
+        let stream = device
+            .build_output_stream(
+                &stream_config,
+                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    mix_audio(
+                        data,
+                        channels,
+                        &shared,
+                        &tracks,
+                        &clips,
+                        &plugins,
+                        &tempo_map,
+                        sample_rate,
+                        &mut track_buf_l,
+                        &mut track_buf_r,
+                        &mut monitor_cons,
+                        &mut monitor_temp,
+                    );
+                },
+                |err| {
+                    eprintln!("Audio stream error: {}", err);
+                },
+                None,
+            )
+            .map_err(|e| format!("Failed to build output stream: {}", e))?;
+
+        stream
+            .play()
+            .map_err(|e| format!("Failed to start stream: {}", e))?;
+
+        // Drop old stream by replacing it
+        self._stream = Some(stream);
+        self.channels = channels;
+
+        Ok(())
     }
 
     /// Send a command to the audio engine.
@@ -273,20 +363,40 @@ fn build_input_stream(
     let mut stream_config: cpal::StreamConfig = config.into();
     stream_config.buffer_size = cpal::BufferSize::Fixed(buffer_size);
 
+    // Pre-allocated buffer for mono→stereo conversion in monitor path
+    let mut mon_stereo_buf = vec![0.0f32; 8192 * 2];
+    let input_channels = channels;
+
     let stream = device
         .build_input_stream(
             &stream_config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                // Push to recording ring buffer
+                // Push to recording ring buffer (raw — engine thread handles channel conversion)
                 if shared.recording.load(Ordering::Relaxed) {
                     if let Some(ref mut prod) = rec_producer {
                         let _ = prod.push_slice(data);
                     }
                 }
-                // Push to monitor ring buffer
+                // Push to monitor ring buffer (always stereo interleaved)
                 if shared.monitoring.load(Ordering::Relaxed) {
                     if let Some(mut prod) = mon_producer.try_lock() {
-                        let _ = prod.push_slice(data);
+                        if input_channels == 2 {
+                            let _ = prod.push_slice(data);
+                        } else {
+                            // Convert to stereo interleaved
+                            let ch = input_channels as usize;
+                            let frames = data.len() / ch;
+                            let stereo_len = frames * 2;
+                            let buf = &mut mon_stereo_buf[..stereo_len];
+                            for f in 0..frames {
+                                let src = f * ch;
+                                let l = data[src];
+                                let r = if ch > 1 { data[src + 1] } else { l };
+                                buf[f * 2] = l;
+                                buf[f * 2 + 1] = r;
+                            }
+                            let _ = prod.push_slice(buf);
+                        }
                     }
                 }
             },
@@ -433,7 +543,7 @@ fn engine_thread(
     plugins: Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
     monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     sample_rate: u32,
-    buffer_size: u32,
+    mut buffer_size: u32,
 ) {
     let mut next_track_id: TrackId = 1;
     let mut next_clip_id: ClipId = 1;
@@ -675,25 +785,48 @@ fn engine_thread(
                     let _ = event_tx.send(AudioEvent::TrackAdded { track_id: id });
                 }
                 AudioCommand::RemoveTrack { track_id } => {
-                    // Remove plugins for this track (extract IDs before taking write lock)
-                    let plugin_ids = tracks
-                        .read()
-                        .get(&track_id)
-                        .map(|t| t.plugin_ids.clone());
-                    if let Some(ids) = plugin_ids {
-                        let mut plugins_guard = plugins.write();
-                        for pid in ids {
-                            plugins_guard.shift_remove(&pid);
+                    // Remove plugins for this track — extract under write lock,
+                    // then drop instances outside the lock so audio callback isn't blocked
+                    let removed_plugins: Vec<_> = {
+                        let plugin_ids = tracks
+                            .read()
+                            .get(&track_id)
+                            .map(|t| t.plugin_ids.clone());
+                        if let Some(ids) = plugin_ids {
+                            let mut plugins_guard = plugins.write();
+                            ids.iter().filter_map(|pid| plugins_guard.shift_remove(pid)).collect()
+                        } else {
+                            Vec::new()
                         }
-                    }
+                    };
+                    drop(removed_plugins);
                     tracks.write().shift_remove(&track_id);
-                    clips.write().retain(|c| c.track_id != track_id);
+                    // Remove clips — collect removed clips so dealloc happens outside lock
+                    let removed_clips: Vec<_> = {
+                        let mut clips_guard = clips.write();
+                        let mut removed = Vec::new();
+                        let mut i = 0;
+                        while i < clips_guard.len() {
+                            if clips_guard[i].track_id == track_id {
+                                removed.push(clips_guard.swap_remove(i));
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        removed
+                    };
+                    drop(removed_clips);
                     recording_buffers.remove(&track_id);
                     let _ = event_tx.send(AudioEvent::TrackRemoved { track_id });
                 }
                 AudioCommand::SetTrackRecordArm { track_id, armed } => {
                     if let Some(track) = tracks.read().get(&track_id) {
                         track.set_record_armed(armed);
+                    }
+                }
+                AudioCommand::SetTrackMono { track_id, mono } => {
+                    if let Some(track) = tracks.read().get(&track_id) {
+                        track.set_mono(mono);
                     }
                 }
                 AudioCommand::SetTrackMonitor {
@@ -855,7 +988,10 @@ fn engine_thread(
                     if let Some(track) = tracks.write().get_mut(&track_id) {
                         track.plugin_ids.retain(|&id| id != instance_id);
                     }
-                    plugins.write().shift_remove(&instance_id);
+                    // Remove from map then drop outside the write lock
+                    // so the audio callback isn't blocked during plugin deactivation
+                    let removed = plugins.write().shift_remove(&instance_id);
+                    drop(removed);
                     let _ = event_tx.send(AudioEvent::PluginRemoved {
                         track_id,
                         instance_id,
@@ -992,6 +1128,9 @@ fn engine_thread(
                     punch_in = pi;
                     punch_out = po;
                 }
+                AudioCommand::SetBufferSize { size } => {
+                    buffer_size = size;
+                }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
@@ -1061,21 +1200,23 @@ fn mix_audio(
     let output_frames = data.len() / channels;
     let frames = output_frames.min(8192);
 
-    // Read monitor input (always drain to keep buffer fresh, even when not playing)
-    let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..frames * 2]);
-    let monitor_frames = monitor_samples / 2;
-
-    // Drain excess samples to prevent latency accumulation
-    {
-        let mut discard = [0.0f32; 512];
-        while monitor_cons.pop_slice(&mut discard) > 0 {}
+    // Read monitor input with jitter margin to avoid underflows.
+    // Keep one extra buffer in the ring so timing jitter between input/output
+    // callbacks doesn't cause partial reads (which produce silence gaps → crackle).
+    let needed = frames * 2; // stereo samples
+    let available = monitor_cons.occupied_len();
+    if available > needed * 3 {
+        // Too far behind — skip to maintain bounded latency (~2 buffer periods)
+        monitor_cons.skip(available - needed * 2);
     }
+    let to_read = needed.min(monitor_cons.occupied_len());
+    let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);
+    let monitor_frames = monitor_samples / 2;
 
     if !shared.playing.load(Ordering::Relaxed) {
         // Even when stopped, output monitored audio for armed tracks
         if monitor_frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
             let (Some(tracks_guard), Some(plugins_guard)) = (tracks.try_read(), plugins.try_read()) else {
-                // Lock contended — output silence rather than block the audio thread
                 return;
             };
             let any_solo = tracks_guard.values().any(|t| t.soloed());
@@ -1088,11 +1229,18 @@ fn mix_audio(
                 // Only the first audible monitoring track receives monitor input
                 if let Some(track) = tracks_guard.values().find(|t| is_audible(&t)) {
                     // De-interleave monitor input into track buffers
+                    let is_mono = track.mono();
                     track_buf_l[..monitor_frames].fill(0.0);
                     track_buf_r[..monitor_frames].fill(0.0);
                     for f in 0..monitor_frames {
-                        track_buf_l[f] = monitor_temp[f * 2];
-                        track_buf_r[f] = monitor_temp[f * 2 + 1];
+                        let l = monitor_temp[f * 2];
+                        if is_mono {
+                            track_buf_l[f] = l;
+                            track_buf_r[f] = l;
+                        } else {
+                            track_buf_l[f] = l;
+                            track_buf_r[f] = monitor_temp[f * 2 + 1];
+                        }
                     }
 
                     // Process through plugin chain
@@ -1139,7 +1287,9 @@ fn mix_audio(
     let playhead = shared.playhead.load(Ordering::Relaxed);
 
     let (Some(tracks_guard), Some(clips_guard), Some(plugins_guard)) = (tracks.try_read(), clips.try_read(), plugins.try_read()) else {
-        // Lock contended — output silence for this buffer rather than block the audio thread
+        // Lock contended — advance playhead to avoid desync, output silence this buffer
+        let new_playhead = playhead + output_frames as u64;
+        shared.playhead.store(new_playhead, Ordering::Relaxed);
         return;
     };
 
@@ -1162,10 +1312,17 @@ fn mix_audio(
         let mut has_audio = false;
         if track.monitor_enabled() && monitor_frames > 0 && !monitor_consumed {
             monitor_consumed = true;
+            let is_mono = track.mono();
             let mix_frames = frames.min(monitor_frames);
             for f in 0..mix_frames {
-                track_buf_l[f] += monitor_temp[f * 2];
-                track_buf_r[f] += monitor_temp[f * 2 + 1];
+                let l = monitor_temp[f * 2];
+                if is_mono {
+                    track_buf_l[f] += l;
+                    track_buf_r[f] += l;
+                } else {
+                    track_buf_l[f] += l;
+                    track_buf_r[f] += monitor_temp[f * 2 + 1];
+                }
             }
             has_audio = true;
         }
