@@ -31,9 +31,20 @@ pub enum AudioCommand {
         track_id: TrackId,
         volume: f32,
     },
+    SetTrackPan {
+        track_id: TrackId,
+        pan: f32,
+    },
     SetTrackMute {
         track_id: TrackId,
         muted: bool,
+    },
+    SetMasterVolume {
+        volume: f32,
+    },
+    SetTrackSolo {
+        track_id: TrackId,
+        soloed: bool,
     },
     AddTrack,
     RemoveTrack {
@@ -190,7 +201,9 @@ impl AudioClip {
 pub struct Track {
     pub id: TrackId,
     volume_bits: AtomicU32,
+    pan_bits: AtomicU32,
     muted: AtomicBool,
+    soloed: AtomicBool,
     pub name: String,
     record_armed: AtomicBool,
     monitor_enabled: AtomicBool,
@@ -204,7 +217,9 @@ impl Track {
         Self {
             id,
             volume_bits: AtomicU32::new(1.0f32.to_bits()),
+            pan_bits: AtomicU32::new(0.0f32.to_bits()),
             muted: AtomicBool::new(false),
+            soloed: AtomicBool::new(false),
             name,
             record_armed: AtomicBool::new(false),
             monitor_enabled: AtomicBool::new(false),
@@ -221,12 +236,28 @@ impl Track {
         self.volume_bits.store(v.to_bits(), Ordering::Relaxed);
     }
 
+    pub fn pan(&self) -> f32 {
+        f32::from_bits(self.pan_bits.load(Ordering::Relaxed))
+    }
+
+    pub fn set_pan(&self, v: f32) {
+        self.pan_bits.store(v.to_bits(), Ordering::Relaxed);
+    }
+
     pub fn muted(&self) -> bool {
         self.muted.load(Ordering::Relaxed)
     }
 
     pub fn set_muted(&self, v: bool) {
         self.muted.store(v, Ordering::Relaxed);
+    }
+
+    pub fn soloed(&self) -> bool {
+        self.soloed.load(Ordering::Relaxed)
+    }
+
+    pub fn set_soloed(&self, v: bool) {
+        self.soloed.store(v, Ordering::Relaxed);
     }
 
     pub fn record_armed(&self) -> bool {

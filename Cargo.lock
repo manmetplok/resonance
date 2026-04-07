@@ -3973,6 +3973,7 @@ dependencies = [
  "clap-sys 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "cpal",
  "crossbeam-channel",
+ "indexmap",
  "libloading 0.8.9",
  "parking_lot 0.12.5",
  "ringbuf",

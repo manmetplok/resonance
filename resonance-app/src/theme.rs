@@ -33,6 +33,12 @@ pub const ACCENT: Color = Color::from_rgb(
     0x2a as f32 / 255.0,
 );
 
+pub const SOLO_YELLOW: Color = Color::from_rgb(
+    0xe6 as f32 / 255.0,
+    0xcc as f32 / 255.0,
+    0x1a as f32 / 255.0,
+);
+
 pub const CLIP_BODY: Color = Color::from_rgb(
     0x4a as f32 / 255.0,
     0x7f as f32 / 255.0,

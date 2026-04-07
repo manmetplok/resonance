@@ -1,7 +1,8 @@
 /// The core audio engine managing tracks, clips, and the cpal output stream.
 use std::collections::HashMap;
+use indexmap::IndexMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -22,6 +23,8 @@ struct SharedState {
     recording: AtomicBool,
     /// Whether any track is monitoring input.
     monitoring: AtomicBool,
+    /// Master volume as linear gain (AtomicU32 bit-punned f32).
+    master_volume_bits: AtomicU32,
 }
 
 /// The audio engine.
@@ -60,12 +63,13 @@ impl AudioEngine {
             playing: AtomicBool::new(false),
             recording: AtomicBool::new(false),
             monitoring: AtomicBool::new(false),
+            master_volume_bits: AtomicU32::new(1.0f32.to_bits()),
         });
 
         let shared_audio = Arc::clone(&shared);
 
-        let tracks: Arc<parking_lot::RwLock<HashMap<TrackId, Track>>> =
-            Arc::new(parking_lot::RwLock::new(HashMap::new()));
+        let tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>> =
+            Arc::new(parking_lot::RwLock::new(IndexMap::new()));
         let clips: Arc<parking_lot::RwLock<Vec<AudioClip>>> =
             Arc::new(parking_lot::RwLock::new(Vec::new()));
 
@@ -77,8 +81,8 @@ impl AudioEngine {
         let tempo_audio = Arc::clone(&tempo_map);
 
         // Plugin instances shared between engine thread and audio callback
-        let plugins: Arc<parking_lot::RwLock<HashMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>> =
-            Arc::new(parking_lot::RwLock::new(HashMap::new()));
+        let plugins: Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>> =
+            Arc::new(parking_lot::RwLock::new(IndexMap::new()));
         let plugins_audio = Arc::clone(&plugins);
 
         // Build the cpal stream
@@ -423,10 +427,10 @@ fn engine_thread(
     cmd_rx: Receiver<AudioCommand>,
     event_tx: Sender<AudioEvent>,
     shared: Arc<SharedState>,
-    tracks: Arc<parking_lot::RwLock<HashMap<TrackId, Track>>>,
+    tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<parking_lot::RwLock<TempoMap>>,
-    plugins: Arc<parking_lot::RwLock<HashMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
+    plugins: Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
     monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     sample_rate: u32,
     buffer_size: u32,
@@ -642,12 +646,25 @@ fn engine_thread(
                 }
                 AudioCommand::SetTrackVolume { track_id, volume } => {
                     if let Some(track) = tracks.read().get(&track_id) {
-                        track.set_volume(volume.clamp(0.0, 1.0));
+                        track.set_volume(volume.max(0.0));
+                    }
+                }
+                AudioCommand::SetTrackPan { track_id, pan } => {
+                    if let Some(track) = tracks.read().get(&track_id) {
+                        track.set_pan(pan.clamp(-1.0, 1.0));
                     }
                 }
                 AudioCommand::SetTrackMute { track_id, muted } => {
                     if let Some(track) = tracks.read().get(&track_id) {
                         track.set_muted(muted);
+                    }
+                }
+                AudioCommand::SetMasterVolume { volume } => {
+                    shared.master_volume_bits.store(volume.max(0.0).to_bits(), Ordering::Relaxed);
+                }
+                AudioCommand::SetTrackSolo { track_id, soloed } => {
+                    if let Some(track) = tracks.read().get(&track_id) {
+                        track.set_soloed(soloed);
                     }
                 }
                 AudioCommand::AddTrack => {
@@ -666,10 +683,10 @@ fn engine_thread(
                     if let Some(ids) = plugin_ids {
                         let mut plugins_guard = plugins.write();
                         for pid in ids {
-                            plugins_guard.remove(&pid);
+                            plugins_guard.shift_remove(&pid);
                         }
                     }
-                    tracks.write().remove(&track_id);
+                    tracks.write().shift_remove(&track_id);
                     clips.write().retain(|c| c.track_id != track_id);
                     recording_buffers.remove(&track_id);
                     let _ = event_tx.send(AudioEvent::TrackRemoved { track_id });
@@ -838,7 +855,7 @@ fn engine_thread(
                     if let Some(track) = tracks.write().get_mut(&track_id) {
                         track.plugin_ids.retain(|&id| id != instance_id);
                     }
-                    plugins.write().remove(&instance_id);
+                    plugins.write().shift_remove(&instance_id);
                     let _ = event_tx.send(AudioEvent::PluginRemoved {
                         track_id,
                         instance_id,
@@ -1028,9 +1045,9 @@ fn mix_audio(
     data: &mut [f32],
     channels: usize,
     shared: &SharedState,
-    tracks: &parking_lot::RwLock<HashMap<TrackId, Track>>,
+    tracks: &parking_lot::RwLock<IndexMap<TrackId, Track>>,
     clips: &parking_lot::RwLock<Vec<AudioClip>>,
-    plugins: &parking_lot::RwLock<HashMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>,
+    plugins: &parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>,
     tempo_map: &parking_lot::RwLock<TempoMap>,
     sample_rate: u32,
     track_buf_l: &mut Vec<f32>,
@@ -1061,14 +1078,15 @@ fn mix_audio(
                 // Lock contended — output silence rather than block the audio thread
                 return;
             };
-            let any_monitor = tracks_guard.values().any(|t| t.monitor_enabled() && !t.muted());
+            let any_solo = tracks_guard.values().any(|t| t.soloed());
+            let is_audible = |t: &&Track| -> bool {
+                t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed())
+            };
+            let any_monitor = tracks_guard.values().any(|t| is_audible(&t));
 
             if any_monitor {
-                for track in tracks_guard.values() {
-                    if !track.monitor_enabled() || track.muted() {
-                        continue;
-                    }
-
+                // Only the first audible monitoring track receives monitor input
+                if let Some(track) = tracks_guard.values().find(|t| is_audible(&t)) {
                     // De-interleave monitor input into track buffers
                     track_buf_l[..monitor_frames].fill(0.0);
                     track_buf_r[..monitor_frames].fill(0.0);
@@ -1090,23 +1108,28 @@ fn mix_audio(
                         }
                     }
 
-                    // Sum to output
+                    // Sum to output with pan
                     let volume = track.volume();
+                    let pan = track.pan();
+                    let theta = (pan + 1.0) * 0.25 * std::f32::consts::PI;
+                    let gain_l = volume * theta.cos();
+                    let gain_r = volume * theta.sin();
                     for f in 0..monitor_frames {
                         let out_idx = f * channels;
                         if channels >= 2 {
-                            data[out_idx] += track_buf_l[f] * volume;
-                            data[out_idx + 1] += track_buf_r[f] * volume;
+                            data[out_idx] += track_buf_l[f] * gain_l;
+                            data[out_idx + 1] += track_buf_r[f] * gain_r;
                         } else {
                             data[out_idx] +=
-                                (track_buf_l[f] + track_buf_r[f]) * 0.5 * volume;
+                                track_buf_l[f] * gain_l + track_buf_r[f] * gain_r;
                         }
                     }
                 }
 
-                // Hard clip
+                // Apply master volume
+                let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
                 for sample in data.iter_mut() {
-                    *sample = sample.clamp(-1.0, 1.0);
+                    *sample = (*sample * master_vol).clamp(-1.0, 1.0);
                 }
             }
         }
@@ -1121,8 +1144,13 @@ fn mix_audio(
     };
 
     // Per-track processing: (clips + monitor input) → plugins → volume → master
+    let any_solo = tracks_guard.values().any(|t| t.soloed());
+    let mut monitor_consumed = false;
     for track in tracks_guard.values() {
         if track.muted() {
+            continue;
+        }
+        if any_solo && !track.soloed() {
             continue;
         }
 
@@ -1130,9 +1158,10 @@ fn mix_audio(
         track_buf_l[..frames].fill(0.0);
         track_buf_r[..frames].fill(0.0);
 
-        // Mix monitor input for tracks with monitoring enabled
+        // Mix monitor input for tracks with monitoring enabled (first monitoring track only)
         let mut has_audio = false;
-        if track.monitor_enabled() && monitor_frames > 0 {
+        if track.monitor_enabled() && monitor_frames > 0 && !monitor_consumed {
+            monitor_consumed = true;
             let mix_frames = frames.min(monitor_frames);
             for f in 0..mix_frames {
                 track_buf_l[f] += monitor_temp[f * 2];
@@ -1190,16 +1219,21 @@ fn mix_audio(
             continue;
         }
 
-        // Apply track volume and sum to master output
+        // Apply track volume + pan and sum to master output
         let volume = track.volume();
+        let pan = track.pan();
+        // Equal-power pan law: theta 0 (hard left) to PI/2 (hard right)
+        let theta = (pan + 1.0) * 0.25 * std::f32::consts::PI;
+        let gain_l = volume * theta.cos();
+        let gain_r = volume * theta.sin();
         for frame_offset in 0..frames {
             let out_idx = frame_offset * channels;
             if channels >= 2 {
-                data[out_idx] += track_buf_l[frame_offset] * volume;
-                data[out_idx + 1] += track_buf_r[frame_offset] * volume;
+                data[out_idx] += track_buf_l[frame_offset] * gain_l;
+                data[out_idx + 1] += track_buf_r[frame_offset] * gain_r;
             } else {
                 data[out_idx] +=
-                    (track_buf_l[frame_offset] + track_buf_r[frame_offset]) * 0.5 * volume;
+                    track_buf_l[frame_offset] * gain_l + track_buf_r[frame_offset] * gain_r;
             }
         }
     }
@@ -1239,9 +1273,10 @@ fn mix_audio(
         }
     }
 
-    // Hard clip at [-1.0, 1.0]
+    // Apply master volume and hard clip at [-1.0, 1.0]
+    let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
     for sample in data.iter_mut() {
-        *sample = sample.clamp(-1.0, 1.0);
+        *sample = (*sample * master_vol).clamp(-1.0, 1.0);
     }
 
     // Advance playhead

@@ -15,6 +15,15 @@ use settings::Settings;
 
 use timeline::TimelineCanvas;
 
+/// Convert dB to linear gain. -60 dB or below maps to 0.0 (silence).
+fn db_to_gain(db: f32) -> f32 {
+    if db <= -60.0 {
+        0.0
+    } else {
+        10.0f32.powf(db / 20.0)
+    }
+}
+
 /// Application state.
 struct Resonance {
     engine: AudioEngine,
@@ -40,6 +49,7 @@ struct Resonance {
     settings: Settings,
     applied_buffer_size: u32,
     error_message: Option<String>,
+    master_volume: f32,
     punch_enabled: bool,
     punch_in: u64,
     punch_out: u64,
@@ -55,7 +65,9 @@ pub struct TrackState {
     pub id: TrackId,
     pub name: String,
     pub volume: f32,
+    pub pan: f32,
     pub muted: bool,
+    pub soloed: bool,
     pub order: usize,
     pub record_armed: bool,
     pub monitor_enabled: bool,
@@ -110,7 +122,10 @@ enum Message {
     AddTrack,
     RemoveTrack(TrackId),
     SetTrackVolume(TrackId, f32),
+    SetTrackPan(TrackId, f32),
+    SetMasterVolume(f32),
     ToggleMute(TrackId),
+    ToggleSolo(TrackId),
     ImportFile(TrackId),
     FileSelected(TrackId, Option<String>),
     DeleteClip(ClipId),
@@ -190,6 +205,7 @@ impl Resonance {
             settings,
             applied_buffer_size,
             error_message: None,
+            master_volume: 0.0, // 0 dB = unity gain
             punch_enabled: false,
             punch_in: 0,
             punch_out: 0,
@@ -234,14 +250,29 @@ impl Resonance {
             Message::RemoveTrack(id) => {
                 self.engine.send(AudioCommand::RemoveTrack { track_id: id });
             }
-            Message::SetTrackVolume(id, vol) => {
+            Message::SetTrackVolume(id, vol_db) => {
                 self.engine.send(AudioCommand::SetTrackVolume {
                     track_id: id,
-                    volume: vol,
+                    volume: db_to_gain(vol_db),
                 });
                 if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
-                    track.volume = vol;
+                    track.volume = vol_db;
                 }
+            }
+            Message::SetTrackPan(id, pan) => {
+                self.engine.send(AudioCommand::SetTrackPan {
+                    track_id: id,
+                    pan,
+                });
+                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
+                    track.pan = pan;
+                }
+            }
+            Message::SetMasterVolume(vol_db) => {
+                self.engine.send(AudioCommand::SetMasterVolume {
+                    volume: db_to_gain(vol_db),
+                });
+                self.master_volume = vol_db;
             }
             Message::ToggleMute(id) => {
                 if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
@@ -249,6 +280,15 @@ impl Resonance {
                     self.engine.send(AudioCommand::SetTrackMute {
                         track_id: id,
                         muted: track.muted,
+                    });
+                }
+            }
+            Message::ToggleSolo(id) => {
+                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
+                    track.soloed = !track.soloed;
+                    self.engine.send(AudioCommand::SetTrackSolo {
+                        track_id: id,
+                        soloed: track.soloed,
                     });
                 }
             }
@@ -741,8 +781,10 @@ impl Resonance {
                 self.tracks.push(TrackState {
                     id: track_id,
                     name: format!("Track {}", track_id),
-                    volume: 1.0,
+                    volume: 0.0, // 0 dB = unity gain
+                    pan: 0.0,
                     muted: false,
+                    soloed: false,
                     order,
                     record_armed: false,
                     monitor_enabled: false,
@@ -1065,6 +1107,15 @@ impl Resonance {
                 }
             });
 
+        let master_slider = slider(-60.0..=6.0f32, self.master_volume, Message::SetMasterVolume)
+            .width(80)
+            .step(0.1);
+        let master_vol_label = if self.master_volume <= -60.0 {
+            "-inf".to_string()
+        } else {
+            format!("{:.1}", self.master_volume)
+        };
+
         let transport_row = row![
             Space::with_width(10),
             skip_back,
@@ -1086,6 +1137,10 @@ impl Resonance {
             Space::with_width(4),
             punch_btn,
             Space::with_width(Length::Fill),
+            text("Master").size(10).color(theme::TEXT_DIM),
+            master_slider,
+            text(master_vol_label).size(11).font(Font::MONOSPACE).color(theme::TEXT_DIM),
+            Space::with_width(12),
             zoom_out,
             text("Zoom").size(12).color(theme::TEXT_DIM),
             zoom_in,
@@ -1277,14 +1332,48 @@ impl Resonance {
             .style(|_theme, status| theme::small_button_style(status))
             .padding(2);
 
-        let vol_slider = slider(0.0..=1.0, track.volume, {
+        let solo_color = if track.soloed {
+            theme::SOLO_YELLOW
+        } else {
+            theme::TEXT_DIM
+        };
+        let solo_btn = button(text("S").size(11).color(solo_color))
+            .on_press(Message::ToggleSolo(track.id))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(2);
+
+        let vol_slider = slider(-60.0..=6.0f32, track.volume, {
             let id = track.id;
             move |v| Message::SetTrackVolume(id, v)
         })
         .width(80)
+        .step(0.1);
+
+        let vol_label = if track.volume <= -60.0 {
+            "-inf".to_string()
+        } else {
+            format!("{:.1}", track.volume)
+        };
+        let vol_text = text(vol_label)
+            .size(11)
+            .font(Font::MONOSPACE)
+            .color(theme::TEXT_DIM);
+
+        let pan_slider = slider(-1.0..=1.0f32, track.pan, {
+            let id = track.id;
+            move |v| Message::SetTrackPan(id, v)
+        })
+        .width(50)
         .step(0.01);
 
-        let vol_text = text(format!("{:.0}%", track.volume * 100.0))
+        let pan_label = if track.pan.abs() < 0.01 {
+            "C".to_string()
+        } else if track.pan < 0.0 {
+            format!("L{:.0}", -track.pan * 100.0)
+        } else {
+            format!("R{:.0}", track.pan * 100.0)
+        };
+        let pan_text = text(pan_label)
             .size(11)
             .font(Font::MONOSPACE)
             .color(theme::TEXT_DIM);
@@ -1337,13 +1426,14 @@ impl Resonance {
             mon_btn,
             rec_btn,
             mute_btn,
+            solo_btn,
             import_btn,
             del_btn
         ]
         .spacing(4)
         .align_y(alignment::Vertical::Center);
 
-        let bottom_row = row![vol_slider, vol_text]
+        let bottom_row = row![vol_slider, vol_text, pan_slider, pan_text]
             .spacing(4)
             .align_y(alignment::Vertical::Center);
 
