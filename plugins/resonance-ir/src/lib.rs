@@ -15,6 +15,7 @@ use params::IrParams;
 #[derive(Clone)]
 pub enum IrTask {
     LoadIr(String),
+    LoadByIndex(usize),
 }
 
 /// Scan a directory for .wav files, returning sorted paths.
@@ -109,42 +110,58 @@ impl Plugin for ResonanceIr {
         let ir_name = self.ir_name.clone();
         let ir_info = self.ir_info.clone();
         let sample_rate = self.sample_rate.clone();
+        let file_list = self.file_list.clone();
+        let ir_path_param = self.params.ir_path.clone();
 
-        Box::new(move |task| match task {
-            IrTask::LoadIr(path) => {
-                let sr = *sample_rate.lock();
-                match ir_loader::load_ir(&path, sr) {
-                    Ok(ir_data) => {
-                        let name = Path::new(&path)
-                            .file_stem()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-
-                        let duration_ms = ir_data.left.len() as f32 / sr * 1000.0;
-                        let ch_str = if ir_data.stereo { "stereo" } else { "mono" };
-                        let info = format!(
-                            "{} samples ({:.0}ms, {})",
-                            ir_data.left.len(),
-                            duration_ms,
-                            ch_str
-                        );
-
-                        let right_ir = if ir_data.stereo {
-                            Some(ir_data.right.as_slice())
-                        } else {
-                            None
-                        };
-                        let conv = StereoConvolver::new(&ir_data.left, right_ir);
-
-                        *ir_name.lock() = name;
-                        *ir_info.lock() = info;
-                        *mailbox.lock() = Some(conv);
+        Box::new(move |task| {
+            let path = match task {
+                IrTask::LoadIr(p) => p,
+                IrTask::LoadByIndex(idx) => {
+                    let list = file_list.lock();
+                    if list.is_empty() {
+                        return;
                     }
-                    Err(e) => {
-                        nih_plug::nih_log!("Failed to load IR: {e}");
-                        *ir_name.lock() = format!("Error: {e}");
-                        *ir_info.lock() = String::new();
+                    let clamped = idx.min(list.len() - 1);
+                    let p = list[clamped].clone();
+                    drop(list);
+                    if let Some(mut ip) = ir_path_param.try_lock() {
+                        *ip = p.clone();
                     }
+                    p
+                }
+            };
+            let sr = *sample_rate.lock();
+            match ir_loader::load_ir(&path, sr) {
+                Ok(ir_data) => {
+                    let name = Path::new(&path)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+
+                    let duration_ms = ir_data.left.len() as f32 / sr * 1000.0;
+                    let ch_str = if ir_data.stereo { "stereo" } else { "mono" };
+                    let info = format!(
+                        "{} samples ({:.0}ms, {})",
+                        ir_data.left.len(),
+                        duration_ms,
+                        ch_str
+                    );
+
+                    let right_ir = if ir_data.stereo {
+                        Some(ir_data.right.as_slice())
+                    } else {
+                        None
+                    };
+                    let conv = StereoConvolver::new(&ir_data.left, right_ir);
+
+                    *ir_name.lock() = name;
+                    *ir_info.lock() = info;
+                    *mailbox.lock() = Some(conv);
+                }
+                Err(e) => {
+                    nih_plug::nih_log!("Failed to load IR: {e}");
+                    *ir_name.lock() = format!("Error: {e}");
+                    *ir_info.lock() = String::new();
                 }
             }
         })
@@ -214,17 +231,7 @@ impl Plugin for ResonanceIr {
         let current_index = self.params.file_select.value();
         if current_index != self.last_file_index {
             self.last_file_index = current_index;
-            if let Some(file_list) = self.file_list.try_lock() {
-                if !file_list.is_empty() {
-                    let idx = (current_index as usize).min(file_list.len() - 1);
-                    let path = file_list[idx].clone();
-                    drop(file_list);
-                    if let Some(mut ir_path) = self.params.ir_path.try_lock() {
-                        *ir_path = path.clone();
-                    }
-                    context.execute_background(IrTask::LoadIr(path));
-                }
-            }
+            context.execute_background(IrTask::LoadByIndex(current_index as usize));
         }
 
         let num_channels = buffer.channels();

@@ -1,12 +1,16 @@
 /// WaveNet inference engine for NAM models.
 ///
-/// Implements dilated causal convolutions with gated activations,
-/// skip connections, and a head MLP.
+/// Follows the NAM (Neural Amp Modeler) weight serialization order:
+/// Per LayerArray (stack): rechannel, layers (conv+bias, input_mixin, layer1x1), head_rechannel
+/// Then: head MLP layers, head_scale.
 
 use super::parse::{WaveNetConfig, WeightReader};
 use super::{matvec, matvec_add, sigmoid, NamInference};
 
-/// Ring buffer for storing channel vectors needed by dilated convolutions.
+// ---------------------------------------------------------------------------
+// Ring buffer
+// ---------------------------------------------------------------------------
+
 struct RingBuffer {
     data: Vec<f32>,
     capacity: usize,
@@ -30,16 +34,14 @@ impl RingBuffer {
         self.write_pos = (self.write_pos + 1) % self.capacity;
     }
 
-    /// Read the most recently written values (delay=0).
-    fn read_current(&self) -> &[f32] {
-        self.read_delayed(0)
-    }
-
-    /// Read values written `delay` steps ago.
     fn read_delayed(&self, delay: usize) -> &[f32] {
         let pos = (self.write_pos + self.capacity - 1 - delay) % self.capacity;
         let base = pos * self.channels;
         &self.data[base..base + self.channels]
+    }
+
+    fn read_current(&self) -> &[f32] {
+        self.read_delayed(0)
     }
 
     fn reset(&mut self) {
@@ -48,24 +50,51 @@ impl RingBuffer {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Layer components
+// ---------------------------------------------------------------------------
+
+/// 1x1 convolution (no bias).
+struct Conv1x1 {
+    weight: Vec<f32>, // [out_ch * in_ch]
+    out_ch: usize,
+    in_ch: usize,
+}
+
+/// 1x1 convolution with optional bias.
+struct Conv1x1Bias {
+    weight: Vec<f32>,
+    bias: Vec<f32>, // empty if no bias
+    out_ch: usize,
+    in_ch: usize,
+}
+
 /// A single WaveNet dilated convolution layer.
+///
+/// NAM weight order per layer:
+///   _conv.weight  [mid_ch, ch, kernel_size]  (filter+gate combined if gated)
+///   _conv.bias    [mid_ch]
+///   _input_mixin.weight [mid_ch, condition_size]  (no bias)
+///   _layer1x1.weight [ch, bottleneck]  (if active)
+///   _layer1x1.bias [ch]                (if active)
 struct WaveNetLayer {
-    /// Filter convolution weights for the delayed sample [channels * channels].
-    w_filter_prev: Vec<f32>,
-    /// Filter convolution weights for the current sample [channels * channels].
-    w_filter_curr: Vec<f32>,
-    b_filter: Vec<f32>,
+    /// Combined filter+gate conv weights per kernel tap.
+    /// w_conv[tap] has size [mid_ch * ch].
+    w_conv: Vec<Vec<f32>>,
+    /// Combined filter+gate conv bias [mid_ch].
+    b_conv: Vec<f32>,
 
-    /// Gate convolution weights (only used if gated).
-    w_gate_prev: Vec<f32>,
-    w_gate_curr: Vec<f32>,
-    b_gate: Vec<f32>,
+    /// Input mixin weights (condition mixing). None if condition_size == 0.
+    w_input_mixin: Option<Vec<f32>>,
 
-    /// 1x1 convolution for residual path [channels * channels].
-    w_1x1: Vec<f32>,
-    b_1x1: Vec<f32>,
+    /// Layer 1x1 residual conv. None if bottleneck == channels.
+    layer1x1: Option<Conv1x1Bias>,
 
+    kernel_size: usize,
     dilation: usize,
+    channels: usize,
+    /// mid_channels = 2*channels if gated, else channels.
+    mid_ch: usize,
 }
 
 /// Dense (fully connected) layer for the head network.
@@ -77,29 +106,31 @@ struct DenseLayer {
     has_activation: bool,
 }
 
+// ---------------------------------------------------------------------------
+// WaveNet model
+// ---------------------------------------------------------------------------
+
 pub struct WaveNetModel {
-    channels: usize,
     gated: bool,
 
-    // Input conditioning: x = input * weight + bias
-    input_weight: Vec<f32>,
-    input_bias: Vec<f32>,
-
-    // Dilated conv layers [stack][layer]
+    // Per-stack data
+    rechannels: Vec<Option<Conv1x1>>,
     stacks: Vec<Vec<WaveNetLayer>>,
-
-    // Head MLP
-    head_layers: Vec<DenseLayer>,
-
-    // State: ring buffer per layer
+    head_rechannels: Vec<Conv1x1Bias>,
     ring_buffers: Vec<Vec<RingBuffer>>,
 
-    // Pre-allocated scratch buffers
+    // Head MLP (may be empty)
+    head_layers: Vec<DenseLayer>,
+    head_scale: f32,
+
+    // Pre-allocated scratch buffers (sized for max needed)
     activation: Vec<f32>,
-    filter_buf: Vec<f32>,
-    gate_buf: Vec<f32>,
+    conv_out: Vec<f32>,   // mid_ch sized
+    mixin_buf: Vec<f32>,  // mid_ch sized
     residual_buf: Vec<f32>,
     skip_accum: Vec<f32>,
+    rechannel_buf: Vec<f32>,
+    head_input: Vec<f32>, // head_size sized, accumulated across stacks
     head_buf_a: Vec<f32>,
     head_buf_b: Vec<f32>,
 }
@@ -109,218 +140,241 @@ impl WaveNetModel {
         config: WaveNetConfig,
         reader: &mut WeightReader,
     ) -> Result<Self, String> {
-        let ch = config.channels;
+        let num_stacks = config.stacks.len();
+        let max_ch = config.stacks.iter().map(|s| s.channels).max().unwrap_or(1);
+        let max_mid = if config.gated { max_ch * 2 } else { max_ch };
+        let head_size = config.head_size;
 
-        // Input conditioning
-        let input_weight = reader.read(ch * config.input_size)?;
-        let input_bias = reader.read(ch)?;
+        let mut rechannels = Vec::with_capacity(num_stacks);
+        let mut stacks = Vec::with_capacity(num_stacks);
+        let mut head_rechannels = Vec::with_capacity(num_stacks);
+        let mut ring_buffers = Vec::with_capacity(num_stacks);
 
-        // Layers per stack
-        let mut stacks = Vec::with_capacity(config.dilations.len());
-        let mut ring_buffers = Vec::with_capacity(config.dilations.len());
+        let mut prev_ch = config.input_size;
 
-        for stack_dilations in &config.dilations {
-            let mut layers = Vec::with_capacity(stack_dilations.len());
-            let mut rings = Vec::with_capacity(stack_dilations.len());
+        for stack_cfg in &config.stacks {
+            let ch = stack_cfg.channels;
+            let mid_ch = if config.gated { ch * 2 } else { ch };
 
-            for &dilation in stack_dilations {
+            // --- Rechannel (1x1, no bias) ---
+            if prev_ch != ch {
+                let weight = reader.read(ch * prev_ch)?;
+                rechannels.push(Some(Conv1x1 {
+                    weight,
+                    out_ch: ch,
+                    in_ch: prev_ch,
+                }));
+            } else {
+                rechannels.push(None);
+            }
 
-                // Dilated convolution weights (kernel_size = 2)
-                // Stored as [out_channels, in_channels, kernel_size]
-                // We split into prev (kernel[0]) and curr (kernel[1])
-                let conv_weights = reader.read(ch * ch * 2)?;
-                let mut w_filter_prev = vec![0.0f32; ch * ch];
-                let mut w_filter_curr = vec![0.0f32; ch * ch];
-                for out_c in 0..ch {
-                    for in_c in 0..ch {
-                        let base = (out_c * ch + in_c) * 2;
-                        w_filter_prev[out_c * ch + in_c] = conv_weights[base];
-                        w_filter_curr[out_c * ch + in_c] = conv_weights[base + 1];
-                    }
-                }
+            // --- Layers ---
+            let mut layers = Vec::with_capacity(stack_cfg.dilations.len());
+            let mut rings = Vec::with_capacity(stack_cfg.dilations.len());
 
-                let (w_gate_prev, w_gate_curr, b_gate) = if config.gated {
-                    let gate_weights = reader.read(ch * ch * 2)?;
-                    let mut gp = vec![0.0f32; ch * ch];
-                    let mut gc = vec![0.0f32; ch * ch];
-                    for out_c in 0..ch {
+            for (layer_idx, &dilation) in stack_cfg.dilations.iter().enumerate() {
+                let ks = stack_cfg.kernel_sizes[layer_idx];
+
+                // _conv.weight [mid_ch, ch, kernel_size] row-major
+                let raw = reader.read(mid_ch * ch * ks)?;
+                let mut w_conv = Vec::with_capacity(ks);
+                for tap in 0..ks {
+                    let mut w = vec![0.0f32; mid_ch * ch];
+                    for out_c in 0..mid_ch {
                         for in_c in 0..ch {
-                            let base = (out_c * ch + in_c) * 2;
-                            gp[out_c * ch + in_c] = gate_weights[base];
-                            gc[out_c * ch + in_c] = gate_weights[base + 1];
+                            w[out_c * ch + in_c] = raw[(out_c * ch + in_c) * ks + tap];
                         }
                     }
-                    let b = reader.read(ch)?;
-                    // Read filter bias after gate weights but before gate bias
-                    // Actually, let me reconsider the weight ordering...
-                    (gp, gc, b)
+                    w_conv.push(w);
+                }
+
+                // _conv.bias [mid_ch]
+                let b_conv = reader.read(mid_ch)?;
+
+                // _input_mixin.weight [mid_ch, condition_size] (no bias)
+                let w_input_mixin = if stack_cfg.condition_size > 0 {
+                    Some(reader.read(mid_ch * stack_cfg.condition_size)?)
                 } else {
-                    (Vec::new(), Vec::new(), Vec::new())
+                    None
                 };
 
-                let b_filter = reader.read(ch)?;
+                // _layer1x1: only present if bottleneck != channels.
+                // For standard models bottleneck == channels, so this is None.
+                let layer1x1 = None;
 
-                // 1x1 convolution (residual)
-                let w_1x1 = reader.read(ch * ch)?;
-                let b_1x1 = reader.read(ch)?;
-
-                let ring_capacity = dilation + 2;
+                let ring_capacity = (ks - 1) * dilation + 2;
                 rings.push(RingBuffer::new(ring_capacity, ch));
 
                 layers.push(WaveNetLayer {
-                    w_filter_prev,
-                    w_filter_curr,
-                    b_filter,
-                    w_gate_prev,
-                    w_gate_curr,
-                    b_gate,
-                    w_1x1,
-                    b_1x1,
+                    w_conv,
+                    b_conv,
+                    w_input_mixin,
+                    layer1x1,
+                    kernel_size: ks,
                     dilation,
+                    channels: ch,
+                    mid_ch,
                 });
             }
 
             stacks.push(layers);
             ring_buffers.push(rings);
+
+            // --- Head rechannel (1x1, bias controlled by head_bias) ---
+            let hr_out = stack_cfg.head_size;
+            let hr_weight = reader.read(hr_out * ch)?;
+            let hr_bias = if config.head_bias {
+                reader.read(hr_out)?
+            } else {
+                vec![0.0; hr_out]
+            };
+            head_rechannels.push(Conv1x1Bias {
+                weight: hr_weight,
+                bias: hr_bias,
+                out_ch: hr_out,
+                in_ch: ch,
+            });
+
+            prev_ch = ch;
         }
 
-        // Head layers
+        // --- Head MLP layers ---
         let mut head_layers = Vec::new();
-        let mut prev_size = ch;
-
-        for &head_size in &config.head {
+        let mut prev_size = head_size;
+        for &hidden in &config.head {
+            let weight = reader.read(hidden * prev_size)?;
+            let bias = reader.read(hidden)?;
+            head_layers.push(DenseLayer {
+                weight,
+                bias,
+                in_features: prev_size,
+                out_features: hidden,
+                has_activation: true,
+            });
+            prev_size = hidden;
+        }
+        // Final output layer (if head has hidden layers)
+        if !config.head.is_empty() {
             let weight = reader.read(head_size * prev_size)?;
-            let bias = if config.head_bias {
-                reader.read(head_size)?
-            } else {
-                vec![0.0; head_size]
-            };
+            let bias = reader.read(head_size)?;
             head_layers.push(DenseLayer {
                 weight,
                 bias,
                 in_features: prev_size,
                 out_features: head_size,
-                has_activation: true,
+                has_activation: false,
             });
-            prev_size = head_size;
         }
 
-        // Final output layer
-        let weight = reader.read(config.head_size * prev_size)?;
-        let bias = if config.head_bias {
-            reader.read(config.head_size)?
+        // --- Head scale (last weight) ---
+        let head_scale = if reader.remaining() >= 1 {
+            reader.read(1)?[0]
         } else {
-            vec![0.0; config.head_size]
+            1.0
         };
-        head_layers.push(DenseLayer {
-            weight,
-            bias,
-            in_features: prev_size,
-            out_features: config.head_size,
-            has_activation: false,
-        });
 
-        // Compute max head buffer size
-        let max_head = config
+        let max_head_buf = config
             .head
             .iter()
             .copied()
-            .chain(std::iter::once(config.head_size))
-            .chain(std::iter::once(ch))
+            .chain(std::iter::once(head_size))
+            .chain(std::iter::once(max_ch))
             .max()
-            .unwrap_or(ch);
+            .unwrap_or(1);
 
         Ok(Self {
-            channels: ch,
             gated: config.gated,
-            input_weight,
-            input_bias,
+            rechannels,
             stacks,
-            head_layers,
+            head_rechannels,
             ring_buffers,
-            activation: vec![0.0; ch],
-            filter_buf: vec![0.0; ch],
-            gate_buf: vec![0.0; ch],
-            residual_buf: vec![0.0; ch],
-            skip_accum: vec![0.0; ch],
-            head_buf_a: vec![0.0; max_head],
-            head_buf_b: vec![0.0; max_head],
+            head_layers,
+            head_scale,
+            activation: vec![0.0; max_ch],
+            conv_out: vec![0.0; max_mid],
+            mixin_buf: vec![0.0; max_mid],
+            residual_buf: vec![0.0; max_ch],
+            skip_accum: vec![0.0; max_ch],
+            rechannel_buf: vec![0.0; max_ch],
+            head_input: vec![0.0; head_size],
+            head_buf_a: vec![0.0; max_head_buf],
+            head_buf_b: vec![0.0; max_head_buf],
         })
     }
 }
 
 impl NamInference for WaveNetModel {
     fn process_sample(&mut self, input: f32) -> f32 {
-        let ch = self.channels;
+        // Seed activation with the raw input (will be rechanneled by first stack's rechannel)
+        self.activation[0] = input;
+        let mut current_ch = 1; // input_size = 1
 
-        // 1. Input conditioning: activation[c] = input * weight[c] + bias[c]
-        for c in 0..ch {
-            self.activation[c] = input * self.input_weight[c] + self.input_bias[c];
-        }
+        // Zero head_input accumulator
+        self.head_input.fill(0.0);
 
-        // 2. Zero skip accumulator
-        self.skip_accum.fill(0.0);
-
-        // 3. Process each stack
         for (stack_idx, stack) in self.stacks.iter().enumerate() {
+            let ch = if let Some(layer) = stack.first() { layer.channels } else { continue };
+            let mid_ch = if let Some(layer) = stack.first() { layer.mid_ch } else { continue };
+
+            // Rechannel if needed
+            if let Some(ref rc) = self.rechannels[stack_idx] {
+                matvec(
+                    &rc.weight,
+                    &self.activation[..rc.in_ch],
+                    rc.out_ch,
+                    rc.in_ch,
+                    &mut self.rechannel_buf,
+                );
+                self.activation[..rc.out_ch].copy_from_slice(&self.rechannel_buf[..rc.out_ch]);
+                current_ch = rc.out_ch;
+            }
+
+            // Save condition signal (activation after rechannel, before layers modify it)
+            // We'll read it from activation snapshot. Since layers modify activation in-place,
+            // we need to save condition for input_mixin. We reuse rechannel_buf for this.
+            self.rechannel_buf[..ch].copy_from_slice(&self.activation[..ch]);
+
+            // Zero skip accumulator for this stack
+            self.skip_accum[..ch].fill(0.0);
+
             for (layer_idx, layer) in stack.iter().enumerate() {
                 let ring = &mut self.ring_buffers[stack_idx][layer_idx];
+                let ks = layer.kernel_size;
 
                 // Write current activation into ring buffer
-                ring.write(&self.activation);
+                ring.write(&self.activation[..ch]);
 
-                // Read current and delayed values
-                let x_curr = ring.read_current();
-                let x_prev = ring.read_delayed(layer.dilation);
-
-                // Dilated convolution: filter path
-                matvec(
-                    &layer.w_filter_curr,
-                    x_curr,
-                    ch,
-                    ch,
-                    &mut self.filter_buf,
-                );
-                matvec_add(
-                    &layer.w_filter_prev,
-                    x_prev,
-                    ch,
-                    ch,
-                    &mut self.filter_buf,
-                );
-                for c in 0..ch {
-                    self.filter_buf[c] += layer.b_filter[c];
+                // Dilated convolution (combined filter+gate)
+                let x0 = ring.read_delayed((ks - 1) * layer.dilation);
+                matvec(&layer.w_conv[0], x0, mid_ch, ch, &mut self.conv_out);
+                for tap in 1..ks {
+                    let delay = (ks - 1 - tap) * layer.dilation;
+                    let xt = ring.read_delayed(delay);
+                    matvec_add(&layer.w_conv[tap], xt, mid_ch, ch, &mut self.conv_out);
+                }
+                for c in 0..mid_ch {
+                    self.conv_out[c] += layer.b_conv[c];
                 }
 
-                // Apply activation
-                if self.gated {
-                    // Gate path
-                    matvec(
-                        &layer.w_gate_curr,
-                        x_curr,
-                        ch,
-                        ch,
-                        &mut self.gate_buf,
-                    );
-                    matvec_add(
-                        &layer.w_gate_prev,
-                        x_prev,
-                        ch,
-                        ch,
-                        &mut self.gate_buf,
-                    );
-                    for c in 0..ch {
-                        self.gate_buf[c] += layer.b_gate[c];
+                // Input mixin: add condition signal projected to mid_ch
+                if let Some(ref w_mixin) = layer.w_input_mixin {
+                    let cond_size = w_mixin.len() / mid_ch;
+                    matvec(w_mixin, &self.rechannel_buf[..cond_size], mid_ch, cond_size, &mut self.mixin_buf);
+                    for c in 0..mid_ch {
+                        self.conv_out[c] += self.mixin_buf[c];
                     }
+                }
 
-                    // Gated activation: z = tanh(filter) * sigmoid(gate)
-                    for c in 0..ch {
+                // Activation function
+                if self.gated {
+                    let half = ch; // bottleneck = ch
+                    for c in 0..half {
                         self.activation[c] =
-                            self.filter_buf[c].tanh() * sigmoid(self.gate_buf[c]);
+                            self.conv_out[c].tanh() * sigmoid(self.conv_out[half + c]);
                     }
                 } else {
                     for c in 0..ch {
-                        self.activation[c] = self.filter_buf[c].tanh();
+                        self.activation[c] = self.conv_out[c].tanh();
                     }
                 }
 
@@ -329,32 +383,51 @@ impl NamInference for WaveNetModel {
                     self.skip_accum[c] += self.activation[c];
                 }
 
-                // 1x1 convolution (residual)
-                matvec(
-                    &layer.w_1x1,
-                    &self.activation,
-                    ch,
-                    ch,
-                    &mut self.residual_buf,
-                );
-                for c in 0..ch {
-                    self.residual_buf[c] += layer.b_1x1[c];
-                }
-
-                // Residual connection: activation = x_curr + residual
-                for c in 0..ch {
-                    self.activation[c] = x_curr[c] + self.residual_buf[c];
+                // Residual connection
+                match &layer.layer1x1 {
+                    Some(l1x1) => {
+                        matvec(&l1x1.weight, &self.activation[..l1x1.in_ch], l1x1.out_ch, l1x1.in_ch, &mut self.residual_buf);
+                        for c in 0..l1x1.out_ch {
+                            self.residual_buf[c] += l1x1.bias[c];
+                        }
+                        let x_curr = ring.read_current();
+                        for c in 0..ch {
+                            self.activation[c] = x_curr[c] + self.residual_buf[c];
+                        }
+                    }
+                    None => {
+                        // bottleneck == channels: z IS the residual
+                        let x_curr = ring.read_current();
+                        for c in 0..ch {
+                            self.activation[c] = x_curr[c] + self.activation[c];
+                        }
+                    }
                 }
             }
+
+            // Head rechannel: project skip_accum to head_size and accumulate
+            let hr = &self.head_rechannels[stack_idx];
+            // Apply tanh to skip_accum before head_rechannel
+            for c in 0..ch {
+                self.skip_accum[c] = self.skip_accum[c].tanh();
+            }
+            matvec(&hr.weight, &self.skip_accum[..hr.in_ch], hr.out_ch, hr.in_ch, &mut self.head_buf_a);
+            for c in 0..hr.out_ch {
+                self.head_input[c] += self.head_buf_a[c] + hr.bias[c];
+            }
+
+            current_ch = ch;
         }
 
-        // 4. Head network
-        // Apply tanh to skip accumulator
-        for c in 0..ch {
-            self.head_buf_a[c] = self.skip_accum[c].tanh();
+        // Head MLP
+        let head_size = self.head_input.len();
+        if self.head_layers.is_empty() {
+            // No head MLP — output is head_input[0] * head_scale
+            return self.head_input[0] * self.head_scale;
         }
 
-        let mut current_size = ch;
+        self.head_buf_a[..head_size].copy_from_slice(&self.head_input);
+        let mut current_size = head_size;
         let mut use_a = true;
 
         for head_layer in &self.head_layers {
@@ -363,14 +436,7 @@ impl NamInference for WaveNetModel {
             } else {
                 (&self.head_buf_b as &[f32], &mut self.head_buf_a)
             };
-
-            matvec(
-                &head_layer.weight,
-                &src[..current_size],
-                head_layer.out_features,
-                head_layer.in_features,
-                dst,
-            );
+            matvec(&head_layer.weight, &src[..current_size], head_layer.out_features, head_layer.in_features, dst);
             for j in 0..head_layer.out_features {
                 dst[j] += head_layer.bias[j];
             }
@@ -379,17 +445,12 @@ impl NamInference for WaveNetModel {
                     dst[j] = dst[j].tanh();
                 }
             }
-
             current_size = head_layer.out_features;
             use_a = !use_a;
         }
 
-        // Result is in whichever buffer was last written to
-        if use_a {
-            self.head_buf_a[0]
-        } else {
-            self.head_buf_b[0]
-        }
+        let result = if use_a { self.head_buf_a[0] } else { self.head_buf_b[0] };
+        result * self.head_scale
     }
 
     fn reset(&mut self) {
@@ -400,5 +461,6 @@ impl NamInference for WaveNetModel {
         }
         self.activation.fill(0.0);
         self.skip_accum.fill(0.0);
+        self.head_input.fill(0.0);
     }
 }

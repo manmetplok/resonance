@@ -19,14 +19,23 @@ struct NamFile {
 /// Internal WaveNet config used by the inference engine.
 pub struct WaveNetConfig {
     pub input_size: usize,
-    pub head_size: usize,
-    pub channels: usize,
-    /// Explicit dilations per stack, e.g. [[1,2,4,8,...], [1,2,4,8,...]].
-    pub dilations: Vec<Vec<usize>>,
-    /// Head hidden layer sizes, e.g. [8].
+    /// Per-stack config.
+    pub stacks: Vec<StackConfig>,
+    /// Head hidden layer sizes (e.g. [8]). Empty if no head MLP.
     pub head: Vec<usize>,
+    /// Final output size from head (typically 1).
+    pub head_size: usize,
     pub gated: bool,
     pub head_bias: bool,
+}
+
+pub struct StackConfig {
+    pub input_size: usize,
+    pub condition_size: usize,
+    pub head_size: usize,
+    pub channels: usize,
+    pub dilations: Vec<usize>,
+    pub kernel_sizes: Vec<usize>,
 }
 
 // -- Old NAM format (flat config with layer counts) --------------------------
@@ -34,7 +43,6 @@ pub struct WaveNetConfig {
 #[derive(Deserialize)]
 struct OldWaveNetConfig {
     input_size: usize,
-    #[allow(dead_code)]
     condition_size: usize,
     head_size: usize,
     channels: usize,
@@ -48,17 +56,30 @@ struct OldWaveNetConfig {
 
 impl OldWaveNetConfig {
     fn into_config(self) -> WaveNetConfig {
-        let dilations = self
+        let dilations: Vec<Vec<usize>> = self
             .layers
             .iter()
             .map(|&n| (0..n).map(|i| 1usize << i).collect())
             .collect();
+        let stacks = dilations
+            .into_iter()
+            .map(|d| {
+                let n = d.len();
+                StackConfig {
+                    input_size: self.input_size,
+                    condition_size: self.condition_size,
+                    head_size: self.head_size,
+                    channels: self.channels,
+                    kernel_sizes: vec![2; n],
+                    dilations: d,
+                }
+            })
+            .collect();
         WaveNetConfig {
             input_size: self.input_size,
-            head_size: self.head_size,
-            channels: self.channels,
-            dilations,
+            stacks,
             head: self.head,
+            head_size: self.head_size,
             gated: self.gated,
             head_bias: self.head_bias,
         }
@@ -70,9 +91,7 @@ impl OldWaveNetConfig {
 #[derive(Deserialize)]
 struct NewLayerArrayConfig {
     input_size: usize,
-    #[allow(dead_code)]
     condition_size: usize,
-    #[allow(dead_code)]
     head_size: usize,
     channels: usize,
     dilations: Vec<usize>,
@@ -115,38 +134,7 @@ impl NewWaveNetConfig {
             .first()
             .ok_or("WaveNet config has no layer arrays")?;
 
-        // Validate kernel sizes are 2 (the only size our inference engine supports).
-        for layer in &self.layers {
-            if let Some(ref ks) = layer.kernel_sizes {
-                if ks.iter().any(|&k| k != 2) {
-                    return Err(format!(
-                        "Unsupported kernel_sizes {:?} (only 2 is supported)",
-                        ks
-                    ));
-                }
-            }
-            if let Some(k) = layer.kernel_size {
-                if k != 2 {
-                    return Err(format!(
-                        "Unsupported kernel_size {} (only 2 is supported)",
-                        k
-                    ));
-                }
-            }
-        }
-
-        // All stacks must share the same channel count.
-        let channels = first.channels;
-        for (i, layer) in self.layers.iter().enumerate() {
-            if layer.channels != channels {
-                return Err(format!(
-                    "Layer array {} has {} channels, expected {} (mixed channel counts not supported)",
-                    i, layer.channels, channels
-                ));
-            }
-        }
-
-        // Determine gating mode. Check gating_mode first (new field), fall back to gated bool.
+        // Determine gating mode.
         let gated = determine_gated(first)?;
         for (i, layer) in self.layers.iter().enumerate().skip(1) {
             if determine_gated(layer)? != gated {
@@ -157,7 +145,26 @@ impl NewWaveNetConfig {
             }
         }
 
-        let dilations = self.layers.iter().map(|l| l.dilations.clone()).collect();
+        let stacks: Vec<StackConfig> = self
+            .layers
+            .iter()
+            .map(|l| {
+                let ks = if let Some(ref ks) = l.kernel_sizes {
+                    ks.clone()
+                } else {
+                    let k = l.kernel_size.unwrap_or(2);
+                    vec![k; l.dilations.len()]
+                };
+                StackConfig {
+                    input_size: l.input_size,
+                    condition_size: l.condition_size,
+                    head_size: l.head_size,
+                    channels: l.channels,
+                    dilations: l.dilations.clone(),
+                    kernel_sizes: ks,
+                }
+            })
+            .collect();
 
         let (head, head_size) = match self.head {
             Some(h) => {
@@ -168,15 +175,14 @@ impl NewWaveNetConfig {
                 };
                 (hidden, h.out_channels)
             }
-            None => (vec![], 1),
+            None => (vec![], first.head_size),
         };
 
         Ok(WaveNetConfig {
             input_size: first.input_size,
-            head_size,
-            channels,
-            dilations,
+            stacks,
             head,
+            head_size,
             gated,
             head_bias: first.head_bias,
         })
@@ -193,7 +199,6 @@ fn determine_gated(layer: &NewLayerArrayConfig) -> Result<bool, String> {
                 other => Err(format!("Unsupported gating_mode: {other}")),
             },
             serde_json::Value::Array(arr) => {
-                // All elements must be the same mode.
                 let first = arr
                     .first()
                     .and_then(|v| v.as_str())
@@ -251,9 +256,10 @@ impl<'a> WeightReader<'a> {
     pub fn read(&mut self, count: usize) -> Result<Vec<f32>, String> {
         if self.pos + count > self.weights.len() {
             return Err(format!(
-                "Weight underflow: need {} more but only {} remain",
+                "Weight underflow: need {} more but only {} remain (at pos {})",
                 count,
-                self.weights.len() - self.pos
+                self.weights.len() - self.pos,
+                self.pos
             ));
         }
         let slice = self.weights[self.pos..self.pos + count].to_vec();

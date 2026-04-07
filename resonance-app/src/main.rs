@@ -913,20 +913,26 @@ impl Resonance {
                 // If we have a pending path to inject, modify the state and reload
                 if let Some((pending_id, ref key, ref path)) = self.pending_plugin_path.clone() {
                     if pending_id == instance_id {
-                        // nih_plug serializes state as JSON where persist field values
-                        // are themselves JSON-serialized strings (double-serialized)
-                        if let Ok(mut state) = serde_json::from_slice::<serde_json::Value>(&data) {
-                            if let Some(fields) = state.get_mut("fields") {
-                                // Double-serialize: the value must be a JSON string of the path
-                                if let Ok(serialized) = serde_json::to_string(path.as_str()) {
-                                    fields[&key] = serde_json::Value::String(serialized);
+                        // NIH-plug's CLAP state format prepends an 8-byte length (u64 LE)
+                        // before the JSON payload. We must strip it before parsing and
+                        // re-add it after modification.
+                        if data.len() > 8 {
+                            let json_data = &data[8..];
+                            if let Ok(mut state) = serde_json::from_slice::<serde_json::Value>(json_data) {
+                                if let Some(fields) = state.get_mut("fields") {
+                                    // Double-serialize: the value must be a JSON string of the path
+                                    if let Ok(serialized) = serde_json::to_string(path.as_str()) {
+                                        fields[&key] = serde_json::Value::String(serialized);
+                                    }
                                 }
-                            }
-                            if let Ok(new_data) = serde_json::to_vec(&state) {
-                                self.engine.send(AudioCommand::LoadPluginState {
-                                    instance_id,
-                                    data: new_data,
-                                });
+                                if let Ok(new_json) = serde_json::to_vec(&state) {
+                                    let mut new_data = (new_json.len() as u64).to_le_bytes().to_vec();
+                                    new_data.extend_from_slice(&new_json);
+                                    self.engine.send(AudioCommand::LoadPluginState {
+                                        instance_id,
+                                        data: new_data,
+                                    });
+                                }
                             }
                         }
                         self.pending_plugin_path = None;

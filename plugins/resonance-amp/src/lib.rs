@@ -15,6 +15,7 @@ use params::AmpParams;
 #[derive(Clone)]
 pub enum AmpTask {
     LoadModel(String),
+    LoadByIndex(usize),
 }
 
 /// Scan a directory for .nam files, returning sorted paths.
@@ -107,9 +108,27 @@ impl Plugin for ResonanceAmp {
     fn task_executor(&mut self) -> TaskExecutor<Self> {
         let mailbox = self.model_mailbox.clone();
         let model_name = self.model_name.clone();
+        let file_list = self.file_list.clone();
+        let model_path = self.params.model_path.clone();
 
-        Box::new(move |task| match task {
-            AmpTask::LoadModel(path) => match nam::parse::load_model_from_file(&path) {
+        Box::new(move |task| {
+            let path = match task {
+                AmpTask::LoadModel(p) => p,
+                AmpTask::LoadByIndex(idx) => {
+                    let list = file_list.lock();
+                    if list.is_empty() {
+                        return;
+                    }
+                    let clamped = idx.min(list.len() - 1);
+                    let p = list[clamped].clone();
+                    drop(list);
+                    if let Some(mut mp) = model_path.try_lock() {
+                        *mp = p.clone();
+                    }
+                    p
+                }
+            };
+            match nam::parse::load_model_from_file(&path) {
                 Ok(model) => {
                     let name = Path::new(&path)
                         .file_stem()
@@ -122,7 +141,7 @@ impl Plugin for ResonanceAmp {
                     nih_plug::nih_log!("Failed to load NAM model: {e}");
                     *model_name.lock() = format!("Error: {e}");
                 }
-            },
+            }
         })
     }
 
@@ -178,17 +197,8 @@ impl Plugin for ResonanceAmp {
         let current_index = self.params.file_select.value();
         if current_index != self.last_file_index {
             self.last_file_index = current_index;
-            if let Some(file_list) = self.file_list.try_lock() {
-                if !file_list.is_empty() {
-                    let idx = (current_index as usize).min(file_list.len() - 1);
-                    let path = file_list[idx].clone();
-                    drop(file_list);
-                    if let Some(mut model_path) = self.params.model_path.try_lock() {
-                        *model_path = path.clone();
-                    }
-                    context.execute_background(AmpTask::LoadModel(path));
-                }
-            }
+            // Dispatch index to background task which can safely allocate
+            context.execute_background(AmpTask::LoadByIndex(current_index as usize));
         }
 
         match &mut self.active_model {
