@@ -6,110 +6,11 @@
 /// The diffusion network blurs input into dense reflections using Hadamard mixing.
 /// The FDN provides the decaying tail with Householder feedback and frequency-dependent damping.
 
+use resonance_dsp::{DelayLine, Lfo, OnePole, SimpleRng};
+
 const CHANNELS: usize = 8;
 const DIFFUSION_STEPS: usize = 4;
 const MAX_PREDELAY_SAMPLES: usize = 48000; // 1 second max pre-delay
-
-/// Simple delay line with power-of-2 buffer for cheap wrapping.
-struct DelayLine {
-    buffer: Vec<f32>,
-    mask: usize,
-    write_pos: usize,
-}
-
-impl DelayLine {
-    fn new(max_samples: usize) -> Self {
-        let size = max_samples.next_power_of_two();
-        Self {
-            buffer: vec![0.0; size],
-            mask: size - 1,
-            write_pos: 0,
-        }
-    }
-
-    fn push(&mut self, sample: f32) {
-        self.buffer[self.write_pos] = sample;
-        self.write_pos = (self.write_pos + 1) & self.mask;
-    }
-
-    fn tap(&self, delay: usize) -> f32 {
-        let idx = self.write_pos.wrapping_sub(delay).wrapping_sub(1) & self.mask;
-        self.buffer[idx]
-    }
-
-    /// Read with linear interpolation for fractional delays (modulation).
-    fn tap_linear(&self, delay_frac: f32) -> f32 {
-        let delay_int = delay_frac as usize;
-        let frac = delay_frac - delay_int as f32;
-        let a = self.tap(delay_int);
-        let b = self.tap(delay_int + 1);
-        a + frac * (b - a)
-    }
-
-    fn clear(&mut self) {
-        self.buffer.fill(0.0);
-        self.write_pos = 0;
-    }
-}
-
-/// One-pole lowpass filter for frequency-dependent damping.
-struct OnePole {
-    state: f32,
-    coeff: f32, // 0.0 = no filtering, 1.0 = max filtering
-}
-
-impl OnePole {
-    fn new() -> Self {
-        Self {
-            state: 0.0,
-            coeff: 0.0,
-        }
-    }
-
-    /// Set cutoff frequency (Hz) for given sample rate.
-    fn set_cutoff(&mut self, freq_hz: f32, sample_rate: f32) {
-        let w = (2.0 * std::f32::consts::PI * freq_hz / sample_rate).min(std::f32::consts::PI);
-        // Attempt to match analog: coeff = exp(-w)
-        self.coeff = (-w).exp();
-    }
-
-    fn process(&mut self, input: f32) -> f32 {
-        self.state = input + self.coeff * (self.state - input);
-        self.state
-    }
-
-    fn clear(&mut self) {
-        self.state = 0.0;
-    }
-}
-
-/// Simple sine LFO.
-struct Lfo {
-    phase: f32,
-    phase_inc: f32,
-}
-
-impl Lfo {
-    fn new(rate_hz: f32, sample_rate: f32, initial_phase: f32) -> Self {
-        Self {
-            phase: initial_phase,
-            phase_inc: rate_hz / sample_rate,
-        }
-    }
-
-    fn set_rate(&mut self, rate_hz: f32, sample_rate: f32) {
-        self.phase_inc = rate_hz / sample_rate;
-    }
-
-    fn next(&mut self) -> f32 {
-        let out = (self.phase * 2.0 * std::f32::consts::PI).sin();
-        self.phase += self.phase_inc;
-        if self.phase >= 1.0 {
-            self.phase -= 1.0;
-        }
-        out
-    }
-}
 
 /// A single diffusion step: N delay lines + Hadamard mix + polarity flips.
 struct DiffusionStep {
@@ -300,10 +201,15 @@ impl ReverbDsp {
         }
     }
 
-    /// Set decay to infinite (freeze mode).
+    /// Set or unset freeze mode. When frozen, decay_gain is 1.0 (infinite tail).
+    /// When unfreezing, recalculate decay_gain from current room size and a default RT60.
     pub fn set_freeze(&mut self, freeze: bool) {
         if freeze {
             self.decay_gain = 1.0;
+        } else if self.decay_gain >= 1.0 {
+            // Was frozen — restore a sensible decay; set_decay will be called
+            // next block with the actual param value, so use a safe default.
+            self.decay_gain = 0.85;
         }
     }
 
@@ -454,22 +360,3 @@ fn householder_in_place(data: &mut [f32; CHANNELS]) {
     }
 }
 
-/// Minimal deterministic PRNG (xorshift32) for delay time randomization.
-struct SimpleRng {
-    state: u32,
-}
-
-impl SimpleRng {
-    fn new(seed: u64) -> Self {
-        Self {
-            state: (seed as u32) | 1, // ensure non-zero
-        }
-    }
-
-    fn next_u32(&mut self) -> u32 {
-        self.state ^= self.state << 13;
-        self.state ^= self.state >> 17;
-        self.state ^= self.state << 5;
-        self.state
-    }
-}

@@ -75,14 +75,7 @@ impl Plugin for ResonanceReverb {
         _aux: &mut AuxiliaryBuffers,
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        #[cfg(target_arch = "x86_64")]
-        unsafe {
-            std::arch::x86_64::_mm_setcsr(std::arch::x86_64::_mm_getcsr() | 0x8040);
-        }
-        #[cfg(target_arch = "x86")]
-        unsafe {
-            std::arch::x86::_mm_setcsr(std::arch::x86::_mm_getcsr() | 0x8040);
-        }
+        resonance_common::flush_denormals();
 
         let Some(reverb) = &mut self.reverb else {
             return ProcessStatus::Normal;
@@ -106,9 +99,7 @@ impl Plugin for ResonanceReverb {
         reverb.set_predelay(predelay);
         reverb.set_mod_rate(mod_rate);
         reverb.set_mod_depth(mod_depth);
-        if freeze {
-            reverb.set_freeze(true);
-        }
+        reverb.set_freeze(freeze);
 
         for mut channel_samples in buffer.iter_samples() {
             let mix = self.params.mix.smoothed.next();

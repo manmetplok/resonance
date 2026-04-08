@@ -3,7 +3,8 @@ use iced::widget::canvas;
 use iced::{keyboard, mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::theme;
-use crate::{ClipEdge, ClipState, Message, PunchDragTarget, TrackState};
+use crate::state::{ClipEdge, ClipState, PunchDragTarget, TrackState};
+use crate::message::Message;
 
 use resonance_audio::types::{ClipId, TrackId};
 
@@ -130,7 +131,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
 
                     // Clip hit-testing (track area)
                     if pos.y >= ruler_height {
-                        let mut sorted_tracks: Vec<&crate::TrackState> = self.tracks.iter().collect();
+                        let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
                         sorted_tracks.sort_by_key(|t| t.order);
 
                         // Check clips in reverse order so topmost clip wins

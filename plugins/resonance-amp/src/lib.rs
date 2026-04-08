@@ -20,20 +20,7 @@ pub enum AmpTask {
 
 /// Scan a directory for .nam files, returning sorted paths.
 fn scan_directory(dir: &Path) -> Vec<String> {
-    let mut files: Vec<String> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext.eq_ignore_ascii_case("nam"))
-                .unwrap_or(false)
-        })
-        .map(|e| e.path().to_string_lossy().into_owned())
-        .collect();
-    files.sort();
-    files
+    resonance_common::scan_directory(dir, "nam")
 }
 
 pub struct ResonanceAmp {
@@ -41,8 +28,6 @@ pub struct ResonanceAmp {
     active_model: Option<Box<dyn NamInference>>,
     model_mailbox: Arc<Mutex<Option<Box<dyn NamInference>>>>,
     model_name: Arc<Mutex<String>>,
-    /// List of .nam files in the current directory.
-    file_list: Arc<Mutex<Vec<String>>>,
     /// Last file_select param value we acted on (to detect changes).
     last_file_index: i32,
 }
@@ -54,7 +39,6 @@ impl Default for ResonanceAmp {
             active_model: None,
             model_mailbox: Arc::new(Mutex::new(None)),
             model_name: Arc::new(Mutex::new(String::new())),
-            file_list: Arc::new(Mutex::new(Vec::new())),
             last_file_index: -1,
         }
     }
@@ -67,7 +51,7 @@ impl ResonanceAmp {
         if let Some(dir) = Path::new(path).parent() {
             let files = scan_directory(dir);
             let idx = files.iter().position(|f| f == path).unwrap_or(0);
-            *self.file_list.lock() = files;
+            *self.params.file_list.lock() = files;
             idx
         } else {
             0
@@ -108,7 +92,7 @@ impl Plugin for ResonanceAmp {
     fn task_executor(&mut self) -> TaskExecutor<Self> {
         let mailbox = self.model_mailbox.clone();
         let model_name = self.model_name.clone();
-        let file_list = self.file_list.clone();
+        let file_list = self.params.file_list.clone();
         let model_path = self.params.model_path.clone();
 
         Box::new(move |task| {
@@ -176,15 +160,7 @@ impl Plugin for ResonanceAmp {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        // Flush denormals to zero to prevent CPU spikes
-        #[cfg(target_arch = "x86_64")]
-        unsafe {
-            std::arch::x86_64::_mm_setcsr(std::arch::x86_64::_mm_getcsr() | 0x8040);
-        }
-        #[cfg(target_arch = "x86")]
-        unsafe {
-            std::arch::x86::_mm_setcsr(std::arch::x86::_mm_getcsr() | 0x8040);
-        }
+        resonance_common::flush_denormals();
 
         // Check mailbox for newly loaded model
         if let Some(mut guard) = self.model_mailbox.try_lock() {

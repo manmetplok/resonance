@@ -1,0 +1,8 @@
+[package]
+name = "resonance-common"
+version = "0.1.0"
+edition = "2021"
+description = "Shared utilities for Resonance plugins"
+
+[dependencies]
+hound = "3.5"

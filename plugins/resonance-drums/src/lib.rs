@@ -69,15 +69,7 @@ impl Plugin for ResonanceDrums {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        // Flush denormals to zero to prevent CPU spikes
-        #[cfg(target_arch = "x86_64")]
-        unsafe {
-            std::arch::x86_64::_mm_setcsr(std::arch::x86_64::_mm_getcsr() | 0x8040);
-        }
-        #[cfg(target_arch = "x86")]
-        unsafe {
-            std::arch::x86::_mm_setcsr(std::arch::x86::_mm_getcsr() | 0x8040);
-        }
+        resonance_common::flush_denormals();
 
         // Read per-pad parameters
         let mut pad_volumes = [0.0f32; drum_map::NUM_PADS];

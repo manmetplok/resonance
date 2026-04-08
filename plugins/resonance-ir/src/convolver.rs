@@ -35,8 +35,8 @@ pub struct MonoConvolver {
     accum_scratch: Vec<Complex<f32>>,
     time_scratch: Vec<Complex<f32>>,
 
-    fft_forward: Arc<dyn Fft<f32>>,
-    fft_inverse: Arc<dyn Fft<f32>>,
+    fft_forward: Arc<dyn Fft<f32> + Send + Sync>,
+    fft_inverse: Arc<dyn Fft<f32> + Send + Sync>,
 }
 
 impl MonoConvolver {
@@ -206,7 +206,3 @@ impl StereoConvolver {
     }
 }
 
-// Safety: MonoConvolver contains no thread-unsafe types.
-// Arc<dyn Fft> is Send+Sync, and all buffers are owned Vecs.
-unsafe impl Send for MonoConvolver {}
-unsafe impl Send for StereoConvolver {}

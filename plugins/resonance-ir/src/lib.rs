@@ -20,20 +20,7 @@ pub enum IrTask {
 
 /// Scan a directory for .wav files, returning sorted paths.
 fn scan_directory(dir: &Path) -> Vec<String> {
-    let mut files: Vec<String> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext.eq_ignore_ascii_case("wav"))
-                .unwrap_or(false)
-        })
-        .map(|e| e.path().to_string_lossy().into_owned())
-        .collect();
-    files.sort();
-    files
+    resonance_common::scan_directory(dir, "wav")
 }
 
 pub struct ResonanceIr {
@@ -42,7 +29,6 @@ pub struct ResonanceIr {
     convolver_mailbox: Arc<Mutex<Option<StereoConvolver>>>,
     ir_name: Arc<Mutex<String>>,
     ir_info: Arc<Mutex<String>>,
-    file_list: Arc<Mutex<Vec<String>>>,
     last_file_index: i32,
     sample_rate: Arc<Mutex<f32>>,
 }
@@ -55,7 +41,6 @@ impl Default for ResonanceIr {
             convolver_mailbox: Arc::new(Mutex::new(None)),
             ir_name: Arc::new(Mutex::new(String::new())),
             ir_info: Arc::new(Mutex::new(String::new())),
-            file_list: Arc::new(Mutex::new(Vec::new())),
             last_file_index: -1,
             sample_rate: Arc::new(Mutex::new(44100.0)),
         }
@@ -67,7 +52,7 @@ impl ResonanceIr {
         if let Some(dir) = Path::new(path).parent() {
             let files = scan_directory(dir);
             let idx = files.iter().position(|f| f == path).unwrap_or(0);
-            *self.file_list.lock() = files;
+            *self.params.file_list.lock() = files;
             idx
         } else {
             0
@@ -110,7 +95,7 @@ impl Plugin for ResonanceIr {
         let ir_name = self.ir_name.clone();
         let ir_info = self.ir_info.clone();
         let sample_rate = self.sample_rate.clone();
-        let file_list = self.file_list.clone();
+        let file_list = self.params.file_list.clone();
         let ir_path_param = self.params.ir_path.clone();
 
         Box::new(move |task| {
@@ -205,15 +190,7 @@ impl Plugin for ResonanceIr {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        // Flush denormals to zero to prevent CPU spikes
-        #[cfg(target_arch = "x86_64")]
-        unsafe {
-            std::arch::x86_64::_mm_setcsr(std::arch::x86_64::_mm_getcsr() | 0x8040);
-        }
-        #[cfg(target_arch = "x86")]
-        unsafe {
-            std::arch::x86::_mm_setcsr(std::arch::x86::_mm_getcsr() | 0x8040);
-        }
+        resonance_common::flush_denormals();
 
         // Check mailbox for newly loaded convolver
         if let Some(mut guard) = self.convolver_mailbox.try_lock() {

@@ -87,6 +87,12 @@ pub const PANEL_ARMED: Color = Color::from_rgb(
     0x14 as f32 / 255.0,
 );
 
+pub const METER_BG: Color = Color::from_rgb(
+    0x08 as f32 / 255.0,
+    0x08 as f32 / 255.0,
+    0x08 as f32 / 255.0,
+);
+
 pub const BAR_LINE: Color = Color::from_rgb(
     0x30 as f32 / 255.0,
     0x30 as f32 / 255.0,
@@ -118,6 +124,10 @@ pub const CLIP_SELECTED_BORDER: Color = Color::from_rgb(
 );
 
 pub const TRACK_HEIGHT: f32 = 80.0;
+pub const RULER_HEIGHT: f32 = 30.0;
+pub const TRACK_HEADER_WIDTH: u16 = 180;
+pub const MIXER_STRIP_WIDTH: u16 = 160;
+pub const MASTER_STRIP_WIDTH: u16 = 140;
 
 pub fn resonance_theme() -> Theme {
     Theme::Dark
@@ -181,6 +191,56 @@ pub fn tab_button_style(active: bool, status: button::Status) -> button::Style {
             color: if active { ACCENT } else { Color::TRANSPARENT },
             width: if active { 1.0 } else { 0.0 },
             radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Toggle button style for active/inactive states with a custom active color.
+/// Used for monitor, metronome, and punch buttons.
+pub fn toggle_button_style(
+    active: bool,
+    active_color: Color,
+    small: bool,
+    status: button::Status,
+) -> button::Style {
+    if active {
+        let bg = match status {
+            button::Status::Hovered => Color::from_rgb(0.15, 0.25, 0.15),
+            button::Status::Pressed => Color::from_rgb(0.10, 0.20, 0.10),
+            _ => Color::from_rgb(0.12, 0.20, 0.12),
+        };
+        button::Style {
+            background: Some(iced::Background::Color(bg)),
+            text_color: active_color,
+            border: iced::Border {
+                color: active_color,
+                width: 1.0,
+                radius: if small { 2.0 } else { 4.0 }.into(),
+            },
+            ..Default::default()
+        }
+    } else if small {
+        small_button_style(status)
+    } else {
+        transport_button_style(status)
+    }
+}
+
+/// Mono/Stereo toggle button style.
+pub fn mono_button_style(is_mono: bool, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Color::from_rgb(0.20, 0.20, 0.25),
+        button::Status::Pressed => Color::from_rgb(0.15, 0.15, 0.20),
+        _ => Color::from_rgb(0.18, 0.18, 0.22),
+    };
+    button::Style {
+        background: Some(iced::Background::Color(bg)),
+        text_color: if is_mono { TEXT } else { ACCENT },
+        border: iced::Border {
+            color: if is_mono { SEPARATOR } else { ACCENT },
+            width: 1.0,
+            radius: 2.0.into(),
         },
         ..Default::default()
     }

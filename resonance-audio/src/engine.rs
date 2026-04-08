@@ -1,30 +1,42 @@
 /// The core audio engine managing tracks, clips, and the cpal output stream.
-use std::collections::HashMap;
+
+/// Ring buffer size for recording input: ~10 seconds at 96kHz stereo.
+const RECORDING_RING_SIZE: usize = 96000 * 2 * 10;
+/// Pre-allocation for recording buffers: ~60 seconds of stereo audio.
+const RECORDING_PREALLOC_SECONDS: usize = 60;
+
 use indexmap::IndexMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
-use ringbuf::traits::{Consumer, Observer, Producer, Split};
+use ringbuf::traits::Split;
 
 use crate::clap_host::{ClapBundle, SyncClapInstance};
 use crate::decode;
+use crate::mixer;
+use crate::platform::{self, DeviceDirection};
+use crate::recording::RecordingState;
 use crate::types::*;
 
 /// Shared state between the engine control thread and the audio callback.
-struct SharedState {
+pub(crate) struct SharedState {
     /// Current playhead position in sample frames.
-    playhead: AtomicU64,
+    pub playhead: AtomicU64,
     /// Whether playback is active.
-    playing: AtomicBool,
+    pub playing: AtomicBool,
     /// Whether recording is active.
-    recording: AtomicBool,
+    pub recording: AtomicBool,
     /// Whether any track is monitoring input.
-    monitoring: AtomicBool,
+    pub monitoring: AtomicBool,
     /// Master volume as linear gain (AtomicU32 bit-punned f32).
-    master_volume_bits: AtomicU32,
+    pub master_volume_bits: AtomicU32,
+    /// Master peak level L (AtomicU32 bit-punned f32), for VU meters.
+    pub master_peak_l_bits: AtomicU32,
+    /// Master peak level R (AtomicU32 bit-punned f32), for VU meters.
+    pub master_peak_r_bits: AtomicU32,
 }
 
 /// The audio engine.
@@ -44,67 +56,10 @@ pub struct AudioEngine {
     quantum: usize,
 }
 
-// cpal::Stream is not Send by default on some platforms but we manage it carefully
+// Safety: cpal::Stream is !Send on some platforms, but `_stream` is stored as
+// `Option<cpal::Stream>` and is never accessed after construction — it is held
+// solely to keep the stream alive via Drop. All other fields are Send.
 unsafe impl Send for AudioEngine {}
-
-/// Serializes access to PIPEWIRE_NODE env var manipulation.
-static PIPEWIRE_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-/// Pick the best sample rate: prefer the PipeWire graph rate to avoid resampling.
-/// Falls back to the default config rate if we can't determine the graph rate.
-fn pick_sample_rate(device: &cpal::Device, default_config: &cpal::SupportedStreamConfig) -> u32 {
-    let default_rate = default_config.sample_rate().0;
-
-    // Try to read PipeWire's graph rate from pw-metadata
-    if let Some(graph_rate) = default_sink_sample_rate() {
-        // Verify the device actually supports this rate
-        if let Ok(mut configs) = device.supported_output_configs() {
-            let supported = configs
-                .any(|c| c.min_sample_rate().0 <= graph_rate && graph_rate <= c.max_sample_rate().0);
-            if supported {
-                return graph_rate;
-            }
-        }
-    }
-
-    default_rate
-}
-
-/// Query the default output device's actual sample rate via pactl.
-/// This matches the hardware rate, avoiding PipeWire resampling.
-fn default_sink_sample_rate() -> Option<u32> {
-    let sink_name = run_pactl(&["get-default-sink"])?.trim().to_string();
-    let sinks = run_pactl(&["list", "sinks", "short"])?;
-    for line in sinks.lines() {
-        if line.contains(&sink_name) {
-            // Format: <id>\t<name>\t<driver>\t<sample_spec>\t<state>
-            // sample_spec e.g. "s32le 26ch 48000Hz"
-            for word in line.split_whitespace() {
-                if let Some(rate_str) = word.strip_suffix("Hz") {
-                    return rate_str.parse().ok();
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Same as pick_sample_rate but for input devices.
-fn pick_input_sample_rate(device: &cpal::Device, default_config: &cpal::SupportedStreamConfig) -> u32 {
-    let default_rate = default_config.sample_rate().0;
-
-    if let Some(graph_rate) = default_sink_sample_rate() {
-        if let Ok(mut configs) = device.supported_input_configs() {
-            let supported = configs
-                .any(|c| c.min_sample_rate().0 <= graph_rate && graph_rate <= c.max_sample_rate().0);
-            if supported {
-                return graph_rate;
-            }
-        }
-    }
-
-    default_rate
-}
 
 impl AudioEngine {
     /// Create and start the audio engine. Returns the engine handle.
@@ -122,13 +77,13 @@ impl AudioEngine {
 
         // Prefer the PipeWire graph sample rate (typically 48000) to avoid resampling.
         // cpal's default_output_config often returns 44100 via ALSA compat, but the
-        // actual hardware/graph runs at a different rate — causing PipeWire to resample
+        // actual hardware/graph runs at a different rate -- causing PipeWire to resample
         // every buffer and inflating the quantum (e.g. 1102 frames instead of 128).
-        let sample_rate = pick_sample_rate(&device, &config);
+        let sample_rate = platform::pick_sample_rate(&device, &config, DeviceDirection::Output);
 
         // Query PipeWire quantum to size buffers relative to the actual period.
-        let quantum = pipewire_quantum().unwrap_or(1024) as usize;
-        let max_quantum = pipewire_max_quantum().unwrap_or(2048) as usize;
+        let quantum = platform::pipewire_quantum().unwrap_or(1024) as usize;
+        let max_quantum = platform::pipewire_max_quantum().unwrap_or(2048) as usize;
         let buf_frames = max_quantum.max(quantum * 2).max(256);
 
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<AudioCommand>();
@@ -140,6 +95,8 @@ impl AudioEngine {
             recording: AtomicBool::new(false),
             monitoring: AtomicBool::new(false),
             master_volume_bits: AtomicU32::new(1.0f32.to_bits()),
+            master_peak_l_bits: AtomicU32::new(0),
+            master_peak_r_bits: AtomicU32::new(0),
         });
 
         let shared_audio = Arc::clone(&shared);
@@ -183,7 +140,7 @@ impl AudioEngine {
             let result = device.build_output_stream(
                 config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    mix_audio(
+                    mixer::mix_audio(
                         data,
                         channels,
                         &shared_audio,
@@ -283,305 +240,24 @@ impl AudioEngine {
     pub fn event_receiver(&self) -> Receiver<AudioEvent> {
         self.event_rx.clone()
     }
-}
 
-/// Run a pactl command with a 2-second timeout. Returns stdout on success.
-fn run_pactl(args: &[&str]) -> Option<String> {
-    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    let (tx, rx) = crossbeam_channel::bounded(1);
-    std::thread::spawn(move || {
-        let result = std::process::Command::new("pactl")
-            .args(&args)
-            .output();
-        let _ = tx.send(result);
-    });
-    match rx.recv_timeout(std::time::Duration::from_secs(2)) {
-        Ok(Ok(output)) if output.status.success() => {
-            Some(String::from_utf8_lossy(&output.stdout).to_string())
-        }
-        _ => None,
-    }
-}
-
-/// Run a pw-metadata query with a 2-second timeout. Returns the parsed value on success.
-fn run_pw_metadata(key: &str) -> Option<String> {
-    let key = key.to_string();
-    let (tx, rx) = crossbeam_channel::bounded(1);
-    std::thread::spawn(move || {
-        let result = std::process::Command::new("pw-metadata")
-            .args(["-n", "settings", "0", &key])
-            .output();
-        let _ = tx.send(result);
-    });
-    match rx.recv_timeout(std::time::Duration::from_secs(2)) {
-        Ok(Ok(output)) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // Format: "update: id:0 key:'clock.quantum' value:'1024' type:''"
-            if let Some(start) = stdout.find("value:'") {
-                let rest = &stdout[start + 7..];
-                if let Some(end) = rest.find('\'') {
-                    return rest[..end].parse::<u32>().ok().map(|v| v.to_string());
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
-/// Query PipeWire's current quantum (buffer period in frames).
-fn pipewire_quantum() -> Option<u32> {
-    run_pw_metadata("clock.quantum").and_then(|s| s.parse().ok())
-}
-
-/// Query PipeWire's maximum quantum.
-fn pipewire_max_quantum() -> Option<u32> {
-    run_pw_metadata("clock.max-quantum").and_then(|s| s.parse().ok())
-}
-
-/// Enumerate available PipeWire/PulseAudio input sources via `pactl`.
-fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>) {
-    let mut devices = Vec::new();
-
-    let default_name = run_pactl(&["get-default-source"])
-        .map(|s| s.trim().to_string());
-
-    let short_text = run_pactl(&["list", "sources", "short"]);
-    let full_text = run_pactl(&["list", "sources"]);
-
-    if let (Some(short), Some(full)) = (short_text, full_text) {
-        let mut descriptions: HashMap<String, String> = HashMap::new();
-        let mut current_name = None;
-        for line in full.lines() {
-            let trimmed = line.trim();
-            if let Some(name) = trimmed.strip_prefix("Name: ") {
-                current_name = Some(name.to_string());
-            } else if let Some(desc) = trimmed.strip_prefix("Description: ") {
-                if let Some(name) = current_name.take() {
-                    descriptions.insert(name, desc.to_string());
-                }
-            }
-        }
-
-        for line in short.lines() {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 2 {
-                let name = parts[1].to_string();
-                let description = descriptions
-                    .get(&name)
-                    .cloned()
-                    .unwrap_or_else(|| name.clone());
-                devices.push(InputDeviceInfo { name, description });
-            }
-        }
-    }
-
-    (devices, default_name)
-}
-
-/// Build a cpal input stream that pushes samples into ring buffer producers.
-/// `rec_producer` is for recording (engine thread drains it).
-/// `mon_producer` is for monitoring (audio callback reads it).
-fn build_input_stream(
-    source_name: Option<&str>,
-    shared: Arc<SharedState>,
-    mut rec_producer: Option<ringbuf::HeapProd<f32>>,
-    mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
-    buf_frames: usize,
-    quantum: usize,
-) -> Result<(cpal::Stream, u32, u16), String> {
-    let _env_guard = PIPEWIRE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-    if let Some(name) = source_name {
-        std::env::set_var("PIPEWIRE_NODE", name);
-    }
-
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| "No input device found".to_string())?;
-
-    let config = device
-        .default_input_config()
-        .map_err(|e| format!("No default input config: {}", e))?;
-
-    let channels = config.channels();
-    let sample_rate = pick_input_sample_rate(&device, &config);
-    let mut stream_config: cpal::StreamConfig = config.into();
-    stream_config.sample_rate = cpal::SampleRate(sample_rate);
-    stream_config.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
-
-    // Pre-allocated buffer for mono→stereo conversion in monitor path
-    let mut mon_stereo_buf = vec![0.0f32; buf_frames * 2];
-    let input_channels = channels;
-
-    let stream = device
-        .build_input_stream(
-            &stream_config,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                // Push to recording ring buffer (raw — engine thread handles channel conversion)
-                if shared.recording.load(Ordering::Relaxed) {
-                    if let Some(ref mut prod) = rec_producer {
-                        let _ = prod.push_slice(data);
-                    }
-                }
-                // Push to monitor ring buffer (always stereo interleaved)
-                if shared.monitoring.load(Ordering::Relaxed) {
-                    if let Some(mut prod) = mon_producer.try_lock() {
-                        if input_channels == 2 {
-                            let _ = prod.push_slice(data);
-                        } else {
-                            // Convert to stereo interleaved
-                            let ch = input_channels as usize;
-                            let frames = data.len() / ch;
-                            let stereo_len = frames * 2;
-                            let buf = &mut mon_stereo_buf[..stereo_len];
-                            for f in 0..frames {
-                                let src = f * ch;
-                                let l = data[src];
-                                let r = if ch > 1 { data[src + 1] } else { l };
-                                buf[f * 2] = l;
-                                buf[f * 2 + 1] = r;
-                            }
-                            let _ = prod.push_slice(buf);
-                        }
-                    }
-                }
-            },
-            |err| {
-                eprintln!("Input stream error: {}", err);
-            },
-            None,
-        )
-        .map_err(|e| format!("Failed to build input stream: {}", e))?;
-
-    stream
-        .play()
-        .map_err(|e| format!("Failed to start input stream: {}", e))?;
-
-    std::env::remove_var("PIPEWIRE_NODE");
-
-    Ok((stream, sample_rate, channels))
-}
-
-/// Drain all available samples from the ring buffer consumer into per-track recording buffers.
-fn drain_ring_to_buffers(
-    consumer: &mut ringbuf::HeapCons<f32>,
-    buffers: &mut HashMap<TrackId, Vec<f32>>,
-    input_channels: u16,
-) {
-    let channels = input_channels as usize;
-    let mut temp = [0.0f32; 4096];
-    loop {
-        let count = consumer.pop_slice(&mut temp);
-        if count == 0 {
-            break;
-        }
-        let chunk = &temp[..count];
-
-        if channels == 2 {
-            for buffer in buffers.values_mut() {
-                buffer.extend_from_slice(chunk);
-            }
+    /// Read and clear peak levels for all tracks and master.
+    /// Returns (track_peaks, master_peak_l, master_peak_r).
+    pub fn read_and_clear_peaks(&self) -> (Vec<(TrackId, f32, f32)>, f32, f32) {
+        let track_levels = if let Some(guard) = self.tracks.try_read() {
+            guard
+                .values()
+                .map(|t| (t.id, t.swap_peak_l(), t.swap_peak_r()))
+                .collect()
         } else {
-            let frames = chunk.len() / channels;
-            for buffer in buffers.values_mut() {
-                buffer.reserve(frames * 2);
-                for f in 0..frames {
-                    let base = f * channels;
-                    let left = chunk[base];
-                    let right = if channels > 1 { chunk[base + 1] } else { left };
-                    buffer.push(left);
-                    buffer.push(right);
-                }
-            }
-        }
-    }
-}
-
-/// Finalize recording: drain remaining samples, create clips, emit events.
-fn finalize_recording(
-    ring_consumer: &mut Option<ringbuf::HeapCons<f32>>,
-    recording_buffers: &mut HashMap<TrackId, Vec<f32>>,
-    input_channels: u16,
-    input_sample_rate: u32,
-    output_sample_rate: u32,
-    recording_start_sample: SamplePos,
-    punch_enabled: bool,
-    punch_in: SamplePos,
-    punch_out: SamplePos,
-    next_clip_id: &mut ClipId,
-    clips: &parking_lot::RwLock<Vec<AudioClip>>,
-    event_tx: &Sender<AudioEvent>,
-) {
-    if let Some(ref mut cons) = ring_consumer {
-        drain_ring_to_buffers(cons, recording_buffers, input_channels);
-    }
-
-    for (track_id, buffer) in recording_buffers.drain() {
-        if buffer.is_empty() {
-            continue;
-        }
-
-        let clip_id = *next_clip_id;
-        *next_clip_id += 1;
-
-        let final_data = if input_sample_rate != output_sample_rate {
-            decode::linear_resample(&buffer, input_sample_rate, output_sample_rate)
-        } else {
-            buffer
+            Vec::new()
         };
-
-        // Trim to punch range if enabled
-        let (clip_start_sample, final_data) = if punch_enabled && punch_out > punch_in {
-            let total_frames = (final_data.len() / 2) as u64;
-            let trim_start_frame = punch_in.saturating_sub(recording_start_sample);
-            let trim_end_frame = punch_out
-                .saturating_sub(recording_start_sample)
-                .min(total_frames);
-
-            if trim_start_frame >= trim_end_frame {
-                continue; // Nothing in the punch range
-            }
-
-            // Skip copy if trim covers the full buffer
-            if trim_start_frame == 0 && trim_end_frame == total_frames {
-                (punch_in, final_data)
-            } else {
-                let trim_start_idx = (trim_start_frame * 2) as usize;
-                let trim_end_idx = (trim_end_frame * 2) as usize;
-                (punch_in, final_data[trim_start_idx..trim_end_idx].to_vec())
-            }
-        } else {
-            (recording_start_sample, final_data)
-        };
-
-        let duration_samples = (final_data.len() / 2) as u64;
-        let name = format!("Recording {}", clip_id);
-        let waveform_peaks = compute_waveform_peaks(&final_data);
-
-        let clip = AudioClip {
-            id: clip_id,
-            track_id,
-            start_sample: clip_start_sample,
-            data: final_data,
-            name: name.clone(),
-            trim_start_frames: 0,
-            trim_end_frames: 0,
-        };
-        clips.write().push(clip);
-
-        let _ = event_tx.send(AudioEvent::RecordingFinished {
-            clip_id,
-            track_id,
-            start_sample: clip_start_sample,
-            duration_samples,
-            name,
-            waveform_peaks,
-        });
+        let ml =
+            f32::from_bits(self.shared.master_peak_l_bits.swap(0, Ordering::Relaxed));
+        let mr =
+            f32::from_bits(self.shared.master_peak_r_bits.swap(0, Ordering::Relaxed));
+        (track_levels, ml, mr)
     }
-
-    *ring_consumer = None;
 }
 
 /// The engine control thread processes commands and sends events.
@@ -604,17 +280,7 @@ fn engine_thread(
     let mut last_playhead_report = std::time::Instant::now();
 
     // Recording state (engine thread local)
-    let mut recording_buffers: HashMap<TrackId, Vec<f32>> = HashMap::new();
-    let mut recording_start_sample: SamplePos = 0;
-    let mut ring_consumer: Option<ringbuf::HeapCons<f32>> = None;
-    let mut _input_stream: Option<cpal::Stream> = None;
-    let mut input_channels: u16 = 2;
-    let mut input_sample_rate: u32 = sample_rate;
-
-    // Punch in/out state (engine thread local)
-    let mut punch_enabled: bool = false;
-    let mut punch_in: SamplePos = 0;
-    let mut punch_out: SamplePos = 0;
+    let mut rec = RecordingState::new(sample_rate);
 
     // Plugin hosting state (engine thread local)
     let mut bundles: Vec<ClapBundle> = Vec::new();
@@ -651,34 +317,41 @@ fn engine_thread(
                             .iter()
                             .find_map(|(_, name)| name.clone());
 
-                        let ring_size = 96000 * 2 * 10;
+                        let ring_size = RECORDING_RING_SIZE;
                         let ring = ringbuf::HeapRb::<f32>::new(ring_size);
                         let (prod, cons) = ring.split();
-                        ring_consumer = Some(cons);
+                        rec.ring_consumer = Some(cons);
 
-                        recording_start_sample = shared.playhead.load(Ordering::SeqCst);
+                        rec.start_sample = shared.playhead.load(Ordering::SeqCst);
                         for (track_id, _) in &armed_tracks {
-                            recording_buffers.insert(
+                            rec.buffers.insert(
                                 *track_id,
-                                Vec::with_capacity(sample_rate as usize * 2 * 60),
+                                Vec::with_capacity(sample_rate as usize * 2 * RECORDING_PREALLOC_SECONDS),
                             );
                         }
                         shared.recording.store(true, Ordering::SeqCst);
 
-                        match build_input_stream(source_name.as_deref(), Arc::clone(&shared), Some(prod), Arc::clone(&monitor_prod), buf_frames, quantum) {
+                        match platform::build_input_stream(
+                            source_name.as_deref(),
+                            Arc::clone(&shared),
+                            Some(prod),
+                            Arc::clone(&monitor_prod),
+                            buf_frames,
+                            quantum,
+                        ) {
                             Ok((stream, in_sr, in_ch)) => {
-                                _input_stream = Some(stream);
-                                input_sample_rate = in_sr;
-                                input_channels = in_ch;
+                                rec.input_stream = Some(stream);
+                                rec.input_sample_rate = in_sr;
+                                rec.input_channels = in_ch;
 
                                 let _ = event_tx.send(AudioEvent::RecordingStarted {
-                                    start_sample: recording_start_sample,
+                                    start_sample: rec.start_sample,
                                 });
                             }
                             Err(e) => {
                                 shared.recording.store(false, Ordering::SeqCst);
-                                recording_buffers.clear();
-                                ring_consumer = None;
+                                rec.buffers.clear();
+                                rec.ring_consumer = None;
                                 let _ = event_tx.send(AudioEvent::Error(format!(
                                     "Failed to start recording: {}",
                                     e
@@ -693,21 +366,13 @@ fn engine_thread(
                     shared.recording.store(false, Ordering::SeqCst);
 
                     if was_recording {
-                        finalize_recording(
-                            &mut ring_consumer,
-                            &mut recording_buffers,
-                            input_channels,
-                            input_sample_rate,
+                        rec.finalize_recording(
                             sample_rate,
-                            recording_start_sample,
-                            punch_enabled,
-                            punch_in,
-                            punch_out,
                             &mut next_clip_id,
                             &clips,
                             &event_tx,
                         );
-                        _input_stream = None;
+                        rec.input_stream = None;
                     }
                 }
                 AudioCommand::Stop => {
@@ -717,21 +382,13 @@ fn engine_thread(
                     shared.playhead.store(0, Ordering::SeqCst);
 
                     if was_recording {
-                        finalize_recording(
-                            &mut ring_consumer,
-                            &mut recording_buffers,
-                            input_channels,
-                            input_sample_rate,
+                        rec.finalize_recording(
                             sample_rate,
-                            recording_start_sample,
-                            punch_enabled,
-                            punch_in,
-                            punch_out,
                             &mut next_clip_id,
                             &clips,
                             &event_tx,
                         );
-                        _input_stream = None;
+                        rec.input_stream = None;
                     }
 
                     let _ = event_tx.send(AudioEvent::Stopped);
@@ -862,7 +519,7 @@ fn engine_thread(
                     let _ = event_tx.send(AudioEvent::TrackAdded { track_id: id });
                 }
                 AudioCommand::RemoveTrack { track_id } => {
-                    // Remove plugins for this track — extract under write lock,
+                    // Remove plugins for this track -- extract under write lock,
                     // then drop instances outside the lock so audio callback isn't blocked
                     let removed_plugins: Vec<_> = {
                         let plugin_ids = tracks
@@ -878,7 +535,7 @@ fn engine_thread(
                     };
                     drop(removed_plugins);
                     tracks.write().shift_remove(&track_id);
-                    // Remove clips — collect removed clips so dealloc happens outside lock
+                    // Remove clips -- collect removed clips so dealloc happens outside lock
                     let removed_clips: Vec<_> = {
                         let mut clips_guard = clips.write();
                         let mut removed = Vec::new();
@@ -893,7 +550,7 @@ fn engine_thread(
                         removed
                     };
                     drop(removed_clips);
-                    recording_buffers.remove(&track_id);
+                    rec.buffers.remove(&track_id);
                     let _ = event_tx.send(AudioEvent::TrackRemoved { track_id });
                 }
                 AudioCommand::SetTrackRecordArm { track_id, armed } => {
@@ -918,14 +575,14 @@ fn engine_thread(
                     shared.monitoring.store(any_monitoring, Ordering::SeqCst);
 
                     // Start input stream if monitoring and no stream active
-                    if any_monitoring && _input_stream.is_none() {
+                    if any_monitoring && rec.input_stream.is_none() {
                         let source_name: Option<String> = {
                             let tg = tracks.read();
                             tg.values()
                                 .find(|t| t.monitor_enabled())
                                 .and_then(|t| t.input_device_name.clone())
                         };
-                        match build_input_stream(
+                        match platform::build_input_stream(
                             source_name.as_deref(),
                             Arc::clone(&shared),
                             None,
@@ -934,9 +591,9 @@ fn engine_thread(
                             quantum,
                         ) {
                             Ok((stream, in_sr, in_ch)) => {
-                                _input_stream = Some(stream);
-                                input_sample_rate = in_sr;
-                                input_channels = in_ch;
+                                rec.input_stream = Some(stream);
+                                rec.input_sample_rate = in_sr;
+                                rec.input_channels = in_ch;
                             }
                             Err(e) => {
                                 let _ = event_tx.send(AudioEvent::Error(format!(
@@ -946,7 +603,7 @@ fn engine_thread(
                         }
                     } else if !any_monitoring && !shared.recording.load(Ordering::SeqCst) {
                         // Stop input stream if no monitoring and not recording
-                        _input_stream = None;
+                        rec.input_stream = None;
                     }
                 }
                 AudioCommand::SetTrackInputDevice {
@@ -958,7 +615,7 @@ fn engine_thread(
                     }
                 }
                 AudioCommand::ListInputDevices => {
-                    let (devices, default_name) = enumerate_input_devices();
+                    let (devices, default_name) = platform::enumerate_input_devices();
                     let _ = event_tx.send(AudioEvent::InputDevicesListed {
                         devices,
                         default_name,
@@ -1098,7 +755,7 @@ fn engine_thread(
                     // Bundled plugins: find target/bundled/ relative to the executable
                     if let Ok(exe) = std::env::current_exe() {
                         if let Some(exe_dir) = exe.parent() {
-                            // cargo run: target/debug/ → look for ../../target/bundled/
+                            // cargo run: target/debug/ -> look for ../../target/bundled/
                             let bundled = exe_dir
                                 .parent()
                                 .and_then(|p| p.parent())
@@ -1202,9 +859,9 @@ fn engine_thread(
                     punch_in: pi,
                     punch_out: po,
                 } => {
-                    punch_enabled = enabled;
-                    punch_in = pi;
-                    punch_out = po;
+                    rec.punch_enabled = enabled;
+                    rec.punch_in = pi;
+                    rec.punch_out = po;
                 }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
@@ -1213,30 +870,20 @@ fn engine_thread(
 
         // Drain recording ring buffer into per-track buffers
         if shared.recording.load(Ordering::Relaxed) {
-            if let Some(ref mut cons) = ring_consumer {
-                drain_ring_to_buffers(cons, &mut recording_buffers, input_channels);
-            }
+            rec.drain_ring_to_buffers();
 
             // Auto-stop recording at punch_out (keep playing)
-            if punch_enabled && punch_out > punch_in {
+            if rec.punch_enabled && rec.punch_out > rec.punch_in {
                 let current_pos = shared.playhead.load(Ordering::SeqCst);
-                if current_pos >= punch_out {
+                if current_pos >= rec.punch_out {
                     shared.recording.store(false, Ordering::SeqCst);
-                    finalize_recording(
-                        &mut ring_consumer,
-                        &mut recording_buffers,
-                        input_channels,
-                        input_sample_rate,
+                    rec.finalize_recording(
                         sample_rate,
-                        recording_start_sample,
-                        punch_enabled,
-                        punch_in,
-                        punch_out,
                         &mut next_clip_id,
                         &clips,
                         &event_tx,
                     );
-                    _input_stream = None;
+                    rec.input_stream = None;
                 }
             }
         }
@@ -1250,269 +897,4 @@ fn engine_thread(
             let _ = event_tx.send(AudioEvent::PlayheadMoved(pos));
         }
     }
-}
-
-/// Mix audio from all active clips into the output buffer.
-/// This runs on the cpal audio callback thread — must be allocation-free
-/// (uses pre-allocated track_buf_l/track_buf_r).
-fn mix_audio(
-    data: &mut [f32],
-    channels: usize,
-    shared: &SharedState,
-    tracks: &parking_lot::RwLock<IndexMap<TrackId, Track>>,
-    clips: &parking_lot::RwLock<Vec<AudioClip>>,
-    plugins: &parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>,
-    tempo_map: &parking_lot::RwLock<TempoMap>,
-    sample_rate: u32,
-    track_buf_l: &mut Vec<f32>,
-    track_buf_r: &mut Vec<f32>,
-    monitor_cons: &mut ringbuf::HeapCons<f32>,
-    monitor_temp: &mut Vec<f32>,
-    buf_frames: usize,
-    quantum: usize,
-) {
-    // Zero the output buffer
-    data.fill(0.0);
-
-    let output_frames = data.len() / channels;
-    let frames = output_frames.min(buf_frames);
-
-    // Read monitor input with jitter margin to avoid underflows.
-    // Skip stale monitor data to keep latency at ~1 buffer period.
-    let needed = frames * 2; // stereo samples
-    let available = monitor_cons.occupied_len();
-    if available > needed + quantum * 2 {
-        monitor_cons.skip(available - needed);
-    }
-    let to_read = needed.min(monitor_cons.occupied_len());
-    let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);
-    let monitor_frames = monitor_samples / 2;
-
-    if !shared.playing.load(Ordering::Relaxed) {
-        // Even when stopped, output monitored audio for armed tracks
-        if monitor_frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
-            let (Some(tracks_guard), Some(plugins_guard)) = (tracks.try_read(), plugins.try_read()) else {
-                return;
-            };
-            let any_solo = tracks_guard.values().any(|t| t.soloed());
-            let is_audible = |t: &&Track| -> bool {
-                t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed())
-            };
-            let any_monitor = tracks_guard.values().any(|t| is_audible(&t));
-
-            if any_monitor {
-                // Only the first audible monitoring track receives monitor input
-                if let Some(track) = tracks_guard.values().find(|t| is_audible(&t)) {
-                    // De-interleave monitor input into track buffers
-                    let is_mono = track.mono();
-                    track_buf_l[..monitor_frames].fill(0.0);
-                    track_buf_r[..monitor_frames].fill(0.0);
-                    for f in 0..monitor_frames {
-                        let l = monitor_temp[f * 2];
-                        if is_mono {
-                            track_buf_l[f] = l;
-                            track_buf_r[f] = l;
-                        } else {
-                            track_buf_l[f] = l;
-                            track_buf_r[f] = monitor_temp[f * 2 + 1];
-                        }
-                    }
-
-                    // Process through plugin chain
-                    for &plugin_id in &track.plugin_ids {
-                        if let Some(si) = plugins_guard.get(&plugin_id) {
-                            if let Some(mut inst) = si.try_lock() {
-                                inst.0.process(
-                                    &mut track_buf_l[..monitor_frames],
-                                    &mut track_buf_r[..monitor_frames],
-                                    monitor_frames,
-                                );
-                            }
-                        }
-                    }
-
-                    // Sum to output with pan
-                    let volume = track.volume();
-                    let pan = track.pan();
-                    let theta = (pan + 1.0) * 0.25 * std::f32::consts::PI;
-                    let gain_l = volume * theta.cos();
-                    let gain_r = volume * theta.sin();
-                    for f in 0..monitor_frames {
-                        let out_idx = f * channels;
-                        if channels >= 2 {
-                            data[out_idx] += track_buf_l[f] * gain_l;
-                            data[out_idx + 1] += track_buf_r[f] * gain_r;
-                        } else {
-                            data[out_idx] +=
-                                track_buf_l[f] * gain_l + track_buf_r[f] * gain_r;
-                        }
-                    }
-                }
-
-                // Apply master volume
-                let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-                for sample in data.iter_mut() {
-                    *sample = (*sample * master_vol).clamp(-1.0, 1.0);
-                }
-            }
-        }
-        return;
-    }
-
-    let playhead = shared.playhead.load(Ordering::Relaxed);
-
-    let (Some(tracks_guard), Some(clips_guard), Some(plugins_guard)) = (tracks.try_read(), clips.try_read(), plugins.try_read()) else {
-        // Lock contended — advance playhead to avoid desync, output silence this buffer
-        let new_playhead = playhead + output_frames as u64;
-        shared.playhead.store(new_playhead, Ordering::Relaxed);
-        return;
-    };
-
-    // Per-track processing: (clips + monitor input) → plugins → volume → master
-    let any_solo = tracks_guard.values().any(|t| t.soloed());
-    let mut monitor_consumed = false;
-    for track in tracks_guard.values() {
-        if track.muted() {
-            continue;
-        }
-        if any_solo && !track.soloed() {
-            continue;
-        }
-
-        // Zero per-track buffers
-        track_buf_l[..frames].fill(0.0);
-        track_buf_r[..frames].fill(0.0);
-
-        // Mix monitor input for tracks with monitoring enabled (first monitoring track only)
-        let mut has_audio = false;
-        if track.monitor_enabled() && monitor_frames > 0 && !monitor_consumed {
-            monitor_consumed = true;
-            let is_mono = track.mono();
-            let mix_frames = frames.min(monitor_frames);
-            for f in 0..mix_frames {
-                let l = monitor_temp[f * 2];
-                if is_mono {
-                    track_buf_l[f] += l;
-                    track_buf_r[f] += l;
-                } else {
-                    track_buf_l[f] += l;
-                    track_buf_r[f] += monitor_temp[f * 2 + 1];
-                }
-            }
-            has_audio = true;
-        }
-
-        // Accumulate all clips for this track into de-interleaved track buffers
-        for clip in clips_guard.iter() {
-            if clip.track_id != track.id {
-                continue;
-            }
-
-            let clip_frames = clip.duration_frames();
-            // Compute overlap between this clip and the current output buffer
-            let clip_start = clip.start_sample;
-            let clip_end = clip_start + clip_frames;
-            let buf_start = playhead;
-            let buf_end = playhead + frames as u64;
-
-            if buf_end <= clip_start || buf_start >= clip_end {
-                continue; // No overlap
-            }
-
-            let overlap_start = buf_start.max(clip_start);
-            let overlap_end = buf_end.min(clip_end);
-
-            for timeline_frame in overlap_start..overlap_end {
-                let frame_offset = (timeline_frame - buf_start) as usize;
-                let clip_frame =
-                    (timeline_frame - clip_start) as usize + clip.trim_start_frames as usize;
-                let clip_idx = clip_frame * 2;
-                if clip_idx + 1 < clip.data.len() {
-                    track_buf_l[frame_offset] += clip.data[clip_idx];
-                    track_buf_r[frame_offset] += clip.data[clip_idx + 1];
-                    has_audio = true;
-                }
-            }
-        }
-
-        // Process through plugin chain (even if no audio — plugins may generate tails)
-        if !track.plugin_ids.is_empty() {
-            for &plugin_id in &track.plugin_ids {
-                if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                    if let Some(mut inst) = mutex.try_lock() {
-                        inst.0
-                            .process(&mut track_buf_l[..frames], &mut track_buf_r[..frames], frames);
-                        has_audio = true;
-                    }
-                }
-            }
-        }
-
-        if !has_audio {
-            continue;
-        }
-
-        // Apply track volume + pan and sum to master output
-        let volume = track.volume();
-        let pan = track.pan();
-        // Equal-power pan law: theta 0 (hard left) to PI/2 (hard right)
-        let theta = (pan + 1.0) * 0.25 * std::f32::consts::PI;
-        let gain_l = volume * theta.cos();
-        let gain_r = volume * theta.sin();
-        for frame_offset in 0..frames {
-            let out_idx = frame_offset * channels;
-            if channels >= 2 {
-                data[out_idx] += track_buf_l[frame_offset] * gain_l;
-                data[out_idx + 1] += track_buf_r[frame_offset] * gain_r;
-            } else {
-                data[out_idx] +=
-                    track_buf_l[frame_offset] * gain_l + track_buf_r[frame_offset] * gain_r;
-            }
-        }
-    }
-
-    drop(plugins_guard);
-
-    // Metronome click synthesis
-    if let Some(tm) = tempo_map.try_read() {
-        if tm.metronome_enabled {
-            let spb = tm.samples_per_beat(sample_rate);
-            let numerator = tm.numerator as u64;
-            let click_duration_samples = (sample_rate as f32 * 0.02) as u64;
-
-            for frame_offset in 0..output_frames {
-                let timeline_frame = playhead + frame_offset as u64;
-                // Use round() to avoid drift: find the nearest beat boundary
-                let beat_index = (timeline_frame as f64 / spb).floor();
-                let beat_start = (beat_index * spb).round() as u64;
-                let beat_pos = timeline_frame.saturating_sub(beat_start);
-
-                if beat_pos < click_duration_samples {
-                    let t = beat_pos as f32 / sample_rate as f32;
-                    let beat_in_bar = (beat_index as u64) % numerator;
-                    let freq = if beat_in_bar == 0 { 1500.0 } else { 1000.0 };
-                    let amplitude = 0.3 * (-t * 200.0).exp();
-                    let click = amplitude * (2.0 * std::f32::consts::PI * freq * t).sin();
-
-                    let out_idx = frame_offset * channels;
-                    if channels >= 2 {
-                        data[out_idx] += click;
-                        data[out_idx + 1] += click;
-                    } else {
-                        data[out_idx] += click;
-                    }
-                }
-            }
-        }
-    }
-
-    // Apply master volume and hard clip at [-1.0, 1.0]
-    let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    for sample in data.iter_mut() {
-        *sample = (*sample * master_vol).clamp(-1.0, 1.0);
-    }
-
-    // Advance playhead
-    let new_playhead = playhead + output_frames as u64;
-    shared.playhead.store(new_playhead, Ordering::Relaxed);
 }

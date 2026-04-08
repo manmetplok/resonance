@@ -19,6 +19,9 @@ pub struct AmpParams {
     #[id = "file_select"]
     pub file_select: IntParam,
 
+    /// Shared file list used by both the display closure and the plugin.
+    pub file_list: Arc<Mutex<Vec<String>>>,
+
     #[id = "input_gain"]
     pub input_gain: FloatParam,
 
@@ -33,6 +36,7 @@ impl Default for AmpParams {
 
         Self {
             model_path: Arc::new(Mutex::new(String::new())),
+            file_list: file_list.clone(),
             file_select: IntParam::new(
                 "Model Select",
                 0,

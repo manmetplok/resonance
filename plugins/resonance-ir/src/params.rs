@@ -17,6 +17,9 @@ pub struct IrParams {
     #[id = "file_select"]
     pub file_select: IntParam,
 
+    /// Shared file list used by both the display closure and the plugin.
+    pub file_list: Arc<Mutex<Vec<String>>>,
+
     #[id = "dry_wet"]
     pub dry_wet: FloatParam,
 
@@ -31,6 +34,7 @@ impl Default for IrParams {
 
         Self {
             ir_path: Arc::new(Mutex::new(String::new())),
+            file_list: file_list.clone(),
             file_select: IntParam::new(
                 "IR Select",
                 0,

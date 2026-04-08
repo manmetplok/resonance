@@ -11,5 +11,5 @@ crate-type = ["cdylib", "lib"]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["assert_process_allocs", "standalone"] }
 parking_lot = "0.12"
 atomic_float = "1"
-hound = "3.5"
 rustfft = "6"
+resonance-common = { path = "../../resonance-common" }

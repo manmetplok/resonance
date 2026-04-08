@@ -3949,6 +3949,7 @@ dependencies = [
  "atomic_float 1.1.0",
  "nih_plug",
  "parking_lot 0.12.5",
+ "resonance-common",
  "serde",
  "serde_json",
 ]
@@ -3976,8 +3977,16 @@ dependencies = [
  "indexmap",
  "libloading 0.8.9",
  "parking_lot 0.12.5",
+ "resonance-dsp",
  "ringbuf",
  "symphonia",
+]
+
+[[package]]
+name = "resonance-common"
+version = "0.1.0"
+dependencies = [
+ "hound",
 ]
 
 [[package]]
@@ -3985,19 +3994,24 @@ name = "resonance-drums"
 version = "0.1.0"
 dependencies = [
  "atomic_float 1.1.0",
- "hound",
  "nih_plug",
  "parking_lot 0.12.5",
+ "resonance-common",
+ "resonance-dsp",
 ]
+
+[[package]]
+name = "resonance-dsp"
+version = "0.1.0"
 
 [[package]]
 name = "resonance-ir"
 version = "0.1.0"
 dependencies = [
  "atomic_float 1.1.0",
- "hound",
  "nih_plug",
  "parking_lot 0.12.5",
+ "resonance-common",
  "rustfft",
 ]
 
@@ -4007,6 +4021,8 @@ version = "0.1.0"
 dependencies = [
  "nih_plug",
  "parking_lot 0.12.5",
+ "resonance-common",
+ "resonance-dsp",
 ]
 
 [[package]]

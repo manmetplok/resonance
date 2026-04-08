@@ -141,10 +141,7 @@ impl DrumSampler {
             let gain = voice.current_gain() * pad_volumes[voice.pad_index];
 
             // Constant-power pan law
-            let pan = pad_pans[voice.pad_index];
-            let angle = (pan + 1.0) * 0.25 * std::f32::consts::PI;
-            let pan_l = angle.cos();
-            let pan_r = angle.sin();
+            let (pan_l, pan_r) = resonance_dsp::constant_power_pan(pad_pans[voice.pad_index]);
 
             *left += sample_l * gain * pan_l;
             *right += sample_r * gain * pan_r;

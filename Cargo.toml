@@ -1,5 +1,5 @@
 [workspace]
-members = ["resonance-audio", "resonance-app", "plugins/resonance-drums", "plugins/resonance-amp", "plugins/resonance-ir", "plugins/resonance-reverb", "xtask"]
+members = ["resonance-audio", "resonance-app", "resonance-common", "resonance-dsp", "plugins/resonance-drums", "plugins/resonance-amp", "plugins/resonance-ir", "plugins/resonance-reverb", "xtask"]
 resolver = "2"
 
 [profile.release]

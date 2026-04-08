@@ -190,7 +190,7 @@ pub enum AudioEvent {
 }
 
 /// An audio clip stored in memory.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AudioClip {
     pub id: ClipId,
     pub track_id: TrackId,
@@ -270,6 +270,10 @@ pub struct Track {
     /// If true, track captures a single input channel (duplicated to both L/R).
     /// If false, track captures a stereo pair.
     mono: AtomicBool,
+    /// Post-fader peak level for left channel (for VU meters).
+    peak_l_bits: AtomicU32,
+    /// Post-fader peak level for right channel (for VU meters).
+    peak_r_bits: AtomicU32,
     pub input_device_name: Option<String>,
     /// Ordered list of plugin instance IDs forming the insert chain.
     pub plugin_ids: Vec<PluginInstanceId>,
@@ -287,6 +291,8 @@ impl Track {
             record_armed: AtomicBool::new(false),
             monitor_enabled: AtomicBool::new(false),
             mono: AtomicBool::new(true),
+            peak_l_bits: AtomicU32::new(0),
+            peak_r_bits: AtomicU32::new(0),
             input_device_name: None,
             plugin_ids: Vec::new(),
         }
@@ -346,6 +352,26 @@ impl Track {
 
     pub fn set_mono(&self, v: bool) {
         self.mono.store(v, Ordering::Relaxed);
+    }
+
+    /// Atomically update peak L to the max of the current and new value.
+    pub fn update_peak_l(&self, v: f32) {
+        self.peak_l_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Atomically update peak R to the max of the current and new value.
+    pub fn update_peak_r(&self, v: f32) {
+        self.peak_r_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Read and clear peak L, returning the peak since last call.
+    pub fn swap_peak_l(&self) -> f32 {
+        f32::from_bits(self.peak_l_bits.swap(0, Ordering::Relaxed))
+    }
+
+    /// Read and clear peak R, returning the peak since last call.
+    pub fn swap_peak_r(&self) -> f32 {
+        f32::from_bits(self.peak_r_bits.swap(0, Ordering::Relaxed))
     }
 }
 
