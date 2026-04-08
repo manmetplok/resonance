@@ -51,7 +51,7 @@ static PIPEWIRE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 impl AudioEngine {
     /// Create and start the audio engine. Returns the engine handle.
-    pub fn new(buffer_size: u32) -> Result<Self, String> {
+    pub fn new() -> Result<Self, String> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -94,9 +94,10 @@ impl AudioEngine {
             Arc::new(parking_lot::RwLock::new(IndexMap::new()));
         let plugins_audio = Arc::clone(&plugins);
 
-        // Build the cpal stream
-        let mut stream_config: cpal::StreamConfig = config.into();
-        stream_config.buffer_size = cpal::BufferSize::Fixed(buffer_size);
+        // Build the cpal stream — use Default buffer size to avoid ALSA underruns
+        // with PipeWire's ALSA compatibility layer (BufferSize::Fixed is broken).
+        // PipeWire controls the actual quantum/latency.
+        let stream_config: cpal::StreamConfig = config.into();
         let audio_sample_rate = sample_rate;
 
         // Pre-allocated per-track processing buffers (moved into audio callback closure)
@@ -161,7 +162,6 @@ impl AudioEngine {
                     plugins_ctrl,
                     monitor_prod_audio,
                     sample_rate,
-                    buffer_size,
                 );
             })
             .map_err(|e| format!("Failed to spawn engine thread: {}", e))?;
@@ -179,79 +179,6 @@ impl AudioEngine {
             sample_rate,
             channels,
         })
-    }
-
-    /// Rebuild the CPAL output stream with a new buffer size (applies immediately).
-    pub fn set_buffer_size(&mut self, buffer_size: u32) -> Result<(), String> {
-        // Notify engine thread of new buffer size (used for input stream creation)
-        self.send(AudioCommand::SetBufferSize { size: buffer_size });
-
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| "No audio output device found".to_string())?;
-
-        let config = device
-            .default_output_config()
-            .map_err(|e| format!("Failed to get output config: {}", e))?;
-
-        let channels = config.channels() as usize;
-        let mut stream_config: cpal::StreamConfig = config.into();
-        stream_config.buffer_size = cpal::BufferSize::Fixed(buffer_size);
-
-        // Pre-allocate new processing buffers
-        let mut track_buf_l = vec![0.0f32; 8192];
-        let mut track_buf_r = vec![0.0f32; 8192];
-        let mut monitor_temp = vec![0.0f32; 8192 * 2];
-
-        // Create new monitor ring buffer and swap the producer
-        let new_ring = ringbuf::HeapRb::<f32>::new(4096 * 2);
-        let (new_prod, mut monitor_cons) = new_ring.split();
-        *self.monitor_prod.lock() = new_prod;
-
-        // Clone Arcs for the new callback closure
-        let shared = Arc::clone(&self.shared);
-        let tracks = Arc::clone(&self.tracks);
-        let clips = Arc::clone(&self.clips);
-        let plugins = Arc::clone(&self.plugins);
-        let tempo_map = Arc::clone(&self.tempo_map);
-        let sample_rate = self.sample_rate;
-
-        let stream = device
-            .build_output_stream(
-                &stream_config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    mix_audio(
-                        data,
-                        channels,
-                        &shared,
-                        &tracks,
-                        &clips,
-                        &plugins,
-                        &tempo_map,
-                        sample_rate,
-                        &mut track_buf_l,
-                        &mut track_buf_r,
-                        &mut monitor_cons,
-                        &mut monitor_temp,
-                    );
-                },
-                |err| {
-                    eprintln!("Audio stream error: {}", err);
-                },
-                None,
-            )
-            .map_err(|e| format!("Failed to build output stream: {}", e))?;
-
-        stream
-            .play()
-            .map_err(|e| format!("Failed to start stream: {}", e))?;
-
-        // Drop old stream by replacing it
-        self._stream = Some(stream);
-        self.channels = channels;
-
-        Ok(())
     }
 
     /// Send a command to the audio engine.
@@ -341,7 +268,6 @@ fn build_input_stream(
     shared: Arc<SharedState>,
     mut rec_producer: Option<ringbuf::HeapProd<f32>>,
     mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
-    buffer_size: u32,
 ) -> Result<(cpal::Stream, u32, u16), String> {
     let _env_guard = PIPEWIRE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -360,8 +286,7 @@ fn build_input_stream(
 
     let sample_rate = config.sample_rate().0;
     let channels = config.channels();
-    let mut stream_config: cpal::StreamConfig = config.into();
-    stream_config.buffer_size = cpal::BufferSize::Fixed(buffer_size);
+    let stream_config: cpal::StreamConfig = config.into();
 
     // Pre-allocated buffer for mono→stereo conversion in monitor path
     let mut mon_stereo_buf = vec![0.0f32; 8192 * 2];
@@ -543,7 +468,6 @@ fn engine_thread(
     plugins: Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
     monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     sample_rate: u32,
-    mut buffer_size: u32,
 ) {
     let mut next_track_id: TrackId = 1;
     let mut next_clip_id: ClipId = 1;
@@ -612,7 +536,7 @@ fn engine_thread(
                         }
                         shared.recording.store(true, Ordering::SeqCst);
 
-                        match build_input_stream(source_name.as_deref(), Arc::clone(&shared), Some(prod), Arc::clone(&monitor_prod), buffer_size) {
+                        match build_input_stream(source_name.as_deref(), Arc::clone(&shared), Some(prod), Arc::clone(&monitor_prod)) {
                             Ok((stream, in_sr, in_ch)) => {
                                 _input_stream = Some(stream);
                                 input_sample_rate = in_sr;
@@ -853,7 +777,6 @@ fn engine_thread(
                             Arc::clone(&shared),
                             None,
                             Arc::clone(&monitor_prod),
-                            buffer_size,
                         ) {
                             Ok((stream, in_sr, in_ch)) => {
                                 _input_stream = Some(stream);
@@ -1127,9 +1050,6 @@ fn engine_thread(
                     punch_enabled = enabled;
                     punch_in = pi;
                     punch_out = po;
-                }
-                AudioCommand::SetBufferSize { size } => {
-                    buffer_size = size;
                 }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}

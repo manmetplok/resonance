@@ -106,10 +106,6 @@ pub enum AudioCommand {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
     },
-    /// Notify the engine thread of a new buffer size (for input stream creation).
-    SetBufferSize {
-        size: u32,
-    },
 }
 
 /// Events sent from the audio engine back to the GUI.

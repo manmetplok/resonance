@@ -2,17 +2,13 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Settings {
-    pub buffer_size: u32,
-}
+pub struct Settings {}
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { buffer_size: 256 }
+        Self {}
     }
 }
-
-pub const BUFFER_SIZE_OPTIONS: &[u32] = &[64, 128, 256, 512, 1024, 2048];
 
 impl Settings {
     fn config_path() -> Option<PathBuf> {
@@ -23,21 +19,13 @@ impl Settings {
         let Some(path) = Self::config_path() else {
             return Self::default();
         };
-        let mut settings = match std::fs::read_to_string(&path) {
+        match std::fs::read_to_string(&path) {
             Ok(contents) => toml::from_str(&contents).unwrap_or_else(|e| {
                 eprintln!("Failed to parse settings, using defaults: {}", e);
                 Self::default()
             }),
             Err(_) => Self::default(),
-        };
-        if !BUFFER_SIZE_OPTIONS.contains(&settings.buffer_size) {
-            eprintln!(
-                "Invalid buffer_size {} in settings, using default",
-                settings.buffer_size
-            );
-            settings.buffer_size = 256;
         }
-        settings
     }
 
     pub fn save(&self) {

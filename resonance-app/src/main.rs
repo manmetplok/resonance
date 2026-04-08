@@ -7,11 +7,8 @@ use iced::{alignment, Element, Font, Length, Size, Subscription};
 use resonance_audio::types::*;
 use resonance_audio::AudioEngine;
 
-mod settings;
 mod theme;
 mod timeline;
-
-use settings::Settings;
 
 use timeline::TimelineCanvas;
 
@@ -46,8 +43,6 @@ struct Resonance {
     metronome_enabled: bool,
     available_plugins: Vec<ScannedPlugin>,
     settings_open: bool,
-    settings: Settings,
-    applied_buffer_size: u32,
     error_message: Option<String>,
     master_volume: f32,
     punch_enabled: bool,
@@ -153,7 +148,6 @@ enum Message {
     PluginNextFile(PluginInstanceId),
     OpenSettings,
     CloseSettings,
-    SettingsSetBufferSize(u32),
     DismissError,
     TogglePunch,
     SetPunchIn(u64),
@@ -173,15 +167,11 @@ fn main() -> iced::Result {
 
 impl Resonance {
     fn new() -> (Self, iced::Task<Message>) {
-        let settings = Settings::load();
-        let engine =
-            AudioEngine::new(settings.buffer_size).expect("Failed to initialize audio engine");
+        let engine = AudioEngine::new().expect("Failed to initialize audio engine");
 
         // Request input device list and plugin scan on startup
         engine.send(AudioCommand::ListInputDevices);
         engine.send(AudioCommand::ScanPlugins);
-
-        let applied_buffer_size = settings.buffer_size;
 
         let app = Self {
             engine,
@@ -204,8 +194,6 @@ impl Resonance {
             metronome_enabled: false,
             available_plugins: Vec::new(),
             settings_open: false,
-            settings,
-            applied_buffer_size,
             error_message: None,
             master_volume: 0.0, // 0 dB = unity gain
             punch_enabled: false,
@@ -666,18 +654,6 @@ impl Resonance {
             }
             Message::CloseSettings => {
                 self.settings_open = false;
-            }
-            Message::SettingsSetBufferSize(size) => {
-                self.settings.buffer_size = size;
-                self.settings.save();
-                match self.engine.set_buffer_size(size) {
-                    Ok(()) => {
-                        self.applied_buffer_size = size;
-                    }
-                    Err(e) => {
-                        self.error_message = Some(format!("Failed to apply buffer size: {}", e));
-                    }
-                }
             }
             Message::DismissError => {
                 self.error_message = None;
@@ -1210,26 +1186,12 @@ impl Resonance {
 
         let title = text("Settings").size(20).color(theme::ACCENT);
 
-        let buf_label = text("Buffer Size").size(14).color(theme::TEXT);
-        let buf_options: Vec<u32> = settings::BUFFER_SIZE_OPTIONS.to_vec();
-        let buf_picker = pick_list(buf_options, Some(self.settings.buffer_size), |size| {
-            Message::SettingsSetBufferSize(size)
-        })
-        .text_size(14)
-        .width(120);
-
-        let buf_row = row![buf_label, Space::with_width(Length::Fill), buf_picker]
-            .spacing(8)
-            .align_y(alignment::Vertical::Center);
-
         let close_btn = button(text("Close").size(14).color(theme::TEXT))
             .on_press(Message::CloseSettings)
             .style(|_theme, status| theme::transport_button_style(status));
 
         let dialog_content = column![
             title,
-            Space::with_height(16),
-            buf_row,
             Space::with_height(20),
             close_btn,
         ]
