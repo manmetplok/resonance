@@ -1,7 +1,7 @@
 use iced::widget::text::Shaping;
 use iced::widget::{
-    button, canvas, column, container, mouse_area, opaque, pick_list, row, slider, stack, text,
-    Space,
+    button, canvas, column, container, mouse_area, opaque, pick_list, row, scrollable, slider,
+    stack, text, Space,
 };
 use iced::{alignment, Element, Font, Length, Size, Subscription};
 use resonance_audio::types::*;
@@ -52,6 +52,39 @@ struct Resonance {
     dragging_punch: Option<PunchDragTarget>,
     /// Pending file path to inject via CLAP state (instance_id, persist_key, path).
     pending_plugin_path: Option<(PluginInstanceId, String, String)>,
+    view_mode: ViewMode,
+    selected_clip: Option<ClipId>,
+    /// Clip drag state: (clip_id, grab_offset_x, original_start_sample, original_track_id, current_x)
+    clip_drag: Option<ClipDragState>,
+    /// Clip trim state
+    clip_trim: Option<ClipTrimState>,
+}
+
+#[derive(Debug, Clone)]
+struct ClipDragState {
+    clip_id: ClipId,
+    grab_offset_x: f32,
+    original_start_sample: SamplePos,
+    original_track_id: TrackId,
+    current_x: f32,
+    current_y: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClipEdge {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone)]
+struct ClipTrimState {
+    clip_id: ClipId,
+    edge: ClipEdge,
+    original_start_sample: SamplePos,
+    original_trim_start: u64,
+    original_trim_end: u64,
+    original_total_frames: u64,
+    anchor_x: f32,
 }
 
 /// GUI-side track state.
@@ -99,6 +132,18 @@ pub struct ClipState {
     pub start_sample: SamplePos,
     pub duration_samples: u64,
     pub name: String,
+    /// Total raw audio frames (before trim). Used for trim bounds.
+    pub total_frames: u64,
+    pub trim_start_frames: u64,
+    pub trim_end_frames: u64,
+    /// Downsampled waveform peaks: (min, max) per chunk of frames.
+    pub waveform_peaks: Vec<(f32, f32)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    Arrange,
+    Mixer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -146,6 +191,7 @@ enum Message {
     PluginFileSelected(PluginInstanceId, Option<String>),
     PluginPrevFile(PluginInstanceId),
     PluginNextFile(PluginInstanceId),
+    SwitchView(ViewMode),
     OpenSettings,
     CloseSettings,
     DismissError,
@@ -155,6 +201,13 @@ enum Message {
     StartPunchDrag(PunchDragTarget),
     UpdatePunchDrag(f32),
     EndPunchDrag,
+    SelectClip(Option<ClipId>),
+    StartClipDrag { clip_id: ClipId, grab_offset_x: f32, start_x: f32, start_y: f32 },
+    UpdateClipDrag(f32, f32),
+    EndClipDrag,
+    StartClipTrim { clip_id: ClipId, edge: ClipEdge, anchor_x: f32 },
+    UpdateClipTrim(f32),
+    EndClipTrim,
 }
 
 fn main() -> iced::Result {
@@ -202,6 +255,10 @@ impl Resonance {
             punch_range_set: false,
             dragging_punch: None,
             pending_plugin_path: None,
+            view_mode: ViewMode::Arrange,
+            selected_clip: None,
+            clip_drag: None,
+            clip_trim: None,
         };
 
         (app, iced::Task::none())
@@ -306,6 +363,9 @@ impl Resonance {
             Message::FileSelected(_, None) => {}
             Message::DeleteClip(id) => {
                 self.engine.send(AudioCommand::DeleteClip { clip_id: id });
+                if self.selected_clip == Some(id) {
+                    self.selected_clip = None;
+                }
             }
             Message::ZoomIn => {
                 self.zoom = (self.zoom * 1.5).min(1000.0);
@@ -649,6 +709,9 @@ impl Resonance {
                 let max_y = (self.tracks.len() as f32 * theme::TRACK_HEIGHT).max(0.0);
                 self.scroll_offset_y = self.scroll_offset_y.min(max_y);
             }
+            Message::SwitchView(mode) => {
+                self.view_mode = mode;
+            }
             Message::OpenSettings => {
                 self.settings_open = true;
             }
@@ -726,6 +789,135 @@ impl Resonance {
             Message::EndPunchDrag => {
                 self.dragging_punch = None;
             }
+            Message::SelectClip(id) => {
+                self.selected_clip = id;
+            }
+            Message::StartClipDrag { clip_id, grab_offset_x, start_x, start_y } => {
+                if let Some(clip) = self.clips.iter().find(|c| c.id == clip_id) {
+                    self.selected_clip = Some(clip_id);
+                    self.clip_drag = Some(ClipDragState {
+                        clip_id,
+                        grab_offset_x,
+                        original_start_sample: clip.start_sample,
+                        original_track_id: clip.track_id,
+                        current_x: start_x,
+                        current_y: start_y,
+                    });
+                }
+            }
+            Message::UpdateClipDrag(x, y) => {
+                if let Some(ref mut drag) = self.clip_drag {
+                    drag.current_x = x;
+                    drag.current_y = y;
+                    // Live-update the clip position for visual feedback
+                    let seconds = ((x - drag.grab_offset_x) + self.scroll_offset) / self.zoom;
+                    let new_start = if seconds < 0.0 {
+                        0u64
+                    } else {
+                        (seconds as f64 * self.sample_rate as f64) as u64
+                    };
+                    // Determine target track from y position
+                    let ruler_height = 30.0f32;
+                    let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
+                    sorted_tracks.sort_by_key(|t| t.order);
+                    let track_idx = ((y - ruler_height + self.scroll_offset_y) / theme::TRACK_HEIGHT)
+                        .floor()
+                        .max(0.0) as usize;
+                    let target_track_id = sorted_tracks
+                        .get(track_idx)
+                        .map(|t| t.id)
+                        .unwrap_or(drag.original_track_id);
+                    if let Some(clip) = self.clips.iter_mut().find(|c| c.id == drag.clip_id) {
+                        clip.start_sample = new_start;
+                        clip.track_id = target_track_id;
+                    }
+                }
+            }
+            Message::EndClipDrag => {
+                if let Some(drag) = self.clip_drag.take() {
+                    if let Some(clip) = self.clips.iter().find(|c| c.id == drag.clip_id) {
+                        self.engine.send(AudioCommand::MoveClip {
+                            clip_id: drag.clip_id,
+                            new_start_sample: clip.start_sample,
+                            new_track_id: clip.track_id,
+                        });
+                    }
+                }
+            }
+            Message::StartClipTrim { clip_id, edge, anchor_x } => {
+                if let Some(clip) = self.clips.iter().find(|c| c.id == clip_id) {
+                    self.selected_clip = Some(clip_id);
+                    self.clip_trim = Some(ClipTrimState {
+                        clip_id,
+                        edge,
+                        original_start_sample: clip.start_sample,
+                        original_trim_start: clip.trim_start_frames,
+                        original_trim_end: clip.trim_end_frames,
+                        original_total_frames: clip.total_frames,
+                        anchor_x,
+                    });
+                }
+            }
+            Message::UpdateClipTrim(x) => {
+                if let Some(ref trim) = self.clip_trim.clone() {
+                    let delta_px = x - trim.anchor_x;
+                    let delta_seconds = delta_px / self.zoom;
+                    let delta_frames = (delta_seconds.abs() as f64 * self.sample_rate as f64) as u64;
+                    let min_duration_frames = (0.01 * self.sample_rate as f64) as u64;
+
+                    match trim.edge {
+                        ClipEdge::Left => {
+                            let max_trim = trim.original_total_frames
+                                .saturating_sub(trim.original_trim_end)
+                                .saturating_sub(min_duration_frames);
+                            let new_trim_start = if delta_seconds > 0.0 {
+                                (trim.original_trim_start + delta_frames).min(max_trim)
+                            } else {
+                                trim.original_trim_start.saturating_sub(delta_frames)
+                            };
+                            let trim_delta = new_trim_start as i64 - trim.original_trim_start as i64;
+                            let new_start = (trim.original_start_sample as i64 + trim_delta).max(0) as u64;
+                            let new_duration = trim.original_total_frames
+                                .saturating_sub(new_trim_start)
+                                .saturating_sub(trim.original_trim_end);
+                            if let Some(clip) = self.clips.iter_mut().find(|c| c.id == trim.clip_id) {
+                                clip.start_sample = new_start;
+                                clip.trim_start_frames = new_trim_start;
+                                clip.duration_samples = new_duration;
+                            }
+                        }
+                        ClipEdge::Right => {
+                            let max_trim = trim.original_total_frames
+                                .saturating_sub(trim.original_trim_start)
+                                .saturating_sub(min_duration_frames);
+                            let new_trim_end = if delta_seconds < 0.0 {
+                                (trim.original_trim_end + delta_frames).min(max_trim)
+                            } else {
+                                trim.original_trim_end.saturating_sub(delta_frames)
+                            };
+                            let new_duration = trim.original_total_frames
+                                .saturating_sub(trim.original_trim_start)
+                                .saturating_sub(new_trim_end);
+                            if let Some(clip) = self.clips.iter_mut().find(|c| c.id == trim.clip_id) {
+                                clip.trim_end_frames = new_trim_end;
+                                clip.duration_samples = new_duration;
+                            }
+                        }
+                    }
+                }
+            }
+            Message::EndClipTrim => {
+                if let Some(trim) = self.clip_trim.take() {
+                    if let Some(clip) = self.clips.iter().find(|c| c.id == trim.clip_id) {
+                        self.engine.send(AudioCommand::TrimClip {
+                            clip_id: trim.clip_id,
+                            new_start_sample: clip.start_sample,
+                            trim_start_frames: clip.trim_start_frames,
+                            trim_end_frames: clip.trim_end_frames,
+                        });
+                    }
+                }
+            }
             Message::Tick => {
                 while let Some(event) = self.engine.try_recv() {
                     self.handle_engine_event(event);
@@ -761,6 +953,7 @@ impl Resonance {
                 start_sample,
                 duration_samples,
                 name,
+                waveform_peaks,
             } => {
                 self.clips.push(ClipState {
                     id: clip_id,
@@ -768,6 +961,10 @@ impl Resonance {
                     start_sample,
                     duration_samples,
                     name,
+                    total_frames: duration_samples,
+                    trim_start_frames: 0,
+                    trim_end_frames: 0,
+                    waveform_peaks,
                 });
             }
             AudioEvent::TrackAdded { track_id } => {
@@ -805,6 +1002,20 @@ impl Resonance {
                     clip.track_id = new_track_id;
                 }
             }
+            AudioEvent::ClipTrimmed {
+                clip_id,
+                new_start_sample,
+                new_duration_samples,
+                trim_start_frames,
+                trim_end_frames,
+            } => {
+                if let Some(clip) = self.clips.iter_mut().find(|c| c.id == clip_id) {
+                    clip.start_sample = new_start_sample;
+                    clip.duration_samples = new_duration_samples;
+                    clip.trim_start_frames = trim_start_frames;
+                    clip.trim_end_frames = trim_end_frames;
+                }
+            }
             AudioEvent::Stopped => {
                 self.playing = false;
                 self.recording = false;
@@ -831,6 +1042,7 @@ impl Resonance {
                 start_sample,
                 duration_samples,
                 name,
+                waveform_peaks,
             } => {
                 self.clips.push(ClipState {
                     id: clip_id,
@@ -838,6 +1050,10 @@ impl Resonance {
                     start_sample,
                     duration_samples,
                     name,
+                    total_frames: duration_samples,
+                    trim_start_frames: 0,
+                    trim_end_frames: 0,
+                    waveform_peaks,
                 });
                 self.recording = false;
             }
@@ -924,7 +1140,10 @@ impl Resonance {
 
     fn view(&self) -> Element<'_, Message> {
         let transport = self.view_transport();
-        let main_area = self.view_main_area();
+        let main_area = match self.view_mode {
+            ViewMode::Arrange => self.view_main_area(),
+            ViewMode::Mixer => self.view_mixer(),
+        };
 
         let content: Element<'_, Message> = if let Some(ref err) = self.error_message {
             let error_bar = container(
@@ -1118,8 +1337,22 @@ impl Resonance {
             format!("{:.1}", self.master_volume)
         };
 
+        let arrange_active = self.view_mode == ViewMode::Arrange;
+        let mixer_active = self.view_mode == ViewMode::Mixer;
+        let arrange_tab = button(text("Arrange").size(12))
+            .on_press(Message::SwitchView(ViewMode::Arrange))
+            .style(move |_theme, status| theme::tab_button_style(arrange_active, status))
+            .padding([4, 8]);
+        let mixer_tab = button(text("Mixer").size(12))
+            .on_press(Message::SwitchView(ViewMode::Mixer))
+            .style(move |_theme, status| theme::tab_button_style(mixer_active, status))
+            .padding([4, 8]);
+
         let transport_row = row![
             Space::with_width(10),
+            arrange_tab,
+            mixer_tab,
+            Space::with_width(8),
             skip_back,
             stop_btn,
             play_pause,
@@ -1442,36 +1675,163 @@ impl Resonance {
             .spacing(4)
             .align_y(alignment::Vertical::Center);
 
-        let mut content = column![top_row, bottom_row].spacing(2).padding(6);
+        let content = column![top_row, bottom_row].spacing(2).padding(6);
 
-        // Clip entries with delete buttons
-        let track_clips: Vec<&ClipState> = self.clips.iter().filter(|c| c.track_id == track.id).collect();
-        for clip in &track_clips {
-            let clip_name: String = if clip.name.chars().count() > 12 {
-                let mut s: String = clip.name.chars().take(10).collect();
-                s.push_str("..");
-                s
-            } else {
-                clip.name.clone()
-            };
-            let clip_del = button(text("×").size(9).color(theme::TEXT_DIM))
-                .on_press(Message::DeleteClip(clip.id))
-                .style(|_theme, status| theme::small_button_style(status))
-                .padding(1);
-            let clip_row = row![
-                text(clip_name).size(9).color(theme::TEXT_DIM),
-                Space::with_width(Length::Fill),
-                clip_del,
-            ]
-            .spacing(2)
-            .align_y(alignment::Vertical::Center);
-            content = content.push(clip_row);
+        let bg = if track.record_armed {
+            theme::PANEL_ARMED
+        } else {
+            theme::PANEL_DARK
+        };
+        let border_color = if track.record_armed {
+            theme::RECORD_RED
+        } else {
+            theme::SEPARATOR
+        };
+
+        container(content)
+            .width(Length::Fill)
+            .height(theme::TRACK_HEIGHT)
+            .style(move |_theme| container::Style {
+                background: Some(iced::Background::Color(bg)),
+                border: iced::Border {
+                    color: border_color,
+                    width: 0.5,
+                    radius: 0.0.into(),
+                },
+                ..Default::default()
+            })
+            .into()
+    }
+
+    // -----------------------------------------------------------------------
+    // Mixer view
+    // -----------------------------------------------------------------------
+
+    fn view_mixer(&self) -> Element<'_, Message> {
+        let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
+        sorted_tracks.sort_by_key(|t| t.order);
+
+        let mut strip_row = row![].spacing(2);
+        for track in &sorted_tracks {
+            strip_row = strip_row.push(self.view_channel_strip(track));
         }
 
-        // Plugin chain with clickable names, remove buttons, and expandable params
+        let scrollable_strips = scrollable(strip_row)
+            .direction(scrollable::Direction::Horizontal(
+                scrollable::Scrollbar::default(),
+            ))
+            .width(Length::Fill);
+
+        let master_strip = self.view_master_strip();
+
+        let separator = container(Space::new(1, Length::Fill)).style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::SEPARATOR)),
+            ..Default::default()
+        });
+
+        let mixer_content = row![scrollable_strips, separator, master_strip]
+            .height(Length::Fill);
+
+        container(mixer_content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(theme::BG)),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    fn view_channel_strip(&self, track: &TrackState) -> Element<'_, Message> {
+        let track_name = container(
+            text(track.name.clone()).size(13).color(theme::TEXT),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .padding([6, 4]);
+
+        // Mute / Solo / Arm / Monitor buttons
+        let rec_color = if track.record_armed { theme::RECORD_RED } else { theme::TEXT_DIM };
+        let armed = track.record_armed;
+        let rec_btn = button(text("R").size(11).color(rec_color))
+            .on_press(Message::ToggleRecordArm(track.id))
+            .style(move |_theme, status| {
+                if armed { theme::record_armed_button_style(status) }
+                else { theme::small_button_style(status) }
+            })
+            .padding(2);
+
+        let mute_color = if track.muted { theme::ACCENT } else { theme::TEXT_DIM };
+        let mute_btn = button(text("M").size(11).color(mute_color))
+            .on_press(Message::ToggleMute(track.id))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(2);
+
+        let solo_color = if track.soloed { theme::SOLO_YELLOW } else { theme::TEXT_DIM };
+        let solo_btn = button(text("S").size(11).color(solo_color))
+            .on_press(Message::ToggleSolo(track.id))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(2);
+
+        let mon_color = if track.monitor_enabled { theme::METRONOME_ON } else { theme::TEXT_DIM };
+        let mon_enabled = track.monitor_enabled;
+        let mon_btn = button(text("I").size(11).color(mon_color))
+            .on_press(Message::ToggleMonitor(track.id))
+            .style(move |_theme, status| {
+                if mon_enabled {
+                    let bg = match status {
+                        iced::widget::button::Status::Hovered => iced::Color::from_rgb(0.15, 0.25, 0.15),
+                        iced::widget::button::Status::Pressed => iced::Color::from_rgb(0.10, 0.20, 0.10),
+                        _ => iced::Color::from_rgb(0.12, 0.20, 0.12),
+                    };
+                    iced::widget::button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: theme::METRONOME_ON,
+                        border: iced::Border {
+                            color: theme::METRONOME_ON,
+                            width: 1.0,
+                            radius: 2.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                } else {
+                    theme::small_button_style(status)
+                }
+            })
+            .padding(2);
+
+        let is_mono = track.mono;
+        let mono_label = if track.mono { "M" } else { "S" };
+        let mono_btn = button(text(mono_label).size(11).color(theme::TEXT))
+            .on_press(Message::ToggleTrackMono(track.id))
+            .style(move |_theme, status| {
+                let bg = match status {
+                    iced::widget::button::Status::Hovered => iced::Color::from_rgb(0.20, 0.20, 0.25),
+                    iced::widget::button::Status::Pressed => iced::Color::from_rgb(0.15, 0.15, 0.20),
+                    _ => iced::Color::from_rgb(0.18, 0.18, 0.22),
+                };
+                iced::widget::button::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    text_color: if is_mono { theme::TEXT } else { theme::ACCENT },
+                    border: iced::Border {
+                        color: if is_mono { theme::SEPARATOR } else { theme::ACCENT },
+                        width: 1.0,
+                        radius: 2.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .padding(2);
+
+        let button_row = row![mono_btn, mon_btn, rec_btn, mute_btn, solo_btn]
+            .spacing(4)
+            .align_y(alignment::Vertical::Center);
+
+        // Plugin chain with expandable params
+        let mut plugin_section = column![].spacing(2).width(Length::Fill);
         for plugin in &track.plugins {
-            let pname: String = if plugin.plugin_name.chars().count() > 12 {
-                let mut s: String = plugin.plugin_name.chars().take(10).collect();
+            let pname: String = if plugin.plugin_name.chars().count() > 14 {
+                let mut s: String = plugin.plugin_name.chars().take(12).collect();
                 s.push_str("..");
                 s
             } else {
@@ -1481,7 +1841,6 @@ impl Resonance {
             let pid = plugin.instance_id;
             let expanded = plugin.expanded;
 
-            // Clickable plugin name
             let name_color = if expanded { theme::TEXT } else { theme::ACCENT };
             let name_btn = button(text(pname).size(9).color(name_color))
                 .on_press(Message::TogglePluginPanel(pid))
@@ -1492,6 +1851,7 @@ impl Resonance {
                 .on_press(Message::RemovePluginFromTrack(track_id, pid))
                 .style(|_theme, status| theme::small_button_style(status))
                 .padding(1);
+
             let plugin_row = row![
                 name_btn,
                 Space::with_width(Length::Fill),
@@ -1499,19 +1859,18 @@ impl Resonance {
             ]
             .spacing(2)
             .align_y(alignment::Vertical::Center);
-            content = content.push(plugin_row);
+            plugin_section = plugin_section.push(plugin_row);
 
-            // Expandable parameter panel — custom views for bundled plugins
             if expanded {
                 match &plugin.custom {
                     PluginCustomState::Drums { selected_pad } => {
-                        content = content.push(self.view_drums_panel(plugin, *selected_pad));
+                        plugin_section = plugin_section.push(self.view_drums_panel(plugin, *selected_pad));
                     }
                     PluginCustomState::Amp { model_name, file_list, current_index } => {
-                        content = content.push(self.view_amp_panel(plugin, model_name, file_list.len(), *current_index));
+                        plugin_section = plugin_section.push(self.view_amp_panel(plugin, model_name, file_list.len(), *current_index));
                     }
                     PluginCustomState::Ir { ir_name, ir_info, file_list, current_index } => {
-                        content = content.push(self.view_ir_panel(plugin, ir_name, ir_info, file_list.len(), *current_index));
+                        plugin_section = plugin_section.push(self.view_ir_panel(plugin, ir_name, ir_info, file_list.len(), *current_index));
                     }
                     PluginCustomState::Generic => {
                         for param in &plugin.params {
@@ -1538,13 +1897,14 @@ impl Resonance {
                                 param_slider,
                             ]
                             .spacing(1);
-                            content = content.push(param_row);
+                            plugin_section = plugin_section.push(param_row);
                         }
                     }
                 }
             }
         }
 
+        // FX picker
         if !self.available_plugins.is_empty() {
             let track_id = track.id;
             let fx_picker = pick_list(
@@ -1555,10 +1915,59 @@ impl Resonance {
             .placeholder("+ FX")
             .text_size(10)
             .width(Length::Fill);
-            content = content.push(fx_picker);
+            plugin_section = plugin_section.push(fx_picker);
         }
 
-        // Input device picker (shown when track is record-armed)
+        // Pan control
+        let pan_slider = slider(-1.0..=1.0f32, track.pan, {
+            let id = track.id;
+            move |v| Message::SetTrackPan(id, v)
+        })
+        .width(Length::Fill)
+        .step(0.01);
+
+        let pan_label = if track.pan.abs() < 0.01 {
+            "C".to_string()
+        } else if track.pan < 0.0 {
+            format!("L{:.0}", -track.pan * 100.0)
+        } else {
+            format!("R{:.0}", track.pan * 100.0)
+        };
+        let pan_row = row![
+            text("Pan").size(9).color(theme::TEXT_DIM),
+            Space::with_width(4),
+            pan_slider,
+            Space::with_width(4),
+            text(pan_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
+        ]
+        .spacing(2)
+        .align_y(alignment::Vertical::Center);
+
+        // Volume fader (horizontal for now)
+        let vol_slider = slider(-60.0..=6.0f32, track.volume, {
+            let id = track.id;
+            move |v| Message::SetTrackVolume(id, v)
+        })
+        .width(Length::Fill)
+        .step(0.1);
+
+        let vol_label = if track.volume <= -60.0 {
+            "-inf".to_string()
+        } else {
+            format!("{:.1}", track.volume)
+        };
+        let vol_row = row![
+            text("Vol").size(9).color(theme::TEXT_DIM),
+            Space::with_width(4),
+            vol_slider,
+            Space::with_width(4),
+            text(vol_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
+        ]
+        .spacing(2)
+        .align_y(alignment::Vertical::Center);
+
+        // Input device picker (when armed)
+        let mut bottom_section = column![].spacing(2);
         if track.record_armed && !self.input_devices.is_empty() {
             let selected = track
                 .input_device_name
@@ -1578,27 +1987,80 @@ impl Resonance {
             .text_size(10)
             .width(Length::Fill);
 
-            content = content.push(device_picker);
+            bottom_section = bottom_section.push(device_picker);
         }
 
-        let bg = if track.record_armed {
-            theme::PANEL_ARMED
-        } else {
-            theme::PANEL_DARK
-        };
-        let border_color = if track.record_armed {
-            theme::RECORD_RED
-        } else {
-            theme::SEPARATOR
-        };
+        let bg = if track.record_armed { theme::PANEL_ARMED } else { theme::PANEL_DARK };
+        let border_color = if track.record_armed { theme::RECORD_RED } else { theme::SEPARATOR };
 
-        container(content)
-            .width(Length::Fill)
-            .height(Length::Shrink)
+        let strip_content = column![
+            track_name,
+            button_row,
+            plugin_section,
+            pan_row,
+            vol_row,
+            bottom_section,
+        ]
+        .spacing(4)
+        .padding(6)
+        .width(160);
+
+        container(strip_content)
             .style(move |_theme| container::Style {
                 background: Some(iced::Background::Color(bg)),
                 border: iced::Border {
                     color: border_color,
+                    width: 0.5,
+                    radius: 0.0.into(),
+                },
+                ..Default::default()
+            })
+            .into()
+    }
+
+    fn view_master_strip(&self) -> Element<'_, Message> {
+        let label = container(
+            text("Master").size(14).color(theme::ACCENT),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .padding([6, 4]);
+
+        let vol_slider = slider(-60.0..=6.0f32, self.master_volume, Message::SetMasterVolume)
+            .width(Length::Fill)
+            .step(0.1);
+
+        let vol_label = if self.master_volume <= -60.0 {
+            "-inf".to_string()
+        } else {
+            format!("{:.1}", self.master_volume)
+        };
+
+        let vol_row = row![
+            text("Vol").size(9).color(theme::TEXT_DIM),
+            Space::with_width(4),
+            vol_slider,
+            Space::with_width(4),
+            text(vol_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
+        ]
+        .spacing(2)
+        .align_y(alignment::Vertical::Center);
+
+        let strip_content = column![
+            label,
+            Space::with_height(Length::Fill),
+            vol_row,
+        ]
+        .spacing(4)
+        .padding(8)
+        .width(140);
+
+        container(strip_content)
+            .height(Length::Fill)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(theme::PANEL_DARK)),
+                border: iced::Border {
+                    color: theme::SEPARATOR,
                     width: 0.5,
                     radius: 0.0.into(),
                 },
@@ -1633,6 +2095,7 @@ impl Resonance {
             punch_enabled: self.punch_enabled,
             punch_in: self.punch_in,
             punch_out: self.punch_out,
+            selected_clip: self.selected_clip,
         };
 
         canvas(timeline_data)

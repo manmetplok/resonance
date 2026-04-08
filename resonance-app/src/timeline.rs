@@ -1,11 +1,11 @@
 /// Timeline canvas rendering for the DAW arrangement view.
 use iced::widget::canvas;
-use iced::{mouse, Color, Point, Rectangle, Renderer, Size, Theme};
+use iced::{keyboard, mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::theme;
-use crate::{ClipState, Message, PunchDragTarget, TrackState};
+use crate::{ClipEdge, ClipState, Message, PunchDragTarget, TrackState};
 
-use resonance_audio::types::TrackId;
+use resonance_audio::types::{ClipId, TrackId};
 
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug)]
@@ -24,6 +24,7 @@ pub struct TimelineCanvas<'a> {
     pub punch_enabled: bool,
     pub punch_in: u64,
     pub punch_out: u64,
+    pub selected_clip: Option<ClipId>,
 }
 
 impl TimelineCanvas<'_> {
@@ -43,10 +44,18 @@ impl TimelineCanvas<'_> {
     }
 }
 
+/// Which part of a clip is being dragged.
+#[derive(Debug, Clone)]
+enum ClipInteraction {
+    Move { clip_id: ClipId, grab_offset_x: f32 },
+    Trim { clip_id: ClipId, edge: ClipEdge },
+}
+
 /// Local state for the timeline canvas, tracking active drag operations.
 #[derive(Debug, Default)]
 pub struct TimelineState {
     dragging_punch: bool,
+    clip_interaction: Option<ClipInteraction>,
 }
 
 impl canvas::Program<Message> for TimelineCanvas<'_> {
@@ -90,45 +99,135 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                 }
             }
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                if self.punch_enabled {
-                    if let Some(pos) = cursor.position_in(bounds) {
-                        let ruler_height = 30.0;
-                        if pos.y < ruler_height {
-                            let punch_in_x = self.sample_to_x(self.punch_in);
-                            let punch_out_x = self.sample_to_x(self.punch_out);
-                            let dist_in = (pos.x - punch_in_x).abs();
-                            let dist_out = (pos.x - punch_out_x).abs();
-                            // When both markers overlap, pick the closest one
-                            if dist_in < 8.0 || dist_out < 8.0 {
-                                let target = if dist_in < 8.0 && dist_out < 8.0 {
-                                    // Both in range — pick closest, prefer Out on tie
-                                    if dist_in < dist_out {
-                                        PunchDragTarget::In
-                                    } else {
-                                        PunchDragTarget::Out
-                                    }
-                                } else if dist_in < 8.0 {
+                if let Some(pos) = cursor.position_in(bounds) {
+                    let ruler_height = 30.0;
+
+                    // Punch marker dragging (ruler area only)
+                    if self.punch_enabled && pos.y < ruler_height {
+                        let punch_in_x = self.sample_to_x(self.punch_in);
+                        let punch_out_x = self.sample_to_x(self.punch_out);
+                        let dist_in = (pos.x - punch_in_x).abs();
+                        let dist_out = (pos.x - punch_out_x).abs();
+                        if dist_in < 8.0 || dist_out < 8.0 {
+                            let target = if dist_in < 8.0 && dist_out < 8.0 {
+                                if dist_in < dist_out {
                                     PunchDragTarget::In
                                 } else {
                                     PunchDragTarget::Out
-                                };
-                                state.dragging_punch = true;
+                                }
+                            } else if dist_in < 8.0 {
+                                PunchDragTarget::In
+                            } else {
+                                PunchDragTarget::Out
+                            };
+                            state.dragging_punch = true;
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::StartPunchDrag(target)),
+                            );
+                        }
+                    }
+
+                    // Clip hit-testing (track area)
+                    if pos.y >= ruler_height {
+                        let mut sorted_tracks: Vec<&crate::TrackState> = self.tracks.iter().collect();
+                        sorted_tracks.sort_by_key(|t| t.order);
+
+                        // Check clips in reverse order so topmost clip wins
+                        for clip in self.clips.iter().rev() {
+                            let track_idx = sorted_tracks.iter().position(|t| t.id == clip.track_id);
+                            let track_idx = match track_idx {
+                                Some(i) => i,
+                                None => continue,
+                            };
+                            let cy = ruler_height + track_idx as f32 * theme::TRACK_HEIGHT + 2.0
+                                - self.scroll_offset_y;
+                            let clip_height = theme::TRACK_HEIGHT - 4.0;
+                            let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
+                            let duration_seconds =
+                                clip.duration_samples as f32 / self.sample_rate as f32;
+                            let cx = start_seconds * self.zoom - self.scroll_offset;
+                            let cw = duration_seconds * self.zoom;
+
+                            if pos.x >= cx && pos.x <= cx + cw && pos.y >= cy && pos.y <= cy + clip_height {
+                                let edge_threshold = 6.0;
+                                // Left edge trim
+                                if pos.x - cx < edge_threshold {
+                                    state.clip_interaction = Some(ClipInteraction::Trim {
+                                        clip_id: clip.id,
+                                        edge: ClipEdge::Left,
+                                    });
+                                    return (
+                                        canvas::event::Status::Captured,
+                                        Some(Message::StartClipTrim {
+                                            clip_id: clip.id,
+                                            edge: ClipEdge::Left,
+                                            anchor_x: pos.x,
+                                        }),
+                                    );
+                                }
+                                // Right edge trim
+                                if (cx + cw) - pos.x < edge_threshold {
+                                    state.clip_interaction = Some(ClipInteraction::Trim {
+                                        clip_id: clip.id,
+                                        edge: ClipEdge::Right,
+                                    });
+                                    return (
+                                        canvas::event::Status::Captured,
+                                        Some(Message::StartClipTrim {
+                                            clip_id: clip.id,
+                                            edge: ClipEdge::Right,
+                                            anchor_x: pos.x,
+                                        }),
+                                    );
+                                }
+                                // Body click → start move drag
+                                let grab_offset = pos.x - cx;
+                                state.clip_interaction = Some(ClipInteraction::Move {
+                                    clip_id: clip.id,
+                                    grab_offset_x: grab_offset,
+                                });
                                 return (
                                     canvas::event::Status::Captured,
-                                    Some(Message::StartPunchDrag(target)),
+                                    Some(Message::StartClipDrag {
+                                        clip_id: clip.id,
+                                        grab_offset_x: grab_offset,
+                                        start_x: pos.x,
+                                        start_y: pos.y,
+                                    }),
                                 );
                             }
                         }
+                        // Clicked on empty space → deselect
+                        return (
+                            canvas::event::Status::Captured,
+                            Some(Message::SelectClip(None)),
+                        );
                     }
                 }
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                if state.dragging_punch {
-                    if let Some(pos) = cursor.position_in(bounds) {
+                if let Some(pos) = cursor.position_in(bounds) {
+                    if state.dragging_punch {
                         return (
                             canvas::event::Status::Captured,
                             Some(Message::UpdatePunchDrag(pos.x)),
                         );
+                    }
+                    match &state.clip_interaction {
+                        Some(ClipInteraction::Move { .. }) => {
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::UpdateClipDrag(pos.x, pos.y)),
+                            );
+                        }
+                        Some(ClipInteraction::Trim { .. }) => {
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::UpdateClipTrim(pos.x)),
+                            );
+                        }
+                        None => {}
                     }
                 }
             }
@@ -138,6 +237,33 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                     return (
                         canvas::event::Status::Captured,
                         Some(Message::EndPunchDrag),
+                    );
+                }
+                if let Some(interaction) = state.clip_interaction.take() {
+                    return match interaction {
+                        ClipInteraction::Move { .. } => (
+                            canvas::event::Status::Captured,
+                            Some(Message::EndClipDrag),
+                        ),
+                        ClipInteraction::Trim { .. } => (
+                            canvas::event::Status::Captured,
+                            Some(Message::EndClipTrim),
+                        ),
+                    };
+                }
+            }
+            canvas::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::Delete),
+                ..
+            })
+            | canvas::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::Backspace),
+                ..
+            }) => {
+                if let Some(clip_id) = self.selected_clip {
+                    return (
+                        canvas::event::Status::Captured,
+                        Some(Message::DeleteClip(clip_id)),
                     );
                 }
             }
@@ -499,8 +625,50 @@ impl TimelineCanvas<'_> {
             theme::CLIP_BODY,
         );
 
-        // Clip header bar
+        // Waveform rendering
         let header_height = 18.0;
+        if !clip.waveform_peaks.is_empty() {
+            let wave_y = y + header_height;
+            let wave_h = clip_height - header_height;
+            let wave_center = wave_y + wave_h * 0.5;
+
+            let peak_frames = resonance_audio::types::WAVEFORM_PEAK_FRAMES as f32;
+            let seconds_per_peak = peak_frames / self.sample_rate as f32;
+            let pixels_per_peak = seconds_per_peak * self.zoom;
+
+            // Determine which peaks are visible (accounting for trim)
+            let trim_start_peaks = clip.trim_start_frames as f32 / peak_frames;
+            let _total_visible_peaks =
+                clip.duration_samples as f32 / peak_frames;
+
+            let waveform_color = Color::from_rgba(0.7, 0.85, 1.0, 0.5);
+
+            let mut px = 0.0f32;
+            while px < w {
+                let peak_idx_f = trim_start_peaks + px / pixels_per_peak;
+                let peak_idx = peak_idx_f as usize;
+                if peak_idx >= clip.waveform_peaks.len() {
+                    break;
+                }
+                let (min_val, max_val) = clip.waveform_peaks[peak_idx];
+
+                let draw_x = x + px;
+                // Only draw if on-screen
+                if draw_x + pixels_per_peak >= 0.0 && draw_x <= w + x {
+                    let top = wave_center - max_val * wave_h * 0.5;
+                    let bottom = wave_center - min_val * wave_h * 0.5;
+                    let bar_h = (bottom - top).max(1.0);
+                    frame.fill_rectangle(
+                        Point::new(draw_x, top),
+                        Size::new(pixels_per_peak.max(1.0), bar_h),
+                        waveform_color,
+                    );
+                }
+                px += pixels_per_peak.max(1.0);
+            }
+        }
+
+        // Clip header bar
         frame.fill_rectangle(
             Point::new(x, y),
             Size::new(w, header_height),
@@ -523,13 +691,23 @@ impl TimelineCanvas<'_> {
             ..canvas::Text::default()
         });
 
-        // Clip border
+        // Clip border (highlighted if selected)
+        let is_selected = self.selected_clip == Some(clip.id);
         let border = canvas::Path::rectangle(Point::new(x, y), Size::new(w, clip_height));
-        frame.stroke(
-            &border,
-            canvas::Stroke::default()
-                .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.3))
-                .with_width(1.0),
-        );
+        if is_selected {
+            frame.stroke(
+                &border,
+                canvas::Stroke::default()
+                    .with_color(theme::CLIP_SELECTED_BORDER)
+                    .with_width(2.0),
+            );
+        } else {
+            frame.stroke(
+                &border,
+                canvas::Stroke::default()
+                    .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.3))
+                    .with_width(1.0),
+            );
+        }
     }
 }

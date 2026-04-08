@@ -24,6 +24,12 @@ pub enum AudioCommand {
         new_start_sample: SamplePos,
         new_track_id: TrackId,
     },
+    TrimClip {
+        clip_id: ClipId,
+        new_start_sample: SamplePos,
+        trim_start_frames: u64,
+        trim_end_frames: u64,
+    },
     DeleteClip {
         clip_id: ClipId,
     },
@@ -121,6 +127,8 @@ pub enum AudioEvent {
         start_sample: SamplePos,
         duration_samples: u64,
         name: String,
+        /// Downsampled waveform peaks: (min, max) per chunk of frames.
+        waveform_peaks: Vec<(f32, f32)>,
     },
     TrackAdded {
         track_id: TrackId,
@@ -135,6 +143,13 @@ pub enum AudioEvent {
         clip_id: ClipId,
         new_start_sample: SamplePos,
         new_track_id: TrackId,
+    },
+    ClipTrimmed {
+        clip_id: ClipId,
+        new_start_sample: SamplePos,
+        new_duration_samples: u64,
+        trim_start_frames: u64,
+        trim_end_frames: u64,
     },
     Stopped,
     Error(String),
@@ -151,6 +166,8 @@ pub enum AudioEvent {
         start_sample: SamplePos,
         duration_samples: u64,
         name: String,
+        /// Downsampled waveform peaks: (min, max) per chunk of frames.
+        waveform_peaks: Vec<(f32, f32)>,
     },
     PluginAdded {
         track_id: TrackId,
@@ -183,12 +200,51 @@ pub struct AudioClip {
     pub data: Vec<f32>,
     /// Original file name.
     pub name: String,
+    /// Non-destructive trim: frames to skip from the start of audio data.
+    pub trim_start_frames: u64,
+    /// Non-destructive trim: frames to skip from the end of audio data.
+    pub trim_end_frames: u64,
+}
+
+/// Number of stereo frames per waveform peak bucket.
+pub const WAVEFORM_PEAK_FRAMES: usize = 512;
+
+/// Compute downsampled waveform peaks from stereo interleaved audio data.
+/// Returns (min, max) pairs, one per chunk of `WAVEFORM_PEAK_FRAMES` frames.
+/// Uses the mono mix (L+R)/2 for display.
+pub fn compute_waveform_peaks(data: &[f32]) -> Vec<(f32, f32)> {
+    let total_frames = data.len() / 2;
+    let num_peaks = (total_frames + WAVEFORM_PEAK_FRAMES - 1) / WAVEFORM_PEAK_FRAMES;
+    let mut peaks = Vec::with_capacity(num_peaks);
+    for chunk_start in (0..total_frames).step_by(WAVEFORM_PEAK_FRAMES) {
+        let chunk_end = (chunk_start + WAVEFORM_PEAK_FRAMES).min(total_frames);
+        let mut min_val = f32::MAX;
+        let mut max_val = f32::MIN;
+        for f in chunk_start..chunk_end {
+            let mono = (data[f * 2] + data[f * 2 + 1]) * 0.5;
+            if mono < min_val {
+                min_val = mono;
+            }
+            if mono > max_val {
+                max_val = mono;
+            }
+        }
+        peaks.push((min_val, max_val));
+    }
+    peaks
 }
 
 impl AudioClip {
-    /// Duration in stereo sample frames.
-    pub fn duration_frames(&self) -> u64 {
+    /// Total number of frames in the raw audio data.
+    pub fn total_frames(&self) -> u64 {
         (self.data.len() / 2) as u64
+    }
+
+    /// Visible/audible duration in stereo sample frames (after trim).
+    pub fn duration_frames(&self) -> u64 {
+        self.total_frames()
+            .saturating_sub(self.trim_start_frames)
+            .saturating_sub(self.trim_end_frames)
     }
 
     /// End position on timeline in sample frames.

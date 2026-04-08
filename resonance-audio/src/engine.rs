@@ -558,6 +558,7 @@ fn finalize_recording(
 
         let duration_samples = (final_data.len() / 2) as u64;
         let name = format!("Recording {}", clip_id);
+        let waveform_peaks = compute_waveform_peaks(&final_data);
 
         let clip = AudioClip {
             id: clip_id,
@@ -565,6 +566,8 @@ fn finalize_recording(
             start_sample: clip_start_sample,
             data: final_data,
             name: name.clone(),
+            trim_start_frames: 0,
+            trim_end_frames: 0,
         };
         clips.write().push(clip);
 
@@ -574,6 +577,7 @@ fn finalize_recording(
             start_sample: clip_start_sample,
             duration_samples,
             name,
+            waveform_peaks,
         });
     }
 
@@ -752,12 +756,15 @@ fn engine_thread(
                             match decode::decode_file(&path, sr) {
                                 Ok((data, name)) => {
                                     let duration = (data.len() / 2) as u64;
+                                    let waveform_peaks = compute_waveform_peaks(&data);
                                     let clip = AudioClip {
                                         id: clip_id,
                                         track_id,
                                         start_sample,
                                         data,
                                         name: name.clone(),
+                                        trim_start_frames: 0,
+                                        trim_end_frames: 0,
                                     };
                                     clips.write().push(clip);
                                     let _ = thread_event_tx.send(AudioEvent::ClipImported {
@@ -766,6 +773,7 @@ fn engine_thread(
                                         start_sample,
                                         duration_samples: duration,
                                         name,
+                                        waveform_peaks,
                                     });
                                 }
                                 Err(e) => {
@@ -796,6 +804,26 @@ fn engine_thread(
                             clip_id,
                             new_start_sample,
                             new_track_id,
+                        });
+                    }
+                }
+                AudioCommand::TrimClip {
+                    clip_id,
+                    new_start_sample,
+                    trim_start_frames,
+                    trim_end_frames,
+                } => {
+                    let mut clips = clips.write();
+                    if let Some(clip) = clips.iter_mut().find(|c| c.id == clip_id) {
+                        clip.start_sample = new_start_sample;
+                        clip.trim_start_frames = trim_start_frames;
+                        clip.trim_end_frames = trim_end_frames;
+                        let _ = event_tx.send(AudioEvent::ClipTrimmed {
+                            clip_id,
+                            new_start_sample,
+                            new_duration_samples: clip.duration_frames(),
+                            trim_start_frames,
+                            trim_end_frames,
                         });
                     }
                 }
@@ -1396,7 +1424,8 @@ fn mix_audio(
 
             for timeline_frame in overlap_start..overlap_end {
                 let frame_offset = (timeline_frame - buf_start) as usize;
-                let clip_frame = (timeline_frame - clip_start) as usize;
+                let clip_frame =
+                    (timeline_frame - clip_start) as usize + clip.trim_start_frames as usize;
                 let clip_idx = clip_frame * 2;
                 if clip_idx + 1 < clip.data.len() {
                     track_buf_l[frame_offset] += clip.data[clip_idx];

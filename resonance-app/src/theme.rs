@@ -111,6 +111,12 @@ pub const PUNCH_MARKER: Color = Color::from_rgb(
     0x1a as f32 / 255.0,
 );
 
+pub const CLIP_SELECTED_BORDER: Color = Color::from_rgb(
+    0xe8 as f32 / 255.0,
+    0x83 as f32 / 255.0,
+    0x2a as f32 / 255.0,
+);
+
 pub const TRACK_HEIGHT: f32 = 80.0;
 
 pub fn resonance_theme() -> Theme {
@@ -150,6 +156,31 @@ pub fn record_armed_button_style(status: button::Status) -> button::Style {
             color: RECORD_RED,
             width: 1.0,
             radius: 2.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+pub fn tab_button_style(active: bool, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Color::from_rgb(0.22, 0.22, 0.22),
+        button::Status::Pressed => Color::from_rgb(0.15, 0.15, 0.15),
+        _ => {
+            if active {
+                Color::from_rgb(0.18, 0.18, 0.18)
+            } else {
+                Color::TRANSPARENT
+            }
+        }
+    };
+
+    button::Style {
+        background: Some(iced::Background::Color(bg)),
+        text_color: if active { ACCENT } else { TEXT_DIM },
+        border: iced::Border {
+            color: if active { ACCENT } else { Color::TRANSPARENT },
+            width: if active { 1.0 } else { 0.0 },
+            radius: 4.0.into(),
         },
         ..Default::default()
     }
