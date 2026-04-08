@@ -4,19 +4,20 @@ use crate::state::*;
 use crate::theme;
 use crate::util::{format_db, format_pan};
 use iced::widget::{
-    button, column, container, pick_list, row, scrollable, slider, text, Space,
+    button, column, container, pick_list, row, scrollable, slider, text,
+    vertical_slider, Space,
 };
 use iced::{alignment, Color, Element, Font, Length};
 use resonance_audio::types::*;
 
-/// Convert linear amplitude to VU meter bar width (logarithmic/dB scale).
-fn level_to_bar_width(level: f32, max_width: f32) -> f32 {
+/// Convert linear amplitude to meter bar height (logarithmic/dB scale).
+fn level_to_bar_height(level: f32, max_height: f32) -> f32 {
     if level < 0.0001 {
         return 0.0;
     }
     let db = 20.0 * level.log10();
     let normalized = (db + 60.0) / 66.0; // -60dB=0, +6dB=1
-    normalized.clamp(0.0, 1.0) * max_width
+    normalized.clamp(0.0, 1.0) * max_height
 }
 
 /// Get meter color based on signal level (green / yellow / red).
@@ -34,33 +35,40 @@ fn level_color(level: f32) -> Color {
     }
 }
 
-/// Render a single horizontal VU meter bar.
-fn meter_bar<'a>(level: f32, max_width: f32) -> Element<'a, Message> {
-    let bar_width = level_to_bar_width(level, max_width);
+/// Render a single vertical VU meter bar (bottom-aligned colored bar on dark bg).
+fn meter_bar_v<'a>(level: f32, max_height: f32) -> Element<'a, Message> {
+    let bar_height = level_to_bar_height(level, max_height);
     let color = level_color(level);
 
+    // Spacer pushes the colored bar to the bottom
+    let spacer_height = (max_height - bar_height).max(0.0);
+
     let bar = container(Space::new(0.0, 0.0))
-        .width(bar_width)
-        .height(3)
+        .width(Length::Fill)
+        .height(bar_height)
         .style(move |_theme| container::Style {
             background: Some(iced::Background::Color(color)),
             ..Default::default()
         });
 
-    container(bar)
-        .width(Length::Fill)
-        .height(3)
-        .style(|_theme| container::Style {
-            background: Some(iced::Background::Color(theme::METER_BG)),
-            ..Default::default()
-        })
-        .into()
+    container(
+        column![
+            Space::new(Length::Fill, spacer_height),
+            bar,
+        ],
+    )
+    .width(6)
+    .height(max_height)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::METER_BG)),
+        ..Default::default()
+    })
+    .into()
 }
 
-/// Render a stereo VU meter (L + R bars).
-fn view_meter<'a>(level_l: f32, level_r: f32, strip_width: u16) -> Element<'a, Message> {
-    let max_width = (strip_width as f32 - 12.0).max(0.0);
-    column![meter_bar(level_l, max_width), meter_bar(level_r, max_width)]
+/// Render a stereo vertical VU meter (L + R bars side by side).
+fn view_meter_v<'a>(level_l: f32, level_r: f32, height: f32) -> Element<'a, Message> {
+    row![meter_bar_v(level_l, height), meter_bar_v(level_r, height)]
         .spacing(1)
         .into()
 }
@@ -249,7 +257,7 @@ impl crate::Resonance {
             plugin_section = plugin_section.push(fx_picker);
         }
 
-        // Pan control
+        // Pan control (horizontal)
         let pan_slider = slider(-1.0..=1.0f32, track.pan, {
             let id = track.id;
             move |v| Message::SetTrackPan(id, v)
@@ -268,24 +276,34 @@ impl crate::Resonance {
         .spacing(2)
         .align_y(alignment::Vertical::Center);
 
-        // Volume fader (horizontal for now)
-        let vol_slider = slider(-60.0..=6.0f32, track.volume, {
+        // Volume fader (vertical) + VU meters
+        let fader_height = 120.0;
+
+        let vol_fader = vertical_slider(-60.0..=6.0f32, track.volume, {
             let id = track.id;
             move |v| Message::SetTrackVolume(id, v)
         })
-        .width(Length::Fill)
+        .height(fader_height)
         .step(0.1);
 
+        let meters = view_meter_v(track.level_l, track.level_r, fader_height);
+
         let vol_label = format_db(track.volume);
-        let vol_row = row![
-            text("Vol").size(9).color(theme::TEXT_DIM),
-            Space::with_width(4),
-            vol_slider,
-            Space::with_width(4),
+        let fader_row = row![
+            meters,
+            vol_fader,
+        ]
+        .spacing(4)
+        .align_y(alignment::Vertical::Center);
+
+        let fader_section = column![
+            container(fader_row)
+                .width(Length::Fill)
+                .center_x(Length::Fill),
             text(vol_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
         ]
         .spacing(2)
-        .align_y(alignment::Vertical::Center);
+        .align_x(alignment::Horizontal::Center);
 
         // Input device picker (when armed)
         let mut bottom_section = column![].spacing(2);
@@ -314,15 +332,12 @@ impl crate::Resonance {
         let bg = if track.record_armed { theme::PANEL_ARMED } else { theme::PANEL_DARK };
         let border_color = if track.record_armed { theme::RECORD_RED } else { theme::SEPARATOR };
 
-        let meter_section = view_meter(track.level_l, track.level_r, theme::MIXER_STRIP_WIDTH);
-
         let strip_content = column![
             track_name,
             button_row,
             plugin_section,
             pan_row,
-            vol_row,
-            meter_section,
+            fader_section,
             bottom_section,
         ]
         .spacing(4)
@@ -350,29 +365,36 @@ impl crate::Resonance {
         .center_x(Length::Fill)
         .padding([6, 4]);
 
-        let vol_slider = slider(-60.0..=6.0f32, self.master_volume, Message::SetMasterVolume)
-            .width(Length::Fill)
+        let fader_height = 120.0;
+
+        let vol_fader = vertical_slider(-60.0..=6.0f32, self.master_volume, Message::SetMasterVolume)
+            .height(fader_height)
             .step(0.1);
+
+        let meters = view_meter_v(self.master_level_l, self.master_level_r, fader_height);
 
         let vol_label = format_db(self.master_volume);
 
-        let vol_row = row![
-            text("Vol").size(9).color(theme::TEXT_DIM),
-            Space::with_width(4),
-            vol_slider,
-            Space::with_width(4),
+        let fader_row = row![
+            meters,
+            vol_fader,
+        ]
+        .spacing(4)
+        .align_y(alignment::Vertical::Center);
+
+        let fader_section = column![
+            container(fader_row)
+                .width(Length::Fill)
+                .center_x(Length::Fill),
             text(vol_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
         ]
         .spacing(2)
-        .align_y(alignment::Vertical::Center);
-
-        let meter_section = view_meter(self.master_level_l, self.master_level_r, theme::MASTER_STRIP_WIDTH);
+        .align_x(alignment::Horizontal::Center);
 
         let strip_content = column![
             label,
             Space::with_height(Length::Fill),
-            vol_row,
-            meter_section,
+            fader_section,
         ]
         .spacing(4)
         .padding(8)
