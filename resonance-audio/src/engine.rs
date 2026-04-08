@@ -41,6 +41,7 @@ pub struct AudioEngine {
     monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     sample_rate: u32,
     channels: usize,
+    quantum: usize,
 }
 
 // cpal::Stream is not Send by default on some platforms but we manage it carefully
@@ -48,6 +49,62 @@ unsafe impl Send for AudioEngine {}
 
 /// Serializes access to PIPEWIRE_NODE env var manipulation.
 static PIPEWIRE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// Pick the best sample rate: prefer the PipeWire graph rate to avoid resampling.
+/// Falls back to the default config rate if we can't determine the graph rate.
+fn pick_sample_rate(device: &cpal::Device, default_config: &cpal::SupportedStreamConfig) -> u32 {
+    let default_rate = default_config.sample_rate().0;
+
+    // Try to read PipeWire's graph rate from pw-metadata
+    if let Some(graph_rate) = default_sink_sample_rate() {
+        // Verify the device actually supports this rate
+        if let Ok(mut configs) = device.supported_output_configs() {
+            let supported = configs
+                .any(|c| c.min_sample_rate().0 <= graph_rate && graph_rate <= c.max_sample_rate().0);
+            if supported {
+                return graph_rate;
+            }
+        }
+    }
+
+    default_rate
+}
+
+/// Query the default output device's actual sample rate via pactl.
+/// This matches the hardware rate, avoiding PipeWire resampling.
+fn default_sink_sample_rate() -> Option<u32> {
+    let sink_name = run_pactl(&["get-default-sink"])?.trim().to_string();
+    let sinks = run_pactl(&["list", "sinks", "short"])?;
+    for line in sinks.lines() {
+        if line.contains(&sink_name) {
+            // Format: <id>\t<name>\t<driver>\t<sample_spec>\t<state>
+            // sample_spec e.g. "s32le 26ch 48000Hz"
+            for word in line.split_whitespace() {
+                if let Some(rate_str) = word.strip_suffix("Hz") {
+                    return rate_str.parse().ok();
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Same as pick_sample_rate but for input devices.
+fn pick_input_sample_rate(device: &cpal::Device, default_config: &cpal::SupportedStreamConfig) -> u32 {
+    let default_rate = default_config.sample_rate().0;
+
+    if let Some(graph_rate) = default_sink_sample_rate() {
+        if let Ok(mut configs) = device.supported_input_configs() {
+            let supported = configs
+                .any(|c| c.min_sample_rate().0 <= graph_rate && graph_rate <= c.max_sample_rate().0);
+            if supported {
+                return graph_rate;
+            }
+        }
+    }
+
+    default_rate
+}
 
 impl AudioEngine {
     /// Create and start the audio engine. Returns the engine handle.
@@ -61,8 +118,18 @@ impl AudioEngine {
             .default_output_config()
             .map_err(|e| format!("Failed to get default output config: {}", e))?;
 
-        let sample_rate = config.sample_rate().0;
         let channels = config.channels() as usize;
+
+        // Prefer the PipeWire graph sample rate (typically 48000) to avoid resampling.
+        // cpal's default_output_config often returns 44100 via ALSA compat, but the
+        // actual hardware/graph runs at a different rate — causing PipeWire to resample
+        // every buffer and inflating the quantum (e.g. 1102 frames instead of 128).
+        let sample_rate = pick_sample_rate(&device, &config);
+
+        // Query PipeWire quantum to size buffers relative to the actual period.
+        let quantum = pipewire_quantum().unwrap_or(1024) as usize;
+        let max_quantum = pipewire_max_quantum().unwrap_or(2048) as usize;
+        let buf_frames = max_quantum.max(quantum * 2).max(256);
 
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<AudioCommand>();
         let (event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
@@ -94,27 +161,27 @@ impl AudioEngine {
             Arc::new(parking_lot::RwLock::new(IndexMap::new()));
         let plugins_audio = Arc::clone(&plugins);
 
-        // Build the cpal stream — use Default buffer size to avoid ALSA underruns
-        // with PipeWire's ALSA compatibility layer (BufferSize::Fixed is broken).
-        // PipeWire controls the actual quantum/latency.
-        let stream_config: cpal::StreamConfig = config.into();
+        let mut stream_config: cpal::StreamConfig = config.into();
+        stream_config.sample_rate = cpal::SampleRate(sample_rate);
+        stream_config.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
         let audio_sample_rate = sample_rate;
 
-        // Pre-allocated per-track processing buffers (moved into audio callback closure)
-        let mut track_buf_l = vec![0.0f32; 8192];
-        let mut track_buf_r = vec![0.0f32; 8192];
-        let mut monitor_temp = vec![0.0f32; 8192 * 2]; // stereo interleaved temp
-
-        // Monitor ring buffer: input callback → output callback
-        // Separate from the recording ring buffer (which goes input → engine thread)
-        let monitor_ring = ringbuf::HeapRb::<f32>::new(4096 * 2); // ~4096 stereo frames
-        let (monitor_prod, mut monitor_cons) = monitor_ring.split();
-        let monitor_prod = Arc::new(parking_lot::Mutex::new(monitor_prod));
-        let monitor_prod_audio = Arc::clone(&monitor_prod);
-
-        let stream = device
-            .build_output_stream(
-                &stream_config,
+        let audio_buf_frames = buf_frames;
+        let audio_quantum = quantum;
+        let build_stream = |config: &cpal::StreamConfig| {
+            // Clone captures that the closure needs to own
+            let shared_audio = Arc::clone(&shared_audio);
+            let tracks_audio = Arc::clone(&tracks_audio);
+            let clips_audio = Arc::clone(&clips_audio);
+            let plugins_audio = Arc::clone(&plugins_audio);
+            let tempo_audio = Arc::clone(&tempo_audio);
+            let mut track_buf_l = vec![0.0f32; audio_buf_frames];
+            let mut track_buf_r = vec![0.0f32; audio_buf_frames];
+            let mut monitor_temp = vec![0.0f32; audio_buf_frames * 2];
+            let monitor_ring = ringbuf::HeapRb::<f32>::new(audio_quantum * 2 * 4);
+            let (prod, mut monitor_cons) = monitor_ring.split();
+            let result = device.build_output_stream(
+                config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     mix_audio(
                         data,
@@ -129,14 +196,27 @@ impl AudioEngine {
                         &mut track_buf_r,
                         &mut monitor_cons,
                         &mut monitor_temp,
+                        audio_buf_frames,
+                        audio_quantum,
                     );
                 },
                 |err| {
                     eprintln!("Audio stream error: {}", err);
                 },
                 None,
-            )
-            .map_err(|e| format!("Failed to build output stream: {}", e))?;
+            );
+            result.map(|stream| (stream, prod))
+        };
+
+        let (stream, monitor_prod_raw) = build_stream(&stream_config).or_else(|_| {
+            // Fall back to default buffer size if fixed quantum was rejected
+            let mut fallback_config = stream_config.clone();
+            fallback_config.buffer_size = cpal::BufferSize::Default;
+            build_stream(&fallback_config)
+        }).map_err(|e| format!("Failed to build output stream: {}", e))?;
+
+        let monitor_prod = Arc::new(parking_lot::Mutex::new(monitor_prod_raw));
+        let monitor_prod_audio = Arc::clone(&monitor_prod);
 
         stream
             .play()
@@ -162,6 +242,8 @@ impl AudioEngine {
                     plugins_ctrl,
                     monitor_prod_audio,
                     sample_rate,
+                    buf_frames,
+                    quantum,
                 );
             })
             .map_err(|e| format!("Failed to spawn engine thread: {}", e))?;
@@ -178,6 +260,7 @@ impl AudioEngine {
             monitor_prod,
             sample_rate,
             channels,
+            quantum,
         })
     }
 
@@ -218,6 +301,42 @@ fn run_pactl(args: &[&str]) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Run a pw-metadata query with a 2-second timeout. Returns the parsed value on success.
+fn run_pw_metadata(key: &str) -> Option<String> {
+    let key = key.to_string();
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    std::thread::spawn(move || {
+        let result = std::process::Command::new("pw-metadata")
+            .args(["-n", "settings", "0", &key])
+            .output();
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+        Ok(Ok(output)) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Format: "update: id:0 key:'clock.quantum' value:'1024' type:''"
+            if let Some(start) = stdout.find("value:'") {
+                let rest = &stdout[start + 7..];
+                if let Some(end) = rest.find('\'') {
+                    return rest[..end].parse::<u32>().ok().map(|v| v.to_string());
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Query PipeWire's current quantum (buffer period in frames).
+fn pipewire_quantum() -> Option<u32> {
+    run_pw_metadata("clock.quantum").and_then(|s| s.parse().ok())
+}
+
+/// Query PipeWire's maximum quantum.
+fn pipewire_max_quantum() -> Option<u32> {
+    run_pw_metadata("clock.max-quantum").and_then(|s| s.parse().ok())
 }
 
 /// Enumerate available PipeWire/PulseAudio input sources via `pactl`.
@@ -268,6 +387,8 @@ fn build_input_stream(
     shared: Arc<SharedState>,
     mut rec_producer: Option<ringbuf::HeapProd<f32>>,
     mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
+    buf_frames: usize,
+    quantum: usize,
 ) -> Result<(cpal::Stream, u32, u16), String> {
     let _env_guard = PIPEWIRE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -284,12 +405,14 @@ fn build_input_stream(
         .default_input_config()
         .map_err(|e| format!("No default input config: {}", e))?;
 
-    let sample_rate = config.sample_rate().0;
     let channels = config.channels();
-    let stream_config: cpal::StreamConfig = config.into();
+    let sample_rate = pick_input_sample_rate(&device, &config);
+    let mut stream_config: cpal::StreamConfig = config.into();
+    stream_config.sample_rate = cpal::SampleRate(sample_rate);
+    stream_config.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
 
     // Pre-allocated buffer for mono→stereo conversion in monitor path
-    let mut mon_stereo_buf = vec![0.0f32; 8192 * 2];
+    let mut mon_stereo_buf = vec![0.0f32; buf_frames * 2];
     let input_channels = channels;
 
     let stream = device
@@ -468,6 +591,8 @@ fn engine_thread(
     plugins: Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
     monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     sample_rate: u32,
+    buf_frames: usize,
+    quantum: usize,
 ) {
     let mut next_track_id: TrackId = 1;
     let mut next_clip_id: ClipId = 1;
@@ -536,7 +661,7 @@ fn engine_thread(
                         }
                         shared.recording.store(true, Ordering::SeqCst);
 
-                        match build_input_stream(source_name.as_deref(), Arc::clone(&shared), Some(prod), Arc::clone(&monitor_prod)) {
+                        match build_input_stream(source_name.as_deref(), Arc::clone(&shared), Some(prod), Arc::clone(&monitor_prod), buf_frames, quantum) {
                             Ok((stream, in_sr, in_ch)) => {
                                 _input_stream = Some(stream);
                                 input_sample_rate = in_sr;
@@ -777,6 +902,8 @@ fn engine_thread(
                             Arc::clone(&shared),
                             None,
                             Arc::clone(&monitor_prod),
+                            buf_frames,
+                            quantum,
                         ) {
                             Ok((stream, in_sr, in_ch)) => {
                                 _input_stream = Some(stream);
@@ -1113,21 +1240,21 @@ fn mix_audio(
     track_buf_r: &mut Vec<f32>,
     monitor_cons: &mut ringbuf::HeapCons<f32>,
     monitor_temp: &mut Vec<f32>,
+    buf_frames: usize,
+    quantum: usize,
 ) {
     // Zero the output buffer
     data.fill(0.0);
 
     let output_frames = data.len() / channels;
-    let frames = output_frames.min(8192);
+    let frames = output_frames.min(buf_frames);
 
     // Read monitor input with jitter margin to avoid underflows.
-    // Keep one extra buffer in the ring so timing jitter between input/output
-    // callbacks doesn't cause partial reads (which produce silence gaps → crackle).
+    // Skip stale monitor data to keep latency at ~1 buffer period.
     let needed = frames * 2; // stereo samples
     let available = monitor_cons.occupied_len();
-    if available > needed * 3 {
-        // Too far behind — skip to maintain bounded latency (~2 buffer periods)
-        monitor_cons.skip(available - needed * 2);
+    if available > needed + quantum * 2 {
+        monitor_cons.skip(available - needed);
     }
     let to_read = needed.min(monitor_cons.occupied_len());
     let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);
