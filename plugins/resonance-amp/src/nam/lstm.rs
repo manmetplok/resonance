@@ -1,7 +1,7 @@
 /// LSTM inference engine for NAM models.
 
 use super::parse::{LstmConfig, WeightReader};
-use super::{matvec, matvec_add, sigmoid, NamInference};
+use super::{fast_tanh, matvec, matvec_add, sigmoid, NamInference};
 
 struct LstmLayer {
     /// Input-to-hidden weights [4*hidden_size, input_size_for_layer] row-major.
@@ -22,6 +22,8 @@ pub struct LstmModel {
     /// Output dense layer: weight [1, hidden_size], bias [1].
     output_weight: Vec<f32>,
     output_bias: f32,
+    /// Learned output scaling factor (last weight in the blob).
+    head_scale: f32,
 
     // Pre-allocated state
     /// Hidden state per layer [num_layers][hidden_size].
@@ -64,11 +66,19 @@ impl LstmModel {
         let output_weight = reader.read(hs)?;
         let output_bias_vec = reader.read(1)?;
 
+        // Head scale (last weight in the blob, like WaveNet)
+        let head_scale = if reader.remaining() >= 1 {
+            reader.read(1)?[0]
+        } else {
+            1.0
+        };
+
         Ok(Self {
             hidden_size: hs,
             layers,
             output_weight,
             output_bias: output_bias_vec[0],
+            head_scale,
             h: vec![vec![0.0; hs]; config.num_layers],
             c: vec![vec![0.0; hs]; config.num_layers],
             gates: vec![0.0; 4 * hs],
@@ -116,11 +126,11 @@ impl NamInference for LstmModel {
             for j in 0..hs {
                 let i_gate = sigmoid(self.gates[j]);
                 let f_gate = sigmoid(self.gates[hs + j]);
-                let g_gate = self.gates[2 * hs + j].tanh();
+                let g_gate = fast_tanh(self.gates[2 * hs + j]);
                 let o_gate = sigmoid(self.gates[3 * hs + j]);
 
                 c[j] = f_gate * c[j] + i_gate * g_gate;
-                h[j] = o_gate * c[j].tanh();
+                h[j] = o_gate * fast_tanh(c[j]);
             }
 
             // Output of this layer becomes input to the next
@@ -134,7 +144,7 @@ impl NamInference for LstmModel {
         for j in 0..hs {
             out += self.output_weight[j] * h_last[j];
         }
-        out
+        out * self.head_scale
     }
 
     fn reset(&mut self) {

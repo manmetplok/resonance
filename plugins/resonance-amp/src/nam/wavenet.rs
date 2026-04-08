@@ -5,7 +5,7 @@
 /// Then: head MLP layers, head_scale.
 
 use super::parse::{WaveNetConfig, WeightReader};
-use super::{matvec, matvec_add, sigmoid, NamInference};
+use super::{fast_tanh, matvec, matvec_add, sigmoid, NamInference};
 
 // ---------------------------------------------------------------------------
 // Ring buffer
@@ -13,33 +13,38 @@ use super::{matvec, matvec_add, sigmoid, NamInference};
 
 struct RingBuffer {
     data: Vec<f32>,
-    capacity: usize,
+    mask: usize, // capacity - 1 (power-of-2 bitmask)
     channels: usize,
     write_pos: usize,
 }
 
 impl RingBuffer {
-    fn new(capacity: usize, channels: usize) -> Self {
+    fn new(min_capacity: usize, channels: usize) -> Self {
+        // Round up to next power of 2 so we can use bitmask instead of modulo
+        let capacity = min_capacity.next_power_of_two();
         Self {
             data: vec![0.0; capacity * channels],
-            capacity,
+            mask: capacity - 1,
             channels,
             write_pos: 0,
         }
     }
 
+    #[inline(always)]
     fn write(&mut self, values: &[f32]) {
         let base = self.write_pos * self.channels;
         self.data[base..base + self.channels].copy_from_slice(&values[..self.channels]);
-        self.write_pos = (self.write_pos + 1) % self.capacity;
+        self.write_pos = (self.write_pos + 1) & self.mask;
     }
 
+    #[inline(always)]
     fn read_delayed(&self, delay: usize) -> &[f32] {
-        let pos = (self.write_pos + self.capacity - 1 - delay) % self.capacity;
+        let pos = (self.write_pos.wrapping_add(self.mask).wrapping_sub(delay)) & self.mask;
         let base = pos * self.channels;
         &self.data[base..base + self.channels]
     }
 
+    #[inline(always)]
     fn read_current(&self) -> &[f32] {
         self.read_delayed(0)
     }
@@ -198,9 +203,19 @@ impl WaveNetModel {
                     None
                 };
 
-                // _layer1x1: only present if bottleneck != channels.
-                // For standard models bottleneck == channels, so this is None.
-                let layer1x1 = None;
+                // _layer1x1: learned 1x1 residual conv (active by default in new-format NAM)
+                let layer1x1 = if config.has_layer1x1 {
+                    let w = reader.read(ch * ch)?;
+                    let b = reader.read(ch)?;
+                    Some(Conv1x1Bias {
+                        weight: w,
+                        bias: b,
+                        out_ch: ch,
+                        in_ch: ch,
+                    })
+                } else {
+                    None
+                };
 
                 let ring_capacity = (ks - 1) * dilation + 2;
                 rings.push(RingBuffer::new(ring_capacity, ch));
@@ -370,11 +385,11 @@ impl NamInference for WaveNetModel {
                     let half = ch; // bottleneck = ch
                     for c in 0..half {
                         self.activation[c] =
-                            self.conv_out[c].tanh() * sigmoid(self.conv_out[half + c]);
+                            fast_tanh(self.conv_out[c]) * sigmoid(self.conv_out[half + c]);
                     }
                 } else {
                     for c in 0..ch {
-                        self.activation[c] = self.conv_out[c].tanh();
+                        self.activation[c] = fast_tanh(self.conv_out[c]);
                     }
                 }
 
@@ -409,7 +424,7 @@ impl NamInference for WaveNetModel {
             let hr = &self.head_rechannels[stack_idx];
             // Apply tanh to skip_accum before head_rechannel
             for c in 0..ch {
-                self.skip_accum[c] = self.skip_accum[c].tanh();
+                self.skip_accum[c] = fast_tanh(self.skip_accum[c]);
             }
             matvec(&hr.weight, &self.skip_accum[..hr.in_ch], hr.out_ch, hr.in_ch, &mut self.head_buf_a);
             for c in 0..hr.out_ch {
@@ -442,7 +457,7 @@ impl NamInference for WaveNetModel {
             }
             if head_layer.has_activation {
                 for j in 0..head_layer.out_features {
-                    dst[j] = dst[j].tanh();
+                    dst[j] = fast_tanh(dst[j]);
                 }
             }
             current_size = head_layer.out_features;

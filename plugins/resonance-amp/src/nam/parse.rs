@@ -27,6 +27,9 @@ pub struct WaveNetConfig {
     pub head_size: usize,
     pub gated: bool,
     pub head_bias: bool,
+    /// Whether layers have a learned 1x1 residual conv (_layer1x1).
+    /// True for new-format NAM models (default), false for old format.
+    pub has_layer1x1: bool,
 }
 
 pub struct StackConfig {
@@ -82,6 +85,7 @@ impl OldWaveNetConfig {
             head_size: self.head_size,
             gated: self.gated,
             head_bias: self.head_bias,
+            has_layer1x1: false,
         }
     }
 }
@@ -185,6 +189,7 @@ impl NewWaveNetConfig {
             head_size,
             gated,
             head_bias: first.head_bias,
+            has_layer1x1: true,
         })
     }
 }

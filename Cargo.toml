@@ -1,3 +1,6 @@
 [workspace]
 members = ["resonance-audio", "resonance-app", "plugins/resonance-drums", "plugins/resonance-amp", "plugins/resonance-ir", "xtask"]
 resolver = "2"
+
+[profile.release]
+lto = "thin"
