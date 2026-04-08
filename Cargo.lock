@@ -4002,6 +4002,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "resonance-reverb"
+version = "0.1.0"
+dependencies = [
+ "nih_plug",
+ "parking_lot 0.12.5",
+]
+
+[[package]]
 name = "rfd"
 version = "0.15.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

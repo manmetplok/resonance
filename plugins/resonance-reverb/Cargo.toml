@@ -1,0 +1,12 @@
+[package]
+name = "resonance-reverb"
+version = "0.1.0"
+edition = "2021"
+description = "An algorithmic reverb CLAP plugin using diffusion networks and FDN"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["assert_process_allocs", "standalone"] }
+parking_lot = "0.12"
