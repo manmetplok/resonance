@@ -480,16 +480,22 @@ impl ClapInstance {
                 return false;
             }
         }
+        // Mark active immediately after successful activate,
+        // so Drop will properly deactivate even if start_processing fails
+        self.active = true;
 
         // Start processing
         if let Some(start) = unsafe { (*self.plugin).start_processing } {
             let ok = unsafe { start(self.plugin) };
             if !ok {
+                // Deactivate since we can't start processing
+                if let Some(deactivate) = unsafe { (*self.plugin).deactivate } {
+                    unsafe { deactivate(self.plugin) };
+                }
+                self.active = false;
                 return false;
             }
         }
-
-        self.active = true;
         true
     }
 

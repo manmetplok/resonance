@@ -82,16 +82,19 @@ fn decode_samples(reader: hound::WavReader<Cursor<&[u8]>>) -> Result<Vec<f32>, S
     match spec.sample_format {
         hound::SampleFormat::Int => {
             let max_val = (1u32 << (spec.bits_per_sample - 1)) as f32;
-            Ok(reader
+            let samples: Vec<i32> = reader
                 .into_samples::<i32>()
-                .filter_map(|s| s.ok())
-                .map(|s| s as f32 / max_val)
-                .collect())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("WAV sample decode error: {e}"))?;
+            Ok(samples.into_iter().map(|s| s as f32 / max_val).collect())
         }
-        hound::SampleFormat::Float => Ok(reader
-            .into_samples::<f32>()
-            .filter_map(|s| s.ok())
-            .collect()),
+        hound::SampleFormat::Float => {
+            let samples = reader
+                .into_samples::<f32>()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("WAV sample decode error: {e}"))?;
+            Ok(samples)
+        }
     }
 }
 
@@ -104,15 +107,9 @@ fn to_stereo_interleaved(samples: &[f32], channels: usize) -> Vec<f32> {
     let mut stereo = Vec::with_capacity(frames * 2);
 
     for frame in 0..frames {
-        let base = frame * channels;
-        let left = samples[base];
-        let right = if channels > 1 {
-            samples[base + 1]
-        } else {
-            left
-        };
-        stereo.push(left);
-        stereo.push(right);
+        let sample = samples[frame];
+        stereo.push(sample);
+        stereo.push(sample);
     }
 
     stereo
@@ -120,6 +117,9 @@ fn to_stereo_interleaved(samples: &[f32], channels: usize) -> Vec<f32> {
 
 /// Linear interpolation resampler for mono audio data.
 pub fn linear_resample_mono(input: &[f32], source_rate: f32, target_rate: f32) -> Vec<f32> {
+    if input.is_empty() {
+        return Vec::new();
+    }
     let ratio = source_rate as f64 / target_rate as f64;
     let target_len = (input.len() as f64 / ratio) as usize;
     let mut output = Vec::with_capacity(target_len);
@@ -139,6 +139,9 @@ pub fn linear_resample_mono(input: &[f32], source_rate: f32, target_rate: f32) -
 
 /// Linear interpolation resampler for stereo interleaved audio data.
 pub fn linear_resample_stereo(input: &[f32], source_rate: f32, target_rate: f32) -> Vec<f32> {
+    if input.is_empty() {
+        return Vec::new();
+    }
     let source_frames = input.len() / 2;
     let ratio = source_rate as f64 / target_rate as f64;
     let target_frames = (source_frames as f64 / ratio) as usize;

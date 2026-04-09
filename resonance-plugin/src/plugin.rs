@@ -31,19 +31,20 @@ impl NoteEvent {
 }
 
 /// Iterator over note events within a process block.
-pub struct EventIterator {
-    events: Vec<NoteEvent>,
+/// Borrows from a pre-allocated buffer to avoid audio-thread allocations.
+pub struct EventIterator<'a> {
+    events: &'a [NoteEvent],
     pos: usize,
 }
 
-impl EventIterator {
-    pub fn new(events: Vec<NoteEvent>) -> Self {
+impl<'a> EventIterator<'a> {
+    pub fn new(events: &'a [NoteEvent]) -> Self {
         Self { events, pos: 0 }
     }
 
     pub fn empty() -> Self {
         Self {
-            events: Vec::new(),
+            events: &[],
             pos: 0,
         }
     }
@@ -92,12 +93,16 @@ pub trait ResonancePlugin: Send + 'static {
     /// Create a new instance of the plugin.
     fn new() -> Self;
 
-    /// Return all parameters for enumeration.
-    fn params(&self) -> Vec<&dyn Param>;
+    /// Return the number of parameters.
+    fn param_count(&self) -> usize;
 
-    /// Return mutable references to all parameters (for loading state).
-    fn params_mut(&mut self) -> Vec<&dyn Param> {
-        self.params()
+    /// Return a reference to the parameter at the given index.
+    fn param(&self, index: usize) -> &dyn Param;
+
+    /// Return all parameters as a Vec (convenience, allocates).
+    /// Default implementation builds from param_count/param.
+    fn params(&self) -> Vec<&dyn Param> {
+        (0..self.param_count()).map(|i| self.param(i)).collect()
     }
 
     /// Called once before processing begins. Return false on failure.
@@ -116,7 +121,7 @@ pub trait ResonancePlugin: Send + 'static {
         left: &mut [f32],
         right: &mut [f32],
         frames: usize,
-        events: &mut EventIterator,
+        events: &mut EventIterator<'_>,
     );
 
     /// Save plugin state to bytes. Default: JSON serialization of params.

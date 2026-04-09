@@ -3446,6 +3446,7 @@ version = "0.1.0"
 dependencies = [
  "parking_lot 0.12.5",
  "resonance-common",
+ "resonance-dsp",
  "resonance-plugin",
  "rustfft",
  "serde_json",

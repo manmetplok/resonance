@@ -38,14 +38,23 @@ impl ResonancePlugin for ResonanceDrums {
         }
     }
 
-    fn params(&self) -> Vec<&dyn Param> {
-        let mut params: Vec<&dyn Param> = vec![&self.params.master_volume];
-        for pad in &self.params.pads {
-            params.push(&pad.volume);
-            params.push(&pad.pan);
-            params.push(&pad.mute);
+    fn param_count(&self) -> usize {
+        1 + drum_map::NUM_PADS * 3 // master_volume + (volume, pan, mute) per pad
+    }
+
+    fn param(&self, index: usize) -> &dyn Param {
+        if index == 0 {
+            return &self.params.master_volume;
         }
-        params
+        let pad_idx = (index - 1) / 3;
+        let field = (index - 1) % 3;
+        let pad = &self.params.pads[pad_idx];
+        match field {
+            0 => &pad.volume,
+            1 => &pad.pan,
+            2 => &pad.mute,
+            _ => unreachable!(),
+        }
     }
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
@@ -62,7 +71,7 @@ impl ResonancePlugin for ResonanceDrums {
         left: &mut [f32],
         right: &mut [f32],
         frames: usize,
-        events: &mut EventIterator,
+        events: &mut EventIterator<'_>,
     ) {
         resonance_common::flush_denormals();
 

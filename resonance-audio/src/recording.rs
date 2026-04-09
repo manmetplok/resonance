@@ -142,7 +142,11 @@ impl RecordingState {
                 trim_start_frames: 0,
                 trim_end_frames: 0,
             };
-            clips.write().push(clip);
+            // Minimize write lock duration: only hold lock for the push
+            {
+                let mut guard = clips.write();
+                guard.push(clip);
+            }
 
             let _ = event_tx.send(AudioEvent::RecordingFinished {
                 clip_id,

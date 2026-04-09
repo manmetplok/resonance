@@ -7,7 +7,7 @@ const RECORDING_PREALLOC_SECONDS: usize = 60;
 
 use indexmap::IndexMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -37,6 +37,8 @@ pub(crate) struct SharedState {
     pub master_peak_l_bits: AtomicU32,
     /// Master peak level R (AtomicU32 bit-punned f32), for VU meters.
     pub master_peak_r_bits: AtomicU32,
+    /// Flag: recording ring buffer overflowed (samples were dropped).
+    pub recording_overflow: AtomicBool,
 }
 
 /// The audio engine.
@@ -97,6 +99,7 @@ impl AudioEngine {
             master_volume_bits: AtomicU32::new(1.0f32.to_bits()),
             master_peak_l_bits: AtomicU32::new(0),
             master_peak_r_bits: AtomicU32::new(0),
+            recording_overflow: AtomicBool::new(false),
         });
 
         let shared_audio = Arc::clone(&shared);
@@ -186,11 +189,13 @@ impl AudioEngine {
         let tempo_ctrl = Arc::clone(&tempo_map);
         let plugins_ctrl = Arc::clone(&plugins);
 
+        let cmd_tx_retry = cmd_tx.clone();
         std::thread::Builder::new()
             .name("resonance-engine".into())
             .spawn(move || {
                 engine_thread(
                     cmd_rx,
+                    cmd_tx_retry,
                     event_tx,
                     shared_ctrl,
                     tracks_ctrl,
@@ -263,6 +268,7 @@ impl AudioEngine {
 /// The engine control thread processes commands and sends events.
 fn engine_thread(
     cmd_rx: Receiver<AudioCommand>,
+    cmd_tx_retry: Sender<AudioCommand>,
     event_tx: Sender<AudioEvent>,
     shared: Arc<SharedState>,
     tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>>,
@@ -278,6 +284,10 @@ fn engine_thread(
     let mut next_clip_id: ClipId = 1;
     let mut next_plugin_id: PluginInstanceId = 1;
     let mut last_playhead_report = std::time::Instant::now();
+
+    // Limit concurrent import threads to avoid unbounded thread spawning.
+    let active_imports: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+    const MAX_CONCURRENT_IMPORTS: usize = 4;
 
     // Recording state (engine thread local)
     let mut rec = RecordingState::new(sample_rate);
@@ -401,11 +411,19 @@ fn engine_thread(
                     path,
                     start_sample,
                 } => {
+                    if active_imports.load(Ordering::Relaxed) >= MAX_CONCURRENT_IMPORTS {
+                        eprintln!("Warning: too many concurrent imports ({MAX_CONCURRENT_IMPORTS}), skipping import of {:?}", path);
+                        let _ = event_tx.send(AudioEvent::Error(
+                            "Too many concurrent imports, please wait for current imports to finish.".to_string(),
+                        ));
+                    } else {
                     let clips = Arc::clone(&clips);
                     let thread_event_tx = event_tx.clone();
                     let clip_id = next_clip_id;
                     next_clip_id += 1;
                     let sr = sample_rate;
+                    let imports_counter = Arc::clone(&active_imports);
+                    imports_counter.fetch_add(1, Ordering::Relaxed);
 
                     let spawn_result = std::thread::Builder::new()
                         .name("resonance-decode".into())
@@ -440,12 +458,15 @@ fn engine_thread(
                                     )));
                                 }
                             }
+                            imports_counter.fetch_sub(1, Ordering::Relaxed);
                         });
                     if let Err(e) = spawn_result {
+                        active_imports.fetch_sub(1, Ordering::Relaxed);
                         let _ = event_tx.send(AudioEvent::Error(format!(
                             "Failed to spawn decode thread: {}",
                             e
                         )));
+                    }
                     }
                 }
                 AudioCommand::MoveClip {
@@ -735,6 +756,17 @@ fn engine_thread(
                 AudioCommand::ScanPlugins => {
                     let mut scanned = Vec::new();
                     let mut scan_dirs: Vec<std::path::PathBuf> = Vec::new();
+                    // Drop all existing plugin instances before clearing bundles,
+                    // to prevent use-after-free from accessing unloaded shared libraries
+                    {
+                        let mut plugins_guard = plugins.write();
+                        let removed: Vec<_> = plugins_guard.drain(..).collect();
+                        drop(plugins_guard);
+                        drop(removed);
+                    }
+                    for track in tracks.write().values_mut() {
+                        track.plugin_ids.clear();
+                    }
                     // Clear previous scan results to avoid duplicates
                     bundles.clear();
 
@@ -840,18 +872,28 @@ fn engine_thread(
                 }
                 AudioCommand::SavePluginState { instance_id } => {
                     if let Some(mutex) = plugins.read().get(&instance_id) {
-                        let data = mutex.lock().0.save_state();
-                        if let Some(data) = data {
-                            let _ = event_tx.send(AudioEvent::PluginStateSaved {
-                                instance_id,
-                                data,
-                            });
+                        if let Some(inst) = mutex.try_lock() {
+                            let data = inst.0.save_state();
+                            if let Some(data) = data {
+                                let _ = event_tx.send(AudioEvent::PluginStateSaved {
+                                    instance_id,
+                                    data,
+                                });
+                            }
+                        } else {
+                            // Audio thread holds the lock — retry next tick
+                            let _ = cmd_tx_retry.send(AudioCommand::SavePluginState { instance_id });
                         }
                     }
                 }
                 AudioCommand::LoadPluginState { instance_id, data } => {
                     if let Some(mutex) = plugins.read().get(&instance_id) {
-                        mutex.lock().0.reload_with_state(&data);
+                        if let Some(mut inst) = mutex.try_lock() {
+                            inst.0.reload_with_state(&data);
+                        } else {
+                            // Audio thread holds the lock — retry next tick
+                            let _ = cmd_tx_retry.send(AudioCommand::LoadPluginState { instance_id, data });
+                        }
                     }
                 }
                 AudioCommand::SetPunchRange {

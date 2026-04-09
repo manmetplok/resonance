@@ -3,7 +3,6 @@ use crate::state::{ClipEdge, PunchDragTarget, ViewMode};
 use resonance_audio::types::{ClipId, PluginInstanceId, ScannedPlugin, TrackId};
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) enum Message {
     Play,
     Pause,
@@ -46,7 +45,9 @@ pub(crate) enum Message {
     CloseSettings,
     DismissError,
     TogglePunch,
+    #[allow(dead_code)] // reserved for direct punch position entry UI
     SetPunchIn(u64),
+    #[allow(dead_code)] // reserved for direct punch position entry UI
     SetPunchOut(u64),
     StartPunchDrag(PunchDragTarget),
     UpdatePunchDrag(f32),
@@ -58,4 +59,6 @@ pub(crate) enum Message {
     StartClipTrim { clip_id: ClipId, edge: ClipEdge, anchor_x: f32 },
     UpdateClipTrim(f32),
     EndClipTrim,
+    PluginFileScanComplete(PluginInstanceId, Option<String>, Vec<String>),
+    ViewportWidth(f32),
 }

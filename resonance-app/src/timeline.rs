@@ -57,6 +57,7 @@ enum ClipInteraction {
 pub struct TimelineState {
     dragging_punch: bool,
     clip_interaction: Option<ClipInteraction>,
+    last_reported_width: f32,
 }
 
 impl canvas::Program<Message> for TimelineCanvas<'_> {
@@ -269,6 +270,14 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                 }
             }
             _ => {}
+        }
+        // Report viewport width changes so the app can use it for auto-scroll
+        if (bounds.width - state.last_reported_width).abs() > 1.0 {
+            state.last_reported_width = bounds.width;
+            return (
+                canvas::event::Status::Ignored,
+                Some(Message::ViewportWidth(bounds.width)),
+            );
         }
         (canvas::event::Status::Ignored, None)
     }
@@ -644,7 +653,8 @@ impl TimelineCanvas<'_> {
 
             let waveform_color = Color::from_rgba(0.7, 0.85, 1.0, 0.5);
 
-            let mut px = 0.0f32;
+            let start_px = (-x).max(0.0);
+            let mut px = start_px;
             while px < w {
                 let peak_idx_f = trim_start_peaks + px / pixels_per_peak;
                 let peak_idx = peak_idx_f as usize;

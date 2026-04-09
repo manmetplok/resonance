@@ -52,6 +52,21 @@ impl crate::Resonance {
                 });
             }
             AudioEvent::TrackRemoved { track_id } => {
+                // Clear selected_clip if it belongs to a clip on the removed track
+                if let Some(sel_clip_id) = self.selected_clip {
+                    if self.clips.iter().any(|c| c.id == sel_clip_id && c.track_id == track_id) {
+                        self.selected_clip = None;
+                    }
+                }
+                // Clear selected_plugin if it belongs to the removed track
+                if let Some(sel_plugin_id) = self.selected_plugin {
+                    if self.tracks.iter()
+                        .filter(|t| t.id == track_id)
+                        .any(|t| t.plugins.iter().any(|p| p.instance_id == sel_plugin_id))
+                    {
+                        self.selected_plugin = None;
+                    }
+                }
                 self.tracks.retain(|t| t.id != track_id);
                 self.clips.retain(|c| c.track_id != track_id);
             }

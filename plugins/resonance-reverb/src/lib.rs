@@ -31,19 +31,22 @@ impl ResonancePlugin for ResonanceReverb {
         }
     }
 
-    fn params(&self) -> Vec<&dyn Param> {
-        vec![
-            &self.params.predelay,
-            &self.params.size,
-            &self.params.decay,
-            &self.params.damping,
-            &self.params.diffusion,
-            &self.params.mod_rate,
-            &self.params.mod_depth,
-            &self.params.width,
-            &self.params.mix,
-            &self.params.freeze,
-        ]
+    fn param_count(&self) -> usize { 10 }
+
+    fn param(&self, index: usize) -> &dyn Param {
+        match index {
+            0 => &self.params.predelay,
+            1 => &self.params.size,
+            2 => &self.params.decay,
+            3 => &self.params.damping,
+            4 => &self.params.diffusion,
+            5 => &self.params.mod_rate,
+            6 => &self.params.mod_depth,
+            7 => &self.params.width,
+            8 => &self.params.mix,
+            9 => &self.params.freeze,
+            _ => unreachable!("invalid param index {index}"),
+        }
     }
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
@@ -84,7 +87,7 @@ impl ResonancePlugin for ResonanceReverb {
         left: &mut [f32],
         right: &mut [f32],
         frames: usize,
-        _events: &mut EventIterator,
+        _events: &mut EventIterator<'_>,
     ) {
         resonance_common::flush_denormals();
 
@@ -104,26 +107,26 @@ impl ResonancePlugin for ResonanceReverb {
         self.params.width.smoother.set_target(self.params.width.value());
         self.params.diffusion.smoother.set_target(self.params.diffusion.value());
 
-        let size = self.params.size.smoother.next();
-        let decay = self.params.decay.smoother.next();
-        let damping = self.params.damping.smoother.next();
-        let predelay = self.params.predelay.smoother.next();
-        let mod_rate = self.params.mod_rate.smoother.next();
-        let mod_depth = self.params.mod_depth.smoother.next();
         let freeze = self.params.freeze.value();
 
-        reverb.set_size(size);
-        reverb.set_decay(decay);
-        reverb.set_damping(damping);
-        reverb.set_predelay(predelay);
-        reverb.set_mod_rate(mod_rate);
-        reverb.set_mod_depth(mod_depth);
-        reverb.set_freeze(freeze);
-
         for i in 0..frames {
+            let size = self.params.size.smoother.next();
+            let decay = self.params.decay.smoother.next();
+            let damping = self.params.damping.smoother.next();
+            let predelay = self.params.predelay.smoother.next();
+            let mod_rate = self.params.mod_rate.smoother.next();
+            let mod_depth = self.params.mod_depth.smoother.next();
             let mix = self.params.mix.smoother.next();
             let width = self.params.width.smoother.next();
             let diffusion = self.params.diffusion.smoother.next();
+
+            reverb.set_size(size);
+            reverb.set_decay(decay);
+            reverb.set_freeze(freeze);
+            reverb.set_damping(damping);
+            reverb.set_predelay(predelay);
+            reverb.set_mod_rate(mod_rate);
+            reverb.set_mod_depth(mod_depth);
 
             let dry_l = left[i];
             let dry_r = right[i];

@@ -60,19 +60,41 @@ pub(crate) fn pick_sample_rate(
 }
 
 /// Run a command with a timeout (in seconds). Returns stdout on success.
+///
+/// Spawns the command as a child process and polls `try_wait` in a loop.
+/// If the timeout expires, the child is killed to avoid leaked processes.
 fn run_command_with_timeout(cmd: &str, args: &[&str], timeout_secs: u64) -> Option<String> {
-    let cmd = cmd.to_string();
-    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    let (tx, rx) = crossbeam_channel::bounded(1);
-    std::thread::spawn(move || {
-        let result = std::process::Command::new(&cmd).args(&args).output();
-        let _ = tx.send(result);
-    });
-    match rx.recv_timeout(std::time::Duration::from_secs(timeout_secs)) {
-        Ok(Ok(output)) if output.status.success() => {
-            Some(String::from_utf8_lossy(&output.stdout).to_string())
+    let mut child = std::process::Command::new(cmd)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    let mut stdout = Vec::new();
+                    if let Some(mut out) = child.stdout.take() {
+                        use std::io::Read;
+                        let _ = out.read_to_end(&mut stdout);
+                    }
+                    return Some(String::from_utf8_lossy(&stdout).to_string());
+                }
+                return None;
+            }
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(_) => return None,
         }
-        _ => None,
     }
 }
 
@@ -176,7 +198,12 @@ pub(crate) fn build_input_stream(
     let _env_guard = PIPEWIRE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     if let Some(name) = source_name {
-        std::env::set_var("PIPEWIRE_NODE", name);
+        // SAFETY: the PIPEWIRE_ENV_LOCK mutex serializes all write accesses within
+        // this process, and this is only called during stream construction (not in the
+        // audio callback). This is a known limitation pending a PIPEWIRE_NODE API in cpal.
+        unsafe {
+            std::env::set_var("PIPEWIRE_NODE", name);
+        }
     }
 
     let host = cpal::default_host();
@@ -205,7 +232,10 @@ pub(crate) fn build_input_stream(
                 // Push to recording ring buffer (raw -- engine thread handles channel conversion)
                 if shared.recording.load(Ordering::Relaxed) {
                     if let Some(ref mut prod) = rec_producer {
-                        let _ = prod.push_slice(data);
+                        let written = prod.push_slice(data);
+                        if written < data.len() {
+                            shared.recording_overflow.store(true, Ordering::Relaxed);
+                        }
                     }
                 }
                 // Push to monitor ring buffer (always stereo interleaved)
@@ -242,7 +272,12 @@ pub(crate) fn build_input_stream(
         .play()
         .map_err(|e| format!("Failed to start input stream: {}", e))?;
 
-    std::env::remove_var("PIPEWIRE_NODE");
+    // SAFETY: the PIPEWIRE_ENV_LOCK mutex serializes all write accesses within
+    // this process, and this is only called during stream construction (not in the
+    // audio callback). This is a known limitation pending a PIPEWIRE_NODE API in cpal.
+    unsafe {
+        std::env::remove_var("PIPEWIRE_NODE");
+    }
 
     Ok((stream, sample_rate, channels))
 }

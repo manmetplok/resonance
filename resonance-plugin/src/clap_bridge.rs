@@ -7,7 +7,7 @@
 
 use std::fmt::Write as FmtWrite;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
@@ -55,18 +55,18 @@ pub struct ClapShared<'a> {
     /// Atomic param values (f64 bit-punned to u64), indexed by param slot.
     pub(crate) param_values: Vec<AtomicU64>,
     /// Map from CLAP param ID to slot index.
-    pub(crate) clap_id_to_slot: Vec<(u32, usize)>,
+    pub(crate) clap_id_to_slot: std::collections::HashMap<u32, usize>,
     input_channels: Option<u32>,
     output_channels: u32,
     midi_input: bool,
+    /// Flag: shared param values have been updated (e.g. state load while active).
+    /// The audio processor should re-sync plugin params from shared atomics.
+    pub(crate) params_dirty: AtomicBool,
 }
 
 impl ClapShared<'_> {
     pub fn find_slot(&self, clap_id: u32) -> Option<usize> {
-        self.clap_id_to_slot
-            .iter()
-            .find(|(id, _)| *id == clap_id)
-            .map(|(_, slot)| *slot)
+        self.clap_id_to_slot.get(&clap_id).copied()
     }
 
     pub fn get_value(&self, slot: usize) -> f64 {
@@ -78,6 +78,9 @@ impl ClapShared<'_> {
     }
 }
 
+// SAFETY: HostSharedHandle wraps CLAP host function pointers which the CLAP spec
+// mandates to be thread-safe (the host must support concurrent calls from any thread).
+// All other fields are atomics, HashMap (read-only after construction), or Send+Sync types.
 unsafe impl Send for ClapShared<'_> {}
 unsafe impl Sync for ClapShared<'_> {}
 
@@ -101,17 +104,20 @@ impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainTh
 // AudioProcessor
 // ---------------------------------------------------------------------------
 
-pub struct ClapAudioProcessor<P: ResonancePlugin> {
+pub struct ClapAudioProcessor<'a, P: ResonancePlugin> {
     plugin: P,
+    shared: &'a ClapShared<'a>,
     #[allow(dead_code)]
     sample_rate: f32,
     /// Pre-allocated temp buffers for left/right channel data.
     temp_left: Vec<f32>,
     temp_right: Vec<f32>,
+    /// Pre-allocated buffer for note events (avoids audio-thread allocation).
+    note_events: Vec<NoteEvent>,
 }
 
 impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainThread<'a, P>>
-    for ClapAudioProcessor<P>
+    for ClapAudioProcessor<'a, P>
 {
     fn activate(
         _host: HostAudioProcessorHandle<'a>,
@@ -125,10 +131,9 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             .ok_or(PluginError::Message("Plugin not initialized"))?;
 
         // Sync param values from shared atomics to plugin's params
-        let params = plugin.params();
-        for (i, p) in params.iter().enumerate() {
+        for i in 0..plugin.param_count() {
             if i < shared.param_values.len() {
-                p.set_plain(shared.get_value(i));
+                plugin.param(i).set_plain(shared.get_value(i));
             }
         }
 
@@ -137,9 +142,11 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         let max_frames = audio_config.max_frames_count as usize;
         Ok(ClapAudioProcessor {
             plugin,
+            shared,
             sample_rate: audio_config.sample_rate as f32,
             temp_left: vec![0.0; max_frames],
             temp_right: vec![0.0; max_frames],
+            note_events: Vec::with_capacity(256),
         })
     }
 
@@ -155,7 +162,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         }
 
         // Handle input events: param changes and note events
-        let mut note_events = Vec::new();
+        self.note_events.clear();
         for event in events.input {
             if let Some(core_event) = event.as_core_event() {
                 use clack_plugin::events::spaces::CoreEventSpace;
@@ -163,18 +170,14 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                     CoreEventSpace::ParamValue(e) => {
                         if let Some(clap_id) = e.param_id() {
                             let value = e.value();
-                            let params = self.plugin.params();
-                            for p in &params {
-                                if p.clap_id() == clap_id.get() {
-                                    p.set_plain(value);
-                                    break;
-                                }
+                            if let Some(slot) = self.shared.find_slot(clap_id.get()) {
+                                self.plugin.param(slot).set_plain(value);
                             }
                         }
                     }
                     CoreEventSpace::NoteOn(e) => {
                         if let crate::Match::Specific(key) = e.key() {
-                            note_events.push(NoteEvent::NoteOn {
+                            self.note_events.push(NoteEvent::NoteOn {
                                 note: key as u8,
                                 velocity: e.velocity() as f32,
                                 timing: e.header().time(),
@@ -183,7 +186,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                     }
                     CoreEventSpace::NoteOff(e) => {
                         if let crate::Match::Specific(key) = e.key() {
-                            note_events.push(NoteEvent::NoteOff {
+                            self.note_events.push(NoteEvent::NoteOff {
                                 note: key as u8,
                                 timing: e.header().time(),
                             });
@@ -191,7 +194,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                     }
                     CoreEventSpace::NoteChoke(e) => {
                         if let crate::Match::Specific(key) = e.key() {
-                            note_events.push(NoteEvent::Choke {
+                            self.note_events.push(NoteEvent::Choke {
                                 note: key as u8,
                                 timing: e.header().time(),
                             });
@@ -202,7 +205,16 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             }
         }
 
-        let mut event_iter = EventIterator::new(note_events);
+        // Re-sync params from shared atomics if state was loaded while active
+        if self.shared.params_dirty.swap(false, Ordering::Acquire) {
+            for i in 0..self.plugin.param_count() {
+                if i < self.shared.param_values.len() {
+                    self.plugin.param(i).set_plain(self.shared.get_value(i));
+                }
+            }
+        }
+
+        let mut event_iter = EventIterator::new(&self.note_events);
 
         // Prepare temp buffers
         let left = &mut self.temp_left[..frames];
@@ -260,7 +272,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             }
         }
 
-        Ok(ProcessStatus::Continue)
+        Ok(ProcessStatus::ContinueIfNotQuiet)
     }
 
     fn deactivate(self, main_thread: &mut ClapMainThread<'a, P>) {
@@ -279,7 +291,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
 pub struct ClapBridge<P: ResonancePlugin>(std::marker::PhantomData<P>);
 
 impl<P: ResonancePlugin> Plugin for ClapBridge<P> {
-    type AudioProcessor<'a> = ClapAudioProcessor<P>;
+    type AudioProcessor<'a> = ClapAudioProcessor<'a, P>;
     type Shared<'a> = ClapShared<'a>;
     type MainThread<'a> = ClapMainThread<'a, P>;
 
@@ -331,14 +343,24 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
 
     fn new_shared<'a>(host: HostSharedHandle<'a>) -> Result<ClapShared<'a>, PluginError> {
         let temp = P::new();
-        let params = temp.params();
+        let count = temp.param_count();
 
-        let mut param_metas = Vec::with_capacity(params.len());
-        let mut param_values = Vec::with_capacity(params.len());
-        let mut clap_id_to_slot = Vec::with_capacity(params.len());
+        let mut param_metas: Vec<ParamMeta> = Vec::with_capacity(count);
+        let mut param_values: Vec<AtomicU64> = Vec::with_capacity(count);
+        let mut clap_id_to_slot: std::collections::HashMap<u32, usize> = std::collections::HashMap::with_capacity(count);
 
-        for (i, p) in params.iter().enumerate() {
+        for i in 0..count {
+            let p = temp.param(i);
             let clap_id = p.clap_id();
+
+            // Check for hash collisions
+            if let Some(&existing_slot) = clap_id_to_slot.get(&clap_id) {
+                panic!(
+                    "CLAP param ID collision: params '{}' (slot {}) and '{}' (slot {}) both hash to {}",
+                    param_metas[existing_slot].str_id, existing_slot, p.id(), i, clap_id
+                );
+            }
+
             param_metas.push(ParamMeta {
                 clap_id,
                 str_id: p.id().to_string(),
@@ -350,7 +372,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
                 is_hidden: p.is_hidden(),
             });
             param_values.push(AtomicU64::new(p.default_plain().to_bits()));
-            clap_id_to_slot.push((clap_id, i));
+            clap_id_to_slot.insert(clap_id, i);
         }
 
         Ok(ClapShared {
@@ -361,6 +383,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             input_channels: P::INPUT_CHANNELS,
             output_channels: P::OUTPUT_CHANNELS,
             midi_input: P::MIDI_INPUT,
+            params_dirty: AtomicBool::new(false),
         })
     }
 
@@ -369,10 +392,9 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
         shared: &'a ClapShared<'a>,
     ) -> Result<ClapMainThread<'a, P>, PluginError> {
         let plugin = P::new();
-        let params = plugin.params();
-        for (i, p) in params.iter().enumerate() {
+        for i in 0..plugin.param_count() {
             if i < shared.param_values.len() {
-                shared.set_value(i, p.get_plain());
+                shared.set_value(i, plugin.param(i).get_plain());
             }
         }
 
@@ -492,9 +514,8 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
     ) -> core::fmt::Result {
         if let Some(slot) = self.shared.find_slot(param_id.get()) {
             if let Some(plugin) = &self.plugin {
-                let params = plugin.params();
-                if let Some(p) = params.get(slot) {
-                    let text = p.display(value);
+                if slot < plugin.param_count() {
+                    let text = plugin.param(slot).display(value);
                     return write!(writer, "{}", text);
                 }
             }
@@ -507,9 +528,8 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
     fn text_to_value(&mut self, param_id: ClapId, text: &std::ffi::CStr) -> Option<f64> {
         let slot = self.shared.find_slot(param_id.get())?;
         if let Some(plugin) = &self.plugin {
-            let params = plugin.params();
-            if let Some(p) = params.get(slot) {
-                return p.parse(text.to_str().ok()?);
+            if slot < plugin.param_count() {
+                return plugin.param(slot).parse(text.to_str().ok()?);
             }
         }
         None
@@ -528,9 +548,8 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
                         if let Some(slot) = self.shared.find_slot(clap_id.get()) {
                             self.shared.set_value(slot, e.value());
                             if let Some(plugin) = &self.plugin {
-                                let params = plugin.params();
-                                if let Some(p) = params.get(slot) {
-                                    p.set_plain(e.value());
+                                if slot < plugin.param_count() {
+                                    plugin.param(slot).set_plain(e.value());
                                 }
                             }
                         }
@@ -545,7 +564,7 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
 // Params extension (audio processor)
 // ---------------------------------------------------------------------------
 
-impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<P> {
+impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<'_, P> {
     fn flush(
         &mut self,
         input_parameter_changes: &InputEvents,
@@ -556,11 +575,9 @@ impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<P> {
                 use clack_plugin::events::spaces::CoreEventSpace;
                 if let CoreEventSpace::ParamValue(e) = core_event {
                     if let Some(clap_id) = e.param_id() {
-                        let params = self.plugin.params();
-                        for p in &params {
-                            if p.clap_id() == clap_id.get() {
-                                p.set_plain(e.value());
-                                break;
+                        if let Some(slot) = self.shared.find_slot(clap_id.get()) {
+                            if slot < self.plugin.param_count() {
+                                self.plugin.param(slot).set_plain(e.value());
                             }
                         }
                     }
@@ -610,14 +627,13 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
                 return Err(PluginError::Message("Failed to load state"));
             }
             // Sync loaded values back to shared atomics
-            let params = plugin.params();
-            for (i, p) in params.iter().enumerate() {
+            for i in 0..plugin.param_count() {
                 if i < self.shared.param_values.len() {
-                    self.shared.set_value(i, p.get_plain());
+                    self.shared.set_value(i, plugin.param(i).get_plain());
                 }
             }
         } else {
-            // Plugin is active — update shared atomics
+            // Plugin is active — update shared atomics and mark dirty for audio processor
             if !crate::state::load_params_from_shared(
                 &self.shared.param_metas,
                 &self.shared.param_values,
@@ -625,6 +641,7 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
             ) {
                 return Err(PluginError::Message("Failed to load state"));
             }
+            self.shared.params_dirty.store(true, Ordering::Release);
         }
 
         Ok(())

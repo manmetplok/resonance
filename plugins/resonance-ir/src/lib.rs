@@ -3,6 +3,7 @@
 use resonance_plugin::*;
 use parking_lot::Mutex;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 
 pub mod convolver;
@@ -28,6 +29,15 @@ pub struct ResonanceIr {
     ir_info: Arc<Mutex<String>>,
     last_file_index: i32,
     sample_rate: f32,
+    /// Atomic load request for the persistent loader thread (-1 = no request).
+    load_request: Arc<AtomicI32>,
+    /// Signal the loader thread to stop.
+    loader_stop: Arc<AtomicBool>,
+    /// Handle to the persistent loader thread.
+    loader_handle: Option<std::thread::JoinHandle<()>>,
+    /// Bypass delay lines to compensate for reported latency when no convolver is active.
+    bypass_delay_l: resonance_dsp::DelayLine,
+    bypass_delay_r: resonance_dsp::DelayLine,
 }
 
 impl ResonanceIr {
@@ -42,44 +52,67 @@ impl ResonanceIr {
         }
     }
 
-    /// Load an IR in the background via a spawned thread.
-    /// The result is placed in the convolver_mailbox for pickup in process().
-    pub fn spawn_load_ir(&self, path: String) {
-        let mailbox = self.convolver_mailbox.clone();
-        let ir_name = self.ir_name.clone();
-        let ir_info = self.ir_info.clone();
-        let sample_rate = self.sample_rate;
-
-        std::thread::spawn(move || {
-            Self::do_load_ir(&path, sample_rate, &mailbox, &ir_name, &ir_info);
-        });
+    /// Load an IR in the background via the persistent loader thread.
+    pub fn request_load_ir(&self, path: String) {
+        // For direct path loading (from UI), store path and trigger a rescan+load
+        *self.params.ir_path.lock() = path.clone();
+        if let Some(dir) = Path::new(&path).parent() {
+            let files = scan_directory(dir);
+            let idx = files.iter().position(|f| f == &path).unwrap_or(0);
+            *self.params.file_list.lock() = files;
+            self.load_request.store(idx as i32, Ordering::Release);
+        }
     }
 
-    /// Load an IR by index from the file list in the background.
-    fn spawn_load_by_index(&self, idx: usize) {
+    /// Start the persistent loader thread that polls `load_request`.
+    fn start_loader_thread(&mut self) {
+        self.stop_loader_thread();
+
+        let load_request = self.load_request.clone();
+        let stop_flag = self.loader_stop.clone();
+        let file_list = self.params.file_list.clone();
+        let ir_path_param = self.params.ir_path.clone();
         let mailbox = self.convolver_mailbox.clone();
         let ir_name = self.ir_name.clone();
         let ir_info = self.ir_info.clone();
         let sample_rate = self.sample_rate;
-        let file_list = self.params.file_list.clone();
-        let ir_path_param = self.params.ir_path.clone();
 
-        std::thread::spawn(move || {
-            let path = {
-                let list = file_list.lock();
-                if list.is_empty() {
-                    return;
-                }
-                let clamped = idx.min(list.len() - 1);
-                let p = list[clamped].clone();
-                drop(list);
-                if let Some(mut ip) = ir_path_param.try_lock() {
-                    *ip = p.clone();
-                }
-                p
-            };
-            Self::do_load_ir(&path, sample_rate, &mailbox, &ir_name, &ir_info);
-        });
+        self.loader_handle = Some(
+            std::thread::Builder::new()
+                .name("ir-loader".into())
+                .spawn(move || {
+                    while !stop_flag.load(Ordering::Relaxed) {
+                        let idx = load_request.swap(-1, Ordering::AcqRel);
+                        if idx >= 0 {
+                            let path = {
+                                let list = file_list.lock();
+                                if list.is_empty() {
+                                    continue;
+                                }
+                                let clamped = (idx as usize).min(list.len() - 1);
+                                let p = list[clamped].clone();
+                                drop(list);
+                                if let Some(mut ip) = ir_path_param.try_lock() {
+                                    *ip = p.clone();
+                                }
+                                p
+                            };
+                            Self::do_load_ir(&path, sample_rate, &mailbox, &ir_name, &ir_info);
+                        } else {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                    }
+                })
+                .expect("failed to spawn ir-loader thread"),
+        );
+    }
+
+    fn stop_loader_thread(&mut self) {
+        self.loader_stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.loader_handle.take() {
+            let _ = handle.join();
+        }
+        self.loader_stop.store(false, Ordering::Relaxed);
     }
 
     /// Shared IR loading logic used by both spawn methods.
@@ -152,19 +185,29 @@ impl ResonancePlugin for ResonanceIr {
             ir_info: Arc::new(Mutex::new(String::new())),
             last_file_index: -1,
             sample_rate: 44100.0,
+            load_request: Arc::new(AtomicI32::new(-1)),
+            loader_stop: Arc::new(AtomicBool::new(false)),
+            loader_handle: None,
+            bypass_delay_l: resonance_dsp::DelayLine::new(convolver::BLOCK_SIZE),
+            bypass_delay_r: resonance_dsp::DelayLine::new(convolver::BLOCK_SIZE),
         }
     }
 
-    fn params(&self) -> Vec<&dyn Param> {
-        vec![
-            &self.params.file_select,
-            &self.params.dry_wet,
-            &self.params.output_gain,
-        ]
+    fn param_count(&self) -> usize { 3 }
+
+    fn param(&self, index: usize) -> &dyn Param {
+        match index {
+            0 => &self.params.file_select,
+            1 => &self.params.dry_wet,
+            2 => &self.params.output_gain,
+            _ => unreachable!("invalid param index {index}"),
+        }
     }
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         self.sample_rate = sample_rate;
+        self.bypass_delay_l = resonance_dsp::DelayLine::new(convolver::BLOCK_SIZE);
+        self.bypass_delay_r = resonance_dsp::DelayLine::new(convolver::BLOCK_SIZE);
 
         // Set smoother sample rates
         self.params.dry_wet.smoother.set_sample_rate(sample_rate);
@@ -180,20 +223,18 @@ impl ResonancePlugin for ResonanceIr {
             self.last_file_index = idx as i32;
 
             // Block on IR loading during initialize so it's ready before processing
-            let mailbox = self.convolver_mailbox.clone();
-            let ir_name = self.ir_name.clone();
-            let ir_info = self.ir_info.clone();
-            let sr = self.sample_rate;
-
-            let handle = std::thread::spawn(move || {
-                Self::do_load_ir(&path, sr, &mailbox, &ir_name, &ir_info);
-            });
-            let _ = handle.join();
+            let mailbox = &self.convolver_mailbox;
+            let ir_name = &self.ir_name;
+            let ir_info = &self.ir_info;
+            Self::do_load_ir(&path, sample_rate, mailbox, ir_name, ir_info);
 
             if let Some(conv) = self.convolver_mailbox.lock().take() {
                 self.active_convolver = Some(conv);
             }
         }
+
+        // Start persistent loader thread for runtime file_select changes
+        self.start_loader_thread();
 
         true
     }
@@ -209,7 +250,7 @@ impl ResonancePlugin for ResonanceIr {
         left: &mut [f32],
         right: &mut [f32],
         frames: usize,
-        _events: &mut EventIterator,
+        _events: &mut EventIterator<'_>,
     ) {
         resonance_common::flush_denormals();
 
@@ -224,7 +265,8 @@ impl ResonancePlugin for ResonanceIr {
         let current_index = self.params.file_select.value();
         if current_index != self.last_file_index {
             self.last_file_index = current_index;
-            self.spawn_load_by_index(current_index as usize);
+            // Signal the persistent loader thread (no allocation, no spawn)
+            self.load_request.store(current_index, Ordering::Release);
         }
 
         // Set smoother targets from current param values
@@ -250,8 +292,12 @@ impl ResonancePlugin for ResonanceIr {
             None => {
                 for i in 0..frames {
                     let output_gain = self.params.output_gain.smoother.next();
-                    left[i] *= output_gain;
-                    right[i] *= output_gain;
+                    let delayed_l = self.bypass_delay_l.tap(convolver::BLOCK_SIZE);
+                    let delayed_r = self.bypass_delay_r.tap(convolver::BLOCK_SIZE);
+                    self.bypass_delay_l.push(left[i]);
+                    self.bypass_delay_r.push(right[i]);
+                    left[i] = delayed_l * output_gain;
+                    right[i] = delayed_r * output_gain;
                 }
             }
         }
@@ -276,11 +322,13 @@ impl ResonancePlugin for ResonanceIr {
     }
 
     fn latency_samples(&self) -> u32 {
-        if self.active_convolver.is_some() {
-            convolver::BLOCK_SIZE as u32
-        } else {
-            0
-        }
+        convolver::BLOCK_SIZE as u32
+    }
+}
+
+impl Drop for ResonanceIr {
+    fn drop(&mut self) {
+        self.stop_loader_thread();
     }
 }
 

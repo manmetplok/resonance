@@ -328,8 +328,7 @@ impl crate::Resonance {
             }),
         );
 
-        let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
-        sorted_tracks.sort_by_key(|t| t.order);
+        let sorted_tracks = self.sorted_tracks();
 
         // Calculate which tracks are visible given scroll_offset_y
         let visible_start = self.scroll_offset_y / theme::TRACK_HEIGHT;

@@ -11,6 +11,12 @@ pub trait NamInference: Send {
     fn reset(&mut self);
 }
 
+/// Validate that buffer dimensions are consistent for matrix-vector operations.
+/// Returns `true` if `a.len() >= rows * cols && x.len() >= cols && y.len() >= rows`.
+pub fn validate_matvec_dims(a: &[f32], x: &[f32], y: &[f32], rows: usize, cols: usize) -> bool {
+    a.len() >= rows * cols && x.len() >= cols && y.len() >= rows
+}
+
 /// Matrix-vector multiply: y = A * x, where A is [rows x cols] row-major.
 #[inline(always)]
 pub fn matvec(a: &[f32], x: &[f32], rows: usize, cols: usize, y: &mut [f32]) {
@@ -21,6 +27,7 @@ pub fn matvec(a: &[f32], x: &[f32], rows: usize, cols: usize, y: &mut [f32]) {
         let mut sum = 0.0f32;
         let row_start = r * cols;
         for c in 0..cols {
+            // SAFETY: dimensions validated at model load time
             sum += unsafe { *a.get_unchecked(row_start + c) * *x.get_unchecked(c) };
         }
         y[r] = sum;
@@ -37,6 +44,7 @@ pub fn matvec_add(a: &[f32], x: &[f32], rows: usize, cols: usize, y: &mut [f32])
         let mut sum = 0.0f32;
         let row_start = r * cols;
         for c in 0..cols {
+            // SAFETY: dimensions validated at model load time
             sum += unsafe { *a.get_unchecked(row_start + c) * *x.get_unchecked(c) };
         }
         y[r] += sum;

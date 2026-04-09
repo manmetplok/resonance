@@ -14,6 +14,7 @@ impl OnePole {
 
     /// Set cutoff frequency (Hz) for given sample rate.
     pub fn set_cutoff(&mut self, freq_hz: f32, sample_rate: f32) {
+        let freq_hz = freq_hz.max(1.0);
         let w = (2.0 * std::f32::consts::PI * freq_hz / sample_rate).min(std::f32::consts::PI);
         self.coeff = (-w).exp();
     }

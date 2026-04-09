@@ -14,6 +14,7 @@ ui = ["resonance-plugin/ui"]
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
+resonance-dsp = { path = "../../resonance-dsp" }
 parking_lot = "0.12"
 rustfft = "6"
 serde_json = "1"

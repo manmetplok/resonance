@@ -55,6 +55,8 @@ pub(crate) struct Resonance {
     pub(crate) clip_trim: Option<ClipTrimState>,
     /// Currently selected plugin for the bottom panel in mixer view.
     pub(crate) selected_plugin: Option<PluginInstanceId>,
+    /// Current viewport width of the timeline canvas (in pixels).
+    pub(crate) viewport_width: f32,
 }
 
 fn main() -> iced::Result {
@@ -66,8 +68,20 @@ fn main() -> iced::Result {
 }
 
 impl Resonance {
+    pub(crate) fn sorted_tracks(&self) -> Vec<&TrackState> {
+        let mut tracks: Vec<&TrackState> = self.tracks.iter().collect();
+        tracks.sort_by_key(|t| t.order);
+        tracks
+    }
+
     fn new() -> (Self, iced::Task<Message>) {
-        let engine = AudioEngine::new().expect("Failed to initialize audio engine");
+        let engine = match AudioEngine::new() {
+            Ok(engine) => engine,
+            Err(e) => {
+                eprintln!("Audio engine init failed: {e}");
+                std::process::exit(1);
+            }
+        };
 
         // Request input device list and plugin scan on startup
         engine.send(AudioCommand::ListInputDevices);
@@ -109,6 +123,7 @@ impl Resonance {
             clip_drag: None,
             clip_trim: None,
             selected_plugin: None,
+            viewport_width: 1000.0,
         };
 
         (app, iced::Task::none())

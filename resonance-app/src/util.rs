@@ -1,5 +1,7 @@
 /// Utility functions for the Resonance application.
 
+use std::borrow::Cow;
+
 /// Convert dB to linear gain. -60 dB or below maps to 0.0 (silence).
 pub fn db_to_gain(db: f32) -> f32 {
     if db <= -60.0 {
@@ -10,21 +12,21 @@ pub fn db_to_gain(db: f32) -> f32 {
 }
 
 /// Format a dB value for display. Returns "-inf" for -60 dB or below.
-pub fn format_db(db: f32) -> String {
+pub fn format_db(db: f32) -> Cow<'static, str> {
     if db <= -60.0 {
-        "-inf".to_string()
+        Cow::Borrowed("-inf")
     } else {
-        format!("{:.1}", db)
+        Cow::Owned(format!("{:.1}", db))
     }
 }
 
 /// Format a pan value for display. Returns "C", "L50", "R50" etc.
-pub fn format_pan(pan: f32) -> String {
+pub fn format_pan(pan: f32) -> Cow<'static, str> {
     if pan.abs() < 0.01 {
-        "C".to_string()
+        Cow::Borrowed("C")
     } else if pan < 0.0 {
-        format!("L{:.0}", -pan * 100.0)
+        Cow::Owned(format!("L{:.0}", -pan * 100.0))
     } else {
-        format!("R{:.0}", pan * 100.0)
+        Cow::Owned(format!("R{:.0}", pan * 100.0))
     }
 }

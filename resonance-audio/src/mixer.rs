@@ -228,7 +228,6 @@ pub(crate) fn mix_audio(
 
     // Per-track processing: (clips + monitor input) -> plugins -> volume -> master
     let any_solo = tracks_guard.values().any(|t| t.soloed());
-    let mut monitor_consumed = false;
     for track in tracks_guard.values() {
         if track.muted() {
             continue;
@@ -241,10 +240,9 @@ pub(crate) fn mix_audio(
         track_buf_l[..frames].fill(0.0);
         track_buf_r[..frames].fill(0.0);
 
-        // Mix monitor input for tracks with monitoring enabled (first monitoring track only)
+        // Mix monitor input for all tracks with monitoring enabled
         let mut has_audio = false;
-        if track.monitor_enabled() && monitor_frames > 0 && !monitor_consumed {
-            monitor_consumed = true;
+        if track.monitor_enabled() && monitor_frames > 0 {
             let is_mono = track.mono();
             let mix_frames = frames.min(monitor_frames);
             for f in 0..mix_frames {

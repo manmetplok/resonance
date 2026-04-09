@@ -1,7 +1,7 @@
 /// LSTM inference engine for NAM models.
 
 use super::parse::{LstmConfig, WeightReader};
-use super::{fast_tanh, matvec, matvec_add, sigmoid, NamInference};
+use super::{fast_tanh, matvec, matvec_add, sigmoid, validate_matvec_dims, NamInference};
 
 struct LstmLayer {
     /// Input-to-hidden weights [4*hidden_size, input_size_for_layer] row-major.
@@ -73,16 +73,37 @@ impl LstmModel {
             1.0
         };
 
+        let gates = vec![0.0; 4 * hs];
+        let input_buf = vec![0.0; hs.max(config.input_size)];
+        let h = vec![vec![0.0; hs]; config.num_layers];
+
+        // Validate matvec dimensions for all LSTM layers at load time.
+        for (i, layer) in layers.iter().enumerate() {
+            let x_buf = if i == 0 { &input_buf[..layer.input_size] } else { &h[0][..] };
+            if !validate_matvec_dims(&layer.w_ih, x_buf, &gates, 4 * hs, layer.input_size) {
+                return Err(format!(
+                    "LSTM layer {}: w_ih dimension mismatch (w_ih={}, input_size={}, gates={})",
+                    i, layer.w_ih.len(), layer.input_size, gates.len()
+                ));
+            }
+            if !validate_matvec_dims(&layer.w_hh, &h[0], &gates, 4 * hs, hs) {
+                return Err(format!(
+                    "LSTM layer {}: w_hh dimension mismatch (w_hh={}, hs={}, gates={})",
+                    i, layer.w_hh.len(), hs, gates.len()
+                ));
+            }
+        }
+
         Ok(Self {
             hidden_size: hs,
             layers,
             output_weight,
             output_bias: output_bias_vec[0],
             head_scale,
-            h: vec![vec![0.0; hs]; config.num_layers],
+            h,
             c: vec![vec![0.0; hs]; config.num_layers],
-            gates: vec![0.0; 4 * hs],
-            input_buf: vec![0.0; hs.max(config.input_size)],
+            gates,
+            input_buf,
         })
     }
 }

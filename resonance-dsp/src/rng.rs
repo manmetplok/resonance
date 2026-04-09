@@ -6,7 +6,7 @@ pub struct SimpleRng {
 impl SimpleRng {
     pub fn new(seed: u64) -> Self {
         Self {
-            state: (seed as u32) | 1, // ensure non-zero
+            state: ((seed ^ (seed >> 32)) as u32) | 1, // ensure non-zero, mix both halves
         }
     }
 

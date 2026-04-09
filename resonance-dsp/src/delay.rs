@@ -7,7 +7,7 @@ pub struct DelayLine {
 
 impl DelayLine {
     pub fn new(max_samples: usize) -> Self {
-        let size = max_samples.next_power_of_two();
+        let size = max_samples.max(2).next_power_of_two();
         Self {
             buffer: vec![0.0; size],
             mask: size - 1,

@@ -105,12 +105,6 @@ impl FloatParam {
         self
     }
 
-    pub fn with_callback(self, _f: Arc<dyn Fn(f32) + Send + Sync>) -> Self {
-        // Callbacks are handled differently in the new system
-        // (via param change events in the bridge). Kept for API compat.
-        self
-    }
-
     pub fn hidden(mut self) -> Self {
         self.hidden = true;
         self
@@ -123,6 +117,9 @@ impl FloatParam {
 
     /// Set the value (thread-safe).
     pub fn set_value(&self, v: f32) {
+        if !v.is_finite() {
+            return;
+        }
         self.value.store(v.to_bits(), Ordering::Relaxed);
     }
 
@@ -142,6 +139,9 @@ impl Param for FloatParam {
         self.value() as f64
     }
     fn set_plain(&self, v: f64) {
+        if !v.is_finite() {
+            return;
+        }
         self.set_value(v as f32);
     }
     fn default_plain(&self) -> f64 {
@@ -218,23 +218,6 @@ impl IntParam {
         self.value.store(v, Ordering::Relaxed);
     }
 
-    pub fn with_value_to_string(
-        self,
-        _f: Arc<dyn Fn(i32) -> String + Send + Sync>,
-    ) -> Self {
-        self
-    }
-
-    pub fn with_string_to_value(
-        self,
-        _f: Arc<dyn Fn(&str) -> Option<i32> + Send + Sync>,
-    ) -> Self {
-        self
-    }
-
-    pub fn with_callback(self, _f: Arc<dyn Fn(i32) + Send + Sync>) -> Self {
-        self
-    }
 }
 
 impl Param for IntParam {

@@ -75,12 +75,12 @@ fn view_meter_v<'a>(level_l: f32, level_r: f32, height: f32) -> Element<'a, Mess
 
 impl crate::Resonance {
     pub(crate) fn view_mixer(&self) -> Element<'_, Message> {
-        let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
-        sorted_tracks.sort_by_key(|t| t.order);
+        let sorted_tracks = self.sorted_tracks();
 
+        let available_plugins = self.available_plugins.clone();
         let mut strip_row = row![].spacing(2);
         for track in &sorted_tracks {
-            strip_row = strip_row.push(self.view_channel_strip(track));
+            strip_row = strip_row.push(self.view_channel_strip(track, &available_plugins));
         }
 
         let scrollable_strips = scrollable(strip_row)
@@ -122,7 +122,7 @@ impl crate::Resonance {
             .into()
     }
 
-    fn view_channel_strip(&self, track: &TrackState) -> Element<'_, Message> {
+    fn view_channel_strip(&self, track: &TrackState, available_plugins: &[ScannedPlugin]) -> Element<'_, Message> {
         let track_name = container(
             text(track.name.clone()).size(13).color(theme::TEXT),
         )
@@ -231,10 +231,10 @@ impl crate::Resonance {
         }
 
         // FX picker
-        if !self.available_plugins.is_empty() {
+        if !available_plugins.is_empty() {
             let track_id = track.id;
             let fx_picker = pick_list(
-                self.available_plugins.clone(),
+                available_plugins.to_vec(),
                 None::<ScannedPlugin>,
                 move |plugin: ScannedPlugin| Message::AddPluginToTrack(track_id, plugin),
             )

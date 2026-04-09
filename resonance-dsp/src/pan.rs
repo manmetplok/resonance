@@ -4,6 +4,7 @@
 /// and returns (left_gain, right_gain) using equal-power panning.
 #[inline]
 pub fn constant_power_pan(pan: f32) -> (f32, f32) {
+    let pan = pan.clamp(-1.0, 1.0);
     let angle = (pan + 1.0) * 0.25 * std::f32::consts::PI;
     (angle.cos(), angle.sin())
 }

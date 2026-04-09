@@ -89,6 +89,9 @@ pub struct ReverbDsp {
 
     // Diffusion network (4 cascaded steps)
     diffusion: [DiffusionStep; DIFFUSION_STEPS],
+    /// Normalized tap positions (0..1) for each diffusion step + channel,
+    /// computed once at creation to avoid re-randomization on size changes.
+    diffusion_ratios: [[f32; CHANNELS]; DIFFUSION_STEPS],
 
     // FDN feedback loop
     fdn_delays: [DelayLine; CHANNELS],
@@ -110,10 +113,17 @@ impl ReverbDsp {
         // Diffusion steps with halving delay ranges
         let base_diffusion_ms = 150.0;
         let mut diff_ms = base_diffusion_ms;
+        let mut diffusion_ratios = [[0.0f32; CHANNELS]; DIFFUSION_STEPS];
         let diffusion = std::array::from_fn(|step| {
             diff_ms *= 0.5;
             let range_samples = (diff_ms * 0.001 * sample_rate) as usize;
-            DiffusionStep::new(range_samples.max(8), (step as u64 + 1) * 0x517cc1b727220a95)
+            let ds = DiffusionStep::new(range_samples.max(8), (step as u64 + 1) * 0x517cc1b727220a95);
+            // Store normalized tap positions so set_size() can rescale without re-randomizing
+            let rs = range_samples.max(8);
+            for c in 0..CHANNELS {
+                diffusion_ratios[step][c] = ds.delay_samples[c] as f32 / rs as f32;
+            }
+            ds
         });
 
         // FDN delay lines with exponential distribution
@@ -142,6 +152,7 @@ impl ReverbDsp {
             predelay_r: DelayLine::new(MAX_PREDELAY_SAMPLES),
             predelay_samples: 0,
             diffusion,
+            diffusion_ratios,
             fdn_delays,
             fdn_delay_samples,
             fdn_damping,
@@ -170,20 +181,14 @@ impl ReverbDsp {
             self.fdn_delay_samples[c] = ((2.0f32.powf(r) * base_samples) as usize).max(1);
         }
 
-        // Also update diffusion delay ranges
+        // Update diffusion delay ranges using stored ratios (no re-randomization)
         let mut diff_ms = size_ms;
-        for step in &mut self.diffusion {
+        for (step_idx, step) in self.diffusion.iter_mut().enumerate() {
             diff_ms *= 0.5;
             let range_samples = ((diff_ms * 0.001 * self.sample_rate) as usize).max(8);
-            let mut rng = SimpleRng::new(range_samples as u64 ^ 0x9e3779b97f4a7c15);
             for c in 0..CHANNELS {
-                let low = range_samples * c / CHANNELS;
-                let high = range_samples * (c + 1) / CHANNELS;
-                step.delay_samples[c] = if high > low {
-                    low + (rng.next_u32() as usize % (high - low))
-                } else {
-                    1
-                };
+                step.delay_samples[c] =
+                    (self.diffusion_ratios[step_idx][c] * range_samples as f32) as usize;
                 step.delay_samples[c] = step.delay_samples[c].max(1);
             }
         }

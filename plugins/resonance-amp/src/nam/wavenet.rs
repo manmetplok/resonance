@@ -5,7 +5,7 @@
 /// Then: head MLP layers, head_scale.
 
 use super::parse::{WaveNetConfig, WeightReader};
-use super::{fast_tanh, matvec, matvec_add, sigmoid, NamInference};
+use super::{fast_tanh, matvec, matvec_add, sigmoid, validate_matvec_dims, NamInference};
 
 // ---------------------------------------------------------------------------
 // Ring buffer
@@ -297,6 +297,51 @@ impl WaveNetModel {
             .max()
             .unwrap_or(1);
 
+        // Validate matvec dimensions for all weight matrices at load time.
+        let scratch_activation = vec![0.0f32; max_ch];
+        let scratch_conv_out = vec![0.0f32; max_mid];
+        let scratch_head_buf = vec![0.0f32; max_head_buf];
+        let scratch_head_input = vec![0.0f32; head_size];
+
+        for (si, rc) in rechannels.iter().enumerate() {
+            if let Some(ref rc) = rc {
+                if !validate_matvec_dims(&rc.weight, &scratch_activation[..rc.in_ch], &scratch_activation[..rc.out_ch], rc.out_ch, rc.in_ch) {
+                    return Err(format!("WaveNet stack {si}: rechannel dimension mismatch"));
+                }
+            }
+        }
+        for (si, stack) in stacks.iter().enumerate() {
+            for (li, layer) in stack.iter().enumerate() {
+                let ch = layer.channels;
+                let mid_ch = layer.mid_ch;
+                for (tap_idx, w) in layer.w_conv.iter().enumerate() {
+                    if !validate_matvec_dims(w, &scratch_activation[..ch], &scratch_conv_out[..mid_ch], mid_ch, ch) {
+                        return Err(format!("WaveNet stack {si} layer {li} tap {tap_idx}: conv weight dimension mismatch"));
+                    }
+                }
+                if let Some(ref w_mixin) = layer.w_input_mixin {
+                    let cond_size = w_mixin.len() / mid_ch;
+                    if !validate_matvec_dims(w_mixin, &scratch_activation[..cond_size], &scratch_conv_out[..mid_ch], mid_ch, cond_size) {
+                        return Err(format!("WaveNet stack {si} layer {li}: input_mixin dimension mismatch"));
+                    }
+                }
+                if let Some(ref l1x1) = layer.layer1x1 {
+                    if !validate_matvec_dims(&l1x1.weight, &scratch_activation[..l1x1.in_ch], &scratch_activation[..l1x1.out_ch], l1x1.out_ch, l1x1.in_ch) {
+                        return Err(format!("WaveNet stack {si} layer {li}: layer1x1 dimension mismatch"));
+                    }
+                }
+            }
+            let hr = &head_rechannels[si];
+            if !validate_matvec_dims(&hr.weight, &scratch_activation[..hr.in_ch], &scratch_head_buf[..hr.out_ch], hr.out_ch, hr.in_ch) {
+                return Err(format!("WaveNet stack {si}: head_rechannel dimension mismatch"));
+            }
+        }
+        for (hi, hl) in head_layers.iter().enumerate() {
+            if !validate_matvec_dims(&hl.weight, &scratch_head_buf[..hl.in_features], &scratch_head_buf[..hl.out_features], hl.out_features, hl.in_features) {
+                return Err(format!("WaveNet head layer {hi}: dimension mismatch"));
+            }
+        }
+
         Ok(Self {
             gated: config.gated,
             rechannels,
@@ -305,14 +350,14 @@ impl WaveNetModel {
             ring_buffers,
             head_layers,
             head_scale,
-            activation: vec![0.0; max_ch],
-            conv_out: vec![0.0; max_mid],
+            activation: scratch_activation,
+            conv_out: scratch_conv_out,
             mixin_buf: vec![0.0; max_mid],
             residual_buf: vec![0.0; max_ch],
             skip_accum: vec![0.0; max_ch],
             rechannel_buf: vec![0.0; max_ch],
-            head_input: vec![0.0; head_size],
-            head_buf_a: vec![0.0; max_head_buf],
+            head_input: scratch_head_input,
+            head_buf_a: scratch_head_buf,
             head_buf_b: vec![0.0; max_head_buf],
         })
     }

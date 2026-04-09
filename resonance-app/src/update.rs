@@ -258,92 +258,42 @@ impl crate::Resonance {
             }
             Message::PluginFileSelected(instance_id, path) => {
                 if let Some(path) = path {
-                    // Scan directory for sibling files
-                    let dir = std::path::Path::new(&path).parent();
-                    if let Some(dir) = dir {
-                        let ext = self.tracks.iter()
-                            .flat_map(|t| t.plugins.iter())
-                            .find(|p| p.instance_id == instance_id)
-                            .map(|p| match p.clap_plugin_id.as_str() {
-                                "com.resonance.amp" => "nam",
-                                "com.resonance.ir" => "wav",
-                                _ => "",
-                            })
-                            .unwrap_or("");
+                    let ext = self.tracks.iter()
+                        .flat_map(|t| t.plugins.iter())
+                        .find(|p| p.instance_id == instance_id)
+                        .map(|p| match p.clap_plugin_id.as_str() {
+                            "com.resonance.amp" => "nam",
+                            "com.resonance.ir" => "wav",
+                            _ => "",
+                        })
+                        .unwrap_or("")
+                        .to_string();
 
-                        let mut files: Vec<String> = std::fs::read_dir(dir)
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|e| e.ok())
-                            .filter(|e| {
-                                e.path().extension()
-                                    .map(|x| x.eq_ignore_ascii_case(ext))
-                                    .unwrap_or(false)
-                            })
-                            .map(|e| e.path().to_string_lossy().into_owned())
-                            .collect();
-                        files.sort();
-
-                        let idx = files.iter().position(|f| f == &path).unwrap_or(0);
-
-                        // Save state with new path, then load it back into the plugin
-                        // First, save current state
-                        self.engine.send(AudioCommand::SavePluginState { instance_id });
-
-                        // Store the pending file info so we can act on it when state arrives
-                        for track in &mut self.tracks {
-                            if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
-                                match &mut p.custom {
-                                    PluginCustomState::Amp(ref mut state) => {
-                                        state.model_name = std::path::Path::new(&path)
-                                            .file_stem()
-                                            .map(|s| s.to_string_lossy().into_owned())
-                                            .unwrap_or_default();
-                                        state.file_list = files;
-                                        state.current_index = idx;
-                                    }
-                                    PluginCustomState::Ir(ref mut state) => {
-                                        state.ir_name = std::path::Path::new(&path)
-                                            .file_stem()
-                                            .map(|s| s.to_string_lossy().into_owned())
-                                            .unwrap_or_default();
-                                        state.file_list = files;
-                                        state.current_index = idx;
-                                    }
-                                    _ => {}
-                                }
-                                // Set file_select param to trigger loading
-                                if let Some(param) = p.params.iter().find(|pp| {
-                                    pp.name == "Model Select" || pp.name == "IR Select"
-                                }) {
-                                    self.engine.send(AudioCommand::SetPluginParam {
-                                        instance_id,
-                                        param_id: param.id,
-                                        value: idx as f64,
-                                    });
-                                }
-                                break;
-                            }
-                        }
-
-                        // Inject the path via CLAP state
-                        let persist_key = self.tracks.iter()
-                            .flat_map(|t| t.plugins.iter())
-                            .find(|p| p.instance_id == instance_id)
-                            .map(|p| match p.clap_plugin_id.as_str() {
-                                "com.resonance.amp" => "model-path",
-                                "com.resonance.ir" => "ir-path",
-                                _ => "",
-                            })
-                            .unwrap_or("");
-
-                        if !persist_key.is_empty() {
-                            // We need to modify the plugin state to include the new path.
-                            // We'll handle this in the PluginStateSaved event handler.
-                            // Store pending path for when state arrives.
-                            self.pending_plugin_path = Some((instance_id, persist_key.to_string(), path));
-                        }
-                    }
+                    // Scan sibling files asynchronously to avoid blocking the UI
+                    return Task::perform(
+                        async move {
+                            let dir = std::path::Path::new(&path).parent().map(|d| d.to_path_buf());
+                            let files = if let Some(dir) = dir {
+                                let mut files: Vec<String> = std::fs::read_dir(dir)
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(|e| e.ok())
+                                    .filter(|e| {
+                                        e.path().extension()
+                                            .map(|x| x.eq_ignore_ascii_case(ext.as_str()))
+                                            .unwrap_or(false)
+                                    })
+                                    .map(|e| e.path().to_string_lossy().into_owned())
+                                    .collect();
+                                files.sort();
+                                files
+                            } else {
+                                Vec::new()
+                            };
+                            (path, files)
+                        },
+                        move |(path, files)| Message::PluginFileScanComplete(instance_id, Some(path), files),
+                    );
                 }
             }
             Message::PluginPrevFile(instance_id) => {
@@ -440,6 +390,16 @@ impl crate::Resonance {
             }
             Message::EndPunchDrag => {
                 self.dragging_punch = None;
+                if self.punch_in > self.punch_out {
+                    std::mem::swap(&mut self.punch_in, &mut self.punch_out);
+                }
+                if self.punch_enabled {
+                    self.engine.send(AudioCommand::SetPunchRange {
+                        enabled: true,
+                        punch_in: self.punch_in,
+                        punch_out: self.punch_out,
+                    });
+                }
             }
             Message::SelectClip(id) => {
                 self.selected_clip = id;
@@ -604,14 +564,71 @@ impl crate::Resonance {
                 if self.playing {
                     let playhead_seconds = self.playhead as f64 / self.sample_rate as f64;
                     let playhead_x = playhead_seconds as f32 * self.zoom - self.scroll_offset;
-                    // Assume ~1000px visible width (we don't have exact bounds here)
-                    let visible_width = 1000.0;
+                    let visible_width = self.viewport_width;
                     if playhead_x > visible_width * 0.8 {
                         self.scroll_offset = playhead_seconds as f32 * self.zoom - visible_width * 0.5;
                     } else if playhead_x < 0.0 {
                         self.scroll_offset = (playhead_seconds as f32 * self.zoom - visible_width * 0.2).max(0.0);
                     }
                 }
+            }
+            Message::PluginFileScanComplete(instance_id, path, files) => {
+                if let Some(path) = path {
+                    let idx = files.iter().position(|f| f == &path).unwrap_or(0);
+
+                    self.engine.send(AudioCommand::SavePluginState { instance_id });
+
+                    for track in &mut self.tracks {
+                        if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
+                            match &mut p.custom {
+                                PluginCustomState::Amp(ref mut state) => {
+                                    state.model_name = std::path::Path::new(&path)
+                                        .file_stem()
+                                        .map(|s| s.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    state.file_list = files.clone();
+                                    state.current_index = idx;
+                                }
+                                PluginCustomState::Ir(ref mut state) => {
+                                    state.ir_name = std::path::Path::new(&path)
+                                        .file_stem()
+                                        .map(|s| s.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    state.file_list = files.clone();
+                                    state.current_index = idx;
+                                }
+                                _ => {}
+                            }
+                            if let Some(param) = p.params.iter().find(|pp| {
+                                pp.name == "Model Select" || pp.name == "IR Select"
+                            }) {
+                                self.engine.send(AudioCommand::SetPluginParam {
+                                    instance_id,
+                                    param_id: param.id,
+                                    value: idx as f64,
+                                });
+                            }
+                            break;
+                        }
+                    }
+
+                    let persist_key = self.tracks.iter()
+                        .flat_map(|t| t.plugins.iter())
+                        .find(|p| p.instance_id == instance_id)
+                        .map(|p| match p.clap_plugin_id.as_str() {
+                            "com.resonance.amp" => "model_path",
+                            "com.resonance.ir" => "ir_path",
+                            _ => "",
+                        })
+                        .unwrap_or("");
+
+                    if !persist_key.is_empty() {
+                        self.pending_plugin_path = Some((instance_id, persist_key.to_string(), path));
+                    }
+                }
+            }
+            Message::ViewportWidth(w) => {
+                self.viewport_width = w;
             }
         }
         Task::none()

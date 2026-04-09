@@ -19,9 +19,7 @@ impl Lfo {
     pub fn next(&mut self) -> f32 {
         let out = (self.phase * 2.0 * std::f32::consts::PI).sin();
         self.phase += self.phase_inc;
-        if self.phase >= 1.0 {
-            self.phase -= 1.0;
-        }
+        self.phase -= self.phase.floor();
         out
     }
 }

@@ -2,6 +2,7 @@
 
 use parking_lot::Mutex;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 
 use resonance_plugin::*;
@@ -27,6 +28,12 @@ pub struct ResonanceAmp {
     model_name: Arc<Mutex<String>>,
     /// Last file_select param value we acted on (to detect changes).
     last_file_index: i32,
+    /// Atomic load request for the persistent loader thread (-1 = no request).
+    load_request: Arc<AtomicI32>,
+    /// Signal the loader thread to stop.
+    loader_stop: Arc<AtomicBool>,
+    /// Handle to the persistent loader thread.
+    loader_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl ResonanceAmp {
@@ -65,42 +72,67 @@ impl ResonanceAmp {
         }
     }
 
-    /// Load a model by index from the file list, in a background thread (fire-and-forget).
-    fn load_model_by_index_background(&self, idx: usize) {
+    /// Start the persistent loader thread that polls `load_request`.
+    fn start_loader_thread(&mut self) {
+        // Stop any existing loader
+        self.stop_loader_thread();
+
+        let load_request = self.load_request.clone();
+        let stop_flag = self.loader_stop.clone();
         let file_list = self.params.file_list.clone();
         let model_path = self.params.model_path.clone();
         let mailbox = self.model_mailbox.clone();
         let model_name = self.model_name.clone();
 
-        std::thread::spawn(move || {
-            let path = {
-                let list = file_list.lock();
-                if list.is_empty() {
-                    return;
-                }
-                let clamped = idx.min(list.len() - 1);
-                let p = list[clamped].clone();
-                drop(list);
-                if let Some(mut mp) = model_path.try_lock() {
-                    *mp = p.clone();
-                }
-                p
-            };
-            match nam::parse::load_model_from_file(&path) {
-                Ok(model) => {
-                    let name = Path::new(&path)
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    *model_name.lock() = name;
-                    *mailbox.lock() = Some(model);
-                }
-                Err(e) => {
-                    eprintln!("Failed to load NAM model: {e}");
-                    *model_name.lock() = format!("Error: {e}");
-                }
-            }
-        });
+        self.loader_handle = Some(
+            std::thread::Builder::new()
+                .name("amp-loader".into())
+                .spawn(move || {
+                    while !stop_flag.load(Ordering::Relaxed) {
+                        let idx = load_request.swap(-1, Ordering::AcqRel);
+                        if idx >= 0 {
+                            let path = {
+                                let list = file_list.lock();
+                                if list.is_empty() {
+                                    continue;
+                                }
+                                let clamped = (idx as usize).min(list.len() - 1);
+                                let p = list[clamped].clone();
+                                drop(list);
+                                if let Some(mut mp) = model_path.try_lock() {
+                                    *mp = p.clone();
+                                }
+                                p
+                            };
+                            match nam::parse::load_model_from_file(&path) {
+                                Ok(model) => {
+                                    let name = Path::new(&path)
+                                        .file_stem()
+                                        .map(|s| s.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    *model_name.lock() = name;
+                                    *mailbox.lock() = Some(model);
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to load NAM model: {e}");
+                                    *model_name.lock() = format!("Error: {e}");
+                                }
+                            }
+                        } else {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                    }
+                })
+                .expect("failed to spawn amp-loader thread"),
+        );
+    }
+
+    fn stop_loader_thread(&mut self) {
+        self.loader_stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.loader_handle.take() {
+            let _ = handle.join();
+        }
+        self.loader_stop.store(false, Ordering::Relaxed);
     }
 }
 
@@ -123,15 +155,21 @@ impl ResonancePlugin for ResonanceAmp {
             model_mailbox: Arc::new(Mutex::new(None)),
             model_name: Arc::new(Mutex::new(String::new())),
             last_file_index: -1,
+            load_request: Arc::new(AtomicI32::new(-1)),
+            loader_stop: Arc::new(AtomicBool::new(false)),
+            loader_handle: None,
         }
     }
 
-    fn params(&self) -> Vec<&dyn Param> {
-        vec![
-            &self.params.file_select,
-            &self.params.input_gain,
-            &self.params.output_gain,
-        ]
+    fn param_count(&self) -> usize { 3 }
+
+    fn param(&self, index: usize) -> &dyn Param {
+        match index {
+            0 => &self.params.file_select,
+            1 => &self.params.input_gain,
+            2 => &self.params.output_gain,
+            _ => unreachable!("invalid param index {index}"),
+        }
     }
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
@@ -160,6 +198,10 @@ impl ResonancePlugin for ResonanceAmp {
                 self.active_model = Some(model);
             }
         }
+
+        // Start persistent loader thread for runtime file_select changes
+        self.start_loader_thread();
+
         true
     }
 
@@ -174,7 +216,7 @@ impl ResonancePlugin for ResonanceAmp {
         left: &mut [f32],
         right: &mut [f32],
         frames: usize,
-        _events: &mut EventIterator,
+        _events: &mut EventIterator<'_>,
     ) {
         resonance_common::flush_denormals();
 
@@ -189,8 +231,8 @@ impl ResonancePlugin for ResonanceAmp {
         let current_index = self.params.file_select.value();
         if current_index != self.last_file_index {
             self.last_file_index = current_index;
-            // Dispatch to background thread (fire-and-forget)
-            self.load_model_by_index_background(current_index as usize);
+            // Signal the persistent loader thread (no allocation, no spawn)
+            self.load_request.store(current_index, Ordering::Release);
         }
 
         // Set smoother targets from current param values
@@ -246,6 +288,12 @@ impl ResonancePlugin for ResonanceAmp {
         } else {
             false
         }
+    }
+}
+
+impl Drop for ResonanceAmp {
+    fn drop(&mut self) {
+        self.stop_loader_thread();
     }
 }
 
