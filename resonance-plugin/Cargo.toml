@@ -1,0 +1,15 @@
+[package]
+name = "resonance-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+ui = ["iced"]
+
+[dependencies]
+clack-plugin = { workspace = true }
+clack-extensions = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+iced = { version = "0.13", optional = true }

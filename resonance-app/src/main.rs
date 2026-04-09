@@ -53,6 +53,8 @@ pub(crate) struct Resonance {
     pub(crate) clip_drag: Option<ClipDragState>,
     /// Clip trim state
     pub(crate) clip_trim: Option<ClipTrimState>,
+    /// Currently selected plugin for the bottom panel in mixer view.
+    pub(crate) selected_plugin: Option<PluginInstanceId>,
 }
 
 fn main() -> iced::Result {
@@ -106,6 +108,7 @@ impl Resonance {
             selected_clip: None,
             clip_drag: None,
             clip_trim: None,
+            selected_plugin: None,
         };
 
         (app, iced::Task::none())

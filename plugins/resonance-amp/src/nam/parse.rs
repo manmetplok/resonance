@@ -292,7 +292,7 @@ pub fn load_model_from_file(path: &str) -> Result<Box<dyn NamInference>, String>
             let config = parse_wavenet_config(nam_file.config)?;
             let model = WaveNetModel::from_config_and_weights(config, &mut reader)?;
             if reader.remaining() > 0 {
-                nih_plug::nih_log!(
+                eprintln!(
                     "Warning: {} unused weights after loading WaveNet model",
                     reader.remaining()
                 );
@@ -304,7 +304,7 @@ pub fn load_model_from_file(path: &str) -> Result<Box<dyn NamInference>, String>
                 .map_err(|e| format!("Invalid LSTM config: {e}"))?;
             let model = LstmModel::from_config_and_weights(config, &mut reader)?;
             if reader.remaining() > 0 {
-                nih_plug::nih_log!(
+                eprintln!(
                     "Warning: {} unused weights after loading LSTM model",
                     reader.remaining()
                 );

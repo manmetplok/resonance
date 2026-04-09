@@ -1,7 +1,6 @@
 /// Resonance Drums - A drum sampler instrument CLAP plugin.
 
-use nih_plug::prelude::*;
-use std::sync::Arc;
+use resonance_plugin::*;
 
 mod drum_map;
 mod kit;
@@ -9,53 +8,48 @@ mod params;
 mod sampler;
 mod voice;
 
+#[cfg(feature = "ui")]
+pub mod ui;
+
 use params::DrumParams;
 use sampler::DrumSampler;
 
 pub struct ResonanceDrums {
-    params: Arc<DrumParams>,
+    params: DrumParams,
     sampler: DrumSampler,
 }
 
-impl Default for ResonanceDrums {
-    fn default() -> Self {
+impl ResonancePlugin for ResonanceDrums {
+    const CLAP_ID: &'static str = "com.resonance.drums";
+    const NAME: &'static str = "Resonance Drums";
+    const VENDOR: &'static str = "Resonance";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+    const DESCRIPTION: &'static str = "A drum sampler instrument";
+    const FEATURES: &'static [&'static str] = &["instrument", "sampler", "drum", "stereo"];
+
+    const INPUT_CHANNELS: Option<u32> = None;
+    const OUTPUT_CHANNELS: u32 = 2;
+    const MIDI_INPUT: bool = true;
+
+    fn new() -> Self {
         Self {
-            params: Arc::new(DrumParams::default()),
+            params: DrumParams::default(),
             sampler: DrumSampler::new(),
         }
     }
-}
 
-impl Plugin for ResonanceDrums {
-    const NAME: &'static str = "Resonance Drums";
-    const VENDOR: &'static str = "Resonance";
-    const URL: &'static str = "";
-    const EMAIL: &'static str = "";
-    const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
-        main_input_channels: None,
-        main_output_channels: NonZeroU32::new(2),
-        ..AudioIOLayout::const_default()
-    }];
-
-    const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
-    const MIDI_OUTPUT: MidiConfig = MidiConfig::None;
-
-    type SysExMessage = ();
-    type BackgroundTask = ();
-
-    fn params(&self) -> Arc<dyn Params> {
-        self.params.clone()
+    fn params(&self) -> Vec<&dyn Param> {
+        let mut params: Vec<&dyn Param> = vec![&self.params.master_volume];
+        for pad in &self.params.pads {
+            params.push(&pad.volume);
+            params.push(&pad.pan);
+            params.push(&pad.mute);
+        }
+        params
     }
 
-    fn initialize(
-        &mut self,
-        _audio_io_layout: &AudioIOLayout,
-        buffer_config: &BufferConfig,
-        _context: &mut impl InitContext<Self>,
-    ) -> bool {
-        self.sampler.load_defaults(buffer_config.sample_rate);
+    fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
+        self.sampler.load_defaults(sample_rate);
         true
     }
 
@@ -65,10 +59,11 @@ impl Plugin for ResonanceDrums {
 
     fn process(
         &mut self,
-        buffer: &mut Buffer,
-        _aux: &mut AuxiliaryBuffers,
-        context: &mut impl ProcessContext<Self>,
-    ) -> ProcessStatus {
+        left: &mut [f32],
+        right: &mut [f32],
+        frames: usize,
+        events: &mut EventIterator,
+    ) {
         resonance_common::flush_denormals();
 
         // Read per-pad parameters
@@ -85,9 +80,9 @@ impl Plugin for ResonanceDrums {
         let master_vol = self.params.master_volume.value();
 
         // Sample-accurate MIDI processing
-        let mut next_event = context.next_event();
+        let mut next_event = events.next_event();
 
-        for (sample_id, channel_samples) in buffer.iter_samples().enumerate() {
+        for sample_id in 0..frames {
             // Process all MIDI events at this sample position
             while let Some(event) = next_event {
                 if event.timing() > sample_id as u32 {
@@ -104,43 +99,23 @@ impl Plugin for ResonanceDrums {
                     NoteEvent::Choke { note, .. } => {
                         self.sampler.note_off(note);
                     }
-                    _ => {}
                 }
 
-                next_event = context.next_event();
+                next_event = events.next_event();
             }
 
             // Render one stereo frame from the sampler
-            let mut left = 0.0f32;
-            let mut right = 0.0f32;
+            let mut frame_l = 0.0f32;
+            let mut frame_r = 0.0f32;
             self.sampler
-                .render_frame(&mut left, &mut right, &pad_volumes, &pad_pans);
+                .render_frame(&mut frame_l, &mut frame_r, &pad_volumes, &pad_pans);
 
             // Write to output with master volume
-            let mut samples = channel_samples.into_iter();
-            if let Some(out_l) = samples.next() {
-                *out_l = left * master_vol;
-            }
-            if let Some(out_r) = samples.next() {
-                *out_r = right * master_vol;
-            }
+            left[sample_id] = frame_l * master_vol;
+            right[sample_id] = frame_r * master_vol;
         }
-
-        ProcessStatus::Normal
     }
 }
 
-impl ClapPlugin for ResonanceDrums {
-    const CLAP_ID: &'static str = "com.resonance.drums";
-    const CLAP_DESCRIPTION: Option<&'static str> = Some("A drum sampler instrument");
-    const CLAP_MANUAL_URL: Option<&'static str> = None;
-    const CLAP_SUPPORT_URL: Option<&'static str> = None;
-    const CLAP_FEATURES: &'static [ClapFeature] = &[
-        ClapFeature::Instrument,
-        ClapFeature::Sampler,
-        ClapFeature::Drum,
-        ClapFeature::Stereo,
-    ];
-}
-
-nih_export_clap!(ResonanceDrums);
+#[cfg(not(feature = "ui"))]
+resonance_plugin::export_clap!(ResonanceDrums);

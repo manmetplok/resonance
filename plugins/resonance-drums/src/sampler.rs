@@ -36,7 +36,7 @@ impl DrumSampler {
                     });
                 }
                 Err(e) => {
-                    nih_plug::nih_log!("Failed to load sample for {}: {}", mapping.name, e);
+                    eprintln!("Failed to load sample for {}: {}", mapping.name, e);
                     // Push an empty pad so indices stay aligned
                     self.pads.push(LoadedPad {
                         note: mapping.note,

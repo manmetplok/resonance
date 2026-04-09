@@ -56,7 +56,6 @@ pub struct PluginSlotState {
     pub plugin_name: String,
     pub clap_plugin_id: String,
     pub params: Vec<ParamInfo>,
-    pub expanded: bool,
     pub custom: PluginCustomState,
 }
 
@@ -64,9 +63,9 @@ pub struct PluginSlotState {
 #[derive(Debug, Clone)]
 pub enum PluginCustomState {
     Generic,
-    Drums { selected_pad: usize },
-    Amp { model_name: String, file_list: Vec<String>, current_index: usize },
-    Ir { ir_name: String, ir_info: String, file_list: Vec<String>, current_index: usize },
+    Drums(resonance_drums::ui::DrumsUiState),
+    Amp(resonance_amp::ui::AmpUiState),
+    Ir(resonance_ir::ui::IrUiState),
 }
 
 /// GUI-side clip state.

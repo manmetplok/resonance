@@ -203,11 +203,10 @@ impl crate::Resonance {
                 });
             }
             Message::TogglePluginPanel(instance_id) => {
-                for track in &mut self.tracks {
-                    if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
-                        p.expanded = !p.expanded;
-                        break;
-                    }
+                if self.selected_plugin == Some(instance_id) {
+                    self.selected_plugin = None;
+                } else {
+                    self.selected_plugin = Some(instance_id);
                 }
             }
             Message::SetPluginParam(instance_id, param_id, value) => {
@@ -229,8 +228,8 @@ impl crate::Resonance {
             Message::DrumPadSelect(instance_id, pad_idx) => {
                 for track in &mut self.tracks {
                     if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
-                        if let PluginCustomState::Drums { ref mut selected_pad } = p.custom {
-                            *selected_pad = pad_idx;
+                        if let PluginCustomState::Drums(ref mut state) = p.custom {
+                            state.selected_pad = pad_idx;
                         }
                         break;
                     }
@@ -295,23 +294,21 @@ impl crate::Resonance {
                         for track in &mut self.tracks {
                             if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
                                 match &mut p.custom {
-                                    PluginCustomState::Amp { model_name, file_list, current_index } => {
-                                        let name = std::path::Path::new(&path)
+                                    PluginCustomState::Amp(ref mut state) => {
+                                        state.model_name = std::path::Path::new(&path)
                                             .file_stem()
                                             .map(|s| s.to_string_lossy().into_owned())
                                             .unwrap_or_default();
-                                        *model_name = name;
-                                        *file_list = files;
-                                        *current_index = idx;
+                                        state.file_list = files;
+                                        state.current_index = idx;
                                     }
-                                    PluginCustomState::Ir { ir_name, file_list, current_index, .. } => {
-                                        let name = std::path::Path::new(&path)
+                                    PluginCustomState::Ir(ref mut state) => {
+                                        state.ir_name = std::path::Path::new(&path)
                                             .file_stem()
                                             .map(|s| s.to_string_lossy().into_owned())
                                             .unwrap_or_default();
-                                        *ir_name = name;
-                                        *file_list = files;
-                                        *current_index = idx;
+                                        state.file_list = files;
+                                        state.current_index = idx;
                                     }
                                     _ => {}
                                 }
@@ -625,28 +622,28 @@ impl crate::Resonance {
         for track in &mut self.tracks {
             if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
                 let new_idx = match &p.custom {
-                    PluginCustomState::Amp { file_list, current_index, .. } => {
-                        if file_list.is_empty() { return; }
-                        Self::wrap_index(*current_index, file_list.len(), direction)
+                    PluginCustomState::Amp(state) => {
+                        if state.file_list.is_empty() { return; }
+                        Self::wrap_index(state.current_index, state.file_list.len(), direction)
                     }
-                    PluginCustomState::Ir { file_list, current_index, .. } => {
-                        if file_list.is_empty() { return; }
-                        Self::wrap_index(*current_index, file_list.len(), direction)
+                    PluginCustomState::Ir(state) => {
+                        if state.file_list.is_empty() { return; }
+                        Self::wrap_index(state.current_index, state.file_list.len(), direction)
                     }
                     _ => return,
                 };
                 // Update local state
                 match &mut p.custom {
-                    PluginCustomState::Amp { model_name, file_list, current_index } => {
-                        *current_index = new_idx;
-                        *model_name = std::path::Path::new(&file_list[new_idx])
+                    PluginCustomState::Amp(ref mut state) => {
+                        state.current_index = new_idx;
+                        state.model_name = std::path::Path::new(&state.file_list[new_idx])
                             .file_stem()
                             .map(|s| s.to_string_lossy().into_owned())
                             .unwrap_or_default();
                     }
-                    PluginCustomState::Ir { ir_name, file_list, current_index, .. } => {
-                        *current_index = new_idx;
-                        *ir_name = std::path::Path::new(&file_list[new_idx])
+                    PluginCustomState::Ir(ref mut state) => {
+                        state.current_index = new_idx;
+                        state.ir_name = std::path::Path::new(&state.file_list[new_idx])
                             .file_stem()
                             .map(|s| s.to_string_lossy().into_owned())
                             .unwrap_or_default();

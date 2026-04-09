@@ -1,17 +1,11 @@
 /// Plugin parameters: master volume + per-pad volume, pan, and mute.
 
-use nih_plug::prelude::*;
-use nih_plug::formatters::v2s_f32_rounded;
-use std::sync::Arc;
+use resonance_plugin::*;
 
 use crate::drum_map::NUM_PADS;
 
-#[derive(Params)]
 pub struct DrumParams {
-    #[id = "master_volume"]
     pub master_volume: FloatParam,
-
-    #[nested(array, group = "Pad")]
     pub pads: [PadParams; NUM_PADS],
 }
 
@@ -19,47 +13,58 @@ impl Default for DrumParams {
     fn default() -> Self {
         Self {
             master_volume: FloatParam::new(
+                "master_volume",
                 "Master Volume",
                 0.8,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_value_to_string(v2s_f32_rounded(2)),
-            pads: Default::default(),
+            .with_value_to_string(formatters::v2s_f32_rounded(2)),
+            pads: std::array::from_fn(|i| PadParams::new(i)),
         }
     }
 }
 
-#[derive(Params)]
 pub struct PadParams {
-    #[id = "volume"]
     pub volume: FloatParam,
-
-    #[id = "pan"]
     pub pan: FloatParam,
-
-    #[id = "mute"]
     pub mute: BoolParam,
 }
 
-impl Default for PadParams {
-    fn default() -> Self {
+impl PadParams {
+    fn new(index: usize) -> Self {
+        // Use leaked strings for unique static IDs per pad
+        let vol_id: &'static str = Box::leak(format!("pad_{}_volume", index).into_boxed_str());
+        let vol_name: &'static str = Box::leak(format!("Pad {} Volume", index).into_boxed_str());
+        let pan_id: &'static str = Box::leak(format!("pad_{}_pan", index).into_boxed_str());
+        let pan_name: &'static str = Box::leak(format!("Pad {} Pan", index).into_boxed_str());
+        let mute_id: &'static str = Box::leak(format!("pad_{}_mute", index).into_boxed_str());
+        let mute_name: &'static str = Box::leak(format!("Pad {} Mute", index).into_boxed_str());
+
         Self {
             volume: FloatParam::new(
-                "Volume",
+                vol_id,
+                vol_name,
                 0.8,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_value_to_string(v2s_f32_rounded(2)),
+            .with_value_to_string(formatters::v2s_f32_rounded(2)),
             pan: FloatParam::new(
-                "Pan",
+                pan_id,
+                pan_name,
                 0.0,
                 FloatRange::Linear {
                     min: -1.0,
                     max: 1.0,
                 },
             )
-            .with_value_to_string(v2s_f32_rounded(2)),
-            mute: BoolParam::new("Mute", false),
+            .with_value_to_string(formatters::v2s_f32_rounded(2)),
+            mute: BoolParam::new(mute_id, mute_name, false),
         }
+    }
+}
+
+impl Default for PadParams {
+    fn default() -> Self {
+        Self::new(0)
     }
 }

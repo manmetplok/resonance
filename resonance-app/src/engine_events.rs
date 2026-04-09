@@ -131,18 +131,9 @@ impl crate::Resonance {
                 params,
             } => {
                 let custom = match clap_plugin_id.as_str() {
-                    "com.resonance.drums" => PluginCustomState::Drums { selected_pad: 0 },
-                    "com.resonance.amp" => PluginCustomState::Amp {
-                        model_name: String::new(),
-                        file_list: Vec::new(),
-                        current_index: 0,
-                    },
-                    "com.resonance.ir" => PluginCustomState::Ir {
-                        ir_name: String::new(),
-                        ir_info: String::new(),
-                        file_list: Vec::new(),
-                        current_index: 0,
-                    },
+                    "com.resonance.drums" => PluginCustomState::Drums(Default::default()),
+                    "com.resonance.amp" => PluginCustomState::Amp(Default::default()),
+                    "com.resonance.ir" => PluginCustomState::Ir(Default::default()),
                     _ => PluginCustomState::Generic,
                 };
                 if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
@@ -151,7 +142,6 @@ impl crate::Resonance {
                         plugin_name,
                         clap_plugin_id,
                         params,
-                        expanded: false,
                         custom,
                     });
                 }
@@ -160,6 +150,9 @@ impl crate::Resonance {
                 track_id,
                 instance_id,
             } => {
+                if self.selected_plugin == Some(instance_id) {
+                    self.selected_plugin = None;
+                }
                 if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
                     track.plugins.retain(|p| p.instance_id != instance_id);
                 }
@@ -168,29 +161,19 @@ impl crate::Resonance {
                 self.available_plugins = plugins;
             }
             AudioEvent::PluginStateSaved { instance_id, data } => {
-                // If we have a pending path to inject, modify the state and reload
+                // If we have a pending path to inject, modify the state and reload.
+                // State format is plain JSON: { "params": {...}, "model_path": "...", ... }
                 if let Some((pending_id, ref key, ref path)) = self.pending_plugin_path.clone() {
                     if pending_id == instance_id {
-                        // NIH-plug's CLAP state format prepends an 8-byte length (u64 LE)
-                        // before the JSON payload. We must strip it before parsing and
-                        // re-add it after modification.
-                        if data.len() > 8 {
-                            let json_data = &data[8..];
-                            if let Ok(mut state) = serde_json::from_slice::<serde_json::Value>(json_data) {
-                                if let Some(fields) = state.get_mut("fields") {
-                                    // Double-serialize: the value must be a JSON string of the path
-                                    if let Ok(serialized) = serde_json::to_string(path.as_str()) {
-                                        fields[&key] = serde_json::Value::String(serialized);
-                                    }
-                                }
-                                if let Ok(new_json) = serde_json::to_vec(&state) {
-                                    let mut new_data = (new_json.len() as u64).to_le_bytes().to_vec();
-                                    new_data.extend_from_slice(&new_json);
-                                    self.engine.send(AudioCommand::LoadPluginState {
-                                        instance_id,
-                                        data: new_data,
-                                    });
-                                }
+                        if let Ok(mut state) =
+                            serde_json::from_slice::<serde_json::Value>(&data)
+                        {
+                            state[&key] = serde_json::Value::String(path.clone());
+                            if let Ok(new_data) = serde_json::to_vec(&state) {
+                                self.engine.send(AudioCommand::LoadPluginState {
+                                    instance_id,
+                                    data: new_data,
+                                });
                             }
                         }
                         self.pending_plugin_path = None;

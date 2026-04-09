@@ -7,9 +7,11 @@ description = "A drum sampler instrument CLAP plugin for the Resonance DAW"
 [lib]
 crate-type = ["cdylib", "lib"]
 
+[features]
+default = []
+ui = ["resonance-plugin/ui"]
+
 [dependencies]
-nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["assert_process_allocs", "standalone"] }
-parking_lot = "0.12"
-atomic_float = "1"
+resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }

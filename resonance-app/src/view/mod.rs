@@ -1,6 +1,5 @@
 /// View rendering for the Resonance application.
 pub(crate) mod mixer;
-pub(crate) mod plugins;
 
 use crate::message::Message;
 use crate::state::*;

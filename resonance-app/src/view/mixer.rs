@@ -96,10 +96,23 @@ impl crate::Resonance {
             ..Default::default()
         });
 
-        let mixer_content = row![scrollable_strips, separator, master_strip]
+        let strips_area = row![scrollable_strips, separator, master_strip]
             .height(Length::Fill);
 
-        container(mixer_content)
+        // Bottom plugin panel
+        let mut mixer_col = column![].spacing(0);
+        mixer_col = mixer_col.push(strips_area);
+
+        if let Some(panel) = self.view_plugin_panel() {
+            let h_sep = container(Space::new(Length::Fill, 1)).style(|_theme| container::Style {
+                background: Some(iced::Background::Color(theme::SEPARATOR)),
+                ..Default::default()
+            });
+            mixer_col = mixer_col.push(h_sep);
+            mixer_col = mixer_col.push(panel);
+        }
+
+        container(mixer_col)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_theme| container::Style {
@@ -162,7 +175,7 @@ impl crate::Resonance {
             .spacing(4)
             .align_y(alignment::Vertical::Center);
 
-        // Plugin chain with expandable params
+        // Plugin chain (click to show in bottom panel)
         let mut plugin_section = column![].spacing(2).width(Length::Fill);
         for plugin in &track.plugins {
             let pname: String = if plugin.plugin_name.chars().count() > 14 {
@@ -174,12 +187,32 @@ impl crate::Resonance {
             };
             let track_id = track.id;
             let pid = plugin.instance_id;
-            let expanded = plugin.expanded;
+            let is_selected = self.selected_plugin == Some(pid);
 
-            let name_color = if expanded { theme::TEXT } else { theme::ACCENT };
+            let name_color = if is_selected { theme::TEXT } else { theme::ACCENT };
             let name_btn = button(text(pname).size(9).color(name_color))
                 .on_press(Message::TogglePluginPanel(pid))
-                .style(|_theme, status| theme::small_button_style(status))
+                .style(move |_theme, status| {
+                    if is_selected {
+                        let bg = match status {
+                            iced::widget::button::Status::Hovered => Color::from_rgb(0.22, 0.22, 0.28),
+                            iced::widget::button::Status::Pressed => Color::from_rgb(0.15, 0.15, 0.20),
+                            _ => Color::from_rgb(0.18, 0.18, 0.24),
+                        };
+                        iced::widget::button::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            text_color: theme::TEXT,
+                            border: iced::Border {
+                                color: theme::ACCENT,
+                                width: 1.0,
+                                radius: 2.0.into(),
+                            },
+                            ..Default::default()
+                        }
+                    } else {
+                        theme::small_button_style(status)
+                    }
+                })
                 .padding(1);
 
             let plugin_del = button(text("\u{00d7}").size(9).color(theme::TEXT_DIM))
@@ -195,52 +228,6 @@ impl crate::Resonance {
             .spacing(2)
             .align_y(alignment::Vertical::Center);
             plugin_section = plugin_section.push(plugin_row);
-
-            if expanded {
-                match &plugin.custom {
-                    PluginCustomState::Drums { selected_pad } => {
-                        plugin_section = plugin_section.push(self.view_drums_panel(plugin, *selected_pad));
-                    }
-                    PluginCustomState::Amp { model_name, file_list, current_index } => {
-                        plugin_section = plugin_section.push(
-                            self.view_file_browser_panel(plugin, model_name, None, file_list.len(), *current_index, &["Input Gain", "Output Gain"]),
-                        );
-                    }
-                    PluginCustomState::Ir { ir_name, ir_info, file_list, current_index } => {
-                        plugin_section = plugin_section.push(
-                            self.view_file_browser_panel(plugin, ir_name, Some(ir_info.as_str()), file_list.len(), *current_index, &["Dry/Wet", "Output Gain"]),
-                        );
-                    }
-                    PluginCustomState::Generic => {
-                        for param in &plugin.params {
-                            let param_id = param.id;
-                            let inst_id = pid;
-                            let range = param.min_value..=param.max_value;
-                            let param_slider = slider(
-                                range,
-                                param.current_value,
-                                move |v| Message::SetPluginParam(inst_id, param_id, v),
-                            )
-                            .width(Length::Fill)
-                            .step(0.001);
-
-                            let param_label = text(param.name.clone()).size(8).color(theme::TEXT_DIM);
-                            let param_value_text = text(format!("{:.2}", param.current_value))
-                                .size(8)
-                                .font(Font::MONOSPACE)
-                                .color(theme::TEXT_DIM);
-
-                            let param_row = column![
-                                row![param_label, Space::with_width(Length::Fill), param_value_text]
-                                    .spacing(2),
-                                param_slider,
-                            ]
-                            .spacing(1);
-                            plugin_section = plugin_section.push(param_row);
-                        }
-                    }
-                }
-            }
         }
 
         // FX picker
@@ -412,5 +399,82 @@ impl crate::Resonance {
                 ..Default::default()
             })
             .into()
+    }
+
+    /// Bottom panel showing the selected plugin's UI.
+    fn view_plugin_panel(&self) -> Option<Element<'_, Message>> {
+        let selected_id = self.selected_plugin?;
+
+        // Find the plugin across all tracks
+        let plugin = self.tracks.iter()
+            .flat_map(|t| t.plugins.iter())
+            .find(|p| p.instance_id == selected_id)?;
+
+        let ui_params: Vec<resonance_plugin::ui::UiParam> = plugin.params.iter()
+            .map(|p| resonance_plugin::ui::UiParam {
+                id: p.id,
+                name: p.name.clone(),
+                min_value: p.min_value,
+                max_value: p.max_value,
+                default_value: p.default_value,
+                current_value: p.current_value,
+            })
+            .collect();
+
+        let plugin_element = match &plugin.custom {
+            PluginCustomState::Drums(state) => {
+                resonance_drums::ui::view(state, &ui_params)
+            }
+            PluginCustomState::Amp(state) => {
+                resonance_amp::ui::view(state, &ui_params)
+            }
+            PluginCustomState::Ir(state) => {
+                resonance_ir::ui::view(state, &ui_params)
+            }
+            PluginCustomState::Generic => {
+                resonance_plugin::ui::view_generic_params(&ui_params)
+            }
+        };
+
+        let inst_id = selected_id;
+        let mapped = plugin_element.map(move |event| {
+            use resonance_plugin::ui::PluginUiEvent;
+            match event {
+                PluginUiEvent::SetParam(param_id, value) => Message::SetPluginParam(inst_id, param_id, value),
+                PluginUiEvent::SelectPad(idx) => Message::DrumPadSelect(inst_id, idx),
+                PluginUiEvent::BrowseFile => Message::PluginBrowseFile(inst_id),
+                PluginUiEvent::PrevFile => Message::PluginPrevFile(inst_id),
+                PluginUiEvent::NextFile => Message::PluginNextFile(inst_id),
+            }
+        });
+
+        // Header with plugin name and close button
+        let header = row![
+            text(plugin.plugin_name.clone()).size(12).color(theme::ACCENT),
+            Space::with_width(Length::Fill),
+            button(text("\u{00d7}").size(14).color(theme::TEXT_DIM))
+                .on_press(Message::TogglePluginPanel(selected_id))
+                .style(|_theme, status| theme::small_button_style(status))
+                .padding(2),
+        ]
+        .spacing(8)
+        .align_y(alignment::Vertical::Center);
+
+        let panel_content = column![header, mapped]
+            .spacing(6)
+            .padding(10);
+
+        let panel = container(
+            scrollable(panel_content)
+                .direction(scrollable::Direction::Vertical(scrollable::Scrollbar::default()))
+        )
+        .width(Length::Fill)
+        .height(200)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::PANEL)),
+            ..Default::default()
+        });
+
+        Some(panel.into())
     }
 }

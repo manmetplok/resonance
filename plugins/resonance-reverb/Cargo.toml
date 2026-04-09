@@ -8,7 +8,6 @@ description = "An algorithmic reverb CLAP plugin using diffusion networks and FD
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
-nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["assert_process_allocs", "standalone"] }
-parking_lot = "0.12"
+resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }

@@ -1,7 +1,6 @@
 /// Resonance Reverb - An algorithmic reverb using diffusion networks and FDN.
 
-use nih_plug::prelude::*;
-use std::sync::Arc;
+use resonance_plugin::*;
 
 pub mod dsp;
 pub mod params;
@@ -10,56 +9,67 @@ use dsp::ReverbDsp;
 use params::ReverbParams;
 
 pub struct ResonanceReverb {
-    params: Arc<ReverbParams>,
+    params: ReverbParams,
     reverb: Option<ReverbDsp>,
 }
 
-impl Default for ResonanceReverb {
-    fn default() -> Self {
+impl ResonancePlugin for ResonanceReverb {
+    const CLAP_ID: &'static str = "com.resonance.reverb";
+    const NAME: &'static str = "Resonance Reverb";
+    const VENDOR: &'static str = "Resonance";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+    const DESCRIPTION: &'static str = "Algorithmic reverb with diffusion network and FDN";
+    const FEATURES: &'static [&'static str] = &["audio-effect", "stereo", "reverb"];
+
+    const INPUT_CHANNELS: Option<u32> = Some(2);
+    const OUTPUT_CHANNELS: u32 = 2;
+
+    fn new() -> Self {
         Self {
-            params: Arc::new(ReverbParams::default()),
+            params: ReverbParams::default(),
             reverb: None,
         }
     }
-}
 
-impl Plugin for ResonanceReverb {
-    const NAME: &'static str = "Resonance Reverb";
-    const VENDOR: &'static str = "Resonance";
-    const URL: &'static str = "";
-    const EMAIL: &'static str = "";
-    const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[
-        AudioIOLayout {
-            main_input_channels: NonZeroU32::new(2),
-            main_output_channels: NonZeroU32::new(2),
-            ..AudioIOLayout::const_default()
-        },
-        AudioIOLayout {
-            main_input_channels: NonZeroU32::new(1),
-            main_output_channels: NonZeroU32::new(2),
-            ..AudioIOLayout::const_default()
-        },
-    ];
-
-    const MIDI_INPUT: MidiConfig = MidiConfig::None;
-    const MIDI_OUTPUT: MidiConfig = MidiConfig::None;
-
-    type SysExMessage = ();
-    type BackgroundTask = ();
-
-    fn params(&self) -> Arc<dyn Params> {
-        self.params.clone()
+    fn params(&self) -> Vec<&dyn Param> {
+        vec![
+            &self.params.predelay,
+            &self.params.size,
+            &self.params.decay,
+            &self.params.damping,
+            &self.params.diffusion,
+            &self.params.mod_rate,
+            &self.params.mod_depth,
+            &self.params.width,
+            &self.params.mix,
+            &self.params.freeze,
+        ]
     }
 
-    fn initialize(
-        &mut self,
-        _audio_io_layout: &AudioIOLayout,
-        buffer_config: &BufferConfig,
-        _context: &mut impl InitContext<Self>,
-    ) -> bool {
-        self.reverb = Some(ReverbDsp::new(buffer_config.sample_rate));
+    fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
+        // Set smoother sample rates
+        self.params.predelay.smoother.set_sample_rate(sample_rate);
+        self.params.size.smoother.set_sample_rate(sample_rate);
+        self.params.decay.smoother.set_sample_rate(sample_rate);
+        self.params.damping.smoother.set_sample_rate(sample_rate);
+        self.params.diffusion.smoother.set_sample_rate(sample_rate);
+        self.params.mod_rate.smoother.set_sample_rate(sample_rate);
+        self.params.mod_depth.smoother.set_sample_rate(sample_rate);
+        self.params.width.smoother.set_sample_rate(sample_rate);
+        self.params.mix.smoother.set_sample_rate(sample_rate);
+
+        // Initialize smoother targets to current values
+        self.params.predelay.smoother.reset(self.params.predelay.value());
+        self.params.size.smoother.reset(self.params.size.value());
+        self.params.decay.smoother.reset(self.params.decay.value());
+        self.params.damping.smoother.reset(self.params.damping.value());
+        self.params.diffusion.smoother.reset(self.params.diffusion.value());
+        self.params.mod_rate.smoother.reset(self.params.mod_rate.value());
+        self.params.mod_depth.smoother.reset(self.params.mod_depth.value());
+        self.params.width.smoother.reset(self.params.width.value());
+        self.params.mix.smoother.reset(self.params.mix.value());
+
+        self.reverb = Some(ReverbDsp::new(sample_rate));
         true
     }
 
@@ -71,26 +81,35 @@ impl Plugin for ResonanceReverb {
 
     fn process(
         &mut self,
-        buffer: &mut Buffer,
-        _aux: &mut AuxiliaryBuffers,
-        _context: &mut impl ProcessContext<Self>,
-    ) -> ProcessStatus {
+        left: &mut [f32],
+        right: &mut [f32],
+        frames: usize,
+        _events: &mut EventIterator,
+    ) {
         resonance_common::flush_denormals();
 
         let Some(reverb) = &mut self.reverb else {
-            return ProcessStatus::Normal;
+            return;
         };
 
-        let num_channels = buffer.channels();
+        // Update reverb parameters (smoothed per-block for size/decay/damping/mod)
+        // Set smoother targets from current param values
+        self.params.size.smoother.set_target(self.params.size.value());
+        self.params.decay.smoother.set_target(self.params.decay.value());
+        self.params.damping.smoother.set_target(self.params.damping.value());
+        self.params.predelay.smoother.set_target(self.params.predelay.value());
+        self.params.mod_rate.smoother.set_target(self.params.mod_rate.value());
+        self.params.mod_depth.smoother.set_target(self.params.mod_depth.value());
+        self.params.mix.smoother.set_target(self.params.mix.value());
+        self.params.width.smoother.set_target(self.params.width.value());
+        self.params.diffusion.smoother.set_target(self.params.diffusion.value());
 
-        // Update reverb parameters (smoothed per-block for size/decay/damping/mod
-        // since they recalculate internal state; mix/width/diffusion are per-sample)
-        let size = self.params.size.smoothed.next();
-        let decay = self.params.decay.smoothed.next();
-        let damping = self.params.damping.smoothed.next();
-        let predelay = self.params.predelay.smoothed.next();
-        let mod_rate = self.params.mod_rate.smoothed.next();
-        let mod_depth = self.params.mod_depth.smoothed.next();
+        let size = self.params.size.smoother.next();
+        let decay = self.params.decay.smoother.next();
+        let damping = self.params.damping.smoother.next();
+        let predelay = self.params.predelay.smoother.next();
+        let mod_rate = self.params.mod_rate.smoother.next();
+        let mod_depth = self.params.mod_depth.smoother.next();
         let freeze = self.params.freeze.value();
 
         reverb.set_size(size);
@@ -101,48 +120,21 @@ impl Plugin for ResonanceReverb {
         reverb.set_mod_depth(mod_depth);
         reverb.set_freeze(freeze);
 
-        for mut channel_samples in buffer.iter_samples() {
-            let mix = self.params.mix.smoothed.next();
-            let width = self.params.width.smoothed.next();
-            let diffusion = self.params.diffusion.smoothed.next();
+        for i in 0..frames {
+            let mix = self.params.mix.smoother.next();
+            let width = self.params.width.smoother.next();
+            let diffusion = self.params.diffusion.smoother.next();
 
-            let Some(sample_l) = channel_samples.get_mut(0) else {
-                continue;
-            };
-            let dry_l = *sample_l;
-            let dry_r = if num_channels >= 2 {
-                *channel_samples.get_mut(1).unwrap()
-            } else {
-                dry_l
-            };
+            let dry_l = left[i];
+            let dry_r = right[i];
 
             let (wet_l, wet_r) = reverb.process(dry_l, dry_r, diffusion, width);
 
             let dry_amount = 1.0 - mix;
-            let out_l = dry_l * dry_amount + wet_l * mix;
-            let out_r = dry_r * dry_amount + wet_r * mix;
-
-            *channel_samples.get_mut(0).unwrap() = out_l;
-            if num_channels >= 2 {
-                *channel_samples.get_mut(1).unwrap() = out_r;
-            }
+            left[i] = dry_l * dry_amount + wet_l * mix;
+            right[i] = dry_r * dry_amount + wet_r * mix;
         }
-
-        ProcessStatus::Normal
     }
 }
 
-impl ClapPlugin for ResonanceReverb {
-    const CLAP_ID: &'static str = "com.resonance.reverb";
-    const CLAP_DESCRIPTION: Option<&'static str> =
-        Some("Algorithmic reverb with diffusion network and FDN");
-    const CLAP_MANUAL_URL: Option<&'static str> = None;
-    const CLAP_SUPPORT_URL: Option<&'static str> = None;
-    const CLAP_FEATURES: &'static [ClapFeature] = &[
-        ClapFeature::AudioEffect,
-        ClapFeature::Stereo,
-        ClapFeature::Reverb,
-    ];
-}
-
-nih_export_clap!(ResonanceReverb);
+resonance_plugin::export_clap!(ResonanceReverb);

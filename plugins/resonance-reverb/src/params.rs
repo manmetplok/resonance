@@ -1,37 +1,17 @@
 /// Plugin parameters for the algorithmic reverb.
 
-use nih_plug::prelude::*;
+use resonance_plugin::*;
 
-#[derive(Params)]
 pub struct ReverbParams {
-    #[id = "predelay"]
     pub predelay: FloatParam,
-
-    #[id = "size"]
     pub size: FloatParam,
-
-    #[id = "decay"]
     pub decay: FloatParam,
-
-    #[id = "damping"]
     pub damping: FloatParam,
-
-    #[id = "diffusion"]
     pub diffusion: FloatParam,
-
-    #[id = "mod_rate"]
     pub mod_rate: FloatParam,
-
-    #[id = "mod_depth"]
     pub mod_depth: FloatParam,
-
-    #[id = "width"]
     pub width: FloatParam,
-
-    #[id = "mix"]
     pub mix: FloatParam,
-
-    #[id = "freeze"]
     pub freeze: BoolParam,
 }
 
@@ -39,6 +19,7 @@ impl Default for ReverbParams {
     fn default() -> Self {
         Self {
             predelay: FloatParam::new(
+                "predelay",
                 "Pre-delay",
                 0.0,
                 FloatRange::Skewed {
@@ -52,6 +33,7 @@ impl Default for ReverbParams {
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
 
             size: FloatParam::new(
+                "size",
                 "Size",
                 0.5,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
@@ -62,6 +44,7 @@ impl Default for ReverbParams {
             .with_string_to_value(formatters::s2v_f32_percentage()),
 
             decay: FloatParam::new(
+                "decay",
                 "Decay",
                 2.0,
                 FloatRange::Skewed {
@@ -75,6 +58,7 @@ impl Default for ReverbParams {
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
 
             damping: FloatParam::new(
+                "damping",
                 "Damping",
                 8000.0,
                 FloatRange::Skewed {
@@ -88,6 +72,7 @@ impl Default for ReverbParams {
             .with_value_to_string(formatters::v2s_f32_rounded(0)),
 
             diffusion: FloatParam::new(
+                "diffusion",
                 "Diffusion",
                 0.8,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
@@ -98,6 +83,7 @@ impl Default for ReverbParams {
             .with_string_to_value(formatters::s2v_f32_percentage()),
 
             mod_rate: FloatParam::new(
+                "mod_rate",
                 "Mod Rate",
                 1.0,
                 FloatRange::Skewed {
@@ -111,6 +97,7 @@ impl Default for ReverbParams {
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
 
             mod_depth: FloatParam::new(
+                "mod_depth",
                 "Mod Depth",
                 0.3,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
@@ -121,6 +108,7 @@ impl Default for ReverbParams {
             .with_string_to_value(formatters::s2v_f32_percentage()),
 
             width: FloatParam::new(
+                "width",
                 "Width",
                 1.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
@@ -131,6 +119,7 @@ impl Default for ReverbParams {
             .with_string_to_value(formatters::s2v_f32_percentage()),
 
             mix: FloatParam::new(
+                "mix",
                 "Mix",
                 0.5,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
@@ -140,7 +129,7 @@ impl Default for ReverbParams {
             .with_value_to_string(formatters::v2s_f32_percentage(0))
             .with_string_to_value(formatters::s2v_f32_percentage()),
 
-            freeze: BoolParam::new("Freeze", false),
+            freeze: BoolParam::new("freeze", "Freeze", false),
         }
     }
 }

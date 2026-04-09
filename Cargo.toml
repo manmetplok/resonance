@@ -1,6 +1,12 @@
 [workspace]
-members = ["resonance-audio", "resonance-app", "resonance-common", "resonance-dsp", "plugins/resonance-drums", "plugins/resonance-amp", "plugins/resonance-ir", "plugins/resonance-reverb", "xtask"]
+members = ["resonance-audio", "resonance-app", "resonance-common", "resonance-dsp", "resonance-plugin", "plugins/resonance-drums", "plugins/resonance-amp", "plugins/resonance-ir", "plugins/resonance-reverb"]
 resolver = "2"
+
+[workspace.dependencies]
+clack-plugin = { git = "https://github.com/prokopyl/clack.git" }
+clack-extensions = { git = "https://github.com/prokopyl/clack.git", features = [
+    "clack-plugin", "audio-ports", "params", "state", "note-ports", "latency"
+] }
 
 [profile.release]
 lto = "thin"
