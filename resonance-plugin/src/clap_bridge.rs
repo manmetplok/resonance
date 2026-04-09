@@ -331,6 +331,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
                 "reverb" => Some(c"reverb"),
                 "sampler" => Some(c"sampler"),
                 "drum" | "drum-machine" => Some(c"drum-machine"),
+                "synthesizer" | "synth" => Some(c"synthesizer"),
                 "cabinet-simulator" => Some(c"cabinet-simulator"),
                 _ => None,
             })

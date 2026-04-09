@@ -3475,6 +3475,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "resonance-wavetable"
+version = "0.1.0"
+dependencies = [
+ "resonance-common",
+ "resonance-dsp",
+ "resonance-plugin",
+]
+
+[[package]]
 name = "rfd"
 version = "0.15.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
