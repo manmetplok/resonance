@@ -1,4 +1,5 @@
 /// Message types for the Resonance application.
+use crate::project::LoadedProject;
 use crate::state::{ClipEdge, PunchDragTarget, ViewMode};
 use resonance_audio::types::{ClipId, PluginInstanceId, ScannedPlugin, TrackId};
 
@@ -63,4 +64,11 @@ pub(crate) enum Message {
     ViewportWidth(f32),
     BounceToWav,
     BouncePathSelected(Option<String>),
+    SaveProject,
+    SaveProjectAs,
+    OpenProject,
+    SavePathSelected(Option<String>),
+    OpenPathSelected(Option<String>),
+    ProjectSaved(Result<(), String>),
+    ProjectLoaded(Result<Box<LoadedProject>, String>),
 }

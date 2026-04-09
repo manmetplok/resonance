@@ -47,6 +47,7 @@ impl TimelineCanvas<'_> {
 
 /// Which part of a clip is being dragged.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum ClipInteraction {
     Move { clip_id: ClipId, grab_offset_x: f32 },
     Trim { clip_id: ClipId, edge: ClipEdge },

@@ -1,9 +1,12 @@
 /// Engine event handling for the Resonance application.
+use crate::message::Message;
+use crate::project;
 use crate::state::*;
+use iced::Task;
 use resonance_audio::types::*;
 
 impl crate::Resonance {
-    pub(crate) fn handle_engine_event(&mut self, event: AudioEvent) {
+    pub(crate) fn handle_engine_event(&mut self, event: AudioEvent) -> Task<Message> {
         match event {
             AudioEvent::PlayheadMoved(pos) => {
                 self.playhead = pos;
@@ -19,25 +22,36 @@ impl crate::Resonance {
                 name,
                 waveform_peaks,
             } => {
-                self.clips.push(ClipState {
-                    id: clip_id,
-                    track_id,
-                    start_sample,
-                    duration_samples,
-                    name,
-                    total_frames: duration_samples,
-                    trim_start_frames: 0,
-                    trim_end_frames: 0,
-                    waveform_peaks,
-                });
+                if self.loading {
+                    // During load: update waveform peaks on the clip we already created
+                    if let Some(clip) = self.clips.iter_mut().find(|c| c.id == clip_id) {
+                        clip.waveform_peaks = waveform_peaks;
+                        clip.total_frames = duration_samples + clip.trim_start_frames + clip.trim_end_frames;
+                    }
+                } else {
+                    self.clips.push(ClipState {
+                        id: clip_id,
+                        track_id,
+                        start_sample,
+                        duration_samples,
+                        name,
+                        total_frames: duration_samples,
+                        trim_start_frames: 0,
+                        trim_end_frames: 0,
+                        waveform_peaks,
+                    });
+                }
             }
             AudioEvent::TrackAdded { track_id } => {
+                if self.loading {
+                    return Task::none();
+                }
                 let order = self.next_track_order;
                 self.next_track_order += 1;
                 self.tracks.push(TrackState {
                     id: track_id,
                     name: format!("Track {}", track_id),
-                    volume: 0.0, // 0 dB = unity gain
+                    volume: 0.0,
                     pan: 0.0,
                     muted: false,
                     soloed: false,
@@ -52,13 +66,11 @@ impl crate::Resonance {
                 });
             }
             AudioEvent::TrackRemoved { track_id } => {
-                // Clear selected_clip if it belongs to a clip on the removed track
                 if let Some(sel_clip_id) = self.selected_clip {
                     if self.clips.iter().any(|c| c.id == sel_clip_id && c.track_id == track_id) {
                         self.selected_clip = None;
                     }
                 }
-                // Clear selected_plugin if it belongs to the removed track
                 if let Some(sel_plugin_id) = self.selected_plugin {
                     if self.tracks.iter()
                         .filter(|t| t.id == track_id)
@@ -98,9 +110,11 @@ impl crate::Resonance {
                 }
             }
             AudioEvent::Stopped => {
-                self.playing = false;
-                self.recording = false;
-                self.playhead = 0;
+                if !self.loading {
+                    self.playing = false;
+                    self.recording = false;
+                    self.playhead = 0;
+                }
             }
             AudioEvent::Error(e) => {
                 eprintln!("Audio engine error: {}", e);
@@ -143,22 +157,33 @@ impl crate::Resonance {
                 instance_id,
                 plugin_name,
                 clap_plugin_id,
+                clap_file_path,
                 params,
             } => {
-                let custom = match clap_plugin_id.as_str() {
-                    "com.resonance.drums" => PluginCustomState::Drums(Default::default()),
-                    "com.resonance.amp" => PluginCustomState::Amp(Default::default()),
-                    "com.resonance.ir" => PluginCustomState::Ir(Default::default()),
-                    _ => PluginCustomState::Generic,
-                };
-                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
-                    track.plugins.push(PluginSlotState {
-                        instance_id,
-                        plugin_name,
-                        clap_plugin_id,
-                        params,
-                        custom,
-                    });
+                if self.loading {
+                    // During load: update params on the plugin slot we already created
+                    if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                        if let Some(slot) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
+                            slot.params = params;
+                        }
+                    }
+                } else {
+                    let custom = match clap_plugin_id.as_str() {
+                        "com.resonance.drums" => PluginCustomState::Drums(Default::default()),
+                        "com.resonance.amp" => PluginCustomState::Amp(Default::default()),
+                        "com.resonance.ir" => PluginCustomState::Ir(Default::default()),
+                        _ => PluginCustomState::Generic,
+                    };
+                    if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                        track.plugins.push(PluginSlotState {
+                            instance_id,
+                            plugin_name,
+                            clap_plugin_id,
+                            clap_file_path,
+                            params,
+                            custom,
+                        });
+                    }
                 }
             }
             AudioEvent::PluginRemoved {
@@ -185,7 +210,6 @@ impl crate::Resonance {
             }
             AudioEvent::PluginStateSaved { instance_id, data } => {
                 // If we have a pending path to inject, modify the state and reload.
-                // State format is plain JSON: { "params": {...}, "model_path": "...", ... }
                 if let Some((pending_id, ref key, ref path)) = self.pending_plugin_path.clone() {
                     if pending_id == instance_id {
                         if let Ok(mut state) =
@@ -203,6 +227,59 @@ impl crate::Resonance {
                     }
                 }
             }
+            // --- Project save events ---
+            AudioEvent::ClipDataExported { clip_id, data } => {
+                if let Some(ref mut save) = self.save_state {
+                    save.clip_data.insert(clip_id, data);
+                }
+            }
+            AudioEvent::AllClipDataExported => {
+                if let Some(ref mut save) = self.save_state {
+                    save.clips_done = true;
+                }
+                return self.try_finish_save();
+            }
+            AudioEvent::AllPluginStatesSaved { states } => {
+                if let Some(ref mut save) = self.save_state {
+                    save.plugin_states = states;
+                    save.plugins_done = true;
+                }
+                return self.try_finish_save();
+            }
+            // --- Project load events ---
+            AudioEvent::AllCleared => {
+                if let Some(loaded) = self.pending_load.take() {
+                    // Extract project_path before replay (replay clears it)
+                    let path = self.project_path.clone();
+                    self.replay_loaded_project(loaded);
+                    self.project_path = path;
+                    self.loading = false;
+                }
+            }
         }
+        Task::none()
+    }
+
+    fn try_finish_save(&mut self) -> Task<Message> {
+        let both_done = self.save_state.as_ref()
+            .map(|s| s.clips_done && s.plugins_done)
+            .unwrap_or(false);
+
+        if !both_done {
+            return Task::none();
+        }
+
+        let save = self.save_state.take().unwrap();
+        let project_file = self.build_project_file();
+        let path = save.path.clone();
+        let clip_data = save.clip_data;
+        let plugin_states = save.plugin_states;
+
+        Task::perform(
+            async move {
+                project::save_project(&path, &project_file, &clip_data, &plugin_states)
+            },
+            Message::ProjectSaved,
+        )
     }
 }

@@ -367,7 +367,7 @@ impl NamInference for WaveNetModel {
     fn process_sample(&mut self, input: f32) -> f32 {
         // Seed activation with the raw input (will be rechanneled by first stack's rechannel)
         self.activation[0] = input;
-        let mut current_ch = 1; // input_size = 1
+        let mut _current_ch = 1; // input_size = 1
 
         // Zero head_input accumulator
         self.head_input.fill(0.0);
@@ -386,7 +386,7 @@ impl NamInference for WaveNetModel {
                     &mut self.rechannel_buf,
                 );
                 self.activation[..rc.out_ch].copy_from_slice(&self.rechannel_buf[..rc.out_ch]);
-                current_ch = rc.out_ch;
+                _current_ch = rc.out_ch;
             }
 
             // Save condition signal (activation after rechannel, before layers modify it)
@@ -476,7 +476,7 @@ impl NamInference for WaveNetModel {
                 self.head_input[c] += self.head_buf_a[c] + hr.bias[c];
             }
 
-            current_ch = ch;
+            _current_ch = ch;
         }
 
         // Head MLP

@@ -1,6 +1,7 @@
 /// Drum kit definition and loaded pad data.
 
 /// A loaded pad with its decoded audio data.
+#[allow(dead_code)]
 pub struct LoadedPad {
     pub note: u8,
     pub name: String,

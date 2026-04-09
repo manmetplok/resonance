@@ -148,6 +148,14 @@ impl crate::Resonance {
             .on_press(Message::AddTrack)
             .style(|_theme, status| theme::transport_button_style(status));
 
+        let open_btn = button(text("\u{1f4c2}").size(14).color(theme::TEXT).shaping(Shaping::Advanced))
+            .on_press(Message::OpenProject)
+            .style(|_theme, status| theme::transport_button_style(status));
+
+        let save_btn = button(text("\u{1f4be}").size(14).color(theme::TEXT).shaping(Shaping::Advanced))
+            .on_press(Message::SaveProject)
+            .style(|_theme, status| theme::transport_button_style(status));
+
         let settings_btn = button(text("\u{2699}").size(16).color(theme::TEXT))
             .on_press(Message::OpenSettings)
             .style(|_theme, status| theme::transport_button_style(status));
@@ -235,6 +243,9 @@ impl crate::Resonance {
             zoom_in,
             Space::with_width(20),
             add_track,
+            Space::with_width(6),
+            open_btn,
+            save_btn,
             Space::with_width(6),
             settings_btn,
             Space::with_width(10),

@@ -116,6 +116,34 @@ pub enum AudioCommand {
     BounceToWav {
         path: String,
     },
+    /// Add a track with a specific ID (for project load).
+    AddTrackWithId {
+        track_id: TrackId,
+        name: String,
+    },
+    /// Add a plugin with a specific instance ID (for project load).
+    AddPluginWithId {
+        track_id: TrackId,
+        instance_id: PluginInstanceId,
+        clap_file_path: String,
+        clap_plugin_id: String,
+    },
+    /// Load a pre-decoded audio clip directly into the engine (for project load).
+    LoadClipDirect {
+        clip_id: ClipId,
+        track_id: TrackId,
+        start_sample: SamplePos,
+        data: Vec<f32>,
+        name: String,
+        trim_start_frames: u64,
+        trim_end_frames: u64,
+    },
+    /// Request all clip audio data for project save.
+    ExportAllClipData,
+    /// Batch save all plugin states for project save.
+    SaveAllPluginStates,
+    /// Remove all tracks, clips, and plugins (for project load).
+    ClearAll,
 }
 
 /// Events sent from the audio engine back to the GUI.
@@ -178,6 +206,7 @@ pub enum AudioEvent {
         instance_id: PluginInstanceId,
         plugin_name: String,
         clap_plugin_id: String,
+        clap_file_path: String,
         params: Vec<ParamInfo>,
     },
     PluginRemoved {
@@ -195,6 +224,19 @@ pub enum AudioEvent {
         path: String,
     },
     BounceError(String),
+    /// Exported clip audio data for project save.
+    ClipDataExported {
+        clip_id: ClipId,
+        data: Vec<f32>,
+    },
+    /// All clip data has been exported.
+    AllClipDataExported,
+    /// All plugin states saved in batch.
+    AllPluginStatesSaved {
+        states: Vec<(PluginInstanceId, Vec<u8>)>,
+    },
+    /// Engine has been cleared of all state.
+    AllCleared,
 }
 
 /// An audio clip stored in memory.

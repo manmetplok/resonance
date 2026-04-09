@@ -1,0 +1,17 @@
+[package]
+name = "resonance-wavetable"
+version = "0.1.0"
+edition = "2021"
+description = "A wavetable synthesizer instrument CLAP plugin for the Resonance DAW"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = []
+ui = ["resonance-plugin/ui"]
+
+[dependencies]
+resonance-plugin = { path = "../../resonance-plugin" }
+resonance-common = { path = "../../resonance-common" }
+resonance-dsp = { path = "../../resonance-dsp" }
