@@ -4,6 +4,7 @@ use resonance_audio::AudioEngine;
 
 mod engine_events;
 mod message;
+pub(crate) mod project;
 pub(crate) mod state;
 mod theme;
 mod timeline;
@@ -57,6 +58,14 @@ pub(crate) struct Resonance {
     pub(crate) selected_plugin: Option<PluginInstanceId>,
     /// Current viewport width of the timeline canvas (in pixels).
     pub(crate) viewport_width: f32,
+    /// Path to the current project directory (None if unsaved).
+    pub(crate) project_path: Option<std::path::PathBuf>,
+    /// In-progress save state: collecting data from engine.
+    pub(crate) save_state: Option<project::SaveCollector>,
+    /// True while loading a project (suppresses engine events).
+    pub(crate) loading: bool,
+    /// Pending project data to replay after ClearAll completes.
+    pub(crate) pending_load: Option<Box<project::LoadedProject>>,
 }
 
 fn main() -> iced::Result {
@@ -124,6 +133,10 @@ impl Resonance {
             clip_trim: None,
             selected_plugin: None,
             viewport_width: 1000.0,
+            project_path: None,
+            save_state: None,
+            loading: false,
+            pending_load: None,
         };
 
         (app, iced::Task::none())

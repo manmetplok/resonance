@@ -1,10 +1,12 @@
 /// Update logic and subscription for the Resonance application.
 use crate::message::Message;
+use crate::project::{self, LoadedProject, ProjectClip, ProjectFile, ProjectPlugin, ProjectTrack, SaveCollector};
 use crate::state::*;
 use crate::theme;
 use crate::util::db_to_gain;
-use iced::{Subscription, Task};
+use iced::{keyboard, Subscription, Task};
 use resonance_audio::types::*;
+use std::collections::HashMap;
 
 impl crate::Resonance {
     pub(crate) fn update(&mut self, message: Message) -> Task<Message> {
@@ -531,8 +533,10 @@ impl crate::Resonance {
                 }
             }
             Message::Tick => {
+                let mut tasks = Vec::new();
                 while let Some(event) = self.engine.try_recv() {
-                    self.handle_engine_event(event);
+                    let task = self.handle_engine_event(event);
+                    tasks.push(task);
                 }
                 // Update VU meter levels
                 {
@@ -570,6 +574,9 @@ impl crate::Resonance {
                     } else if playhead_x < 0.0 {
                         self.scroll_offset = (playhead_seconds as f32 * self.zoom - visible_width * 0.2).max(0.0);
                     }
+                }
+                if !tasks.is_empty() {
+                    return Task::batch(tasks);
                 }
             }
             Message::PluginFileScanComplete(instance_id, path, files) => {
@@ -629,6 +636,81 @@ impl crate::Resonance {
             }
             Message::ViewportWidth(w) => {
                 self.viewport_width = w;
+            }
+            Message::SaveProject => {
+                if self.project_path.is_some() {
+                    return self.start_save();
+                } else {
+                    return self.update(Message::SaveProjectAs);
+                }
+            }
+            Message::SaveProjectAs => {
+                return Task::perform(
+                    async move {
+                        let result = rfd::AsyncFileDialog::new()
+                            .set_title("Save Project")
+                            .set_file_name("MyProject.rproj")
+                            .save_file()
+                            .await;
+                        result.map(|f| f.path().to_string_lossy().to_string())
+                    },
+                    Message::SavePathSelected,
+                );
+            }
+            Message::SavePathSelected(Some(path)) => {
+                // Ensure path ends with .rproj
+                let path = if path.ends_with(".rproj") {
+                    std::path::PathBuf::from(path)
+                } else {
+                    std::path::PathBuf::from(format!("{path}.rproj"))
+                };
+                self.project_path = Some(path);
+                return self.start_save();
+            }
+            Message::SavePathSelected(None) => {}
+            Message::OpenProject => {
+                return Task::perform(
+                    async move {
+                        let result = rfd::AsyncFileDialog::new()
+                            .set_title("Open Project")
+                            .add_filter("Resonance Project", &["rproj"])
+                            .pick_folder()
+                            .await;
+                        result.map(|f| f.path().to_string_lossy().to_string())
+                    },
+                    Message::OpenPathSelected,
+                );
+            }
+            Message::OpenPathSelected(Some(path)) => {
+                let path = std::path::PathBuf::from(path);
+                self.project_path = Some(path.clone());
+                return Task::perform(
+                    async move {
+                        project::load_project(&path)
+                            .map(|p| Box::new(p))
+                    },
+                    Message::ProjectLoaded,
+                );
+            }
+            Message::OpenPathSelected(None) => {}
+            Message::ProjectSaved(Ok(())) => {
+                self.save_state = None;
+            }
+            Message::ProjectSaved(Err(e)) => {
+                self.save_state = None;
+                self.error_message = Some(format!("Save failed: {e}"));
+            }
+            Message::ProjectLoaded(Ok(loaded)) => {
+                // Stop playback, clear state, then replay
+                self.engine.send(AudioCommand::Stop);
+                self.playing = false;
+                self.recording = false;
+                self.loading = true;
+                self.pending_load = Some(loaded);
+                self.engine.send(AudioCommand::ClearAll);
+            }
+            Message::ProjectLoaded(Err(e)) => {
+                self.error_message = Some(format!("Load failed: {e}"));
             }
         }
         Task::none()
@@ -691,7 +773,271 @@ impl crate::Resonance {
         }
     }
 
+    fn start_save(&mut self) -> Task<Message> {
+        let path = match &self.project_path {
+            Some(p) => p.clone(),
+            None => return Task::none(),
+        };
+        self.save_state = Some(SaveCollector {
+            path,
+            clip_data: HashMap::new(),
+            plugin_states: Vec::new(),
+            clips_done: false,
+            plugins_done: false,
+        });
+        self.engine.send(AudioCommand::ExportAllClipData);
+        self.engine.send(AudioCommand::SaveAllPluginStates);
+        Task::none()
+    }
+
+    /// Build a ProjectFile from current GUI state.
+    pub(crate) fn build_project_file(&self) -> ProjectFile {
+        let tracks = self.sorted_tracks().iter().map(|t| {
+            ProjectTrack {
+                id: t.id,
+                name: t.name.clone(),
+                order: t.order,
+                volume: t.volume,
+                pan: t.pan,
+                muted: t.muted,
+                soloed: t.soloed,
+                record_armed: t.record_armed,
+                monitor_enabled: t.monitor_enabled,
+                mono: t.mono,
+                input_device_name: t.input_device_name.clone(),
+                plugins: t.plugins.iter().map(|p| {
+                    ProjectPlugin {
+                        instance_id: p.instance_id,
+                        plugin_name: p.plugin_name.clone(),
+                        clap_plugin_id: p.clap_plugin_id.clone(),
+                        clap_file_path: p.clap_file_path.clone(),
+                        state_file: format!("plugins/plugin_{}.bin", p.instance_id),
+                    }
+                }).collect(),
+            }
+        }).collect();
+
+        let clips = self.clips.iter().map(|c| {
+            ProjectClip {
+                id: c.id,
+                track_id: c.track_id,
+                start_sample: c.start_sample,
+                name: c.name.clone(),
+                total_frames: c.total_frames,
+                trim_start_frames: c.trim_start_frames,
+                trim_end_frames: c.trim_end_frames,
+                audio_file: format!("audio/clip_{}.raw", c.id),
+            }
+        }).collect();
+
+        ProjectFile {
+            version: 1,
+            sample_rate: self.sample_rate,
+            bpm: self.bpm,
+            time_sig_num: self.time_sig_num,
+            time_sig_den: self.time_sig_den,
+            metronome_enabled: self.metronome_enabled,
+            master_volume: self.master_volume,
+            punch_enabled: self.punch_enabled,
+            punch_in: self.punch_in,
+            punch_out: self.punch_out,
+            tracks,
+            clips,
+        }
+    }
+
+    /// Replay a loaded project into the engine and rebuild GUI state.
+    pub(crate) fn replay_loaded_project(&mut self, loaded: Box<LoadedProject>) {
+        let project = &loaded.file;
+        self.project_path = None; // Will be set by the caller (OpenPathSelected)
+
+        // Restore global settings
+        self.bpm = project.bpm;
+        self.time_sig_num = project.time_sig_num;
+        self.time_sig_den = project.time_sig_den;
+        self.metronome_enabled = project.metronome_enabled;
+        self.master_volume = project.master_volume;
+        self.punch_enabled = project.punch_enabled;
+        self.punch_in = project.punch_in;
+        self.punch_out = project.punch_out;
+        self.playhead = 0;
+        self.scroll_offset = 0.0;
+        self.scroll_offset_y = 0.0;
+        self.selected_clip = None;
+        self.selected_plugin = None;
+        self.clip_drag = None;
+        self.clip_trim = None;
+
+        self.engine.send(AudioCommand::SetBpm { bpm: self.bpm });
+        self.engine.send(AudioCommand::SetTimeSignature {
+            numerator: self.time_sig_num,
+            denominator: self.time_sig_den,
+        });
+        self.engine.send(AudioCommand::SetMetronomeEnabled {
+            enabled: self.metronome_enabled,
+        });
+        self.engine.send(AudioCommand::SetMasterVolume {
+            volume: db_to_gain(self.master_volume),
+        });
+        self.engine.send(AudioCommand::SetPunchRange {
+            enabled: self.punch_enabled,
+            punch_in: self.punch_in,
+            punch_out: self.punch_out,
+        });
+
+        // Clear GUI state
+        self.tracks.clear();
+        self.clips.clear();
+        self.next_track_order = 0;
+
+        // Replay tracks
+        for pt in &project.tracks {
+            self.engine.send(AudioCommand::AddTrackWithId {
+                track_id: pt.id,
+                name: pt.name.clone(),
+            });
+
+            // Set track properties
+            self.engine.send(AudioCommand::SetTrackVolume {
+                track_id: pt.id,
+                volume: db_to_gain(pt.volume),
+            });
+            self.engine.send(AudioCommand::SetTrackPan {
+                track_id: pt.id,
+                pan: pt.pan,
+            });
+            self.engine.send(AudioCommand::SetTrackMute {
+                track_id: pt.id,
+                muted: pt.muted,
+            });
+            self.engine.send(AudioCommand::SetTrackSolo {
+                track_id: pt.id,
+                soloed: pt.soloed,
+            });
+            self.engine.send(AudioCommand::SetTrackRecordArm {
+                track_id: pt.id,
+                armed: pt.record_armed,
+            });
+            self.engine.send(AudioCommand::SetTrackMonitor {
+                track_id: pt.id,
+                enabled: pt.monitor_enabled,
+            });
+            self.engine.send(AudioCommand::SetTrackMono {
+                track_id: pt.id,
+                mono: pt.mono,
+            });
+            if let Some(ref device) = pt.input_device_name {
+                self.engine.send(AudioCommand::SetTrackInputDevice {
+                    track_id: pt.id,
+                    device_name: Some(device.clone()),
+                });
+            }
+
+            // Build GUI track state
+            let mut gui_plugins = Vec::new();
+            for pp in &pt.plugins {
+                self.engine.send(AudioCommand::AddPluginWithId {
+                    track_id: pt.id,
+                    instance_id: pp.instance_id,
+                    clap_file_path: pp.clap_file_path.clone(),
+                    clap_plugin_id: pp.clap_plugin_id.clone(),
+                });
+                if let Some(state_data) = loaded.plugin_states.get(&pp.instance_id) {
+                    self.engine.send(AudioCommand::LoadPluginState {
+                        instance_id: pp.instance_id,
+                        data: state_data.clone(),
+                    });
+                }
+
+                let custom = match pp.clap_plugin_id.as_str() {
+                    "com.resonance.drums" => PluginCustomState::Drums(Default::default()),
+                    "com.resonance.amp" => PluginCustomState::Amp(Default::default()),
+                    "com.resonance.ir" => PluginCustomState::Ir(Default::default()),
+                    _ => PluginCustomState::Generic,
+                };
+                gui_plugins.push(PluginSlotState {
+                    instance_id: pp.instance_id,
+                    plugin_name: pp.plugin_name.clone(),
+                    clap_plugin_id: pp.clap_plugin_id.clone(),
+                    clap_file_path: pp.clap_file_path.clone(),
+                    params: Vec::new(), // Will be populated by PluginAdded events
+                    custom,
+                });
+            }
+
+            self.tracks.push(TrackState {
+                id: pt.id,
+                name: pt.name.clone(),
+                volume: pt.volume,
+                pan: pt.pan,
+                muted: pt.muted,
+                soloed: pt.soloed,
+                order: self.next_track_order,
+                record_armed: pt.record_armed,
+                monitor_enabled: pt.monitor_enabled,
+                mono: pt.mono,
+                input_device_name: pt.input_device_name.clone(),
+                plugins: gui_plugins,
+                level_l: 0.0,
+                level_r: 0.0,
+            });
+            self.next_track_order += 1;
+        }
+
+        // Replay clips
+        for pc in &project.clips {
+            if let Some(data) = loaded.audio_data.get(&pc.id) {
+                self.engine.send(AudioCommand::LoadClipDirect {
+                    clip_id: pc.id,
+                    track_id: pc.track_id,
+                    start_sample: pc.start_sample,
+                    data: data.clone(),
+                    name: pc.name.clone(),
+                    trim_start_frames: pc.trim_start_frames,
+                    trim_end_frames: pc.trim_end_frames,
+                });
+
+                let duration_samples = pc.total_frames
+                    .saturating_sub(pc.trim_start_frames)
+                    .saturating_sub(pc.trim_end_frames);
+                self.clips.push(ClipState {
+                    id: pc.id,
+                    track_id: pc.track_id,
+                    start_sample: pc.start_sample,
+                    duration_samples,
+                    name: pc.name.clone(),
+                    total_frames: pc.total_frames,
+                    trim_start_frames: pc.trim_start_frames,
+                    trim_end_frames: pc.trim_end_frames,
+                    waveform_peaks: Vec::new(), // Will be populated by ClipImported event
+                });
+            }
+        }
+
+        self.punch_range_set = self.punch_enabled;
+    }
+
     pub(crate) fn subscription(&self) -> Subscription<Message> {
-        iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::Tick)
+        let tick = iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::Tick);
+        let keys = keyboard::on_key_press(|key, modifiers| {
+            if modifiers.command() {
+                match key {
+                    keyboard::Key::Character(ref c) if c.as_str() == "s" => {
+                        if modifiers.shift() {
+                            Some(Message::SaveProjectAs)
+                        } else {
+                            Some(Message::SaveProject)
+                        }
+                    }
+                    keyboard::Key::Character(ref c) if c.as_str() == "o" => {
+                        Some(Message::OpenProject)
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        });
+        Subscription::batch([tick, keys])
     }
 }

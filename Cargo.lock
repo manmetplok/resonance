@@ -3392,6 +3392,7 @@ dependencies = [
 name = "resonance-app"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "dirs",
  "iced",
  "resonance-amp",

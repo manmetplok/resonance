@@ -42,6 +42,7 @@ pub(crate) struct SharedState {
 }
 
 /// The audio engine.
+#[allow(dead_code)]
 pub struct AudioEngine {
     cmd_tx: Sender<AudioCommand>,
     event_rx: Receiver<AudioEvent>,
@@ -727,6 +728,7 @@ fn engine_thread(
                                 instance_id,
                                 plugin_name,
                                 clap_plugin_id: actual_plugin_id.clone(),
+                                clap_file_path,
                                 params,
                             });
                         }
@@ -904,6 +906,173 @@ fn engine_thread(
                     rec.punch_enabled = enabled;
                     rec.punch_in = pi;
                     rec.punch_out = po;
+                }
+                AudioCommand::AddTrackWithId { track_id, name } => {
+                    let track = Track::new(track_id, name);
+                    tracks.write().insert(track_id, track);
+                    next_track_id = next_track_id.max(track_id + 1);
+                    let _ = event_tx.send(AudioEvent::TrackAdded { track_id });
+                }
+                AudioCommand::AddPluginWithId {
+                    track_id,
+                    instance_id,
+                    clap_file_path,
+                    clap_plugin_id,
+                } => {
+                    let path = Path::new(&clap_file_path);
+
+                    let bundle_idx = bundles.iter().position(|b| {
+                        b.descriptors().iter().any(|d| d.id == clap_plugin_id)
+                    });
+
+                    let bundle_idx = match bundle_idx {
+                        Some(idx) => idx,
+                        None => {
+                            match ClapBundle::load(path) {
+                                Ok(bundle) => {
+                                    bundles.push(bundle);
+                                    bundles.len() - 1
+                                }
+                                Err(e) => {
+                                    let _ = event_tx.send(AudioEvent::Error(format!(
+                                        "Failed to load plugin: {}", e
+                                    )));
+                                    continue;
+                                }
+                            }
+                        }
+                    };
+
+                    let plugin_name = bundles[bundle_idx]
+                        .descriptors()
+                        .iter()
+                        .find(|d| d.id == clap_plugin_id)
+                        .map(|d| d.name.clone())
+                        .unwrap_or_else(|| clap_plugin_id.clone());
+
+                    match bundles[bundle_idx].create_instance(&clap_plugin_id, sample_rate) {
+                        Ok(instance) => {
+                            let params = instance.query_params();
+                            plugins.write().insert(instance_id, parking_lot::Mutex::new(SyncClapInstance(instance)));
+                            next_plugin_id = next_plugin_id.max(instance_id + 1);
+
+                            if let Some(track) = tracks.write().get_mut(&track_id) {
+                                track.plugin_ids.push(instance_id);
+                            }
+
+                            let _ = event_tx.send(AudioEvent::PluginAdded {
+                                track_id,
+                                instance_id,
+                                plugin_name,
+                                clap_plugin_id,
+                                clap_file_path,
+                                params,
+                            });
+                        }
+                        Err(e) => {
+                            let _ = event_tx.send(AudioEvent::Error(format!(
+                                "Failed to create plugin instance: {}", e
+                            )));
+                        }
+                    }
+                }
+                AudioCommand::LoadClipDirect {
+                    clip_id,
+                    track_id,
+                    start_sample,
+                    data,
+                    name,
+                    trim_start_frames,
+                    trim_end_frames,
+                } => {
+                    let total_frames = (data.len() / 2) as u64;
+                    let waveform_peaks = compute_waveform_peaks(&data);
+                    let duration_samples = total_frames
+                        .saturating_sub(trim_start_frames)
+                        .saturating_sub(trim_end_frames);
+                    let clip = AudioClip {
+                        id: clip_id,
+                        track_id,
+                        start_sample,
+                        data,
+                        name: name.clone(),
+                        trim_start_frames,
+                        trim_end_frames,
+                    };
+                    clips.write().push(clip);
+                    next_clip_id = next_clip_id.max(clip_id + 1);
+                    let _ = event_tx.send(AudioEvent::ClipImported {
+                        clip_id,
+                        track_id,
+                        start_sample,
+                        duration_samples,
+                        name,
+                        waveform_peaks,
+                    });
+                }
+                AudioCommand::ExportAllClipData => {
+                    let clips_guard = clips.read();
+                    for clip in clips_guard.iter() {
+                        let _ = event_tx.send(AudioEvent::ClipDataExported {
+                            clip_id: clip.id,
+                            data: clip.data.clone(),
+                        });
+                    }
+                    let _ = event_tx.send(AudioEvent::AllClipDataExported);
+                }
+                AudioCommand::SaveAllPluginStates => {
+                    let mut states = Vec::new();
+                    let plugins_guard = plugins.read();
+                    let mut retry = false;
+                    for (&instance_id, mutex) in plugins_guard.iter() {
+                        if let Some(inst) = mutex.try_lock() {
+                            if let Some(data) = inst.0.save_state() {
+                                states.push((instance_id, data));
+                            }
+                        } else {
+                            retry = true;
+                            break;
+                        }
+                    }
+                    drop(plugins_guard);
+                    if retry {
+                        let _ = cmd_tx_retry.send(AudioCommand::SaveAllPluginStates);
+                    } else {
+                        let _ = event_tx.send(AudioEvent::AllPluginStatesSaved { states });
+                    }
+                }
+                AudioCommand::ClearAll => {
+                    // Stop playback/recording
+                    shared.playing.store(false, Ordering::SeqCst);
+                    shared.recording.store(false, Ordering::SeqCst);
+                    shared.playhead.store(0, Ordering::SeqCst);
+                    rec.input_stream = None;
+                    rec.buffers.clear();
+
+                    // Drop all plugin instances outside the write lock
+                    {
+                        let mut plugins_guard = plugins.write();
+                        let removed: Vec<_> = plugins_guard.drain(..).collect();
+                        drop(plugins_guard);
+                        drop(removed);
+                    }
+
+                    // Clear tracks
+                    tracks.write().clear();
+
+                    // Clear clips -- collect to drop outside lock
+                    let removed_clips: Vec<_> = clips.write().drain(..).collect();
+                    drop(removed_clips);
+
+                    // Clear bundles
+                    bundles.clear();
+
+                    // Reset ID counters
+                    next_track_id = 1;
+                    next_clip_id = 1;
+                    next_plugin_id = 1;
+
+                    let _ = event_tx.send(AudioEvent::AllCleared);
                 }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}

@@ -2,6 +2,7 @@
 use resonance_audio::types::*;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ClipDragState {
     pub clip_id: ClipId,
     pub grab_offset_x: f32,
@@ -55,6 +56,7 @@ pub struct PluginSlotState {
     pub instance_id: PluginInstanceId,
     pub plugin_name: String,
     pub clap_plugin_id: String,
+    pub clap_file_path: String,
     pub params: Vec<ParamInfo>,
     pub custom: PluginCustomState,
 }
