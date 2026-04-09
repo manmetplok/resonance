@@ -61,4 +61,6 @@ pub(crate) enum Message {
     EndClipTrim,
     PluginFileScanComplete(PluginInstanceId, Option<String>, Vec<String>),
     ViewportWidth(f32),
+    BounceToWav,
+    BouncePathSelected(Option<String>),
 }

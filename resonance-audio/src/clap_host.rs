@@ -499,6 +499,20 @@ impl ClapInstance {
         true
     }
 
+    /// Reset plugin to clean state by cycling stop/start processing.
+    /// Clears reverb tails, delay lines, model state, etc.
+    pub fn reset_processing(&mut self) {
+        if !self.active {
+            return;
+        }
+        if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
+            unsafe { stop(self.plugin) };
+        }
+        if let Some(start) = unsafe { (*self.plugin).start_processing } {
+            unsafe { start(self.plugin) };
+        }
+    }
+
     /// Process audio through the plugin (in-place).
     /// CLAP spec allows aliased input/output buffers.
     /// Sends any pending parameter changes as input events.

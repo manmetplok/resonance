@@ -44,9 +44,9 @@ impl Default for AmpParams {
                 "Input Gain",
                 1.0,
                 FloatRange::Skewed {
-                    min: 0.1,
-                    max: 10.0,
-                    factor: FloatRange::gain_skew_factor(-20.0, 20.0),
+                    min: 0.01,
+                    max: 4.0,
+                    factor: FloatRange::gain_skew_factor(-40.0, 12.0),
                 },
             )
             .with_smoother(SmoothingStyle::Logarithmic(50.0))
@@ -56,11 +56,11 @@ impl Default for AmpParams {
             output_gain: FloatParam::new(
                 "output_gain",
                 "Output Gain",
-                1.0,
+                0.5,
                 FloatRange::Skewed {
-                    min: 0.1,
-                    max: 10.0,
-                    factor: FloatRange::gain_skew_factor(-20.0, 20.0),
+                    min: 0.001,
+                    max: 4.0,
+                    factor: FloatRange::gain_skew_factor(-60.0, 12.0),
                 },
             )
             .with_smoother(SmoothingStyle::Logarithmic(50.0))

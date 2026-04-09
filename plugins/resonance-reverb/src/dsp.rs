@@ -234,8 +234,8 @@ impl ReverbDsp {
 
     /// Set modulation depth (0..1 normalized).
     pub fn set_mod_depth(&mut self, depth: f32) {
-        // Map to 0..3 samples of delay modulation
-        self.mod_depth_samples = depth * 3.0;
+        // Map to 0..40 samples (~0.9ms at 44.1kHz) of delay modulation.
+        self.mod_depth_samples = depth * 40.0;
     }
 
     /// Set modulation rate (Hz).

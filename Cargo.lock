@@ -3412,6 +3412,7 @@ dependencies = [
  "clap-sys",
  "cpal",
  "crossbeam-channel",
+ "hound",
  "indexmap",
  "libloading 0.8.9",
  "parking_lot 0.12.5",

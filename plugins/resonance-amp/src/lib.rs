@@ -21,6 +21,9 @@ fn scan_directory(dir: &Path) -> Vec<String> {
     resonance_common::scan_directory(dir, "nam")
 }
 
+/// Crossfade length in samples (~1.5ms at 44.1kHz) to avoid pops on model swap.
+const SWAP_FADE_SAMPLES: u32 = 64;
+
 pub struct ResonanceAmp {
     params: AmpParams,
     active_model: Option<Box<dyn NamInference>>,
@@ -34,6 +37,12 @@ pub struct ResonanceAmp {
     loader_stop: Arc<AtomicBool>,
     /// Handle to the persistent loader thread.
     loader_handle: Option<std::thread::JoinHandle<()>>,
+    /// Model waiting to be swapped in after fade-out completes.
+    pending_model: Option<Box<dyn NamInference>>,
+    /// Samples remaining in fade-out before model swap.
+    fade_out_remaining: u32,
+    /// Samples remaining in fade-in after model swap.
+    fade_in_remaining: u32,
 }
 
 impl ResonanceAmp {
@@ -158,6 +167,9 @@ impl ResonancePlugin for ResonanceAmp {
             load_request: Arc::new(AtomicI32::new(-1)),
             loader_stop: Arc::new(AtomicBool::new(false)),
             loader_handle: None,
+            pending_model: None,
+            fade_out_remaining: 0,
+            fade_in_remaining: 0,
         }
     }
 
@@ -191,6 +203,7 @@ impl ResonancePlugin for ResonanceAmp {
         if !path.is_empty() {
             let idx = self.rescan_directory(&path);
             self.last_file_index = idx as i32;
+            self.params.file_select.set_value(idx as i32);
 
             // Block on loading the model during init
             self.load_model_sync(path);
@@ -220,10 +233,18 @@ impl ResonancePlugin for ResonanceAmp {
     ) {
         resonance_common::flush_denormals();
 
-        // Check mailbox for newly loaded model
+        // Check mailbox for newly loaded model — start crossfade
         if let Some(mut guard) = self.model_mailbox.try_lock() {
             if guard.is_some() {
-                self.active_model = guard.take();
+                self.pending_model = guard.take();
+                if self.active_model.is_some() {
+                    self.fade_out_remaining = SWAP_FADE_SAMPLES;
+                    self.fade_in_remaining = 0;
+                } else {
+                    // No previous model — swap directly with fade-in
+                    self.active_model = self.pending_model.take();
+                    self.fade_in_remaining = SWAP_FADE_SAMPLES;
+                }
             }
         }
 
@@ -245,25 +266,35 @@ impl ResonancePlugin for ResonanceAmp {
             .smoother
             .set_target(self.params.output_gain.value());
 
-        match &mut self.active_model {
-            Some(model) => {
-                for i in 0..frames {
-                    let input_gain = self.params.input_gain.smoother.next();
-                    let output_gain = self.params.output_gain.smoother.next();
+        for i in 0..frames {
+            let input_gain = self.params.input_gain.smoother.next();
+            let output_gain = self.params.output_gain.smoother.next();
 
+            // Crossfade envelope: fade out old model, swap, fade in new model
+            let fade_gain = if self.fade_out_remaining > 0 {
+                self.fade_out_remaining -= 1;
+                let g = self.fade_out_remaining as f32 / SWAP_FADE_SAMPLES as f32;
+                if self.fade_out_remaining == 0 {
+                    self.active_model = self.pending_model.take();
+                    self.fade_in_remaining = SWAP_FADE_SAMPLES;
+                }
+                g
+            } else if self.fade_in_remaining > 0 {
+                self.fade_in_remaining -= 1;
+                1.0 - self.fade_in_remaining as f32 / SWAP_FADE_SAMPLES as f32
+            } else {
+                1.0
+            };
+
+            match &mut self.active_model {
+                Some(model) => {
                     let input = left[i] * input_gain;
-                    let output = model.process_sample(input) * output_gain;
-
-                    // Write same mono output to both channels
+                    let output = model.process_sample(input) * output_gain * fade_gain;
                     left[i] = output;
                     right[i] = output;
                 }
-            }
-            None => {
-                for i in 0..frames {
-                    let input_gain = self.params.input_gain.smoother.next();
-                    let output_gain = self.params.output_gain.smoother.next();
-                    let gain = input_gain * output_gain;
+                None => {
+                    let gain = input_gain * output_gain * fade_gain;
                     left[i] *= gain;
                     right[i] *= gain;
                 }

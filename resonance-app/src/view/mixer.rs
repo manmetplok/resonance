@@ -378,8 +378,23 @@ impl crate::Resonance {
         .spacing(2)
         .align_x(alignment::Horizontal::Center);
 
+        let bounce_btn: Element<'_, Message> = if self.bouncing {
+            text("Bouncing...").size(8).color(theme::ACCENT).into()
+        } else {
+            button(text("Bounce").size(8).color(theme::TEXT))
+                .on_press(Message::BounceToWav)
+                .style(|_theme, status| theme::small_button_style(status))
+                .padding([2, 8])
+                .into()
+        };
+
+        let bounce_row = container(bounce_btn)
+            .width(Length::Fill)
+            .center_x(Length::Fill);
+
         let strip_content = column![
             label,
+            bounce_row,
             Space::with_height(Length::Fill),
             fader_section,
         ]

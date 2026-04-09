@@ -21,6 +21,9 @@ fn scan_directory(dir: &Path) -> Vec<String> {
     resonance_common::scan_directory(dir, "wav")
 }
 
+/// Crossfade length in samples (~1.5ms at 44.1kHz) to avoid pops on convolver swap.
+const SWAP_FADE_SAMPLES: u32 = 64;
+
 pub struct ResonanceIr {
     params: IrParams,
     active_convolver: Option<StereoConvolver>,
@@ -38,6 +41,12 @@ pub struct ResonanceIr {
     /// Bypass delay lines to compensate for reported latency when no convolver is active.
     bypass_delay_l: resonance_dsp::DelayLine,
     bypass_delay_r: resonance_dsp::DelayLine,
+    /// Convolver waiting to be swapped in after fade-out completes.
+    pending_convolver: Option<StereoConvolver>,
+    /// Samples remaining in fade-out before convolver swap.
+    fade_out_remaining: u32,
+    /// Samples remaining in fade-in after convolver swap.
+    fade_in_remaining: u32,
 }
 
 impl ResonanceIr {
@@ -190,6 +199,9 @@ impl ResonancePlugin for ResonanceIr {
             loader_handle: None,
             bypass_delay_l: resonance_dsp::DelayLine::new(convolver::BLOCK_SIZE),
             bypass_delay_r: resonance_dsp::DelayLine::new(convolver::BLOCK_SIZE),
+            pending_convolver: None,
+            fade_out_remaining: 0,
+            fade_in_remaining: 0,
         }
     }
 
@@ -221,6 +233,7 @@ impl ResonancePlugin for ResonanceIr {
         if !path.is_empty() {
             let idx = self.rescan_directory(&path);
             self.last_file_index = idx as i32;
+            self.params.file_select.set_value(idx as i32);
 
             // Block on IR loading during initialize so it's ready before processing
             let mailbox = &self.convolver_mailbox;
@@ -254,10 +267,18 @@ impl ResonancePlugin for ResonanceIr {
     ) {
         resonance_common::flush_denormals();
 
-        // Check mailbox for newly loaded convolver
+        // Check mailbox for newly loaded convolver — start crossfade
         if let Some(mut guard) = self.convolver_mailbox.try_lock() {
             if guard.is_some() {
-                self.active_convolver = guard.take();
+                self.pending_convolver = guard.take();
+                if self.active_convolver.is_some() {
+                    self.fade_out_remaining = SWAP_FADE_SAMPLES;
+                    self.fade_in_remaining = 0;
+                } else {
+                    // No previous convolver — swap directly with fade-in
+                    self.active_convolver = self.pending_convolver.take();
+                    self.fade_in_remaining = SWAP_FADE_SAMPLES;
+                }
             }
         }
 
@@ -273,31 +294,44 @@ impl ResonancePlugin for ResonanceIr {
         self.params.dry_wet.smoother.set_target(self.params.dry_wet.value());
         self.params.output_gain.smoother.set_target(self.params.output_gain.value());
 
-        match &mut self.active_convolver {
-            Some(conv) => {
-                for i in 0..frames {
-                    let dry_wet = self.params.dry_wet.smoother.next();
-                    let output_gain = self.params.output_gain.smoother.next();
+        for i in 0..frames {
+            let dry_wet = self.params.dry_wet.smoother.next();
+            let output_gain = self.params.output_gain.smoother.next();
 
+            // Crossfade envelope: fade out old convolver, swap, fade in new convolver
+            let fade_gain = if self.fade_out_remaining > 0 {
+                self.fade_out_remaining -= 1;
+                let g = self.fade_out_remaining as f32 / SWAP_FADE_SAMPLES as f32;
+                if self.fade_out_remaining == 0 {
+                    self.active_convolver = self.pending_convolver.take();
+                    self.fade_in_remaining = SWAP_FADE_SAMPLES;
+                }
+                g
+            } else if self.fade_in_remaining > 0 {
+                self.fade_in_remaining -= 1;
+                1.0 - self.fade_in_remaining as f32 / SWAP_FADE_SAMPLES as f32
+            } else {
+                1.0
+            };
+
+            match &mut self.active_convolver {
+                Some(conv) => {
                     let dry_l = left[i];
                     let dry_r = right[i];
 
                     let (wet_l, wet_r) = conv.process_sample(dry_l, dry_r);
 
                     let dry_amount = 1.0 - dry_wet;
-                    left[i] = (dry_l * dry_amount + wet_l * dry_wet) * output_gain;
-                    right[i] = (dry_r * dry_amount + wet_r * dry_wet) * output_gain;
+                    left[i] = (dry_l * dry_amount + wet_l * dry_wet) * output_gain * fade_gain;
+                    right[i] = (dry_r * dry_amount + wet_r * dry_wet) * output_gain * fade_gain;
                 }
-            }
-            None => {
-                for i in 0..frames {
-                    let output_gain = self.params.output_gain.smoother.next();
+                None => {
                     let delayed_l = self.bypass_delay_l.tap(convolver::BLOCK_SIZE);
                     let delayed_r = self.bypass_delay_r.tap(convolver::BLOCK_SIZE);
                     self.bypass_delay_l.push(left[i]);
                     self.bypass_delay_r.push(right[i]);
-                    left[i] = delayed_l * output_gain;
-                    right[i] = delayed_r * output_gain;
+                    left[i] = delayed_l * output_gain * fade_gain;
+                    right[i] = delayed_r * output_gain * fade_gain;
                 }
             }
         }

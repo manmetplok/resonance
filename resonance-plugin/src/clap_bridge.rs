@@ -172,6 +172,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                             let value = e.value();
                             if let Some(slot) = self.shared.find_slot(clap_id.get()) {
                                 self.plugin.param(slot).set_plain(value);
+                                self.shared.set_value(slot, value);
                             }
                         }
                     }

@@ -13,3 +13,4 @@ clap-sys = "0.5"
 libloading = "0.8"
 indexmap = "2"
 resonance-dsp = { path = "../resonance-dsp" }
+hound = "3.5"

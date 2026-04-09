@@ -109,24 +109,28 @@ impl ResonancePlugin for ResonanceReverb {
 
         let freeze = self.params.freeze.value();
 
+        // Advance smoothers to end-of-block values for expensive DSP updates.
+        // These are called once per block instead of per-sample since they involve
+        // transcendental functions (powf, exp) and 8-channel loop recalculations.
+        for _ in 0..frames { self.params.size.smoother.next(); }
+        for _ in 0..frames { self.params.decay.smoother.next(); }
+        for _ in 0..frames { self.params.damping.smoother.next(); }
+        for _ in 0..frames { self.params.predelay.smoother.next(); }
+        for _ in 0..frames { self.params.mod_rate.smoother.next(); }
+        for _ in 0..frames { self.params.mod_depth.smoother.next(); }
+
+        reverb.set_size(self.params.size.smoother.current());
+        reverb.set_decay(self.params.decay.smoother.current());
+        reverb.set_freeze(freeze);
+        reverb.set_damping(self.params.damping.smoother.current());
+        reverb.set_predelay(self.params.predelay.smoother.current());
+        reverb.set_mod_rate(self.params.mod_rate.smoother.current());
+        reverb.set_mod_depth(self.params.mod_depth.smoother.current());
+
         for i in 0..frames {
-            let size = self.params.size.smoother.next();
-            let decay = self.params.decay.smoother.next();
-            let damping = self.params.damping.smoother.next();
-            let predelay = self.params.predelay.smoother.next();
-            let mod_rate = self.params.mod_rate.smoother.next();
-            let mod_depth = self.params.mod_depth.smoother.next();
             let mix = self.params.mix.smoother.next();
             let width = self.params.width.smoother.next();
             let diffusion = self.params.diffusion.smoother.next();
-
-            reverb.set_size(size);
-            reverb.set_decay(decay);
-            reverb.set_freeze(freeze);
-            reverb.set_damping(damping);
-            reverb.set_predelay(predelay);
-            reverb.set_mod_rate(mod_rate);
-            reverb.set_mod_depth(mod_depth);
 
             let dry_l = left[i];
             let dry_r = right[i];

@@ -175,6 +175,14 @@ impl crate::Resonance {
             AudioEvent::PluginsScanned { plugins } => {
                 self.available_plugins = plugins;
             }
+            AudioEvent::BounceComplete { path } => {
+                self.bouncing = false;
+                eprintln!("Bounce complete: {path}");
+            }
+            AudioEvent::BounceError(e) => {
+                self.bouncing = false;
+                self.error_message = Some(format!("Bounce failed: {e}"));
+            }
             AudioEvent::PluginStateSaved { instance_id, data } => {
                 // If we have a pending path to inject, modify the state and reload.
                 // State format is plain JSON: { "params": {...}, "model_path": "...", ... }

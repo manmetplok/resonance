@@ -630,6 +630,25 @@ impl crate::Resonance {
             Message::ViewportWidth(w) => {
                 self.viewport_width = w;
             }
+            Message::BounceToWav => {
+                return Task::perform(
+                    async move {
+                        let result = rfd::AsyncFileDialog::new()
+                            .add_filter("WAV Audio", &["wav"])
+                            .set_title("Bounce to WAV")
+                            .set_file_name("bounce.wav")
+                            .save_file()
+                            .await;
+                        result.map(|f| f.path().to_string_lossy().to_string())
+                    },
+                    Message::BouncePathSelected,
+                );
+            }
+            Message::BouncePathSelected(Some(path)) => {
+                self.bouncing = true;
+                self.engine.send(AudioCommand::BounceToWav { path });
+            }
+            Message::BouncePathSelected(None) => {}
         }
         Task::none()
     }

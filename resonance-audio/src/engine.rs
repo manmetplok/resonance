@@ -803,7 +803,13 @@ fn engine_thread(
                     // Also check workspace root target/bundled/
                     let workspace_bundled = std::path::PathBuf::from("target/bundled");
                     if workspace_bundled.is_dir() {
-                        scan_dirs.push(workspace_bundled);
+                        if let Ok(canonical) = workspace_bundled.canonicalize() {
+                            if !scan_dirs.iter().any(|d| d.canonicalize().ok().as_ref() == Some(&canonical)) {
+                                scan_dirs.push(workspace_bundled);
+                            }
+                        } else {
+                            scan_dirs.push(workspace_bundled);
+                        }
                     }
 
                     for dir in &scan_dirs {
@@ -893,6 +899,180 @@ fn engine_thread(
                         } else {
                             // Audio thread holds the lock — retry next tick
                             let _ = cmd_tx_retry.send(AudioCommand::LoadPluginState { instance_id, data });
+                        }
+                    }
+                }
+                AudioCommand::BounceToWav { path } => {
+                    // Compute project range from clips
+                    let (render_start, render_end) = {
+                        let clips_guard = clips.read();
+                        if clips_guard.is_empty() {
+                            let _ = event_tx.send(AudioEvent::BounceError(
+                                "No clips to bounce".into(),
+                            ));
+                            continue;
+                        }
+                        let start = clips_guard.iter().map(|c| c.start_sample).min().unwrap_or(0);
+                        let end = clips_guard.iter().map(|c| c.end_sample()).max().unwrap_or(0);
+                        (start, end)
+                    };
+
+                    if render_end <= render_start {
+                        let _ = event_tx.send(AudioEvent::BounceError(
+                            "No audio to bounce".into(),
+                        ));
+                        continue;
+                    }
+
+                    // Open WAV writer
+                    let spec = hound::WavSpec {
+                        channels: 2,
+                        sample_rate,
+                        bits_per_sample: 32,
+                        sample_format: hound::SampleFormat::Float,
+                    };
+                    let mut writer = match hound::WavWriter::create(&path, spec) {
+                        Ok(w) => w,
+                        Err(e) => {
+                            let _ = event_tx.send(AudioEvent::BounceError(
+                                format!("Failed to create WAV file: {e}"),
+                            ));
+                            continue;
+                        }
+                    };
+
+                    // Reset all plugins for clean render
+                    {
+                        let plugins_guard = plugins.read();
+                        for mutex in plugins_guard.values() {
+                            let mut inst = mutex.lock();
+                            inst.0.reset_processing();
+                        }
+                    }
+
+                    // Offline render in chunks
+                    const BOUNCE_CHUNK: usize = 1024;
+                    let mut track_buf_l = vec![0.0f32; BOUNCE_CHUNK];
+                    let mut track_buf_r = vec![0.0f32; BOUNCE_CHUNK];
+                    let mut mix_buf = vec![0.0f32; BOUNCE_CHUNK * 2];
+                    let master_vol =
+                        f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
+                    let mut write_error = false;
+
+                    let mut pos = render_start;
+                    while pos < render_end && !write_error {
+                        let frames = ((render_end - pos) as usize).min(BOUNCE_CHUNK);
+                        mix_buf[..frames * 2].fill(0.0);
+
+                        let tracks_guard = tracks.read();
+                        let clips_guard = clips.read();
+                        let plugins_guard = plugins.read();
+
+                        let any_solo = tracks_guard.values().any(|t| t.soloed());
+
+                        for track in tracks_guard.values() {
+                            if track.muted() {
+                                continue;
+                            }
+                            if any_solo && !track.soloed() {
+                                continue;
+                            }
+
+                            track_buf_l[..frames].fill(0.0);
+                            track_buf_r[..frames].fill(0.0);
+                            let mut has_audio = false;
+
+                            // Mix clips into track buffers
+                            for clip in clips_guard.iter() {
+                                if clip.track_id != track.id {
+                                    continue;
+                                }
+                                let clip_start = clip.start_sample;
+                                let clip_end = clip_start + clip.duration_frames();
+                                let buf_end = pos + frames as u64;
+                                if buf_end <= clip_start || pos >= clip_end {
+                                    continue;
+                                }
+                                let overlap_start = pos.max(clip_start);
+                                let overlap_end = buf_end.min(clip_end);
+                                for timeline_frame in overlap_start..overlap_end {
+                                    let frame_offset = (timeline_frame - pos) as usize;
+                                    let clip_frame = (timeline_frame - clip_start) as usize
+                                        + clip.trim_start_frames as usize;
+                                    let clip_idx = clip_frame * 2;
+                                    if clip_idx + 1 < clip.data.len() {
+                                        track_buf_l[frame_offset] += clip.data[clip_idx];
+                                        track_buf_r[frame_offset] += clip.data[clip_idx + 1];
+                                        has_audio = true;
+                                    }
+                                }
+                            }
+
+                            // Process through plugin chain
+                            if !track.plugin_ids.is_empty() {
+                                for &plugin_id in &track.plugin_ids {
+                                    if let Some(mutex) = plugins_guard.get(&plugin_id) {
+                                        let mut inst = mutex.lock();
+                                        inst.0.process(
+                                            &mut track_buf_l[..frames],
+                                            &mut track_buf_r[..frames],
+                                            frames,
+                                        );
+                                        has_audio = true;
+                                    }
+                                }
+                            }
+
+                            if !has_audio {
+                                continue;
+                            }
+
+                            // Apply track volume + pan, sum into mix buffer
+                            let volume = track.volume();
+                            let (pan_l, pan_r) =
+                                resonance_dsp::constant_power_pan(track.pan());
+                            let gain_l = volume * pan_l;
+                            let gain_r = volume * pan_r;
+                            for f in 0..frames {
+                                mix_buf[f * 2] += track_buf_l[f] * gain_l;
+                                mix_buf[f * 2 + 1] += track_buf_r[f] * gain_r;
+                            }
+                        }
+
+                        drop(plugins_guard);
+                        drop(clips_guard);
+                        drop(tracks_guard);
+
+                        // Apply master volume and hard clip
+                        for s in &mut mix_buf[..frames * 2] {
+                            *s = (*s * master_vol).clamp(-1.0, 1.0);
+                        }
+
+                        // Write to WAV
+                        for &sample in &mix_buf[..frames * 2] {
+                            if let Err(e) = writer.write_sample(sample) {
+                                let _ = event_tx.send(AudioEvent::BounceError(
+                                    format!("WAV write error: {e}"),
+                                ));
+                                write_error = true;
+                                break;
+                            }
+                        }
+
+                        pos += frames as u64;
+                    }
+
+                    if !write_error {
+                        match writer.finalize() {
+                            Ok(()) => {
+                                let _ = event_tx
+                                    .send(AudioEvent::BounceComplete { path });
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(AudioEvent::BounceError(
+                                    format!("WAV finalize error: {e}"),
+                                ));
+                            }
                         }
                     }
                 }

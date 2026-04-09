@@ -112,6 +112,10 @@ pub enum AudioCommand {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
     },
+    /// Offline render of the project to a WAV file.
+    BounceToWav {
+        path: String,
+    },
 }
 
 /// Events sent from the audio engine back to the GUI.
@@ -187,6 +191,10 @@ pub enum AudioEvent {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
     },
+    BounceComplete {
+        path: String,
+    },
+    BounceError(String),
 }
 
 /// An audio clip stored in memory.

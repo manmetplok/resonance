@@ -57,6 +57,8 @@ pub(crate) struct Resonance {
     pub(crate) selected_plugin: Option<PluginInstanceId>,
     /// Current viewport width of the timeline canvas (in pixels).
     pub(crate) viewport_width: f32,
+    /// Whether an offline bounce is in progress.
+    pub(crate) bouncing: bool,
 }
 
 fn main() -> iced::Result {
@@ -124,6 +126,7 @@ impl Resonance {
             clip_trim: None,
             selected_plugin: None,
             viewport_width: 1000.0,
+            bouncing: false,
         };
 
         (app, iced::Task::none())
