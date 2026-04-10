@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 resonance-audio = { path = "../resonance-audio" }
 resonance-plugin = { path = "../resonance-plugin", features = ["ui"] }
-resonance-drums = { path = "../plugins/resonance-drums", features = ["ui"] }
 resonance-amp = { path = "../plugins/resonance-amp", features = ["ui"] }
 resonance-ir = { path = "../plugins/resonance-ir", features = ["ui"] }
 iced = { version = "0.13", features = ["canvas", "wgpu", "tokio"] }

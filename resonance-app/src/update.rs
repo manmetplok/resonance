@@ -45,6 +45,10 @@ impl crate::Resonance {
                 self.engine.send(AudioCommand::SeekTo(new_pos));
                 self.playhead = new_pos;
             }
+            Message::SeekToSample(pos) => {
+                self.engine.send(AudioCommand::SeekTo(pos));
+                self.playhead = pos;
+            }
             Message::AddTrack => {
                 self.engine.send(AudioCommand::AddTrack);
                 self.add_track_menu_open = false;
@@ -283,16 +287,6 @@ impl crate::Resonance {
                         .find(|p| p.instance_id == instance_id)
                     {
                         p.editor_open = false;
-                        break;
-                    }
-                }
-            }
-            Message::DrumPadSelect(instance_id, pad_idx) => {
-                for track in &mut self.tracks {
-                    if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
-                        if let PluginCustomState::Drums(ref mut state) = p.custom {
-                            state.selected_pad = pad_idx;
-                        }
                         break;
                     }
                 }
@@ -1318,7 +1312,6 @@ impl crate::Resonance {
                 }
 
                 let custom = match pp.clap_plugin_id.as_str() {
-                    "com.resonance.drums" => PluginCustomState::Drums(Default::default()),
                     "com.resonance.amp" => PluginCustomState::Amp(Default::default()),
                     "com.resonance.ir" => PluginCustomState::Ir(Default::default()),
                     _ => PluginCustomState::Generic,

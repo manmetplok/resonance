@@ -11,6 +11,8 @@ pub(crate) enum Message {
     Stop,
     SkipBack,
     SkipForward,
+    /// Move the playhead to the given sample position (ruler click, etc.).
+    SeekToSample(u64),
     AddTrack,
     RemoveTrack(TrackId),
     SetTrackVolume(TrackId, f32),
@@ -43,7 +45,6 @@ pub(crate) enum Message {
     OpenPluginEditor(PluginInstanceId),
     /// Close the plugin's editor window.
     ClosePluginEditor(PluginInstanceId),
-    DrumPadSelect(PluginInstanceId, usize),
     PluginBrowseFile(PluginInstanceId),
     PluginFileSelected(PluginInstanceId, Option<String>),
     PluginPrevFile(PluginInstanceId),

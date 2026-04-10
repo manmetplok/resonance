@@ -25,7 +25,6 @@ pub struct UiParam {
 #[derive(Debug, Clone)]
 pub enum PluginUiEvent {
     SetParam(u32, f64),
-    SelectPad(usize),
     BrowseFile,
     PrevFile,
     NextFile,

@@ -83,7 +83,6 @@ pub struct PluginSlotState {
 #[derive(Debug, Clone)]
 pub enum PluginCustomState {
     Generic,
-    Drums(resonance_drums::ui::DrumsUiState),
     Amp(resonance_amp::ui::AmpUiState),
     Ir(resonance_ir::ui::IrUiState),
 }

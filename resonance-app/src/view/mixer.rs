@@ -514,9 +514,6 @@ impl crate::Resonance {
             .collect();
 
         let plugin_element = match &plugin.custom {
-            PluginCustomState::Drums(state) => {
-                resonance_drums::ui::view(state, &ui_params)
-            }
             PluginCustomState::Amp(state) => {
                 resonance_amp::ui::view(state, &ui_params)
             }
@@ -533,7 +530,6 @@ impl crate::Resonance {
             use resonance_plugin::ui::PluginUiEvent;
             match event {
                 PluginUiEvent::SetParam(param_id, value) => Message::SetPluginParam(inst_id, param_id, value),
-                PluginUiEvent::SelectPad(idx) => Message::DrumPadSelect(inst_id, idx),
                 PluginUiEvent::BrowseFile => Message::PluginBrowseFile(inst_id),
                 PluginUiEvent::PrevFile => Message::PluginPrevFile(inst_id),
                 PluginUiEvent::NextFile => Message::PluginNextFile(inst_id),

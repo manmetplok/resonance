@@ -3581,7 +3581,6 @@ dependencies = [
  "iced",
  "resonance-amp",
  "resonance-audio",
- "resonance-drums",
  "resonance-ir",
  "resonance-plugin",
  "rfd",
@@ -3617,9 +3616,15 @@ dependencies = [
 name = "resonance-drums"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-channel",
+ "egui",
  "resonance-common",
  "resonance-dsp",
  "resonance-plugin",
+ "rfd",
+ "serde",
+ "serde_json",
+ "wayland-plugin-gui",
 ]
 
 [[package]]

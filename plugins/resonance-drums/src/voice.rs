@@ -16,7 +16,15 @@ pub struct Voice {
     pub active: bool,
     pub pad_index: usize,
     pub note: u8,
+    /// Baseline gain applied throughout playback. For multi-layer pads this
+    /// is 1.0 because the chosen velocity layer already captures the
+    /// dynamics; for single-layer fallback pads it's the MIDI velocity so the
+    /// embedded defaults still scale.
     pub velocity: f32,
+    /// Index into `pad.layers`.
+    pub layer_index: usize,
+    /// Index into `pad.layers[layer_index].round_robins`.
+    pub rr_index: usize,
     /// Current read position in the sample (in stereo frames).
     pub position: usize,
     pub choke_group: Option<u8>,
@@ -36,6 +44,8 @@ impl Voice {
             pad_index: 0,
             note: 0,
             velocity: 0.0,
+            layer_index: 0,
+            rr_index: 0,
             position: 0,
             choke_group: None,
             state: VoiceState::Playing,
