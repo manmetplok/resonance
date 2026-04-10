@@ -1,6 +1,32 @@
 /// The ResonancePlugin trait -- what plugin authors implement.
 
+use std::sync::Arc;
+
 use crate::param::Param;
+
+/// Saver for plugin state that lives outside the parameter list — file
+/// paths, loaded resource handles, anything the plugin needs to persist
+/// alongside its params.
+///
+/// The CLAP bridge harvests this handle once at plugin construction and
+/// calls it from the main thread at project save / project load time.
+/// Because the bridge may call `save`/`load` **while the plugin is in the
+/// audio processor**, implementations must only touch thread-safe shared
+/// state (Arcs, atomics, parking_lot mutexes) — never fields that the
+/// plugin struct owns exclusively.
+///
+/// Keys returned from `save` are merged into the top level of the state
+/// JSON object alongside `"params"`, so existing on-disk state formats
+/// that use top-level keys remain readable.
+pub trait ExtraStateSaver: Send + Sync {
+    /// Return key-value pairs to merge into the top-level state JSON.
+    fn save(&self) -> serde_json::Map<String, serde_json::Value>;
+
+    /// Apply previously-saved state from the top-level JSON object.
+    /// Implementations typically `state.get("my_key")` into their own
+    /// shared storage.
+    fn load(&self, state: &serde_json::Value);
+}
 
 /// A note event for sample-accurate MIDI processing.
 #[derive(Debug, Clone, Copy)]
@@ -124,14 +150,42 @@ pub trait ResonancePlugin: Send + 'static {
         events: &mut EventIterator<'_>,
     );
 
-    /// Save plugin state to bytes. Default: JSON serialization of params.
+    /// Save plugin state to bytes. Default: JSON serialization of params
+    /// composed with whatever `extra_state_saver()` returns (so plugins that
+    /// just need a couple of extra file-path fields can skip overriding
+    /// this entirely and provide a saver instead).
     fn save_state(&self) -> Vec<u8> {
-        crate::state::save_params(&self.params())
+        let mut json = crate::state::params_to_json(&self.params());
+        if let Some(saver) = self.extra_state_saver() {
+            if let Some(obj) = json.as_object_mut() {
+                for (k, v) in saver.save() {
+                    obj.insert(k, v);
+                }
+            }
+        }
+        serde_json::to_vec(&json).unwrap_or_default()
     }
 
-    /// Load plugin state from bytes. Default: JSON deserialization of params.
+    /// Load plugin state from bytes. Default: JSON deserialization of
+    /// params plus any `extra_state_saver()` contribution.
     fn load_state(&mut self, data: &[u8]) -> bool {
-        crate::state::load_params(&self.params(), data)
+        let Ok(state) = serde_json::from_slice::<serde_json::Value>(data) else {
+            return false;
+        };
+        let ok = crate::state::load_params_from_json(&self.params(), &state);
+        if let Some(saver) = self.extra_state_saver() {
+            saver.load(&state);
+        }
+        ok
+    }
+
+    /// Optional handle that persists state outside the param list (file
+    /// paths, resource pointers, etc.). Harvested once at plugin creation
+    /// by the CLAP bridge and cached for the plugin's lifetime, so the
+    /// bridge can save/load extra state even while the plugin is in the
+    /// audio processor. Default: `None`.
+    fn extra_state_saver(&self) -> Option<Arc<dyn ExtraStateSaver>> {
+        None
     }
 
     /// Report latency in samples. Default: 0.

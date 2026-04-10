@@ -1,4 +1,4 @@
-/// Voice management for polyphonic drum sample playback.
+//! Voice management for polyphonic drum sample playback.
 
 pub const MAX_VOICES: usize = 32;
 
@@ -18,9 +18,9 @@ pub struct Voice {
     pub note: u8,
     /// Baseline gain applied throughout playback. For multi-layer pads this
     /// is 1.0 because the chosen velocity layer already captures the
-    /// dynamics; for single-layer fallback pads it's the MIDI velocity so the
-    /// embedded defaults still scale.
-    pub velocity: f32,
+    /// dynamics; for single-layer fallback pads it's the MIDI velocity so
+    /// the embedded defaults still scale with how hard the note was hit.
+    pub base_gain: f32,
     /// Index into `pad.layers`.
     pub layer_index: usize,
     /// Index into `pad.layers[layer_index].round_robins`.
@@ -43,13 +43,13 @@ impl Voice {
             active: false,
             pad_index: 0,
             note: 0,
-            velocity: 0.0,
+            base_gain: 0.0,
             layer_index: 0,
             rr_index: 0,
             position: 0,
             choke_group: None,
             state: VoiceState::Playing,
-            release_gain: 1.0,
+            release_gain: 0.0,
             release_pos: 0,
             age: 0,
         }
@@ -59,7 +59,7 @@ impl Voice {
     pub fn trigger_release(&mut self) {
         if self.state == VoiceState::Playing {
             self.state = VoiceState::Releasing;
-            self.release_gain = self.velocity;
+            self.release_gain = self.base_gain;
             self.release_pos = 0;
         }
     }
@@ -68,7 +68,7 @@ impl Voice {
     /// Returns 0.0 if the voice should be deactivated.
     pub fn current_gain(&self) -> f32 {
         match self.state {
-            VoiceState::Playing => self.velocity,
+            VoiceState::Playing => self.base_gain,
             VoiceState::Releasing => {
                 if self.release_pos >= RELEASE_SAMPLES {
                     0.0

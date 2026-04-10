@@ -1,6 +1,6 @@
-/// Drum kit data model: a pad is a grid of (velocity layer, round robin)
-/// samples. Single-sample embedded defaults are represented as a pad with
-/// one layer containing one round robin.
+//! Drum kit data model: a pad is a grid of (velocity layer, round robin)
+//! samples. Single-sample embedded defaults are represented as a pad with
+//! one layer containing one round robin.
 
 /// A single decoded stereo sample ready for playback.
 pub struct LoadedSample {
@@ -16,11 +16,13 @@ pub struct VelocityLayer {
 }
 
 /// A loaded pad with velocity layers and round robins.
-#[allow(dead_code)]
 pub struct LoadedPad {
-    pub note: u8,
+    /// Display name, sourced from `PAD_MAPPINGS`.
+    #[allow(dead_code)]
     pub name: String,
-    /// Velocity layers sorted soft → loud. Always at least one layer.
+    /// Velocity layers sorted soft → loud. Always at least one layer when
+    /// the pad is playable; empty only in the unusual case where the
+    /// embedded fallback failed to decode.
     pub layers: Vec<VelocityLayer>,
     pub choke_group: Option<u8>,
 }

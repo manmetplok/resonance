@@ -107,6 +107,11 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
     /// The currently-open editor, if any. Created by `gui_create`, dropped
     /// by `gui_destroy`.
     editor: Option<Box<dyn PluginEditor>>,
+    /// Extra-state saver harvested from the plugin at construction time.
+    /// `None` if the plugin has no extra state. Kept alive across
+    /// activate/deactivate so the host can save/load project state while
+    /// the plugin is in the audio processor.
+    extra_state_saver: Option<std::sync::Arc<dyn crate::plugin::ExtraStateSaver>>,
 }
 
 impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainThread<'a, P> {}
@@ -415,9 +420,11 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             }
         }
 
-        // Harvest the editor factory before the plugin may be moved to the
-        // audio processor. Returns None for plugins without a GUI.
+        // Harvest the editor factory and any extra-state saver before the
+        // plugin may be moved to the audio processor. Both are None for
+        // plugins that don't opt in.
         let editor_factory = plugin.editor_factory();
+        let extra_state_saver = plugin.extra_state_saver();
 
         Ok(ClapMainThread {
             host,
@@ -426,6 +433,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             last_latency: 0,
             editor_factory,
             editor: None,
+            extra_state_saver,
         })
     }
 }
@@ -617,9 +625,15 @@ impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<'_, P
 impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
     fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {
         let data = if let Some(plugin) = &self.plugin {
+            // Main-thread path: the plugin's own `save_state` composes
+            // params with any extra-state saver via the trait default.
             plugin.save_state()
         } else {
-            // Plugin is in audio processor — serialize from shared atomics
+            // Audio-processor path: the owned plugin is currently inside
+            // `ClapAudioProcessor`, so we can't call `save_state` directly.
+            // Serialize params from the shared atomics and merge any
+            // extra-state saver's output using the same `"extra" ->
+            // top-level` shape the plugin would produce.
             let temp_params: Vec<crate::param::TempParamOwned> = self
                 .shared
                 .param_metas
@@ -631,7 +645,15 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
                 })
                 .collect();
             let refs: Vec<&dyn Param> = temp_params.iter().map(|p| p as &dyn Param).collect();
-            crate::state::save_params(&refs)
+            let mut json = crate::state::params_to_json(&refs);
+            if let Some(saver) = &self.extra_state_saver {
+                if let Some(obj) = json.as_object_mut() {
+                    for (k, v) in saver.save() {
+                        obj.insert(k, v);
+                    }
+                }
+            }
+            serde_json::to_vec(&json).unwrap_or_default()
         };
         output
             .write_all(&data)
@@ -656,13 +678,20 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
                 }
             }
         } else {
-            // Plugin is active — update shared atomics and mark dirty for audio processor
-            if !crate::state::load_params_from_shared(
+            // Audio-processor path: parse once, load params into shared
+            // atomics, and hand the parsed value to the extra-state saver
+            // so file paths etc. land in their shared storage.
+            let state: serde_json::Value = serde_json::from_slice(&data)
+                .map_err(|_| PluginError::Message("Failed to load state"))?;
+            if !crate::state::load_params_from_shared_json(
                 &self.shared.param_metas,
                 &self.shared.param_values,
-                &data,
+                &state,
             ) {
                 return Err(PluginError::Message("Failed to load state"));
+            }
+            if let Some(saver) = &self.extra_state_saver {
+                saver.load(&state);
             }
             self.shared.params_dirty.store(true, Ordering::Release);
         }

@@ -41,15 +41,14 @@ pub fn load_params_from_json(params: &[&dyn Param], state: &serde_json::Value) -
     true
 }
 
-/// Load params from bytes into shared atomic storage (used when plugin is active).
-pub(crate) fn load_params_from_shared(
+/// Load params from a pre-parsed JSON Value into shared atomic storage
+/// (used when the plugin is in the audio processor and the bridge is
+/// serving save/load from shared state).
+pub(crate) fn load_params_from_shared_json(
     param_metas: &[crate::clap_bridge::ParamMeta],
     param_values: &[std::sync::atomic::AtomicU64],
-    data: &[u8],
+    state: &serde_json::Value,
 ) -> bool {
-    let Ok(state) = serde_json::from_slice::<serde_json::Value>(data) else {
-        return false;
-    };
     let Some(param_map) = state.get("params").and_then(|v| v.as_object()) else {
         return false;
     };

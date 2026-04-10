@@ -9,14 +9,15 @@
 //!   * the SPSC channel (for publishing the new pad set).
 
 use std::collections::BTreeMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
 
-use crossbeam_channel::Sender;
 use serde::Deserialize;
 
 use crate::drum_map::{PadMapping, NUM_PADS, PAD_MAPPINGS};
 use crate::kit::{decode_wav, LoadedPad, LoadedSample, VelocityLayer};
+use crate::KitBridge;
 
 // ---------------------------------------------------------------------------
 // Manifest types — mirror the shape observed in drummica's drum_samples.json.
@@ -112,40 +113,62 @@ pub fn load_kit_from_manifest(
     Ok(pads)
 }
 
-/// Spawn a background loader thread. Reports status via `status`, publishes
-/// the finished pad vec through `sender`, and records the successful kit path
-/// in `kit_path` on success.
-pub fn spawn_loader(
-    manifest_path: PathBuf,
-    target_sr: f32,
-    kit_path: Arc<Mutex<Option<PathBuf>>>,
-    status: Arc<Mutex<KitStatus>>,
-    sender: Sender<Vec<LoadedPad>>,
-) {
-    std::thread::spawn(move || {
-        *status.lock().unwrap() = KitStatus::Loading {
-            path: manifest_path.clone(),
-        };
+/// Spawn a background loader thread. Writes status updates and the kit path
+/// to `bridge`, and publishes the finished pad vec through `bridge.kit_sender`.
+///
+/// Each call bumps `bridge.load_generation`; in-flight older loads check
+/// the stamp before writing state and become no-ops if a newer load has
+/// started, so last-click-wins status is preserved even under spam.
+/// Loader panics are caught and converted to `KitStatus::Error`.
+pub fn spawn_loader(manifest_path: PathBuf, target_sr: f32, bridge: &KitBridge) {
+    let bridge = bridge.clone();
+    let stamp = bridge.load_generation.fetch_add(1, Ordering::AcqRel) + 1;
 
-        match load_kit_from_manifest(&manifest_path, target_sr) {
-            Ok(pads) => {
-                let num_pads = pads.len();
-                let name = manifest_path
-                    .parent()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "kit".to_string());
-                // Best-effort send; if the channel is full, coalesce by
-                // dropping this load (the newer one wins).
-                let _ = sender.try_send(pads);
-                *kit_path.lock().unwrap() = Some(manifest_path);
-                *status.lock().unwrap() = KitStatus::Loaded { name, num_pads };
+    std::thread::Builder::new()
+        .name("resonance-drums-loader".to_string())
+        .spawn(move || {
+            // Publish "Loading" only if we're still the latest load.
+            if bridge.load_generation.load(Ordering::Acquire) == stamp {
+                *bridge.kit_status.lock().unwrap() = KitStatus::Loading {
+                    path: manifest_path.clone(),
+                };
             }
-            Err(message) => {
-                *status.lock().unwrap() = KitStatus::Error { message };
+
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                load_kit_from_manifest(&manifest_path, target_sr)
+            }));
+
+            // Only the newest load is allowed to write final state.
+            if bridge.load_generation.load(Ordering::Acquire) != stamp {
+                return;
             }
-        }
-    });
+
+            match outcome {
+                Ok(Ok(pads)) => {
+                    let num_pads = pads.len();
+                    let name = manifest_path
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "kit".to_string());
+                    // Best-effort send; if the channel is full, coalesce
+                    // by dropping this load (the newer one wins anyway).
+                    let _ = bridge.kit_sender.try_send(pads);
+                    *bridge.kit_path.lock().unwrap() = Some(manifest_path);
+                    *bridge.kit_status.lock().unwrap() =
+                        KitStatus::Loaded { name, num_pads };
+                }
+                Ok(Err(message)) => {
+                    *bridge.kit_status.lock().unwrap() = KitStatus::Error { message };
+                }
+                Err(_) => {
+                    *bridge.kit_status.lock().unwrap() = KitStatus::Error {
+                        message: "loader panicked".to_string(),
+                    };
+                }
+            }
+        })
+        .expect("spawn drums kit loader thread");
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +217,6 @@ fn build_pad_from_piece(
     }
 
     Ok(LoadedPad {
-        note: mapping.note,
         name: mapping.name.to_string(),
         layers,
         choke_group: mapping.choke_group,
@@ -206,7 +228,6 @@ fn build_fallback_pad(mapping: &PadMapping, target_sr: f32) -> Result<LoadedPad,
         .map_err(|e| format!("decode embedded {}: {e}", mapping.name))?;
     let sample = LoadedSample::from_data(data);
     Ok(LoadedPad {
-        note: mapping.note,
         name: mapping.name.to_string(),
         layers: vec![VelocityLayer {
             round_robins: vec![sample],
@@ -229,21 +250,32 @@ fn parse_vel_index(key: &str) -> Option<u32> {
 mod tests {
     use super::*;
 
+    /// Resolve the drummica manifest path for the smoke test. Honours the
+    /// `RESONANCE_DRUMMICA_PATH` env var so other developers and CI can
+    /// point at their own copy; falls back to the author's local path.
+    fn drummica_manifest() -> PathBuf {
+        std::env::var("RESONANCE_DRUMMICA_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                PathBuf::from("/home/jorrit/Documents/Guitar/drummica/drum_samples.json")
+            })
+    }
+
     /// Smoke test: parses the drummica manifest if present, verifying that
     /// the loader returns exactly NUM_PADS pads and that each has at least
-    /// one velocity layer and one round robin.
-    ///
-    /// Gated on the drummica path existing so CI without the samples still
-    /// passes.
+    /// one velocity layer and one round robin. Gated on the manifest path
+    /// existing so CI without the samples still passes.
     #[test]
     fn drummica_smoke() {
-        let manifest =
-            Path::new("/home/jorrit/Documents/Guitar/drummica/drum_samples.json");
+        let manifest = drummica_manifest();
         if !manifest.exists() {
-            eprintln!("drummica manifest not present; skipping");
+            eprintln!(
+                "drummica manifest not present at {}; skipping",
+                manifest.display()
+            );
             return;
         }
-        let pads = load_kit_from_manifest(manifest, 48000.0)
+        let pads = load_kit_from_manifest(&manifest, 48000.0)
             .expect("drummica kit should load cleanly");
         assert_eq!(pads.len(), NUM_PADS);
         for pad in &pads {
@@ -264,5 +296,28 @@ mod tests {
         assert_eq!(parse_vel_index("Vel28"), Some(28));
         assert_eq!(parse_vel_index("Velocity"), None);
         assert_eq!(parse_vel_index("foo"), None);
+    }
+
+    /// Every embedded default sample decodes cleanly via the fallback path.
+    /// This runs without any external assets — it only exercises the bytes
+    /// baked into the binary via `include_bytes!`.
+    #[test]
+    fn fallback_pads_all_decode() {
+        for mapping in &PAD_MAPPINGS {
+            let pad = build_fallback_pad(mapping, 48000.0)
+                .unwrap_or_else(|e| panic!("fallback for {} failed: {e}", mapping.name));
+            assert_eq!(pad.layers.len(), 1, "{} should have 1 layer", mapping.name);
+            assert_eq!(
+                pad.layers[0].round_robins.len(),
+                1,
+                "{} should have 1 round robin",
+                mapping.name
+            );
+            assert!(
+                pad.layers[0].round_robins[0].frames > 0,
+                "{} sample is empty",
+                mapping.name
+            );
+        }
     }
 }

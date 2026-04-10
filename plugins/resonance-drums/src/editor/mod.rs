@@ -157,20 +157,24 @@ impl DrumsEditorApp {
             .add_filter("Drum kit manifest", &["json"])
             .pick_file();
         let Some(path) = picked else { return };
-        let target_sr = f32::from_bits(self.bridge.sample_rate.load(Ordering::Relaxed));
-        kit_loader::spawn_loader(
-            path,
-            target_sr,
-            self.bridge.kit_path.clone(),
-            self.bridge.kit_status.clone(),
-            self.bridge.kit_sender.clone(),
-        );
+
+        // Refuse to spawn a loader before the host has activated the
+        // plugin — without a sample rate we'd decode at the wrong pitch.
+        let sr_bits = self.bridge.sample_rate.load(Ordering::Acquire);
+        if sr_bits == 0 {
+            *self.bridge.kit_status.lock().unwrap() = KitStatus::Error {
+                message: "plugin not yet activated by host".to_string(),
+            };
+            return;
+        }
+        let target_sr = f32::from_bits(sr_bits);
+        kit_loader::spawn_loader(path, target_sr, &self.bridge);
     }
 }
 
 fn format_kit_status(status: &KitStatus) -> String {
     match status {
-        KitStatus::Empty => "No kit loaded".to_string(),
+        KitStatus::Empty => "Defaults (no kit loaded)".to_string(),
         KitStatus::Loading { path } => format!(
             "Loading {}…",
             path.file_name()

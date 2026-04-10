@@ -302,22 +302,33 @@ impl ResonancePlugin for ResonanceAmp {
         }
     }
 
-    fn save_state(&self) -> Vec<u8> {
-        let mut json = resonance_plugin::state::params_to_json(&self.params());
-        json["model_path"] =
-            serde_json::Value::String(self.params.model_path.lock().clone());
-        serde_json::to_vec(&json).unwrap_or_default()
+    fn extra_state_saver(&self) -> Option<Arc<dyn resonance_plugin::plugin::ExtraStateSaver>> {
+        Some(Arc::new(AmpExtraState {
+            model_path: self.params.model_path.clone(),
+        }))
+    }
+}
+
+/// Persists the NAM model path alongside the plugin's params. Holds only
+/// the shared `Arc<Mutex<String>>` so the CLAP bridge can serialize it
+/// while the plugin is in the audio processor.
+struct AmpExtraState {
+    model_path: Arc<Mutex<String>>,
+}
+
+impl resonance_plugin::plugin::ExtraStateSaver for AmpExtraState {
+    fn save(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "model_path".to_string(),
+            serde_json::Value::String(self.model_path.lock().clone()),
+        );
+        map
     }
 
-    fn load_state(&mut self, data: &[u8]) -> bool {
-        if let Ok(state) = serde_json::from_slice::<serde_json::Value>(data) {
-            resonance_plugin::state::load_params_from_json(&self.params(), &state);
-            if let Some(path) = state.get("model_path").and_then(|v| v.as_str()) {
-                *self.params.model_path.lock() = path.to_string();
-            }
-            true
-        } else {
-            false
+    fn load(&self, state: &serde_json::Value) {
+        if let Some(path) = state.get("model_path").and_then(|v| v.as_str()) {
+            *self.model_path.lock() = path.to_string();
         }
     }
 }
