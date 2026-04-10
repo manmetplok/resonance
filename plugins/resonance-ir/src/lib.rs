@@ -183,7 +183,6 @@ impl ResonancePlugin for ResonanceIr {
     ];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
-    const OUTPUT_CHANNELS: u32 = 2;
 
     fn new() -> Self {
         Self {
@@ -260,11 +259,15 @@ impl ResonancePlugin for ResonanceIr {
 
     fn process(
         &mut self,
-        left: &mut [f32],
-        right: &mut [f32],
+        outputs: &mut [resonance_plugin::OutputBuffer<'_>],
         frames: usize,
         _events: &mut EventIterator<'_>,
     ) {
+        let main = outputs
+            .first_mut()
+            .expect("resonance-ir always has a main output");
+        let left = &mut *main.left;
+        let right = &mut *main.right;
         resonance_common::flush_denormals();
 
         // Check mailbox for newly loaded convolver — start crossfade

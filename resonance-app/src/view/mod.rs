@@ -1,4 +1,5 @@
 /// View rendering for the Resonance application.
+pub(crate) mod compose;
 pub(crate) mod mixer;
 
 use crate::message::Message;
@@ -7,11 +8,9 @@ use crate::state::*;
 use crate::theme;
 use crate::theme::fa;
 use crate::timeline::TimelineCanvas;
-use crate::util::{format_db, format_pan};
-use iced::widget::text::{LineHeight, Shaping};
+use iced::widget::text::LineHeight;
 use iced::widget::{
-    button, canvas, column, container, mouse_area, opaque, row, slider, stack, text, text_input,
-    Space,
+    button, canvas, column, container, mouse_area, opaque, row, stack, text, text_input, Space,
 };
 use iced::{alignment, Color, Element, Font, Length};
 use resonance_audio::types::*;
@@ -22,6 +21,7 @@ impl crate::Resonance {
         let main_area = match self.view_mode {
             ViewMode::Arrange => self.view_main_area(),
             ViewMode::Mixer => self.view_mixer(),
+            ViewMode::Compose => self.view_compose(),
         };
 
         let content: Element<'_, Message> = if let Some(ref err) = self.error_message {
@@ -85,7 +85,7 @@ impl crate::Resonance {
 
         let audio_btn = button(
             row![
-                text("\u{1f50a}").size(14).shaping(Shaping::Advanced),
+                theme::icon(theme::fa::MICROPHONE).size(14).color(theme::TEXT),
                 Space::with_width(8),
                 text("Audio").size(13).color(theme::TEXT),
             ]
@@ -98,7 +98,7 @@ impl crate::Resonance {
 
         let inst_btn = button(
             row![
-                text("\u{1f3b9}").size(14).shaping(Shaping::Advanced),
+                theme::icon(theme::fa::MUSIC).size(14).color(Color::from_rgb(0.3, 0.75, 0.8)),
                 Space::with_width(8),
                 text("Instrument").size(13).color(Color::from_rgb(0.3, 0.75, 0.8)),
             ]
@@ -454,6 +454,7 @@ impl crate::Resonance {
         // ---- View mode tabs -------------------------------------------------
         let arrange_active = self.view_mode == ViewMode::Arrange;
         let mixer_active = self.view_mode == ViewMode::Mixer;
+        let compose_active = self.view_mode == ViewMode::Compose;
         let arrange_tab = button(text("Arrange").size(12))
             .on_press(Message::SwitchView(ViewMode::Arrange))
             .style(move |_theme, status| theme::tab_button_style(arrange_active, status))
@@ -462,12 +463,17 @@ impl crate::Resonance {
             .on_press(Message::SwitchView(ViewMode::Mixer))
             .style(move |_theme, status| theme::tab_button_style(mixer_active, status))
             .padding([4, 8]);
+        let compose_tab = button(text("Compose").size(12))
+            .on_press(Message::SwitchView(ViewMode::Compose))
+            .style(move |_theme, status| theme::tab_button_style(compose_active, status))
+            .padding([4, 8]);
 
         // ---- Final row assembly ---------------------------------------------
         let transport_row = row![
             Space::with_width(10),
             arrange_tab,
             mixer_tab,
+            compose_tab,
             Space::with_width(10),
             skip_back,
             stop_btn,
@@ -607,69 +613,13 @@ impl crate::Resonance {
 
         let main = row![track_headers, timeline];
 
-        if let Some(ref editor_state) = self.editing_midi_clip {
-            // Find the clip being edited
-            if let Some(clip) = self.midi_clips.iter().find(|c| c.id == editor_state.clip_id) {
-                let close_btn = button(text("Close Editor").size(12).color(theme::TEXT))
-                    .on_press(Message::CloseMidiEditor)
-                    .style(|_theme, status| theme::transport_button_style(status))
-                    .padding([4, 8]);
-                let editor_label = text(format!("MIDI: {}", clip.name))
-                    .size(12)
-                    .color(theme::ACCENT);
-                let editor_toolbar = container(
-                    row![editor_label, Space::with_width(Length::Fill), close_btn]
-                        .spacing(8)
-                        .align_y(alignment::Vertical::Center)
-                        .padding([4, 8]),
-                )
-                .width(Length::Fill)
-                .style(|_theme| container::Style {
-                    background: Some(iced::Background::Color(theme::PANEL)),
-                    border: iced::Border {
-                        color: theme::SEPARATOR,
-                        width: 1.0,
-                        radius: 0.0.into(),
-                    },
-                    ..Default::default()
-                });
-
-                let piano_roll = canvas(PianoRollCanvas {
-                    clip,
-                    track_id: editor_state.track_id,
-                    scroll_x: editor_state.scroll_x,
-                    scroll_y: editor_state.scroll_y,
-                    zoom_x: editor_state.zoom_x,
-                    zoom_y: editor_state.zoom_y,
-                    snap_ticks: editor_state.snap_ticks,
-                    selected_note: editor_state.selected_note,
-                    time_sig_num: self.time_sig_num,
-                })
-                .width(Length::Fill)
-                .height(Length::Fill);
-
-                let editor_panel = column![editor_toolbar, piano_roll].spacing(0);
-
-                let editor_container = container(editor_panel)
-                    .width(Length::Fill)
-                    .height(250)
-                    .style(|_theme| container::Style {
-                        background: Some(iced::Background::Color(theme::BG)),
-                        border: iced::Border {
-                            color: theme::SEPARATOR,
-                            width: 1.0,
-                            radius: 0.0.into(),
-                        },
-                        ..Default::default()
-                    });
-
-                return column![
-                    container(main).width(Length::Fill).height(Length::Fill),
-                    editor_container,
-                ]
-                .spacing(0)
-                .into();
-            }
+        if let Some(editor) = self.view_midi_editor_panel() {
+            return column![
+                container(main).width(Length::Fill).height(Length::Fill),
+                editor,
+            ]
+            .spacing(0)
+            .into();
         }
 
         container(main)
@@ -678,7 +628,74 @@ impl crate::Resonance {
             .into()
     }
 
-    fn view_track_headers(&self) -> Element<'_, Message> {
+    /// Bottom MIDI editor panel shown whenever a clip is open in the piano
+    /// roll. Used by both the Arrange and Compose tabs so inline editing
+    /// works identically from either view.
+    pub(crate) fn view_midi_editor_panel(&self) -> Option<Element<'_, Message>> {
+        let editor_state = self.editing_midi_clip.as_ref()?;
+        let clip = self
+            .midi_clips
+            .iter()
+            .find(|c| c.id == editor_state.clip_id)?;
+
+        let close_btn = button(text("Close Editor").size(12).color(theme::TEXT))
+            .on_press(Message::CloseMidiEditor)
+            .style(|_theme, status| theme::transport_button_style(status))
+            .padding([4, 8]);
+        let editor_label = text(format!("MIDI: {}", clip.name))
+            .size(12)
+            .color(theme::ACCENT);
+        let editor_toolbar = container(
+            row![editor_label, Space::with_width(Length::Fill), close_btn]
+                .spacing(8)
+                .align_y(alignment::Vertical::Center)
+                .padding([4, 8]),
+        )
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::PANEL)),
+            border: iced::Border {
+                color: theme::SEPARATOR,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        });
+
+        let piano_roll = canvas(PianoRollCanvas {
+            clip,
+            track_id: editor_state.track_id,
+            scroll_x: editor_state.scroll_x,
+            scroll_y: editor_state.scroll_y,
+            zoom_x: editor_state.zoom_x,
+            zoom_y: editor_state.zoom_y,
+            snap_ticks: editor_state.snap_ticks,
+            selected_note: editor_state.selected_note,
+            time_sig_num: self.time_sig_num,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+        let editor_panel = column![editor_toolbar, piano_roll].spacing(0);
+
+        Some(
+            container(editor_panel)
+                .width(Length::Fill)
+                .height(250)
+                .style(|_theme| container::Style {
+                    background: Some(iced::Background::Color(theme::BG)),
+                    border: iced::Border {
+                        color: theme::SEPARATOR,
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..Default::default()
+                })
+                .into(),
+        )
+    }
+
+    pub(crate) fn view_track_headers(&self) -> Element<'_, Message> {
         let mut headers = column![].spacing(0);
 
         // Ruler header with "+" button to add a track
@@ -738,137 +755,155 @@ impl crate::Resonance {
     }
 
     fn view_track_header(&self, track: &TrackState) -> Element<'_, Message> {
-        let name = text(track.name.clone()).size(13).color(theme::TEXT);
+        let is_sub = track.sub_track.is_some();
+        // Track name on its own line, clipped at the header width so long
+        // names don't push the icons offscreen. `Wrapping::None` prevents
+        // iced from line-wrapping and the enclosing container's clip flag
+        // trims any glyph that overflows the available width. Sub-tracks
+        // render dimmer since they're driven by their parent plugin.
+        let name_color = if is_sub { theme::TEXT_DIM } else { theme::TEXT };
+        let name = text(track.name.clone())
+            .size(13)
+            .color(name_color)
+            .wrapping(iced::widget::text::Wrapping::None);
+        let name_row = container(name)
+            .width(Length::Fill)
+            .clip(true);
 
-        // Record arm button
+        // Record arm (filled circle; red when armed).
         let rec_color = if track.record_armed {
             theme::RECORD_RED
         } else {
             theme::TEXT_DIM
         };
         let armed = track.record_armed;
-        let rec_btn = button(text("R").size(11).color(rec_color))
-            .on_press(Message::ToggleRecordArm(track.id))
-            .style(move |_theme, status| {
-                if armed {
-                    theme::record_armed_button_style(status)
-                } else {
-                    theme::small_button_style(status)
-                }
-            })
-            .padding(2);
+        let rec_btn = button(
+            theme::icon(theme::fa::CIRCLE).size(12).color(rec_color),
+        )
+        .on_press(Message::ToggleRecordArm(track.id))
+        .style(move |_theme, status| {
+            if armed {
+                theme::record_armed_button_style(status)
+            } else {
+                theme::small_button_style(status)
+            }
+        })
+        .padding(2);
 
+        // Mute (speaker with X; accent when muted).
         let mute_color = if track.muted {
             theme::ACCENT
         } else {
             theme::TEXT_DIM
         };
-        let mute_btn = button(text("M").size(11).color(mute_color))
-            .on_press(Message::ToggleMute(track.id))
-            .style(|_theme, status| theme::small_button_style(status))
-            .padding(2);
+        let mute_btn = button(
+            theme::icon(theme::fa::VOLUME_XMARK).size(12).color(mute_color),
+        )
+        .on_press(Message::ToggleMute(track.id))
+        .style(|_theme, status| theme::small_button_style(status))
+        .padding(2);
 
+        // Solo (headphones; yellow when soloed).
         let solo_color = if track.soloed {
             theme::SOLO_YELLOW
         } else {
             theme::TEXT_DIM
         };
-        let solo_btn = button(text("S").size(11).color(solo_color))
-            .on_press(Message::ToggleSolo(track.id))
-            .style(|_theme, status| theme::small_button_style(status))
-            .padding(2);
+        let solo_btn = button(
+            theme::icon(theme::fa::HEADPHONES).size(12).color(solo_color),
+        )
+        .on_press(Message::ToggleSolo(track.id))
+        .style(|_theme, status| theme::small_button_style(status))
+        .padding(2);
 
-        let vol_slider = slider(-60.0..=6.0f32, track.volume, {
-            let id = track.id;
-            move |v| Message::SetTrackVolume(id, v)
-        })
-        .width(80)
-        .step(0.1);
+        let del_btn = button(
+            theme::icon(theme::fa::TRASH).size(12).color(theme::TEXT_DIM),
+        )
+        .on_press(Message::RemoveTrack(track.id))
+        .style(|_theme, status| theme::small_button_style(status))
+        .padding(2);
 
-        let vol_label = format_db(track.volume);
-        let vol_text = text(vol_label)
-            .size(11)
-            .font(Font::MONOSPACE)
-            .color(theme::TEXT_DIM);
-
-        let pan_slider = slider(-1.0..=1.0f32, track.pan, {
-            let id = track.id;
-            move |v| Message::SetTrackPan(id, v)
-        })
-        .width(50)
-        .step(0.01);
-
-        let pan_label = format_pan(track.pan);
-        let pan_text = text(pan_label)
-            .size(11)
-            .font(Font::MONOSPACE)
-            .color(theme::TEXT_DIM);
-
-        let import_btn: Element<'_, Message> = if track.track_type == TrackType::Instrument {
-            button(text("+M").size(11).color(Color::from_rgb(0.3, 0.75, 0.8)))
-                .on_press(Message::CreateMidiClip(track.id))
-                .style(|_theme, status| theme::small_button_style(status))
-                .padding(2)
-                .into()
-        } else {
-            button(text("+").size(12).color(theme::TEXT))
-                .on_press(Message::ImportFile(track.id))
-                .style(|_theme, status| theme::small_button_style(status))
-                .padding(2)
-                .into()
-        };
-
-        let del_btn = button(text("\u{00d7}").size(12).color(theme::TEXT_DIM))
-            .on_press(Message::RemoveTrack(track.id))
-            .style(|_theme, status| theme::small_button_style(status))
-            .padding(2);
-
-        // Monitor button
+        // Monitor (eye; green when monitoring).
         let mon_color = if track.monitor_enabled {
             theme::METRONOME_ON
         } else {
             theme::TEXT_DIM
         };
         let mon_enabled = track.monitor_enabled;
-        let mon_btn = button(text("I").size(11).color(mon_color))
-            .on_press(Message::ToggleMonitor(track.id))
-            .style(move |_theme, status| {
-                theme::toggle_button_style(mon_enabled, theme::METRONOME_ON, true, status)
-            })
-            .padding(2);
+        let mon_btn = button(
+            theme::icon(theme::fa::EYE).size(12).color(mon_color),
+        )
+        .on_press(Message::ToggleMonitor(track.id))
+        .style(move |_theme, status| {
+            theme::toggle_button_style(mon_enabled, theme::METRONOME_ON, true, status)
+        })
+        .padding(2);
 
-        // Mono/Stereo toggle
-        let mono_label = if track.mono { "M" } else { "S" };
+        // Mono/Stereo toggle: one hollow circle for mono, two overlapping
+        // hollow circles for stereo (the classic stereo symbol —
+        // https://de.wikipedia.org/wiki/Datei:Stereo2.png). Both glyphs
+        // are custom additions to our extended FA font — see
+        // tools/add_mono_stereo_glyphs.py.
         let is_mono = track.mono;
-        let mono_btn = button(text(mono_label).size(11).color(theme::TEXT))
-            .on_press(Message::ToggleTrackMono(track.id))
-            .style(move |_theme, status| {
-                theme::mono_button_style(is_mono, status)
-            })
-            .padding(2);
+        let mono_glyph = if is_mono {
+            theme::fa::CIRCLE_HOLLOW
+        } else {
+            theme::fa::CIRCLE_HOLLOW_DOUBLE
+        };
+        let mono_btn = button(
+            theme::icon(mono_glyph).size(12).color(theme::TEXT),
+        )
+        .on_press(Message::ToggleTrackMono(track.id))
+        .style(move |_theme, status| theme::mono_button_style(is_mono, status))
+        .padding(2);
 
-        let top_row = row![
-            name,
-            Space::with_width(Length::Fill),
-            mono_btn,
-            mon_btn,
-            rec_btn,
-            mute_btn,
-            solo_btn,
-            import_btn,
-            del_btn
-        ]
-        .spacing(4)
-        .align_y(alignment::Vertical::Center);
-
-        let bottom_row = row![vol_slider, vol_text, pan_slider, pan_text]
+        // Sub-tracks expose a trimmed toolbar: just mute/solo + a
+        // per-port label. They cannot be armed, monitored, deleted, or
+        // swapped to mono — those all belong to their parent.
+        let icon_row: iced::widget::Row<'_, Message> = if is_sub {
+            row![
+                mute_btn,
+                solo_btn,
+                Space::with_width(Length::Fill),
+            ]
             .spacing(4)
-            .align_y(alignment::Vertical::Center);
+            .align_y(alignment::Vertical::Center)
+        } else {
+            row![
+                mono_btn,
+                mon_btn,
+                rec_btn,
+                mute_btn,
+                solo_btn,
+                del_btn,
+                Space::with_width(Length::Fill),
+            ]
+            .spacing(4)
+            .align_y(alignment::Vertical::Center)
+        };
 
-        let content = column![top_row, bottom_row].spacing(2).padding(6);
+        let header_col = column![name_row, icon_row].spacing(4);
+
+        // Sub-tracks get an indent on the left so their visual hierarchy
+        // under the parent track is obvious at a glance. iced Padding's
+        // array form is [vertical, horizontal] only, so we build the full
+        // Padding explicitly for the per-side indent.
+        let left_pad: f32 = if is_sub { 20.0 } else { 8.0 };
+        let content = container(header_col)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(iced::Padding {
+                top: 6.0,
+                right: 8.0,
+                bottom: 6.0,
+                left: left_pad,
+            })
+            .clip(true);
 
         let bg = if track.record_armed {
             theme::PANEL_ARMED
+        } else if is_sub {
+            theme::PANEL
         } else {
             theme::PANEL_DARK
         };

@@ -155,7 +155,6 @@ impl ResonancePlugin for ResonanceAmp {
     const FEATURES: &'static [&'static str] = &["audio-effect", "mono", "stereo"];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
-    const OUTPUT_CHANNELS: u32 = 2;
 
     fn new() -> Self {
         Self {
@@ -226,11 +225,17 @@ impl ResonancePlugin for ResonanceAmp {
 
     fn process(
         &mut self,
-        left: &mut [f32],
-        right: &mut [f32],
+        outputs: &mut [resonance_plugin::OutputBuffer<'_>],
         frames: usize,
         _events: &mut EventIterator<'_>,
     ) {
+        // Single-output effect: operate on port 0 only. The CLAP bridge
+        // has already seeded this buffer with the incoming audio.
+        let main = outputs
+            .first_mut()
+            .expect("resonance-amp always has a main output");
+        let left = &mut *main.left;
+        let right = &mut *main.right;
         resonance_common::flush_denormals();
 
         // Check mailbox for newly loaded model — start crossfade

@@ -1,0 +1,103 @@
+use resonance_audio::types::TrackId;
+use resonance_music_theory::{Chord, ChordQuality, PitchClass, Scale};
+
+#[derive(Debug, Clone)]
+pub enum ComposeMessage {
+    // Create a new MIDI clip that spans the selected section on the given
+    // instrument track. Used by the "+" button that appears over empty
+    // instrument rows in the Compose track area.
+    CreateMidiClipInSection {
+        track_id: TrackId,
+        start_sample: u64,
+        length_bars: u32,
+    },
+
+    // Create-section inline form
+    OpenCreateSectionDialog,
+    CancelCreateSectionDialog,
+    SetNewSectionName(String),
+    SetNewSectionLength(String),
+    ConfirmCreateSection,
+
+    // Edit-section inline form (for the currently selected placement)
+    OpenEditSectionDialog { definition_id: u64 },
+    CancelEditSectionDialog,
+    SetEditSectionName(String),
+    SetEditSectionLength(String),
+    ConfirmEditSection,
+    CycleSectionColor { definition_id: u64 },
+
+    // Section definitions
+    CreateSection {
+        name: String,
+        length_bars: u32,
+        color: [u8; 3],
+    },
+    RenameSection {
+        definition_id: u64,
+        name: String,
+    },
+    ResizeSection {
+        definition_id: u64,
+        length_bars: u32,
+    },
+    DeleteSectionDefinition {
+        definition_id: u64,
+    },
+    SetSectionScale {
+        definition_id: u64,
+        scale: Option<Scale>,
+    },
+
+    // Section placements
+    PlaceSection {
+        definition_id: u64,
+        start_bar: u32,
+    },
+    DeleteSectionPlacement {
+        placement_id: u64,
+    },
+    SelectSectionPlacement {
+        placement_id: u64,
+    },
+
+    // Chord selection (drives the editor row under the chord lane)
+    SelectChord {
+        chord_id: u64,
+    },
+    ClearChordSelection,
+
+    // Instrument details panel in the Compose track area
+    SelectInstrumentForDetails {
+        track_id: TrackId,
+    },
+    ClearInstrumentDetails,
+
+    // Chords inside a section definition
+    AddChord {
+        definition_id: u64,
+        start_beat: u32,
+        duration_beats: u32,
+        root: PitchClass,
+        quality: ChordQuality,
+    },
+    EditChord {
+        definition_id: u64,
+        chord_id: u64,
+        chord: Chord,
+    },
+    MoveChord {
+        definition_id: u64,
+        chord_id: u64,
+        start_beat: u32,
+    },
+    ResizeChord {
+        definition_id: u64,
+        chord_id: u64,
+        duration_beats: u32,
+    },
+    DeleteChord {
+        definition_id: u64,
+        chord_id: u64,
+    },
+}

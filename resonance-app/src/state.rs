@@ -1,5 +1,109 @@
 /// GUI-side state types for the Resonance application.
 use resonance_audio::types::*;
+use serde::{Deserialize, Serialize};
+
+/// Sub-type of an instrument track, surfaced in the Compose tab. Only used
+/// for display and icon defaulting — the audio engine itself treats all
+/// instrument tracks identically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum InstrumentType {
+    Synth,
+    Drum,
+}
+
+impl Default for InstrumentType {
+    fn default() -> Self {
+        InstrumentType::Synth
+    }
+}
+
+impl InstrumentType {
+    pub const ALL: [InstrumentType; 2] = [InstrumentType::Synth, InstrumentType::Drum];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InstrumentType::Synth => "Synth",
+            InstrumentType::Drum => "Drum",
+        }
+    }
+}
+
+impl std::fmt::Display for InstrumentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Icon shown next to the instrument name in the Compose tab. Backed by a
+/// Font Awesome glyph; kept in an enum so the persisted value survives
+/// font-file renames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum InstrumentIcon {
+    Music,
+    Drum,
+    Guitar,
+    Microphone,
+    WaveSquare,
+    CompactDisc,
+    Sliders,
+}
+
+impl Default for InstrumentIcon {
+    fn default() -> Self {
+        InstrumentIcon::Music
+    }
+}
+
+impl InstrumentIcon {
+    pub const ALL: [InstrumentIcon; 7] = [
+        InstrumentIcon::Music,
+        InstrumentIcon::Drum,
+        InstrumentIcon::Guitar,
+        InstrumentIcon::Microphone,
+        InstrumentIcon::WaveSquare,
+        InstrumentIcon::CompactDisc,
+        InstrumentIcon::Sliders,
+    ];
+
+    pub fn glyph(self) -> char {
+        use crate::theme::fa;
+        match self {
+            InstrumentIcon::Music => fa::MUSIC,
+            InstrumentIcon::Drum => fa::DRUM,
+            InstrumentIcon::Guitar => fa::GUITAR,
+            InstrumentIcon::Microphone => fa::MICROPHONE,
+            InstrumentIcon::WaveSquare => fa::WAVE_SQUARE,
+            InstrumentIcon::CompactDisc => fa::COMPACT_DISC,
+            InstrumentIcon::Sliders => fa::SLIDERS,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InstrumentIcon::Music => "Music",
+            InstrumentIcon::Drum => "Drum",
+            InstrumentIcon::Guitar => "Guitar",
+            InstrumentIcon::Microphone => "Microphone",
+            InstrumentIcon::WaveSquare => "Wave",
+            InstrumentIcon::CompactDisc => "Disc",
+            InstrumentIcon::Sliders => "Sliders",
+        }
+    }
+
+    /// Default icon for the given instrument type.
+    pub fn default_for(ty: InstrumentType) -> Self {
+        match ty {
+            InstrumentType::Synth => InstrumentIcon::Music,
+            InstrumentType::Drum => InstrumentIcon::Drum,
+        }
+    }
+}
+
+impl std::fmt::Display for InstrumentIcon {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -51,6 +155,28 @@ pub struct TrackState {
     pub track_type: TrackType,
     /// Where this track's post-fader audio is routed.
     pub output: TrackOutput,
+    /// Instrument sub-type (synth/drum). Only meaningful when
+    /// `track_type == TrackType::Instrument`; audio tracks carry the default.
+    pub instrument_type: InstrumentType,
+    /// Icon shown next to the name in Compose. Default is
+    /// `InstrumentIcon::default_for(instrument_type)` for new tracks.
+    pub instrument_icon: InstrumentIcon,
+    /// When set, this track is a sub-track that reads one non-main output
+    /// port from its parent track's instrument plugin. Sub-tracks have
+    /// their own fader / pan / mute / bus routing, but no clips, no plugin
+    /// chain of their own, and no record arm — they're fed entirely from
+    /// the parent plugin's fan-out. `None` on all normal tracks.
+    pub sub_track: Option<SubTrackLink>,
+}
+
+/// Identifies a sub-track's parent and which plugin output port it reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubTrackLink {
+    pub parent_track_id: TrackId,
+    /// Index into the plugin's declared output-port layout. `0` is the
+    /// parent's own main output — never used by a sub-track. Sub-tracks
+    /// always have `output_port_index >= 1`.
+    pub output_port_index: u32,
 }
 
 /// GUI-side bus state.
@@ -143,6 +269,7 @@ pub struct MidiClipTrimState {
 pub enum ViewMode {
     Arrange,
     Mixer,
+    Compose,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

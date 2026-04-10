@@ -135,6 +135,18 @@ pub enum AudioCommand {
     RemoveTrack {
         track_id: TrackId,
     },
+    /// Register an app-side sub-track with the audio engine so the mixer
+    /// can drive it from its parent plugin's output port. The app
+    /// allocates the id itself (high range, never colliding with
+    /// engine ids counting up from 1) and passes it here. Called after
+    /// `AudioEvent::PluginAdded` for every non-main output port on a
+    /// multi-output plugin.
+    CreateSubTrack {
+        sub_id: TrackId,
+        parent_track_id: TrackId,
+        output_port_index: u32,
+        name: String,
+    },
     SetTrackRecordArm {
         track_id: TrackId,
         armed: bool,
@@ -420,6 +432,15 @@ pub enum AudioEvent {
         params: Vec<ParamInfo>,
         /// Whether the plugin exposes a CLAP GUI the host can open.
         has_gui: bool,
+        /// Number of audio output ports declared by this plugin instance.
+        /// `1` for every legacy single-output plugin. Multi-output plugins
+        /// (e.g. `resonance-drums`) report a larger number and the app
+        /// auto-creates one sub-track per non-main output port.
+        output_port_count: usize,
+        /// Human-readable name of each output port, same length as
+        /// `output_port_count`. Used to name auto-created sub-tracks after
+        /// their source port.
+        output_port_names: Vec<String>,
     },
     PluginRemoved {
         track_id: TrackId,
@@ -624,6 +645,13 @@ pub struct Track {
     /// Ordered list of plugin instance IDs forming the insert chain.
     /// For instrument tracks, the first plugin is the instrument; the rest are effects.
     pub plugin_ids: Vec<PluginInstanceId>,
+    /// When set, this track is a sub-track fed by a non-main output port
+    /// of `parent_track_id`'s instrument plugin. Sub-tracks never run
+    /// their own plugin chain or receive MIDI events — the mixer drives
+    /// them entirely from the parent plugin's `process_multi` output.
+    /// The tuple is `(parent_track_id, output_port_index)` where index 0
+    /// is reserved for the parent's own main output.
+    pub sub_track_of: Option<(TrackId, u32)>,
 }
 
 impl Track {
@@ -648,7 +676,23 @@ impl Track {
             output_bus_bits: AtomicU64::new(TRACK_OUTPUT_MASTER),
             input_device_name: None,
             plugin_ids: Vec::new(),
+            sub_track_of: None,
         }
+    }
+
+    /// Construct a sub-track feeding from `parent_track_id`'s output port
+    /// index `output_port_index`. Starts muted-friendly (volume 1.0,
+    /// pan 0.0) and routed to master; the app layer pushes user edits
+    /// via the normal `SetTrackVolume` / `SetTrackOutput` / etc. commands.
+    pub fn new_sub_track(
+        id: TrackId,
+        name: String,
+        parent_track_id: TrackId,
+        output_port_index: u32,
+    ) -> Self {
+        let mut t = Self::with_type(id, name, TrackType::Instrument);
+        t.sub_track_of = Some((parent_track_id, output_port_index));
+        t
     }
 
     pub fn output(&self) -> TrackOutput {

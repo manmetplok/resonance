@@ -16,7 +16,8 @@ use std::sync::atomic::Ordering;
 use serde::Deserialize;
 
 use crate::drum_map::{PadMapping, NUM_PADS, PAD_MAPPINGS};
-use crate::kit::{decode_wav, LoadedPad, LoadedSample, VelocityLayer};
+use crate::kit::{decode_wav, LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer};
+use crate::mic_catalog::ManifestMicCatalog;
 use crate::KitBridge;
 
 // ---------------------------------------------------------------------------
@@ -27,7 +28,7 @@ use crate::KitBridge;
 pub type KitManifest = BTreeMap<String, BTreeMap<String, MicSetup>>;
 
 #[derive(Deserialize)]
-#[allow(dead_code)] // brand/channel/mic/position are parsed but unused in v1
+#[allow(dead_code)] // brand/channel/mic fields come from the manifest but we only use `position` + `rounds`
 pub struct MicSetup {
     pub brand: String,
     pub channel: String,
@@ -60,8 +61,22 @@ const DRUMMICA_MAPPING: [&str; NUM_PADS] = [
     "SD Crash 18 Bell",        // 11 Cowbell (drummica has no cowbell)
 ];
 
-/// Preferred mic setup key. Falls back to the first available if absent.
-const PREFERRED_MIC_SETUP: &str = "23_OHsAB_e914";
+/// Default overhead setup key. Matches the pre-multi-output loader so
+/// existing projects load with no audible change.
+pub const DEFAULT_OVERHEAD_SETUP: &str = "23_OHsAB_e914";
+
+// ---------------------------------------------------------------------------
+// Per-pad mic-choice state — kept outside the loader so the editor can
+// persist it via ExtraStateSaver.
+// ---------------------------------------------------------------------------
+
+/// User-chosen setup keys per close-mic position for one pad. If an
+/// entry is missing the loader picks the first available setup for that
+/// position from the manifest.
+#[derive(Debug, Clone, Default)]
+pub struct PadMicChoices {
+    pub close_setups: BTreeMap<String, String>,
+}
 
 // ---------------------------------------------------------------------------
 // Status reported by the loader thread, rendered by the editor.
@@ -81,16 +96,26 @@ impl Default for KitStatus {
     }
 }
 
+/// Output of a successful kit load — the decoded pads + a snapshot of
+/// the manifest's mic catalog for the GUI.
+pub struct LoadedKit {
+    pub pads: Vec<LoadedPad>,
+    pub catalog: ManifestMicCatalog,
+}
+
 // ---------------------------------------------------------------------------
 // Public loader entrypoint.
 // ---------------------------------------------------------------------------
 
 /// Parse the manifest at `manifest_path`, decode every referenced sample at
-/// `target_sr`, and return the assembled pad list.
+/// `target_sr`, and return the assembled pad list + catalog of available
+/// mic setups for the GUI.
 pub fn load_kit_from_manifest(
     manifest_path: &Path,
     target_sr: f32,
-) -> Result<Vec<LoadedPad>, String> {
+    overhead_setup_key: &str,
+    pad_choices: &[PadMicChoices; NUM_PADS],
+) -> Result<LoadedKit, String> {
     let bytes = std::fs::read(manifest_path)
         .map_err(|e| format!("read manifest: {e}"))?;
     let manifest: KitManifest = serde_json::from_slice(&bytes)
@@ -100,17 +125,27 @@ pub fn load_kit_from_manifest(
         .parent()
         .ok_or_else(|| "manifest path has no parent directory".to_string())?;
 
+    let catalog = ManifestMicCatalog::from_manifest(&manifest);
+
     let mut pads = Vec::with_capacity(NUM_PADS);
     for (pad_idx, mapping) in PAD_MAPPINGS.iter().enumerate() {
         let piece_name = DRUMMICA_MAPPING[pad_idx];
         let pad = match manifest.get(piece_name) {
-            Some(piece) => build_pad_from_piece(mapping, piece_name, piece, kit_dir, target_sr)?,
+            Some(piece) => build_pad_from_piece(
+                mapping,
+                piece_name,
+                piece,
+                kit_dir,
+                target_sr,
+                overhead_setup_key,
+                &pad_choices[pad_idx],
+            )?,
             None => build_fallback_pad(mapping, target_sr)?,
         };
         pads.push(pad);
     }
 
-    Ok(pads)
+    Ok(LoadedKit { pads, catalog })
 }
 
 /// Spawn a background loader thread. Writes status updates and the kit path
@@ -120,7 +155,13 @@ pub fn load_kit_from_manifest(
 /// the stamp before writing state and become no-ops if a newer load has
 /// started, so last-click-wins status is preserved even under spam.
 /// Loader panics are caught and converted to `KitStatus::Error`.
-pub fn spawn_loader(manifest_path: PathBuf, target_sr: f32, bridge: &KitBridge) {
+pub fn spawn_loader(
+    manifest_path: PathBuf,
+    target_sr: f32,
+    bridge: &KitBridge,
+    overhead_setup_key: String,
+    pad_choices: [PadMicChoices; NUM_PADS],
+) {
     let bridge = bridge.clone();
     let stamp = bridge.load_generation.fetch_add(1, Ordering::AcqRel) + 1;
 
@@ -135,7 +176,7 @@ pub fn spawn_loader(manifest_path: PathBuf, target_sr: f32, bridge: &KitBridge) 
             }
 
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                load_kit_from_manifest(&manifest_path, target_sr)
+                load_kit_from_manifest(&manifest_path, target_sr, &overhead_setup_key, &pad_choices)
             }));
 
             // Only the newest load is allowed to write final state.
@@ -144,16 +185,17 @@ pub fn spawn_loader(manifest_path: PathBuf, target_sr: f32, bridge: &KitBridge) 
             }
 
             match outcome {
-                Ok(Ok(pads)) => {
-                    let num_pads = pads.len();
+                Ok(Ok(kit)) => {
+                    let num_pads = kit.pads.len();
                     let name = manifest_path
                         .parent()
                         .and_then(|p| p.file_name())
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_else(|| "kit".to_string());
+                    *bridge.catalog.lock().unwrap() = kit.catalog;
                     // Best-effort send; if the channel is full, coalesce
                     // by dropping this load (the newer one wins anyway).
-                    let _ = bridge.kit_sender.try_send(pads);
+                    let _ = bridge.kit_sender.try_send(kit.pads);
                     *bridge.kit_path.lock().unwrap() = Some(manifest_path);
                     *bridge.kit_status.lock().unwrap() =
                         KitStatus::Loaded { name, num_pads };
@@ -181,15 +223,112 @@ fn build_pad_from_piece(
     piece: &BTreeMap<String, MicSetup>,
     kit_dir: &Path,
     target_sr: f32,
+    overhead_setup_key: &str,
+    choices: &PadMicChoices,
 ) -> Result<LoadedPad, String> {
-    let mic = piece
-        .get(PREFERRED_MIC_SETUP)
-        .or_else(|| piece.values().next())
-        .ok_or_else(|| format!("piece '{piece_name}' has no mic setups"))?;
+    // Close-mic banks: one per position in PadMapping::close_mic_positions
+    // (already empty for cymbals). For kick/snare that's two banks.
+    let mut close_mics = Vec::with_capacity(mapping.close_mic_positions.len());
+    for position in mapping.close_mic_positions {
+        if let Some(bank) = load_bank_for_position(
+            piece_name,
+            piece,
+            kit_dir,
+            target_sr,
+            position,
+            choices.close_setups.get(*position).map(String::as_str),
+        )? {
+            close_mics.push(bank);
+        }
+    }
 
+    // Overhead bank: look up the global overhead setup key directly. If
+    // the piece doesn't have that specific setup, fall back to any
+    // OH-prefixed setup the piece does have so the pad still makes sound.
+    let overhead = load_overhead_bank(piece_name, piece, kit_dir, target_sr, overhead_setup_key)?;
+
+    Ok(LoadedPad {
+        name: mapping.name.to_string(),
+        choke_group: mapping.choke_group,
+        output_group: mapping.output_group,
+        close_mics,
+        overhead,
+    })
+}
+
+/// Load the mic bank for `position` from `piece`, picking the user's
+/// preferred setup if one is supplied and available, otherwise taking
+/// the first setup whose `position` field matches.
+fn load_bank_for_position(
+    piece_name: &str,
+    piece: &BTreeMap<String, MicSetup>,
+    kit_dir: &Path,
+    target_sr: f32,
+    position: &str,
+    preferred_setup: Option<&str>,
+) -> Result<Option<LoadedMicBank>, String> {
+    // Try preferred first, then fall back to position match.
+    let chosen = preferred_setup
+        .and_then(|key| piece.get(key).map(|setup| (key.to_string(), setup)))
+        .or_else(|| {
+            piece
+                .iter()
+                .find(|(_, setup)| setup.position == position)
+                .map(|(k, v)| (k.clone(), v))
+        });
+
+    let Some((setup_key, setup)) = chosen else {
+        return Ok(None);
+    };
+    let layers = decode_layers(piece_name, setup, kit_dir, target_sr)?;
+    Ok(Some(LoadedMicBank {
+        position: position.to_string(),
+        setup_key,
+        layers,
+    }))
+}
+
+/// Load the overhead bank for a piece using the globally selected OH
+/// setup key, falling back to any OH-prefixed setup the piece supplies.
+fn load_overhead_bank(
+    piece_name: &str,
+    piece: &BTreeMap<String, MicSetup>,
+    kit_dir: &Path,
+    target_sr: f32,
+    overhead_setup_key: &str,
+) -> Result<Option<LoadedMicBank>, String> {
+    let chosen = piece
+        .get(overhead_setup_key)
+        .map(|setup| (overhead_setup_key.to_string(), setup))
+        .or_else(|| {
+            piece
+                .iter()
+                .find(|(_, setup)| setup.position.starts_with("OH"))
+                .map(|(k, v)| (k.clone(), v))
+        });
+
+    let Some((setup_key, setup)) = chosen else {
+        return Ok(None);
+    };
+    let layers = decode_layers(piece_name, setup, kit_dir, target_sr)?;
+    Ok(Some(LoadedMicBank {
+        position: setup.position.clone(),
+        setup_key,
+        layers,
+    }))
+}
+
+/// Decode all velocity layers / round robins of one mic setup into
+/// `VelocityLayer`s. Common helper shared by close and overhead banks.
+fn decode_layers(
+    piece_name: &str,
+    setup: &MicSetup,
+    kit_dir: &Path,
+    target_sr: f32,
+) -> Result<Vec<VelocityLayer>, String> {
     // Reshape rounds: {RR → {Vel → filename}} into {Vel → [RR filenames]}.
     let mut layers_by_vel: BTreeMap<u32, Vec<&String>> = BTreeMap::new();
-    for (_rr_name, vel_map) in &mic.rounds {
+    for (_rr_name, vel_map) in &setup.rounds {
         for (vel_name, filename) in vel_map {
             let vel_num = parse_vel_index(vel_name).ok_or_else(|| {
                 format!("piece '{piece_name}': unparseable velocity key '{vel_name}'")
@@ -215,12 +354,7 @@ fn build_pad_from_piece(
         }
         layers.push(VelocityLayer { round_robins });
     }
-
-    Ok(LoadedPad {
-        name: mapping.name.to_string(),
-        layers,
-        choke_group: mapping.choke_group,
-    })
+    Ok(layers)
 }
 
 fn build_fallback_pad(mapping: &PadMapping, target_sr: f32) -> Result<LoadedPad, String> {
@@ -229,10 +363,16 @@ fn build_fallback_pad(mapping: &PadMapping, target_sr: f32) -> Result<LoadedPad,
     let sample = LoadedSample::from_data(data);
     Ok(LoadedPad {
         name: mapping.name.to_string(),
-        layers: vec![VelocityLayer {
-            round_robins: vec![sample],
-        }],
         choke_group: mapping.choke_group,
+        output_group: mapping.output_group,
+        close_mics: vec![LoadedMicBank {
+            position: "fallback".to_string(),
+            setup_key: String::new(),
+            layers: vec![VelocityLayer {
+                round_robins: vec![sample],
+            }],
+        }],
+        overhead: None,
     })
 }
 
@@ -261,10 +401,14 @@ mod tests {
             })
     }
 
+    fn default_choices() -> [PadMicChoices; NUM_PADS] {
+        std::array::from_fn(|_| PadMicChoices::default())
+    }
+
     /// Smoke test: parses the drummica manifest if present, verifying that
-    /// the loader returns exactly NUM_PADS pads and that each has at least
-    /// one velocity layer and one round robin. Gated on the manifest path
-    /// existing so CI without the samples still passes.
+    /// the loader returns exactly NUM_PADS pads and that close-mic counts
+    /// match the PadMapping spec. Gated on the manifest path existing so
+    /// CI without the samples still passes.
     #[test]
     fn drummica_smoke() {
         let manifest = drummica_manifest();
@@ -275,18 +419,65 @@ mod tests {
             );
             return;
         }
-        let pads = load_kit_from_manifest(&manifest, 48000.0)
-            .expect("drummica kit should load cleanly");
-        assert_eq!(pads.len(), NUM_PADS);
-        for pad in &pads {
-            assert!(!pad.layers.is_empty(), "pad {} has no layers", pad.name);
-            for layer in &pad.layers {
-                assert!(
-                    !layer.round_robins.is_empty(),
-                    "pad {} layer has no round robins",
-                    pad.name
-                );
+        let kit = load_kit_from_manifest(
+            &manifest,
+            48000.0,
+            DEFAULT_OVERHEAD_SETUP,
+            &default_choices(),
+        )
+        .expect("drummica kit should load cleanly");
+        assert_eq!(kit.pads.len(), NUM_PADS);
+
+        // Kick and snare each have two close mic positions (In+Out and
+        // Top+Btm respectively) so they must load two banks.
+        assert_eq!(kit.pads[0].close_mics.len(), 2, "kick should load KickIn + KickOut");
+        assert_eq!(kit.pads[1].close_mics.len(), 2, "snare should load SNTop + SNBtm");
+        assert_eq!(kit.pads[9].close_mics.len(), 2, "rimshot should load SNTop + SNBtm");
+
+        // Tom pads each have a single position mic.
+        for tom_idx in [4, 5, 6] {
+            assert_eq!(
+                kit.pads[tom_idx].close_mics.len(),
+                1,
+                "tom pad {} should have one close mic bank",
+                tom_idx
+            );
+        }
+
+        // Hi-hat pads have a single Hat close mic.
+        assert_eq!(kit.pads[2].close_mics.len(), 1);
+        assert_eq!(kit.pads[3].close_mics.len(), 1);
+
+        // Cymbal pads (crash, ride) have no close mics in Drummica.
+        assert_eq!(kit.pads[7].close_mics.len(), 0, "crash has no close mic in Drummica");
+        assert_eq!(kit.pads[8].close_mics.len(), 0, "ride has no close mic in Drummica");
+
+        // Every pad that maps to a Drummica piece has an overhead bank.
+        for (i, pad) in kit.pads.iter().enumerate() {
+            assert!(pad.overhead.is_some(), "pad {} should have an overhead bank", i);
+        }
+
+        // Every loaded bank must have at least one velocity layer and RR.
+        for pad in &kit.pads {
+            for bank in pad.close_mics.iter().chain(pad.overhead.iter()) {
+                assert!(!bank.layers.is_empty(), "bank {} has no layers", bank.setup_key);
+                for layer in &bank.layers {
+                    assert!(
+                        !layer.round_robins.is_empty(),
+                        "bank {} layer has no round robins",
+                        bank.setup_key
+                    );
+                }
             }
+        }
+
+        // Catalog should mention every Drummica position we expect.
+        for position in ["KickIn", "KickOut", "SNTop", "SNBtm", "Hat", "Tom01", "Tom02", "TomFloor", "OHsAB", "OHsXY"] {
+            assert!(
+                kit.catalog.positions.contains_key(position),
+                "catalog missing position {}",
+                position
+            );
         }
     }
 
@@ -306,18 +497,20 @@ mod tests {
         for mapping in &PAD_MAPPINGS {
             let pad = build_fallback_pad(mapping, 48000.0)
                 .unwrap_or_else(|e| panic!("fallback for {} failed: {e}", mapping.name));
-            assert_eq!(pad.layers.len(), 1, "{} should have 1 layer", mapping.name);
             assert_eq!(
-                pad.layers[0].round_robins.len(),
+                pad.close_mics.len(),
                 1,
-                "{} should have 1 round robin",
+                "{} fallback should hold exactly one close bank",
                 mapping.name
             );
+            assert_eq!(pad.close_mics[0].layers.len(), 1);
+            assert_eq!(pad.close_mics[0].layers[0].round_robins.len(), 1);
             assert!(
-                pad.layers[0].round_robins[0].frames > 0,
+                pad.close_mics[0].layers[0].round_robins[0].frames > 0,
                 "{} sample is empty",
                 mapping.name
             );
+            assert!(pad.overhead.is_none(), "fallback pads have no overhead");
         }
     }
 }

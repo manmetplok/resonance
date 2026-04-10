@@ -3582,6 +3582,7 @@ dependencies = [
  "resonance-amp",
  "resonance-audio",
  "resonance-ir",
+ "resonance-music-theory",
  "resonance-plugin",
  "rfd",
  "serde",
@@ -3641,6 +3642,13 @@ dependencies = [
  "resonance-plugin",
  "rustfft",
  "serde_json",
+]
+
+[[package]]
+name = "resonance-music-theory"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

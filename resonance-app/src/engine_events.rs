@@ -65,6 +65,9 @@ impl crate::Resonance {
                     level_r: 0.0,
                     track_type: TrackType::Audio,
                     output: TrackOutput::Master,
+                    instrument_type: InstrumentType::Synth,
+                    instrument_icon: InstrumentIcon::Music,
+                    sub_track: None,
                 });
             }
             AudioEvent::TrackRemoved { track_id } => {
@@ -83,6 +86,12 @@ impl crate::Resonance {
                 }
                 self.tracks.retain(|t| t.id != track_id);
                 self.clips.retain(|c| c.track_id != track_id);
+                // Also drop any sub-tracks whose parent just went away.
+                self.tracks.retain(|t| {
+                    t.sub_track
+                        .map(|l| l.parent_track_id != track_id)
+                        .unwrap_or(true)
+                });
             }
             AudioEvent::ClipDeleted { clip_id } => {
                 self.clips.retain(|c| c.id != clip_id);
@@ -162,6 +171,8 @@ impl crate::Resonance {
                 clap_file_path,
                 params,
                 has_gui,
+                output_port_count,
+                output_port_names,
             } => {
                 // Idempotent: if the plugin slot already exists (created by project load),
                 // just update its params and has_gui. Otherwise push a new slot.
@@ -184,6 +195,74 @@ impl crate::Resonance {
                             custom,
                             has_gui,
                             editor_open: false,
+                        });
+                    }
+                }
+
+                // Auto-create sub-tracks for multi-output plugins.
+                // Skips ports already represented (so project load, which
+                // replays saved sub-tracks before the PluginAdded event,
+                // doesn't double up). Parent track's own existing name is
+                // prefixed onto each sub-track ("Drums → Kick").
+                if output_port_count > 1 {
+                    let parent_name = self
+                        .tracks
+                        .iter()
+                        .find(|t| t.id == track_id)
+                        .map(|t| t.name.clone())
+                        .unwrap_or_else(|| format!("Track {}", track_id));
+                    for port_idx in 1..output_port_count {
+                        let already = self.tracks.iter().any(|t| {
+                            t.sub_track
+                                .map(|l| l.parent_track_id == track_id && l.output_port_index == port_idx as u32)
+                                .unwrap_or(false)
+                        });
+                        if already {
+                            continue;
+                        }
+                        let port_label = output_port_names
+                            .get(port_idx)
+                            .cloned()
+                            .unwrap_or_else(|| format!("Port {}", port_idx));
+                        let sub_id = self.next_sub_track_id;
+                        self.next_sub_track_id += 1;
+                        let order = self.next_track_order;
+                        self.next_track_order += 1;
+                        let sub_name = format!("{} \u{2192} {}", parent_name, port_label);
+                        // Register the sub-track with the engine so its
+                        // fader / pan / mute / bus routing atomics live
+                        // alongside the parent track and the mixer's
+                        // existing SetTrackVolume / SetTrackOutput / ...
+                        // commands work unchanged.
+                        self.engine.send(AudioCommand::CreateSubTrack {
+                            sub_id,
+                            parent_track_id: track_id,
+                            output_port_index: port_idx as u32,
+                            name: sub_name.clone(),
+                        });
+                        self.tracks.push(TrackState {
+                            id: sub_id,
+                            name: sub_name,
+                            volume: 0.0,
+                            pan: 0.0,
+                            muted: false,
+                            soloed: false,
+                            order,
+                            record_armed: false,
+                            monitor_enabled: false,
+                            mono: false,
+                            input_device_name: None,
+                            plugins: Vec::new(),
+                            level_l: 0.0,
+                            level_r: 0.0,
+                            track_type: TrackType::Instrument,
+                            output: TrackOutput::Master,
+                            instrument_type: InstrumentType::Synth,
+                            instrument_icon: InstrumentIcon::Music,
+                            sub_track: Some(crate::state::SubTrackLink {
+                                parent_track_id: track_id,
+                                output_port_index: port_idx as u32,
+                            }),
                         });
                     }
                 }
@@ -283,6 +362,9 @@ impl crate::Resonance {
                     level_r: 0.0,
                     track_type: TrackType::Instrument,
                     output: TrackOutput::Master,
+                    instrument_type: InstrumentType::Synth,
+                    instrument_icon: InstrumentIcon::Music,
+                    sub_track: None,
                 });
             }
 

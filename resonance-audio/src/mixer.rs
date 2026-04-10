@@ -12,9 +12,15 @@ use indexmap::IndexMap;
 use ringbuf::traits::{Consumer, Observer};
 use std::sync::atomic::Ordering;
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::{StereoBufMut, SyncClapInstance};
 use crate::engine::SharedState;
 use crate::types::*;
+
+/// Maximum number of plugin output ports the mixer allocates scratch
+/// for per block. The drum plugin uses 7; picking 8 leaves a little
+/// headroom for future multi-output plugins without blowing past the
+/// scratch-array size.
+pub(crate) const MAX_PLUGIN_OUTPUT_PORTS: usize = 8;
 
 /// Compute stereo gains for a track using equal-power pan law.
 #[inline]
@@ -242,6 +248,12 @@ pub(crate) fn mix_audio(
     track_buf_l: &mut Vec<f32>,
     track_buf_r: &mut Vec<f32>,
     bus_bufs: &mut [(Vec<f32>, Vec<f32>)],
+    // Per-plugin-output-port scratch used for multi-output instruments
+    // (e.g. resonance-drums with its 7 group/overhead ports). Sized to
+    // `MAX_PLUGIN_OUTPUT_PORTS` pairs by the engine; mix_audio only
+    // touches the first N slots on any given block, where N is the
+    // active plugin's declared port count.
+    port_scratch: &mut [(Vec<f32>, Vec<f32>)],
     note_event_buf: &mut Vec<PendingNoteEvent>,
     monitor_cons: &mut ringbuf::HeapCons<f32>,
     monitor_temp: &mut Vec<f32>,
@@ -359,9 +371,17 @@ pub(crate) fn mix_audio(
         (sample_rate as f64 * 60.0 / 120.0) / TICKS_PER_QUARTER_NOTE as f64
     };
 
-    // Per-track processing: (clips + monitor input) -> plugins -> volume -> master
-    let any_solo = tracks_guard.values().any(|t| t.soloed());
+    // Per-track processing: (clips + monitor input) -> plugins -> volume -> master.
+    // Sub-tracks are skipped here; they're driven by their parent's plugin
+    // fan-out later in the same track pass.
+    let any_solo = tracks_guard
+        .values()
+        .filter(|t| t.sub_track_of.is_none())
+        .any(|t| t.soloed());
     for track in tracks_guard.values() {
+        if track.sub_track_of.is_some() {
+            continue;
+        }
         if track.muted() {
             continue;
         }
@@ -374,6 +394,10 @@ pub(crate) fn mix_audio(
         track_buf_r[..frames].fill(0.0);
 
         let mut has_audio = false;
+        // Sub-track fan-out book-keeping: how many extra output ports the
+        // instrument plugin filled on this block, so the post-plugin loop
+        // knows how many `port_scratch` entries to route to sub-tracks.
+        let mut extra_ports_filled: usize = 0;
 
         if track.track_type == TrackType::Instrument {
             // -- Instrument track: collect MIDI events, send to instrument plugin --
@@ -400,12 +424,74 @@ pub(crate) fn mix_audio(
                                 inst.0.queue_note_off(event.note, event.sample_offset);
                             }
                         }
-                        inst.0.process(
-                            &mut track_buf_l[..frames],
-                            &mut track_buf_r[..frames],
-                            frames,
-                        );
-                        has_audio = true;
+
+                        let port_count = inst
+                            .0
+                            .output_port_count()
+                            .min(port_scratch.len());
+                        if port_count > 1 {
+                            // Multi-output instrument: fan out into the
+                            // per-port scratch pool, then copy port 0 back
+                            // into the track's main buffer so the rest of
+                            // the track chain (effects + fader + bus
+                            // routing) runs unchanged.
+                            {
+                                let mut views: [Option<StereoBufMut<'_>>;
+                                    MAX_PLUGIN_OUTPUT_PORTS] = Default::default();
+                                for (i, (pl, pr)) in port_scratch
+                                    .iter_mut()
+                                    .take(port_count)
+                                    .enumerate()
+                                {
+                                    pl[..frames].fill(0.0);
+                                    pr[..frames].fill(0.0);
+                                    views[i] = Some(StereoBufMut {
+                                        left: &mut pl[..frames],
+                                        right: &mut pr[..frames],
+                                    });
+                                }
+                                // Build a contiguous slice of StereoBufMut
+                                // for the CLAP call. We know ports 0..port_count
+                                // are Some.
+                                let mut slots: [std::mem::MaybeUninit<StereoBufMut<'_>>;
+                                    MAX_PLUGIN_OUTPUT_PORTS] =
+                                    unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+                                for i in 0..port_count {
+                                    slots[i].write(views[i].take().unwrap());
+                                }
+                                // SAFETY: the first `port_count` slots are
+                                // initialized above; the slice only refers
+                                // to those.
+                                let slice: &mut [StereoBufMut<'_>] = unsafe {
+                                    std::slice::from_raw_parts_mut(
+                                        slots.as_mut_ptr() as *mut StereoBufMut<'_>,
+                                        port_count,
+                                    )
+                                };
+                                inst.0.process_multi(slice, frames);
+                                // Drop the initialized entries before the
+                                // MaybeUninit array goes out of scope.
+                                for i in 0..port_count {
+                                    unsafe { slots[i].assume_init_drop() };
+                                }
+                            }
+                            // Port 0 → main track buffer for effect chain.
+                            track_buf_l[..frames]
+                                .copy_from_slice(&port_scratch[0].0[..frames]);
+                            track_buf_r[..frames]
+                                .copy_from_slice(&port_scratch[0].1[..frames]);
+                            extra_ports_filled = port_count;
+                            has_audio = true;
+                        } else {
+                            // Single-output path (legacy plugins): use the
+                            // thin wrapper that re-targets onto track_buf_l/r.
+                            inst.0.process(
+                                &mut track_buf_l[..frames],
+                                &mut track_buf_r[..frames],
+                                frames,
+                            );
+                            has_audio = true;
+                        }
                     }
                 }
             }
@@ -527,6 +613,56 @@ pub(crate) fn mix_audio(
             sum_to_output(
                 data, channels, frames, track_buf_l, track_buf_r, gain_l, gain_r,
             );
+        }
+
+        // Sub-track fan-out: for every non-main plugin output port that
+        // was filled by the instrument above, look up the matching
+        // sub-track (if any) and route its scratch buffer through the
+        // sub-track's fader / pan / bus.
+        if extra_ports_filled > 1 {
+            for sub_track in tracks_guard.values() {
+                let Some((parent_id, port_idx)) = sub_track.sub_track_of else {
+                    continue;
+                };
+                if parent_id != track.id {
+                    continue;
+                }
+                let port_idx = port_idx as usize;
+                if port_idx == 0 || port_idx >= extra_ports_filled {
+                    continue;
+                }
+                if sub_track.muted() {
+                    continue;
+                }
+                let (sub_gain_l, sub_gain_r) = track_stereo_gains(sub_track);
+
+                // Peak levels for sub-track VU meter.
+                let (pl, pr) = &port_scratch[port_idx];
+                let mut sub_peak_l = 0.0f32;
+                let mut sub_peak_r = 0.0f32;
+                for f in 0..frames {
+                    sub_peak_l = sub_peak_l.max((pl[f] * sub_gain_l).abs());
+                    sub_peak_r = sub_peak_r.max((pr[f] * sub_gain_r).abs());
+                }
+                sub_track.update_peak_l(sub_peak_l);
+                sub_track.update_peak_r(sub_peak_r);
+
+                // Route post-fader audio to the sub-track's destination.
+                let routed = match sub_track.output() {
+                    TrackOutput::Bus(bus_id) => busses_guard
+                        .get_index_of(&bus_id)
+                        .filter(|idx| *idx < active_busses)
+                        .map(|idx| {
+                            let (bl, br) = &mut bus_bufs[idx];
+                            sum_to_stereo(bl, br, frames, pl, pr, sub_gain_l, sub_gain_r);
+                        })
+                        .is_some(),
+                    TrackOutput::Master => false,
+                };
+                if !routed {
+                    sum_to_output(data, channels, frames, pl, pr, sub_gain_l, sub_gain_r);
+                }
+            }
         }
     }
 

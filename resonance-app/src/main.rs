@@ -2,6 +2,7 @@ use iced::Size;
 use resonance_audio::types::*;
 use resonance_audio::AudioEngine;
 
+pub(crate) mod compose;
 mod engine_events;
 mod message;
 mod midi_editor;
@@ -32,6 +33,11 @@ pub(crate) struct Resonance {
     pub(crate) scroll_offset: f32,  // horizontal scroll in pixels
     pub(crate) scroll_offset_y: f32, // vertical scroll in pixels
     pub(crate) next_track_order: usize,
+    /// Id counter for auto-created sub-tracks. Lives in a high numeric
+    /// range so it never collides with engine-allocated track ids
+    /// (engine tracks count up from 1). Sub-tracks are purely app-side
+    /// for now — the audio engine doesn't know about them until Phase 5.
+    pub(crate) next_sub_track_id: u64,
     pub(crate) input_devices: Vec<InputDeviceInfo>,
     pub(crate) default_input_device_name: Option<String>,
     pub(crate) bpm: f32,
@@ -93,6 +99,8 @@ pub(crate) struct Resonance {
     pub(crate) midi_clip_trim: Option<MidiClipTrimState>,
     /// Currently open MIDI clip in the piano roll editor.
     pub(crate) editing_midi_clip: Option<MidiEditorState>,
+    /// Compose tab state: section definitions, placements, chord progressions.
+    pub(crate) compose: compose::ComposeState,
 }
 
 fn main() -> iced::Result {
@@ -145,6 +153,7 @@ impl Resonance {
             scroll_offset: 0.0,
             scroll_offset_y: 0.0,
             next_track_order: 0,
+            next_sub_track_id: 1_000_000_000,
             input_devices: Vec::new(),
             default_input_device_name: None,
             bpm: 120.0,
@@ -184,6 +193,7 @@ impl Resonance {
             midi_clip_drag: None,
             midi_clip_trim: None,
             editing_midi_clip: None,
+            compose: compose::ComposeState::default(),
         };
 
         (app, iced::Task::none())

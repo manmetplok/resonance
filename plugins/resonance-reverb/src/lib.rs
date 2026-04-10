@@ -22,7 +22,6 @@ impl ResonancePlugin for ResonanceReverb {
     const FEATURES: &'static [&'static str] = &["audio-effect", "stereo", "reverb"];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
-    const OUTPUT_CHANNELS: u32 = 2;
 
     fn new() -> Self {
         Self {
@@ -84,11 +83,15 @@ impl ResonancePlugin for ResonanceReverb {
 
     fn process(
         &mut self,
-        left: &mut [f32],
-        right: &mut [f32],
+        outputs: &mut [resonance_plugin::OutputBuffer<'_>],
         frames: usize,
         _events: &mut EventIterator<'_>,
     ) {
+        let main = outputs
+            .first_mut()
+            .expect("resonance-reverb always has a main output");
+        let left = &mut *main.left;
+        let right = &mut *main.right;
         resonance_common::flush_denormals();
 
         let Some(reverb) = &mut self.reverb else {

@@ -45,7 +45,6 @@ impl ResonancePlugin for ResonanceWavetable {
         &["instrument", "synthesizer", "stereo"];
 
     const INPUT_CHANNELS: Option<u32> = None;
-    const OUTPUT_CHANNELS: u32 = 2;
     const MIDI_INPUT: bool = true;
 
     fn new() -> Self {
@@ -75,11 +74,15 @@ impl ResonancePlugin for ResonanceWavetable {
 
     fn process(
         &mut self,
-        left: &mut [f32],
-        right: &mut [f32],
+        outputs: &mut [resonance_plugin::OutputBuffer<'_>],
         frames: usize,
         events: &mut EventIterator<'_>,
     ) {
+        let main = outputs
+            .first_mut()
+            .expect("resonance-wavetable always has a main output");
+        let left = &mut *main.left;
+        let right = &mut *main.right;
         resonance_common::flush_denormals();
 
         // Sample-accurate MIDI processing

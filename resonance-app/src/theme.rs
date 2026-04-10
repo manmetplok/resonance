@@ -37,10 +37,33 @@ pub mod fa {
     pub const FLOPPY_DISK: char = '\u{f0c7}';
     pub const MAGNIFYING_GLASS_PLUS: char = '\u{f00e}';
     pub const MAGNIFYING_GLASS_MINUS: char = '\u{f010}';
-    /// Metronome icon (Font Awesome Solid).
+    /// Metronome icon (custom glyph added by tools/add_metronome_glyph.py).
     pub const METRONOME: char = '\u{f8db}';
+    /// Single hollow circle — mono channel indicator. Custom glyph added
+    /// by tools/add_mono_stereo_glyphs.py.
+    pub const CIRCLE_HOLLOW: char = '\u{f8dc}';
+    /// Two overlapping hollow circles — stereo channel indicator. Custom
+    /// glyph added by tools/add_mono_stereo_glyphs.py.
+    pub const CIRCLE_HOLLOW_DOUBLE: char = '\u{f8dd}';
     /// Bullseye — used for the punch-in/out toggle.
     pub const BULLSEYE: char = '\u{f140}';
+    /// Volume/speaker with an X — used for the mute button.
+    pub const VOLUME_XMARK: char = '\u{f6a9}';
+    /// Headphones — used for the solo button.
+    pub const HEADPHONES: char = '\u{f025}';
+    /// Microphone — used for audio tracks in the add-track menu.
+    pub const MICROPHONE: char = '\u{f130}';
+    /// Musical note — used for instrument tracks in the add-track menu.
+    pub const MUSIC: char = '\u{f001}';
+    pub const DRUM: char = '\u{f569}';
+    pub const GUITAR: char = '\u{f7a6}';
+    pub const WAVE_SQUARE: char = '\u{f83e}';
+    pub const COMPACT_DISC: char = '\u{f51f}';
+    pub const SLIDERS: char = '\u{f1de}';
+    /// Eye — used for the input-monitor toggle.
+    pub const EYE: char = '\u{f06e}';
+    /// Trash can — used for the track delete button.
+    pub const TRASH: char = '\u{f1f8}';
 }
 
 // Core palette
@@ -231,6 +254,53 @@ pub fn tab_button_style(active: bool, status: button::Status) -> button::Style {
         border: iced::Border {
             color: if active { ACCENT } else { Color::TRANSPARENT },
             width: if active { 1.0 } else { 0.0 },
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Button style for a section placement in the Compose tab strip. Fills the
+/// button with the section's configured color (dimmed when inactive) and
+/// highlights it with an accent border when it is the current selection.
+pub fn section_button_style(
+    active: bool,
+    color: [u8; 3],
+    status: button::Status,
+) -> button::Style {
+    let base = Color::from_rgb(
+        color[0] as f32 / 255.0,
+        color[1] as f32 / 255.0,
+        color[2] as f32 / 255.0,
+    );
+    let panel = PANEL;
+    let inactive = Color::from_rgb(
+        panel.r * 0.7 + base.r * 0.3,
+        panel.g * 0.7 + base.g * 0.3,
+        panel.b * 0.7 + base.b * 0.3,
+    );
+    let active_bg = Color::from_rgb(
+        panel.r * 0.4 + base.r * 0.6,
+        panel.g * 0.4 + base.g * 0.6,
+        panel.b * 0.4 + base.b * 0.6,
+    );
+    let bg = match status {
+        button::Status::Hovered => active_bg,
+        button::Status::Pressed => base,
+        _ => {
+            if active {
+                active_bg
+            } else {
+                inactive
+            }
+        }
+    };
+    button::Style {
+        background: Some(iced::Background::Color(bg)),
+        text_color: TEXT,
+        border: iced::Border {
+            color: if active { ACCENT } else { SEPARATOR },
+            width: if active { 1.5 } else { 1.0 },
             radius: 4.0.into(),
         },
         ..Default::default()

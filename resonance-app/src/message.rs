@@ -1,12 +1,14 @@
 /// Message types for the Resonance application.
+use crate::compose::ComposeMessage;
 use crate::project::LoadedProject;
-use crate::state::{ClipEdge, PunchDragTarget, ViewMode};
+use crate::state::{ClipEdge, InstrumentIcon, InstrumentType, PunchDragTarget, ViewMode};
 use resonance_audio::types::{
     BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
 };
 
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
+    Compose(ComposeMessage),
     Play,
     Record,
     Pause,
@@ -22,6 +24,7 @@ pub(crate) enum Message {
     SetMasterVolume(f32),
     ToggleMute(TrackId),
     ToggleSolo(TrackId),
+    #[allow(dead_code)] // handler retained for a future import entry point (menu/drag-drop)
     ImportFile(TrackId),
     FileSelected(TrackId, Option<String>),
     DeleteClip(ClipId),
@@ -31,6 +34,12 @@ pub(crate) enum Message {
     ToggleRecordArm(TrackId),
     ToggleMonitor(TrackId),
     ToggleTrackMono(TrackId),
+    /// Rename a track (edited from the Compose instrument details panel).
+    SetTrackName(TrackId, String),
+    /// Change an instrument track's sub-type (synth vs drum).
+    SetInstrumentType(TrackId, InstrumentType),
+    /// Change an instrument track's display icon.
+    SetInstrumentIcon(TrackId, InstrumentIcon),
     SetTrackInputDevice(TrackId, Option<String>),
     SetBpmText(String),
     CommitBpm,
@@ -87,6 +96,7 @@ pub(crate) enum Message {
     ProjectSaved(Result<(), String>),
     ProjectLoaded(Result<Box<LoadedProject>, String>),
     AddInstrumentTrack,
+    #[allow(dead_code)] // handler retained for a future MIDI clip creation entry point
     CreateMidiClip(TrackId),
     DeleteMidiClip(ClipId),
     StartMidiClipDrag { clip_id: ClipId, grab_offset_x: f32, start_x: f32, start_y: f32 },

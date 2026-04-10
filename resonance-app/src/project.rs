@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 
 use resonance_audio::types::{ClipId, PluginInstanceId};
 
+pub mod sections;
+pub use sections::{ProjectSectionChord, ProjectSectionDefinition, ProjectSectionPlacement};
+
 /// On-disk project format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectFile {
@@ -24,6 +27,10 @@ pub struct ProjectFile {
     pub midi_clips: Vec<ProjectMidiClip>,
     #[serde(default)]
     pub busses: Vec<ProjectBus>,
+    #[serde(default)]
+    pub section_definitions: Vec<ProjectSectionDefinition>,
+    #[serde(default)]
+    pub section_placements: Vec<ProjectSectionPlacement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +53,19 @@ pub struct ProjectTrack {
     /// projects) means the track routes directly to master.
     #[serde(default)]
     pub output_bus: Option<u64>,
+    /// Instrument sub-type (synth/drum) for display in Compose. Default for
+    /// legacy projects is `Synth`.
+    #[serde(default)]
+    pub instrument_type: crate::state::InstrumentType,
+    /// Display icon for the instrument. Default for legacy projects is the
+    /// icon matching `instrument_type`.
+    #[serde(default)]
+    pub instrument_icon: crate::state::InstrumentIcon,
+    /// When set, this track is a sub-track driven by a non-main output
+    /// port of `parent_track_id`'s instrument plugin. Legacy projects
+    /// load with `None` (no sub-tracks existed before this feature).
+    #[serde(default)]
+    pub sub_track: Option<crate::state::SubTrackLink>,
 }
 
 /// On-disk bus state.

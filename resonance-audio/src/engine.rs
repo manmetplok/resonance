@@ -158,6 +158,13 @@ impl AudioEngine {
             let mut bus_bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..MAX_BUSSES)
                 .map(|_| (vec![0.0f32; audio_buf_frames], vec![0.0f32; audio_buf_frames]))
                 .collect();
+            // Per-plugin-output-port scratch used for multi-output
+            // instruments (resonance-drums declares 7 ports; this pool
+            // carries room for a couple more).
+            let mut port_scratch: Vec<(Vec<f32>, Vec<f32>)> =
+                (0..crate::mixer::MAX_PLUGIN_OUTPUT_PORTS)
+                    .map(|_| (vec![0.0f32; audio_buf_frames], vec![0.0f32; audio_buf_frames]))
+                    .collect();
             let mut note_event_buf: Vec<PendingNoteEvent> = Vec::with_capacity(256);
             let mut monitor_temp = vec![0.0f32; audio_buf_frames * 2];
             let monitor_ring = ringbuf::HeapRb::<f32>::new(audio_quantum * 2 * 4);
@@ -179,6 +186,7 @@ impl AudioEngine {
                         &mut track_buf_l,
                         &mut track_buf_r,
                         &mut bus_bufs,
+                        &mut port_scratch,
                         &mut note_event_buf,
                         &mut monitor_cons,
                         &mut monitor_temp,
@@ -603,6 +611,23 @@ fn engine_thread(
                     tracks.write().insert(id, track);
                     let _ = event_tx.send(AudioEvent::TrackAdded { track_id: id });
                 }
+                AudioCommand::CreateSubTrack {
+                    sub_id,
+                    parent_track_id,
+                    output_port_index,
+                    name,
+                } => {
+                    // Idempotent: skip if this sub-track already exists.
+                    // Project load replays saved sub-tracks, then PluginAdded
+                    // re-fires the auto-create path; the second hit should
+                    // be a no-op.
+                    if tracks.read().contains_key(&sub_id) {
+                        continue;
+                    }
+                    let track =
+                        Track::new_sub_track(sub_id, name, parent_track_id, output_port_index);
+                    tracks.write().insert(sub_id, track);
+                }
                 AudioCommand::RemoveTrack { track_id } => {
                     // Remove plugins for this track -- extract under write lock,
                     // then drop instances outside the lock so audio callback isn't blocked
@@ -619,7 +644,21 @@ fn engine_thread(
                         }
                     };
                     drop(removed_plugins);
-                    tracks.write().shift_remove(&track_id);
+                    // Drop the parent track and any sub-tracks fed by it
+                    // in one pass under the same write lock.
+                    let removed_sub_ids: Vec<TrackId> = {
+                        let mut tracks_guard = tracks.write();
+                        tracks_guard.shift_remove(&track_id);
+                        let sub_ids: Vec<TrackId> = tracks_guard
+                            .values()
+                            .filter(|t| matches!(t.sub_track_of, Some((p, _)) if p == track_id))
+                            .map(|t| t.id)
+                            .collect();
+                        for sid in &sub_ids {
+                            tracks_guard.shift_remove(sid);
+                        }
+                        sub_ids
+                    };
                     // Remove clips -- collect removed clips so dealloc happens outside lock
                     let removed_clips: Vec<_> = {
                         let mut clips_guard = clips.write();
@@ -637,6 +676,9 @@ fn engine_thread(
                     drop(removed_clips);
                     rec.buffers.remove(&track_id);
                     let _ = event_tx.send(AudioEvent::TrackRemoved { track_id });
+                    for sid in removed_sub_ids {
+                        let _ = event_tx.send(AudioEvent::TrackRemoved { track_id: sid });
+                    }
                 }
                 AudioCommand::SetTrackRecordArm { track_id, armed } => {
                     if let Some(track) = tracks.read().get(&track_id) {
@@ -777,9 +819,12 @@ fn engine_thread(
                             let instance_id = next_plugin_id;
                             next_plugin_id += 1;
 
-                            // Query params + has_gui before moving instance into shared map
+                            // Query params + has_gui + output port layout
+                            // before moving instance into shared map.
                             let params = instance.query_params();
                             let has_gui = instance.has_gui();
+                            let output_port_count = instance.output_port_count();
+                            let output_port_names = instance.output_port_names();
 
                             plugins.write().insert(instance_id, parking_lot::Mutex::new(SyncClapInstance(instance)));
 
@@ -795,6 +840,8 @@ fn engine_thread(
                                 clap_file_path,
                                 params,
                                 has_gui,
+                                output_port_count,
+                                output_port_names,
                             });
                         }
                         Err(e) => {
@@ -1334,6 +1381,8 @@ fn engine_thread(
                         Ok(instance) => {
                             let params = instance.query_params();
                             let has_gui = instance.has_gui();
+                            let output_port_count = instance.output_port_count();
+                            let output_port_names = instance.output_port_names();
                             plugins.write().insert(instance_id, parking_lot::Mutex::new(SyncClapInstance(instance)));
                             next_plugin_id = next_plugin_id.max(instance_id + 1);
 
@@ -1349,6 +1398,8 @@ fn engine_thread(
                                 clap_file_path,
                                 params,
                                 has_gui,
+                                output_port_count,
+                                output_port_names,
                             });
                         }
                         Err(e) => {

@@ -56,6 +56,28 @@ impl NoteEvent {
     }
 }
 
+/// Describes one audio output port exposed by a plugin. Returned from
+/// `ResonancePlugin::output_layout()` at activation time; used by the CLAP
+/// bridge to declare audio ports to the host and by the host mixer to size
+/// its per-port scratch buffers.
+#[derive(Debug, Clone)]
+pub struct OutputPortSpec {
+    /// Human-readable name shown to the host (e.g. "Out", "Kick", "Snare").
+    pub name: String,
+    /// Number of audio channels for this port. Only 1 (mono) and 2 (stereo)
+    /// are supported right now; everything else is rejected at activation.
+    pub channel_count: u32,
+}
+
+/// Mutable stereo buffer pair for one output port, passed to
+/// `ResonancePlugin::process()` in a slice — one entry per declared port in
+/// `output_layout()` order. Plugins write their output directly into
+/// `left` and `right` (already zeroed when the process call begins).
+pub struct OutputBuffer<'a> {
+    pub left: &'a mut [f32],
+    pub right: &'a mut [f32],
+}
+
 /// Iterator over note events within a process block.
 /// Borrows from a pre-allocated buffer to avoid audio-thread allocations.
 pub struct EventIterator<'a> {
@@ -111,10 +133,22 @@ pub trait ResonancePlugin: Send + 'static {
 
     /// Number of input channels. None = instrument (no audio input).
     const INPUT_CHANNELS: Option<u32>;
-    /// Number of output channels.
-    const OUTPUT_CHANNELS: u32;
     /// Whether this plugin accepts MIDI note input.
     const MIDI_INPUT: bool = false;
+
+    /// Describe the plugin's audio output layout. Called once at activation
+    /// and cached for the plugin's lifetime — **do not** change the port
+    /// count across activations, the host caches it and sizes buffers
+    /// accordingly. Default: a single stereo output named "Out".
+    ///
+    /// Port 0 is always the "main" output; plugins that declare multiple
+    /// ports conventionally put their primary / mix-down output at index 0.
+    fn output_layout(&self) -> Vec<OutputPortSpec> {
+        vec![OutputPortSpec {
+            name: "Out".to_string(),
+            channel_count: 2,
+        }]
+    }
 
     /// Create a new instance of the plugin.
     fn new() -> Self;
@@ -139,13 +173,19 @@ pub trait ResonancePlugin: Send + 'static {
 
     /// Process a buffer of audio.
     ///
-    /// `left` and `right` are mutable slices of `frames` length.
-    /// For instruments (no input), they are zeroed before calling.
+    /// `outputs` is a slice of stereo buffer pairs, one per declared output
+    /// port in `output_layout()` order. Each buffer has `frames` samples
+    /// and is already zeroed when the plugin is called (instrument path)
+    /// or pre-filled with the incoming audio (effect path on port 0).
+    ///
+    /// Single-output plugins simply write into `outputs[0].left` /
+    /// `outputs[0].right`. Multi-output plugins (e.g. resonance-drums with
+    /// its 7 group/overhead ports) fan out to the full slice.
+    ///
     /// `events` provides sample-accurate note events.
     fn process(
         &mut self,
-        left: &mut [f32],
-        right: &mut [f32],
+        outputs: &mut [OutputBuffer<'_>],
         frames: usize,
         events: &mut EventIterator<'_>,
     );

@@ -31,7 +31,7 @@ use clack_plugin::stream::{InputStream, OutputStream};
 
 use crate::gui::{EditorFactory, PluginEditor};
 use crate::param::Param;
-use crate::plugin::{EventIterator, NoteEvent, ResonancePlugin};
+use crate::plugin::{EventIterator, NoteEvent, OutputBuffer, OutputPortSpec, ResonancePlugin};
 
 // ---------------------------------------------------------------------------
 // Param metadata stored in SharedState
@@ -61,7 +61,10 @@ pub struct ClapShared<'a> {
     /// Map from CLAP param ID to slot index.
     pub(crate) clap_id_to_slot: std::collections::HashMap<u32, usize>,
     input_channels: Option<u32>,
-    output_channels: u32,
+    /// Cached output-port layout, captured once from `ResonancePlugin::output_layout()`
+    /// at plugin construction. The CLAP audio-ports extension, the host, and the
+    /// audio processor all consult this instead of re-calling the plugin hook.
+    output_ports: Vec<OutputPortSpec>,
     midi_input: bool,
     /// Flag: shared param values have been updated (e.g. state load while active).
     /// The audio processor should re-sync plugin params from shared atomics.
@@ -125,9 +128,14 @@ pub struct ClapAudioProcessor<'a, P: ResonancePlugin> {
     shared: &'a ClapShared<'a>,
     #[allow(dead_code)]
     sample_rate: f32,
-    /// Pre-allocated temp buffers for left/right channel data.
-    temp_left: Vec<f32>,
-    temp_right: Vec<f32>,
+    /// Pre-allocated scratch buffers for the effect/instrument input
+    /// (read from host into these before the plugin call).
+    input_left: Vec<f32>,
+    input_right: Vec<f32>,
+    /// Pre-allocated output scratch, one `(left, right)` pair per declared
+    /// output port. Populated by the plugin on each `process()` call and
+    /// then copied back into the CLAP audio buffers.
+    output_scratch: Vec<(Vec<f32>, Vec<f32>)>,
     /// Pre-allocated buffer for note events (avoids audio-thread allocation).
     note_events: Vec<NoteEvent>,
 }
@@ -156,12 +164,17 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         plugin.initialize(audio_config.sample_rate as f32, audio_config.max_frames_count);
 
         let max_frames = audio_config.max_frames_count as usize;
+        let port_count = shared.output_ports.len();
+        let output_scratch = (0..port_count)
+            .map(|_| (vec![0.0_f32; max_frames], vec![0.0_f32; max_frames]))
+            .collect();
         Ok(ClapAudioProcessor {
             plugin,
             shared,
             sample_rate: audio_config.sample_rate as f32,
-            temp_left: vec![0.0; max_frames],
-            temp_right: vec![0.0; max_frames],
+            input_left: vec![0.0; max_frames],
+            input_right: vec![0.0; max_frames],
+            output_scratch,
             note_events: Vec::with_capacity(256),
         })
     }
@@ -233,57 +246,99 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
 
         let mut event_iter = EventIterator::new(&self.note_events);
 
-        // Prepare temp buffers
-        let left = &mut self.temp_left[..frames];
-        let right = &mut self.temp_right[..frames];
+        // Effect path: read the input (port 0 of the input audio buffers)
+        // into scratch. The plugin sees the input pre-loaded in its
+        // `outputs[0]` buffer because the legacy effect contract is
+        // "read left/right, process in place, write left/right". Non-main
+        // output ports (1..N) are zeroed before the call.
+        let input_left = &mut self.input_left[..frames];
+        let input_right = &mut self.input_right[..frames];
 
         if P::INPUT_CHANNELS.is_some() {
-            // Read input from port pair (in-place processing)
             if let Some(mut pair) = audio.port_pair(0) {
                 let mut channels = pair.channels()?.into_f32().ok_or(PluginError::Message("Expected f32 audio"))?;
-                // Read left channel
                 if let Some(ch) = channels.channel_pair(0) {
                     match ch {
-                        ChannelPair::InPlace(buf) => left.copy_from_slice(&buf[..frames]),
-                        ChannelPair::InputOutput(inp, _) => left.copy_from_slice(&inp[..frames]),
-                        _ => left.fill(0.0),
+                        ChannelPair::InPlace(buf) => input_left.copy_from_slice(&buf[..frames]),
+                        ChannelPair::InputOutput(inp, _) => input_left.copy_from_slice(&inp[..frames]),
+                        _ => input_left.fill(0.0),
                     }
                 }
-                // Read right channel
                 if let Some(ch) = channels.channel_pair(1) {
                     match ch {
-                        ChannelPair::InPlace(buf) => right.copy_from_slice(&buf[..frames]),
-                        ChannelPair::InputOutput(inp, _) => right.copy_from_slice(&inp[..frames]),
-                        _ => right.fill(0.0),
+                        ChannelPair::InPlace(buf) => input_right.copy_from_slice(&buf[..frames]),
+                        ChannelPair::InputOutput(inp, _) => input_right.copy_from_slice(&inp[..frames]),
+                        _ => input_right.fill(0.0),
                     }
                 }
             }
         } else {
-            left.fill(0.0);
-            right.fill(0.0);
+            input_left.fill(0.0);
+            input_right.fill(0.0);
         }
 
-        // Process audio through the plugin
-        self.plugin.process(left, right, frames, &mut event_iter);
+        // Zero every output scratch pair for this frame range, then seed
+        // port 0 with the input so effect plugins see their audio in-place.
+        for (idx, (l, r)) in self.output_scratch.iter_mut().enumerate() {
+            l[..frames].fill(0.0);
+            r[..frames].fill(0.0);
+            if idx == 0 && P::INPUT_CHANNELS.is_some() {
+                l[..frames].copy_from_slice(input_left);
+                r[..frames].copy_from_slice(input_right);
+            }
+        }
 
-        // Write output back
-        if let Some(mut pair) = audio.port_pair(0) {
-            let mut channels = pair.channels()?.into_f32().ok_or(PluginError::Message("Expected f32 audio"))?;
-            // Write left channel
+        // Build a transient slice of OutputBuffer views over the scratch.
+        // The tiny allocation here (up to 8 output ports × 16 bytes each)
+        // is acceptable on the audio thread — far cheaper than copying
+        // audio data, and the plugin call itself does real work.
+        let mut port_views: Vec<OutputBuffer<'_>> =
+            Vec::with_capacity(self.output_scratch.len());
+        for (l, r) in self.output_scratch.iter_mut() {
+            port_views.push(OutputBuffer {
+                left: &mut l[..frames],
+                right: &mut r[..frames],
+            });
+        }
+
+        self.plugin
+            .process(&mut port_views, frames, &mut event_iter);
+
+        // Drop the port views so the scratch is free to be re-borrowed for
+        // the write-back pass below.
+        drop(port_views);
+
+        // Copy each declared output port back into the host's audio buffers.
+        for port_index in 0..self.output_scratch.len() {
+            let Some(mut pair) = audio.port_pair(port_index) else {
+                continue;
+            };
+            let mut channels = pair
+                .channels()?
+                .into_f32()
+                .ok_or(PluginError::Message("Expected f32 audio"))?;
+            let (scratch_l, scratch_r) = &self.output_scratch[port_index];
             if let Some(ch) = channels.channel_pair(0) {
                 match ch {
-                    ChannelPair::InPlace(buf) => buf[..frames].copy_from_slice(left),
-                    ChannelPair::InputOutput(_, out) => out[..frames].copy_from_slice(left),
-                    ChannelPair::OutputOnly(buf) => buf[..frames].copy_from_slice(left),
+                    ChannelPair::InPlace(buf) => buf[..frames].copy_from_slice(&scratch_l[..frames]),
+                    ChannelPair::InputOutput(_, out) => {
+                        out[..frames].copy_from_slice(&scratch_l[..frames])
+                    }
+                    ChannelPair::OutputOnly(buf) => {
+                        buf[..frames].copy_from_slice(&scratch_l[..frames])
+                    }
                     _ => {}
                 }
             }
-            // Write right channel
             if let Some(ch) = channels.channel_pair(1) {
                 match ch {
-                    ChannelPair::InPlace(buf) => buf[..frames].copy_from_slice(right),
-                    ChannelPair::InputOutput(_, out) => out[..frames].copy_from_slice(right),
-                    ChannelPair::OutputOnly(buf) => buf[..frames].copy_from_slice(right),
+                    ChannelPair::InPlace(buf) => buf[..frames].copy_from_slice(&scratch_r[..frames]),
+                    ChannelPair::InputOutput(_, out) => {
+                        out[..frames].copy_from_slice(&scratch_r[..frames])
+                    }
+                    ChannelPair::OutputOnly(buf) => {
+                        buf[..frames].copy_from_slice(&scratch_r[..frames])
+                    }
                     _ => {}
                 }
             }
@@ -366,6 +421,17 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
     fn new_shared<'a>(host: HostSharedHandle<'a>) -> Result<ClapShared<'a>, PluginError> {
         let temp = P::new();
         let count = temp.param_count();
+        let output_ports = temp.output_layout();
+        if output_ports.is_empty() {
+            return Err(PluginError::Message("Plugin must declare at least one output port"));
+        }
+        for port in &output_ports {
+            if port.channel_count != 1 && port.channel_count != 2 {
+                return Err(PluginError::Message(
+                    "Only mono and stereo output ports are supported",
+                ));
+            }
+        }
 
         let mut param_metas: Vec<ParamMeta> = Vec::with_capacity(count);
         let mut param_values: Vec<AtomicU64> = Vec::with_capacity(count);
@@ -403,7 +469,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             param_values,
             clap_id_to_slot,
             input_channels: P::INPUT_CHANNELS,
-            output_channels: P::OUTPUT_CHANNELS,
+            output_ports,
             midi_input: P::MIDI_INPUT,
             params_dirty: AtomicBool::new(false),
         })
@@ -447,15 +513,15 @@ impl<'a, P: ResonancePlugin> PluginAudioPortsImpl for ClapMainThread<'a, P> {
         if is_input {
             if self.shared.input_channels.is_some() { 1 } else { 0 }
         } else {
-            1
+            self.shared.output_ports.len() as u32
         }
     }
 
     fn get(&mut self, index: u32, is_input: bool, writer: &mut AudioPortInfoWriter) {
-        if index != 0 {
-            return;
-        }
         if is_input {
+            if index != 0 {
+                return;
+            }
             if let Some(ch) = self.shared.input_channels {
                 writer.set(&AudioPortInfo {
                     id: ClapId::new(1),
@@ -467,28 +533,51 @@ impl<'a, P: ResonancePlugin> PluginAudioPortsImpl for ClapMainThread<'a, P> {
                     } else {
                         AudioPortType::STEREO
                     }),
+                    // Only the main output port (index 0) gets the in-place
+                    // pair with the input port; secondary outputs are not
+                    // in-place routable.
                     in_place_pair: Some(ClapId::new(2)),
                 });
             }
-        } else {
-            let ch = self.shared.output_channels;
-            writer.set(&AudioPortInfo {
-                id: ClapId::new(2),
-                name: b"Output",
-                channel_count: ch,
-                flags: AudioPortFlags::IS_MAIN,
-                port_type: Some(if ch == 1 {
-                    AudioPortType::MONO
-                } else {
-                    AudioPortType::STEREO
-                }),
-                in_place_pair: if self.shared.input_channels.is_some() {
-                    Some(ClapId::new(1))
-                } else {
-                    None
-                },
-            });
+            return;
         }
+
+        // Output ports — one AudioPortInfo per entry in `output_ports`.
+        let Some(port) = self.shared.output_ports.get(index as usize) else {
+            return;
+        };
+        // Port IDs start at 2 (legacy: input was 1, main output was 2) and
+        // increase by one per additional output.
+        let port_id = ClapId::new(2 + index);
+        let is_main = index == 0;
+        // Use a zero-terminated buffer for the name; CLAP names are
+        // limited to CLAP_NAME_SIZE bytes so truncate safely if needed.
+        let mut name_buf = [0u8; 32];
+        let bytes = port.name.as_bytes();
+        let copy_len = bytes.len().min(name_buf.len() - 1);
+        name_buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        writer.set(&AudioPortInfo {
+            id: port_id,
+            name: &name_buf[..=copy_len],
+            channel_count: port.channel_count,
+            flags: if is_main {
+                AudioPortFlags::IS_MAIN
+            } else {
+                AudioPortFlags::empty()
+            },
+            port_type: Some(if port.channel_count == 1 {
+                AudioPortType::MONO
+            } else {
+                AudioPortType::STEREO
+            }),
+            // Only the main output port can be in-place paired with the
+            // input port for effects.
+            in_place_pair: if is_main && self.shared.input_channels.is_some() {
+                Some(ClapId::new(1))
+            } else {
+                None
+            },
+        });
     }
 }
 

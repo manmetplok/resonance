@@ -18,7 +18,9 @@ pub mod ui;
 pub use clap_bridge::ClapBridge;
 pub use formatters::*;
 pub use param::{BoolParam, FloatParam, IntParam, Param};
-pub use plugin::{EventIterator, ExtraStateSaver, NoteEvent, ResonancePlugin};
+pub use plugin::{
+    EventIterator, ExtraStateSaver, NoteEvent, OutputBuffer, OutputPortSpec, ResonancePlugin,
+};
 pub use range::{FloatRange, IntRange};
 pub use smoother::{Smoother, SmoothingStyle};
 

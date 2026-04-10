@@ -1,0 +1,8 @@
+[package]
+name = "resonance-music-theory"
+version = "0.1.0"
+edition = "2021"
+description = "Music theory primitives (pitch, chord, scale) for Resonance"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

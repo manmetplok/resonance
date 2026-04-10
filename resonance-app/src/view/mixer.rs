@@ -2,6 +2,7 @@
 use crate::message::Message;
 use crate::state::*;
 use crate::theme;
+use crate::theme::fa;
 use crate::util::{format_db, format_pan};
 use iced::widget::{
     button, column, container, pick_list, row, scrollable, slider, text,
@@ -109,11 +110,16 @@ impl crate::Resonance {
             track_strip_row =
                 track_strip_row.push(self.view_channel_strip(track, &available_plugins));
         }
-        let scrollable_tracks = scrollable(track_strip_row)
-            .direction(scrollable::Direction::Horizontal(
-                scrollable::Scrollbar::default(),
-            ))
-            .width(Length::Fill);
+        // Construct the scrollable with its horizontal direction up front.
+        // `scrollable(content)` would default to Vertical and run its
+        // `validate()` debug assertion before the chained `.direction(...)`
+        // has a chance to change it — and `track_strip_row`'s size hint is
+        // Fill-height now that each strip claims Length::Fill vertically.
+        let scrollable_tracks = iced::widget::Scrollable::with_direction(
+            track_strip_row,
+            scrollable::Direction::Horizontal(scrollable::Scrollbar::default()),
+        )
+        .width(Length::Fill);
         let master_strip = self.view_master_strip();
         let v_separator_tracks =
             container(Space::new(1, Length::Fill)).style(|_theme| container::Style {
@@ -128,11 +134,11 @@ impl crate::Resonance {
         for bus in &sorted_busses {
             bus_strip_row = bus_strip_row.push(self.view_bus_strip(bus, &available_plugins));
         }
-        let scrollable_busses = scrollable(bus_strip_row)
-            .direction(scrollable::Direction::Horizontal(
-                scrollable::Scrollbar::default(),
-            ))
-            .width(Length::Fill);
+        let scrollable_busses = iced::widget::Scrollable::with_direction(
+            bus_strip_row,
+            scrollable::Direction::Horizontal(scrollable::Scrollbar::default()),
+        )
+        .width(Length::Fill);
         let add_bus_strip = self.view_add_bus_strip();
         let v_separator_busses =
             container(Space::new(1, Length::Fill)).style(|_theme| container::Style {
@@ -281,17 +287,23 @@ impl crate::Resonance {
     }
 
     fn view_channel_strip(&self, track: &TrackState, available_plugins: &[ScannedPlugin]) -> Element<'_, Message> {
+        // Sub-tracks get a slimmer strip variant — no FX chain and no
+        // input/arm section, because they're fed entirely from their
+        // parent plugin's output port.
+        let is_sub = track.sub_track.is_some();
+        let name_color = if is_sub { theme::TEXT_DIM } else { theme::TEXT };
         let track_name = container(
-            text(track.name.clone()).size(13).color(theme::TEXT),
+            text(track.name.clone()).size(13).color(name_color),
         )
         .width(Length::Fill)
         .center_x(Length::Fill)
         .padding([6, 4]);
 
-        // Mute / Solo / Arm / Monitor buttons
+        // Same icon vocabulary as the Arrange track header so the two
+        // surfaces stay visually consistent.
         let rec_color = if track.record_armed { theme::RECORD_RED } else { theme::TEXT_DIM };
         let armed = track.record_armed;
-        let rec_btn = button(text("R").size(11).color(rec_color))
+        let rec_btn = button(theme::icon(fa::CIRCLE).size(12).color(rec_color))
             .on_press(Message::ToggleRecordArm(track.id))
             .style(move |_theme, status| {
                 if armed { theme::record_armed_button_style(status) }
@@ -300,20 +312,20 @@ impl crate::Resonance {
             .padding(2);
 
         let mute_color = if track.muted { theme::ACCENT } else { theme::TEXT_DIM };
-        let mute_btn = button(text("M").size(11).color(mute_color))
+        let mute_btn = button(theme::icon(fa::VOLUME_XMARK).size(12).color(mute_color))
             .on_press(Message::ToggleMute(track.id))
             .style(|_theme, status| theme::small_button_style(status))
             .padding(2);
 
         let solo_color = if track.soloed { theme::SOLO_YELLOW } else { theme::TEXT_DIM };
-        let solo_btn = button(text("S").size(11).color(solo_color))
+        let solo_btn = button(theme::icon(fa::HEADPHONES).size(12).color(solo_color))
             .on_press(Message::ToggleSolo(track.id))
             .style(|_theme, status| theme::small_button_style(status))
             .padding(2);
 
         let mon_color = if track.monitor_enabled { theme::METRONOME_ON } else { theme::TEXT_DIM };
         let mon_enabled = track.monitor_enabled;
-        let mon_btn = button(text("I").size(11).color(mon_color))
+        let mon_btn = button(theme::icon(fa::EYE).size(12).color(mon_color))
             .on_press(Message::ToggleMonitor(track.id))
             .style(move |_theme, status| {
                 theme::toggle_button_style(mon_enabled, theme::METRONOME_ON, true, status)
@@ -321,8 +333,8 @@ impl crate::Resonance {
             .padding(2);
 
         let is_mono = track.mono;
-        let mono_label = if track.mono { "M" } else { "S" };
-        let mono_btn = button(text(mono_label).size(11).color(theme::TEXT))
+        let mono_glyph = if is_mono { fa::CIRCLE_HOLLOW } else { fa::CIRCLE_HOLLOW_DOUBLE };
+        let mono_btn = button(theme::icon(mono_glyph).size(12).color(theme::TEXT))
             .on_press(Message::ToggleTrackMono(track.id))
             .style(move |_theme, status| {
                 theme::mono_button_style(is_mono, status)
@@ -490,13 +502,36 @@ impl crate::Resonance {
             bottom_section = bottom_section.push(device_picker);
         }
 
-        let bg = if track.record_armed { theme::PANEL_ARMED } else { theme::PANEL_DARK };
+        let bg = if track.record_armed {
+            theme::PANEL_ARMED
+        } else if is_sub {
+            theme::PANEL
+        } else {
+            theme::PANEL_DARK
+        };
         let border_color = if track.record_armed { theme::RECORD_RED } else { theme::SEPARATOR };
+
+        // Sub-tracks skip the plugin chain entirely — they're fed by the
+        // parent plugin's output port, not their own chain. Use a spacer
+        // to keep the strip height consistent with parent tracks so the
+        // faders still line up visually.
+        let plugin_fill: Element<'_, Message> = if is_sub {
+            container(Space::new(Length::Fill, Length::Fill))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else {
+            container(plugin_section)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_y(alignment::Vertical::Top)
+                .into()
+        };
 
         let strip_content = column![
             track_name,
             button_row,
-            plugin_section,
+            plugin_fill,
             pan_row,
             fader_section,
             output_picker,
@@ -504,9 +539,11 @@ impl crate::Resonance {
         ]
         .spacing(4)
         .padding(6)
-        .width(theme::MIXER_STRIP_WIDTH);
+        .width(theme::MIXER_STRIP_WIDTH)
+        .height(Length::Fill);
 
         container(strip_content)
+            .height(Length::Fill)
             .style(move |_theme| container::Style {
                 background: Some(iced::Background::Color(bg)),
                 border: iced::Border {
@@ -569,15 +606,15 @@ impl crate::Resonance {
         .center_x(Length::Fill)
         .padding([6, 4]);
 
-        // Mute + Remove buttons.
+        // Mute + Remove buttons — same icons as the track header.
         let mute_color = if bus.muted { theme::ACCENT } else { theme::TEXT_DIM };
         let bus_id = bus.id;
-        let mute_btn = button(text("M").size(11).color(mute_color))
+        let mute_btn = button(theme::icon(fa::VOLUME_XMARK).size(12).color(mute_color))
             .on_press(Message::ToggleBusMute(bus_id))
             .style(|_theme, status| theme::small_button_style(status))
             .padding(2);
 
-        let remove_btn = button(text("\u{00d7}").size(11).color(theme::TEXT_DIM))
+        let remove_btn = button(theme::icon(fa::TRASH).size(12).color(theme::TEXT_DIM))
             .on_press(Message::RemoveBus(bus_id))
             .style(|_theme, status| theme::small_button_style(status))
             .padding(2);
@@ -652,18 +689,26 @@ impl crate::Resonance {
         .spacing(2)
         .align_x(alignment::Horizontal::Center);
 
+        // FX section absorbs all slack (same treatment as track strips).
+        let plugin_fill = container(plugin_section)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(alignment::Vertical::Top);
+
         let strip_content = column![
             bus_name,
             button_row,
-            plugin_section,
+            plugin_fill,
             pan_row,
             fader_section,
         ]
         .spacing(4)
         .padding(6)
-        .width(theme::MIXER_STRIP_WIDTH);
+        .width(theme::MIXER_STRIP_WIDTH)
+        .height(Length::Fill);
 
         container(strip_content)
+            .height(Length::Fill)
             .style(|_theme| container::Style {
                 background: Some(iced::Background::Color(theme::PANEL_DARK)),
                 border: iced::Border {

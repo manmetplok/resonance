@@ -7,6 +7,9 @@ use std::ptr;
 
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
+use clap_sys::ext::audio_ports::{
+    clap_audio_port_info, clap_plugin_audio_ports, CLAP_EXT_AUDIO_PORTS,
+};
 use clap_sys::events::{
     clap_event_header, clap_event_note, clap_event_param_value, clap_input_events,
     clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
@@ -286,6 +289,29 @@ impl ClapBundle {
             }
         };
 
+        // Query the audio-ports extension to learn how many output ports
+        // this plugin declares. Defaults to 1 (single stereo) if the
+        // extension is absent — matches CLAP host fallback behaviour and
+        // keeps pre-multi-output plugins working unchanged.
+        let audio_ports_ext = unsafe {
+            if let Some(get_ext) = (*plugin).get_extension {
+                let ext = get_ext(plugin, CLAP_EXT_AUDIO_PORTS.as_ptr());
+                if ext.is_null() {
+                    None
+                } else {
+                    Some(ext as *const clap_plugin_audio_ports)
+                }
+            } else {
+                None
+            }
+        };
+        let output_port_count = unsafe {
+            match audio_ports_ext.and_then(|ports| (*ports).count) {
+                Some(count_fn) => (count_fn(plugin, false) as usize).max(1),
+                None => 1,
+            }
+        };
+
         // Activate
         if let Some(activate) = unsafe { (*plugin).activate } {
             let ok = unsafe { activate(plugin, sample_rate as f64, 32, 8192) };
@@ -311,6 +337,20 @@ impl ClapBundle {
             }
         }
 
+        // Pre-allocate the audio-output buffer array once per plugin
+        // instance. process_multi refreshes the data32 pointers each block
+        // without ever allocating.
+        let audio_out_ptrs = vec![[ptr::null_mut(); 2]; output_port_count];
+        let audio_out_buffers = (0..output_port_count)
+            .map(|_| clap_audio_buffer {
+                data32: ptr::null_mut(),
+                data64: ptr::null_mut(),
+                channel_count: 2,
+                latency: 0,
+                constant_mask: 0,
+            })
+            .collect();
+
         Ok(ClapInstance {
             plugin,
             _host_data: host_data,
@@ -318,12 +358,16 @@ impl ClapBundle {
             sample_rate,
             params_ext,
             state_ext,
+            audio_ports_ext,
             gui_ext,
             gui_open: false,
+            output_port_count,
             pending_params: Vec::new(),
             param_event_buf: Vec::new(),
             pending_notes: Vec::new(),
             note_event_buf: Vec::new(),
+            audio_out_buffers,
+            audio_out_ptrs,
         })
     }
 }
@@ -340,6 +384,16 @@ impl Drop for ClapBundle {
 // ClapInstance — a running plugin instance
 // ---------------------------------------------------------------------------
 
+/// Mutable reference to one stereo output port's buffer. Used by
+/// [`ClapInstance::process_multi`] to drive plugins that declare more than
+/// one output port (e.g. `resonance-drums` with its per-group outputs).
+/// For regular single-output plugins use the shorter [`ClapInstance::process`]
+/// convenience wrapper instead.
+pub struct StereoBufMut<'a> {
+    pub left: &'a mut [f32],
+    pub right: &'a mut [f32],
+}
+
 pub struct ClapInstance {
     plugin: *const clap_plugin,
     _host_data: Pin<Box<HostData>>,
@@ -347,9 +401,15 @@ pub struct ClapInstance {
     sample_rate: u32,
     params_ext: Option<*const clap_plugin_params>,
     state_ext: Option<*const clap_plugin_state>,
+    audio_ports_ext: Option<*const clap_plugin_audio_ports>,
     gui_ext: Option<*const clap_plugin_gui>,
     /// True when `gui_create` has been called and `gui_destroy` hasn't yet.
     gui_open: bool,
+    /// Number of output audio ports as reported by the plugin's audio-ports
+    /// extension at activation time. Cached so the mixer can size its
+    /// per-port scratch buffers without re-querying on every block.
+    /// Always >= 1 because resonance-plugin rejects empty output layouts.
+    output_port_count: usize,
     /// Pending parameter changes to send during next process() call.
     pending_params: Vec<(u32, f64)>,
     /// Pre-allocated buffer for CLAP parameter events (reused across process() calls).
@@ -359,9 +419,56 @@ pub struct ClapInstance {
     pending_notes: Vec<(bool, u8, f32, u32)>,
     /// Pre-allocated buffer for CLAP note events.
     note_event_buf: Vec<clap_event_note>,
+    /// Pre-allocated scratch for the CLAP audio output buffer array,
+    /// one entry per output port. Reused across every `process_multi`
+    /// call so the audio thread never allocates.
+    audio_out_buffers: Vec<clap_audio_buffer>,
+    /// Per-port channel pointer array (2 pointers per port). Each block's
+    /// `process_multi` call refreshes these to point at the caller's
+    /// supplied slices before handing them to CLAP.
+    audio_out_ptrs: Vec<[*mut f32; 2]>,
 }
 
 impl ClapInstance {
+    /// Number of output audio ports this plugin declares. Stable for the
+    /// lifetime of the instance — use this to size per-port scratch
+    /// buffers and (in the app layer) auto-create sub-tracks. Always >= 1.
+    pub fn output_port_count(&self) -> usize {
+        self.output_port_count
+    }
+
+    /// Human-readable name of each output port, as reported by the plugin's
+    /// `clap.audio-ports` extension at activation time. Used by the app
+    /// layer to name auto-created sub-tracks after their source port
+    /// (e.g. "Kick", "Snare", "Overhead"). Falls back to "Out N" if the
+    /// plugin doesn't implement the extension or returns empty names.
+    pub fn output_port_names(&self) -> Vec<String> {
+        let mut names = Vec::with_capacity(self.output_port_count);
+        let ports_ext = self.audio_ports_ext;
+        unsafe {
+            let get_fn = ports_ext.and_then(|ports| (*ports).get);
+            for i in 0..self.output_port_count {
+                let name = get_fn.and_then(|f| {
+                    let mut info = std::mem::MaybeUninit::<clap_audio_port_info>::zeroed();
+                    let ok = f(self.plugin, i as u32, false, info.as_mut_ptr());
+                    if !ok {
+                        return None;
+                    }
+                    let info = info.assume_init();
+                    let cstr = CStr::from_ptr(info.name.as_ptr());
+                    let s = cstr.to_string_lossy().into_owned();
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                });
+                names.push(name.unwrap_or_else(|| format!("Out {}", i + 1)));
+            }
+        }
+        names
+    }
+
     /// Query all parameters from the plugin. Called from the engine thread.
     pub fn query_params(&self) -> Vec<ParamInfo> {
         let params = match self.params_ext {
@@ -671,19 +778,42 @@ impl ClapInstance {
         }
     }
 
-    /// Process audio through the plugin (in-place).
-    /// CLAP spec allows aliased input/output buffers.
-    /// Sends any pending parameter changes as input events.
+    /// Process audio through the plugin (single-output convenience wrapper).
+    /// CLAP spec allows aliased input/output buffers so this is in-place.
+    /// Works with any plugin — non-main output ports are silently dropped.
     pub fn process(&mut self, buf_l: &mut [f32], buf_r: &mut [f32], frames: usize) {
+        // SAFETY: we hand the single mutable borrow pair to process_multi
+        // as a one-element slice; both references disappear before this
+        // function returns.
+        let mut outs = [StereoBufMut {
+            left: buf_l,
+            right: buf_r,
+        }];
+        self.process_multi(&mut outs, frames);
+    }
+
+    /// Process audio through the plugin, delivering each declared output
+    /// port into its own stereo buffer pair. `outputs[0]` is the main
+    /// output (same role as [`ClapInstance::process`]). Extra entries
+    /// beyond the plugin's declared output-port count are ignored; extra
+    /// plugin ports beyond `outputs.len()` are silently dropped.
+    ///
+    /// This is the multi-output fast path used by the mixer for the drum
+    /// plugin's per-group outputs.
+    pub fn process_multi(&mut self, outputs: &mut [StereoBufMut<'_>], frames: usize) {
         if !self.active || frames == 0 {
             return;
         }
 
         let frames = frames.min(8192);
 
-        // Point CLAP audio buffers directly at caller's data (in-place processing)
-        let mut in_ptrs: [*mut f32; 2] = [buf_l.as_mut_ptr(), buf_r.as_mut_ptr()];
-        let mut out_ptrs: [*mut f32; 2] = [buf_l.as_mut_ptr(), buf_r.as_mut_ptr()];
+        // Point CLAP input buffers at the main output pair (in-place
+        // processing — CLAP allows aliased in/out pointers).
+        let (main_left_ptr, main_right_ptr) = outputs
+            .first_mut()
+            .map(|p| (p.left.as_mut_ptr(), p.right.as_mut_ptr()))
+            .unwrap_or((ptr::null_mut(), ptr::null_mut()));
+        let mut in_ptrs: [*mut f32; 2] = [main_left_ptr, main_right_ptr];
 
         let mut audio_in = clap_audio_buffer {
             data32: in_ptrs.as_mut_ptr(),
@@ -693,13 +823,18 @@ impl ClapInstance {
             constant_mask: 0,
         };
 
-        let mut audio_out = clap_audio_buffer {
-            data32: out_ptrs.as_mut_ptr(),
-            data64: ptr::null_mut(),
-            channel_count: 2,
-            latency: 0,
-            constant_mask: 0,
-        };
+        // Refresh each output port's pointer array to point at the
+        // caller's buffer slices for this block. We iterate up to the
+        // smaller of the pre-allocated buffer array and the caller's
+        // output slice so callers can pass fewer buffers (in which case
+        // the plugin's extra ports are dropped) without crashing.
+        let active_out_count = outputs.len().min(self.output_port_count);
+        for i in 0..active_out_count {
+            self.audio_out_ptrs[i][0] = outputs[i].left.as_mut_ptr();
+            self.audio_out_ptrs[i][1] = outputs[i].right.as_mut_ptr();
+            self.audio_out_buffers[i].data32 = self.audio_out_ptrs[i].as_mut_ptr();
+            self.audio_out_buffers[i].channel_count = 2;
+        }
 
         // Build input events from pending parameter changes (reuse pre-allocated buffer)
         self.param_event_buf.clear();
@@ -764,9 +899,9 @@ impl ClapInstance {
             frames_count: frames as u32,
             transport: ptr::null(),
             audio_inputs: &mut audio_in as *mut clap_audio_buffer as *const clap_audio_buffer,
-            audio_outputs: &mut audio_out,
+            audio_outputs: self.audio_out_buffers.as_mut_ptr(),
             audio_inputs_count: 1,
-            audio_outputs_count: 1,
+            audio_outputs_count: active_out_count as u32,
             in_events: &in_events,
             out_events: &out_events,
         };

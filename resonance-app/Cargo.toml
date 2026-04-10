@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 resonance-audio = { path = "../resonance-audio" }
+resonance-music-theory = { path = "../resonance-music-theory" }
 resonance-plugin = { path = "../resonance-plugin", features = ["ui"] }
 resonance-amp = { path = "../plugins/resonance-amp", features = ["ui"] }
 resonance-ir = { path = "../plugins/resonance-ir", features = ["ui"] }

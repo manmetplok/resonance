@@ -8,9 +8,14 @@ use iced::{keyboard, Subscription, Task};
 use resonance_audio::types::*;
 use std::collections::HashMap;
 
+pub mod compose;
+
 impl crate::Resonance {
     pub(crate) fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Compose(m) => {
+                crate::update::compose::handle(self, m);
+            }
             Message::Play => {
                 self.engine.send(AudioCommand::Play);
                 self.playing = true;
@@ -139,6 +144,22 @@ impl crate::Resonance {
                         track_id: id,
                         enabled: track.monitor_enabled,
                     });
+                }
+            }
+            Message::SetTrackName(track_id, name) => {
+                if let Some(t) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                    t.name = name;
+                }
+            }
+            Message::SetInstrumentType(track_id, ty) => {
+                if let Some(t) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                    t.instrument_type = ty;
+                    t.instrument_icon = crate::state::InstrumentIcon::default_for(ty);
+                }
+            }
+            Message::SetInstrumentIcon(track_id, icon) => {
+                if let Some(t) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                    t.instrument_icon = icon;
                 }
             }
             Message::ToggleTrackMono(id) => {
@@ -1223,6 +1244,9 @@ impl crate::Resonance {
                     TrackOutput::Master => None,
                     TrackOutput::Bus(id) => Some(id),
                 },
+                instrument_type: t.instrument_type,
+                instrument_icon: t.instrument_icon,
+                sub_track: t.sub_track,
             }
         }).collect();
 
@@ -1294,6 +1318,8 @@ impl crate::Resonance {
             clips,
             midi_clips,
             busses,
+            section_definitions: self.compose.to_project_definitions(),
+            section_placements: self.compose.to_project_placements(),
         }
     }
 
@@ -1318,6 +1344,8 @@ impl crate::Resonance {
         self.selected_plugin = None;
         self.clip_drag = None;
         self.clip_trim = None;
+        self.compose
+            .load_from_project(&project.section_definitions, &project.section_placements);
 
         self.engine.send(AudioCommand::SetBpm { bpm: self.bpm });
         self.engine.send(AudioCommand::SetTimeSignature {
@@ -1344,9 +1372,31 @@ impl crate::Resonance {
         self.next_track_order = 0;
         self.next_bus_order = 0;
 
+        // Bump the app-side sub-track id counter past any persisted ids
+        // so new sub-tracks allocated after this load don't collide with
+        // restored ones.
+        for pt in &project.tracks {
+            if let Some(link) = pt.sub_track {
+                let _ = link;
+                if pt.id >= self.next_sub_track_id {
+                    self.next_sub_track_id = pt.id + 1;
+                }
+            }
+        }
+
         // Replay tracks
         for pt in &project.tracks {
-            if pt.track_type == "instrument" {
+            if let Some(link) = pt.sub_track {
+                // Sub-tracks skip the normal AddTrack path — they're
+                // registered directly via CreateSubTrack so the engine
+                // knows they're fed by their parent's plugin fan-out.
+                self.engine.send(AudioCommand::CreateSubTrack {
+                    sub_id: pt.id,
+                    parent_track_id: link.parent_track_id,
+                    output_port_index: link.output_port_index,
+                    name: pt.name.clone(),
+                });
+            } else if pt.track_type == "instrument" {
                 self.engine.send(AudioCommand::AddInstrumentTrackWithId {
                     track_id: pt.id,
                     name: pt.name.clone(),
@@ -1453,6 +1503,9 @@ impl crate::Resonance {
                     .output_bus
                     .map(TrackOutput::Bus)
                     .unwrap_or(TrackOutput::Master),
+                instrument_type: pt.instrument_type,
+                instrument_icon: pt.instrument_icon,
+                sub_track: pt.sub_track,
             });
             self.next_track_order += 1;
         }

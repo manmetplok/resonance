@@ -1,6 +1,6 @@
 //! Voice management for polyphonic drum sample playback.
 
-pub const MAX_VOICES: usize = 32;
+pub const MAX_VOICES: usize = 64;
 
 /// Fade-out length in samples to avoid clicks when a voice is choked or released.
 pub const RELEASE_SAMPLES: usize = 1024;
@@ -9,6 +9,36 @@ pub const RELEASE_SAMPLES: usize = 1024;
 pub enum VoiceState {
     Playing,
     Releasing,
+}
+
+/// Which bank this voice is reading from and where it should be summed
+/// at render time.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum VoiceDestination {
+    /// One of the pad's close-mic banks. `bank_index` is the index into
+    /// `pad.close_mics`. `output_port` is the plugin output port this
+    /// bank routes to (from `pad.output_group`). `balance_side` determines
+    /// how the kick In/Out or snare Top/Btm balance slider scales this
+    /// voice.
+    CloseMic {
+        bank_index: usize,
+        output_port: u8,
+        balance_side: BalanceSide,
+    },
+    /// Overhead mic bank. Always routes to the shared Overhead output
+    /// port (6) and is scaled by the per-pad `oh_blend` param.
+    Overhead,
+}
+
+/// Which "side" of a balance slider this close-mic voice represents.
+/// For kick: `Left` = KickIn, `Right` = KickOut. For snare: `Left` = SNTop,
+/// `Right` = SNBtm. `None` for pads with only one close mic position
+/// (toms, hats) — the balance slider doesn't apply.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BalanceSide {
+    None,
+    Left,
+    Right,
 }
 
 #[derive(Clone)]
@@ -21,9 +51,11 @@ pub struct Voice {
     /// dynamics; for single-layer fallback pads it's the MIDI velocity so
     /// the embedded defaults still scale with how hard the note was hit.
     pub base_gain: f32,
-    /// Index into `pad.layers`.
+    /// Where this voice's audio should be summed.
+    pub destination: VoiceDestination,
+    /// Index into the selected bank's `layers`.
     pub layer_index: usize,
-    /// Index into `pad.layers[layer_index].round_robins`.
+    /// Index into `layers[layer_index].round_robins`.
     pub rr_index: usize,
     /// Current read position in the sample (in stereo frames).
     pub position: usize,
@@ -44,6 +76,11 @@ impl Voice {
             pad_index: 0,
             note: 0,
             base_gain: 0.0,
+            destination: VoiceDestination::CloseMic {
+                bank_index: 0,
+                output_port: 0,
+                balance_side: BalanceSide::None,
+            },
             layer_index: 0,
             rr_index: 0,
             position: 0,
