@@ -15,7 +15,6 @@ pub struct WavetableFrame {
 
 /// A wavetable: a collection of frames that can be scanned with a position parameter.
 pub struct Wavetable {
-    pub name: &'static str,
     pub frames: Vec<WavetableFrame>,
 }
 
@@ -33,22 +32,6 @@ pub fn generate_all(sample_rate: f32) -> Vec<Wavetable> {
     tables.push(generate_noise_cycle(sample_rate));
     tables.push(generate_sync_sweep(sample_rate));
     tables
-}
-
-pub fn wavetable_name(index: i32) -> &'static str {
-    match index {
-        0 => "Basic",
-        1 => "Saw Stack",
-        2 => "PWM",
-        3 => "Formant",
-        4 => "Digital",
-        5 => "Harm Sweep",
-        6 => "Metallic",
-        7 => "Organ",
-        8 => "Noise",
-        9 => "Sync",
-        _ => "Basic",
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +156,6 @@ fn generate_basic(sample_rate: f32) -> Wavetable {
     let square = frame_from_harmonics(&sq_h, sample_rate);
 
     Wavetable {
-        name: "Basic",
         frames: vec![sine, triangle, saw, square],
     }
 }
@@ -212,10 +194,7 @@ fn generate_saw_stack(sample_rate: f32) -> Wavetable {
         })
         .collect();
 
-    Wavetable {
-        name: "Saw Stack",
-        frames,
-    }
+    Wavetable { frames }
 }
 
 /// 3. PWM: pulse wave from 50% to 5% duty cycle (64 frames)
@@ -237,10 +216,7 @@ fn generate_pwm(sample_rate: f32) -> Wavetable {
         })
         .collect();
 
-    Wavetable {
-        name: "PWM",
-        frames,
-    }
+    Wavetable { frames }
 }
 
 /// 4. Formant: vowel-like spectral shapes (64 frames)
@@ -284,10 +260,7 @@ fn generate_formant(sample_rate: f32) -> Wavetable {
         })
         .collect();
 
-    Wavetable {
-        name: "Formant",
-        frames,
-    }
+    Wavetable { frames }
 }
 
 /// 5. Digital: smooth sine -> heavily quantized/bitcrushed (32 frames)
@@ -310,10 +283,7 @@ fn generate_digital(sample_rate: f32) -> Wavetable {
         })
         .collect();
 
-    Wavetable {
-        name: "Digital",
-        frames,
-    }
+    Wavetable { frames }
 }
 
 /// 6. Harmonic Sweep: progressively adding harmonics (64 frames)
@@ -327,10 +297,7 @@ fn generate_harmonic_sweep(sample_rate: f32) -> Wavetable {
         })
         .collect();
 
-    Wavetable {
-        name: "Harm Sweep",
-        frames,
-    }
+    Wavetable { frames }
 }
 
 /// 7. Metallic: harmonic -> inharmonic partials (32 frames)
@@ -357,10 +324,7 @@ fn generate_metallic(sample_rate: f32) -> Wavetable {
         })
         .collect();
 
-    Wavetable {
-        name: "Metallic",
-        frames,
-    }
+    Wavetable { frames }
 }
 
 /// 8. Organ: drawbar combinations (16 frames)
@@ -401,10 +365,7 @@ fn generate_organ(sample_rate: f32) -> Wavetable {
         })
         .collect();
 
-    Wavetable {
-        name: "Organ",
-        frames,
-    }
+    Wavetable { frames }
 }
 
 /// 9. Noise Cycle: single-cycle noise with varying spectral density (8 frames)
@@ -431,10 +392,7 @@ fn generate_noise_cycle(sample_rate: f32) -> Wavetable {
         })
         .collect();
 
-    Wavetable {
-        name: "Noise",
-        frames,
-    }
+    Wavetable { frames }
 }
 
 /// 10. Sync Sweep: emulated hard-sync by compressing a saw into one cycle (64 frames)
@@ -454,8 +412,5 @@ fn generate_sync_sweep(sample_rate: f32) -> Wavetable {
         })
         .collect();
 
-    Wavetable {
-        name: "Sync",
-        frames,
-    }
+    Wavetable { frames }
 }

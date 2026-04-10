@@ -22,12 +22,11 @@ impl crate::Resonance {
                 name,
                 waveform_peaks,
             } => {
-                if self.loading {
-                    // During load: update waveform peaks on the clip we already created
-                    if let Some(clip) = self.clips.iter_mut().find(|c| c.id == clip_id) {
-                        clip.waveform_peaks = waveform_peaks;
-                        clip.total_frames = duration_samples + clip.trim_start_frames + clip.trim_end_frames;
-                    }
+                // Idempotent: if the clip already exists (created by project load),
+                // just update its waveform and total frames. Otherwise push new.
+                if let Some(clip) = self.clips.iter_mut().find(|c| c.id == clip_id) {
+                    clip.waveform_peaks = waveform_peaks;
+                    clip.total_frames = duration_samples + clip.trim_start_frames + clip.trim_end_frames;
                 } else {
                     self.clips.push(ClipState {
                         id: clip_id,
@@ -43,7 +42,8 @@ impl crate::Resonance {
                 }
             }
             AudioEvent::TrackAdded { track_id } => {
-                if self.loading {
+                // Idempotent: skip if the track already exists (created by project load).
+                if self.tracks.iter().any(|t| t.id == track_id) {
                     return Task::none();
                 }
                 let order = self.next_track_order;
@@ -160,22 +160,21 @@ impl crate::Resonance {
                 clap_plugin_id,
                 clap_file_path,
                 params,
+                has_gui,
             } => {
-                if self.loading {
-                    // During load: update params on the plugin slot we already created
-                    if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
-                        if let Some(slot) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
-                            slot.params = params;
-                        }
-                    }
-                } else {
-                    let custom = match clap_plugin_id.as_str() {
-                        "com.resonance.drums" => PluginCustomState::Drums(Default::default()),
-                        "com.resonance.amp" => PluginCustomState::Amp(Default::default()),
-                        "com.resonance.ir" => PluginCustomState::Ir(Default::default()),
-                        _ => PluginCustomState::Generic,
-                    };
-                    if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                // Idempotent: if the plugin slot already exists (created by project load),
+                // just update its params and has_gui. Otherwise push a new slot.
+                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                    if let Some(slot) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
+                        slot.params = params;
+                        slot.has_gui = has_gui;
+                    } else {
+                        let custom = match clap_plugin_id.as_str() {
+                            "com.resonance.drums" => PluginCustomState::Drums(Default::default()),
+                            "com.resonance.amp" => PluginCustomState::Amp(Default::default()),
+                            "com.resonance.ir" => PluginCustomState::Ir(Default::default()),
+                            _ => PluginCustomState::Generic,
+                        };
                         track.plugins.push(PluginSlotState {
                             instance_id,
                             plugin_name,
@@ -183,6 +182,8 @@ impl crate::Resonance {
                             clap_file_path,
                             params,
                             custom,
+                            has_gui,
+                            editor_open: false,
                         });
                     }
                 }
@@ -260,6 +261,10 @@ impl crate::Resonance {
 
             // -- Instrument track events --
             AudioEvent::InstrumentTrackAdded { track_id } => {
+                // Idempotent: skip if the track already exists (created by project load).
+                if self.tracks.iter().any(|t| t.id == track_id) {
+                    return Task::none();
+                }
                 let order = self.tracks.len();
                 self.tracks.push(TrackState {
                     id: track_id,
@@ -285,6 +290,10 @@ impl crate::Resonance {
                 clip_id, track_id, start_sample, duration_ticks,
                 name, notes, trim_start_ticks, trim_end_ticks,
             } => {
+                // Idempotent: skip if the MIDI clip already exists (created by project load).
+                if self.midi_clips.iter().any(|c| c.id == clip_id) {
+                    return Task::none();
+                }
                 self.midi_clips.push(MidiClipState {
                     id: clip_id,
                     track_id,

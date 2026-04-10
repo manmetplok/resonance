@@ -4,6 +4,7 @@
 
 pub mod clap_bridge;
 pub mod formatters;
+pub mod gui;
 pub mod param;
 pub mod plugin;
 pub mod range;

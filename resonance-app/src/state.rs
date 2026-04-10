@@ -73,6 +73,10 @@ pub struct PluginSlotState {
     pub clap_file_path: String,
     pub params: Vec<ParamInfo>,
     pub custom: PluginCustomState,
+    /// Whether the plugin exposes a CLAP_EXT_GUI editor.
+    pub has_gui: bool,
+    /// Whether the host has currently opened the plugin's editor window.
+    pub editor_open: bool,
 }
 
 /// Plugin-specific GUI state for bundled plugins.
@@ -104,7 +108,6 @@ pub struct ClipState {
 pub struct MidiClipDragState {
     pub clip_id: ClipId,
     pub grab_offset_x: f32,
-    pub original_start_sample: SamplePos,
     pub original_track_id: TrackId,
     pub current_x: f32,
     pub current_y: f32,
@@ -144,13 +147,4 @@ pub struct MidiEditorState {
     pub zoom_y: f32,
     pub snap_ticks: u64,
     pub selected_note: Option<usize>,
-    pub tool: MidiTool,
-}
-
-/// Active tool in the MIDI editor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MidiTool {
-    Draw,
-    Select,
-    Erase,
 }

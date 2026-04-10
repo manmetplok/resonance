@@ -1,0 +1,31 @@
+[package]
+name = "wayland-plugin-gui"
+version = "0.1.0"
+edition = "2021"
+description = "Wayland-native plugin GUI runtime: hosts an egui UI in a floating top-level Wayland window, designed to be spawned from inside a CLAP/VST plugin dylib."
+
+[dependencies]
+# Wayland client + SCTK for windowing, input, XDG shell, decorations, fractional scaling.
+smithay-client-toolkit = "0.20"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-egl = "0.32"
+
+# EGL + OpenGL for rendering.
+khronos-egl = { version = "6", features = ["dynamic"] }
+libloading = "0.8"
+glow = "0.17"
+
+# egui + the glow painter. egui's `default_fonts` feature is REQUIRED — without it
+# no glyphs are loaded, the font atlas is empty, and text has zero-width metrics
+# (layouts collapse, text is invisible). egui_glow's default features pull in
+# egui-winit which we don't want, so we disable them and wire glow manually.
+egui = { version = "0.34", features = ["default_fonts"], default-features = false }
+egui_glow = { version = "0.34", default-features = false }
+
+# Misc.
+raw-window-handle = "0.6"
+
+[[example]]
+name = "hello"
+path = "examples/hello.rs"

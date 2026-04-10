@@ -132,7 +132,6 @@ fn collect_midi_events(
     track_id: TrackId,
     playhead: u64,
     frames: usize,
-    sample_rate: u32,
     samples_per_tick: f64,
     out: &mut Vec<PendingNoteEvent>,
 ) {
@@ -193,12 +192,11 @@ pub(crate) fn collect_midi_events_bounce(
     track_id: TrackId,
     playhead: u64,
     frames: usize,
-    sample_rate: u32,
     samples_per_tick: f64,
     out: &mut Vec<PendingNoteEvent>,
 ) {
     out.clear();
-    collect_midi_events(midi_clips, track_id, playhead, frames, sample_rate, samples_per_tick, out);
+    collect_midi_events(midi_clips, track_id, playhead, frames, samples_per_tick, out);
 }
 
 /// Mix audio from all active clips into the output buffer.
@@ -337,7 +335,6 @@ pub(crate) fn mix_audio(
                 track.id,
                 playhead,
                 frames,
-                sample_rate,
                 samples_per_tick,
                 note_event_buf,
             );

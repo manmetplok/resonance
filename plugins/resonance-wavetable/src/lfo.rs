@@ -23,17 +23,6 @@ impl LfoShape {
             _ => Self::Sine,
         }
     }
-
-    pub fn name(v: i32) -> &'static str {
-        match v {
-            0 => "Sine",
-            1 => "Triangle",
-            2 => "Saw",
-            3 => "Square",
-            4 => "S&H",
-            _ => "Sine",
-        }
-    }
 }
 
 #[derive(Clone)]

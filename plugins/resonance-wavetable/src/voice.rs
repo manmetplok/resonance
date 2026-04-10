@@ -67,6 +67,14 @@ pub struct Voice {
     // Unison sub-voices
     pub unison: [UnisonSubVoice; MAX_UNISON],
     pub unison_count: usize,
+
+    // "Last computed" values cached per-sample during render. Read by the
+    // viz state publisher at the end of each audio block. Not part of the
+    // DSP itself.
+    pub last_filter_cutoff: f32,
+    pub last_osc1_pos: f32,
+    pub last_osc2_pos: f32,
+    pub last_lfo_phases: [f32; 3],
 }
 
 impl Voice {
@@ -87,6 +95,10 @@ impl Voice {
             filter_r: StateVariableFilter::new(),
             unison: std::array::from_fn(|_| UnisonSubVoice::new()),
             unison_count: 1,
+            last_filter_cutoff: 8000.0,
+            last_osc1_pos: 0.0,
+            last_osc2_pos: 0.0,
+            last_lfo_phases: [0.0; 3],
         }
     }
 

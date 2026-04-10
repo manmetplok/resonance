@@ -1,7 +1,11 @@
 /// Resonance Wavetable - A wavetable synthesizer instrument CLAP plugin.
 
+use std::sync::Arc;
+
 use resonance_plugin::*;
 
+#[cfg(feature = "editor")]
+mod editor;
 mod effects;
 mod engine;
 mod envelope;
@@ -10,15 +14,25 @@ mod lfo;
 mod modulation;
 mod oscillator;
 mod params;
+mod viz;
 mod voice;
 mod wavetable;
 
 use engine::SynthEngine;
 use params::{WavetableParams, PARAM_COUNT};
+use viz::WavetableVizState;
 
 pub struct ResonanceWavetable {
-    params: WavetableParams,
+    /// Parameters — shared with the editor thread via Arc so the UI can read
+    /// and write from a separate thread. All `FloatParam` / `IntParam` /
+    /// `BoolParam` fields use atomic storage internally, so `&WavetableParams`
+    /// is safe to use concurrently from audio + UI.
+    params: Arc<WavetableParams>,
     engine: SynthEngine,
+    /// Shared audio-thread → UI-thread visualisation state. Lives as long as
+    /// the plugin instance. Cloned into the editor factory when the host
+    /// opens the GUI.
+    viz: Arc<WavetableVizState>,
 }
 
 impl ResonancePlugin for ResonanceWavetable {
@@ -36,8 +50,9 @@ impl ResonancePlugin for ResonanceWavetable {
 
     fn new() -> Self {
         Self {
-            params: WavetableParams::new(),
+            params: Arc::new(WavetableParams::new()),
             engine: SynthEngine::new(),
+            viz: Arc::new(WavetableVizState::new()),
         }
     }
 
@@ -95,8 +110,19 @@ impl ResonancePlugin for ResonanceWavetable {
             left[sample_id] = frame_l;
             right[sample_id] = frame_r;
         }
+
+        // Publish audio-thread state to the shared viz atomics once per
+        // block. The editor thread reads from these at ~60 Hz.
+        self.engine.publish_viz(&self.params, &self.viz);
+    }
+
+    #[cfg(feature = "editor")]
+    fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
+        Some(Arc::new(editor::WavetableEditorFactory::new(
+            self.params.clone(),
+            self.viz.clone(),
+        )))
     }
 }
 
-#[cfg(not(feature = "ui"))]
 resonance_plugin::export_clap!(ResonanceWavetable);

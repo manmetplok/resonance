@@ -742,8 +742,9 @@ fn engine_thread(
                             let instance_id = next_plugin_id;
                             next_plugin_id += 1;
 
-                            // Query params before moving instance into shared map
+                            // Query params + has_gui before moving instance into shared map
                             let params = instance.query_params();
+                            let has_gui = instance.has_gui();
 
                             plugins.write().insert(instance_id, parking_lot::Mutex::new(SyncClapInstance(instance)));
 
@@ -758,6 +759,7 @@ fn engine_thread(
                                 clap_plugin_id: actual_plugin_id.clone(),
                                 clap_file_path,
                                 params,
+                                has_gui,
                             });
                         }
                         Err(e) => {
@@ -906,6 +908,33 @@ fn engine_thread(
                         mutex.lock().0.set_param(param_id, value);
                     }
                 }
+                AudioCommand::OpenPluginEditor { instance_id } => {
+                    if let Some(mutex) = plugins.read().get(&instance_id) {
+                        // open_gui is a main-thread operation; the audio
+                        // thread holds a different lock. Block briefly if
+                        // the audio thread is mid-process and retry.
+                        if let Some(mut inst) = mutex.try_lock() {
+                            if !inst.0.open_gui() {
+                                let _ = event_tx.send(AudioEvent::Error(
+                                    "Failed to open plugin editor".to_string(),
+                                ));
+                            }
+                        } else {
+                            let _ = cmd_tx_retry
+                                .send(AudioCommand::OpenPluginEditor { instance_id });
+                        }
+                    }
+                }
+                AudioCommand::ClosePluginEditor { instance_id } => {
+                    if let Some(mutex) = plugins.read().get(&instance_id) {
+                        if let Some(mut inst) = mutex.try_lock() {
+                            inst.0.close_gui();
+                        } else {
+                            let _ = cmd_tx_retry
+                                .send(AudioCommand::ClosePluginEditor { instance_id });
+                        }
+                    }
+                }
                 AudioCommand::SavePluginState { instance_id } => {
                     if let Some(mutex) = plugins.read().get(&instance_id) {
                         if let Some(inst) = mutex.try_lock() {
@@ -1033,7 +1062,7 @@ fn engine_thread(
                                 bounce_note_buf.clear();
                                 mixer::collect_midi_events_bounce(
                                     &midi_guard, track.id, pos, frames,
-                                    sample_rate, bounce_spt, &mut bounce_note_buf,
+                                    bounce_spt, &mut bounce_note_buf,
                                 );
                                 let mut plugin_iter = track.plugin_ids.iter();
                                 if let Some(&inst_id) = plugin_iter.next() {
@@ -1208,6 +1237,7 @@ fn engine_thread(
                     match bundles[bundle_idx].create_instance(&clap_plugin_id, sample_rate) {
                         Ok(instance) => {
                             let params = instance.query_params();
+                            let has_gui = instance.has_gui();
                             plugins.write().insert(instance_id, parking_lot::Mutex::new(SyncClapInstance(instance)));
                             next_plugin_id = next_plugin_id.max(instance_id + 1);
 
@@ -1222,6 +1252,7 @@ fn engine_thread(
                                 clap_plugin_id,
                                 clap_file_path,
                                 params,
+                                has_gui,
                             });
                         }
                         Err(e) => {

@@ -1,4 +1,6 @@
 /// Timeline canvas rendering for the DAW arrangement view.
+use std::time::Instant;
+
 use iced::widget::canvas;
 use iced::{keyboard, mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
@@ -7,6 +9,9 @@ use crate::state::{ClipEdge, ClipState, MidiClipState, PunchDragTarget, TrackSta
 use crate::message::Message;
 
 use resonance_audio::types::{ClipId, TrackId, TICKS_PER_QUARTER_NOTE};
+
+/// Maximum interval between two clicks to count as a double-click.
+const DOUBLE_CLICK_MS: u128 = 400;
 
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug)]
@@ -63,6 +68,8 @@ pub struct TimelineState {
     dragging_punch: bool,
     clip_interaction: Option<ClipInteraction>,
     last_reported_width: f32,
+    /// Tracks the most recent click on a MIDI clip for double-click detection.
+    last_midi_click: Option<(Instant, ClipId)>,
 }
 
 impl canvas::Program<Message> for TimelineCanvas<'_> {
@@ -77,7 +84,12 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
     ) -> (canvas::event::Status, Option<Message>) {
         match event {
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                let _ = bounds;
+                // Only handle wheel events when the cursor is actually over the
+                // timeline — otherwise scrolling the piano roll would also
+                // scroll the arrangement behind it.
+                if cursor.position_in(bounds).is_none() {
+                    return (canvas::event::Status::Ignored, None);
+                }
                 match delta {
                     mouse::ScrollDelta::Lines { x, y } => {
                         if x.abs() > f32::EPSILON {
@@ -159,6 +171,24 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                             let cw = duration_seconds * self.zoom;
 
                             if pos.x >= cx && pos.x <= cx + cw && pos.y >= cy && pos.y <= cy + clip_height {
+                                // Double-click on a MIDI clip body opens the piano roll editor.
+                                let now = Instant::now();
+                                let is_double_click = state
+                                    .last_midi_click
+                                    .map(|(t, id)| {
+                                        id == clip.id
+                                            && now.duration_since(t).as_millis() <= DOUBLE_CLICK_MS
+                                    })
+                                    .unwrap_or(false);
+                                state.last_midi_click = Some((now, clip.id));
+                                if is_double_click {
+                                    state.last_midi_click = None;
+                                    return (
+                                        canvas::event::Status::Captured,
+                                        Some(Message::OpenMidiEditor(clip.id)),
+                                    );
+                                }
+
                                 let edge_threshold = 6.0;
                                 if pos.x - cx < edge_threshold {
                                     state.clip_interaction = Some(ClipInteraction::MidiTrim {

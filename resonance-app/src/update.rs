@@ -38,6 +38,7 @@ impl crate::Resonance {
             }
             Message::AddTrack => {
                 self.engine.send(AudioCommand::AddTrack);
+                self.add_track_menu_open = false;
             }
             Message::RemoveTrack(id) => {
                 self.engine.send(AudioCommand::RemoveTrack { track_id: id });
@@ -227,6 +228,34 @@ impl crate::Resonance {
                     }
                 }
             }
+            Message::OpenPluginEditor(instance_id) => {
+                self.engine
+                    .send(AudioCommand::OpenPluginEditor { instance_id });
+                for track in &mut self.tracks {
+                    if let Some(p) = track
+                        .plugins
+                        .iter_mut()
+                        .find(|p| p.instance_id == instance_id)
+                    {
+                        p.editor_open = true;
+                        break;
+                    }
+                }
+            }
+            Message::ClosePluginEditor(instance_id) => {
+                self.engine
+                    .send(AudioCommand::ClosePluginEditor { instance_id });
+                for track in &mut self.tracks {
+                    if let Some(p) = track
+                        .plugins
+                        .iter_mut()
+                        .find(|p| p.instance_id == instance_id)
+                    {
+                        p.editor_open = false;
+                        break;
+                    }
+                }
+            }
             Message::DrumPadSelect(instance_id, pad_idx) => {
                 for track in &mut self.tracks {
                     if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
@@ -321,6 +350,12 @@ impl crate::Resonance {
             }
             Message::CloseSettings => {
                 self.settings_open = false;
+            }
+            Message::OpenAddTrackMenu => {
+                self.add_track_menu_open = true;
+            }
+            Message::CloseAddTrackMenu => {
+                self.add_track_menu_open = false;
             }
             Message::DismissError => {
                 self.error_message = None;
@@ -733,6 +768,7 @@ impl crate::Resonance {
             }
             Message::AddInstrumentTrack => {
                 self.engine.send(AudioCommand::AddInstrumentTrack);
+                self.add_track_menu_open = false;
             }
             Message::CreateMidiClip(track_id) => {
                 let duration_ticks = 4 * self.time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
@@ -749,12 +785,6 @@ impl crate::Resonance {
                     self.selected_midi_clip = None;
                 }
             }
-            Message::SelectMidiClip(id) => {
-                self.selected_midi_clip = id;
-                if id.is_some() {
-                    self.selected_clip = None;
-                }
-            }
             Message::StartMidiClipDrag { clip_id, grab_offset_x, start_x, start_y } => {
                 if let Some(clip) = self.midi_clips.iter().find(|c| c.id == clip_id) {
                     self.selected_midi_clip = Some(clip_id);
@@ -762,7 +792,6 @@ impl crate::Resonance {
                     self.midi_clip_drag = Some(MidiClipDragState {
                         clip_id,
                         grab_offset_x,
-                        original_start_sample: clip.start_sample,
                         original_track_id: clip.track_id,
                         current_x: start_x,
                         current_y: start_y,
@@ -896,18 +925,11 @@ impl crate::Resonance {
                 }
             }
             Message::OpenMidiEditor(clip_id) => {
-                if let Some(clip) = self.midi_clips.iter().find(|c| c.id == clip_id) {
-                    self.editing_midi_clip = Some(MidiEditorState {
-                        clip_id,
-                        track_id: clip.track_id,
-                        scroll_x: 0.0,
-                        scroll_y: 60.0 * 5.0,
-                        zoom_x: 0.5,
-                        zoom_y: 12.0,
-                        snap_ticks: TICKS_PER_QUARTER_NOTE / 4,
-                        selected_note: None,
-                        tool: MidiTool::Draw,
-                    });
+                self.open_midi_editor(clip_id);
+            }
+            Message::OpenSelectedMidiClip => {
+                if let Some(clip_id) = self.selected_midi_clip {
+                    self.open_midi_editor(clip_id);
                 }
             }
             Message::CloseMidiEditor => {
@@ -1251,6 +1273,8 @@ impl crate::Resonance {
                     clap_file_path: pp.clap_file_path.clone(),
                     params: Vec::new(), // Will be populated by PluginAdded events
                     custom,
+                    has_gui: false, // overwritten by PluginAdded
+                    editor_open: false,
                 });
             }
 
@@ -1347,6 +1371,22 @@ impl crate::Resonance {
         self.punch_range_set = self.punch_enabled;
     }
 
+    /// Initialize the piano roll editor state for the given MIDI clip.
+    fn open_midi_editor(&mut self, clip_id: ClipId) {
+        if let Some(clip) = self.midi_clips.iter().find(|c| c.id == clip_id) {
+            self.editing_midi_clip = Some(MidiEditorState {
+                clip_id,
+                track_id: clip.track_id,
+                scroll_x: 0.0,
+                scroll_y: 60.0 * 5.0,
+                zoom_x: 0.5,
+                zoom_y: 12.0,
+                snap_ticks: TICKS_PER_QUARTER_NOTE / 4,
+                selected_note: None,
+            });
+        }
+    }
+
     pub(crate) fn subscription(&self) -> Subscription<Message> {
         let tick = iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::Tick);
         let keys = keyboard::on_key_press(|key, modifiers| {
@@ -1365,7 +1405,12 @@ impl crate::Resonance {
                     _ => None,
                 }
             } else {
-                None
+                match key {
+                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                        Some(Message::OpenSelectedMidiClip)
+                    }
+                    _ => None,
+                }
             }
         });
         Subscription::batch([tick, keys])

@@ -60,9 +60,90 @@ impl crate::Resonance {
 
         if self.settings_open {
             stack![base, self.view_settings_overlay()].into()
+        } else if self.add_track_menu_open {
+            stack![base, self.view_add_track_menu()].into()
         } else {
             base
         }
+    }
+
+    fn view_add_track_menu(&self) -> Element<'_, Message> {
+        let backdrop = mouse_area(
+            container(Space::new(Length::Fill, Length::Fill))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_theme| container::Style {
+                    background: Some(iced::Background::Color(iced::Color::from_rgba(
+                        0.0, 0.0, 0.0, 0.3,
+                    ))),
+                    ..Default::default()
+                }),
+        )
+        .on_press(Message::CloseAddTrackMenu);
+
+        let audio_btn = button(
+            row![
+                text("\u{1f50a}").size(14).shaping(Shaping::Advanced),
+                Space::with_width(8),
+                text("Audio").size(13).color(theme::TEXT),
+            ]
+            .align_y(alignment::Vertical::Center),
+        )
+        .on_press(Message::AddTrack)
+        .width(Length::Fill)
+        .padding([6, 10])
+        .style(|_theme, status| theme::transport_button_style(status));
+
+        let inst_btn = button(
+            row![
+                text("\u{1f3b9}").size(14).shaping(Shaping::Advanced),
+                Space::with_width(8),
+                text("Instrument").size(13).color(Color::from_rgb(0.3, 0.75, 0.8)),
+            ]
+            .align_y(alignment::Vertical::Center),
+        )
+        .on_press(Message::AddInstrumentTrack)
+        .width(Length::Fill)
+        .padding([6, 10])
+        .style(|_theme, status| theme::transport_button_style(status));
+
+        let menu_content = column![
+            text("Add Track").size(11).color(theme::TEXT_DIM),
+            Space::with_height(4),
+            audio_btn,
+            inst_btn,
+        ]
+        .spacing(2)
+        .padding(8)
+        .width(180);
+
+        let menu = container(opaque(menu_content)).style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::PANEL)),
+            border: iced::Border {
+                color: theme::SEPARATOR,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..Default::default()
+        });
+
+        // Position the popup just below the "+" button in the track header ruler area.
+        // The + button sits near the left edge of the track header column (~12px in)
+        // directly below the transport bar (transport height ~48px + ruler height 30px).
+        let top_pad = 48.0 + theme::RULER_HEIGHT + 2.0;
+        let positioned = container(menu)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(alignment::Horizontal::Left)
+            .align_y(alignment::Vertical::Top)
+            .padding(iced::Padding {
+                top: top_pad,
+                right: 0.0,
+                bottom: 0.0,
+                left: 12.0,
+            });
+
+        stack![backdrop, positioned].into()
     }
 
     fn view_transport(&self) -> Element<'_, Message> {
@@ -143,14 +224,6 @@ impl crate::Resonance {
 
         let zoom_in = button(text("+").size(16).color(theme::TEXT))
             .on_press(Message::ZoomIn)
-            .style(|_theme, status| theme::transport_button_style(status));
-
-        let add_track = button(text("+ Track").size(14).color(theme::TEXT))
-            .on_press(Message::AddTrack)
-            .style(|_theme, status| theme::transport_button_style(status));
-
-        let add_inst_track = button(text("+ Inst").size(14).color(Color::from_rgb(0.3, 0.75, 0.8)))
-            .on_press(Message::AddInstrumentTrack)
             .style(|_theme, status| theme::transport_button_style(status));
 
         let open_btn = button(text("\u{1f4c2}").size(14).color(theme::TEXT).shaping(Shaping::Advanced))
@@ -247,9 +320,6 @@ impl crate::Resonance {
             text("Zoom").size(12).color(theme::TEXT_DIM),
             zoom_in,
             Space::with_width(20),
-            add_track,
-            add_inst_track,
-            Space::with_width(6),
             open_btn,
             save_btn,
             Space::with_width(6),
@@ -402,12 +472,22 @@ impl crate::Resonance {
     fn view_track_headers(&self) -> Element<'_, Message> {
         let mut headers = column![].spacing(0);
 
-        // Ruler header spacer
+        // Ruler header with "+" button to add a track
+        let add_btn = button(text("+").size(16).color(theme::TEXT))
+            .on_press(Message::OpenAddTrackMenu)
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding([0, 6]);
+        let add_row = row![Space::with_width(6), add_btn]
+            .align_y(alignment::Vertical::Center)
+            .height(theme::RULER_HEIGHT);
         headers = headers.push(
-            container(Space::new(Length::Fill, theme::RULER_HEIGHT)).style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::PANEL_DARK)),
-                ..Default::default()
-            }),
+            container(add_row)
+                .width(Length::Fill)
+                .height(theme::RULER_HEIGHT)
+                .style(|_theme| container::Style {
+                    background: Some(iced::Background::Color(theme::PANEL_DARK)),
+                    ..Default::default()
+                }),
         );
 
         let sorted_tracks = self.sorted_tracks();

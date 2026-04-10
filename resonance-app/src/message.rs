@@ -36,6 +36,10 @@ pub(crate) enum Message {
     RemovePluginFromTrack(TrackId, PluginInstanceId),
     TogglePluginPanel(PluginInstanceId),
     SetPluginParam(PluginInstanceId, u32, f64),
+    /// Open the plugin's editor window (CLAP_EXT_GUI).
+    OpenPluginEditor(PluginInstanceId),
+    /// Close the plugin's editor window.
+    ClosePluginEditor(PluginInstanceId),
     DrumPadSelect(PluginInstanceId, usize),
     PluginBrowseFile(PluginInstanceId),
     PluginFileSelected(PluginInstanceId, Option<String>),
@@ -44,6 +48,8 @@ pub(crate) enum Message {
     SwitchView(ViewMode),
     OpenSettings,
     CloseSettings,
+    OpenAddTrackMenu,
+    CloseAddTrackMenu,
     DismissError,
     TogglePunch,
     #[allow(dead_code)] // reserved for direct punch position entry UI
@@ -74,7 +80,6 @@ pub(crate) enum Message {
     AddInstrumentTrack,
     CreateMidiClip(TrackId),
     DeleteMidiClip(ClipId),
-    SelectMidiClip(Option<ClipId>),
     StartMidiClipDrag { clip_id: ClipId, grab_offset_x: f32, start_x: f32, start_y: f32 },
     UpdateMidiClipDrag(f32, f32),
     EndMidiClipDrag,
@@ -83,6 +88,8 @@ pub(crate) enum Message {
     EndMidiClipTrim,
     // MIDI piano roll editor messages
     OpenMidiEditor(ClipId),
+    /// Open the currently selected MIDI clip (if any) in the piano roll editor.
+    OpenSelectedMidiClip,
     CloseMidiEditor,
     MidiEditorAddNote { clip_id: ClipId, note: u8, start_tick: u64, duration_ticks: u64, velocity: f32 },
     MidiEditorRemoveNote { clip_id: ClipId, note_index: usize },

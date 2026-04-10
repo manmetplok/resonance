@@ -463,17 +463,39 @@ impl crate::Resonance {
             }
         });
 
-        // Header with plugin name and close button
-        let header = row![
+        // Header with plugin name, optional Open Editor button, and close.
+        let mut header = row![
             text(plugin.plugin_name.clone()).size(12).color(theme::ACCENT),
             Space::with_width(Length::Fill),
+        ]
+        .spacing(8)
+        .align_y(alignment::Vertical::Center);
+
+        if plugin.has_gui {
+            let label = if plugin.editor_open {
+                "Close Editor"
+            } else {
+                "Open Editor"
+            };
+            let msg = if plugin.editor_open {
+                Message::ClosePluginEditor(selected_id)
+            } else {
+                Message::OpenPluginEditor(selected_id)
+            };
+            header = header.push(
+                button(text(label).size(9).color(theme::TEXT))
+                    .on_press(msg)
+                    .style(|_theme, status| theme::small_button_style(status))
+                    .padding([2, 8]),
+            );
+        }
+
+        header = header.push(
             button(text("\u{00d7}").size(14).color(theme::TEXT_DIM))
                 .on_press(Message::TogglePluginPanel(selected_id))
                 .style(|_theme, status| theme::small_button_style(status))
                 .padding(2),
-        ]
-        .spacing(8)
-        .align_y(alignment::Vertical::Center);
+        );
 
         let panel_content = column![header, mapped]
             .spacing(6)

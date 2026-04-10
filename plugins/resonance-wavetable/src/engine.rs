@@ -8,6 +8,7 @@ use crate::lfo::LfoShape;
 use crate::modulation::{self, ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
 use crate::oscillator::{self, midi_to_freq, read_wavetable};
 use crate::params::WavetableParams;
+use crate::viz::{ScopeCollector, WavetableVizState};
 use crate::voice::{Voice, VoiceState, MAX_VOICES};
 use crate::wavetable::Wavetable;
 
@@ -33,6 +34,10 @@ pub struct SynthEngine {
 
     // Last note for portamento
     last_note: Option<u8>,
+
+    // Audio → UI oscilloscope ring. Filled per-frame in render_frame,
+    // published to the shared viz state at the end of each audio block.
+    scope_collector: ScopeCollector,
 }
 
 impl SynthEngine {
@@ -48,7 +53,8 @@ impl SynthEngine {
             chorus: Chorus::new(44100.0),
             delay: StereoDelay::new(44100.0),
             rng: SimpleRng::new(42),
-        last_note: None,
+            last_note: None,
+            scope_collector: ScopeCollector::new(),
         }
     }
 
@@ -327,7 +333,17 @@ impl SynthEngine {
                 osc_r = voice.filter_r.process(
                     osc_r, cutoff, reso, self.sample_rate, filter_type, filter_drive,
                 );
+                voice.last_filter_cutoff = cutoff;
+            } else {
+                voice.last_filter_cutoff = filter_cutoff;
             }
+
+            // Cache post-modulation osc positions + LFO phases for viz.
+            voice.last_osc1_pos = (osc1_pos + mods.osc1_position).clamp(0.0, 1.0);
+            voice.last_osc2_pos = (osc2_pos + mods.osc2_position).clamp(0.0, 1.0);
+            voice.last_lfo_phases[0] = if lfo1_retrigger { voice.lfo1.phase } else { self.global_lfo1.phase };
+            voice.last_lfo_phases[1] = if lfo2_retrigger { voice.lfo2.phase } else { self.global_lfo2.phase };
+            voice.last_lfo_phases[2] = if lfo3_retrigger { voice.lfo3.phase } else { self.global_lfo3.phase };
 
             // Amplitude
             let amp = amp_env_val * voice.velocity * (1.0 + mods.amp_level).max(0.0);
@@ -367,7 +383,60 @@ impl SynthEngine {
             mix_r = dr;
         }
 
-        (mix_l * master_vol, mix_r * master_vol)
+        let out_l = mix_l * master_vol;
+        let out_r = mix_r * master_vol;
+
+        // Feed the oscilloscope ring. The publish to shared atomics happens
+        // once per block via publish_viz below.
+        self.scope_collector.push(out_l, out_r);
+
+        (out_l, out_r)
+    }
+
+    /// Publish the latest audio-thread state to the shared viz atomics.
+    /// Called once per audio block by the plugin's `process()`.
+    pub fn publish_viz(&mut self, params: &WavetableParams, viz: &WavetableVizState) {
+        // Flush the oscilloscope buffer.
+        self.scope_collector.publish(viz);
+
+        // Pick the representative voice: the newest non-idle one. If nothing
+        // is active we leave the scalars at their previous values, which
+        // avoids glitchy snap-to-zero between notes.
+        let mut rep_idx: Option<usize> = None;
+        let mut rep_age: u64 = 0;
+        let mut active = 0u32;
+        for (i, v) in self.voices.iter().enumerate() {
+            if v.state != VoiceState::Idle {
+                active += 1;
+                if v.age >= rep_age {
+                    rep_age = v.age;
+                    rep_idx = Some(i);
+                }
+            }
+        }
+        viz.store_active_voice_count(active);
+
+        if let Some(i) = rep_idx {
+            let voice = &self.voices[i];
+            viz.store_env_amp(voice.amp_env.level, voice.amp_env.stage as u32);
+            viz.store_env_mod(voice.mod_env.level);
+            viz.store_filter_cutoff_live(voice.last_filter_cutoff);
+            viz.store_osc_positions(voice.last_osc1_pos, voice.last_osc2_pos);
+            for (lfo, phase) in voice.last_lfo_phases.iter().enumerate() {
+                viz.store_lfo_phase(lfo, *phase);
+            }
+        } else {
+            // No active voices: reflect the current params where it makes
+            // sense so the UI still shows sensible values when idle.
+            viz.store_filter_cutoff_live(params.filter.cutoff.value());
+            viz.store_osc_positions(
+                params.osc1.position.value(),
+                params.osc2.position.value(),
+            );
+            viz.store_lfo_phase(0, self.global_lfo1.phase);
+            viz.store_lfo_phase(1, self.global_lfo2.phase);
+            viz.store_lfo_phase(2, self.global_lfo3.phase);
+        }
     }
 
     fn find_free_voice(&self, note: u8, max_voices: usize) -> usize {

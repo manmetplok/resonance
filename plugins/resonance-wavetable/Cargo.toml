@@ -8,10 +8,21 @@ description = "A wavetable synthesizer instrument CLAP plugin for the Resonance 
 crate-type = ["cdylib", "lib"]
 
 [features]
-default = []
-ui = ["resonance-plugin/ui"]
+# The editor is enabled by default so the cdylib bundle ships with a GUI.
+# Turn it off (`--no-default-features`) to get a headless build for tests.
+default = ["editor"]
+editor = ["dep:wayland-plugin-gui", "dep:egui"]
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
+
+# Editor dependencies — only pulled in when the `editor` feature is on.
+wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+egui = { version = "0.34", features = ["default_fonts"], default-features = false, optional = true }
+
+[[example]]
+name = "editor_standalone"
+path = "examples/editor_standalone.rs"
+required-features = ["editor"]

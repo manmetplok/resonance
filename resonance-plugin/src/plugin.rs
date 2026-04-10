@@ -138,4 +138,14 @@ pub trait ResonancePlugin: Send + 'static {
     fn latency_samples(&self) -> u32 {
         0
     }
+
+    /// Return an editor factory if this plugin has a GUI.
+    ///
+    /// Called once at plugin creation time (before the plugin is moved into
+    /// the audio processor). Returning `Some(factory)` causes the clap_bridge
+    /// to expose `CLAP_EXT_GUI`; the host can then open, resize, hide, show,
+    /// and destroy the editor through the factory. Default: `None`.
+    fn editor_factory(&self) -> Option<std::sync::Arc<dyn crate::gui::EditorFactory>> {
+        None
+    }
 }

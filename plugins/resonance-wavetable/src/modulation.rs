@@ -30,21 +30,6 @@ impl ModSource {
             _ => Self::None,
         }
     }
-
-    pub fn name(v: i32) -> &'static str {
-        match v {
-            0 => "None",
-            1 => "LFO 1",
-            2 => "LFO 2",
-            3 => "LFO 3",
-            4 => "Mod Env",
-            5 => "Velocity",
-            6 => "Key Track",
-            7 => "Mod Wheel",
-            8 => "Aftertouch",
-            _ => "None",
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -79,24 +64,6 @@ impl ModDest {
             10 => Self::Osc1Pan,
             11 => Self::Osc2Pan,
             _ => Self::None,
-        }
-    }
-
-    pub fn name(v: i32) -> &'static str {
-        match v {
-            0 => "None",
-            1 => "Osc1 Pos",
-            2 => "Osc2 Pos",
-            3 => "Osc1 Pitch",
-            4 => "Osc2 Pitch",
-            5 => "Filt Cutoff",
-            6 => "Filt Reso",
-            7 => "Osc Balance",
-            8 => "Amp Level",
-            9 => "Uni Detune",
-            10 => "Osc1 Pan",
-            11 => "Osc2 Pan",
-            _ => "None",
         }
     }
 }

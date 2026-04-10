@@ -13,6 +13,9 @@ use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
     PluginAudioPortsImpl,
 };
+use clack_extensions::gui::{
+    GuiApiType, GuiConfiguration, GuiSize, PluginGui, PluginGuiImpl, Window,
+};
 use clack_extensions::latency::{PluginLatency, PluginLatencyImpl};
 use clack_extensions::note_ports::{
     NoteDialect, NoteDialects, NotePortInfo, NotePortInfoWriter, PluginNotePorts,
@@ -26,6 +29,7 @@ use clack_extensions::state::{PluginState, PluginStateImpl};
 use clack_plugin::prelude::*;
 use clack_plugin::stream::{InputStream, OutputStream};
 
+use crate::gui::{EditorFactory, PluginEditor};
 use crate::param::Param;
 use crate::plugin::{EventIterator, NoteEvent, ResonancePlugin};
 
@@ -96,6 +100,13 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
     shared: &'a ClapShared<'a>,
     plugin: Option<P>,
     last_latency: u32,
+    /// Editor factory harvested from the plugin at construction time. `None`
+    /// if the plugin has no GUI. Kept alive across activate/deactivate so
+    /// the host can open the editor while audio is running.
+    editor_factory: Option<std::sync::Arc<dyn EditorFactory>>,
+    /// The currently-open editor, if any. Created by `gui_create`, dropped
+    /// by `gui_destroy`.
+    editor: Option<Box<dyn PluginEditor>>,
 }
 
 impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainThread<'a, P> {}
@@ -311,6 +322,10 @@ impl<P: ResonancePlugin> Plugin for ClapBridge<P> {
         }
 
         builder.register::<PluginLatency>();
+        // GUI extension is registered unconditionally; plugins without an
+        // editor factory return false from is_api_supported, which is the
+        // CLAP-correct way to say "no editor".
+        builder.register::<PluginGui>();
     }
 }
 
@@ -400,11 +415,17 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             }
         }
 
+        // Harvest the editor factory before the plugin may be moved to the
+        // audio processor. Returns None for plugins without a GUI.
+        let editor_factory = plugin.editor_factory();
+
         Ok(ClapMainThread {
             host,
             shared,
             plugin: Some(plugin),
             last_latency: 0,
+            editor_factory,
+            editor: None,
         })
     }
 }
@@ -687,6 +708,130 @@ impl<'a, P: ResonancePlugin> PluginLatencyImpl for ClapMainThread<'a, P> {
             lat
         } else {
             self.last_latency
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GUI extension
+// ---------------------------------------------------------------------------
+
+impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
+    fn is_api_supported(&mut self, configuration: GuiConfiguration) -> bool {
+        let Some(factory) = &self.editor_factory else {
+            return false;
+        };
+        let Ok(api) = configuration.api_type.0.to_str() else {
+            return false;
+        };
+        factory.supports(api, configuration.is_floating)
+    }
+
+    fn get_preferred_api(&mut self) -> Option<GuiConfiguration<'_>> {
+        let factory = self.editor_factory.as_ref()?;
+        let (api, is_floating) = factory.preferred()?;
+        let api_type = match api {
+            "wayland" => GuiApiType::WAYLAND,
+            "x11" => GuiApiType::X11,
+            "win32" => GuiApiType::WIN32,
+            "cocoa" => GuiApiType::COCOA,
+            _ => return None,
+        };
+        Some(GuiConfiguration {
+            api_type,
+            is_floating,
+        })
+    }
+
+    fn create(&mut self, configuration: GuiConfiguration) -> Result<(), PluginError> {
+        let factory = self
+            .editor_factory
+            .as_ref()
+            .ok_or(PluginError::Message("plugin has no editor factory"))?;
+        let api = configuration
+            .api_type
+            .0
+            .to_str()
+            .map_err(|_| PluginError::Message("invalid GUI api string"))?;
+        let editor = factory
+            .create(api, configuration.is_floating)
+            .ok_or(PluginError::Message("editor creation failed"))?;
+        self.editor = Some(editor);
+        Ok(())
+    }
+
+    fn destroy(&mut self) {
+        self.editor = None;
+    }
+
+    fn set_scale(&mut self, _scale: f64) -> Result<(), PluginError> {
+        // Wayland handles scale via the compositor — the runtime reads it
+        // from wl_output events. For other APIs this would matter.
+        Ok(())
+    }
+
+    fn get_size(&mut self) -> Option<GuiSize> {
+        if let Some(editor) = &self.editor {
+            let (w, h) = editor.size();
+            Some(GuiSize { width: w, height: h })
+        } else if let Some(factory) = &self.editor_factory {
+            let (w, h) = factory.preferred_size();
+            Some(GuiSize { width: w, height: h })
+        } else {
+            None
+        }
+    }
+
+    fn can_resize(&mut self) -> bool {
+        self.editor.as_ref().map(|e| e.can_resize()).unwrap_or(false)
+    }
+
+    fn set_size(&mut self, size: GuiSize) -> Result<(), PluginError> {
+        let editor = self
+            .editor
+            .as_mut()
+            .ok_or(PluginError::Message("no editor to resize"))?;
+        if editor.set_size(size.width, size.height) {
+            Ok(())
+        } else {
+            Err(PluginError::Message("set_size refused"))
+        }
+    }
+
+    fn set_parent(&mut self, _window: Window) -> Result<(), PluginError> {
+        // We are Wayland-only and floating-only in v1. Pretend to succeed so
+        // hosts that call set_parent unconditionally (even with is_floating=true)
+        // don't fail the handshake.
+        Ok(())
+    }
+
+    fn set_transient(&mut self, _window: Window) -> Result<(), PluginError> {
+        // v1: no-op. Could later map to xdg-foreign-unstable-v2 on Wayland
+        // to mark the plugin window as transient for the host window.
+        Ok(())
+    }
+
+    fn suggest_title(&mut self, title: &str) {
+        if let Some(editor) = &mut self.editor {
+            editor.set_title(title);
+        }
+    }
+
+    fn show(&mut self) -> Result<(), PluginError> {
+        if let Some(editor) = &mut self.editor {
+            editor.show();
+            Ok(())
+        } else {
+            Err(PluginError::Message("no editor to show"))
+        }
+    }
+
+    fn hide(&mut self) -> Result<(), PluginError> {
+        if let Some(editor) = &mut self.editor {
+            editor.hide();
+            Ok(())
+        } else {
+            Err(PluginError::Message("no editor to hide"))
         }
     }
 }

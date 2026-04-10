@@ -12,6 +12,9 @@ use clap_sys::events::{
     clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
     CLAP_EVENT_PARAM_VALUE,
 };
+use clap_sys::ext::gui::{
+    clap_plugin_gui, CLAP_EXT_GUI, CLAP_WINDOW_API_WAYLAND,
+};
 use clap_sys::ext::params::{clap_plugin_params, CLAP_EXT_PARAMS};
 use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
@@ -252,6 +255,19 @@ impl ClapBundle {
             }
         };
 
+        let gui_ext = unsafe {
+            if let Some(get_ext) = (*plugin).get_extension {
+                let ext = get_ext(plugin, CLAP_EXT_GUI.as_ptr());
+                if ext.is_null() {
+                    None
+                } else {
+                    Some(ext as *const clap_plugin_gui)
+                }
+            } else {
+                None
+            }
+        };
+
         // Activate
         if let Some(activate) = unsafe { (*plugin).activate } {
             let ok = unsafe { activate(plugin, sample_rate as f64, 32, 8192) };
@@ -284,6 +300,8 @@ impl ClapBundle {
             sample_rate,
             params_ext,
             state_ext,
+            gui_ext,
+            gui_open: false,
             pending_params: Vec::new(),
             param_event_buf: Vec::new(),
             pending_notes: Vec::new(),
@@ -311,6 +329,9 @@ pub struct ClapInstance {
     sample_rate: u32,
     params_ext: Option<*const clap_plugin_params>,
     state_ext: Option<*const clap_plugin_state>,
+    gui_ext: Option<*const clap_plugin_gui>,
+    /// True when `gui_create` has been called and `gui_destroy` hasn't yet.
+    gui_open: bool,
     /// Pending parameter changes to send during next process() call.
     pending_params: Vec<(u32, f64)>,
     /// Pre-allocated buffer for CLAP parameter events (reused across process() calls).
@@ -399,6 +420,91 @@ impl ClapInstance {
     }
 
     /// Send note-off for all 128 MIDI notes (to clear stuck notes).
+    // --- GUI (CLAP_EXT_GUI) ------------------------------------------------
+
+    /// Whether the plugin exposes a GUI that the host can open.
+    pub fn has_gui(&self) -> bool {
+        self.gui_ext.is_some()
+    }
+
+    /// Whether the GUI is currently open (i.e. `gui_create` was called).
+    pub fn is_gui_open(&self) -> bool {
+        self.gui_open
+    }
+
+    /// Open the plugin's editor window as a floating Wayland window.
+    ///
+    /// Walks the full CLAP GUI negotiation sequence:
+    /// `is_api_supported` → `create` → `get_size` → `show`. Returns `false`
+    /// at any step failure. If the GUI is already open, this is a no-op.
+    pub fn open_gui(&mut self) -> bool {
+        let Some(gui) = self.gui_ext else {
+            return false;
+        };
+        if self.gui_open {
+            return true;
+        }
+        unsafe {
+            let Some(is_supported) = (*gui).is_api_supported else {
+                return false;
+            };
+            if !is_supported(self.plugin, CLAP_WINDOW_API_WAYLAND.as_ptr(), true) {
+                return false;
+            }
+            let Some(create) = (*gui).create else {
+                return false;
+            };
+            if !create(self.plugin, CLAP_WINDOW_API_WAYLAND.as_ptr(), true) {
+                return false;
+            }
+            // Best-effort size negotiation (ignore errors — the plugin has
+            // its own preferred size baked into its factory).
+            if let Some(get_size) = (*gui).get_size {
+                let mut w: u32 = 0;
+                let mut h: u32 = 0;
+                get_size(self.plugin, &mut w, &mut h);
+                if let Some(set_size) = (*gui).set_size {
+                    if w > 0 && h > 0 {
+                        set_size(self.plugin, w, h);
+                    }
+                }
+            }
+            let Some(show) = (*gui).show else {
+                // If show isn't exposed, roll back the create.
+                if let Some(destroy) = (*gui).destroy {
+                    destroy(self.plugin);
+                }
+                return false;
+            };
+            if !show(self.plugin) {
+                if let Some(destroy) = (*gui).destroy {
+                    destroy(self.plugin);
+                }
+                return false;
+            }
+        }
+        self.gui_open = true;
+        true
+    }
+
+    /// Close the plugin's editor window (hide + destroy).
+    pub fn close_gui(&mut self) {
+        if !self.gui_open {
+            return;
+        }
+        if let Some(gui) = self.gui_ext {
+            unsafe {
+                if let Some(hide) = (*gui).hide {
+                    hide(self.plugin);
+                }
+                if let Some(destroy) = (*gui).destroy {
+                    destroy(self.plugin);
+                }
+            }
+        }
+        self.gui_open = false;
+    }
+
     pub fn all_notes_off(&mut self) {
         for key in 0..128u8 {
             self.pending_notes.push((false, key, 0.0, 0));
@@ -661,6 +767,9 @@ impl ClapInstance {
 
 impl Drop for ClapInstance {
     fn drop(&mut self) {
+        // Tear down any open GUI first so the plugin can release its editor
+        // thread before the rest of the plugin goes away.
+        self.close_gui();
         if self.active {
             if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
                 unsafe { stop(self.plugin) };

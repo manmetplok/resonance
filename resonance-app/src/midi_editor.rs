@@ -87,6 +87,12 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
         match event {
             // --- Scroll ---
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                // Only handle wheel events when the cursor is actually over the
+                // piano roll — otherwise scrolling the arrangement would also
+                // scroll this editor.
+                if cursor.position_in(bounds).is_none() {
+                    return (canvas::event::Status::Ignored, None);
+                }
                 match delta {
                     mouse::ScrollDelta::Lines { x, y } => {
                         if x.abs() > f32::EPSILON {

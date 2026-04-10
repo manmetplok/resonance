@@ -21,16 +21,6 @@ impl FilterType {
             _ => Self::Lowpass,
         }
     }
-
-    pub fn name(v: i32) -> &'static str {
-        match v {
-            0 => "LP",
-            1 => "HP",
-            2 => "BP",
-            3 => "Notch",
-            _ => "LP",
-        }
-    }
 }
 
 #[derive(Clone)]

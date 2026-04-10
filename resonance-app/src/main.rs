@@ -38,6 +38,7 @@ pub(crate) struct Resonance {
     pub(crate) metronome_enabled: bool,
     pub(crate) available_plugins: Vec<ScannedPlugin>,
     pub(crate) settings_open: bool,
+    pub(crate) add_track_menu_open: bool,
     pub(crate) error_message: Option<String>,
     pub(crate) master_volume: f32,
     pub(crate) master_level_l: f32,
@@ -130,6 +131,7 @@ impl Resonance {
             metronome_enabled: false,
             available_plugins: Vec::new(),
             settings_open: false,
+            add_track_menu_open: false,
             error_message: None,
             master_volume: 0.0, // 0 dB = unity gain
             master_level_l: 0.0,

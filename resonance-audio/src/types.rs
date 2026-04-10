@@ -175,6 +175,14 @@ pub enum AudioCommand {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
     },
+    /// Open the plugin's editor window (requires CLAP_EXT_GUI).
+    OpenPluginEditor {
+        instance_id: PluginInstanceId,
+    },
+    /// Close the plugin's editor window.
+    ClosePluginEditor {
+        instance_id: PluginInstanceId,
+    },
     /// Offline render of the project to a WAV file.
     BounceToWav {
         path: String,
@@ -347,6 +355,8 @@ pub enum AudioEvent {
         clap_plugin_id: String,
         clap_file_path: String,
         params: Vec<ParamInfo>,
+        /// Whether the plugin exposes a CLAP GUI the host can open.
+        has_gui: bool,
     },
     PluginRemoved {
         track_id: TrackId,
