@@ -1,5 +1,3 @@
-[alias]
-xtask = "run --package xtask --release --"
-
 [build]
-rustflags = ["-C", "target-cpu=native"]
+# Uncomment for local development (produces non-portable binaries):
+# rustflags = ["-C", "target-cpu=native"]

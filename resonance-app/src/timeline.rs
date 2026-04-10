@@ -352,6 +352,20 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                         }
                     }
 
+                    // Any other click in the ruler → seek the playhead.
+                    // Punch handle drags above have already captured their
+                    // own clicks, so we only get here on empty ruler space.
+                    if pos.y < ruler_height {
+                        let seconds =
+                            ((pos.x + self.scroll_offset) / self.zoom).max(0.0);
+                        let sample =
+                            (seconds as f64 * self.sample_rate as f64) as u64;
+                        return (
+                            canvas::event::Status::Captured,
+                            Some(Message::SeekToSample(sample)),
+                        );
+                    }
+
                     // Clip hit-testing (track area)
                     if pos.y >= ruler_height {
                         let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
