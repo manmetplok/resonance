@@ -35,6 +35,28 @@ impl std::fmt::Display for OutputChoice {
     }
 }
 
+/// Wrapper so the input-port pick_list can render 1-based channel
+/// numbers and stereo pair labels without reaching into track state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PortChoice {
+    /// 0-indexed channel number on the device.
+    index: u16,
+    /// True if the track is mono — the label shows "In N"; false shows
+    /// "In N/N+1" so the user sees which pair the stereo track reads.
+    mono: bool,
+}
+
+impl std::fmt::Display for PortChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let one_based = self.index + 1;
+        if self.mono {
+            write!(f, "In {}", one_based)
+        } else {
+            write!(f, "In {}/{}", one_based, one_based + 1)
+        }
+    }
+}
+
 /// Convert linear amplitude to meter bar height (logarithmic/dB scale).
 fn level_to_bar_height(level: f32, max_height: f32) -> f32 {
     if level < 0.0001 {
@@ -105,8 +127,18 @@ impl crate::Resonance {
         let available_plugins = self.available_plugins.clone();
 
         // -- Top row: track strips + master strip on the right. --
+        // Skip sub-tracks whose parent is currently collapsed in the
+        // mixer UI. The collapse state is app-side only (not persisted).
         let mut track_strip_row = row![].spacing(2);
         for track in &sorted_tracks {
+            if let Some(link) = track.sub_track {
+                if self
+                    .collapsed_sub_track_parents
+                    .contains(&link.parent_track_id)
+                {
+                    continue;
+                }
+            }
             track_strip_row =
                 track_strip_row.push(self.view_channel_strip(track, &available_plugins));
         }
@@ -292,12 +324,44 @@ impl crate::Resonance {
         // parent plugin's output port.
         let is_sub = track.sub_track.is_some();
         let name_color = if is_sub { theme::TEXT_DIM } else { theme::TEXT };
-        let track_name = container(
-            text(track.name.clone()).size(13).color(name_color),
-        )
-        .width(Length::Fill)
-        .center_x(Length::Fill)
-        .padding([6, 4]);
+
+        // Parent instrument tracks that have at least one sub-track show
+        // a small collapse/expand button next to the name. Clicking it
+        // toggles `collapsed_sub_track_parents`, which view_mixer reads
+        // before rendering each sub-track strip.
+        let has_sub_tracks = !is_sub
+            && self
+                .tracks
+                .iter()
+                .any(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id));
+        let is_collapsed = self
+            .collapsed_sub_track_parents
+            .contains(&track.id);
+
+        let name_text = text(track.name.clone()).size(13).color(name_color);
+        let track_name: Element<'_, Message> = if has_sub_tracks {
+            let glyph = if is_collapsed { "\u{25B8}" } else { "\u{25BE}" };
+            let track_id = track.id;
+            let toggle = button(text(glyph).size(10).color(theme::TEXT_DIM))
+                .on_press(Message::ToggleSubTracksVisible(track_id))
+                .padding([2, 4])
+                .style(|_theme, status| theme::small_button_style(status));
+            container(
+                row![toggle, name_text]
+                    .spacing(4)
+                    .align_y(alignment::Vertical::Center),
+            )
+            .width(Length::Fill)
+            .center_x(Length::Fill)
+            .padding([6, 4])
+            .into()
+        } else {
+            container(name_text)
+                .width(Length::Fill)
+                .center_x(Length::Fill)
+                .padding([6, 4])
+                .into()
+        };
 
         // Same icon vocabulary as the Arrange track header so the two
         // surfaces stay visually consistent.
@@ -478,19 +542,27 @@ impl crate::Resonance {
         .spacing(2)
         .align_x(alignment::Horizontal::Center);
 
-        // Input device picker (when armed)
+        // Input device + port picker (when armed). The port dropdown
+        // lets the user pick a specific channel on the selected device —
+        // critical for multi-input interfaces (e.g. the user's 18-in
+        // soundcard). Only shown when the selected device reports a
+        // usable channel count.
         let mut bottom_section = column![].spacing(2);
         if track.record_armed && !self.input_devices.is_empty() {
-            let selected = track
+            let selected_device = track
                 .input_device_name
                 .as_ref()
                 .and_then(|name| self.input_devices.iter().find(|d| &d.name == name))
                 .cloned();
+            let device_channels = selected_device
+                .as_ref()
+                .map(|d| d.channels)
+                .unwrap_or(0);
 
             let track_id = track.id;
             let device_picker = pick_list(
                 self.input_devices.clone(),
-                selected,
+                selected_device,
                 move |device: InputDeviceInfo| {
                     Message::SetTrackInputDevice(track_id, Some(device.name))
                 },
@@ -500,6 +572,41 @@ impl crate::Resonance {
             .width(Length::Fill);
 
             bottom_section = bottom_section.push(device_picker);
+
+            if device_channels > 0 {
+                let is_mono = track.mono;
+                // Mono: list every channel 1..=N. Stereo: list every
+                // valid pair start (1..=N-1) since the right channel
+                // reads `port + 1`.
+                let last_valid_index = if is_mono {
+                    device_channels
+                } else {
+                    device_channels.saturating_sub(1)
+                };
+                let ports: Vec<PortChoice> = (0..last_valid_index)
+                    .map(|i| PortChoice {
+                        index: i,
+                        mono: is_mono,
+                    })
+                    .collect();
+                let selected_port = PortChoice {
+                    index: track.input_port_index.min(last_valid_index.saturating_sub(1)),
+                    mono: is_mono,
+                };
+                if !ports.is_empty() {
+                    let track_id = track.id;
+                    let port_picker = pick_list(
+                        ports,
+                        Some(selected_port),
+                        move |choice: PortChoice| {
+                            Message::SetTrackInputPort(track_id, choice.index)
+                        },
+                    )
+                    .text_size(10)
+                    .width(Length::Fill);
+                    bottom_section = bottom_section.push(port_picker);
+                }
+            }
         }
 
         let bg = if track.record_armed {

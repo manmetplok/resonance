@@ -57,12 +57,17 @@ fn sum_to_stereo(
 }
 
 /// De-interleave monitor input into track buffers and process through plugins.
-/// Returns the number of frames written.
+/// Returns the number of frames written. `monitor_temp` is interleaved
+/// multi-channel input audio (the raw stream straight from the device);
+/// `input_channels` tells us how many channels are in each frame, and the
+/// track's own `input_port` picks which channel(s) to route into its
+/// stereo L/R pair.
 fn process_monitor_track(
     track: &Track,
     monitor_temp: &[f32],
     monitor_frames: usize,
     max_frames: usize,
+    input_channels: usize,
     track_buf_l: &mut [f32],
     track_buf_r: &mut [f32],
     plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
@@ -73,15 +78,21 @@ fn process_monitor_track(
     track_buf_l[..mix_frames].fill(0.0);
     track_buf_r[..mix_frames].fill(0.0);
 
+    if input_channels == 0 {
+        return mix_frames;
+    }
+
+    let port = (track.input_port() as usize).min(input_channels - 1);
+    let right_port = if is_mono {
+        port
+    } else {
+        (port + 1).min(input_channels - 1)
+    };
+
     for f in 0..mix_frames {
-        let l = monitor_temp[f * 2];
-        if is_mono {
-            track_buf_l[f] = l;
-            track_buf_r[f] = l;
-        } else {
-            track_buf_l[f] = l;
-            track_buf_r[f] = monitor_temp[f * 2 + 1];
-        }
+        let base = f * input_channels;
+        track_buf_l[f] = monitor_temp[base + port];
+        track_buf_r[f] = monitor_temp[base + right_port];
     }
 
     // Process through plugin chain
@@ -268,14 +279,19 @@ pub(crate) fn mix_audio(
 
     // Read monitor input with jitter margin to avoid underflows.
     // Skip stale monitor data to keep latency at ~1 buffer period.
-    let needed = frames * 2; // stereo samples
+    // The monitor stream carries raw interleaved multi-channel data now
+    // (one `input_channels` block per frame), so sample counts scale by
+    // the current input channel count.
+    let input_channels = shared.input_channels.load(Ordering::Relaxed) as usize;
+    let frame_stride = input_channels.max(1);
+    let needed = frames * frame_stride;
     let available = monitor_cons.occupied_len();
-    if available > needed + quantum * 2 {
+    if available > needed + quantum * frame_stride {
         monitor_cons.skip(available - needed);
     }
     let to_read = needed.min(monitor_cons.occupied_len());
     let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);
-    let monitor_frames = monitor_samples / 2;
+    let monitor_frames = monitor_samples / frame_stride;
 
     if !shared.playing.load(Ordering::Relaxed) {
         // Even when stopped, output monitored audio for armed tracks
@@ -297,6 +313,7 @@ pub(crate) fn mix_audio(
                         monitor_temp,
                         monitor_frames,
                         monitor_frames,
+                        input_channels,
                         track_buf_l,
                         track_buf_r,
                         &plugins_guard,
@@ -511,19 +528,22 @@ pub(crate) fn mix_audio(
         } else {
             // -- Audio track: mix clips + monitor input + plugin chain --
 
-            // Mix monitor input for all tracks with monitoring enabled
-            if track.monitor_enabled() && monitor_frames > 0 {
+            // Mix monitor input for all tracks with monitoring enabled.
+            // Each track pulls its own channel(s) from the interleaved
+            // multi-channel monitor buffer based on its input_port.
+            if track.monitor_enabled() && monitor_frames > 0 && input_channels > 0 {
                 let is_mono = track.mono();
                 let mix_frames = frames.min(monitor_frames);
+                let port = (track.input_port() as usize).min(input_channels - 1);
+                let right_port = if is_mono {
+                    port
+                } else {
+                    (port + 1).min(input_channels - 1)
+                };
                 for f in 0..mix_frames {
-                    let l = monitor_temp[f * 2];
-                    if is_mono {
-                        track_buf_l[f] += l;
-                        track_buf_r[f] += l;
-                    } else {
-                        track_buf_l[f] += l;
-                        track_buf_r[f] += monitor_temp[f * 2 + 1];
-                    }
+                    let base = f * input_channels;
+                    track_buf_l[f] += monitor_temp[base + port];
+                    track_buf_r[f] += monitor_temp[base + right_port];
                 }
                 has_audio = true;
             }

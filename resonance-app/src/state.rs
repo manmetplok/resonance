@@ -147,6 +147,8 @@ pub struct TrackState {
     pub monitor_enabled: bool,
     pub mono: bool,
     pub input_device_name: Option<String>,
+    /// 0-indexed starting input channel on the track's input device.
+    pub input_port_index: u16,
     pub plugins: Vec<PluginSlotState>,
     /// Current VU meter level for left channel (linear amplitude).
     pub level_l: f32,

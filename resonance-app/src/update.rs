@@ -194,10 +194,34 @@ impl crate::Resonance {
             Message::SetTrackInputDevice(id, device_name) => {
                 if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
                     track.input_device_name = device_name.clone();
+                    // Reset port selection to the first channel pair
+                    // whenever the device changes — the old port may not
+                    // exist on the new card.
+                    track.input_port_index = 0;
                     self.engine.send(AudioCommand::SetTrackInputDevice {
                         track_id: id,
                         device_name,
                     });
+                    self.engine.send(AudioCommand::SetTrackInputPort {
+                        track_id: id,
+                        port_index: 0,
+                    });
+                }
+            }
+            Message::SetTrackInputPort(id, port_index) => {
+                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == id) {
+                    track.input_port_index = port_index;
+                    self.engine.send(AudioCommand::SetTrackInputPort {
+                        track_id: id,
+                        port_index,
+                    });
+                }
+            }
+            Message::ToggleSubTracksVisible(id) => {
+                if !self.collapsed_sub_track_parents.insert(id) {
+                    // Already present — the insert was a no-op, so toggle
+                    // to the expanded state by removing.
+                    self.collapsed_sub_track_parents.remove(&id);
                 }
             }
             Message::SetBpmText(s) => {
@@ -1248,6 +1272,7 @@ impl crate::Resonance {
                 instrument_type: t.instrument_type,
                 instrument_icon: t.instrument_icon,
                 sub_track: t.sub_track,
+                input_port_index: Some(t.input_port_index),
             }
         }).collect();
 
@@ -1444,6 +1469,12 @@ impl crate::Resonance {
                     device_name: Some(device.clone()),
                 });
             }
+            if let Some(port_index) = pt.input_port_index {
+                self.engine.send(AudioCommand::SetTrackInputPort {
+                    track_id: pt.id,
+                    port_index,
+                });
+            }
 
             // Build GUI track state
             let mut gui_plugins = Vec::new();
@@ -1507,6 +1538,7 @@ impl crate::Resonance {
                 instrument_type: pt.instrument_type,
                 instrument_icon: pt.instrument_icon,
                 sub_track: pt.sub_track,
+                input_port_index: pt.input_port_index.unwrap_or(0),
             });
             self.next_track_order += 1;
         }

@@ -46,6 +46,10 @@ pub struct ProjectTrack {
     pub monitor_enabled: bool,
     pub mono: bool,
     pub input_device_name: Option<String>,
+    /// 0-indexed starting input channel on the track's input device.
+    /// None on legacy projects (loads as 0, i.e. first channel pair).
+    #[serde(default)]
+    pub input_port_index: Option<u16>,
     pub plugins: Vec<ProjectPlugin>,
     #[serde(default = "default_track_type")]
     pub track_type: String,

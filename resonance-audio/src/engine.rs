@@ -11,7 +11,7 @@ pub(crate) const MAX_BUSSES: usize = 32;
 
 use indexmap::IndexMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -43,6 +43,10 @@ pub(crate) struct SharedState {
     pub master_peak_r_bits: AtomicU32,
     /// Flag: recording ring buffer overflowed (samples were dropped).
     pub recording_overflow: AtomicBool,
+    /// Channel count of the currently-active input stream, or 0 when
+    /// no stream is open. Used by the mix callback to de-interleave
+    /// per-track monitor audio from a multi-channel input device.
+    pub input_channels: AtomicU16,
 }
 
 /// The audio engine.
@@ -107,6 +111,7 @@ impl AudioEngine {
             master_peak_l_bits: AtomicU32::new(0),
             master_peak_r_bits: AtomicU32::new(0),
             recording_overflow: AtomicBool::new(false),
+            input_channels: AtomicU16::new(0),
         });
 
         let shared_audio = Arc::clone(&shared);
@@ -166,8 +171,15 @@ impl AudioEngine {
                     .map(|_| (vec![0.0f32; audio_buf_frames], vec![0.0f32; audio_buf_frames]))
                     .collect();
             let mut note_event_buf: Vec<PendingNoteEvent> = Vec::with_capacity(256);
-            let mut monitor_temp = vec![0.0f32; audio_buf_frames * 2];
-            let monitor_ring = ringbuf::HeapRb::<f32>::new(audio_quantum * 2 * 4);
+            // Monitor scratch + ring are sized for the widest multi-channel
+            // interleaved input we're likely to see (e.g. an 18-in audio
+            // interface). 32 channels × a few blocks of headroom covers
+            // everything reasonable without leaking meaningful RAM.
+            const MAX_INPUT_CHANNELS: usize = 32;
+            let mut monitor_temp =
+                vec![0.0f32; audio_buf_frames * MAX_INPUT_CHANNELS];
+            let monitor_ring =
+                ringbuf::HeapRb::<f32>::new(audio_quantum * MAX_INPUT_CHANNELS * 4);
             let (prod, mut monitor_cons) = monitor_ring.split();
             let result = device.build_output_stream(
                 config,
@@ -369,19 +381,33 @@ fn engine_thread(
                 AudioCommand::Record => {
                     shared.playing.store(true, Ordering::SeqCst);
 
-                    let armed_tracks: Vec<(TrackId, Option<String>)> = {
+                    // Snapshot port + mono per armed track so the drain
+                    // loop on the engine thread doesn't need to re-lock
+                    // the tracks map for every buffer pop.
+                    struct ArmedInfo {
+                        track_id: TrackId,
+                        device: Option<String>,
+                        port: u16,
+                        mono: bool,
+                    }
+                    let armed_tracks: Vec<ArmedInfo> = {
                         let tracks_guard = tracks.read();
                         tracks_guard
                             .values()
                             .filter(|t| t.record_armed())
-                            .map(|t| (t.id, t.input_device_name.clone()))
+                            .map(|t| ArmedInfo {
+                                track_id: t.id,
+                                device: t.input_device_name.clone(),
+                                port: t.input_port(),
+                                mono: t.mono(),
+                            })
                             .collect()
                     };
 
                     if !armed_tracks.is_empty() {
                         let source_name: Option<String> = armed_tracks
                             .iter()
-                            .find_map(|(_, name)| name.clone());
+                            .find_map(|info| info.device.clone());
 
                         let ring_size = RECORDING_RING_SIZE;
                         let ring = ringbuf::HeapRb::<f32>::new(ring_size);
@@ -389,10 +415,16 @@ fn engine_thread(
                         rec.ring_consumer = Some(cons);
 
                         rec.start_sample = shared.playhead.load(Ordering::SeqCst);
-                        for (track_id, _) in &armed_tracks {
+                        for info in &armed_tracks {
                             rec.buffers.insert(
-                                *track_id,
-                                Vec::with_capacity(sample_rate as usize * 2 * RECORDING_PREALLOC_SECONDS),
+                                info.track_id,
+                                crate::recording::TrackRecordingBuf {
+                                    data: Vec::with_capacity(
+                                        sample_rate as usize * 2 * RECORDING_PREALLOC_SECONDS,
+                                    ),
+                                    input_port: info.port,
+                                    mono: info.mono,
+                                },
                             );
                         }
                         shared.recording.store(true, Ordering::SeqCst);
@@ -409,6 +441,7 @@ fn engine_thread(
                                 rec.input_stream = Some(stream);
                                 rec.input_sample_rate = in_sr;
                                 rec.input_channels = in_ch;
+                                shared.input_channels.store(in_ch, Ordering::Release);
 
                                 let _ = event_tx.send(AudioEvent::RecordingStarted {
                                     start_sample: rec.start_sample,
@@ -416,6 +449,7 @@ fn engine_thread(
                             }
                             Err(e) => {
                                 shared.recording.store(false, Ordering::SeqCst);
+                                shared.input_channels.store(0, Ordering::Release);
                                 rec.buffers.clear();
                                 rec.ring_consumer = None;
                                 let _ = event_tx.send(AudioEvent::Error(format!(
@@ -721,6 +755,7 @@ fn engine_thread(
                                 rec.input_stream = Some(stream);
                                 rec.input_sample_rate = in_sr;
                                 rec.input_channels = in_ch;
+                                shared.input_channels.store(in_ch, Ordering::Release);
                             }
                             Err(e) => {
                                 let _ = event_tx.send(AudioEvent::Error(format!(
@@ -731,6 +766,7 @@ fn engine_thread(
                     } else if !any_monitoring && !shared.recording.load(Ordering::SeqCst) {
                         // Stop input stream if no monitoring and not recording
                         rec.input_stream = None;
+                        shared.input_channels.store(0, Ordering::Release);
                     }
                 }
                 AudioCommand::SetTrackInputDevice {
@@ -739,6 +775,14 @@ fn engine_thread(
                 } => {
                     if let Some(track) = tracks.write().get_mut(&track_id) {
                         track.input_device_name = device_name;
+                    }
+                }
+                AudioCommand::SetTrackInputPort {
+                    track_id,
+                    port_index,
+                } => {
+                    if let Some(track) = tracks.read().get(&track_id) {
+                        track.set_input_port(port_index);
                     }
                 }
                 AudioCommand::ListInputDevices => {

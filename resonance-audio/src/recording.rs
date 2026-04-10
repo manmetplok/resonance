@@ -8,9 +8,23 @@ use ringbuf::traits::Consumer;
 use crate::decode;
 use crate::types::*;
 
+/// Per-track recording scratch: the audio buffer plus a snapshot of the
+/// track's port/mono settings captured at record-start time so the drain
+/// path can extract the right channel(s) without looking up track state.
+pub(crate) struct TrackRecordingBuf {
+    pub data: Vec<f32>,
+    /// 0-indexed starting channel in the interleaved input stream. For
+    /// a stereo track this is the left channel; for a mono track it's
+    /// the single captured channel.
+    pub input_port: u16,
+    /// True = capture one channel and duplicate to L/R. False = capture
+    /// two consecutive channels as L/R.
+    pub mono: bool,
+}
+
 /// Groups all mutable recording state that lives on the engine thread.
 pub(crate) struct RecordingState {
-    pub buffers: HashMap<TrackId, Vec<f32>>,
+    pub buffers: HashMap<TrackId, TrackRecordingBuf>,
     pub start_sample: SamplePos,
     pub ring_consumer: Option<ringbuf::HeapCons<f32>>,
     pub input_stream: Option<cpal::Stream>,
@@ -37,12 +51,19 @@ impl RecordingState {
         }
     }
 
-    /// Drain all available samples from the ring buffer consumer into per-track recording buffers.
+    /// Drain all available samples from the ring buffer consumer into
+    /// per-track recording buffers. Each track picks its own channel(s)
+    /// out of the interleaved multi-channel stream via its snapshotted
+    /// `input_port` and `mono` flags — so two tracks on the same input
+    /// device can simultaneously capture different physical inputs.
     pub fn drain_ring_to_buffers(&mut self) {
         let Some(ref mut consumer) = self.ring_consumer else {
             return;
         };
         let channels = self.input_channels as usize;
+        if channels == 0 {
+            return;
+        }
         let mut temp = [0.0f32; 4096];
         loop {
             let count = consumer.pop_slice(&mut temp);
@@ -50,26 +71,25 @@ impl RecordingState {
                 break;
             }
             let chunk = &temp[..count];
+            let frames = chunk.len() / channels;
+            if frames == 0 {
+                continue;
+            }
 
-            if channels == 2 {
-                for buffer in self.buffers.values_mut() {
-                    buffer.extend_from_slice(chunk);
-                }
-            } else {
-                let frames = chunk.len() / channels;
-                for buffer in self.buffers.values_mut() {
-                    buffer.reserve(frames * 2);
-                    for f in 0..frames {
-                        let base = f * channels;
-                        let left = chunk[base];
-                        let right = if channels > 1 {
-                            chunk[base + 1]
-                        } else {
-                            left
-                        };
-                        buffer.push(left);
-                        buffer.push(right);
-                    }
+            for track_buf in self.buffers.values_mut() {
+                let port = (track_buf.input_port as usize).min(channels - 1);
+                let right_port = if track_buf.mono {
+                    port
+                } else {
+                    (port + 1).min(channels - 1)
+                };
+                track_buf.data.reserve(frames * 2);
+                for f in 0..frames {
+                    let base = f * channels;
+                    let l = chunk[base + port];
+                    let r = chunk[base + right_port];
+                    track_buf.data.push(l);
+                    track_buf.data.push(r);
                 }
             }
         }
@@ -85,8 +105,8 @@ impl RecordingState {
     ) {
         self.drain_ring_to_buffers();
 
-        for (track_id, buffer) in self.buffers.drain() {
-            if buffer.is_empty() {
+        for (track_id, track_buf) in self.buffers.drain() {
+            if track_buf.data.is_empty() {
                 continue;
             }
 
@@ -94,9 +114,9 @@ impl RecordingState {
             *next_clip_id += 1;
 
             let final_data = if self.input_sample_rate != output_sample_rate {
-                decode::linear_resample(&buffer, self.input_sample_rate, output_sample_rate)
+                decode::linear_resample(&track_buf.data, self.input_sample_rate, output_sample_rate)
             } else {
-                buffer
+                track_buf.data
             };
 
             // Trim to punch range if enabled

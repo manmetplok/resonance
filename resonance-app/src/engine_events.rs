@@ -68,6 +68,7 @@ impl crate::Resonance {
                     instrument_type: InstrumentType::Synth,
                     instrument_icon: InstrumentIcon::Music,
                     sub_track: None,
+                    input_port_index: 0,
                 });
             }
             AudioEvent::TrackRemoved { track_id } => {
@@ -263,6 +264,7 @@ impl crate::Resonance {
                                 parent_track_id: track_id,
                                 output_port_index: port_idx as u32,
                             }),
+                            input_port_index: 0,
                         });
                     }
                 }
@@ -365,6 +367,7 @@ impl crate::Resonance {
                     instrument_type: InstrumentType::Synth,
                     instrument_icon: InstrumentIcon::Music,
                     sub_track: None,
+                    input_port_index: 0,
                 });
             }
 

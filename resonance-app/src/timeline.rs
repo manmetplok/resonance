@@ -80,9 +80,27 @@ impl TimelineCanvas<'_> {
         content.max(viewport_width * 1.5).max(viewport_width)
     }
 
-    /// Total vertical content height (tracks + ruler).
+    /// Total vertical content height (tracks + ruler). Excludes
+    /// sub-tracks since the arrange view hides them entirely.
     pub(crate) fn content_height_px(&self) -> f32 {
-        30.0 + self.tracks.len() as f32 * theme::TRACK_HEIGHT
+        let visible = self
+            .tracks
+            .iter()
+            .filter(|t| t.sub_track.is_none())
+            .count();
+        30.0 + visible as f32 * theme::TRACK_HEIGHT
+    }
+
+    /// Tracks visible in the arrange view, sorted by `order`. Excludes
+    /// sub-tracks (rendered only in the mixer view).
+    fn visible_tracks_sorted(&self) -> Vec<&TrackState> {
+        let mut v: Vec<&TrackState> = self
+            .tracks
+            .iter()
+            .filter(|t| t.sub_track.is_none())
+            .collect();
+        v.sort_by_key(|t| t.order);
+        v
     }
 }
 
@@ -368,8 +386,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
 
                     // Clip hit-testing (track area)
                     if pos.y >= ruler_height {
-                        let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
-                        sorted_tracks.sort_by_key(|t| t.order);
+                        let sorted_tracks = self.visible_tracks_sorted();
 
                         // Check MIDI clips (reverse order so topmost wins)
                         for clip in self.midi_clips.iter().rev() {
@@ -738,9 +755,9 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             theme::RULER_BG,
         );
 
-        // Draw track backgrounds
-        let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
-        sorted_tracks.sort_by_key(|t| t.order);
+        // Draw track backgrounds. Only non-sub-tracks are rendered; the
+        // mixer view is where sub-track lanes live.
+        let sorted_tracks = self.visible_tracks_sorted();
         let track_area_height = sorted_tracks.len() as f32 * theme::TRACK_HEIGHT;
 
         for (i, track) in sorted_tracks.iter().enumerate() {

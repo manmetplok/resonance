@@ -163,6 +163,13 @@ pub enum AudioCommand {
         track_id: TrackId,
         device_name: Option<String>,
     },
+    /// Set the 0-indexed starting input channel for a track. Mono
+    /// tracks capture just this channel; stereo tracks capture this
+    /// channel as L and `port_index + 1` as R.
+    SetTrackInputPort {
+        track_id: TrackId,
+        port_index: u16,
+    },
     ListInputDevices,
     SetBpm {
         bpm: f32,
@@ -642,6 +649,11 @@ pub struct Track {
     /// without taking a write lock while the UI edits it.
     output_bus_bits: AtomicU64,
     pub input_device_name: Option<String>,
+    /// 0-indexed starting input channel on the track's input device. For
+    /// mono tracks this is the single channel captured and duplicated to
+    /// L/R; for stereo tracks it's the L channel and `port_index + 1` is
+    /// used as R. Defaults to 0 (first channel pair).
+    input_port_bits: AtomicU32,
     /// Ordered list of plugin instance IDs forming the insert chain.
     /// For instrument tracks, the first plugin is the instrument; the rest are effects.
     pub plugin_ids: Vec<PluginInstanceId>,
@@ -675,9 +687,20 @@ impl Track {
             peak_r_bits: AtomicU32::new(0),
             output_bus_bits: AtomicU64::new(TRACK_OUTPUT_MASTER),
             input_device_name: None,
+            input_port_bits: AtomicU32::new(0),
             plugin_ids: Vec::new(),
             sub_track_of: None,
         }
+    }
+
+    /// The track's 0-indexed starting input channel.
+    pub fn input_port(&self) -> u16 {
+        (self.input_port_bits.load(Ordering::Relaxed) & 0xFFFF) as u16
+    }
+
+    pub fn set_input_port(&self, port: u16) {
+        self.input_port_bits
+            .store(port as u32, Ordering::Relaxed);
     }
 
     /// Construct a sub-track feeding from `parent_track_id`'s output port
@@ -870,6 +893,11 @@ pub struct InputDeviceInfo {
     pub name: String,
     /// Human-readable description (e.g. "USB Microphone Analog Stereo").
     pub description: String,
+    /// Number of input channels exposed by this device. 0 means the
+    /// channel count couldn't be determined at enumeration time; the UI
+    /// should fall back to a sensible default (e.g. the count reported
+    /// once the stream opens).
+    pub channels: u16,
 }
 
 impl std::fmt::Display for InputDeviceInfo {

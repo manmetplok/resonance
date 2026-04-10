@@ -716,7 +716,14 @@ impl crate::Resonance {
                 }),
         );
 
-        let sorted_tracks = self.sorted_tracks();
+        // Arrange view intentionally hides sub-tracks — they only make
+        // sense in the mixer where they get per-bus routing. In arrange
+        // they'd just take up vertical space with empty lanes.
+        let sorted_tracks: Vec<&TrackState> = self
+            .sorted_tracks()
+            .into_iter()
+            .filter(|t| t.sub_track.is_none())
+            .collect();
 
         // Calculate which tracks are visible given scroll_offset_y
         let visible_start = self.scroll_offset_y / theme::TRACK_HEIGHT;

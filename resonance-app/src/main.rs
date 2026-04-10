@@ -38,6 +38,9 @@ pub(crate) struct Resonance {
     /// (engine tracks count up from 1). Sub-tracks are purely app-side
     /// for now — the audio engine doesn't know about them until Phase 5.
     pub(crate) next_sub_track_id: u64,
+    /// Parent track ids whose sub-tracks are currently collapsed in the
+    /// mixer view. Purely UI state — the engine doesn't care.
+    pub(crate) collapsed_sub_track_parents: std::collections::HashSet<TrackId>,
     pub(crate) input_devices: Vec<InputDeviceInfo>,
     pub(crate) default_input_device_name: Option<String>,
     pub(crate) bpm: f32,
@@ -154,6 +157,7 @@ impl Resonance {
             scroll_offset_y: 0.0,
             next_track_order: 0,
             next_sub_track_id: 1_000_000_000,
+            collapsed_sub_track_parents: std::collections::HashSet::new(),
             input_devices: Vec::new(),
             default_input_device_name: None,
             bpm: 120.0,

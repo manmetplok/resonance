@@ -156,15 +156,46 @@ pub(crate) fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>
 
     if let (Some(short), Some(full)) = (short_text, full_text) {
         let mut descriptions: HashMap<String, String> = HashMap::new();
-        let mut current_name = None;
+        let mut channel_counts: HashMap<String, u16> = HashMap::new();
+        let mut current_name: Option<String> = None;
+        let mut current_channels: Option<u16> = None;
+        let mut current_description: Option<String> = None;
+        // Walk the pactl full output as a simple state machine: we
+        // accumulate Name / Description / Sample Specification lines
+        // until the next Source # boundary, then commit.
         for line in full.lines() {
             let trimmed = line.trim();
-            if let Some(name) = trimmed.strip_prefix("Name: ") {
+            if trimmed.starts_with("Source #") {
+                if let Some(name) = current_name.take() {
+                    if let Some(desc) = current_description.take() {
+                        descriptions.insert(name.clone(), desc);
+                    }
+                    if let Some(ch) = current_channels.take() {
+                        channel_counts.insert(name, ch);
+                    }
+                }
+            } else if let Some(name) = trimmed.strip_prefix("Name: ") {
                 current_name = Some(name.to_string());
             } else if let Some(desc) = trimmed.strip_prefix("Description: ") {
-                if let Some(name) = current_name.take() {
-                    descriptions.insert(name, desc.to_string());
+                current_description = Some(desc.to_string());
+            } else if let Some(spec) = trimmed.strip_prefix("Sample Specification: ") {
+                // Format: "float32le 18ch 48000Hz" — take the token
+                // ending in "ch" and parse its numeric prefix.
+                if let Some(ch) = spec
+                    .split_whitespace()
+                    .find_map(|tok| tok.strip_suffix("ch").and_then(|n| n.parse::<u16>().ok()))
+                {
+                    current_channels = Some(ch);
                 }
+            }
+        }
+        // Flush the last section.
+        if let Some(name) = current_name {
+            if let Some(desc) = current_description {
+                descriptions.insert(name.clone(), desc);
+            }
+            if let Some(ch) = current_channels {
+                channel_counts.insert(name, ch);
             }
         }
 
@@ -176,7 +207,12 @@ pub(crate) fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>
                     .get(&name)
                     .cloned()
                     .unwrap_or_else(|| name.clone());
-                devices.push(InputDeviceInfo { name, description });
+                let channels = channel_counts.get(&name).copied().unwrap_or(0);
+                devices.push(InputDeviceInfo {
+                    name,
+                    description,
+                    channels,
+                });
             }
         }
     }
@@ -221,15 +257,13 @@ pub(crate) fn build_input_stream(
     stream_config.sample_rate = cpal::SampleRate(sample_rate);
     stream_config.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
 
-    // Pre-allocated buffer for mono->stereo conversion in monitor path
-    let mut mon_stereo_buf = vec![0.0f32; buf_frames * 2];
-    let input_channels = channels;
+    let _ = buf_frames; // unused once the monitor path stopped pre-converting
 
     let stream = device
         .build_input_stream(
             &stream_config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                // Push to recording ring buffer (raw -- engine thread handles channel conversion)
+                // Push to recording ring buffer (raw interleaved multi-channel).
                 if shared.recording.load(Ordering::Relaxed) {
                     if let Some(ref mut prod) = rec_producer {
                         let written = prod.push_slice(data);
@@ -238,26 +272,14 @@ pub(crate) fn build_input_stream(
                         }
                     }
                 }
-                // Push to monitor ring buffer (always stereo interleaved)
+                // Push raw interleaved multi-channel data to the monitor
+                // ring buffer. The mix callback de-interleaves per track
+                // based on each track's input_port_index, so two tracks
+                // can monitor different physical inputs from the same
+                // soundcard simultaneously.
                 if shared.monitoring.load(Ordering::Relaxed) {
                     if let Some(mut prod) = mon_producer.try_lock() {
-                        if input_channels == 2 {
-                            let _ = prod.push_slice(data);
-                        } else {
-                            // Convert to stereo interleaved
-                            let ch = input_channels as usize;
-                            let frames = data.len() / ch;
-                            let stereo_len = frames * 2;
-                            let buf = &mut mon_stereo_buf[..stereo_len];
-                            for f in 0..frames {
-                                let src = f * ch;
-                                let l = data[src];
-                                let r = if ch > 1 { data[src + 1] } else { l };
-                                buf[f * 2] = l;
-                                buf[f * 2 + 1] = r;
-                            }
-                            let _ = prod.push_slice(buf);
-                        }
+                        let _ = prod.push_slice(data);
                     }
                 }
             },

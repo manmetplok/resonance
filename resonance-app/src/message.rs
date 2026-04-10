@@ -41,6 +41,9 @@ pub(crate) enum Message {
     /// Change an instrument track's display icon.
     SetInstrumentIcon(TrackId, InstrumentIcon),
     SetTrackInputDevice(TrackId, Option<String>),
+    SetTrackInputPort(TrackId, u16),
+    /// Toggle whether a parent track's sub-tracks are shown in the mixer.
+    ToggleSubTracksVisible(TrackId),
     SetBpmText(String),
     CommitBpm,
     ToggleMetronome,
