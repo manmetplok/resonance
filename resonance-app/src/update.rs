@@ -338,21 +338,17 @@ impl crate::Resonance {
                 }
             }
             Message::PluginBrowseFile(instance_id) => {
-                // Find the plugin's clap_plugin_id to determine file filter
-                let filter = self.tracks.iter()
-                    .flat_map(|t| t.plugins.iter())
-                    .find(|p| p.instance_id == instance_id)
-                    .map(|p| p.clap_plugin_id.clone());
-
+                // Legacy host-side browse path. Amp and IR used to trigger
+                // this from their inline iced UIs; both now use floating
+                // egui editors that open native file dialogs themselves, so
+                // no bundled plugin reaches this handler today. Kept as a
+                // hook for any future plugin that wants host-side browsing.
                 let task = Task::perform(
                     async move {
-                        let mut dialog = rfd::AsyncFileDialog::new();
-                        dialog = match filter.as_deref() {
-                            Some("com.resonance.amp") => dialog.add_filter("NAM Model", &["nam"]),
-                            Some("com.resonance.ir") => dialog.add_filter("WAV Audio", &["wav"]),
-                            _ => dialog,
-                        };
-                        dialog.pick_file().await.map(|f| f.path().to_string_lossy().into_owned())
+                        rfd::AsyncFileDialog::new()
+                            .pick_file()
+                            .await
+                            .map(|f| f.path().to_string_lossy().into_owned())
                     },
                     move |path| Message::PluginFileSelected(instance_id, path),
                 );
@@ -364,8 +360,10 @@ impl crate::Resonance {
                         .flat_map(|t| t.plugins.iter())
                         .find(|p| p.instance_id == instance_id)
                         .map(|p| match p.clap_plugin_id.as_str() {
-                            "com.resonance.amp" => "nam",
-                            "com.resonance.ir" => "wav",
+                            // No bundled plugins reach this code path anymore
+                            // (see PluginBrowseFile above); left empty for
+                            // future plugins that might opt into host-side
+                            // file browsing.
                             _ => "",
                         })
                         .unwrap_or("")
@@ -710,27 +708,14 @@ impl crate::Resonance {
 
                     self.engine.send(AudioCommand::SavePluginState { instance_id });
 
+                    // Bundled plugins (Amp, IR) no longer reach this handler
+                    // now that they browse from their own floating editors.
+                    // The file-select param sync + persist path below still
+                    // runs for any future plugin that opts into the host-side
+                    // browse flow via `PluginCustomState::Generic` plus
+                    // PluginUiEvent::BrowseFile.
                     for track in &mut self.tracks {
                         if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
-                            match &mut p.custom {
-                                PluginCustomState::Amp(ref mut state) => {
-                                    state.model_name = std::path::Path::new(&path)
-                                        .file_stem()
-                                        .map(|s| s.to_string_lossy().into_owned())
-                                        .unwrap_or_default();
-                                    state.file_list = files.clone();
-                                    state.current_index = idx;
-                                }
-                                PluginCustomState::Ir(ref mut state) => {
-                                    state.ir_name = std::path::Path::new(&path)
-                                        .file_stem()
-                                        .map(|s| s.to_string_lossy().into_owned())
-                                        .unwrap_or_default();
-                                    state.file_list = files.clone();
-                                    state.current_index = idx;
-                                }
-                                _ => {}
-                            }
                             if let Some(param) = p.params.iter().find(|pp| {
                                 pp.name == "Model Select" || pp.name == "IR Select"
                             }) {
@@ -748,8 +733,6 @@ impl crate::Resonance {
                         .flat_map(|t| t.plugins.iter())
                         .find(|p| p.instance_id == instance_id)
                         .map(|p| match p.clap_plugin_id.as_str() {
-                            "com.resonance.amp" => "model_path",
-                            "com.resonance.ir" => "ir_path",
                             _ => "",
                         })
                         .unwrap_or("");
@@ -1163,62 +1146,11 @@ impl crate::Resonance {
         Task::none()
     }
 
-    /// Step through the plugin file list by `direction` (-1 for previous, 1 for next).
-    fn step_plugin_file(&mut self, instance_id: PluginInstanceId, direction: i32) {
-        for track in &mut self.tracks {
-            if let Some(p) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
-                let new_idx = match &p.custom {
-                    PluginCustomState::Amp(state) => {
-                        if state.file_list.is_empty() { return; }
-                        Self::wrap_index(state.current_index, state.file_list.len(), direction)
-                    }
-                    PluginCustomState::Ir(state) => {
-                        if state.file_list.is_empty() { return; }
-                        Self::wrap_index(state.current_index, state.file_list.len(), direction)
-                    }
-                    _ => return,
-                };
-                // Update local state
-                match &mut p.custom {
-                    PluginCustomState::Amp(ref mut state) => {
-                        state.current_index = new_idx;
-                        state.model_name = std::path::Path::new(&state.file_list[new_idx])
-                            .file_stem()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-                    }
-                    PluginCustomState::Ir(ref mut state) => {
-                        state.current_index = new_idx;
-                        state.ir_name = std::path::Path::new(&state.file_list[new_idx])
-                            .file_stem()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-                    }
-                    _ => {}
-                }
-                // Set file_select param
-                if let Some(param) = p.params.iter().find(|pp| {
-                    pp.name == "Model Select" || pp.name == "IR Select"
-                }) {
-                    self.engine.send(AudioCommand::SetPluginParam {
-                        instance_id,
-                        param_id: param.id,
-                        value: new_idx as f64,
-                    });
-                }
-                break;
-            }
-        }
-    }
-
-    /// Compute the next index wrapping around the list boundaries.
-    fn wrap_index(current: usize, len: usize, direction: i32) -> usize {
-        if direction < 0 {
-            if current == 0 { len - 1 } else { current - 1 }
-        } else {
-            if current >= len - 1 { 0 } else { current + 1 }
-        }
-    }
+    /// Step through the plugin file list by `direction` (-1 for previous,
+    /// 1 for next). Legacy hook for inline-UI prev/next buttons — both
+    /// Amp and IR now navigate files from their own floating editors, so
+    /// this is a no-op until a new bundled plugin opts back in.
+    fn step_plugin_file(&mut self, _instance_id: PluginInstanceId, _direction: i32) {}
 
     fn start_save(&mut self) -> Task<Message> {
         let path = match &self.project_path {
@@ -1493,8 +1425,6 @@ impl crate::Resonance {
                 }
 
                 let custom = match pp.clap_plugin_id.as_str() {
-                    "com.resonance.amp" => PluginCustomState::Amp(Default::default()),
-                    "com.resonance.ir" => PluginCustomState::Ir(Default::default()),
                     _ => PluginCustomState::Generic,
                 };
                 gui_plugins.push(PluginSlotState {
@@ -1578,8 +1508,6 @@ impl crate::Resonance {
                     });
                 }
                 let custom = match pp.clap_plugin_id.as_str() {
-                    "com.resonance.amp" => PluginCustomState::Amp(Default::default()),
-                    "com.resonance.ir" => PluginCustomState::Ir(Default::default()),
                     _ => PluginCustomState::Generic,
                 };
                 gui_plugins.push(PluginSlotState {

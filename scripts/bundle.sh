@@ -4,7 +4,7 @@ set -e
 
 mkdir -p target/bundled
 
-for plugin in resonance-drums resonance-amp resonance-ir resonance-reverb resonance-wavetable; do
+for plugin in resonance-drums resonance-amp resonance-eq resonance-ir resonance-reverb resonance-wavetable; do
     cargo build --release -p "$plugin"
     so_name="lib${plugin//-/_}.so"
     cp "target/release/$so_name" "target/bundled/${plugin}.clap"

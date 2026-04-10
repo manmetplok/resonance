@@ -656,6 +656,25 @@ pub(crate) fn mix_audio(
                 }
                 let (sub_gain_l, sub_gain_r) = track_stereo_gains(sub_track);
 
+                // Run the sub-track's own effect chain in place on its
+                // port buffer, before peak metering and bus/master routing.
+                // Sub-tracks never host an instrument, so every entry in
+                // `plugin_ids` is treated as an audio effect.
+                {
+                    let (pl, pr) = &mut port_scratch[port_idx];
+                    for &plugin_id in &sub_track.plugin_ids {
+                        if let Some(mutex) = plugins_guard.get(&plugin_id) {
+                            if let Some(mut inst) = mutex.try_lock() {
+                                inst.0.process(
+                                    &mut pl[..frames],
+                                    &mut pr[..frames],
+                                    frames,
+                                );
+                            }
+                        }
+                    }
+                }
+
                 // Peak levels for sub-track VU meter.
                 let (pl, pr) = &port_scratch[port_idx];
                 let mut sub_peak_l = 0.0f32;

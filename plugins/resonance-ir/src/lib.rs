@@ -10,8 +10,8 @@ pub mod convolver;
 pub mod ir_loader;
 pub mod params;
 
-#[cfg(feature = "ui")]
-pub mod ui;
+#[cfg(feature = "editor")]
+mod editor;
 
 use convolver::StereoConvolver;
 use params::IrParams;
@@ -25,7 +25,11 @@ fn scan_directory(dir: &Path) -> Vec<String> {
 const SWAP_FADE_SAMPLES: u32 = 64;
 
 pub struct ResonanceIr {
-    params: IrParams,
+    /// Parameters — shared with the editor thread via `Arc` so the UI can
+    /// read and write from a separate thread. The `FloatParam` / `IntParam`
+    /// fields use atomic storage internally, so `&IrParams` is safe to use
+    /// concurrently from audio + UI.
+    params: Arc<IrParams>,
     active_convolver: Option<StereoConvolver>,
     convolver_mailbox: Arc<Mutex<Option<StereoConvolver>>>,
     ir_name: Arc<Mutex<String>>,
@@ -47,6 +51,11 @@ pub struct ResonanceIr {
     fade_out_remaining: u32,
     /// Samples remaining in fade-in after convolver swap.
     fade_in_remaining: u32,
+    /// Plugin-local smoother for the dry/wet mix. Lives here (not on
+    /// `IrParams`) so that `params` can be `Arc`-shared with the editor
+    /// thread while the smoothers stay audio-thread mutable.
+    dry_wet_smoother: Smoother,
+    output_gain_smoother: Smoother,
 }
 
 impl ResonanceIr {
@@ -186,7 +195,7 @@ impl ResonancePlugin for ResonanceIr {
 
     fn new() -> Self {
         Self {
-            params: IrParams::default(),
+            params: Arc::new(IrParams::default()),
             active_convolver: None,
             convolver_mailbox: Arc::new(Mutex::new(None)),
             ir_name: Arc::new(Mutex::new(String::new())),
@@ -201,6 +210,8 @@ impl ResonancePlugin for ResonanceIr {
             pending_convolver: None,
             fade_out_remaining: 0,
             fade_in_remaining: 0,
+            dry_wet_smoother: Smoother::new(SmoothingStyle::Linear(50.0)),
+            output_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
         }
     }
 
@@ -220,13 +231,12 @@ impl ResonancePlugin for ResonanceIr {
         self.bypass_delay_l = resonance_dsp::DelayLine::new(convolver::BLOCK_SIZE);
         self.bypass_delay_r = resonance_dsp::DelayLine::new(convolver::BLOCK_SIZE);
 
-        // Set smoother sample rates
-        self.params.dry_wet.smoother.set_sample_rate(sample_rate);
-        self.params.output_gain.smoother.set_sample_rate(sample_rate);
-
-        // Initialize smoother targets to current values
-        self.params.dry_wet.smoother.reset(self.params.dry_wet.value());
-        self.params.output_gain.smoother.reset(self.params.output_gain.value());
+        // Configure plugin-local smoothers and seed them with the
+        // current parameter values.
+        self.dry_wet_smoother.set_sample_rate(sample_rate);
+        self.output_gain_smoother.set_sample_rate(sample_rate);
+        self.dry_wet_smoother.reset(self.params.dry_wet.value());
+        self.output_gain_smoother.reset(self.params.output_gain.value());
 
         let path = self.params.ir_path.lock().clone();
         if !path.is_empty() {
@@ -294,12 +304,12 @@ impl ResonancePlugin for ResonanceIr {
         }
 
         // Set smoother targets from current param values
-        self.params.dry_wet.smoother.set_target(self.params.dry_wet.value());
-        self.params.output_gain.smoother.set_target(self.params.output_gain.value());
+        self.dry_wet_smoother.set_target(self.params.dry_wet.value());
+        self.output_gain_smoother.set_target(self.params.output_gain.value());
 
         for i in 0..frames {
-            let dry_wet = self.params.dry_wet.smoother.next();
-            let output_gain = self.params.output_gain.smoother.next();
+            let dry_wet = self.dry_wet_smoother.next();
+            let output_gain = self.output_gain_smoother.next();
 
             // Crossfade envelope: fade out old convolver, swap, fade in new convolver
             let fade_gain = if self.fade_out_remaining > 0 {
@@ -349,6 +359,16 @@ impl ResonancePlugin for ResonanceIr {
     fn latency_samples(&self) -> u32 {
         convolver::BLOCK_SIZE as u32
     }
+
+    #[cfg(feature = "editor")]
+    fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
+        Some(Arc::new(editor::IrEditorFactory::new(
+            self.params.clone(),
+            self.ir_name.clone(),
+            self.ir_info.clone(),
+            self.load_request.clone(),
+        )))
+    }
 }
 
 /// Persists the IR file path alongside the plugin's params. Holds only
@@ -381,5 +401,4 @@ impl Drop for ResonanceIr {
     }
 }
 
-#[cfg(not(feature = "ui"))]
 resonance_plugin::export_clap!(ResonanceIr);

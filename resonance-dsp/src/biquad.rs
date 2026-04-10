@@ -1,12 +1,12 @@
-/// RBJ cookbook biquad filter.
-///
-/// Direct Form I transposed topology. One `Biquad` filters a single audio
-/// channel; use one per channel for stereo. Coefficients are updated via
-/// the `set_*` methods (cheap per-block); `process` is per-sample.
-///
-/// Reference: "Cookbook formulae for audio EQ biquad filter coefficients"
-/// by Robert Bristow-Johnson. All formulas are bilinear-transformed
-/// analog prototypes normalized by a0.
+//! RBJ cookbook biquad filter.
+//!
+//! Direct Form I transposed topology. One `Biquad` filters a single audio
+//! channel; use one per channel for stereo. Coefficients are updated via
+//! the `set_*` methods (cheap per-block); `process` is per-sample.
+//!
+//! Reference: "Cookbook formulae for audio EQ biquad filter coefficients"
+//! by Robert Bristow-Johnson. All formulas are bilinear-transformed
+//! analog prototypes normalized by a0.
 
 use std::f32::consts::PI;
 

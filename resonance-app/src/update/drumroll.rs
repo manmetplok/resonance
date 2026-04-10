@@ -2,6 +2,7 @@ use resonance_audio::types::{
     AudioCommand, ClipId, MidiNote, TICKS_PER_QUARTER_NOTE,
 };
 
+use crate::compose::drumroll::humanize::{self, HumanizeParams, HumanizeScope};
 use crate::compose::drumroll::{euclidean, DrumrollMessage};
 use crate::state::MidiClipState;
 
@@ -112,7 +113,98 @@ pub fn handle(r: &mut crate::Resonance, msg: DrumrollMessage) {
                 .collect();
             send_pad_edits(r, clip_id, removals, Vec::new());
         }
+
+        DrumrollMessage::SetHumanizeVelocity(v) => {
+            r.compose.drumroll.humanize_velocity = v.clamp(0.0, 1.0);
+        }
+        DrumrollMessage::SetHumanizeTiming(v) => {
+            r.compose.drumroll.humanize_timing = v.clamp(0.0, 1.0);
+        }
+        DrumrollMessage::SetHumanizeSwing(v) => {
+            r.compose.drumroll.humanize_swing = v.clamp(0.0, 1.0);
+        }
+        DrumrollMessage::SetHumanizeAccent(pattern) => {
+            r.compose.drumroll.humanize_accent = pattern;
+        }
+        DrumrollMessage::SetHumanizeAccentAmount(v) => {
+            r.compose.drumroll.humanize_accent_amount = v.clamp(0.0, 1.0);
+        }
+        DrumrollMessage::SetHumanizeScope(scope) => {
+            r.compose.drumroll.humanize_scope = scope;
+        }
+        DrumrollMessage::ApplyHumanize { clip_id } => {
+            let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) else {
+                return;
+            };
+            let steps_per_bar = r.compose.drumroll.steps_per_bar;
+            let time_sig_num = r.time_sig_num;
+            let step_ticks = step_ticks_for(steps_per_bar, time_sig_num);
+            if step_ticks == 0 {
+                return;
+            }
+            let selected_pad_note = r
+                .compose
+                .drumroll
+                .selected_pad
+                .and_then(|i| r.compose.drumroll.pad_map.get(i))
+                .map(|p| p.note);
+            if r.compose.drumroll.humanize_scope == HumanizeScope::SelectedPad
+                && selected_pad_note.is_none()
+            {
+                return;
+            }
+            let params = HumanizeParams {
+                velocity_amount: r.compose.drumroll.humanize_velocity,
+                timing_amount: r.compose.drumroll.humanize_timing,
+                swing: r.compose.drumroll.humanize_swing,
+                accent_pattern: r.compose.drumroll.humanize_accent,
+                accent_amount: r.compose.drumroll.humanize_accent_amount,
+                selected_pad_note,
+                scope: r.compose.drumroll.humanize_scope,
+                step_ticks,
+                steps_per_beat: steps_per_bar / time_sig_num.max(1) as u32,
+                steps_per_bar,
+                clip_length_ticks: clip.duration_ticks,
+                seed: fresh_seed(),
+            };
+            let (removals, adds) = humanize_edits_for(clip, &params);
+            send_pad_edits(r, clip_id, removals, adds);
+        }
     }
+}
+
+/// Pure helper: returns `(removal_indices_desc, replacement_notes)` for
+/// replacing every in-scope note in `clip` with its humanized version.
+pub fn humanize_edits_for(
+    clip: &MidiClipState,
+    params: &HumanizeParams,
+) -> (Vec<usize>, Vec<MidiNote>) {
+    let humanized = humanize::humanize(&clip.notes, params);
+    // Determine which original notes were in scope: those are the ones
+    // that have to be removed and re-added. Out-of-scope notes were
+    // copied verbatim and can stay.
+    let mut removals = Vec::new();
+    let mut adds = Vec::new();
+    for (i, (orig, new)) in clip.notes.iter().zip(humanized.iter()).enumerate() {
+        let in_scope = match params.scope {
+            HumanizeScope::AllPads => true,
+            HumanizeScope::SelectedPad => params.selected_pad_note == Some(orig.note),
+        };
+        if in_scope {
+            removals.push(i);
+            adds.push(new.clone());
+        }
+    }
+    removals.sort_unstable_by(|a, b| b.cmp(a));
+    (removals, adds)
+}
+
+fn fresh_seed() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E3779B97F4A7C15)
 }
 
 /// Compute the (removals, additions) diff for replacing every hit on
@@ -211,5 +303,34 @@ mod tests {
     #[test]
     fn step_ticks_zero_is_zero() {
         assert_eq!(step_ticks_for(0, 4), 0);
+    }
+
+    #[test]
+    fn humanize_edits_selected_pad_only_touches_matching_notes() {
+        let notes = vec![
+            MidiNote { note: 36, velocity: 0.9, start_tick: 0, duration_ticks: 120 },
+            MidiNote { note: 38, velocity: 0.9, start_tick: 120, duration_ticks: 120 },
+            MidiNote { note: 36, velocity: 0.9, start_tick: 240, duration_ticks: 120 },
+        ];
+        let clip = clip_with_notes(notes);
+        let params = HumanizeParams {
+            velocity_amount: 0.5,
+            timing_amount: 0.0,
+            swing: 0.0,
+            accent_pattern: humanize::AccentPattern::None,
+            accent_amount: 0.0,
+            selected_pad_note: Some(36),
+            scope: HumanizeScope::SelectedPad,
+            step_ticks: 120,
+            steps_per_beat: 4,
+            steps_per_bar: 16,
+            clip_length_ticks: 120 * 16,
+            seed: 1,
+        };
+        let (removals, adds) = humanize_edits_for(&clip, &params);
+        // Only indices 0 and 2 (the note-36 hits) should be rewritten.
+        assert_eq!(removals, vec![2, 0]);
+        assert_eq!(adds.len(), 2);
+        assert!(adds.iter().all(|n| n.note == 36));
     }
 }

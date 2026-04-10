@@ -10,8 +10,8 @@ use resonance_plugin::*;
 pub mod nam;
 pub mod params;
 
-#[cfg(feature = "ui")]
-pub mod ui;
+#[cfg(feature = "editor")]
+mod editor;
 
 use nam::NamInference;
 use params::AmpParams;
@@ -25,7 +25,11 @@ fn scan_directory(dir: &Path) -> Vec<String> {
 const SWAP_FADE_SAMPLES: u32 = 64;
 
 pub struct ResonanceAmp {
-    params: AmpParams,
+    /// Parameters — shared with the editor thread via `Arc` so the UI can
+    /// read and write from a separate thread. The `FloatParam` / `IntParam`
+    /// fields use atomic storage internally, so `&AmpParams` is safe to use
+    /// concurrently from audio + UI.
+    params: Arc<AmpParams>,
     active_model: Option<Box<dyn NamInference>>,
     model_mailbox: Arc<Mutex<Option<Box<dyn NamInference>>>>,
     model_name: Arc<Mutex<String>>,
@@ -43,6 +47,11 @@ pub struct ResonanceAmp {
     fade_out_remaining: u32,
     /// Samples remaining in fade-in after model swap.
     fade_in_remaining: u32,
+    /// Plugin-local smoothers for the two gain params. Live here (not on
+    /// `AmpParams`) so that `params` can be `Arc`-shared with the editor
+    /// thread while the smoothers stay audio-thread mutable.
+    input_gain_smoother: Smoother,
+    output_gain_smoother: Smoother,
 }
 
 impl ResonanceAmp {
@@ -158,7 +167,7 @@ impl ResonancePlugin for ResonanceAmp {
 
     fn new() -> Self {
         Self {
-            params: AmpParams::default(),
+            params: Arc::new(AmpParams::default()),
             active_model: None,
             model_mailbox: Arc::new(Mutex::new(None)),
             model_name: Arc::new(Mutex::new(String::new())),
@@ -169,6 +178,8 @@ impl ResonancePlugin for ResonanceAmp {
             pending_model: None,
             fade_out_remaining: 0,
             fade_in_remaining: 0,
+            input_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
+            output_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
         }
     }
 
@@ -184,19 +195,12 @@ impl ResonancePlugin for ResonanceAmp {
     }
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
-        // Set smoother sample rates
-        self.params.input_gain.smoother.set_sample_rate(sample_rate);
-        self.params.output_gain.smoother.set_sample_rate(sample_rate);
-
-        // Initialize smoother targets to current values
-        self.params
-            .input_gain
-            .smoother
-            .reset(self.params.input_gain.value());
-        self.params
-            .output_gain
-            .smoother
-            .reset(self.params.output_gain.value());
+        // Configure plugin-local smoothers and seed them with the
+        // current parameter values.
+        self.input_gain_smoother.set_sample_rate(sample_rate);
+        self.output_gain_smoother.set_sample_rate(sample_rate);
+        self.input_gain_smoother.reset(self.params.input_gain.value());
+        self.output_gain_smoother.reset(self.params.output_gain.value());
 
         let path = self.params.model_path.lock().clone();
         if !path.is_empty() {
@@ -262,18 +266,14 @@ impl ResonancePlugin for ResonanceAmp {
         }
 
         // Set smoother targets from current param values
-        self.params
-            .input_gain
-            .smoother
+        self.input_gain_smoother
             .set_target(self.params.input_gain.value());
-        self.params
-            .output_gain
-            .smoother
+        self.output_gain_smoother
             .set_target(self.params.output_gain.value());
 
         for i in 0..frames {
-            let input_gain = self.params.input_gain.smoother.next();
-            let output_gain = self.params.output_gain.smoother.next();
+            let input_gain = self.input_gain_smoother.next();
+            let output_gain = self.output_gain_smoother.next();
 
             // Crossfade envelope: fade out old model, swap, fade in new model
             let fade_gain = if self.fade_out_remaining > 0 {
@@ -312,6 +312,15 @@ impl ResonancePlugin for ResonanceAmp {
             model_path: self.params.model_path.clone(),
         }))
     }
+
+    #[cfg(feature = "editor")]
+    fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
+        Some(Arc::new(editor::AmpEditorFactory::new(
+            self.params.clone(),
+            self.model_name.clone(),
+            self.load_request.clone(),
+        )))
+    }
 }
 
 /// Persists the NAM model path alongside the plugin's params. Holds only
@@ -344,5 +353,4 @@ impl Drop for ResonanceAmp {
     }
 }
 
-#[cfg(not(feature = "ui"))]
 resonance_plugin::export_clap!(ResonanceAmp);

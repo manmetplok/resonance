@@ -1,0 +1,13 @@
+{
+  "params": {
+    "band0_enabled": 1, "band0_freq": 60.0,  "band0_gain": 0.0,  "band0_q": 0.707, "band0_kind": 3, "band0_slope": 1,
+    "band1_enabled": 1, "band1_freq": 200.0, "band1_gain": 3.0,  "band1_q": 1.0,   "band1_kind": 0, "band1_slope": 1,
+    "band2_enabled": 1, "band2_freq": 800.0, "band2_gain": -2.0, "band2_q": 1.0,   "band2_kind": 0, "band2_slope": 1,
+    "band3_enabled": 1, "band3_freq": 8000.0,"band3_gain": 1.5,  "band3_q": 0.707, "band3_kind": 2, "band3_slope": 1,
+    "band4_enabled": 0, "band4_freq": 1500.0,"band4_gain": 0.0,  "band4_q": 0.707, "band4_kind": 0, "band4_slope": 1,
+    "band5_enabled": 0, "band5_freq": 4000.0,"band5_gain": 0.0,  "band5_q": 0.707, "band5_kind": 0, "band5_slope": 1,
+    "band6_enabled": 0, "band6_freq": 9000.0,"band6_gain": 0.0,  "band6_q": 0.707, "band6_kind": 2, "band6_slope": 1,
+    "band7_enabled": 0, "band7_freq": 18000.0,"band7_gain": 0.0, "band7_q": 0.707, "band7_kind": 4, "band7_slope": 1,
+    "output_gain": 0.0
+  }
+}

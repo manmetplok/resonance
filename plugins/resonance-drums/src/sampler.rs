@@ -225,9 +225,16 @@ impl DrumSampler {
         }
     }
 
-    /// Trigger note-off for a given note. For drums, this triggers release
-    /// (fade-out) on matching voices.
-    pub fn note_off(&mut self, note: u8) {
+    /// Drum samples are one-shots: musical NOTE_OFF is intentionally
+    /// ignored so the sample plays through to its natural end regardless
+    /// of how short the MIDI note is. Host-level CLAP choke events take
+    /// the `choke_note` path instead.
+    pub fn note_off(&mut self, _note: u8) {}
+
+    /// Host-level "silence this note now" — used by the CLAP host when
+    /// playback stops or a track is muted mid-hit. Fades the matching
+    /// voices out rather than clicking them off.
+    pub fn choke_note(&mut self, note: u8) {
         for voice in &mut self.voices {
             if voice.active && voice.note == note && voice.state == VoiceState::Playing {
                 voice.trigger_release();

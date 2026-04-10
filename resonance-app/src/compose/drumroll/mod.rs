@@ -1,8 +1,10 @@
 pub mod drum_map;
 pub mod euclidean;
+pub mod humanize;
 pub mod messages;
 
 pub use drum_map::DrumPadMap;
+pub use humanize::{AccentPattern, HumanizeScope};
 pub use messages::DrumrollMessage;
 
 /// Transient UI state for the Compose drumroll view. Lives on
@@ -23,6 +25,14 @@ pub struct DrumrollViewState {
     /// Pad map used by the grid. Currently always the built-in default;
     /// designed so a future file-loader replaces this at construction time.
     pub pad_map: DrumPadMap,
+
+    // --- Humanizer controls (applied below the euclidean section). ---
+    pub humanize_velocity: f32,
+    pub humanize_timing: f32,
+    pub humanize_swing: f32,
+    pub humanize_accent: AccentPattern,
+    pub humanize_accent_amount: f32,
+    pub humanize_scope: HumanizeScope,
 }
 
 impl Default for DrumrollViewState {
@@ -35,6 +45,12 @@ impl Default for DrumrollViewState {
             euclid_hits_input: "4".to_string(),
             euclid_rotation_input: "0".to_string(),
             pad_map: DrumPadMap::default_map(),
+            humanize_velocity: 0.15,
+            humanize_timing: 0.1,
+            humanize_swing: 0.0,
+            humanize_accent: AccentPattern::None,
+            humanize_accent_amount: 0.2,
+            humanize_scope: HumanizeScope::AllPads,
         }
     }
 }

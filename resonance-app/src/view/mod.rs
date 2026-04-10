@@ -1,5 +1,6 @@
 /// View rendering for the Resonance application.
 pub(crate) mod compose;
+pub(crate) mod knob;
 pub(crate) mod mixer;
 
 use crate::message::Message;

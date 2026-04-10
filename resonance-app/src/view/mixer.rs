@@ -4,9 +4,9 @@ use crate::state::*;
 use crate::theme;
 use crate::theme::fa;
 use crate::util::{format_db, format_pan};
+use crate::view::knob::pan_knob;
 use iced::widget::{
-    button, column, container, pick_list, row, scrollable, slider, text,
-    vertical_slider, Space,
+    button, column, container, pick_list, row, scrollable, text, vertical_slider, Space,
 };
 use iced::{alignment, Color, Element, Font, Length};
 use resonance_audio::types::*;
@@ -266,7 +266,24 @@ impl crate::Resonance {
             plugin.plugin_name.clone()
         };
         let pid = plugin.instance_id;
-        let is_selected = self.selected_plugin == Some(pid);
+        // Plugins that expose a floating editor (has_gui) are driven
+        // entirely from that window — clicking the name in the strip
+        // toggles the editor open/closed rather than showing the
+        // generic params in the bottom panel. Plugins without a
+        // floating editor still fall back to the bottom panel path.
+        let (click_msg, is_selected) = if plugin.has_gui {
+            let msg = if plugin.editor_open {
+                Message::ClosePluginEditor(pid)
+            } else {
+                Message::OpenPluginEditor(pid)
+            };
+            (msg, plugin.editor_open)
+        } else {
+            (
+                Message::TogglePluginPanel(pid),
+                self.selected_plugin == Some(pid),
+            )
+        };
 
         let base_color = if is_instrument_slot {
             Color::from_rgb(0.3, 0.75, 0.8)
@@ -275,7 +292,7 @@ impl crate::Resonance {
         };
         let name_color = if is_selected { theme::TEXT } else { base_color };
         let name_btn = button(text(pname).size(9).color(name_color))
-            .on_press(Message::TogglePluginPanel(pid))
+            .on_press(click_msg)
             .style(move |_theme, status| {
                 if is_selected {
                     let bg = match status {
@@ -416,8 +433,18 @@ impl crate::Resonance {
         let mut plugin_section = column![].spacing(2).width(Length::Fill);
         let is_instrument_track = track.track_type == TrackType::Instrument;
 
-        // For instrument tracks, the first plugin is the dedicated instrument slot.
-        if is_instrument_track {
+        // Sub-tracks are fed by their parent instrument plugin's output
+        // port, so they never have their own instrument slot — only an
+        // effects chain. Everything else (audio and instrument tracks)
+        // follows the existing instrument-slot / FX-slot layout.
+        if is_sub {
+            // FX slots: every plugin on the sub-track is an effect.
+            for plugin in &track.plugins {
+                plugin_section = plugin_section.push(
+                    self.view_plugin_slot_row(PluginOwner::Track(track.id), plugin, false),
+                );
+            }
+        } else if is_instrument_track {
             if let Some(plugin) = track.plugins.first() {
                 plugin_section = plugin_section.push(
                     self.view_plugin_slot_row(PluginOwner::Track(track.id), plugin, true),
@@ -470,48 +497,65 @@ impl crate::Resonance {
             }
         }
 
-        // FX picker (filtered to effects only). Only shown for instrument tracks
-        // once the instrument slot is filled.
+        // FX picker (filtered to effects only). Shown for sub-tracks and
+        // audio tracks unconditionally; shown for instrument tracks only
+        // once the instrument slot is filled. Extracted from the plugin
+        // stack so it can dock directly above the pan knob rather than
+        // floating just under the last plugin slot.
         let show_fx_picker = !available_plugins.is_empty()
-            && (!is_instrument_track || !track.plugins.is_empty());
-        if show_fx_picker {
+            && (is_sub || !is_instrument_track || !track.plugins.is_empty());
+        let fx_picker_element: Option<Element<'_, Message>> = if show_fx_picker {
             let effects: Vec<ScannedPlugin> = available_plugins
                 .iter()
                 .filter(|p| !p.is_instrument)
                 .cloned()
                 .collect();
-            if !effects.is_empty() {
+            if effects.is_empty() {
+                None
+            } else {
                 let track_id = track.id;
-                let fx_picker = pick_list(
-                    effects,
-                    None::<ScannedPlugin>,
-                    move |plugin: ScannedPlugin| Message::AddPluginToTrack(track_id, plugin),
+                Some(
+                    pick_list(
+                        effects,
+                        None::<ScannedPlugin>,
+                        move |plugin: ScannedPlugin| {
+                            Message::AddPluginToTrack(track_id, plugin)
+                        },
+                    )
+                    .placeholder("+ FX")
+                    .text_size(10)
+                    .width(Length::Fill)
+                    .into(),
                 )
-                .placeholder("+ FX")
-                .text_size(10)
-                .width(Length::Fill);
-                plugin_section = plugin_section.push(fx_picker);
             }
-        }
+        } else {
+            None
+        };
 
-        // Pan control (horizontal)
-        let pan_slider = slider(-1.0..=1.0f32, track.pan, {
-            let id = track.id;
-            move |v| Message::SetTrackPan(id, v)
-        })
-        .width(Length::Fill)
-        .step(0.01);
-
+        // Pan knob — vertical drag to change, double-click to reset.
+        let id = track.id;
+        let pan_ctrl = pan_knob(track.pan, move |v| Message::SetTrackPan(id, v));
         let pan_label = format_pan(track.pan);
         let pan_row = row![
             text("Pan").size(9).color(theme::TEXT_DIM),
-            Space::with_width(4),
-            pan_slider,
-            Space::with_width(4),
+            Space::with_width(Length::Fill),
+            pan_ctrl,
+            Space::with_width(Length::Fill),
             text(pan_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
         ]
         .spacing(2)
         .align_y(alignment::Vertical::Center);
+
+        // Dock the +FX picker flush above the pan row so they read as a
+        // single block, and rely on `plugin_fill`'s Length::Fill to push
+        // that block down to the bottom of the plugin area.
+        let fx_pan_block = {
+            let mut col = iced::widget::Column::new().spacing(0).width(Length::Fill);
+            if let Some(fx) = fx_picker_element {
+                col = col.push(fx);
+            }
+            col.push(pan_row)
+        };
 
         // Volume fader (vertical) + VU meters
         let fader_height = 120.0;
@@ -618,28 +662,21 @@ impl crate::Resonance {
         };
         let border_color = if track.record_armed { theme::RECORD_RED } else { theme::SEPARATOR };
 
-        // Sub-tracks skip the plugin chain entirely — they're fed by the
-        // parent plugin's output port, not their own chain. Use a spacer
-        // to keep the strip height consistent with parent tracks so the
-        // faders still line up visually.
-        let plugin_fill: Element<'_, Message> = if is_sub {
-            container(Space::new(Length::Fill, Length::Fill))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
-        } else {
-            container(plugin_section)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_y(alignment::Vertical::Top)
-                .into()
-        };
+        // The plugin section renders for every strip — sub-tracks show an
+        // effects-only chain, instrument tracks show the instrument slot +
+        // FX chain, audio tracks show an FX chain. All three paths are
+        // constructed above into `plugin_section`.
+        let plugin_fill: Element<'_, Message> = container(plugin_section)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(alignment::Vertical::Top)
+            .into();
 
         let strip_content = column![
             track_name,
             button_row,
             plugin_fill,
-            pan_row,
+            fx_pan_block,
             fader_section,
             output_picker,
             bottom_section,
@@ -738,42 +775,53 @@ impl crate::Resonance {
             );
         }
 
-        if !available_plugins.is_empty() {
+        // Extract the +FX picker so it can dock above the pan knob (same
+        // treatment as track strips).
+        let fx_picker_element: Option<Element<'_, Message>> = if available_plugins.is_empty() {
+            None
+        } else {
             let effects: Vec<ScannedPlugin> = available_plugins
                 .iter()
                 .filter(|p| !p.is_instrument)
                 .cloned()
                 .collect();
-            if !effects.is_empty() {
-                let fx_picker = pick_list(
-                    effects,
-                    None::<ScannedPlugin>,
-                    move |plugin: ScannedPlugin| Message::AddPluginToBus(bus_id, plugin),
+            if effects.is_empty() {
+                None
+            } else {
+                Some(
+                    pick_list(
+                        effects,
+                        None::<ScannedPlugin>,
+                        move |plugin: ScannedPlugin| Message::AddPluginToBus(bus_id, plugin),
+                    )
+                    .placeholder("+ FX")
+                    .text_size(10)
+                    .width(Length::Fill)
+                    .into(),
                 )
-                .placeholder("+ FX")
-                .text_size(10)
-                .width(Length::Fill);
-                plugin_section = plugin_section.push(fx_picker);
             }
-        }
+        };
 
-        // Pan control.
-        let pan_slider = slider(-1.0..=1.0f32, bus.pan, move |v| {
-            Message::SetBusPan(bus_id, v)
-        })
-        .width(Length::Fill)
-        .step(0.01);
-
+        // Pan knob — vertical drag to change, double-click to reset.
+        let pan_ctrl = pan_knob(bus.pan, move |v| Message::SetBusPan(bus_id, v));
         let pan_label = format_pan(bus.pan);
         let pan_row = row![
             text("Pan").size(9).color(theme::TEXT_DIM),
-            Space::with_width(4),
-            pan_slider,
-            Space::with_width(4),
+            Space::with_width(Length::Fill),
+            pan_ctrl,
+            Space::with_width(Length::Fill),
             text(pan_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
         ]
         .spacing(2)
         .align_y(alignment::Vertical::Center);
+
+        let fx_pan_block = {
+            let mut col = iced::widget::Column::new().spacing(0).width(Length::Fill);
+            if let Some(fx) = fx_picker_element {
+                col = col.push(fx);
+            }
+            col.push(pan_row)
+        };
 
         // Volume fader + meters.
         let fader_height = 120.0;
@@ -806,7 +854,7 @@ impl crate::Resonance {
             bus_name,
             button_row,
             plugin_fill,
-            pan_row,
+            fx_pan_block,
             fader_section,
         ]
         .spacing(4)
@@ -922,12 +970,6 @@ impl crate::Resonance {
             .collect();
 
         let plugin_element = match &plugin.custom {
-            PluginCustomState::Amp(state) => {
-                resonance_amp::ui::view(state, &ui_params)
-            }
-            PluginCustomState::Ir(state) => {
-                resonance_ir::ui::view(state, &ui_params)
-            }
             PluginCustomState::Generic => {
                 resonance_plugin::ui::view_generic_params(&ui_params)
             }

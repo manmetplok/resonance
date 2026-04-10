@@ -7,8 +7,6 @@ edition = "2021"
 resonance-audio = { path = "../resonance-audio" }
 resonance-music-theory = { path = "../resonance-music-theory" }
 resonance-plugin = { path = "../resonance-plugin", features = ["ui"] }
-resonance-amp = { path = "../plugins/resonance-amp", features = ["ui"] }
-resonance-ir = { path = "../plugins/resonance-ir", features = ["ui"] }
 iced = { version = "0.13", features = ["canvas", "wgpu", "tokio"] }
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }

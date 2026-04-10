@@ -223,12 +223,12 @@ pub struct PluginSlotState {
     pub editor_open: bool,
 }
 
-/// Plugin-specific GUI state for bundled plugins.
+/// Plugin-specific GUI state for bundled plugins. Currently a single
+/// variant; kept as an enum so future plugins can add their own inline
+/// state without reshaping `PluginSlotState`.
 #[derive(Debug, Clone)]
 pub enum PluginCustomState {
     Generic,
-    Amp(resonance_amp::ui::AmpUiState),
-    Ir(resonance_ir::ui::IrUiState),
 }
 
 /// GUI-side clip state.

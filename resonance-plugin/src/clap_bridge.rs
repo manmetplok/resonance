@@ -244,6 +244,24 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             }
         }
 
+        // Push any editor-driven parameter writes back into the shared
+        // atomics so the main-thread save path (which reads from `shared`
+        // while the plugin is active) sees them. Editors update the
+        // plugin's own atomic storage directly via the `Arc<Params>`
+        // handle they were given, bypassing the CLAP event loop that
+        // normally keeps `shared` in sync. Without this, project save
+        // would persist stale default values for any param the user
+        // only touched through the editor.
+        //
+        // This runs after `params_dirty` was handled above, so a newly
+        // loaded state is not immediately clobbered.
+        for i in 0..self.plugin.param_count() {
+            if i < self.shared.param_values.len() {
+                self.shared
+                    .set_value(i, self.plugin.param(i).get_plain());
+            }
+        }
+
         let mut event_iter = EventIterator::new(&self.note_events);
 
         // Effect path: read the input (port 0 of the input audio buffers)

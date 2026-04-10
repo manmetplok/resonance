@@ -183,8 +183,6 @@ impl crate::Resonance {
                         slot.has_gui = has_gui;
                     } else {
                         let custom = match clap_plugin_id.as_str() {
-                            "com.resonance.amp" => PluginCustomState::Amp(Default::default()),
-                            "com.resonance.ir" => PluginCustomState::Ir(Default::default()),
                             _ => PluginCustomState::Generic,
                         };
                         track.plugins.push(PluginSlotState {

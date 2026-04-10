@@ -1,5 +1,7 @@
 use resonance_audio::types::ClipId;
 
+use super::humanize::{AccentPattern, HumanizeScope};
+
 /// Messages produced by the Compose drumroll view. Routed through
 /// `ComposeMessage::Drumroll` → `crate::update::drumroll::handle`.
 #[derive(Debug, Clone)]
@@ -34,4 +36,16 @@ pub enum DrumrollMessage {
         clip_id: ClipId,
         pad_index: usize,
     },
+
+    // --- Humanizer sliders + pickers ---
+    SetHumanizeVelocity(f32),
+    SetHumanizeTiming(f32),
+    SetHumanizeSwing(f32),
+    SetHumanizeAccent(AccentPattern),
+    SetHumanizeAccentAmount(f32),
+    SetHumanizeScope(HumanizeScope),
+    /// Apply the humanizer to every in-scope note in the clip. Notes are
+    /// re-snapped to the grid first so repeated Apply clicks produce
+    /// independent realizations rather than compounding drift.
+    ApplyHumanize { clip_id: ClipId },
 }

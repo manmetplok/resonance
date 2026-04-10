@@ -3565,11 +3565,14 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 name = "resonance-amp"
 version = "0.1.0"
 dependencies = [
+ "egui",
  "parking_lot 0.12.5",
  "resonance-common",
  "resonance-plugin",
+ "rfd",
  "serde",
  "serde_json",
+ "wayland-plugin-gui",
 ]
 
 [[package]]
@@ -3579,9 +3582,7 @@ dependencies = [
  "bytemuck",
  "dirs",
  "iced",
- "resonance-amp",
  "resonance-audio",
- "resonance-ir",
  "resonance-music-theory",
  "resonance-plugin",
  "rfd",
@@ -3633,15 +3634,32 @@ name = "resonance-dsp"
 version = "0.1.0"
 
 [[package]]
-name = "resonance-ir"
+name = "resonance-eq"
 version = "0.1.0"
 dependencies = [
+ "egui",
  "parking_lot 0.12.5",
  "resonance-common",
  "resonance-dsp",
  "resonance-plugin",
  "rustfft",
  "serde_json",
+ "wayland-plugin-gui",
+]
+
+[[package]]
+name = "resonance-ir"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "parking_lot 0.12.5",
+ "resonance-common",
+ "resonance-dsp",
+ "resonance-plugin",
+ "rfd",
+ "rustfft",
+ "serde_json",
+ "wayland-plugin-gui",
 ]
 
 [[package]]

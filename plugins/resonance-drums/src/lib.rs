@@ -182,7 +182,7 @@ impl ResonancePlugin for ResonanceDrums {
                     self.sampler.note_off(note);
                 }
                 NoteEvent::Choke { note, .. } => {
-                    self.sampler.note_off(note);
+                    self.sampler.choke_note(note);
                 }
             }
         }

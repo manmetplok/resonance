@@ -3,7 +3,9 @@ use iced::{alignment, Element, Length};
 
 use resonance_audio::types::ClipId;
 
-use crate::compose::drumroll::{DrumrollMessage, DrumrollViewState};
+use crate::compose::drumroll::{
+    AccentPattern, DrumrollMessage, DrumrollViewState, HumanizeScope,
+};
 use crate::compose::ComposeMessage;
 use crate::message::Message;
 use crate::state::{InstrumentType, TrackState};
@@ -115,6 +117,61 @@ pub fn view<'a>(
         clear_btn = clear_btn.on_press(m);
     }
 
+    // --- Humanize block --------------------------------------------------
+    let hum_vel_slider = slider(0.0..=1.0, state.humanize_velocity, |v| {
+        Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeVelocity(v)))
+    })
+    .step(0.01)
+    .width(Length::Fill);
+    let hum_timing_slider = slider(0.0..=1.0, state.humanize_timing, |v| {
+        Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeTiming(v)))
+    })
+    .step(0.01)
+    .width(Length::Fill);
+    let hum_swing_slider = slider(0.0..=1.0, state.humanize_swing, |v| {
+        Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeSwing(v)))
+    })
+    .step(0.01)
+    .width(Length::Fill);
+    let accent_picker = pick_list(
+        AccentPattern::ALL.to_vec(),
+        Some(state.humanize_accent),
+        |p| {
+            Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeAccent(p)))
+        },
+    )
+    .text_size(12)
+    .padding([4, 6])
+    .width(Length::Fill);
+    let accent_slider = slider(0.0..=1.0, state.humanize_accent_amount, |v| {
+        Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeAccentAmount(v)))
+    })
+    .step(0.01)
+    .width(Length::Fill);
+    let scope_picker = pick_list(
+        HumanizeScope::ALL.to_vec(),
+        Some(state.humanize_scope),
+        |s| {
+            Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeScope(s)))
+        },
+    )
+    .text_size(12)
+    .padding([4, 6])
+    .width(Length::Fill);
+
+    let humanize_msg = clip_id.map(|cid| {
+        Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::ApplyHumanize {
+            clip_id: cid,
+        }))
+    });
+    let mut humanize_btn = button(text("Humanize").size(12))
+        .padding([4, 10])
+        .width(Length::Fill)
+        .style(|_theme, status| theme::transport_button_style(status));
+    if let Some(m) = humanize_msg {
+        humanize_btn = humanize_btn.on_press(m);
+    }
+
     let content = column![
         row![heading, Space::with_width(Length::Fill), close_btn]
             .align_y(alignment::Vertical::Center),
@@ -148,6 +205,33 @@ pub fn view<'a>(
         apply_btn,
         Space::with_height(4),
         clear_btn,
+        Space::with_height(14),
+        text("Humanize").size(11).color(theme::ACCENT),
+        Space::with_height(4),
+        text(format!("Velocity jitter: {:.2}", state.humanize_velocity))
+            .size(10)
+            .color(theme::TEXT_DIM),
+        hum_vel_slider,
+        text(format!("Timing jitter: {:.2}", state.humanize_timing))
+            .size(10)
+            .color(theme::TEXT_DIM),
+        hum_timing_slider,
+        text(format!("Swing: {:.2}", state.humanize_swing))
+            .size(10)
+            .color(theme::TEXT_DIM),
+        hum_swing_slider,
+        Space::with_height(4),
+        text("Accent pattern").size(10).color(theme::TEXT_DIM),
+        accent_picker,
+        text(format!("Accent amount: {:.2}", state.humanize_accent_amount))
+            .size(10)
+            .color(theme::TEXT_DIM),
+        accent_slider,
+        Space::with_height(4),
+        text("Scope").size(10).color(theme::TEXT_DIM),
+        scope_picker,
+        Space::with_height(6),
+        humanize_btn,
     ]
     .spacing(4)
     .padding(12);
