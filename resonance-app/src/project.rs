@@ -20,6 +20,8 @@ pub struct ProjectFile {
     pub punch_out: u64,
     pub tracks: Vec<ProjectTrack>,
     pub clips: Vec<ProjectClip>,
+    #[serde(default)]
+    pub midi_clips: Vec<ProjectMidiClip>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +38,12 @@ pub struct ProjectTrack {
     pub mono: bool,
     pub input_device_name: Option<String>,
     pub plugins: Vec<ProjectPlugin>,
+    #[serde(default = "default_track_type")]
+    pub track_type: String,
+}
+
+fn default_track_type() -> String {
+    "audio".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +65,26 @@ pub struct ProjectClip {
     pub trim_start_frames: u64,
     pub trim_end_frames: u64,
     pub audio_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectMidiClip {
+    pub id: u64,
+    pub track_id: u64,
+    pub start_sample: u64,
+    pub duration_ticks: u64,
+    pub name: String,
+    pub trim_start_ticks: u64,
+    pub trim_end_ticks: u64,
+    pub notes: Vec<ProjectMidiNote>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectMidiNote {
+    pub note: u8,
+    pub velocity: f32,
+    pub start_tick: u64,
+    pub duration_ticks: u64,
 }
 
 /// Everything needed to reconstruct a project after loading from disk.

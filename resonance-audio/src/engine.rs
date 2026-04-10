@@ -51,6 +51,7 @@ pub struct AudioEngine {
     shared: Arc<SharedState>,
     tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
+    midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>>,
     plugins: Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
     tempo_map: Arc<parking_lot::RwLock<TempoMap>>,
     monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
@@ -109,9 +110,12 @@ impl AudioEngine {
             Arc::new(parking_lot::RwLock::new(IndexMap::new()));
         let clips: Arc<parking_lot::RwLock<Vec<AudioClip>>> =
             Arc::new(parking_lot::RwLock::new(Vec::new()));
+        let midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>> =
+            Arc::new(parking_lot::RwLock::new(Vec::new()));
 
         let tracks_audio = Arc::clone(&tracks);
         let clips_audio = Arc::clone(&clips);
+        let midi_clips_audio = Arc::clone(&midi_clips);
 
         let tempo_map: Arc<parking_lot::RwLock<TempoMap>> =
             Arc::new(parking_lot::RwLock::new(TempoMap::default()));
@@ -134,10 +138,12 @@ impl AudioEngine {
             let shared_audio = Arc::clone(&shared_audio);
             let tracks_audio = Arc::clone(&tracks_audio);
             let clips_audio = Arc::clone(&clips_audio);
+            let midi_clips_audio = Arc::clone(&midi_clips_audio);
             let plugins_audio = Arc::clone(&plugins_audio);
             let tempo_audio = Arc::clone(&tempo_audio);
             let mut track_buf_l = vec![0.0f32; audio_buf_frames];
             let mut track_buf_r = vec![0.0f32; audio_buf_frames];
+            let mut note_event_buf: Vec<PendingNoteEvent> = Vec::with_capacity(256);
             let mut monitor_temp = vec![0.0f32; audio_buf_frames * 2];
             let monitor_ring = ringbuf::HeapRb::<f32>::new(audio_quantum * 2 * 4);
             let (prod, mut monitor_cons) = monitor_ring.split();
@@ -150,11 +156,13 @@ impl AudioEngine {
                         &shared_audio,
                         &tracks_audio,
                         &clips_audio,
+                        &midi_clips_audio,
                         &plugins_audio,
                         &tempo_audio,
                         audio_sample_rate,
                         &mut track_buf_l,
                         &mut track_buf_r,
+                        &mut note_event_buf,
                         &mut monitor_cons,
                         &mut monitor_temp,
                         audio_buf_frames,
@@ -187,6 +195,7 @@ impl AudioEngine {
         let shared_ctrl = Arc::clone(&shared);
         let tracks_ctrl = Arc::clone(&tracks);
         let clips_ctrl = Arc::clone(&clips);
+        let midi_clips_ctrl = Arc::clone(&midi_clips);
         let tempo_ctrl = Arc::clone(&tempo_map);
         let plugins_ctrl = Arc::clone(&plugins);
 
@@ -201,6 +210,7 @@ impl AudioEngine {
                     shared_ctrl,
                     tracks_ctrl,
                     clips_ctrl,
+                    midi_clips_ctrl,
                     tempo_ctrl,
                     plugins_ctrl,
                     monitor_prod_audio,
@@ -218,6 +228,7 @@ impl AudioEngine {
             shared,
             tracks,
             clips,
+            midi_clips,
             plugins,
             tempo_map,
             monitor_prod,
@@ -274,6 +285,7 @@ fn engine_thread(
     shared: Arc<SharedState>,
     tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
+    midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>>,
     tempo_map: Arc<parking_lot::RwLock<TempoMap>>,
     plugins: Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
     monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
@@ -400,6 +412,22 @@ fn engine_thread(
                             &event_tx,
                         );
                         rec.input_stream = None;
+                    }
+
+                    // Send all-notes-off to instrument plugins to prevent stuck notes
+                    {
+                        let tracks_guard = tracks.read();
+                        let plugins_guard = plugins.read();
+                        for track in tracks_guard.values() {
+                            if track.track_type == TrackType::Instrument {
+                                if let Some(&inst_id) = track.plugin_ids.first() {
+                                    if let Some(mutex) = plugins_guard.get(&inst_id) {
+                                        let mut inst = mutex.lock();
+                                        inst.0.all_notes_off();
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     let _ = event_tx.send(AudioEvent::Stopped);
@@ -905,17 +933,26 @@ fn engine_thread(
                     }
                 }
                 AudioCommand::BounceToWav { path } => {
-                    // Compute project range from clips
+                    // Compute project range from audio clips + MIDI clips
                     let (render_start, render_end) = {
                         let clips_guard = clips.read();
-                        if clips_guard.is_empty() {
+                        let midi_guard = midi_clips.read();
+                        let tm = tempo_map.read();
+                        let spt = tm.samples_per_beat(sample_rate) / TICKS_PER_QUARTER_NOTE as f64;
+
+                        if clips_guard.is_empty() && midi_guard.is_empty() {
                             let _ = event_tx.send(AudioEvent::BounceError(
                                 "No clips to bounce".into(),
                             ));
                             continue;
                         }
-                        let start = clips_guard.iter().map(|c| c.start_sample).min().unwrap_or(0);
-                        let end = clips_guard.iter().map(|c| c.end_sample()).max().unwrap_or(0);
+                        let audio_start = clips_guard.iter().map(|c| c.start_sample).min();
+                        let audio_end = clips_guard.iter().map(|c| c.end_sample()).max();
+                        let midi_start = midi_guard.iter().map(|c| c.start_sample).min();
+                        let midi_end = midi_guard.iter().map(|c| c.end_sample(spt)).max();
+
+                        let start = audio_start.into_iter().chain(midi_start).min().unwrap_or(0);
+                        let end = audio_end.into_iter().chain(midi_end).max().unwrap_or(0);
                         (start, end)
                     };
 
@@ -956,10 +993,16 @@ fn engine_thread(
                     const BOUNCE_CHUNK: usize = 1024;
                     let mut track_buf_l = vec![0.0f32; BOUNCE_CHUNK];
                     let mut track_buf_r = vec![0.0f32; BOUNCE_CHUNK];
+                    let mut bounce_note_buf: Vec<PendingNoteEvent> = Vec::with_capacity(256);
                     let mut mix_buf = vec![0.0f32; BOUNCE_CHUNK * 2];
                     let master_vol =
                         f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
                     let mut write_error = false;
+
+                    let bounce_spt = {
+                        let tm = tempo_map.read();
+                        tm.samples_per_beat(sample_rate) / TICKS_PER_QUARTER_NOTE as f64
+                    };
 
                     let mut pos = render_start;
                     while pos < render_end && !write_error {
@@ -968,6 +1011,7 @@ fn engine_thread(
 
                         let tracks_guard = tracks.read();
                         let clips_guard = clips.read();
+                        let midi_guard = midi_clips.read();
                         let plugins_guard = plugins.read();
 
                         let any_solo = tracks_guard.values().any(|t| t.soloed());
@@ -984,43 +1028,74 @@ fn engine_thread(
                             track_buf_r[..frames].fill(0.0);
                             let mut has_audio = false;
 
-                            // Mix clips into track buffers
-                            for clip in clips_guard.iter() {
-                                if clip.track_id != track.id {
-                                    continue;
-                                }
-                                let clip_start = clip.start_sample;
-                                let clip_end = clip_start + clip.duration_frames();
-                                let buf_end = pos + frames as u64;
-                                if buf_end <= clip_start || pos >= clip_end {
-                                    continue;
-                                }
-                                let overlap_start = pos.max(clip_start);
-                                let overlap_end = buf_end.min(clip_end);
-                                for timeline_frame in overlap_start..overlap_end {
-                                    let frame_offset = (timeline_frame - pos) as usize;
-                                    let clip_frame = (timeline_frame - clip_start) as usize
-                                        + clip.trim_start_frames as usize;
-                                    let clip_idx = clip_frame * 2;
-                                    if clip_idx + 1 < clip.data.len() {
-                                        track_buf_l[frame_offset] += clip.data[clip_idx];
-                                        track_buf_r[frame_offset] += clip.data[clip_idx + 1];
+                            if track.track_type == TrackType::Instrument {
+                                // Instrument track: collect MIDI events and process
+                                bounce_note_buf.clear();
+                                mixer::collect_midi_events_bounce(
+                                    &midi_guard, track.id, pos, frames,
+                                    sample_rate, bounce_spt, &mut bounce_note_buf,
+                                );
+                                let mut plugin_iter = track.plugin_ids.iter();
+                                if let Some(&inst_id) = plugin_iter.next() {
+                                    if let Some(mutex) = plugins_guard.get(&inst_id) {
+                                        let mut inst = mutex.lock();
+                                        for ev in bounce_note_buf.iter() {
+                                            if ev.is_note_on {
+                                                inst.0.queue_note_on(ev.note, ev.velocity, ev.sample_offset);
+                                            } else {
+                                                inst.0.queue_note_off(ev.note, ev.sample_offset);
+                                            }
+                                        }
+                                        inst.0.process(&mut track_buf_l[..frames], &mut track_buf_r[..frames], frames);
                                         has_audio = true;
                                     }
                                 }
-                            }
-
-                            // Process through plugin chain
-                            if !track.plugin_ids.is_empty() {
-                                for &plugin_id in &track.plugin_ids {
+                                for &plugin_id in plugin_iter {
                                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
                                         let mut inst = mutex.lock();
-                                        inst.0.process(
-                                            &mut track_buf_l[..frames],
-                                            &mut track_buf_r[..frames],
-                                            frames,
-                                        );
+                                        inst.0.process(&mut track_buf_l[..frames], &mut track_buf_r[..frames], frames);
                                         has_audio = true;
+                                    }
+                                }
+                            } else {
+                                // Audio track: mix clips + plugin chain
+                                for clip in clips_guard.iter() {
+                                    if clip.track_id != track.id {
+                                        continue;
+                                    }
+                                    let clip_start = clip.start_sample;
+                                    let clip_end = clip_start + clip.duration_frames();
+                                    let buf_end = pos + frames as u64;
+                                    if buf_end <= clip_start || pos >= clip_end {
+                                        continue;
+                                    }
+                                    let overlap_start = pos.max(clip_start);
+                                    let overlap_end = buf_end.min(clip_end);
+                                    for timeline_frame in overlap_start..overlap_end {
+                                        let frame_offset = (timeline_frame - pos) as usize;
+                                        let clip_frame = (timeline_frame - clip_start) as usize
+                                            + clip.trim_start_frames as usize;
+                                        let clip_idx = clip_frame * 2;
+                                        if clip_idx + 1 < clip.data.len() {
+                                            track_buf_l[frame_offset] += clip.data[clip_idx];
+                                            track_buf_r[frame_offset] += clip.data[clip_idx + 1];
+                                            has_audio = true;
+                                        }
+                                    }
+                                }
+
+                                // Process through plugin chain
+                                if !track.plugin_ids.is_empty() {
+                                    for &plugin_id in &track.plugin_ids {
+                                        if let Some(mutex) = plugins_guard.get(&plugin_id) {
+                                            let mut inst = mutex.lock();
+                                            inst.0.process(
+                                                &mut track_buf_l[..frames],
+                                                &mut track_buf_r[..frames],
+                                                frames,
+                                            );
+                                            has_audio = true;
+                                        }
                                     }
                                 }
                             }
@@ -1244,6 +1319,9 @@ fn engine_thread(
                     let removed_clips: Vec<_> = clips.write().drain(..).collect();
                     drop(removed_clips);
 
+                    // Clear MIDI clips
+                    midi_clips.write().clear();
+
                     // Clear bundles
                     bundles.clear();
 
@@ -1253,6 +1331,175 @@ fn engine_thread(
                     next_plugin_id = 1;
 
                     let _ = event_tx.send(AudioEvent::AllCleared);
+                }
+
+                // -- Instrument track commands --
+                AudioCommand::AddInstrumentTrack => {
+                    let id = next_track_id;
+                    next_track_id += 1;
+                    let track = Track::with_type(id, format!("Instrument {}", id), TrackType::Instrument);
+                    tracks.write().insert(id, track);
+                    let _ = event_tx.send(AudioEvent::InstrumentTrackAdded { track_id: id });
+                }
+                AudioCommand::AddInstrumentTrackWithId { track_id, name } => {
+                    let track = Track::with_type(track_id, name, TrackType::Instrument);
+                    tracks.write().insert(track_id, track);
+                    next_track_id = next_track_id.max(track_id + 1);
+                    let _ = event_tx.send(AudioEvent::InstrumentTrackAdded { track_id });
+                }
+
+                // -- MIDI clip commands --
+                AudioCommand::CreateMidiClip { track_id, start_sample, duration_ticks, name } => {
+                    let clip_id = next_clip_id;
+                    next_clip_id += 1;
+                    let clip = MidiClip {
+                        id: clip_id,
+                        track_id,
+                        start_sample,
+                        duration_ticks,
+                        notes: Vec::new(),
+                        name: name.clone(),
+                        trim_start_ticks: 0,
+                        trim_end_ticks: 0,
+                    };
+                    midi_clips.write().push(clip);
+                    let _ = event_tx.send(AudioEvent::MidiClipCreated {
+                        clip_id, track_id, start_sample, duration_ticks,
+                        name, notes: Vec::new(), trim_start_ticks: 0, trim_end_ticks: 0,
+                    });
+                }
+                AudioCommand::LoadMidiClipDirect {
+                    clip_id, track_id, start_sample, duration_ticks,
+                    notes, name, trim_start_ticks, trim_end_ticks,
+                } => {
+                    let clip = MidiClip {
+                        id: clip_id,
+                        track_id,
+                        start_sample,
+                        duration_ticks,
+                        notes: notes.clone(),
+                        name: name.clone(),
+                        trim_start_ticks,
+                        trim_end_ticks,
+                    };
+                    midi_clips.write().push(clip);
+                    next_clip_id = next_clip_id.max(clip_id + 1);
+                    let _ = event_tx.send(AudioEvent::MidiClipCreated {
+                        clip_id, track_id, start_sample, duration_ticks,
+                        name, notes, trim_start_ticks, trim_end_ticks,
+                    });
+                }
+                AudioCommand::MoveMidiClip { clip_id, new_start_sample, new_track_id } => {
+                    let mut guard = midi_clips.write();
+                    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+                        clip.start_sample = new_start_sample;
+                        clip.track_id = new_track_id;
+                    }
+                    let _ = event_tx.send(AudioEvent::MidiClipMoved {
+                        clip_id, new_start_sample, new_track_id,
+                    });
+                }
+                AudioCommand::TrimMidiClip { clip_id, new_start_sample, trim_start_ticks, trim_end_ticks } => {
+                    let mut guard = midi_clips.write();
+                    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+                        clip.start_sample = new_start_sample;
+                        clip.trim_start_ticks = trim_start_ticks;
+                        clip.trim_end_ticks = trim_end_ticks;
+                    }
+                    let _ = event_tx.send(AudioEvent::MidiClipTrimmed {
+                        clip_id, new_start_sample, trim_start_ticks, trim_end_ticks,
+                    });
+                }
+                AudioCommand::DeleteMidiClip { clip_id } => {
+                    midi_clips.write().retain(|c| c.id != clip_id);
+                    let _ = event_tx.send(AudioEvent::MidiClipDeleted { clip_id });
+                }
+
+                // -- MIDI note editing --
+                AudioCommand::AddMidiNote { clip_id, note } => {
+                    let mut guard = midi_clips.write();
+                    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+                        let n = note.clone();
+                        // Insert sorted by start_tick
+                        let pos = clip.notes.partition_point(|n| n.start_tick <= note.start_tick);
+                        clip.notes.insert(pos, note.clone());
+                        let _ = event_tx.send(AudioEvent::MidiNoteAdded { clip_id, note: n });
+                    }
+                }
+                AudioCommand::RemoveMidiNote { clip_id, note_index } => {
+                    let mut guard = midi_clips.write();
+                    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+                        if note_index < clip.notes.len() {
+                            clip.notes.remove(note_index);
+                            let _ = event_tx.send(AudioEvent::MidiNoteRemoved { clip_id, note_index });
+                        }
+                    }
+                }
+                AudioCommand::MoveMidiNote { clip_id, note_index, new_start_tick, new_note } => {
+                    let mut guard = midi_clips.write();
+                    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+                        if note_index < clip.notes.len() {
+                            clip.notes[note_index].start_tick = new_start_tick;
+                            clip.notes[note_index].note = new_note;
+                            // Re-sort
+                            clip.notes.sort_by_key(|n| n.start_tick);
+                            let _ = event_tx.send(AudioEvent::MidiNoteMoved {
+                                clip_id, note_index, new_start_tick, new_note,
+                            });
+                        }
+                    }
+                }
+                AudioCommand::ResizeMidiNote { clip_id, note_index, new_duration_ticks } => {
+                    let mut guard = midi_clips.write();
+                    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+                        if note_index < clip.notes.len() {
+                            clip.notes[note_index].duration_ticks = new_duration_ticks;
+                            let _ = event_tx.send(AudioEvent::MidiNoteResized {
+                                clip_id, note_index, new_duration_ticks,
+                            });
+                        }
+                    }
+                }
+                AudioCommand::SetMidiNoteVelocity { clip_id, note_index, velocity } => {
+                    let mut guard = midi_clips.write();
+                    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+                        if note_index < clip.notes.len() {
+                            clip.notes[note_index].velocity = velocity;
+                            let _ = event_tx.send(AudioEvent::MidiNoteVelocitySet {
+                                clip_id, note_index, velocity,
+                            });
+                        }
+                    }
+                }
+
+                // -- Live MIDI input --
+                AudioCommand::SendNoteOn { track_id, note, velocity } => {
+                    let tracks_guard = tracks.read();
+                    if let Some(track) = tracks_guard.get(&track_id) {
+                        if track.track_type == TrackType::Instrument {
+                            if let Some(&inst_id) = track.plugin_ids.first() {
+                                let plugins_guard = plugins.read();
+                                if let Some(mutex) = plugins_guard.get(&inst_id) {
+                                    let mut inst = mutex.lock();
+                                    inst.0.queue_note_on(note, velocity, 0);
+                                }
+                            }
+                        }
+                    }
+                }
+                AudioCommand::SendNoteOff { track_id, note } => {
+                    let tracks_guard = tracks.read();
+                    if let Some(track) = tracks_guard.get(&track_id) {
+                        if track.track_type == TrackType::Instrument {
+                            if let Some(&inst_id) = track.plugin_ids.first() {
+                                let plugins_guard = plugins.read();
+                                if let Some(mutex) = plugins_guard.get(&inst_id) {
+                                    let mut inst = mutex.lock();
+                                    inst.0.queue_note_off(note, 0);
+                                }
+                            }
+                        }
+                    }
                 }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}

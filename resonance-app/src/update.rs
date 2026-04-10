@@ -1,6 +1,6 @@
 /// Update logic and subscription for the Resonance application.
 use crate::message::Message;
-use crate::project::{self, LoadedProject, ProjectClip, ProjectFile, ProjectPlugin, ProjectTrack, SaveCollector};
+use crate::project::{self, LoadedProject, ProjectClip, ProjectFile, ProjectMidiClip, ProjectMidiNote, ProjectPlugin, ProjectTrack, SaveCollector};
 use crate::state::*;
 use crate::theme;
 use crate::util::db_to_gain;
@@ -731,6 +731,243 @@ impl crate::Resonance {
             Message::ProjectLoaded(Err(e)) => {
                 self.error_message = Some(format!("Load failed: {e}"));
             }
+            Message::AddInstrumentTrack => {
+                self.engine.send(AudioCommand::AddInstrumentTrack);
+            }
+            Message::CreateMidiClip(track_id) => {
+                let duration_ticks = 4 * self.time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
+                self.engine.send(AudioCommand::CreateMidiClip {
+                    track_id,
+                    start_sample: self.playhead,
+                    duration_ticks,
+                    name: "MIDI Clip".to_string(),
+                });
+            }
+            Message::DeleteMidiClip(id) => {
+                self.engine.send(AudioCommand::DeleteMidiClip { clip_id: id });
+                if self.selected_midi_clip == Some(id) {
+                    self.selected_midi_clip = None;
+                }
+            }
+            Message::SelectMidiClip(id) => {
+                self.selected_midi_clip = id;
+                if id.is_some() {
+                    self.selected_clip = None;
+                }
+            }
+            Message::StartMidiClipDrag { clip_id, grab_offset_x, start_x, start_y } => {
+                if let Some(clip) = self.midi_clips.iter().find(|c| c.id == clip_id) {
+                    self.selected_midi_clip = Some(clip_id);
+                    self.selected_clip = None;
+                    self.midi_clip_drag = Some(MidiClipDragState {
+                        clip_id,
+                        grab_offset_x,
+                        original_start_sample: clip.start_sample,
+                        original_track_id: clip.track_id,
+                        current_x: start_x,
+                        current_y: start_y,
+                    });
+                }
+            }
+            Message::UpdateMidiClipDrag(x, y) => {
+                if let Some(ref mut drag) = self.midi_clip_drag {
+                    drag.current_x = x;
+                    drag.current_y = y;
+                    let seconds = ((x - drag.grab_offset_x) + self.scroll_offset) / self.zoom;
+                    let new_start = if seconds < 0.0 {
+                        0u64
+                    } else {
+                        (seconds as f64 * self.sample_rate as f64) as u64
+                    };
+                    let ruler_height = 30.0f32;
+                    let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
+                    sorted_tracks.sort_by_key(|t| t.order);
+                    let track_idx = ((y - ruler_height + self.scroll_offset_y) / theme::TRACK_HEIGHT)
+                        .floor()
+                        .max(0.0) as usize;
+                    let target_track_id = sorted_tracks
+                        .get(track_idx)
+                        .map(|t| t.id)
+                        .unwrap_or(drag.original_track_id);
+                    if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == drag.clip_id) {
+                        clip.start_sample = new_start;
+                        clip.track_id = target_track_id;
+                    }
+                }
+            }
+            Message::EndMidiClipDrag => {
+                if let Some(drag) = self.midi_clip_drag.take() {
+                    if let Some(clip) = self.midi_clips.iter().find(|c| c.id == drag.clip_id) {
+                        self.engine.send(AudioCommand::MoveMidiClip {
+                            clip_id: drag.clip_id,
+                            new_start_sample: clip.start_sample,
+                            new_track_id: clip.track_id,
+                        });
+                    }
+                }
+            }
+            Message::StartMidiClipTrim { clip_id, edge, anchor_x } => {
+                if let Some(clip) = self.midi_clips.iter().find(|c| c.id == clip_id) {
+                    self.selected_midi_clip = Some(clip_id);
+                    self.selected_clip = None;
+                    self.midi_clip_trim = Some(MidiClipTrimState {
+                        clip_id,
+                        edge,
+                        original_start_sample: clip.start_sample,
+                        original_duration_ticks: clip.duration_ticks,
+                        original_trim_start_ticks: clip.trim_start_ticks,
+                        original_trim_end_ticks: clip.trim_end_ticks,
+                        anchor_x,
+                    });
+                }
+            }
+            Message::UpdateMidiClipTrim(x) => {
+                if let Some(ref trim) = self.midi_clip_trim.clone() {
+                    let delta_px = x - trim.anchor_x;
+                    let delta_seconds = delta_px / self.zoom;
+                    let samples_per_tick = (self.sample_rate as f64 * 60.0 / self.bpm as f64)
+                        / TICKS_PER_QUARTER_NOTE as f64;
+                    let delta_ticks = ((delta_seconds.abs() as f64 * self.sample_rate as f64)
+                        / samples_per_tick) as u64;
+                    let total_ticks = trim.original_duration_ticks
+                        + trim.original_trim_start_ticks
+                        + trim.original_trim_end_ticks;
+                    let min_ticks = TICKS_PER_QUARTER_NOTE;
+
+                    match trim.edge {
+                        ClipEdge::Left => {
+                            let max_trim = total_ticks
+                                .saturating_sub(trim.original_trim_end_ticks)
+                                .saturating_sub(min_ticks);
+                            let new_trim_start = if delta_seconds > 0.0 {
+                                (trim.original_trim_start_ticks + delta_ticks).min(max_trim)
+                            } else {
+                                trim.original_trim_start_ticks.saturating_sub(delta_ticks)
+                            };
+                            let trim_delta = new_trim_start as i64
+                                - trim.original_trim_start_ticks as i64;
+                            let sample_delta =
+                                (trim_delta as f64 * samples_per_tick) as i64;
+                            let new_start =
+                                (trim.original_start_sample as i64 + sample_delta).max(0) as u64;
+                            let new_duration = total_ticks
+                                .saturating_sub(new_trim_start)
+                                .saturating_sub(trim.original_trim_end_ticks);
+                            if let Some(clip) =
+                                self.midi_clips.iter_mut().find(|c| c.id == trim.clip_id)
+                            {
+                                clip.start_sample = new_start;
+                                clip.trim_start_ticks = new_trim_start;
+                                clip.duration_ticks = new_duration;
+                            }
+                        }
+                        ClipEdge::Right => {
+                            let max_trim = total_ticks
+                                .saturating_sub(trim.original_trim_start_ticks)
+                                .saturating_sub(min_ticks);
+                            let new_trim_end = if delta_seconds < 0.0 {
+                                (trim.original_trim_end_ticks + delta_ticks).min(max_trim)
+                            } else {
+                                trim.original_trim_end_ticks.saturating_sub(delta_ticks)
+                            };
+                            let new_duration = total_ticks
+                                .saturating_sub(trim.original_trim_start_ticks)
+                                .saturating_sub(new_trim_end);
+                            if let Some(clip) =
+                                self.midi_clips.iter_mut().find(|c| c.id == trim.clip_id)
+                            {
+                                clip.trim_end_ticks = new_trim_end;
+                                clip.duration_ticks = new_duration;
+                            }
+                        }
+                    }
+                }
+            }
+            Message::EndMidiClipTrim => {
+                if let Some(trim) = self.midi_clip_trim.take() {
+                    if let Some(clip) = self.midi_clips.iter().find(|c| c.id == trim.clip_id) {
+                        self.engine.send(AudioCommand::TrimMidiClip {
+                            clip_id: trim.clip_id,
+                            new_start_sample: clip.start_sample,
+                            trim_start_ticks: clip.trim_start_ticks,
+                            trim_end_ticks: clip.trim_end_ticks,
+                        });
+                    }
+                }
+            }
+            Message::OpenMidiEditor(clip_id) => {
+                if let Some(clip) = self.midi_clips.iter().find(|c| c.id == clip_id) {
+                    self.editing_midi_clip = Some(MidiEditorState {
+                        clip_id,
+                        track_id: clip.track_id,
+                        scroll_x: 0.0,
+                        scroll_y: 60.0 * 5.0,
+                        zoom_x: 0.5,
+                        zoom_y: 12.0,
+                        snap_ticks: TICKS_PER_QUARTER_NOTE / 4,
+                        selected_note: None,
+                        tool: MidiTool::Draw,
+                    });
+                }
+            }
+            Message::CloseMidiEditor => {
+                self.editing_midi_clip = None;
+            }
+            Message::MidiEditorAddNote { clip_id, note, start_tick, duration_ticks, velocity } => {
+                self.engine.send(AudioCommand::AddMidiNote {
+                    clip_id,
+                    note: MidiNote { note, velocity, start_tick, duration_ticks },
+                });
+            }
+            Message::MidiEditorRemoveNote { clip_id, note_index } => {
+                self.engine.send(AudioCommand::RemoveMidiNote {
+                    clip_id,
+                    note_index,
+                });
+            }
+            Message::MidiEditorMoveNote { clip_id, note_index, new_start_tick, new_note } => {
+                self.engine.send(AudioCommand::MoveMidiNote {
+                    clip_id,
+                    note_index,
+                    new_start_tick,
+                    new_note,
+                });
+            }
+            Message::MidiEditorResizeNote { clip_id, note_index, new_duration_ticks } => {
+                self.engine.send(AudioCommand::ResizeMidiNote {
+                    clip_id,
+                    note_index,
+                    new_duration_ticks,
+                });
+            }
+            Message::MidiEditorSelectNote { note_index } => {
+                if let Some(ref mut editor) = self.editing_midi_clip {
+                    editor.selected_note = note_index;
+                }
+            }
+            Message::MidiEditorPreviewNote(track_id, note) => {
+                self.engine.send(AudioCommand::SendNoteOn {
+                    track_id,
+                    note,
+                    velocity: 0.8,
+                });
+            }
+            Message::MidiEditorStopPreview(track_id, note) => {
+                self.engine.send(AudioCommand::SendNoteOff {
+                    track_id,
+                    note,
+                });
+            }
+            Message::MidiEditorScrollX(delta) => {
+                if let Some(ref mut editor) = self.editing_midi_clip {
+                    editor.scroll_x = (editor.scroll_x + delta).max(0.0);
+                }
+            }
+            Message::MidiEditorScrollY(delta) => {
+                if let Some(ref mut editor) = self.editing_midi_clip {
+                    editor.scroll_y = (editor.scroll_y + delta).max(0.0);
+                }
+            }
         }
         Task::none()
     }
@@ -833,6 +1070,10 @@ impl crate::Resonance {
                         state_file: format!("plugins/plugin_{}.bin", p.instance_id),
                     }
                 }).collect(),
+                track_type: match t.track_type {
+                    TrackType::Audio => "audio".to_string(),
+                    TrackType::Instrument => "instrument".to_string(),
+                },
             }
         }).collect();
 
@@ -849,6 +1090,26 @@ impl crate::Resonance {
             }
         }).collect();
 
+        let midi_clips = self.midi_clips.iter().map(|mc| {
+            ProjectMidiClip {
+                id: mc.id,
+                track_id: mc.track_id,
+                start_sample: mc.start_sample,
+                duration_ticks: mc.duration_ticks,
+                name: mc.name.clone(),
+                trim_start_ticks: mc.trim_start_ticks,
+                trim_end_ticks: mc.trim_end_ticks,
+                notes: mc.notes.iter().map(|n| {
+                    ProjectMidiNote {
+                        note: n.note,
+                        velocity: n.velocity,
+                        start_tick: n.start_tick,
+                        duration_ticks: n.duration_ticks,
+                    }
+                }).collect(),
+            }
+        }).collect();
+
         ProjectFile {
             version: 1,
             sample_rate: self.sample_rate,
@@ -862,6 +1123,7 @@ impl crate::Resonance {
             punch_out: self.punch_out,
             tracks,
             clips,
+            midi_clips,
         }
     }
 
@@ -907,14 +1169,22 @@ impl crate::Resonance {
         // Clear GUI state
         self.tracks.clear();
         self.clips.clear();
+        self.midi_clips.clear();
         self.next_track_order = 0;
 
         // Replay tracks
         for pt in &project.tracks {
-            self.engine.send(AudioCommand::AddTrackWithId {
-                track_id: pt.id,
-                name: pt.name.clone(),
-            });
+            if pt.track_type == "instrument" {
+                self.engine.send(AudioCommand::AddInstrumentTrackWithId {
+                    track_id: pt.id,
+                    name: pt.name.clone(),
+                });
+            } else {
+                self.engine.send(AudioCommand::AddTrackWithId {
+                    track_id: pt.id,
+                    name: pt.name.clone(),
+                });
+            }
 
             // Set track properties
             self.engine.send(AudioCommand::SetTrackVolume {
@@ -984,6 +1254,12 @@ impl crate::Resonance {
                 });
             }
 
+            let track_type = if pt.track_type == "instrument" {
+                TrackType::Instrument
+            } else {
+                TrackType::Audio
+            };
+
             self.tracks.push(TrackState {
                 id: pt.id,
                 name: pt.name.clone(),
@@ -999,11 +1275,12 @@ impl crate::Resonance {
                 plugins: gui_plugins,
                 level_l: 0.0,
                 level_r: 0.0,
+                track_type,
             });
             self.next_track_order += 1;
         }
 
-        // Replay clips
+        // Replay audio clips
         for pc in &project.clips {
             if let Some(data) = loaded.audio_data.get(&pc.id) {
                 self.engine.send(AudioCommand::LoadClipDirect {
@@ -1031,6 +1308,40 @@ impl crate::Resonance {
                     waveform_peaks: Vec::new(), // Will be populated by ClipImported event
                 });
             }
+        }
+
+        // Replay MIDI clips
+        for pmc in &project.midi_clips {
+            let notes: Vec<MidiNote> = pmc.notes.iter().map(|n| {
+                MidiNote {
+                    note: n.note,
+                    velocity: n.velocity,
+                    start_tick: n.start_tick,
+                    duration_ticks: n.duration_ticks,
+                }
+            }).collect();
+
+            self.engine.send(AudioCommand::LoadMidiClipDirect {
+                clip_id: pmc.id,
+                track_id: pmc.track_id,
+                start_sample: pmc.start_sample,
+                duration_ticks: pmc.duration_ticks,
+                notes: notes.clone(),
+                name: pmc.name.clone(),
+                trim_start_ticks: pmc.trim_start_ticks,
+                trim_end_ticks: pmc.trim_end_ticks,
+            });
+
+            self.midi_clips.push(MidiClipState {
+                id: pmc.id,
+                track_id: pmc.track_id,
+                start_sample: pmc.start_sample,
+                duration_ticks: pmc.duration_ticks,
+                name: pmc.name.clone(),
+                notes,
+                trim_start_ticks: pmc.trim_start_ticks,
+                trim_end_ticks: pmc.trim_end_ticks,
+            });
         }
 
         self.punch_range_set = self.punch_enabled;

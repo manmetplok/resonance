@@ -3,10 +3,10 @@ use iced::widget::canvas;
 use iced::{keyboard, mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::theme;
-use crate::state::{ClipEdge, ClipState, PunchDragTarget, TrackState};
+use crate::state::{ClipEdge, ClipState, MidiClipState, PunchDragTarget, TrackState};
 use crate::message::Message;
 
-use resonance_audio::types::{ClipId, TrackId};
+use resonance_audio::types::{ClipId, TrackId, TICKS_PER_QUARTER_NOTE};
 
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug)]
@@ -26,6 +26,8 @@ pub struct TimelineCanvas<'a> {
     pub punch_in: u64,
     pub punch_out: u64,
     pub selected_clip: Option<ClipId>,
+    pub midi_clips: &'a [MidiClipState],
+    pub selected_midi_clip: Option<ClipId>,
 }
 
 impl TimelineCanvas<'_> {
@@ -51,6 +53,8 @@ impl TimelineCanvas<'_> {
 enum ClipInteraction {
     Move { clip_id: ClipId, grab_offset_x: f32 },
     Trim { clip_id: ClipId, edge: ClipEdge },
+    MidiMove { clip_id: ClipId, grab_offset_x: f32 },
+    MidiTrim { clip_id: ClipId, edge: ClipEdge },
 }
 
 /// Local state for the timeline canvas, tracking active drag operations.
@@ -136,7 +140,72 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                         let mut sorted_tracks: Vec<&TrackState> = self.tracks.iter().collect();
                         sorted_tracks.sort_by_key(|t| t.order);
 
-                        // Check clips in reverse order so topmost clip wins
+                        // Check MIDI clips (reverse order so topmost wins)
+                        for clip in self.midi_clips.iter().rev() {
+                            let track_idx = sorted_tracks.iter().position(|t| t.id == clip.track_id);
+                            let track_idx = match track_idx {
+                                Some(i) => i,
+                                None => continue,
+                            };
+                            let cy = ruler_height + track_idx as f32 * theme::TRACK_HEIGHT + 2.0
+                                - self.scroll_offset_y;
+                            let clip_height = theme::TRACK_HEIGHT - 4.0;
+                            let samples_per_tick = (self.sample_rate as f64 * 60.0 / self.bpm as f64)
+                                / TICKS_PER_QUARTER_NOTE as f64;
+                            let duration_samples = clip.duration_ticks as f64 * samples_per_tick;
+                            let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
+                            let duration_seconds = duration_samples as f32 / self.sample_rate as f32;
+                            let cx = start_seconds * self.zoom - self.scroll_offset;
+                            let cw = duration_seconds * self.zoom;
+
+                            if pos.x >= cx && pos.x <= cx + cw && pos.y >= cy && pos.y <= cy + clip_height {
+                                let edge_threshold = 6.0;
+                                if pos.x - cx < edge_threshold {
+                                    state.clip_interaction = Some(ClipInteraction::MidiTrim {
+                                        clip_id: clip.id,
+                                        edge: ClipEdge::Left,
+                                    });
+                                    return (
+                                        canvas::event::Status::Captured,
+                                        Some(Message::StartMidiClipTrim {
+                                            clip_id: clip.id,
+                                            edge: ClipEdge::Left,
+                                            anchor_x: pos.x,
+                                        }),
+                                    );
+                                }
+                                if (cx + cw) - pos.x < edge_threshold {
+                                    state.clip_interaction = Some(ClipInteraction::MidiTrim {
+                                        clip_id: clip.id,
+                                        edge: ClipEdge::Right,
+                                    });
+                                    return (
+                                        canvas::event::Status::Captured,
+                                        Some(Message::StartMidiClipTrim {
+                                            clip_id: clip.id,
+                                            edge: ClipEdge::Right,
+                                            anchor_x: pos.x,
+                                        }),
+                                    );
+                                }
+                                let grab_offset = pos.x - cx;
+                                state.clip_interaction = Some(ClipInteraction::MidiMove {
+                                    clip_id: clip.id,
+                                    grab_offset_x: grab_offset,
+                                });
+                                return (
+                                    canvas::event::Status::Captured,
+                                    Some(Message::StartMidiClipDrag {
+                                        clip_id: clip.id,
+                                        grab_offset_x: grab_offset,
+                                        start_x: pos.x,
+                                        start_y: pos.y,
+                                    }),
+                                );
+                            }
+                        }
+
+                        // Check audio clips in reverse order so topmost clip wins
                         for clip in self.clips.iter().rev() {
                             let track_idx = sorted_tracks.iter().position(|t| t.id == clip.track_id);
                             let track_idx = match track_idx {
@@ -230,6 +299,18 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                                 Some(Message::UpdateClipTrim(pos.x)),
                             );
                         }
+                        Some(ClipInteraction::MidiMove { .. }) => {
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::UpdateMidiClipDrag(pos.x, pos.y)),
+                            );
+                        }
+                        Some(ClipInteraction::MidiTrim { .. }) => {
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::UpdateMidiClipTrim(pos.x)),
+                            );
+                        }
                         None => {}
                     }
                 }
@@ -252,6 +333,14 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                             canvas::event::Status::Captured,
                             Some(Message::EndClipTrim),
                         ),
+                        ClipInteraction::MidiMove { .. } => (
+                            canvas::event::Status::Captured,
+                            Some(Message::EndMidiClipDrag),
+                        ),
+                        ClipInteraction::MidiTrim { .. } => (
+                            canvas::event::Status::Captured,
+                            Some(Message::EndMidiClipTrim),
+                        ),
                     };
                 }
             }
@@ -263,6 +352,12 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                 key: keyboard::Key::Named(keyboard::key::Named::Backspace),
                 ..
             }) => {
+                if let Some(clip_id) = self.selected_midi_clip {
+                    return (
+                        canvas::event::Status::Captured,
+                        Some(Message::DeleteMidiClip(clip_id)),
+                    );
+                }
                 if let Some(clip_id) = self.selected_clip {
                     return (
                         canvas::event::Status::Captured,
@@ -360,9 +455,14 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         // Draw bar/beat ruler
         self.draw_ruler(&mut frame, bounds.width, ruler_height);
 
-        // Draw clips
+        // Draw audio clips
         for clip in self.clips {
             self.draw_clip(&mut frame, clip, &sorted_tracks, ruler_height, y_off, bounds.height);
+        }
+
+        // Draw MIDI clips
+        for clip in self.midi_clips {
+            self.draw_midi_clip(&mut frame, clip, &sorted_tracks, ruler_height, y_off, bounds.height);
         }
 
         // Draw punch in/out markers
@@ -705,6 +805,158 @@ impl TimelineCanvas<'_> {
 
         // Clip border (highlighted if selected)
         let is_selected = self.selected_clip == Some(clip.id);
+        let border = canvas::Path::rectangle(Point::new(x, y), Size::new(w, clip_height));
+        if is_selected {
+            frame.stroke(
+                &border,
+                canvas::Stroke::default()
+                    .with_color(theme::CLIP_SELECTED_BORDER)
+                    .with_width(2.0),
+            );
+        } else {
+            frame.stroke(
+                &border,
+                canvas::Stroke::default()
+                    .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.3))
+                    .with_width(1.0),
+            );
+        }
+    }
+
+    fn draw_midi_clip(
+        &self,
+        frame: &mut canvas::Frame,
+        clip: &MidiClipState,
+        sorted_tracks: &[&TrackState],
+        ruler_height: f32,
+        y_off: f32,
+        visible_height: f32,
+    ) {
+        let track_index = sorted_tracks
+            .iter()
+            .position(|t| t.id == clip.track_id);
+
+        let track_index = match track_index {
+            Some(i) => i,
+            None => return,
+        };
+
+        let y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT + 2.0 - y_off;
+
+        if y + theme::TRACK_HEIGHT < ruler_height || y > visible_height {
+            return;
+        }
+        let clip_height = theme::TRACK_HEIGHT - 4.0;
+
+        // Convert tick duration to samples, then to seconds for pixel width
+        let samples_per_tick = (self.sample_rate as f64 * 60.0 / self.bpm as f64)
+            / TICKS_PER_QUARTER_NOTE as f64;
+        let duration_samples = clip.duration_ticks as f64 * samples_per_tick;
+        let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
+        let duration_seconds = duration_samples as f32 / self.sample_rate as f32;
+
+        let x = start_seconds * self.zoom - self.scroll_offset;
+        let w = duration_seconds * self.zoom;
+
+        // Teal/cyan clip body
+        let midi_body_color = Color::from_rgb(0.12, 0.22, 0.25);
+        frame.fill_rectangle(
+            Point::new(x, y),
+            Size::new(w, clip_height),
+            midi_body_color,
+        );
+
+        // Draw note rectangles inside the clip body
+        let header_height = 18.0;
+        let note_area_y = y + header_height;
+        let note_area_h = clip_height - header_height;
+
+        if !clip.notes.is_empty() && note_area_h > 2.0 && w > 2.0 {
+            // Find the note range for vertical mapping
+            let mut min_note: u8 = 127;
+            let mut max_note: u8 = 0;
+            for note in &clip.notes {
+                if note.note < min_note {
+                    min_note = note.note;
+                }
+                if note.note > max_note {
+                    max_note = note.note;
+                }
+            }
+            // Add padding so notes aren't flush with edges
+            let range_min = min_note.saturating_sub(2);
+            let range_max = (max_note + 2).min(127);
+            let note_range = (range_max - range_min).max(1) as f32;
+
+            let total_ticks = clip.duration_ticks as f32;
+            if total_ticks > 0.0 {
+                for note in &clip.notes {
+                    // Horizontal position: note start relative to clip visible start
+                    let note_start_in_clip = note.start_tick as f32
+                        - clip.trim_start_ticks as f32;
+                    if note_start_in_clip + note.duration_ticks as f32 <= 0.0 {
+                        continue; // note is before visible area
+                    }
+                    if note_start_in_clip >= total_ticks {
+                        continue; // note is after visible area
+                    }
+                    let visible_start = note_start_in_clip.max(0.0);
+                    let visible_end = (note_start_in_clip + note.duration_ticks as f32)
+                        .min(total_ticks);
+
+                    let nx = x + (visible_start / total_ticks) * w;
+                    let nw = ((visible_end - visible_start) / total_ticks) * w;
+
+                    // Vertical position: highest note at top
+                    let ny = note_area_y
+                        + (1.0 - (note.note as f32 - range_min as f32) / note_range)
+                            * (note_area_h - 3.0);
+                    let nh = (note_area_h / note_range).max(2.0).min(6.0);
+
+                    // Color intensity maps to velocity
+                    let vel = note.velocity.clamp(0.0, 1.0);
+                    let note_color = Color::from_rgba(
+                        0.2 + 0.6 * vel,
+                        0.7 + 0.3 * vel,
+                        0.8 + 0.2 * vel,
+                        0.7 + 0.3 * vel,
+                    );
+
+                    frame.fill_rectangle(
+                        Point::new(nx, ny),
+                        Size::new(nw.max(1.0), nh),
+                        note_color,
+                    );
+                }
+            }
+        }
+
+        // Clip header bar (teal accent)
+        let midi_header_color = Color::from_rgb(0.15, 0.45, 0.50);
+        frame.fill_rectangle(
+            Point::new(x, y),
+            Size::new(w, header_height),
+            midi_header_color,
+        );
+
+        // Clip name
+        let display_name: String = if clip.name.chars().count() > 20 {
+            let mut truncated: String = clip.name.chars().take(17).collect();
+            truncated.push_str("...");
+            truncated
+        } else {
+            clip.name.clone()
+        };
+        frame.fill_text(canvas::Text {
+            content: display_name,
+            position: Point::new(x + 4.0, y + 2.0),
+            color: theme::TEXT,
+            size: 11.0.into(),
+            ..canvas::Text::default()
+        });
+
+        // Clip border (highlighted if selected)
+        let is_selected = self.selected_midi_clip == Some(clip.id);
         let border = canvas::Path::rectangle(Point::new(x, y), Size::new(w, clip_height));
         if is_selected {
             frame.stroke(

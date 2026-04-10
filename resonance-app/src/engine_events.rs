@@ -63,6 +63,7 @@ impl crate::Resonance {
                     plugins: Vec::new(),
                     level_l: 0.0,
                     level_r: 0.0,
+                    track_type: TrackType::Audio,
                 });
             }
             AudioEvent::TrackRemoved { track_id } => {
@@ -254,6 +255,99 @@ impl crate::Resonance {
                     self.replay_loaded_project(loaded);
                     self.project_path = path;
                     self.loading = false;
+                }
+            }
+
+            // -- Instrument track events --
+            AudioEvent::InstrumentTrackAdded { track_id } => {
+                let order = self.tracks.len();
+                self.tracks.push(TrackState {
+                    id: track_id,
+                    name: format!("Instrument {}", track_id),
+                    volume: 1.0,
+                    pan: 0.0,
+                    muted: false,
+                    soloed: false,
+                    order,
+                    record_armed: false,
+                    monitor_enabled: false,
+                    mono: false,
+                    input_device_name: None,
+                    plugins: Vec::new(),
+                    level_l: 0.0,
+                    level_r: 0.0,
+                    track_type: TrackType::Instrument,
+                });
+            }
+
+            // -- MIDI clip events --
+            AudioEvent::MidiClipCreated {
+                clip_id, track_id, start_sample, duration_ticks,
+                name, notes, trim_start_ticks, trim_end_ticks,
+            } => {
+                self.midi_clips.push(MidiClipState {
+                    id: clip_id,
+                    track_id,
+                    start_sample,
+                    duration_ticks,
+                    name,
+                    notes,
+                    trim_start_ticks,
+                    trim_end_ticks,
+                });
+            }
+            AudioEvent::MidiClipMoved { clip_id, new_start_sample, new_track_id } => {
+                if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
+                    clip.start_sample = new_start_sample;
+                    clip.track_id = new_track_id;
+                }
+            }
+            AudioEvent::MidiClipTrimmed { clip_id, new_start_sample, trim_start_ticks, trim_end_ticks } => {
+                if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
+                    clip.start_sample = new_start_sample;
+                    clip.trim_start_ticks = trim_start_ticks;
+                    clip.trim_end_ticks = trim_end_ticks;
+                }
+            }
+            AudioEvent::MidiClipDeleted { clip_id } => {
+                self.midi_clips.retain(|c| c.id != clip_id);
+            }
+
+            // -- MIDI note editing events --
+            AudioEvent::MidiNoteAdded { clip_id, note } => {
+                if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
+                    let pos = clip.notes.partition_point(|n| n.start_tick <= note.start_tick);
+                    clip.notes.insert(pos, note);
+                }
+            }
+            AudioEvent::MidiNoteRemoved { clip_id, note_index } => {
+                if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
+                    if note_index < clip.notes.len() {
+                        clip.notes.remove(note_index);
+                    }
+                }
+            }
+            AudioEvent::MidiNoteMoved { clip_id, note_index, new_start_tick, new_note } => {
+                if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
+                    if note_index < clip.notes.len() {
+                        clip.notes[note_index].start_tick = new_start_tick;
+                        clip.notes[note_index].note = new_note;
+                        clip.notes.sort_by_key(|n| n.start_tick);
+                    }
+                }
+            }
+            AudioEvent::MidiNoteResized { clip_id, note_index, new_duration_ticks } => {
+                if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
+                    if note_index < clip.notes.len() {
+                        clip.notes[note_index].duration_ticks = new_duration_ticks;
+                    }
+                }
+            }
+            AudioEvent::MidiNoteVelocitySet { clip_id, note_index, velocity } => {
+                if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
+                    if note_index < clip.notes.len() {
+                        clip.notes[note_index].velocity = velocity;
+                    }
                 }
             }
         }

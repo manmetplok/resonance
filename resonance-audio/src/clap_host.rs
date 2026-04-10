@@ -8,8 +8,9 @@ use std::ptr;
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::{
-    clap_event_header, clap_event_param_value, clap_input_events, clap_output_events,
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE,
+    clap_event_header, clap_event_note, clap_event_param_value, clap_input_events,
+    clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
+    CLAP_EVENT_PARAM_VALUE,
 };
 use clap_sys::ext::params::{clap_plugin_params, CLAP_EXT_PARAMS};
 use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
@@ -65,28 +66,37 @@ fn create_host_data() -> Pin<Box<HostData>> {
 }
 
 // ---------------------------------------------------------------------------
-// Event list for parameter changes
+// Event list for parameter changes + note events
 // ---------------------------------------------------------------------------
 
-/// Context for input events that carries param value events.
-struct ParamEventListCtx {
-    events: Vec<clap_event_param_value>,
+/// Context for input events carrying both param value and note events.
+/// Param events (time=0) come first, then note events sorted by time.
+struct MixedEventListCtx {
+    param_events: Vec<clap_event_param_value>,
+    note_events: Vec<clap_event_note>,
 }
 
-unsafe extern "C" fn param_events_size(list: *const clap_input_events) -> u32 {
-    let ctx = &*((*list).ctx as *const ParamEventListCtx);
-    ctx.events.len() as u32
+unsafe extern "C" fn mixed_events_size(list: *const clap_input_events) -> u32 {
+    let ctx = &*((*list).ctx as *const MixedEventListCtx);
+    (ctx.param_events.len() + ctx.note_events.len()) as u32
 }
 
-unsafe extern "C" fn param_events_get(
+unsafe extern "C" fn mixed_events_get(
     list: *const clap_input_events,
     index: u32,
 ) -> *const clap_event_header {
-    let ctx = &*((*list).ctx as *const ParamEventListCtx);
-    if (index as usize) < ctx.events.len() {
-        &ctx.events[index as usize].header as *const clap_event_header
+    let ctx = &*((*list).ctx as *const MixedEventListCtx);
+    let param_count = ctx.param_events.len();
+    let idx = index as usize;
+    if idx < param_count {
+        &ctx.param_events[idx].header as *const clap_event_header
     } else {
-        ptr::null()
+        let note_idx = idx - param_count;
+        if note_idx < ctx.note_events.len() {
+            &ctx.note_events[note_idx].header as *const clap_event_header
+        } else {
+            ptr::null()
+        }
     }
 }
 
@@ -276,6 +286,8 @@ impl ClapBundle {
             state_ext,
             pending_params: Vec::new(),
             param_event_buf: Vec::new(),
+            pending_notes: Vec::new(),
+            note_event_buf: Vec::new(),
         })
     }
 }
@@ -303,6 +315,11 @@ pub struct ClapInstance {
     pending_params: Vec<(u32, f64)>,
     /// Pre-allocated buffer for CLAP parameter events (reused across process() calls).
     param_event_buf: Vec<clap_event_param_value>,
+    /// Pending note events to send during next process() call.
+    /// Each entry: (is_note_on, key, velocity, sample_offset)
+    pending_notes: Vec<(bool, u8, f32, u32)>,
+    /// Pre-allocated buffer for CLAP note events.
+    note_event_buf: Vec<clap_event_note>,
 }
 
 impl ClapInstance {
@@ -369,6 +386,23 @@ impl ClapInstance {
     /// Queue a parameter change to be sent during the next process() call.
     pub fn set_param(&mut self, param_id: u32, value: f64) {
         self.pending_params.push((param_id, value));
+    }
+
+    /// Queue a note-on event to be sent during the next process() call.
+    pub fn queue_note_on(&mut self, key: u8, velocity: f32, sample_offset: u32) {
+        self.pending_notes.push((true, key, velocity, sample_offset));
+    }
+
+    /// Queue a note-off event to be sent during the next process() call.
+    pub fn queue_note_off(&mut self, key: u8, sample_offset: u32) {
+        self.pending_notes.push((false, key, 0.0, sample_offset));
+    }
+
+    /// Send note-off for all 128 MIDI notes (to clear stuck notes).
+    pub fn all_notes_off(&mut self) {
+        for key in 0..128u8 {
+            self.pending_notes.push((false, key, 0.0, 0));
+        }
     }
 
     /// Save the plugin's full state (params + persisted fields) via CLAP state extension.
@@ -565,14 +599,35 @@ impl ClapInstance {
                 }
             }));
 
-        let mut event_ctx = ParamEventListCtx {
-            events: std::mem::take(&mut self.param_event_buf),
+        // Build note events from pending notes (reuse pre-allocated buffer)
+        self.note_event_buf.clear();
+        self.note_event_buf
+            .extend(self.pending_notes.drain(..).map(|(is_on, key, vel, offset)| {
+                clap_event_note {
+                    header: clap_event_header {
+                        size: std::mem::size_of::<clap_event_note>() as u32,
+                        time: offset,
+                        space_id: CLAP_CORE_EVENT_SPACE_ID,
+                        type_: if is_on { CLAP_EVENT_NOTE_ON } else { CLAP_EVENT_NOTE_OFF },
+                        flags: 0,
+                    },
+                    note_id: -1,
+                    port_index: 0,
+                    channel: 0,
+                    key: key as i16,
+                    velocity: vel as f64,
+                }
+            }));
+
+        let mut event_ctx = MixedEventListCtx {
+            param_events: std::mem::take(&mut self.param_event_buf),
+            note_events: std::mem::take(&mut self.note_event_buf),
         };
 
         let in_events = clap_input_events {
-            ctx: &mut event_ctx as *mut ParamEventListCtx as *mut c_void,
-            size: Some(param_events_size),
-            get: Some(param_events_get),
+            ctx: &mut event_ctx as *mut MixedEventListCtx as *mut c_void,
+            size: Some(mixed_events_size),
+            get: Some(mixed_events_get),
         };
 
         let out_events = clap_output_events {
@@ -596,9 +651,11 @@ impl ClapInstance {
             unsafe { process_fn(self.plugin, &process_data) };
         }
 
-        // Reclaim the event buffer for reuse (avoids allocation next call)
-        self.param_event_buf = event_ctx.events;
+        // Reclaim event buffers for reuse (avoids allocation next call)
+        self.param_event_buf = event_ctx.param_events;
         self.param_event_buf.clear();
+        self.note_event_buf = event_ctx.note_events;
+        self.note_event_buf.clear();
     }
 }
 

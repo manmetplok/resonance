@@ -7,6 +7,69 @@ pub type ClipId = u64;
 pub type SamplePos = u64;
 pub type PluginInstanceId = u64;
 
+/// Ticks per quarter note for MIDI timing (standard PPQ).
+pub const TICKS_PER_QUARTER_NOTE: u64 = 480;
+
+/// Distinguishes audio recording/playback tracks from instrument (MIDI) tracks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackType {
+    Audio,
+    Instrument,
+}
+
+/// A single MIDI note in a clip.
+#[derive(Debug, Clone)]
+pub struct MidiNote {
+    pub note: u8,
+    pub velocity: f32,
+    pub start_tick: u64,
+    pub duration_ticks: u64,
+}
+
+/// A MIDI clip containing note data, placed on the timeline.
+#[derive(Debug)]
+pub struct MidiClip {
+    pub id: ClipId,
+    pub track_id: TrackId,
+    /// Position on the timeline in samples (same units as AudioClip).
+    pub start_sample: SamplePos,
+    /// Logical length in ticks.
+    pub duration_ticks: u64,
+    /// Notes sorted by start_tick.
+    pub notes: Vec<MidiNote>,
+    pub name: String,
+    pub trim_start_ticks: u64,
+    pub trim_end_ticks: u64,
+}
+
+impl MidiClip {
+    /// Visible duration in ticks after trim.
+    pub fn visible_duration_ticks(&self) -> u64 {
+        self.duration_ticks
+            .saturating_sub(self.trim_start_ticks)
+            .saturating_sub(self.trim_end_ticks)
+    }
+
+    /// Convert visible duration to samples using the tempo map.
+    pub fn duration_samples(&self, samples_per_tick: f64) -> u64 {
+        (self.visible_duration_ticks() as f64 * samples_per_tick) as u64
+    }
+
+    /// End position on timeline in samples.
+    pub fn end_sample(&self, samples_per_tick: f64) -> SamplePos {
+        self.start_sample + self.duration_samples(samples_per_tick)
+    }
+}
+
+/// A note event to be sent to a plugin during audio processing.
+#[derive(Debug, Clone)]
+pub struct PendingNoteEvent {
+    pub is_note_on: bool,
+    pub note: u8,
+    pub velocity: f32,
+    pub sample_offset: u32,
+}
+
 /// Commands sent from the GUI to the audio engine.
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
@@ -144,6 +207,82 @@ pub enum AudioCommand {
     SaveAllPluginStates,
     /// Remove all tracks, clips, and plugins (for project load).
     ClearAll,
+
+    // -- Instrument track commands --
+    AddInstrumentTrack,
+    AddInstrumentTrackWithId {
+        track_id: TrackId,
+        name: String,
+    },
+
+    // -- MIDI clip commands --
+    CreateMidiClip {
+        track_id: TrackId,
+        start_sample: SamplePos,
+        duration_ticks: u64,
+        name: String,
+    },
+    LoadMidiClipDirect {
+        clip_id: ClipId,
+        track_id: TrackId,
+        start_sample: SamplePos,
+        duration_ticks: u64,
+        notes: Vec<MidiNote>,
+        name: String,
+        trim_start_ticks: u64,
+        trim_end_ticks: u64,
+    },
+    MoveMidiClip {
+        clip_id: ClipId,
+        new_start_sample: SamplePos,
+        new_track_id: TrackId,
+    },
+    TrimMidiClip {
+        clip_id: ClipId,
+        new_start_sample: SamplePos,
+        trim_start_ticks: u64,
+        trim_end_ticks: u64,
+    },
+    DeleteMidiClip {
+        clip_id: ClipId,
+    },
+
+    // -- MIDI note editing commands --
+    AddMidiNote {
+        clip_id: ClipId,
+        note: MidiNote,
+    },
+    RemoveMidiNote {
+        clip_id: ClipId,
+        note_index: usize,
+    },
+    MoveMidiNote {
+        clip_id: ClipId,
+        note_index: usize,
+        new_start_tick: u64,
+        new_note: u8,
+    },
+    ResizeMidiNote {
+        clip_id: ClipId,
+        note_index: usize,
+        new_duration_ticks: u64,
+    },
+    SetMidiNoteVelocity {
+        clip_id: ClipId,
+        note_index: usize,
+        velocity: f32,
+    },
+
+    // -- Live MIDI input --
+    SendNoteOn {
+        track_id: TrackId,
+        note: u8,
+        velocity: f32,
+    },
+    SendNoteOff {
+        track_id: TrackId,
+        note: u8,
+    },
 }
 
 /// Events sent from the audio engine back to the GUI.
@@ -237,6 +376,63 @@ pub enum AudioEvent {
     },
     /// Engine has been cleared of all state.
     AllCleared,
+
+    // -- Instrument track events --
+    InstrumentTrackAdded {
+        track_id: TrackId,
+    },
+
+    // -- MIDI clip events --
+    MidiClipCreated {
+        clip_id: ClipId,
+        track_id: TrackId,
+        start_sample: SamplePos,
+        duration_ticks: u64,
+        name: String,
+        notes: Vec<MidiNote>,
+        trim_start_ticks: u64,
+        trim_end_ticks: u64,
+    },
+    MidiClipMoved {
+        clip_id: ClipId,
+        new_start_sample: SamplePos,
+        new_track_id: TrackId,
+    },
+    MidiClipTrimmed {
+        clip_id: ClipId,
+        new_start_sample: SamplePos,
+        trim_start_ticks: u64,
+        trim_end_ticks: u64,
+    },
+    MidiClipDeleted {
+        clip_id: ClipId,
+    },
+
+    // -- MIDI note editing events --
+    MidiNoteAdded {
+        clip_id: ClipId,
+        note: MidiNote,
+    },
+    MidiNoteRemoved {
+        clip_id: ClipId,
+        note_index: usize,
+    },
+    MidiNoteMoved {
+        clip_id: ClipId,
+        note_index: usize,
+        new_start_tick: u64,
+        new_note: u8,
+    },
+    MidiNoteResized {
+        clip_id: ClipId,
+        note_index: usize,
+        new_duration_ticks: u64,
+    },
+    MidiNoteVelocitySet {
+        clip_id: ClipId,
+        note_index: usize,
+        velocity: f32,
+    },
 }
 
 /// An audio clip stored in memory.
@@ -303,13 +499,14 @@ impl AudioClip {
     }
 }
 
-/// A track containing audio clips.
+/// A track containing audio clips or MIDI clips.
 ///
 /// Hot-path fields (volume, muted, monitor_enabled, record_armed) are atomic
 /// so the audio callback can read them without taking a write lock.
 #[derive(Debug)]
 pub struct Track {
     pub id: TrackId,
+    pub track_type: TrackType,
     volume_bits: AtomicU32,
     pan_bits: AtomicU32,
     muted: AtomicBool,
@@ -326,13 +523,19 @@ pub struct Track {
     peak_r_bits: AtomicU32,
     pub input_device_name: Option<String>,
     /// Ordered list of plugin instance IDs forming the insert chain.
+    /// For instrument tracks, the first plugin is the instrument; the rest are effects.
     pub plugin_ids: Vec<PluginInstanceId>,
 }
 
 impl Track {
     pub fn new(id: TrackId, name: String) -> Self {
+        Self::with_type(id, name, TrackType::Audio)
+    }
+
+    pub fn with_type(id: TrackId, name: String, track_type: TrackType) -> Self {
         Self {
             id,
+            track_type,
             volume_bits: AtomicU32::new(1.0f32.to_bits()),
             pan_bits: AtomicU32::new(0.0f32.to_bits()),
             muted: AtomicBool::new(false),

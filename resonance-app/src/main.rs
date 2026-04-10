@@ -4,6 +4,7 @@ use resonance_audio::AudioEngine;
 
 mod engine_events;
 mod message;
+mod midi_editor;
 pub(crate) mod project;
 pub(crate) mod state;
 mod theme;
@@ -68,6 +69,16 @@ pub(crate) struct Resonance {
     pub(crate) loading: bool,
     /// Pending project data to replay after ClearAll completes.
     pub(crate) pending_load: Option<Box<project::LoadedProject>>,
+    /// MIDI clips on the timeline.
+    pub(crate) midi_clips: Vec<MidiClipState>,
+    /// Selected MIDI clip for interactions.
+    pub(crate) selected_midi_clip: Option<ClipId>,
+    /// MIDI clip drag state.
+    pub(crate) midi_clip_drag: Option<MidiClipDragState>,
+    /// MIDI clip trim state.
+    pub(crate) midi_clip_trim: Option<MidiClipTrimState>,
+    /// Currently open MIDI clip in the piano roll editor.
+    pub(crate) editing_midi_clip: Option<MidiEditorState>,
 }
 
 fn main() -> iced::Result {
@@ -140,6 +151,11 @@ impl Resonance {
             save_state: None,
             loading: false,
             pending_load: None,
+            midi_clips: Vec::new(),
+            selected_midi_clip: None,
+            midi_clip_drag: None,
+            midi_clip_trim: None,
+            editing_midi_clip: None,
         };
 
         (app, iced::Task::none())

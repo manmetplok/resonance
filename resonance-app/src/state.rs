@@ -48,6 +48,20 @@ pub struct TrackState {
     pub level_l: f32,
     /// Current VU meter level for right channel (linear amplitude).
     pub level_r: f32,
+    pub track_type: TrackType,
+}
+
+/// GUI-side MIDI clip state.
+#[derive(Debug, Clone)]
+pub struct MidiClipState {
+    pub id: ClipId,
+    pub track_id: TrackId,
+    pub start_sample: SamplePos,
+    pub duration_ticks: u64,
+    pub name: String,
+    pub notes: Vec<MidiNote>,
+    pub trim_start_ticks: u64,
+    pub trim_end_ticks: u64,
 }
 
 /// GUI-side plugin instance state.
@@ -86,6 +100,27 @@ pub struct ClipState {
     pub waveform_peaks: Vec<(f32, f32)>,
 }
 
+#[derive(Debug, Clone)]
+pub struct MidiClipDragState {
+    pub clip_id: ClipId,
+    pub grab_offset_x: f32,
+    pub original_start_sample: SamplePos,
+    pub original_track_id: TrackId,
+    pub current_x: f32,
+    pub current_y: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct MidiClipTrimState {
+    pub clip_id: ClipId,
+    pub edge: ClipEdge,
+    pub original_start_sample: SamplePos,
+    pub original_duration_ticks: u64,
+    pub original_trim_start_ticks: u64,
+    pub original_trim_end_ticks: u64,
+    pub anchor_x: f32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
     Arrange,
@@ -96,4 +131,26 @@ pub enum ViewMode {
 pub enum PunchDragTarget {
     In,
     Out,
+}
+
+/// State for the MIDI piano roll editor.
+#[derive(Debug, Clone)]
+pub struct MidiEditorState {
+    pub clip_id: ClipId,
+    pub track_id: TrackId,
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+    pub zoom_x: f32,
+    pub zoom_y: f32,
+    pub snap_ticks: u64,
+    pub selected_note: Option<usize>,
+    pub tool: MidiTool,
+}
+
+/// Active tool in the MIDI editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MidiTool {
+    Draw,
+    Select,
+    Erase,
 }

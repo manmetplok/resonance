@@ -2,6 +2,7 @@
 pub(crate) mod mixer;
 
 use crate::message::Message;
+use crate::midi_editor::PianoRollCanvas;
 use crate::state::*;
 use crate::theme;
 use crate::timeline::TimelineCanvas;
@@ -10,7 +11,7 @@ use iced::widget::text::Shaping;
 use iced::widget::{
     button, canvas, column, container, mouse_area, opaque, row, slider, stack, text, Space,
 };
-use iced::{alignment, Element, Font, Length};
+use iced::{alignment, Color, Element, Font, Length};
 use resonance_audio::types::*;
 
 impl crate::Resonance {
@@ -148,6 +149,10 @@ impl crate::Resonance {
             .on_press(Message::AddTrack)
             .style(|_theme, status| theme::transport_button_style(status));
 
+        let add_inst_track = button(text("+ Inst").size(14).color(Color::from_rgb(0.3, 0.75, 0.8)))
+            .on_press(Message::AddInstrumentTrack)
+            .style(|_theme, status| theme::transport_button_style(status));
+
         let open_btn = button(text("\u{1f4c2}").size(14).color(theme::TEXT).shaping(Shaping::Advanced))
             .on_press(Message::OpenProject)
             .style(|_theme, status| theme::transport_button_style(status));
@@ -243,6 +248,7 @@ impl crate::Resonance {
             zoom_in,
             Space::with_width(20),
             add_track,
+            add_inst_track,
             Space::with_width(6),
             open_btn,
             save_btn,
@@ -321,6 +327,71 @@ impl crate::Resonance {
         let timeline = self.view_timeline();
 
         let main = row![track_headers, timeline];
+
+        if let Some(ref editor_state) = self.editing_midi_clip {
+            // Find the clip being edited
+            if let Some(clip) = self.midi_clips.iter().find(|c| c.id == editor_state.clip_id) {
+                let close_btn = button(text("Close Editor").size(12).color(theme::TEXT))
+                    .on_press(Message::CloseMidiEditor)
+                    .style(|_theme, status| theme::transport_button_style(status))
+                    .padding([4, 8]);
+                let editor_label = text(format!("MIDI: {}", clip.name))
+                    .size(12)
+                    .color(theme::ACCENT);
+                let editor_toolbar = container(
+                    row![editor_label, Space::with_width(Length::Fill), close_btn]
+                        .spacing(8)
+                        .align_y(alignment::Vertical::Center)
+                        .padding([4, 8]),
+                )
+                .width(Length::Fill)
+                .style(|_theme| container::Style {
+                    background: Some(iced::Background::Color(theme::PANEL)),
+                    border: iced::Border {
+                        color: theme::SEPARATOR,
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..Default::default()
+                });
+
+                let piano_roll = canvas(PianoRollCanvas {
+                    clip,
+                    track_id: editor_state.track_id,
+                    scroll_x: editor_state.scroll_x,
+                    scroll_y: editor_state.scroll_y,
+                    zoom_x: editor_state.zoom_x,
+                    zoom_y: editor_state.zoom_y,
+                    snap_ticks: editor_state.snap_ticks,
+                    selected_note: editor_state.selected_note,
+                    time_sig_num: self.time_sig_num,
+                })
+                .width(Length::Fill)
+                .height(Length::Fill);
+
+                let editor_panel = column![editor_toolbar, piano_roll].spacing(0);
+
+                let editor_container = container(editor_panel)
+                    .width(Length::Fill)
+                    .height(250)
+                    .style(|_theme| container::Style {
+                        background: Some(iced::Background::Color(theme::BG)),
+                        border: iced::Border {
+                            color: theme::SEPARATOR,
+                            width: 1.0,
+                            radius: 0.0.into(),
+                        },
+                        ..Default::default()
+                    });
+
+                return column![
+                    container(main).width(Length::Fill).height(Length::Fill),
+                    editor_container,
+                ]
+                .spacing(0)
+                .into();
+            }
+        }
 
         container(main)
             .width(Length::Fill)
@@ -444,10 +515,19 @@ impl crate::Resonance {
             .font(Font::MONOSPACE)
             .color(theme::TEXT_DIM);
 
-        let import_btn = button(text("+").size(12).color(theme::TEXT))
-            .on_press(Message::ImportFile(track.id))
-            .style(|_theme, status| theme::small_button_style(status))
-            .padding(2);
+        let import_btn: Element<'_, Message> = if track.track_type == TrackType::Instrument {
+            button(text("+M").size(11).color(Color::from_rgb(0.3, 0.75, 0.8)))
+                .on_press(Message::CreateMidiClip(track.id))
+                .style(|_theme, status| theme::small_button_style(status))
+                .padding(2)
+                .into()
+        } else {
+            button(text("+").size(12).color(theme::TEXT))
+                .on_press(Message::ImportFile(track.id))
+                .style(|_theme, status| theme::small_button_style(status))
+                .padding(2)
+                .into()
+        };
 
         let del_btn = button(text("\u{00d7}").size(12).color(theme::TEXT_DIM))
             .on_press(Message::RemoveTrack(track.id))
@@ -551,6 +631,8 @@ impl crate::Resonance {
             punch_in: self.punch_in,
             punch_out: self.punch_out,
             selected_clip: self.selected_clip,
+            midi_clips: &self.midi_clips,
+            selected_midi_clip: self.selected_midi_clip,
         };
 
         canvas(timeline_data)
