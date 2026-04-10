@@ -15,6 +15,15 @@ impl crate::Resonance {
                 self.engine.send(AudioCommand::Play);
                 self.playing = true;
             }
+            Message::Record => {
+                // Only meaningful when at least one track is armed; the UI
+                // disables the button otherwise.
+                if self.tracks.iter().any(|t| t.record_armed) {
+                    self.engine.send(AudioCommand::Record);
+                    self.playing = true;
+                    // self.recording flips true when RecordingStarted arrives.
+                }
+            }
             Message::Pause => {
                 self.engine.send(AudioCommand::Pause);
                 self.playing = false;
@@ -165,9 +174,31 @@ impl crate::Resonance {
                     });
                 }
             }
-            Message::SetBpm(bpm) => {
-                self.bpm = bpm.clamp(20.0, 999.0);
-                self.engine.send(AudioCommand::SetBpm { bpm: self.bpm });
+            Message::SetBpmText(s) => {
+                // Accept any keystroke so the user can type freely; only
+                // commit on Enter via CommitBpm.
+                self.bpm_input = s;
+            }
+            Message::CommitBpm => {
+                match self.bpm_input.trim().parse::<f32>() {
+                    Ok(parsed) => {
+                        self.bpm = parsed.clamp(20.0, 300.0);
+                        self.engine.send(AudioCommand::SetBpm { bpm: self.bpm });
+                    }
+                    Err(_) => {}
+                }
+                // Always rewrite the buffer from the current (possibly clamped
+                // or reverted) BPM so the field shows a sane value.
+                self.bpm_input = format!("{:.0}", self.bpm);
+            }
+            Message::CyclePrecountBars => {
+                // Cycle through common pre-count lengths.
+                self.precount_bars = match self.precount_bars {
+                    0 => 1,
+                    1 => 2,
+                    2 => 4,
+                    _ => 0,
+                };
             }
             Message::ToggleMetronome => {
                 self.metronome_enabled = !self.metronome_enabled;
@@ -334,7 +365,10 @@ impl crate::Resonance {
                 self.step_plugin_file(instance_id, 1);
             }
             Message::ScrollX(delta) => {
-                self.scroll_offset = (self.scroll_offset + delta).max(0.0);
+                let max_x =
+                    (self.timeline_content_width - self.viewport_width).max(0.0);
+                self.scroll_offset =
+                    (self.scroll_offset + delta).clamp(0.0, max_x);
             }
             Message::ScrollY(delta) => {
                 self.scroll_offset_y = (self.scroll_offset_y + delta).max(0.0);
@@ -671,6 +705,29 @@ impl crate::Resonance {
             }
             Message::ViewportWidth(w) => {
                 self.viewport_width = w;
+            }
+            Message::TimelineContentSize(w, h) => {
+                self.timeline_content_width = w;
+                self.timeline_content_height = h;
+                // Re-clamp scroll offsets if content shrank.
+                let max_x = (w - self.viewport_width).max(0.0);
+                if self.scroll_offset > max_x {
+                    self.scroll_offset = max_x;
+                }
+                let max_y = (h - 1.0).max(0.0);
+                if self.scroll_offset_y > max_y {
+                    self.scroll_offset_y = max_y;
+                }
+            }
+            Message::ScrollToX(x) => {
+                let max_x = (self.timeline_content_width - self.viewport_width).max(0.0);
+                self.scroll_offset = x.clamp(0.0, max_x);
+            }
+            Message::ScrollToY(y) => {
+                self.scroll_offset_y = y.max(0.0);
+                let max_y =
+                    (self.tracks.len() as f32 * theme::TRACK_HEIGHT).max(0.0);
+                self.scroll_offset_y = self.scroll_offset_y.min(max_y);
             }
             Message::BounceToWav => {
                 return Task::perform(

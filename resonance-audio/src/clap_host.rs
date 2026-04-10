@@ -181,7 +181,25 @@ impl ClapBundle {
             let vendor = unsafe { CStr::from_ptr((*desc).vendor) }
                 .to_string_lossy()
                 .to_string();
-            descriptors.push(PluginDescInfo { id, name, vendor });
+
+            // Walk the null-terminated features array looking for "instrument".
+            let mut is_instrument = false;
+            unsafe {
+                let mut feat_ptr = (*desc).features;
+                if !feat_ptr.is_null() {
+                    while !(*feat_ptr).is_null() {
+                        if let Ok(feat) = CStr::from_ptr(*feat_ptr).to_str() {
+                            if feat == "instrument" {
+                                is_instrument = true;
+                                break;
+                            }
+                        }
+                        feat_ptr = feat_ptr.add(1);
+                    }
+                }
+            }
+
+            descriptors.push(PluginDescInfo { id, name, vendor, is_instrument });
         }
 
         Ok(ClapBundle {

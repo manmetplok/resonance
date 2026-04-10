@@ -122,6 +122,70 @@ impl crate::Resonance {
             .into()
     }
 
+    /// Render a single plugin slot row (name button + remove button).
+    /// If `is_instrument_slot` is true, the name is tinted to distinguish it.
+    fn view_plugin_slot_row(
+        &self,
+        track_id: TrackId,
+        plugin: &PluginSlotState,
+        is_instrument_slot: bool,
+    ) -> Element<'_, Message> {
+        let pname: String = if plugin.plugin_name.chars().count() > 14 {
+            let mut s: String = plugin.plugin_name.chars().take(12).collect();
+            s.push_str("..");
+            s
+        } else {
+            plugin.plugin_name.clone()
+        };
+        let pid = plugin.instance_id;
+        let is_selected = self.selected_plugin == Some(pid);
+
+        let base_color = if is_instrument_slot {
+            Color::from_rgb(0.3, 0.75, 0.8)
+        } else {
+            theme::ACCENT
+        };
+        let name_color = if is_selected { theme::TEXT } else { base_color };
+        let name_btn = button(text(pname).size(9).color(name_color))
+            .on_press(Message::TogglePluginPanel(pid))
+            .style(move |_theme, status| {
+                if is_selected {
+                    let bg = match status {
+                        iced::widget::button::Status::Hovered => Color::from_rgb(0.22, 0.22, 0.28),
+                        iced::widget::button::Status::Pressed => Color::from_rgb(0.15, 0.15, 0.20),
+                        _ => Color::from_rgb(0.18, 0.18, 0.24),
+                    };
+                    iced::widget::button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: theme::TEXT,
+                        border: iced::Border {
+                            color: base_color,
+                            width: 1.0,
+                            radius: 2.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                } else {
+                    theme::small_button_style(status)
+                }
+            })
+            .padding(1);
+
+        let plugin_del = button(text("\u{00d7}").size(9).color(theme::TEXT_DIM))
+            .on_press(Message::RemovePluginFromTrack(track_id, pid))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(1);
+
+        row![
+            name_btn,
+            Space::with_width(Length::Fill),
+            plugin_del,
+        ]
+        .spacing(2)
+        .align_y(alignment::Vertical::Center)
+        .into()
+    }
+
     fn view_channel_strip(&self, track: &TrackState, available_plugins: &[ScannedPlugin]) -> Element<'_, Message> {
         let track_name = container(
             text(track.name.clone()).size(13).color(theme::TEXT),
@@ -177,71 +241,84 @@ impl crate::Resonance {
 
         // Plugin chain (click to show in bottom panel)
         let mut plugin_section = column![].spacing(2).width(Length::Fill);
-        for plugin in &track.plugins {
-            let pname: String = if plugin.plugin_name.chars().count() > 14 {
-                let mut s: String = plugin.plugin_name.chars().take(12).collect();
-                s.push_str("..");
-                s
-            } else {
-                plugin.plugin_name.clone()
-            };
-            let track_id = track.id;
-            let pid = plugin.instance_id;
-            let is_selected = self.selected_plugin == Some(pid);
+        let is_instrument_track = track.track_type == TrackType::Instrument;
 
-            let name_color = if is_selected { theme::TEXT } else { theme::ACCENT };
-            let name_btn = button(text(pname).size(9).color(name_color))
-                .on_press(Message::TogglePluginPanel(pid))
-                .style(move |_theme, status| {
-                    if is_selected {
-                        let bg = match status {
-                            iced::widget::button::Status::Hovered => Color::from_rgb(0.22, 0.22, 0.28),
-                            iced::widget::button::Status::Pressed => Color::from_rgb(0.15, 0.15, 0.20),
-                            _ => Color::from_rgb(0.18, 0.18, 0.24),
-                        };
-                        iced::widget::button::Style {
-                            background: Some(iced::Background::Color(bg)),
-                            text_color: theme::TEXT,
-                            border: iced::Border {
-                                color: theme::ACCENT,
-                                width: 1.0,
-                                radius: 2.0.into(),
-                            },
-                            ..Default::default()
-                        }
-                    } else {
-                        theme::small_button_style(status)
-                    }
-                })
-                .padding(1);
+        // For instrument tracks, the first plugin is the dedicated instrument slot.
+        if is_instrument_track {
+            if let Some(plugin) = track.plugins.first() {
+                plugin_section = plugin_section.push(
+                    self.view_plugin_slot_row(track.id, plugin, true),
+                );
+            } else if !available_plugins.is_empty() {
+                // Empty instrument slot: show a picker filtered to instruments.
+                let instruments: Vec<ScannedPlugin> = available_plugins
+                    .iter()
+                    .filter(|p| p.is_instrument)
+                    .cloned()
+                    .collect();
+                if !instruments.is_empty() {
+                    let track_id = track.id;
+                    let inst_picker = pick_list(
+                        instruments,
+                        None::<ScannedPlugin>,
+                        move |plugin: ScannedPlugin| Message::AddPluginToTrack(track_id, plugin),
+                    )
+                    .placeholder("+ Instrument")
+                    .text_size(10)
+                    .width(Length::Fill);
+                    plugin_section = plugin_section.push(inst_picker);
+                } else {
+                    plugin_section = plugin_section.push(
+                        text("No instruments").size(9).color(theme::TEXT_DIM),
+                    );
+                }
+            }
 
-            let plugin_del = button(text("\u{00d7}").size(9).color(theme::TEXT_DIM))
-                .on_press(Message::RemovePluginFromTrack(track_id, pid))
-                .style(|_theme, status| theme::small_button_style(status))
-                .padding(1);
+            // Thin separator between instrument slot and FX chain.
+            plugin_section = plugin_section.push(
+                container(Space::new(Length::Fill, 1)).style(|_theme| container::Style {
+                    background: Some(iced::Background::Color(theme::SEPARATOR)),
+                    ..Default::default()
+                }),
+            );
 
-            let plugin_row = row![
-                name_btn,
-                Space::with_width(Length::Fill),
-                plugin_del,
-            ]
-            .spacing(2)
-            .align_y(alignment::Vertical::Center);
-            plugin_section = plugin_section.push(plugin_row);
+            // FX slots: plugins after the instrument.
+            for plugin in track.plugins.iter().skip(1) {
+                plugin_section = plugin_section.push(
+                    self.view_plugin_slot_row(track.id, plugin, false),
+                );
+            }
+        } else {
+            // Audio track: all plugins are FX.
+            for plugin in &track.plugins {
+                plugin_section = plugin_section.push(
+                    self.view_plugin_slot_row(track.id, plugin, false),
+                );
+            }
         }
 
-        // FX picker
-        if !available_plugins.is_empty() {
-            let track_id = track.id;
-            let fx_picker = pick_list(
-                available_plugins.to_vec(),
-                None::<ScannedPlugin>,
-                move |plugin: ScannedPlugin| Message::AddPluginToTrack(track_id, plugin),
-            )
-            .placeholder("+ FX")
-            .text_size(10)
-            .width(Length::Fill);
-            plugin_section = plugin_section.push(fx_picker);
+        // FX picker (filtered to effects only). Only shown for instrument tracks
+        // once the instrument slot is filled.
+        let show_fx_picker = !available_plugins.is_empty()
+            && (!is_instrument_track || !track.plugins.is_empty());
+        if show_fx_picker {
+            let effects: Vec<ScannedPlugin> = available_plugins
+                .iter()
+                .filter(|p| !p.is_instrument)
+                .cloned()
+                .collect();
+            if !effects.is_empty() {
+                let track_id = track.id;
+                let fx_picker = pick_list(
+                    effects,
+                    None::<ScannedPlugin>,
+                    move |plugin: ScannedPlugin| Message::AddPluginToTrack(track_id, plugin),
+                )
+                .placeholder("+ FX")
+                .text_size(10)
+                .width(Length::Fill);
+                plugin_section = plugin_section.push(fx_picker);
+            }
         }
 
         // Pan control (horizontal)

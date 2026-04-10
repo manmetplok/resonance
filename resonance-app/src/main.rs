@@ -33,9 +33,14 @@ pub(crate) struct Resonance {
     pub(crate) input_devices: Vec<InputDeviceInfo>,
     pub(crate) default_input_device_name: Option<String>,
     pub(crate) bpm: f32,
+    /// Editable text buffer backing the BPM text_input widget.
+    pub(crate) bpm_input: String,
     pub(crate) time_sig_num: u8,
     pub(crate) time_sig_den: u8,
     pub(crate) metronome_enabled: bool,
+    /// Number of bars the metronome counts in before playback/recording
+    /// starts. 0 disables the pre-count.
+    pub(crate) precount_bars: u8,
     pub(crate) available_plugins: Vec<ScannedPlugin>,
     pub(crate) settings_open: bool,
     pub(crate) add_track_menu_open: bool,
@@ -60,6 +65,12 @@ pub(crate) struct Resonance {
     pub(crate) selected_plugin: Option<PluginInstanceId>,
     /// Current viewport width of the timeline canvas (in pixels).
     pub(crate) viewport_width: f32,
+    /// Total content width of the timeline in pixels, reported from the
+    /// canvas. Used to clamp horizontal scroll and size the scrollbar thumb.
+    pub(crate) timeline_content_width: f32,
+    /// Total content height of the timeline in pixels, reported from the
+    /// canvas. Used to clamp vertical scroll and size the scrollbar thumb.
+    pub(crate) timeline_content_height: f32,
     /// Whether an offline bounce is in progress.
     pub(crate) bouncing: bool,
     /// Path to the current project directory (None if unsaved).
@@ -84,6 +95,7 @@ pub(crate) struct Resonance {
 
 fn main() -> iced::Result {
     iced::application("Resonance", Resonance::update, Resonance::view)
+        .font(theme::ICON_FONT_BYTES)
         .subscription(Resonance::subscription)
         .theme(|_| theme::resonance_theme())
         .window_size(Size::new(1280.0, 720.0))
@@ -126,9 +138,11 @@ impl Resonance {
             input_devices: Vec::new(),
             default_input_device_name: None,
             bpm: 120.0,
+            bpm_input: "120".to_string(),
             time_sig_num: 4,
             time_sig_den: 4,
             metronome_enabled: false,
+            precount_bars: 2,
             available_plugins: Vec::new(),
             settings_open: false,
             add_track_menu_open: false,
@@ -148,6 +162,8 @@ impl Resonance {
             clip_trim: None,
             selected_plugin: None,
             viewport_width: 1000.0,
+            timeline_content_width: 1000.0,
+            timeline_content_height: 0.0,
             bouncing: false,
             project_path: None,
             save_state: None,

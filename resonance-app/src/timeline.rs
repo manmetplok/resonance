@@ -13,6 +13,11 @@ use resonance_audio::types::{ClipId, TrackId, TICKS_PER_QUARTER_NOTE};
 /// Maximum interval between two clicks to count as a double-click.
 const DOUBLE_CLICK_MS: u128 = 400;
 
+/// Thickness of the scrollbar strips drawn inside the timeline canvas.
+const SCROLLBAR_THICKNESS: f32 = 10.0;
+/// Minimum thumb size in pixels so the thumb stays clickable at any zoom.
+const SCROLLBAR_MIN_THUMB: f32 = 24.0;
+
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug)]
 pub struct TimelineCanvas<'a> {
@@ -50,6 +55,118 @@ impl TimelineCanvas<'_> {
     fn sample_to_x(&self, sample: u64) -> f32 {
         (sample as f64 / self.sample_rate as f64) as f32 * self.zoom - self.scroll_offset
     }
+
+    /// Rightmost pixel needed to show all content (clips + MIDI clips).
+    /// Always returns at least `viewport_width * 1.5` so users can scroll a
+    /// bit past the last clip, and never less than `viewport_width` itself.
+    pub(crate) fn content_width_px(&self, viewport_width: f32) -> f32 {
+        let mut max_sample: u64 = 0;
+        for c in self.clips {
+            let end = c.start_sample + c.duration_samples;
+            if end > max_sample {
+                max_sample = end;
+            }
+        }
+        let samples_per_tick =
+            (self.sample_rate as f64 * 60.0 / self.bpm as f64) / TICKS_PER_QUARTER_NOTE as f64;
+        for c in self.midi_clips {
+            let dur = (c.duration_ticks as f64 * samples_per_tick) as u64;
+            let end = c.start_sample + dur;
+            if end > max_sample {
+                max_sample = end;
+            }
+        }
+        let content = (max_sample as f64 / self.sample_rate as f64) as f32 * self.zoom;
+        content.max(viewport_width * 1.5).max(viewport_width)
+    }
+
+    /// Total vertical content height (tracks + ruler).
+    pub(crate) fn content_height_px(&self) -> f32 {
+        30.0 + self.tracks.len() as f32 * theme::TRACK_HEIGHT
+    }
+}
+
+/// Hit test for the horizontal scrollbar. Returns `(track_rect, thumb_rect)`
+/// when the scrollbar is visible (content wider than the viewport).
+fn h_scrollbar_rects(
+    bounds_width: f32,
+    bounds_height: f32,
+    content_width: f32,
+    scroll_offset: f32,
+    show_v_bar: bool,
+) -> Option<(Rectangle, Rectangle)> {
+    if content_width <= bounds_width + 0.5 {
+        return None;
+    }
+    let track_width = if show_v_bar {
+        (bounds_width - SCROLLBAR_THICKNESS).max(0.0)
+    } else {
+        bounds_width
+    };
+    if track_width <= 0.0 {
+        return None;
+    }
+    let track = Rectangle {
+        x: 0.0,
+        y: bounds_height - SCROLLBAR_THICKNESS,
+        width: track_width,
+        height: SCROLLBAR_THICKNESS,
+    };
+    let ratio_visible = (bounds_width / content_width).clamp(0.0, 1.0);
+    let thumb_w = (track_width * ratio_visible).max(SCROLLBAR_MIN_THUMB);
+    let max_scroll = (content_width - bounds_width).max(1.0);
+    let travel = (track_width - thumb_w).max(0.0);
+    let thumb_x = (scroll_offset / max_scroll).clamp(0.0, 1.0) * travel;
+    let thumb = Rectangle {
+        x: thumb_x,
+        y: track.y,
+        width: thumb_w,
+        height: SCROLLBAR_THICKNESS,
+    };
+    Some((track, thumb))
+}
+
+/// Hit test for the vertical scrollbar (track area only, excludes ruler).
+fn v_scrollbar_rects(
+    bounds_width: f32,
+    bounds_height: f32,
+    content_height: f32,
+    scroll_offset_y: f32,
+    ruler_height: f32,
+    show_h_bar: bool,
+) -> Option<(Rectangle, Rectangle)> {
+    let viewport_height = bounds_height - ruler_height
+        - if show_h_bar { SCROLLBAR_THICKNESS } else { 0.0 };
+    let track_content_h = content_height - ruler_height;
+    if viewport_height <= 0.0 || track_content_h <= viewport_height + 0.5 {
+        return None;
+    }
+    let track = Rectangle {
+        x: bounds_width - SCROLLBAR_THICKNESS,
+        y: ruler_height,
+        width: SCROLLBAR_THICKNESS,
+        height: viewport_height,
+    };
+    let ratio_visible = (viewport_height / track_content_h).clamp(0.0, 1.0);
+    let thumb_h = (viewport_height * ratio_visible).max(SCROLLBAR_MIN_THUMB);
+    let max_scroll = (track_content_h - viewport_height).max(1.0);
+    let travel = (viewport_height - thumb_h).max(0.0);
+    let thumb_y = ruler_height + (scroll_offset_y / max_scroll).clamp(0.0, 1.0) * travel;
+    let thumb = Rectangle {
+        x: track.x,
+        y: thumb_y,
+        width: SCROLLBAR_THICKNESS,
+        height: thumb_h,
+    };
+    Some((track, thumb))
+}
+
+/// Is `pos` inside `rect`?
+fn rect_contains(rect: &Rectangle, pos: Point) -> bool {
+    pos.x >= rect.x
+        && pos.x <= rect.x + rect.width
+        && pos.y >= rect.y
+        && pos.y <= rect.y + rect.height
 }
 
 /// Which part of a clip is being dragged.
@@ -68,8 +185,15 @@ pub struct TimelineState {
     dragging_punch: bool,
     clip_interaction: Option<ClipInteraction>,
     last_reported_width: f32,
+    last_reported_content_width: f32,
+    last_reported_content_height: f32,
     /// Tracks the most recent click on a MIDI clip for double-click detection.
     last_midi_click: Option<(Instant, ClipId)>,
+    /// Horizontal scrollbar drag in progress. Stores the x-offset of the
+    /// grab point relative to the left edge of the thumb (in track pixels).
+    h_scrollbar_grab: Option<f32>,
+    /// Vertical scrollbar drag in progress (y-offset within the thumb).
+    v_scrollbar_grab: Option<f32>,
 }
 
 impl canvas::Program<Message> for TimelineCanvas<'_> {
@@ -120,6 +244,87 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(pos) = cursor.position_in(bounds) {
                     let ruler_height = 30.0;
+                    let content_w = self.content_width_px(bounds.width);
+                    let content_h = self.content_height_px();
+                    let h_rects = h_scrollbar_rects(
+                        bounds.width,
+                        bounds.height,
+                        content_w,
+                        self.scroll_offset,
+                        v_scrollbar_rects(
+                            bounds.width,
+                            bounds.height,
+                            content_h,
+                            self.scroll_offset_y,
+                            ruler_height,
+                            true,
+                        )
+                        .is_some(),
+                    );
+                    let v_rects = v_scrollbar_rects(
+                        bounds.width,
+                        bounds.height,
+                        content_h,
+                        self.scroll_offset_y,
+                        ruler_height,
+                        h_rects.is_some(),
+                    );
+
+                    // Horizontal scrollbar hit test.
+                    if let Some((track, thumb)) = h_rects {
+                        if rect_contains(&track, pos) {
+                            if rect_contains(&thumb, pos) {
+                                state.h_scrollbar_grab = Some(pos.x - thumb.x);
+                            } else {
+                                // Page-jump: center thumb on click position.
+                                let travel = (track.width - thumb.width).max(0.0);
+                                let max_scroll =
+                                    (content_w - bounds.width).max(1.0);
+                                let new_thumb_x =
+                                    (pos.x - thumb.width / 2.0).clamp(0.0, travel);
+                                let new_scroll = if travel > 0.0 {
+                                    new_thumb_x / travel * max_scroll
+                                } else {
+                                    0.0
+                                };
+                                state.h_scrollbar_grab = Some(thumb.width / 2.0);
+                                return (
+                                    canvas::event::Status::Captured,
+                                    Some(Message::ScrollToX(new_scroll)),
+                                );
+                            }
+                            return (canvas::event::Status::Captured, None);
+                        }
+                    }
+
+                    // Vertical scrollbar hit test.
+                    if let Some((track, thumb)) = v_rects {
+                        if rect_contains(&track, pos) {
+                            if rect_contains(&thumb, pos) {
+                                state.v_scrollbar_grab = Some(pos.y - thumb.y);
+                            } else {
+                                let travel = (track.height - thumb.height).max(0.0);
+                                let max_scroll =
+                                    (content_h - ruler_height
+                                        - (track.height))
+                                        .max(1.0);
+                                let new_thumb_y =
+                                    (pos.y - ruler_height - thumb.height / 2.0)
+                                        .clamp(0.0, travel);
+                                let new_scroll = if travel > 0.0 {
+                                    new_thumb_y / travel * max_scroll
+                                } else {
+                                    0.0
+                                };
+                                state.v_scrollbar_grab = Some(thumb.height / 2.0);
+                                return (
+                                    canvas::event::Status::Captured,
+                                    Some(Message::ScrollToY(new_scroll)),
+                                );
+                            }
+                            return (canvas::event::Status::Captured, None);
+                        }
+                    }
 
                     // Punch marker dragging (ruler area only)
                     if self.punch_enabled && pos.y < ruler_height {
@@ -310,6 +515,76 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 if let Some(pos) = cursor.position_in(bounds) {
+                    // Scrollbar drag updates.
+                    if let Some(grab) = state.h_scrollbar_grab {
+                        let content_w = self.content_width_px(bounds.width);
+                        let show_v = v_scrollbar_rects(
+                            bounds.width,
+                            bounds.height,
+                            self.content_height_px(),
+                            self.scroll_offset_y,
+                            30.0,
+                            true,
+                        )
+                        .is_some();
+                        if let Some((track, thumb)) = h_scrollbar_rects(
+                            bounds.width,
+                            bounds.height,
+                            content_w,
+                            self.scroll_offset,
+                            show_v,
+                        ) {
+                            let new_thumb_x =
+                                (pos.x - grab).clamp(0.0, track.width - thumb.width);
+                            let travel = (track.width - thumb.width).max(0.0);
+                            let max_scroll = (content_w - bounds.width).max(1.0);
+                            let new_scroll = if travel > 0.0 {
+                                new_thumb_x / travel * max_scroll
+                            } else {
+                                0.0
+                            };
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::ScrollToX(new_scroll)),
+                            );
+                        }
+                    }
+                    if let Some(grab) = state.v_scrollbar_grab {
+                        let content_h = self.content_height_px();
+                        let show_h = h_scrollbar_rects(
+                            bounds.width,
+                            bounds.height,
+                            self.content_width_px(bounds.width),
+                            self.scroll_offset,
+                            true,
+                        )
+                        .is_some();
+                        if let Some((track, thumb)) = v_scrollbar_rects(
+                            bounds.width,
+                            bounds.height,
+                            content_h,
+                            self.scroll_offset_y,
+                            30.0,
+                            show_h,
+                        ) {
+                            let rel_y = pos.y - track.y - grab;
+                            let travel = (track.height - thumb.height).max(0.0);
+                            let new_thumb_rel =
+                                rel_y.clamp(0.0, travel);
+                            let max_scroll =
+                                (content_h - 30.0 - track.height).max(1.0);
+                            let new_scroll = if travel > 0.0 {
+                                new_thumb_rel / travel * max_scroll
+                            } else {
+                                0.0
+                            };
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::ScrollToY(new_scroll)),
+                            );
+                        }
+                    }
+
                     if state.dragging_punch {
                         return (
                             canvas::event::Status::Captured,
@@ -346,6 +621,14 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                 }
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                if state.h_scrollbar_grab.is_some() {
+                    state.h_scrollbar_grab = None;
+                    return (canvas::event::Status::Captured, None);
+                }
+                if state.v_scrollbar_grab.is_some() {
+                    state.v_scrollbar_grab = None;
+                    return (canvas::event::Status::Captured, None);
+                }
                 if state.dragging_punch {
                     state.dragging_punch = false;
                     return (
@@ -403,6 +686,20 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             return (
                 canvas::event::Status::Ignored,
                 Some(Message::ViewportWidth(bounds.width)),
+            );
+        }
+        // Report content size so scroll clamping and scrollbar sizing stays
+        // in sync with the clips on the timeline.
+        let cw = self.content_width_px(bounds.width);
+        let ch = self.content_height_px();
+        if (cw - state.last_reported_content_width).abs() > 1.0
+            || (ch - state.last_reported_content_height).abs() > 1.0
+        {
+            state.last_reported_content_width = cw;
+            state.last_reported_content_height = ch;
+            return (
+                canvas::event::Status::Ignored,
+                Some(Message::TimelineContentSize(cw, ch)),
             );
         }
         (canvas::event::Status::Ignored, None)
@@ -586,6 +883,60 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                 Point::new(playhead_x - 0.5, 0.0),
                 Size::new(1.0, total_height),
                 theme::ACCENT,
+            );
+        }
+
+        // Smart scrollbars — drawn last so they sit above clips + playhead.
+        let content_w = self.content_width_px(bounds.width);
+        let content_h = self.content_height_px();
+        let h_pre = h_scrollbar_rects(
+            bounds.width,
+            bounds.height,
+            content_w,
+            self.scroll_offset,
+            false,
+        );
+        let v_rects = v_scrollbar_rects(
+            bounds.width,
+            bounds.height,
+            content_h,
+            self.scroll_offset_y,
+            ruler_height,
+            h_pre.is_some(),
+        );
+        let h_rects = h_scrollbar_rects(
+            bounds.width,
+            bounds.height,
+            content_w,
+            self.scroll_offset,
+            v_rects.is_some(),
+        );
+
+        let track_color = Color::from_rgba(0.08, 0.08, 0.08, 0.8);
+        let thumb_color = Color::from_rgba(0.45, 0.45, 0.45, 0.85);
+
+        if let Some((track, thumb)) = h_rects {
+            frame.fill_rectangle(
+                Point::new(track.x, track.y),
+                Size::new(track.width, track.height),
+                track_color,
+            );
+            frame.fill_rectangle(
+                Point::new(thumb.x, thumb.y),
+                Size::new(thumb.width, thumb.height),
+                thumb_color,
+            );
+        }
+        if let Some((track, thumb)) = v_rects {
+            frame.fill_rectangle(
+                Point::new(track.x, track.y),
+                Size::new(track.width, track.height),
+                track_color,
+            );
+            frame.fill_rectangle(
+                Point::new(thumb.x, thumb.y),
+                Size::new(thumb.width, thumb.height),
+                thumb_color,
             );
         }
 

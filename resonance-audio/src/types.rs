@@ -74,6 +74,7 @@ pub struct PendingNoteEvent {
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
     Play,
+    Record,
     Pause,
     Stop,
     SeekTo(SamplePos),
@@ -659,6 +660,8 @@ pub struct PluginDescInfo {
     pub id: String,
     pub name: String,
     pub vendor: String,
+    /// True if the plugin declared the `instrument` feature in its CLAP descriptor.
+    pub is_instrument: bool,
 }
 
 /// A plugin parameter descriptor with current value.
@@ -679,6 +682,8 @@ pub struct ScannedPlugin {
     pub clap_plugin_id: String,
     pub name: String,
     pub vendor: String,
+    /// True if the plugin declared the `instrument` feature in its CLAP descriptor.
+    pub is_instrument: bool,
 }
 
 impl std::fmt::Display for ScannedPlugin {
@@ -737,5 +742,13 @@ impl TempoMap {
     pub fn format_position(&self, sample_pos: u64, sample_rate: u32) -> String {
         let (bar, beat, _) = self.position_to_bars(sample_pos, sample_rate);
         format!("{}.{}", bar, beat)
+    }
+
+    /// Format a sample position as "mm:ss.mmm" wall-clock time.
+    pub fn format_time(&self, sample_pos: u64, sample_rate: u32) -> String {
+        let total_secs = sample_pos as f64 / sample_rate as f64;
+        let minutes = (total_secs / 60.0).floor() as u32;
+        let seconds = total_secs - (minutes as f64 * 60.0);
+        format!("{:02}:{:06.3}", minutes, seconds)
     }
 }

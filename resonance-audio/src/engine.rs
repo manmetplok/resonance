@@ -325,6 +325,9 @@ fn engine_thread(
             Ok(cmd) => match cmd {
                 AudioCommand::Play => {
                     shared.playing.store(true, Ordering::SeqCst);
+                }
+                AudioCommand::Record => {
+                    shared.playing.store(true, Ordering::SeqCst);
 
                     let armed_tracks: Vec<(TrackId, Option<String>)> = {
                         let tracks_guard = tracks.read();
@@ -879,6 +882,7 @@ fn engine_thread(
                                             clap_plugin_id: desc.id.clone(),
                                             name: desc.name.clone(),
                                             vendor: desc.vendor.clone(),
+                                            is_instrument: desc.is_instrument,
                                         });
                                     }
                                     // Keep bundle alive for later instantiation
