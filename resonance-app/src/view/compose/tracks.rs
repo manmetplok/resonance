@@ -7,7 +7,7 @@ use resonance_music_theory::Scale;
 
 use crate::compose::{ComposeMessage, SectionDefinitionState, SectionPlacementState};
 use crate::message::Message;
-use crate::state::{MidiClipState, TrackState};
+use crate::state::{InstrumentType, MidiClipState, TrackState};
 use crate::theme;
 use crate::Resonance;
 
@@ -245,7 +245,11 @@ impl<'a> ComposeTrackCanvas<'a> {
         let mut v: Vec<&TrackState> = self
             .tracks
             .iter()
-            .filter(|t| matches!(t.track_type, TrackType::Instrument) && t.sub_track.is_none())
+            .filter(|t| {
+                matches!(t.track_type, TrackType::Instrument)
+                    && t.sub_track.is_none()
+                    && t.instrument_type != InstrumentType::Drum
+            })
             .collect();
         v.sort_by_key(|t| t.order);
         v

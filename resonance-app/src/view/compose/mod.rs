@@ -2,9 +2,11 @@ use iced::widget::{column, container, row, text, Space};
 use iced::{alignment, Element, Length};
 
 use crate::message::Message;
+use crate::state::InstrumentType;
 use crate::theme;
 
 pub mod chord_lane;
+pub mod drumroll;
 pub mod instrument_panel;
 pub mod popover;
 pub mod scale_panel;
@@ -61,21 +63,27 @@ impl crate::Resonance {
                     _ => container(Space::with_height(0)).width(Length::Fill).into(),
                 };
 
-                let tracks_view = tracks::view(self, placement, definition);
+                let synth_tracks = tracks::view(self, placement, definition);
+                let drum_tracks = drumroll::view(self, placement, definition);
 
-                let left_column = column![chord_lane, editor, tracks_view]
+                let left_column = column![chord_lane, editor, synth_tracks, drum_tracks]
                     .spacing(0)
                     .width(Length::Fill)
                     .height(Length::Fill);
 
                 // The right-side panel swaps between scale info for the
-                // section (default) and instrument details for whichever
-                // track the user clicked in the name column.
+                // section (default), synth instrument details, and the
+                // drumroll pattern controls for drum tracks.
                 let right_panel: Element<'_, Message> = match self
                     .compose
                     .details_track_id
                     .and_then(|id| self.tracks.iter().find(|t| t.id == id))
                 {
+                    Some(track) if track.instrument_type == InstrumentType::Drum => {
+                        let clip_id =
+                            drumroll::clip_for_track(self, placement, definition, track.id);
+                        drumroll::controls::view(&self.compose.drumroll, track, clip_id)
+                    }
                     Some(track) => instrument_panel::view(track),
                     None => scale_panel::view(definition),
                 };

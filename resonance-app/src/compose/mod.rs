@@ -2,9 +2,11 @@ use resonance_music_theory::{Chord, Scale};
 
 use crate::project::{ProjectSectionChord, ProjectSectionDefinition, ProjectSectionPlacement};
 
+pub mod drumroll;
 pub mod invariants;
 pub mod messages;
 
+pub use drumroll::DrumrollViewState;
 pub use messages::ComposeMessage;
 
 /// Runtime mirror of `ProjectSectionDefinition`. Kept separate so future
@@ -60,6 +62,9 @@ pub struct ComposeState {
     /// shows an instrument details panel (name / type / icon) instead of
     /// the note grid.
     pub details_track_id: Option<resonance_audio::types::TrackId>,
+    /// Transient UI state for the drumroll block (selected pad, euclidean
+    /// form buffers, pad map). Not persisted.
+    pub drumroll: DrumrollViewState,
 }
 
 #[derive(Debug, Clone)]

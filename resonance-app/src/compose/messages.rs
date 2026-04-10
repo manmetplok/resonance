@@ -1,8 +1,13 @@
 use resonance_audio::types::TrackId;
 use resonance_music_theory::{Chord, ChordQuality, PitchClass, Scale};
 
+use crate::compose::drumroll::DrumrollMessage;
+
 #[derive(Debug, Clone)]
 pub enum ComposeMessage {
+    /// Drumroll view messages (toggle hit, generate euclidean, etc.).
+    Drumroll(DrumrollMessage),
+
     // Create a new MIDI clip that spans the selected section on the given
     // instrument track. Used by the "+" button that appears over empty
     // instrument rows in the Compose track area.

@@ -9,6 +9,7 @@ use resonance_audio::types::*;
 use std::collections::HashMap;
 
 pub mod compose;
+pub mod drumroll;
 
 impl crate::Resonance {
     pub(crate) fn update(&mut self, message: Message) -> Task<Message> {

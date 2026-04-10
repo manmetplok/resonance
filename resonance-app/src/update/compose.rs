@@ -43,6 +43,10 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
     let time_sig_num = r.time_sig_num;
 
     match msg {
+        ComposeMessage::Drumroll(m) => {
+            crate::update::drumroll::handle(r, m);
+        }
+
         ComposeMessage::CreateMidiClipInSection {
             track_id,
             start_sample,
