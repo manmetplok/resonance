@@ -10,6 +10,30 @@ use iced::widget::{
 use iced::{alignment, Color, Element, Font, Length};
 use resonance_audio::types::*;
 
+/// Which container a plugin slot belongs to. Used so `view_plugin_slot_row`
+/// can emit the right remove message regardless of whether it's rendering
+/// a track's plugin or a bus's plugin.
+#[derive(Debug, Clone, Copy)]
+enum PluginOwner {
+    Track(TrackId),
+    Bus(BusId),
+}
+
+/// Wrapper type for the output-destination pick_list so iced can render
+/// it via `Display` and `PartialEq`. Variants correspond 1:1 with
+/// `TrackOutput` but carry a display name for the chosen bus.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OutputChoice {
+    label: String,
+    output: TrackOutput,
+}
+
+impl std::fmt::Display for OutputChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
 /// Convert linear amplitude to meter bar height (logarithmic/dB scale).
 fn level_to_bar_height(level: f32, max_height: f32) -> f32 {
     if level < 0.0001 {
@@ -76,32 +100,57 @@ fn view_meter_v<'a>(level_l: f32, level_r: f32, height: f32) -> Element<'a, Mess
 impl crate::Resonance {
     pub(crate) fn view_mixer(&self) -> Element<'_, Message> {
         let sorted_tracks = self.sorted_tracks();
-
+        let sorted_busses = self.sorted_busses();
         let available_plugins = self.available_plugins.clone();
-        let mut strip_row = row![].spacing(2);
-        for track in &sorted_tracks {
-            strip_row = strip_row.push(self.view_channel_strip(track, &available_plugins));
-        }
 
-        let scrollable_strips = scrollable(strip_row)
+        // -- Top row: track strips + master strip on the right. --
+        let mut track_strip_row = row![].spacing(2);
+        for track in &sorted_tracks {
+            track_strip_row =
+                track_strip_row.push(self.view_channel_strip(track, &available_plugins));
+        }
+        let scrollable_tracks = scrollable(track_strip_row)
             .direction(scrollable::Direction::Horizontal(
                 scrollable::Scrollbar::default(),
             ))
             .width(Length::Fill);
-
         let master_strip = self.view_master_strip();
+        let v_separator_tracks =
+            container(Space::new(1, Length::Fill)).style(|_theme| container::Style {
+                background: Some(iced::Background::Color(theme::SEPARATOR)),
+                ..Default::default()
+            });
+        let tracks_area = row![scrollable_tracks, v_separator_tracks, master_strip]
+            .height(Length::FillPortion(1));
 
-        let separator = container(Space::new(1, Length::Fill)).style(|_theme| container::Style {
+        // -- Bottom row: bus strips + "+ Bus" button on the right. --
+        let mut bus_strip_row = row![].spacing(2);
+        for bus in &sorted_busses {
+            bus_strip_row = bus_strip_row.push(self.view_bus_strip(bus, &available_plugins));
+        }
+        let scrollable_busses = scrollable(bus_strip_row)
+            .direction(scrollable::Direction::Horizontal(
+                scrollable::Scrollbar::default(),
+            ))
+            .width(Length::Fill);
+        let add_bus_strip = self.view_add_bus_strip();
+        let v_separator_busses =
+            container(Space::new(1, Length::Fill)).style(|_theme| container::Style {
+                background: Some(iced::Background::Color(theme::SEPARATOR)),
+                ..Default::default()
+            });
+        let busses_area = row![scrollable_busses, v_separator_busses, add_bus_strip]
+            .height(Length::FillPortion(1));
+
+        let h_sep_mid = container(Space::new(Length::Fill, 1)).style(|_theme| container::Style {
             background: Some(iced::Background::Color(theme::SEPARATOR)),
             ..Default::default()
         });
 
-        let strips_area = row![scrollable_strips, separator, master_strip]
-            .height(Length::Fill);
-
-        // Bottom plugin panel
         let mut mixer_col = column![].spacing(0);
-        mixer_col = mixer_col.push(strips_area);
+        mixer_col = mixer_col.push(tracks_area);
+        mixer_col = mixer_col.push(h_sep_mid);
+        mixer_col = mixer_col.push(busses_area);
 
         if let Some(panel) = self.view_plugin_panel() {
             let h_sep = container(Space::new(Length::Fill, 1)).style(|_theme| container::Style {
@@ -122,11 +171,52 @@ impl crate::Resonance {
             .into()
     }
 
+    /// Small "+ Bus" strip that lives in the same slot the master strip
+    /// occupies in the top row, but in the bus row. Clicking it dispatches
+    /// `Message::AddBus`.
+    fn view_add_bus_strip(&self) -> Element<'_, Message> {
+        let label = container(
+            text("Busses").size(11).color(theme::TEXT_DIM),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .padding([6, 4]);
+
+        let add_btn = button(text("+ Bus").size(11).color(theme::TEXT))
+            .on_press(Message::AddBus)
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding([4, 10]);
+
+        let content = column![
+            label,
+            container(add_btn)
+                .width(Length::Fill)
+                .center_x(Length::Fill),
+            Space::with_height(Length::Fill),
+        ]
+        .spacing(4)
+        .padding(8)
+        .width(theme::MASTER_STRIP_WIDTH);
+
+        container(content)
+            .height(Length::Fill)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(theme::PANEL_DARK)),
+                border: iced::Border {
+                    color: theme::SEPARATOR,
+                    width: 0.5,
+                    radius: 0.0.into(),
+                },
+                ..Default::default()
+            })
+            .into()
+    }
+
     /// Render a single plugin slot row (name button + remove button).
     /// If `is_instrument_slot` is true, the name is tinted to distinguish it.
     fn view_plugin_slot_row(
         &self,
-        track_id: TrackId,
+        owner: PluginOwner,
         plugin: &PluginSlotState,
         is_instrument_slot: bool,
     ) -> Element<'_, Message> {
@@ -171,8 +261,12 @@ impl crate::Resonance {
             })
             .padding(1);
 
+        let remove_msg = match owner {
+            PluginOwner::Track(track_id) => Message::RemovePluginFromTrack(track_id, pid),
+            PluginOwner::Bus(bus_id) => Message::RemovePluginFromBus(bus_id, pid),
+        };
         let plugin_del = button(text("\u{00d7}").size(9).color(theme::TEXT_DIM))
-            .on_press(Message::RemovePluginFromTrack(track_id, pid))
+            .on_press(remove_msg)
             .style(|_theme, status| theme::small_button_style(status))
             .padding(1);
 
@@ -239,6 +333,9 @@ impl crate::Resonance {
             .spacing(4)
             .align_y(alignment::Vertical::Center);
 
+        // Output destination selector: Master + every existing bus.
+        let output_picker = self.view_track_output_picker(track);
+
         // Plugin chain (click to show in bottom panel)
         let mut plugin_section = column![].spacing(2).width(Length::Fill);
         let is_instrument_track = track.track_type == TrackType::Instrument;
@@ -247,7 +344,7 @@ impl crate::Resonance {
         if is_instrument_track {
             if let Some(plugin) = track.plugins.first() {
                 plugin_section = plugin_section.push(
-                    self.view_plugin_slot_row(track.id, plugin, true),
+                    self.view_plugin_slot_row(PluginOwner::Track(track.id), plugin, true),
                 );
             } else if !available_plugins.is_empty() {
                 // Empty instrument slot: show a picker filtered to instruments.
@@ -285,14 +382,14 @@ impl crate::Resonance {
             // FX slots: plugins after the instrument.
             for plugin in track.plugins.iter().skip(1) {
                 plugin_section = plugin_section.push(
-                    self.view_plugin_slot_row(track.id, plugin, false),
+                    self.view_plugin_slot_row(PluginOwner::Track(track.id), plugin, false),
                 );
             }
         } else {
             // Audio track: all plugins are FX.
             for plugin in &track.plugins {
                 plugin_section = plugin_section.push(
-                    self.view_plugin_slot_row(track.id, plugin, false),
+                    self.view_plugin_slot_row(PluginOwner::Track(track.id), plugin, false),
                 );
             }
         }
@@ -402,6 +499,7 @@ impl crate::Resonance {
             plugin_section,
             pan_row,
             fader_section,
+            output_picker,
             bottom_section,
         ]
         .spacing(4)
@@ -413,6 +511,163 @@ impl crate::Resonance {
                 background: Some(iced::Background::Color(bg)),
                 border: iced::Border {
                     color: border_color,
+                    width: 0.5,
+                    radius: 0.0.into(),
+                },
+                ..Default::default()
+            })
+            .into()
+    }
+
+    /// Pick-list of available output destinations (Master + all busses)
+    /// for a given track. Emits `Message::SetTrackOutput` when changed.
+    fn view_track_output_picker(&self, track: &TrackState) -> Element<'_, Message> {
+        let mut choices: Vec<OutputChoice> = Vec::with_capacity(1 + self.busses.len());
+        choices.push(OutputChoice {
+            label: "→ Master".to_string(),
+            output: TrackOutput::Master,
+        });
+        for bus in self.sorted_busses() {
+            choices.push(OutputChoice {
+                label: format!("→ {}", bus.name),
+                output: TrackOutput::Bus(bus.id),
+            });
+        }
+
+        // Resolve the currently-selected choice (fall back to Master if the
+        // track's bus id isn't in the choice list — e.g. mid-remove).
+        let selected = choices
+            .iter()
+            .find(|c| c.output == track.output)
+            .cloned()
+            .unwrap_or_else(|| choices[0].clone());
+
+        let track_id = track.id;
+        let picker = pick_list(choices, Some(selected), move |choice: OutputChoice| {
+            Message::SetTrackOutput(track_id, choice.output)
+        })
+        .text_size(9)
+        .width(Length::Fill);
+
+        container(picker)
+            .width(Length::Fill)
+            .into()
+    }
+
+    /// Render a bus channel strip. Structurally similar to a track strip
+    /// but trimmed: no mono/monitor/arm, no instrument slot, no input
+    /// device picker, no output selector (busses always go to master).
+    fn view_bus_strip(
+        &self,
+        bus: &BusState,
+        available_plugins: &[ScannedPlugin],
+    ) -> Element<'_, Message> {
+        let bus_name = container(
+            text(bus.name.clone()).size(13).color(theme::TEXT),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .padding([6, 4]);
+
+        // Mute + Remove buttons.
+        let mute_color = if bus.muted { theme::ACCENT } else { theme::TEXT_DIM };
+        let bus_id = bus.id;
+        let mute_btn = button(text("M").size(11).color(mute_color))
+            .on_press(Message::ToggleBusMute(bus_id))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(2);
+
+        let remove_btn = button(text("\u{00d7}").size(11).color(theme::TEXT_DIM))
+            .on_press(Message::RemoveBus(bus_id))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding(2);
+
+        let button_row = row![mute_btn, Space::with_width(Length::Fill), remove_btn]
+            .spacing(4)
+            .align_y(alignment::Vertical::Center);
+
+        // Plugin chain (all effects — no instrument slot on busses).
+        let mut plugin_section = column![].spacing(2).width(Length::Fill);
+        for plugin in &bus.plugins {
+            plugin_section = plugin_section.push(
+                self.view_plugin_slot_row(PluginOwner::Bus(bus_id), plugin, false),
+            );
+        }
+
+        if !available_plugins.is_empty() {
+            let effects: Vec<ScannedPlugin> = available_plugins
+                .iter()
+                .filter(|p| !p.is_instrument)
+                .cloned()
+                .collect();
+            if !effects.is_empty() {
+                let fx_picker = pick_list(
+                    effects,
+                    None::<ScannedPlugin>,
+                    move |plugin: ScannedPlugin| Message::AddPluginToBus(bus_id, plugin),
+                )
+                .placeholder("+ FX")
+                .text_size(10)
+                .width(Length::Fill);
+                plugin_section = plugin_section.push(fx_picker);
+            }
+        }
+
+        // Pan control.
+        let pan_slider = slider(-1.0..=1.0f32, bus.pan, move |v| {
+            Message::SetBusPan(bus_id, v)
+        })
+        .width(Length::Fill)
+        .step(0.01);
+
+        let pan_label = format_pan(bus.pan);
+        let pan_row = row![
+            text("Pan").size(9).color(theme::TEXT_DIM),
+            Space::with_width(4),
+            pan_slider,
+            Space::with_width(4),
+            text(pan_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
+        ]
+        .spacing(2)
+        .align_y(alignment::Vertical::Center);
+
+        // Volume fader + meters.
+        let fader_height = 120.0;
+        let vol_fader = vertical_slider(-60.0..=6.0f32, bus.volume, move |v| {
+            Message::SetBusVolume(bus_id, v)
+        })
+        .height(fader_height)
+        .step(0.1);
+        let meters = view_meter_v(bus.level_l, bus.level_r, fader_height);
+        let vol_label = format_db(bus.volume);
+        let fader_row = row![meters, vol_fader]
+            .spacing(4)
+            .align_y(alignment::Vertical::Center);
+        let fader_section = column![
+            container(fader_row)
+                .width(Length::Fill)
+                .center_x(Length::Fill),
+            text(vol_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
+        ]
+        .spacing(2)
+        .align_x(alignment::Horizontal::Center);
+
+        let strip_content = column![
+            bus_name,
+            button_row,
+            plugin_section,
+            pan_row,
+            fader_section,
+        ]
+        .spacing(4)
+        .padding(6)
+        .width(theme::MIXER_STRIP_WIDTH);
+
+        container(strip_content)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(theme::PANEL_DARK)),
+                border: iced::Border {
+                    color: theme::SEPARATOR,
                     width: 0.5,
                     radius: 0.0.into(),
                 },
@@ -497,9 +752,10 @@ impl crate::Resonance {
     fn view_plugin_panel(&self) -> Option<Element<'_, Message>> {
         let selected_id = self.selected_plugin?;
 
-        // Find the plugin across all tracks
+        // Find the plugin across all tracks and busses.
         let plugin = self.tracks.iter()
             .flat_map(|t| t.plugins.iter())
+            .chain(self.busses.iter().flat_map(|b| b.plugins.iter()))
             .find(|p| p.instance_id == selected_id)?;
 
         let ui_params: Vec<resonance_plugin::ui::UiParam> = plugin.params.iter()

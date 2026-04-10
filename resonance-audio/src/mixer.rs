@@ -24,6 +24,32 @@ fn track_stereo_gains(track: &Track) -> (f32, f32) {
     (volume * pan_l, volume * pan_r)
 }
 
+/// Compute stereo gains for a bus using the same equal-power pan law.
+#[inline]
+fn bus_stereo_gains(bus: &Bus) -> (f32, f32) {
+    let volume = bus.volume();
+    let (pan_l, pan_r) = resonance_dsp::constant_power_pan(bus.pan());
+    (volume * pan_l, volume * pan_r)
+}
+
+/// Accumulate a source track buffer into a destination stereo pair
+/// (separate L/R Vecs, as used by bus summing buffers).
+#[inline]
+fn sum_to_stereo(
+    dst_l: &mut [f32],
+    dst_r: &mut [f32],
+    frames: usize,
+    src_l: &[f32],
+    src_r: &[f32],
+    gain_l: f32,
+    gain_r: f32,
+) {
+    for f in 0..frames {
+        dst_l[f] += src_l[f] * gain_l;
+        dst_r[f] += src_r[f] * gain_r;
+    }
+}
+
 /// De-interleave monitor input into track buffers and process through plugins.
 /// Returns the number of frames written.
 fn process_monitor_track(
@@ -207,6 +233,7 @@ pub(crate) fn mix_audio(
     channels: usize,
     shared: &SharedState,
     tracks: &parking_lot::RwLock<IndexMap<TrackId, Track>>,
+    busses: &parking_lot::RwLock<IndexMap<BusId, Bus>>,
     clips: &parking_lot::RwLock<Vec<AudioClip>>,
     midi_clips: &parking_lot::RwLock<Vec<MidiClip>>,
     plugins: &parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>,
@@ -214,6 +241,7 @@ pub(crate) fn mix_audio(
     sample_rate: u32,
     track_buf_l: &mut Vec<f32>,
     track_buf_r: &mut Vec<f32>,
+    bus_bufs: &mut [(Vec<f32>, Vec<f32>)],
     note_event_buf: &mut Vec<PendingNoteEvent>,
     monitor_cons: &mut ringbuf::HeapCons<f32>,
     monitor_temp: &mut Vec<f32>,
@@ -294,14 +322,34 @@ pub(crate) fn mix_audio(
 
     let playhead = shared.playhead.load(Ordering::Relaxed);
 
-    let (Some(tracks_guard), Some(clips_guard), Some(midi_clips_guard), Some(plugins_guard)) =
-        (tracks.try_read(), clips.try_read(), midi_clips.try_read(), plugins.try_read())
+    let (
+        Some(tracks_guard),
+        Some(busses_guard),
+        Some(clips_guard),
+        Some(midi_clips_guard),
+        Some(plugins_guard),
+    ) = (
+        tracks.try_read(),
+        busses.try_read(),
+        clips.try_read(),
+        midi_clips.try_read(),
+        plugins.try_read(),
+    )
     else {
         // Lock contended -- advance playhead to avoid desync, output silence this buffer
         let new_playhead = playhead + output_frames as u64;
         shared.playhead.store(new_playhead, Ordering::Relaxed);
         return;
     };
+
+    // Zero every active bus summing buffer at the start of the block so
+    // tracks can accumulate into them. Capped at `bus_bufs.len()` (= MAX_BUSSES)
+    // so runaway bus counts never index out of the pre-allocated pool.
+    let active_busses = busses_guard.len().min(bus_bufs.len());
+    for (buf_l, buf_r) in bus_bufs.iter_mut().take(active_busses) {
+        buf_l[..frames].fill(0.0);
+        buf_r[..frames].fill(0.0);
+    }
 
     // Read tempo for MIDI tick conversion
     let samples_per_tick = if let Some(tm) = tempo_map.try_read() {
@@ -447,7 +495,7 @@ pub(crate) fn mix_audio(
             continue;
         }
 
-        // Apply track volume + pan and sum to master output
+        // Apply track volume + pan and sum to the track's destination.
         let (gain_l, gain_r) = track_stereo_gains(track);
 
         // Compute post-fader peak levels for VU meters
@@ -460,7 +508,63 @@ pub(crate) fn mix_audio(
         track.update_peak_l(peak_l);
         track.update_peak_r(peak_r);
 
-        sum_to_output(data, channels, frames, track_buf_l, track_buf_r, gain_l, gain_r);
+        // Route post-fader audio: either directly to the master interleaved
+        // output or into the target bus's summing buffer. If the target bus
+        // no longer exists (e.g. removed mid-block), fall back to master so
+        // the track isn't silenced.
+        let routed_to_bus = match track.output() {
+            TrackOutput::Bus(bus_id) => busses_guard
+                .get_index_of(&bus_id)
+                .filter(|idx| *idx < active_busses)
+                .map(|idx| {
+                    let (bl, br) = &mut bus_bufs[idx];
+                    sum_to_stereo(bl, br, frames, track_buf_l, track_buf_r, gain_l, gain_r);
+                })
+                .is_some(),
+            TrackOutput::Master => false,
+        };
+        if !routed_to_bus {
+            sum_to_output(
+                data, channels, frames, track_buf_l, track_buf_r, gain_l, gain_r,
+            );
+        }
+    }
+
+    // Per-bus processing: plugin chain, volume/pan, peaks, sum to master.
+    for (bus_idx, bus) in busses_guard.values().enumerate().take(active_busses) {
+        if bus.muted() {
+            continue;
+        }
+        let (bus_buf_l, bus_buf_r) = &mut bus_bufs[bus_idx];
+
+        // Process bus plugin chain in place over the accumulated buffer.
+        for &plugin_id in &bus.plugin_ids {
+            if let Some(mutex) = plugins_guard.get(&plugin_id) {
+                if let Some(mut inst) = mutex.try_lock() {
+                    inst.0.process(
+                        &mut bus_buf_l[..frames],
+                        &mut bus_buf_r[..frames],
+                        frames,
+                    );
+                }
+            }
+        }
+
+        // Apply bus volume + pan and compute post-fader peaks.
+        let (bus_gain_l, bus_gain_r) = bus_stereo_gains(bus);
+        let mut bus_peak_l = 0.0f32;
+        let mut bus_peak_r = 0.0f32;
+        for f in 0..frames {
+            bus_peak_l = bus_peak_l.max((bus_buf_l[f] * bus_gain_l).abs());
+            bus_peak_r = bus_peak_r.max((bus_buf_r[f] * bus_gain_r).abs());
+        }
+        bus.update_peak_l(bus_peak_l);
+        bus.update_peak_r(bus_peak_r);
+
+        // Sum the bus output into master.
+        sum_to_output(
+            data, channels, frames, bus_buf_l, bus_buf_r, bus_gain_l, bus_gain_r,
+        );
     }
 
     drop(plugins_guard);

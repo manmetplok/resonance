@@ -22,6 +22,8 @@ pub struct ProjectFile {
     pub clips: Vec<ProjectClip>,
     #[serde(default)]
     pub midi_clips: Vec<ProjectMidiClip>,
+    #[serde(default)]
+    pub busses: Vec<ProjectBus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +42,22 @@ pub struct ProjectTrack {
     pub plugins: Vec<ProjectPlugin>,
     #[serde(default = "default_track_type")]
     pub track_type: String,
+    /// If Some, the track routes to this bus id. None (default on old
+    /// projects) means the track routes directly to master.
+    #[serde(default)]
+    pub output_bus: Option<u64>,
+}
+
+/// On-disk bus state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectBus {
+    pub id: u64,
+    pub name: String,
+    pub order: usize,
+    pub volume: f32,
+    pub pan: f32,
+    pub muted: bool,
+    pub plugins: Vec<ProjectPlugin>,
 }
 
 fn default_track_type() -> String {

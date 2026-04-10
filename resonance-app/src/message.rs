@@ -1,7 +1,9 @@
 /// Message types for the Resonance application.
 use crate::project::LoadedProject;
 use crate::state::{ClipEdge, PunchDragTarget, ViewMode};
-use resonance_audio::types::{ClipId, PluginInstanceId, ScannedPlugin, TrackId};
+use resonance_audio::types::{
+    BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
@@ -107,4 +109,14 @@ pub(crate) enum Message {
     MidiEditorStopPreview(TrackId, u8),
     MidiEditorScrollX(f32),
     MidiEditorScrollY(f32),
+
+    // -- Bus messages --
+    AddBus,
+    RemoveBus(BusId),
+    SetBusVolume(BusId, f32),
+    SetBusPan(BusId, f32),
+    ToggleBusMute(BusId),
+    SetTrackOutput(TrackId, TrackOutput),
+    AddPluginToBus(BusId, ScannedPlugin),
+    RemovePluginFromBus(BusId, PluginInstanceId),
 }

@@ -4,6 +4,10 @@
 const RECORDING_RING_SIZE: usize = 96000 * 2 * 10;
 /// Pre-allocation for recording buffers: ~60 seconds of stereo audio.
 const RECORDING_PREALLOC_SECONDS: usize = 60;
+/// Hard cap on concurrent busses. Used to pre-allocate bus summing
+/// buffers at startup so the audio thread never has to allocate on a
+/// bus add. 32 is well past what any realistic project needs.
+pub(crate) const MAX_BUSSES: usize = 32;
 
 use indexmap::IndexMap;
 use std::path::Path;
@@ -50,6 +54,7 @@ pub struct AudioEngine {
     // Shared state for live stream rebuilding (e.g. buffer size changes)
     shared: Arc<SharedState>,
     tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>>,
+    busses: Arc<parking_lot::RwLock<IndexMap<BusId, Bus>>>,
     clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
     midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>>,
     plugins: Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
@@ -108,12 +113,15 @@ impl AudioEngine {
 
         let tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>> =
             Arc::new(parking_lot::RwLock::new(IndexMap::new()));
+        let busses: Arc<parking_lot::RwLock<IndexMap<BusId, Bus>>> =
+            Arc::new(parking_lot::RwLock::new(IndexMap::new()));
         let clips: Arc<parking_lot::RwLock<Vec<AudioClip>>> =
             Arc::new(parking_lot::RwLock::new(Vec::new()));
         let midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>> =
             Arc::new(parking_lot::RwLock::new(Vec::new()));
 
         let tracks_audio = Arc::clone(&tracks);
+        let busses_audio = Arc::clone(&busses);
         let clips_audio = Arc::clone(&clips);
         let midi_clips_audio = Arc::clone(&midi_clips);
 
@@ -137,12 +145,19 @@ impl AudioEngine {
             // Clone captures that the closure needs to own
             let shared_audio = Arc::clone(&shared_audio);
             let tracks_audio = Arc::clone(&tracks_audio);
+            let busses_audio = Arc::clone(&busses_audio);
             let clips_audio = Arc::clone(&clips_audio);
             let midi_clips_audio = Arc::clone(&midi_clips_audio);
             let plugins_audio = Arc::clone(&plugins_audio);
             let tempo_audio = Arc::clone(&tempo_audio);
             let mut track_buf_l = vec![0.0f32; audio_buf_frames];
             let mut track_buf_r = vec![0.0f32; audio_buf_frames];
+            // Pre-allocate MAX_BUSSES stereo buffers so adding a bus at
+            // runtime never allocates on the audio thread. mix_audio only
+            // uses the first N slots where N = current bus count.
+            let mut bus_bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..MAX_BUSSES)
+                .map(|_| (vec![0.0f32; audio_buf_frames], vec![0.0f32; audio_buf_frames]))
+                .collect();
             let mut note_event_buf: Vec<PendingNoteEvent> = Vec::with_capacity(256);
             let mut monitor_temp = vec![0.0f32; audio_buf_frames * 2];
             let monitor_ring = ringbuf::HeapRb::<f32>::new(audio_quantum * 2 * 4);
@@ -155,6 +170,7 @@ impl AudioEngine {
                         channels,
                         &shared_audio,
                         &tracks_audio,
+                        &busses_audio,
                         &clips_audio,
                         &midi_clips_audio,
                         &plugins_audio,
@@ -162,6 +178,7 @@ impl AudioEngine {
                         audio_sample_rate,
                         &mut track_buf_l,
                         &mut track_buf_r,
+                        &mut bus_bufs,
                         &mut note_event_buf,
                         &mut monitor_cons,
                         &mut monitor_temp,
@@ -194,6 +211,7 @@ impl AudioEngine {
         // Spawn the engine control thread
         let shared_ctrl = Arc::clone(&shared);
         let tracks_ctrl = Arc::clone(&tracks);
+        let busses_ctrl = Arc::clone(&busses);
         let clips_ctrl = Arc::clone(&clips);
         let midi_clips_ctrl = Arc::clone(&midi_clips);
         let tempo_ctrl = Arc::clone(&tempo_map);
@@ -209,6 +227,7 @@ impl AudioEngine {
                     event_tx,
                     shared_ctrl,
                     tracks_ctrl,
+                    busses_ctrl,
                     clips_ctrl,
                     midi_clips_ctrl,
                     tempo_ctrl,
@@ -227,6 +246,7 @@ impl AudioEngine {
             _stream: Some(stream),
             shared,
             tracks,
+            busses,
             clips,
             midi_clips,
             plugins,
@@ -258,9 +278,11 @@ impl AudioEngine {
         self.event_rx.clone()
     }
 
-    /// Read and clear peak levels for all tracks and master.
-    /// Returns (track_peaks, master_peak_l, master_peak_r).
-    pub fn read_and_clear_peaks(&self) -> (Vec<(TrackId, f32, f32)>, f32, f32) {
+    /// Read and clear peak levels for all tracks, busses, and master.
+    /// Returns (track_peaks, bus_peaks, master_peak_l, master_peak_r).
+    pub fn read_and_clear_peaks(
+        &self,
+    ) -> (Vec<(TrackId, f32, f32)>, Vec<(BusId, f32, f32)>, f32, f32) {
         let track_levels = if let Some(guard) = self.tracks.try_read() {
             guard
                 .values()
@@ -269,11 +291,19 @@ impl AudioEngine {
         } else {
             Vec::new()
         };
+        let bus_levels = if let Some(guard) = self.busses.try_read() {
+            guard
+                .values()
+                .map(|b| (b.id, b.swap_peak_l(), b.swap_peak_r()))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let ml =
             f32::from_bits(self.shared.master_peak_l_bits.swap(0, Ordering::Relaxed));
         let mr =
             f32::from_bits(self.shared.master_peak_r_bits.swap(0, Ordering::Relaxed));
-        (track_levels, ml, mr)
+        (track_levels, bus_levels, ml, mr)
     }
 }
 
@@ -284,6 +314,7 @@ fn engine_thread(
     event_tx: Sender<AudioEvent>,
     shared: Arc<SharedState>,
     tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>>,
+    busses: Arc<parking_lot::RwLock<IndexMap<BusId, Bus>>>,
     clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
     midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>>,
     tempo_map: Arc<parking_lot::RwLock<TempoMap>>,
@@ -294,6 +325,7 @@ fn engine_thread(
     quantum: usize,
 ) {
     let mut next_track_id: TrackId = 1;
+    let mut next_bus_id: BusId = 1;
     let mut next_clip_id: ClipId = 1;
     let mut next_plugin_id: PluginInstanceId = 1;
     let mut last_playhead_report = std::time::Instant::now();
@@ -1026,6 +1058,12 @@ fn engine_thread(
                     const BOUNCE_CHUNK: usize = 1024;
                     let mut track_buf_l = vec![0.0f32; BOUNCE_CHUNK];
                     let mut track_buf_r = vec![0.0f32; BOUNCE_CHUNK];
+                    // Bounce mirrors live playback: pre-allocate one stereo
+                    // buffer per potential bus so bus routing survives the
+                    // offline render.
+                    let mut bounce_bus_bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..MAX_BUSSES)
+                        .map(|_| (vec![0.0f32; BOUNCE_CHUNK], vec![0.0f32; BOUNCE_CHUNK]))
+                        .collect();
                     let mut bounce_note_buf: Vec<PendingNoteEvent> = Vec::with_capacity(256);
                     let mut mix_buf = vec![0.0f32; BOUNCE_CHUNK * 2];
                     let master_vol =
@@ -1043,9 +1081,16 @@ fn engine_thread(
                         mix_buf[..frames * 2].fill(0.0);
 
                         let tracks_guard = tracks.read();
+                        let busses_guard = busses.read();
                         let clips_guard = clips.read();
                         let midi_guard = midi_clips.read();
                         let plugins_guard = plugins.read();
+
+                        let active_busses = busses_guard.len().min(bounce_bus_bufs.len());
+                        for (bl, br) in bounce_bus_bufs.iter_mut().take(active_busses) {
+                            bl[..frames].fill(0.0);
+                            br[..frames].fill(0.0);
+                        }
 
                         let any_solo = tracks_guard.values().any(|t| t.soloed());
 
@@ -1137,20 +1182,67 @@ fn engine_thread(
                                 continue;
                             }
 
-                            // Apply track volume + pan, sum into mix buffer
+                            // Apply track volume + pan, route to master or bus.
                             let volume = track.volume();
                             let (pan_l, pan_r) =
                                 resonance_dsp::constant_power_pan(track.pan());
                             let gain_l = volume * pan_l;
                             let gain_r = volume * pan_r;
+
+                            let routed_to_bus = match track.output() {
+                                TrackOutput::Bus(bus_id) => busses_guard
+                                    .get_index_of(&bus_id)
+                                    .filter(|idx| *idx < active_busses)
+                                    .map(|idx| {
+                                        let (bl, br) = &mut bounce_bus_bufs[idx];
+                                        for f in 0..frames {
+                                            bl[f] += track_buf_l[f] * gain_l;
+                                            br[f] += track_buf_r[f] * gain_r;
+                                        }
+                                    })
+                                    .is_some(),
+                                TrackOutput::Master => false,
+                            };
+                            if !routed_to_bus {
+                                for f in 0..frames {
+                                    mix_buf[f * 2] += track_buf_l[f] * gain_l;
+                                    mix_buf[f * 2 + 1] += track_buf_r[f] * gain_r;
+                                }
+                            }
+                        }
+
+                        // Per-bus plugin chain + volume/pan + sum to master.
+                        for (bus_idx, bus) in
+                            busses_guard.values().enumerate().take(active_busses)
+                        {
+                            if bus.muted() {
+                                continue;
+                            }
+                            let (bl, br) = &mut bounce_bus_bufs[bus_idx];
+                            for &plugin_id in &bus.plugin_ids {
+                                if let Some(mutex) = plugins_guard.get(&plugin_id) {
+                                    let mut inst = mutex.lock();
+                                    inst.0.process(
+                                        &mut bl[..frames],
+                                        &mut br[..frames],
+                                        frames,
+                                    );
+                                }
+                            }
+                            let bus_volume = bus.volume();
+                            let (bus_pan_l, bus_pan_r) =
+                                resonance_dsp::constant_power_pan(bus.pan());
+                            let bus_gain_l = bus_volume * bus_pan_l;
+                            let bus_gain_r = bus_volume * bus_pan_r;
                             for f in 0..frames {
-                                mix_buf[f * 2] += track_buf_l[f] * gain_l;
-                                mix_buf[f * 2 + 1] += track_buf_r[f] * gain_r;
+                                mix_buf[f * 2] += bl[f] * bus_gain_l;
+                                mix_buf[f * 2 + 1] += br[f] * bus_gain_r;
                             }
                         }
 
                         drop(plugins_guard);
                         drop(clips_guard);
+                        drop(busses_guard);
                         drop(tracks_guard);
 
                         // Apply master volume and hard clip
@@ -1535,6 +1627,240 @@ fn engine_thread(
                             }
                         }
                     }
+                }
+
+                // -- Bus commands --
+                AudioCommand::AddBus => {
+                    let mut busses_guard = busses.write();
+                    if busses_guard.len() >= MAX_BUSSES {
+                        let _ = event_tx.send(AudioEvent::Error(format!(
+                            "Cannot add bus: maximum of {MAX_BUSSES} busses reached"
+                        )));
+                    } else {
+                        let bus_id = next_bus_id;
+                        next_bus_id += 1;
+                        let name = format!("Bus {bus_id}");
+                        busses_guard.insert(bus_id, Bus::new(bus_id, name.clone()));
+                        drop(busses_guard);
+                        let _ = event_tx.send(AudioEvent::BusAdded { bus_id, name });
+                    }
+                }
+                AudioCommand::AddBusWithId { bus_id, name } => {
+                    let mut busses_guard = busses.write();
+                    if busses_guard.len() >= MAX_BUSSES {
+                        let _ = event_tx.send(AudioEvent::Error(format!(
+                            "Cannot add bus: maximum of {MAX_BUSSES} busses reached"
+                        )));
+                    } else if !busses_guard.contains_key(&bus_id) {
+                        busses_guard.insert(bus_id, Bus::new(bus_id, name.clone()));
+                        next_bus_id = next_bus_id.max(bus_id + 1);
+                        drop(busses_guard);
+                        let _ = event_tx.send(AudioEvent::BusAdded { bus_id, name });
+                    }
+                }
+                AudioCommand::RemoveBus { bus_id } => {
+                    // First: unassign any track that was routed here so no
+                    // dangling references survive the removal.
+                    {
+                        let tracks_guard = tracks.read();
+                        for track in tracks_guard.values() {
+                            if track.output() == TrackOutput::Bus(bus_id) {
+                                track.set_output(TrackOutput::Master);
+                            }
+                        }
+                    }
+                    // Collect the bus's plugin ids before removing it so we
+                    // can tear them down outside the busses lock.
+                    let removed_plugins: Vec<PluginInstanceId> = {
+                        let mut busses_guard = busses.write();
+                        if let Some(bus) = busses_guard.shift_remove(&bus_id) {
+                            bus.plugin_ids
+                        } else {
+                            Vec::new()
+                        }
+                    };
+                    // Drop plugin instances off the audio path.
+                    {
+                        let mut plugins_guard = plugins.write();
+                        for pid in &removed_plugins {
+                            if let Some(inst) = plugins_guard.shift_remove(pid) {
+                                drop(inst);
+                            }
+                        }
+                    }
+                    let _ = event_tx.send(AudioEvent::BusRemoved { bus_id });
+                }
+                AudioCommand::SetBusVolume { bus_id, volume } => {
+                    if let Some(bus) = busses.read().get(&bus_id) {
+                        bus.set_volume(volume);
+                    }
+                }
+                AudioCommand::SetBusPan { bus_id, pan } => {
+                    if let Some(bus) = busses.read().get(&bus_id) {
+                        bus.set_pan(pan);
+                    }
+                }
+                AudioCommand::SetBusMute { bus_id, muted } => {
+                    if let Some(bus) = busses.read().get(&bus_id) {
+                        bus.set_muted(muted);
+                    }
+                }
+                AudioCommand::SetBusName { bus_id, name } => {
+                    if let Some(bus) = busses.write().get_mut(&bus_id) {
+                        bus.name = name;
+                    }
+                }
+                AudioCommand::SetTrackOutput { track_id, output } => {
+                    if let Some(track) = tracks.read().get(&track_id) {
+                        track.set_output(output);
+                    }
+                }
+                AudioCommand::AddPluginToBus {
+                    bus_id,
+                    clap_file_path,
+                    clap_plugin_id,
+                } => {
+                    let path = Path::new(&clap_file_path);
+                    let bundle_idx = bundles.iter().position(|b| {
+                        b.descriptors().iter().any(|d| d.id == clap_plugin_id)
+                    });
+                    let bundle_idx = match bundle_idx {
+                        Some(idx) => idx,
+                        None => match ClapBundle::load(path) {
+                            Ok(bundle) => {
+                                bundles.push(bundle);
+                                bundles.len() - 1
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(AudioEvent::Error(format!(
+                                    "Failed to load plugin: {}", e
+                                )));
+                                continue;
+                            }
+                        },
+                    };
+                    let actual_plugin_id = if clap_plugin_id.is_empty() {
+                        match bundles[bundle_idx].descriptors().first() {
+                            Some(d) => d.id.clone(),
+                            None => {
+                                let _ = event_tx.send(AudioEvent::Error(
+                                    "No plugins found in file".to_string(),
+                                ));
+                                continue;
+                            }
+                        }
+                    } else {
+                        clap_plugin_id
+                    };
+                    let plugin_name = bundles[bundle_idx]
+                        .descriptors()
+                        .iter()
+                        .find(|d| d.id == actual_plugin_id)
+                        .map(|d| d.name.clone())
+                        .unwrap_or_else(|| actual_plugin_id.clone());
+                    match bundles[bundle_idx].create_instance(&actual_plugin_id, sample_rate) {
+                        Ok(instance) => {
+                            let instance_id = next_plugin_id;
+                            next_plugin_id += 1;
+                            let params = instance.query_params();
+                            let has_gui = instance.has_gui();
+                            plugins.write().insert(
+                                instance_id,
+                                parking_lot::Mutex::new(SyncClapInstance(instance)),
+                            );
+                            if let Some(bus) = busses.write().get_mut(&bus_id) {
+                                bus.plugin_ids.push(instance_id);
+                            }
+                            let _ = event_tx.send(AudioEvent::BusPluginAdded {
+                                bus_id,
+                                instance_id,
+                                plugin_name,
+                                clap_plugin_id: actual_plugin_id.clone(),
+                                clap_file_path,
+                                params,
+                                has_gui,
+                            });
+                        }
+                        Err(e) => {
+                            let _ = event_tx.send(AudioEvent::Error(format!(
+                                "Failed to create plugin instance: {}", e
+                            )));
+                        }
+                    }
+                }
+                AudioCommand::AddPluginToBusWithId {
+                    bus_id,
+                    instance_id,
+                    clap_file_path,
+                    clap_plugin_id,
+                } => {
+                    let path = Path::new(&clap_file_path);
+                    let bundle_idx = bundles.iter().position(|b| {
+                        b.descriptors().iter().any(|d| d.id == clap_plugin_id)
+                    });
+                    let bundle_idx = match bundle_idx {
+                        Some(idx) => idx,
+                        None => match ClapBundle::load(path) {
+                            Ok(bundle) => {
+                                bundles.push(bundle);
+                                bundles.len() - 1
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(AudioEvent::Error(format!(
+                                    "Failed to load plugin: {}", e
+                                )));
+                                continue;
+                            }
+                        },
+                    };
+                    let plugin_name = bundles[bundle_idx]
+                        .descriptors()
+                        .iter()
+                        .find(|d| d.id == clap_plugin_id)
+                        .map(|d| d.name.clone())
+                        .unwrap_or_else(|| clap_plugin_id.clone());
+                    match bundles[bundle_idx].create_instance(&clap_plugin_id, sample_rate) {
+                        Ok(instance) => {
+                            let params = instance.query_params();
+                            let has_gui = instance.has_gui();
+                            plugins.write().insert(
+                                instance_id,
+                                parking_lot::Mutex::new(SyncClapInstance(instance)),
+                            );
+                            if let Some(bus) = busses.write().get_mut(&bus_id) {
+                                bus.plugin_ids.push(instance_id);
+                            }
+                            next_plugin_id = next_plugin_id.max(instance_id + 1);
+                            let _ = event_tx.send(AudioEvent::BusPluginAdded {
+                                bus_id,
+                                instance_id,
+                                plugin_name,
+                                clap_plugin_id,
+                                clap_file_path,
+                                params,
+                                has_gui,
+                            });
+                        }
+                        Err(e) => {
+                            let _ = event_tx.send(AudioEvent::Error(format!(
+                                "Failed to create plugin instance: {}", e
+                            )));
+                        }
+                    }
+                }
+                AudioCommand::RemovePluginFromBus {
+                    bus_id,
+                    instance_id,
+                } => {
+                    if let Some(bus) = busses.write().get_mut(&bus_id) {
+                        bus.plugin_ids.retain(|&id| id != instance_id);
+                    }
+                    let removed = plugins.write().shift_remove(&instance_id);
+                    drop(removed);
+                    let _ = event_tx.send(AudioEvent::BusPluginRemoved {
+                        bus_id,
+                        instance_id,
+                    });
                 }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}

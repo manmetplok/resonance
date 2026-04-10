@@ -1,11 +1,26 @@
 /// Core types for the Resonance audio engine.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 pub type TrackId = u64;
 pub type ClipId = u64;
 pub type SamplePos = u64;
 pub type PluginInstanceId = u64;
+pub type BusId = u64;
+
+/// Where a track's post-fader audio lands. Tracks either sum directly
+/// into the master output (the default, matching pre-bus behaviour) or
+/// route into a named bus for group processing before reaching master.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackOutput {
+    Master,
+    Bus(BusId),
+}
+
+/// Sentinel value used in `Track::output_bus_bits` to encode
+/// `TrackOutput::Master` (so the enum can live in a single AtomicU64
+/// for lock-free reads on the audio thread).
+const TRACK_OUTPUT_MASTER: u64 = u64::MAX;
 
 /// Ticks per quarter note for MIDI timing (standard PPQ).
 pub const TICKS_PER_QUARTER_NOTE: u64 = 480;
@@ -292,6 +307,53 @@ pub enum AudioCommand {
         track_id: TrackId,
         note: u8,
     },
+
+    // -- Bus commands --
+    AddBus,
+    /// Add a bus with a specific ID (for project load).
+    AddBusWithId {
+        bus_id: BusId,
+        name: String,
+    },
+    RemoveBus {
+        bus_id: BusId,
+    },
+    SetBusVolume {
+        bus_id: BusId,
+        volume: f32,
+    },
+    SetBusPan {
+        bus_id: BusId,
+        pan: f32,
+    },
+    SetBusMute {
+        bus_id: BusId,
+        muted: bool,
+    },
+    SetBusName {
+        bus_id: BusId,
+        name: String,
+    },
+    SetTrackOutput {
+        track_id: TrackId,
+        output: TrackOutput,
+    },
+    AddPluginToBus {
+        bus_id: BusId,
+        clap_file_path: String,
+        clap_plugin_id: String,
+    },
+    /// Add a plugin to a bus with a specific instance ID (for project load).
+    AddPluginToBusWithId {
+        bus_id: BusId,
+        instance_id: PluginInstanceId,
+        clap_file_path: String,
+        clap_plugin_id: String,
+    },
+    RemovePluginFromBus {
+        bus_id: BusId,
+        instance_id: PluginInstanceId,
+    },
 }
 
 /// Events sent from the audio engine back to the GUI.
@@ -444,6 +506,28 @@ pub enum AudioEvent {
         note_index: usize,
         velocity: f32,
     },
+
+    // -- Bus events --
+    BusAdded {
+        bus_id: BusId,
+        name: String,
+    },
+    BusRemoved {
+        bus_id: BusId,
+    },
+    BusPluginAdded {
+        bus_id: BusId,
+        instance_id: PluginInstanceId,
+        plugin_name: String,
+        clap_plugin_id: String,
+        clap_file_path: String,
+        params: Vec<ParamInfo>,
+        has_gui: bool,
+    },
+    BusPluginRemoved {
+        bus_id: BusId,
+        instance_id: PluginInstanceId,
+    },
 }
 
 /// An audio clip stored in memory.
@@ -532,6 +616,10 @@ pub struct Track {
     peak_l_bits: AtomicU32,
     /// Post-fader peak level for right channel (for VU meters).
     peak_r_bits: AtomicU32,
+    /// Output destination, encoded as `u64::MAX` for `Master` or a bus id.
+    /// Stored as an atomic so the audio thread can read the routing
+    /// without taking a write lock while the UI edits it.
+    output_bus_bits: AtomicU64,
     pub input_device_name: Option<String>,
     /// Ordered list of plugin instance IDs forming the insert chain.
     /// For instrument tracks, the first plugin is the instrument; the rest are effects.
@@ -557,9 +645,25 @@ impl Track {
             mono: AtomicBool::new(true),
             peak_l_bits: AtomicU32::new(0),
             peak_r_bits: AtomicU32::new(0),
+            output_bus_bits: AtomicU64::new(TRACK_OUTPUT_MASTER),
             input_device_name: None,
             plugin_ids: Vec::new(),
         }
+    }
+
+    pub fn output(&self) -> TrackOutput {
+        match self.output_bus_bits.load(Ordering::Relaxed) {
+            TRACK_OUTPUT_MASTER => TrackOutput::Master,
+            bus_id => TrackOutput::Bus(bus_id),
+        }
+    }
+
+    pub fn set_output(&self, output: TrackOutput) {
+        let encoded = match output {
+            TrackOutput::Master => TRACK_OUTPUT_MASTER,
+            TrackOutput::Bus(id) => id,
+        };
+        self.output_bus_bits.store(encoded, Ordering::Relaxed);
     }
 
     pub fn volume(&self) -> f32 {
@@ -634,6 +738,82 @@ impl Track {
     }
 
     /// Read and clear peak R, returning the peak since last call.
+    pub fn swap_peak_r(&self) -> f32 {
+        f32::from_bits(self.peak_r_bits.swap(0, Ordering::Relaxed))
+    }
+}
+
+/// An audio bus: an intermediate summing point with its own plugin
+/// chain, fader, pan, mute, and meters. Busses live between tracks and
+/// master — tracks can route their post-fader audio to a bus, the bus
+/// processes the sum through its plugin chain, then the bus sums into
+/// master.
+///
+/// Hot-path fields mirror `Track` (atomic volume/pan/muted/peaks) so
+/// the audio thread can read them without a write lock.
+#[derive(Debug)]
+pub struct Bus {
+    pub id: BusId,
+    volume_bits: AtomicU32,
+    pan_bits: AtomicU32,
+    muted: AtomicBool,
+    pub name: String,
+    peak_l_bits: AtomicU32,
+    peak_r_bits: AtomicU32,
+    /// Ordered list of plugin instance IDs forming the insert chain.
+    pub plugin_ids: Vec<PluginInstanceId>,
+}
+
+impl Bus {
+    pub fn new(id: BusId, name: String) -> Self {
+        Self {
+            id,
+            volume_bits: AtomicU32::new(1.0f32.to_bits()),
+            pan_bits: AtomicU32::new(0.0f32.to_bits()),
+            muted: AtomicBool::new(false),
+            name,
+            peak_l_bits: AtomicU32::new(0),
+            peak_r_bits: AtomicU32::new(0),
+            plugin_ids: Vec::new(),
+        }
+    }
+
+    pub fn volume(&self) -> f32 {
+        f32::from_bits(self.volume_bits.load(Ordering::Relaxed))
+    }
+
+    pub fn set_volume(&self, v: f32) {
+        self.volume_bits.store(v.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn pan(&self) -> f32 {
+        f32::from_bits(self.pan_bits.load(Ordering::Relaxed))
+    }
+
+    pub fn set_pan(&self, v: f32) {
+        self.pan_bits.store(v.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn muted(&self) -> bool {
+        self.muted.load(Ordering::Relaxed)
+    }
+
+    pub fn set_muted(&self, v: bool) {
+        self.muted.store(v, Ordering::Relaxed);
+    }
+
+    pub fn update_peak_l(&self, v: f32) {
+        self.peak_l_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn update_peak_r(&self, v: f32) {
+        self.peak_r_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn swap_peak_l(&self) -> f32 {
+        f32::from_bits(self.peak_l_bits.swap(0, Ordering::Relaxed))
+    }
+
     pub fn swap_peak_r(&self) -> f32 {
         f32::from_bits(self.peak_r_bits.swap(0, Ordering::Relaxed))
     }
@@ -750,5 +930,90 @@ impl TempoMap {
         let minutes = (total_secs / 60.0).floor() as u32;
         let seconds = total_secs - (minutes as f64 * 60.0);
         format!("{:02}:{:06.3}", minutes, seconds)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn track_output_defaults_to_master() {
+        let track = Track::new(1, "T1".to_string());
+        assert_eq!(track.output(), TrackOutput::Master);
+    }
+
+    #[test]
+    fn track_output_roundtrip_master() {
+        let track = Track::new(1, "T1".to_string());
+        track.set_output(TrackOutput::Master);
+        assert_eq!(track.output(), TrackOutput::Master);
+    }
+
+    #[test]
+    fn track_output_roundtrip_bus() {
+        let track = Track::new(1, "T1".to_string());
+        track.set_output(TrackOutput::Bus(42));
+        assert_eq!(track.output(), TrackOutput::Bus(42));
+    }
+
+    #[test]
+    fn track_output_roundtrip_various_bus_ids() {
+        let track = Track::new(1, "T1".to_string());
+        for id in [1u64, 7, 100, 1_000_000, u64::MAX - 1] {
+            track.set_output(TrackOutput::Bus(id));
+            assert_eq!(track.output(), TrackOutput::Bus(id));
+        }
+    }
+
+    #[test]
+    fn track_output_master_sentinel_is_u64_max() {
+        // The sentinel chosen for Master is u64::MAX. Bus id u64::MAX is
+        // reserved and intentionally indistinguishable from Master; the
+        // engine's next_bus_id starts at 1 and grows, so this is safe in
+        // practice but worth pinning in a test.
+        let track = Track::new(1, "T1".to_string());
+        track.set_output(TrackOutput::Master);
+        assert_eq!(track.output(), TrackOutput::Master);
+        // Flip from Master to a bus and back.
+        track.set_output(TrackOutput::Bus(5));
+        assert_eq!(track.output(), TrackOutput::Bus(5));
+        track.set_output(TrackOutput::Master);
+        assert_eq!(track.output(), TrackOutput::Master);
+    }
+
+    #[test]
+    fn bus_atomic_accessors_roundtrip() {
+        let bus = Bus::new(1, "Bus 1".to_string());
+
+        // Defaults.
+        assert_eq!(bus.volume(), 1.0);
+        assert_eq!(bus.pan(), 0.0);
+        assert!(!bus.muted());
+
+        bus.set_volume(0.5);
+        assert_eq!(bus.volume(), 0.5);
+
+        bus.set_pan(-0.75);
+        assert_eq!(bus.pan(), -0.75);
+
+        bus.set_muted(true);
+        assert!(bus.muted());
+    }
+
+    #[test]
+    fn bus_peak_update_and_swap() {
+        let bus = Bus::new(1, "Bus 1".to_string());
+
+        bus.update_peak_l(0.3);
+        bus.update_peak_l(0.5);
+        bus.update_peak_l(0.2); // Should not decrease the stored max.
+        bus.update_peak_r(0.8);
+
+        // swap returns the stored max and resets to 0.
+        assert_eq!(bus.swap_peak_l(), 0.5);
+        assert_eq!(bus.swap_peak_r(), 0.8);
+        assert_eq!(bus.swap_peak_l(), 0.0);
+        assert_eq!(bus.swap_peak_r(), 0.0);
     }
 }

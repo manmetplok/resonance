@@ -1,6 +1,6 @@
 /// Update logic and subscription for the Resonance application.
 use crate::message::Message;
-use crate::project::{self, LoadedProject, ProjectClip, ProjectFile, ProjectMidiClip, ProjectMidiNote, ProjectPlugin, ProjectTrack, SaveCollector};
+use crate::project::{self, LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectMidiNote, ProjectPlugin, ProjectTrack, SaveCollector};
 use crate::state::*;
 use crate::theme;
 use crate::util::db_to_gain;
@@ -603,12 +603,16 @@ impl crate::Resonance {
                 }
                 // Update VU meter levels
                 {
-                    let (track_peaks, master_peak_l, master_peak_r) =
+                    let (track_peaks, bus_peaks, master_peak_l, master_peak_r) =
                         self.engine.read_and_clear_peaks();
                     const PEAK_DECAY: f32 = 0.85;
                     for track in &mut self.tracks {
                         track.level_l *= PEAK_DECAY;
                         track.level_r *= PEAK_DECAY;
+                    }
+                    for bus in &mut self.busses {
+                        bus.level_l *= PEAK_DECAY;
+                        bus.level_r *= PEAK_DECAY;
                     }
                     for (track_id, pl, pr) in track_peaks {
                         if let Some(track) =
@@ -619,6 +623,18 @@ impl crate::Resonance {
                             }
                             if pr > track.level_r {
                                 track.level_r = pr;
+                            }
+                        }
+                    }
+                    for (bus_id, pl, pr) in bus_peaks {
+                        if let Some(bus) =
+                            self.busses.iter_mut().find(|b| b.id == bus_id)
+                        {
+                            if pl > bus.level_l {
+                                bus.level_l = pl;
+                            }
+                            if pr > bus.level_r {
+                                bus.level_r = pr;
                             }
                         }
                     }
@@ -820,6 +836,62 @@ impl crate::Resonance {
             Message::AddInstrumentTrack => {
                 self.engine.send(AudioCommand::AddInstrumentTrack);
                 self.add_track_menu_open = false;
+            }
+            Message::AddBus => {
+                self.engine.send(AudioCommand::AddBus);
+            }
+            Message::RemoveBus(bus_id) => {
+                self.engine.send(AudioCommand::RemoveBus { bus_id });
+                // Locally clear any track routings pointing here; the engine
+                // does the same. Mirrors how TrackRemoved clears refs.
+                for track in &mut self.tracks {
+                    if track.output == TrackOutput::Bus(bus_id) {
+                        track.output = TrackOutput::Master;
+                    }
+                }
+            }
+            Message::SetBusVolume(bus_id, vol_db) => {
+                self.engine.send(AudioCommand::SetBusVolume {
+                    bus_id,
+                    volume: db_to_gain(vol_db),
+                });
+                if let Some(bus) = self.busses.iter_mut().find(|b| b.id == bus_id) {
+                    bus.volume = vol_db;
+                }
+            }
+            Message::SetBusPan(bus_id, pan) => {
+                self.engine.send(AudioCommand::SetBusPan { bus_id, pan });
+                if let Some(bus) = self.busses.iter_mut().find(|b| b.id == bus_id) {
+                    bus.pan = pan;
+                }
+            }
+            Message::ToggleBusMute(bus_id) => {
+                if let Some(bus) = self.busses.iter_mut().find(|b| b.id == bus_id) {
+                    bus.muted = !bus.muted;
+                    self.engine.send(AudioCommand::SetBusMute {
+                        bus_id,
+                        muted: bus.muted,
+                    });
+                }
+            }
+            Message::SetTrackOutput(track_id, output) => {
+                self.engine.send(AudioCommand::SetTrackOutput { track_id, output });
+                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                    track.output = output;
+                }
+            }
+            Message::AddPluginToBus(bus_id, plugin) => {
+                self.engine.send(AudioCommand::AddPluginToBus {
+                    bus_id,
+                    clap_file_path: plugin.clap_file_path,
+                    clap_plugin_id: plugin.clap_plugin_id,
+                });
+            }
+            Message::RemovePluginFromBus(bus_id, instance_id) => {
+                self.engine.send(AudioCommand::RemovePluginFromBus {
+                    bus_id,
+                    instance_id,
+                });
             }
             Message::CreateMidiClip(track_id) => {
                 let duration_ticks = 4 * self.time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
@@ -1147,6 +1219,30 @@ impl crate::Resonance {
                     TrackType::Audio => "audio".to_string(),
                     TrackType::Instrument => "instrument".to_string(),
                 },
+                output_bus: match t.output {
+                    TrackOutput::Master => None,
+                    TrackOutput::Bus(id) => Some(id),
+                },
+            }
+        }).collect();
+
+        let busses = self.sorted_busses().iter().map(|b| {
+            ProjectBus {
+                id: b.id,
+                name: b.name.clone(),
+                order: b.order,
+                volume: b.volume,
+                pan: b.pan,
+                muted: b.muted,
+                plugins: b.plugins.iter().map(|p| {
+                    ProjectPlugin {
+                        instance_id: p.instance_id,
+                        plugin_name: p.plugin_name.clone(),
+                        clap_plugin_id: p.clap_plugin_id.clone(),
+                        clap_file_path: p.clap_file_path.clone(),
+                        state_file: format!("plugins/plugin_{}.bin", p.instance_id),
+                    }
+                }).collect(),
             }
         }).collect();
 
@@ -1197,6 +1293,7 @@ impl crate::Resonance {
             tracks,
             clips,
             midi_clips,
+            busses,
         }
     }
 
@@ -1241,9 +1338,11 @@ impl crate::Resonance {
 
         // Clear GUI state
         self.tracks.clear();
+        self.busses.clear();
         self.clips.clear();
         self.midi_clips.clear();
         self.next_track_order = 0;
+        self.next_bus_order = 0;
 
         // Replay tracks
         for pt in &project.tracks {
@@ -1350,8 +1449,87 @@ impl crate::Resonance {
                 level_l: 0.0,
                 level_r: 0.0,
                 track_type,
+                output: pt
+                    .output_bus
+                    .map(TrackOutput::Bus)
+                    .unwrap_or(TrackOutput::Master),
             });
             self.next_track_order += 1;
+        }
+
+        // Replay busses (must come before SetTrackOutput so the target
+        // bus exists at the time the routing is set).
+        for pb in &project.busses {
+            self.engine.send(AudioCommand::AddBusWithId {
+                bus_id: pb.id,
+                name: pb.name.clone(),
+            });
+            self.engine.send(AudioCommand::SetBusVolume {
+                bus_id: pb.id,
+                volume: pb.volume,
+            });
+            self.engine.send(AudioCommand::SetBusPan {
+                bus_id: pb.id,
+                pan: pb.pan,
+            });
+            self.engine.send(AudioCommand::SetBusMute {
+                bus_id: pb.id,
+                muted: pb.muted,
+            });
+
+            let mut gui_plugins = Vec::new();
+            for pp in &pb.plugins {
+                self.engine.send(AudioCommand::AddPluginToBusWithId {
+                    bus_id: pb.id,
+                    instance_id: pp.instance_id,
+                    clap_file_path: pp.clap_file_path.clone(),
+                    clap_plugin_id: pp.clap_plugin_id.clone(),
+                });
+                if let Some(state_data) = loaded.plugin_states.get(&pp.instance_id) {
+                    self.engine.send(AudioCommand::LoadPluginState {
+                        instance_id: pp.instance_id,
+                        data: state_data.clone(),
+                    });
+                }
+                let custom = match pp.clap_plugin_id.as_str() {
+                    "com.resonance.amp" => PluginCustomState::Amp(Default::default()),
+                    "com.resonance.ir" => PluginCustomState::Ir(Default::default()),
+                    _ => PluginCustomState::Generic,
+                };
+                gui_plugins.push(PluginSlotState {
+                    instance_id: pp.instance_id,
+                    plugin_name: pp.plugin_name.clone(),
+                    clap_plugin_id: pp.clap_plugin_id.clone(),
+                    clap_file_path: pp.clap_file_path.clone(),
+                    params: Vec::new(),
+                    custom,
+                    has_gui: false,
+                    editor_open: false,
+                });
+            }
+
+            self.busses.push(BusState {
+                id: pb.id,
+                name: pb.name.clone(),
+                order: self.next_bus_order,
+                volume: pb.volume,
+                pan: pb.pan,
+                muted: pb.muted,
+                plugins: gui_plugins,
+                level_l: 0.0,
+                level_r: 0.0,
+            });
+            self.next_bus_order += 1;
+        }
+
+        // Now that all busses exist, resolve track → bus routing.
+        for pt in &project.tracks {
+            if let Some(bus_id) = pt.output_bus {
+                self.engine.send(AudioCommand::SetTrackOutput {
+                    track_id: pt.id,
+                    output: TrackOutput::Bus(bus_id),
+                });
+            }
         }
 
         // Replay audio clips

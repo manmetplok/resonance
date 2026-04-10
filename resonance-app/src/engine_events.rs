@@ -64,6 +64,7 @@ impl crate::Resonance {
                     level_l: 0.0,
                     level_r: 0.0,
                     track_type: TrackType::Audio,
+                    output: TrackOutput::Master,
                 });
             }
             AudioEvent::TrackRemoved { track_id } => {
@@ -281,6 +282,7 @@ impl crate::Resonance {
                     level_l: 0.0,
                     level_r: 0.0,
                     track_type: TrackType::Instrument,
+                    output: TrackOutput::Master,
                 });
             }
 
@@ -356,6 +358,81 @@ impl crate::Resonance {
                     if note_index < clip.notes.len() {
                         clip.notes[note_index].velocity = velocity;
                     }
+                }
+            }
+
+            // -- Bus events --
+            AudioEvent::BusAdded { bus_id, name } => {
+                if self.busses.iter().any(|b| b.id == bus_id) {
+                    return Task::none();
+                }
+                let order = self.next_bus_order;
+                self.next_bus_order += 1;
+                self.busses.push(BusState {
+                    id: bus_id,
+                    name,
+                    order,
+                    volume: 1.0,
+                    pan: 0.0,
+                    muted: false,
+                    plugins: Vec::new(),
+                    level_l: 0.0,
+                    level_r: 0.0,
+                });
+            }
+            AudioEvent::BusRemoved { bus_id } => {
+                if let Some(sel) = self.selected_plugin {
+                    if self.busses.iter()
+                        .filter(|b| b.id == bus_id)
+                        .any(|b| b.plugins.iter().any(|p| p.instance_id == sel))
+                    {
+                        self.selected_plugin = None;
+                    }
+                }
+                self.busses.retain(|b| b.id != bus_id);
+                // Any track that was routed to the removed bus falls back
+                // to Master locally (the engine did the same server-side).
+                for track in &mut self.tracks {
+                    if track.output == TrackOutput::Bus(bus_id) {
+                        track.output = TrackOutput::Master;
+                    }
+                }
+            }
+            AudioEvent::BusPluginAdded {
+                bus_id,
+                instance_id,
+                plugin_name,
+                clap_plugin_id,
+                clap_file_path,
+                params,
+                has_gui,
+            } => {
+                if let Some(bus) = self.busses.iter_mut().find(|b| b.id == bus_id) {
+                    if let Some(slot) =
+                        bus.plugins.iter_mut().find(|p| p.instance_id == instance_id)
+                    {
+                        slot.params = params;
+                        slot.has_gui = has_gui;
+                    } else {
+                        bus.plugins.push(PluginSlotState {
+                            instance_id,
+                            plugin_name,
+                            clap_plugin_id,
+                            clap_file_path,
+                            params,
+                            custom: PluginCustomState::Generic,
+                            has_gui,
+                            editor_open: false,
+                        });
+                    }
+                }
+            }
+            AudioEvent::BusPluginRemoved { bus_id, instance_id } => {
+                if let Some(bus) = self.busses.iter_mut().find(|b| b.id == bus_id) {
+                    bus.plugins.retain(|p| p.instance_id != instance_id);
+                }
+                if self.selected_plugin == Some(instance_id) {
+                    self.selected_plugin = None;
                 }
             }
         }

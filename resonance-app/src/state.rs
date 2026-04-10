@@ -49,6 +49,22 @@ pub struct TrackState {
     /// Current VU meter level for right channel (linear amplitude).
     pub level_r: f32,
     pub track_type: TrackType,
+    /// Where this track's post-fader audio is routed.
+    pub output: TrackOutput,
+}
+
+/// GUI-side bus state.
+#[derive(Debug, Clone)]
+pub struct BusState {
+    pub id: BusId,
+    pub name: String,
+    pub order: usize,
+    pub volume: f32,
+    pub pan: f32,
+    pub muted: bool,
+    pub plugins: Vec<PluginSlotState>,
+    pub level_l: f32,
+    pub level_r: f32,
 }
 
 /// GUI-side MIDI clip state.

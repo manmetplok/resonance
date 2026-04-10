@@ -20,6 +20,8 @@ use state::*;
 pub(crate) struct Resonance {
     pub(crate) engine: AudioEngine,
     pub(crate) tracks: Vec<TrackState>,
+    pub(crate) busses: Vec<BusState>,
+    pub(crate) next_bus_order: usize,
     pub(crate) clips: Vec<ClipState>,
     pub(crate) playhead: u64,
     pub(crate) playing: bool,
@@ -109,6 +111,12 @@ impl Resonance {
         tracks
     }
 
+    pub(crate) fn sorted_busses(&self) -> Vec<&BusState> {
+        let mut busses: Vec<&BusState> = self.busses.iter().collect();
+        busses.sort_by_key(|b| b.order);
+        busses
+    }
+
     fn new() -> (Self, iced::Task<Message>) {
         let engine = match AudioEngine::new() {
             Ok(engine) => engine,
@@ -125,6 +133,8 @@ impl Resonance {
         let app = Self {
             engine,
             tracks: Vec::new(),
+            busses: Vec::new(),
+            next_bus_order: 0,
             clips: Vec::new(),
             playhead: 0,
             playing: false,
