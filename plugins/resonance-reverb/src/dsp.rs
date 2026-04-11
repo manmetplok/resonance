@@ -11,6 +11,19 @@ use resonance_dsp::{DelayLine, Lfo, OnePole, SimpleRng};
 const CHANNELS: usize = 8;
 const DIFFUSION_STEPS: usize = 4;
 const MAX_PREDELAY_SAMPLES: usize = 48000; // 1 second max pre-delay
+/// Lower bound of the `size` parameter expressed in ms. Maps to the
+/// shortest "room" feel the user can dial in.
+const MIN_SIZE_MS: f32 = 10.0;
+/// Upper bound of the `size` parameter expressed in ms. Also used to
+/// pre-size every internal delay buffer so `set_size` can slide the
+/// tap positions freely without the read index wrapping past the end
+/// of a too-small buffer.
+const MAX_SIZE_MS: f32 = 200.0;
+/// Maximum FDN channel delay multiplier at the longest channel.
+/// The classic `2^(c/(CHANNELS-1))` spread with `c = CHANNELS-1 = 7`
+/// gives ~2.0 — a narrow range (1×..2×) that produces dense
+/// feedback reflection pile-up instead of audibly separated echoes.
+const MAX_FDN_MULT: f32 = 2.0;
 pub const ER_TAPS: usize = 12;
 const ER_BASE_MAX_MS: f32 = 220.0; // Upper bound for the longest tap at time_scale=1.0
 const ER_TIME_MIN: f32 = 0.25; // er_time=0 → 0.25× base
@@ -236,38 +249,52 @@ pub struct ReverbDsp {
 
 impl ReverbDsp {
     pub fn new(sample_rate: f32) -> Self {
-        let max_delay = (sample_rate * 0.5) as usize; // 500ms max per delay line
-
-        // Diffusion steps with halving delay ranges
-        let base_diffusion_ms = 150.0;
-        let mut diff_ms = base_diffusion_ms;
+        // Diffusion steps. The delay *ranges* are halving multiples of
+        // the current room size, and `set_size` slides the actual tap
+        // positions in real-time — so every diffusion buffer is sized
+        // for the widest range it will ever need to serve (at
+        // `size=1.0`, i.e. `MAX_SIZE_MS`). This is what keeps the tap
+        // reads inside the buffer no matter what `set_size` does.
+        let mut max_diff_ms = MAX_SIZE_MS;
         let mut diffusion_ratios = [[0.0f32; CHANNELS]; DIFFUSION_STEPS];
         let diffusion = std::array::from_fn(|step| {
-            diff_ms *= 0.5;
-            let range_samples = (diff_ms * 0.001 * sample_rate) as usize;
+            max_diff_ms *= 0.5;
+            let max_range_samples = (max_diff_ms * 0.001 * sample_rate) as usize;
             let ds = DiffusionStep::new(
-                range_samples.max(8),
+                max_range_samples.max(64),
                 (step as u64 + 1).wrapping_mul(0x517cc1b727220a95),
             );
-            // Store normalized tap positions so set_size() can rescale without re-randomizing
-            let rs = range_samples.max(8);
+            // Store normalized tap positions (against the MAX range)
+            // so set_size() can rescale without re-randomizing and the
+            // resulting tap positions always stay ≤ max_range_samples.
+            let rs = max_range_samples.max(64);
             for c in 0..CHANNELS {
                 diffusion_ratios[step][c] = ds.delay_samples[c] as f32 / rs as f32;
             }
             ds
         });
 
-        // FDN delay lines with exponential distribution
-        let base_delay_ms = 150.0;
+        // Initial FDN delay lengths. These get immediately overridden
+        // by `set_size()` on the first process block, so the exact
+        // numbers don't matter — they just need to be non-zero so an
+        // impulse arriving before the host calls `set_size` still
+        // produces valid output. Uses the same `2^(c/(N-1))` spread as
+        // `set_size` for internal consistency.
+        let base_delay_ms = 60.0; // medium-room ballpark
         let base_samples = (base_delay_ms * 0.001 * sample_rate) as f32;
         let mut fdn_delay_samples = [0usize; CHANNELS];
         for c in 0..CHANNELS {
-            let r = c as f32 / CHANNELS as f32;
-            fdn_delay_samples[c] = (2.0f32.powf(r) * base_samples) as usize;
-            fdn_delay_samples[c] = fdn_delay_samples[c].max(1);
+            let r = c as f32 / (CHANNELS - 1).max(1) as f32;
+            let mult = MAX_FDN_MULT.powf(r);
+            fdn_delay_samples[c] = ((mult * base_samples) as usize).max(1);
         }
 
-        let fdn_delays = std::array::from_fn(|_| DelayLine::new(max_delay));
+        // Size each FDN delay line for the longest possible channel
+        // delay at `size=1.0`, plus headroom for modulation and the
+        // `tap_linear` interpolator (which reads delay+1) and a small
+        // safety margin.
+        let max_fdn_samples = (MAX_SIZE_MS * 0.001 * sample_rate * MAX_FDN_MULT) as usize + 256;
+        let fdn_delays = std::array::from_fn(|_| DelayLine::new(max_fdn_samples));
         let fdn_damping = std::array::from_fn(|_| OnePole::new());
 
         // LFOs with staggered phases and randomized rates
@@ -352,14 +379,24 @@ impl ReverbDsp {
 
     /// Update room size. Recalculates FDN delay times and diffusion.
     pub fn set_size(&mut self, size_normalized: f32) {
-        // Map 0..1 to ~20ms..500ms base delay
-        let size_ms = 20.0 + size_normalized * 480.0;
+        // Logarithmic map 0..1 → MIN_SIZE_MS..MAX_SIZE_MS so the middle
+        // of the knob lands on a "medium room" (~ 90 ms) instead of a
+        // linear mapping's half-cathedral.
+        let t = size_normalized.clamp(0.0, 1.0);
+        let size_ms = MIN_SIZE_MS * (MAX_SIZE_MS / MIN_SIZE_MS).powf(t);
         self.room_size_ms = size_ms;
 
         let base_samples = (size_ms * 0.001 * self.sample_rate) as f32;
+        // Channel spread: `2^(c/(N-1))` gives channel 0 at 1× base,
+        // channel N-1 at 2× base — a narrow spread that packs 8 delay
+        // lines into a factor-of-two range so feedback reflections
+        // arrive densely (every ~base/8 ms on average) instead of as
+        // audibly separated echoes. This is the classic density pattern
+        // for 8-channel FDN reverbs.
         for c in 0..CHANNELS {
-            let r = c as f32 / CHANNELS as f32;
-            self.fdn_delay_samples[c] = ((2.0f32.powf(r) * base_samples) as usize).max(1);
+            let r = c as f32 / (CHANNELS - 1).max(1) as f32;
+            let mult = MAX_FDN_MULT.powf(r);
+            self.fdn_delay_samples[c] = ((mult * base_samples) as usize).max(1);
         }
 
         // Update diffusion delay ranges using stored ratios (no re-randomization)
@@ -440,39 +477,63 @@ impl ReverbDsp {
         // the same pre-delayed input as the diffusion network.
         let (er_l, er_r) = self.er.process(dl, dr);
 
-        // Scatter stereo input into 8 channels
-        let mut ch = [0.0f32; CHANNELS];
-        ch[0] = dl;
-        ch[1] = dr;
-        // Add previous FDN feedback into the input channels
-        for c in 0..CHANNELS {
-            ch[c] += self.fdn_feedback[c];
-        }
-
-        // Diffusion network: 4 cascaded steps
+        // Scatter stereo input into 8 channels and diffuse it. The
+        // diffusion network only ever sees *fresh input* — never FDN
+        // feedback. If we ran feedback through diffusion (as the
+        // earlier version did), the Hadamard-crossfade's non-unit
+        // broadband gain (~0.5× for random signals) would multiply
+        // into every cycle of the feedback loop, producing an
+        // effective RT60 ~4× shorter than requested.
+        let mut diffused = [0.0f32; CHANNELS];
+        diffused[0] = dl;
+        diffused[1] = dr;
         for step in &mut self.diffusion {
-            step.process(&mut ch, diffusion_amount);
+            step.process(&mut diffused, diffusion_amount);
         }
 
-        // FDN: write diffused signal into delay lines, read output
-        let mut output = [0.0f32; CHANNELS];
+        // FDN input = diffused fresh input + recirculated feedback from
+        // the previous sample. This is the point where the tail
+        // re-enters the delay lines; the feedback path NEVER goes
+        // through diffusion.
+        let mut fdn_input = [0.0f32; CHANNELS];
+        for c in 0..CHANNELS {
+            fdn_input[c] = diffused[c] + self.fdn_feedback[c];
+        }
+
+        // FDN: read the previous loop's output out of the delay lines
+        // and push the new input in. `fdn_output` is what the user
+        // hears as the tail.
+        let mut fdn_output = [0.0f32; CHANNELS];
         for c in 0..CHANNELS {
             // Modulated read position
             let mod_offset = self.fdn_lfos[c].next() * self.mod_depth_samples;
             let delay_f = self.fdn_delay_samples[c] as f32 + mod_offset;
             let delay_f = delay_f.max(1.0);
 
-            output[c] = self.fdn_delays[c].tap_linear(delay_f);
-            self.fdn_delays[c].push(ch[c]);
+            fdn_output[c] = self.fdn_delays[c].tap_linear(delay_f);
+            self.fdn_delays[c].push(fdn_input[c]);
         }
 
-        // Householder feedback: mix output, apply damping and decay
-        let mut feedback = output;
+        // Householder feedback: mix the FDN output, apply damping and
+        // decay, and store for the next sample's FDN input.
+        let mut feedback = fdn_output;
         householder_in_place(&mut feedback);
         for c in 0..CHANNELS {
             feedback[c] = self.fdn_damping[c].process(feedback[c]) * self.decay_gain;
         }
         self.fdn_feedback = feedback;
+
+        // The per-channel wet signal is `diffused + fdn_output`: the
+        // immediate diffused signal (early reflections from the
+        // cascade) plus the FDN feedback tail. This is the key bit of
+        // the Signalsmith/Luff design — without summing the diffused
+        // signal into the output, the only thing the user would hear
+        // is the FDN tap at `fdn_delay_samples[0]` samples later, i.e.
+        // the reverb onset would be pinned to `size_ms`.
+        let mut output = [0.0f32; CHANNELS];
+        for c in 0..CHANNELS {
+            output[c] = diffused[c] + fdn_output[c];
+        }
 
         // Smooth the |feedback| magnitudes toward a display envelope for the
         // tank view. Simple one-pole follower — cheap, no allocation. The
