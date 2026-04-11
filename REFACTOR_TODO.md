@@ -40,35 +40,39 @@ sub-state layout: `TransportMessage`, `TrackMessage`, `BusMessage`,
 stays top-level to avoid wrapping cost on the hot path. `ComposeMessage`
 was already in this shape and was not touched.
 
-## 🟡 #4 — `engine.rs` split — partial (`b4a8cc4`)
+## ✅ #4 — `engine.rs` split — complete
 
-First pass extracted the two handlers with no shared mutable state:
+First pass (`b4a8cc4`): extracted the two handlers with no shared
+mutable state:
 - Renamed `engine.rs` → `engine/mod.rs` so submodules can sit alongside.
-- New `engine/scan.rs` — `ScanPlugins` handler (115 LOC).
-- New `engine/bounce.rs` — `BounceToWav` handler (281 LOC, pure read).
+- New `engine/scan.rs` — `ScanPlugins` handler.
+- New `engine/bounce.rs` — `BounceToWav` handler (pure read).
 
-`engine/mod.rs` shrank from 1873 to 1497 LOC. The remaining transport /
-clips / midi / plugins / busses handlers still live inline in `mod.rs`
-because they share `next_track_id` / `next_clip_id` / `next_plugin_id` /
-`rec: RecordingState` / `bundles: Vec<ClapBundle>` with each other and
-need a `HandlerState` plumbing pass before they can be safely extracted.
-That second pass is deferred as its own branch — the audio engine is
-the most dangerous file in the repo and the safer to-extract handlers
-are already out.
+Second pass: extracted every remaining handler via a
+`HandlerCtx` / `HandlerState` plumbing pass. `engine/mod.rs` shrank
+from 1497 → 343 LOC and now contains only `AudioEngine::new` and the
+public API.
 
-### Remaining work for #4 (future branch)
+- `engine/thread.rs` — `HandlerCtx<'_>` (shared Arcs + channels),
+  `HandlerState` (id counters, `rec`, `bundles`, `active_imports`),
+  and the `engine_thread` dispatch loop.
+- `engine/transport.rs` — Play/Stop/Pause/Record/SeekTo, BPM/time
+  signature/metronome, and loop range.
+- `engine/tracks.rs` — audio track CRUD + sub-track creation,
+  volume/pan/mute/solo/arm/mono/monitor, input-device routing,
+  master volume, clear-all.
+- `engine/clips.rs` — audio clip import (spawns decode thread),
+  move/trim/delete, direct load, bulk export.
+- `engine/midi.rs` — instrument track, MIDI clip/note CRUD,
+  live note-on/off.
+- `engine/plugins.rs` — track plugin CRUD, set-param, GUI open/close,
+  state save/load (single + bulk). `cmd_tx_retry` is threaded through
+  for lock-retry on every path that touches a plugin instance.
+- `engine/busses.rs` — bus CRUD, volume/pan/mute/name, track→bus
+  routing, bus-plugin CRUD. Reuses `ensure_bundle` / `resolve_plugin_id`
+  from `plugins`.
 
-- Define `HandlerCtx<'_>` (Arcs + event_tx) and `HandlerState`
-  (id counters, rec, bundles, active_imports) in `engine/thread.rs`.
-- Move transport (Play/Stop/Pause/Record/Seek/tempo/loop) handlers
-  into `engine/transport.rs`.
-- Move audio clip CRUD into `engine/clips.rs`.
-- Move MIDI clip/note/instrument handlers into `engine/midi.rs`.
-- Move plugin CRUD + state + editor into `engine/plugins.rs`
-  (critical: `cmd_tx_retry` must stay threaded through for lock-retry).
-- Move bus CRUD + routing into `engine/busses.rs`.
-- Shrink `engine/mod.rs` to just `AudioEngine::new` + dispatch.
-
-Each of these needs hands-on audio testing (playback, recording,
-plugin scanning + param automation, multi-output plugins, save/load
-round-trip) after extraction.
+Handlers are free functions that take `&HandlerCtx` + `&mut HandlerState`
+— no hidden state, no trait indirection. Each command variant maps to
+a single `handle_*` call in `thread::dispatch`, so the match arms stay
+readable at a glance.

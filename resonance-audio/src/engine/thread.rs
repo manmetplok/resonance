@@ -1,0 +1,449 @@
+//! Engine control thread: owns the command/event loop and the
+//! per-command handler dispatch. All mutable engine state that must
+//! outlive a single command lives in [`HandlerState`]; the shared
+//! references to `Arc<RwLock<...>>` project state, the event sender, and
+//! the retry-command sender live in [`HandlerCtx`].
+//!
+//! Handlers are free functions in the submodules (`transport`, `tracks`,
+//! `clips`, `midi`, `plugins`, `busses`). They take `&HandlerCtx` +
+//! `&mut HandlerState` + the command payload and execute synchronously.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+use crossbeam_channel::{Receiver, Sender};
+use indexmap::IndexMap;
+use parking_lot::{Mutex, RwLock};
+
+use crate::clap_host::{ClapBundle, SyncClapInstance};
+use crate::recording::RecordingState;
+use crate::types::*;
+
+use super::{bounce, busses, clips, midi, plugins, scan, tracks, transport, SharedState};
+
+/// Read-only handle to shared project state and channels. Passed by
+/// reference into every handler so they can lock the relevant maps and
+/// emit events without taking ownership.
+pub(crate) struct HandlerCtx<'a> {
+    pub shared: &'a Arc<SharedState>,
+    pub tracks: &'a Arc<RwLock<IndexMap<TrackId, Track>>>,
+    pub busses: &'a Arc<RwLock<IndexMap<BusId, Bus>>>,
+    pub clips: &'a Arc<RwLock<Vec<AudioClip>>>,
+    pub midi_clips: &'a Arc<RwLock<Vec<MidiClip>>>,
+    pub plugins:
+        &'a Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    pub tempo_map: &'a Arc<RwLock<TempoMap>>,
+    pub monitor_prod: &'a Arc<Mutex<ringbuf::HeapProd<f32>>>,
+    pub event_tx: &'a Sender<AudioEvent>,
+    pub cmd_tx_retry: &'a Sender<AudioCommand>,
+    pub sample_rate: u32,
+    pub buf_frames: usize,
+    pub quantum: usize,
+}
+
+/// Mutable engine-thread-local state that persists across command
+/// dispatches: monotonic id counters, the recording session, the loaded
+/// CLAP bundles, and the concurrent-import counter.
+pub(crate) struct HandlerState {
+    pub next_track_id: TrackId,
+    pub next_bus_id: BusId,
+    pub next_clip_id: ClipId,
+    pub next_plugin_id: PluginInstanceId,
+    pub rec: RecordingState,
+    pub bundles: Vec<ClapBundle>,
+    pub active_imports: Arc<AtomicUsize>,
+}
+
+/// Hard cap on concurrent clip decode threads. Import commands past this
+/// bound get dropped with an error event.
+pub(crate) const MAX_CONCURRENT_IMPORTS: usize = 4;
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn engine_thread(
+    cmd_rx: Receiver<AudioCommand>,
+    cmd_tx_retry: Sender<AudioCommand>,
+    event_tx: Sender<AudioEvent>,
+    shared: Arc<SharedState>,
+    tracks_arc: Arc<RwLock<IndexMap<TrackId, Track>>>,
+    busses_arc: Arc<RwLock<IndexMap<BusId, Bus>>>,
+    clips_arc: Arc<RwLock<Vec<AudioClip>>>,
+    midi_clips_arc: Arc<RwLock<Vec<MidiClip>>>,
+    tempo_map: Arc<RwLock<TempoMap>>,
+    plugins_arc: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
+    sample_rate: u32,
+    buf_frames: usize,
+    quantum: usize,
+) {
+    let mut state = HandlerState {
+        next_track_id: 1,
+        next_bus_id: 1,
+        next_clip_id: 1,
+        next_plugin_id: 1,
+        rec: RecordingState::new(sample_rate),
+        bundles: Vec::new(),
+        active_imports: Arc::new(AtomicUsize::new(0)),
+    };
+    let ctx = HandlerCtx {
+        shared: &shared,
+        tracks: &tracks_arc,
+        busses: &busses_arc,
+        clips: &clips_arc,
+        midi_clips: &midi_clips_arc,
+        plugins: &plugins_arc,
+        tempo_map: &tempo_map,
+        monitor_prod: &monitor_prod,
+        event_tx: &event_tx,
+        cmd_tx_retry: &cmd_tx_retry,
+        sample_rate,
+        buf_frames,
+        quantum,
+    };
+
+    let mut last_playhead_report = std::time::Instant::now();
+
+    // Report actual sample rate to GUI
+    let _ = ctx.event_tx.send(AudioEvent::SampleRateDetected { sample_rate });
+
+    // Add a default track
+    {
+        let id = state.next_track_id;
+        let track = Track::new(id, "Track 1".to_string());
+        ctx.tracks.write().insert(id, track);
+        let _ = ctx.event_tx.send(AudioEvent::TrackAdded { track_id: id });
+        state.next_track_id += 1;
+    }
+
+    loop {
+        match cmd_rx.recv_timeout(std::time::Duration::from_millis(16)) {
+            Ok(cmd) => dispatch(&ctx, &mut state, cmd),
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+        }
+
+        // Drain recording ring buffer into per-track buffers
+        if ctx.shared.recording.load(Ordering::Relaxed) {
+            state.rec.drain_ring_to_buffers();
+        }
+
+        // Report playhead position at ~60Hz using wall-clock time
+        if ctx.shared.playing.load(Ordering::SeqCst)
+            && last_playhead_report.elapsed() >= std::time::Duration::from_millis(16)
+        {
+            last_playhead_report = std::time::Instant::now();
+            let pos = ctx.shared.playhead.load(Ordering::SeqCst);
+            let _ = ctx.event_tx.send(AudioEvent::PlayheadMoved(pos));
+        }
+    }
+}
+
+fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
+    match cmd {
+        // -- Transport --
+        AudioCommand::Play => transport::handle_play(ctx),
+        AudioCommand::Record => transport::handle_record(ctx, state),
+        AudioCommand::Pause => transport::handle_pause(ctx, state),
+        AudioCommand::Stop => transport::handle_stop(ctx, state),
+        AudioCommand::SeekTo(pos) => transport::handle_seek_to(ctx, pos),
+        AudioCommand::SetBpm { bpm } => transport::handle_set_bpm(ctx, bpm),
+        AudioCommand::SetTimeSignature {
+            numerator,
+            denominator,
+        } => transport::handle_set_time_signature(ctx, numerator, denominator),
+        AudioCommand::SetMetronomeEnabled { enabled } => {
+            transport::handle_set_metronome_enabled(ctx, enabled)
+        }
+        AudioCommand::SetLoopRange {
+            enabled,
+            loop_in,
+            loop_out,
+        } => transport::handle_set_loop_range(ctx, state, enabled, loop_in, loop_out),
+
+        // -- Audio clips --
+        AudioCommand::ImportClip {
+            track_id,
+            path,
+            start_sample,
+        } => clips::handle_import_clip(ctx, state, track_id, path, start_sample),
+        AudioCommand::MoveClip {
+            clip_id,
+            new_start_sample,
+            new_track_id,
+        } => clips::handle_move_clip(ctx, clip_id, new_start_sample, new_track_id),
+        AudioCommand::TrimClip {
+            clip_id,
+            new_start_sample,
+            trim_start_frames,
+            trim_end_frames,
+        } => clips::handle_trim_clip(
+            ctx,
+            clip_id,
+            new_start_sample,
+            trim_start_frames,
+            trim_end_frames,
+        ),
+        AudioCommand::DeleteClip { clip_id } => clips::handle_delete_clip(ctx, clip_id),
+        AudioCommand::LoadClipDirect {
+            clip_id,
+            track_id,
+            start_sample,
+            data,
+            name,
+            trim_start_frames,
+            trim_end_frames,
+        } => clips::handle_load_clip_direct(
+            ctx,
+            state,
+            clip_id,
+            track_id,
+            start_sample,
+            data,
+            name,
+            trim_start_frames,
+            trim_end_frames,
+        ),
+        AudioCommand::ExportAllClipData => clips::handle_export_all_clip_data(ctx),
+
+        // -- Tracks --
+        AudioCommand::SetTrackVolume { track_id, volume } => {
+            tracks::handle_set_track_volume(ctx, track_id, volume)
+        }
+        AudioCommand::SetTrackPan { track_id, pan } => {
+            tracks::handle_set_track_pan(ctx, track_id, pan)
+        }
+        AudioCommand::SetTrackMute { track_id, muted } => {
+            tracks::handle_set_track_mute(ctx, track_id, muted)
+        }
+        AudioCommand::SetMasterVolume { volume } => {
+            tracks::handle_set_master_volume(ctx, volume)
+        }
+        AudioCommand::SetTrackSolo { track_id, soloed } => {
+            tracks::handle_set_track_solo(ctx, track_id, soloed)
+        }
+        AudioCommand::AddTrack { id_hint, name } => {
+            tracks::handle_add_track(ctx, state, id_hint, name)
+        }
+        AudioCommand::CreateSubTrack {
+            sub_id,
+            parent_track_id,
+            output_port_index,
+            name,
+        } => tracks::handle_create_sub_track(
+            ctx,
+            sub_id,
+            parent_track_id,
+            output_port_index,
+            name,
+        ),
+        AudioCommand::RemoveTrack { track_id } => {
+            tracks::handle_remove_track(ctx, state, track_id)
+        }
+        AudioCommand::SetTrackRecordArm { track_id, armed } => {
+            tracks::handle_set_track_record_arm(ctx, track_id, armed)
+        }
+        AudioCommand::SetTrackMono { track_id, mono } => {
+            tracks::handle_set_track_mono(ctx, track_id, mono)
+        }
+        AudioCommand::SetTrackMonitor { track_id, enabled } => {
+            tracks::handle_set_track_monitor(ctx, state, track_id, enabled)
+        }
+        AudioCommand::SetTrackInputDevice {
+            track_id,
+            device_name,
+        } => tracks::handle_set_track_input_device(ctx, track_id, device_name),
+        AudioCommand::SetTrackInputPort {
+            track_id,
+            port_index,
+        } => tracks::handle_set_track_input_port(ctx, track_id, port_index),
+        AudioCommand::ListInputDevices => tracks::handle_list_input_devices(ctx),
+        AudioCommand::ClearAll => tracks::handle_clear_all(ctx, state),
+
+        // -- Plugins --
+        AudioCommand::AddPlugin {
+            track_id,
+            clap_file_path,
+            clap_plugin_id,
+            id_hint,
+        } => plugins::handle_add_plugin(
+            ctx,
+            state,
+            track_id,
+            clap_file_path,
+            clap_plugin_id,
+            id_hint,
+        ),
+        AudioCommand::RemovePlugin {
+            track_id,
+            instance_id,
+        } => plugins::handle_remove_plugin(ctx, track_id, instance_id),
+        AudioCommand::ScanPlugins => {
+            scan::scan_plugins(ctx.plugins, ctx.tracks, &mut state.bundles, ctx.event_tx)
+        }
+        AudioCommand::SetPluginParam {
+            instance_id,
+            param_id,
+            value,
+        } => plugins::handle_set_plugin_param(ctx, instance_id, param_id, value),
+        AudioCommand::OpenPluginEditor { instance_id } => {
+            plugins::handle_open_plugin_editor(ctx, instance_id)
+        }
+        AudioCommand::ClosePluginEditor { instance_id } => {
+            plugins::handle_close_plugin_editor(ctx, instance_id)
+        }
+        AudioCommand::SavePluginState { instance_id } => {
+            plugins::handle_save_plugin_state(ctx, instance_id)
+        }
+        AudioCommand::LoadPluginState { instance_id, data } => {
+            plugins::handle_load_plugin_state(ctx, instance_id, data)
+        }
+        AudioCommand::SaveAllPluginStates => plugins::handle_save_all_plugin_states(ctx),
+
+        // -- Bounce --
+        AudioCommand::BounceToWav { path } => bounce::to_wav(
+            path,
+            ctx.shared,
+            ctx.tracks,
+            ctx.busses,
+            ctx.clips,
+            ctx.midi_clips,
+            ctx.plugins,
+            ctx.tempo_map,
+            ctx.sample_rate,
+            ctx.event_tx,
+        ),
+
+        // -- Instrument tracks + MIDI --
+        AudioCommand::AddInstrumentTrack { id_hint, name } => {
+            midi::handle_add_instrument_track(ctx, state, id_hint, name)
+        }
+        AudioCommand::CreateMidiClip {
+            track_id,
+            start_sample,
+            duration_ticks,
+            name,
+        } => midi::handle_create_midi_clip(
+            ctx,
+            state,
+            track_id,
+            start_sample,
+            duration_ticks,
+            name,
+        ),
+        AudioCommand::LoadMidiClipDirect {
+            clip_id,
+            track_id,
+            start_sample,
+            duration_ticks,
+            notes,
+            name,
+            trim_start_ticks,
+            trim_end_ticks,
+        } => midi::handle_load_midi_clip_direct(
+            ctx,
+            state,
+            clip_id,
+            track_id,
+            start_sample,
+            duration_ticks,
+            notes,
+            name,
+            trim_start_ticks,
+            trim_end_ticks,
+        ),
+        AudioCommand::MoveMidiClip {
+            clip_id,
+            new_start_sample,
+            new_track_id,
+        } => midi::handle_move_midi_clip(ctx, clip_id, new_start_sample, new_track_id),
+        AudioCommand::TrimMidiClip {
+            clip_id,
+            new_start_sample,
+            trim_start_ticks,
+            trim_end_ticks,
+        } => midi::handle_trim_midi_clip(
+            ctx,
+            clip_id,
+            new_start_sample,
+            trim_start_ticks,
+            trim_end_ticks,
+        ),
+        AudioCommand::DeleteMidiClip { clip_id } => {
+            midi::handle_delete_midi_clip(ctx, clip_id)
+        }
+        AudioCommand::AddMidiNote { clip_id, note } => {
+            midi::handle_add_midi_note(ctx, clip_id, note)
+        }
+        AudioCommand::RemoveMidiNote {
+            clip_id,
+            note_index,
+        } => midi::handle_remove_midi_note(ctx, clip_id, note_index),
+        AudioCommand::MoveMidiNote {
+            clip_id,
+            note_index,
+            new_start_tick,
+            new_note,
+        } => midi::handle_move_midi_note(
+            ctx,
+            clip_id,
+            note_index,
+            new_start_tick,
+            new_note,
+        ),
+        AudioCommand::ResizeMidiNote {
+            clip_id,
+            note_index,
+            new_duration_ticks,
+        } => midi::handle_resize_midi_note(ctx, clip_id, note_index, new_duration_ticks),
+        AudioCommand::SetMidiNoteVelocity {
+            clip_id,
+            note_index,
+            velocity,
+        } => midi::handle_set_midi_note_velocity(ctx, clip_id, note_index, velocity),
+        AudioCommand::SendNoteOn {
+            track_id,
+            note,
+            velocity,
+        } => midi::handle_send_note_on(ctx, track_id, note, velocity),
+        AudioCommand::SendNoteOff { track_id, note } => {
+            midi::handle_send_note_off(ctx, track_id, note)
+        }
+
+        // -- Busses --
+        AudioCommand::AddBus { id_hint, name } => {
+            busses::handle_add_bus(ctx, state, id_hint, name)
+        }
+        AudioCommand::RemoveBus { bus_id } => busses::handle_remove_bus(ctx, bus_id),
+        AudioCommand::SetBusVolume { bus_id, volume } => {
+            busses::handle_set_bus_volume(ctx, bus_id, volume)
+        }
+        AudioCommand::SetBusPan { bus_id, pan } => {
+            busses::handle_set_bus_pan(ctx, bus_id, pan)
+        }
+        AudioCommand::SetBusMute { bus_id, muted } => {
+            busses::handle_set_bus_mute(ctx, bus_id, muted)
+        }
+        AudioCommand::SetBusName { bus_id, name } => {
+            busses::handle_set_bus_name(ctx, bus_id, name)
+        }
+        AudioCommand::SetTrackOutput { track_id, output } => {
+            busses::handle_set_track_output(ctx, track_id, output)
+        }
+        AudioCommand::AddPluginToBus {
+            bus_id,
+            clap_file_path,
+            clap_plugin_id,
+            id_hint,
+        } => busses::handle_add_plugin_to_bus(
+            ctx,
+            state,
+            bus_id,
+            clap_file_path,
+            clap_plugin_id,
+            id_hint,
+        ),
+        AudioCommand::RemovePluginFromBus {
+            bus_id,
+            instance_id,
+        } => busses::handle_remove_plugin_from_bus(ctx, bus_id, instance_id),
+    }
+}
