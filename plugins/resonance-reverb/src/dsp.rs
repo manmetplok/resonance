@@ -11,6 +11,10 @@ use resonance_dsp::{DelayLine, Lfo, OnePole, SimpleRng};
 const CHANNELS: usize = 8;
 const DIFFUSION_STEPS: usize = 4;
 const MAX_PREDELAY_SAMPLES: usize = 48000; // 1 second max pre-delay
+pub const ER_TAPS: usize = 12;
+const ER_BASE_MAX_MS: f32 = 220.0; // Upper bound for the longest tap at time_scale=1.0
+const ER_TIME_MIN: f32 = 0.25; // er_time=0 → 0.25× base
+const ER_TIME_MAX: f32 = 2.0;  // er_time=1 → 2.0× base
 
 /// A single diffusion step: N delay lines + Hadamard mix + polarity flips.
 struct DiffusionStep {
@@ -78,6 +82,120 @@ impl DiffusionStep {
     }
 }
 
+/// Parallel multi-tap early reflections. Generates 12 discrete stereo taps
+/// before the diffused tail arrives, giving the reverb its spatial signature.
+struct EarlyReflections {
+    delay_l: DelayLine,
+    delay_r: DelayLine,
+    /// Base tap times in ms (left, right), fixed at construction.
+    base_times_ms: [(f32, f32); ER_TAPS],
+    /// Per-tap gains (left, right), including polarity flips.
+    gains: [(f32, f32); ER_TAPS],
+    /// Current `er_time` multiplier applied to `base_times_ms`.
+    time_scale: f32,
+    /// Cached scaled tap times in samples. Recomputed when `time_scale` changes.
+    scaled_samples: [(f32, f32); ER_TAPS],
+    /// Cached scaled tap times in ms (for the viz).
+    scaled_ms: [(f32, f32); ER_TAPS],
+    /// Current `er_level` applied to the summed output before it joins the wet path.
+    level: f32,
+    sample_rate: f32,
+}
+
+impl EarlyReflections {
+    fn new(sample_rate: f32) -> Self {
+        // Enough headroom for the longest tap at time_scale=ER_TIME_MAX.
+        let max_samples = ((ER_BASE_MAX_MS * ER_TIME_MAX) * 0.001 * sample_rate) as usize + 64;
+        let mut rng = SimpleRng::new(0xa3f1_7b2c_0005_beef);
+
+        // Generate tap times with a mild clustering bias: early taps
+        // cluster in the first 60ms, later taps spread out toward 220ms.
+        // This matches how real rooms produce dense-early / sparser-late
+        // first reflections.
+        let mut base_times_ms = [(0.0f32, 0.0f32); ER_TAPS];
+        let mut gains = [(0.0f32, 0.0f32); ER_TAPS];
+        for i in 0..ER_TAPS {
+            let t = i as f32 / (ER_TAPS - 1).max(1) as f32;
+            // Curve spreads the taps: sqrt gives more density early.
+            let curved = t.sqrt();
+            let center_ms = 4.0 + curved * (ER_BASE_MAX_MS - 4.0);
+
+            // Small per-side jitter so L/R don't land exactly on top of each other.
+            let jitter_l = ((rng.next_u32() & 0xffff) as f32 / 65535.0 - 0.5) * 8.0;
+            let jitter_r = ((rng.next_u32() & 0xffff) as f32 / 65535.0 - 0.5) * 8.0;
+            base_times_ms[i] = ((center_ms + jitter_l).max(1.0), (center_ms + jitter_r).max(1.0));
+
+            // Exponential gain decay across taps with random polarity.
+            let decay = (-3.0 * t).exp();
+            let pol_l = if rng.next_u32() & 1 == 1 { 1.0 } else { -1.0 };
+            let pol_r = if rng.next_u32() & 1 == 1 { 1.0 } else { -1.0 };
+            gains[i] = (decay * pol_l, decay * pol_r);
+        }
+
+        let mut me = Self {
+            delay_l: DelayLine::new(max_samples),
+            delay_r: DelayLine::new(max_samples),
+            base_times_ms,
+            gains,
+            time_scale: 1.0,
+            scaled_samples: [(0.0, 0.0); ER_TAPS],
+            scaled_ms: [(0.0, 0.0); ER_TAPS],
+            level: 0.4,
+            sample_rate,
+        };
+        me.recompute_scaled();
+        me
+    }
+
+    fn recompute_scaled(&mut self) {
+        for i in 0..ER_TAPS {
+            let ms = (self.base_times_ms[i].0 * self.time_scale,
+                      self.base_times_ms[i].1 * self.time_scale);
+            self.scaled_ms[i] = ms;
+            self.scaled_samples[i] = (
+                (ms.0 * 0.001 * self.sample_rate).max(1.0),
+                (ms.1 * 0.001 * self.sample_rate).max(1.0),
+            );
+        }
+    }
+
+    /// Map `er_time` (0..1) to a tap-time multiplier in [ER_TIME_MIN..ER_TIME_MAX].
+    fn set_time(&mut self, norm: f32) {
+        let scale = ER_TIME_MIN + norm.clamp(0.0, 1.0) * (ER_TIME_MAX - ER_TIME_MIN);
+        if (scale - self.time_scale).abs() > 1e-4 {
+            self.time_scale = scale;
+            self.recompute_scaled();
+        }
+    }
+
+    fn set_level(&mut self, norm: f32) {
+        self.level = norm.clamp(0.0, 1.0);
+    }
+
+    /// Process a single stereo sample. Returns the ER contribution
+    /// *including* `level` so the caller just sums it into the wet path.
+    fn process(&mut self, left: f32, right: f32) -> (f32, f32) {
+        self.delay_l.push(left);
+        self.delay_r.push(right);
+        let mut out_l = 0.0f32;
+        let mut out_r = 0.0f32;
+        for i in 0..ER_TAPS {
+            let (sl, sr) = self.scaled_samples[i];
+            let (gl, gr) = self.gains[i];
+            out_l += self.delay_l.tap_linear(sl) * gl;
+            out_r += self.delay_r.tap_linear(sr) * gr;
+        }
+        // 1/sqrt(N) keeps the summed broadband level predictable.
+        let scale = self.level * (1.0 / (ER_TAPS as f32).sqrt());
+        (out_l * scale, out_r * scale)
+    }
+
+    fn clear(&mut self) {
+        self.delay_l.clear();
+        self.delay_r.clear();
+    }
+}
+
 /// The complete reverb processor.
 pub struct ReverbDsp {
     sample_rate: f32,
@@ -100,10 +218,20 @@ pub struct ReverbDsp {
     fdn_lfos: [Lfo; CHANNELS],
     fdn_feedback: [f32; CHANNELS], // persistent feedback state
 
+    // Early reflections (parallel multi-tap delay)
+    er: EarlyReflections,
+
     // Current parameters (for per-sample smoothing)
     decay_gain: f32,
     mod_depth_samples: f32,
     room_size_ms: f32,
+
+    // Viz-facing smoothed state (not audio-critical, block-rate updates).
+    /// Smoothed |feedback| per FDN channel, for the tank view. Range ~0..1.
+    channel_energy_smoothed: [f32; CHANNELS],
+    /// Running sum-of-squares for wet RMS (reset by `take_wet_rms`).
+    wet_sumsq: f64,
+    wet_count: u32,
 }
 
 impl ReverbDsp {
@@ -117,7 +245,10 @@ impl ReverbDsp {
         let diffusion = std::array::from_fn(|step| {
             diff_ms *= 0.5;
             let range_samples = (diff_ms * 0.001 * sample_rate) as usize;
-            let ds = DiffusionStep::new(range_samples.max(8), (step as u64 + 1) * 0x517cc1b727220a95);
+            let ds = DiffusionStep::new(
+                range_samples.max(8),
+                (step as u64 + 1).wrapping_mul(0x517cc1b727220a95),
+            );
             // Store normalized tap positions so set_size() can rescale without re-randomizing
             let rs = range_samples.max(8);
             for c in 0..CHANNELS {
@@ -158,10 +289,60 @@ impl ReverbDsp {
             fdn_damping,
             fdn_lfos,
             fdn_feedback: [0.0; CHANNELS],
+            er: EarlyReflections::new(sample_rate),
             decay_gain: 0.85,
             mod_depth_samples: 0.0,
             room_size_ms: 150.0,
+            channel_energy_smoothed: [0.0; CHANNELS],
+            wet_sumsq: 0.0,
+            wet_count: 0,
         }
+    }
+
+    /// Set early-reflections level (0..1, normalized).
+    pub fn set_er_level(&mut self, norm: f32) {
+        self.er.set_level(norm);
+    }
+
+    /// Set early-reflections time scaling (0..1, normalized).
+    pub fn set_er_time(&mut self, norm: f32) {
+        self.er.set_time(norm);
+    }
+
+    /// Snapshot the current scaled ER tap times (ms) for the editor.
+    pub fn er_tap_times_ms(&self) -> [(f32, f32); ER_TAPS] {
+        self.er.scaled_ms
+    }
+
+    /// Snapshot the ER tap gains (incl. polarity) for the editor.
+    pub fn er_tap_gains(&self) -> [(f32, f32); ER_TAPS] {
+        self.er.gains
+    }
+
+    /// Snapshot the smoothed per-FDN-channel energies for the tank view.
+    pub fn channel_energies(&self) -> [f32; CHANNELS] {
+        self.channel_energy_smoothed
+    }
+
+    /// Current FDN delay lengths in ms (affected by `size`).
+    pub fn fdn_delay_ms(&self) -> [f32; CHANNELS] {
+        let mut out = [0.0f32; CHANNELS];
+        for c in 0..CHANNELS {
+            out[c] = self.fdn_delay_samples[c] as f32 * 1000.0 / self.sample_rate;
+        }
+        out
+    }
+
+    /// Take the RMS of the wet output since the last call and reset the accumulator.
+    /// Returns 0.0 on the first call after construction / clear.
+    pub fn take_wet_rms(&mut self) -> f32 {
+        if self.wet_count == 0 {
+            return 0.0;
+        }
+        let mean = self.wet_sumsq / self.wet_count as f64;
+        self.wet_sumsq = 0.0;
+        self.wet_count = 0;
+        (mean as f32).sqrt()
     }
 
     /// Reconfigure for a new sample rate. Clears all state.
@@ -255,6 +436,10 @@ impl ReverbDsp {
         self.predelay_l.push(left);
         self.predelay_r.push(right);
 
+        // Early reflections: independent parallel multi-tap delay, fed from
+        // the same pre-delayed input as the diffusion network.
+        let (er_l, er_r) = self.er.process(dl, dr);
+
         // Scatter stereo input into 8 channels
         let mut ch = [0.0f32; CHANNELS];
         ch[0] = dl;
@@ -289,6 +474,15 @@ impl ReverbDsp {
         }
         self.fdn_feedback = feedback;
 
+        // Smooth the |feedback| magnitudes toward a display envelope for the
+        // tank view. Simple one-pole follower — cheap, no allocation. The
+        // 0.995 coefficient gives a ~200-sample time constant (~4 ms @ 48 k).
+        for c in 0..CHANNELS {
+            let mag = self.fdn_feedback[c].abs();
+            self.channel_energy_smoothed[c] =
+                self.channel_energy_smoothed[c] * 0.995 + mag * 0.005;
+        }
+
         // Mix 8 channels to stereo with width control
         // Even channels → left, odd channels → right
         let mut sum_l = 0.0f32;
@@ -304,11 +498,20 @@ impl ReverbDsp {
         sum_l *= scale;
         sum_r *= scale;
 
+        // Sum ER into the wet bus before the width/mix stage so ER also
+        // respects width and mix.
+        sum_l += er_l;
+        sum_r += er_r;
+
         // Width: 0 = mono, 1 = full stereo
         let mid = (sum_l + sum_r) * 0.5;
         let side = (sum_l - sum_r) * 0.5;
         let out_l = mid + side * width;
         let out_r = mid - side * width;
+
+        // Wet RMS accumulator for the impulse-view live trace polygon.
+        self.wet_sumsq += (out_l as f64) * (out_l as f64) + (out_r as f64) * (out_r as f64);
+        self.wet_count += 2;
 
         (out_l, out_r)
     }
@@ -327,6 +530,10 @@ impl ReverbDsp {
             f.clear();
         }
         self.fdn_feedback = [0.0; CHANNELS];
+        self.er.clear();
+        self.channel_energy_smoothed = [0.0; CHANNELS];
+        self.wet_sumsq = 0.0;
+        self.wet_count = 0;
     }
 }
 

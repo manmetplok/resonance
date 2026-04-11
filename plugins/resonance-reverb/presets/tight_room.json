@@ -1,0 +1,16 @@
+{
+  "params": {
+    "predelay": 5.0,
+    "er_level": 0.55,
+    "er_time": 0.25,
+    "size": 0.20,
+    "decay": 0.6,
+    "damping": 7000.0,
+    "diffusion": 0.75,
+    "mod_rate": 0.8,
+    "mod_depth": 0.20,
+    "width": 0.9,
+    "mix": 0.25,
+    "freeze": 0
+  }
+}

@@ -1,15 +1,31 @@
 /// Resonance Reverb - An algorithmic reverb using diffusion networks and FDN.
 
+use std::sync::Arc;
+
 use resonance_plugin::*;
 
 pub mod dsp;
 pub mod params;
+pub mod presets;
+pub mod viz;
+
+#[cfg(feature = "editor")]
+mod editor;
 
 use dsp::ReverbDsp;
-use params::ReverbParams;
+use params::{ReverbParams, ReverbSmoothers, PARAM_COUNT};
+use viz::ReverbViz;
 
 pub struct ResonanceReverb {
-    params: ReverbParams,
+    /// Params shared with the editor via `Arc`. All FloatParam/BoolParam
+    /// storage is atomic internally so `&ReverbParams` is safe from both
+    /// audio and UI threads.
+    params: Arc<ReverbParams>,
+    /// Audio-thread-only smoothers. Kept outside `params` so the audio
+    /// thread can mutate smoother state through `&mut self`.
+    smoothers: ReverbSmoothers,
+    /// Lock-free meters + tank energies + ER tap snapshot for the editor.
+    viz: Arc<ReverbViz>,
     reverb: Option<ReverbDsp>,
 }
 
@@ -25,52 +41,21 @@ impl ResonancePlugin for ResonanceReverb {
 
     fn new() -> Self {
         Self {
-            params: ReverbParams::default(),
+            params: Arc::new(ReverbParams::default()),
+            smoothers: ReverbSmoothers::new(),
+            viz: ReverbViz::new(),
             reverb: None,
         }
     }
 
-    fn param_count(&self) -> usize { 10 }
+    fn param_count(&self) -> usize { PARAM_COUNT }
 
     fn param(&self, index: usize) -> &dyn Param {
-        match index {
-            0 => &self.params.predelay,
-            1 => &self.params.size,
-            2 => &self.params.decay,
-            3 => &self.params.damping,
-            4 => &self.params.diffusion,
-            5 => &self.params.mod_rate,
-            6 => &self.params.mod_depth,
-            7 => &self.params.width,
-            8 => &self.params.mix,
-            9 => &self.params.freeze,
-            _ => unreachable!("invalid param index {index}"),
-        }
+        self.params.param_at(index)
     }
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
-        // Set smoother sample rates
-        self.params.predelay.smoother.set_sample_rate(sample_rate);
-        self.params.size.smoother.set_sample_rate(sample_rate);
-        self.params.decay.smoother.set_sample_rate(sample_rate);
-        self.params.damping.smoother.set_sample_rate(sample_rate);
-        self.params.diffusion.smoother.set_sample_rate(sample_rate);
-        self.params.mod_rate.smoother.set_sample_rate(sample_rate);
-        self.params.mod_depth.smoother.set_sample_rate(sample_rate);
-        self.params.width.smoother.set_sample_rate(sample_rate);
-        self.params.mix.smoother.set_sample_rate(sample_rate);
-
-        // Initialize smoother targets to current values
-        self.params.predelay.smoother.reset(self.params.predelay.value());
-        self.params.size.smoother.reset(self.params.size.value());
-        self.params.decay.smoother.reset(self.params.decay.value());
-        self.params.damping.smoother.reset(self.params.damping.value());
-        self.params.diffusion.smoother.reset(self.params.diffusion.value());
-        self.params.mod_rate.smoother.reset(self.params.mod_rate.value());
-        self.params.mod_depth.smoother.reset(self.params.mod_depth.value());
-        self.params.width.smoother.reset(self.params.width.value());
-        self.params.mix.smoother.reset(self.params.mix.value());
-
+        self.smoothers.prepare(sample_rate, &self.params);
         self.reverb = Some(ReverbDsp::new(sample_rate));
         true
     }
@@ -98,55 +83,146 @@ impl ResonancePlugin for ResonanceReverb {
             return;
         };
 
-        // Update reverb parameters (smoothed per-block for size/decay/damping/mod)
-        // Set smoother targets from current param values
-        self.params.size.smoother.set_target(self.params.size.value());
-        self.params.decay.smoother.set_target(self.params.decay.value());
-        self.params.damping.smoother.set_target(self.params.damping.value());
-        self.params.predelay.smoother.set_target(self.params.predelay.value());
-        self.params.mod_rate.smoother.set_target(self.params.mod_rate.value());
-        self.params.mod_depth.smoother.set_target(self.params.mod_depth.value());
-        self.params.mix.smoother.set_target(self.params.mix.value());
-        self.params.width.smoother.set_target(self.params.width.value());
-        self.params.diffusion.smoother.set_target(self.params.diffusion.value());
-
+        // Update smoother targets from the atomic param values once per block.
+        self.smoothers.retarget_from(&self.params);
         let freeze = self.params.freeze.value();
 
-        // Advance smoothers to end-of-block values for expensive DSP updates.
-        // These are called once per block instead of per-sample since they
-        // involve transcendental functions (powf, exp) and 8-channel loop
-        // recalculations, so the block-rate stair-step is deliberate.
+        // Advance the block-rate smoothers to their end-of-block state. These
+        // feed expensive DSP updates (transcendentals, 8-channel loops) and
+        // don't need per-sample granularity, so the block-rate stair-step is
+        // deliberate.
         let n = frames as u32;
-        self.params.size.smoother.skip(n);
-        self.params.decay.smoother.skip(n);
-        self.params.damping.smoother.skip(n);
-        self.params.predelay.smoother.skip(n);
-        self.params.mod_rate.smoother.skip(n);
-        self.params.mod_depth.smoother.skip(n);
+        self.smoothers.size.skip(n);
+        self.smoothers.decay.skip(n);
+        self.smoothers.damping.skip(n);
+        self.smoothers.predelay.skip(n);
+        self.smoothers.er_level.skip(n);
+        self.smoothers.er_time.skip(n);
+        self.smoothers.mod_rate.skip(n);
+        self.smoothers.mod_depth.skip(n);
 
-        reverb.set_size(self.params.size.smoother.current());
-        reverb.set_decay(self.params.decay.smoother.current());
+        reverb.set_size(self.smoothers.size.current());
+        reverb.set_decay(self.smoothers.decay.current());
         reverb.set_freeze(freeze);
-        reverb.set_damping(self.params.damping.smoother.current());
-        reverb.set_predelay(self.params.predelay.smoother.current());
-        reverb.set_mod_rate(self.params.mod_rate.smoother.current());
-        reverb.set_mod_depth(self.params.mod_depth.smoother.current());
+        reverb.set_damping(self.smoothers.damping.current());
+        reverb.set_predelay(self.smoothers.predelay.current());
+        reverb.set_er_level(self.smoothers.er_level.current());
+        reverb.set_er_time(self.smoothers.er_time.current());
+        reverb.set_mod_rate(self.smoothers.mod_rate.current());
+        reverb.set_mod_depth(self.smoothers.mod_depth.current());
+
+        // Track peaks for the meter widgets.
+        let mut in_l_peak = 0.0f32;
+        let mut in_r_peak = 0.0f32;
+        let mut out_l_peak = 0.0f32;
+        let mut out_r_peak = 0.0f32;
 
         for i in 0..frames {
-            let mix = self.params.mix.smoother.next();
-            let width = self.params.width.smoother.next();
-            let diffusion = self.params.diffusion.smoother.next();
+            let mix = self.smoothers.mix.next();
+            let width = self.smoothers.width.next();
+            let diffusion = self.smoothers.diffusion.next();
 
             let dry_l = left[i];
             let dry_r = right[i];
+            in_l_peak = in_l_peak.max(dry_l.abs());
+            in_r_peak = in_r_peak.max(dry_r.abs());
 
             let (wet_l, wet_r) = reverb.process(dry_l, dry_r, diffusion, width);
 
             let dry_amount = 1.0 - mix;
-            left[i] = dry_l * dry_amount + wet_l * mix;
-            right[i] = dry_r * dry_amount + wet_r * mix;
+            let out_l = dry_l * dry_amount + wet_l * mix;
+            let out_r = dry_r * dry_amount + wet_r * mix;
+            left[i] = out_l;
+            right[i] = out_r;
+            out_l_peak = out_l_peak.max(out_l.abs());
+            out_r_peak = out_r_peak.max(out_r.abs());
         }
+
+        // Publish block-rate viz state. All lock-free except the tail ring.
+        self.viz.store_peaks(
+            linear_to_db(in_l_peak),
+            linear_to_db(in_r_peak),
+            linear_to_db(out_l_peak),
+            linear_to_db(out_r_peak),
+        );
+        self.viz.store_channel_energies(&reverb.channel_energies());
+        self.viz.store_fdn_delay_ms(&reverb.fdn_delay_ms());
+        self.viz.store_er_taps(&reverb.er_tap_times_ms(), &reverb.er_tap_gains());
+        self.viz.push_tail_rms(reverb.take_wet_rms());
+    }
+
+    #[cfg(feature = "editor")]
+    fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
+        Some(Arc::new(editor::ReverbEditorFactory::new(
+            self.params.clone(),
+            self.viz.clone(),
+        )))
+    }
+}
+
+/// Convert a linear amplitude to dBFS. `0.0` → `-inf`, `1.0` → `0 dB`.
+fn linear_to_db(linear: f32) -> f32 {
+    if linear <= 1e-9 {
+        f32::NEG_INFINITY
+    } else {
+        20.0 * linear.log10()
     }
 }
 
 resonance_plugin::export_clap!(ResonanceReverb);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::presets::PRESETS;
+
+    #[test]
+    fn param_enumeration_covers_declared_count() {
+        let plugin = ResonanceReverb::new();
+        assert_eq!(plugin.param_count(), PARAM_COUNT);
+        let mut seen = std::collections::HashSet::new();
+        for i in 0..plugin.param_count() {
+            let id = plugin.param(i).id().to_string();
+            assert!(seen.insert(id.clone()), "duplicate param id: {id}");
+        }
+    }
+
+    #[test]
+    fn every_factory_preset_parses() {
+        assert!(!PRESETS.is_empty());
+        for entry in PRESETS {
+            let value: serde_json::Value = serde_json::from_str(entry.json)
+                .unwrap_or_else(|e| panic!("preset {:?} invalid: {e}", entry.name));
+            assert!(
+                value.get("params").and_then(|v| v.as_object()).is_some(),
+                "preset {:?} missing `params` object",
+                entry.name
+            );
+        }
+    }
+
+    #[test]
+    fn dsp_processes_impulse_without_nans() {
+        let mut plugin = ResonanceReverb::new();
+        plugin.initialize(48_000.0, 4096);
+
+        let frames = 4096usize;
+        let mut left = vec![0.0_f32; frames];
+        let mut right = vec![0.0_f32; frames];
+        left[0] = 1.0;
+        right[0] = 1.0;
+
+        let mut outs = [OutputBuffer {
+            left: &mut left,
+            right: &mut right,
+        }];
+        let mut ev = EventIterator::empty();
+        plugin.process(&mut outs, frames, &mut ev);
+
+        for &x in left.iter().chain(right.iter()) {
+            assert!(x.is_finite(), "non-finite sample: {x}");
+        }
+        let tail_energy: f32 = left[200..].iter().map(|x| x.abs()).sum();
+        assert!(tail_energy > 1e-4, "expected audible tail, got {tail_energy}");
+    }
+}
