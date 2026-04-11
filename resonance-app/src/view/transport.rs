@@ -13,13 +13,13 @@ use crate::Resonance;
 
 pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
     let tempo = TempoMap {
-        bpm: r.bpm,
-        numerator: r.time_sig_num,
-        denominator: r.time_sig_den,
-        metronome_enabled: r.metronome_enabled,
+        bpm: r.transport.bpm,
+        numerator: r.transport.time_sig_num,
+        denominator: r.transport.time_sig_den,
+        metronome_enabled: r.transport.metronome_enabled,
     };
-    let bar_beat_str = tempo.format_position(r.playhead, r.sample_rate);
-    let time_str = tempo.format_time(r.playhead, r.sample_rate);
+    let bar_beat_str = tempo.format_position(r.transport.playhead, r.sample_rate);
+    let time_str = tempo.format_time(r.transport.playhead, r.sample_rate);
 
     // ---- Transport buttons (uniform size/padding/style) -----------------
     const TRANSPORT_ICON_SIZE: u16 = 16;
@@ -29,7 +29,7 @@ pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
     let stop_btn = transport_icon_btn(fa::STOP, Message::Stop, button_pad);
     let skip_fwd = transport_icon_btn(fa::FORWARD_STEP, Message::SkipForward, button_pad);
 
-    let play_pause: Element<'_, Message> = if r.playing {
+    let play_pause: Element<'_, Message> = if r.transport.playing {
         button(
             theme::icon(fa::PAUSE)
                 .size(TRANSPORT_ICON_SIZE)
@@ -52,7 +52,7 @@ pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
     };
 
     // Record button: grayed out and unclickable when no track is armed.
-    let any_armed = r.tracks.iter().any(|t| t.record_armed);
+    let any_armed = r.registry.tracks.iter().any(|t| t.record_armed);
     let rec_color = if any_armed {
         theme::RECORD_RED
     } else {
@@ -204,7 +204,7 @@ fn timing_panel<'a>(
     .width(112)
     .align_x(alignment::Horizontal::Center);
 
-    let bpm_field = text_input("120", &r.bpm_input)
+    let bpm_field = text_input("120", &r.transport.bpm_input)
         .on_input(Message::SetBpmText)
         .on_submit(Message::CommitBpm)
         .width(52)
@@ -225,7 +225,7 @@ fn timing_panel<'a>(
     .width(60)
     .align_x(alignment::Horizontal::Center);
 
-    let time_sig_str = format!("{}/{}", r.time_sig_num, r.time_sig_den);
+    let time_sig_str = format!("{}/{}", r.transport.time_sig_num, r.transport.time_sig_den);
     let time_sig_value = mouse_area(
         text(time_sig_str)
             .size(VALUE_SIZE)
@@ -246,7 +246,7 @@ fn timing_panel<'a>(
     .width(48)
     .align_x(alignment::Horizontal::Center);
 
-    let met_color = if r.metronome_enabled {
+    let met_color = if r.transport.metronome_enabled {
         theme::METRONOME_ON
     } else {
         theme::TEXT_DIM
@@ -259,10 +259,10 @@ fn timing_panel<'a>(
     )
     .on_press(Message::ToggleMetronome);
 
-    let precount_label = if r.precount_bars == 0 {
+    let precount_label = if r.transport.precount_bars == 0 {
         "OFF".to_string()
     } else {
-        format!("{} BAR", r.precount_bars)
+        format!("{} BAR", r.transport.precount_bars)
     };
     let precount_text = mouse_area(
         text(precount_label)
@@ -302,7 +302,7 @@ fn loop_button<'a>(
     button_pad: iced::Padding,
     icon_size: u16,
 ) -> iced::widget::Button<'a, Message> {
-    let loop_enabled = r.loop_enabled;
+    let loop_enabled = r.transport.loop_enabled;
     let loop_color = if loop_enabled {
         theme::LOOP_MARKER
     } else {

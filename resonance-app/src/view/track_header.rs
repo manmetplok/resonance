@@ -38,16 +38,16 @@ pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
         .collect();
 
     // Calculate which tracks are visible given scroll_offset_y
-    let visible_start = r.scroll_offset_y / theme::TRACK_HEIGHT;
+    let visible_start = r.viewport.scroll_offset_y / theme::TRACK_HEIGHT;
     let first_visible = visible_start.floor() as usize;
     // Add top padding for the scrolled-away portion
-    let top_pad = first_visible as f32 * theme::TRACK_HEIGHT - r.scroll_offset_y;
+    let top_pad = first_visible as f32 * theme::TRACK_HEIGHT - r.viewport.scroll_offset_y;
     if first_visible > 0 {
         headers = headers.push(Space::new(
             Length::Fill,
-            (first_visible as f32 * theme::TRACK_HEIGHT - r.scroll_offset_y).max(0.0),
+            (first_visible as f32 * theme::TRACK_HEIGHT - r.viewport.scroll_offset_y).max(0.0),
         ));
-    } else if r.scroll_offset_y > 0.0 {
+    } else if r.viewport.scroll_offset_y > 0.0 {
         headers = headers.push(Space::new(Length::Fill, top_pad.max(0.0)));
     }
 

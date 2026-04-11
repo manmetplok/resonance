@@ -9,7 +9,7 @@ impl crate::Resonance {
     pub(crate) fn handle_engine_event(&mut self, event: AudioEvent) -> Task<Message> {
         match event {
             AudioEvent::PlayheadMoved(pos) => {
-                self.playhead = pos;
+                self.transport.playhead = pos;
             }
             AudioEvent::SampleRateDetected { sample_rate } => {
                 self.sample_rate = sample_rate;
@@ -43,31 +43,31 @@ impl crate::Resonance {
             }
             AudioEvent::TrackAdded { track_id } => {
                 // Idempotent: skip if the track already exists (created by project load).
-                if self.tracks.iter().any(|t| t.id == track_id) {
+                if self.registry.tracks.iter().any(|t| t.id == track_id) {
                     return Task::none();
                 }
-                let order = self.next_track_order;
-                self.next_track_order += 1;
-                self.tracks.push(TrackState::new_audio(track_id, order));
+                let order = self.registry.next_track_order;
+                self.registry.next_track_order += 1;
+                self.registry.tracks.push(TrackState::new_audio(track_id, order));
             }
             AudioEvent::TrackRemoved { track_id } => {
-                if let Some(sel_clip_id) = self.selected_clip {
+                if let Some(sel_clip_id) = self.interaction.selected_clip {
                     if self.clips.iter().any(|c| c.id == sel_clip_id && c.track_id == track_id) {
-                        self.selected_clip = None;
+                        self.interaction.selected_clip = None;
                     }
                 }
-                if let Some(sel_plugin_id) = self.selected_plugin {
-                    if self.tracks.iter()
+                if let Some(sel_plugin_id) = self.mixer.selected_plugin {
+                    if self.registry.tracks.iter()
                         .filter(|t| t.id == track_id)
                         .any(|t| t.plugins.iter().any(|p| p.instance_id == sel_plugin_id))
                     {
-                        self.selected_plugin = None;
+                        self.mixer.selected_plugin = None;
                     }
                 }
-                self.tracks.retain(|t| t.id != track_id);
+                self.registry.tracks.retain(|t| t.id != track_id);
                 self.clips.retain(|c| c.track_id != track_id);
                 // Also drop any sub-tracks whose parent just went away.
-                self.tracks.retain(|t| {
+                self.registry.tracks.retain(|t| {
                     t.sub_track
                         .map(|l| l.parent_track_id != track_id)
                         .unwrap_or(true)
@@ -101,10 +101,10 @@ impl crate::Resonance {
                 }
             }
             AudioEvent::Stopped => {
-                if !self.loading {
-                    self.playing = false;
-                    self.recording = false;
-                    self.playhead = 0;
+                if !self.io.loading {
+                    self.transport.playing = false;
+                    self.transport.recording = false;
+                    self.transport.playhead = 0;
                 }
             }
             AudioEvent::Error(e) => {
@@ -119,8 +119,8 @@ impl crate::Resonance {
                 self.default_input_device_name = default_name;
             }
             AudioEvent::RecordingStarted { start_sample } => {
-                self.recording = true;
-                self.recording_start_sample = start_sample;
+                self.transport.recording = true;
+                self.transport.recording_start_sample = start_sample;
             }
             AudioEvent::RecordingFinished {
                 clip_id,
@@ -141,7 +141,7 @@ impl crate::Resonance {
                     trim_end_frames: 0,
                     waveform_peaks,
                 });
-                self.recording = false;
+                self.transport.recording = false;
             }
             AudioEvent::PluginAdded {
                 track_id,
@@ -156,7 +156,7 @@ impl crate::Resonance {
             } => {
                 // Idempotent: if the plugin slot already exists (created by project load),
                 // just update its params and has_gui. Otherwise push a new slot.
-                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                if let Some(track) = self.registry.tracks.iter_mut().find(|t| t.id == track_id) {
                     if let Some(slot) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
                         slot.params = params;
                         slot.has_gui = has_gui;
@@ -179,13 +179,14 @@ impl crate::Resonance {
                 // prefixed onto each sub-track ("Drums → Kick").
                 if output_port_count > 1 {
                     let parent_name = self
+                        .registry
                         .tracks
                         .iter()
                         .find(|t| t.id == track_id)
                         .map(|t| t.name.clone())
                         .unwrap_or_else(|| format!("Track {}", track_id));
                     for port_idx in 1..output_port_count {
-                        let already = self.tracks.iter().any(|t| {
+                        let already = self.registry.tracks.iter().any(|t| {
                             t.sub_track
                                 .map(|l| l.parent_track_id == track_id && l.output_port_index == port_idx as u32)
                                 .unwrap_or(false)
@@ -197,10 +198,10 @@ impl crate::Resonance {
                             .get(port_idx)
                             .cloned()
                             .unwrap_or_else(|| format!("Port {}", port_idx));
-                        let sub_id = self.next_sub_track_id;
-                        self.next_sub_track_id += 1;
-                        let order = self.next_track_order;
-                        self.next_track_order += 1;
+                        let sub_id = self.registry.next_sub_track_id;
+                        self.registry.next_sub_track_id += 1;
+                        let order = self.registry.next_track_order;
+                        self.registry.next_track_order += 1;
                         let sub_name = format!("{} \u{2192} {}", parent_name, port_label);
                         // Register the sub-track with the engine so its
                         // fader / pan / mute / bus routing atomics live
@@ -213,7 +214,7 @@ impl crate::Resonance {
                             output_port_index: port_idx as u32,
                             name: sub_name.clone(),
                         });
-                        self.tracks.push(TrackState::new_sub_track(
+                        self.registry.tracks.push(TrackState::new_sub_track(
                             sub_id,
                             order,
                             sub_name,
@@ -227,10 +228,10 @@ impl crate::Resonance {
                 track_id,
                 instance_id,
             } => {
-                if self.selected_plugin == Some(instance_id) {
-                    self.selected_plugin = None;
+                if self.mixer.selected_plugin == Some(instance_id) {
+                    self.mixer.selected_plugin = None;
                 }
-                if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                if let Some(track) = self.registry.tracks.iter_mut().find(|t| t.id == track_id) {
                     track.plugins.retain(|p| p.instance_id != instance_id);
                 }
             }
@@ -238,11 +239,11 @@ impl crate::Resonance {
                 self.available_plugins = plugins;
             }
             AudioEvent::BounceComplete { path } => {
-                self.bouncing = false;
+                self.io.bouncing = false;
                 eprintln!("Bounce complete: {path}");
             }
             AudioEvent::BounceError(e) => {
-                self.bouncing = false;
+                self.io.bouncing = false;
                 self.error_message = Some(format!("Bounce failed: {e}"));
             }
             AudioEvent::PluginStateSaved { instance_id: _, data: _ } => {
@@ -250,18 +251,18 @@ impl crate::Resonance {
             }
             // --- Project save events ---
             AudioEvent::ClipDataExported { clip_id, data } => {
-                if let Some(ref mut save) = self.save_state {
+                if let Some(ref mut save) = self.io.save_state {
                     save.clip_data.insert(clip_id, data);
                 }
             }
             AudioEvent::AllClipDataExported => {
-                if let Some(ref mut save) = self.save_state {
+                if let Some(ref mut save) = self.io.save_state {
                     save.clips_done = true;
                 }
                 return self.try_finish_save();
             }
             AudioEvent::AllPluginStatesSaved { states } => {
-                if let Some(ref mut save) = self.save_state {
+                if let Some(ref mut save) = self.io.save_state {
                     save.plugin_states = states;
                     save.plugins_done = true;
                 }
@@ -269,23 +270,23 @@ impl crate::Resonance {
             }
             // --- Project load events ---
             AudioEvent::AllCleared => {
-                if let Some(loaded) = self.pending_load.take() {
+                if let Some(loaded) = self.io.pending_load.take() {
                     // Extract project_path before replay (replay clears it)
-                    let path = self.project_path.clone();
+                    let path = self.io.project_path.clone();
                     crate::update::replay_loaded_project(self, loaded);
-                    self.project_path = path;
-                    self.loading = false;
+                    self.io.project_path = path;
+                    self.io.loading = false;
                 }
             }
 
             // -- Instrument track events --
             AudioEvent::InstrumentTrackAdded { track_id } => {
                 // Idempotent: skip if the track already exists (created by project load).
-                if self.tracks.iter().any(|t| t.id == track_id) {
+                if self.registry.tracks.iter().any(|t| t.id == track_id) {
                     return Task::none();
                 }
-                let order = self.tracks.len();
-                self.tracks
+                let order = self.registry.tracks.len();
+                self.registry.tracks
                     .push(TrackState::new_instrument(track_id, order));
             }
 
@@ -366,26 +367,26 @@ impl crate::Resonance {
 
             // -- Bus events --
             AudioEvent::BusAdded { bus_id, name } => {
-                if self.busses.iter().any(|b| b.id == bus_id) {
+                if self.registry.busses.iter().any(|b| b.id == bus_id) {
                     return Task::none();
                 }
-                let order = self.next_bus_order;
-                self.next_bus_order += 1;
-                self.busses.push(BusState::new(bus_id, order, name));
+                let order = self.registry.next_bus_order;
+                self.registry.next_bus_order += 1;
+                self.registry.busses.push(BusState::new(bus_id, order, name));
             }
             AudioEvent::BusRemoved { bus_id } => {
-                if let Some(sel) = self.selected_plugin {
-                    if self.busses.iter()
+                if let Some(sel) = self.mixer.selected_plugin {
+                    if self.registry.busses.iter()
                         .filter(|b| b.id == bus_id)
                         .any(|b| b.plugins.iter().any(|p| p.instance_id == sel))
                     {
-                        self.selected_plugin = None;
+                        self.mixer.selected_plugin = None;
                     }
                 }
-                self.busses.retain(|b| b.id != bus_id);
+                self.registry.busses.retain(|b| b.id != bus_id);
                 // Any track that was routed to the removed bus falls back
                 // to Master locally (the engine did the same server-side).
-                for track in &mut self.tracks {
+                for track in &mut self.registry.tracks {
                     if track.output == TrackOutput::Bus(bus_id) {
                         track.output = TrackOutput::Master;
                     }
@@ -400,7 +401,7 @@ impl crate::Resonance {
                 params,
                 has_gui,
             } => {
-                if let Some(bus) = self.busses.iter_mut().find(|b| b.id == bus_id) {
+                if let Some(bus) = self.registry.busses.iter_mut().find(|b| b.id == bus_id) {
                     if let Some(slot) =
                         bus.plugins.iter_mut().find(|p| p.instance_id == instance_id)
                     {
@@ -419,11 +420,11 @@ impl crate::Resonance {
                 }
             }
             AudioEvent::BusPluginRemoved { bus_id, instance_id } => {
-                if let Some(bus) = self.busses.iter_mut().find(|b| b.id == bus_id) {
+                if let Some(bus) = self.registry.busses.iter_mut().find(|b| b.id == bus_id) {
                     bus.plugins.retain(|p| p.instance_id != instance_id);
                 }
-                if self.selected_plugin == Some(instance_id) {
-                    self.selected_plugin = None;
+                if self.mixer.selected_plugin == Some(instance_id) {
+                    self.mixer.selected_plugin = None;
                 }
             }
         }
@@ -431,7 +432,7 @@ impl crate::Resonance {
     }
 
     fn try_finish_save(&mut self) -> Task<Message> {
-        let both_done = self.save_state.as_ref()
+        let both_done = self.io.save_state.as_ref()
             .map(|s| s.clips_done && s.plugins_done)
             .unwrap_or(false);
 
@@ -439,7 +440,7 @@ impl crate::Resonance {
             return Task::none();
         }
 
-        let save = self.save_state.take().unwrap();
+        let save = self.io.save_state.take().unwrap();
         let project_file = crate::update::build_project_file(self);
         let path = save.path.clone();
         let clip_data = save.clip_data;

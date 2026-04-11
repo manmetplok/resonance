@@ -63,9 +63,9 @@ impl crate::Resonance {
             .style(theme::base_bg)
             .into();
 
-        if self.settings_open {
+        if self.mixer.settings_open {
             stack![base, settings::view_settings_overlay(self)].into()
-        } else if self.add_track_menu_open {
+        } else if self.mixer.add_track_menu_open {
             stack![base, menus::view_add_track_menu(self)].into()
         } else {
             base
@@ -97,7 +97,7 @@ impl crate::Resonance {
     /// roll. Used by both the Arrange and Compose tabs so inline editing
     /// works identically from either view.
     pub(crate) fn view_midi_editor_panel(&self) -> Option<Element<'_, Message>> {
-        let editor_state = self.editing_midi_clip.as_ref()?;
+        let editor_state = self.interaction.editing_midi_clip.as_ref()?;
         let clip = self
             .midi_clips
             .iter()
@@ -128,7 +128,7 @@ impl crate::Resonance {
             zoom_y: editor_state.zoom_y,
             snap_ticks: editor_state.snap_ticks,
             selected_note: editor_state.selected_note,
-            time_sig_num: self.time_sig_num,
+            time_sig_num: self.transport.time_sig_num,
         })
         .width(Length::Fill)
         .height(Length::Fill);
@@ -153,8 +153,8 @@ impl crate::Resonance {
     }
 
     fn view_timeline(&self) -> Element<'_, Message> {
-        let recording_tracks: Vec<TrackId> = if self.recording {
-            self.tracks
+        let recording_tracks: Vec<TrackId> = if self.transport.recording {
+            self.registry.tracks
                 .iter()
                 .filter(|t| t.record_armed)
                 .map(|t| t.id)
@@ -164,23 +164,23 @@ impl crate::Resonance {
         };
 
         let timeline_data = TimelineCanvas {
-            tracks: &self.tracks,
+            tracks: &self.registry.tracks,
             clips: &self.clips,
-            playhead: self.playhead,
+            playhead: self.transport.playhead,
             sample_rate: self.sample_rate,
-            zoom: self.zoom,
-            scroll_offset: self.scroll_offset,
+            zoom: self.viewport.zoom,
+            scroll_offset: self.viewport.scroll_offset,
             recording_tracks,
-            recording_start_sample: self.recording_start_sample,
-            bpm: self.bpm,
-            time_sig_num: self.time_sig_num,
-            scroll_offset_y: self.scroll_offset_y,
-            loop_enabled: self.loop_enabled,
-            loop_in: self.loop_in,
-            loop_out: self.loop_out,
-            selected_clip: self.selected_clip,
+            recording_start_sample: self.transport.recording_start_sample,
+            bpm: self.transport.bpm,
+            time_sig_num: self.transport.time_sig_num,
+            scroll_offset_y: self.viewport.scroll_offset_y,
+            loop_enabled: self.transport.loop_enabled,
+            loop_in: self.transport.loop_in,
+            loop_out: self.transport.loop_out,
+            selected_clip: self.interaction.selected_clip,
             midi_clips: &self.midi_clips,
-            selected_midi_clip: self.selected_midi_clip,
+            selected_midi_clip: self.interaction.selected_midi_clip,
         };
 
         let canvas_el = canvas(timeline_data)

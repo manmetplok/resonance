@@ -44,16 +44,16 @@ pub fn view<'a>(
     let section_end = section_start + definition.length_bars as u64 * samples_per_bar;
 
     let cropped = Canvas::new(ComposeTrackCanvas {
-        tracks: &app.tracks,
+        tracks: &app.registry.tracks,
         midi_clips: &app.midi_clips,
         section_start,
         section_end,
         section_length_bars: definition.length_bars,
         sample_rate: app.sample_rate,
-        bpm: app.bpm,
-        scroll_offset_y: app.scroll_offset_y,
+        bpm: app.transport.bpm,
+        scroll_offset_y: app.viewport.scroll_offset_y,
         scale: definition.scale,
-        time_sig_num: app.time_sig_num,
+        time_sig_num: app.transport.time_sig_num,
         details_track_id: app.compose.details_track_id,
     })
     .width(Length::Fill)
@@ -594,6 +594,6 @@ fn snap_tick(tick: u64, snap: u64) -> u64 {
 }
 
 fn samples_per_bar(app: &Resonance) -> u64 {
-    let samples_per_beat = app.sample_rate as f64 * 60.0 / app.bpm as f64;
-    (samples_per_beat * app.time_sig_num as f64) as u64
+    let samples_per_beat = app.sample_rate as f64 * 60.0 / app.transport.bpm as f64;
+    (samples_per_beat * app.transport.time_sig_num as f64) as u64
 }

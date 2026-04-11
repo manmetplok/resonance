@@ -40,7 +40,7 @@ fn next_default_color(state: &ComposeState) -> [u8; 3] {
 
 pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
     // Convenience: pull time_sig_num up-front for chord-fit checks.
-    let time_sig_num = r.time_sig_num;
+    let time_sig_num = r.transport.time_sig_num;
 
     match msg {
         ComposeMessage::Drumroll(m) => {

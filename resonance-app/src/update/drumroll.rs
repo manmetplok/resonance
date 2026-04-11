@@ -47,7 +47,7 @@ pub fn handle(r: &mut crate::Resonance, msg: DrumrollMessage) {
                 return;
             };
             let steps_per_bar = r.compose.drumroll.steps_per_bar;
-            let time_sig_num = r.time_sig_num;
+            let time_sig_num = r.transport.time_sig_num;
             let velocity = r.compose.drumroll.default_velocity;
             let step_ticks = step_ticks_for(steps_per_bar, time_sig_num);
             if step_ticks == 0 {
@@ -137,7 +137,7 @@ pub fn handle(r: &mut crate::Resonance, msg: DrumrollMessage) {
                 return;
             };
             let steps_per_bar = r.compose.drumroll.steps_per_bar;
-            let time_sig_num = r.time_sig_num;
+            let time_sig_num = r.transport.time_sig_num;
             let step_ticks = step_ticks_for(steps_per_bar, time_sig_num);
             if step_ticks == 0 {
                 return;

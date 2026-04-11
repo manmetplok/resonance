@@ -72,6 +72,7 @@ impl crate::Resonance {
         for track in &sorted_tracks {
             if let Some(link) = track.sub_track {
                 if self
+                    .mixer
                     .collapsed_sub_track_parents
                     .contains(&link.parent_track_id)
                 {
@@ -197,7 +198,7 @@ impl crate::Resonance {
         } else {
             (
                 Message::TogglePluginPanel(pid),
-                self.selected_plugin == Some(pid),
+                self.mixer.selected_plugin == Some(pid),
             )
         };
 
@@ -264,10 +265,12 @@ impl crate::Resonance {
         // before rendering each sub-track strip.
         let has_sub_tracks = !is_sub
             && self
+                .registry
                 .tracks
                 .iter()
                 .any(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id));
         let is_collapsed = self
+            .mixer
             .collapsed_sub_track_parents
             .contains(&track.id);
 
@@ -561,7 +564,7 @@ impl crate::Resonance {
     /// Pick-list of available output destinations (Master + all busses)
     /// for a given track. Emits `Message::SetTrackOutput` when changed.
     fn view_track_output_picker(&self, track: &TrackState) -> Element<'_, Message> {
-        let mut choices: Vec<OutputChoice> = Vec::with_capacity(1 + self.busses.len());
+        let mut choices: Vec<OutputChoice> = Vec::with_capacity(1 + self.registry.busses.len());
         choices.push(OutputChoice {
             label: "→ Master".to_string(),
             output: TrackOutput::Master,
@@ -717,7 +720,7 @@ impl crate::Resonance {
             Message::SetMasterVolume,
         );
 
-        let bounce_btn: Element<'_, Message> = if self.bouncing {
+        let bounce_btn: Element<'_, Message> = if self.io.bouncing {
             text("Bouncing...").size(8).color(theme::ACCENT).into()
         } else {
             button(text("Bounce").size(8).color(theme::TEXT))
@@ -749,12 +752,12 @@ impl crate::Resonance {
 
     /// Bottom panel showing the selected plugin's UI.
     fn view_plugin_panel(&self) -> Option<Element<'_, Message>> {
-        let selected_id = self.selected_plugin?;
+        let selected_id = self.mixer.selected_plugin?;
 
         // Find the plugin across all tracks and busses.
-        let plugin = self.tracks.iter()
+        let plugin = self.registry.tracks.iter()
             .flat_map(|t| t.plugins.iter())
-            .chain(self.busses.iter().flat_map(|b| b.plugins.iter()))
+            .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
             .find(|p| p.instance_id == selected_id)?;
 
         let ui_params: Vec<resonance_plugin::ui::UiParam> = plugin.params.iter()

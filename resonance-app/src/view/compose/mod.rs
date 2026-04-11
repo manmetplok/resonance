@@ -49,7 +49,7 @@ impl crate::Resonance {
                     Space::with_width(Length::Fixed(tracks::NAME_COLUMN_WIDTH)),
                     chord_lane::view(
                         definition,
-                        self.time_sig_num,
+                        self.transport.time_sig_num,
                         self.compose.selected_chord_id,
                     ),
                 ];
@@ -77,7 +77,7 @@ impl crate::Resonance {
                 let right_panel: Element<'_, Message> = match self
                     .compose
                     .details_track_id
-                    .and_then(|id| self.tracks.iter().find(|t| t.id == id))
+                    .and_then(|id| self.registry.tracks.iter().find(|t| t.id == id))
                 {
                     Some(track) if track.instrument_type == InstrumentType::Drum => {
                         let clip_id =

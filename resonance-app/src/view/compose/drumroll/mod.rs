@@ -21,6 +21,7 @@ pub fn view<'a>(
     definition: &'a SectionDefinitionState,
 ) -> Element<'a, Message> {
     let drum_track_count = app
+        .registry
         .tracks
         .iter()
         .filter(|t| {
@@ -41,7 +42,7 @@ pub fn view<'a>(
     let section_end = section_start + definition.length_bars as u64 * samples_per_bar;
 
     let canvas_prog = ComposeDrumCanvas {
-        tracks: &app.tracks,
+        tracks: &app.registry.tracks,
         midi_clips: &app.midi_clips,
         pad_map: &app.compose.drumroll.pad_map,
         section_start,
@@ -49,9 +50,9 @@ pub fn view<'a>(
         section_length_bars: definition.length_bars,
         steps_per_bar: app.compose.drumroll.steps_per_bar,
         sample_rate: app.sample_rate,
-        bpm: app.bpm,
-        time_sig_num: app.time_sig_num,
-        scroll_offset_y: app.scroll_offset_y,
+        bpm: app.transport.bpm,
+        time_sig_num: app.transport.time_sig_num,
+        scroll_offset_y: app.viewport.scroll_offset_y,
         details_track_id: app.compose.details_track_id,
         selected_pad: app.compose.drumroll.selected_pad,
     };
@@ -68,8 +69,8 @@ pub fn view<'a>(
 }
 
 fn samples_per_bar(app: &Resonance) -> u64 {
-    let samples_per_beat = app.sample_rate as f64 * 60.0 / app.bpm as f64;
-    (samples_per_beat * app.time_sig_num as f64) as u64
+    let samples_per_beat = app.sample_rate as f64 * 60.0 / app.transport.bpm as f64;
+    (samples_per_beat * app.transport.time_sig_num as f64) as u64
 }
 
 /// Look up the first MIDI clip on `track_id` that overlaps the current
@@ -84,7 +85,7 @@ pub fn clip_for_track(
     let samples_per_bar = samples_per_bar(app);
     let section_start = placement.start_bar as u64 * samples_per_bar;
     let section_end = section_start + definition.length_bars as u64 * samples_per_bar;
-    let samples_per_beat = app.sample_rate as f64 * 60.0 / app.bpm as f64;
+    let samples_per_beat = app.sample_rate as f64 * 60.0 / app.transport.bpm as f64;
     let samples_per_tick = samples_per_beat / TICKS_PER_QUARTER_NOTE as f64;
     app.midi_clips.iter().find_map(|clip| {
         if clip.track_id != track_id {

@@ -402,3 +402,188 @@ pub struct MidiEditorState {
     pub snap_ticks: u64,
     pub selected_note: Option<usize>,
 }
+
+// ---------------------------------------------------------------------------
+// Resonance sub-state groupings
+// ---------------------------------------------------------------------------
+
+/// Transport, tempo, metronome, and loop range — everything the play head
+/// and the tempo engine depend on. Held as a sub-struct on `Resonance` so
+/// handlers that only care about transport can take `&mut TransportState`.
+#[derive(Debug, Clone)]
+pub struct TransportState {
+    pub playing: bool,
+    pub recording: bool,
+    pub recording_start_sample: u64,
+    pub playhead: u64,
+    pub bpm: f32,
+    pub bpm_input: String,
+    pub time_sig_num: u8,
+    pub time_sig_den: u8,
+    pub metronome_enabled: bool,
+    /// Number of bars the metronome counts in before playback/recording
+    /// starts. 0 disables the pre-count.
+    pub precount_bars: u8,
+    pub loop_enabled: bool,
+    pub loop_in: u64,
+    pub loop_out: u64,
+    pub loop_range_set: bool,
+    pub dragging_loop: Option<LoopDragTarget>,
+}
+
+impl Default for TransportState {
+    fn default() -> Self {
+        Self {
+            playing: false,
+            recording: false,
+            recording_start_sample: 0,
+            playhead: 0,
+            bpm: 120.0,
+            bpm_input: "120".to_string(),
+            time_sig_num: 4,
+            time_sig_den: 4,
+            metronome_enabled: false,
+            precount_bars: 2,
+            loop_enabled: false,
+            loop_in: 0,
+            loop_out: 0,
+            loop_range_set: false,
+            dragging_loop: None,
+        }
+    }
+}
+
+/// Horizontal and vertical scroll position of the arrange-view timeline.
+/// `viewport_width` / `timeline_content_width` / `_height` are reported back
+/// from the canvas after layout.
+#[derive(Debug, Clone)]
+pub struct ArrangeViewport {
+    /// Horizontal zoom in pixels per second.
+    pub zoom: f32,
+    pub scroll_offset: f32,
+    pub scroll_offset_y: f32,
+    pub viewport_width: f32,
+    pub timeline_content_width: f32,
+    pub timeline_content_height: f32,
+}
+
+impl Default for ArrangeViewport {
+    fn default() -> Self {
+        Self {
+            zoom: 100.0,
+            scroll_offset: 0.0,
+            scroll_offset_y: 0.0,
+            viewport_width: 1000.0,
+            timeline_content_width: 1000.0,
+            timeline_content_height: 0.0,
+        }
+    }
+}
+
+/// Transient clip interaction state: current selection, active drag/trim,
+/// and the open MIDI editor if any.
+#[derive(Debug, Default)]
+pub struct ClipInteractionState {
+    pub selected_clip: Option<ClipId>,
+    pub selected_midi_clip: Option<ClipId>,
+    pub clip_drag: Option<ClipDragState>,
+    pub clip_trim: Option<ClipTrimState>,
+    pub midi_clip_drag: Option<MidiClipDragState>,
+    pub midi_clip_trim: Option<MidiClipTrimState>,
+    pub editing_midi_clip: Option<MidiEditorState>,
+}
+
+/// Project save/load and offline-bounce progress state.
+#[derive(Default)]
+pub struct ProjectIoState {
+    pub project_path: Option<std::path::PathBuf>,
+    pub save_state: Option<crate::project::SaveCollector>,
+    pub loading: bool,
+    pub pending_load: Option<Box<crate::project::LoadedProject>>,
+    pub bouncing: bool,
+}
+
+/// Pure UI state for the mixer view and its menus.
+#[derive(Debug, Default)]
+pub struct MixerUiState {
+    pub selected_plugin: Option<PluginInstanceId>,
+    pub collapsed_sub_track_parents: std::collections::HashSet<TrackId>,
+    pub add_track_menu_open: bool,
+    pub settings_open: bool,
+}
+
+/// Tracks + busses + id counters. Central registry that handlers borrow to
+/// mutate track/bus/plugin state without touching the rest of `Resonance`.
+#[derive(Debug, Default)]
+pub struct TrackRegistry {
+    pub tracks: Vec<TrackState>,
+    pub busses: Vec<BusState>,
+    pub next_track_order: usize,
+    pub next_bus_order: usize,
+    /// Id counter for auto-created sub-tracks. Lives in a high numeric
+    /// range so it never collides with engine-allocated track ids
+    /// (engine tracks count up from 1).
+    pub next_sub_track_id: u64,
+}
+
+impl TrackRegistry {
+    pub fn sorted_tracks(&self) -> Vec<&TrackState> {
+        let mut v: Vec<&TrackState> = self.tracks.iter().collect();
+        v.sort_by_key(|t| t.order);
+        v
+    }
+
+    pub fn sorted_busses(&self) -> Vec<&BusState> {
+        let mut v: Vec<&BusState> = self.busses.iter().collect();
+        v.sort_by_key(|b| b.order);
+        v
+    }
+
+    /// Run `f` on the track with the given id, returning whatever `f`
+    /// returns. `None` if the track doesn't exist.
+    pub fn with_track_mut<R>(
+        &mut self,
+        id: TrackId,
+        f: impl FnOnce(&mut TrackState) -> R,
+    ) -> Option<R> {
+        self.tracks.iter_mut().find(|t| t.id == id).map(f)
+    }
+
+    /// Run `f` on the bus with the given id, returning whatever `f` returns.
+    /// `None` if the bus doesn't exist.
+    pub fn with_bus_mut<R>(
+        &mut self,
+        id: BusId,
+        f: impl FnOnce(&mut BusState) -> R,
+    ) -> Option<R> {
+        self.busses.iter_mut().find(|b| b.id == id).map(f)
+    }
+
+    /// Locate a plugin slot on any track or bus by instance id and run `f`
+    /// on it. Iterates tracks first, then busses.
+    pub fn with_plugin_mut<R>(
+        &mut self,
+        instance_id: PluginInstanceId,
+        f: impl FnOnce(&mut PluginSlotState) -> R,
+    ) -> Option<R> {
+        for track in &mut self.tracks {
+            if let Some(p) = track
+                .plugins
+                .iter_mut()
+                .find(|p| p.instance_id == instance_id)
+            {
+                return Some(f(p));
+            }
+        }
+        for bus in &mut self.busses {
+            if let Some(p) = bus
+                .plugins
+                .iter_mut()
+                .find(|p| p.instance_id == instance_id)
+            {
+                return Some(f(p));
+            }
+        }
+        None
+    }
+}

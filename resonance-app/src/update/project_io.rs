@@ -16,16 +16,16 @@ use crate::state::*;
 use crate::util::db_to_gain;
 use crate::Resonance;
 
-/// Begin an async save. Requires `self.project_path` to already be set;
+/// Begin an async save. Requires `self.io.project_path` to already be set;
 /// callers use `Message::SaveProjectAs` first if the project has never
 /// been saved. Initializes the `SaveCollector` state machine and kicks
 /// off the two parallel engine requests (clip audio + plugin states).
 pub fn start_save(r: &mut Resonance) -> Task<Message> {
-    let path = match &r.project_path {
+    let path = match &r.io.project_path {
         Some(p) => p.clone(),
         None => return Task::none(),
     };
-    r.save_state = Some(SaveCollector {
+    r.io.save_state = Some(SaveCollector {
         path,
         clip_data: HashMap::new(),
         plugin_states: Vec::new(),
@@ -146,14 +146,14 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
     ProjectFile {
         version: 1,
         sample_rate: r.sample_rate,
-        bpm: r.bpm,
-        time_sig_num: r.time_sig_num,
-        time_sig_den: r.time_sig_den,
-        metronome_enabled: r.metronome_enabled,
+        bpm: r.transport.bpm,
+        time_sig_num: r.transport.time_sig_num,
+        time_sig_den: r.transport.time_sig_den,
+        metronome_enabled: r.transport.metronome_enabled,
         master_volume: r.master_volume,
-        loop_enabled: r.loop_enabled,
-        loop_in: r.loop_in,
-        loop_out: r.loop_out,
+        loop_enabled: r.transport.loop_enabled,
+        loop_in: r.transport.loop_in,
+        loop_out: r.transport.loop_out,
         tracks,
         clips,
         midi_clips,
@@ -167,58 +167,58 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
 /// after `AudioEvent::AllCleared` confirms the engine is empty.
 pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     let project = &loaded.file;
-    r.project_path = None; // Will be set by the caller (OpenPathSelected)
+    r.io.project_path = None; // Will be set by the caller (OpenPathSelected)
 
     // Restore global settings
-    r.bpm = project.bpm;
-    r.time_sig_num = project.time_sig_num;
-    r.time_sig_den = project.time_sig_den;
-    r.metronome_enabled = project.metronome_enabled;
+    r.transport.bpm = project.bpm;
+    r.transport.time_sig_num = project.time_sig_num;
+    r.transport.time_sig_den = project.time_sig_den;
+    r.transport.metronome_enabled = project.metronome_enabled;
     r.master_volume = project.master_volume;
-    r.loop_enabled = project.loop_enabled;
-    r.loop_in = project.loop_in;
-    r.loop_out = project.loop_out;
-    r.playhead = 0;
-    r.scroll_offset = 0.0;
-    r.scroll_offset_y = 0.0;
-    r.selected_clip = None;
-    r.selected_plugin = None;
-    r.clip_drag = None;
-    r.clip_trim = None;
+    r.transport.loop_enabled = project.loop_enabled;
+    r.transport.loop_in = project.loop_in;
+    r.transport.loop_out = project.loop_out;
+    r.transport.playhead = 0;
+    r.viewport.scroll_offset = 0.0;
+    r.viewport.scroll_offset_y = 0.0;
+    r.interaction.selected_clip = None;
+    r.mixer.selected_plugin = None;
+    r.interaction.clip_drag = None;
+    r.interaction.clip_trim = None;
     r.compose
         .load_from_project(&project.section_definitions, &project.section_placements);
 
-    r.engine.send(AudioCommand::SetBpm { bpm: r.bpm });
+    r.engine.send(AudioCommand::SetBpm { bpm: r.transport.bpm });
     r.engine.send(AudioCommand::SetTimeSignature {
-        numerator: r.time_sig_num,
-        denominator: r.time_sig_den,
+        numerator: r.transport.time_sig_num,
+        denominator: r.transport.time_sig_den,
     });
     r.engine.send(AudioCommand::SetMetronomeEnabled {
-        enabled: r.metronome_enabled,
+        enabled: r.transport.metronome_enabled,
     });
     r.engine.send(AudioCommand::SetMasterVolume {
         volume: db_to_gain(r.master_volume),
     });
     r.engine.send(AudioCommand::SetLoopRange {
-        enabled: r.loop_enabled,
-        loop_in: r.loop_in,
-        loop_out: r.loop_out,
+        enabled: r.transport.loop_enabled,
+        loop_in: r.transport.loop_in,
+        loop_out: r.transport.loop_out,
     });
 
     // Clear GUI state
-    r.tracks.clear();
-    r.busses.clear();
+    r.registry.tracks.clear();
+    r.registry.busses.clear();
     r.clips.clear();
     r.midi_clips.clear();
-    r.next_track_order = 0;
-    r.next_bus_order = 0;
+    r.registry.next_track_order = 0;
+    r.registry.next_bus_order = 0;
 
     // Bump the app-side sub-track id counter past any persisted ids
     // so new sub-tracks allocated after this load don't collide with
     // restored ones.
     for pt in &project.tracks {
-        if pt.sub_track.is_some() && pt.id >= r.next_sub_track_id {
-            r.next_sub_track_id = pt.id + 1;
+        if pt.sub_track.is_some() && pt.id >= r.registry.next_sub_track_id {
+            r.registry.next_sub_track_id = pt.id + 1;
         }
     }
 
@@ -309,7 +309,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
         });
     }
 
-    r.loop_range_set = r.loop_enabled;
+    r.transport.loop_range_set = r.transport.loop_enabled;
 }
 
 fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
@@ -403,9 +403,9 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
     }
 
     let mut track = if pt.track_type == "instrument" {
-        TrackState::new_instrument(pt.id, r.next_track_order)
+        TrackState::new_instrument(pt.id, r.registry.next_track_order)
     } else {
-        TrackState::new_audio(pt.id, r.next_track_order)
+        TrackState::new_audio(pt.id, r.registry.next_track_order)
     };
     track.name = pt.name.clone();
     track.volume = pt.volume;
@@ -425,8 +425,8 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
     track.instrument_icon = pt.instrument_icon;
     track.sub_track = pt.sub_track;
     track.input_port_index = pt.input_port_index.unwrap_or(0);
-    r.tracks.push(track);
-    r.next_track_order += 1;
+    r.registry.tracks.push(track);
+    r.registry.next_track_order += 1;
 }
 
 fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProject) {
@@ -471,13 +471,13 @@ fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProject) {
         ));
     }
 
-    let mut bus = BusState::new(pb.id, r.next_bus_order, pb.name.clone());
+    let mut bus = BusState::new(pb.id, r.registry.next_bus_order, pb.name.clone());
     bus.volume = pb.volume;
     bus.pan = pb.pan;
     bus.muted = pb.muted;
     bus.plugins = gui_plugins;
-    r.busses.push(bus);
-    r.next_bus_order += 1;
+    r.registry.busses.push(bus);
+    r.registry.next_bus_order += 1;
 }
 
 // -- File dialog tasks ---------------------------------------------------

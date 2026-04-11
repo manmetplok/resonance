@@ -25,11 +25,11 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
 fn update_vu_meters(r: &mut Resonance) {
     let (track_peaks, bus_peaks, master_peak_l, master_peak_r) =
         r.engine.read_and_clear_peaks();
-    for track in &mut r.tracks {
+    for track in &mut r.registry.tracks {
         track.level_l *= theme::PEAK_DECAY;
         track.level_r *= theme::PEAK_DECAY;
     }
-    for bus in &mut r.busses {
+    for bus in &mut r.registry.busses {
         bus.level_l *= theme::PEAK_DECAY;
         bus.level_r *= theme::PEAK_DECAY;
     }
@@ -58,64 +58,64 @@ fn update_vu_meters(r: &mut Resonance) {
 }
 
 fn auto_follow_playhead(r: &mut Resonance) {
-    if !r.playing {
+    if !r.transport.playing {
         return;
     }
-    let playhead_seconds = r.playhead as f64 / r.sample_rate as f64;
-    let playhead_x = playhead_seconds as f32 * r.zoom - r.scroll_offset;
-    let visible_width = r.viewport_width;
+    let playhead_seconds = r.transport.playhead as f64 / r.sample_rate as f64;
+    let playhead_x = playhead_seconds as f32 * r.viewport.zoom - r.viewport.scroll_offset;
+    let visible_width = r.viewport.viewport_width;
     if playhead_x > visible_width * 0.8 {
-        r.scroll_offset = playhead_seconds as f32 * r.zoom - visible_width * 0.5;
+        r.viewport.scroll_offset = playhead_seconds as f32 * r.viewport.zoom - visible_width * 0.5;
     } else if playhead_x < 0.0 {
-        r.scroll_offset =
-            (playhead_seconds as f32 * r.zoom - visible_width * 0.2).max(0.0);
+        r.viewport.scroll_offset =
+            (playhead_seconds as f32 * r.viewport.zoom - visible_width * 0.2).max(0.0);
     }
 }
 
 pub fn scroll_x_delta(r: &mut Resonance, delta: f32) {
-    let max_x = (r.timeline_content_width - r.viewport_width).max(0.0);
-    r.scroll_offset = (r.scroll_offset + delta).clamp(0.0, max_x);
+    let max_x = (r.viewport.timeline_content_width - r.viewport.viewport_width).max(0.0);
+    r.viewport.scroll_offset = (r.viewport.scroll_offset + delta).clamp(0.0, max_x);
 }
 
 pub fn scroll_y_delta(r: &mut Resonance, delta: f32) {
-    r.scroll_offset_y = (r.scroll_offset_y + delta).max(0.0);
-    let max_y = (r.tracks.len() as f32 * theme::TRACK_HEIGHT).max(0.0);
-    r.scroll_offset_y = r.scroll_offset_y.min(max_y);
+    r.viewport.scroll_offset_y = (r.viewport.scroll_offset_y + delta).max(0.0);
+    let max_y = (r.registry.tracks.len() as f32 * theme::TRACK_HEIGHT).max(0.0);
+    r.viewport.scroll_offset_y = r.viewport.scroll_offset_y.min(max_y);
 }
 
 pub fn scroll_to_x(r: &mut Resonance, x: f32) {
-    let max_x = (r.timeline_content_width - r.viewport_width).max(0.0);
-    r.scroll_offset = x.clamp(0.0, max_x);
+    let max_x = (r.viewport.timeline_content_width - r.viewport.viewport_width).max(0.0);
+    r.viewport.scroll_offset = x.clamp(0.0, max_x);
 }
 
 pub fn scroll_to_y(r: &mut Resonance, y: f32) {
-    r.scroll_offset_y = y.max(0.0);
-    let max_y = (r.tracks.len() as f32 * theme::TRACK_HEIGHT).max(0.0);
-    r.scroll_offset_y = r.scroll_offset_y.min(max_y);
+    r.viewport.scroll_offset_y = y.max(0.0);
+    let max_y = (r.registry.tracks.len() as f32 * theme::TRACK_HEIGHT).max(0.0);
+    r.viewport.scroll_offset_y = r.viewport.scroll_offset_y.min(max_y);
 }
 
 pub fn viewport_width(r: &mut Resonance, w: f32) {
-    r.viewport_width = w;
+    r.viewport.viewport_width = w;
 }
 
 pub fn timeline_content_size(r: &mut Resonance, w: f32, h: f32) {
-    r.timeline_content_width = w;
-    r.timeline_content_height = h;
+    r.viewport.timeline_content_width = w;
+    r.viewport.timeline_content_height = h;
     // Re-clamp scroll offsets if content shrank.
-    let max_x = (w - r.viewport_width).max(0.0);
-    if r.scroll_offset > max_x {
-        r.scroll_offset = max_x;
+    let max_x = (w - r.viewport.viewport_width).max(0.0);
+    if r.viewport.scroll_offset > max_x {
+        r.viewport.scroll_offset = max_x;
     }
     let max_y = (h - 1.0).max(0.0);
-    if r.scroll_offset_y > max_y {
-        r.scroll_offset_y = max_y;
+    if r.viewport.scroll_offset_y > max_y {
+        r.viewport.scroll_offset_y = max_y;
     }
 }
 
 pub fn zoom_in(r: &mut Resonance) {
-    r.zoom = (r.zoom * 1.5).min(1000.0);
+    r.viewport.zoom = (r.viewport.zoom * 1.5).min(1000.0);
 }
 
 pub fn zoom_out(r: &mut Resonance) {
-    r.zoom = (r.zoom / 1.5).max(10.0);
+    r.viewport.zoom = (r.viewport.zoom / 1.5).max(10.0);
 }
