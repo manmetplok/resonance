@@ -293,7 +293,7 @@ Never use `iced::Color::from_rgb(...)` inline for anything that belongs to the a
 - `SEPARATOR`, `TRACK_LINE`, `BAR_LINE`, `BEAT_LINE` — rules & grid
 - `TEXT`, `TEXT_DIM` — foreground text
 - `ACCENT` — primary interaction color (orange)
-- `RECORD_RED`, `SOLO_YELLOW`, `METRONOME_ON`, `PUNCH_MARKER` — semantic
+- `RECORD_RED`, `SOLO_YELLOW`, `METRONOME_ON`, `LOOP_MARKER` — semantic
 - `CLIP_BODY`, `CLIP_HEADER`, `CLIP_SELECTED_BORDER` — clip rendering
 - `RULER_BG` — timeline ruler background
 
