@@ -2,12 +2,13 @@
 use crate::message::Message;
 use crate::state::*;
 use crate::theme;
-use crate::theme::fa;
-use crate::util::{format_db, format_pan};
-use crate::view::knob::pan_knob;
-use iced::widget::{
-    button, column, container, pick_list, row, scrollable, text, vertical_slider, Space,
+use crate::util::format_pan;
+use crate::view::controls::{
+    bus_remove_button, fader_section, monitor_button, mono_button, mute_button,
+    record_arm_button, solo_button,
 };
+use crate::view::knob::pan_knob;
+use iced::widget::{button, column, container, pick_list, row, scrollable, text, Space};
 use iced::{alignment, Color, Element, Font, Length};
 use resonance_audio::types::*;
 
@@ -57,68 +58,6 @@ impl std::fmt::Display for PortChoice {
     }
 }
 
-/// Convert linear amplitude to meter bar height (logarithmic/dB scale).
-fn level_to_bar_height(level: f32, max_height: f32) -> f32 {
-    if level < 0.0001 {
-        return 0.0;
-    }
-    let db = 20.0 * level.log10();
-    let normalized = (db + 60.0) / 66.0; // -60dB=0, +6dB=1
-    normalized.clamp(0.0, 1.0) * max_height
-}
-
-/// Get meter color based on signal level (green / yellow / red).
-fn level_color(level: f32) -> Color {
-    if level < 0.0001 {
-        return theme::METRONOME_ON;
-    }
-    let db = 20.0 * level.log10();
-    if db > 0.0 {
-        theme::RECORD_RED
-    } else if db > -6.0 {
-        theme::SOLO_YELLOW
-    } else {
-        theme::METRONOME_ON
-    }
-}
-
-/// Render a single vertical VU meter bar (bottom-aligned colored bar on dark bg).
-fn meter_bar_v<'a>(level: f32, max_height: f32) -> Element<'a, Message> {
-    let bar_height = level_to_bar_height(level, max_height);
-    let color = level_color(level);
-
-    // Spacer pushes the colored bar to the bottom
-    let spacer_height = (max_height - bar_height).max(0.0);
-
-    let bar = container(Space::new(0.0, 0.0))
-        .width(Length::Fill)
-        .height(bar_height)
-        .style(move |_theme| container::Style {
-            background: Some(iced::Background::Color(color)),
-            ..Default::default()
-        });
-
-    container(
-        column![
-            Space::new(Length::Fill, spacer_height),
-            bar,
-        ],
-    )
-    .width(6)
-    .height(max_height)
-    .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(theme::METER_BG)),
-        ..Default::default()
-    })
-    .into()
-}
-
-/// Render a stereo vertical VU meter (L + R bars side by side).
-fn view_meter_v<'a>(level_l: f32, level_r: f32, height: f32) -> Element<'a, Message> {
-    row![meter_bar_v(level_l, height), meter_bar_v(level_r, height)]
-        .spacing(1)
-        .into()
-}
 
 impl crate::Resonance {
     pub(crate) fn view_mixer(&self) -> Element<'_, Message> {
@@ -154,10 +93,7 @@ impl crate::Resonance {
         .width(Length::Fill);
         let master_strip = self.view_master_strip();
         let v_separator_tracks =
-            container(Space::new(1, Length::Fill)).style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::SEPARATOR)),
-                ..Default::default()
-            });
+            container(Space::new(1, Length::Fill)).style(theme::separator_bg);
         let tracks_area = row![scrollable_tracks, v_separator_tracks, master_strip]
             .height(Length::FillPortion(1));
 
@@ -173,17 +109,11 @@ impl crate::Resonance {
         .width(Length::Fill);
         let add_bus_strip = self.view_add_bus_strip();
         let v_separator_busses =
-            container(Space::new(1, Length::Fill)).style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::SEPARATOR)),
-                ..Default::default()
-            });
+            container(Space::new(1, Length::Fill)).style(theme::separator_bg);
         let busses_area = row![scrollable_busses, v_separator_busses, add_bus_strip]
             .height(Length::FillPortion(1));
 
-        let h_sep_mid = container(Space::new(Length::Fill, 1)).style(|_theme| container::Style {
-            background: Some(iced::Background::Color(theme::SEPARATOR)),
-            ..Default::default()
-        });
+        let h_sep_mid = container(Space::new(Length::Fill, 1)).style(theme::separator_bg);
 
         let mut mixer_col = column![].spacing(0);
         mixer_col = mixer_col.push(tracks_area);
@@ -191,10 +121,7 @@ impl crate::Resonance {
         mixer_col = mixer_col.push(busses_area);
 
         if let Some(panel) = self.view_plugin_panel() {
-            let h_sep = container(Space::new(Length::Fill, 1)).style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::SEPARATOR)),
-                ..Default::default()
-            });
+            let h_sep = container(Space::new(Length::Fill, 1)).style(theme::separator_bg);
             mixer_col = mixer_col.push(h_sep);
             mixer_col = mixer_col.push(panel);
         }
@@ -202,10 +129,7 @@ impl crate::Resonance {
         container(mixer_col)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::BG)),
-                ..Default::default()
-            })
+            .style(theme::base_bg)
             .into()
     }
 
@@ -238,15 +162,7 @@ impl crate::Resonance {
 
         container(content)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::PANEL_DARK)),
-                border: iced::Border {
-                    color: theme::SEPARATOR,
-                    width: 0.5,
-                    radius: 0.0.into(),
-                },
-                ..Default::default()
-            })
+            .style(theme::panel_dark_outlined)
             .into()
     }
 
@@ -382,49 +298,15 @@ impl crate::Resonance {
 
         // Same icon vocabulary as the Arrange track header so the two
         // surfaces stay visually consistent.
-        let rec_color = if track.record_armed { theme::RECORD_RED } else { theme::TEXT_DIM };
-        let armed = track.record_armed;
-        let rec_btn = button(theme::icon(fa::CIRCLE).size(12).color(rec_color))
-            .on_press(Message::ToggleRecordArm(track.id))
-            .style(move |_theme, status| {
-                if armed { theme::record_armed_button_style(status) }
-                else { theme::small_button_style(status) }
-            })
-            .padding(2);
-
-        let mute_color = if track.muted { theme::ACCENT } else { theme::TEXT_DIM };
-        let mute_btn = button(theme::icon(fa::VOLUME_XMARK).size(12).color(mute_color))
-            .on_press(Message::ToggleMute(track.id))
-            .style(|_theme, status| theme::small_button_style(status))
-            .padding(2);
-
-        let solo_color = if track.soloed { theme::SOLO_YELLOW } else { theme::TEXT_DIM };
-        let solo_btn = button(theme::icon(fa::HEADPHONES).size(12).color(solo_color))
-            .on_press(Message::ToggleSolo(track.id))
-            .style(|_theme, status| theme::small_button_style(status))
-            .padding(2);
-
-        let mon_color = if track.monitor_enabled { theme::METRONOME_ON } else { theme::TEXT_DIM };
-        let mon_enabled = track.monitor_enabled;
-        let mon_btn = button(theme::icon(fa::EYE).size(12).color(mon_color))
-            .on_press(Message::ToggleMonitor(track.id))
-            .style(move |_theme, status| {
-                theme::toggle_button_style(mon_enabled, theme::METRONOME_ON, true, status)
-            })
-            .padding(2);
-
-        let is_mono = track.mono;
-        let mono_glyph = if is_mono { fa::CIRCLE_HOLLOW } else { fa::CIRCLE_HOLLOW_DOUBLE };
-        let mono_btn = button(theme::icon(mono_glyph).size(12).color(theme::TEXT))
-            .on_press(Message::ToggleTrackMono(track.id))
-            .style(move |_theme, status| {
-                theme::mono_button_style(is_mono, status)
-            })
-            .padding(2);
-
-        let button_row = row![mono_btn, mon_btn, rec_btn, mute_btn, solo_btn]
-            .spacing(4)
-            .align_y(alignment::Vertical::Center);
+        let button_row = row![
+            mono_button(track.mono, track.id, 12),
+            monitor_button(track.monitor_enabled, track.id, 12),
+            record_arm_button(track.record_armed, track.id, 12),
+            mute_button(track.muted, Message::ToggleMute(track.id), 12),
+            solo_button(track.soloed, Message::ToggleSolo(track.id), 12),
+        ]
+        .spacing(4)
+        .align_y(alignment::Vertical::Center);
 
         // Output destination selector: Master + every existing bus.
         let output_picker = self.view_track_output_picker(track);
@@ -476,10 +358,7 @@ impl crate::Resonance {
 
             // Thin separator between instrument slot and FX chain.
             plugin_section = plugin_section.push(
-                container(Space::new(Length::Fill, 1)).style(|_theme| container::Style {
-                    background: Some(iced::Background::Color(theme::SEPARATOR)),
-                    ..Default::default()
-                }),
+                container(Space::new(Length::Fill, 1)).style(theme::separator_bg),
             );
 
             // FX slots: plugins after the instrument.
@@ -557,34 +436,13 @@ impl crate::Resonance {
             col.push(pan_row)
         };
 
-        // Volume fader (vertical) + VU meters
-        let fader_height = 120.0;
-
-        let vol_fader = vertical_slider(-60.0..=6.0f32, track.volume, {
-            let id = track.id;
-            move |v| Message::SetTrackVolume(id, v)
-        })
-        .height(fader_height)
-        .step(0.1);
-
-        let meters = view_meter_v(track.level_l, track.level_r, fader_height);
-
-        let vol_label = format_db(track.volume);
-        let fader_row = row![
-            meters,
-            vol_fader,
-        ]
-        .spacing(4)
-        .align_y(alignment::Vertical::Center);
-
-        let fader_section = column![
-            container(fader_row)
-                .width(Length::Fill)
-                .center_x(Length::Fill),
-            text(vol_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
-        ]
-        .spacing(2)
-        .align_x(alignment::Horizontal::Center);
+        let track_id_for_fader = track.id;
+        let fader_block = fader_section(
+            track.level_l,
+            track.level_r,
+            track.volume,
+            move |v| Message::SetTrackVolume(track_id_for_fader, v),
+        );
 
         // Input device + port picker (when armed). The port dropdown
         // lets the user pick a specific channel on the selected device —
@@ -677,7 +535,7 @@ impl crate::Resonance {
             button_row,
             plugin_fill,
             fx_pan_block,
-            fader_section,
+            fader_block,
             output_picker,
             bottom_section,
         ]
@@ -751,21 +609,14 @@ impl crate::Resonance {
         .padding([6, 4]);
 
         // Mute + Remove buttons — same icons as the track header.
-        let mute_color = if bus.muted { theme::ACCENT } else { theme::TEXT_DIM };
         let bus_id = bus.id;
-        let mute_btn = button(theme::icon(fa::VOLUME_XMARK).size(12).color(mute_color))
-            .on_press(Message::ToggleBusMute(bus_id))
-            .style(|_theme, status| theme::small_button_style(status))
-            .padding(2);
-
-        let remove_btn = button(theme::icon(fa::TRASH).size(12).color(theme::TEXT_DIM))
-            .on_press(Message::RemoveBus(bus_id))
-            .style(|_theme, status| theme::small_button_style(status))
-            .padding(2);
-
-        let button_row = row![mute_btn, Space::with_width(Length::Fill), remove_btn]
-            .spacing(4)
-            .align_y(alignment::Vertical::Center);
+        let button_row = row![
+            mute_button(bus.muted, Message::ToggleBusMute(bus_id), 12),
+            Space::with_width(Length::Fill),
+            bus_remove_button(bus_id, 12),
+        ]
+        .spacing(4)
+        .align_y(alignment::Vertical::Center);
 
         // Plugin chain (all effects — no instrument slot on busses).
         let mut plugin_section = column![].spacing(2).width(Length::Fill);
@@ -823,26 +674,9 @@ impl crate::Resonance {
             col.push(pan_row)
         };
 
-        // Volume fader + meters.
-        let fader_height = 120.0;
-        let vol_fader = vertical_slider(-60.0..=6.0f32, bus.volume, move |v| {
+        let fader_block = fader_section(bus.level_l, bus.level_r, bus.volume, move |v| {
             Message::SetBusVolume(bus_id, v)
-        })
-        .height(fader_height)
-        .step(0.1);
-        let meters = view_meter_v(bus.level_l, bus.level_r, fader_height);
-        let vol_label = format_db(bus.volume);
-        let fader_row = row![meters, vol_fader]
-            .spacing(4)
-            .align_y(alignment::Vertical::Center);
-        let fader_section = column![
-            container(fader_row)
-                .width(Length::Fill)
-                .center_x(Length::Fill),
-            text(vol_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
-        ]
-        .spacing(2)
-        .align_x(alignment::Horizontal::Center);
+        });
 
         // FX section absorbs all slack (same treatment as track strips).
         let plugin_fill = container(plugin_section)
@@ -855,7 +689,7 @@ impl crate::Resonance {
             button_row,
             plugin_fill,
             fx_pan_block,
-            fader_section,
+            fader_block,
         ]
         .spacing(4)
         .padding(6)
@@ -864,15 +698,7 @@ impl crate::Resonance {
 
         container(strip_content)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::PANEL_DARK)),
-                border: iced::Border {
-                    color: theme::SEPARATOR,
-                    width: 0.5,
-                    radius: 0.0.into(),
-                },
-                ..Default::default()
-            })
+            .style(theme::panel_dark_outlined)
             .into()
     }
 
@@ -884,31 +710,12 @@ impl crate::Resonance {
         .center_x(Length::Fill)
         .padding([6, 4]);
 
-        let fader_height = 120.0;
-
-        let vol_fader = vertical_slider(-60.0..=6.0f32, self.master_volume, Message::SetMasterVolume)
-            .height(fader_height)
-            .step(0.1);
-
-        let meters = view_meter_v(self.master_level_l, self.master_level_r, fader_height);
-
-        let vol_label = format_db(self.master_volume);
-
-        let fader_row = row![
-            meters,
-            vol_fader,
-        ]
-        .spacing(4)
-        .align_y(alignment::Vertical::Center);
-
-        let fader_section = column![
-            container(fader_row)
-                .width(Length::Fill)
-                .center_x(Length::Fill),
-            text(vol_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
-        ]
-        .spacing(2)
-        .align_x(alignment::Horizontal::Center);
+        let fader_block = fader_section(
+            self.master_level_l,
+            self.master_level_r,
+            self.master_volume,
+            Message::SetMasterVolume,
+        );
 
         let bounce_btn: Element<'_, Message> = if self.bouncing {
             text("Bouncing...").size(8).color(theme::ACCENT).into()
@@ -928,7 +735,7 @@ impl crate::Resonance {
             label,
             bounce_row,
             Space::with_height(Length::Fill),
-            fader_section,
+            fader_block,
         ]
         .spacing(4)
         .padding(8)
@@ -936,15 +743,7 @@ impl crate::Resonance {
 
         container(strip_content)
             .height(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::PANEL_DARK)),
-                border: iced::Border {
-                    color: theme::SEPARATOR,
-                    width: 0.5,
-                    radius: 0.0.into(),
-                },
-                ..Default::default()
-            })
+            .style(theme::panel_dark_outlined)
             .into()
     }
 
@@ -979,10 +778,9 @@ impl crate::Resonance {
         let mapped = plugin_element.map(move |event| {
             use resonance_plugin::ui::PluginUiEvent;
             match event {
-                PluginUiEvent::SetParam(param_id, value) => Message::SetPluginParam(inst_id, param_id, value),
-                PluginUiEvent::BrowseFile => Message::PluginBrowseFile(inst_id),
-                PluginUiEvent::PrevFile => Message::PluginPrevFile(inst_id),
-                PluginUiEvent::NextFile => Message::PluginNextFile(inst_id),
+                PluginUiEvent::SetParam(param_id, value) => {
+                    Message::SetPluginParam(inst_id, param_id, value)
+                }
             }
         });
 
@@ -1030,10 +828,7 @@ impl crate::Resonance {
         )
         .width(Length::Fill)
         .height(200)
-        .style(|_theme| container::Style {
-            background: Some(iced::Background::Color(theme::PANEL)),
-            ..Default::default()
-        });
+        .style(theme::panel_bg);
 
         Some(panel.into())
     }

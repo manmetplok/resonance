@@ -181,6 +181,116 @@ pub struct SubTrackLink {
     pub output_port_index: u32,
 }
 
+impl TrackState {
+    /// New audio track with default settings. `order` comes from the
+    /// caller (usually `next_track_order`).
+    pub fn new_audio(id: TrackId, order: usize) -> Self {
+        Self {
+            id,
+            name: format!("Track {}", id),
+            volume: 0.0,
+            pan: 0.0,
+            muted: false,
+            soloed: false,
+            order,
+            record_armed: false,
+            monitor_enabled: false,
+            mono: true,
+            input_device_name: None,
+            input_port_index: 0,
+            plugins: Vec::new(),
+            level_l: 0.0,
+            level_r: 0.0,
+            track_type: TrackType::Audio,
+            output: TrackOutput::Master,
+            instrument_type: InstrumentType::Synth,
+            instrument_icon: InstrumentIcon::Music,
+            sub_track: None,
+        }
+    }
+
+    /// New instrument track with default settings.
+    pub fn new_instrument(id: TrackId, order: usize) -> Self {
+        Self {
+            id,
+            name: format!("Instrument {}", id),
+            volume: 0.0,
+            pan: 0.0,
+            muted: false,
+            soloed: false,
+            order,
+            record_armed: false,
+            monitor_enabled: false,
+            mono: false,
+            input_device_name: None,
+            input_port_index: 0,
+            plugins: Vec::new(),
+            level_l: 0.0,
+            level_r: 0.0,
+            track_type: TrackType::Instrument,
+            output: TrackOutput::Master,
+            instrument_type: InstrumentType::Synth,
+            instrument_icon: InstrumentIcon::Music,
+            sub_track: None,
+        }
+    }
+
+    /// New sub-track driven by a parent instrument plugin's output port.
+    pub fn new_sub_track(
+        id: TrackId,
+        order: usize,
+        name: String,
+        parent_track_id: TrackId,
+        output_port_index: u32,
+    ) -> Self {
+        let mut t = Self::new_instrument(id, order);
+        t.name = name;
+        t.sub_track = Some(SubTrackLink {
+            parent_track_id,
+            output_port_index,
+        });
+        t
+    }
+}
+
+impl BusState {
+    pub fn new(id: BusId, order: usize, name: String) -> Self {
+        Self {
+            id,
+            name,
+            order,
+            volume: 0.0,
+            pan: 0.0,
+            muted: false,
+            plugins: Vec::new(),
+            level_l: 0.0,
+            level_r: 0.0,
+        }
+    }
+}
+
+impl PluginSlotState {
+    pub fn new(
+        instance_id: PluginInstanceId,
+        plugin_name: String,
+        clap_plugin_id: String,
+        clap_file_path: String,
+        params: Vec<ParamInfo>,
+        has_gui: bool,
+    ) -> Self {
+        Self {
+            instance_id,
+            plugin_name,
+            clap_plugin_id,
+            clap_file_path,
+            params,
+            custom: PluginCustomState::Generic,
+            has_gui,
+            editor_open: false,
+        }
+    }
+}
+
 /// GUI-side bus state.
 #[derive(Debug, Clone)]
 pub struct BusState {

@@ -10,6 +10,7 @@ pub(crate) mod project;
 pub(crate) mod state;
 mod theme;
 mod timeline;
+mod timeline_draw;
 mod update;
 pub(crate) mod util;
 mod view;
@@ -64,8 +65,6 @@ pub(crate) struct Resonance {
     pub(crate) loop_out: u64,
     pub(crate) loop_range_set: bool,
     pub(crate) dragging_loop: Option<LoopDragTarget>,
-    /// Pending file path to inject via CLAP state (instance_id, persist_key, path).
-    pub(crate) pending_plugin_path: Option<(PluginInstanceId, String, String)>,
     pub(crate) view_mode: ViewMode,
     pub(crate) selected_clip: Option<ClipId>,
     /// Clip drag state: (clip_id, grab_offset_x, original_start_sample, original_track_id, current_x)
@@ -128,6 +127,72 @@ impl Resonance {
         busses
     }
 
+    /// Run `f` on the track with the given id, returning whatever `f`
+    /// returns. `None` if the track doesn't exist.
+    pub(crate) fn with_track_mut<R>(
+        &mut self,
+        id: TrackId,
+        f: impl FnOnce(&mut TrackState) -> R,
+    ) -> Option<R> {
+        self.tracks.iter_mut().find(|t| t.id == id).map(f)
+    }
+
+    /// Run `f` on the bus with the given id, returning whatever `f`
+    /// returns. `None` if the bus doesn't exist.
+    pub(crate) fn with_bus_mut<R>(
+        &mut self,
+        id: BusId,
+        f: impl FnOnce(&mut BusState) -> R,
+    ) -> Option<R> {
+        self.busses.iter_mut().find(|b| b.id == id).map(f)
+    }
+
+    /// Locate a plugin slot on any track or bus by instance id and run
+    /// `f` on it. Iterates tracks first, then busses.
+    pub(crate) fn with_plugin_mut<R>(
+        &mut self,
+        instance_id: PluginInstanceId,
+        f: impl FnOnce(&mut PluginSlotState) -> R,
+    ) -> Option<R> {
+        for track in &mut self.tracks {
+            if let Some(p) = track
+                .plugins
+                .iter_mut()
+                .find(|p| p.instance_id == instance_id)
+            {
+                return Some(f(p));
+            }
+        }
+        for bus in &mut self.busses {
+            if let Some(p) = bus
+                .plugins
+                .iter_mut()
+                .find(|p| p.instance_id == instance_id)
+            {
+                return Some(f(p));
+            }
+        }
+        None
+    }
+
+    /// Find the index in `self.tracks` of the visible track at the given
+    /// y coordinate in the arrange view. Used by clip drag handlers to
+    /// pick the target lane under the cursor. Sub-tracks are excluded
+    /// (the arrange view hides them).
+    pub(crate) fn track_id_at_arrange_y(&self, y: f32) -> Option<TrackId> {
+        let ruler_height = theme::RULER_HEIGHT;
+        let track_idx = ((y - ruler_height + self.scroll_offset_y) / theme::TRACK_HEIGHT)
+            .floor()
+            .max(0.0) as usize;
+        let mut sorted: Vec<&TrackState> = self
+            .tracks
+            .iter()
+            .filter(|t| t.sub_track.is_none())
+            .collect();
+        sorted.sort_by_key(|t| t.order);
+        sorted.get(track_idx).map(|t| t.id)
+    }
+
     fn new() -> (Self, iced::Task<Message>) {
         let engine = match AudioEngine::new() {
             Ok(engine) => engine,
@@ -178,7 +243,6 @@ impl Resonance {
             loop_out: 0,
             loop_range_set: false,
             dragging_loop: None,
-            pending_plugin_path: None,
             view_mode: ViewMode::Arrange,
             selected_clip: None,
             clip_drag: None,

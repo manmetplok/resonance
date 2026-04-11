@@ -646,10 +646,17 @@ fn engine_thread(
                         track.set_soloed(soloed);
                     }
                 }
-                AudioCommand::AddTrack => {
-                    let id = next_track_id;
-                    next_track_id += 1;
-                    let track = Track::new(id, format!("Track {}", id));
+                AudioCommand::AddTrack { id_hint, name } => {
+                    let id = id_hint.unwrap_or_else(|| {
+                        let i = next_track_id;
+                        next_track_id += 1;
+                        i
+                    });
+                    if id_hint.is_some() {
+                        next_track_id = next_track_id.max(id + 1);
+                    }
+                    let name = name.unwrap_or_else(|| format!("Track {}", id));
+                    let track = Track::new(id, name);
                     tracks.write().insert(id, track);
                     let _ = event_tx.send(AudioEvent::TrackAdded { track_id: id });
                 }
@@ -818,6 +825,7 @@ fn engine_thread(
                     track_id,
                     clap_file_path,
                     clap_plugin_id,
+                    id_hint,
                 } => {
                     let path = Path::new(&clap_file_path);
 
@@ -868,8 +876,14 @@ fn engine_thread(
 
                     match bundles[bundle_idx].create_instance(&actual_plugin_id, sample_rate) {
                         Ok(instance) => {
-                            let instance_id = next_plugin_id;
-                            next_plugin_id += 1;
+                            let instance_id = id_hint.unwrap_or_else(|| {
+                                let i = next_plugin_id;
+                                next_plugin_id += 1;
+                                i
+                            });
+                            if id_hint.is_some() {
+                                next_plugin_id = next_plugin_id.max(instance_id + 1);
+                            }
 
                             // Query params + has_gui + output port layout
                             // before moving instance into shared map.
@@ -1389,81 +1403,6 @@ fn engine_thread(
                     shared.loop_in.store(li, Ordering::Relaxed);
                     shared.loop_out.store(lo, Ordering::Relaxed);
                 }
-                AudioCommand::AddTrackWithId { track_id, name } => {
-                    let track = Track::new(track_id, name);
-                    tracks.write().insert(track_id, track);
-                    next_track_id = next_track_id.max(track_id + 1);
-                    let _ = event_tx.send(AudioEvent::TrackAdded { track_id });
-                }
-                AudioCommand::AddPluginWithId {
-                    track_id,
-                    instance_id,
-                    clap_file_path,
-                    clap_plugin_id,
-                } => {
-                    let path = Path::new(&clap_file_path);
-
-                    let bundle_idx = bundles.iter().position(|b| {
-                        b.descriptors().iter().any(|d| d.id == clap_plugin_id)
-                    });
-
-                    let bundle_idx = match bundle_idx {
-                        Some(idx) => idx,
-                        None => {
-                            match ClapBundle::load(path) {
-                                Ok(bundle) => {
-                                    bundles.push(bundle);
-                                    bundles.len() - 1
-                                }
-                                Err(e) => {
-                                    let _ = event_tx.send(AudioEvent::Error(format!(
-                                        "Failed to load plugin: {}", e
-                                    )));
-                                    continue;
-                                }
-                            }
-                        }
-                    };
-
-                    let plugin_name = bundles[bundle_idx]
-                        .descriptors()
-                        .iter()
-                        .find(|d| d.id == clap_plugin_id)
-                        .map(|d| d.name.clone())
-                        .unwrap_or_else(|| clap_plugin_id.clone());
-
-                    match bundles[bundle_idx].create_instance(&clap_plugin_id, sample_rate) {
-                        Ok(instance) => {
-                            let params = instance.query_params();
-                            let has_gui = instance.has_gui();
-                            let output_port_count = instance.output_port_count();
-                            let output_port_names = instance.output_port_names();
-                            plugins.write().insert(instance_id, parking_lot::Mutex::new(SyncClapInstance(instance)));
-                            next_plugin_id = next_plugin_id.max(instance_id + 1);
-
-                            if let Some(track) = tracks.write().get_mut(&track_id) {
-                                track.plugin_ids.push(instance_id);
-                            }
-
-                            let _ = event_tx.send(AudioEvent::PluginAdded {
-                                track_id,
-                                instance_id,
-                                plugin_name,
-                                clap_plugin_id,
-                                clap_file_path,
-                                params,
-                                has_gui,
-                                output_port_count,
-                                output_port_names,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = event_tx.send(AudioEvent::Error(format!(
-                                "Failed to create plugin instance: {}", e
-                            )));
-                        }
-                    }
-                }
                 AudioCommand::LoadClipDirect {
                     clip_id,
                     track_id,
@@ -1567,18 +1506,19 @@ fn engine_thread(
                 }
 
                 // -- Instrument track commands --
-                AudioCommand::AddInstrumentTrack => {
-                    let id = next_track_id;
-                    next_track_id += 1;
-                    let track = Track::with_type(id, format!("Instrument {}", id), TrackType::Instrument);
+                AudioCommand::AddInstrumentTrack { id_hint, name } => {
+                    let id = id_hint.unwrap_or_else(|| {
+                        let i = next_track_id;
+                        next_track_id += 1;
+                        i
+                    });
+                    if id_hint.is_some() {
+                        next_track_id = next_track_id.max(id + 1);
+                    }
+                    let name = name.unwrap_or_else(|| format!("Instrument {}", id));
+                    let track = Track::with_type(id, name, TrackType::Instrument);
                     tracks.write().insert(id, track);
                     let _ = event_tx.send(AudioEvent::InstrumentTrackAdded { track_id: id });
-                }
-                AudioCommand::AddInstrumentTrackWithId { track_id, name } => {
-                    let track = Track::with_type(track_id, name, TrackType::Instrument);
-                    tracks.write().insert(track_id, track);
-                    next_track_id = next_track_id.max(track_id + 1);
-                    let _ = event_tx.send(AudioEvent::InstrumentTrackAdded { track_id });
                 }
 
                 // -- MIDI clip commands --
@@ -1736,30 +1676,26 @@ fn engine_thread(
                 }
 
                 // -- Bus commands --
-                AudioCommand::AddBus => {
+                AudioCommand::AddBus { id_hint, name } => {
                     let mut busses_guard = busses.write();
                     if busses_guard.len() >= MAX_BUSSES {
                         let _ = event_tx.send(AudioEvent::Error(format!(
                             "Cannot add bus: maximum of {MAX_BUSSES} busses reached"
                         )));
                     } else {
-                        let bus_id = next_bus_id;
-                        next_bus_id += 1;
-                        let name = format!("Bus {bus_id}");
+                        let bus_id = id_hint.unwrap_or_else(|| {
+                            let i = next_bus_id;
+                            next_bus_id += 1;
+                            i
+                        });
+                        if id_hint.is_some() {
+                            if busses_guard.contains_key(&bus_id) {
+                                continue;
+                            }
+                            next_bus_id = next_bus_id.max(bus_id + 1);
+                        }
+                        let name = name.unwrap_or_else(|| format!("Bus {bus_id}"));
                         busses_guard.insert(bus_id, Bus::new(bus_id, name.clone()));
-                        drop(busses_guard);
-                        let _ = event_tx.send(AudioEvent::BusAdded { bus_id, name });
-                    }
-                }
-                AudioCommand::AddBusWithId { bus_id, name } => {
-                    let mut busses_guard = busses.write();
-                    if busses_guard.len() >= MAX_BUSSES {
-                        let _ = event_tx.send(AudioEvent::Error(format!(
-                            "Cannot add bus: maximum of {MAX_BUSSES} busses reached"
-                        )));
-                    } else if !busses_guard.contains_key(&bus_id) {
-                        busses_guard.insert(bus_id, Bus::new(bus_id, name.clone()));
-                        next_bus_id = next_bus_id.max(bus_id + 1);
                         drop(busses_guard);
                         let _ = event_tx.send(AudioEvent::BusAdded { bus_id, name });
                     }
@@ -1825,6 +1761,7 @@ fn engine_thread(
                     bus_id,
                     clap_file_path,
                     clap_plugin_id,
+                    id_hint,
                 } => {
                     let path = Path::new(&clap_file_path);
                     let bundle_idx = bundles.iter().position(|b| {
@@ -1866,8 +1803,14 @@ fn engine_thread(
                         .unwrap_or_else(|| actual_plugin_id.clone());
                     match bundles[bundle_idx].create_instance(&actual_plugin_id, sample_rate) {
                         Ok(instance) => {
-                            let instance_id = next_plugin_id;
-                            next_plugin_id += 1;
+                            let instance_id = id_hint.unwrap_or_else(|| {
+                                let i = next_plugin_id;
+                                next_plugin_id += 1;
+                                i
+                            });
+                            if id_hint.is_some() {
+                                next_plugin_id = next_plugin_id.max(instance_id + 1);
+                            }
                             let params = instance.query_params();
                             let has_gui = instance.has_gui();
                             plugins.write().insert(
@@ -1882,66 +1825,6 @@ fn engine_thread(
                                 instance_id,
                                 plugin_name,
                                 clap_plugin_id: actual_plugin_id.clone(),
-                                clap_file_path,
-                                params,
-                                has_gui,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = event_tx.send(AudioEvent::Error(format!(
-                                "Failed to create plugin instance: {}", e
-                            )));
-                        }
-                    }
-                }
-                AudioCommand::AddPluginToBusWithId {
-                    bus_id,
-                    instance_id,
-                    clap_file_path,
-                    clap_plugin_id,
-                } => {
-                    let path = Path::new(&clap_file_path);
-                    let bundle_idx = bundles.iter().position(|b| {
-                        b.descriptors().iter().any(|d| d.id == clap_plugin_id)
-                    });
-                    let bundle_idx = match bundle_idx {
-                        Some(idx) => idx,
-                        None => match ClapBundle::load(path) {
-                            Ok(bundle) => {
-                                bundles.push(bundle);
-                                bundles.len() - 1
-                            }
-                            Err(e) => {
-                                let _ = event_tx.send(AudioEvent::Error(format!(
-                                    "Failed to load plugin: {}", e
-                                )));
-                                continue;
-                            }
-                        },
-                    };
-                    let plugin_name = bundles[bundle_idx]
-                        .descriptors()
-                        .iter()
-                        .find(|d| d.id == clap_plugin_id)
-                        .map(|d| d.name.clone())
-                        .unwrap_or_else(|| clap_plugin_id.clone());
-                    match bundles[bundle_idx].create_instance(&clap_plugin_id, sample_rate) {
-                        Ok(instance) => {
-                            let params = instance.query_params();
-                            let has_gui = instance.has_gui();
-                            plugins.write().insert(
-                                instance_id,
-                                parking_lot::Mutex::new(SyncClapInstance(instance)),
-                            );
-                            if let Some(bus) = busses.write().get_mut(&bus_id) {
-                                bus.plugin_ids.push(instance_id);
-                            }
-                            next_plugin_id = next_plugin_id.max(instance_id + 1);
-                            let _ = event_tx.send(AudioEvent::BusPluginAdded {
-                                bus_id,
-                                instance_id,
-                                plugin_name,
-                                clap_plugin_id,
                                 clap_file_path,
                                 params,
                                 has_gui,

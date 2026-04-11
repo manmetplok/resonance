@@ -24,9 +24,6 @@ pub(crate) enum Message {
     SetMasterVolume(f32),
     ToggleMute(TrackId),
     ToggleSolo(TrackId),
-    #[allow(dead_code)] // handler retained for a future import entry point (menu/drag-drop)
-    ImportFile(TrackId),
-    FileSelected(TrackId, Option<String>),
     DeleteClip(ClipId),
     ZoomIn,
     ZoomOut,
@@ -59,10 +56,6 @@ pub(crate) enum Message {
     OpenPluginEditor(PluginInstanceId),
     /// Close the plugin's editor window.
     ClosePluginEditor(PluginInstanceId),
-    PluginBrowseFile(PluginInstanceId),
-    PluginFileSelected(PluginInstanceId, Option<String>),
-    PluginPrevFile(PluginInstanceId),
-    PluginNextFile(PluginInstanceId),
     SwitchView(ViewMode),
     OpenSettings,
     CloseSettings,
@@ -70,10 +63,6 @@ pub(crate) enum Message {
     CloseAddTrackMenu,
     DismissError,
     ToggleLoop,
-    #[allow(dead_code)] // reserved for direct loop position entry UI
-    SetLoopIn(u64),
-    #[allow(dead_code)] // reserved for direct loop position entry UI
-    SetLoopOut(u64),
     StartLoopDrag(LoopDragTarget),
     UpdateLoopDrag(f32),
     EndLoopDrag,
@@ -84,7 +73,6 @@ pub(crate) enum Message {
     StartClipTrim { clip_id: ClipId, edge: ClipEdge, anchor_x: f32 },
     UpdateClipTrim(f32),
     EndClipTrim,
-    PluginFileScanComplete(PluginInstanceId, Option<String>, Vec<String>),
     ViewportWidth(f32),
     TimelineContentSize(f32, f32),
     ScrollToX(f32),
@@ -99,8 +87,6 @@ pub(crate) enum Message {
     ProjectSaved(Result<(), String>),
     ProjectLoaded(Result<Box<LoadedProject>, String>),
     AddInstrumentTrack,
-    #[allow(dead_code)] // handler retained for a future MIDI clip creation entry point
-    CreateMidiClip(TrackId),
     DeleteMidiClip(ClipId),
     StartMidiClipDrag { clip_id: ClipId, grab_offset_x: f32, start_x: f32, start_y: f32 },
     UpdateMidiClipDrag(f32, f32),

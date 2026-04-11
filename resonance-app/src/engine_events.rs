@@ -48,28 +48,7 @@ impl crate::Resonance {
                 }
                 let order = self.next_track_order;
                 self.next_track_order += 1;
-                self.tracks.push(TrackState {
-                    id: track_id,
-                    name: format!("Track {}", track_id),
-                    volume: 0.0,
-                    pan: 0.0,
-                    muted: false,
-                    soloed: false,
-                    order,
-                    record_armed: false,
-                    monitor_enabled: false,
-                    mono: true,
-                    input_device_name: None,
-                    plugins: Vec::new(),
-                    level_l: 0.0,
-                    level_r: 0.0,
-                    track_type: TrackType::Audio,
-                    output: TrackOutput::Master,
-                    instrument_type: InstrumentType::Synth,
-                    instrument_icon: InstrumentIcon::Music,
-                    sub_track: None,
-                    input_port_index: 0,
-                });
+                self.tracks.push(TrackState::new_audio(track_id, order));
             }
             AudioEvent::TrackRemoved { track_id } => {
                 if let Some(sel_clip_id) = self.selected_clip {
@@ -182,19 +161,14 @@ impl crate::Resonance {
                         slot.params = params;
                         slot.has_gui = has_gui;
                     } else {
-                        let custom = match clap_plugin_id.as_str() {
-                            _ => PluginCustomState::Generic,
-                        };
-                        track.plugins.push(PluginSlotState {
+                        track.plugins.push(PluginSlotState::new(
                             instance_id,
                             plugin_name,
                             clap_plugin_id,
                             clap_file_path,
                             params,
-                            custom,
                             has_gui,
-                            editor_open: false,
-                        });
+                        ));
                     }
                 }
 
@@ -239,31 +213,13 @@ impl crate::Resonance {
                             output_port_index: port_idx as u32,
                             name: sub_name.clone(),
                         });
-                        self.tracks.push(TrackState {
-                            id: sub_id,
-                            name: sub_name,
-                            volume: 0.0,
-                            pan: 0.0,
-                            muted: false,
-                            soloed: false,
+                        self.tracks.push(TrackState::new_sub_track(
+                            sub_id,
                             order,
-                            record_armed: false,
-                            monitor_enabled: false,
-                            mono: false,
-                            input_device_name: None,
-                            plugins: Vec::new(),
-                            level_l: 0.0,
-                            level_r: 0.0,
-                            track_type: TrackType::Instrument,
-                            output: TrackOutput::Master,
-                            instrument_type: InstrumentType::Synth,
-                            instrument_icon: InstrumentIcon::Music,
-                            sub_track: Some(crate::state::SubTrackLink {
-                                parent_track_id: track_id,
-                                output_port_index: port_idx as u32,
-                            }),
-                            input_port_index: 0,
-                        });
+                            sub_name,
+                            track_id,
+                            port_idx as u32,
+                        ));
                     }
                 }
             }
@@ -289,24 +245,8 @@ impl crate::Resonance {
                 self.bouncing = false;
                 self.error_message = Some(format!("Bounce failed: {e}"));
             }
-            AudioEvent::PluginStateSaved { instance_id, data } => {
-                // If we have a pending path to inject, modify the state and reload.
-                if let Some((pending_id, ref key, ref path)) = self.pending_plugin_path.clone() {
-                    if pending_id == instance_id {
-                        if let Ok(mut state) =
-                            serde_json::from_slice::<serde_json::Value>(&data)
-                        {
-                            state[&key] = serde_json::Value::String(path.clone());
-                            if let Ok(new_data) = serde_json::to_vec(&state) {
-                                self.engine.send(AudioCommand::LoadPluginState {
-                                    instance_id,
-                                    data: new_data,
-                                });
-                            }
-                        }
-                        self.pending_plugin_path = None;
-                    }
-                }
+            AudioEvent::PluginStateSaved { instance_id: _, data: _ } => {
+                // Used only by the project-save path (SaveCollector).
             }
             // --- Project save events ---
             AudioEvent::ClipDataExported { clip_id, data } => {
@@ -332,7 +272,7 @@ impl crate::Resonance {
                 if let Some(loaded) = self.pending_load.take() {
                     // Extract project_path before replay (replay clears it)
                     let path = self.project_path.clone();
-                    self.replay_loaded_project(loaded);
+                    crate::update::replay_loaded_project(self, loaded);
                     self.project_path = path;
                     self.loading = false;
                 }
@@ -345,28 +285,8 @@ impl crate::Resonance {
                     return Task::none();
                 }
                 let order = self.tracks.len();
-                self.tracks.push(TrackState {
-                    id: track_id,
-                    name: format!("Instrument {}", track_id),
-                    volume: 1.0,
-                    pan: 0.0,
-                    muted: false,
-                    soloed: false,
-                    order,
-                    record_armed: false,
-                    monitor_enabled: false,
-                    mono: false,
-                    input_device_name: None,
-                    plugins: Vec::new(),
-                    level_l: 0.0,
-                    level_r: 0.0,
-                    track_type: TrackType::Instrument,
-                    output: TrackOutput::Master,
-                    instrument_type: InstrumentType::Synth,
-                    instrument_icon: InstrumentIcon::Music,
-                    sub_track: None,
-                    input_port_index: 0,
-                });
+                self.tracks
+                    .push(TrackState::new_instrument(track_id, order));
             }
 
             // -- MIDI clip events --
@@ -451,17 +371,7 @@ impl crate::Resonance {
                 }
                 let order = self.next_bus_order;
                 self.next_bus_order += 1;
-                self.busses.push(BusState {
-                    id: bus_id,
-                    name,
-                    order,
-                    volume: 1.0,
-                    pan: 0.0,
-                    muted: false,
-                    plugins: Vec::new(),
-                    level_l: 0.0,
-                    level_r: 0.0,
-                });
+                self.busses.push(BusState::new(bus_id, order, name));
             }
             AudioEvent::BusRemoved { bus_id } => {
                 if let Some(sel) = self.selected_plugin {
@@ -497,16 +407,14 @@ impl crate::Resonance {
                         slot.params = params;
                         slot.has_gui = has_gui;
                     } else {
-                        bus.plugins.push(PluginSlotState {
+                        bus.plugins.push(PluginSlotState::new(
                             instance_id,
                             plugin_name,
                             clap_plugin_id,
                             clap_file_path,
                             params,
-                            custom: PluginCustomState::Generic,
                             has_gui,
-                            editor_open: false,
-                        });
+                        ));
                     }
                 }
             }
@@ -532,7 +440,7 @@ impl crate::Resonance {
         }
 
         let save = self.save_state.take().unwrap();
-        let project_file = self.build_project_file();
+        let project_file = crate::update::build_project_file(self);
         let path = save.path.clone();
         let clip_data = save.clip_data;
         let plugin_states = save.plugin_states;

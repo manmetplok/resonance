@@ -193,6 +193,15 @@ pub const TRACK_HEADER_WIDTH: u16 = 180;
 pub const MIXER_STRIP_WIDTH: u16 = 160;
 pub const MASTER_STRIP_WIDTH: u16 = 140;
 
+/// Height of the vertical fader used in mixer strips and master strip.
+pub const FADER_HEIGHT: f32 = 120.0;
+/// Pixel radius around a clip's left/right edge that starts a trim (not move).
+pub const CLIP_EDGE_THRESHOLD: f32 = 6.0;
+/// VU-meter peak decay factor applied per frame tick.
+pub const PEAK_DECAY: f32 = 0.85;
+/// Tick interval (ms) for the subscription timer that drains engine events.
+pub const TICK_INTERVAL_MS: u64 = 16;
+
 pub fn resonance_theme() -> Theme {
     Theme::Dark
 }
@@ -430,6 +439,70 @@ pub fn floating_button_style(status: button::Status) -> button::Style {
             color: SEPARATOR,
             width: 1.0,
             radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+// ---- Container style helpers -------------------------------------------
+// These wrap the "flat background container with no border" pattern that
+// appears ~80 times across the view module.
+
+/// Flat PANEL background, no border.
+pub fn panel_bg(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(PANEL)),
+        ..Default::default()
+    }
+}
+
+/// Flat PANEL_DARK background, no border.
+pub fn panel_dark_bg(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(PANEL_DARK)),
+        ..Default::default()
+    }
+}
+
+/// Flat BG (base) background, no border.
+pub fn base_bg(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(BG)),
+        ..Default::default()
+    }
+}
+
+/// Flat SEPARATOR-color background (for 1px separator Spaces).
+pub fn separator_bg(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(SEPARATOR)),
+        ..Default::default()
+    }
+}
+
+/// PANEL background with a subtle SEPARATOR outline. Used on track
+/// header frames.
+pub fn panel_outlined(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(PANEL)),
+        border: iced::Border {
+            color: SEPARATOR,
+            width: 1.0,
+            radius: 0.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// PANEL_DARK background with a thin SEPARATOR outline. Used on mixer
+/// strip frames.
+pub fn panel_dark_outlined(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(PANEL_DARK)),
+        border: iced::Border {
+            color: SEPARATOR,
+            width: 0.5,
+            radius: 0.0.into(),
         },
         ..Default::default()
     }
