@@ -10,13 +10,14 @@ use crate::message::Message;
 
 use resonance_audio::types::{ClipId, TrackId, TICKS_PER_QUARTER_NOTE};
 
+pub mod hit_test;
+pub mod scrollbar;
+
+use hit_test::{HitKind, track_index};
+use scrollbar::{ScrollbarRects, scroll_from_thumb_pos};
+
 /// Maximum interval between two clicks to count as a double-click.
 const DOUBLE_CLICK_MS: u128 = 400;
-
-/// Thickness of the scrollbar strips drawn inside the timeline canvas.
-const SCROLLBAR_THICKNESS: f32 = 10.0;
-/// Minimum thumb size in pixels so the thumb stays clickable at any zoom.
-const SCROLLBAR_MIN_THUMB: f32 = 24.0;
 
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug)]
@@ -94,89 +95,8 @@ impl TimelineCanvas<'_> {
     /// Tracks visible in the arrange view, sorted by `order`. Excludes
     /// sub-tracks (rendered only in the mixer view).
     fn visible_tracks_sorted(&self) -> Vec<&TrackState> {
-        let mut v: Vec<&TrackState> = self
-            .tracks
-            .iter()
-            .filter(|t| t.sub_track.is_none())
-            .collect();
-        v.sort_by_key(|t| t.order);
-        v
+        hit_test::sorted_arrange_tracks(self.tracks)
     }
-}
-
-/// Hit test for the horizontal scrollbar. Returns `(track_rect, thumb_rect)`
-/// when the scrollbar is visible (content wider than the viewport).
-fn h_scrollbar_rects(
-    bounds_width: f32,
-    bounds_height: f32,
-    content_width: f32,
-    scroll_offset: f32,
-    show_v_bar: bool,
-) -> Option<(Rectangle, Rectangle)> {
-    if content_width <= bounds_width + 0.5 {
-        return None;
-    }
-    let track_width = if show_v_bar {
-        (bounds_width - SCROLLBAR_THICKNESS).max(0.0)
-    } else {
-        bounds_width
-    };
-    if track_width <= 0.0 {
-        return None;
-    }
-    let track = Rectangle {
-        x: 0.0,
-        y: bounds_height - SCROLLBAR_THICKNESS,
-        width: track_width,
-        height: SCROLLBAR_THICKNESS,
-    };
-    let ratio_visible = (bounds_width / content_width).clamp(0.0, 1.0);
-    let thumb_w = (track_width * ratio_visible).max(SCROLLBAR_MIN_THUMB);
-    let max_scroll = (content_width - bounds_width).max(1.0);
-    let travel = (track_width - thumb_w).max(0.0);
-    let thumb_x = (scroll_offset / max_scroll).clamp(0.0, 1.0) * travel;
-    let thumb = Rectangle {
-        x: thumb_x,
-        y: track.y,
-        width: thumb_w,
-        height: SCROLLBAR_THICKNESS,
-    };
-    Some((track, thumb))
-}
-
-/// Hit test for the vertical scrollbar (track area only, excludes ruler).
-fn v_scrollbar_rects(
-    bounds_width: f32,
-    bounds_height: f32,
-    content_height: f32,
-    scroll_offset_y: f32,
-    ruler_height: f32,
-    show_h_bar: bool,
-) -> Option<(Rectangle, Rectangle)> {
-    let viewport_height = bounds_height - ruler_height
-        - if show_h_bar { SCROLLBAR_THICKNESS } else { 0.0 };
-    let track_content_h = content_height - ruler_height;
-    if viewport_height <= 0.0 || track_content_h <= viewport_height + 0.5 {
-        return None;
-    }
-    let track = Rectangle {
-        x: bounds_width - SCROLLBAR_THICKNESS,
-        y: ruler_height,
-        width: SCROLLBAR_THICKNESS,
-        height: viewport_height,
-    };
-    let ratio_visible = (viewport_height / track_content_h).clamp(0.0, 1.0);
-    let thumb_h = (viewport_height * ratio_visible).max(SCROLLBAR_MIN_THUMB);
-    let max_scroll = (track_content_h - viewport_height).max(1.0);
-    let travel = (viewport_height - thumb_h).max(0.0);
-    let thumb_y = ruler_height + (scroll_offset_y / max_scroll).clamp(0.0, 1.0) * travel;
-    let thumb = Rectangle {
-        x: track.x,
-        y: thumb_y,
-        width: SCROLLBAR_THICKNESS,
-        height: thumb_h,
-    };
-    Some((track, thumb))
 }
 
 /// Is `pos` inside `rect`?
@@ -214,6 +134,397 @@ pub struct TimelineState {
     v_scrollbar_grab: Option<f32>,
 }
 
+type UpdateResult = (canvas::event::Status, Option<Message>);
+
+fn captured(msg: Message) -> UpdateResult {
+    (canvas::event::Status::Captured, Some(msg))
+}
+
+impl TimelineCanvas<'_> {
+    /// Returns both scrollbar rects with each bar's visibility informed by
+    /// the other (the vertical bar's track shrinks when the horizontal bar
+    /// is shown, and vice versa).
+    fn scrollbar_rects(
+        &self,
+        bounds: Rectangle,
+    ) -> (Option<ScrollbarRects>, Option<ScrollbarRects>) {
+        let content_w = self.content_width_px(bounds.width);
+        let content_h = self.content_height_px();
+        let ruler_height = theme::RULER_HEIGHT;
+        let h = scrollbar::h_rects(
+            bounds,
+            content_w,
+            self.scroll_offset,
+            scrollbar::v_rects(
+                bounds,
+                content_h,
+                self.scroll_offset_y,
+                ruler_height,
+                true,
+            )
+            .is_some(),
+        );
+        let v = scrollbar::v_rects(
+            bounds,
+            content_h,
+            self.scroll_offset_y,
+            ruler_height,
+            h.is_some(),
+        );
+        (h, v)
+    }
+
+    fn handle_wheel(
+        &self,
+        delta: mouse::ScrollDelta,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> UpdateResult {
+        // Only handle wheel events when the cursor is actually over the
+        // timeline — otherwise scrolling the piano roll would also scroll
+        // the arrangement behind it.
+        if cursor.position_in(bounds).is_none() {
+            return (canvas::event::Status::Ignored, None);
+        }
+        match delta {
+            mouse::ScrollDelta::Lines { x, y } => {
+                if x.abs() > f32::EPSILON {
+                    return captured(Message::ScrollX(-x * 30.0));
+                }
+                captured(Message::ScrollY(-y * 30.0))
+            }
+            mouse::ScrollDelta::Pixels { x, y } => {
+                if x.abs() > f32::EPSILON {
+                    return captured(Message::ScrollX(-x));
+                }
+                captured(Message::ScrollY(-y))
+            }
+        }
+    }
+
+    /// Hit-test a pointer press against a clip lane (MIDI or audio).
+    /// `duration_samples` is already tick-converted for MIDI clips.
+    fn hit_test_lane(
+        &self,
+        pos: Point,
+        sorted_tracks: &[&TrackState],
+        clip_track_id: TrackId,
+        clip_start_sample: u64,
+        duration_samples: u64,
+    ) -> Option<HitKind> {
+        let ruler_height = theme::RULER_HEIGHT;
+        let track_idx = track_index(sorted_tracks, clip_track_id)?;
+        let row_y = hit_test::track_row_y(
+            track_idx,
+            ruler_height,
+            self.scroll_offset_y,
+            theme::TRACK_HEIGHT,
+        );
+        let rect = hit_test::clip_rect(
+            row_y,
+            theme::TRACK_HEIGHT,
+            clip_start_sample,
+            duration_samples,
+            self.zoom,
+            self.sample_rate,
+            self.scroll_offset,
+        );
+        match hit_test::hit_test(pos, rect, theme::CLIP_EDGE_THRESHOLD) {
+            HitKind::Miss => None,
+            hit => Some(hit),
+        }
+    }
+
+    fn handle_press(
+        &self,
+        state: &mut TimelineState,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> UpdateResult {
+        let Some(pos) = cursor.position_in(bounds) else {
+            return (canvas::event::Status::Ignored, None);
+        };
+        let ruler_height = theme::RULER_HEIGHT;
+        let (h_rects, v_rects) = self.scrollbar_rects(bounds);
+
+        // Horizontal scrollbar hit test.
+        if let Some(sb) = h_rects {
+            if rect_contains(&sb.track, pos) {
+                if rect_contains(&sb.thumb, pos) {
+                    state.h_scrollbar_grab = Some(pos.x - sb.thumb.x);
+                } else {
+                    // Page-jump: center thumb on click position.
+                    let new_scroll = scroll_from_thumb_pos(
+                        pos.x - sb.thumb.width / 2.0,
+                        sb.travel,
+                        sb.max_scroll,
+                    );
+                    state.h_scrollbar_grab = Some(sb.thumb.width / 2.0);
+                    return captured(Message::ScrollToX(new_scroll));
+                }
+                return (canvas::event::Status::Captured, None);
+            }
+        }
+
+        // Vertical scrollbar hit test.
+        if let Some(sb) = v_rects {
+            if rect_contains(&sb.track, pos) {
+                if rect_contains(&sb.thumb, pos) {
+                    state.v_scrollbar_grab = Some(pos.y - sb.thumb.y);
+                } else {
+                    let new_scroll = scroll_from_thumb_pos(
+                        pos.y - ruler_height - sb.thumb.height / 2.0,
+                        sb.travel,
+                        sb.max_scroll,
+                    );
+                    state.v_scrollbar_grab = Some(sb.thumb.height / 2.0);
+                    return captured(Message::ScrollToY(new_scroll));
+                }
+                return (canvas::event::Status::Captured, None);
+            }
+        }
+
+        // Loop marker dragging (ruler area only)
+        if self.loop_enabled && pos.y < ruler_height {
+            let loop_in_x = self.sample_to_x(self.loop_in);
+            let loop_out_x = self.sample_to_x(self.loop_out);
+            let dist_in = (pos.x - loop_in_x).abs();
+            let dist_out = (pos.x - loop_out_x).abs();
+            if dist_in < 8.0 || dist_out < 8.0 {
+                let target = if dist_in < 8.0 && dist_out < 8.0 {
+                    if dist_in < dist_out {
+                        LoopDragTarget::In
+                    } else {
+                        LoopDragTarget::Out
+                    }
+                } else if dist_in < 8.0 {
+                    LoopDragTarget::In
+                } else {
+                    LoopDragTarget::Out
+                };
+                state.dragging_loop = true;
+                return captured(Message::StartLoopDrag(target));
+            }
+        }
+
+        // Any other click in the ruler → seek the playhead.
+        if pos.y < ruler_height {
+            let seconds = ((pos.x + self.scroll_offset) / self.zoom).max(0.0);
+            let sample = (seconds as f64 * self.sample_rate as f64) as u64;
+            return captured(Message::SeekToSample(sample));
+        }
+
+        // Clip hit-testing (track area)
+        let sorted_tracks = self.visible_tracks_sorted();
+
+        // Check MIDI clips (reverse order so topmost wins)
+        let samples_per_tick =
+            (self.sample_rate as f64 * 60.0 / self.bpm as f64) / TICKS_PER_QUARTER_NOTE as f64;
+        for clip in self.midi_clips.iter().rev() {
+            let duration_samples = (clip.duration_ticks as f64 * samples_per_tick) as u64;
+            let Some(hit) = self.hit_test_lane(
+                pos,
+                &sorted_tracks,
+                clip.track_id,
+                clip.start_sample,
+                duration_samples,
+            ) else {
+                continue;
+            };
+
+            // Double-click on a MIDI clip body opens the piano roll editor.
+            let now = Instant::now();
+            let is_double_click = state
+                .last_midi_click
+                .map(|(t, id)| {
+                    id == clip.id && now.duration_since(t).as_millis() <= DOUBLE_CLICK_MS
+                })
+                .unwrap_or(false);
+            state.last_midi_click = Some((now, clip.id));
+            if is_double_click {
+                state.last_midi_click = None;
+                return captured(Message::OpenMidiEditor(clip.id));
+            }
+
+            return match hit {
+                HitKind::Trim(edge) => {
+                    state.clip_interaction =
+                        Some(ClipInteraction::MidiTrim { clip_id: clip.id, edge });
+                    captured(Message::StartMidiClipTrim {
+                        clip_id: clip.id,
+                        edge,
+                        anchor_x: pos.x,
+                    })
+                }
+                HitKind::Move { grab_offset_x } => {
+                    state.clip_interaction = Some(ClipInteraction::MidiMove {
+                        clip_id: clip.id,
+                        grab_offset_x,
+                    });
+                    captured(Message::StartMidiClipDrag {
+                        clip_id: clip.id,
+                        grab_offset_x,
+                        start_x: pos.x,
+                        start_y: pos.y,
+                    })
+                }
+                HitKind::Miss => unreachable!("None path taken above"),
+            };
+        }
+
+        // Check audio clips in reverse order so topmost clip wins
+        for clip in self.clips.iter().rev() {
+            let Some(hit) = self.hit_test_lane(
+                pos,
+                &sorted_tracks,
+                clip.track_id,
+                clip.start_sample,
+                clip.duration_samples,
+            ) else {
+                continue;
+            };
+
+            return match hit {
+                HitKind::Trim(edge) => {
+                    state.clip_interaction =
+                        Some(ClipInteraction::Trim { clip_id: clip.id, edge });
+                    captured(Message::StartClipTrim {
+                        clip_id: clip.id,
+                        edge,
+                        anchor_x: pos.x,
+                    })
+                }
+                HitKind::Move { grab_offset_x } => {
+                    state.clip_interaction = Some(ClipInteraction::Move {
+                        clip_id: clip.id,
+                        grab_offset_x,
+                    });
+                    captured(Message::StartClipDrag {
+                        clip_id: clip.id,
+                        grab_offset_x,
+                        start_x: pos.x,
+                        start_y: pos.y,
+                    })
+                }
+                HitKind::Miss => unreachable!("None path taken above"),
+            };
+        }
+
+        // Clicked on empty track area → deselect.
+        captured(Message::SelectClip(None))
+    }
+
+    fn handle_move(
+        &self,
+        state: &mut TimelineState,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> UpdateResult {
+        let Some(pos) = cursor.position_in(bounds) else {
+            return (canvas::event::Status::Ignored, None);
+        };
+        let ruler_height = theme::RULER_HEIGHT;
+
+        // Horizontal scrollbar drag.
+        if let Some(grab) = state.h_scrollbar_grab {
+            let (h_rects, _) = self.scrollbar_rects(bounds);
+            if let Some(sb) = h_rects {
+                let new_scroll =
+                    scroll_from_thumb_pos(pos.x - grab, sb.travel, sb.max_scroll);
+                return captured(Message::ScrollToX(new_scroll));
+            }
+        }
+        // Vertical scrollbar drag.
+        if let Some(grab) = state.v_scrollbar_grab {
+            let (_, v_rects) = self.scrollbar_rects(bounds);
+            if let Some(sb) = v_rects {
+                let new_scroll = scroll_from_thumb_pos(
+                    pos.y - sb.track.y - grab,
+                    sb.travel,
+                    sb.max_scroll,
+                );
+                return captured(Message::ScrollToY(new_scroll));
+            }
+        }
+
+        if state.dragging_loop {
+            return captured(Message::UpdateLoopDrag(pos.x));
+        }
+        match &state.clip_interaction {
+            Some(ClipInteraction::Move { .. }) => captured(Message::UpdateClipDrag(pos.x, pos.y)),
+            Some(ClipInteraction::Trim { .. }) => captured(Message::UpdateClipTrim(pos.x)),
+            Some(ClipInteraction::MidiMove { .. }) => {
+                captured(Message::UpdateMidiClipDrag(pos.x, pos.y))
+            }
+            Some(ClipInteraction::MidiTrim { .. }) => captured(Message::UpdateMidiClipTrim(pos.x)),
+            None => {
+                let _ = ruler_height;
+                (canvas::event::Status::Ignored, None)
+            }
+        }
+    }
+
+    fn handle_release(&self, state: &mut TimelineState) -> UpdateResult {
+        if state.h_scrollbar_grab.take().is_some() {
+            return (canvas::event::Status::Captured, None);
+        }
+        if state.v_scrollbar_grab.take().is_some() {
+            return (canvas::event::Status::Captured, None);
+        }
+        if state.dragging_loop {
+            state.dragging_loop = false;
+            return captured(Message::EndLoopDrag);
+        }
+        if let Some(interaction) = state.clip_interaction.take() {
+            return match interaction {
+                ClipInteraction::Move { .. } => captured(Message::EndClipDrag),
+                ClipInteraction::Trim { .. } => captured(Message::EndClipTrim),
+                ClipInteraction::MidiMove { .. } => captured(Message::EndMidiClipDrag),
+                ClipInteraction::MidiTrim { .. } => captured(Message::EndMidiClipTrim),
+            };
+        }
+        (canvas::event::Status::Ignored, None)
+    }
+
+    fn handle_key(&self, key: &keyboard::Key) -> UpdateResult {
+        use keyboard::key::Named;
+        let is_delete = matches!(
+            key,
+            keyboard::Key::Named(Named::Delete) | keyboard::Key::Named(Named::Backspace)
+        );
+        if !is_delete {
+            return (canvas::event::Status::Ignored, None);
+        }
+        if let Some(clip_id) = self.selected_midi_clip {
+            return captured(Message::DeleteMidiClip(clip_id));
+        }
+        if let Some(clip_id) = self.selected_clip {
+            return captured(Message::DeleteClip(clip_id));
+        }
+        (canvas::event::Status::Ignored, None)
+    }
+
+    /// Emit `ViewportWidth` / `TimelineContentSize` messages when either
+    /// value has moved enough to be worth pushing upstream. Called at the
+    /// tail of every event the canvas sees.
+    fn report_viewport(&self, state: &mut TimelineState, bounds: Rectangle) -> Option<Message> {
+        if (bounds.width - state.last_reported_width).abs() > 1.0 {
+            state.last_reported_width = bounds.width;
+            return Some(Message::ViewportWidth(bounds.width));
+        }
+        let cw = self.content_width_px(bounds.width);
+        let ch = self.content_height_px();
+        if (cw - state.last_reported_content_width).abs() > 1.0
+            || (ch - state.last_reported_content_height).abs() > 1.0
+        {
+            state.last_reported_content_width = cw;
+            state.last_reported_content_height = ch;
+            return Some(Message::TimelineContentSize(cw, ch));
+        }
+        None
+    }
+}
+
 impl canvas::Program<Message> for TimelineCanvas<'_> {
     type State = TimelineState;
 
@@ -223,515 +534,33 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         event: canvas::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
-        match event {
+    ) -> UpdateResult {
+        let result = match event {
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                // Only handle wheel events when the cursor is actually over the
-                // timeline — otherwise scrolling the piano roll would also
-                // scroll the arrangement behind it.
-                if cursor.position_in(bounds).is_none() {
-                    return (canvas::event::Status::Ignored, None);
-                }
-                match delta {
-                    mouse::ScrollDelta::Lines { x, y } => {
-                        if x.abs() > f32::EPSILON {
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::ScrollX(-x * 30.0)),
-                            );
-                        }
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::ScrollY(-y * 30.0)),
-                        );
-                    }
-                    mouse::ScrollDelta::Pixels { x, y } => {
-                        if x.abs() > f32::EPSILON {
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::ScrollX(-x)),
-                            );
-                        }
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::ScrollY(-y)),
-                        );
-                    }
-                }
+                self.handle_wheel(delta, bounds, cursor)
             }
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                if let Some(pos) = cursor.position_in(bounds) {
-                    let ruler_height = 30.0;
-                    let content_w = self.content_width_px(bounds.width);
-                    let content_h = self.content_height_px();
-                    let h_rects = h_scrollbar_rects(
-                        bounds.width,
-                        bounds.height,
-                        content_w,
-                        self.scroll_offset,
-                        v_scrollbar_rects(
-                            bounds.width,
-                            bounds.height,
-                            content_h,
-                            self.scroll_offset_y,
-                            ruler_height,
-                            true,
-                        )
-                        .is_some(),
-                    );
-                    let v_rects = v_scrollbar_rects(
-                        bounds.width,
-                        bounds.height,
-                        content_h,
-                        self.scroll_offset_y,
-                        ruler_height,
-                        h_rects.is_some(),
-                    );
-
-                    // Horizontal scrollbar hit test.
-                    if let Some((track, thumb)) = h_rects {
-                        if rect_contains(&track, pos) {
-                            if rect_contains(&thumb, pos) {
-                                state.h_scrollbar_grab = Some(pos.x - thumb.x);
-                            } else {
-                                // Page-jump: center thumb on click position.
-                                let travel = (track.width - thumb.width).max(0.0);
-                                let max_scroll =
-                                    (content_w - bounds.width).max(1.0);
-                                let new_thumb_x =
-                                    (pos.x - thumb.width / 2.0).clamp(0.0, travel);
-                                let new_scroll = if travel > 0.0 {
-                                    new_thumb_x / travel * max_scroll
-                                } else {
-                                    0.0
-                                };
-                                state.h_scrollbar_grab = Some(thumb.width / 2.0);
-                                return (
-                                    canvas::event::Status::Captured,
-                                    Some(Message::ScrollToX(new_scroll)),
-                                );
-                            }
-                            return (canvas::event::Status::Captured, None);
-                        }
-                    }
-
-                    // Vertical scrollbar hit test.
-                    if let Some((track, thumb)) = v_rects {
-                        if rect_contains(&track, pos) {
-                            if rect_contains(&thumb, pos) {
-                                state.v_scrollbar_grab = Some(pos.y - thumb.y);
-                            } else {
-                                let travel = (track.height - thumb.height).max(0.0);
-                                let max_scroll =
-                                    (content_h - ruler_height
-                                        - (track.height))
-                                        .max(1.0);
-                                let new_thumb_y =
-                                    (pos.y - ruler_height - thumb.height / 2.0)
-                                        .clamp(0.0, travel);
-                                let new_scroll = if travel > 0.0 {
-                                    new_thumb_y / travel * max_scroll
-                                } else {
-                                    0.0
-                                };
-                                state.v_scrollbar_grab = Some(thumb.height / 2.0);
-                                return (
-                                    canvas::event::Status::Captured,
-                                    Some(Message::ScrollToY(new_scroll)),
-                                );
-                            }
-                            return (canvas::event::Status::Captured, None);
-                        }
-                    }
-
-                    // Loop marker dragging (ruler area only)
-                    if self.loop_enabled && pos.y < ruler_height {
-                        let loop_in_x = self.sample_to_x(self.loop_in);
-                        let loop_out_x = self.sample_to_x(self.loop_out);
-                        let dist_in = (pos.x - loop_in_x).abs();
-                        let dist_out = (pos.x - loop_out_x).abs();
-                        if dist_in < 8.0 || dist_out < 8.0 {
-                            let target = if dist_in < 8.0 && dist_out < 8.0 {
-                                if dist_in < dist_out {
-                                    LoopDragTarget::In
-                                } else {
-                                    LoopDragTarget::Out
-                                }
-                            } else if dist_in < 8.0 {
-                                LoopDragTarget::In
-                            } else {
-                                LoopDragTarget::Out
-                            };
-                            state.dragging_loop = true;
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::StartLoopDrag(target)),
-                            );
-                        }
-                    }
-
-                    // Any other click in the ruler → seek the playhead.
-                    // Punch handle drags above have already captured their
-                    // own clicks, so we only get here on empty ruler space.
-                    if pos.y < ruler_height {
-                        let seconds =
-                            ((pos.x + self.scroll_offset) / self.zoom).max(0.0);
-                        let sample =
-                            (seconds as f64 * self.sample_rate as f64) as u64;
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::SeekToSample(sample)),
-                        );
-                    }
-
-                    // Clip hit-testing (track area)
-                    if pos.y >= ruler_height {
-                        let sorted_tracks = self.visible_tracks_sorted();
-
-                        // Check MIDI clips (reverse order so topmost wins)
-                        for clip in self.midi_clips.iter().rev() {
-                            let track_idx = sorted_tracks.iter().position(|t| t.id == clip.track_id);
-                            let track_idx = match track_idx {
-                                Some(i) => i,
-                                None => continue,
-                            };
-                            let cy = ruler_height + track_idx as f32 * theme::TRACK_HEIGHT + 2.0
-                                - self.scroll_offset_y;
-                            let clip_height = theme::TRACK_HEIGHT - 4.0;
-                            let samples_per_tick = (self.sample_rate as f64 * 60.0 / self.bpm as f64)
-                                / TICKS_PER_QUARTER_NOTE as f64;
-                            let duration_samples = clip.duration_ticks as f64 * samples_per_tick;
-                            let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
-                            let duration_seconds = duration_samples as f32 / self.sample_rate as f32;
-                            let cx = start_seconds * self.zoom - self.scroll_offset;
-                            let cw = duration_seconds * self.zoom;
-
-                            if pos.x >= cx && pos.x <= cx + cw && pos.y >= cy && pos.y <= cy + clip_height {
-                                // Double-click on a MIDI clip body opens the piano roll editor.
-                                let now = Instant::now();
-                                let is_double_click = state
-                                    .last_midi_click
-                                    .map(|(t, id)| {
-                                        id == clip.id
-                                            && now.duration_since(t).as_millis() <= DOUBLE_CLICK_MS
-                                    })
-                                    .unwrap_or(false);
-                                state.last_midi_click = Some((now, clip.id));
-                                if is_double_click {
-                                    state.last_midi_click = None;
-                                    return (
-                                        canvas::event::Status::Captured,
-                                        Some(Message::OpenMidiEditor(clip.id)),
-                                    );
-                                }
-
-                                let edge_threshold = theme::CLIP_EDGE_THRESHOLD;
-                                if pos.x - cx < edge_threshold {
-                                    state.clip_interaction = Some(ClipInteraction::MidiTrim {
-                                        clip_id: clip.id,
-                                        edge: ClipEdge::Left,
-                                    });
-                                    return (
-                                        canvas::event::Status::Captured,
-                                        Some(Message::StartMidiClipTrim {
-                                            clip_id: clip.id,
-                                            edge: ClipEdge::Left,
-                                            anchor_x: pos.x,
-                                        }),
-                                    );
-                                }
-                                if (cx + cw) - pos.x < edge_threshold {
-                                    state.clip_interaction = Some(ClipInteraction::MidiTrim {
-                                        clip_id: clip.id,
-                                        edge: ClipEdge::Right,
-                                    });
-                                    return (
-                                        canvas::event::Status::Captured,
-                                        Some(Message::StartMidiClipTrim {
-                                            clip_id: clip.id,
-                                            edge: ClipEdge::Right,
-                                            anchor_x: pos.x,
-                                        }),
-                                    );
-                                }
-                                let grab_offset = pos.x - cx;
-                                state.clip_interaction = Some(ClipInteraction::MidiMove {
-                                    clip_id: clip.id,
-                                    grab_offset_x: grab_offset,
-                                });
-                                return (
-                                    canvas::event::Status::Captured,
-                                    Some(Message::StartMidiClipDrag {
-                                        clip_id: clip.id,
-                                        grab_offset_x: grab_offset,
-                                        start_x: pos.x,
-                                        start_y: pos.y,
-                                    }),
-                                );
-                            }
-                        }
-
-                        // Check audio clips in reverse order so topmost clip wins
-                        for clip in self.clips.iter().rev() {
-                            let track_idx = sorted_tracks.iter().position(|t| t.id == clip.track_id);
-                            let track_idx = match track_idx {
-                                Some(i) => i,
-                                None => continue,
-                            };
-                            let cy = ruler_height + track_idx as f32 * theme::TRACK_HEIGHT + 2.0
-                                - self.scroll_offset_y;
-                            let clip_height = theme::TRACK_HEIGHT - 4.0;
-                            let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
-                            let duration_seconds =
-                                clip.duration_samples as f32 / self.sample_rate as f32;
-                            let cx = start_seconds * self.zoom - self.scroll_offset;
-                            let cw = duration_seconds * self.zoom;
-
-                            if pos.x >= cx && pos.x <= cx + cw && pos.y >= cy && pos.y <= cy + clip_height {
-                                let edge_threshold = theme::CLIP_EDGE_THRESHOLD;
-                                // Left edge trim
-                                if pos.x - cx < edge_threshold {
-                                    state.clip_interaction = Some(ClipInteraction::Trim {
-                                        clip_id: clip.id,
-                                        edge: ClipEdge::Left,
-                                    });
-                                    return (
-                                        canvas::event::Status::Captured,
-                                        Some(Message::StartClipTrim {
-                                            clip_id: clip.id,
-                                            edge: ClipEdge::Left,
-                                            anchor_x: pos.x,
-                                        }),
-                                    );
-                                }
-                                // Right edge trim
-                                if (cx + cw) - pos.x < edge_threshold {
-                                    state.clip_interaction = Some(ClipInteraction::Trim {
-                                        clip_id: clip.id,
-                                        edge: ClipEdge::Right,
-                                    });
-                                    return (
-                                        canvas::event::Status::Captured,
-                                        Some(Message::StartClipTrim {
-                                            clip_id: clip.id,
-                                            edge: ClipEdge::Right,
-                                            anchor_x: pos.x,
-                                        }),
-                                    );
-                                }
-                                // Body click → start move drag
-                                let grab_offset = pos.x - cx;
-                                state.clip_interaction = Some(ClipInteraction::Move {
-                                    clip_id: clip.id,
-                                    grab_offset_x: grab_offset,
-                                });
-                                return (
-                                    canvas::event::Status::Captured,
-                                    Some(Message::StartClipDrag {
-                                        clip_id: clip.id,
-                                        grab_offset_x: grab_offset,
-                                        start_x: pos.x,
-                                        start_y: pos.y,
-                                    }),
-                                );
-                            }
-                        }
-                        // Clicked on empty space → deselect
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::SelectClip(None)),
-                        );
-                    }
-                }
+                self.handle_press(state, bounds, cursor)
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                if let Some(pos) = cursor.position_in(bounds) {
-                    // Scrollbar drag updates.
-                    if let Some(grab) = state.h_scrollbar_grab {
-                        let content_w = self.content_width_px(bounds.width);
-                        let show_v = v_scrollbar_rects(
-                            bounds.width,
-                            bounds.height,
-                            self.content_height_px(),
-                            self.scroll_offset_y,
-                            30.0,
-                            true,
-                        )
-                        .is_some();
-                        if let Some((track, thumb)) = h_scrollbar_rects(
-                            bounds.width,
-                            bounds.height,
-                            content_w,
-                            self.scroll_offset,
-                            show_v,
-                        ) {
-                            let new_thumb_x =
-                                (pos.x - grab).clamp(0.0, track.width - thumb.width);
-                            let travel = (track.width - thumb.width).max(0.0);
-                            let max_scroll = (content_w - bounds.width).max(1.0);
-                            let new_scroll = if travel > 0.0 {
-                                new_thumb_x / travel * max_scroll
-                            } else {
-                                0.0
-                            };
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::ScrollToX(new_scroll)),
-                            );
-                        }
-                    }
-                    if let Some(grab) = state.v_scrollbar_grab {
-                        let content_h = self.content_height_px();
-                        let show_h = h_scrollbar_rects(
-                            bounds.width,
-                            bounds.height,
-                            self.content_width_px(bounds.width),
-                            self.scroll_offset,
-                            true,
-                        )
-                        .is_some();
-                        if let Some((track, thumb)) = v_scrollbar_rects(
-                            bounds.width,
-                            bounds.height,
-                            content_h,
-                            self.scroll_offset_y,
-                            30.0,
-                            show_h,
-                        ) {
-                            let rel_y = pos.y - track.y - grab;
-                            let travel = (track.height - thumb.height).max(0.0);
-                            let new_thumb_rel =
-                                rel_y.clamp(0.0, travel);
-                            let max_scroll =
-                                (content_h - 30.0 - track.height).max(1.0);
-                            let new_scroll = if travel > 0.0 {
-                                new_thumb_rel / travel * max_scroll
-                            } else {
-                                0.0
-                            };
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::ScrollToY(new_scroll)),
-                            );
-                        }
-                    }
-
-                    if state.dragging_loop {
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::UpdateLoopDrag(pos.x)),
-                        );
-                    }
-                    match &state.clip_interaction {
-                        Some(ClipInteraction::Move { .. }) => {
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::UpdateClipDrag(pos.x, pos.y)),
-                            );
-                        }
-                        Some(ClipInteraction::Trim { .. }) => {
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::UpdateClipTrim(pos.x)),
-                            );
-                        }
-                        Some(ClipInteraction::MidiMove { .. }) => {
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::UpdateMidiClipDrag(pos.x, pos.y)),
-                            );
-                        }
-                        Some(ClipInteraction::MidiTrim { .. }) => {
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::UpdateMidiClipTrim(pos.x)),
-                            );
-                        }
-                        None => {}
-                    }
-                }
+                self.handle_move(state, bounds, cursor)
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                if state.h_scrollbar_grab.is_some() {
-                    state.h_scrollbar_grab = None;
-                    return (canvas::event::Status::Captured, None);
-                }
-                if state.v_scrollbar_grab.is_some() {
-                    state.v_scrollbar_grab = None;
-                    return (canvas::event::Status::Captured, None);
-                }
-                if state.dragging_loop {
-                    state.dragging_loop = false;
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::EndLoopDrag),
-                    );
-                }
-                if let Some(interaction) = state.clip_interaction.take() {
-                    return match interaction {
-                        ClipInteraction::Move { .. } => (
-                            canvas::event::Status::Captured,
-                            Some(Message::EndClipDrag),
-                        ),
-                        ClipInteraction::Trim { .. } => (
-                            canvas::event::Status::Captured,
-                            Some(Message::EndClipTrim),
-                        ),
-                        ClipInteraction::MidiMove { .. } => (
-                            canvas::event::Status::Captured,
-                            Some(Message::EndMidiClipDrag),
-                        ),
-                        ClipInteraction::MidiTrim { .. } => (
-                            canvas::event::Status::Captured,
-                            Some(Message::EndMidiClipTrim),
-                        ),
-                    };
-                }
+                self.handle_release(state)
             }
-            canvas::Event::Keyboard(keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(keyboard::key::Named::Delete),
-                ..
-            })
-            | canvas::Event::Keyboard(keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(keyboard::key::Named::Backspace),
-                ..
-            }) => {
-                if let Some(clip_id) = self.selected_midi_clip {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::DeleteMidiClip(clip_id)),
-                    );
-                }
-                if let Some(clip_id) = self.selected_clip {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::DeleteClip(clip_id)),
-                    );
-                }
+            canvas::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
+                self.handle_key(&key)
             }
-            _ => {}
+            _ => (canvas::event::Status::Ignored, None),
+        };
+        if let (_, Some(_)) = result {
+            return result;
         }
-        // Report viewport width changes so the app can use it for auto-scroll
-        if (bounds.width - state.last_reported_width).abs() > 1.0 {
-            state.last_reported_width = bounds.width;
-            return (
-                canvas::event::Status::Ignored,
-                Some(Message::ViewportWidth(bounds.width)),
-            );
+        if result.0 == canvas::event::Status::Captured {
+            return result;
         }
-        // Report content size so scroll clamping and scrollbar sizing stays
-        // in sync with the clips on the timeline.
-        let cw = self.content_width_px(bounds.width);
-        let ch = self.content_height_px();
-        if (cw - state.last_reported_content_width).abs() > 1.0
-            || (ch - state.last_reported_content_height).abs() > 1.0
-        {
-            state.last_reported_content_width = cw;
-            state.last_reported_content_height = ch;
-            return (
-                canvas::event::Status::Ignored,
-                Some(Message::TimelineContentSize(cw, ch)),
-            );
+        if let Some(msg) = self.report_viewport(state, bounds) {
+            return (canvas::event::Status::Ignored, Some(msg));
         }
         (canvas::event::Status::Ignored, None)
     }
@@ -918,55 +747,32 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         }
 
         // Smart scrollbars — drawn last so they sit above clips + playhead.
-        let content_w = self.content_width_px(bounds.width);
-        let content_h = self.content_height_px();
-        let h_pre = h_scrollbar_rects(
-            bounds.width,
-            bounds.height,
-            content_w,
-            self.scroll_offset,
-            false,
-        );
-        let v_rects = v_scrollbar_rects(
-            bounds.width,
-            bounds.height,
-            content_h,
-            self.scroll_offset_y,
-            ruler_height,
-            h_pre.is_some(),
-        );
-        let h_rects = h_scrollbar_rects(
-            bounds.width,
-            bounds.height,
-            content_w,
-            self.scroll_offset,
-            v_rects.is_some(),
-        );
+        let (h_rects, v_rects) = self.scrollbar_rects(bounds);
 
         let track_color = Color::from_rgba(0.08, 0.08, 0.08, 0.8);
         let thumb_color = Color::from_rgba(0.45, 0.45, 0.45, 0.85);
 
-        if let Some((track, thumb)) = h_rects {
+        if let Some(sb) = h_rects {
             frame.fill_rectangle(
-                Point::new(track.x, track.y),
-                Size::new(track.width, track.height),
+                Point::new(sb.track.x, sb.track.y),
+                Size::new(sb.track.width, sb.track.height),
                 track_color,
             );
             frame.fill_rectangle(
-                Point::new(thumb.x, thumb.y),
-                Size::new(thumb.width, thumb.height),
+                Point::new(sb.thumb.x, sb.thumb.y),
+                Size::new(sb.thumb.width, sb.thumb.height),
                 thumb_color,
             );
         }
-        if let Some((track, thumb)) = v_rects {
+        if let Some(sb) = v_rects {
             frame.fill_rectangle(
-                Point::new(track.x, track.y),
-                Size::new(track.width, track.height),
+                Point::new(sb.track.x, sb.track.y),
+                Size::new(sb.track.width, sb.track.height),
                 track_color,
             );
             frame.fill_rectangle(
-                Point::new(thumb.x, thumb.y),
-                Size::new(thumb.width, thumb.height),
+                Point::new(sb.thumb.x, sb.thumb.y),
+                Size::new(sb.thumb.width, sb.thumb.height),
                 thumb_color,
             );
         }
