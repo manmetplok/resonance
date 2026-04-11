@@ -2,27 +2,37 @@
 
 use parking_lot::Mutex;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
 use resonance_plugin::*;
 
+mod dsp;
+mod loader;
 pub mod nam;
 pub mod params;
+mod tuner;
+pub mod viz;
 
 #[cfg(feature = "editor")]
 mod editor;
 
+use dsp::DcBlocker;
+use loader::{LoaderDeps, LoaderHandle};
 use nam::NamInference;
 use params::AmpParams;
+use tuner::Tuner;
+use viz::AmpViz;
 
 /// Scan a directory for .nam files, returning sorted paths.
 fn scan_directory(dir: &Path) -> Vec<String> {
     resonance_common::scan_directory(dir, "nam")
 }
 
-/// Crossfade length in samples (~1.5ms at 44.1kHz) to avoid pops on model swap.
-const SWAP_FADE_SAMPLES: u32 = 64;
+/// Crossfade length in samples (~23 ms at 44.1 kHz). Long enough to
+/// mask any residual transient when a freshly-loaded model takes over
+/// mid-audio, even after the loader thread has primed it.
+const SWAP_FADE_SAMPLES: u32 = 1024;
 
 pub struct ResonanceAmp {
     /// Parameters — shared with the editor thread via `Arc` so the UI can
@@ -30,6 +40,19 @@ pub struct ResonanceAmp {
     /// fields use atomic storage internally, so `&AmpParams` is safe to use
     /// concurrently from audio + UI.
     params: Arc<AmpParams>,
+    /// Lock-free meters + scope + transfer curve + tuner state shared
+    /// with the editor.
+    viz: Arc<AmpViz>,
+    /// Monophonic pitch tracker fed with the pre-gain input signal.
+    /// `Option` because it depends on the sample rate (known only at
+    /// `initialize` time).
+    tuner: Option<Tuner>,
+    /// Output DC blocker (L/R). Strips any residual DC bias the model
+    /// emits at rest — the final layer of the "plop" fix on top of the
+    /// loader-thread priming and the extended crossfade.
+    dc_l: DcBlocker,
+    dc_r: DcBlocker,
+
     active_model: Option<Box<dyn NamInference>>,
     model_mailbox: Arc<Mutex<Option<Box<dyn NamInference>>>>,
     model_name: Arc<Mutex<String>>,
@@ -37,10 +60,8 @@ pub struct ResonanceAmp {
     last_file_index: i32,
     /// Atomic load request for the persistent loader thread (-1 = no request).
     load_request: Arc<AtomicI32>,
-    /// Signal the loader thread to stop.
-    loader_stop: Arc<AtomicBool>,
     /// Handle to the persistent loader thread.
-    loader_handle: Option<std::thread::JoinHandle<()>>,
+    loader: Option<LoaderHandle>,
     /// Model waiting to be swapped in after fade-out completes.
     pending_model: Option<Box<dyn NamInference>>,
     /// Samples remaining in fade-out before model swap.
@@ -52,6 +73,10 @@ pub struct ResonanceAmp {
     /// thread while the smoothers stay audio-thread mutable.
     input_gain_smoother: Smoother,
     output_gain_smoother: Smoother,
+    /// Scratch buffer used to snapshot the input channel before the
+    /// processing loop overwrites it in place. Sized from
+    /// `max_buffer_size` in `initialize`.
+    input_scratch: Vec<f32>,
 }
 
 impl ResonanceAmp {
@@ -68,89 +93,31 @@ impl ResonanceAmp {
         }
     }
 
-    /// Load a model by path, blocking the current thread.
-    /// On success the model is placed in the mailbox.
+    /// Synchronously load a model, prime it, sample its transfer curve,
+    /// and place it in the mailbox. Used only from `initialize` so the
+    /// first model is available before `process` runs.
     fn load_model_sync(&self, path: String) {
-        let mailbox = self.model_mailbox.clone();
-        let model_name = self.model_name.clone();
-
         match nam::parse::load_model_from_file(&path) {
-            Ok(model) => {
+            Ok(mut model) => {
+                model.reset();
+                loader::prime_model(&mut *model, 2048);
+                let curve = loader::sample_transfer_curve(&mut *model);
+                self.viz.store_transfer_curve(curve);
+                model.reset();
+                loader::prime_model(&mut *model, 2048);
+
                 let name = Path::new(&path)
                     .file_stem()
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                *model_name.lock() = name;
-                *mailbox.lock() = Some(model);
+                *self.model_name.lock() = name;
+                *self.model_mailbox.lock() = Some(model);
             }
             Err(e) => {
                 eprintln!("Failed to load NAM model: {e}");
-                *model_name.lock() = format!("Error: {e}");
+                *self.model_name.lock() = format!("Error: {e}");
             }
         }
-    }
-
-    /// Start the persistent loader thread that polls `load_request`.
-    fn start_loader_thread(&mut self) {
-        // Stop any existing loader
-        self.stop_loader_thread();
-
-        let load_request = self.load_request.clone();
-        let stop_flag = self.loader_stop.clone();
-        let file_list = self.params.file_list.clone();
-        let model_path = self.params.model_path.clone();
-        let mailbox = self.model_mailbox.clone();
-        let model_name = self.model_name.clone();
-
-        self.loader_handle = Some(
-            std::thread::Builder::new()
-                .name("amp-loader".into())
-                .spawn(move || {
-                    while !stop_flag.load(Ordering::Relaxed) {
-                        let idx = load_request.swap(-1, Ordering::AcqRel);
-                        if idx >= 0 {
-                            let path = {
-                                let list = file_list.lock();
-                                if list.is_empty() {
-                                    continue;
-                                }
-                                let clamped = (idx as usize).min(list.len() - 1);
-                                let p = list[clamped].clone();
-                                drop(list);
-                                if let Some(mut mp) = model_path.try_lock() {
-                                    *mp = p.clone();
-                                }
-                                p
-                            };
-                            match nam::parse::load_model_from_file(&path) {
-                                Ok(model) => {
-                                    let name = Path::new(&path)
-                                        .file_stem()
-                                        .map(|s| s.to_string_lossy().into_owned())
-                                        .unwrap_or_default();
-                                    *model_name.lock() = name;
-                                    *mailbox.lock() = Some(model);
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to load NAM model: {e}");
-                                    *model_name.lock() = format!("Error: {e}");
-                                }
-                            }
-                        } else {
-                            std::thread::sleep(std::time::Duration::from_millis(50));
-                        }
-                    }
-                })
-                .expect("failed to spawn amp-loader thread"),
-        );
-    }
-
-    fn stop_loader_thread(&mut self) {
-        self.loader_stop.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.loader_handle.take() {
-            let _ = handle.join();
-        }
-        self.loader_stop.store(false, Ordering::Relaxed);
     }
 }
 
@@ -168,18 +135,22 @@ impl ResonancePlugin for ResonanceAmp {
     fn new() -> Self {
         Self {
             params: Arc::new(AmpParams::default()),
+            viz: AmpViz::new(),
+            tuner: None,
+            dc_l: DcBlocker::default(),
+            dc_r: DcBlocker::default(),
             active_model: None,
             model_mailbox: Arc::new(Mutex::new(None)),
             model_name: Arc::new(Mutex::new(String::new())),
             last_file_index: -1,
             load_request: Arc::new(AtomicI32::new(-1)),
-            loader_stop: Arc::new(AtomicBool::new(false)),
-            loader_handle: None,
+            loader: None,
             pending_model: None,
             fade_out_remaining: 0,
             fade_in_remaining: 0,
             input_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
             output_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
+            input_scratch: Vec::new(),
         }
     }
 
@@ -194,13 +165,16 @@ impl ResonancePlugin for ResonanceAmp {
         }
     }
 
-    fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
-        // Configure plugin-local smoothers and seed them with the
-        // current parameter values.
+    fn initialize(&mut self, sample_rate: f32, max_buffer_size: u32) -> bool {
         self.input_gain_smoother.set_sample_rate(sample_rate);
         self.output_gain_smoother.set_sample_rate(sample_rate);
         self.input_gain_smoother.reset(self.params.input_gain.value());
         self.output_gain_smoother.reset(self.params.output_gain.value());
+
+        self.tuner = Some(Tuner::new(sample_rate));
+        self.dc_l.reset();
+        self.dc_r.reset();
+        self.input_scratch = vec![0.0; max_buffer_size as usize];
 
         let path = self.params.model_path.lock().clone();
         if !path.is_empty() {
@@ -208,15 +182,24 @@ impl ResonancePlugin for ResonanceAmp {
             self.last_file_index = idx as i32;
             self.params.file_select.set_value(idx as i32);
 
-            // Block on loading the model during init
+            // Block on loading the model during init so the first
+            // `process` call has an active model to run.
             self.load_model_sync(path);
             if let Some(model) = self.model_mailbox.lock().take() {
                 self.active_model = Some(model);
             }
         }
 
-        // Start persistent loader thread for runtime file_select changes
-        self.start_loader_thread();
+        // Start the persistent loader thread for runtime file_select
+        // changes. All subsequent loads go through it — priming and
+        // transfer-curve sampling included.
+        self.loader = Some(loader::start(LoaderDeps {
+            params: self.params.clone(),
+            mailbox: self.model_mailbox.clone(),
+            model_name: self.model_name.clone(),
+            load_request: self.load_request.clone(),
+            viz: self.viz.clone(),
+        }));
 
         true
     }
@@ -225,6 +208,8 @@ impl ResonancePlugin for ResonanceAmp {
         if let Some(model) = &mut self.active_model {
             model.reset();
         }
+        self.dc_l.reset();
+        self.dc_r.reset();
     }
 
     fn process(
@@ -242,7 +227,14 @@ impl ResonancePlugin for ResonanceAmp {
         let right = &mut *main.right;
         resonance_common::flush_denormals();
 
-        // Check mailbox for newly loaded model — start crossfade
+        // Snapshot the dry input before the processing loop overwrites
+        // it. Used by the scope view and the tuner.
+        let copy_n = frames.min(self.input_scratch.len());
+        self.input_scratch[..copy_n].copy_from_slice(&left[..copy_n]);
+
+        // Check mailbox for newly loaded model — start crossfade. The
+        // model is already primed on the loader thread, so the fade only
+        // has to mask the handoff itself.
         if let Some(mut guard) = self.model_mailbox.try_lock() {
             if guard.is_some() {
                 self.pending_model = guard.take();
@@ -250,30 +242,36 @@ impl ResonancePlugin for ResonanceAmp {
                     self.fade_out_remaining = SWAP_FADE_SAMPLES;
                     self.fade_in_remaining = 0;
                 } else {
-                    // No previous model — swap directly with fade-in
+                    // No previous model — swap directly with fade-in.
                     self.active_model = self.pending_model.take();
                     self.fade_in_remaining = SWAP_FADE_SAMPLES;
                 }
             }
         }
 
-        // Detect file_select param change from host/DAW
+        // Detect file_select param change from host/DAW.
         let current_index = self.params.file_select.value();
         if current_index != self.last_file_index {
             self.last_file_index = current_index;
-            // Signal the persistent loader thread (no allocation, no spawn)
-            self.load_request.store(current_index, Ordering::Release);
+            self.load_request
+                .store(current_index, std::sync::atomic::Ordering::Release);
         }
 
-        // Set smoother targets from current param values
         self.input_gain_smoother
             .set_target(self.params.input_gain.value());
         self.output_gain_smoother
             .set_target(self.params.output_gain.value());
 
-        // Hot path: no model swap in flight. `active_model` is stable across
-        // the whole block so we can hoist the `Some/None` match outside the
-        // per-sample loop and avoid a branch per frame.
+        // Track block-peak values for the meters.
+        let mut in_peak_l = 0.0f32;
+        let mut in_peak_r = 0.0f32;
+        let mut out_peak_l = 0.0f32;
+        let mut out_peak_r = 0.0f32;
+        for i in 0..frames {
+            in_peak_l = in_peak_l.max(left[i].abs());
+            in_peak_r = in_peak_r.max(right[i].abs());
+        }
+
         if self.fade_out_remaining == 0 {
             match self.active_model.as_mut() {
                 Some(model) => {
@@ -287,16 +285,17 @@ impl ResonancePlugin for ResonanceAmp {
                             1.0
                         };
                         let input = left[i] * input_gain;
-                        let output = model.process_sample(input) * output_gain * fade_gain;
-                        left[i] = output;
-                        right[i] = output;
+                        let raw = model.process_sample(input) * output_gain * fade_gain;
+                        let blocked = self.dc_l.process(raw);
+                        left[i] = blocked;
+                        right[i] = self.dc_r.process(raw);
                     }
                 }
                 None => {
                     // No model loaded: only `input_gain * output_gain` is
-                    // applied. `fade_in_remaining` is guaranteed to be zero
-                    // in this arm because a fade-in is always paired with a
-                    // newly installed model.
+                    // applied. `fade_in_remaining` is zero in this arm
+                    // because a fade-in is always paired with a newly
+                    // installed model.
                     for i in 0..frames {
                         let input_gain = self.input_gain_smoother.next();
                         let output_gain = self.output_gain_smoother.next();
@@ -306,43 +305,69 @@ impl ResonancePlugin for ResonanceAmp {
                     }
                 }
             }
-            return;
+        } else {
+            // Slow path: fade-out in progress, `active_model` will be
+            // replaced mid-block when `fade_out_remaining` hits zero.
+            for i in 0..frames {
+                let input_gain = self.input_gain_smoother.next();
+                let output_gain = self.output_gain_smoother.next();
+
+                let fade_gain = if self.fade_out_remaining > 0 {
+                    self.fade_out_remaining -= 1;
+                    let g = self.fade_out_remaining as f32 / SWAP_FADE_SAMPLES as f32;
+                    if self.fade_out_remaining == 0 {
+                        self.active_model = self.pending_model.take();
+                        self.fade_in_remaining = SWAP_FADE_SAMPLES;
+                    }
+                    g
+                } else if self.fade_in_remaining > 0 {
+                    self.fade_in_remaining -= 1;
+                    1.0 - self.fade_in_remaining as f32 / SWAP_FADE_SAMPLES as f32
+                } else {
+                    1.0
+                };
+
+                match &mut self.active_model {
+                    Some(model) => {
+                        let input = left[i] * input_gain;
+                        let raw = model.process_sample(input) * output_gain * fade_gain;
+                        left[i] = self.dc_l.process(raw);
+                        right[i] = self.dc_r.process(raw);
+                    }
+                    None => {
+                        let gain = input_gain * output_gain * fade_gain;
+                        left[i] *= gain;
+                        right[i] *= gain;
+                    }
+                }
+            }
         }
 
-        // Slow path: fade-out in progress, `active_model` will be replaced
-        // mid-block when `fade_out_remaining` hits zero. Keep the original
-        // per-sample match so we pick up the new model at the swap boundary.
         for i in 0..frames {
-            let input_gain = self.input_gain_smoother.next();
-            let output_gain = self.output_gain_smoother.next();
+            out_peak_l = out_peak_l.max(left[i].abs());
+            out_peak_r = out_peak_r.max(right[i].abs());
+        }
 
-            let fade_gain = if self.fade_out_remaining > 0 {
-                self.fade_out_remaining -= 1;
-                let g = self.fade_out_remaining as f32 / SWAP_FADE_SAMPLES as f32;
-                if self.fade_out_remaining == 0 {
-                    self.active_model = self.pending_model.take();
-                    self.fade_in_remaining = SWAP_FADE_SAMPLES;
-                }
-                g
-            } else if self.fade_in_remaining > 0 {
-                self.fade_in_remaining -= 1;
-                1.0 - self.fade_in_remaining as f32 / SWAP_FADE_SAMPLES as f32
-            } else {
-                1.0
-            };
+        // Publish block-rate viz state.
+        self.viz.store_peaks(
+            linear_to_db(in_peak_l),
+            linear_to_db(in_peak_r),
+            linear_to_db(out_peak_l),
+            linear_to_db(out_peak_r),
+        );
+        {
+            let mut scope = self.viz.scope.lock();
+            for i in 0..copy_n {
+                scope.push(self.input_scratch[i], left[i]);
+            }
+        }
 
-            match &mut self.active_model {
-                Some(model) => {
-                    let input = left[i] * input_gain;
-                    let output = model.process_sample(input) * output_gain * fade_gain;
-                    left[i] = output;
-                    right[i] = output;
-                }
-                None => {
-                    let gain = input_gain * output_gain * fade_gain;
-                    left[i] *= gain;
-                    right[i] *= gain;
-                }
+        // Feed the tuner with the dry input (pre-gain, pre-model) so
+        // the amp's nonlinear harmonics don't confuse the pitch tracker.
+        if let Some(tuner) = self.tuner.as_mut() {
+            tuner.feed(&self.input_scratch[..copy_n]);
+            if let Some((hz, conf)) = tuner.analyze() {
+                self.viz.store_tuner(hz, conf);
             }
         }
     }
@@ -359,7 +384,17 @@ impl ResonancePlugin for ResonanceAmp {
             self.params.clone(),
             self.model_name.clone(),
             self.load_request.clone(),
+            self.viz.clone(),
         )))
+    }
+}
+
+/// Convert a linear amplitude to dBFS. `0.0` → `-inf`, `1.0` → `0 dB`.
+fn linear_to_db(linear: f32) -> f32 {
+    if linear <= 1e-9 {
+        f32::NEG_INFINITY
+    } else {
+        20.0 * linear.log10()
     }
 }
 
@@ -384,12 +419,6 @@ impl resonance_plugin::plugin::ExtraStateSaver for AmpExtraState {
         if let Some(path) = state.get("model_path").and_then(|v| v.as_str()) {
             *self.model_path.lock() = path.to_string();
         }
-    }
-}
-
-impl Drop for ResonanceAmp {
-    fn drop(&mut self) {
-        self.stop_loader_thread();
     }
 }
 
