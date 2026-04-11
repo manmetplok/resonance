@@ -65,6 +65,18 @@ pub(crate) struct RecordingState {
     pub loop_enabled: bool,
     pub loop_in: SamplePos,
     pub loop_out: SamplePos,
+    /// Set when a `Record` with `precount_bars > 0` is in its count-in
+    /// phase. `target_sample` is the playhead position the user hit
+    /// record at — once the playhead catches up to it, the input stream
+    /// opens and recording begins. `restore_metronome` holds the
+    /// metronome's pre-count-in state so it can be put back afterwards.
+    pub precount: Option<PrecountState>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrecountState {
+    pub target_sample: SamplePos,
+    pub restore_metronome: bool,
 }
 
 impl RecordingState {
@@ -79,6 +91,7 @@ impl RecordingState {
             loop_enabled: false,
             loop_in: 0,
             loop_out: 0,
+            precount: None,
         }
     }
 

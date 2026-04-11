@@ -132,6 +132,11 @@ pub(crate) fn engine_thread(
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
         }
 
+        // Advance any pending record count-in: once the playhead
+        // catches up to the user's original record-start, the real
+        // recording stream opens.
+        transport::poll_precount(&ctx, &mut state);
+
         // Drain recording ring buffer into per-track buffers
         if ctx.shared.recording.load(Ordering::Relaxed) {
             state.rec.drain_ring_to_buffers();
@@ -152,7 +157,9 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
     match cmd {
         // -- Transport --
         AudioCommand::Play => transport::handle_play(ctx),
-        AudioCommand::Record => transport::handle_record(ctx, state),
+        AudioCommand::Record { precount_bars } => {
+            transport::handle_record(ctx, state, precount_bars)
+        }
         AudioCommand::Pause => transport::handle_pause(ctx, state),
         AudioCommand::Stop => transport::handle_stop(ctx, state),
         AudioCommand::SeekTo(pos) => transport::handle_seek_to(ctx, pos),

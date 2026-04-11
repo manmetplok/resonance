@@ -7,7 +7,14 @@ use super::{BusId, ClipId, MidiNote, PluginInstanceId, SamplePos, TrackId, Track
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
     Play,
-    Record,
+    /// Start recording on every armed track. When `precount_bars > 0`,
+    /// the engine rewinds the playhead by that many bars, force-enables
+    /// the metronome, and begins playback; the input stream opens and
+    /// `recording` flips true once the playhead catches up to the
+    /// original position.
+    Record {
+        precount_bars: u8,
+    },
     Pause,
     Stop,
     SeekTo(SamplePos),

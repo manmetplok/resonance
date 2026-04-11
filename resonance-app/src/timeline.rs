@@ -19,6 +19,37 @@ use scrollbar::{ScrollbarRects, scroll_from_thumb_pos};
 /// Maximum interval between two clicks to count as a double-click.
 const DOUBLE_CLICK_MS: u128 = 400;
 
+/// Snap a sample position to the nearest grid line at the current zoom,
+/// matching the bar/beat grid drawn in the timeline. At high zoom
+/// (bar wider than 40 px) this snaps to beats; lower zoom drops to
+/// bars, and at very low zoom it follows the same `bar_step` stride
+/// used by `draw_grid_lines`.
+pub fn snap_sample_to_grid(
+    sample: u64,
+    bpm: f32,
+    time_sig_num: u8,
+    sample_rate: u32,
+    zoom: f32,
+) -> u64 {
+    if bpm <= 0.0 || time_sig_num == 0 || zoom <= 0.0 {
+        return sample;
+    }
+    let samples_per_beat = sample_rate as f64 * 60.0 / bpm as f64;
+    let samples_per_bar = samples_per_beat * time_sig_num as f64;
+    let bar_pixel_width = (samples_per_bar / sample_rate as f64) as f32 * zoom;
+    let step = if bar_pixel_width >= 40.0 {
+        samples_per_beat
+    } else if bar_pixel_width >= 20.0 {
+        samples_per_bar
+    } else {
+        samples_per_bar * (20.0 / bar_pixel_width).ceil() as f64
+    };
+    if step <= 0.0 {
+        return sample;
+    }
+    ((sample as f64 / step).round() * step).round() as u64
+}
+
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug)]
 pub struct TimelineCanvas<'a> {
@@ -307,11 +338,19 @@ impl TimelineCanvas<'_> {
             }
         }
 
-        // Any other click in the ruler → seek the playhead.
+        // Any other click in the ruler → seek the playhead, snapped
+        // to the nearest grid line.
         if pos.y < ruler_height {
             let seconds = ((pos.x + self.scroll_offset) / self.zoom).max(0.0);
             let sample = (seconds as f64 * self.sample_rate as f64) as u64;
-            return captured(Message::Transport(TransportMessage::SeekToSample(sample)));
+            let snapped = snap_sample_to_grid(
+                sample,
+                self.bpm,
+                self.time_sig_num,
+                self.sample_rate,
+                self.zoom,
+            );
+            return captured(Message::Transport(TransportMessage::SeekToSample(snapped)));
         }
 
         // Clip hit-testing (track area)

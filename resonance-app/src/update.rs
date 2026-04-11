@@ -126,7 +126,9 @@ impl crate::Resonance {
                 // Only meaningful when at least one track is armed; the UI
                 // disables the button otherwise.
                 if self.registry.tracks.iter().any(|t| t.record_armed) {
-                    self.engine.send(AudioCommand::Record);
+                    self.engine.send(AudioCommand::Record {
+                        precount_bars: self.transport.precount_bars,
+                    });
                     self.transport.playing = true;
                     // self.transport.recording flips true when RecordingStarted arrives.
                 }
@@ -471,9 +473,17 @@ impl crate::Resonance {
             }
             Message::Transport(TransportMessage::UpdateLoopDrag(x)) => {
                 if self.transport.dragging_loop.is_some() {
-                    // Convert pixel x to sample position
+                    // Convert pixel x to sample position, snapped to the
+                    // bar/beat grid so loop markers line up with the ruler.
                     let seconds = (x + self.viewport.scroll_offset) / self.viewport.zoom;
-                    let sample = (seconds.max(0.0) as f64 * self.sample_rate as f64) as u64;
+                    let raw = (seconds.max(0.0) as f64 * self.sample_rate as f64) as u64;
+                    let sample = crate::timeline::snap_sample_to_grid(
+                        raw,
+                        self.transport.bpm,
+                        self.transport.time_sig_num,
+                        self.sample_rate,
+                        self.viewport.zoom,
+                    );
                     match self.transport.dragging_loop {
                         Some(LoopDragTarget::In) => {
                             self.transport.loop_in = sample;

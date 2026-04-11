@@ -15,7 +15,84 @@ pub(crate) fn handle_play(ctx: &HandlerCtx) {
     ctx.shared.playing.store(true, Ordering::SeqCst);
 }
 
-pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState) {
+pub(crate) fn handle_record(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    precount_bars: u8,
+) {
+    if precount_bars == 0 {
+        begin_recording_stream(ctx, state);
+        return;
+    }
+
+    // Count-in: force the metronome on, rewind the playhead by
+    // `precount_bars`, and start playback. The engine control thread
+    // polls `rec.precount` each loop and opens the recording stream
+    // the moment the playhead reaches the user's original position.
+    let (precount_samples, was_metronome) = {
+        let tm = ctx.tempo_map.read();
+        let samples_per_bar = tm.samples_per_bar(ctx.sample_rate);
+        let samples = (samples_per_bar * precount_bars as f64) as u64;
+        (samples, tm.metronome_enabled)
+    };
+
+    let orig_playhead = ctx.shared.playhead.load(Ordering::SeqCst);
+    // Rewind by the precount, but never past 0 — if the user hit
+    // Record near the project start, playback just begins at 0 and
+    // the recording-start slides forward to keep the count-in a
+    // full `precount_bars` long.
+    let new_playhead = orig_playhead.saturating_sub(precount_samples);
+    let target_sample = new_playhead + precount_samples;
+    ctx.shared.playhead.store(new_playhead, Ordering::SeqCst);
+    ctx.tempo_map.write().metronome_enabled = true;
+    ctx.shared.playing.store(true, Ordering::SeqCst);
+
+    state.rec.precount = Some(crate::recording::PrecountState {
+        target_sample,
+        restore_metronome: was_metronome,
+    });
+}
+
+/// Clear any pending count-in and restore the metronome toggle to
+/// whatever it was before `Record` was pressed. Called by Pause/Stop
+/// so cancelling a record-with-precount doesn't leave the metronome
+/// stuck on.
+pub(crate) fn cancel_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
+    if let Some(pc) = state.rec.precount.take() {
+        ctx.tempo_map.write().metronome_enabled = pc.restore_metronome;
+    }
+}
+
+/// Poll hook: if a count-in is in flight and the playhead has reached
+/// the original record-start position, restore the metronome toggle
+/// and open the actual recording stream. Runs on the engine control
+/// thread's ~60 Hz loop, so the worst-case start jitter is one engine
+/// tick (≈16 ms).
+pub(crate) fn poll_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
+    let Some(pc) = state.rec.precount else {
+        return;
+    };
+    // Pause/Stop clears `playing` — if that happened while counting
+    // in, drop the precount without starting the stream.
+    if !ctx.shared.playing.load(Ordering::Relaxed) {
+        state.rec.precount = None;
+        ctx.tempo_map.write().metronome_enabled = pc.restore_metronome;
+        return;
+    }
+    if ctx.shared.playhead.load(Ordering::Relaxed) < pc.target_sample {
+        return;
+    }
+    state.rec.precount = None;
+    ctx.tempo_map.write().metronome_enabled = pc.restore_metronome;
+    // Nail the playhead to the user's original start position so the
+    // recorded clip lines up exactly with where Record was pressed.
+    ctx.shared
+        .playhead
+        .store(pc.target_sample, Ordering::SeqCst);
+    begin_recording_stream(ctx, state);
+}
+
+fn begin_recording_stream(ctx: &HandlerCtx, state: &mut HandlerState) {
     // Recording must have a project directory to stream WAVs into.
     // The startup modal guarantees a project is always selected, so
     // hitting this branch is a programmer error — surface it rather
@@ -134,6 +211,7 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
     let was_recording = ctx.shared.recording.load(Ordering::SeqCst);
     ctx.shared.playing.store(false, Ordering::SeqCst);
     ctx.shared.recording.store(false, Ordering::SeqCst);
+    cancel_precount(ctx, state);
 
     if was_recording {
         state.rec.finalize_recording(
@@ -150,6 +228,7 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
     ctx.shared.playing.store(false, Ordering::SeqCst);
     ctx.shared.recording.store(false, Ordering::SeqCst);
     ctx.shared.playhead.store(0, Ordering::SeqCst);
+    cancel_precount(ctx, state);
 
     if was_recording {
         state.rec.finalize_recording(
