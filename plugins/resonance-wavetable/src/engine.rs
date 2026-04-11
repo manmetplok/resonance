@@ -64,8 +64,11 @@ impl SynthEngine {
         self.voice_counter = 0;
         self.last_note = None;
 
-        // Generate wavetables
-        self.wavetables = crate::wavetable::generate_all(sample_rate);
+        // Load pre-generated wavetables from the bundled blob. Generation
+        // happens once at plugin build time (see `build.rs`), not on every
+        // `initialize()` — this keeps plugin instantiation fast instead of
+        // burning multi-seconds on additive synthesis.
+        self.wavetables = crate::wavetable::load_bundled();
 
         // Init effects
         self.chorus = Chorus::new(sample_rate);
