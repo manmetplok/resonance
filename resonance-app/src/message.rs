@@ -27,6 +27,10 @@ pub(crate) enum Message {
     /// Timer tick driving VU meters and auto-follow. Kept at top level to
     /// avoid wrapping cost on the hot path.
     Tick,
+    /// Walk one step back through the session-local undo history.
+    Undo,
+    /// Walk one step forward through the session-local redo history.
+    Redo,
 }
 
 #[derive(Debug, Clone)]

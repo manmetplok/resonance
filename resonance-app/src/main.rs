@@ -12,12 +12,14 @@ pub(crate) mod state;
 mod theme;
 mod timeline;
 mod timeline_draw;
+pub(crate) mod undo;
 mod update;
 pub(crate) mod util;
 mod view;
 
 use message::Message;
 use state::*;
+use undo::UndoHistory;
 
 /// Application state.
 pub(crate) struct Resonance {
@@ -51,6 +53,16 @@ pub(crate) struct Resonance {
     pub(crate) io: ProjectIoState,
     pub(crate) mixer: MixerUiState,
     pub(crate) registry: TrackRegistry,
+    /// Session-local undo/redo history. Cleared on project load.
+    pub(crate) undo: UndoHistory,
+    /// Cache of the most recently observed CLAP state blob per plugin
+    /// instance. Populated from `PluginStateSaved` / `AllPluginStatesSaved`
+    /// engine events and read into undo snapshots so restores can replay
+    /// plugin internal state via `LoadPluginState`. Stale between
+    /// refreshes — parameter values in snapshots always come from live
+    /// GUI state instead.
+    pub(crate) plugin_state_cache:
+        std::collections::HashMap<resonance_audio::types::PluginInstanceId, Vec<u8>>,
 }
 
 fn main() -> iced::Result {
@@ -185,6 +197,8 @@ impl Resonance {
                 next_sub_track_id: 1_000_000_000,
                 ..TrackRegistry::default()
             },
+            undo: UndoHistory::new(),
+            plugin_state_cache: std::collections::HashMap::new(),
         };
 
         (app, iced::Task::none())

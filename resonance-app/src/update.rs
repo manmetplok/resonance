@@ -45,14 +45,75 @@ fn is_gated_message(message: &Message) -> bool {
         Message::ProjectIo(_) => false,
         // Timer tick: harmless, drives VU meters — allow.
         Message::Tick => false,
+        // Undo/redo need a project to be meaningful — block otherwise.
+        Message::Undo | Message::Redo => true,
     }
 }
 
 impl crate::Resonance {
+    /// Public entry point invoked by Iced on every message. Handles
+    /// undo/redo meta-messages, runs the startup-modal gate, then hands
+    /// off to `dispatch` with the undo-history bookkeeping wrapped
+    /// around the dispatch — recording atomic entries before mutations
+    /// and committing gesture transactions after.
     pub(crate) fn update(&mut self, message: Message) -> Task<Message> {
         if !self.io.has_active_project && is_gated_message(&message) {
             return Task::none();
         }
+
+        // Meta-messages: walk the history, don't classify.
+        match message {
+            Message::Undo => {
+                self.try_undo();
+                return Task::none();
+            }
+            Message::Redo => {
+                self.try_redo();
+                return Task::none();
+            }
+            _ => {}
+        }
+
+        // Classify now so we can record/begin before the mutation runs,
+        // and commit after. Classification is a pure function over the
+        // message shape — no borrow on `self`.
+        let action = crate::undo::classify(&message);
+        let commit_after = matches!(action, crate::undo::UndoAction::Commit);
+        // Skip every history-mutating branch when the app isn't in a
+        // state where a snapshot could be restored (no active project,
+        // no saved path, mid-restore). Commit still runs on gesture end
+        // even if recording was blocked — it'll be a no-op because
+        // `begin` was also blocked, so there's no pending transaction.
+        if self.can_record_undo() {
+            match action {
+                crate::undo::UndoAction::Skip | crate::undo::UndoAction::Commit => {}
+                crate::undo::UndoAction::Record => {
+                    let snap = self.snapshot_for_undo();
+                    self.undo.record(snap);
+                }
+                crate::undo::UndoAction::RecordCoalesced(key) => {
+                    let snap = self.snapshot_for_undo();
+                    self.undo.record_coalesced(snap, key);
+                }
+                crate::undo::UndoAction::Begin => {
+                    let snap = self.snapshot_for_undo();
+                    self.undo.begin(snap);
+                }
+            }
+        }
+
+        let task = self.dispatch(message);
+
+        if commit_after {
+            self.undo.commit();
+        }
+
+        task
+    }
+
+    /// Existing message-dispatch body. Extracted so the undo wrapper can
+    /// run around it; no other behavioral change.
+    fn dispatch(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Compose(m) => {
                 crate::update::compose::handle(self, m);
@@ -354,6 +415,12 @@ impl crate::Resonance {
                 self.engine
                     .send(AudioCommand::ClosePluginEditor { instance_id });
                 self.with_plugin_mut(instance_id, |p| p.editor_open = false);
+                // Refresh the undo cache with the plugin's post-edit
+                // state so future snapshots can replay it. Asynchronous:
+                // the `PluginStateSaved` handler updates
+                // `plugin_state_cache` when the blob arrives.
+                self.engine
+                    .send(AudioCommand::SavePluginState { instance_id });
             }
             Message::Viewport(ViewportMessage::ScrollX(delta)) => viewport::scroll_x_delta(self, delta),
             Message::Viewport(ViewportMessage::ScrollY(delta)) => viewport::scroll_y_delta(self, delta),
@@ -532,6 +599,11 @@ impl crate::Resonance {
                 self.transport.recording = false;
                 self.io.loading = true;
                 self.io.pending_load = Some(loaded);
+                // A fresh project starts with an empty history — undo
+                // must not cross the load boundary. The plugin cache
+                // is session-local to the current project too.
+                self.undo.clear();
+                self.plugin_state_cache.clear();
                 self.engine.send(AudioCommand::ClearAll);
                 // Lift the gate immediately — replay runs when the
                 // engine emits `AllCleared`, but the project is
@@ -723,6 +795,9 @@ impl crate::Resonance {
                     editor.scroll_y = (editor.scroll_y + delta).max(0.0);
                 }
             }
+            // Handled by `update()` before dispatch is called; no-op
+            // here to keep the match exhaustive.
+            Message::Undo | Message::Redo => {}
         }
         Task::none()
     }
@@ -744,6 +819,16 @@ impl crate::Resonance {
                     }
                     keyboard::Key::Character(ref c) if c.as_str() == "o" => {
                         Some(Message::ProjectIo(ProjectIoMessage::OpenProject))
+                    }
+                    keyboard::Key::Character(ref c) if c.as_str() == "z" => {
+                        if modifiers.shift() {
+                            Some(Message::Redo)
+                        } else {
+                            Some(Message::Undo)
+                        }
+                    }
+                    keyboard::Key::Character(ref c) if c.as_str() == "y" => {
+                        Some(Message::Redo)
                     }
                     _ => None,
                 }

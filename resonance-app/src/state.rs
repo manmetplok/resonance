@@ -542,6 +542,10 @@ pub struct ProjectIoState {
     pub save_state: Option<crate::project::SaveCollector>,
     pub loading: bool,
     pub pending_load: Option<Box<crate::project::LoadedProject>>,
+    /// Runtime-only state to re-apply after an undo/redo restore, once
+    /// `replay_loaded_project` has rebuilt the declarative project.
+    /// `None` for a normal project load, `Some` for undo/redo.
+    pub pending_undo_extras: Option<crate::undo::UndoExtras>,
     pub bouncing: bool,
     /// When false, the startup modal is shown and interactive
     /// messages are dropped. Flipped true on successful load or

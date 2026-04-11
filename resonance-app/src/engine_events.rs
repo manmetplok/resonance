@@ -172,6 +172,14 @@ impl crate::Resonance {
                     }
                 }
 
+                // Seed the undo plugin-state cache with the plugin's
+                // initial CLAP state. Snapshots taken before the user
+                // interacts with the plugin will have the default blob
+                // to restore to, avoiding "undo resets the plugin to
+                // uninitialised garbage" UX.
+                self.engine
+                    .send(AudioCommand::SavePluginState { instance_id });
+
                 // Auto-create sub-tracks for multi-output plugins.
                 // Skips ports already represented (so project load, which
                 // replays saved sub-tracks before the PluginAdded event,
@@ -234,6 +242,7 @@ impl crate::Resonance {
                 if let Some(track) = self.registry.tracks.iter_mut().find(|t| t.id == track_id) {
                     track.plugins.retain(|p| p.instance_id != instance_id);
                 }
+                self.plugin_state_cache.remove(&instance_id);
             }
             AudioEvent::PluginsScanned { plugins } => {
                 self.available_plugins = plugins;
@@ -246,8 +255,12 @@ impl crate::Resonance {
                 self.io.bouncing = false;
                 self.error_message = Some(format!("Bounce failed: {e}"));
             }
-            AudioEvent::PluginStateSaved { instance_id: _, data: _ } => {
-                // Used only by the project-save path (SaveCollector).
+            AudioEvent::PluginStateSaved { instance_id, data } => {
+                // Also feeds the undo system's plugin-state cache so
+                // snapshots can replay internal CLAP state on restore.
+                // The project-save path drains the cache via
+                // `SaveAllPluginStates` separately.
+                self.plugin_state_cache.insert(instance_id, data);
             }
             // --- Project save events ---
             AudioEvent::ClipsSavedToProjectDir { clip_files } => {
@@ -258,6 +271,11 @@ impl crate::Resonance {
                 return self.try_finish_save();
             }
             AudioEvent::AllPluginStatesSaved { states } => {
+                // Refresh the undo cache first, then (if a save was in
+                // progress) hand the states off to the SaveCollector.
+                for (instance_id, data) in &states {
+                    self.plugin_state_cache.insert(*instance_id, data.clone());
+                }
                 if let Some(ref mut save) = self.io.save_state {
                     save.plugin_states = states;
                     save.plugins_done = true;
@@ -272,6 +290,12 @@ impl crate::Resonance {
                     crate::update::replay_loaded_project(self, loaded);
                     self.io.project_path = path;
                     self.io.loading = false;
+                    // If this clear/replay came from an undo or redo, apply
+                    // the runtime-only state that replay can't recover
+                    // (currently: the compose derived-clip cache).
+                    if let Some(extras) = self.io.pending_undo_extras.take() {
+                        self.finalize_undo_restore(extras);
+                    }
                 }
             }
 
@@ -414,6 +438,8 @@ impl crate::Resonance {
                         ));
                     }
                 }
+                self.engine
+                    .send(AudioCommand::SavePluginState { instance_id });
             }
             AudioEvent::BusPluginRemoved { bus_id, instance_id } => {
                 if let Some(bus) = self.registry.busses.iter_mut().find(|b| b.id == bus_id) {
@@ -422,6 +448,7 @@ impl crate::Resonance {
                 if self.mixer.selected_plugin == Some(instance_id) {
                     self.mixer.selected_plugin = None;
                 }
+                self.plugin_state_cache.remove(&instance_id);
             }
             AudioEvent::MasterPluginAdded {
                 instance_id,
@@ -448,6 +475,8 @@ impl crate::Resonance {
                         has_gui,
                     ));
                 }
+                self.engine
+                    .send(AudioCommand::SavePluginState { instance_id });
             }
             AudioEvent::MasterPluginRemoved { instance_id } => {
                 self.master_plugins
@@ -455,6 +484,7 @@ impl crate::Resonance {
                 if self.mixer.selected_plugin == Some(instance_id) {
                     self.mixer.selected_plugin = None;
                 }
+                self.plugin_state_cache.remove(&instance_id);
             }
             AudioEvent::TrackFxBypassChanged { track_id, bypassed } => {
                 if let Some(track) =
