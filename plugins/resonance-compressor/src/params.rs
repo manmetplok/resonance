@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use resonance_plugin::formatters::{v2s_f32_db, v2s_f32_hz, v2s_f32_percent};
 use resonance_plugin::*;
 
 pub const PARAM_COUNT: usize = 11;
@@ -51,10 +52,8 @@ impl CompressorParams {
     }
 }
 
-fn format_db(decimals: usize) -> Arc<dyn Fn(f32) -> String + Send + Sync> {
-    Arc::new(move |v: f32| format!("{:.*} dB", decimals, v))
-}
-
+/// Local ms formatter: drops one decimal above 100 ms to keep the
+/// label compact. The default [`v2s_f32_ms`] uses a fixed precision.
 fn format_ms(decimals: usize) -> Arc<dyn Fn(f32) -> String + Send + Sync> {
     Arc::new(move |v: f32| {
         if v >= 100.0 {
@@ -65,26 +64,14 @@ fn format_ms(decimals: usize) -> Arc<dyn Fn(f32) -> String + Send + Sync> {
     })
 }
 
+/// Local ratio formatter: shows "∞:1" for extreme ratios so the slider
+/// can encode a limiting ratio without maxing out the number.
 fn format_ratio() -> Arc<dyn Fn(f32) -> String + Send + Sync> {
     Arc::new(|v: f32| {
         if v >= 19.5 {
             "∞:1".to_string()
         } else {
             format!("{:.1}:1", v)
-        }
-    })
-}
-
-fn format_percent(decimals: usize) -> Arc<dyn Fn(f32) -> String + Send + Sync> {
-    Arc::new(move |v: f32| format!("{:.*}%", decimals, v * 100.0))
-}
-
-fn format_hz() -> Arc<dyn Fn(f32) -> String + Send + Sync> {
-    Arc::new(|v: f32| {
-        if v >= 1000.0 {
-            format!("{:.2} kHz", v / 1000.0)
-        } else {
-            format!("{:.0} Hz", v)
         }
     })
 }
@@ -111,7 +98,7 @@ impl Default for CompressorParams {
                 FloatRange::Linear { min: -60.0, max: 0.0 },
             )
             .with_unit(" dB")
-            .with_value_to_string(format_db(1)),
+            .with_value_to_string(v2s_f32_db(1)),
 
             ratio: FloatParam::new(
                 "ratio",
@@ -158,7 +145,7 @@ impl Default for CompressorParams {
                 FloatRange::Linear { min: 0.0, max: 12.0 },
             )
             .with_unit(" dB")
-            .with_value_to_string(format_db(1)),
+            .with_value_to_string(v2s_f32_db(1)),
 
             makeup: FloatParam::new(
                 "makeup",
@@ -168,7 +155,7 @@ impl Default for CompressorParams {
             )
             .with_smoother(SmoothingStyle::Logarithmic(20.0))
             .with_unit(" dB")
-            .with_value_to_string(format_db(1)),
+            .with_value_to_string(v2s_f32_db(1)),
 
             mix: FloatParam::new(
                 "mix",
@@ -178,7 +165,7 @@ impl Default for CompressorParams {
             )
             .with_smoother(SmoothingStyle::Linear(20.0))
             .with_unit("%")
-            .with_value_to_string(format_percent(0)),
+            .with_value_to_string(v2s_f32_percent(0)),
 
             detector_mix: FloatParam::new(
                 "detector_mix",
@@ -199,7 +186,7 @@ impl Default for CompressorParams {
                 },
             )
             .with_unit(" Hz")
-            .with_value_to_string(format_hz()),
+            .with_value_to_string(v2s_f32_hz()),
 
             sc_hpf_on: BoolParam::new("sc_hpf_on", "SC HPF On", false),
             auto_makeup: BoolParam::new("auto_makeup", "Auto Makeup", false),

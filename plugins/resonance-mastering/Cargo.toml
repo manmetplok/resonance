@@ -1,0 +1,26 @@
+[package]
+name = "resonance-mastering"
+version = "0.1.0"
+edition = "2021"
+description = "Automatic mastering plugin for band music — analyzer + linear-phase chain"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = ["editor"]
+editor = ["dep:wayland-plugin-gui", "dep:egui"]
+
+[dependencies]
+resonance-plugin = { path = "../../resonance-plugin" }
+resonance-common = { path = "../../resonance-common" }
+resonance-dsp = { path = "../../resonance-dsp" }
+resonance-metering = { path = "../../resonance-metering" }
+arc-swap = "1"
+parking_lot = "0.12"
+rustfft = "6"
+serde_json = "1"
+symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "flac", "mp3", "ogg", "vorbis", "aac", "isomp4"] }
+
+wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+egui = { version = "0.34", features = ["default_fonts"], default-features = false, optional = true }

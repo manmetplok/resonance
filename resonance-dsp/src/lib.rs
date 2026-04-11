@@ -3,6 +3,8 @@
 mod biquad;
 mod db;
 mod delay;
+pub mod dynamics;
+pub mod eq;
 mod filter;
 mod lfo;
 mod pan;
@@ -11,6 +13,8 @@ mod rng;
 pub use biquad::Biquad;
 pub use db::{db_to_linear, linear_to_db, MIN_DB};
 pub use delay::DelayLine;
+pub use dynamics::{soft_knee_gain_reduction_db, Ballistics};
+pub use eq::BandType;
 pub use filter::OnePole;
 pub use lfo::Lfo;
 pub use pan::constant_power_pan;

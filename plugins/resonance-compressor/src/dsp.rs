@@ -15,7 +15,9 @@
 //! All intermediate quantities downstream of the detector are in dB so
 //! that the soft-knee formula and makeup gain are linear and cheap.
 
-use resonance_dsp::{db_to_linear, linear_to_db, Biquad};
+use resonance_dsp::{
+    db_to_linear, linear_to_db, soft_knee_gain_reduction_db, Ballistics, Biquad,
+};
 
 use crate::params::CompressorParams;
 use crate::viz::{CompressorViz, HISTORY_STEP_SAMPLES};
@@ -114,8 +116,8 @@ impl CompressorDsp {
         // --- Derived quantities ---
         // Attack/release coefficients: one-pole exponential convergence.
         // `exp(-1 / (time_seconds * sr))` is the fraction kept each sample.
-        let attack_coef = (-1.0_f32 / (attack_ms * 0.001 * self.sample_rate)).exp();
-        let release_coef = (-1.0_f32 / (release_ms * 0.001 * self.sample_rate)).exp();
+        let ballistics = Ballistics::from_times(self.sample_rate, attack_ms, release_ms);
+        let release_coef = ballistics.release_coef;
 
         // Auto-makeup: compensate about half the maximum possible GR at
         // 0 dBFS input, which is a good perceptual match for music that
@@ -173,17 +175,13 @@ impl CompressorDsp {
             let detector_db = peak_db * (1.0 - detector_mix) + rms_db * detector_mix;
 
             // Static knee/ratio nonlinearity.
-            let target_gr_db = static_gain_computer(detector_db, threshold, knee, half_knee, slope);
+            let target_gr_db =
+                soft_knee_gain_reduction_db(detector_db, threshold, knee, half_knee, slope);
 
             // Attack/release ballistics on the GR envelope. When new GR is
             // larger than current (the comp needs to clamp harder) we use
             // the attack coefficient; otherwise the slower release.
-            let coef = if target_gr_db > self.gr_db {
-                attack_coef
-            } else {
-                release_coef
-            };
-            self.gr_db = target_gr_db + (self.gr_db - target_gr_db) * coef;
+            self.gr_db = ballistics.step_envelope(self.gr_db, target_gr_db);
 
             // Apply the gain reduction plus makeup.
             let apply_db = total_makeup_db - self.gr_db;
@@ -234,29 +232,6 @@ impl CompressorDsp {
     }
 }
 
-/// Log-domain soft-knee gain computer.
-///
-/// Returns the gain reduction to apply (positive dB means attenuation).
-fn static_gain_computer(
-    detector_db: f32,
-    threshold: f32,
-    knee: f32,
-    half_knee: f32,
-    slope: f32,
-) -> f32 {
-    let over = detector_db - threshold;
-    if knee > 0.0 && over > -half_knee && over < half_knee {
-        // Quadratic interpolation across the knee width. At the lower
-        // edge the local slope is 0, at the upper edge it's `slope`.
-        let x = over + half_knee;
-        slope * (x * x) / (2.0 * knee)
-    } else if over > 0.0 {
-        slope * over
-    } else {
-        0.0
-    }
-}
-
 /// Public, pure helper reused by the editor to render the transfer curve
 /// without instantiating a whole DSP.
 pub fn transfer_curve_db(
@@ -269,6 +244,6 @@ pub fn transfer_curve_db(
     let ratio = ratio.max(1.0);
     let slope = 1.0 - 1.0 / ratio;
     let half_knee = knee * 0.5;
-    let gr = static_gain_computer(input_db, threshold, knee, half_knee, slope);
+    let gr = soft_knee_gain_reduction_db(input_db, threshold, knee, half_knee, slope);
     input_db - gr + makeup_db
 }
