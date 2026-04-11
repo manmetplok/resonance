@@ -1,15 +1,19 @@
 //! IR plugin editor: an egui UI hosted in `wayland-plugin-gui`.
 //!
-//! Mirrors the shape of the drums plugin editor: a Factory that produces
-//! a `RuntimeEditorHandle`, which wraps the `wayland_plugin_gui::Editor`
+//! Mirrors the amp / reverb editors: a Factory that produces a
+//! `RuntimeEditorHandle`, which wraps the `wayland_plugin_gui::Editor`
 //! and drives an `EditorApp` implementation on the editor thread.
 //!
-//! The UI is intentionally compact: a header with a "Load IR…" button, a
-//! file browser (prev / next across the current directory), a filename /
-//! info line, and the two parameter sliders (Dry/Wet and Output Gain).
+//! Layout (top → bottom):
+//!
+//! - Top strip: header with title, "Load IR…" button, Prev/Next and
+//!   the current filename + position counter.
+//! - Centre: waveform view (left) + frequency-response view (right)
+//!   drawn from the `IrSnapshot` published by the loader thread, plus
+//!   a stereo IN/OUT meter strip along the bottom.
+//! - Bottom: the dry/wet and output-gain control strip.
 
-use std::path::Path;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -17,11 +21,17 @@ use resonance_plugin::gui::{EditorFactory, PluginEditor};
 use wayland_plugin_gui::{egui, Editor as RuntimeEditor, EditorApp, EditorOptions};
 
 use crate::params::IrParams;
+use crate::viz::IrViz;
 
+mod controls;
+mod header;
+mod meters;
+mod response_view;
 mod theme;
+mod waveform_view;
 
-const INITIAL_SIZE: (u32, u32) = (520, 360);
-const MIN_SIZE: (u32, u32) = (440, 300);
+const INITIAL_SIZE: (u32, u32) = (880, 540);
+const MIN_SIZE: (u32, u32) = (680, 440);
 
 // ---------------------------------------------------------------------------
 // Factory — produced by ResonanceIr::editor_factory().
@@ -32,6 +42,7 @@ pub struct IrEditorFactory {
     ir_name: Arc<Mutex<String>>,
     ir_info: Arc<Mutex<String>>,
     load_request: Arc<AtomicI32>,
+    viz: Arc<IrViz>,
 }
 
 impl IrEditorFactory {
@@ -40,12 +51,14 @@ impl IrEditorFactory {
         ir_name: Arc<Mutex<String>>,
         ir_info: Arc<Mutex<String>>,
         load_request: Arc<AtomicI32>,
+        viz: Arc<IrViz>,
     ) -> Self {
         Self {
             params,
             ir_name,
             ir_info,
             load_request,
+            viz,
         }
     }
 }
@@ -67,12 +80,13 @@ impl EditorFactory for IrEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = IrEditorApp::new(
-            self.params.clone(),
-            self.ir_name.clone(),
-            self.ir_info.clone(),
-            self.load_request.clone(),
-        );
+        let app = IrEditorApp {
+            params: self.params.clone(),
+            ir_name: self.ir_name.clone(),
+            ir_info: self.ir_info.clone(),
+            load_request: self.load_request.clone(),
+            viz: self.viz.clone(),
+        };
         let runtime = RuntimeEditor::new(
             app,
             EditorOptions {
@@ -145,197 +159,62 @@ impl Drop for RuntimeEditorHandle {
 }
 
 // ---------------------------------------------------------------------------
-// EditorApp — the actual egui UI that runs on the editor thread.
+// EditorApp — the egui UI driven on the editor thread.
 // ---------------------------------------------------------------------------
 
-struct IrEditorApp {
-    params: Arc<IrParams>,
-    ir_name: Arc<Mutex<String>>,
-    ir_info: Arc<Mutex<String>>,
-    load_request: Arc<AtomicI32>,
-}
-
-impl IrEditorApp {
-    fn new(
-        params: Arc<IrParams>,
-        ir_name: Arc<Mutex<String>>,
-        ir_info: Arc<Mutex<String>>,
-        load_request: Arc<AtomicI32>,
-    ) -> Self {
-        Self {
-            params,
-            ir_name,
-            ir_info,
-            load_request,
-        }
-    }
-
-    /// Open a native file picker for a .wav impulse response. On success,
-    /// rescan the containing directory so Prev/Next walks the same folder
-    /// the user just picked from, then kick off a load.
-    fn load_ir_clicked(&self) {
-        let picked = rfd::FileDialog::new()
-            .add_filter("Impulse response (WAV)", &["wav"])
-            .pick_file();
-        let Some(path) = picked else { return };
-        let path_str = path.to_string_lossy().into_owned();
-
-        let Some(dir) = path.parent() else { return };
-        let files = resonance_common::scan_directory(dir, "wav");
-        let idx = files.iter().position(|f| f == &path_str).unwrap_or(0);
-
-        *self.params.file_list.lock() = files;
-        *self.params.ir_path.lock() = path_str;
-        self.params.file_select.set_value(idx as i32);
-        self.load_request.store(idx as i32, Ordering::Release);
-    }
-
-    /// Step forward or backward through the current directory scan. Wraps
-    /// around so walking past the end loops back to the start.
-    fn seek_relative(&self, delta: i32) {
-        let len = {
-            let list = self.params.file_list.lock();
-            list.len()
-        };
-        if len == 0 {
-            return;
-        }
-        let len_i = len as i32;
-        let current = self.params.file_select.value();
-        let next = (current + delta).rem_euclid(len_i);
-        self.params.file_select.set_value(next);
-        self.load_request.store(next, Ordering::Release);
-    }
+pub(crate) struct IrEditorApp {
+    pub(crate) params: Arc<IrParams>,
+    pub(crate) ir_name: Arc<Mutex<String>>,
+    pub(crate) ir_info: Arc<Mutex<String>>,
+    pub(crate) load_request: Arc<AtomicI32>,
+    pub(crate) viz: Arc<IrViz>,
 }
 
 impl EditorApp for IrEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
         theme::apply(ui.ctx());
-
-        // Drive a modest repaint so status updates from the loader
-        // thread (filename, info) flow into the UI promptly.
         ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(100));
+            .request_repaint_after(std::time::Duration::from_millis(33));
 
-        // Header: title + Load IR button.
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("RESONANCE IR")
-                    .strong()
-                    .color(theme::ACCENT)
-                    .size(14.0),
-            );
-            ui.add_space(12.0);
-            ui.separator();
-            ui.add_space(8.0);
-            if ui.button("Load IR…").clicked() {
-                self.load_ir_clicked();
-            }
-        });
-        ui.separator();
+        egui::Panel::top("ir_header")
+            .exact_size(42.0)
+            .show_inside(ui, |ui| header::draw(ui, self));
 
-        // Filename + info line.
-        let name_text = {
-            let name = self.ir_name.lock().clone();
-            if name.is_empty() {
-                "(No IR loaded)".to_string()
-            } else {
-                name
-            }
-        };
-        ui.label(
-            egui::RichText::new(name_text)
-                .size(16.0)
-                .color(theme::TEXT),
-        );
-        let info_text = self.ir_info.lock().clone();
-        if !info_text.is_empty() {
-            ui.label(
-                egui::RichText::new(info_text)
-                    .size(11.0)
-                    .color(theme::TEXT_DIM),
-            );
-        } else {
-            // Keep the row height stable whether info is present or not.
-            ui.label(
-                egui::RichText::new(" ")
-                    .size(11.0)
-                    .color(theme::TEXT_DIM),
-            );
-        }
+        egui::Panel::bottom("ir_strip")
+            .exact_size(120.0)
+            .show_inside(ui, |ui| controls::draw(ui, &self.params));
 
-        ui.add_space(4.0);
-
-        // Prev / Next navigation + position indicator.
-        let list_len = self.params.file_list.lock().len();
-        let current_index = self.params.file_select.value() as usize;
-        ui.horizontal(|ui| {
-            let enabled = list_len > 1;
-            ui.add_enabled_ui(enabled, |ui| {
-                if ui.button("◀ Prev").clicked() {
-                    self.seek_relative(-1);
-                }
-                if ui.button("Next ▶").clicked() {
-                    self.seek_relative(1);
-                }
-            });
-            ui.add_space(8.0);
-            let position = if list_len == 0 {
-                "(no directory scanned)".to_string()
-            } else {
-                // Show the current file stem alongside the index so the
-                // user can see what they're about to navigate away from.
-                let stem = {
-                    let list = self.params.file_list.lock();
-                    list.get(current_index.min(list_len.saturating_sub(1)))
-                        .and_then(|p| Path::new(p).file_stem().map(|s| s.to_string_lossy().into_owned()))
-                        .unwrap_or_default()
-                };
-                format!(
-                    "{} / {}  {}",
-                    current_index + 1,
-                    list_len,
-                    stem
-                )
-            };
-            ui.label(
-                egui::RichText::new(position)
-                    .size(11.0)
-                    .color(theme::TEXT_DIM),
-            );
-        });
-
-        ui.add_space(8.0);
-        ui.separator();
-        ui.add_space(4.0);
-
-        // Parameters.
-        let mut dry_wet = self.params.dry_wet.value();
-        if ui
-            .add(
-                egui::Slider::new(&mut dry_wet, 0.0..=1.0)
-                    .text("Dry/Wet")
-                    .custom_formatter(|x, _| format!("{:.0}%", x * 100.0)),
-            )
-            .changed()
-        {
-            self.params.dry_wet.set_value(dry_wet);
-        }
-
-        let mut gain = self.params.output_gain.value();
-        if ui
-            .add(
-                egui::Slider::new(&mut gain, 0.1..=10.0)
-                    .logarithmic(true)
-                    .text("Output Gain")
-                    .custom_formatter(|x, _| {
-                        let db = 20.0 * x.log10();
-                        format!("{:+.1} dB", db)
-                    }),
-            )
-            .changed()
-        {
-            self.params.output_gain.set_value(gain);
-        }
+        egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
     }
+}
+
+fn draw_center(ui: &mut egui::Ui, app: &mut IrEditorApp) {
+    let avail = ui.available_rect_before_wrap();
+    let gap = 8.0f32;
+    let meter_h = 28.0f32;
+
+    let viz_rect = egui::Rect::from_min_max(
+        egui::pos2(avail.left() + gap, avail.top() + gap),
+        egui::pos2(avail.right() - gap, avail.bottom() - meter_h - gap),
+    );
+    let meter_rect = egui::Rect::from_min_max(
+        egui::pos2(avail.left() + gap, avail.bottom() - meter_h),
+        egui::pos2(avail.right() - gap, avail.bottom() - 2.0),
+    );
+
+    // Split viz: waveform (left ~55%), response (right ~45%).
+    let resp_w = (viz_rect.width() * 0.45).clamp(240.0, 520.0);
+    let wave_rect = egui::Rect::from_min_max(
+        viz_rect.min,
+        egui::pos2(viz_rect.right() - resp_w - gap, viz_rect.bottom()),
+    );
+    let resp_rect = egui::Rect::from_min_max(
+        egui::pos2(wave_rect.right() + gap, viz_rect.top()),
+        viz_rect.max,
+    );
+
+    let painter = ui.painter_at(avail);
+    waveform_view::draw(&painter, wave_rect, &app.viz, &app.ir_name.lock());
+    response_view::draw(&painter, resp_rect, &app.viz);
+    meters::draw(&painter, meter_rect, &app.viz);
 }
