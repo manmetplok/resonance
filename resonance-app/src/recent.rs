@@ -53,6 +53,11 @@ pub fn load() -> Vec<RecentEntry> {
         Ok(mut list) => {
             list.sort_by_key(|e| std::cmp::Reverse(e.last_opened_secs));
             list.truncate(MAX_RECENT);
+            let before = list.len();
+            list.retain(|e| e.path.exists());
+            if list.len() != before {
+                persist(&list);
+            }
             list
         }
         Err(e) => {
