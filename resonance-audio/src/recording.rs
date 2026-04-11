@@ -30,9 +30,9 @@ pub(crate) struct RecordingState {
     pub input_stream: Option<cpal::Stream>,
     pub input_channels: u16,
     pub input_sample_rate: u32,
-    pub punch_enabled: bool,
-    pub punch_in: SamplePos,
-    pub punch_out: SamplePos,
+    pub loop_enabled: bool,
+    pub loop_in: SamplePos,
+    pub loop_out: SamplePos,
 }
 
 impl RecordingState {
@@ -45,9 +45,9 @@ impl RecordingState {
             input_stream: None,
             input_channels: 2,
             input_sample_rate: sample_rate,
-            punch_enabled: false,
-            punch_in: 0,
-            punch_out: 0,
+            loop_enabled: false,
+            loop_in: 0,
+            loop_out: 0,
         }
     }
 
@@ -119,29 +119,29 @@ impl RecordingState {
                 track_buf.data
             };
 
-            // Trim to punch range if enabled
+            // Trim to loop range if enabled
             let (clip_start_sample, final_data) =
-                if self.punch_enabled && self.punch_out > self.punch_in {
+                if self.loop_enabled && self.loop_out > self.loop_in {
                     let total_frames = (final_data.len() / 2) as u64;
                     let trim_start_frame =
-                        self.punch_in.saturating_sub(self.start_sample);
+                        self.loop_in.saturating_sub(self.start_sample);
                     let trim_end_frame = self
-                        .punch_out
+                        .loop_out
                         .saturating_sub(self.start_sample)
                         .min(total_frames);
 
                     if trim_start_frame >= trim_end_frame {
-                        continue; // Nothing in the punch range
+                        continue; // Nothing in the loop range
                     }
 
                     // Skip copy if trim covers the full buffer
                     if trim_start_frame == 0 && trim_end_frame == total_frames {
-                        (self.punch_in, final_data)
+                        (self.loop_in, final_data)
                     } else {
                         let trim_start_idx = (trim_start_frame * 2) as usize;
                         let trim_end_idx = (trim_end_frame * 2) as usize;
                         (
-                            self.punch_in,
+                            self.loop_in,
                             final_data[trim_start_idx..trim_end_idx].to_vec(),
                         )
                     }

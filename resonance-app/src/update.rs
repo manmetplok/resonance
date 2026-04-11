@@ -432,81 +432,81 @@ impl crate::Resonance {
             Message::DismissError => {
                 self.error_message = None;
             }
-            Message::TogglePunch => {
-                self.punch_enabled = !self.punch_enabled;
+            Message::ToggleLoop => {
+                self.loop_enabled = !self.loop_enabled;
                 // Set sensible defaults if enabling with no range set
-                if self.punch_enabled && !self.punch_range_set {
+                if self.loop_enabled && !self.loop_range_set {
                     // Default: 2 bars from current playhead
                     let spb = self.sample_rate as f64 * 60.0 / self.bpm as f64;
                     let two_bars = (spb * self.time_sig_num as f64 * 2.0) as u64;
-                    self.punch_in = self.playhead;
-                    self.punch_out = self.playhead + two_bars;
-                    self.punch_range_set = true;
+                    self.loop_in = self.playhead;
+                    self.loop_out = self.playhead + two_bars;
+                    self.loop_range_set = true;
                 }
-                self.engine.send(AudioCommand::SetPunchRange {
-                    enabled: self.punch_enabled,
-                    punch_in: self.punch_in,
-                    punch_out: self.punch_out,
+                self.engine.send(AudioCommand::SetLoopRange {
+                    enabled: self.loop_enabled,
+                    loop_in: self.loop_in,
+                    loop_out: self.loop_out,
                 });
             }
-            Message::SetPunchIn(pos) => {
-                self.punch_in = pos;
-                self.punch_range_set = true;
-                if self.punch_enabled {
-                    self.engine.send(AudioCommand::SetPunchRange {
+            Message::SetLoopIn(pos) => {
+                self.loop_in = pos;
+                self.loop_range_set = true;
+                if self.loop_enabled {
+                    self.engine.send(AudioCommand::SetLoopRange {
                         enabled: true,
-                        punch_in: self.punch_in,
-                        punch_out: self.punch_out,
+                        loop_in: self.loop_in,
+                        loop_out: self.loop_out,
                     });
                 }
             }
-            Message::SetPunchOut(pos) => {
-                self.punch_out = pos;
-                self.punch_range_set = true;
-                if self.punch_enabled {
-                    self.engine.send(AudioCommand::SetPunchRange {
+            Message::SetLoopOut(pos) => {
+                self.loop_out = pos;
+                self.loop_range_set = true;
+                if self.loop_enabled {
+                    self.engine.send(AudioCommand::SetLoopRange {
                         enabled: true,
-                        punch_in: self.punch_in,
-                        punch_out: self.punch_out,
+                        loop_in: self.loop_in,
+                        loop_out: self.loop_out,
                     });
                 }
             }
-            Message::StartPunchDrag(target) => {
-                self.dragging_punch = Some(target);
+            Message::StartLoopDrag(target) => {
+                self.dragging_loop = Some(target);
             }
-            Message::UpdatePunchDrag(x) => {
-                if self.dragging_punch.is_some() {
+            Message::UpdateLoopDrag(x) => {
+                if self.dragging_loop.is_some() {
                     // Convert pixel x to sample position
                     let seconds = (x + self.scroll_offset) / self.zoom;
                     let sample = (seconds.max(0.0) as f64 * self.sample_rate as f64) as u64;
-                    match self.dragging_punch {
-                        Some(PunchDragTarget::In) => {
-                            self.punch_in = sample;
+                    match self.dragging_loop {
+                        Some(LoopDragTarget::In) => {
+                            self.loop_in = sample;
                         }
-                        Some(PunchDragTarget::Out) => {
-                            self.punch_out = sample;
+                        Some(LoopDragTarget::Out) => {
+                            self.loop_out = sample;
                         }
                         None => {}
                     }
-                    if self.punch_enabled {
-                        self.engine.send(AudioCommand::SetPunchRange {
+                    if self.loop_enabled {
+                        self.engine.send(AudioCommand::SetLoopRange {
                             enabled: true,
-                            punch_in: self.punch_in,
-                            punch_out: self.punch_out,
+                            loop_in: self.loop_in,
+                            loop_out: self.loop_out,
                         });
                     }
                 }
             }
-            Message::EndPunchDrag => {
-                self.dragging_punch = None;
-                if self.punch_in > self.punch_out {
-                    std::mem::swap(&mut self.punch_in, &mut self.punch_out);
+            Message::EndLoopDrag => {
+                self.dragging_loop = None;
+                if self.loop_in > self.loop_out {
+                    std::mem::swap(&mut self.loop_in, &mut self.loop_out);
                 }
-                if self.punch_enabled {
-                    self.engine.send(AudioCommand::SetPunchRange {
+                if self.loop_enabled {
+                    self.engine.send(AudioCommand::SetLoopRange {
                         enabled: true,
-                        punch_in: self.punch_in,
-                        punch_out: self.punch_out,
+                        loop_in: self.loop_in,
+                        loop_out: self.loop_out,
                     });
                 }
             }
@@ -1269,9 +1269,9 @@ impl crate::Resonance {
             time_sig_den: self.time_sig_den,
             metronome_enabled: self.metronome_enabled,
             master_volume: self.master_volume,
-            punch_enabled: self.punch_enabled,
-            punch_in: self.punch_in,
-            punch_out: self.punch_out,
+            loop_enabled: self.loop_enabled,
+            loop_in: self.loop_in,
+            loop_out: self.loop_out,
             tracks,
             clips,
             midi_clips,
@@ -1292,9 +1292,9 @@ impl crate::Resonance {
         self.time_sig_den = project.time_sig_den;
         self.metronome_enabled = project.metronome_enabled;
         self.master_volume = project.master_volume;
-        self.punch_enabled = project.punch_enabled;
-        self.punch_in = project.punch_in;
-        self.punch_out = project.punch_out;
+        self.loop_enabled = project.loop_enabled;
+        self.loop_in = project.loop_in;
+        self.loop_out = project.loop_out;
         self.playhead = 0;
         self.scroll_offset = 0.0;
         self.scroll_offset_y = 0.0;
@@ -1316,10 +1316,10 @@ impl crate::Resonance {
         self.engine.send(AudioCommand::SetMasterVolume {
             volume: db_to_gain(self.master_volume),
         });
-        self.engine.send(AudioCommand::SetPunchRange {
-            enabled: self.punch_enabled,
-            punch_in: self.punch_in,
-            punch_out: self.punch_out,
+        self.engine.send(AudioCommand::SetLoopRange {
+            enabled: self.loop_enabled,
+            loop_in: self.loop_in,
+            loop_out: self.loop_out,
         });
 
         // Clear GUI state
@@ -1610,7 +1610,7 @@ impl crate::Resonance {
             });
         }
 
-        self.punch_range_set = self.punch_enabled;
+        self.loop_range_set = self.loop_enabled;
     }
 
     /// Initialize the piano roll editor state for the given MIDI clip.

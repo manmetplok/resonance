@@ -45,7 +45,7 @@ pub mod fa {
     /// Two overlapping hollow circles — stereo channel indicator. Custom
     /// glyph added by tools/add_mono_stereo_glyphs.py.
     pub const CIRCLE_HOLLOW_DOUBLE: char = '\u{f8dd}';
-    /// Bullseye — used for the punch-in/out toggle.
+    /// Bullseye — used for the loop (cycle) toggle.
     pub const BULLSEYE: char = '\u{f140}';
     /// Volume/speaker with an X — used for the mute button.
     pub const VOLUME_XMARK: char = '\u{f6a9}';
@@ -175,7 +175,7 @@ pub const METRONOME_ON: Color = Color::from_rgb(
     0x4a as f32 / 255.0,
 );
 
-pub const PUNCH_MARKER: Color = Color::from_rgb(
+pub const LOOP_MARKER: Color = Color::from_rgb(
     0xe6 as f32 / 255.0,
     0xb8 as f32 / 255.0,
     0x1a as f32 / 255.0,

@@ -196,12 +196,13 @@ pub enum AudioCommand {
         param_id: u32,
         value: f64,
     },
-    /// Set punch in/out range. When enabled, recording is trimmed to [punch_in, punch_out].
-    /// If punch_out <= punch_in, no clip is produced.
-    SetPunchRange {
+    /// Set loop (cycle) range. When enabled, playback wraps from loop_out back to
+    /// loop_in, and any recording is trimmed to [loop_in, loop_out]. If
+    /// loop_out <= loop_in, no clip is produced.
+    SetLoopRange {
         enabled: bool,
-        punch_in: SamplePos,
-        punch_out: SamplePos,
+        loop_in: SamplePos,
+        loop_out: SamplePos,
     },
     SavePluginState {
         instance_id: PluginInstanceId,

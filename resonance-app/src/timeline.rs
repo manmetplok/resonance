@@ -5,7 +5,7 @@ use iced::widget::canvas;
 use iced::{keyboard, mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::theme;
-use crate::state::{ClipEdge, ClipState, MidiClipState, PunchDragTarget, TrackState};
+use crate::state::{ClipEdge, ClipState, LoopDragTarget, MidiClipState, TrackState};
 use crate::message::Message;
 
 use resonance_audio::types::{ClipId, TrackId, TICKS_PER_QUARTER_NOTE};
@@ -32,9 +32,9 @@ pub struct TimelineCanvas<'a> {
     pub bpm: f32,
     pub time_sig_num: u8,
     pub scroll_offset_y: f32,
-    pub punch_enabled: bool,
-    pub punch_in: u64,
-    pub punch_out: u64,
+    pub loop_enabled: bool,
+    pub loop_in: u64,
+    pub loop_out: u64,
     pub selected_clip: Option<ClipId>,
     pub midi_clips: &'a [MidiClipState],
     pub selected_midi_clip: Option<ClipId>,
@@ -200,7 +200,7 @@ enum ClipInteraction {
 /// Local state for the timeline canvas, tracking active drag operations.
 #[derive(Debug, Default)]
 pub struct TimelineState {
-    dragging_punch: bool,
+    dragging_loop: bool,
     clip_interaction: Option<ClipInteraction>,
     last_reported_width: f32,
     last_reported_content_width: f32,
@@ -344,28 +344,28 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                         }
                     }
 
-                    // Punch marker dragging (ruler area only)
-                    if self.punch_enabled && pos.y < ruler_height {
-                        let punch_in_x = self.sample_to_x(self.punch_in);
-                        let punch_out_x = self.sample_to_x(self.punch_out);
-                        let dist_in = (pos.x - punch_in_x).abs();
-                        let dist_out = (pos.x - punch_out_x).abs();
+                    // Loop marker dragging (ruler area only)
+                    if self.loop_enabled && pos.y < ruler_height {
+                        let loop_in_x = self.sample_to_x(self.loop_in);
+                        let loop_out_x = self.sample_to_x(self.loop_out);
+                        let dist_in = (pos.x - loop_in_x).abs();
+                        let dist_out = (pos.x - loop_out_x).abs();
                         if dist_in < 8.0 || dist_out < 8.0 {
                             let target = if dist_in < 8.0 && dist_out < 8.0 {
                                 if dist_in < dist_out {
-                                    PunchDragTarget::In
+                                    LoopDragTarget::In
                                 } else {
-                                    PunchDragTarget::Out
+                                    LoopDragTarget::Out
                                 }
                             } else if dist_in < 8.0 {
-                                PunchDragTarget::In
+                                LoopDragTarget::In
                             } else {
-                                PunchDragTarget::Out
+                                LoopDragTarget::Out
                             };
-                            state.dragging_punch = true;
+                            state.dragging_loop = true;
                             return (
                                 canvas::event::Status::Captured,
-                                Some(Message::StartPunchDrag(target)),
+                                Some(Message::StartLoopDrag(target)),
                             );
                         }
                     }
@@ -616,10 +616,10 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                         }
                     }
 
-                    if state.dragging_punch {
+                    if state.dragging_loop {
                         return (
                             canvas::event::Status::Captured,
-                            Some(Message::UpdatePunchDrag(pos.x)),
+                            Some(Message::UpdateLoopDrag(pos.x)),
                         );
                     }
                     match &state.clip_interaction {
@@ -660,11 +660,11 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                     state.v_scrollbar_grab = None;
                     return (canvas::event::Status::Captured, None);
                 }
-                if state.dragging_punch {
-                    state.dragging_punch = false;
+                if state.dragging_loop {
+                    state.dragging_loop = false;
                     return (
                         canvas::event::Status::Captured,
-                        Some(Message::EndPunchDrag),
+                        Some(Message::EndLoopDrag),
                     );
                 }
                 if let Some(interaction) = state.clip_interaction.take() {
@@ -781,8 +781,8 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
 
             // Recording overlay on armed tracks
             if self.recording_tracks.contains(&track.id) {
-                let (overlay_start, overlay_end) = if self.punch_enabled {
-                    (self.punch_in, self.playhead.min(self.punch_out))
+                let (overlay_start, overlay_end) = if self.loop_enabled {
+                    (self.loop_in, self.playhead.min(self.loop_out))
                 } else {
                     (self.recording_start_sample, self.playhead)
                 };
@@ -823,23 +823,23 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             self.draw_midi_clip(&mut frame, clip, &sorted_tracks, ruler_height, y_off, bounds.height);
         }
 
-        // Draw punch in/out markers
-        if self.punch_enabled {
-            let punch_in_x = self.sample_to_x(self.punch_in);
-            let punch_out_x = self.sample_to_x(self.punch_out);
+        // Draw loop in/out markers
+        if self.loop_enabled {
+            let loop_in_x = self.sample_to_x(self.loop_in);
+            let loop_out_x = self.sample_to_x(self.loop_out);
             let total_height = (ruler_height + track_area_height - y_off).max(bounds.height);
-            let punch_color = theme::PUNCH_MARKER;
+            let loop_color = theme::LOOP_MARKER;
 
-            // Dim overlay outside punch range (over track area only)
-            if punch_in_x > 0.0 {
+            // Dim overlay outside loop range (over track area only)
+            if loop_in_x > 0.0 {
                 frame.fill_rectangle(
                     Point::new(0.0, ruler_height),
-                    Size::new(punch_in_x.min(bounds.width), total_height - ruler_height),
+                    Size::new(loop_in_x.min(bounds.width), total_height - ruler_height),
                     Color::from_rgba(0.0, 0.0, 0.0, 0.15),
                 );
             }
-            if punch_out_x < bounds.width {
-                let right_start = punch_out_x.max(0.0);
+            if loop_out_x < bounds.width {
+                let right_start = loop_out_x.max(0.0);
                 frame.fill_rectangle(
                     Point::new(right_start, ruler_height),
                     Size::new(
@@ -851,8 +851,8 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             }
 
             // Amber range fill in ruler area
-            let range_x = punch_in_x.max(0.0);
-            let range_w = (punch_out_x - range_x).max(0.0).min(bounds.width - range_x);
+            let range_x = loop_in_x.max(0.0);
+            let range_w = (loop_out_x - range_x).max(0.0).min(bounds.width - range_x);
             if range_w > 0.0 {
                 frame.fill_rectangle(
                     Point::new(range_x, 0.0),
@@ -861,36 +861,36 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                 );
             }
 
-            // Punch In line + handle
-            if punch_in_x >= -1.0 && punch_in_x <= bounds.width + 1.0 {
+            // Loop In line + handle
+            if loop_in_x >= -1.0 && loop_in_x <= bounds.width + 1.0 {
                 frame.fill_rectangle(
-                    Point::new(punch_in_x - 0.5, 0.0),
+                    Point::new(loop_in_x - 0.5, 0.0),
                     Size::new(1.0, total_height),
-                    punch_color,
+                    loop_color,
                 );
                 let tri = canvas::Path::new(|b| {
-                    b.move_to(Point::new(punch_in_x - 6.0, 0.0));
-                    b.line_to(Point::new(punch_in_x + 6.0, 0.0));
-                    b.line_to(Point::new(punch_in_x, 8.0));
+                    b.move_to(Point::new(loop_in_x - 6.0, 0.0));
+                    b.line_to(Point::new(loop_in_x + 6.0, 0.0));
+                    b.line_to(Point::new(loop_in_x, 8.0));
                     b.close();
                 });
-                frame.fill(&tri, punch_color);
+                frame.fill(&tri, loop_color);
             }
 
-            // Punch Out line + handle
-            if punch_out_x >= -1.0 && punch_out_x <= bounds.width + 1.0 {
+            // Loop Out line + handle
+            if loop_out_x >= -1.0 && loop_out_x <= bounds.width + 1.0 {
                 frame.fill_rectangle(
-                    Point::new(punch_out_x - 0.5, 0.0),
+                    Point::new(loop_out_x - 0.5, 0.0),
                     Size::new(1.0, total_height),
-                    punch_color,
+                    loop_color,
                 );
                 let tri = canvas::Path::new(|b| {
-                    b.move_to(Point::new(punch_out_x - 6.0, 0.0));
-                    b.line_to(Point::new(punch_out_x + 6.0, 0.0));
-                    b.line_to(Point::new(punch_out_x, 8.0));
+                    b.move_to(Point::new(loop_out_x - 6.0, 0.0));
+                    b.line_to(Point::new(loop_out_x + 6.0, 0.0));
+                    b.line_to(Point::new(loop_out_x, 8.0));
                     b.close();
                 });
-                frame.fill(&tri, punch_color);
+                frame.fill(&tri, loop_color);
             }
         }
 

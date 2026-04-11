@@ -18,9 +18,12 @@ pub struct ProjectFile {
     pub time_sig_den: u8,
     pub metronome_enabled: bool,
     pub master_volume: f32,
-    pub punch_enabled: bool,
-    pub punch_in: u64,
-    pub punch_out: u64,
+    #[serde(alias = "punch_enabled")]
+    pub loop_enabled: bool,
+    #[serde(alias = "punch_in")]
+    pub loop_in: u64,
+    #[serde(alias = "punch_out")]
+    pub loop_out: u64,
     pub tracks: Vec<ProjectTrack>,
     pub clips: Vec<ProjectClip>,
     #[serde(default)]

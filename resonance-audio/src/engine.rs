@@ -47,6 +47,11 @@ pub(crate) struct SharedState {
     /// no stream is open. Used by the mix callback to de-interleave
     /// per-track monitor audio from a multi-channel input device.
     pub input_channels: AtomicU16,
+    /// Loop (cycle) playback enabled: when true, the audio callback
+    /// wraps the playhead from `loop_out` back to `loop_in`.
+    pub loop_enabled: AtomicBool,
+    pub loop_in: AtomicU64,
+    pub loop_out: AtomicU64,
 }
 
 /// The audio engine.
@@ -112,6 +117,9 @@ impl AudioEngine {
             master_peak_r_bits: AtomicU32::new(0),
             recording_overflow: AtomicBool::new(false),
             input_channels: AtomicU16::new(0),
+            loop_enabled: AtomicBool::new(false),
+            loop_in: AtomicU64::new(0),
+            loop_out: AtomicU64::new(0),
         });
 
         let shared_audio = Arc::clone(&shared);
@@ -1369,14 +1377,17 @@ fn engine_thread(
                         }
                     }
                 }
-                AudioCommand::SetPunchRange {
+                AudioCommand::SetLoopRange {
                     enabled,
-                    punch_in: pi,
-                    punch_out: po,
+                    loop_in: li,
+                    loop_out: lo,
                 } => {
-                    rec.punch_enabled = enabled;
-                    rec.punch_in = pi;
-                    rec.punch_out = po;
+                    rec.loop_enabled = enabled;
+                    rec.loop_in = li;
+                    rec.loop_out = lo;
+                    shared.loop_enabled.store(enabled, Ordering::Relaxed);
+                    shared.loop_in.store(li, Ordering::Relaxed);
+                    shared.loop_out.store(lo, Ordering::Relaxed);
                 }
                 AudioCommand::AddTrackWithId { track_id, name } => {
                     let track = Track::new(track_id, name);
@@ -1965,21 +1976,6 @@ fn engine_thread(
         // Drain recording ring buffer into per-track buffers
         if shared.recording.load(Ordering::Relaxed) {
             rec.drain_ring_to_buffers();
-
-            // Auto-stop recording at punch_out (keep playing)
-            if rec.punch_enabled && rec.punch_out > rec.punch_in {
-                let current_pos = shared.playhead.load(Ordering::SeqCst);
-                if current_pos >= rec.punch_out {
-                    shared.recording.store(false, Ordering::SeqCst);
-                    rec.finalize_recording(
-                        sample_rate,
-                        &mut next_clip_id,
-                        &clips,
-                        &event_tx,
-                    );
-                    rec.input_stream = None;
-                }
-            }
         }
 
         // Report playhead position at ~60Hz using wall-clock time

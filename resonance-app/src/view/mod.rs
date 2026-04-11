@@ -402,22 +402,22 @@ impl crate::Resonance {
             .padding(iced::Padding::from([4, 12]))
             .style(theme::timing_panel_style);
 
-        // ---- Punch toggle (icon button in transport area) ------------------
-        let punch_color = if self.punch_enabled {
-            theme::PUNCH_MARKER
+        // ---- Loop (cycle) toggle (icon button in transport area) -----------
+        let loop_color = if self.loop_enabled {
+            theme::LOOP_MARKER
         } else {
             theme::TEXT_DIM
         };
-        let punch_enabled = self.punch_enabled;
-        let punch_btn = button(
+        let loop_enabled = self.loop_enabled;
+        let loop_btn = button(
             theme::icon(fa::BULLSEYE)
                 .size(TRANSPORT_ICON_SIZE)
-                .color(punch_color),
+                .color(loop_color),
         )
-        .on_press(Message::TogglePunch)
+        .on_press(Message::ToggleLoop)
         .padding(button_pad)
         .style(move |_theme, status| {
-            if punch_enabled {
+            if loop_enabled {
                 let bg = match status {
                     iced::widget::button::Status::Hovered => {
                         iced::Color::from_rgb(0.25, 0.20, 0.10)
@@ -429,9 +429,9 @@ impl crate::Resonance {
                 };
                 iced::widget::button::Style {
                     background: Some(iced::Background::Color(bg)),
-                    text_color: theme::PUNCH_MARKER,
+                    text_color: theme::LOOP_MARKER,
                     border: iced::Border {
-                        color: theme::PUNCH_MARKER,
+                        color: theme::LOOP_MARKER,
                         width: 1.0,
                         radius: 4.0.into(),
                     },
@@ -482,7 +482,7 @@ impl crate::Resonance {
             rec_btn,
             skip_fwd,
             Space::with_width(8),
-            punch_btn,
+            loop_btn,
             Space::with_width(16),
             timing_panel,
             Space::with_width(Length::Fill),
@@ -959,9 +959,9 @@ impl crate::Resonance {
             bpm: self.bpm,
             time_sig_num: self.time_sig_num,
             scroll_offset_y: self.scroll_offset_y,
-            punch_enabled: self.punch_enabled,
-            punch_in: self.punch_in,
-            punch_out: self.punch_out,
+            loop_enabled: self.loop_enabled,
+            loop_in: self.loop_in,
+            loop_out: self.loop_out,
             selected_clip: self.selected_clip,
             midi_clips: &self.midi_clips,
             selected_midi_clip: self.selected_midi_clip,

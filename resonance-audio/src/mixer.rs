@@ -22,6 +22,26 @@ use crate::types::*;
 /// scratch-array size.
 pub(crate) const MAX_PLUGIN_OUTPUT_PORTS: usize = 8;
 
+/// Fallback playhead advance used when the audio callback couldn't acquire
+/// its locks. No audio is rendered on that path, so we only need to move
+/// the playhead forward and handle the loop seam by snapping back — stuck
+/// notes and audio content leakage aren't possible when we're outputting
+/// silence. The sample-accurate seam handling lives inline in `mix_audio`.
+fn advance_playhead_silent(shared: &SharedState, playhead: u64, frames: u64) -> u64 {
+    let mut new_playhead = playhead + frames;
+    if shared.loop_enabled.load(Ordering::Relaxed) {
+        let lo = shared.loop_in.load(Ordering::Relaxed);
+        let hi = shared.loop_out.load(Ordering::Relaxed);
+        // `>=` matches the main path: when `new_playhead == hi` exactly, we
+        // still need to snap back, or the next buffer lands past the loop
+        // and never catches up.
+        if hi > lo && playhead < hi && new_playhead >= hi {
+            new_playhead = lo;
+        }
+    }
+    new_playhead
+}
+
 /// Compute stereo gains for a track using equal-power pan law.
 #[inline]
 fn track_stereo_gains(track: &Track) -> (f32, f32) {
@@ -242,159 +262,51 @@ pub(crate) fn collect_midi_events_bounce(
     collect_midi_events(midi_clips, track_id, playhead, frames, samples_per_tick, out);
 }
 
-/// Mix audio from all active clips into the output buffer.
-/// This runs on the cpal audio callback thread -- must be allocation-free
-/// (uses pre-allocated track_buf_l/track_buf_r).
-pub(crate) fn mix_audio(
+/// Render one contiguous timeline sub-block into a slice of the output.
+/// Separated from `mix_audio` so that a buffer which crosses the loop seam
+/// can be rendered as two sub-blocks (pre-wrap and post-wrap) with different
+/// `playhead` values, giving sample-accurate cycle playback.
+///
+/// The caller is responsible for:
+/// - Passing `data` sliced to exactly `frames * channels` samples.
+/// - Passing `monitor_temp` sliced to the corresponding portion of this
+///   callback's live input (monitor is timeline-independent — it streams
+///   linearly across the full callback, not per sub-block's playhead).
+/// - Clearing the output buffer before the first call.
+/// - Running the metronome and master-volume passes once over the full
+///   callback buffer afterwards.
+fn render_timeline_block(
     data: &mut [f32],
     channels: usize,
-    shared: &SharedState,
-    tracks: &parking_lot::RwLock<IndexMap<TrackId, Track>>,
-    busses: &parking_lot::RwLock<IndexMap<BusId, Bus>>,
-    clips: &parking_lot::RwLock<Vec<AudioClip>>,
-    midi_clips: &parking_lot::RwLock<Vec<MidiClip>>,
-    plugins: &parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>,
-    tempo_map: &parking_lot::RwLock<TempoMap>,
-    sample_rate: u32,
-    track_buf_l: &mut Vec<f32>,
-    track_buf_r: &mut Vec<f32>,
+    tracks_guard: &IndexMap<TrackId, Track>,
+    busses_guard: &IndexMap<BusId, Bus>,
+    clips_guard: &[AudioClip],
+    midi_clips_guard: &[MidiClip],
+    plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
+    samples_per_tick: f64,
+    any_solo: bool,
+    active_busses: usize,
+    playhead: u64,
+    frames: usize,
+    track_buf_l: &mut [f32],
+    track_buf_r: &mut [f32],
     bus_bufs: &mut [(Vec<f32>, Vec<f32>)],
-    // Per-plugin-output-port scratch used for multi-output instruments
-    // (e.g. resonance-drums with its 7 group/overhead ports). Sized to
-    // `MAX_PLUGIN_OUTPUT_PORTS` pairs by the engine; mix_audio only
-    // touches the first N slots on any given block, where N is the
-    // active plugin's declared port count.
     port_scratch: &mut [(Vec<f32>, Vec<f32>)],
     note_event_buf: &mut Vec<PendingNoteEvent>,
-    monitor_cons: &mut ringbuf::HeapCons<f32>,
-    monitor_temp: &mut Vec<f32>,
-    buf_frames: usize,
-    quantum: usize,
+    monitor_temp: &[f32],
+    monitor_frames: usize,
+    input_channels: usize,
 ) {
-    // Zero the output buffer
-    data.fill(0.0);
-
-    let output_frames = data.len() / channels;
-    let frames = output_frames.min(buf_frames);
-
-    // Read monitor input with jitter margin to avoid underflows.
-    // Skip stale monitor data to keep latency at ~1 buffer period.
-    // The monitor stream carries raw interleaved multi-channel data now
-    // (one `input_channels` block per frame), so sample counts scale by
-    // the current input channel count.
-    let input_channels = shared.input_channels.load(Ordering::Relaxed) as usize;
-    let frame_stride = input_channels.max(1);
-    let needed = frames * frame_stride;
-    let available = monitor_cons.occupied_len();
-    if available > needed + quantum * frame_stride {
-        monitor_cons.skip(available - needed);
-    }
-    let to_read = needed.min(monitor_cons.occupied_len());
-    let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);
-    let monitor_frames = monitor_samples / frame_stride;
-
-    if !shared.playing.load(Ordering::Relaxed) {
-        // Even when stopped, output monitored audio for armed tracks
-        if monitor_frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
-            let (Some(tracks_guard), Some(plugins_guard)) =
-                (tracks.try_read(), plugins.try_read())
-            else {
-                return;
-            };
-            let any_solo = tracks_guard.values().any(|t| t.soloed());
-            let is_audible =
-                |t: &&Track| -> bool { t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed()) };
-            let any_monitor = tracks_guard.values().any(|t| is_audible(&t));
-
-            if any_monitor {
-                if let Some(track) = tracks_guard.values().find(|t| is_audible(&t)) {
-                    let processed_frames = process_monitor_track(
-                        track,
-                        monitor_temp,
-                        monitor_frames,
-                        monitor_frames,
-                        input_channels,
-                        track_buf_l,
-                        track_buf_r,
-                        &plugins_guard,
-                    );
-
-                    let (gain_l, gain_r) = track_stereo_gains(track);
-
-                    // Compute post-fader peak levels for VU meters
-                    let mut peak_l = 0.0f32;
-                    let mut peak_r = 0.0f32;
-                    for f in 0..processed_frames {
-                        peak_l = peak_l.max((track_buf_l[f] * gain_l).abs());
-                        peak_r = peak_r.max((track_buf_r[f] * gain_r).abs());
-                    }
-                    track.update_peak_l(peak_l);
-                    track.update_peak_r(peak_r);
-
-                    sum_to_output(
-                        data,
-                        channels,
-                        processed_frames,
-                        track_buf_l,
-                        track_buf_r,
-                        gain_l,
-                        gain_r,
-                    );
-                }
-
-                // Apply master volume and compute master peak levels
-                apply_master_volume_and_peaks(data, channels, shared);
-            }
-        }
-        return;
-    }
-
-    let playhead = shared.playhead.load(Ordering::Relaxed);
-
-    let (
-        Some(tracks_guard),
-        Some(busses_guard),
-        Some(clips_guard),
-        Some(midi_clips_guard),
-        Some(plugins_guard),
-    ) = (
-        tracks.try_read(),
-        busses.try_read(),
-        clips.try_read(),
-        midi_clips.try_read(),
-        plugins.try_read(),
-    )
-    else {
-        // Lock contended -- advance playhead to avoid desync, output silence this buffer
-        let new_playhead = playhead + output_frames as u64;
-        shared.playhead.store(new_playhead, Ordering::Relaxed);
-        return;
-    };
-
-    // Zero every active bus summing buffer at the start of the block so
-    // tracks can accumulate into them. Capped at `bus_bufs.len()` (= MAX_BUSSES)
-    // so runaway bus counts never index out of the pre-allocated pool.
-    let active_busses = busses_guard.len().min(bus_bufs.len());
+    // Zero every active bus summing buffer at the start of the sub-block so
+    // tracks can accumulate into them.
     for (buf_l, buf_r) in bus_bufs.iter_mut().take(active_busses) {
         buf_l[..frames].fill(0.0);
         buf_r[..frames].fill(0.0);
     }
 
-    // Read tempo for MIDI tick conversion
-    let samples_per_tick = if let Some(tm) = tempo_map.try_read() {
-        tm.samples_per_beat(sample_rate) / TICKS_PER_QUARTER_NOTE as f64
-    } else {
-        // Fallback: 120 BPM
-        (sample_rate as f64 * 60.0 / 120.0) / TICKS_PER_QUARTER_NOTE as f64
-    };
-
     // Per-track processing: (clips + monitor input) -> plugins -> volume -> master.
     // Sub-tracks are skipped here; they're driven by their parent's plugin
     // fan-out later in the same track pass.
-    let any_solo = tracks_guard
-        .values()
-        .filter(|t| t.sub_track_of.is_none())
-        .any(|t| t.soloed());
     for track in tracks_guard.values() {
         if track.sub_track_of.is_some() {
             continue;
@@ -420,7 +332,7 @@ pub(crate) fn mix_audio(
             // -- Instrument track: collect MIDI events, send to instrument plugin --
             note_event_buf.clear();
             collect_midi_events(
-                &midi_clips_guard,
+                midi_clips_guard,
                 track.id,
                 playhead,
                 frames,
@@ -741,10 +653,296 @@ pub(crate) fn mix_audio(
             data, channels, frames, bus_buf_l, bus_buf_r, bus_gain_l, bus_gain_r,
         );
     }
+}
+
+/// Fire all-notes-off on every instrument track's primary plugin. Used at
+/// the loop seam to prevent notes started before `loop_out` from hanging
+/// after the playhead snaps back to `loop_in`.
+fn panic_instrument_tracks(
+    tracks_guard: &IndexMap<TrackId, Track>,
+    plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
+) {
+    for track in tracks_guard.values() {
+        if track.track_type != TrackType::Instrument {
+            continue;
+        }
+        let Some(&inst_id) = track.plugin_ids.first() else {
+            continue;
+        };
+        let Some(mutex) = plugins_guard.get(&inst_id) else {
+            continue;
+        };
+        if let Some(mut inst) = mutex.try_lock() {
+            inst.0.all_notes_off();
+        }
+    }
+}
+
+/// Mix audio from all active clips into the output buffer.
+/// This runs on the cpal audio callback thread -- must be allocation-free
+/// (uses pre-allocated track_buf_l/track_buf_r).
+pub(crate) fn mix_audio(
+    data: &mut [f32],
+    channels: usize,
+    shared: &SharedState,
+    tracks: &parking_lot::RwLock<IndexMap<TrackId, Track>>,
+    busses: &parking_lot::RwLock<IndexMap<BusId, Bus>>,
+    clips: &parking_lot::RwLock<Vec<AudioClip>>,
+    midi_clips: &parking_lot::RwLock<Vec<MidiClip>>,
+    plugins: &parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>,
+    tempo_map: &parking_lot::RwLock<TempoMap>,
+    sample_rate: u32,
+    track_buf_l: &mut Vec<f32>,
+    track_buf_r: &mut Vec<f32>,
+    bus_bufs: &mut [(Vec<f32>, Vec<f32>)],
+    // Per-plugin-output-port scratch used for multi-output instruments
+    // (e.g. resonance-drums with its 7 group/overhead ports). Sized to
+    // `MAX_PLUGIN_OUTPUT_PORTS` pairs by the engine; mix_audio only
+    // touches the first N slots on any given block, where N is the
+    // active plugin's declared port count.
+    port_scratch: &mut [(Vec<f32>, Vec<f32>)],
+    note_event_buf: &mut Vec<PendingNoteEvent>,
+    monitor_cons: &mut ringbuf::HeapCons<f32>,
+    monitor_temp: &mut Vec<f32>,
+    buf_frames: usize,
+    quantum: usize,
+) {
+    // Zero the output buffer
+    data.fill(0.0);
+
+    let output_frames = data.len() / channels;
+    let frames = output_frames.min(buf_frames);
+
+    // Read monitor input with jitter margin to avoid underflows.
+    // Skip stale monitor data to keep latency at ~1 buffer period.
+    // The monitor stream carries raw interleaved multi-channel data now
+    // (one `input_channels` block per frame), so sample counts scale by
+    // the current input channel count.
+    let input_channels = shared.input_channels.load(Ordering::Relaxed) as usize;
+    let frame_stride = input_channels.max(1);
+    let needed = frames * frame_stride;
+    let available = monitor_cons.occupied_len();
+    if available > needed + quantum * frame_stride {
+        monitor_cons.skip(available - needed);
+    }
+    let to_read = needed.min(monitor_cons.occupied_len());
+    let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);
+    let monitor_frames = monitor_samples / frame_stride;
+
+    if !shared.playing.load(Ordering::Relaxed) {
+        // Even when stopped, output monitored audio for armed tracks
+        if monitor_frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
+            let (Some(tracks_guard), Some(plugins_guard)) =
+                (tracks.try_read(), plugins.try_read())
+            else {
+                return;
+            };
+            let any_solo = tracks_guard.values().any(|t| t.soloed());
+            let is_audible =
+                |t: &&Track| -> bool { t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed()) };
+            let any_monitor = tracks_guard.values().any(|t| is_audible(&t));
+
+            if any_monitor {
+                if let Some(track) = tracks_guard.values().find(|t| is_audible(&t)) {
+                    let processed_frames = process_monitor_track(
+                        track,
+                        monitor_temp,
+                        monitor_frames,
+                        monitor_frames,
+                        input_channels,
+                        track_buf_l,
+                        track_buf_r,
+                        &plugins_guard,
+                    );
+
+                    let (gain_l, gain_r) = track_stereo_gains(track);
+
+                    // Compute post-fader peak levels for VU meters
+                    let mut peak_l = 0.0f32;
+                    let mut peak_r = 0.0f32;
+                    for f in 0..processed_frames {
+                        peak_l = peak_l.max((track_buf_l[f] * gain_l).abs());
+                        peak_r = peak_r.max((track_buf_r[f] * gain_r).abs());
+                    }
+                    track.update_peak_l(peak_l);
+                    track.update_peak_r(peak_r);
+
+                    sum_to_output(
+                        data,
+                        channels,
+                        processed_frames,
+                        track_buf_l,
+                        track_buf_r,
+                        gain_l,
+                        gain_r,
+                    );
+                }
+
+                // Apply master volume and compute master peak levels
+                apply_master_volume_and_peaks(data, channels, shared);
+            }
+        }
+        return;
+    }
+
+    let playhead = shared.playhead.load(Ordering::Relaxed);
+
+    let (
+        Some(tracks_guard),
+        Some(busses_guard),
+        Some(clips_guard),
+        Some(midi_clips_guard),
+        Some(plugins_guard),
+    ) = (
+        tracks.try_read(),
+        busses.try_read(),
+        clips.try_read(),
+        midi_clips.try_read(),
+        plugins.try_read(),
+    )
+    else {
+        // Lock contended -- advance playhead to avoid desync, output silence this buffer
+        let new_playhead =
+            advance_playhead_silent(shared, playhead, output_frames as u64);
+        shared.playhead.store(new_playhead, Ordering::Relaxed);
+        return;
+    };
+
+    let active_busses = busses_guard.len().min(bus_bufs.len());
+
+    // Read tempo for MIDI tick conversion
+    let samples_per_tick = if let Some(tm) = tempo_map.try_read() {
+        tm.samples_per_beat(sample_rate) / TICKS_PER_QUARTER_NOTE as f64
+    } else {
+        // Fallback: 120 BPM
+        (sample_rate as f64 * 60.0 / 120.0) / TICKS_PER_QUARTER_NOTE as f64
+    };
+
+    let any_solo = tracks_guard
+        .values()
+        .filter(|t| t.sub_track_of.is_none())
+        .any(|t| t.soloed());
+
+    // Detect a loop seam inside this buffer. When the callback reaches or
+    // crosses `loop_out`, we render two sub-blocks: the pre-wrap portion
+    // from the current playhead, then (after an all-notes-off on instrument
+    // plugins) the post-wrap portion starting from `loop_in`. This gives
+    // sample-accurate cycle playback — no silent gap and no stray audio
+    // from past `loop_out` bleeding across the seam.
+    //
+    // The `>=` on the end-of-block check is load-bearing: when the buffer
+    // size divides the loop length exactly (common with small pro-audio
+    // quanta like 128 frames), a strict `>` would miss the seam every time
+    // — the block would end exactly on `loop_out` and the next block would
+    // start past it, failing the `playhead < hi` test. With `>=`, that
+    // aligned case renders the full block as `head` and sets `tail = 0`,
+    // snapping the playhead back to `loop_in` for the next buffer.
+    let seam_split: Option<(usize, usize, u64)> = if shared
+        .loop_enabled
+        .load(Ordering::Relaxed)
+    {
+        let lo = shared.loop_in.load(Ordering::Relaxed);
+        let hi = shared.loop_out.load(Ordering::Relaxed);
+        if hi > lo && playhead < hi && playhead + frames as u64 >= hi {
+            let head = (hi - playhead) as usize;
+            let tail = frames - head;
+            Some((head, tail, lo))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let new_playhead = if let Some((head_frames, tail_frames, loop_in)) = seam_split {
+        // ---- Pre-wrap sub-block (plays to `loop_out`) ---------------------
+        let head_monitor_frames = monitor_frames.min(head_frames);
+        render_timeline_block(
+            &mut data[..head_frames * channels],
+            channels,
+            &tracks_guard,
+            &busses_guard,
+            &clips_guard,
+            &midi_clips_guard,
+            &plugins_guard,
+            samples_per_tick,
+            any_solo,
+            active_busses,
+            playhead,
+            head_frames,
+            track_buf_l,
+            track_buf_r,
+            bus_bufs,
+            port_scratch,
+            note_event_buf,
+            &monitor_temp[..head_monitor_frames * frame_stride],
+            head_monitor_frames,
+            input_channels,
+        );
+
+        // Flush instrument voices at the seam.
+        panic_instrument_tracks(&tracks_guard, &plugins_guard);
+
+        // ---- Post-wrap sub-block (plays from `loop_in`) -------------------
+        let tail_monitor_start = head_monitor_frames * frame_stride;
+        let tail_monitor_avail = monitor_frames.saturating_sub(head_monitor_frames);
+        let tail_monitor_frames = tail_monitor_avail.min(tail_frames);
+        render_timeline_block(
+            &mut data[head_frames * channels..(head_frames + tail_frames) * channels],
+            channels,
+            &tracks_guard,
+            &busses_guard,
+            &clips_guard,
+            &midi_clips_guard,
+            &plugins_guard,
+            samples_per_tick,
+            any_solo,
+            active_busses,
+            loop_in,
+            tail_frames,
+            track_buf_l,
+            track_buf_r,
+            bus_bufs,
+            port_scratch,
+            note_event_buf,
+            &monitor_temp[tail_monitor_start..tail_monitor_start + tail_monitor_frames * frame_stride],
+            tail_monitor_frames,
+            input_channels,
+        );
+
+        loop_in + tail_frames as u64
+    } else {
+        render_timeline_block(
+            &mut data[..frames * channels],
+            channels,
+            &tracks_guard,
+            &busses_guard,
+            &clips_guard,
+            &midi_clips_guard,
+            &plugins_guard,
+            samples_per_tick,
+            any_solo,
+            active_busses,
+            playhead,
+            frames,
+            track_buf_l,
+            track_buf_r,
+            bus_bufs,
+            port_scratch,
+            note_event_buf,
+            &monitor_temp[..monitor_frames * frame_stride],
+            monitor_frames,
+            input_channels,
+        );
+        playhead + output_frames as u64
+    };
 
     drop(plugins_guard);
 
-    // Metronome click synthesis
+    // Metronome click synthesis. When a loop seam split the callback, the
+    // mapping from output frame index to timeline frame changes at the seam:
+    // frames before `head_frames` play from `playhead`, frames after play
+    // from `loop_in`.
     if let Some(tm) = tempo_map.try_read() {
         if tm.metronome_enabled {
             let spb = tm.samples_per_beat(sample_rate);
@@ -752,7 +950,12 @@ pub(crate) fn mix_audio(
             let click_duration_samples = (sample_rate as f32 * CLICK_DURATION_SECS) as u64;
 
             for frame_offset in 0..output_frames {
-                let timeline_frame = playhead + frame_offset as u64;
+                let timeline_frame = match seam_split {
+                    Some((head, _, loop_in)) if frame_offset >= head => {
+                        loop_in + (frame_offset - head) as u64
+                    }
+                    _ => playhead + frame_offset as u64,
+                };
                 // Use round() to avoid drift: find the nearest beat boundary
                 let beat_index = (timeline_frame as f64 / spb).floor();
                 let beat_start = (beat_index * spb).round() as u64;
@@ -780,7 +983,5 @@ pub(crate) fn mix_audio(
     // Apply master volume, hard clip, and compute master peak levels
     apply_master_volume_and_peaks(data, channels, shared);
 
-    // Advance playhead
-    let new_playhead = playhead + output_frames as u64;
     shared.playhead.store(new_playhead, Ordering::Relaxed);
 }

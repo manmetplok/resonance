@@ -1,7 +1,7 @@
 /// Message types for the Resonance application.
 use crate::compose::ComposeMessage;
 use crate::project::LoadedProject;
-use crate::state::{ClipEdge, InstrumentIcon, InstrumentType, PunchDragTarget, ViewMode};
+use crate::state::{ClipEdge, InstrumentIcon, InstrumentType, LoopDragTarget, ViewMode};
 use resonance_audio::types::{
     BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
 };
@@ -69,14 +69,14 @@ pub(crate) enum Message {
     OpenAddTrackMenu,
     CloseAddTrackMenu,
     DismissError,
-    TogglePunch,
-    #[allow(dead_code)] // reserved for direct punch position entry UI
-    SetPunchIn(u64),
-    #[allow(dead_code)] // reserved for direct punch position entry UI
-    SetPunchOut(u64),
-    StartPunchDrag(PunchDragTarget),
-    UpdatePunchDrag(f32),
-    EndPunchDrag,
+    ToggleLoop,
+    #[allow(dead_code)] // reserved for direct loop position entry UI
+    SetLoopIn(u64),
+    #[allow(dead_code)] // reserved for direct loop position entry UI
+    SetLoopOut(u64),
+    StartLoopDrag(LoopDragTarget),
+    UpdateLoopDrag(f32),
+    EndLoopDrag,
     SelectClip(Option<ClipId>),
     StartClipDrag { clip_id: ClipId, grab_offset_x: f32, start_x: f32, start_y: f32 },
     UpdateClipDrag(f32, f32),

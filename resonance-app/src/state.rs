@@ -275,7 +275,7 @@ pub enum ViewMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PunchDragTarget {
+pub enum LoopDragTarget {
     In,
     Out,
 }
