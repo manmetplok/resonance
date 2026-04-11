@@ -11,6 +11,8 @@ mod dsp;
 mod loader;
 pub mod nam;
 pub mod params;
+#[cfg(feature = "editor")]
+pub mod tone3000;
 mod tuner;
 pub mod viz;
 
@@ -44,6 +46,11 @@ pub struct ResonanceAmp {
     /// fields use atomic storage internally, so `&AmpParams` is safe to use
     /// concurrently from audio + UI.
     params: Arc<AmpParams>,
+    /// Tone3000 API browser worker, lazily created on first editor open.
+    /// Held as `Option` because it depends on `Arc<AmpParams>` and is only
+    /// useful with the editor feature enabled.
+    #[cfg(feature = "editor")]
+    tone3000: Option<Arc<tone3000::worker::WorkerHandle>>,
     /// Lock-free meters + scope + transfer curve + tuner state shared
     /// with the editor.
     viz: Arc<AmpViz>,
@@ -137,8 +144,27 @@ impl ResonancePlugin for ResonanceAmp {
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
     fn new() -> Self {
+        let params = Arc::new(AmpParams::default());
+        let load_request = Arc::new(AtomicI32::new(-1));
+
+        #[cfg(feature = "editor")]
+        let tone3000 = {
+            let params_for_setter = params.clone();
+            let hooks = tone3000::worker::PluginHooks {
+                file_list: params.file_list.clone(),
+                model_path: params.model_path.clone(),
+                load_request: load_request.clone(),
+                file_select_setter: Arc::new(move |v| {
+                    params_for_setter.file_select.set_value(v);
+                }),
+            };
+            Some(Arc::new(tone3000::worker::spawn(hooks)))
+        };
+
         Self {
-            params: Arc::new(AmpParams::default()),
+            params,
+            #[cfg(feature = "editor")]
+            tone3000,
             viz: AmpViz::new(),
             tuner: None,
             dc_l: DcBlocker::default(),
@@ -147,7 +173,7 @@ impl ResonancePlugin for ResonanceAmp {
             model_mailbox: Arc::new(Mutex::new(None)),
             model_name: Arc::new(Mutex::new(String::new())),
             last_file_index: -1,
-            load_request: Arc::new(AtomicI32::new(-1)),
+            load_request,
             loader: None,
             pending_model: None,
             fade_out_remaining: 0,
@@ -398,11 +424,13 @@ impl ResonancePlugin for ResonanceAmp {
 
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
+        let tone3000 = self.tone3000.clone()?;
         Some(Arc::new(editor::AmpEditorFactory::new(
             self.params.clone(),
             self.model_name.clone(),
             self.load_request.clone(),
             self.viz.clone(),
+            tone3000,
         )))
     }
 }

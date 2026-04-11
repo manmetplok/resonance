@@ -26,7 +26,12 @@ mod header;
 mod meters;
 mod scope_view;
 mod theme;
+#[cfg(feature = "editor")]
+mod tone3000_panel;
 mod tuner_view;
+
+use crate::tone3000::worker::WorkerHandle;
+use tone3000_panel::Tone3000PanelState;
 
 const INITIAL_SIZE: (u32, u32) = (960, 620);
 const MIN_SIZE: (u32, u32) = (760, 520);
@@ -40,6 +45,7 @@ pub struct AmpEditorFactory {
     model_name: Arc<Mutex<String>>,
     load_request: Arc<AtomicI32>,
     viz: Arc<AmpViz>,
+    tone3000: Arc<WorkerHandle>,
 }
 
 impl AmpEditorFactory {
@@ -48,12 +54,14 @@ impl AmpEditorFactory {
         model_name: Arc<Mutex<String>>,
         load_request: Arc<AtomicI32>,
         viz: Arc<AmpViz>,
+        tone3000: Arc<WorkerHandle>,
     ) -> Self {
         Self {
             params,
             model_name,
             load_request,
             viz,
+            tone3000,
         }
     }
 }
@@ -80,6 +88,8 @@ impl EditorFactory for AmpEditorFactory {
             model_name: self.model_name.clone(),
             load_request: self.load_request.clone(),
             viz: self.viz.clone(),
+            tone3000: self.tone3000.clone(),
+            tone3000_panel: Tone3000PanelState::default(),
         };
         let runtime = RuntimeEditor::new(
             app,
@@ -161,6 +171,8 @@ pub(crate) struct AmpEditorApp {
     pub(crate) model_name: Arc<Mutex<String>>,
     pub(crate) load_request: Arc<AtomicI32>,
     pub(crate) viz: Arc<AmpViz>,
+    pub(crate) tone3000: Arc<WorkerHandle>,
+    pub(crate) tone3000_panel: Tone3000PanelState,
 }
 
 impl EditorApp for AmpEditorApp {
@@ -186,6 +198,10 @@ impl EditorApp for AmpEditorApp {
             .show_inside(ui, |ui| controls::draw(ui, &self.params));
 
         egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
+
+        if self.tone3000_panel.open {
+            tone3000_panel::draw(ui, &mut self.tone3000_panel, &self.tone3000);
+        }
     }
 }
 

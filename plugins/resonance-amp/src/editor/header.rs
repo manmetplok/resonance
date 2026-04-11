@@ -29,6 +29,22 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
         }
 
         ui.add_space(8.0);
+
+        // Accent-coloured rich-text button so the Tone3000 entry point
+        // is visually distinct from the plain "Load Model…" button
+        // next to it.
+        let tone3000_btn = egui::Button::new(
+            egui::RichText::new("Browse Tone3000…")
+                .color(egui::Color32::BLACK)
+                .strong()
+                .size(13.0),
+        )
+        .fill(theme::ACCENT);
+        if ui.add(tone3000_btn).clicked() {
+            app.tone3000_panel.open = true;
+        }
+
+        ui.add_space(8.0);
         ui.separator();
         ui.add_space(8.0);
 
