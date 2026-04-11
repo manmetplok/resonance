@@ -69,6 +69,22 @@ pub(crate) struct SharedState {
     pub loop_enabled: AtomicBool,
     pub loop_in: AtomicU64,
     pub loop_out: AtomicU64,
+    /// True while a record-with-count-in is in flight. The mixer uses
+    /// this to pick its count-in branch (hold the playhead, skip
+    /// track/clip rendering, render metronome ticks and monitoring).
+    /// The engine control thread clears it after opening the
+    /// recording stream so normal playback can resume on the next
+    /// buffer.
+    pub count_in_active: AtomicBool,
+    /// Count-in frames remaining before the last click fires. When
+    /// this hits zero while `count_in_active` is still set, the mixer
+    /// stops emitting metronome ticks but keeps holding the playhead
+    /// until the control thread has opened the recording stream.
+    pub count_in_remaining: AtomicU64,
+    /// Total count-in frames at the moment count-in was armed. Used
+    /// with `count_in_remaining` to derive elapsed frames for beat
+    /// alignment inside the mixer's count-in branch.
+    pub count_in_total: AtomicU64,
 }
 
 /// The audio engine.
@@ -146,6 +162,9 @@ impl AudioEngine {
             loop_enabled: AtomicBool::new(false),
             loop_in: AtomicU64::new(0),
             loop_out: AtomicU64::new(0),
+            count_in_active: AtomicBool::new(false),
+            count_in_remaining: AtomicU64::new(0),
+            count_in_total: AtomicU64::new(0),
         });
 
         let shared_audio = Arc::clone(&shared);

@@ -803,6 +803,120 @@ pub(crate) fn mix_audio(
     let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);
     let monitor_frames = monitor_samples / frame_stride;
 
+    // Count-in branch: hold the playhead, skip track/clip rendering,
+    // and emit metronome ticks from a count-in-local elapsed counter
+    // so the last click lands exactly one beat before the punch-in
+    // line. `count_in_active` stays set across the brief window
+    // between `count_in_remaining` hitting zero and the engine
+    // control thread opening the recording stream, so the playhead
+    // stays pinned to the punch-in line throughout.
+    if shared.count_in_active.load(Ordering::Relaxed) {
+        let count_in_remaining = shared.count_in_remaining.load(Ordering::Relaxed);
+        let count_in_total = shared.count_in_total.load(Ordering::Relaxed);
+        let elapsed_at_start = count_in_total.saturating_sub(count_in_remaining);
+        let click_frames = (output_frames as u64).min(count_in_remaining) as usize;
+
+        // Monitor pass-through so the performer can hear themselves
+        // warm up during the count-in. Mirrors the playing=false
+        // monitor branch but is best-effort on lock contention —
+        // dropping monitor audio for one buffer is acceptable; losing
+        // the count-in tick is not.
+        if monitor_frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
+            if let (Some(tracks_guard), Some(plugins_guard)) =
+                (tracks.try_read(), plugins.try_read())
+            {
+                let any_solo = tracks_guard.values().any(|t| t.soloed());
+                let is_audible = |t: &&Track| -> bool {
+                    t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed())
+                };
+                if let Some(track) = tracks_guard.values().find(|t| is_audible(&t)) {
+                    let processed_frames = process_monitor_track(
+                        track,
+                        monitor_temp,
+                        monitor_frames,
+                        monitor_frames,
+                        input_channels,
+                        track_buf_l,
+                        track_buf_r,
+                        &plugins_guard,
+                    );
+                    let (gain_l, gain_r) = track_stereo_gains(track);
+                    let mut peak_l = 0.0f32;
+                    let mut peak_r = 0.0f32;
+                    for f in 0..processed_frames {
+                        peak_l = peak_l.max((track_buf_l[f] * gain_l).abs());
+                        peak_r = peak_r.max((track_buf_r[f] * gain_r).abs());
+                    }
+                    track.update_peak_l(peak_l);
+                    track.update_peak_r(peak_r);
+                    sum_to_output(
+                        data,
+                        channels,
+                        processed_frames,
+                        track_buf_l,
+                        track_buf_r,
+                        gain_l,
+                        gain_r,
+                    );
+                }
+            }
+        }
+
+        // Metronome click synthesis using a count-in-local timeline.
+        // Beats are indexed from the start of the count-in; with
+        // `count_in_total == precount_bars * numerator * spb`, the
+        // final click in the loop lands at elapsed
+        // `(precount_bars * numerator - 1) * spb`, leaving exactly
+        // one beat of silence before the punch-in line.
+        if let Some(tm) = tempo_map.try_read() {
+            let spb = tm.samples_per_beat(sample_rate);
+            let numerator = tm.numerator as u64;
+            let click_duration_samples =
+                (sample_rate as f32 * CLICK_DURATION_SECS) as u64;
+            for frame_offset in 0..click_frames {
+                let elapsed = elapsed_at_start + frame_offset as u64;
+                let beat_index = (elapsed as f64 / spb).floor();
+                let beat_start = (beat_index * spb).round() as u64;
+                let beat_pos = elapsed.saturating_sub(beat_start);
+                if beat_pos < click_duration_samples {
+                    let t = beat_pos as f32 / sample_rate as f32;
+                    let beat_in_bar = (beat_index as u64) % numerator;
+                    let freq = if beat_in_bar == 0 {
+                        CLICK_FREQ_DOWNBEAT
+                    } else {
+                        CLICK_FREQ_UPBEAT
+                    };
+                    let amplitude = CLICK_AMPLITUDE * (-t * CLICK_DECAY_RATE).exp();
+                    let click =
+                        amplitude * (2.0 * std::f32::consts::PI * freq * t).sin();
+                    let out_idx = frame_offset * channels;
+                    if channels >= 2 {
+                        data[out_idx] += click;
+                        data[out_idx + 1] += click;
+                    } else {
+                        data[out_idx] += click;
+                    }
+                }
+            }
+        }
+
+        // Master volume + peaks so the count-in audio hits meters the
+        // same way normal playback does.
+        apply_master_volume_and_peaks(data, channels, shared);
+
+        // Decrement the remaining-clicks counter. Once it hits zero
+        // the metronome goes quiet, but `count_in_active` keeps the
+        // mixer in this branch until the engine control thread has
+        // actually opened the recording stream — that cross-thread
+        // handoff is what guarantees the playhead doesn't start
+        // advancing until recording is armed.
+        let new_remaining = count_in_remaining.saturating_sub(output_frames as u64);
+        shared
+            .count_in_remaining
+            .store(new_remaining, Ordering::Relaxed);
+        return;
+    }
+
     if !shared.playing.load(Ordering::Relaxed) {
         // Even when stopped, output monitored audio for armed tracks
         if monitor_frames > 0 && shared.monitoring.load(Ordering::Relaxed) {

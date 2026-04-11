@@ -21,14 +21,16 @@ pub(crate) fn handle_record(
     precount_bars: u8,
 ) {
     if precount_bars == 0 {
-        begin_recording_stream(ctx, state);
+        let start_sample = ctx.shared.playhead.load(Ordering::SeqCst);
+        begin_recording_stream(ctx, state, start_sample);
         return;
     }
 
-    // Count-in: force the metronome on, rewind the playhead by
-    // `precount_bars`, and start playback. The engine control thread
-    // polls `rec.precount` each loop and opens the recording stream
-    // the moment the playhead reaches the user's original position.
+    // Count-in: leave the playhead exactly where the user pressed
+    // Record and arm the mixer's count-in branch. The mixer holds
+    // the playhead stationary, renders metronome ticks from its own
+    // elapsed counter, and the engine control thread opens the
+    // recording stream the moment `count_in_remaining` reaches zero.
     let (precount_samples, was_metronome) = {
         let tm = ctx.tempo_map.read();
         let samples_per_bar = tm.samples_per_bar(ctx.sample_rate);
@@ -37,18 +39,18 @@ pub(crate) fn handle_record(
     };
 
     let orig_playhead = ctx.shared.playhead.load(Ordering::SeqCst);
-    // Rewind by the precount, but never past 0 — if the user hit
-    // Record near the project start, playback just begins at 0 and
-    // the recording-start slides forward to keep the count-in a
-    // full `precount_bars` long.
-    let new_playhead = orig_playhead.saturating_sub(precount_samples);
-    let target_sample = new_playhead + precount_samples;
-    ctx.shared.playhead.store(new_playhead, Ordering::SeqCst);
+    ctx.shared
+        .count_in_total
+        .store(precount_samples, Ordering::SeqCst);
+    ctx.shared
+        .count_in_remaining
+        .store(precount_samples, Ordering::SeqCst);
+    ctx.shared.count_in_active.store(true, Ordering::SeqCst);
     ctx.tempo_map.write().metronome_enabled = true;
     ctx.shared.playing.store(true, Ordering::SeqCst);
 
     state.rec.precount = Some(crate::recording::PrecountState {
-        target_sample,
+        target_sample: orig_playhead,
         restore_metronome: was_metronome,
     });
 }
@@ -56,18 +58,22 @@ pub(crate) fn handle_record(
 /// Clear any pending count-in and restore the metronome toggle to
 /// whatever it was before `Record` was pressed. Called by Pause/Stop
 /// so cancelling a record-with-precount doesn't leave the metronome
-/// stuck on.
+/// stuck on or the mixer stuck in its count-in branch.
 pub(crate) fn cancel_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
     if let Some(pc) = state.rec.precount.take() {
         ctx.tempo_map.write().metronome_enabled = pc.restore_metronome;
+        ctx.shared.count_in_active.store(false, Ordering::SeqCst);
+        ctx.shared.count_in_remaining.store(0, Ordering::SeqCst);
+        ctx.shared.count_in_total.store(0, Ordering::SeqCst);
     }
 }
 
-/// Poll hook: if a count-in is in flight and the playhead has reached
-/// the original record-start position, restore the metronome toggle
-/// and open the actual recording stream. Runs on the engine control
-/// thread's ~60 Hz loop, so the worst-case start jitter is one engine
-/// tick (≈16 ms).
+/// Poll hook: if a count-in is in flight and the mixer has drained
+/// `count_in_remaining` to zero, restore the metronome toggle and
+/// open the actual recording stream. Runs on the engine control
+/// thread's ~60 Hz loop, so the worst-case start jitter is one
+/// engine tick (≈16 ms) on top of the one-buffer tail the mixer
+/// holds after the counter hits zero.
 pub(crate) fn poll_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
     let Some(pc) = state.rec.precount else {
         return;
@@ -77,22 +83,32 @@ pub(crate) fn poll_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
     if !ctx.shared.playing.load(Ordering::Relaxed) {
         state.rec.precount = None;
         ctx.tempo_map.write().metronome_enabled = pc.restore_metronome;
+        ctx.shared.count_in_active.store(false, Ordering::SeqCst);
+        ctx.shared.count_in_remaining.store(0, Ordering::SeqCst);
+        ctx.shared.count_in_total.store(0, Ordering::SeqCst);
         return;
     }
-    if ctx.shared.playhead.load(Ordering::Relaxed) < pc.target_sample {
+    if ctx.shared.count_in_remaining.load(Ordering::Relaxed) > 0 {
         return;
     }
     state.rec.precount = None;
     ctx.tempo_map.write().metronome_enabled = pc.restore_metronome;
-    // Nail the playhead to the user's original start position so the
-    // recorded clip lines up exactly with where Record was pressed.
-    ctx.shared
-        .playhead
-        .store(pc.target_sample, Ordering::SeqCst);
-    begin_recording_stream(ctx, state);
+    ctx.shared.count_in_total.store(0, Ordering::SeqCst);
+    // The mixer held the playhead stationary through the count-in,
+    // so it still points at the punch-in line. Open the recording
+    // stream first, then clear `count_in_active` — the mixer keeps
+    // holding the playhead until this flag flips, which is what
+    // makes the count-in → record transition race-free even if
+    // CPAL's `build_input_stream` takes real wall-clock time.
+    begin_recording_stream(ctx, state, pc.target_sample);
+    ctx.shared.count_in_active.store(false, Ordering::SeqCst);
 }
 
-fn begin_recording_stream(ctx: &HandlerCtx, state: &mut HandlerState) {
+fn begin_recording_stream(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    start_sample: SamplePos,
+) {
     // Recording must have a project directory to stream WAVs into.
     // The startup modal guarantees a project is always selected, so
     // hitting this branch is a programmer error — surface it rather
@@ -164,7 +180,7 @@ fn begin_recording_stream(ctx: &HandlerCtx, state: &mut HandlerState) {
         }
     };
 
-    state.rec.start_sample = ctx.shared.playhead.load(Ordering::SeqCst);
+    state.rec.start_sample = start_sample;
     state.rec.ring_consumer = Some(cons);
     state.rec.input_sample_rate = in_sr;
     state.rec.input_channels = in_ch;
