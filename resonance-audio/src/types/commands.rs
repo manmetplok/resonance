@@ -299,4 +299,31 @@ pub enum AudioCommand {
         bus_id: BusId,
         instance_id: PluginInstanceId,
     },
+
+    // -- Master FX chain + bypass --
+    /// Add a plugin to the master bus insert chain. Master FX run after
+    /// every track/bus has been summed, before the master volume pass.
+    AddPluginToMaster {
+        clap_file_path: String,
+        clap_plugin_id: String,
+        /// If provided, the engine uses this id instead of allocating a
+        /// new one and bumps its allocator past it. Set by project load.
+        id_hint: Option<PluginInstanceId>,
+    },
+    RemovePluginFromMaster {
+        instance_id: PluginInstanceId,
+    },
+    /// Bypass every effect plugin on a track. Instrument plugins
+    /// (slot 0 on instrument tracks) keep running.
+    SetTrackFxBypass {
+        track_id: TrackId,
+        bypassed: bool,
+    },
+    SetBusFxBypass {
+        bus_id: BusId,
+        bypassed: bool,
+    },
+    SetMasterFxBypass {
+        bypassed: bool,
+    },
 }

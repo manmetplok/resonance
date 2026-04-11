@@ -24,6 +24,7 @@ pub(crate) fn to_wav(
     shared: &Arc<SharedState>,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
+    master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
@@ -163,15 +164,17 @@ pub(crate) fn to_wav(
                         has_audio = true;
                     }
                 }
-                for &plugin_id in plugin_iter {
-                    if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                        let mut inst = mutex.lock();
-                        inst.0.process(
-                            &mut track_buf_l[..frames],
-                            &mut track_buf_r[..frames],
-                            frames,
-                        );
-                        has_audio = true;
+                if !track.fx_bypassed() {
+                    for &plugin_id in plugin_iter {
+                        if let Some(mutex) = plugins_guard.get(&plugin_id) {
+                            let mut inst = mutex.lock();
+                            inst.0.process(
+                                &mut track_buf_l[..frames],
+                                &mut track_buf_r[..frames],
+                                frames,
+                            );
+                            has_audio = true;
+                        }
                     }
                 }
             } else {
@@ -202,8 +205,8 @@ pub(crate) fn to_wav(
                     }
                 }
 
-                // Process through plugin chain.
-                if !track.plugin_ids.is_empty() {
+                // Process through plugin chain (skipped when bypassed).
+                if !track.plugin_ids.is_empty() && !track.fx_bypassed() {
                     for &plugin_id in &track.plugin_ids {
                         if let Some(mutex) = plugins_guard.get(&plugin_id) {
                             let mut inst = mutex.lock();
@@ -256,10 +259,12 @@ pub(crate) fn to_wav(
                 continue;
             }
             let (bl, br) = &mut bounce_bus_bufs[bus_idx];
-            for &plugin_id in &bus.plugin_ids {
-                if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                    let mut inst = mutex.lock();
-                    inst.0.process(&mut bl[..frames], &mut br[..frames], frames);
+            if !bus.fx_bypassed() {
+                for &plugin_id in &bus.plugin_ids {
+                    if let Some(mutex) = plugins_guard.get(&plugin_id) {
+                        let mut inst = mutex.lock();
+                        inst.0.process(&mut bl[..frames], &mut br[..frames], frames);
+                    }
                 }
             }
             let bus_volume = bus.volume();
@@ -269,6 +274,34 @@ pub(crate) fn to_wav(
             for f in 0..frames {
                 mix_buf[f * 2] += bl[f] * bus_gain_l;
                 mix_buf[f * 2 + 1] += br[f] * bus_gain_r;
+            }
+        }
+
+        // Master FX chain: run over the summed mix in place. Uses
+        // track_buf_l/r as de-interleave scratch (the per-track pass is
+        // done by this point so they're free). Skipped when globally
+        // bypassed or when the master chain is empty.
+        if !shared.master_fx_bypassed.load(Ordering::Relaxed) {
+            let master_guard = master.read();
+            if !master_guard.plugin_ids.is_empty() {
+                for f in 0..frames {
+                    track_buf_l[f] = mix_buf[f * 2];
+                    track_buf_r[f] = mix_buf[f * 2 + 1];
+                }
+                for &plugin_id in &master_guard.plugin_ids {
+                    if let Some(mutex) = plugins_guard.get(&plugin_id) {
+                        let mut inst = mutex.lock();
+                        inst.0.process(
+                            &mut track_buf_l[..frames],
+                            &mut track_buf_r[..frames],
+                            frames,
+                        );
+                    }
+                }
+                for f in 0..frames {
+                    mix_buf[f * 2] = track_buf_l[f];
+                    mix_buf[f * 2 + 1] = track_buf_r[f];
+                }
             }
         }
 

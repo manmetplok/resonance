@@ -16,6 +16,7 @@ pub(crate) enum Message {
     Transport(TransportMessage),
     Track(TrackMessage),
     Bus(BusMessage),
+    Master(MasterMessage),
     Clip(ClipMessage),
     MidiClip(MidiClipMessage),
     MidiEditor(MidiEditorMessage),
@@ -62,6 +63,7 @@ pub(crate) enum TrackMessage {
     ToggleRecordArm(TrackId),
     ToggleMonitor(TrackId),
     ToggleTrackMono(TrackId),
+    ToggleTrackFxBypass(TrackId),
     /// Rename a track (edited from the Compose instrument details panel).
     SetTrackName(TrackId, String),
     /// Change an instrument track's sub-type (synth vs drum).
@@ -82,8 +84,16 @@ pub(crate) enum BusMessage {
     SetBusVolume(BusId, f32),
     SetBusPan(BusId, f32),
     ToggleBusMute(BusId),
+    ToggleBusFxBypass(BusId),
     AddPluginToBus(BusId, ScannedPlugin),
     RemovePluginFromBus(BusId, PluginInstanceId),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum MasterMessage {
+    ToggleMasterFxBypass,
+    AddPluginToMaster(ScannedPlugin),
+    RemovePluginFromMaster(PluginInstanceId),
 }
 
 #[derive(Debug, Clone)]

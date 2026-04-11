@@ -20,7 +20,9 @@ use crate::clap_host::{ClapBundle, SyncClapInstance};
 use crate::recording::RecordingState;
 use crate::types::*;
 
-use super::{bounce, busses, clips, midi, plugins, scan, tracks, transport, SharedState};
+use super::{
+    bounce, busses, clips, master, midi, plugins, scan, tracks, transport, SharedState,
+};
 
 /// Read-only handle to shared project state and channels. Passed by
 /// reference into every handler so they can lock the relevant maps and
@@ -29,6 +31,7 @@ pub(crate) struct HandlerCtx<'a> {
     pub shared: &'a Arc<SharedState>,
     pub tracks: &'a Arc<RwLock<IndexMap<TrackId, Track>>>,
     pub busses: &'a Arc<RwLock<IndexMap<BusId, Bus>>>,
+    pub master: &'a Arc<RwLock<MasterBus>>,
     pub clips: &'a Arc<RwLock<Vec<AudioClip>>>,
     pub midi_clips: &'a Arc<RwLock<Vec<MidiClip>>>,
     pub plugins:
@@ -71,6 +74,7 @@ pub(crate) fn engine_thread(
     shared: Arc<SharedState>,
     tracks_arc: Arc<RwLock<IndexMap<TrackId, Track>>>,
     busses_arc: Arc<RwLock<IndexMap<BusId, Bus>>>,
+    master_arc: Arc<RwLock<MasterBus>>,
     clips_arc: Arc<RwLock<Vec<AudioClip>>>,
     midi_clips_arc: Arc<RwLock<Vec<MidiClip>>>,
     tempo_map: Arc<RwLock<TempoMap>>,
@@ -94,6 +98,7 @@ pub(crate) fn engine_thread(
         shared: &shared,
         tracks: &tracks_arc,
         busses: &busses_arc,
+        master: &master_arc,
         clips: &clips_arc,
         midi_clips: &midi_clips_arc,
         plugins: &plugins_arc,
@@ -313,6 +318,7 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             ctx.shared,
             ctx.tracks,
             ctx.busses,
+            ctx.master,
             ctx.clips,
             ctx.midi_clips,
             ctx.plugins,
@@ -454,5 +460,30 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             bus_id,
             instance_id,
         } => busses::handle_remove_plugin_from_bus(ctx, bus_id, instance_id),
+
+        // -- Master FX chain + bypass --
+        AudioCommand::AddPluginToMaster {
+            clap_file_path,
+            clap_plugin_id,
+            id_hint,
+        } => master::handle_add_plugin_to_master(
+            ctx,
+            state,
+            clap_file_path,
+            clap_plugin_id,
+            id_hint,
+        ),
+        AudioCommand::RemovePluginFromMaster { instance_id } => {
+            master::handle_remove_plugin_from_master(ctx, instance_id)
+        }
+        AudioCommand::SetTrackFxBypass { track_id, bypassed } => {
+            tracks::handle_set_track_fx_bypass(ctx, track_id, bypassed)
+        }
+        AudioCommand::SetBusFxBypass { bus_id, bypassed } => {
+            busses::handle_set_bus_fx_bypass(ctx, bus_id, bypassed)
+        }
+        AudioCommand::SetMasterFxBypass { bypassed } => {
+            master::handle_set_master_fx_bypass(ctx, bypassed)
+        }
     }
 }

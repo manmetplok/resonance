@@ -184,4 +184,28 @@ pub enum AudioEvent {
         bus_id: BusId,
         instance_id: PluginInstanceId,
     },
+
+    // -- Master FX events --
+    MasterPluginAdded {
+        instance_id: PluginInstanceId,
+        plugin_name: String,
+        clap_plugin_id: String,
+        clap_file_path: String,
+        params: Vec<ParamInfo>,
+        has_gui: bool,
+    },
+    MasterPluginRemoved {
+        instance_id: PluginInstanceId,
+    },
+    TrackFxBypassChanged {
+        track_id: TrackId,
+        bypassed: bool,
+    },
+    BusFxBypassChanged {
+        bus_id: BusId,
+        bypassed: bool,
+    },
+    MasterFxBypassChanged {
+        bypassed: bool,
+    },
 }

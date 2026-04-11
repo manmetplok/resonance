@@ -171,6 +171,9 @@ pub struct TrackState {
     pub pan: f32,
     pub muted: bool,
     pub soloed: bool,
+    /// When true, every effect plugin on this track is bypassed.
+    /// Instrument plugins (slot 0 on instrument tracks) still play.
+    pub fx_bypassed: bool,
     pub order: usize,
     pub record_armed: bool,
     pub monitor_enabled: bool,
@@ -224,6 +227,7 @@ impl TrackState {
             pan: 0.0,
             muted: false,
             soloed: false,
+            fx_bypassed: false,
             order,
             record_armed: false,
             monitor_enabled: false,
@@ -251,6 +255,7 @@ impl TrackState {
             pan: 0.0,
             muted: false,
             soloed: false,
+            fx_bypassed: false,
             order,
             record_armed: false,
             monitor_enabled: false,
@@ -296,6 +301,7 @@ impl BusState {
             volume: 0.0,
             pan: 0.0,
             muted: false,
+            fx_bypassed: false,
             plugins: Vec::new(),
             level_l: 0.0,
             level_r: 0.0,
@@ -334,6 +340,8 @@ pub struct BusState {
     pub volume: f32,
     pub pan: f32,
     pub muted: bool,
+    /// When true, every plugin in this bus's FX chain is bypassed.
+    pub fx_bypassed: bool,
     pub plugins: Vec<PluginSlotState>,
     pub level_l: f32,
     pub level_r: f32,
@@ -600,31 +608,4 @@ impl TrackRegistry {
         self.busses.iter_mut().find(|b| b.id == id).map(f)
     }
 
-    /// Locate a plugin slot on any track or bus by instance id and run `f`
-    /// on it. Iterates tracks first, then busses.
-    pub fn with_plugin_mut<R>(
-        &mut self,
-        instance_id: PluginInstanceId,
-        f: impl FnOnce(&mut PluginSlotState) -> R,
-    ) -> Option<R> {
-        for track in &mut self.tracks {
-            if let Some(p) = track
-                .plugins
-                .iter_mut()
-                .find(|p| p.instance_id == instance_id)
-            {
-                return Some(f(p));
-            }
-        }
-        for bus in &mut self.busses {
-            if let Some(p) = bus
-                .plugins
-                .iter_mut()
-                .find(|p| p.instance_id == instance_id)
-            {
-                return Some(f(p));
-            }
-        }
-        None
-    }
 }

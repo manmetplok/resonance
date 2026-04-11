@@ -93,6 +93,19 @@ pub(crate) fn handle_set_bus_mute(ctx: &HandlerCtx, bus_id: BusId, muted: bool) 
     }
 }
 
+pub(crate) fn handle_set_bus_fx_bypass(
+    ctx: &HandlerCtx,
+    bus_id: BusId,
+    bypassed: bool,
+) {
+    if let Some(bus) = ctx.busses.read().get(&bus_id) {
+        bus.set_fx_bypassed(bypassed);
+    }
+    let _ = ctx
+        .event_tx
+        .send(AudioEvent::BusFxBypassChanged { bus_id, bypassed });
+}
+
 pub(crate) fn handle_set_bus_name(ctx: &HandlerCtx, bus_id: BusId, name: String) {
     if let Some(bus) = ctx.busses.write().get_mut(&bus_id) {
         bus.name = name;

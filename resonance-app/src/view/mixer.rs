@@ -4,8 +4,8 @@ use crate::state::*;
 use crate::theme;
 use crate::util::format_pan;
 use crate::view::controls::{
-    bus_remove_button, fader_section, monitor_button, mono_button, mute_button,
-    record_arm_button, solo_button,
+    bus_remove_button, fader_section, fx_bypass_button, monitor_button, mono_button,
+    mute_button, record_arm_button, solo_button,
 };
 use crate::view::knob::pan_knob;
 use iced::widget::{button, column, container, pick_list, row, scrollable, text, Space};
@@ -19,6 +19,7 @@ use resonance_audio::types::*;
 enum PluginOwner {
     Track(TrackId),
     Bus(BusId),
+    Master,
 }
 
 /// Wrapper type for the output-destination pick_list so iced can render
@@ -92,7 +93,7 @@ impl crate::Resonance {
             scrollable::Direction::Horizontal(scrollable::Scrollbar::default()),
         )
         .width(Length::Fill);
-        let master_strip = self.view_master_strip();
+        let master_strip = self.view_master_strip(&available_plugins);
         let v_separator_tracks =
             container(Space::new(1, Length::Fill)).style(theme::separator_bg);
         let tracks_area = row![scrollable_tracks, v_separator_tracks, master_strip]
@@ -236,6 +237,7 @@ impl crate::Resonance {
         let remove_msg = match owner {
             PluginOwner::Track(track_id) => Message::Plugin(PluginMessage::RemovePluginFromTrack(track_id, pid)),
             PluginOwner::Bus(bus_id) => Message::Bus(BusMessage::RemovePluginFromBus(bus_id, pid)),
+            PluginOwner::Master => Message::Master(MasterMessage::RemovePluginFromMaster(pid)),
         };
         let plugin_del = button(text("\u{00d7}").size(9).color(theme::TEXT_DIM))
             .on_press(remove_msg)
@@ -307,6 +309,11 @@ impl crate::Resonance {
             record_arm_button(track.record_armed, track.id, 12),
             mute_button(track.muted, Message::Track(TrackMessage::ToggleMute(track.id)), 12),
             solo_button(track.soloed, Message::Track(TrackMessage::ToggleSolo(track.id)), 12),
+            fx_bypass_button(
+                track.fx_bypassed,
+                Message::Track(TrackMessage::ToggleTrackFxBypass(track.id)),
+                10,
+            ),
         ]
         .spacing(4)
         .align_y(alignment::Vertical::Center);
@@ -611,10 +618,15 @@ impl crate::Resonance {
         .center_x(Length::Fill)
         .padding([6, 4]);
 
-        // Mute + Remove buttons — same icons as the track header.
+        // Mute + FX bypass + Remove buttons — same icons as the track header.
         let bus_id = bus.id;
         let button_row = row![
             mute_button(bus.muted, Message::Bus(BusMessage::ToggleBusMute(bus_id)), 12),
+            fx_bypass_button(
+                bus.fx_bypassed,
+                Message::Bus(BusMessage::ToggleBusFxBypass(bus_id)),
+                10,
+            ),
             Space::with_width(Length::Fill),
             bus_remove_button(bus_id, 12),
         ]
@@ -705,13 +717,75 @@ impl crate::Resonance {
             .into()
     }
 
-    fn view_master_strip(&self) -> Element<'_, Message> {
+    fn view_master_strip(&self, available_plugins: &[ScannedPlugin]) -> Element<'_, Message> {
         let label = container(
             text("Master").size(14).color(theme::ACCENT),
         )
         .width(Length::Fill)
         .center_x(Length::Fill)
         .padding([6, 4]);
+
+        // FX bypass button, centered in its own row so the master strip
+        // has a dedicated control spot (tracks and busses share a row
+        // with other toggles; the master strip only has this one).
+        let button_row = container(
+            fx_bypass_button(
+                self.master_fx_bypassed,
+                Message::Master(MasterMessage::ToggleMasterFxBypass),
+                10,
+            ),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill);
+
+        // Plugin chain — every plugin is an effect.
+        let mut plugin_section = column![].spacing(2).width(Length::Fill);
+        for plugin in &self.master_plugins {
+            plugin_section = plugin_section
+                .push(self.view_plugin_slot_row(PluginOwner::Master, plugin, false));
+        }
+
+        // `+ FX` picker (filtered to effects). Only rendered when we
+        // have at least one non-instrument plugin available.
+        let fx_picker_element: Option<Element<'_, Message>> = if available_plugins.is_empty() {
+            None
+        } else {
+            let effects: Vec<ScannedPlugin> = available_plugins
+                .iter()
+                .filter(|p| !p.is_instrument)
+                .cloned()
+                .collect();
+            if effects.is_empty() {
+                None
+            } else {
+                Some(
+                    pick_list(
+                        effects,
+                        None::<ScannedPlugin>,
+                        |plugin: ScannedPlugin| {
+                            Message::Master(MasterMessage::AddPluginToMaster(plugin))
+                        },
+                    )
+                    .placeholder("+ FX")
+                    .text_size(10)
+                    .width(Length::Fill)
+                    .into(),
+                )
+            }
+        };
+
+        let plugin_fill = container(plugin_section)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(alignment::Vertical::Top);
+
+        let fx_block = {
+            let mut col = iced::widget::Column::new().spacing(0).width(Length::Fill);
+            if let Some(fx) = fx_picker_element {
+                col = col.push(fx);
+            }
+            col
+        };
 
         let fader_block = fader_section(
             self.master_level_l,
@@ -736,9 +810,11 @@ impl crate::Resonance {
 
         let strip_content = column![
             label,
-            bounce_row,
-            Space::with_height(Length::Fill),
+            button_row,
+            plugin_fill,
+            fx_block,
             fader_block,
+            bounce_row,
         ]
         .spacing(4)
         .padding(8)
@@ -754,10 +830,11 @@ impl crate::Resonance {
     fn view_plugin_panel(&self) -> Option<Element<'_, Message>> {
         let selected_id = self.mixer.selected_plugin?;
 
-        // Find the plugin across all tracks and busses.
+        // Find the plugin across all tracks, busses, and the master chain.
         let plugin = self.registry.tracks.iter()
             .flat_map(|t| t.plugins.iter())
             .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
+            .chain(self.master_plugins.iter())
             .find(|p| p.instance_id == selected_id)?;
 
         let ui_params: Vec<resonance_plugin::ui::UiParam> = plugin.params.iter()

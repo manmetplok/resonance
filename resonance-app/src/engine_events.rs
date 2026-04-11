@@ -423,6 +423,55 @@ impl crate::Resonance {
                     self.mixer.selected_plugin = None;
                 }
             }
+            AudioEvent::MasterPluginAdded {
+                instance_id,
+                plugin_name,
+                clap_plugin_id,
+                clap_file_path,
+                params,
+                has_gui,
+            } => {
+                if let Some(slot) = self
+                    .master_plugins
+                    .iter_mut()
+                    .find(|p| p.instance_id == instance_id)
+                {
+                    slot.params = params;
+                    slot.has_gui = has_gui;
+                } else {
+                    self.master_plugins.push(PluginSlotState::new(
+                        instance_id,
+                        plugin_name,
+                        clap_plugin_id,
+                        clap_file_path,
+                        params,
+                        has_gui,
+                    ));
+                }
+            }
+            AudioEvent::MasterPluginRemoved { instance_id } => {
+                self.master_plugins
+                    .retain(|p| p.instance_id != instance_id);
+                if self.mixer.selected_plugin == Some(instance_id) {
+                    self.mixer.selected_plugin = None;
+                }
+            }
+            AudioEvent::TrackFxBypassChanged { track_id, bypassed } => {
+                if let Some(track) =
+                    self.registry.tracks.iter_mut().find(|t| t.id == track_id)
+                {
+                    track.fx_bypassed = bypassed;
+                }
+            }
+            AudioEvent::BusFxBypassChanged { bus_id, bypassed } => {
+                if let Some(bus) = self.registry.busses.iter_mut().find(|b| b.id == bus_id)
+                {
+                    bus.fx_bypassed = bypassed;
+                }
+            }
+            AudioEvent::MasterFxBypassChanged { bypassed } => {
+                self.master_fx_bypassed = bypassed;
+            }
         }
         Task::none()
     }

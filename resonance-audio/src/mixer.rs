@@ -115,15 +115,17 @@ fn process_monitor_track(
         track_buf_r[f] = monitor_temp[base + right_port];
     }
 
-    // Process through plugin chain
-    for &plugin_id in &track.plugin_ids {
-        if let Some(si) = plugins_guard.get(&plugin_id) {
-            if let Some(mut inst) = si.try_lock() {
-                inst.0.process(
-                    &mut track_buf_l[..mix_frames],
-                    &mut track_buf_r[..mix_frames],
-                    mix_frames,
-                );
+    // Process through plugin chain (skipped when FX are bypassed).
+    if !track.fx_bypassed() {
+        for &plugin_id in &track.plugin_ids {
+            if let Some(si) = plugins_guard.get(&plugin_id) {
+                if let Some(mut inst) = si.try_lock() {
+                    inst.0.process(
+                        &mut track_buf_l[..mix_frames],
+                        &mut track_buf_r[..mix_frames],
+                        mix_frames,
+                    );
+                }
             }
         }
     }
@@ -149,6 +151,69 @@ fn sum_to_output(
             data[out_idx + 1] += track_buf_r[f] * gain_r;
         } else {
             data[out_idx] += track_buf_l[f] * gain_l + track_buf_r[f] * gain_r;
+        }
+    }
+}
+
+/// Run the master FX insert chain over the interleaved `data` buffer in
+/// place. De-interleaves into the borrowed `scratch_l`/`scratch_r` pair
+/// (the per-track mix buffers are free at this point in `mix_audio`),
+/// processes each plugin in order, then re-interleaves back into `data`.
+/// Silently no-ops when the chain is empty, the read lock is contended,
+/// or a plugin's instance is momentarily locked by the control thread.
+#[inline]
+fn apply_master_fx_chain(
+    data: &mut [f32],
+    channels: usize,
+    master: &parking_lot::RwLock<MasterBus>,
+    plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
+    scratch_l: &mut [f32],
+    scratch_r: &mut [f32],
+) {
+    let Some(master_guard) = master.try_read() else {
+        return;
+    };
+    if master_guard.plugin_ids.is_empty() {
+        return;
+    }
+    let output_frames = data.len() / channels;
+    let frames = output_frames.min(scratch_l.len()).min(scratch_r.len());
+    if frames == 0 {
+        return;
+    }
+    // De-interleave into scratch pair. Mono output shares L across R so
+    // plugins see a proper stereo input.
+    if channels >= 2 {
+        for f in 0..frames {
+            let idx = f * channels;
+            scratch_l[f] = data[idx];
+            scratch_r[f] = data[idx + 1];
+        }
+    } else {
+        for f in 0..frames {
+            let s = data[f * channels];
+            scratch_l[f] = s;
+            scratch_r[f] = s;
+        }
+    }
+    for &plugin_id in &master_guard.plugin_ids {
+        if let Some(mutex) = plugins_guard.get(&plugin_id) {
+            if let Some(mut inst) = mutex.try_lock() {
+                inst.0
+                    .process(&mut scratch_l[..frames], &mut scratch_r[..frames], frames);
+            }
+        }
+    }
+    // Interleave back into data.
+    if channels >= 2 {
+        for f in 0..frames {
+            let idx = f * channels;
+            data[idx] = scratch_l[f];
+            data[idx + 1] = scratch_r[f];
+        }
+    } else {
+        for f in 0..frames {
+            data[f * channels] = 0.5 * (scratch_l[f] + scratch_r[f]);
         }
     }
 }
@@ -424,16 +489,19 @@ fn render_timeline_block(
                     }
                 }
             }
-            // Effect plugins
-            for &plugin_id in plugin_iter {
-                if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                    if let Some(mut inst) = mutex.try_lock() {
-                        inst.0.process(
-                            &mut track_buf_l[..frames],
-                            &mut track_buf_r[..frames],
-                            frames,
-                        );
-                        has_audio = true;
+            // Effect plugins (skipped when the track's FX are bypassed;
+            // the instrument itself still ran above).
+            if !track.fx_bypassed() {
+                for &plugin_id in plugin_iter {
+                    if let Some(mutex) = plugins_guard.get(&plugin_id) {
+                        if let Some(mut inst) = mutex.try_lock() {
+                            inst.0.process(
+                                &mut track_buf_l[..frames],
+                                &mut track_buf_r[..frames],
+                                frames,
+                            );
+                            has_audio = true;
+                        }
                     }
                 }
             }
@@ -493,8 +561,8 @@ fn render_timeline_block(
                 }
             }
 
-            // Process through plugin chain
-            if !track.plugin_ids.is_empty() {
+            // Process through plugin chain (skipped when FX are bypassed).
+            if !track.plugin_ids.is_empty() && !track.fx_bypassed() {
                 for &plugin_id in &track.plugin_ids {
                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
                         if let Some(mut inst) = mutex.try_lock() {
@@ -572,8 +640,9 @@ fn render_timeline_block(
                 // Run the sub-track's own effect chain in place on its
                 // port buffer, before peak metering and bus/master routing.
                 // Sub-tracks never host an instrument, so every entry in
-                // `plugin_ids` is treated as an audio effect.
-                {
+                // `plugin_ids` is treated as an audio effect and is
+                // subject to the sub-track's own FX-bypass flag.
+                if !sub_track.fx_bypassed() {
                     let (pl, pr) = &mut port_scratch[port_idx];
                     for &plugin_id in &sub_track.plugin_ids {
                         if let Some(mutex) = plugins_guard.get(&plugin_id) {
@@ -625,15 +694,18 @@ fn render_timeline_block(
         }
         let (bus_buf_l, bus_buf_r) = &mut bus_bufs[bus_idx];
 
-        // Process bus plugin chain in place over the accumulated buffer.
-        for &plugin_id in &bus.plugin_ids {
-            if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                if let Some(mut inst) = mutex.try_lock() {
-                    inst.0.process(
-                        &mut bus_buf_l[..frames],
-                        &mut bus_buf_r[..frames],
-                        frames,
-                    );
+        // Process bus plugin chain in place over the accumulated buffer
+        // (skipped when the bus's FX are bypassed).
+        if !bus.fx_bypassed() {
+            for &plugin_id in &bus.plugin_ids {
+                if let Some(mutex) = plugins_guard.get(&plugin_id) {
+                    if let Some(mut inst) = mutex.try_lock() {
+                        inst.0.process(
+                            &mut bus_buf_l[..frames],
+                            &mut bus_buf_r[..frames],
+                            frames,
+                        );
+                    }
                 }
             }
         }
@@ -688,6 +760,7 @@ pub(crate) fn mix_audio(
     shared: &SharedState,
     tracks: &parking_lot::RwLock<IndexMap<TrackId, Track>>,
     busses: &parking_lot::RwLock<IndexMap<BusId, Bus>>,
+    master: &parking_lot::RwLock<MasterBus>,
     clips: &parking_lot::RwLock<Vec<AudioClip>>,
     midi_clips: &parking_lot::RwLock<Vec<MidiClip>>,
     plugins: &parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>,
@@ -937,6 +1010,20 @@ pub(crate) fn mix_audio(
         );
         playhead + output_frames as u64
     };
+
+    // Master FX chain: run over the full callback buffer post-bus-sum,
+    // before the metronome click is layered in and before the master
+    // volume pass. Skipped when globally bypassed.
+    if !shared.master_fx_bypassed.load(Ordering::Relaxed) {
+        apply_master_fx_chain(
+            data,
+            channels,
+            master,
+            &plugins_guard,
+            track_buf_l,
+            track_buf_r,
+        );
+    }
 
     drop(plugins_guard);
 

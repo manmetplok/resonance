@@ -31,6 +31,7 @@ use crate::types::*;
 mod bounce;
 mod busses;
 mod clips;
+mod master;
 mod midi;
 mod plugins;
 mod scan;
@@ -54,6 +55,9 @@ pub(crate) struct SharedState {
     pub master_peak_l_bits: AtomicU32,
     /// Master peak level R (AtomicU32 bit-punned f32), for VU meters.
     pub master_peak_r_bits: AtomicU32,
+    /// When true, the mixer skips the master FX chain (everything in
+    /// `MasterBus::plugin_ids`). Fader + peak metering are unaffected.
+    pub master_fx_bypassed: AtomicBool,
     /// Flag: recording ring buffer overflowed (samples were dropped).
     pub recording_overflow: AtomicBool,
     /// Channel count of the currently-active input stream, or 0 when
@@ -77,6 +81,7 @@ pub struct AudioEngine {
     shared: Arc<SharedState>,
     tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>>,
     busses: Arc<parking_lot::RwLock<IndexMap<BusId, Bus>>>,
+    master: Arc<parking_lot::RwLock<MasterBus>>,
     clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
     midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>>,
     plugins: Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
@@ -100,11 +105,16 @@ impl AudioEngine {
             .default_output_device()
             .ok_or_else(|| "No audio output device found".to_string())?;
 
+        let device_name = device
+            .name()
+            .unwrap_or_else(|_| "<unnamed>".to_string());
+
         let config = device
             .default_output_config()
             .map_err(|e| format!("Failed to get default output config: {}", e))?;
 
         let channels = config.channels() as usize;
+        let default_rate = config.sample_rate().0;
 
         // Prefer the PipeWire graph sample rate (typically 48000) to avoid resampling.
         // cpal's default_output_config often returns 44100 via ALSA compat, but the
@@ -113,8 +123,10 @@ impl AudioEngine {
         let sample_rate = platform::pick_sample_rate(&device, &config, DeviceDirection::Output);
 
         // Query PipeWire quantum to size buffers relative to the actual period.
-        let quantum = platform::pipewire_quantum().unwrap_or(1024) as usize;
-        let max_quantum = platform::pipewire_max_quantum().unwrap_or(2048) as usize;
+        let probed_quantum = platform::pipewire_quantum();
+        let probed_max_quantum = platform::pipewire_max_quantum();
+        let quantum = probed_quantum.unwrap_or(1024) as usize;
+        let max_quantum = probed_max_quantum.unwrap_or(2048) as usize;
         let buf_frames = max_quantum.max(quantum * 2).max(256);
 
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<AudioCommand>();
@@ -128,6 +140,7 @@ impl AudioEngine {
             master_volume_bits: AtomicU32::new(1.0f32.to_bits()),
             master_peak_l_bits: AtomicU32::new(0),
             master_peak_r_bits: AtomicU32::new(0),
+            master_fx_bypassed: AtomicBool::new(false),
             recording_overflow: AtomicBool::new(false),
             input_channels: AtomicU16::new(0),
             loop_enabled: AtomicBool::new(false),
@@ -141,6 +154,8 @@ impl AudioEngine {
             Arc::new(parking_lot::RwLock::new(IndexMap::new()));
         let busses: Arc<parking_lot::RwLock<IndexMap<BusId, Bus>>> =
             Arc::new(parking_lot::RwLock::new(IndexMap::new()));
+        let master: Arc<parking_lot::RwLock<MasterBus>> =
+            Arc::new(parking_lot::RwLock::new(MasterBus::new()));
         let clips: Arc<parking_lot::RwLock<Vec<AudioClip>>> =
             Arc::new(parking_lot::RwLock::new(Vec::new()));
         let midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>> =
@@ -148,6 +163,7 @@ impl AudioEngine {
 
         let tracks_audio = Arc::clone(&tracks);
         let busses_audio = Arc::clone(&busses);
+        let master_audio = Arc::clone(&master);
         let clips_audio = Arc::clone(&clips);
         let midi_clips_audio = Arc::clone(&midi_clips);
 
@@ -172,6 +188,7 @@ impl AudioEngine {
             let shared_audio = Arc::clone(&shared_audio);
             let tracks_audio = Arc::clone(&tracks_audio);
             let busses_audio = Arc::clone(&busses_audio);
+            let master_audio = Arc::clone(&master_audio);
             let clips_audio = Arc::clone(&clips_audio);
             let midi_clips_audio = Arc::clone(&midi_clips_audio);
             let plugins_audio = Arc::clone(&plugins_audio);
@@ -211,6 +228,7 @@ impl AudioEngine {
                         &shared_audio,
                         &tracks_audio,
                         &busses_audio,
+                        &master_audio,
                         &clips_audio,
                         &midi_clips_audio,
                         &plugins_audio,
@@ -235,12 +253,45 @@ impl AudioEngine {
             result.map(|stream| (stream, prod))
         };
 
-        let (stream, monitor_prod_raw) = build_stream(&stream_config).or_else(|_| {
-            // Fall back to default buffer size if fixed quantum was rejected
-            let mut fallback_config = stream_config.clone();
-            fallback_config.buffer_size = cpal::BufferSize::Default;
-            build_stream(&fallback_config)
-        }).map_err(|e| format!("Failed to build output stream: {}", e))?;
+        let (stream, monitor_prod_raw, used_fixed_buffer) =
+            match build_stream(&stream_config) {
+                Ok((stream, prod)) => (stream, prod, true),
+                Err(fixed_err) => {
+                    // Fall back to default buffer size if fixed quantum was rejected.
+                    let mut fallback_config = stream_config.clone();
+                    fallback_config.buffer_size = cpal::BufferSize::Default;
+                    match build_stream(&fallback_config) {
+                        Ok((stream, prod)) => {
+                            eprintln!(
+                                "audio: Fixed({}) rejected ({}) — falling back to BufferSize::Default (HIGH LATENCY)",
+                                quantum, fixed_err
+                            );
+                            (stream, prod, false)
+                        }
+                        Err(e) => {
+                            return Err(format!("Failed to build output stream: {}", e));
+                        }
+                    }
+                }
+            };
+
+        // One-line negotiation summary so latency regressions are diagnosable
+        // from stderr alone. `probed_*` being None means the pw-metadata
+        // subprocess failed and we're running on the conservative fallback
+        // numbers, which is usually the cause of "why is latency higher than
+        // the pipewire quantum".
+        eprintln!(
+            "audio: device={:?} sample_rate={} (cpal_default={}) quantum={} (probed={:?}) max_quantum={} (probed={:?}) buf_frames={} fixed_buffer={}",
+            device_name,
+            sample_rate,
+            default_rate,
+            quantum,
+            probed_quantum,
+            max_quantum,
+            probed_max_quantum,
+            buf_frames,
+            used_fixed_buffer,
+        );
 
         let monitor_prod = Arc::new(parking_lot::Mutex::new(monitor_prod_raw));
         let monitor_prod_audio = Arc::clone(&monitor_prod);
@@ -253,6 +304,7 @@ impl AudioEngine {
         let shared_ctrl = Arc::clone(&shared);
         let tracks_ctrl = Arc::clone(&tracks);
         let busses_ctrl = Arc::clone(&busses);
+        let master_ctrl = Arc::clone(&master);
         let clips_ctrl = Arc::clone(&clips);
         let midi_clips_ctrl = Arc::clone(&midi_clips);
         let tempo_ctrl = Arc::clone(&tempo_map);
@@ -269,6 +321,7 @@ impl AudioEngine {
                     shared_ctrl,
                     tracks_ctrl,
                     busses_ctrl,
+                    master_ctrl,
                     clips_ctrl,
                     midi_clips_ctrl,
                     tempo_ctrl,
@@ -288,6 +341,7 @@ impl AudioEngine {
             shared,
             tracks,
             busses,
+            master,
             clips,
             midi_clips,
             plugins,

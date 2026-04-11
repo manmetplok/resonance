@@ -40,6 +40,12 @@ pub struct ProjectFile {
     pub time_sig_den: u8,
     pub metronome_enabled: bool,
     pub master_volume: f32,
+    /// FX plugins inserted on the master bus. Empty on legacy projects.
+    #[serde(default)]
+    pub master_plugins: Vec<ProjectPlugin>,
+    /// Whether the master FX chain is bypassed. `false` on legacy projects.
+    #[serde(default)]
+    pub master_fx_bypassed: bool,
     #[serde(alias = "punch_enabled")]
     pub loop_enabled: bool,
     #[serde(alias = "punch_in")]
@@ -67,6 +73,10 @@ pub struct ProjectTrack {
     pub pan: f32,
     pub muted: bool,
     pub soloed: bool,
+    /// Whether the track's FX chain is bypassed. Default `false` keeps
+    /// legacy projects loadable.
+    #[serde(default)]
+    pub fx_bypassed: bool,
     pub record_armed: bool,
     pub monitor_enabled: bool,
     pub mono: bool,
@@ -110,6 +120,8 @@ pub struct ProjectBus {
     pub volume: f32,
     pub pan: f32,
     pub muted: bool,
+    #[serde(default)]
+    pub fx_bypassed: bool,
     pub plugins: Vec<ProjectPlugin>,
 }
 
@@ -268,23 +280,34 @@ pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
         }
     }
 
-    // Read plugin state blobs.
+    // Read plugin state blobs for every track, bus, and master plugin.
     let mut plugin_states: HashMap<PluginInstanceId, Vec<u8>> = HashMap::new();
-    for track in &file.tracks {
-        for plugin in &track.plugins {
-            let state_path = project_dir.join(&plugin.state_file);
-            match std::fs::read(&state_path) {
-                Ok(data) => {
-                    plugin_states.insert(plugin.instance_id, data);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Warning: could not load plugin state {}: {e}",
-                        plugin.state_file
-                    );
-                }
+    let mut load_plugin_state = |plugin: &ProjectPlugin| {
+        let state_path = project_dir.join(&plugin.state_file);
+        match std::fs::read(&state_path) {
+            Ok(data) => {
+                plugin_states.insert(plugin.instance_id, data);
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: could not load plugin state {}: {e}",
+                    plugin.state_file
+                );
             }
         }
+    };
+    for track in &file.tracks {
+        for plugin in &track.plugins {
+            load_plugin_state(plugin);
+        }
+    }
+    for bus in &file.busses {
+        for plugin in &bus.plugins {
+            load_plugin_state(plugin);
+        }
+    }
+    for plugin in &file.master_plugins {
+        load_plugin_state(plugin);
     }
 
     Ok(LoadedProject {

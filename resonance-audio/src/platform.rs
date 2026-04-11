@@ -135,8 +135,22 @@ pub(crate) fn default_sink_sample_rate() -> Option<u32> {
     None
 }
 
-/// Query PipeWire's current quantum (buffer period in frames).
+/// Query PipeWire's effective quantum (buffer period in frames).
+///
+/// PipeWire exposes both `clock.quantum` (the default target) and
+/// `clock.force-quantum` (the user override, set e.g. by
+/// `pw-metadata 0 clock.force-quantum 64`). When a force value is
+/// present and non-zero, the graph actually runs at that size — the
+/// plain `clock.quantum` still reports the default (typically 1024),
+/// so reading it alone gives the wrong answer and leaves the engine
+/// sizing its buffers for ~21 ms instead of ~1.3 ms.
 pub(crate) fn pipewire_quantum() -> Option<u32> {
+    if let Some(forced) = run_pw_metadata("clock.force-quantum")
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|v| *v > 0)
+    {
+        return Some(forced);
+    }
     run_pw_metadata("clock.quantum").and_then(|s| s.parse().ok())
 }
 

@@ -21,6 +21,10 @@ pub struct Track {
     pan_bits: AtomicU32,
     muted: AtomicBool,
     soloed: AtomicBool,
+    /// When true, the mixer skips every effect plugin on this track.
+    /// Instrument plugins (the first slot on instrument tracks) still
+    /// play — only the effects chain after them is bypassed.
+    fx_bypassed: AtomicBool,
     pub name: String,
     record_armed: AtomicBool,
     monitor_enabled: AtomicBool,
@@ -66,6 +70,7 @@ impl Track {
             pan_bits: AtomicU32::new(0.0f32.to_bits()),
             muted: AtomicBool::new(false),
             soloed: AtomicBool::new(false),
+            fx_bypassed: AtomicBool::new(false),
             name,
             record_armed: AtomicBool::new(false),
             monitor_enabled: AtomicBool::new(false),
@@ -152,6 +157,14 @@ impl Track {
         self.soloed.store(v, Ordering::Relaxed);
     }
 
+    pub fn fx_bypassed(&self) -> bool {
+        self.fx_bypassed.load(Ordering::Relaxed)
+    }
+
+    pub fn set_fx_bypassed(&self, v: bool) {
+        self.fx_bypassed.store(v, Ordering::Relaxed);
+    }
+
     pub fn record_armed(&self) -> bool {
         self.record_armed.load(Ordering::Relaxed)
     }
@@ -208,6 +221,8 @@ pub struct Bus {
     volume_bits: AtomicU32,
     pan_bits: AtomicU32,
     muted: AtomicBool,
+    /// When true, the mixer skips every plugin in this bus's FX chain.
+    fx_bypassed: AtomicBool,
     pub name: String,
     peak_l_bits: AtomicU32,
     peak_r_bits: AtomicU32,
@@ -222,6 +237,7 @@ impl Bus {
             volume_bits: AtomicU32::new(1.0f32.to_bits()),
             pan_bits: AtomicU32::new(0.0f32.to_bits()),
             muted: AtomicBool::new(false),
+            fx_bypassed: AtomicBool::new(false),
             name,
             peak_l_bits: AtomicU32::new(0),
             peak_r_bits: AtomicU32::new(0),
@@ -253,6 +269,14 @@ impl Bus {
         self.muted.store(v, Ordering::Relaxed);
     }
 
+    pub fn fx_bypassed(&self) -> bool {
+        self.fx_bypassed.load(Ordering::Relaxed)
+    }
+
+    pub fn set_fx_bypassed(&self, v: bool) {
+        self.fx_bypassed.store(v, Ordering::Relaxed);
+    }
+
     pub fn update_peak_l(&self, v: f32) {
         self.peak_l_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
     }
@@ -267,6 +291,21 @@ impl Bus {
 
     pub fn swap_peak_r(&self) -> f32 {
         f32::from_bits(self.peak_r_bits.swap(0, Ordering::Relaxed))
+    }
+}
+
+/// The global master bus. Holds the post-bus-sum FX chain that runs
+/// after every track and bus has been summed into the master output,
+/// right before the master volume / clip / peak pass.
+#[derive(Debug, Default)]
+pub struct MasterBus {
+    /// Ordered list of plugin instance IDs forming the master insert chain.
+    pub plugin_ids: Vec<PluginInstanceId>,
+}
+
+impl MasterBus {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
@@ -334,6 +373,26 @@ mod tests {
 
         bus.set_muted(true);
         assert!(bus.muted());
+    }
+
+    #[test]
+    fn track_fx_bypass_roundtrip() {
+        let track = Track::new(1, "T1".to_string());
+        assert!(!track.fx_bypassed());
+        track.set_fx_bypassed(true);
+        assert!(track.fx_bypassed());
+        track.set_fx_bypassed(false);
+        assert!(!track.fx_bypassed());
+    }
+
+    #[test]
+    fn bus_fx_bypass_roundtrip() {
+        let bus = Bus::new(1, "Bus 1".to_string());
+        assert!(!bus.fx_bypassed());
+        bus.set_fx_bypassed(true);
+        assert!(bus.fx_bypassed());
+        bus.set_fx_bypassed(false);
+        assert!(!bus.fx_bypassed());
     }
 
     #[test]

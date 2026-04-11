@@ -61,6 +61,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             pan: t.pan,
             muted: t.muted,
             soloed: t.soloed,
+            fx_bypassed: t.fx_bypassed,
             record_armed: t.record_armed,
             monitor_enabled: t.monitor_enabled,
             mono: t.mono,
@@ -102,6 +103,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             volume: b.volume,
             pan: b.pan,
             muted: b.muted,
+            fx_bypassed: b.fx_bypassed,
             plugins: b
                 .plugins
                 .iter()
@@ -146,6 +148,18 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         })
         .collect();
 
+    let master_plugins = r
+        .master_plugins
+        .iter()
+        .map(|p| ProjectPlugin {
+            instance_id: p.instance_id,
+            plugin_name: p.plugin_name.clone(),
+            clap_plugin_id: p.clap_plugin_id.clone(),
+            clap_file_path: p.clap_file_path.clone(),
+            state_file: format!("plugins/plugin_{}.bin", p.instance_id),
+        })
+        .collect();
+
     ProjectFile {
         version: PROJECT_FORMAT_VERSION,
         sample_rate: r.sample_rate,
@@ -154,6 +168,8 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         time_sig_den: r.transport.time_sig_den,
         metronome_enabled: r.transport.metronome_enabled,
         master_volume: r.master_volume,
+        master_plugins,
+        master_fx_bypassed: r.master_fx_bypassed,
         loop_enabled: r.transport.loop_enabled,
         loop_in: r.transport.loop_in,
         loop_out: r.transport.loop_out,
@@ -216,6 +232,8 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // Clear GUI state
     r.registry.tracks.clear();
     r.registry.busses.clear();
+    r.master_plugins.clear();
+    r.master_fx_bypassed = false;
     r.clips.clear();
     r.midi_clips.clear();
     r.registry.next_track_order = 0;
@@ -239,6 +257,9 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     for pb in &project.busses {
         replay_bus(r, pb, &loaded);
     }
+
+    // Replay master FX chain + bypass state.
+    replay_master(r, project, &loaded);
 
     // Now that all busses exist, resolve track → bus routing.
     for pt in &project.tracks {
@@ -366,6 +387,10 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
         track_id: pt.id,
         mono: pt.mono,
     });
+    r.engine.send(AudioCommand::SetTrackFxBypass {
+        track_id: pt.id,
+        bypassed: pt.fx_bypassed,
+    });
     if let Some(ref device) = pt.input_device_name {
         r.engine.send(AudioCommand::SetTrackInputDevice {
             track_id: pt.id,
@@ -416,6 +441,7 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
     track.pan = pt.pan;
     track.muted = pt.muted;
     track.soloed = pt.soloed;
+    track.fx_bypassed = pt.fx_bypassed;
     track.record_armed = pt.record_armed;
     track.monitor_enabled = pt.monitor_enabled;
     track.mono = pt.mono;
@@ -451,6 +477,10 @@ fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProject) {
         bus_id: pb.id,
         muted: pb.muted,
     });
+    r.engine.send(AudioCommand::SetBusFxBypass {
+        bus_id: pb.id,
+        bypassed: pb.fx_bypassed,
+    });
 
     let mut gui_plugins = Vec::new();
     for pp in &pb.plugins {
@@ -480,9 +510,40 @@ fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProject) {
     bus.volume = pb.volume;
     bus.pan = pb.pan;
     bus.muted = pb.muted;
+    bus.fx_bypassed = pb.fx_bypassed;
     bus.plugins = gui_plugins;
     r.registry.busses.push(bus);
     r.registry.next_bus_order += 1;
+}
+
+fn replay_master(r: &mut Resonance, project: &crate::project::ProjectFile, loaded: &LoadedProject) {
+    r.master_fx_bypassed = project.master_fx_bypassed;
+    r.engine.send(AudioCommand::SetMasterFxBypass {
+        bypassed: project.master_fx_bypassed,
+    });
+
+    r.master_plugins.clear();
+    for pp in &project.master_plugins {
+        r.engine.send(AudioCommand::AddPluginToMaster {
+            clap_file_path: pp.clap_file_path.clone(),
+            clap_plugin_id: pp.clap_plugin_id.clone(),
+            id_hint: Some(pp.instance_id),
+        });
+        if let Some(state_data) = loaded.plugin_states.get(&pp.instance_id) {
+            r.engine.send(AudioCommand::LoadPluginState {
+                instance_id: pp.instance_id,
+                data: state_data.clone(),
+            });
+        }
+        r.master_plugins.push(PluginSlotState::new(
+            pp.instance_id,
+            pp.plugin_name.clone(),
+            pp.clap_plugin_id.clone(),
+            pp.clap_file_path.clone(),
+            Vec::new(),
+            false,
+        ));
+    }
 }
 
 // -- File dialog tasks ---------------------------------------------------

@@ -25,6 +25,7 @@ fn is_gated_message(message: &Message) -> bool {
         | Message::Transport(_)
         | Message::Track(_)
         | Message::Bus(_)
+        | Message::Master(_)
         | Message::Clip(_)
         | Message::MidiClip(_)
         | Message::MidiEditor(_)
@@ -177,6 +178,18 @@ impl crate::Resonance {
             }
             Message::Track(TrackMessage::SetInstrumentIcon(track_id, icon)) => {
                 self.with_track_mut(track_id, |t| t.instrument_icon = icon);
+            }
+            Message::Track(TrackMessage::ToggleTrackFxBypass(id)) => {
+                let new_bypass = self.with_track_mut(id, |t| {
+                    t.fx_bypassed = !t.fx_bypassed;
+                    t.fx_bypassed
+                });
+                if let Some(bypassed) = new_bypass {
+                    self.engine.send(AudioCommand::SetTrackFxBypass {
+                        track_id: id,
+                        bypassed,
+                    });
+                }
             }
             Message::Track(TrackMessage::ToggleTrackMono(id)) => {
                 let new_mono = self.with_track_mut(id, |t| {
@@ -593,6 +606,32 @@ impl crate::Resonance {
                     bus_id,
                     instance_id,
                 });
+            }
+            Message::Bus(BusMessage::ToggleBusFxBypass(bus_id)) => {
+                let new_bypass = self.with_bus_mut(bus_id, |b| {
+                    b.fx_bypassed = !b.fx_bypassed;
+                    b.fx_bypassed
+                });
+                if let Some(bypassed) = new_bypass {
+                    self.engine.send(AudioCommand::SetBusFxBypass { bus_id, bypassed });
+                }
+            }
+            Message::Master(MasterMessage::ToggleMasterFxBypass) => {
+                self.master_fx_bypassed = !self.master_fx_bypassed;
+                self.engine.send(AudioCommand::SetMasterFxBypass {
+                    bypassed: self.master_fx_bypassed,
+                });
+            }
+            Message::Master(MasterMessage::AddPluginToMaster(plugin)) => {
+                self.engine.send(AudioCommand::AddPluginToMaster {
+                    clap_file_path: plugin.clap_file_path,
+                    clap_plugin_id: plugin.clap_plugin_id,
+                    id_hint: None,
+                });
+            }
+            Message::Master(MasterMessage::RemovePluginFromMaster(instance_id)) => {
+                self.engine
+                    .send(AudioCommand::RemovePluginFromMaster { instance_id });
             }
             Message::MidiClip(MidiClipMessage::DeleteMidiClip(id)) => {
                 self.engine.send(AudioCommand::DeleteMidiClip { clip_id: id });

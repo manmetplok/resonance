@@ -94,6 +94,26 @@ pub fn mono_button<'a>(
         .padding(2)
 }
 
+/// FX bypass toggle button. Small "FX" text label; dim when the
+/// effects chain is active (normal state) and tinted with the accent
+/// colour when bypassed (so the user can see at a glance which strips
+/// have their chain disabled).
+pub fn fx_bypass_button<'a>(
+    bypassed: bool,
+    on_press: Message,
+    size: u16,
+) -> iced::widget::Button<'a, Message> {
+    let color = if bypassed {
+        theme::ACCENT
+    } else {
+        theme::TEXT_DIM
+    };
+    button(text("FX").size(size).color(color))
+        .on_press(on_press)
+        .style(|_theme, status| theme::small_button_style(status))
+        .padding([2, 3])
+}
+
 /// Trash/delete button (gray trash can).
 pub fn delete_button<'a>(on_press: Message, size: u16) -> iced::widget::Button<'a, Message> {
     button(theme::icon(fa::TRASH).size(size).color(theme::TEXT_DIM))

@@ -30,6 +30,12 @@ pub(crate) struct Resonance {
     pub(crate) master_volume: f32,
     pub(crate) master_level_l: f32,
     pub(crate) master_level_r: f32,
+    /// FX plugins inserted on the master bus, rendered after every
+    /// track and bus has been summed.
+    pub(crate) master_plugins: Vec<PluginSlotState>,
+    /// When true, the master FX chain is bypassed — the master fader
+    /// and metering still run, but no master-bus plugins are processed.
+    pub(crate) master_fx_bypassed: bool,
     pub(crate) view_mode: ViewMode,
     /// Audio clips on the timeline.
     pub(crate) clips: Vec<ClipState>,
@@ -85,14 +91,35 @@ impl Resonance {
         self.registry.with_bus_mut(id, f)
     }
 
-    /// Locate a plugin slot on any track or bus by instance id and run
-    /// `f` on it. Iterates tracks first, then busses.
+    /// Locate a plugin slot on any track, bus, or master by instance id
+    /// and run `f` on it. Iterates tracks first, then busses, then master.
     pub(crate) fn with_plugin_mut<R>(
         &mut self,
         instance_id: PluginInstanceId,
         f: impl FnOnce(&mut PluginSlotState) -> R,
     ) -> Option<R> {
-        self.registry.with_plugin_mut(instance_id, f)
+        for track in &mut self.registry.tracks {
+            if let Some(p) = track
+                .plugins
+                .iter_mut()
+                .find(|p| p.instance_id == instance_id)
+            {
+                return Some(f(p));
+            }
+        }
+        for bus in &mut self.registry.busses {
+            if let Some(p) = bus
+                .plugins
+                .iter_mut()
+                .find(|p| p.instance_id == instance_id)
+            {
+                return Some(f(p));
+            }
+        }
+        self.master_plugins
+            .iter_mut()
+            .find(|p| p.instance_id == instance_id)
+            .map(f)
     }
 
     /// Find the index in `self.registry.tracks` of the visible track at the
@@ -139,6 +166,8 @@ impl Resonance {
             master_volume: 0.0, // 0 dB = unity gain
             master_level_l: 0.0,
             master_level_r: 0.0,
+            master_plugins: Vec::new(),
+            master_fx_bypassed: false,
             view_mode: ViewMode::Arrange,
             clips: Vec::new(),
             midi_clips: Vec::new(),

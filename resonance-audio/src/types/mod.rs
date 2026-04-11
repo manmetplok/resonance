@@ -38,4 +38,4 @@ pub use events::AudioEvent;
 pub use tempo::{
     InputDeviceInfo, ParamInfo, PluginDescInfo, ScannedPlugin, TempoMap, TICKS_PER_QUARTER_NOTE,
 };
-pub use track::{Bus, Track};
+pub use track::{Bus, MasterBus, Track};

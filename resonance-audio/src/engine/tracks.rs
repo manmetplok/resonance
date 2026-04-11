@@ -29,6 +29,19 @@ pub(crate) fn handle_set_track_mute(ctx: &HandlerCtx, track_id: TrackId, muted: 
     }
 }
 
+pub(crate) fn handle_set_track_fx_bypass(
+    ctx: &HandlerCtx,
+    track_id: TrackId,
+    bypassed: bool,
+) {
+    if let Some(track) = ctx.tracks.read().get(&track_id) {
+        track.set_fx_bypassed(bypassed);
+    }
+    let _ = ctx
+        .event_tx
+        .send(AudioEvent::TrackFxBypassChanged { track_id, bypassed });
+}
+
 pub(crate) fn handle_set_master_volume(ctx: &HandlerCtx, volume: f32) {
     ctx.shared
         .master_volume_bits
@@ -251,6 +264,12 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
 
     // Clear tracks
     ctx.tracks.write().clear();
+
+    // Clear master FX chain
+    ctx.master.write().plugin_ids.clear();
+    ctx.shared
+        .master_fx_bypassed
+        .store(false, Ordering::Relaxed);
 
     // Clear clips -- collect to drop outside lock
     let removed_clips: Vec<_> = ctx.clips.write().drain(..).collect();
