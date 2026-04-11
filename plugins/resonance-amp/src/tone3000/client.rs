@@ -35,7 +35,10 @@ impl Tone3000Client {
             .set("Authorization", &format!("Bearer {token}"))
             .query("query", query)
             .query("sort", sort)
-            .query("gears", "amp")
+            // Underscore-separated multi-value filter per the tone3000
+            // spec. Includes full-rig so bundled amp+cab+mic snapshots
+            // show up alongside bare amp profiles.
+            .query("gears", "amp_full-rig")
             .query("platform", "nam")
             .query("page", &page.to_string())
             .query("page_size", "25")
