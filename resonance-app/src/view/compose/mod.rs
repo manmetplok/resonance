@@ -85,7 +85,7 @@ impl crate::Resonance {
                         drumroll::controls::view(&self.compose.drumroll, track, clip_id)
                     }
                     Some(track) => instrument_panel::view(track),
-                    None => scale_panel::view(definition),
+                    None => scale_panel::view(definition, &self.registry.tracks),
                 };
 
                 row![left_column, right_panel]

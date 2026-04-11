@@ -34,6 +34,35 @@ impl std::fmt::Display for InstrumentType {
     }
 }
 
+/// Role a track plays inside a compose section's derived arrangement.
+/// When the user clicks "Derive pad / bass / lead", the compose handler
+/// targets the first track carrying the matching role. Untagged tracks
+/// (`None`) are never picked automatically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TrackRole {
+    Pad,
+    Bass,
+    Lead,
+}
+
+impl TrackRole {
+    pub const ALL: [TrackRole; 3] = [TrackRole::Pad, TrackRole::Bass, TrackRole::Lead];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TrackRole::Pad => "Pad",
+            TrackRole::Bass => "Bass",
+            TrackRole::Lead => "Lead",
+        }
+    }
+}
+
+impl std::fmt::Display for TrackRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Icon shown next to the instrument name in the Compose tab. Backed by a
 /// Font Awesome glyph; kept in an enum so the persisted value survives
 /// font-file renames.
@@ -163,6 +192,9 @@ pub struct TrackState {
     /// Icon shown next to the name in Compose. Default is
     /// `InstrumentIcon::default_for(instrument_type)` for new tracks.
     pub instrument_icon: InstrumentIcon,
+    /// Role this track plays inside derived-arrangement workflows. `None`
+    /// means the track is excluded from auto-derive targeting.
+    pub role: Option<TrackRole>,
     /// When set, this track is a sub-track that reads one non-main output
     /// port from its parent track's instrument plugin. Sub-tracks have
     /// their own fader / pan / mute / bus routing, but no clips, no plugin
@@ -205,6 +237,7 @@ impl TrackState {
             output: TrackOutput::Master,
             instrument_type: InstrumentType::Synth,
             instrument_icon: InstrumentIcon::Music,
+            role: None,
             sub_track: None,
         }
     }
@@ -231,6 +264,7 @@ impl TrackState {
             output: TrackOutput::Master,
             instrument_type: InstrumentType::Synth,
             instrument_icon: InstrumentIcon::Music,
+            role: None,
             sub_track: None,
         }
     }

@@ -86,6 +86,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             },
             instrument_type: t.instrument_type,
             instrument_icon: t.instrument_icon,
+            role: t.role,
             sub_track: t.sub_track,
             input_port_index: Some(t.input_port_index),
         })
@@ -426,6 +427,7 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
         .unwrap_or(TrackOutput::Master);
     track.instrument_type = pt.instrument_type;
     track.instrument_icon = pt.instrument_icon;
+    track.role = pt.role;
     track.sub_track = pt.sub_track;
     track.input_port_index = pt.input_port_index.unwrap_or(0);
     r.registry.tracks.push(track);

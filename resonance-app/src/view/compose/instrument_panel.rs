@@ -3,8 +3,60 @@ use iced::{alignment, Element, Font, Length};
 
 use crate::compose::ComposeMessage;
 use crate::message::*;
-use crate::state::{InstrumentIcon, InstrumentType, TrackState};
+use crate::state::{InstrumentIcon, InstrumentType, TrackRole, TrackState};
 use crate::theme;
+
+/// Dropdown-friendly wrapper around `Option<TrackRole>`. Iced's pick_list
+/// needs a concrete type with Display; `Option<T>` doesn't implement it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RolePick {
+    None,
+    Pad,
+    Bass,
+    Lead,
+}
+
+impl RolePick {
+    const ALL: [RolePick; 4] = [
+        RolePick::None,
+        RolePick::Pad,
+        RolePick::Bass,
+        RolePick::Lead,
+    ];
+}
+
+impl std::fmt::Display for RolePick {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            RolePick::None => "None",
+            RolePick::Pad => "Pad",
+            RolePick::Bass => "Bass",
+            RolePick::Lead => "Lead",
+        })
+    }
+}
+
+impl From<Option<TrackRole>> for RolePick {
+    fn from(r: Option<TrackRole>) -> Self {
+        match r {
+            None => RolePick::None,
+            Some(TrackRole::Pad) => RolePick::Pad,
+            Some(TrackRole::Bass) => RolePick::Bass,
+            Some(TrackRole::Lead) => RolePick::Lead,
+        }
+    }
+}
+
+impl From<RolePick> for Option<TrackRole> {
+    fn from(p: RolePick) -> Self {
+        match p {
+            RolePick::None => None,
+            RolePick::Pad => Some(TrackRole::Pad),
+            RolePick::Bass => Some(TrackRole::Bass),
+            RolePick::Lead => Some(TrackRole::Lead),
+        }
+    }
+}
 
 pub const PANEL_WIDTH: f32 = 240.0;
 
@@ -60,6 +112,20 @@ pub fn view<'a>(track: &'a TrackState) -> Element<'a, Message> {
     .padding([4, 6])
     .width(Length::Fill);
 
+    let role_picker = pick_list(
+        RolePick::ALL.to_vec(),
+        Some(RolePick::from(track.role)),
+        move |pick| {
+            Message::Compose(ComposeMessage::SetTrackRole {
+                track_id,
+                role: Option::<TrackRole>::from(pick),
+            })
+        },
+    )
+    .text_size(12)
+    .padding([4, 6])
+    .width(Length::Fill);
+
     let content = column![
         row![heading, Space::with_width(Length::Fill), close_btn]
             .align_y(alignment::Vertical::Center),
@@ -74,6 +140,12 @@ pub fn view<'a>(track: &'a TrackState) -> Element<'a, Message> {
         Space::with_height(8),
         text("Icon").size(10).color(theme::TEXT_DIM),
         icon_picker,
+        Space::with_height(8),
+        text("Role").size(10).color(theme::TEXT_DIM),
+        role_picker,
+        text("Tagged tracks are auto-targeted by Derive.")
+            .size(10)
+            .color(theme::TEXT_DIM),
     ]
     .spacing(4)
     .padding(12);

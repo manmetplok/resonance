@@ -72,6 +72,8 @@ mod tests {
             length_bars,
             chords: vec![],
             scale: None,
+            progression_seed: 0,
+            generate_params: crate::compose::GenerateParams::default(),
         }
     }
 

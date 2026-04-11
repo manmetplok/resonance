@@ -1,12 +1,18 @@
+use std::collections::HashMap;
+
+use resonance_audio::types::ClipId;
 use resonance_music_theory::{Chord, Scale};
 
 use crate::project::{ProjectSectionChord, ProjectSectionDefinition, ProjectSectionPlacement};
+use crate::state::TrackRole;
 
 pub mod drumroll;
+pub mod generate;
 pub mod invariants;
 pub mod messages;
 
 pub use drumroll::DrumrollViewState;
+pub use generate::{DeriveKind, GenerateParams};
 pub use messages::ComposeMessage;
 
 /// Runtime mirror of `ProjectSectionDefinition`. Kept separate so future
@@ -20,6 +26,12 @@ pub struct SectionDefinitionState {
     pub length_bars: u32,
     pub chords: Vec<ChordState>,
     pub scale: Option<Scale>,
+    /// Seed the progression walker uses for this section. Bumped by
+    /// the "reroll" action so each click produces a new progression.
+    pub progression_seed: u64,
+    /// Persisted generator knobs — chord count, beats per chord,
+    /// per-derive params (pad register, bass style, melody style).
+    pub generate_params: GenerateParams,
 }
 
 #[derive(Debug, Clone)]
@@ -37,7 +49,7 @@ pub struct ChordState {
     pub chord: Chord,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ComposeState {
     pub definitions: Vec<SectionDefinitionState>,
     pub placements: Vec<SectionPlacementState>,
@@ -65,6 +77,15 @@ pub struct ComposeState {
     /// Transient UI state for the drumroll block (selected pad, euclidean
     /// form buffers, pad map). Not persisted.
     pub drumroll: DrumrollViewState,
+    /// Derived clips we created, keyed by (definition_id, placement_id,
+    /// role). Runtime-only: rebuilt on project load by scanning clip
+    /// names in `r.midi_clips`. The re-derive path uses this to delete
+    /// old clips before issuing fresh ones.
+    pub derived_clips: HashMap<(u64, u64, TrackRole), ClipId>,
+    /// Monotonic id used when allocating fresh `ClipId`s for derived
+    /// clips. Kept in the high range so it never collides with engine-
+    /// allocated ids coming from `CreateMidiClip`.
+    pub next_derived_clip_id: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -81,10 +102,46 @@ pub struct EditSectionForm {
     pub length_input: String,
 }
 
+/// Starting point for app-allocated derived clip ids. Chosen high enough
+/// that it will never collide with engine-allocated clip ids (which count
+/// up monotonically from 1 via `CreateMidiClip`), yet small enough to
+/// leave headroom for a very long session. The engine bumps its own
+/// allocator past any id seen via `LoadMidiClipDirect`, so using values
+/// above this base is always safe.
+pub const DERIVED_CLIP_ID_BASE: u64 = 1 << 40;
+
+impl Default for ComposeState {
+    fn default() -> Self {
+        Self {
+            definitions: Vec::new(),
+            placements: Vec::new(),
+            selected_placement_id: None,
+            scroll_y: 0.0,
+            next_id: 0,
+            last_error: None,
+            new_section_form: None,
+            edit_section_form: None,
+            selected_chord_id: None,
+            details_track_id: None,
+            drumroll: DrumrollViewState::default(),
+            derived_clips: HashMap::new(),
+            next_derived_clip_id: DERIVED_CLIP_ID_BASE,
+        }
+    }
+}
+
 impl ComposeState {
     pub fn fresh_id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
+    }
+
+    /// Allocate a fresh clip id to use with `LoadMidiClipDirect`. See
+    /// [`DERIVED_CLIP_ID_BASE`] for why these live in the high range.
+    pub fn fresh_derived_clip_id(&mut self) -> ClipId {
+        let id = self.next_derived_clip_id;
+        self.next_derived_clip_id += 1;
+        id
     }
 
     pub fn find_definition(&self, id: u64) -> Option<&SectionDefinitionState> {
@@ -123,6 +180,8 @@ impl ComposeState {
                     })
                     .collect(),
                 scale: d.scale,
+                progression_seed: d.progression_seed,
+                generate_params: d.generate_params.clone(),
             })
             .collect()
     }
@@ -162,8 +221,15 @@ impl ComposeState {
                     })
                     .collect(),
                 scale: d.scale,
+                progression_seed: d.progression_seed,
+                generate_params: d.generate_params.clone(),
             })
             .collect();
+        // Runtime-only state: start each load with an empty derived-clip
+        // map. `update::project_io::replay_loaded_project` will rebuild
+        // it by scanning clip names once the MIDI clips are in place.
+        self.derived_clips.clear();
+        self.next_derived_clip_id = DERIVED_CLIP_ID_BASE;
         self.placements = placements
             .iter()
             .map(|p| SectionPlacementState {
@@ -221,6 +287,8 @@ mod tests {
                 },
             ],
             scale: Some(Scale::new(PitchClass::C, Mode::Minor)),
+            progression_seed: 12345,
+            generate_params: GenerateParams::default(),
         });
         let placement_id = state.fresh_id();
         state.placements.push(SectionPlacementState {
@@ -285,6 +353,10 @@ mod tests {
         assert_eq!(def.chords.len(), 2);
         assert_eq!(def.chords[0].chord.quality, ChordQuality::Maj7);
         assert_eq!(def.chords[1].chord.bass, Some(PitchClass::F));
+        // Generation fields round-trip unchanged.
+        assert_eq!(def.progression_seed, 12345);
+        assert_eq!(def.generate_params.chord_count, 4);
+        assert_eq!(def.generate_params.beats_per_chord, 4);
     }
 
     /// Old project files predating this feature won't have `chords` or

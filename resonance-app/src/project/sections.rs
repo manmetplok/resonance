@@ -1,6 +1,8 @@
 use resonance_music_theory::{Chord, Scale};
 use serde::{Deserialize, Serialize};
 
+use crate::compose::GenerateParams;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectSectionDefinition {
     pub id: u64,
@@ -11,6 +13,13 @@ pub struct ProjectSectionDefinition {
     pub chords: Vec<ProjectSectionChord>,
     #[serde(default)]
     pub scale: Option<Scale>,
+    /// Seed for the per-section progression walker. Older project files
+    /// load with seed 0, which the walker still accepts.
+    #[serde(default)]
+    pub progression_seed: u64,
+    /// Per-section knobs for the progression + derive generators.
+    #[serde(default)]
+    pub generate_params: GenerateParams,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

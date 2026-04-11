@@ -1,11 +1,14 @@
+use std::collections::HashSet;
+
 use resonance_audio::types::{AudioCommand, TICKS_PER_QUARTER_NOTE};
-use resonance_music_theory::Chord;
+use resonance_music_theory::{walk_progression, Chord, ProgressionParams};
 
 use crate::compose::invariants::{chord_fits_in_section, chord_overlaps, placement_overlaps};
 use crate::compose::{
-    ChordState, ComposeMessage, ComposeState, EditSectionForm, NewSectionForm,
-    SectionDefinitionState, SectionPlacementState,
+    generate, ChordState, ComposeMessage, ComposeState, DeriveKind, EditSectionForm,
+    NewSectionForm, SectionDefinitionState, SectionPlacementState,
 };
+use crate::state::TrackRole;
 
 /// Stock section names offered in the order Intro → Verse → Chorus → Bridge
 /// → Outro. Whichever is not yet present in the project is used as the
@@ -223,6 +226,8 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 length_bars,
                 chords: Vec::new(),
                 scale: None,
+                progression_seed: id.wrapping_mul(0x9E3779B97F4A7C15),
+                generate_params: crate::compose::GenerateParams::default(),
             });
             // Auto-place the new definition at the first free slot so the user
             // immediately sees the section on the strip.
@@ -511,7 +516,240 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
             }
             r.compose.last_error = None;
         }
+
+        // ---- Generate / derive ----
+        ComposeMessage::GenerateProgression { definition_id } => {
+            generate_progression(r, definition_id);
+        }
+
+        ComposeMessage::RerollProgression { definition_id } => {
+            // Bump the seed then regenerate. Use a golden-ratio hop so
+            // successive rerolls don't get stuck in a tight neighbourhood
+            // of the same xorshift state.
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                def.progression_seed = def
+                    .progression_seed
+                    .wrapping_add(0x9E3779B97F4A7C15)
+                    .wrapping_add(1);
+            }
+            generate_progression(r, definition_id);
+            cascade_rederive(r, definition_id);
+        }
+
+        ComposeMessage::SetGenerateChordCount { definition_id, chord_count } => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                def.generate_params.chord_count = chord_count.max(1).min(32);
+                r.compose.last_error = None;
+            }
+        }
+        ComposeMessage::SetGenerateBeatsPerChord { definition_id, beats_per_chord } => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                def.generate_params.beats_per_chord = beats_per_chord.max(1).min(16);
+                r.compose.last_error = None;
+            }
+        }
+        ComposeMessage::SetGenerateSeventhChords { definition_id, seventh_chords } => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                def.generate_params.seventh_chords = seventh_chords;
+                r.compose.last_error = None;
+            }
+        }
+        ComposeMessage::SetBassStyle { definition_id, style } => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                def.generate_params.bass.style = style;
+                r.compose.last_error = None;
+            }
+        }
+        ComposeMessage::SetMelodyStyle { definition_id, style } => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                def.generate_params.melody.style = style;
+                r.compose.last_error = None;
+            }
+        }
+
+        ComposeMessage::DerivePart { definition_id, kind } => {
+            derive_part(r, definition_id, kind);
+        }
+
+        ComposeMessage::DeriveAllParts { definition_id } => {
+            // Stop at the first role that has no target track, so
+            // last_error communicates the missing role clearly.
+            derive_part(r, definition_id, DeriveKind::Pad);
+            derive_part(r, definition_id, DeriveKind::Bass);
+            derive_part(r, definition_id, DeriveKind::Lead);
+        }
+
+        ComposeMessage::SetTrackRole { track_id, role } => {
+            if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
+                track.role = role;
+            }
+        }
     }
+}
+
+/// Regenerate the section's chord list from its current scale and
+/// generate params, using the section's current seed.
+fn generate_progression(r: &mut crate::Resonance, definition_id: u64) {
+    let time_sig_num = r.transport.time_sig_num;
+    let def_snapshot = match r.compose.find_definition(definition_id) {
+        Some(d) => d.clone(),
+        None => return,
+    };
+    let Some(scale) = def_snapshot.scale else {
+        r.compose.last_error = Some("Pick a scale before generating a progression".into());
+        return;
+    };
+    let params = ProgressionParams {
+        scale,
+        chord_count: def_snapshot.generate_params.chord_count.max(1),
+        seventh_chords: def_snapshot.generate_params.seventh_chords,
+        seed: def_snapshot.progression_seed,
+    };
+    let chords = walk_progression(&params);
+
+    let beats_per_chord = def_snapshot.generate_params.beats_per_chord.max(1);
+    let section_beats = def_snapshot.length_bars * time_sig_num as u32;
+    let total_beats = chords.len() as u32 * beats_per_chord;
+    if total_beats > section_beats {
+        r.compose.last_error = Some(format!(
+            "Generated {} chords × {} beats won't fit in {} bars",
+            chords.len(),
+            beats_per_chord,
+            def_snapshot.length_bars
+        ));
+        return;
+    }
+
+    // Build the new ChordState list. Fresh ids so nothing lingers from
+    // the previous progression.
+    let mut new_chords = Vec::with_capacity(chords.len());
+    for (i, chord) in chords.iter().enumerate() {
+        let id = r.compose.fresh_id();
+        new_chords.push(ChordState {
+            id,
+            start_beat: i as u32 * beats_per_chord,
+            duration_beats: beats_per_chord,
+            chord: *chord,
+        });
+    }
+    if let Some(def) = r.compose.find_definition_mut(definition_id) {
+        def.chords = new_chords;
+    }
+    r.compose.selected_chord_id = None;
+    r.compose.last_error = None;
+}
+
+/// Re-run every derive that already has clips for this section. Used
+/// after a progression reroll so existing Pad/Bass/Lead tracks stay in
+/// sync with the new chord list.
+fn cascade_rederive(r: &mut crate::Resonance, definition_id: u64) {
+    let roles: HashSet<TrackRole> = r
+        .compose
+        .derived_clips
+        .keys()
+        .filter(|(d, _, _)| *d == definition_id)
+        .map(|(_, _, role)| *role)
+        .collect();
+    for role in roles {
+        let kind = match role {
+            TrackRole::Pad => DeriveKind::Pad,
+            TrackRole::Bass => DeriveKind::Bass,
+            TrackRole::Lead => DeriveKind::Lead,
+        };
+        derive_part(r, definition_id, kind);
+    }
+}
+
+/// Run the deriver for `kind` and emit the commands to replace every
+/// derived clip of that role for every placement of this section.
+fn derive_part(r: &mut crate::Resonance, definition_id: u64, kind: DeriveKind) {
+    let role = match kind {
+        DeriveKind::Pad => TrackRole::Pad,
+        DeriveKind::Bass => TrackRole::Bass,
+        DeriveKind::Lead => TrackRole::Lead,
+    };
+
+    // Target track: first non-sub-track with the matching role.
+    let Some(target_track_id) = r
+        .registry
+        .tracks
+        .iter()
+        .filter(|t| t.sub_track.is_none())
+        .find(|t| t.role == Some(role))
+        .map(|t| t.id)
+    else {
+        r.compose.last_error = Some(format!("No track tagged as {}", role.as_str()));
+        return;
+    };
+
+    let def = match r.compose.find_definition(definition_id) {
+        Some(d) => d.clone(),
+        None => return,
+    };
+    if def.chords.is_empty() {
+        r.compose.last_error = Some("Section has no chords to derive from".into());
+        return;
+    }
+
+    // Pure generation. Seed lives on the section so the same section
+    // always produces the same derived parts until the user rerolls.
+    let notes = generate::derive_notes(
+        kind,
+        &def.chords,
+        def.scale,
+        &def.generate_params,
+        TICKS_PER_QUARTER_NOTE as u32,
+        def.progression_seed,
+    );
+
+    let time_sig_num = r.transport.time_sig_num;
+    let samples_per_bar = compose_samples_per_bar(r.sample_rate, r.transport.bpm, time_sig_num);
+    let duration_ticks = def.length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
+    let name = format!("{} · {}", def.name, role.as_str());
+
+    let placements: Vec<(u64, u32)> = r
+        .compose
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == definition_id)
+        .map(|p| (p.id, p.start_bar))
+        .collect();
+
+    for (placement_id, start_bar) in placements {
+        // Delete any previous derived clip at this slot so the new one
+        // doesn't stack on top of it.
+        if let Some(old_id) = r
+            .compose
+            .derived_clips
+            .remove(&(definition_id, placement_id, role))
+        {
+            r.engine
+                .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
+        }
+
+        let clip_id = r.compose.fresh_derived_clip_id();
+        let start_sample = start_bar as u64 * samples_per_bar;
+        r.engine.send(AudioCommand::LoadMidiClipDirect {
+            clip_id,
+            track_id: target_track_id,
+            start_sample,
+            duration_ticks,
+            notes: notes.clone(),
+            name: name.clone(),
+            trim_start_ticks: 0,
+            trim_end_ticks: 0,
+        });
+        r.compose
+            .derived_clips
+            .insert((definition_id, placement_id, role), clip_id);
+    }
+
+    r.compose.last_error = None;
+}
+
+fn compose_samples_per_bar(sample_rate: u32, bpm: f32, time_sig_num: u8) -> u64 {
+    let samples_per_beat = sample_rate as f64 * 60.0 / bpm as f64;
+    (samples_per_beat * time_sig_num as f64) as u64
 }
 
 /// Find the earliest bar where a placement of the given length would not

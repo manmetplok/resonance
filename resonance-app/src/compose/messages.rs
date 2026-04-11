@@ -1,7 +1,11 @@
 use resonance_audio::types::TrackId;
-use resonance_music_theory::{Chord, ChordQuality, PitchClass, Scale};
+use resonance_music_theory::{
+    BassStyle, Chord, ChordQuality, MelodyStyle, PitchClass, Scale,
+};
 
 use crate::compose::drumroll::DrumrollMessage;
+use crate::compose::DeriveKind;
+use crate::state::TrackRole;
 
 #[derive(Debug, Clone)]
 pub enum ComposeMessage {
@@ -104,5 +108,39 @@ pub enum ComposeMessage {
     DeleteChord {
         definition_id: u64,
         chord_id: u64,
+    },
+
+    // ---- Generate / derive ----
+    /// Replace the section's chord list with a progression generated
+    /// from the section's scale + generate_params. Does not bump the
+    /// seed — callers who want a new progression should send
+    /// `RerollProgression` instead.
+    GenerateProgression { definition_id: u64 },
+
+    /// Bump the progression seed and regenerate. Cascade: any derived
+    /// clips already in place for this section are refreshed.
+    RerollProgression { definition_id: u64 },
+
+    /// Set the target chord count for the next generated progression.
+    SetGenerateChordCount { definition_id: u64, chord_count: u32 },
+    /// Set beats per chord for the next generated progression.
+    SetGenerateBeatsPerChord { definition_id: u64, beats_per_chord: u32 },
+    /// Toggle seventh chords in the next generated progression.
+    SetGenerateSeventhChords { definition_id: u64, seventh_chords: bool },
+
+    /// Change bass style on a section's generate params.
+    SetBassStyle { definition_id: u64, style: BassStyle },
+    /// Change melody style on a section's generate params.
+    SetMelodyStyle { definition_id: u64, style: MelodyStyle },
+
+    /// Derive MIDI clips for one role on every placement of this section.
+    DerivePart { definition_id: u64, kind: DeriveKind },
+    /// Derive pad, bass and lead parts in one shot.
+    DeriveAllParts { definition_id: u64 },
+
+    /// Set or clear a track's arrangement role.
+    SetTrackRole {
+        track_id: TrackId,
+        role: Option<TrackRole>,
     },
 }

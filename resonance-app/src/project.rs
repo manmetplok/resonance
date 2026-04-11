@@ -90,6 +90,10 @@ pub struct ProjectTrack {
     /// icon matching `instrument_type`.
     #[serde(default)]
     pub instrument_icon: crate::state::InstrumentIcon,
+    /// Arrangement role for derive-from-chords flows. Legacy projects load
+    /// with `None`, meaning the track is not auto-picked by any derive.
+    #[serde(default)]
+    pub role: Option<crate::state::TrackRole>,
     /// When set, this track is a sub-track driven by a non-main output
     /// port of `parent_track_id`'s instrument plugin. Legacy projects
     /// load with `None` (no sub-tracks existed before this feature).
