@@ -15,12 +15,10 @@
 //! All intermediate quantities downstream of the detector are in dB so
 //! that the soft-knee formula and makeup gain are linear and cheap.
 
-use resonance_dsp::Biquad;
+use resonance_dsp::{db_to_linear, linear_to_db, Biquad};
 
 use crate::params::CompressorParams;
 use crate::viz::{CompressorViz, HISTORY_STEP_SAMPLES};
-
-const MIN_DB: f32 = -120.0;
 
 pub struct CompressorDsp {
     sample_rate: f32,
@@ -257,18 +255,6 @@ fn static_gain_computer(
     } else {
         0.0
     }
-}
-
-fn linear_to_db(v: f32) -> f32 {
-    if v <= 1e-10 {
-        MIN_DB
-    } else {
-        20.0 * v.log10()
-    }
-}
-
-fn db_to_linear(db: f32) -> f32 {
-    10.0_f32.powf(db / 20.0)
 }
 
 /// Public, pure helper reused by the editor to render the transfer curve

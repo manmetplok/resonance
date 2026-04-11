@@ -6,7 +6,7 @@
 //! channels × 8 bands × up-to-4 stages biquad cascade plus a trailing
 //! output gain.
 
-use resonance_dsp::Biquad;
+use resonance_dsp::{db_to_linear, Biquad};
 use resonance_plugin::Smoother;
 
 use crate::band::{configure_stages, MAX_STAGES_PER_BAND};
@@ -87,10 +87,6 @@ impl EqDsp {
             right[i] = r * gain_lin;
         }
     }
-}
-
-fn db_to_linear(db: f32) -> f32 {
-    10.0_f32.powf(db / 20.0)
 }
 
 fn snapshots_equal(a: &BandSnapshot, b: &BandSnapshot) -> bool {

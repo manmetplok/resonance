@@ -68,6 +68,12 @@ pub struct Voice {
     pub unison: [UnisonSubVoice; MAX_UNISON],
     pub unison_count: usize,
 
+    // Set by `trigger()`, cleared by the render loop the first time the
+    // voice runs through the filter stage. Used to force an immediate
+    // filter coefficient update on freshly-triggered voices even when
+    // the global control-rate slot wouldn't otherwise tick this sample.
+    pub filter_dirty: bool,
+
     // "Last computed" values cached per-sample during render. Read by the
     // viz state publisher at the end of each audio block. Not part of the
     // DSP itself.
@@ -95,6 +101,7 @@ impl Voice {
             filter_r: StateVariableFilter::new(),
             unison: std::array::from_fn(|_| UnisonSubVoice::new()),
             unison_count: 1,
+            filter_dirty: true,
             last_filter_cutoff: 8000.0,
             last_osc1_pos: 0.0,
             last_osc2_pos: 0.0,
@@ -146,6 +153,7 @@ impl Voice {
 
         self.filter_l.clear();
         self.filter_r.clear();
+        self.filter_dirty = true;
 
         // Distribute unison voices
         self.unison_count = unison_count.clamp(1, MAX_UNISON);

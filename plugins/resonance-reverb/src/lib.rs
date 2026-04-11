@@ -87,9 +87,9 @@ impl ResonancePlugin for ResonanceReverb {
         frames: usize,
         _events: &mut EventIterator<'_>,
     ) {
-        let main = outputs
-            .first_mut()
-            .expect("resonance-reverb always has a main output");
+        let Some(main) = outputs.first_mut() else {
+            return;
+        };
         let left = &mut *main.left;
         let right = &mut *main.right;
         resonance_common::flush_denormals();
@@ -113,14 +113,16 @@ impl ResonancePlugin for ResonanceReverb {
         let freeze = self.params.freeze.value();
 
         // Advance smoothers to end-of-block values for expensive DSP updates.
-        // These are called once per block instead of per-sample since they involve
-        // transcendental functions (powf, exp) and 8-channel loop recalculations.
-        for _ in 0..frames { self.params.size.smoother.next(); }
-        for _ in 0..frames { self.params.decay.smoother.next(); }
-        for _ in 0..frames { self.params.damping.smoother.next(); }
-        for _ in 0..frames { self.params.predelay.smoother.next(); }
-        for _ in 0..frames { self.params.mod_rate.smoother.next(); }
-        for _ in 0..frames { self.params.mod_depth.smoother.next(); }
+        // These are called once per block instead of per-sample since they
+        // involve transcendental functions (powf, exp) and 8-channel loop
+        // recalculations, so the block-rate stair-step is deliberate.
+        let n = frames as u32;
+        self.params.size.smoother.skip(n);
+        self.params.decay.smoother.skip(n);
+        self.params.damping.smoother.skip(n);
+        self.params.predelay.smoother.skip(n);
+        self.params.mod_rate.smoother.skip(n);
+        self.params.mod_depth.smoother.skip(n);
 
         reverb.set_size(self.params.size.smoother.current());
         reverb.set_decay(self.params.decay.smoother.current());

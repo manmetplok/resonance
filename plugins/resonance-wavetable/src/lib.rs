@@ -14,6 +14,7 @@ mod lfo;
 mod modulation;
 mod oscillator;
 mod params;
+mod render;
 mod viz;
 mod voice;
 mod wavetable;
@@ -78,41 +79,18 @@ impl ResonancePlugin for ResonanceWavetable {
         frames: usize,
         events: &mut EventIterator<'_>,
     ) {
-        let main = outputs
-            .first_mut()
-            .expect("resonance-wavetable always has a main output");
-        let left = &mut *main.left;
-        let right = &mut *main.right;
+        let Some(main) = outputs.first_mut() else {
+            return;
+        };
+        let left = &mut main.left[..frames];
+        let right = &mut main.right[..frames];
         resonance_common::flush_denormals();
 
-        // Sample-accurate MIDI processing
-        let mut next_event = events.next_event();
-
-        for sample_id in 0..frames {
-            while let Some(event) = next_event {
-                if event.timing() > sample_id as u32 {
-                    break;
-                }
-
-                match event {
-                    NoteEvent::NoteOn { note, velocity, .. } => {
-                        self.engine.note_on(note, velocity, &self.params);
-                    }
-                    NoteEvent::NoteOff { note, .. } => {
-                        self.engine.note_off(note);
-                    }
-                    NoteEvent::Choke { note, .. } => {
-                        self.engine.note_off(note);
-                    }
-                }
-
-                next_event = events.next_event();
-            }
-
-            let (frame_l, frame_r) = self.engine.render_frame(&self.params);
-            left[sample_id] = frame_l;
-            right[sample_id] = frame_r;
-        }
+        // The engine drains `events` with sample-accurate timing internally
+        // and snapshots every atomic parameter once for the whole block --
+        // the per-sample kernel reads only from stack locals from there on.
+        self.engine
+            .render_block(left, right, frames, &self.params, events);
 
         // Publish audio-thread state to the shared viz atomics once per
         // block. The editor thread reads from these at ~60 Hz.

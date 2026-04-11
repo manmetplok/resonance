@@ -187,31 +187,38 @@ impl ResonancePlugin for ResonanceDrums {
             }
         }
 
-        // Build a slice of per-port buffer views for the sampler. The
-        // CLAP bridge already handed us one OutputBuffer per declared
-        // port (7 for this plugin), so we just re-project into the
-        // sampler's PortBuffers shape.
-        let mut port_views: Vec<sampler::PortBuffers<'_>> =
-            Vec::with_capacity(outputs.len());
-        for out in outputs.iter_mut() {
-            port_views.push(sampler::PortBuffers {
-                left: &mut *out.left,
-                right: &mut *out.right,
-            });
+        // Project the CLAP bridge's `OutputBuffer` slice into the sampler's
+        // `PortBuffers` shape on the stack. The plugin declares exactly
+        // `NUM_OUTPUT_PORTS` output ports in its layout so the bridge is
+        // guaranteed to hand us at least that many; bail if it doesn't
+        // rather than panic on the audio thread.
+        if outputs.len() < kit::NUM_OUTPUT_PORTS {
+            return;
         }
+        let mut out_iter = outputs.iter_mut();
+        let mut port_views: [sampler::PortBuffers<'_>; kit::NUM_OUTPUT_PORTS] =
+            std::array::from_fn(|_| {
+                let out = out_iter.next().expect("checked len above");
+                sampler::PortBuffers {
+                    left: &mut *out.left,
+                    right: &mut *out.right,
+                }
+            });
+        drop(out_iter);
 
         self.sampler
             .render_block(&mut port_views, frames, &self.params);
 
-        // Apply master volume across every port in-place.
+        // Apply master volume across every port in-place. Work through the
+        // `port_views` we already projected so we don't need a second borrow
+        // of `outputs`.
         let master_vol = self.params.master_volume.value();
-        drop(port_views);
         if (master_vol - 1.0).abs() > f32::EPSILON {
-            for out in outputs.iter_mut() {
-                for sample in out.left[..frames].iter_mut() {
+            for port in port_views.iter_mut() {
+                for sample in port.left[..frames].iter_mut() {
                     *sample *= master_vol;
                 }
-                for sample in out.right[..frames].iter_mut() {
+                for sample in port.right[..frames].iter_mut() {
                     *sample *= master_vol;
                 }
             }

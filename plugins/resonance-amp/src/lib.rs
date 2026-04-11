@@ -235,9 +235,9 @@ impl ResonancePlugin for ResonanceAmp {
     ) {
         // Single-output effect: operate on port 0 only. The CLAP bridge
         // has already seeded this buffer with the incoming audio.
-        let main = outputs
-            .first_mut()
-            .expect("resonance-amp always has a main output");
+        let Some(main) = outputs.first_mut() else {
+            return;
+        };
         let left = &mut *main.left;
         let right = &mut *main.right;
         resonance_common::flush_denormals();
@@ -271,11 +271,51 @@ impl ResonancePlugin for ResonanceAmp {
         self.output_gain_smoother
             .set_target(self.params.output_gain.value());
 
+        // Hot path: no model swap in flight. `active_model` is stable across
+        // the whole block so we can hoist the `Some/None` match outside the
+        // per-sample loop and avoid a branch per frame.
+        if self.fade_out_remaining == 0 {
+            match self.active_model.as_mut() {
+                Some(model) => {
+                    for i in 0..frames {
+                        let input_gain = self.input_gain_smoother.next();
+                        let output_gain = self.output_gain_smoother.next();
+                        let fade_gain = if self.fade_in_remaining > 0 {
+                            self.fade_in_remaining -= 1;
+                            1.0 - self.fade_in_remaining as f32 / SWAP_FADE_SAMPLES as f32
+                        } else {
+                            1.0
+                        };
+                        let input = left[i] * input_gain;
+                        let output = model.process_sample(input) * output_gain * fade_gain;
+                        left[i] = output;
+                        right[i] = output;
+                    }
+                }
+                None => {
+                    // No model loaded: only `input_gain * output_gain` is
+                    // applied. `fade_in_remaining` is guaranteed to be zero
+                    // in this arm because a fade-in is always paired with a
+                    // newly installed model.
+                    for i in 0..frames {
+                        let input_gain = self.input_gain_smoother.next();
+                        let output_gain = self.output_gain_smoother.next();
+                        let gain = input_gain * output_gain;
+                        left[i] *= gain;
+                        right[i] *= gain;
+                    }
+                }
+            }
+            return;
+        }
+
+        // Slow path: fade-out in progress, `active_model` will be replaced
+        // mid-block when `fade_out_remaining` hits zero. Keep the original
+        // per-sample match so we pick up the new model at the swap boundary.
         for i in 0..frames {
             let input_gain = self.input_gain_smoother.next();
             let output_gain = self.output_gain_smoother.next();
 
-            // Crossfade envelope: fade out old model, swap, fade in new model
             let fade_gain = if self.fade_out_remaining > 0 {
                 self.fade_out_remaining -= 1;
                 let g = self.fade_out_remaining as f32 / SWAP_FADE_SAMPLES as f32;

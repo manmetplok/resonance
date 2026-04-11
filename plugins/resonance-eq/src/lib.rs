@@ -91,9 +91,9 @@ impl ResonancePlugin for ResonanceEq {
         frames: usize,
         _events: &mut EventIterator<'_>,
     ) {
-        let main = outputs
-            .first_mut()
-            .expect("resonance-eq always has a main output");
+        let Some(main) = outputs.first_mut() else {
+            return;
+        };
         let left = &mut main.left[..frames];
         let right = &mut main.right[..frames];
         resonance_common::flush_denormals();

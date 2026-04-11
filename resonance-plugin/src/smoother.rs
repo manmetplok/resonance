@@ -88,6 +88,52 @@ impl Smoother {
         self.step = 0.0;
     }
 
+    /// Analytically fast-forward the smoother by `n` samples. Produces the
+    /// same `current` value as `for _ in 0..n { self.next(); }` but without
+    /// the per-sample loop. Used for block-rate parameters where only the
+    /// end-of-block value is consumed (e.g. expensive DSP coefficient
+    /// updates), and where spinning `frames` iterations purely to advance
+    /// smoother state would be wasteful.
+    pub fn skip(&mut self, n: u32) {
+        if n == 0 {
+            return;
+        }
+        if self.remaining == 0 {
+            self.current = self.target;
+            return;
+        }
+
+        let consumed = n.min(self.remaining);
+        let reaches_target = consumed == self.remaining;
+        self.remaining -= consumed;
+
+        match self.style {
+            SmoothingStyle::None => {
+                self.current = self.target;
+            }
+            SmoothingStyle::Linear(_) => {
+                if reaches_target {
+                    self.current = self.target;
+                } else {
+                    self.current += self.step * consumed as f32;
+                }
+            }
+            SmoothingStyle::Logarithmic(_) => {
+                if reaches_target {
+                    self.current = self.target;
+                } else {
+                    // Exact closed form for the recurrence
+                    //   c_{k+1} = c_k + (t - c_k) * step
+                    // which gives
+                    //   c_n = t - (t - c_0) * (1 - step)^n
+                    let remaining_dist = self.target - self.current;
+                    let decay = (1.0 - self.step).powi(consumed as i32);
+                    self.current = self.target - remaining_dist * decay;
+                }
+            }
+        }
+    }
+
     /// Get the next smoothed value (call once per sample).
     pub fn next(&mut self) -> f32 {
         if self.remaining == 0 {
