@@ -1,5 +1,5 @@
 /// Update logic and subscription for the Resonance application.
-use crate::message::Message;
+use crate::message::*;
 use crate::state::*;
 use crate::theme;
 use crate::util::db_to_gain;
@@ -20,11 +20,11 @@ impl crate::Resonance {
             Message::Compose(m) => {
                 crate::update::compose::handle(self, m);
             }
-            Message::Play => {
+            Message::Transport(TransportMessage::Play) => {
                 self.engine.send(AudioCommand::Play);
                 self.transport.playing = true;
             }
-            Message::Record => {
+            Message::Transport(TransportMessage::Record) => {
                 // Only meaningful when at least one track is armed; the UI
                 // disables the button otherwise.
                 if self.registry.tracks.iter().any(|t| t.record_armed) {
@@ -33,60 +33,60 @@ impl crate::Resonance {
                     // self.transport.recording flips true when RecordingStarted arrives.
                 }
             }
-            Message::Pause => {
+            Message::Transport(TransportMessage::Pause) => {
                 self.engine.send(AudioCommand::Pause);
                 self.transport.playing = false;
             }
-            Message::Stop => {
+            Message::Transport(TransportMessage::Stop) => {
                 self.engine.send(AudioCommand::Stop);
                 self.transport.playing = false;
                 self.transport.playhead = 0;
             }
-            Message::SkipBack => {
+            Message::Transport(TransportMessage::SkipBack) => {
                 let skip = self.sample_rate as u64 * 5;
                 let new_pos = self.transport.playhead.saturating_sub(skip);
                 self.engine.send(AudioCommand::SeekTo(new_pos));
                 self.transport.playhead = new_pos;
             }
-            Message::SkipForward => {
+            Message::Transport(TransportMessage::SkipForward) => {
                 let skip = self.sample_rate as u64 * 5;
                 let new_pos = self.transport.playhead + skip;
                 self.engine.send(AudioCommand::SeekTo(new_pos));
                 self.transport.playhead = new_pos;
             }
-            Message::SeekToSample(pos) => {
+            Message::Transport(TransportMessage::SeekToSample(pos)) => {
                 self.engine.send(AudioCommand::SeekTo(pos));
                 self.transport.playhead = pos;
             }
-            Message::AddTrack => {
+            Message::Track(TrackMessage::AddTrack) => {
                 self.engine.send(AudioCommand::AddTrack {
                     id_hint: None,
                     name: None,
                 });
                 self.mixer.add_track_menu_open = false;
             }
-            Message::RemoveTrack(id) => {
+            Message::Track(TrackMessage::RemoveTrack(id)) => {
                 self.engine.send(AudioCommand::RemoveTrack { track_id: id });
             }
-            Message::SetTrackVolume(id, vol_db) => {
+            Message::Track(TrackMessage::SetTrackVolume(id, vol_db)) => {
                 self.engine.send(AudioCommand::SetTrackVolume {
                     track_id: id,
                     volume: db_to_gain(vol_db),
                 });
                 self.with_track_mut(id, |t| t.volume = vol_db);
             }
-            Message::SetTrackPan(id, pan) => {
+            Message::Track(TrackMessage::SetTrackPan(id, pan)) => {
                 self.engine
                     .send(AudioCommand::SetTrackPan { track_id: id, pan });
                 self.with_track_mut(id, |t| t.pan = pan);
             }
-            Message::SetMasterVolume(vol_db) => {
+            Message::Track(TrackMessage::SetMasterVolume(vol_db)) => {
                 self.engine.send(AudioCommand::SetMasterVolume {
                     volume: db_to_gain(vol_db),
                 });
                 self.master_volume = vol_db;
             }
-            Message::ToggleMute(id) => {
+            Message::Track(TrackMessage::ToggleMute(id)) => {
                 let new_muted = self.with_track_mut(id, |t| {
                     t.muted = !t.muted;
                     t.muted
@@ -98,7 +98,7 @@ impl crate::Resonance {
                     });
                 }
             }
-            Message::ToggleSolo(id) => {
+            Message::Track(TrackMessage::ToggleSolo(id)) => {
                 let new_soloed = self.with_track_mut(id, |t| {
                     t.soloed = !t.soloed;
                     t.soloed
@@ -110,15 +110,15 @@ impl crate::Resonance {
                     });
                 }
             }
-            Message::DeleteClip(id) => {
+            Message::Clip(ClipMessage::DeleteClip(id)) => {
                 self.engine.send(AudioCommand::DeleteClip { clip_id: id });
                 if self.interaction.selected_clip == Some(id) {
                     self.interaction.selected_clip = None;
                 }
             }
-            Message::ZoomIn => viewport::zoom_in(self),
-            Message::ZoomOut => viewport::zoom_out(self),
-            Message::ToggleMonitor(id) => {
+            Message::Viewport(ViewportMessage::ZoomIn) => viewport::zoom_in(self),
+            Message::Viewport(ViewportMessage::ZoomOut) => viewport::zoom_out(self),
+            Message::Track(TrackMessage::ToggleMonitor(id)) => {
                 let new_enabled = self.with_track_mut(id, |t| {
                     t.monitor_enabled = !t.monitor_enabled;
                     t.monitor_enabled
@@ -130,19 +130,19 @@ impl crate::Resonance {
                     });
                 }
             }
-            Message::SetTrackName(track_id, name) => {
+            Message::Track(TrackMessage::SetTrackName(track_id, name)) => {
                 self.with_track_mut(track_id, |t| t.name = name);
             }
-            Message::SetInstrumentType(track_id, ty) => {
+            Message::Track(TrackMessage::SetInstrumentType(track_id, ty)) => {
                 self.with_track_mut(track_id, |t| {
                     t.instrument_type = ty;
                     t.instrument_icon = crate::state::InstrumentIcon::default_for(ty);
                 });
             }
-            Message::SetInstrumentIcon(track_id, icon) => {
+            Message::Track(TrackMessage::SetInstrumentIcon(track_id, icon)) => {
                 self.with_track_mut(track_id, |t| t.instrument_icon = icon);
             }
-            Message::ToggleTrackMono(id) => {
+            Message::Track(TrackMessage::ToggleTrackMono(id)) => {
                 let new_mono = self.with_track_mut(id, |t| {
                     t.mono = !t.mono;
                     t.mono
@@ -154,7 +154,7 @@ impl crate::Resonance {
                     });
                 }
             }
-            Message::ToggleRecordArm(id) => {
+            Message::Track(TrackMessage::ToggleRecordArm(id)) => {
                 // Auto-attach default input device when arming if none set.
                 let default_device = self.default_input_device_name.clone();
                 let auto_device = self.with_track_mut(id, |t| {
@@ -177,7 +177,7 @@ impl crate::Resonance {
                     });
                 }
             }
-            Message::SetTrackInputDevice(id, device_name) => {
+            Message::Track(TrackMessage::SetTrackInputDevice(id, device_name)) => {
                 // Reset port to first channel pair when device changes —
                 // the old port may not exist on the new card.
                 let updated = self.with_track_mut(id, |t| {
@@ -195,7 +195,7 @@ impl crate::Resonance {
                     });
                 }
             }
-            Message::SetTrackInputPort(id, port_index) => {
+            Message::Track(TrackMessage::SetTrackInputPort(id, port_index)) => {
                 let updated = self.with_track_mut(id, |t| t.input_port_index = port_index);
                 if updated.is_some() {
                     self.engine.send(AudioCommand::SetTrackInputPort {
@@ -204,19 +204,19 @@ impl crate::Resonance {
                     });
                 }
             }
-            Message::ToggleSubTracksVisible(id) => {
+            Message::Track(TrackMessage::ToggleSubTracksVisible(id)) => {
                 if !self.mixer.collapsed_sub_track_parents.insert(id) {
                     // Already present — the insert was a no-op, so toggle
                     // to the expanded state by removing.
                     self.mixer.collapsed_sub_track_parents.remove(&id);
                 }
             }
-            Message::SetBpmText(s) => {
+            Message::Transport(TransportMessage::SetBpmText(s)) => {
                 // Accept any keystroke so the user can type freely; only
                 // commit on Enter via CommitBpm.
                 self.transport.bpm_input = s;
             }
-            Message::CommitBpm => {
+            Message::Transport(TransportMessage::CommitBpm) => {
                 match self.transport.bpm_input.trim().parse::<f32>() {
                     Ok(parsed) => {
                         self.transport.bpm = parsed.clamp(20.0, 300.0);
@@ -228,7 +228,7 @@ impl crate::Resonance {
                 // or reverted) BPM so the field shows a sane value.
                 self.transport.bpm_input = format!("{:.0}", self.transport.bpm);
             }
-            Message::CyclePrecountBars => {
+            Message::Transport(TransportMessage::CyclePrecountBars) => {
                 // Cycle through common pre-count lengths.
                 self.transport.precount_bars = match self.transport.precount_bars {
                     0 => 1,
@@ -237,13 +237,13 @@ impl crate::Resonance {
                     _ => 0,
                 };
             }
-            Message::ToggleMetronome => {
+            Message::Transport(TransportMessage::ToggleMetronome) => {
                 self.transport.metronome_enabled = !self.transport.metronome_enabled;
                 self.engine.send(AudioCommand::SetMetronomeEnabled {
                     enabled: self.transport.metronome_enabled,
                 });
             }
-            Message::CycleTimeSignature => {
+            Message::Transport(TransportMessage::CycleTimeSignature) => {
                 // Cycle through common time signatures
                 let (num, den) = match (self.transport.time_sig_num, self.transport.time_sig_den) {
                     (4, 4) => (3, 4),
@@ -260,7 +260,7 @@ impl crate::Resonance {
                     denominator: den,
                 });
             }
-            Message::AddPluginToTrack(track_id, plugin) => {
+            Message::Plugin(PluginMessage::AddPluginToTrack(track_id, plugin)) => {
                 self.engine.send(AudioCommand::AddPlugin {
                     track_id,
                     clap_file_path: plugin.clap_file_path,
@@ -268,20 +268,20 @@ impl crate::Resonance {
                     id_hint: None,
                 });
             }
-            Message::RemovePluginFromTrack(track_id, instance_id) => {
+            Message::Plugin(PluginMessage::RemovePluginFromTrack(track_id, instance_id)) => {
                 self.engine.send(AudioCommand::RemovePlugin {
                     track_id,
                     instance_id,
                 });
             }
-            Message::TogglePluginPanel(instance_id) => {
+            Message::Plugin(PluginMessage::TogglePluginPanel(instance_id)) => {
                 if self.mixer.selected_plugin == Some(instance_id) {
                     self.mixer.selected_plugin = None;
                 } else {
                     self.mixer.selected_plugin = Some(instance_id);
                 }
             }
-            Message::SetPluginParam(instance_id, param_id, value) => {
+            Message::Plugin(PluginMessage::SetPluginParam(instance_id, param_id, value)) => {
                 self.engine.send(AudioCommand::SetPluginParam {
                     instance_id,
                     param_id,
@@ -296,37 +296,37 @@ impl crate::Resonance {
                     }
                 });
             }
-            Message::OpenPluginEditor(instance_id) => {
+            Message::Plugin(PluginMessage::OpenPluginEditor(instance_id)) => {
                 self.engine
                     .send(AudioCommand::OpenPluginEditor { instance_id });
                 self.with_plugin_mut(instance_id, |p| p.editor_open = true);
             }
-            Message::ClosePluginEditor(instance_id) => {
+            Message::Plugin(PluginMessage::ClosePluginEditor(instance_id)) => {
                 self.engine
                     .send(AudioCommand::ClosePluginEditor { instance_id });
                 self.with_plugin_mut(instance_id, |p| p.editor_open = false);
             }
-            Message::ScrollX(delta) => viewport::scroll_x_delta(self, delta),
-            Message::ScrollY(delta) => viewport::scroll_y_delta(self, delta),
-            Message::SwitchView(mode) => {
+            Message::Viewport(ViewportMessage::ScrollX(delta)) => viewport::scroll_x_delta(self, delta),
+            Message::Viewport(ViewportMessage::ScrollY(delta)) => viewport::scroll_y_delta(self, delta),
+            Message::Ui(UiMessage::SwitchView(mode)) => {
                 self.view_mode = mode;
             }
-            Message::OpenSettings => {
+            Message::Ui(UiMessage::OpenSettings) => {
                 self.mixer.settings_open = true;
             }
-            Message::CloseSettings => {
+            Message::Ui(UiMessage::CloseSettings) => {
                 self.mixer.settings_open = false;
             }
-            Message::OpenAddTrackMenu => {
+            Message::Ui(UiMessage::OpenAddTrackMenu) => {
                 self.mixer.add_track_menu_open = true;
             }
-            Message::CloseAddTrackMenu => {
+            Message::Ui(UiMessage::CloseAddTrackMenu) => {
                 self.mixer.add_track_menu_open = false;
             }
-            Message::DismissError => {
+            Message::Ui(UiMessage::DismissError) => {
                 self.error_message = None;
             }
-            Message::ToggleLoop => {
+            Message::Transport(TransportMessage::ToggleLoop) => {
                 self.transport.loop_enabled = !self.transport.loop_enabled;
                 // Set sensible defaults if enabling with no range set
                 if self.transport.loop_enabled && !self.transport.loop_range_set {
@@ -343,10 +343,10 @@ impl crate::Resonance {
                     loop_out: self.transport.loop_out,
                 });
             }
-            Message::StartLoopDrag(target) => {
+            Message::Transport(TransportMessage::StartLoopDrag(target)) => {
                 self.transport.dragging_loop = Some(target);
             }
-            Message::UpdateLoopDrag(x) => {
+            Message::Transport(TransportMessage::UpdateLoopDrag(x)) => {
                 if self.transport.dragging_loop.is_some() {
                     // Convert pixel x to sample position
                     let seconds = (x + self.viewport.scroll_offset) / self.viewport.zoom;
@@ -369,7 +369,7 @@ impl crate::Resonance {
                     }
                 }
             }
-            Message::EndLoopDrag => {
+            Message::Transport(TransportMessage::EndLoopDrag) => {
                 self.transport.dragging_loop = None;
                 if self.transport.loop_in > self.transport.loop_out {
                     std::mem::swap(&mut self.transport.loop_in, &mut self.transport.loop_out);
@@ -382,55 +382,55 @@ impl crate::Resonance {
                     });
                 }
             }
-            Message::SelectClip(id) => {
+            Message::Clip(ClipMessage::SelectClip(id)) => {
                 self.interaction.selected_clip = id;
             }
-            Message::StartClipDrag { clip_id, grab_offset_x, start_x, start_y } => {
+            Message::Clip(ClipMessage::StartClipDrag { clip_id, grab_offset_x, start_x, start_y }) => {
                 clips::start_clip_drag(self, clip_id, grab_offset_x, start_x, start_y);
             }
-            Message::UpdateClipDrag(x, y) => {
+            Message::Clip(ClipMessage::UpdateClipDrag(x, y)) => {
                 clips::update_clip_drag(self, x, y);
             }
-            Message::EndClipDrag => {
+            Message::Clip(ClipMessage::EndClipDrag) => {
                 clips::end_clip_drag(self);
             }
-            Message::StartClipTrim { clip_id, edge, anchor_x } => {
+            Message::Clip(ClipMessage::StartClipTrim { clip_id, edge, anchor_x }) => {
                 clips::start_clip_trim(self, clip_id, edge, anchor_x);
             }
-            Message::UpdateClipTrim(x) => {
+            Message::Clip(ClipMessage::UpdateClipTrim(x)) => {
                 clips::update_clip_trim(self, x);
             }
-            Message::EndClipTrim => {
+            Message::Clip(ClipMessage::EndClipTrim) => {
                 clips::end_clip_trim(self);
             }
             Message::Tick => {
                 return viewport::handle_tick(self);
             }
-            Message::ViewportWidth(w) => viewport::viewport_width(self, w),
-            Message::TimelineContentSize(w, h) => {
+            Message::Viewport(ViewportMessage::ViewportWidth(w)) => viewport::viewport_width(self, w),
+            Message::Viewport(ViewportMessage::TimelineContentSize(w, h)) => {
                 viewport::timeline_content_size(self, w, h);
             }
-            Message::ScrollToX(x) => viewport::scroll_to_x(self, x),
-            Message::ScrollToY(y) => viewport::scroll_to_y(self, y),
-            Message::BounceToWav => {
+            Message::Viewport(ViewportMessage::ScrollToX(x)) => viewport::scroll_to_x(self, x),
+            Message::Viewport(ViewportMessage::ScrollToY(y)) => viewport::scroll_to_y(self, y),
+            Message::ProjectIo(ProjectIoMessage::BounceToWav) => {
                 return project_io::bounce_dialog();
             }
-            Message::BouncePathSelected(Some(path)) => {
+            Message::ProjectIo(ProjectIoMessage::BouncePathSelected(Some(path))) => {
                 self.io.bouncing = true;
                 self.engine.send(AudioCommand::BounceToWav { path });
             }
-            Message::BouncePathSelected(None) => {}
-            Message::SaveProject => {
+            Message::ProjectIo(ProjectIoMessage::BouncePathSelected(None)) => {}
+            Message::ProjectIo(ProjectIoMessage::SaveProject) => {
                 if self.io.project_path.is_some() {
                     return project_io::start_save(self);
                 } else {
-                    return self.update(Message::SaveProjectAs);
+                    return self.update(Message::ProjectIo(ProjectIoMessage::SaveProjectAs));
                 }
             }
-            Message::SaveProjectAs => {
+            Message::ProjectIo(ProjectIoMessage::SaveProjectAs) => {
                 return project_io::save_project_as_dialog();
             }
-            Message::SavePathSelected(Some(path)) => {
+            Message::ProjectIo(ProjectIoMessage::SavePathSelected(Some(path))) => {
                 // Ensure path ends with .rproj
                 let path = if path.ends_with(".rproj") {
                     std::path::PathBuf::from(path)
@@ -440,24 +440,24 @@ impl crate::Resonance {
                 self.io.project_path = Some(path);
                 return project_io::start_save(self);
             }
-            Message::SavePathSelected(None) => {}
-            Message::OpenProject => {
+            Message::ProjectIo(ProjectIoMessage::SavePathSelected(None)) => {}
+            Message::ProjectIo(ProjectIoMessage::OpenProject) => {
                 return project_io::open_project_dialog();
             }
-            Message::OpenPathSelected(Some(path)) => {
+            Message::ProjectIo(ProjectIoMessage::OpenPathSelected(Some(path))) => {
                 let path = std::path::PathBuf::from(path);
                 self.io.project_path = Some(path.clone());
                 return project_io::load_project_task(path);
             }
-            Message::OpenPathSelected(None) => {}
-            Message::ProjectSaved(Ok(())) => {
+            Message::ProjectIo(ProjectIoMessage::OpenPathSelected(None)) => {}
+            Message::ProjectIo(ProjectIoMessage::ProjectSaved(Ok(()))) => {
                 self.io.save_state = None;
             }
-            Message::ProjectSaved(Err(e)) => {
+            Message::ProjectIo(ProjectIoMessage::ProjectSaved(Err(e))) => {
                 self.io.save_state = None;
                 self.error_message = Some(format!("Save failed: {e}"));
             }
-            Message::ProjectLoaded(Ok(loaded)) => {
+            Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Ok(loaded))) => {
                 // Stop playback, clear state, then replay
                 self.engine.send(AudioCommand::Stop);
                 self.transport.playing = false;
@@ -466,23 +466,23 @@ impl crate::Resonance {
                 self.io.pending_load = Some(loaded);
                 self.engine.send(AudioCommand::ClearAll);
             }
-            Message::ProjectLoaded(Err(e)) => {
+            Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Err(e))) => {
                 self.error_message = Some(format!("Load failed: {e}"));
             }
-            Message::AddInstrumentTrack => {
+            Message::Track(TrackMessage::AddInstrumentTrack) => {
                 self.engine.send(AudioCommand::AddInstrumentTrack {
                     id_hint: None,
                     name: None,
                 });
                 self.mixer.add_track_menu_open = false;
             }
-            Message::AddBus => {
+            Message::Bus(BusMessage::AddBus) => {
                 self.engine.send(AudioCommand::AddBus {
                     id_hint: None,
                     name: None,
                 });
             }
-            Message::RemoveBus(bus_id) => {
+            Message::Bus(BusMessage::RemoveBus(bus_id)) => {
                 self.engine.send(AudioCommand::RemoveBus { bus_id });
                 // Locally clear any track routings pointing here; the engine
                 // does the same. Mirrors how TrackRemoved clears refs.
@@ -492,18 +492,18 @@ impl crate::Resonance {
                     }
                 }
             }
-            Message::SetBusVolume(bus_id, vol_db) => {
+            Message::Bus(BusMessage::SetBusVolume(bus_id, vol_db)) => {
                 self.engine.send(AudioCommand::SetBusVolume {
                     bus_id,
                     volume: db_to_gain(vol_db),
                 });
                 self.with_bus_mut(bus_id, |b| b.volume = vol_db);
             }
-            Message::SetBusPan(bus_id, pan) => {
+            Message::Bus(BusMessage::SetBusPan(bus_id, pan)) => {
                 self.engine.send(AudioCommand::SetBusPan { bus_id, pan });
                 self.with_bus_mut(bus_id, |b| b.pan = pan);
             }
-            Message::ToggleBusMute(bus_id) => {
+            Message::Bus(BusMessage::ToggleBusMute(bus_id)) => {
                 let new_muted = self.with_bus_mut(bus_id, |b| {
                     b.muted = !b.muted;
                     b.muted
@@ -513,12 +513,12 @@ impl crate::Resonance {
                         .send(AudioCommand::SetBusMute { bus_id, muted });
                 }
             }
-            Message::SetTrackOutput(track_id, output) => {
+            Message::Track(TrackMessage::SetTrackOutput(track_id, output)) => {
                 self.engine
                     .send(AudioCommand::SetTrackOutput { track_id, output });
                 self.with_track_mut(track_id, |t| t.output = output);
             }
-            Message::AddPluginToBus(bus_id, plugin) => {
+            Message::Bus(BusMessage::AddPluginToBus(bus_id, plugin)) => {
                 self.engine.send(AudioCommand::AddPluginToBus {
                     bus_id,
                     clap_file_path: plugin.clap_file_path,
@@ -526,60 +526,60 @@ impl crate::Resonance {
                     id_hint: None,
                 });
             }
-            Message::RemovePluginFromBus(bus_id, instance_id) => {
+            Message::Bus(BusMessage::RemovePluginFromBus(bus_id, instance_id)) => {
                 self.engine.send(AudioCommand::RemovePluginFromBus {
                     bus_id,
                     instance_id,
                 });
             }
-            Message::DeleteMidiClip(id) => {
+            Message::MidiClip(MidiClipMessage::DeleteMidiClip(id)) => {
                 self.engine.send(AudioCommand::DeleteMidiClip { clip_id: id });
                 if self.interaction.selected_midi_clip == Some(id) {
                     self.interaction.selected_midi_clip = None;
                 }
             }
-            Message::StartMidiClipDrag { clip_id, grab_offset_x, start_x, start_y } => {
+            Message::MidiClip(MidiClipMessage::StartMidiClipDrag { clip_id, grab_offset_x, start_x, start_y }) => {
                 clips::start_midi_clip_drag(self, clip_id, grab_offset_x, start_x, start_y);
             }
-            Message::UpdateMidiClipDrag(x, y) => {
+            Message::MidiClip(MidiClipMessage::UpdateMidiClipDrag(x, y)) => {
                 clips::update_midi_clip_drag(self, x, y);
             }
-            Message::EndMidiClipDrag => {
+            Message::MidiClip(MidiClipMessage::EndMidiClipDrag) => {
                 clips::end_midi_clip_drag(self);
             }
-            Message::StartMidiClipTrim { clip_id, edge, anchor_x } => {
+            Message::MidiClip(MidiClipMessage::StartMidiClipTrim { clip_id, edge, anchor_x }) => {
                 clips::start_midi_clip_trim(self, clip_id, edge, anchor_x);
             }
-            Message::UpdateMidiClipTrim(x) => {
+            Message::MidiClip(MidiClipMessage::UpdateMidiClipTrim(x)) => {
                 clips::update_midi_clip_trim(self, x);
             }
-            Message::EndMidiClipTrim => {
+            Message::MidiClip(MidiClipMessage::EndMidiClipTrim) => {
                 clips::end_midi_clip_trim(self);
             }
-            Message::OpenMidiEditor(clip_id) => {
+            Message::MidiEditor(MidiEditorMessage::OpenMidiEditor(clip_id)) => {
                 clips::open_midi_editor(self, clip_id);
             }
-            Message::OpenSelectedMidiClip => {
+            Message::MidiEditor(MidiEditorMessage::OpenSelectedMidiClip) => {
                 if let Some(clip_id) = self.interaction.selected_midi_clip {
                     clips::open_midi_editor(self, clip_id);
                 }
             }
-            Message::CloseMidiEditor => {
+            Message::MidiEditor(MidiEditorMessage::CloseMidiEditor) => {
                 self.interaction.editing_midi_clip = None;
             }
-            Message::MidiEditorAddNote { clip_id, note, start_tick, duration_ticks, velocity } => {
+            Message::MidiEditor(MidiEditorMessage::AddNote { clip_id, note, start_tick, duration_ticks, velocity }) => {
                 self.engine.send(AudioCommand::AddMidiNote {
                     clip_id,
                     note: MidiNote { note, velocity, start_tick, duration_ticks },
                 });
             }
-            Message::MidiEditorRemoveNote { clip_id, note_index } => {
+            Message::MidiEditor(MidiEditorMessage::RemoveNote { clip_id, note_index }) => {
                 self.engine.send(AudioCommand::RemoveMidiNote {
                     clip_id,
                     note_index,
                 });
             }
-            Message::MidiEditorMoveNote { clip_id, note_index, new_start_tick, new_note } => {
+            Message::MidiEditor(MidiEditorMessage::MoveNote { clip_id, note_index, new_start_tick, new_note }) => {
                 self.engine.send(AudioCommand::MoveMidiNote {
                     clip_id,
                     note_index,
@@ -587,37 +587,37 @@ impl crate::Resonance {
                     new_note,
                 });
             }
-            Message::MidiEditorResizeNote { clip_id, note_index, new_duration_ticks } => {
+            Message::MidiEditor(MidiEditorMessage::ResizeNote { clip_id, note_index, new_duration_ticks }) => {
                 self.engine.send(AudioCommand::ResizeMidiNote {
                     clip_id,
                     note_index,
                     new_duration_ticks,
                 });
             }
-            Message::MidiEditorSelectNote { note_index } => {
+            Message::MidiEditor(MidiEditorMessage::SelectNote { note_index }) => {
                 if let Some(ref mut editor) = self.interaction.editing_midi_clip {
                     editor.selected_note = note_index;
                 }
             }
-            Message::MidiEditorPreviewNote(track_id, note) => {
+            Message::MidiEditor(MidiEditorMessage::PreviewNote(track_id, note)) => {
                 self.engine.send(AudioCommand::SendNoteOn {
                     track_id,
                     note,
                     velocity: 0.8,
                 });
             }
-            Message::MidiEditorStopPreview(track_id, note) => {
+            Message::MidiEditor(MidiEditorMessage::StopPreview(track_id, note)) => {
                 self.engine.send(AudioCommand::SendNoteOff {
                     track_id,
                     note,
                 });
             }
-            Message::MidiEditorScrollX(delta) => {
+            Message::MidiEditor(MidiEditorMessage::ScrollX(delta)) => {
                 if let Some(ref mut editor) = self.interaction.editing_midi_clip {
                     editor.scroll_x = (editor.scroll_x + delta).max(0.0);
                 }
             }
-            Message::MidiEditorScrollY(delta) => {
+            Message::MidiEditor(MidiEditorMessage::ScrollY(delta)) => {
                 if let Some(ref mut editor) = self.interaction.editing_midi_clip {
                     editor.scroll_y = (editor.scroll_y + delta).max(0.0);
                 }
@@ -636,20 +636,20 @@ impl crate::Resonance {
                 match key {
                     keyboard::Key::Character(ref c) if c.as_str() == "s" => {
                         if modifiers.shift() {
-                            Some(Message::SaveProjectAs)
+                            Some(Message::ProjectIo(ProjectIoMessage::SaveProjectAs))
                         } else {
-                            Some(Message::SaveProject)
+                            Some(Message::ProjectIo(ProjectIoMessage::SaveProject))
                         }
                     }
                     keyboard::Key::Character(ref c) if c.as_str() == "o" => {
-                        Some(Message::OpenProject)
+                        Some(Message::ProjectIo(ProjectIoMessage::OpenProject))
                     }
                     _ => None,
                 }
             } else {
                 match key {
                     keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                        Some(Message::OpenSelectedMidiClip)
+                        Some(Message::MidiEditor(MidiEditorMessage::OpenSelectedMidiClip))
                     }
                     _ => None,
                 }

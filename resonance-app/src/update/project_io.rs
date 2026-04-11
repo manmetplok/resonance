@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use iced::Task;
 use resonance_audio::types::*;
 
-use crate::message::Message;
+use crate::message::*;
 use crate::project::{
     self, LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip,
     ProjectMidiNote, ProjectPlugin, ProjectTrack, SaveCollector,
@@ -17,7 +17,7 @@ use crate::util::db_to_gain;
 use crate::Resonance;
 
 /// Begin an async save. Requires `self.io.project_path` to already be set;
-/// callers use `Message::SaveProjectAs` first if the project has never
+/// callers use `Message::ProjectIo(ProjectIoMessage::SaveProjectAs)` first if the project has never
 /// been saved. Initializes the `SaveCollector` state machine and kicks
 /// off the two parallel engine requests (clip audio + plugin states).
 pub fn start_save(r: &mut Resonance) -> Task<Message> {
@@ -492,7 +492,7 @@ pub fn save_project_as_dialog() -> Task<Message> {
                 .await
                 .map(|f| f.path().to_string_lossy().to_string())
         },
-        Message::SavePathSelected,
+        |r| Message::ProjectIo(ProjectIoMessage::SavePathSelected(r)),
     )
 }
 
@@ -506,7 +506,7 @@ pub fn open_project_dialog() -> Task<Message> {
                 .await
                 .map(|f| f.path().to_string_lossy().to_string())
         },
-        Message::OpenPathSelected,
+        |r| Message::ProjectIo(ProjectIoMessage::OpenPathSelected(r)),
     )
 }
 
@@ -521,7 +521,7 @@ pub fn bounce_dialog() -> Task<Message> {
                 .await
                 .map(|f| f.path().to_string_lossy().to_string())
         },
-        Message::BouncePathSelected,
+        |r| Message::ProjectIo(ProjectIoMessage::BouncePathSelected(r)),
     )
 }
 
@@ -529,6 +529,6 @@ pub fn bounce_dialog() -> Task<Message> {
 pub fn load_project_task(path: std::path::PathBuf) -> Task<Message> {
     Task::perform(
         async move { project::load_project(&path).map(Box::new) },
-        Message::ProjectLoaded,
+        |r| Message::ProjectIo(ProjectIoMessage::ProjectLoaded(r)),
     )
 }

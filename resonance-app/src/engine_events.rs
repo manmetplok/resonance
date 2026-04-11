@@ -1,5 +1,5 @@
 /// Engine event handling for the Resonance application.
-use crate::message::Message;
+use crate::message::*;
 use crate::project;
 use crate::state::*;
 use iced::Task;
@@ -450,7 +450,7 @@ impl crate::Resonance {
             async move {
                 project::save_project(&path, &project_file, &clip_data, &plugin_states)
             },
-            Message::ProjectSaved,
+            |r| Message::ProjectIo(ProjectIoMessage::ProjectSaved(r)),
         )
     }
 }

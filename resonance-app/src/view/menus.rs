@@ -2,7 +2,7 @@
 use iced::widget::{button, column, container, mouse_area, opaque, row, stack, text, Space};
 use iced::{alignment, Color, Element, Length};
 
-use crate::message::Message;
+use crate::message::*;
 use crate::theme::{self, fa};
 use crate::Resonance;
 
@@ -18,7 +18,7 @@ pub(crate) fn view_add_track_menu(_r: &Resonance) -> Element<'_, Message> {
                 ..Default::default()
             }),
     )
-    .on_press(Message::CloseAddTrackMenu);
+    .on_press(Message::Ui(UiMessage::CloseAddTrackMenu));
 
     let audio_btn = button(
         row![
@@ -28,7 +28,7 @@ pub(crate) fn view_add_track_menu(_r: &Resonance) -> Element<'_, Message> {
         ]
         .align_y(alignment::Vertical::Center),
     )
-    .on_press(Message::AddTrack)
+    .on_press(Message::Track(TrackMessage::AddTrack))
     .width(Length::Fill)
     .padding([6, 10])
     .style(|_theme, status| theme::transport_button_style(status));
@@ -45,7 +45,7 @@ pub(crate) fn view_add_track_menu(_r: &Resonance) -> Element<'_, Message> {
         ]
         .align_y(alignment::Vertical::Center),
     )
-    .on_press(Message::AddInstrumentTrack)
+    .on_press(Message::Track(TrackMessage::AddInstrumentTrack))
     .width(Length::Fill)
     .padding([6, 10])
     .style(|_theme, status| theme::transport_button_style(status));

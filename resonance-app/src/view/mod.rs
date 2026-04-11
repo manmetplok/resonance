@@ -10,7 +10,7 @@ pub(crate) mod settings;
 pub(crate) mod track_header;
 pub(crate) mod transport;
 
-use crate::message::Message;
+use crate::message::*;
 use crate::midi_editor::PianoRollCanvas;
 use crate::state::*;
 use crate::theme;
@@ -36,7 +36,7 @@ impl crate::Resonance {
                     text(err).size(13).color(iced::Color::WHITE),
                     Space::with_width(Length::Fill),
                     button(text("\u{00d7}").size(14).color(iced::Color::WHITE))
-                        .on_press(Message::DismissError)
+                        .on_press(Message::Ui(UiMessage::DismissError))
                         .style(|_theme, _status| iced::widget::button::Style {
                             background: Some(iced::Background::Color(iced::Color::TRANSPARENT)),
                             text_color: iced::Color::WHITE,
@@ -104,7 +104,7 @@ impl crate::Resonance {
             .find(|c| c.id == editor_state.clip_id)?;
 
         let close_btn = button(text("Close Editor").size(12).color(theme::TEXT))
-            .on_press(Message::CloseMidiEditor)
+            .on_press(Message::MidiEditor(MidiEditorMessage::CloseMidiEditor))
             .style(|_theme, status| theme::transport_button_style(status))
             .padding([4, 8]);
         let editor_label = text(format!("MIDI: {}", clip.name))
@@ -195,7 +195,7 @@ impl crate::Resonance {
                 .size(12)
                 .color(theme::TEXT),
         )
-        .on_press(Message::ZoomOut)
+        .on_press(Message::Viewport(ViewportMessage::ZoomOut))
         .padding([6, 8])
         .style(|_theme, status| theme::floating_button_style(status));
 
@@ -204,7 +204,7 @@ impl crate::Resonance {
                 .size(12)
                 .color(theme::TEXT),
         )
-        .on_press(Message::ZoomIn)
+        .on_press(Message::Viewport(ViewportMessage::ZoomIn))
         .padding([6, 8])
         .style(|_theme, status| theme::floating_button_style(status));
 

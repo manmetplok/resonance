@@ -6,7 +6,7 @@ use iced::widget::{button, column, container, mouse_area, row, text, text_input,
 use iced::{alignment, Element, Font, Length};
 use resonance_audio::types::TempoMap;
 
-use crate::message::Message;
+use crate::message::*;
 use crate::state::ViewMode;
 use crate::theme::{self, fa};
 use crate::Resonance;
@@ -25,9 +25,9 @@ pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
     const TRANSPORT_ICON_SIZE: u16 = 16;
     let button_pad = iced::Padding::from([6, 10]);
 
-    let skip_back = transport_icon_btn(fa::BACKWARD_STEP, Message::SkipBack, button_pad);
-    let stop_btn = transport_icon_btn(fa::STOP, Message::Stop, button_pad);
-    let skip_fwd = transport_icon_btn(fa::FORWARD_STEP, Message::SkipForward, button_pad);
+    let skip_back = transport_icon_btn(fa::BACKWARD_STEP, Message::Transport(TransportMessage::SkipBack), button_pad);
+    let stop_btn = transport_icon_btn(fa::STOP, Message::Transport(TransportMessage::Stop), button_pad);
+    let skip_fwd = transport_icon_btn(fa::FORWARD_STEP, Message::Transport(TransportMessage::SkipForward), button_pad);
 
     let play_pause: Element<'_, Message> = if r.transport.playing {
         button(
@@ -35,7 +35,7 @@ pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
                 .size(TRANSPORT_ICON_SIZE)
                 .color(theme::TEXT),
         )
-        .on_press(Message::Pause)
+        .on_press(Message::Transport(TransportMessage::Pause))
         .padding(button_pad)
         .style(|_theme, status| theme::transport_button_style(status))
         .into()
@@ -45,7 +45,7 @@ pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
                 .size(TRANSPORT_ICON_SIZE)
                 .color(theme::ACCENT),
         )
-        .on_press(Message::Play)
+        .on_press(Message::Transport(TransportMessage::Play))
         .padding(button_pad)
         .style(|_theme, status| theme::transport_button_style(status))
         .into()
@@ -72,7 +72,7 @@ pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
         }
     });
     if any_armed {
-        rec_btn = rec_btn.on_press(Message::Record);
+        rec_btn = rec_btn.on_press(Message::Transport(TransportMessage::Record));
     }
 
     let timing_panel = timing_panel(r, bar_beat_str, time_str);
@@ -84,7 +84,7 @@ pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
             .size(TRANSPORT_ICON_SIZE)
             .color(theme::TEXT),
     )
-    .on_press(Message::OpenSettings)
+    .on_press(Message::Ui(UiMessage::OpenSettings))
     .padding(button_pad)
     .style(|_theme, status| theme::transport_button_style(status));
 
@@ -140,7 +140,7 @@ fn tab_button<'a>(
 ) -> iced::widget::Button<'a, Message> {
     let active = current == mode;
     button(text(label).size(12))
-        .on_press(Message::SwitchView(mode))
+        .on_press(Message::Ui(UiMessage::SwitchView(mode)))
         .style(move |_theme, status| theme::tab_button_style(active, status))
         .padding([4, 8])
 }
@@ -205,8 +205,8 @@ fn timing_panel<'a>(
     .align_x(alignment::Horizontal::Center);
 
     let bpm_field = text_input("120", &r.transport.bpm_input)
-        .on_input(Message::SetBpmText)
-        .on_submit(Message::CommitBpm)
+        .on_input(|s| Message::Transport(TransportMessage::SetBpmText(s)))
+        .on_submit(Message::Transport(TransportMessage::CommitBpm))
         .width(52)
         .size(VALUE_SIZE)
         .font(Font::MONOSPACE)
@@ -233,7 +233,7 @@ fn timing_panel<'a>(
             .font(Font::MONOSPACE)
             .color(theme::TEXT),
     )
-    .on_press(Message::CycleTimeSignature);
+    .on_press(Message::Transport(TransportMessage::CycleTimeSignature));
     let time_sig_block = column![
         value_cell(time_sig_value),
         label_cell(
@@ -257,7 +257,7 @@ fn timing_panel<'a>(
             .line_height(tight)
             .color(met_color),
     )
-    .on_press(Message::ToggleMetronome);
+    .on_press(Message::Transport(TransportMessage::ToggleMetronome));
 
     let precount_label = if r.transport.precount_bars == 0 {
         "OFF".to_string()
@@ -271,7 +271,7 @@ fn timing_panel<'a>(
             .font(Font::MONOSPACE)
             .color(theme::TEXT_DIM),
     )
-    .on_press(Message::CyclePrecountBars);
+    .on_press(Message::Transport(TransportMessage::CyclePrecountBars));
 
     let met_block = column![value_cell(met_icon), label_cell(precount_text)]
         .width(52)
@@ -309,7 +309,7 @@ fn loop_button<'a>(
         theme::TEXT_DIM
     };
     button(theme::icon(fa::BULLSEYE).size(icon_size).color(loop_color))
-        .on_press(Message::ToggleLoop)
+        .on_press(Message::Transport(TransportMessage::ToggleLoop))
         .padding(button_pad)
         .style(move |_theme, status| {
             if loop_enabled {

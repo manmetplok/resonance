@@ -6,7 +6,7 @@ use iced::{keyboard, mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::theme;
 use crate::state::{ClipEdge, ClipState, LoopDragTarget, MidiClipState, TrackState};
-use crate::message::Message;
+use crate::message::*;
 
 use resonance_audio::types::{ClipId, TrackId, TICKS_PER_QUARTER_NOTE};
 
@@ -189,15 +189,15 @@ impl TimelineCanvas<'_> {
         match delta {
             mouse::ScrollDelta::Lines { x, y } => {
                 if x.abs() > f32::EPSILON {
-                    return captured(Message::ScrollX(-x * 30.0));
+                    return captured(Message::Viewport(ViewportMessage::ScrollX(-x * 30.0)));
                 }
-                captured(Message::ScrollY(-y * 30.0))
+                captured(Message::Viewport(ViewportMessage::ScrollY(-y * 30.0)))
             }
             mouse::ScrollDelta::Pixels { x, y } => {
                 if x.abs() > f32::EPSILON {
-                    return captured(Message::ScrollX(-x));
+                    return captured(Message::Viewport(ViewportMessage::ScrollX(-x)));
                 }
-                captured(Message::ScrollY(-y))
+                captured(Message::Viewport(ViewportMessage::ScrollY(-y)))
             }
         }
     }
@@ -260,7 +260,7 @@ impl TimelineCanvas<'_> {
                         sb.max_scroll,
                     );
                     state.h_scrollbar_grab = Some(sb.thumb.width / 2.0);
-                    return captured(Message::ScrollToX(new_scroll));
+                    return captured(Message::Viewport(ViewportMessage::ScrollToX(new_scroll)));
                 }
                 return (canvas::event::Status::Captured, None);
             }
@@ -278,7 +278,7 @@ impl TimelineCanvas<'_> {
                         sb.max_scroll,
                     );
                     state.v_scrollbar_grab = Some(sb.thumb.height / 2.0);
-                    return captured(Message::ScrollToY(new_scroll));
+                    return captured(Message::Viewport(ViewportMessage::ScrollToY(new_scroll)));
                 }
                 return (canvas::event::Status::Captured, None);
             }
@@ -303,7 +303,7 @@ impl TimelineCanvas<'_> {
                     LoopDragTarget::Out
                 };
                 state.dragging_loop = true;
-                return captured(Message::StartLoopDrag(target));
+                return captured(Message::Transport(TransportMessage::StartLoopDrag(target)));
             }
         }
 
@@ -311,7 +311,7 @@ impl TimelineCanvas<'_> {
         if pos.y < ruler_height {
             let seconds = ((pos.x + self.scroll_offset) / self.zoom).max(0.0);
             let sample = (seconds as f64 * self.sample_rate as f64) as u64;
-            return captured(Message::SeekToSample(sample));
+            return captured(Message::Transport(TransportMessage::SeekToSample(sample)));
         }
 
         // Clip hit-testing (track area)
@@ -343,30 +343,30 @@ impl TimelineCanvas<'_> {
             state.last_midi_click = Some((now, clip.id));
             if is_double_click {
                 state.last_midi_click = None;
-                return captured(Message::OpenMidiEditor(clip.id));
+                return captured(Message::MidiEditor(MidiEditorMessage::OpenMidiEditor(clip.id)));
             }
 
             return match hit {
                 HitKind::Trim(edge) => {
                     state.clip_interaction =
                         Some(ClipInteraction::MidiTrim { clip_id: clip.id, edge });
-                    captured(Message::StartMidiClipTrim {
+                    captured(Message::MidiClip(MidiClipMessage::StartMidiClipTrim {
                         clip_id: clip.id,
                         edge,
                         anchor_x: pos.x,
-                    })
+                    }))
                 }
                 HitKind::Move { grab_offset_x } => {
                     state.clip_interaction = Some(ClipInteraction::MidiMove {
                         clip_id: clip.id,
                         grab_offset_x,
                     });
-                    captured(Message::StartMidiClipDrag {
+                    captured(Message::MidiClip(MidiClipMessage::StartMidiClipDrag {
                         clip_id: clip.id,
                         grab_offset_x,
                         start_x: pos.x,
                         start_y: pos.y,
-                    })
+                    }))
                 }
                 HitKind::Miss => unreachable!("None path taken above"),
             };
@@ -388,30 +388,30 @@ impl TimelineCanvas<'_> {
                 HitKind::Trim(edge) => {
                     state.clip_interaction =
                         Some(ClipInteraction::Trim { clip_id: clip.id, edge });
-                    captured(Message::StartClipTrim {
+                    captured(Message::Clip(ClipMessage::StartClipTrim {
                         clip_id: clip.id,
                         edge,
                         anchor_x: pos.x,
-                    })
+                    }))
                 }
                 HitKind::Move { grab_offset_x } => {
                     state.clip_interaction = Some(ClipInteraction::Move {
                         clip_id: clip.id,
                         grab_offset_x,
                     });
-                    captured(Message::StartClipDrag {
+                    captured(Message::Clip(ClipMessage::StartClipDrag {
                         clip_id: clip.id,
                         grab_offset_x,
                         start_x: pos.x,
                         start_y: pos.y,
-                    })
+                    }))
                 }
                 HitKind::Miss => unreachable!("None path taken above"),
             };
         }
 
         // Clicked on empty track area → deselect.
-        captured(Message::SelectClip(None))
+        captured(Message::Clip(ClipMessage::SelectClip(None)))
     }
 
     fn handle_move(
@@ -431,7 +431,7 @@ impl TimelineCanvas<'_> {
             if let Some(sb) = h_rects {
                 let new_scroll =
                     scroll_from_thumb_pos(pos.x - grab, sb.travel, sb.max_scroll);
-                return captured(Message::ScrollToX(new_scroll));
+                return captured(Message::Viewport(ViewportMessage::ScrollToX(new_scroll)));
             }
         }
         // Vertical scrollbar drag.
@@ -443,20 +443,20 @@ impl TimelineCanvas<'_> {
                     sb.travel,
                     sb.max_scroll,
                 );
-                return captured(Message::ScrollToY(new_scroll));
+                return captured(Message::Viewport(ViewportMessage::ScrollToY(new_scroll)));
             }
         }
 
         if state.dragging_loop {
-            return captured(Message::UpdateLoopDrag(pos.x));
+            return captured(Message::Transport(TransportMessage::UpdateLoopDrag(pos.x)));
         }
         match &state.clip_interaction {
-            Some(ClipInteraction::Move { .. }) => captured(Message::UpdateClipDrag(pos.x, pos.y)),
-            Some(ClipInteraction::Trim { .. }) => captured(Message::UpdateClipTrim(pos.x)),
+            Some(ClipInteraction::Move { .. }) => captured(Message::Clip(ClipMessage::UpdateClipDrag(pos.x, pos.y))),
+            Some(ClipInteraction::Trim { .. }) => captured(Message::Clip(ClipMessage::UpdateClipTrim(pos.x))),
             Some(ClipInteraction::MidiMove { .. }) => {
-                captured(Message::UpdateMidiClipDrag(pos.x, pos.y))
+                captured(Message::MidiClip(MidiClipMessage::UpdateMidiClipDrag(pos.x, pos.y)))
             }
-            Some(ClipInteraction::MidiTrim { .. }) => captured(Message::UpdateMidiClipTrim(pos.x)),
+            Some(ClipInteraction::MidiTrim { .. }) => captured(Message::MidiClip(MidiClipMessage::UpdateMidiClipTrim(pos.x))),
             None => {
                 let _ = ruler_height;
                 (canvas::event::Status::Ignored, None)
@@ -473,14 +473,14 @@ impl TimelineCanvas<'_> {
         }
         if state.dragging_loop {
             state.dragging_loop = false;
-            return captured(Message::EndLoopDrag);
+            return captured(Message::Transport(TransportMessage::EndLoopDrag));
         }
         if let Some(interaction) = state.clip_interaction.take() {
             return match interaction {
-                ClipInteraction::Move { .. } => captured(Message::EndClipDrag),
-                ClipInteraction::Trim { .. } => captured(Message::EndClipTrim),
-                ClipInteraction::MidiMove { .. } => captured(Message::EndMidiClipDrag),
-                ClipInteraction::MidiTrim { .. } => captured(Message::EndMidiClipTrim),
+                ClipInteraction::Move { .. } => captured(Message::Clip(ClipMessage::EndClipDrag)),
+                ClipInteraction::Trim { .. } => captured(Message::Clip(ClipMessage::EndClipTrim)),
+                ClipInteraction::MidiMove { .. } => captured(Message::MidiClip(MidiClipMessage::EndMidiClipDrag)),
+                ClipInteraction::MidiTrim { .. } => captured(Message::MidiClip(MidiClipMessage::EndMidiClipTrim)),
             };
         }
         (canvas::event::Status::Ignored, None)
@@ -496,10 +496,10 @@ impl TimelineCanvas<'_> {
             return (canvas::event::Status::Ignored, None);
         }
         if let Some(clip_id) = self.selected_midi_clip {
-            return captured(Message::DeleteMidiClip(clip_id));
+            return captured(Message::MidiClip(MidiClipMessage::DeleteMidiClip(clip_id)));
         }
         if let Some(clip_id) = self.selected_clip {
-            return captured(Message::DeleteClip(clip_id));
+            return captured(Message::Clip(ClipMessage::DeleteClip(clip_id)));
         }
         (canvas::event::Status::Ignored, None)
     }
@@ -510,7 +510,7 @@ impl TimelineCanvas<'_> {
     fn report_viewport(&self, state: &mut TimelineState, bounds: Rectangle) -> Option<Message> {
         if (bounds.width - state.last_reported_width).abs() > 1.0 {
             state.last_reported_width = bounds.width;
-            return Some(Message::ViewportWidth(bounds.width));
+            return Some(Message::Viewport(ViewportMessage::ViewportWidth(bounds.width)));
         }
         let cw = self.content_width_px(bounds.width);
         let ch = self.content_height_px();
@@ -519,7 +519,7 @@ impl TimelineCanvas<'_> {
         {
             state.last_reported_content_width = cw;
             state.last_reported_content_height = ch;
-            return Some(Message::TimelineContentSize(cw, ch));
+            return Some(Message::Viewport(ViewportMessage::TimelineContentSize(cw, ch)));
         }
         None
     }

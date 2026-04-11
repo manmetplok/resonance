@@ -3,7 +3,7 @@
 use iced::widget::{button, column, container, mouse_area, opaque, row, stack, text, Space};
 use iced::{alignment, Element, Length};
 
-use crate::message::Message;
+use crate::message::*;
 use crate::theme::{self, fa};
 use crate::Resonance;
 
@@ -19,19 +19,19 @@ pub(crate) fn view_settings_overlay(_r: &Resonance) -> Element<'_, Message> {
                 ..Default::default()
             }),
     )
-    .on_press(Message::CloseSettings);
+    .on_press(Message::Ui(UiMessage::CloseSettings));
 
     let title = text("Settings").size(20).color(theme::ACCENT);
 
     let section = |label: &'static str| text(label).size(11).color(theme::TEXT_DIM);
 
-    let open_btn = wide_button(fa::FOLDER_OPEN, "Open Project...", Message::OpenProject);
-    let save_btn = wide_button(fa::FLOPPY_DISK, "Save Project", Message::SaveProject);
+    let open_btn = wide_button(fa::FOLDER_OPEN, "Open Project...", Message::ProjectIo(ProjectIoMessage::OpenProject));
+    let save_btn = wide_button(fa::FLOPPY_DISK, "Save Project", Message::ProjectIo(ProjectIoMessage::SaveProject));
     let save_as_btn =
-        wide_button(fa::FLOPPY_DISK, "Save Project As...", Message::SaveProjectAs);
+        wide_button(fa::FLOPPY_DISK, "Save Project As...", Message::ProjectIo(ProjectIoMessage::SaveProjectAs));
 
     let close_btn = button(text("Close").size(13).color(theme::TEXT))
-        .on_press(Message::CloseSettings)
+        .on_press(Message::Ui(UiMessage::CloseSettings))
         .padding([6, 14])
         .style(|_theme, status| theme::transport_button_style(status));
 

@@ -7,7 +7,7 @@ use crate::compose::drumroll::{
     AccentPattern, DrumrollMessage, DrumrollViewState, HumanizeScope,
 };
 use crate::compose::ComposeMessage;
-use crate::message::Message;
+use crate::message::*;
 use crate::state::{InstrumentType, TrackState};
 use crate::theme;
 
@@ -35,7 +35,7 @@ pub fn view<'a>(
         .style(|_theme, status| theme::transport_button_style(status));
 
     let name_input = text_input("Name", &track.name)
-        .on_input(move |s| Message::SetTrackName(track_id, s))
+        .on_input(move |s| Message::Track(TrackMessage::SetTrackName(track_id, s)))
         .size(12)
         .padding([4, 6])
         .width(Length::Fill);
@@ -43,7 +43,7 @@ pub fn view<'a>(
     let type_picker = pick_list(
         InstrumentType::ALL.to_vec(),
         Some(track.instrument_type),
-        move |ty| Message::SetInstrumentType(track_id, ty),
+        move |ty| Message::Track(TrackMessage::SetInstrumentType(track_id, ty)),
     )
     .text_size(12)
     .padding([4, 6])

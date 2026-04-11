@@ -2,7 +2,7 @@ use iced::widget::{button, column, container, pick_list, row, text, text_input, 
 use iced::{alignment, Element, Font, Length};
 
 use crate::compose::ComposeMessage;
-use crate::message::Message;
+use crate::message::*;
 use crate::state::{InstrumentIcon, InstrumentType, TrackState};
 use crate::theme;
 
@@ -37,7 +37,7 @@ pub fn view<'a>(track: &'a TrackState) -> Element<'a, Message> {
     .align_y(alignment::Vertical::Center);
 
     let name_input = text_input("Name", &track.name)
-        .on_input(move |s| Message::SetTrackName(track_id, s))
+        .on_input(move |s| Message::Track(TrackMessage::SetTrackName(track_id, s)))
         .size(12)
         .padding([4, 6])
         .width(Length::Fill);
@@ -45,7 +45,7 @@ pub fn view<'a>(track: &'a TrackState) -> Element<'a, Message> {
     let type_picker = pick_list(
         InstrumentType::ALL.to_vec(),
         Some(track.instrument_type),
-        move |ty| Message::SetInstrumentType(track_id, ty),
+        move |ty| Message::Track(TrackMessage::SetInstrumentType(track_id, ty)),
     )
     .text_size(12)
     .padding([4, 6])
@@ -54,7 +54,7 @@ pub fn view<'a>(track: &'a TrackState) -> Element<'a, Message> {
     let icon_picker = pick_list(
         InstrumentIcon::ALL.to_vec(),
         Some(track.instrument_icon),
-        move |icon| Message::SetInstrumentIcon(track_id, icon),
+        move |icon| Message::Track(TrackMessage::SetInstrumentIcon(track_id, icon)),
     )
     .text_size(12)
     .padding([4, 6])

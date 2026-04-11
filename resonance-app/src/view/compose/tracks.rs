@@ -6,7 +6,7 @@ use resonance_audio::types::{TrackId, TrackType, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::Scale;
 
 use crate::compose::{ComposeMessage, SectionDefinitionState, SectionPlacementState};
-use crate::message::Message;
+use crate::message::*;
 use crate::state::{InstrumentType, MidiClipState, TrackState};
 use crate::theme;
 use crate::Resonance;
@@ -537,10 +537,10 @@ impl<'a> ComposeTrackCanvas<'a> {
                     let y = self.pitch_to_y(note.note, clip_area);
                     let h = (cell_h - 1.0).max(2.0);
                     if pos.x >= x && pos.x <= right && pos.y >= y && pos.y <= y + h {
-                        return Some(Message::MidiEditorRemoveNote {
+                        return Some(Message::MidiEditor(MidiEditorMessage::RemoveNote {
                             clip_id: clip.id,
                             note_index,
-                        });
+                        }));
                     }
                 }
             }
@@ -563,13 +563,13 @@ impl<'a> ComposeTrackCanvas<'a> {
                     let offset_samples = abs_sample - clip.start_sample;
                     let raw_tick = (offset_samples as f64 / samples_per_tick) as u64;
                     let snapped = snap_tick(raw_tick, DEFAULT_NEW_NOTE_TICKS);
-                    return Some(Message::MidiEditorAddNote {
+                    return Some(Message::MidiEditor(MidiEditorMessage::AddNote {
                         clip_id: clip.id,
                         note: pitch,
                         start_tick: snapped,
                         duration_ticks: DEFAULT_NEW_NOTE_TICKS,
                         velocity: DEFAULT_NEW_NOTE_VELOCITY,
-                    });
+                    }));
                 }
             }
             return None;

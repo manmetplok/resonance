@@ -5,7 +5,7 @@
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{alignment, Element, Length};
 
-use crate::message::Message;
+use crate::message::*;
 use crate::state::TrackState;
 use crate::theme;
 use crate::view::controls::{
@@ -18,7 +18,7 @@ pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
 
     // Ruler header with "+" button to add a track
     let add_btn = button(text("+").size(16).color(theme::TEXT))
-        .on_press(Message::OpenAddTrackMenu)
+        .on_press(Message::Ui(UiMessage::OpenAddTrackMenu))
         .style(|_theme, status| theme::small_button_style(status))
         .padding([0, 6]);
     let add_row = row![Space::with_width(6), add_btn]
@@ -89,8 +89,8 @@ fn view_track_header(track: &TrackState) -> Element<'_, Message> {
     // mono — those all belong to their parent.
     let icon_row: iced::widget::Row<'_, Message> = if is_sub {
         row![
-            mute_button(track.muted, Message::ToggleMute(track.id), 12),
-            solo_button(track.soloed, Message::ToggleSolo(track.id), 12),
+            mute_button(track.muted, Message::Track(TrackMessage::ToggleMute(track.id)), 12),
+            solo_button(track.soloed, Message::Track(TrackMessage::ToggleSolo(track.id)), 12),
             Space::with_width(Length::Fill),
         ]
         .spacing(4)
@@ -100,9 +100,9 @@ fn view_track_header(track: &TrackState) -> Element<'_, Message> {
             mono_button(track.mono, track.id, 12),
             monitor_button(track.monitor_enabled, track.id, 12),
             record_arm_button(track.record_armed, track.id, 12),
-            mute_button(track.muted, Message::ToggleMute(track.id), 12),
-            solo_button(track.soloed, Message::ToggleSolo(track.id), 12),
-            delete_button(Message::RemoveTrack(track.id), 12),
+            mute_button(track.muted, Message::Track(TrackMessage::ToggleMute(track.id)), 12),
+            solo_button(track.soloed, Message::Track(TrackMessage::ToggleSolo(track.id)), 12),
+            delete_button(Message::Track(TrackMessage::RemoveTrack(track.id)), 12),
             Space::with_width(Length::Fill),
         ]
         .spacing(4)

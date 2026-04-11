@@ -5,7 +5,7 @@ use iced::widget::{button, column, container, row, text, vertical_slider, Space}
 use iced::{alignment, Element, Font, Length};
 use resonance_audio::types::{BusId, TrackId};
 
-use crate::message::Message;
+use crate::message::*;
 use crate::theme::{self, fa};
 use crate::util::format_db;
 
@@ -21,7 +21,7 @@ pub fn record_arm_button<'a>(
         theme::TEXT_DIM
     };
     button(theme::icon(fa::CIRCLE).size(size).color(color))
-        .on_press(Message::ToggleRecordArm(track_id))
+        .on_press(Message::Track(TrackMessage::ToggleRecordArm(track_id)))
         .style(move |_theme, status| {
             if armed {
                 theme::record_armed_button_style(status)
@@ -70,7 +70,7 @@ pub fn monitor_button<'a>(
         theme::TEXT_DIM
     };
     button(theme::icon(fa::EYE).size(size).color(color))
-        .on_press(Message::ToggleMonitor(track_id))
+        .on_press(Message::Track(TrackMessage::ToggleMonitor(track_id)))
         .style(move |_theme, status| {
             theme::toggle_button_style(enabled, theme::METRONOME_ON, true, status)
         })
@@ -89,7 +89,7 @@ pub fn mono_button<'a>(
         fa::CIRCLE_HOLLOW_DOUBLE
     };
     button(theme::icon(glyph).size(size).color(theme::TEXT))
-        .on_press(Message::ToggleTrackMono(track_id))
+        .on_press(Message::Track(TrackMessage::ToggleTrackMono(track_id)))
         .style(move |_theme, status| theme::mono_button_style(is_mono, status))
         .padding(2)
 }
@@ -104,7 +104,7 @@ pub fn delete_button<'a>(on_press: Message, size: u16) -> iced::widget::Button<'
 
 /// Bus remove button — same style as delete, used on bus strips.
 pub fn bus_remove_button<'a>(bus_id: BusId, size: u16) -> iced::widget::Button<'a, Message> {
-    delete_button(Message::RemoveBus(bus_id), size)
+    delete_button(Message::Bus(BusMessage::RemoveBus(bus_id)), size)
 }
 
 /// Convert linear amplitude to meter bar height (logarithmic/dB scale).
