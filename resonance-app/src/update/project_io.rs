@@ -9,8 +9,8 @@ use resonance_audio::types::*;
 
 use crate::message::*;
 use crate::project::{
-    self, LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip,
-    ProjectMidiNote, ProjectPlugin, ProjectTrack, SaveCollector,
+    self, LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin,
+    ProjectTrack, SaveCollector, PROJECT_FORMAT_VERSION,
 };
 use crate::state::*;
 use crate::util::db_to_gain;
@@ -18,21 +18,32 @@ use crate::Resonance;
 
 /// Begin an async save. Requires `self.io.project_path` to already be set;
 /// callers use `Message::ProjectIo(ProjectIoMessage::SaveProjectAs)` first if the project has never
-/// been saved. Initializes the `SaveCollector` state machine and kicks
-/// off the two parallel engine requests (clip audio + plugin states).
+/// been saved. Initializes the `SaveCollector` state machine, tells
+/// the engine which directory to target, and kicks off the two
+/// parallel engine requests (clip files + plugin states).
 pub fn start_save(r: &mut Resonance) -> Task<Message> {
     let path = match &r.io.project_path {
         Some(p) => p.clone(),
         None => return Task::none(),
     };
+
+    // Make sure the project directory exists before the engine
+    // tries to write clip WAVs into `{path}/audio/`. For a brand-
+    // new project this is the first time the directory is created.
+    if let Err(e) = std::fs::create_dir_all(&path) {
+        r.error_message = Some(format!("Create project directory: {e}"));
+        return Task::none();
+    }
+
+    r.engine.send(AudioCommand::SetProjectDir(path.clone()));
     r.io.save_state = Some(SaveCollector {
         path,
-        clip_data: HashMap::new(),
+        clip_files: HashMap::new(),
         plugin_states: Vec::new(),
         clips_done: false,
         plugins_done: false,
     });
-    r.engine.send(AudioCommand::ExportAllClipData);
+    r.engine.send(AudioCommand::SaveClipsToProjectDir);
     r.engine.send(AudioCommand::SaveAllPluginStates);
     Task::none()
 }
@@ -115,7 +126,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             total_frames: c.total_frames,
             trim_start_frames: c.trim_start_frames,
             trim_end_frames: c.trim_end_frames,
-            audio_file: format!("audio/clip_{}.raw", c.id),
+            audio_file: format!("audio/clip_{}.wav", c.id),
         })
         .collect();
 
@@ -130,21 +141,12 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             name: mc.name.clone(),
             trim_start_ticks: mc.trim_start_ticks,
             trim_end_ticks: mc.trim_end_ticks,
-            notes: mc
-                .notes
-                .iter()
-                .map(|n| ProjectMidiNote {
-                    note: n.note,
-                    velocity: n.velocity,
-                    start_tick: n.start_tick,
-                    duration_ticks: n.duration_ticks,
-                })
-                .collect(),
+            midi_file: format!("midi/clip_{}.mid", mc.id),
         })
         .collect();
 
     ProjectFile {
-        version: 1,
+        version: PROJECT_FORMAT_VERSION,
         sample_rate: r.sample_rate,
         bpm: r.transport.bpm,
         time_sig_num: r.transport.time_sig_num,
@@ -168,6 +170,11 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
 pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     let project = &loaded.file;
     r.io.project_path = None; // Will be set by the caller (OpenPathSelected)
+
+    // Point the engine at the loaded project's directory so that
+    // subsequent imports and recordings stream into it.
+    r.engine
+        .send(AudioCommand::SetProjectDir(loaded.project_dir.clone()));
 
     // Restore global settings
     r.transport.bpm = project.bpm;
@@ -242,49 +249,45 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
         }
     }
 
-    // Replay audio clips
+    // Replay audio clips: each clip's WAV file already exists on
+    // disk inside the project directory; hand the engine an
+    // absolute path and let it mmap the file itself.
     for pc in &project.clips {
-        if let Some(data) = loaded.audio_data.get(&pc.id) {
-            r.engine.send(AudioCommand::LoadClipDirect {
-                clip_id: pc.id,
-                track_id: pc.track_id,
-                start_sample: pc.start_sample,
-                data: data.clone(),
-                name: pc.name.clone(),
-                trim_start_frames: pc.trim_start_frames,
-                trim_end_frames: pc.trim_end_frames,
-            });
+        let abs_path = loaded.project_dir.join(&pc.audio_file);
+        r.engine.send(AudioCommand::LoadClipFromWav {
+            clip_id: pc.id,
+            track_id: pc.track_id,
+            start_sample: pc.start_sample,
+            path: abs_path,
+            name: pc.name.clone(),
+            trim_start_frames: pc.trim_start_frames,
+            trim_end_frames: pc.trim_end_frames,
+        });
 
-            let duration_samples = pc
-                .total_frames
-                .saturating_sub(pc.trim_start_frames)
-                .saturating_sub(pc.trim_end_frames);
-            r.clips.push(ClipState {
-                id: pc.id,
-                track_id: pc.track_id,
-                start_sample: pc.start_sample,
-                duration_samples,
-                name: pc.name.clone(),
-                total_frames: pc.total_frames,
-                trim_start_frames: pc.trim_start_frames,
-                trim_end_frames: pc.trim_end_frames,
-                waveform_peaks: Vec::new(), // Will be populated by ClipImported event
-            });
-        }
+        let duration_samples = pc
+            .total_frames
+            .saturating_sub(pc.trim_start_frames)
+            .saturating_sub(pc.trim_end_frames);
+        r.clips.push(ClipState {
+            id: pc.id,
+            track_id: pc.track_id,
+            start_sample: pc.start_sample,
+            duration_samples,
+            name: pc.name.clone(),
+            total_frames: pc.total_frames,
+            trim_start_frames: pc.trim_start_frames,
+            trim_end_frames: pc.trim_end_frames,
+            waveform_peaks: Vec::new(), // Will be populated by ClipImported event
+        });
     }
 
-    // Replay MIDI clips
+    // Replay MIDI clips from the parsed `.mid` files.
     for pmc in &project.midi_clips {
-        let notes: Vec<MidiNote> = pmc
-            .notes
-            .iter()
-            .map(|n| MidiNote {
-                note: n.note,
-                velocity: n.velocity,
-                start_tick: n.start_tick,
-                duration_ticks: n.duration_ticks,
-            })
-            .collect();
+        let notes: Vec<MidiNote> = loaded
+            .midi_notes
+            .get(&pmc.id)
+            .cloned()
+            .unwrap_or_default();
 
         r.engine.send(AudioCommand::LoadMidiClipDirect {
             clip_id: pmc.id,
@@ -482,11 +485,29 @@ fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProject) {
 
 // -- File dialog tasks ---------------------------------------------------
 
+/// Resolve the default projects directory, `$XDG_DOCUMENTS_DIR/resonance`
+/// on Linux (or the platform equivalent from the `dirs` crate),
+/// creating it on first use. Falls back to the user's home directory,
+/// and ultimately to the current working directory, if the XDG
+/// lookup fails.
+fn default_projects_dir() -> std::path::PathBuf {
+    let base = dirs::document_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let dir = base.join("resonance");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("Create default projects dir {}: {e}", dir.display());
+    }
+    dir
+}
+
 pub fn save_project_as_dialog() -> Task<Message> {
+    let default_dir = default_projects_dir();
     Task::perform(
-        async {
+        async move {
             rfd::AsyncFileDialog::new()
                 .set_title("Save Project")
+                .set_directory(&default_dir)
                 .set_file_name("MyProject.rproj")
                 .save_file()
                 .await
@@ -497,10 +518,12 @@ pub fn save_project_as_dialog() -> Task<Message> {
 }
 
 pub fn open_project_dialog() -> Task<Message> {
+    let default_dir = default_projects_dir();
     Task::perform(
-        async {
+        async move {
             rfd::AsyncFileDialog::new()
                 .set_title("Open Project")
+                .set_directory(&default_dir)
                 .add_filter("Resonance Project", &["rproj"])
                 .pick_folder()
                 .await
@@ -511,11 +534,13 @@ pub fn open_project_dialog() -> Task<Message> {
 }
 
 pub fn bounce_dialog() -> Task<Message> {
+    let default_dir = default_projects_dir();
     Task::perform(
-        async {
+        async move {
             rfd::AsyncFileDialog::new()
                 .add_filter("WAV Audio", &["wav"])
                 .set_title("Bounce to WAV")
+                .set_directory(&default_dir)
                 .set_file_name("bounce.wav")
                 .save_file()
                 .await

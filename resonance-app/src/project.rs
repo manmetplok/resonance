@@ -1,12 +1,34 @@
 /// Project save/load for the Resonance application.
+///
+/// v2 on-disk layout:
+///
+/// ```text
+/// MyProject.rproj/
+///   project.json               — metadata, no inline clip samples
+///   audio/clip_{id}.wav        — 32-bit float stereo WAVs
+///   midi/clip_{id}.mid         — Format 0 Standard MIDI files
+///   plugins/plugin_{id}.bin    — opaque CLAP state blobs
+/// ```
+///
+/// Audio WAVs are streamed there during recording and memory-mapped
+/// at load, so even very long takes never materialise as a
+/// contiguous in-RAM buffer. MIDI clips persist as real `.mid` files
+/// so projects interchange cleanly with other tools.
+///
+/// This version hard-breaks v1 projects — there is no `.raw` →
+/// `.wav` migration path. Users on v1 need to open the project with
+/// a prior build and re-export.
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use resonance_audio::types::{ClipId, PluginInstanceId};
+use resonance_audio::midi_io;
+use resonance_audio::types::{ClipId, MidiNote, PluginInstanceId};
 
 pub mod sections;
 pub use sections::{ProjectSectionChord, ProjectSectionDefinition, ProjectSectionPlacement};
+
+pub const PROJECT_FORMAT_VERSION: u32 = 2;
 
 /// On-disk project format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +131,9 @@ pub struct ProjectClip {
     pub total_frames: u64,
     pub trim_start_frames: u64,
     pub trim_end_frames: u64,
+    /// Project-relative path to the clip's WAV file, e.g.
+    /// `"audio/clip_42.wav"`. Absolute paths are resolved against
+    /// the project directory at load time.
     pub audio_file: String,
 }
 
@@ -121,58 +146,54 @@ pub struct ProjectMidiClip {
     pub name: String,
     pub trim_start_ticks: u64,
     pub trim_end_ticks: u64,
-    pub notes: Vec<ProjectMidiNote>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectMidiNote {
-    pub note: u8,
-    pub velocity: f32,
-    pub start_tick: u64,
-    pub duration_ticks: u64,
+    /// Project-relative path to the clip's Standard MIDI File.
+    pub midi_file: String,
 }
 
 /// Everything needed to reconstruct a project after loading from disk.
 #[derive(Debug, Clone)]
 pub struct LoadedProject {
     pub file: ProjectFile,
-    pub audio_data: HashMap<ClipId, Vec<f32>>,
+    /// Absolute path to the project directory (the `.rproj` folder).
+    /// The replay step needs this to resolve `ProjectClip.audio_file`
+    /// into the absolute path it hands the engine.
+    pub project_dir: PathBuf,
+    /// MIDI notes per clip id, read from the sibling `.mid` files.
+    pub midi_notes: HashMap<ClipId, Vec<MidiNote>>,
     pub plugin_states: HashMap<PluginInstanceId, Vec<u8>>,
 }
 
-/// State accumulated during an async save operation.
+/// State accumulated during an async save operation. The engine
+/// streams recorded audio straight to `audio/clip_{id}.wav`, so by
+/// the time the save kicks off the clip files already exist on
+/// disk; we only need to collect the confirmed path list and the
+/// plugin state blobs, then write `project.json`.
 pub struct SaveCollector {
     pub path: PathBuf,
-    pub clip_data: HashMap<ClipId, Vec<f32>>,
+    /// Map from clip id to project-relative WAV path, returned by
+    /// `AudioEvent::ClipsSavedToProjectDir`.
+    pub clip_files: HashMap<ClipId, String>,
     pub plugin_states: Vec<(PluginInstanceId, Vec<u8>)>,
     pub clips_done: bool,
     pub plugins_done: bool,
 }
 
-/// Write a project to disk.
+/// Write a project to disk. Assumes the engine has already written
+/// every audio clip's WAV file into `{path}/audio/`; this function
+/// only writes `project.json`, the MIDI clip files, and the plugin
+/// state blobs.
 pub fn save_project(
     path: &Path,
     project: &ProjectFile,
-    clip_data: &HashMap<ClipId, Vec<f32>>,
     plugin_states: &[(PluginInstanceId, Vec<u8>)],
+    midi_clips: &[(ClipId, Vec<MidiNote>)],
 ) -> Result<(), String> {
-    let audio_dir = path.join("audio");
     let plugins_dir = path.join("plugins");
-
-    std::fs::create_dir_all(&audio_dir).map_err(|e| format!("Create audio dir: {e}"))?;
+    let midi_dir = path.join("midi");
     std::fs::create_dir_all(&plugins_dir).map_err(|e| format!("Create plugins dir: {e}"))?;
+    std::fs::create_dir_all(&midi_dir).map_err(|e| format!("Create midi dir: {e}"))?;
 
-    // Write audio clip data as raw f32 little-endian bytes
-    for clip in &project.clips {
-        if let Some(data) = clip_data.get(&clip.id) {
-            let bytes: &[u8] = bytemuck::cast_slice(data);
-            let file_path = path.join(&clip.audio_file);
-            std::fs::write(&file_path, bytes)
-                .map_err(|e| format!("Write {}: {e}", clip.audio_file))?;
-        }
-    }
-
-    // Write plugin state blobs
+    // Write plugin state blobs.
     for (instance_id, data) in plugin_states {
         let file_name = format!("plugin_{instance_id}.bin");
         let file_path = plugins_dir.join(&file_name);
@@ -180,7 +201,14 @@ pub fn save_project(
             .map_err(|e| format!("Write {file_name}: {e}"))?;
     }
 
-    // Write project.json
+    // Write MIDI clips as Standard MIDI Files.
+    for (clip_id, notes) in midi_clips {
+        let file_path = midi_dir.join(format!("clip_{clip_id}.mid"));
+        midi_io::write_midi_file(&file_path, notes)
+            .map_err(|e| format!("Write midi {clip_id}: {e}"))?;
+    }
+
+    // Write project.json.
     let json = serde_json::to_string_pretty(project)
         .map_err(|e| format!("Serialize project: {e}"))?;
     std::fs::write(path.join("project.json"), json)
@@ -189,7 +217,10 @@ pub fn save_project(
     Ok(())
 }
 
-/// Read a project from disk.
+/// Read a project from disk. Audio clips stay on disk and are
+/// memory-mapped by the engine's load-clip handler — this function
+/// only parses `project.json`, loads MIDI clips from their `.mid`
+/// files, and collects plugin state blobs.
 pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
     let json_path = if path.join("project.json").exists() {
         path.join("project.json")
@@ -199,37 +230,42 @@ pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
         return Err("No project.json found".to_string());
     };
 
-    let project_dir = json_path.parent().unwrap_or(path);
+    let project_dir = json_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| path.to_path_buf());
 
     let json = std::fs::read_to_string(&json_path)
         .map_err(|e| format!("Read project.json: {e}"))?;
     let file: ProjectFile =
         serde_json::from_str(&json).map_err(|e| format!("Parse project.json: {e}"))?;
 
-    if file.version != 1 {
-        return Err(format!("Unsupported project version: {}", file.version));
+    if file.version != PROJECT_FORMAT_VERSION {
+        return Err(format!(
+            "Unsupported project version {}. This build only loads v{} projects; \
+             re-save from an older build first.",
+            file.version, PROJECT_FORMAT_VERSION
+        ));
     }
 
-    // Read audio clip data
-    let mut audio_data = HashMap::new();
-    for clip in &file.clips {
-        let clip_path = project_dir.join(&clip.audio_file);
-        match std::fs::read(&clip_path) {
-            Ok(bytes) => {
-                if bytes.len() % 4 != 0 {
-                    return Err(format!("Invalid audio file size: {}", clip.audio_file));
-                }
-                let data: Vec<f32> = bytemuck::cast_slice(&bytes).to_vec();
-                audio_data.insert(clip.id, data);
+    // Read MIDI clip files. Missing files are logged and replaced
+    // with empty note lists so the rest of the project still loads.
+    let mut midi_notes: HashMap<ClipId, Vec<MidiNote>> = HashMap::new();
+    for mc in &file.midi_clips {
+        let mid_path = project_dir.join(&mc.midi_file);
+        match midi_io::read_midi_file(&mid_path) {
+            Ok(notes) => {
+                midi_notes.insert(mc.id, notes);
             }
             Err(e) => {
-                eprintln!("Warning: could not load audio file {}: {e}", clip.audio_file);
+                eprintln!("Warning: could not load midi file {}: {e}", mc.midi_file);
+                midi_notes.insert(mc.id, Vec::new());
             }
         }
     }
 
-    // Read plugin state blobs
-    let mut plugin_states = HashMap::new();
+    // Read plugin state blobs.
+    let mut plugin_states: HashMap<PluginInstanceId, Vec<u8>> = HashMap::new();
     for track in &file.tracks {
         for plugin in &track.plugins {
             let state_path = project_dir.join(&plugin.state_file);
@@ -249,7 +285,8 @@ pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
 
     Ok(LoadedProject {
         file,
-        audio_data,
+        project_dir,
+        midi_notes,
         plugin_states,
     })
 }

@@ -5,9 +5,11 @@
 //! `busses`, plus `scan` and `bounce`).
 
 /// Ring buffer size for recording input: ~10 seconds at 96kHz stereo.
+/// Sized as a safety margin between the cpal input callback (producer)
+/// and the engine control thread's drain-to-WAV loop (consumer); the
+/// engine thread wakes at ~60 Hz, so even a pathological scheduling
+/// gap fits inside this.
 pub(crate) const RECORDING_RING_SIZE: usize = 96000 * 2 * 10;
-/// Pre-allocation for recording buffers: ~60 seconds of stereo audio.
-pub(crate) const RECORDING_PREALLOC_SECONDS: usize = 60;
 /// Hard cap on concurrent busses. Used to pre-allocate bus summing
 /// buffers at startup so the audio thread never has to allocate on a
 /// bus add. 32 is well past what any realistic project needs.

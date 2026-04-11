@@ -188,14 +188,15 @@ pub(crate) fn to_wav(
                     }
                     let overlap_start = pos.max(clip_start);
                     let overlap_end = buf_end.min(clip_end);
+                    let clip_data = clip.source.as_frames();
                     for timeline_frame in overlap_start..overlap_end {
                         let frame_offset = (timeline_frame - pos) as usize;
                         let clip_frame = (timeline_frame - clip_start) as usize
                             + clip.trim_start_frames as usize;
                         let clip_idx = clip_frame * 2;
-                        if clip_idx + 1 < clip.data.len() {
-                            track_buf_l[frame_offset] += clip.data[clip_idx];
-                            track_buf_r[frame_offset] += clip.data[clip_idx + 1];
+                        if clip_idx + 1 < clip_data.len() {
+                            track_buf_l[frame_offset] += clip_data[clip_idx];
+                            track_buf_r[frame_offset] += clip_data[clip_idx + 1];
                             has_audio = true;
                         }
                     }

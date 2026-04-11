@@ -92,13 +92,13 @@ pub enum AudioEvent {
         path: String,
     },
     BounceError(String),
-    /// Exported clip audio data for project save.
-    ClipDataExported {
-        clip_id: ClipId,
-        data: Vec<f32>,
+    /// Response to `SaveClipsToProjectDir`: every in-engine audio
+    /// clip has a `.wav` file on disk. The map is `clip_id` →
+    /// project-relative path (e.g. `"audio/clip_42.wav"`), which
+    /// the save path writes into `project.json`.
+    ClipsSavedToProjectDir {
+        clip_files: Vec<(ClipId, String)>,
     },
-    /// All clip data has been exported.
-    AllClipDataExported,
     /// All plugin states saved in batch.
     AllPluginStatesSaved {
         states: Vec<(PluginInstanceId, Vec<u8>)>,

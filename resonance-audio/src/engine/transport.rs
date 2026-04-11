@@ -16,6 +16,20 @@ pub(crate) fn handle_play(ctx: &HandlerCtx) {
 }
 
 pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState) {
+    // Recording must have a project directory to stream WAVs into.
+    // The startup modal guarantees a project is always selected, so
+    // hitting this branch is a programmer error — surface it rather
+    // than silently losing the take.
+    let project_dir = match state.project_dir.clone() {
+        Some(dir) => dir,
+        None => {
+            let _ = ctx.event_tx.send(AudioEvent::Error(
+                "Cannot record: no project directory set. Open or create a project first.".into(),
+            ));
+            return;
+        }
+    };
+
     ctx.shared.playing.store(true, Ordering::SeqCst);
 
     // Snapshot port + mono per armed track so the drain loop on the
@@ -52,24 +66,11 @@ pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState) {
     let ring = ringbuf::HeapRb::<f32>::new(ring_size);
     use ringbuf::traits::Split;
     let (prod, cons) = ring.split();
-    state.rec.ring_consumer = Some(cons);
 
-    state.rec.start_sample = ctx.shared.playhead.load(Ordering::SeqCst);
-    for info in &armed_tracks {
-        state.rec.buffers.insert(
-            info.track_id,
-            crate::recording::TrackRecordingBuf {
-                data: Vec::with_capacity(
-                    ctx.sample_rate as usize * 2 * super::RECORDING_PREALLOC_SECONDS,
-                ),
-                input_port: info.port,
-                mono: info.mono,
-            },
-        );
-    }
-    ctx.shared.recording.store(true, Ordering::SeqCst);
-
-    match platform::build_input_stream(
+    // Build the input stream first so we know the device's actual
+    // sample rate; the streaming resamplers need it at track-buf
+    // creation time.
+    let (stream, in_sr, in_ch) = match platform::build_input_stream(
         source_name.as_deref(),
         Arc::clone(ctx.shared),
         Some(prod),
@@ -77,26 +78,56 @@ pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState) {
         ctx.buf_frames,
         ctx.quantum,
     ) {
-        Ok((stream, in_sr, in_ch)) => {
-            state.rec.input_stream = Some(stream);
-            state.rec.input_sample_rate = in_sr;
-            state.rec.input_channels = in_ch;
-            ctx.shared.input_channels.store(in_ch, Ordering::Release);
-
-            let _ = ctx.event_tx.send(AudioEvent::RecordingStarted {
-                start_sample: state.rec.start_sample,
-            });
-        }
+        Ok(triple) => triple,
         Err(e) => {
-            ctx.shared.recording.store(false, Ordering::SeqCst);
-            ctx.shared.input_channels.store(0, Ordering::Release);
-            state.rec.buffers.clear();
-            state.rec.ring_consumer = None;
             let _ = ctx
                 .event_tx
                 .send(AudioEvent::Error(format!("Failed to start recording: {}", e)));
+            return;
+        }
+    };
+
+    state.rec.start_sample = ctx.shared.playhead.load(Ordering::SeqCst);
+    state.rec.ring_consumer = Some(cons);
+    state.rec.input_sample_rate = in_sr;
+    state.rec.input_channels = in_ch;
+
+    // Allocate a clip id per armed track and open a WAV writer
+    // targeting its final location in the project's audio dir. Any
+    // failure here unwinds the partially-built state and bails.
+    for info in &armed_tracks {
+        let clip_id = state.next_clip_id;
+        state.next_clip_id += 1;
+        match crate::recording::RecordingState::create_track_buf(
+            &project_dir,
+            info.track_id,
+            clip_id,
+            ctx.sample_rate,
+            in_sr,
+            info.port,
+            info.mono,
+        ) {
+            Ok(buf) => {
+                state.rec.buffers.insert(info.track_id, buf);
+            }
+            Err(e) => {
+                state.rec.buffers.clear();
+                state.rec.ring_consumer = None;
+                let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                    "Failed to open recording file: {e}"
+                )));
+                return;
+            }
         }
     }
+
+    state.rec.input_stream = Some(stream);
+    ctx.shared.input_channels.store(in_ch, Ordering::Release);
+    ctx.shared.recording.store(true, Ordering::SeqCst);
+
+    let _ = ctx.event_tx.send(AudioEvent::RecordingStarted {
+        start_sample: state.rec.start_sample,
+    });
 }
 
 pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
@@ -107,7 +138,6 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
     if was_recording {
         state.rec.finalize_recording(
             ctx.sample_rate,
-            &mut state.next_clip_id,
             ctx.clips.as_ref(),
             ctx.event_tx,
         );
@@ -124,7 +154,6 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
     if was_recording {
         state.rec.finalize_recording(
             ctx.sample_rate,
-            &mut state.next_clip_id,
             ctx.clips.as_ref(),
             ctx.event_tx,
         );

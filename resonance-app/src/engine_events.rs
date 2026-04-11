@@ -250,13 +250,9 @@ impl crate::Resonance {
                 // Used only by the project-save path (SaveCollector).
             }
             // --- Project save events ---
-            AudioEvent::ClipDataExported { clip_id, data } => {
+            AudioEvent::ClipsSavedToProjectDir { clip_files } => {
                 if let Some(ref mut save) = self.io.save_state {
-                    save.clip_data.insert(clip_id, data);
-                }
-            }
-            AudioEvent::AllClipDataExported => {
-                if let Some(ref mut save) = self.io.save_state {
+                    save.clip_files = clip_files.into_iter().collect();
                     save.clips_done = true;
                 }
                 return self.try_finish_save();
@@ -443,12 +439,19 @@ impl crate::Resonance {
         let save = self.io.save_state.take().unwrap();
         let project_file = crate::update::build_project_file(self);
         let path = save.path.clone();
-        let clip_data = save.clip_data;
         let plugin_states = save.plugin_states;
+
+        // Snapshot MIDI clips by id so the async save task can
+        // write them as `.mid` files without touching `Resonance`.
+        let midi_clips: Vec<(resonance_audio::types::ClipId, Vec<resonance_audio::types::MidiNote>)> =
+            self.midi_clips
+                .iter()
+                .map(|mc| (mc.id, mc.notes.clone()))
+                .collect();
 
         Task::perform(
             async move {
-                project::save_project(&path, &project_file, &clip_data, &plugin_states)
+                project::save_project(&path, &project_file, &plugin_states, &midi_clips)
             },
             |r| Message::ProjectIo(ProjectIoMessage::ProjectSaved(r)),
         )

@@ -1,4 +1,6 @@
 //! GUI → engine command enum.
+use std::path::PathBuf;
+
 use super::{BusId, ClipId, MidiNote, PluginInstanceId, SamplePos, TrackId, TrackOutput};
 
 /// Commands sent from the GUI to the audio engine.
@@ -148,18 +150,31 @@ pub enum AudioCommand {
     BounceToWav {
         path: String,
     },
-    /// Load a pre-decoded audio clip directly into the engine (for project load).
-    LoadClipDirect {
+    /// Set the current project directory. Recorded and imported
+    /// clips are written into `{project_dir}/audio/` as WAV files,
+    /// and recording refuses to start if no project directory has
+    /// been set. Sent by the app whenever a project is opened,
+    /// created, or saved-as to a new location.
+    SetProjectDir(PathBuf),
+    /// Load an audio clip from a WAV file on disk (project load
+    /// path). The engine memory-maps the file and references it
+    /// via `ClipSource::Mapped`, so the PCM data never materialises
+    /// as a contiguous in-RAM buffer.
+    LoadClipFromWav {
         clip_id: ClipId,
         track_id: TrackId,
         start_sample: SamplePos,
-        data: Vec<f32>,
+        path: PathBuf,
         name: String,
         trim_start_frames: u64,
         trim_end_frames: u64,
     },
-    /// Request all clip audio data for project save.
-    ExportAllClipData,
+    /// Ensure every in-engine audio clip has a WAV file on disk at
+    /// `{project_dir}/audio/clip_{id}.wav`. Recorded clips already
+    /// do (they stream there during capture); in-RAM imported clips
+    /// get transcoded. Emits `AudioEvent::ClipsSavedToProjectDir`
+    /// when done so the save path can write project.json.
+    SaveClipsToProjectDir,
     /// Batch save all plugin states for project save.
     SaveAllPluginStates,
     /// Remove all tracks, clips, and plugins (for project load).

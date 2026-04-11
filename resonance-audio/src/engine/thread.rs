@@ -8,6 +8,7 @@
 //! `clips`, `midi`, `plugins`, `busses`). They take `&HandlerCtx` +
 //! `&mut HandlerState` + the command payload and execute synchronously.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -52,6 +53,10 @@ pub(crate) struct HandlerState {
     pub rec: RecordingState,
     pub bundles: Vec<ClapBundle>,
     pub active_imports: Arc<AtomicUsize>,
+    /// Current project directory. Set via `AudioCommand::SetProjectDir`
+    /// whenever the app opens, creates, or saves-as a project.
+    /// Recording and import refuse to run when this is `None`.
+    pub project_dir: Option<PathBuf>,
 }
 
 /// Hard cap on concurrent clip decode threads. Import commands past this
@@ -83,6 +88,7 @@ pub(crate) fn engine_thread(
         rec: RecordingState::new(sample_rate),
         bundles: Vec::new(),
         active_imports: Arc::new(AtomicUsize::new(0)),
+        project_dir: None,
     };
     let ctx = HandlerCtx {
         shared: &shared,
@@ -183,26 +189,29 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             trim_end_frames,
         ),
         AudioCommand::DeleteClip { clip_id } => clips::handle_delete_clip(ctx, clip_id),
-        AudioCommand::LoadClipDirect {
+        AudioCommand::SetProjectDir(dir) => {
+            state.project_dir = Some(dir);
+        }
+        AudioCommand::LoadClipFromWav {
             clip_id,
             track_id,
             start_sample,
-            data,
+            path,
             name,
             trim_start_frames,
             trim_end_frames,
-        } => clips::handle_load_clip_direct(
+        } => clips::handle_load_clip_from_wav(
             ctx,
             state,
             clip_id,
             track_id,
             start_sample,
-            data,
+            path,
             name,
             trim_start_frames,
             trim_end_frames,
         ),
-        AudioCommand::ExportAllClipData => clips::handle_export_all_clip_data(ctx),
+        AudioCommand::SaveClipsToProjectDir => clips::handle_save_clips_to_project_dir(ctx, state),
 
         // -- Tracks --
         AudioCommand::SetTrackVolume { track_id, volume } => {

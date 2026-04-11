@@ -490,11 +490,13 @@ impl crate::Resonance {
             Message::ProjectIo(ProjectIoMessage::OpenPathSelected(Some(path))) => {
                 let path = std::path::PathBuf::from(path);
                 self.io.project_path = Some(path.clone());
+                self.engine.send(AudioCommand::SetProjectDir(path.clone()));
                 return project_io::load_project_task(path);
             }
             Message::ProjectIo(ProjectIoMessage::OpenPathSelected(None)) => {}
             Message::ProjectIo(ProjectIoMessage::OpenRecent(path)) => {
                 self.io.project_path = Some(path.clone());
+                self.engine.send(AudioCommand::SetProjectDir(path.clone()));
                 return project_io::load_project_task(path);
             }
             Message::ProjectIo(ProjectIoMessage::ProjectSaved(Ok(()))) => {
