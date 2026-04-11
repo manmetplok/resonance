@@ -14,6 +14,7 @@ mod lfo;
 mod modulation;
 mod oscillator;
 mod params;
+pub mod presets;
 mod render;
 mod viz;
 mod voice;

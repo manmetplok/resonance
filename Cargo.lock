@@ -3710,6 +3710,7 @@ dependencies = [
  "resonance-common",
  "resonance-dsp",
  "resonance-plugin",
+ "serde_json",
  "wayland-plugin-gui",
 ]
 

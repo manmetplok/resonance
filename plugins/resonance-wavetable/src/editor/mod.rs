@@ -11,7 +11,8 @@ use std::sync::Arc;
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
 use wayland_plugin_gui::{egui, Editor as RuntimeEditor, EditorApp, EditorOptions};
 
-use crate::params::WavetableParams;
+use crate::params::{WavetableParams, PARAM_COUNT};
+use crate::presets::PRESETS;
 use crate::viz::{VizSnapshot, WavetableVizState};
 
 mod display_waves;
@@ -209,11 +210,45 @@ fn draw_tab_bar(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         tab_button(ui, &mut app.selected_tab, WtTab::Fx, "FX");
         ui.add_space(16.0);
         ui.separator();
+        ui.add_space(8.0);
+
+        ui.label(egui::RichText::new("Preset").color(theme::TEXT_DIM));
+        egui::ComboBox::from_id_salt("wt_preset_combo")
+            .width(190.0)
+            .selected_text("— select —")
+            .show_ui(ui, |ui| {
+                for entry in PRESETS {
+                    if ui.selectable_label(false, entry.name).clicked() {
+                        load_preset(&app.params, entry.json);
+                    }
+                }
+            });
+
+        ui.add_space(16.0);
+        ui.separator();
         ui.label(
             egui::RichText::new(format!("voices {}", app.snapshot.active_voice_count))
                 .color(theme::TEXT_DIM),
         );
     });
+}
+
+/// Apply a factory preset: walk every param and call `set_plain` for any
+/// id that matches a key in the preset's `params` object. Missing keys
+/// are ignored so older presets still load after a param is added.
+fn load_preset(params: &WavetableParams, json: &str) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return;
+    };
+    let Some(map) = value.get("params").and_then(|v| v.as_object()) else {
+        return;
+    };
+    for i in 0..PARAM_COUNT {
+        let p = params.param_at(i);
+        if let Some(v) = map.get(p.id()).and_then(|v| v.as_f64()) {
+            p.set_plain(v);
+        }
+    }
 }
 
 fn tab_button(ui: &mut egui::Ui, current: &mut WtTab, this: WtTab, label: &str) {

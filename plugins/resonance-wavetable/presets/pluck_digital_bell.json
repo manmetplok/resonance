@@ -1,0 +1,25 @@
+{
+  "params": {
+    "master_volume": 0.65, "glide_time": 0.0, "glide_enabled": 0, "max_voices": 16, "osc_balance": 0.0,
+    "osc1_wavetable": 6, "osc1_position": 0.4, "osc1_coarse": 0, "osc1_fine": 0.0, "osc1_level": 1.0, "osc1_pan": -0.2, "osc1_enabled": 1,
+    "osc2_wavetable": 4, "osc2_position": 0.3, "osc2_coarse": 12, "osc2_fine": 3.0, "osc2_level": 0.5, "osc2_pan": 0.2, "osc2_enabled": 1,
+    "unison_voices": 1, "unison_detune": 0.0, "unison_spread": 0.0,
+    "amp_attack": 0.002, "amp_decay": 1.5, "amp_sustain": 0.0, "amp_release": 1.5, "amp_curve": 0.0,
+    "mod_attack": 0.002, "mod_decay": 0.6, "mod_sustain": 0.0, "mod_release": 0.6, "mod_curve": 0.0,
+    "filter_type": 0, "filter_cutoff": 6000.0, "filter_resonance": 0.1, "filter_env_depth": 0.4, "filter_keytrack": 0.7, "filter_enabled": 1, "filter_drive": 0.1,
+    "lfo1_shape": 0, "lfo1_rate": 4.0, "lfo1_depth": 0.0, "lfo1_retrigger": 1,
+    "lfo2_shape": 0, "lfo2_rate": 2.0, "lfo2_depth": 0.0, "lfo2_retrigger": 1,
+    "lfo3_shape": 0, "lfo3_rate": 0.5, "lfo3_depth": 0.0, "lfo3_retrigger": 0,
+    "mod_1_src": 4, "mod_1_dst": 5, "mod_1_amt": 0.4,
+    "mod_2_src": 4, "mod_2_dst": 1, "mod_2_amt": 0.2,
+    "mod_3_src": 0, "mod_3_dst": 0, "mod_3_amt": 0.0,
+    "mod_4_src": 0, "mod_4_dst": 0, "mod_4_amt": 0.0,
+    "mod_5_src": 0, "mod_5_dst": 0, "mod_5_amt": 0.0,
+    "mod_6_src": 0, "mod_6_dst": 0, "mod_6_amt": 0.0,
+    "mod_7_src": 0, "mod_7_dst": 0, "mod_7_amt": 0.0,
+    "mod_8_src": 0, "mod_8_dst": 0, "mod_8_amt": 0.0,
+    "chorus_enabled": 0, "chorus_rate": 1.0, "chorus_depth": 0.3, "chorus_mix": 0.5,
+    "delay_enabled": 1, "delay_time_l": 333.0, "delay_time_r": 500.0, "delay_feedback": 0.55, "delay_mix": 0.35,
+    "dist_enabled": 0, "dist_drive": 1.0, "dist_mix": 0.5
+  }
+}
