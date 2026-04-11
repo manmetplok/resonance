@@ -600,28 +600,34 @@ impl ReverbDsp {
 
 // --- Math utilities ---
 
-/// In-place Hadamard transform (unitary, for power-of-2 sizes).
-fn hadamard_in_place(data: &mut [f32; CHANNELS]) {
-    hadamard_recursive(data, CHANNELS);
-    let scale = 1.0 / (CHANNELS as f32).sqrt();
-    for x in data.iter_mut() {
-        *x *= scale;
-    }
-}
+/// In-place 8-point Hadamard (unitary). Three straight-line butterfly
+/// stages with independent adds per stage, so LLVM can schedule them
+/// into AVX2 SIMD under `target-cpu=native`. The final `1/√8` scale is
+/// folded into the last stage.
+#[inline]
+fn hadamard_in_place(data: &mut [f32; 8]) {
+    // Stage 1: pairs within each half.
+    let (a0, a1) = (data[0] + data[1], data[0] - data[1]);
+    let (a2, a3) = (data[2] + data[3], data[2] - data[3]);
+    let (a4, a5) = (data[4] + data[5], data[4] - data[5]);
+    let (a6, a7) = (data[6] + data[7], data[6] - data[7]);
 
-fn hadamard_recursive(data: &mut [f32], n: usize) {
-    if n <= 1 {
-        return;
-    }
-    let half = n / 2;
-    hadamard_recursive(&mut data[..half], half);
-    hadamard_recursive(&mut data[half..n], half);
-    for i in 0..half {
-        let a = data[i];
-        let b = data[i + half];
-        data[i] = a + b;
-        data[i + half] = a - b;
-    }
+    // Stage 2: pairs of pairs.
+    let (b0, b2) = (a0 + a2, a0 - a2);
+    let (b1, b3) = (a1 + a3, a1 - a3);
+    let (b4, b6) = (a4 + a6, a4 - a6);
+    let (b5, b7) = (a5 + a7, a5 - a7);
+
+    // Stage 3: top half vs bottom half, with 1/√8 folded in.
+    const S: f32 = 0.353_553_39; // 1 / sqrt(8)
+    data[0] = (b0 + b4) * S;
+    data[1] = (b1 + b5) * S;
+    data[2] = (b2 + b6) * S;
+    data[3] = (b3 + b7) * S;
+    data[4] = (b0 - b4) * S;
+    data[5] = (b1 - b5) * S;
+    data[6] = (b2 - b6) * S;
+    data[7] = (b3 - b7) * S;
 }
 
 /// In-place Householder reflection: y[i] = x[i] - (2/N) * sum(x).

@@ -33,6 +33,10 @@ fn scan_directory(dir: &Path) -> Vec<String> {
 /// mask any residual transient when a freshly-loaded model takes over
 /// mid-audio, even after the loader thread has primed it.
 const SWAP_FADE_SAMPLES: u32 = 1024;
+/// Precomputed `1.0 / SWAP_FADE_SAMPLES as f32`. LLVM won't fold
+/// float division with a runtime counter, so express the per-sample
+/// fade step as a multiply.
+const SWAP_FADE_STEP: f32 = 1.0 / SWAP_FADE_SAMPLES as f32;
 
 pub struct ResonanceAmp {
     /// Parameters — shared with the editor thread via `Arc` so the UI can
@@ -262,33 +266,38 @@ impl ResonancePlugin for ResonanceAmp {
         self.output_gain_smoother
             .set_target(self.params.output_gain.value());
 
-        // Track block-peak values for the meters.
+        // Track block-peak values for the meters. Computed inline with
+        // the DSP loops below to avoid an extra pass over the buffer.
         let mut in_peak_l = 0.0f32;
         let mut in_peak_r = 0.0f32;
         let mut out_peak_l = 0.0f32;
         let mut out_peak_r = 0.0f32;
-        for i in 0..frames {
-            in_peak_l = in_peak_l.max(left[i].abs());
-            in_peak_r = in_peak_r.max(right[i].abs());
-        }
 
         if self.fade_out_remaining == 0 {
             match self.active_model.as_mut() {
                 Some(model) => {
                     for i in 0..frames {
+                        let dry_l = left[i];
+                        let dry_r = right[i];
+                        in_peak_l = in_peak_l.max(dry_l.abs());
+                        in_peak_r = in_peak_r.max(dry_r.abs());
+
                         let input_gain = self.input_gain_smoother.next();
                         let output_gain = self.output_gain_smoother.next();
                         let fade_gain = if self.fade_in_remaining > 0 {
                             self.fade_in_remaining -= 1;
-                            1.0 - self.fade_in_remaining as f32 / SWAP_FADE_SAMPLES as f32
+                            1.0 - self.fade_in_remaining as f32 * SWAP_FADE_STEP
                         } else {
                             1.0
                         };
-                        let input = left[i] * input_gain;
+                        let input = dry_l * input_gain;
                         let raw = model.process_sample(input) * output_gain * fade_gain;
-                        let blocked = self.dc_l.process(raw);
-                        left[i] = blocked;
-                        right[i] = self.dc_r.process(raw);
+                        let out_l = self.dc_l.process(raw);
+                        let out_r = self.dc_r.process(raw);
+                        left[i] = out_l;
+                        right[i] = out_r;
+                        out_peak_l = out_peak_l.max(out_l.abs());
+                        out_peak_r = out_peak_r.max(out_r.abs());
                     }
                 }
                 None => {
@@ -297,11 +306,20 @@ impl ResonancePlugin for ResonanceAmp {
                     // because a fade-in is always paired with a newly
                     // installed model.
                     for i in 0..frames {
+                        let dry_l = left[i];
+                        let dry_r = right[i];
+                        in_peak_l = in_peak_l.max(dry_l.abs());
+                        in_peak_r = in_peak_r.max(dry_r.abs());
+
                         let input_gain = self.input_gain_smoother.next();
                         let output_gain = self.output_gain_smoother.next();
                         let gain = input_gain * output_gain;
-                        left[i] *= gain;
-                        right[i] *= gain;
+                        let out_l = dry_l * gain;
+                        let out_r = dry_r * gain;
+                        left[i] = out_l;
+                        right[i] = out_r;
+                        out_peak_l = out_peak_l.max(out_l.abs());
+                        out_peak_r = out_peak_r.max(out_r.abs());
                     }
                 }
             }
@@ -309,12 +327,17 @@ impl ResonancePlugin for ResonanceAmp {
             // Slow path: fade-out in progress, `active_model` will be
             // replaced mid-block when `fade_out_remaining` hits zero.
             for i in 0..frames {
+                let dry_l = left[i];
+                let dry_r = right[i];
+                in_peak_l = in_peak_l.max(dry_l.abs());
+                in_peak_r = in_peak_r.max(dry_r.abs());
+
                 let input_gain = self.input_gain_smoother.next();
                 let output_gain = self.output_gain_smoother.next();
 
                 let fade_gain = if self.fade_out_remaining > 0 {
                     self.fade_out_remaining -= 1;
-                    let g = self.fade_out_remaining as f32 / SWAP_FADE_SAMPLES as f32;
+                    let g = self.fade_out_remaining as f32 * SWAP_FADE_STEP;
                     if self.fade_out_remaining == 0 {
                         self.active_model = self.pending_model.take();
                         self.fade_in_remaining = SWAP_FADE_SAMPLES;
@@ -322,30 +345,27 @@ impl ResonancePlugin for ResonanceAmp {
                     g
                 } else if self.fade_in_remaining > 0 {
                     self.fade_in_remaining -= 1;
-                    1.0 - self.fade_in_remaining as f32 / SWAP_FADE_SAMPLES as f32
+                    1.0 - self.fade_in_remaining as f32 * SWAP_FADE_STEP
                 } else {
                     1.0
                 };
 
-                match &mut self.active_model {
+                let (out_l, out_r) = match &mut self.active_model {
                     Some(model) => {
-                        let input = left[i] * input_gain;
+                        let input = dry_l * input_gain;
                         let raw = model.process_sample(input) * output_gain * fade_gain;
-                        left[i] = self.dc_l.process(raw);
-                        right[i] = self.dc_r.process(raw);
+                        (self.dc_l.process(raw), self.dc_r.process(raw))
                     }
                     None => {
                         let gain = input_gain * output_gain * fade_gain;
-                        left[i] *= gain;
-                        right[i] *= gain;
+                        (dry_l * gain, dry_r * gain)
                     }
-                }
+                };
+                left[i] = out_l;
+                right[i] = out_r;
+                out_peak_l = out_peak_l.max(out_l.abs());
+                out_peak_r = out_peak_r.max(out_r.abs());
             }
-        }
-
-        for i in 0..frames {
-            out_peak_l = out_peak_l.max(left[i].abs());
-            out_peak_r = out_peak_r.max(right[i].abs());
         }
 
         // Publish block-rate viz state.
@@ -357,9 +377,7 @@ impl ResonancePlugin for ResonanceAmp {
         );
         {
             let mut scope = self.viz.scope.lock();
-            for i in 0..copy_n {
-                scope.push(self.input_scratch[i], left[i]);
-            }
+            scope.push_slice(&self.input_scratch[..copy_n], &left[..copy_n]);
         }
 
         // Feed the tuner with the dry input (pre-gain, pre-model) so

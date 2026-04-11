@@ -41,6 +41,41 @@ impl ScopeHistory {
         self.write_pos = (self.write_pos + 1) % SCOPE_LEN;
     }
 
+    /// Block-wise push: write two source slices (equal length) into the
+    /// ring, handling wrap once via two `copy_from_slice` calls. Much
+    /// cheaper than calling `push` per sample because the audio thread
+    /// only holds the mutex for the duration of at most two memcpys.
+    pub fn push_slice(&mut self, input: &[f32], output: &[f32]) {
+        debug_assert_eq!(input.len(), output.len());
+        let mut n = input.len();
+        // If the caller hands us more than SCOPE_LEN in one shot, only
+        // the tail is retained — the earlier samples would be overwritten
+        // anyway on the next wrap.
+        let (mut src_in, mut src_out) = if n > SCOPE_LEN {
+            let skip = n - SCOPE_LEN;
+            n = SCOPE_LEN;
+            (&input[skip..], &output[skip..])
+        } else {
+            (input, output)
+        };
+
+        let mut pos = self.write_pos;
+        let first = (SCOPE_LEN - pos).min(n);
+        self.input[pos..pos + first].copy_from_slice(&src_in[..first]);
+        self.output[pos..pos + first].copy_from_slice(&src_out[..first]);
+        pos = (pos + first) & (SCOPE_LEN - 1);
+        src_in = &src_in[first..];
+        src_out = &src_out[first..];
+
+        let remaining = n - first;
+        if remaining > 0 {
+            self.input[pos..pos + remaining].copy_from_slice(&src_in[..remaining]);
+            self.output[pos..pos + remaining].copy_from_slice(&src_out[..remaining]);
+            pos = (pos + remaining) & (SCOPE_LEN - 1);
+        }
+        self.write_pos = pos;
+    }
+
     /// Iterate the ring in chronological order (oldest first).
     pub fn iter_chrono(&self) -> impl Iterator<Item = (f32, f32)> + '_ {
         let start = self.write_pos;

@@ -1,3 +1,4 @@
 [build]
-# Uncomment for local development (produces non-portable binaries):
-# rustflags = ["-C", "target-cpu=native"]
+# Local dev: produces non-portable binaries, but lets LLVM emit AVX2+FMA
+# for the NAM matvec loops, the reverb Hadamard, and the amp fade math.
+rustflags = ["-C", "target-cpu=native"]
