@@ -1,0 +1,24 @@
+[package]
+name = "resonance-compressor"
+version = "0.1.0"
+edition = "2021"
+description = "A stereo feed-forward compressor CLAP plugin with soft knee, sidechain HPF and parallel mix"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+# Editor ships by default so the bundled .clap has a GUI.
+# Turn it off (`--no-default-features`) for a headless DSP build.
+default = ["editor"]
+editor = ["dep:wayland-plugin-gui", "dep:egui"]
+
+[dependencies]
+resonance-plugin = { path = "../../resonance-plugin" }
+resonance-common = { path = "../../resonance-common" }
+resonance-dsp = { path = "../../resonance-dsp" }
+serde_json = "1"
+parking_lot = "0.12"
+
+wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+egui = { version = "0.34", features = ["default_fonts"], default-features = false, optional = true }

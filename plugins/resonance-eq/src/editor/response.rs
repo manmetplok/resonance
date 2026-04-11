@@ -214,7 +214,10 @@ fn spectrum_fill() -> egui::Color32 {
 }
 
 fn spectrum_stroke() -> egui::Color32 {
-    egui::Color32::from_rgba_premultiplied(0x5a, 0xc8, 0xfa, 0x90)
+    // Near-opaque white gives a crisp envelope line above the translucent
+    // cyan fill — matches the Pro-Q 3 look where the spectrum body is
+    // colored but its top edge reads as a sharp bright trace.
+    egui::Color32::from_rgba_premultiplied(0xff, 0xff, 0xff, 0xe0)
 }
 
 fn draw_grid(painter: &egui::Painter, plot: egui::Rect) {

@@ -353,6 +353,8 @@ impl ResonancePlugin for ResonanceIr {
     fn extra_state_saver(&self) -> Option<Arc<dyn resonance_plugin::plugin::ExtraStateSaver>> {
         Some(Arc::new(IrExtraState {
             ir_path: self.params.ir_path.clone(),
+            file_list: self.params.file_list.clone(),
+            load_request: self.load_request.clone(),
         }))
     }
 
@@ -371,11 +373,23 @@ impl ResonancePlugin for ResonanceIr {
     }
 }
 
-/// Persists the IR file path alongside the plugin's params. Holds only
-/// the shared `Arc<Mutex<String>>` so the CLAP bridge can serialize it
-/// while the plugin is in the audio processor.
+/// Persists the IR file path alongside the plugin's params, and — crucially
+/// — rebuilds the in-memory file list and kicks the persistent loader
+/// thread when the state is restored. Holds only shared Arcs so the CLAP
+/// bridge can call save/load while the plugin is in the audio processor.
+///
+/// Why the rescan + load_request live here (instead of in `initialize`):
+/// the CLAP bridge's load path runs **after** the plugin has been moved
+/// into the audio processor and `initialize` has already returned, so by
+/// the time the saved path shows up in `ir_path` the loader thread has no
+/// file list to walk and process() has no way to kick it. This saver
+/// closes that gap by publishing both the path and the matching directory
+/// scan as a single synchronous step, then bumping the load-request atomic
+/// so the loader thread rebuilds the convolver on its next poll.
 struct IrExtraState {
     ir_path: Arc<Mutex<String>>,
+    file_list: Arc<Mutex<Vec<String>>>,
+    load_request: Arc<std::sync::atomic::AtomicI32>,
 }
 
 impl resonance_plugin::plugin::ExtraStateSaver for IrExtraState {
@@ -389,8 +403,25 @@ impl resonance_plugin::plugin::ExtraStateSaver for IrExtraState {
     }
 
     fn load(&self, state: &serde_json::Value) {
-        if let Some(path) = state.get("ir_path").and_then(|v| v.as_str()) {
-            *self.ir_path.lock() = path.to_string();
+        let Some(path) = state.get("ir_path").and_then(|v| v.as_str()) else {
+            return;
+        };
+        *self.ir_path.lock() = path.to_string();
+        if path.is_empty() {
+            return;
+        }
+        // Rescan the containing directory so Prev/Next in the editor and
+        // the audio-thread's param-change detector both have a populated
+        // list to work with.
+        if let Some(dir) = Path::new(path).parent() {
+            let files = scan_directory(dir);
+            let idx = files.iter().position(|f| f == path).unwrap_or(0);
+            *self.file_list.lock() = files;
+            // Bump the loader thread so it rebuilds the convolver for the
+            // restored path. Without this the plugin would sit silent
+            // after a project reopen even though `ir_path` was set.
+            self.load_request
+                .store(idx as i32, std::sync::atomic::Ordering::Release);
         }
     }
 }
@@ -402,3 +433,146 @@ impl Drop for ResonanceIr {
 }
 
 resonance_plugin::export_clap!(ResonanceIr);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use resonance_plugin::plugin::ExtraStateSaver;
+    use resonance_plugin::ResonancePlugin;
+
+    /// Full save_state → load_state round-trip preserves the persisted IR
+    /// path. Exercises the trait-default `save_state` / `load_state` that
+    /// the CLAP bridge calls on the owned plugin instance.
+    #[test]
+    fn state_roundtrip_preserves_ir_path() {
+        let src = ResonanceIr::new();
+        *src.params.ir_path.lock() = "/some/cabs/resonance_cab.wav".to_string();
+
+        let bytes = src.save_state();
+
+        let mut dst = ResonanceIr::new();
+        assert!(dst.load_state(&bytes), "load_state should succeed");
+        assert_eq!(
+            dst.params.ir_path.lock().clone(),
+            "/some/cabs/resonance_cab.wav"
+        );
+    }
+
+    /// Direct round-trip through the `ExtraStateSaver` interface. This
+    /// simulates the audio-processor code path in the CLAP bridge: the
+    /// owned plugin has been moved into `ClapAudioProcessor`, so `save()`
+    /// on the bridge side talks to the cached saver Arc instead of calling
+    /// the plugin's trait default. The saver must still round-trip the
+    /// path through the shared `Arc<Mutex<String>>` it holds.
+    #[test]
+    fn extra_saver_roundtrip_active_path() {
+        use std::sync::atomic::AtomicI32;
+
+        // The save side: pretend the user has loaded an IR from a
+        // directory that happens not to exist on the test host. We only
+        // exercise `save()` here, so the absent directory is fine — the
+        // rescan only runs on `load()`.
+        let src_path = Arc::new(Mutex::new(
+            "/definitely/not/real/active_cab.wav".to_string(),
+        ));
+        let saver = IrExtraState {
+            ir_path: src_path.clone(),
+            file_list: Arc::new(Mutex::new(Vec::new())),
+            load_request: Arc::new(AtomicI32::new(-1)),
+        };
+
+        // Serialize the same way clap_bridge::save() does on the
+        // plugin-is-None branch: a JSON object with a "params" key plus
+        // whatever the saver adds at the top level.
+        let mut json = serde_json::json!({ "params": {} });
+        for (k, v) in saver.save() {
+            json.as_object_mut().unwrap().insert(k, v);
+        }
+
+        // A fresh saver with its own shared storage — representing the
+        // plugin instance that'll be loaded back from the project file.
+        // We use the same non-existent directory so `load()` skips the
+        // rescan gracefully and we only verify the ir_path field.
+        let dst_path = Arc::new(Mutex::new(String::new()));
+        let restored_saver = IrExtraState {
+            ir_path: dst_path.clone(),
+            file_list: Arc::new(Mutex::new(Vec::new())),
+            load_request: Arc::new(AtomicI32::new(-1)),
+        };
+        restored_saver.load(&json);
+
+        assert_eq!(
+            dst_path.lock().clone(),
+            "/definitely/not/real/active_cab.wav",
+            "ir_path should round-trip through the ExtraStateSaver"
+        );
+    }
+
+    /// Restoring a project file that references an IR must leave the
+    /// plugin in a state where the persistent loader thread will actually
+    /// rebuild the convolver. Before the fix, the saver wrote the path
+    /// into the shared storage but never populated the file list or
+    /// nudged the loader, so the plugin sat silent after reopen even
+    /// though the editor showed the correct filename.
+    ///
+    /// This test asserts the three load-side side-effects that together
+    /// make the reload work: `ir_path`, `file_list`, and `load_request`.
+    #[test]
+    fn extra_saver_load_populates_file_list_and_queues_loader() {
+        use std::sync::atomic::{AtomicI32, Ordering};
+
+        // Unique temp directory so parallel test runs don't collide.
+        let dir = std::env::temp_dir().join(format!(
+            "resonance-ir-saver-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let wav_a = dir.join("aaa_first.wav");
+        let wav_b = dir.join("bbb_second.wav");
+        let wav_c = dir.join("ccc_third.wav");
+        // The content doesn't matter for the directory scan — we're not
+        // actually decoding the file, just walking directory entries.
+        for p in [&wav_a, &wav_b, &wav_c] {
+            std::fs::write(p, b"").unwrap();
+        }
+        let target = wav_b.to_string_lossy().into_owned();
+
+        // Fresh shared storage, all empty — this is what the plugin's
+        // `new()` produces before any state is loaded.
+        let ir_path = Arc::new(Mutex::new(String::new()));
+        let file_list = Arc::new(Mutex::new(Vec::<String>::new()));
+        let load_request = Arc::new(AtomicI32::new(-1));
+
+        let saver = IrExtraState {
+            ir_path: ir_path.clone(),
+            file_list: file_list.clone(),
+            load_request: load_request.clone(),
+        };
+
+        let state = serde_json::json!({
+            "params": {},
+            "ir_path": target,
+        });
+        saver.load(&state);
+
+        // The path is published.
+        assert_eq!(ir_path.lock().clone(), target);
+        // The file list contains every .wav in the directory, sorted.
+        let files = file_list.lock().clone();
+        assert_eq!(files.len(), 3, "all three .wav files should be listed");
+        assert!(files.iter().any(|f| f == &target));
+        // The load request points at the restored file's index so the
+        // loader thread will pick it up on its next poll.
+        let expected_idx = files.iter().position(|f| f == &target).unwrap() as i32;
+        assert_eq!(load_request.load(Ordering::Acquire), expected_idx);
+
+        // Clean up the temp directory so repeated test runs don't leave
+        // litter behind. Best-effort — ignore errors.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

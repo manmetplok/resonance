@@ -3615,6 +3615,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "resonance-compressor"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "parking_lot 0.12.5",
+ "resonance-common",
+ "resonance-dsp",
+ "resonance-plugin",
+ "serde_json",
+ "wayland-plugin-gui",
+]
+
+[[package]]
 name = "resonance-drums"
 version = "0.1.0"
 dependencies = [

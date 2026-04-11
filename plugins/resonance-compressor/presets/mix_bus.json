@@ -1,0 +1,15 @@
+{
+  "params": {
+    "threshold": -14.0,
+    "ratio": 2.0,
+    "attack": 30.0,
+    "release": 300.0,
+    "knee": 10.0,
+    "makeup": 1.0,
+    "mix": 1.0,
+    "detector_mix": 0.6,
+    "sc_hpf_freq": 60.0,
+    "sc_hpf_on": 1,
+    "auto_makeup": 1
+  }
+}
