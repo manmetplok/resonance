@@ -195,6 +195,8 @@ pub(crate) enum ProjectIoMessage {
     SaveProject,
     SaveProjectAs,
     OpenProject,
+    /// User clicked a recent entry in the startup modal.
+    OpenRecent(std::path::PathBuf),
     SavePathSelected(Option<String>),
     OpenPathSelected(Option<String>),
     ProjectSaved(Result<(), String>),
@@ -209,4 +211,6 @@ pub(crate) enum UiMessage {
     OpenAddTrackMenu,
     CloseAddTrackMenu,
     DismissError,
+    /// User clicked "New Project" in the startup modal.
+    StartNewProject,
 }

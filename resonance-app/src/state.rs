@@ -501,6 +501,13 @@ pub struct ProjectIoState {
     pub loading: bool,
     pub pending_load: Option<Box<crate::project::LoadedProject>>,
     pub bouncing: bool,
+    /// When false, the startup modal is shown and interactive
+    /// messages are dropped. Flipped true on successful load or
+    /// on the first successful save of a new project.
+    pub has_active_project: bool,
+    /// Recent-projects list, loaded from disk on startup and
+    /// refreshed whenever an entry is added.
+    pub recent_projects: Vec<crate::recent::RecentEntry>,
 }
 
 /// Pure UI state for the mixer view and its menus.

@@ -14,8 +14,44 @@ pub mod viewport;
 
 pub(crate) use project_io::{build_project_file, replay_loaded_project};
 
+/// While the startup modal is up (no active project), swallow
+/// messages that would mutate project state. Engine events don't
+/// flow through `update()` (see `engine_events.rs`), so this only
+/// needs to think about user-initiated variants.
+fn is_gated_message(message: &Message) -> bool {
+    match message {
+        // Interactive user input: block.
+        Message::Compose(_)
+        | Message::Transport(_)
+        | Message::Track(_)
+        | Message::Bus(_)
+        | Message::Clip(_)
+        | Message::MidiClip(_)
+        | Message::MidiEditor(_)
+        | Message::Plugin(_)
+        | Message::Viewport(_) => true,
+        // Tab switches / auxiliary overlays: block so they can't
+        // steal focus from the startup modal.
+        Message::Ui(UiMessage::SwitchView(_))
+        | Message::Ui(UiMessage::OpenSettings)
+        | Message::Ui(UiMessage::OpenAddTrackMenu) => true,
+        // Benign UI: allow.
+        Message::Ui(UiMessage::CloseSettings)
+        | Message::Ui(UiMessage::CloseAddTrackMenu)
+        | Message::Ui(UiMessage::DismissError)
+        | Message::Ui(UiMessage::StartNewProject) => false,
+        // Project I/O drives the modal itself: always allow.
+        Message::ProjectIo(_) => false,
+        // Timer tick: harmless, drives VU meters — allow.
+        Message::Tick => false,
+    }
+}
+
 impl crate::Resonance {
     pub(crate) fn update(&mut self, message: Message) -> Task<Message> {
+        if !self.io.has_active_project && is_gated_message(&message) {
+            return Task::none();
+        }
         match message {
             Message::Compose(m) => {
                 crate::update::compose::handle(self, m);
@@ -326,6 +362,13 @@ impl crate::Resonance {
             Message::Ui(UiMessage::DismissError) => {
                 self.error_message = None;
             }
+            Message::Ui(UiMessage::StartNewProject) => {
+                // Kick straight into the Save-As dialog. When it
+                // returns, `SavePathSelected(Some(..))` sets the
+                // path and starts saving the empty project; on
+                // `ProjectSaved(Ok)` the gate lifts.
+                return project_io::save_project_as_dialog();
+            }
             Message::Transport(TransportMessage::ToggleLoop) => {
                 self.transport.loop_enabled = !self.transport.loop_enabled;
                 // Set sensible defaults if enabling with no range set
@@ -450,8 +493,18 @@ impl crate::Resonance {
                 return project_io::load_project_task(path);
             }
             Message::ProjectIo(ProjectIoMessage::OpenPathSelected(None)) => {}
+            Message::ProjectIo(ProjectIoMessage::OpenRecent(path)) => {
+                self.io.project_path = Some(path.clone());
+                return project_io::load_project_task(path);
+            }
             Message::ProjectIo(ProjectIoMessage::ProjectSaved(Ok(()))) => {
                 self.io.save_state = None;
+                // First successful save of a New Project lifts the
+                // gate; idempotent for normal saves.
+                self.io.has_active_project = true;
+                if let Some(ref path) = self.io.project_path {
+                    crate::recent::add(&mut self.io.recent_projects, path);
+                }
             }
             Message::ProjectIo(ProjectIoMessage::ProjectSaved(Err(e))) => {
                 self.io.save_state = None;
@@ -465,6 +518,13 @@ impl crate::Resonance {
                 self.io.loading = true;
                 self.io.pending_load = Some(loaded);
                 self.engine.send(AudioCommand::ClearAll);
+                // Lift the gate immediately — replay runs when the
+                // engine emits `AllCleared`, but the project is
+                // logically active the moment load succeeded.
+                self.io.has_active_project = true;
+                if let Some(ref path) = self.io.project_path {
+                    crate::recent::add(&mut self.io.recent_projects, path);
+                }
             }
             Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Err(e))) => {
                 self.error_message = Some(format!("Load failed: {e}"));

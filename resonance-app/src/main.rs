@@ -7,6 +7,7 @@ mod engine_events;
 mod message;
 mod midi_editor;
 pub(crate) mod project;
+pub(crate) mod recent;
 pub(crate) mod state;
 mod theme;
 mod timeline;
@@ -126,6 +127,8 @@ impl Resonance {
         engine.send(AudioCommand::ListInputDevices);
         engine.send(AudioCommand::ScanPlugins);
 
+        let recent_projects = recent::load();
+
         let app = Self {
             engine,
             sample_rate: 44100, // overwritten by SampleRateDetected event
@@ -144,7 +147,10 @@ impl Resonance {
             transport: TransportState::default(),
             viewport: ArrangeViewport::default(),
             interaction: ClipInteractionState::default(),
-            io: ProjectIoState::default(),
+            io: ProjectIoState {
+                recent_projects,
+                ..ProjectIoState::default()
+            },
             mixer: MixerUiState::default(),
             registry: TrackRegistry {
                 next_sub_track_id: 1_000_000_000,

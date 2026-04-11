@@ -7,6 +7,7 @@ pub(crate) mod knob;
 pub(crate) mod menus;
 pub(crate) mod mixer;
 pub(crate) mod settings;
+pub(crate) mod startup;
 pub(crate) mod track_header;
 pub(crate) mod transport;
 
@@ -63,7 +64,9 @@ impl crate::Resonance {
             .style(theme::base_bg)
             .into();
 
-        if self.mixer.settings_open {
+        if !self.io.has_active_project {
+            stack![base, startup::view_startup_overlay(self)].into()
+        } else if self.mixer.settings_open {
             stack![base, settings::view_settings_overlay(self)].into()
         } else if self.mixer.add_track_menu_open {
             stack![base, menus::view_add_track_menu(self)].into()
