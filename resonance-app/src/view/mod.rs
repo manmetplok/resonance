@@ -2,6 +2,7 @@
 /// lives here; concrete surfaces are in sibling modules (transport,
 /// mixer, compose, track_header, menus, settings).
 pub(crate) mod compose;
+pub(crate) mod confirm_delete_track;
 pub(crate) mod controls;
 pub(crate) mod knob;
 pub(crate) mod menus;
@@ -66,6 +67,12 @@ impl crate::Resonance {
 
         if !self.io.has_active_project {
             stack![base, startup::view_startup_overlay(self)].into()
+        } else if let Some(track_id) = self.confirm_delete_track {
+            stack![
+                base,
+                confirm_delete_track::view_confirm_delete_track_overlay(self, track_id)
+            ]
+            .into()
         } else if self.mixer.settings_open {
             stack![base, settings::view_settings_overlay(self)].into()
         } else if self.mixer.add_track_menu_open {

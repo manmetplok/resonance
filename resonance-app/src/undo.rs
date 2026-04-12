@@ -424,6 +424,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
                 UndoAction::RecordCoalesced(CoalesceKey::MasterVolume)
             }
             TrackMessage::ToggleSubTracksVisible(_) => UndoAction::Skip,
+            // Dismissing the delete-confirmation dialog is a transient
+            // UI gesture — nothing to undo.
+            TrackMessage::CancelRemoveTrack => UndoAction::Skip,
             _ => UndoAction::Record,
         },
 

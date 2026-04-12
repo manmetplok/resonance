@@ -55,6 +55,9 @@ pub(crate) struct Resonance {
     pub(crate) registry: TrackRegistry,
     /// Session-local undo/redo history. Cleared on project load.
     pub(crate) undo: UndoHistory,
+    /// When set, the confirmation dialog for deleting a track with
+    /// content is shown. Holds the track id that the user wants to remove.
+    pub(crate) confirm_delete_track: Option<resonance_audio::types::TrackId>,
     /// Cache of the most recently observed CLAP state blob per plugin
     /// instance. Populated from `PluginStateSaved` / `AllPluginStatesSaved`
     /// engine events and read into undo snapshots so restores can replay
@@ -199,6 +202,7 @@ impl Resonance {
             },
             undo: UndoHistory::new(),
             plugin_state_cache: std::collections::HashMap::new(),
+            confirm_delete_track: None,
         };
 
         (app, iced::Task::none())

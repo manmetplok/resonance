@@ -166,6 +166,31 @@ impl crate::Resonance {
                 });
                 self.mixer.add_track_menu_open = false;
             }
+            Message::Track(TrackMessage::RequestRemoveTrack(id)) => {
+                let has_audio = self.clips.iter().any(|c| c.track_id == id);
+                let has_midi = self.midi_clips.iter().any(|c| c.track_id == id);
+                if has_audio || has_midi {
+                    // Track has content — ask for confirmation first.
+                    self.confirm_delete_track = Some(id);
+                } else {
+                    // Empty track — delete immediately (same as RemoveTrack).
+                    if self.interaction.selected_track == Some(id) {
+                        self.interaction.selected_track = None;
+                    }
+                    self.engine.send(AudioCommand::RemoveTrack { track_id: id });
+                }
+            }
+            Message::Track(TrackMessage::ConfirmRemoveTrack) => {
+                if let Some(id) = self.confirm_delete_track.take() {
+                    if self.interaction.selected_track == Some(id) {
+                        self.interaction.selected_track = None;
+                    }
+                    self.engine.send(AudioCommand::RemoveTrack { track_id: id });
+                }
+            }
+            Message::Track(TrackMessage::CancelRemoveTrack) => {
+                self.confirm_delete_track = None;
+            }
             Message::Track(TrackMessage::RemoveTrack(id)) => {
                 if self.interaction.selected_track == Some(id) {
                     self.interaction.selected_track = None;

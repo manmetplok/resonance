@@ -458,6 +458,25 @@ pub fn floating_button_style(status: button::Status) -> button::Style {
     }
 }
 
+/// Red-tinted button for destructive actions (delete confirmations).
+pub fn destructive_button_style(status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Color::from_rgb(0.50, 0.14, 0.14),
+        button::Status::Pressed => Color::from_rgb(0.38, 0.10, 0.10),
+        _ => Color::from_rgb(0.45, 0.12, 0.12),
+    };
+    button::Style {
+        background: Some(iced::Background::Color(bg)),
+        text_color: Color::WHITE,
+        border: iced::Border {
+            color: RECORD_RED,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
 // ---- Container style helpers -------------------------------------------
 // These wrap the "flat background container with no border" pattern that
 // appears ~80 times across the view module.

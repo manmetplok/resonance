@@ -93,7 +93,7 @@ fn view_track_header(track: &TrackState, is_selected: bool) -> Element<'_, Messa
     } else {
         row![
             container(name).width(Length::Fill).clip(true),
-            delete_button(Message::Track(TrackMessage::RemoveTrack(track.id)), 12),
+            delete_button(Message::Track(TrackMessage::RequestRemoveTrack(track.id)), 12),
         ]
         .spacing(4)
         .align_y(alignment::Vertical::Center)
