@@ -35,10 +35,12 @@ impl Default for DownloadPanelState {
 }
 
 pub fn draw(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc<WorkerHandle>) {
-    // Dim the entire window behind the overlay, including side panels.
-    let screen = ui.ctx().screen_rect();
+    // Dim the background behind the overlay. Use a Tooltip-order layer so it
+    // sits between the normal UI and the Foreground-order panel, avoiding
+    // darkening the panel itself.
+    let screen = ui.ctx().content_rect();
     let painter = ui.ctx().layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Tooltip,
         egui::Id::new("download_kits_backdrop"),
     ));
     painter.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(180));
