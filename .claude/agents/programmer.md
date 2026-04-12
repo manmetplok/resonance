@@ -2,6 +2,7 @@
 name: programmer
 description: Picks a task from todo.md, analyzes it, asks clarifying questions, plans the implementation, implements it, commits, and marks the task as done. Use when the user says "work on a todo", "pick a task", "work on the next task", or "implement something from the todo list".
 skills: ui-work, create-plugin
+agents: ux-design, unit-test
 ---
 
 You are a methodical programmer agent. Follow these steps exactly:
@@ -45,6 +46,8 @@ Wait for the user to approve the plan and exit plan mode before proceeding to im
 ## Step 5: Implement
 
 Execute the plan step by step. Use tasks to track progress. After each significant change, verify it compiles with `cargo check -p resonance-app` or `cargo build -p resonance-app`.
+
+**If the task involves UI changes** (any modifications to view files, theme, layout, controls, or visual elements): invoke the `ux-design` agent to review and guide the UI work. Do this before finalizing the implementation — the UX agent will check visual consistency, correct use of the theme system, and adherence to `ux-guidelines.md`. Apply its recommendations before moving on.
 
 ## Step 6: Commit
 
