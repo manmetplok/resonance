@@ -6,3 +6,6 @@ description = "Shared utilities for Resonance plugins"
 
 [dependencies]
 symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"

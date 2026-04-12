@@ -1,6 +1,7 @@
 /// Shared utilities for Resonance plugins.
 
 mod denormal;
+pub mod registry;
 mod wav;
 mod scan;
 

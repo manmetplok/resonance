@@ -9,6 +9,8 @@ use resonance_plugin::*;
 
 #[cfg(feature = "editor")]
 mod editor;
+#[cfg(feature = "editor")]
+pub(crate) mod download;
 mod drum_map;
 mod kit;
 mod kit_loader;
@@ -17,6 +19,8 @@ mod params;
 mod sampler;
 mod voice;
 
+#[cfg(feature = "editor")]
+use download::WorkerHandle;
 use kit::LoadedPad;
 use kit_loader::{KitStatus, PadMicChoices, DEFAULT_OVERHEAD_SETUP};
 use mic_catalog::ManifestMicCatalog;
@@ -63,6 +67,10 @@ pub struct ResonanceDrums {
     params: Arc<DrumParams>,
     sampler: DrumSampler,
     bridge: KitBridge,
+    /// Download worker for fetching drumkits from the server. Only present
+    /// in editor builds.
+    #[cfg(feature = "editor")]
+    download_worker: Arc<WorkerHandle>,
 }
 
 impl ResonancePlugin for ResonanceDrums {
@@ -96,6 +104,8 @@ impl ResonancePlugin for ResonanceDrums {
             params: Arc::new(DrumParams::default()),
             sampler: DrumSampler::new(kit_receiver),
             bridge,
+            #[cfg(feature = "editor")]
+            download_worker: Arc::new(download::spawn()),
         }
     }
 
@@ -239,6 +249,7 @@ impl ResonancePlugin for ResonanceDrums {
         Some(Arc::new(editor::DrumsEditorFactory::new(
             self.params.clone(),
             self.bridge.clone(),
+            self.download_worker.clone(),
         )))
     }
 }

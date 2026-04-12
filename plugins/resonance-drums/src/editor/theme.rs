@@ -12,6 +12,7 @@ pub const TEXT: egui::Color32 = egui::Color32::from_rgb(0xe0, 0xe0, 0xe0);
 pub const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0x80, 0x80, 0x88);
 pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x5a, 0xc8, 0xfa);
 pub const ACCENT_GLOW: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x5a, 0xc8, 0xfa, 0x40);
+pub const DANGER: egui::Color32 = egui::Color32::from_rgb(0xff, 0x6a, 0x6a);
 
 pub fn apply(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();

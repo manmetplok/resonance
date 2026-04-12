@@ -14,10 +14,13 @@ use resonance_plugin::gui::{EditorFactory, PluginEditor};
 use resonance_plugin::param::Param;
 use wayland_plugin_gui::{egui, Editor as RuntimeEditor, EditorApp, EditorOptions};
 
+use crate::download::WorkerHandle;
 use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
 use crate::kit_loader::{self, KitStatus};
 use crate::params::DrumParams;
 use crate::KitBridge;
+
+mod download_panel;
 
 /// Reload the kit in place with the current mic selection. Used whenever
 /// the user changes a close-mic, overhead-mic, or any other setup that
@@ -50,11 +53,20 @@ const MIN_SIZE: (u32, u32) = (560, 360);
 pub struct DrumsEditorFactory {
     params: Arc<DrumParams>,
     bridge: KitBridge,
+    download_worker: Arc<WorkerHandle>,
 }
 
 impl DrumsEditorFactory {
-    pub(crate) fn new(params: Arc<DrumParams>, bridge: KitBridge) -> Self {
-        Self { params, bridge }
+    pub(crate) fn new(
+        params: Arc<DrumParams>,
+        bridge: KitBridge,
+        download_worker: Arc<WorkerHandle>,
+    ) -> Self {
+        Self {
+            params,
+            bridge,
+            download_worker,
+        }
     }
 }
 
@@ -75,7 +87,11 @@ impl EditorFactory for DrumsEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = DrumsEditorApp::new(self.params.clone(), self.bridge.clone());
+        let app = DrumsEditorApp::new(
+            self.params.clone(),
+            self.bridge.clone(),
+            self.download_worker.clone(),
+        );
         let runtime = RuntimeEditor::new(
             app,
             EditorOptions {
@@ -157,14 +173,18 @@ struct DrumsEditorApp {
     params: Arc<DrumParams>,
     bridge: KitBridge,
     selected_pad: usize,
+    download_worker: Arc<WorkerHandle>,
+    download_panel: download_panel::DownloadPanelState,
 }
 
 impl DrumsEditorApp {
-    fn new(params: Arc<DrumParams>, bridge: KitBridge) -> Self {
+    fn new(params: Arc<DrumParams>, bridge: KitBridge, download_worker: Arc<WorkerHandle>) -> Self {
         Self {
             params,
             bridge,
             selected_pad: 0,
+            download_worker,
+            download_panel: download_panel::DownloadPanelState::default(),
         }
     }
 
@@ -248,6 +268,16 @@ impl EditorApp for DrumsEditorApp {
             if ui.button("Load Kit").clicked() {
                 self.load_kit_clicked();
             }
+            let dl_btn = egui::Button::new(
+                egui::RichText::new("Download Kits")
+                    .color(egui::Color32::BLACK)
+                    .strong()
+                    .size(12.0),
+            )
+            .fill(theme::ACCENT);
+            if ui.add(dl_btn).clicked() {
+                self.download_panel.open = true;
+            }
             let status = self.bridge.kit_status.lock().unwrap().clone();
             ui.label(
                 egui::RichText::new(format_kit_status(&status)).color(theme::TEXT_DIM),
@@ -320,6 +350,10 @@ impl EditorApp for DrumsEditorApp {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             self.render_pad_detail(ui, &catalog);
         });
+
+        if self.download_panel.open {
+            download_panel::draw(ui, &mut self.download_panel, &self.download_worker);
+        }
     }
 }
 
