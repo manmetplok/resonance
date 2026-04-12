@@ -31,3 +31,4 @@
     - [x] We should be able to download the drumkit as a zip from a server. (see https://resonance.plok.org/index.json)
     - [x] Check if round robin is executed correctly (also add unit tests)
     - [x] Implement all pads/parts found in /home/jorrit/Documents/Guitar/drummica
+    - [x] Add ability to delete installed drumkits from the download panel

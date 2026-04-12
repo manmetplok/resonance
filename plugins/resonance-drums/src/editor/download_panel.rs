@@ -19,6 +19,9 @@ pub struct DownloadPanelState {
     pub open: bool,
     /// Set once after the panel opens so we fetch the index exactly once.
     pub did_initial_fetch: bool,
+    /// When set, the kit with this name is awaiting deletion confirmation.
+    /// A second click on "Confirm?" will actually delete it.
+    pending_delete: Option<String>,
 }
 
 impl Default for DownloadPanelState {
@@ -26,6 +29,7 @@ impl Default for DownloadPanelState {
         Self {
             open: false,
             did_initial_fetch: false,
+            pending_delete: None,
         }
     }
 }
@@ -90,7 +94,7 @@ fn draw_contents(
     draw_status_line(ui, &status);
     ui.add_space(6.0);
 
-    draw_kit_list(ui, worker, index.as_ref(), &status);
+    draw_kit_list(ui, panel, worker, index.as_ref(), &status);
 
     if let Some(err) = error {
         ui.add_space(4.0);
@@ -163,6 +167,7 @@ fn draw_status_line(ui: &mut egui::Ui, status: &Status) {
 
 fn draw_kit_list(
     ui: &mut egui::Ui,
+    panel: &mut DownloadPanelState,
     worker: &Arc<WorkerHandle>,
     index: Option<&crate::download::ServerIndex>,
     status: &Status,
@@ -193,21 +198,21 @@ fn draw_kit_list(
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for kit in &index.drumkits {
-                draw_kit_row(ui, worker, kit, &installed, status);
+                draw_kit_row(ui, panel, worker, kit, &installed, status);
             }
         });
 }
 
 fn draw_kit_row(
     ui: &mut egui::Ui,
+    panel: &mut DownloadPanelState,
     worker: &Arc<WorkerHandle>,
     kit: &ServerKit,
     installed: &[registry::InstalledItem],
     status: &Status,
 ) {
-    let is_installed = installed
-        .iter()
-        .any(|item| item.name == kit.name);
+    let installed_item = installed.iter().find(|item| item.name == kit.name);
+    let is_installed = installed_item.is_some();
 
     let frame = egui::Frame::new()
         .fill(theme::PANEL)
@@ -248,11 +253,53 @@ fn draw_kit_row(
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if is_installed {
-                    ui.label(
-                        egui::RichText::new("Installed")
-                            .color(theme::ACCENT)
-                            .size(12.0),
-                    );
+                    let confirming = panel
+                        .pending_delete
+                        .as_ref()
+                        .is_some_and(|name| name == &kit.name);
+
+                    if confirming {
+                        // Show confirm/cancel buttons.
+                        if ui
+                            .button(
+                                egui::RichText::new("Confirm?")
+                                    .color(theme::DANGER)
+                                    .size(11.0),
+                            )
+                            .clicked()
+                        {
+                            // Actually delete: remove directory, then registry entry.
+                            if let Some(item) = installed_item {
+                                let path = std::path::Path::new(&item.path);
+                                if path.exists() {
+                                    let _ = std::fs::remove_dir_all(path);
+                                }
+                            }
+                            let _ =
+                                registry::remove_installed(&kit.name, &ContentType::Drumkit);
+                            panel.pending_delete = None;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            panel.pending_delete = None;
+                        }
+                    } else {
+                        // Show delete button + installed label.
+                        if ui
+                            .button(
+                                egui::RichText::new("Delete")
+                                    .color(theme::DANGER)
+                                    .size(11.0),
+                            )
+                            .clicked()
+                        {
+                            panel.pending_delete = Some(kit.name.clone());
+                        }
+                        ui.label(
+                            egui::RichText::new("Installed")
+                                .color(theme::ACCENT)
+                                .size(12.0),
+                        );
+                    }
                 } else {
                     let busy = status.is_busy();
                     ui.add_enabled_ui(!busy, |ui| {
