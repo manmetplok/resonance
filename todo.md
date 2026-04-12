@@ -13,7 +13,7 @@
 
 ##Mix tab
     -We need a new solution for subtracks. My suggestion would be to make the collapsed view the default. But then make it a bit wider (maybe two slots, and show db meters of all subtracks. When expendanded the user can modify gain etc.
-    -!Something goes wrong when saving with busses. When opening a saved project the bus is there, but does not work. When removing the bus, audio can be heard again.
+    - [x] Something goes wrong when saving with busses. When opening a saved project the bus is there, but does not work. When removing the bus, audio can be heard again.
 
 ##Compose tab
     -We need a solution about the editing of instruments, the current view is to small so its hard to pick the correct notes. We need to brainstorm about this.
