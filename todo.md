@@ -2,7 +2,7 @@
 
 ##General
     -Conformation when a user wants to kill the app, but there are unsaved changes
-    -Conformation when a user wants to delete a track which has content.
+    - [x] Conformation when a user wants to delete a track which has content.
 
 ##Arrange tab
     -We need a place for global tracks like tempo track, and signature changes, my idea would an collapsable area between the normal tracks and the time indication
