@@ -70,6 +70,7 @@ pub struct TimelineCanvas<'a> {
     pub selected_clip: Option<ClipId>,
     pub midi_clips: &'a [MidiClipState],
     pub selected_midi_clip: Option<ClipId>,
+    pub selected_track: Option<TrackId>,
 }
 
 impl TimelineCanvas<'_> {
@@ -449,8 +450,16 @@ impl TimelineCanvas<'_> {
             };
         }
 
-        // Clicked on empty track area → deselect.
-        captured(Message::Clip(ClipMessage::SelectClip(None)))
+        // Clicked on empty track area → select the track under the cursor
+        // and deselect any active clip selection.
+        let clicked_track = {
+            let ruler_height = theme::RULER_HEIGHT;
+            let track_idx = ((pos.y - ruler_height + self.scroll_offset_y) / theme::TRACK_HEIGHT)
+                .floor()
+                .max(0.0) as usize;
+            sorted_tracks.get(track_idx).map(|t| t.id)
+        };
+        captured(Message::Ui(UiMessage::SelectTrack(clicked_track)))
     }
 
     fn handle_move(
@@ -636,7 +645,10 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                 continue;
             }
 
-            let bg = if i % 2 == 0 {
+            let is_selected = self.selected_track == Some(track.id);
+            let bg = if is_selected {
+                theme::PANEL_SELECTED
+            } else if i % 2 == 0 {
                 theme::BG
             } else {
                 theme::PANEL_DARK

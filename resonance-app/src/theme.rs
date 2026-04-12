@@ -151,6 +151,20 @@ pub const PANEL_ARMED: Color = Color::from_rgb(
     0x14 as f32 / 255.0,
 );
 
+/// Subtle highlight for the currently selected track header and lane.
+pub const PANEL_SELECTED: Color = Color::from_rgb(
+    0x1a as f32 / 255.0,
+    0x1a as f32 / 255.0,
+    0x22 as f32 / 255.0,
+);
+
+/// Border accent for the selected track header.
+pub const SELECTED_BORDER: Color = Color::from_rgb(
+    0x4a as f32 / 255.0,
+    0x4a as f32 / 255.0,
+    0x6a as f32 / 255.0,
+);
+
 pub const METER_BG: Color = Color::from_rgb(
     0x08 as f32 / 255.0,
     0x08 as f32 / 255.0,

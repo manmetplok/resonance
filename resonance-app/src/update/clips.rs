@@ -18,6 +18,7 @@ pub fn start_clip_drag(
 ) {
     if let Some(clip) = r.clips.iter().find(|c| c.id == clip_id) {
         r.interaction.selected_clip = Some(clip_id);
+        r.interaction.selected_track = Some(clip.track_id);
         r.interaction.clip_drag = Some(ClipDragState {
             clip_id,
             grab_offset_x,
@@ -78,6 +79,7 @@ pub fn start_clip_trim(
 ) {
     if let Some(clip) = r.clips.iter().find(|c| c.id == clip_id) {
         r.interaction.selected_clip = Some(clip_id);
+        r.interaction.selected_track = Some(clip.track_id);
         r.interaction.clip_trim = Some(ClipTrimState {
             clip_id,
             edge,
@@ -196,6 +198,7 @@ pub fn start_midi_clip_drag(
     if let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) {
         r.interaction.selected_midi_clip = Some(clip_id);
         r.interaction.selected_clip = None;
+        r.interaction.selected_track = Some(clip.track_id);
         r.interaction.midi_clip_drag = Some(MidiClipDragState {
             clip_id,
             grab_offset_x,
@@ -256,6 +259,7 @@ pub fn start_midi_clip_trim(
     if let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) {
         r.interaction.selected_midi_clip = Some(clip_id);
         r.interaction.selected_clip = None;
+        r.interaction.selected_track = Some(clip.track_id);
         r.interaction.midi_clip_trim = Some(MidiClipTrimState {
             clip_id,
             edge,

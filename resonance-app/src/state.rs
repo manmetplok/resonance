@@ -528,6 +528,8 @@ impl Default for ArrangeViewport {
 pub struct ClipInteractionState {
     pub selected_clip: Option<ClipId>,
     pub selected_midi_clip: Option<ClipId>,
+    /// Currently selected (highlighted) track in the arrange view.
+    pub selected_track: Option<TrackId>,
     pub clip_drag: Option<ClipDragState>,
     pub clip_trim: Option<ClipTrimState>,
     pub midi_clip_drag: Option<MidiClipDragState>,

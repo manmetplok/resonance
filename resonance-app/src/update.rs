@@ -40,7 +40,8 @@ fn is_gated_message(message: &Message) -> bool {
         Message::Ui(UiMessage::CloseSettings)
         | Message::Ui(UiMessage::CloseAddTrackMenu)
         | Message::Ui(UiMessage::DismissError)
-        | Message::Ui(UiMessage::StartNewProject) => false,
+        | Message::Ui(UiMessage::StartNewProject)
+        | Message::Ui(UiMessage::SelectTrack(_)) => false,
         // Project I/O drives the modal itself: always allow.
         Message::ProjectIo(_) => false,
         // Timer tick: harmless, drives VU meters — allow.
@@ -166,6 +167,9 @@ impl crate::Resonance {
                 self.mixer.add_track_menu_open = false;
             }
             Message::Track(TrackMessage::RemoveTrack(id)) => {
+                if self.interaction.selected_track == Some(id) {
+                    self.interaction.selected_track = None;
+                }
                 self.engine.send(AudioCommand::RemoveTrack { track_id: id });
             }
             Message::Track(TrackMessage::SetTrackVolume(id, vol_db)) => {
@@ -450,6 +454,12 @@ impl crate::Resonance {
                 // path and starts saving the empty project; on
                 // `ProjectSaved(Ok)` the gate lifts.
                 return project_io::save_project_as_dialog();
+            }
+            Message::Ui(UiMessage::SelectTrack(id)) => {
+                self.interaction.selected_track = id;
+                // Deselect any active clip when clicking a track's empty area.
+                self.interaction.selected_clip = None;
+                self.interaction.selected_midi_clip = None;
             }
             Message::Transport(TransportMessage::ToggleLoop) => {
                 self.transport.loop_enabled = !self.transport.loop_enabled;

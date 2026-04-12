@@ -184,6 +184,7 @@ impl crate::Resonance {
             selected_clip: self.interaction.selected_clip,
             midi_clips: &self.midi_clips,
             selected_midi_clip: self.interaction.selected_midi_clip,
+            selected_track: self.interaction.selected_track,
         };
 
         let canvas_el = canvas(timeline_data)

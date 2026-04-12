@@ -2,7 +2,7 @@
 //! a "+" add-track button plus one stacked header cell per visible track.
 //! Sub-tracks are intentionally hidden here — they only make sense in the
 //! mixer where they get per-bus routing.
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{alignment, Element, Length};
 
 use crate::message::*;
@@ -51,11 +51,13 @@ pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
         headers = headers.push(Space::new(Length::Fill, top_pad.max(0.0)));
     }
 
+    let selected_track = r.interaction.selected_track;
     for (i, track) in sorted_tracks.iter().enumerate() {
         if i < first_visible {
             continue;
         }
-        headers = headers.push(view_track_header(track));
+        let is_selected = selected_track == Some(track.id);
+        headers = headers.push(view_track_header(track, is_selected));
     }
 
     container(headers)
@@ -66,7 +68,8 @@ pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
         .into()
 }
 
-fn view_track_header(track: &TrackState) -> Element<'_, Message> {
+fn view_track_header(track: &TrackState, is_selected: bool) -> Element<'_, Message> {
+    let track_id = track.id;
     let is_sub = track.sub_track.is_some();
     // Track name on its own line, clipped at the header width so long
     // names don't push the icons offscreen. `Wrapping::None` prevents
@@ -127,6 +130,8 @@ fn view_track_header(track: &TrackState) -> Element<'_, Message> {
 
     let bg = if track.record_armed {
         theme::PANEL_ARMED
+    } else if is_selected {
+        theme::PANEL_SELECTED
     } else if is_sub {
         theme::PANEL
     } else {
@@ -134,21 +139,29 @@ fn view_track_header(track: &TrackState) -> Element<'_, Message> {
     };
     let border_color = if track.record_armed {
         theme::RECORD_RED
+    } else if is_selected {
+        theme::SELECTED_BORDER
     } else {
         theme::SEPARATOR
     };
 
-    container(content)
+    let header = container(content)
         .width(Length::Fill)
         .height(theme::TRACK_HEIGHT)
         .style(move |_theme| container::Style {
             background: Some(iced::Background::Color(bg)),
             border: iced::Border {
                 color: border_color,
-                width: 0.5,
+                width: if is_selected { 1.0 } else { 0.5 },
                 radius: 0.0.into(),
             },
             ..Default::default()
-        })
+        });
+
+    // Wrap in a mouse_area so clicking anywhere on the header selects
+    // the track. The inner buttons (mute, solo, etc.) capture their own
+    // presses, so this only fires on the "dead space" around them.
+    mouse_area(header)
+        .on_press(Message::Ui(UiMessage::SelectTrack(Some(track_id))))
         .into()
 }

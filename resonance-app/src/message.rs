@@ -10,6 +10,7 @@ use resonance_audio::types::{
     BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
 };
 
+
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     Compose(ComposeMessage),
@@ -227,4 +228,6 @@ pub(crate) enum UiMessage {
     DismissError,
     /// User clicked "New Project" in the startup modal.
     StartNewProject,
+    /// Select (highlight) a track in the arrange view, or deselect all.
+    SelectTrack(Option<TrackId>),
 }
