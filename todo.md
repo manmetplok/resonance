@@ -1,7 +1,7 @@
 #TODO
 
 ##General
-    -Conformation when a user wants to kill the app, but there are unsaved changes
+    - [x] Conformation when a user wants to kill the app, but there are unsaved changes
     - [x] Conformation when a user wants to delete a track which has content.
 
 ##Arrange tab
