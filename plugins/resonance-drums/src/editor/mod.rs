@@ -14,6 +14,8 @@ use resonance_plugin::gui::{EditorFactory, PluginEditor};
 use resonance_plugin::param::Param;
 use wayland_plugin_gui::{egui, Editor as RuntimeEditor, EditorApp, EditorOptions};
 
+use resonance_common::registry::{self, ContentType, InstalledItem};
+
 use crate::download::WorkerHandle;
 use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
 use crate::kit_loader::{self, KitStatus};
@@ -175,17 +177,82 @@ struct DrumsEditorApp {
     selected_pad: usize,
     download_worker: Arc<WorkerHandle>,
     download_panel: download_panel::DownloadPanelState,
+    /// Cached list of installed drum kits from the shared registry.
+    installed_kits: Vec<InstalledItem>,
+    /// Frame counter used to periodically refresh the installed-kits cache
+    /// (every ~60 frames, roughly once per second at the 100ms repaint rate).
+    installed_kits_refresh: u32,
 }
 
 impl DrumsEditorApp {
     fn new(params: Arc<DrumParams>, bridge: KitBridge, download_worker: Arc<WorkerHandle>) -> Self {
+        let installed_kits = registry::list_installed(&ContentType::Drumkit);
         Self {
             params,
             bridge,
             selected_pad: 0,
             download_worker,
             download_panel: download_panel::DownloadPanelState::default(),
+            installed_kits,
+            installed_kits_refresh: 0,
         }
+    }
+
+    /// Refresh the installed-kits cache every ~60 frames. Called once per
+    /// frame from `ui()`.
+    fn maybe_refresh_installed_kits(&mut self) {
+        self.installed_kits_refresh += 1;
+        if self.installed_kits_refresh >= 60 {
+            self.installed_kits_refresh = 0;
+            self.installed_kits = registry::list_installed(&ContentType::Drumkit);
+        }
+    }
+
+    /// Find the `drum_samples.json` manifest inside a kit directory. The
+    /// downloaded kits have a nested subdirectory, so we search one level
+    /// deep as well as the root.
+    fn find_manifest(kit_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+        let direct = kit_dir.join("drum_samples.json");
+        if direct.exists() {
+            return Some(direct);
+        }
+        // Search one level of subdirectories.
+        if let Ok(entries) = std::fs::read_dir(kit_dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    let nested = entry.path().join("drum_samples.json");
+                    if nested.exists() {
+                        return Some(nested);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Load a kit from an installed registry entry.
+    fn load_installed_kit(&self, item: &InstalledItem) {
+        let kit_dir = std::path::PathBuf::from(&item.path);
+        let Some(manifest_path) = Self::find_manifest(&kit_dir) else {
+            *self.bridge.kit_status.lock().unwrap() = KitStatus::Error {
+                message: format!(
+                    "no drum_samples.json found in {}",
+                    kit_dir.display()
+                ),
+            };
+            return;
+        };
+        let sr_bits = self.bridge.sample_rate.load(Ordering::Acquire);
+        if sr_bits == 0 {
+            *self.bridge.kit_status.lock().unwrap() = KitStatus::Error {
+                message: "plugin not yet activated by host".to_string(),
+            };
+            return;
+        }
+        let target_sr = f32::from_bits(sr_bits);
+        let overhead_key = self.bridge.overhead_setup_key.lock().unwrap().clone();
+        let choices = self.bridge.pad_choices.lock().unwrap().clone();
+        kit_loader::spawn_loader(manifest_path, target_sr, &self.bridge, overhead_key, choices);
     }
 
     fn load_kit_clicked(&self) {
@@ -236,6 +303,9 @@ impl EditorApp for DrumsEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
         theme::apply(ui.ctx());
 
+        // Periodically refresh the installed-kits cache.
+        self.maybe_refresh_installed_kits();
+
         // Drive a modest repaint so kit-loading status updates flow in.
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(100));
@@ -283,6 +353,59 @@ impl EditorApp for DrumsEditorApp {
                 egui::RichText::new(format_kit_status(&status)).color(theme::TEXT_DIM),
             );
         });
+
+        // Installed kits combo box — lets the user pick from previously
+        // downloaded kits without opening the file picker.
+        if !self.installed_kits.is_empty() {
+            let mut kit_to_load: Option<InstalledItem> = None;
+
+            // Derive the "currently loaded" kit name from kit_status so the
+            // combo box reflects what's active.
+            let current_kit_name = {
+                let status = self.bridge.kit_status.lock().unwrap();
+                match &*status {
+                    KitStatus::Loaded { name, .. } => name.clone(),
+                    KitStatus::Loading { path } => path
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    _ => String::new(),
+                }
+            };
+
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("Installed:")
+                        .color(theme::TEXT_DIM)
+                        .size(11.0),
+                );
+                let selected_text = if current_kit_name.is_empty() {
+                    "(select a kit)".to_string()
+                } else {
+                    current_kit_name.clone()
+                };
+                egui::ComboBox::from_id_salt("installed_kits")
+                    .selected_text(selected_text)
+                    .show_ui(ui, |ui| {
+                        for item in &self.installed_kits {
+                            if ui
+                                .selectable_label(
+                                    item.name == current_kit_name,
+                                    &item.name,
+                                )
+                                .clicked()
+                            {
+                                kit_to_load = Some(item.clone());
+                            }
+                        }
+                    });
+            });
+
+            if let Some(item) = kit_to_load {
+                self.load_installed_kit(&item);
+            }
+        }
 
         // Snapshot the catalog once per frame so we don't re-lock on every
         // dropdown. The `.clone()` is cheap compared to the UI work.
