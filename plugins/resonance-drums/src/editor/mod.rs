@@ -25,9 +25,9 @@ use crate::KitBridge;
 mod download_panel;
 
 /// Reload the kit in place with the current mic selection. Used whenever
-/// the user changes a close-mic, overhead-mic, or any other setup that
-/// needs the sample banks to be re-decoded. No-op if there's no kit
-/// path yet or the host hasn't activated the plugin.
+/// the user changes a close-mic, overhead-mic, articulation, or any other
+/// setup that needs the sample banks to be re-decoded. No-op if there's no
+/// kit path yet or the host hasn't activated the plugin.
 fn reload_kit(bridge: &KitBridge) {
     let path = match bridge.kit_path.lock().unwrap().clone() {
         Some(p) => p,
@@ -40,7 +40,8 @@ fn reload_kit(bridge: &KitBridge) {
     let target_sr = f32::from_bits(sr_bits);
     let overhead_key = bridge.overhead_setup_key.lock().unwrap().clone();
     let choices = bridge.pad_choices.lock().unwrap().clone();
-    kit_loader::spawn_loader(path, target_sr, bridge, overhead_key, choices);
+    let articulations = *bridge.articulations.lock().unwrap();
+    kit_loader::spawn_loader(path, target_sr, bridge, overhead_key, choices, articulations);
 }
 
 mod theme;
@@ -252,7 +253,15 @@ impl DrumsEditorApp {
         let target_sr = f32::from_bits(sr_bits);
         let overhead_key = self.bridge.overhead_setup_key.lock().unwrap().clone();
         let choices = self.bridge.pad_choices.lock().unwrap().clone();
-        kit_loader::spawn_loader(manifest_path, target_sr, &self.bridge, overhead_key, choices);
+        let articulations = *self.bridge.articulations.lock().unwrap();
+        kit_loader::spawn_loader(
+            manifest_path,
+            target_sr,
+            &self.bridge,
+            overhead_key,
+            choices,
+            articulations,
+        );
     }
 
     fn load_kit_clicked(&self) {
@@ -276,7 +285,15 @@ impl DrumsEditorApp {
         let target_sr = f32::from_bits(sr_bits);
         let overhead_key = self.bridge.overhead_setup_key.lock().unwrap().clone();
         let choices = self.bridge.pad_choices.lock().unwrap().clone();
-        kit_loader::spawn_loader(path, target_sr, &self.bridge, overhead_key, choices);
+        let articulations = *self.bridge.articulations.lock().unwrap();
+        kit_loader::spawn_loader(
+            path,
+            target_sr,
+            &self.bridge,
+            overhead_key,
+            choices,
+            articulations,
+        );
     }
 }
 
@@ -284,7 +301,7 @@ fn format_kit_status(status: &KitStatus) -> String {
     match status {
         KitStatus::Empty => "Defaults (no kit loaded)".to_string(),
         KitStatus::Loading { path } => format!(
-            "Loading {}…",
+            "Loading {}...",
             path.file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "kit".to_string())
@@ -451,7 +468,7 @@ impl EditorApp for DrumsEditorApp {
         ui.separator();
 
         // Two-column layout: pad list on the left, selected-pad detail on the right.
-        #[allow(deprecated)] // SidePanel → Panel::left rename; current API on this egui version
+        #[allow(deprecated)] // SidePanel -> Panel::left rename; current API on this egui version
         egui::SidePanel::left("drum_pad_list")
             .default_size(150.0)
             .resizable(false)
@@ -525,6 +542,31 @@ impl DrumsEditorApp {
             .changed()
         {
             pad.pan.set_value(pan);
+        }
+
+        // Articulation toggle (mit/ohne Teppich) — only for pads that have one.
+        if mapping.has_articulation {
+            ui.add_space(8.0);
+            ui.separator();
+            ui.label(
+                egui::RichText::new("ARTICULATION")
+                    .size(10.0)
+                    .strong()
+                    .color(theme::TEXT_DIM),
+            );
+            let current_art = self.bridge.articulations.lock().unwrap()[pad_idx];
+            let label = if current_art {
+                "ohne Teppich (snare wires off)"
+            } else {
+                "mit Teppich (snare wires on)"
+            };
+            let mut toggled = current_art;
+            if ui.checkbox(&mut toggled, label).changed() {
+                self.bridge.articulations.lock().unwrap()[pad_idx] = toggled;
+                // Also update the param so it persists in the plugin state.
+                pad.articulation.set_plain(if toggled { 1.0 } else { 0.0 });
+                reload_kit(&self.bridge);
+            }
         }
 
         ui.add_space(8.0);
@@ -609,7 +651,7 @@ impl DrumsEditorApp {
                 if ui
                     .add(
                         egui::Slider::new(&mut balance, 0.0..=1.0)
-                            .text(format!("{} \u{2194} {}", left_label, right_label))
+                            .text(format!("{} <-> {}", left_label, right_label))
                             .custom_formatter(|x, _| format!("{:.2}", x)),
                     )
                     .changed()

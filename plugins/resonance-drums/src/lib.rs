@@ -24,7 +24,7 @@ use download::WorkerHandle;
 use kit::LoadedPad;
 use kit_loader::{KitStatus, PadMicChoices, DEFAULT_OVERHEAD_SETUP};
 use mic_catalog::ManifestMicCatalog;
-use params::DrumParams;
+use params::{DrumParams, PARAMS_PER_PAD};
 use resonance_plugin::plugin::ExtraStateSaver;
 use sampler::DrumSampler;
 
@@ -57,6 +57,9 @@ pub(crate) struct KitBridge {
     /// User-chosen global overhead setup key. Defaults to
     /// `DEFAULT_OVERHEAD_SETUP` and persists via plugin state.
     pub overhead_setup_key: Arc<Mutex<String>>,
+    /// Per-pad articulation toggle state. When true, the loader uses the
+    /// alternate piece name (e.g. "ohne Teppich"). Persisted via plugin state.
+    pub articulations: Arc<Mutex<[bool; drum_map::NUM_PADS]>>,
 }
 
 pub struct ResonanceDrums {
@@ -99,6 +102,7 @@ impl ResonancePlugin for ResonanceDrums {
             catalog: Arc::new(Mutex::new(ManifestMicCatalog::default())),
             pad_choices: Arc::new(Mutex::new(std::array::from_fn(|_| PadMicChoices::default()))),
             overhead_setup_key: Arc::new(Mutex::new(DEFAULT_OVERHEAD_SETUP.to_string())),
+            articulations: Arc::new(Mutex::new([false; drum_map::NUM_PADS])),
         };
         Self {
             params: Arc::new(DrumParams::default()),
@@ -110,16 +114,16 @@ impl ResonancePlugin for ResonanceDrums {
     }
 
     fn param_count(&self) -> usize {
-        // master_volume + (volume, pan, mute, oh_blend, balance) per pad
-        1 + drum_map::NUM_PADS * 5
+        // master_volume + (volume, pan, mute, oh_blend, balance, articulation) per pad
+        1 + drum_map::NUM_PADS * PARAMS_PER_PAD
     }
 
     fn param(&self, index: usize) -> &dyn Param {
         if index == 0 {
             return &self.params.master_volume;
         }
-        let pad_idx = (index - 1) / 5;
-        let field = (index - 1) % 5;
+        let pad_idx = (index - 1) / PARAMS_PER_PAD;
+        let field = (index - 1) % PARAMS_PER_PAD;
         let pad = &self.params.pads[pad_idx];
         match field {
             0 => &pad.volume,
@@ -127,6 +131,7 @@ impl ResonancePlugin for ResonanceDrums {
             2 => &pad.mute,
             3 => &pad.oh_blend,
             4 => &pad.balance,
+            5 => &pad.articulation,
             _ => unreachable!(),
         }
     }
@@ -156,7 +161,15 @@ impl ResonancePlugin for ResonanceDrums {
         if let Some(path) = path {
             let overhead_key = self.bridge.overhead_setup_key.lock().unwrap().clone();
             let choices = self.bridge.pad_choices.lock().unwrap().clone();
-            kit_loader::spawn_loader(path, sample_rate, &self.bridge, overhead_key, choices);
+            let articulations = *self.bridge.articulations.lock().unwrap();
+            kit_loader::spawn_loader(
+                path,
+                sample_rate,
+                &self.bridge,
+                overhead_key,
+                choices,
+                articulations,
+            );
         }
 
         true
@@ -241,6 +254,7 @@ impl ResonancePlugin for ResonanceDrums {
             kit_path: self.bridge.kit_path.clone(),
             overhead_setup_key: self.bridge.overhead_setup_key.clone(),
             pad_choices: self.bridge.pad_choices.clone(),
+            articulations: self.bridge.articulations.clone(),
         }))
     }
 
@@ -255,7 +269,8 @@ impl ResonancePlugin for ResonanceDrums {
 }
 
 /// Persists the drum plugin's kit path, the globally selected overhead
-/// setup, and the per-pad close-mic picks alongside the plugin's params.
+/// setup, per-pad close-mic picks, and per-pad articulation toggles
+/// alongside the plugin's params.
 /// The saver holds only shared Arcs so the CLAP bridge can call save/load
 /// from the main thread while the plugin is in the audio processor
 /// without touching audio-thread state.
@@ -263,6 +278,7 @@ struct DrumsExtraState {
     kit_path: Arc<Mutex<Option<PathBuf>>>,
     overhead_setup_key: Arc<Mutex<String>>,
     pad_choices: Arc<Mutex<[PadMicChoices; drum_map::NUM_PADS]>>,
+    articulations: Arc<Mutex<[bool; drum_map::NUM_PADS]>>,
 }
 
 impl ExtraStateSaver for DrumsExtraState {
@@ -302,6 +318,16 @@ impl ExtraStateSaver for DrumsExtraState {
             "pad_mic_choices".to_string(),
             serde_json::Value::Array(pads_array),
         );
+        // Per-pad articulation toggles as an array of booleans.
+        let arts = self.articulations.lock().unwrap();
+        let arts_array: Vec<serde_json::Value> = arts
+            .iter()
+            .map(|&v| serde_json::Value::Bool(v))
+            .collect();
+        map.insert(
+            "articulations".to_string(),
+            serde_json::Value::Array(arts_array),
+        );
         map
     }
 
@@ -333,6 +359,15 @@ impl ExtraStateSaver for DrumsExtraState {
                 guard[i] = choices;
             }
         }
+
+        if let Some(arr) = state.get("articulations").and_then(|v| v.as_array()) {
+            let mut guard = self.articulations.lock().unwrap();
+            for (i, val) in arr.iter().enumerate().take(drum_map::NUM_PADS) {
+                if let Some(b) = val.as_bool() {
+                    guard[i] = b;
+                }
+            }
+        }
     }
 }
 
@@ -342,7 +377,7 @@ resonance_plugin::export_clap!(ResonanceDrums);
 mod tests {
     use super::*;
 
-    /// save_state → load_state round-trip preserves a kit path.
+    /// save_state -> load_state round-trip preserves a kit path.
     /// Exercises the main-thread path where the host calls save_state /
     /// load_state on the owned plugin instance.
     #[test]
@@ -389,6 +424,7 @@ mod tests {
         Arc<Mutex<Option<PathBuf>>>,
         Arc<Mutex<String>>,
         Arc<Mutex<[PadMicChoices; drum_map::NUM_PADS]>>,
+        Arc<Mutex<[bool; drum_map::NUM_PADS]>>,
         DrumsExtraState,
     ) {
         let kit_path = Arc::new(Mutex::new(initial_path));
@@ -397,19 +433,21 @@ mod tests {
         let pad_choices = Arc::new(Mutex::new(std::array::from_fn(|_| {
             PadMicChoices::default()
         })));
+        let articulations = Arc::new(Mutex::new([false; drum_map::NUM_PADS]));
         let saver = DrumsExtraState {
             kit_path: kit_path.clone(),
             overhead_setup_key: overhead_setup_key.clone(),
             pad_choices: pad_choices.clone(),
+            articulations: articulations.clone(),
         };
-        (kit_path, overhead_setup_key, pad_choices, saver)
+        (kit_path, overhead_setup_key, pad_choices, articulations, saver)
     }
 
     #[test]
     fn extra_saver_roundtrip_active_path() {
         // Construct the saver the same way editor_factory / new() would,
         // holding shared arcs for each persisted field.
-        let (_kp, _oh, _pc, saver) = make_saver_bundle(Some(PathBuf::from(
+        let (_kp, _oh, _pc, _art, saver) = make_saver_bundle(Some(PathBuf::from(
             "/active/path/drum_samples.json",
         )));
 
@@ -421,7 +459,7 @@ mod tests {
         }
 
         // New instance with a different shared storage — clear to start.
-        let (restored_path, _, _, restored_saver) = make_saver_bundle(None);
+        let (restored_path, _, _, _, restored_saver) = make_saver_bundle(None);
 
         // Load from the serialized state.
         restored_saver.load(&json);
@@ -436,7 +474,7 @@ mod tests {
     /// A loaded null kit_path through the saver clears previously stored path.
     #[test]
     fn extra_saver_null_clears_active_path() {
-        let (kit_path, _, _, saver) =
+        let (kit_path, _, _, _, saver) =
             make_saver_bundle(Some(PathBuf::from("/stale.json")));
 
         // State without a kit_path (simulating a save with no kit loaded).
@@ -449,7 +487,7 @@ mod tests {
     /// through the ExtraStateSaver JSON.
     #[test]
     fn extra_saver_roundtrips_mic_choices() {
-        let (_, oh_arc, pad_arc, saver) = make_saver_bundle(None);
+        let (_, oh_arc, pad_arc, _, saver) = make_saver_bundle(None);
         // Inject user edits.
         *oh_arc.lock().unwrap() = "24_OHsAB_KM184".to_string();
         {
@@ -470,7 +508,7 @@ mod tests {
             json.as_object_mut().unwrap().insert(k, v);
         }
 
-        let (_, oh2, pad2, restored) = make_saver_bundle(None);
+        let (_, oh2, pad2, _, restored) = make_saver_bundle(None);
         restored.load(&json);
         assert_eq!(*oh2.lock().unwrap(), "24_OHsAB_KM184");
         let guard = pad2.lock().unwrap();
@@ -486,5 +524,28 @@ mod tests {
             guard[1].close_setups.get("SNTop"),
             Some(&"07_SNTop_e904".to_string())
         );
+    }
+
+    /// Articulation toggles round-trip through the ExtraStateSaver JSON.
+    #[test]
+    fn extra_saver_roundtrips_articulations() {
+        let (_, _, _, art_arc, saver) = make_saver_bundle(None);
+        {
+            let mut guard = art_arc.lock().unwrap();
+            guard[0] = true;  // Kick -> ohne Teppich
+            guard[9] = true;  // Tom High -> ohne Teppich
+        }
+
+        let mut json = serde_json::json!({ "params": {} });
+        for (k, v) in saver.save() {
+            json.as_object_mut().unwrap().insert(k, v);
+        }
+
+        let (_, _, _, art2, restored) = make_saver_bundle(None);
+        restored.load(&json);
+        let guard = art2.lock().unwrap();
+        assert!(guard[0], "kick articulation should be true");
+        assert!(guard[9], "tom high articulation should be true");
+        assert!(!guard[1], "snare articulation should be false (default)");
     }
 }

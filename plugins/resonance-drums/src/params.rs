@@ -1,8 +1,12 @@
-/// Plugin parameters: master volume + per-pad volume, pan, and mute.
+/// Plugin parameters: master volume + per-pad volume, pan, mute, OH blend,
+/// balance, and articulation toggle.
 
 use resonance_plugin::*;
 
 use crate::drum_map::NUM_PADS;
+
+/// Number of param fields per pad, used for param indexing.
+pub const PARAMS_PER_PAD: usize = 6;
 
 pub struct DrumParams {
     pub master_volume: FloatParam,
@@ -40,6 +44,10 @@ pub struct PadParams {
     /// snare Top), 1.0 favours the "right" side (kick Out or snare
     /// Btm). Ignored for pads with fewer than two close-mic banks.
     pub balance: FloatParam,
+    /// Articulation toggle: when true, use the alternate sample set
+    /// (e.g. "ohne Teppich" instead of "mit Teppich"). Only
+    /// meaningful for pads whose `PadMapping::has_articulation` is true.
+    pub articulation: BoolParam,
 }
 
 impl PadParams {
@@ -55,6 +63,9 @@ impl PadParams {
         let oh_name: &'static str = Box::leak(format!("Pad {} OH Blend", index).into_boxed_str());
         let bal_id: &'static str = Box::leak(format!("pad_{}_balance", index).into_boxed_str());
         let bal_name: &'static str = Box::leak(format!("Pad {} Balance", index).into_boxed_str());
+        let art_id: &'static str = Box::leak(format!("pad_{}_articulation", index).into_boxed_str());
+        let art_name: &'static str =
+            Box::leak(format!("Pad {} Articulation", index).into_boxed_str());
 
         Self {
             volume: FloatParam::new(
@@ -89,6 +100,7 @@ impl PadParams {
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
+            articulation: BoolParam::new(art_id, art_name, false),
         }
     }
 }
