@@ -467,7 +467,7 @@ fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProject) {
     });
     r.engine.send(AudioCommand::SetBusVolume {
         bus_id: pb.id,
-        volume: pb.volume,
+        volume: db_to_gain(pb.volume),
     });
     r.engine.send(AudioCommand::SetBusPan {
         bus_id: pb.id,
