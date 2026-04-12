@@ -8,7 +8,7 @@
     -We need a place for global tracks like tempo track, and signature changes, my idea would an collapsable area between the normal tracks and the time indication
     -Implement tempo track and signature track
     - [x] Selecting a track should highlight it
-    -Move the delete track button to the top right position. Its different from the rest of the buttons
+    - [x] Move the delete track button to the top right position. Its different from the rest of the buttons
     -The solo functionality does not seem to work.
 
 ##Mix tab

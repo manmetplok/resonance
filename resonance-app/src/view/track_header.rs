@@ -85,7 +85,19 @@ fn view_track_header(track: &TrackState, is_selected: bool) -> Element<'_, Messa
         .size(13)
         .color(name_color)
         .wrapping(iced::widget::text::Wrapping::None);
-    let name_row = container(name).width(Length::Fill).clip(true);
+    // For non-sub-tracks, place the delete button in the top-right corner
+    // so it is visually separated from the transport/monitoring controls.
+    let name_row = if is_sub {
+        row![container(name).width(Length::Fill).clip(true)]
+            .align_y(alignment::Vertical::Center)
+    } else {
+        row![
+            container(name).width(Length::Fill).clip(true),
+            delete_button(Message::Track(TrackMessage::RemoveTrack(track.id)), 12),
+        ]
+        .spacing(4)
+        .align_y(alignment::Vertical::Center)
+    };
 
     // Sub-tracks expose a trimmed toolbar: just mute/solo + a per-port
     // label. They cannot be armed, monitored, deleted, or swapped to
@@ -105,7 +117,6 @@ fn view_track_header(track: &TrackState, is_selected: bool) -> Element<'_, Messa
             record_arm_button(track.record_armed, track.id, 12),
             mute_button(track.muted, Message::Track(TrackMessage::ToggleMute(track.id)), 12),
             solo_button(track.soloed, Message::Track(TrackMessage::ToggleSolo(track.id)), 12),
-            delete_button(Message::Track(TrackMessage::RemoveTrack(track.id)), 12),
             Space::with_width(Length::Fill),
         ]
         .spacing(4)
