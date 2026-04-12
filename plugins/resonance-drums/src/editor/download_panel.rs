@@ -31,12 +31,15 @@ impl Default for DownloadPanelState {
 }
 
 pub fn draw(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc<WorkerHandle>) {
-    // Dim the underlying editor behind the overlay.
-    let screen = ui.ctx().content_rect();
-    ui.painter()
-        .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(180));
+    // Dim the entire window behind the overlay, including side panels.
+    let screen = ui.ctx().screen_rect();
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("download_kits_backdrop"),
+    ));
+    painter.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(180));
 
-    let margin = 32.0;
+    let margin = 48.0;
     let rect = screen.shrink(margin);
     let window_id = egui::Id::new("download_kits_panel");
 
@@ -47,10 +50,11 @@ pub fn draw(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc<Work
             let frame = egui::Frame::new()
                 .fill(theme::PANEL)
                 .stroke(egui::Stroke::new(1.0, theme::BORDER))
-                .inner_margin(egui::Margin::same(14));
+                .corner_radius(6.0)
+                .inner_margin(egui::Margin::same(16));
             frame.show(ui, |ui| {
-                ui.set_width(rect.width());
-                ui.set_height(rect.height());
+                ui.set_width(rect.width() - 32.0);
+                ui.set_height(rect.height() - 32.0);
                 draw_contents(ui, panel, worker);
             });
         });
