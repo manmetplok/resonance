@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::{container, Canvas};
 use iced::{mouse, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
@@ -19,6 +21,8 @@ pub const NAME_COLUMN_WIDTH: f32 = 110.0;
 /// Row height used inside the Compose track area. Taller than the Arrange
 /// track height so inline note editing has enough vertical room.
 const COMPOSE_TRACK_HEIGHT: f32 = 160.0;
+/// Height for collapsed track strips when another track is expanded.
+const COLLAPSED_TRACK_HEIGHT: f32 = 36.0;
 /// Top/bottom padding inside each row before the note grid starts.
 const NOTE_GRID_PAD: f32 = 6.0;
 /// Pitch range shown inline. C2 .. C6 covers most melodic writing and keeps
@@ -29,6 +33,8 @@ const DEFAULT_NEW_NOTE_TICKS: u64 = TICKS_PER_QUARTER_NOTE;
 const DEFAULT_NEW_NOTE_VELOCITY: f32 = 0.8;
 /// Size of the "+" hint button drawn over empty instrument rows.
 const ADD_BUTTON_SIZE: f32 = 32.0;
+/// Maximum milliseconds between two clicks to count as a double-click.
+const DOUBLE_CLICK_MS: u64 = 400;
 
 fn pitch_count() -> u8 {
     PITCH_RANGE_HIGH - PITCH_RANGE_LOW + 1
@@ -55,6 +61,7 @@ pub fn view<'a>(
         scale: definition.scale,
         time_sig_num: app.transport.time_sig_num,
         details_track_id: app.compose.details_track_id,
+        expanded_track_id: app.compose.expanded_track_id,
     })
     .width(Length::Fill)
     .height(Length::Fill);
@@ -84,10 +91,19 @@ pub struct ComposeTrackCanvas<'a> {
     pub scale: Option<Scale>,
     pub time_sig_num: u8,
     pub details_track_id: Option<TrackId>,
+    /// When set, this track is expanded into the full editor; other tracks
+    /// are rendered as collapsed name-only strips.
+    pub expanded_track_id: Option<TrackId>,
+}
+
+/// Canvas-local state for double-click detection.
+#[derive(Debug, Default)]
+pub struct ComposeTrackCanvasState {
+    last_click: Option<(Instant, TrackId)>,
 }
 
 impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
-    type State = ();
+    type State = ComposeTrackCanvasState;
 
     fn draw(
         &self,
@@ -105,6 +121,7 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
         }
 
         let tracks = self.sorted_tracks();
+        let is_expanded = self.expanded_track_id.is_some();
 
         for (idx, track) in tracks.iter().enumerate() {
             let row_rect = self.track_row_rect(idx, bounds);
@@ -112,78 +129,147 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
                 continue;
             }
 
-            // Row background — name column panel + grid area
             let is_selected_for_details = self.details_track_id == Some(track.id);
-            let name_bg = if is_selected_for_details {
-                Color::from_rgb(0.22, 0.22, 0.27)
-            } else {
-                theme::PANEL
-            };
-            frame.fill_rectangle(
-                Point::new(0.0, row_rect.y),
-                Size::new(NAME_COLUMN_WIDTH, row_rect.height),
-                name_bg,
-            );
+            let is_this_expanded = self.expanded_track_id == Some(track.id);
 
-            // Icon + name on the first line, instrument type on the second.
-            frame.fill_text(canvas::Text {
-                content: track.instrument_icon.glyph().to_string(),
-                position: Point::new(10.0, row_rect.y + row_rect.height * 0.5 - 12.0),
-                color: if is_selected_for_details { theme::ACCENT } else { theme::TEXT },
-                size: 14.0.into(),
-                font: theme::ICON_FONT,
-                ..canvas::Text::default()
-            });
-            frame.fill_text(canvas::Text {
-                content: track.name.clone(),
-                position: Point::new(32.0, row_rect.y + row_rect.height * 0.5 - 12.0),
-                color: theme::TEXT,
-                size: 12.0.into(),
-                ..canvas::Text::default()
-            });
-            frame.fill_text(canvas::Text {
-                content: track.instrument_type.as_str().to_string(),
-                position: Point::new(10.0, row_rect.y + row_rect.height * 0.5 + 6.0),
-                color: theme::TEXT_DIM,
-                size: 10.0.into(),
-                ..canvas::Text::default()
-            });
+            if is_expanded {
+                // --- Collapsed strip rendering ---
+                let bg = if is_this_expanded {
+                    Color::from_rgb(0.18, 0.22, 0.18)
+                } else if is_selected_for_details {
+                    Color::from_rgb(0.22, 0.22, 0.27)
+                } else {
+                    theme::PANEL
+                };
+                frame.fill_rectangle(
+                    Point::new(0.0, row_rect.y),
+                    Size::new(bounds.width, row_rect.height),
+                    bg,
+                );
 
-            frame.fill_rectangle(
-                Point::new(NAME_COLUMN_WIDTH, row_rect.y),
-                Size::new(1.0, row_rect.height),
-                if is_selected_for_details { theme::ACCENT } else { theme::SEPARATOR },
-            );
+                // Icon + name centered vertically
+                frame.fill_text(canvas::Text {
+                    content: track.instrument_icon.glyph().to_string(),
+                    position: Point::new(10.0, row_rect.y + row_rect.height * 0.5 - 8.0),
+                    color: if is_this_expanded {
+                        theme::ACCENT
+                    } else {
+                        theme::TEXT
+                    },
+                    size: 12.0.into(),
+                    font: theme::ICON_FONT,
+                    ..canvas::Text::default()
+                });
+                frame.fill_text(canvas::Text {
+                    content: track.name.clone(),
+                    position: Point::new(30.0, row_rect.y + row_rect.height * 0.5 - 8.0),
+                    color: if is_this_expanded {
+                        theme::ACCENT
+                    } else {
+                        theme::TEXT
+                    },
+                    size: 12.0.into(),
+                    ..canvas::Text::default()
+                });
 
-            let clip_rect = Rectangle {
-                x: row_rect.x + NAME_COLUMN_WIDTH,
-                y: row_rect.y,
-                width: (row_rect.width - NAME_COLUMN_WIDTH).max(0.0),
-                height: row_rect.height,
-            };
-
-            self.draw_grid_background(&mut frame, clip_rect);
-            self.draw_beat_grid(&mut frame, clip_rect);
-
-            let mut has_clip_in_section = false;
-            for clip in self.midi_clips.iter().filter(|c| c.track_id == track.id) {
-                let clip_end = clip.start_sample + self.midi_clip_duration_samples(clip);
-                if let Some(range) = self.clip_range(clip.start_sample, clip_end) {
-                    has_clip_in_section = true;
-                    self.draw_clip_outline(&mut frame, clip_rect, range);
-                    self.draw_notes(&mut frame, clip, clip_rect);
+                // Hint text for expanded track
+                if is_this_expanded {
+                    frame.fill_text(canvas::Text {
+                        content: "(editing - double-click to collapse)".to_string(),
+                        position: Point::new(NAME_COLUMN_WIDTH + 10.0, row_rect.y + row_rect.height * 0.5 - 6.0),
+                        color: theme::TEXT_DIM,
+                        size: 10.0.into(),
+                        ..canvas::Text::default()
+                    });
                 }
-            }
 
-            // Bottom separator between rows
-            frame.fill_rectangle(
-                Point::new(0.0, row_rect.y + row_rect.height - 1.0),
-                Size::new(bounds.width, 1.0),
-                theme::SEPARATOR,
-            );
+                // Bottom separator
+                frame.fill_rectangle(
+                    Point::new(0.0, row_rect.y + row_rect.height - 1.0),
+                    Size::new(bounds.width, 1.0),
+                    theme::SEPARATOR,
+                );
+            } else {
+                // --- Normal full-height rendering ---
+                let name_bg = if is_selected_for_details {
+                    Color::from_rgb(0.22, 0.22, 0.27)
+                } else {
+                    theme::PANEL
+                };
+                frame.fill_rectangle(
+                    Point::new(0.0, row_rect.y),
+                    Size::new(NAME_COLUMN_WIDTH, row_rect.height),
+                    name_bg,
+                );
 
-            if !has_clip_in_section {
-                self.draw_add_button(&mut frame, clip_rect);
+                // Icon + name on the first line, instrument type on the second.
+                frame.fill_text(canvas::Text {
+                    content: track.instrument_icon.glyph().to_string(),
+                    position: Point::new(10.0, row_rect.y + row_rect.height * 0.5 - 12.0),
+                    color: if is_selected_for_details {
+                        theme::ACCENT
+                    } else {
+                        theme::TEXT
+                    },
+                    size: 14.0.into(),
+                    font: theme::ICON_FONT,
+                    ..canvas::Text::default()
+                });
+                frame.fill_text(canvas::Text {
+                    content: track.name.clone(),
+                    position: Point::new(32.0, row_rect.y + row_rect.height * 0.5 - 12.0),
+                    color: theme::TEXT,
+                    size: 12.0.into(),
+                    ..canvas::Text::default()
+                });
+                frame.fill_text(canvas::Text {
+                    content: track.instrument_type.as_str().to_string(),
+                    position: Point::new(10.0, row_rect.y + row_rect.height * 0.5 + 6.0),
+                    color: theme::TEXT_DIM,
+                    size: 10.0.into(),
+                    ..canvas::Text::default()
+                });
+
+                frame.fill_rectangle(
+                    Point::new(NAME_COLUMN_WIDTH, row_rect.y),
+                    Size::new(1.0, row_rect.height),
+                    if is_selected_for_details {
+                        theme::ACCENT
+                    } else {
+                        theme::SEPARATOR
+                    },
+                );
+
+                let clip_rect = Rectangle {
+                    x: row_rect.x + NAME_COLUMN_WIDTH,
+                    y: row_rect.y,
+                    width: (row_rect.width - NAME_COLUMN_WIDTH).max(0.0),
+                    height: row_rect.height,
+                };
+
+                self.draw_grid_background(&mut frame, clip_rect);
+                self.draw_beat_grid(&mut frame, clip_rect);
+
+                let mut has_clip_in_section = false;
+                for clip in self.midi_clips.iter().filter(|c| c.track_id == track.id) {
+                    let clip_end = clip.start_sample + self.midi_clip_duration_samples(clip);
+                    if let Some(range) = self.clip_range(clip.start_sample, clip_end) {
+                        has_clip_in_section = true;
+                        self.draw_clip_outline(&mut frame, clip_rect, range);
+                        self.draw_notes(&mut frame, clip, clip_rect);
+                    }
+                }
+
+                if !has_clip_in_section {
+                    self.draw_add_button(&mut frame, clip_rect);
+                }
+
+                // Bottom separator between rows
+                frame.fill_rectangle(
+                    Point::new(0.0, row_rect.y + row_rect.height - 1.0),
+                    Size::new(bounds.width, 1.0),
+                    theme::SEPARATOR,
+                );
             }
         }
 
@@ -192,7 +278,7 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
 
     fn update(
         &self,
-        _state: &mut Self::State,
+        state: &mut Self::State,
         event: canvas::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
@@ -201,6 +287,44 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
             let Some(pos) = cursor.position_in(bounds) else {
                 return (canvas::event::Status::Ignored, None);
             };
+
+            // Determine which track row was clicked.
+            let clicked_track = self.hit_test_track(pos, bounds);
+
+            // Double-click detection: expand/collapse a track.
+            if let Some(track_id) = clicked_track {
+                let now = Instant::now();
+                if let Some((prev_time, prev_id)) = state.last_click {
+                    if prev_id == track_id
+                        && now.duration_since(prev_time).as_millis() < DOUBLE_CLICK_MS as u128
+                    {
+                        state.last_click = None;
+                        return (
+                            canvas::event::Status::Captured,
+                            Some(Message::Compose(ComposeMessage::ExpandTrack { track_id })),
+                        );
+                    }
+                }
+                state.last_click = Some((now, track_id));
+            }
+
+            // When tracks are expanded, only handle name-column clicks
+            // on collapsed strips (to select for details).
+            if self.expanded_track_id.is_some() {
+                if pos.x < NAME_COLUMN_WIDTH {
+                    if let Some(track_id) = clicked_track {
+                        return (
+                            canvas::event::Status::Captured,
+                            Some(Message::Compose(
+                                ComposeMessage::SelectInstrumentForDetails { track_id },
+                            )),
+                        );
+                    }
+                }
+                return (canvas::event::Status::Ignored, None);
+            }
+
+            // Normal (non-expanded) behaviour below.
 
             // Click on the name column opens the instrument details panel
             // on the right side of the Compose tab.
@@ -256,12 +380,47 @@ impl<'a> ComposeTrackCanvas<'a> {
     }
 
     fn track_row_rect(&self, index: usize, bounds: Rectangle) -> Rectangle {
-        let y = index as f32 * COMPOSE_TRACK_HEIGHT - self.scroll_offset_y;
+        if self.expanded_track_id.is_none() {
+            // Normal mode: all tracks at full height
+            let y = index as f32 * COMPOSE_TRACK_HEIGHT - self.scroll_offset_y;
+            return Rectangle {
+                x: 0.0,
+                y,
+                width: bounds.width,
+                height: COMPOSE_TRACK_HEIGHT,
+            };
+        }
+
+        // Expanded mode: collapsed strips for non-expanded tracks.
+        // The expanded track itself is not drawn in this canvas (it gets
+        // the separate expanded_editor canvas), so all tracks shown here
+        // are collapsed strips.
+        let tracks = self.sorted_tracks();
+        let mut y: f32 = 0.0;
+        for (i, t) in tracks.iter().enumerate() {
+            let h = if Some(t.id) == self.expanded_track_id {
+                // The expanded track still gets a small strip in this
+                // canvas so the user can double-click to collapse.
+                COLLAPSED_TRACK_HEIGHT
+            } else {
+                COLLAPSED_TRACK_HEIGHT
+            };
+            if i == index {
+                return Rectangle {
+                    x: 0.0,
+                    y: y - self.scroll_offset_y,
+                    width: bounds.width,
+                    height: h,
+                };
+            }
+            y += h;
+        }
+        // Fallback (should not be reached)
         Rectangle {
             x: 0.0,
-            y,
+            y: index as f32 * COLLAPSED_TRACK_HEIGHT - self.scroll_offset_y,
             width: bounds.width,
-            height: COMPOSE_TRACK_HEIGHT,
+            height: COLLAPSED_TRACK_HEIGHT,
         }
     }
 
@@ -447,6 +606,19 @@ impl<'a> ComposeTrackCanvas<'a> {
             size: 22.0.into(),
             ..canvas::Text::default()
         });
+    }
+
+    /// Determine which track row (if any) the given point falls in,
+    /// respecting expanded/collapsed layout.
+    fn hit_test_track(&self, pos: Point, bounds: Rectangle) -> Option<TrackId> {
+        let tracks = self.sorted_tracks();
+        for (idx, track) in tracks.iter().enumerate() {
+            let row = self.track_row_rect(idx, bounds);
+            if pos.y >= row.y && pos.y <= row.y + row.height {
+                return Some(track.id);
+            }
+        }
+        None
     }
 
     fn hit_test_name_column(&self, pos: Point, bounds: Rectangle) -> Option<TrackId> {

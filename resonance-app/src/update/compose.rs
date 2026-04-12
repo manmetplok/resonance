@@ -386,6 +386,37 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
             r.compose.details_track_id = None;
         }
 
+        ComposeMessage::ExpandTrack { track_id } => {
+            // Toggle: expanding the same track again collapses.
+            if r.compose.expanded_track_id == Some(track_id) {
+                r.compose.expanded_track_id = None;
+            } else {
+                r.compose.expanded_track_id = Some(track_id);
+                // Also select this track for the details panel.
+                r.compose.details_track_id = Some(track_id);
+                // Reset scroll for the new expanded view.
+                r.compose.expanded_scroll_x = 0.0;
+                // Start scrolled so mid-range pitches (around C4=60) are visible.
+                r.compose.expanded_scroll_y = 40.0 * r.compose.expanded_zoom_y;
+            }
+        }
+
+        ComposeMessage::CollapseTrack => {
+            r.compose.expanded_track_id = None;
+        }
+
+        ComposeMessage::ExpandedScrollX(delta) => {
+            r.compose.expanded_scroll_x = (r.compose.expanded_scroll_x + delta).max(0.0);
+        }
+
+        ComposeMessage::ExpandedScrollY(delta) => {
+            r.compose.expanded_scroll_y = (r.compose.expanded_scroll_y + delta).max(0.0);
+        }
+
+        ComposeMessage::ExpandedZoomY(delta) => {
+            r.compose.expanded_zoom_y = (r.compose.expanded_zoom_y + delta).clamp(4.0, 40.0);
+        }
+
         ComposeMessage::AddChord {
             definition_id,
             start_beat,

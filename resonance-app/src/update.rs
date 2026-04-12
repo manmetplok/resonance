@@ -191,6 +191,9 @@ impl crate::Resonance {
                     if self.interaction.selected_track == Some(id) {
                         self.interaction.selected_track = None;
                     }
+                    if self.compose.expanded_track_id == Some(id) {
+                        self.compose.expanded_track_id = None;
+                    }
                     self.engine.send(AudioCommand::RemoveTrack { track_id: id });
                 }
             }
@@ -198,6 +201,9 @@ impl crate::Resonance {
                 if let Some(id) = self.confirm_delete_track.take() {
                     if self.interaction.selected_track == Some(id) {
                         self.interaction.selected_track = None;
+                    }
+                    if self.compose.expanded_track_id == Some(id) {
+                        self.compose.expanded_track_id = None;
                     }
                     self.engine.send(AudioCommand::RemoveTrack { track_id: id });
                 }
@@ -208,6 +214,9 @@ impl crate::Resonance {
             Message::Track(TrackMessage::RemoveTrack(id)) => {
                 if self.interaction.selected_track == Some(id) {
                     self.interaction.selected_track = None;
+                }
+                if self.compose.expanded_track_id == Some(id) {
+                    self.compose.expanded_track_id = None;
                 }
                 self.engine.send(AudioCommand::RemoveTrack { track_id: id });
             }

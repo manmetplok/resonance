@@ -77,6 +77,16 @@ pub struct ComposeState {
     /// Transient UI state for the drumroll block (selected pad, euclidean
     /// form buffers, pad map). Not persisted.
     pub drumroll: DrumrollViewState,
+    /// When `Some`, the indicated instrument track is shown in an
+    /// expanded piano-roll view in the Compose tab. All other tracks
+    /// collapse to minimal name-only strips while the editor is open.
+    pub expanded_track_id: Option<resonance_audio::types::TrackId>,
+    /// Vertical zoom (pixels per semitone row) for the expanded editor.
+    pub expanded_zoom_y: f32,
+    /// Horizontal scroll offset (pixels) for the expanded editor.
+    pub expanded_scroll_x: f32,
+    /// Vertical scroll offset (pixels) for the expanded editor.
+    pub expanded_scroll_y: f32,
     /// Derived clips we created, keyed by (definition_id, placement_id,
     /// role). Runtime-only: rebuilt on project load by scanning clip
     /// names in `r.midi_clips`. The re-derive path uses this to delete
@@ -123,6 +133,10 @@ impl Default for ComposeState {
             edit_section_form: None,
             selected_chord_id: None,
             details_track_id: None,
+            expanded_track_id: None,
+            expanded_zoom_y: 12.0,
+            expanded_scroll_x: 0.0,
+            expanded_scroll_y: 0.0,
             drumroll: DrumrollViewState::default(),
             derived_clips: HashMap::new(),
             next_derived_clip_id: DERIVED_CLIP_ID_BASE,
@@ -241,6 +255,7 @@ impl ComposeState {
         self.selected_placement_id = self.placements.first().map(|p| p.id);
         self.scroll_y = 0.0;
         self.last_error = None;
+        self.expanded_track_id = None;
 
         // Advance the id counter past anything we just loaded so fresh_id()
         // never collides with persisted ids.

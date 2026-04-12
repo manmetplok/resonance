@@ -82,6 +82,17 @@ pub enum ComposeMessage {
     },
     ClearInstrumentDetails,
 
+    /// Expand a track into the full-width inline piano-roll editor.
+    ExpandTrack { track_id: TrackId },
+    /// Collapse the expanded editor back to the compact overview.
+    CollapseTrack,
+    /// Scroll the expanded editor horizontally.
+    ExpandedScrollX(f32),
+    /// Scroll the expanded editor vertically.
+    ExpandedScrollY(f32),
+    /// Adjust vertical zoom of the expanded editor.
+    ExpandedZoomY(f32),
+
     // Chords inside a section definition
     AddChord {
         definition_id: u64,

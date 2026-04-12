@@ -3,6 +3,7 @@
 ##General
     - [x] Conformation when a user wants to kill the app, but there are unsaved changes
     - [x] Conformation when a user wants to delete a track which has content.
+    - I want to create presets for track (bas guitar, rhythm guitar, solo, etc) we should have user presets, and a number of default presets.
 
 ##Arrange tab
     -We need a place for global tracks like tempo track, and signature changes, my idea would an collapsable area between the normal tracks and the time indication
@@ -16,12 +17,16 @@
     - [x] Something goes wrong when saving with busses. When opening a saved project the bus is there, but does not work. When removing the bus, audio can be heard again.
 
 ##Compose tab
-    -We need a solution about the editing of instruments, the current view is to small so its hard to pick the correct notes. We need to brainstorm about this.
+    - [x] We need a solution about the editing of instruments, the current view is to small so its hard to pick the correct notes. We need to brainstorm about this.
     
 
 ##Plugins general
     - We need better control, maybe knobs are better then slider.
 
-##Delay
+##Delay plugin
     - [x] Feedback range is to large afaik
 
+
+##Drum plugin
+    - We should be able to download the drumkit as a zip from a server.
+    - Check if round robin is executed correctly (also add unit tests)

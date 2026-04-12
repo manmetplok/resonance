@@ -7,6 +7,7 @@ use crate::theme;
 
 pub mod chord_lane;
 pub mod drumroll;
+pub mod expanded_editor;
 pub mod instrument_panel;
 pub mod popover;
 pub mod scale_panel;
@@ -66,10 +67,28 @@ impl crate::Resonance {
                 let synth_tracks = tracks::view(self, placement, definition);
                 let drum_tracks = drumroll::view(self, placement, definition);
 
-                let left_column = column![chord_lane, editor, synth_tracks, drum_tracks]
-                    .spacing(0)
-                    .width(Length::Fill)
-                    .height(Length::Fill);
+                let left_column = match self.compose.expanded_track_id {
+                    Some(track_id)
+                        if self
+                            .registry
+                            .tracks
+                            .iter()
+                            .any(|t| t.id == track_id) =>
+                    {
+                        let expanded =
+                            expanded_editor::view(self, track_id, placement, definition);
+                        column![chord_lane, editor, synth_tracks, expanded]
+                            .spacing(0)
+                            .width(Length::Fill)
+                            .height(Length::Fill)
+                    }
+                    _ => {
+                        column![chord_lane, editor, synth_tracks, drum_tracks]
+                            .spacing(0)
+                            .width(Length::Fill)
+                            .height(Length::Fill)
+                    }
+                };
 
                 // The right-side panel swaps between scale info for the
                 // section (default), synth instrument details, and the

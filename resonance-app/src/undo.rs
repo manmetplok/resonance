@@ -511,7 +511,12 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | ComposeMessage::SelectChord { .. }
             | ComposeMessage::ClearChordSelection
             | ComposeMessage::SelectInstrumentForDetails { .. }
-            | ComposeMessage::ClearInstrumentDetails => UndoAction::Skip,
+            | ComposeMessage::ClearInstrumentDetails
+            | ComposeMessage::ExpandTrack { .. }
+            | ComposeMessage::CollapseTrack
+            | ComposeMessage::ExpandedScrollX(_)
+            | ComposeMessage::ExpandedScrollY(_)
+            | ComposeMessage::ExpandedZoomY(_) => UndoAction::Skip,
 
             // Drumroll: skip the view-state configuration messages,
             // record the ones that actually mutate notes in the clip.
