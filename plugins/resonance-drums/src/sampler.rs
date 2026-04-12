@@ -323,7 +323,7 @@ impl DrumSampler {
                 continue;
             }
             let vol = pad_volume[pad_index];
-            let (pan_l, pan_r) = resonance_dsp::constant_power_pan(pad_pan[pad_index]);
+            let (pan_l, pan_r) = resonance_dsp::stereo_balance(pad_pan[pad_index]);
 
             // Split-borrow the destination port's buffers so the inner
             // loop can write into both channels cheaply.

@@ -17,5 +17,5 @@ pub use dynamics::{soft_knee_gain_reduction_db, Ballistics};
 pub use eq::BandType;
 pub use filter::OnePole;
 pub use lfo::Lfo;
-pub use pan::constant_power_pan;
+pub use pan::{constant_power_pan, stereo_balance};
 pub use rng::SimpleRng;
