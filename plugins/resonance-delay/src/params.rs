@@ -70,7 +70,7 @@ impl Default for DelayParams {
                 "feedback",
                 "Feedback",
                 0.45,
-                FloatRange::Linear { min: 0.0, max: 1.1 },
+                FloatRange::Linear { min: 0.0, max: 0.95 },
             )
             .with_unit("%")
             .with_value_to_string(formatters::v2s_f32_percentage(0))

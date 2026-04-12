@@ -23,5 +23,5 @@
     - We need better control, maybe knobs are better then slider.
 
 ##Delay
-    - Feedback range is to large afaik
+    - [x] Feedback range is to large afaik
 
