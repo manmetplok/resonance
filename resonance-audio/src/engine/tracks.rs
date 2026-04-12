@@ -265,6 +265,9 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // Clear tracks
     ctx.tracks.write().clear();
 
+    // Clear busses
+    ctx.busses.write().clear();
+
     // Clear master FX chain
     ctx.master.write().plugin_ids.clear();
     ctx.shared
@@ -283,6 +286,7 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
 
     // Reset ID counters
     state.next_track_id = 1;
+    state.next_bus_id = 1;
     state.next_clip_id = 1;
     state.next_plugin_id = 1;
 
