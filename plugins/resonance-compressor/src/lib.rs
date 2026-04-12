@@ -73,6 +73,7 @@ impl ResonancePlugin for ResonanceCompressor {
         outputs: &mut [OutputBuffer<'_>],
         frames: usize,
         _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
     ) {
         let Some(main) = outputs.first_mut() else {
             return;
@@ -187,7 +188,7 @@ mod tests {
             right: &mut right,
         }];
         let mut ev = EventIterator::empty();
-        plugin.process(&mut outs, frames, &mut ev);
+        plugin.process(&mut outs, frames, &mut ev, None);
 
         for &x in left.iter().chain(right.iter()) {
             assert!(x.is_finite(), "non-finite sample: {x}");

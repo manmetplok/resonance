@@ -99,6 +99,7 @@ impl ResonancePlugin for ResonanceMastering {
         outputs: &mut [OutputBuffer<'_>],
         frames: usize,
         _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
     ) {
         let Some(main) = outputs.first_mut() else {
             return;

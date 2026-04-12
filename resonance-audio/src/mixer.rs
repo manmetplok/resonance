@@ -22,6 +22,15 @@ use crate::types::*;
 /// scratch-array size.
 pub(crate) const MAX_PLUGIN_OUTPUT_PORTS: usize = 8;
 
+/// Latch a pre-captured transport snapshot onto a plugin instance so the
+/// next `process()` call delivers it through the CLAP transport event.
+#[inline]
+fn latch_transport(inst: &mut SyncClapInstance, snap: Option<(f64, u16, u16, bool, f64)>) {
+    if let Some((bpm, num, den, playing, pos)) = snap {
+        inst.0.set_transport(bpm, num, den, playing, pos);
+    }
+}
+
 /// Fallback playhead advance used when the audio callback couldn't acquire
 /// its locks. No audio is rendered on that path, so we only need to move
 /// the playhead forward and handle the loop seam by snapping back — stuck
@@ -91,6 +100,7 @@ fn process_monitor_track(
     track_buf_l: &mut [f32],
     track_buf_r: &mut [f32],
     plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
+    transport_snap: Option<(f64, u16, u16, bool, f64)>,
 ) -> usize {
     let is_mono = track.mono();
     let mix_frames = max_frames.min(monitor_frames);
@@ -120,6 +130,7 @@ fn process_monitor_track(
         for &plugin_id in &track.plugin_ids {
             if let Some(si) = plugins_guard.get(&plugin_id) {
                 if let Some(mut inst) = si.try_lock() {
+                    latch_transport(&mut inst, transport_snap);
                     inst.0.process(
                         &mut track_buf_l[..mix_frames],
                         &mut track_buf_r[..mix_frames],
@@ -169,6 +180,7 @@ fn apply_master_fx_chain(
     plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
     scratch_l: &mut [f32],
     scratch_r: &mut [f32],
+    transport_snap: Option<(f64, u16, u16, bool, f64)>,
 ) {
     let Some(master_guard) = master.try_read() else {
         return;
@@ -199,6 +211,7 @@ fn apply_master_fx_chain(
     for &plugin_id in &master_guard.plugin_ids {
         if let Some(mutex) = plugins_guard.get(&plugin_id) {
             if let Some(mut inst) = mutex.try_lock() {
+                latch_transport(&mut inst, transport_snap);
                 inst.0
                     .process(&mut scratch_l[..frames], &mut scratch_r[..frames], frames);
             }
@@ -361,6 +374,7 @@ fn render_timeline_block(
     monitor_temp: &[f32],
     monitor_frames: usize,
     input_channels: usize,
+    transport_snap: Option<(f64, u16, u16, bool, f64)>,
 ) {
     // Zero every active bus summing buffer at the start of the sub-block so
     // tracks can accumulate into them.
@@ -411,6 +425,7 @@ fn render_timeline_block(
             if let Some(&instrument_id) = plugin_iter.next() {
                 if let Some(mutex) = plugins_guard.get(&instrument_id) {
                     if let Some(mut inst) = mutex.try_lock() {
+                        latch_transport(&mut inst, transport_snap);
                         for event in note_event_buf.iter() {
                             if event.is_note_on {
                                 inst.0.queue_note_on(event.note, event.velocity, event.sample_offset);
@@ -495,6 +510,7 @@ fn render_timeline_block(
                 for &plugin_id in plugin_iter {
                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
                         if let Some(mut inst) = mutex.try_lock() {
+                            latch_transport(&mut inst, transport_snap);
                             inst.0.process(
                                 &mut track_buf_l[..frames],
                                 &mut track_buf_r[..frames],
@@ -566,6 +582,7 @@ fn render_timeline_block(
                 for &plugin_id in &track.plugin_ids {
                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
                         if let Some(mut inst) = mutex.try_lock() {
+                            latch_transport(&mut inst, transport_snap);
                             inst.0.process(
                                 &mut track_buf_l[..frames],
                                 &mut track_buf_r[..frames],
@@ -647,6 +664,7 @@ fn render_timeline_block(
                     for &plugin_id in &sub_track.plugin_ids {
                         if let Some(mutex) = plugins_guard.get(&plugin_id) {
                             if let Some(mut inst) = mutex.try_lock() {
+                                latch_transport(&mut inst, transport_snap);
                                 inst.0.process(
                                     &mut pl[..frames],
                                     &mut pr[..frames],
@@ -700,6 +718,7 @@ fn render_timeline_block(
             for &plugin_id in &bus.plugin_ids {
                 if let Some(mutex) = plugins_guard.get(&plugin_id) {
                     if let Some(mut inst) = mutex.try_lock() {
+                        latch_transport(&mut inst, transport_snap);
                         inst.0.process(
                             &mut bus_buf_l[..frames],
                             &mut bus_buf_r[..frames],
@@ -787,6 +806,19 @@ pub(crate) fn mix_audio(
     let output_frames = data.len() / channels;
     let frames = output_frames.min(buf_frames);
 
+    // Snapshot tempo for plugin transport (once per block, avoids lock contention).
+    let transport_snap: Option<(f64, u16, u16, bool, f64)> = tempo_map
+        .try_read()
+        .map(|tm| {
+            let bpm = tm.bpm as f64;
+            let playing = shared.playing.load(std::sync::atomic::Ordering::Relaxed);
+            let pos = shared.playhead.load(std::sync::atomic::Ordering::Relaxed) as f64
+                / sample_rate as f64
+                * bpm
+                / 60.0;
+            (bpm, tm.numerator as u16, tm.denominator as u16, playing, pos)
+        });
+
     // Read monitor input with jitter margin to avoid underflows.
     // Skip stale monitor data to keep latency at ~1 buffer period.
     // The monitor stream carries raw interleaved multi-channel data now
@@ -839,6 +871,7 @@ pub(crate) fn mix_audio(
                         track_buf_l,
                         track_buf_r,
                         &plugins_guard,
+                        transport_snap,
                     );
                     let (gain_l, gain_r) = track_stereo_gains(track);
                     let mut peak_l = 0.0f32;
@@ -941,6 +974,7 @@ pub(crate) fn mix_audio(
                         track_buf_l,
                         track_buf_r,
                         &plugins_guard,
+                        transport_snap,
                     );
 
                     let (gain_l, gain_r) = track_stereo_gains(track);
@@ -1066,6 +1100,7 @@ pub(crate) fn mix_audio(
             &monitor_temp[..head_monitor_frames * frame_stride],
             head_monitor_frames,
             input_channels,
+            transport_snap,
         );
 
         // Flush instrument voices at the seam.
@@ -1096,6 +1131,7 @@ pub(crate) fn mix_audio(
             &monitor_temp[tail_monitor_start..tail_monitor_start + tail_monitor_frames * frame_stride],
             tail_monitor_frames,
             input_channels,
+            transport_snap,
         );
 
         loop_in + tail_frames as u64
@@ -1121,6 +1157,7 @@ pub(crate) fn mix_audio(
             &monitor_temp[..monitor_frames * frame_stride],
             monitor_frames,
             input_channels,
+            transport_snap,
         );
         playhead + output_frames as u64
     };
@@ -1136,6 +1173,7 @@ pub(crate) fn mix_audio(
             &plugins_guard,
             track_buf_l,
             track_buf_r,
+            transport_snap,
         );
     }
 

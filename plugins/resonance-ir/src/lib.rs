@@ -177,6 +177,7 @@ impl ResonancePlugin for ResonanceIr {
         outputs: &mut [resonance_plugin::OutputBuffer<'_>],
         frames: usize,
         _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
     ) {
         let main = outputs
             .first_mut()

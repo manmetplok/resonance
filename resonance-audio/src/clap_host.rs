@@ -11,9 +11,11 @@ use clap_sys::ext::audio_ports::{
     clap_audio_port_info, clap_plugin_audio_ports, CLAP_EXT_AUDIO_PORTS,
 };
 use clap_sys::events::{
-    clap_event_header, clap_event_note, clap_event_param_value, clap_input_events,
-    clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
-    CLAP_EVENT_PARAM_VALUE,
+    clap_event_header, clap_event_note, clap_event_param_value, clap_event_transport,
+    clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF,
+    CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT,
+    CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO,
+    CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING,
 };
 use clap_sys::ext::gui::{
     clap_plugin_gui, CLAP_EXT_GUI, CLAP_WINDOW_API_WAYLAND,
@@ -24,6 +26,7 @@ use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::host::clap_host;
 use clap_sys::plugin::clap_plugin;
+use clap_sys::fixedpoint::CLAP_BEATTIME_FACTOR;
 use clap_sys::process::clap_process;
 use clap_sys::version::CLAP_VERSION;
 
@@ -368,6 +371,12 @@ impl ClapBundle {
             note_event_buf: Vec::new(),
             audio_out_buffers,
             audio_out_ptrs,
+            transport_bpm: 120.0,
+            transport_num: 4,
+            transport_den: 4,
+            transport_playing: false,
+            transport_pos_beats: 0.0,
+            transport_valid: false,
         })
     }
 }
@@ -427,6 +436,13 @@ pub struct ClapInstance {
     /// `process_multi` call refreshes these to point at the caller's
     /// supplied slices before handing them to CLAP.
     audio_out_ptrs: Vec<[*mut f32; 2]>,
+    /// Latched transport state, set by the mixer before each process() call.
+    transport_bpm: f64,
+    transport_num: u16,
+    transport_den: u16,
+    transport_playing: bool,
+    transport_pos_beats: f64,
+    transport_valid: bool,
 }
 
 impl ClapInstance {
@@ -778,6 +794,24 @@ impl ClapInstance {
         }
     }
 
+    /// Latch the current transport state so the next process() call can
+    /// forward it to the plugin via `clap_event_transport`.
+    pub fn set_transport(
+        &mut self,
+        bpm: f64,
+        num: u16,
+        den: u16,
+        playing: bool,
+        pos_beats: f64,
+    ) {
+        self.transport_bpm = bpm;
+        self.transport_num = num;
+        self.transport_den = den;
+        self.transport_playing = playing;
+        self.transport_pos_beats = pos_beats;
+        self.transport_valid = true;
+    }
+
     /// Process audio through the plugin (single-output convenience wrapper).
     /// CLAP spec allows aliased input/output buffers so this is in-place.
     /// Works with any plugin — non-main output ports are silently dropped.
@@ -894,10 +928,49 @@ impl ClapInstance {
             try_push: Some(discard_output_event),
         };
 
+        let mut transport_flags: u32 = 0;
+        if self.transport_valid {
+            transport_flags |= CLAP_TRANSPORT_HAS_TEMPO
+                | CLAP_TRANSPORT_HAS_BEATS_TIMELINE
+                | CLAP_TRANSPORT_HAS_TIME_SIGNATURE;
+            if self.transport_playing {
+                transport_flags |= CLAP_TRANSPORT_IS_PLAYING;
+            }
+        }
+        let beats_fp =
+            (self.transport_pos_beats * CLAP_BEATTIME_FACTOR as f64).round() as i64;
+        let transport_event = clap_event_transport {
+            header: clap_event_header {
+                size: std::mem::size_of::<clap_event_transport>() as u32,
+                time: 0,
+                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                type_: CLAP_EVENT_TRANSPORT,
+                flags: 0,
+            },
+            flags: transport_flags,
+            song_pos_beats: beats_fp,
+            song_pos_seconds: 0,
+            tempo: self.transport_bpm,
+            tempo_inc: 0.0,
+            loop_start_beats: 0,
+            loop_end_beats: 0,
+            loop_start_seconds: 0,
+            loop_end_seconds: 0,
+            bar_start: 0,
+            bar_number: 0,
+            tsig_num: self.transport_num,
+            tsig_denom: self.transport_den,
+        };
+        let transport_ptr: *const clap_event_transport = if self.transport_valid {
+            &transport_event
+        } else {
+            ptr::null()
+        };
+
         let process_data = clap_process {
             steady_time: -1,
             frames_count: frames as u32,
-            transport: ptr::null(),
+            transport: transport_ptr,
             audio_inputs: &mut audio_in as *mut clap_audio_buffer as *const clap_audio_buffer,
             audio_outputs: self.audio_out_buffers.as_mut_ptr(),
             audio_inputs_count: 1,

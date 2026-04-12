@@ -90,6 +90,7 @@ impl ResonancePlugin for ResonanceEq {
         outputs: &mut [OutputBuffer<'_>],
         frames: usize,
         _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
     ) {
         let Some(main) = outputs.first_mut() else {
             return;
@@ -215,7 +216,7 @@ mod tests {
             right: &mut right,
         }];
         let mut ev = resonance_plugin::EventIterator::empty();
-        plugin.process(&mut outs, 256, &mut ev);
+        plugin.process(&mut outs, 256, &mut ev, None);
 
         for &x in left.iter().chain(right.iter()) {
             assert!(x.is_finite(), "output contains non-finite value: {x}");

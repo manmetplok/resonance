@@ -79,6 +79,7 @@ impl ResonancePlugin for ResonanceWavetable {
         outputs: &mut [resonance_plugin::OutputBuffer<'_>],
         frames: usize,
         events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
     ) {
         let Some(main) = outputs.first_mut() else {
             return;

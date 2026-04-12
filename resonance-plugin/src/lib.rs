@@ -20,6 +20,7 @@ pub use formatters::*;
 pub use param::{BoolParam, FloatParam, IntParam, Param};
 pub use plugin::{
     EventIterator, ExtraStateSaver, NoteEvent, OutputBuffer, OutputPortSpec, ResonancePlugin,
+    TempoInfo,
 };
 pub use range::{FloatRange, IntRange};
 pub use smoother::{Smoother, SmoothingStyle};

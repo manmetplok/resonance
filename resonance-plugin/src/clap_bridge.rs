@@ -31,7 +31,9 @@ use clack_plugin::stream::{InputStream, OutputStream};
 
 use crate::gui::{EditorFactory, PluginEditor};
 use crate::param::Param;
-use crate::plugin::{EventIterator, NoteEvent, OutputBuffer, OutputPortSpec, ResonancePlugin};
+use crate::plugin::{
+    EventIterator, NoteEvent, OutputBuffer, OutputPortSpec, ResonancePlugin, TempoInfo,
+};
 
 // ---------------------------------------------------------------------------
 // Param metadata stored in SharedState
@@ -181,7 +183,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
 
     fn process(
         &mut self,
-        _process: Process,
+        process: Process,
         mut audio: Audio,
         events: Events,
     ) -> Result<ProcessStatus, PluginError> {
@@ -262,6 +264,20 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             }
         }
 
+        let tempo = process.transport.and_then(|t| {
+            use clack_plugin::events::event_types::TransportFlags;
+            if !t.flags.contains(TransportFlags::HAS_TEMPO) {
+                return None;
+            }
+            Some(TempoInfo {
+                bpm: t.tempo as f32,
+                time_sig_num: t.time_signature_numerator,
+                time_sig_den: t.time_signature_denominator,
+                playing: t.flags.contains(TransportFlags::IS_PLAYING),
+                song_pos_beats: t.song_pos_beats.to_float(),
+            })
+        });
+
         let mut event_iter = EventIterator::new(&self.note_events);
 
         // Effect path: read the input (port 0 of the input audio buffers)
@@ -320,7 +336,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         }
 
         self.plugin
-            .process(&mut port_views, frames, &mut event_iter);
+            .process(&mut port_views, frames, &mut event_iter, tempo);
 
         // Drop the port views so the scratch is free to be re-borrowed for
         // the write-back pass below.

@@ -161,6 +161,7 @@ impl ResonancePlugin for ResonanceDrums {
         outputs: &mut [resonance_plugin::OutputBuffer<'_>],
         frames: usize,
         events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
     ) {
         resonance_common::flush_denormals();
 

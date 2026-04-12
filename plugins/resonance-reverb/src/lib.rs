@@ -71,6 +71,7 @@ impl ResonancePlugin for ResonanceReverb {
         outputs: &mut [resonance_plugin::OutputBuffer<'_>],
         frames: usize,
         _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
     ) {
         let Some(main) = outputs.first_mut() else {
             return;
@@ -217,7 +218,7 @@ mod tests {
             right: &mut right,
         }];
         let mut ev = EventIterator::empty();
-        plugin.process(&mut outs, frames, &mut ev);
+        plugin.process(&mut outs, frames, &mut ev, None);
 
         for &x in left.iter().chain(right.iter()) {
             assert!(x.is_finite(), "non-finite sample: {x}");
@@ -257,7 +258,7 @@ mod tests {
                 right: r_slice,
             }];
             let mut ev = EventIterator::empty();
-            plugin.process(&mut outs, n, &mut ev);
+            plugin.process(&mut outs, n, &mut ev, None);
             pos += n;
         }
 
@@ -314,7 +315,7 @@ mod tests {
             right: &mut right,
         }];
         let mut ev = EventIterator::empty();
-        plugin.process(&mut outs, frames, &mut ev);
+        plugin.process(&mut outs, frames, &mut ev, None);
 
         // Find first sample after t=1 where wet magnitude exceeds a small
         // threshold. Skip index 0 because it contains the dry leak from

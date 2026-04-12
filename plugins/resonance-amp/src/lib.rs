@@ -247,6 +247,7 @@ impl ResonancePlugin for ResonanceAmp {
         outputs: &mut [resonance_plugin::OutputBuffer<'_>],
         frames: usize,
         _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
     ) {
         // Single-output effect: operate on port 0 only. The CLAP bridge
         // has already seeded this buffer with the incoming audio.

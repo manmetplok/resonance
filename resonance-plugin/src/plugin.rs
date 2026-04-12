@@ -114,6 +114,18 @@ impl<'a> EventIterator<'a> {
     }
 }
 
+/// Transport/tempo snapshot delivered once per process block.
+///
+/// `None` when the host (or offline renderer) doesn't supply transport.
+#[derive(Debug, Clone, Copy)]
+pub struct TempoInfo {
+    pub bpm: f32,
+    pub time_sig_num: u16,
+    pub time_sig_den: u16,
+    pub playing: bool,
+    pub song_pos_beats: f64,
+}
+
 /// The main trait that plugin authors implement.
 ///
 /// The CLAP bridge wraps this trait to produce a valid CLAP plugin.
@@ -188,6 +200,7 @@ pub trait ResonancePlugin: Send + 'static {
         outputs: &mut [OutputBuffer<'_>],
         frames: usize,
         events: &mut EventIterator<'_>,
+        tempo: Option<TempoInfo>,
     );
 
     /// Save plugin state to bytes. Default: JSON serialization of params

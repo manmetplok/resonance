@@ -93,7 +93,7 @@ fn stream_sine(
             right: &mut r,
         }];
         let mut ev = EventIterator::empty();
-        plugin.process(&mut outs, n, &mut ev);
+        plugin.process(&mut outs, n, &mut ev, None);
         out_l.extend_from_slice(&l);
         out_r.extend_from_slice(&r);
         done += n;

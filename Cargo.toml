@@ -1,5 +1,5 @@
 [workspace]
-members = ["resonance-audio", "resonance-app", "resonance-common", "resonance-dsp", "resonance-metering", "resonance-music-theory", "resonance-plugin", "wayland-plugin-gui", "plugins/resonance-drums", "plugins/resonance-amp", "plugins/resonance-compressor", "plugins/resonance-eq", "plugins/resonance-ir", "plugins/resonance-mastering", "plugins/resonance-reverb", "plugins/resonance-wavetable"]
+members = ["resonance-audio", "resonance-app", "resonance-common", "resonance-dsp", "resonance-metering", "resonance-music-theory", "resonance-plugin", "wayland-plugin-gui", "plugins/resonance-delay", "plugins/resonance-drums", "plugins/resonance-amp", "plugins/resonance-compressor", "plugins/resonance-eq", "plugins/resonance-ir", "plugins/resonance-mastering", "plugins/resonance-reverb", "plugins/resonance-wavetable"]
 resolver = "2"
 
 [workspace.dependencies]
