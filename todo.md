@@ -29,5 +29,5 @@
 
 ##Drum plugin
     - [x] We should be able to download the drumkit as a zip from a server. (see https://resonance.plok.org/index.json)
-    - Check if round robin is executed correctly (also add unit tests)
+    - [x] Check if round robin is executed correctly (also add unit tests)
     - Implement all pads/parts found in /home/jorrit/Documents/Guitar/drummica
