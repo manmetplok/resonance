@@ -41,11 +41,16 @@ fn is_gated_message(message: &Message) -> bool {
         | Message::Ui(UiMessage::CloseAddTrackMenu)
         | Message::Ui(UiMessage::DismissError)
         | Message::Ui(UiMessage::StartNewProject)
-        | Message::Ui(UiMessage::SelectTrack(_)) => false,
+        | Message::Ui(UiMessage::SelectTrack(_))
+        | Message::Ui(UiMessage::ConfirmSaveAndQuit)
+        | Message::Ui(UiMessage::ConfirmDiscardAndQuit)
+        | Message::Ui(UiMessage::CancelQuit) => false,
         // Project I/O drives the modal itself: always allow.
         Message::ProjectIo(_) => false,
         // Timer tick: harmless, drives VU meters — allow.
         Message::Tick => false,
+        // Window close request: always allow so the app can exit.
+        Message::WindowCloseRequested(_) => false,
         // Undo/redo need a project to be meaningful — block otherwise.
         Message::Undo | Message::Redo => true,
     }
@@ -80,6 +85,15 @@ impl crate::Resonance {
         // message shape — no borrow on `self`.
         let action = crate::undo::classify(&message);
         let commit_after = matches!(action, crate::undo::UndoAction::Commit);
+        // Mark the project dirty on any state-changing action. This
+        // mirrors the undo classification: any action that warrants an
+        // undo entry (Record, RecordCoalesced, Begin, Commit) means the
+        // project has diverged from the last saved version. The dirty
+        // flag is cleared on ProjectSaved(Ok) and on project load.
+        if !matches!(action, crate::undo::UndoAction::Skip) {
+            self.dirty = true;
+        }
+
         // Skip every history-mutating branch when the app isn't in a
         // state where a snapshot could be restored (no active project,
         // no saved path, mid-restore). Commit still runs on gesture end
@@ -626,15 +640,22 @@ impl crate::Resonance {
             }
             Message::ProjectIo(ProjectIoMessage::ProjectSaved(Ok(()))) => {
                 self.io.save_state = None;
+                self.dirty = false;
                 // First successful save of a New Project lifts the
                 // gate; idempotent for normal saves.
                 self.io.has_active_project = true;
                 if let Some(ref path) = self.io.project_path {
                     crate::recent::add(&mut self.io.recent_projects, path);
                 }
+                // If the save was triggered by "Save & Quit", close the
+                // window now that the project is safely on disk.
+                if let Some(id) = self.quit_after_save.take() {
+                    return iced::window::close(id);
+                }
             }
             Message::ProjectIo(ProjectIoMessage::ProjectSaved(Err(e))) => {
                 self.io.save_state = None;
+                self.quit_after_save = None;
                 self.error_message = Some(format!("Save failed: {e}"));
             }
             Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Ok(loaded))) => {
@@ -649,6 +670,7 @@ impl crate::Resonance {
                 // is session-local to the current project too.
                 self.undo.clear();
                 self.plugin_state_cache.clear();
+                self.dirty = false;
                 self.engine.send(AudioCommand::ClearAll);
                 // Lift the gate immediately — replay runs when the
                 // engine emits `AllCleared`, but the project is
@@ -840,6 +862,28 @@ impl crate::Resonance {
                     editor.scroll_y = (editor.scroll_y + delta).max(0.0);
                 }
             }
+            Message::WindowCloseRequested(id) => {
+                if self.dirty && self.io.has_active_project {
+                    self.confirm_quit = Some(id);
+                } else {
+                    return iced::window::close(id);
+                }
+            }
+            Message::Ui(UiMessage::ConfirmSaveAndQuit) => {
+                let window_id = self.confirm_quit.take();
+                // Trigger a save; the actual quit happens in
+                // ProjectSaved(Ok) when `quit_after_save` is set.
+                self.quit_after_save = window_id;
+                return self.update(Message::ProjectIo(ProjectIoMessage::SaveProject));
+            }
+            Message::Ui(UiMessage::ConfirmDiscardAndQuit) => {
+                if let Some(id) = self.confirm_quit.take() {
+                    return iced::window::close(id);
+                }
+            }
+            Message::Ui(UiMessage::CancelQuit) => {
+                self.confirm_quit = None;
+            }
             // Handled by `update()` before dispatch is called; no-op
             // here to keep the match exhaustive.
             Message::Undo | Message::Redo => {}
@@ -886,6 +930,8 @@ impl crate::Resonance {
                 }
             }
         });
-        Subscription::batch([tick, keys])
+        let close_requests =
+            iced::window::close_requests().map(Message::WindowCloseRequested);
+        Subscription::batch([tick, keys, close_requests])
     }
 }

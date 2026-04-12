@@ -477,6 +477,25 @@ pub fn destructive_button_style(status: button::Status) -> button::Style {
     }
 }
 
+/// Accent-coloured button for primary/positive actions (e.g. "Save & Quit").
+pub fn accent_button_style(status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Color::from_rgb(0.18, 0.50, 0.72),
+        button::Status::Pressed => Color::from_rgb(0.12, 0.38, 0.58),
+        _ => Color::from_rgb(ACCENT.r, ACCENT.g, ACCENT.b),
+    };
+    button::Style {
+        background: Some(iced::Background::Color(bg)),
+        text_color: Color::WHITE,
+        border: iced::Border {
+            color: ACCENT,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
 // ---- Container style helpers -------------------------------------------
 // These wrap the "flat background container with no border" pattern that
 // appears ~80 times across the view module.

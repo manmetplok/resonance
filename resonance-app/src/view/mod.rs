@@ -3,6 +3,7 @@
 /// mixer, compose, track_header, menus, settings).
 pub(crate) mod compose;
 pub(crate) mod confirm_delete_track;
+pub(crate) mod confirm_quit;
 pub(crate) mod controls;
 pub(crate) mod knob;
 pub(crate) mod menus;
@@ -67,6 +68,8 @@ impl crate::Resonance {
 
         if !self.io.has_active_project {
             stack![base, startup::view_startup_overlay(self)].into()
+        } else if self.confirm_quit.is_some() {
+            stack![base, confirm_quit::view_confirm_quit_overlay(self)].into()
         } else if let Some(track_id) = self.confirm_delete_track {
             stack![
                 base,

@@ -32,6 +32,8 @@ pub(crate) enum Message {
     Undo,
     /// Walk one step forward through the session-local redo history.
     Redo,
+    /// The window manager requested that the window be closed.
+    WindowCloseRequested(iced::window::Id),
 }
 
 #[derive(Debug, Clone)]
@@ -241,4 +243,10 @@ pub(crate) enum UiMessage {
     StartNewProject,
     /// Select (highlight) a track in the arrange view, or deselect all.
     SelectTrack(Option<TrackId>),
+    /// User confirmed "Save & Quit" in the unsaved-changes dialog.
+    ConfirmSaveAndQuit,
+    /// User confirmed "Discard & Quit" in the unsaved-changes dialog.
+    ConfirmDiscardAndQuit,
+    /// User cancelled the unsaved-changes quit dialog.
+    CancelQuit,
 }

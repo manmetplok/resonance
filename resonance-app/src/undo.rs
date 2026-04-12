@@ -388,6 +388,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // them before calling classify — but be defensive.
         Message::Undo | Message::Redo => UndoAction::Skip,
 
+        // Window close request: pure UI flow, no project mutation.
+        Message::WindowCloseRequested(_) => UndoAction::Skip,
+
         // Timer tick, pure UI, engine runtime, project I/O.
         Message::Tick => UndoAction::Skip,
         Message::Viewport(_) => UndoAction::Skip,

@@ -210,6 +210,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.interaction.clip_drag = None;
     r.interaction.clip_trim = None;
     r.confirm_delete_track = None;
+    r.confirm_quit = None;
     r.compose
         .load_from_project(&project.section_definitions, &project.section_placements);
 

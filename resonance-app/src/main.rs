@@ -58,6 +58,14 @@ pub(crate) struct Resonance {
     /// When set, the confirmation dialog for deleting a track with
     /// content is shown. Holds the track id that the user wants to remove.
     pub(crate) confirm_delete_track: Option<resonance_audio::types::TrackId>,
+    /// True when the project has been modified since the last save.
+    pub(crate) dirty: bool,
+    /// When set, the "unsaved changes" quit-confirmation dialog is shown.
+    /// Holds the window id so we can close it if the user confirms.
+    pub(crate) confirm_quit: Option<iced::window::Id>,
+    /// When set, the app should quit after the current save completes.
+    /// Set by the "Save & Quit" flow in the unsaved-changes dialog.
+    pub(crate) quit_after_save: Option<iced::window::Id>,
     /// Cache of the most recently observed CLAP state blob per plugin
     /// instance. Populated from `PluginStateSaved` / `AllPluginStatesSaved`
     /// engine events and read into undo snapshots so restores can replay
@@ -74,6 +82,7 @@ fn main() -> iced::Result {
         .subscription(Resonance::subscription)
         .theme(|_| theme::resonance_theme())
         .window_size(Size::new(1280.0, 720.0))
+        .exit_on_close_request(false)
         .run_with(Resonance::new)
 }
 
@@ -203,6 +212,9 @@ impl Resonance {
             undo: UndoHistory::new(),
             plugin_state_cache: std::collections::HashMap::new(),
             confirm_delete_track: None,
+            dirty: false,
+            confirm_quit: None,
+            quit_after_save: None,
         };
 
         (app, iced::Task::none())
