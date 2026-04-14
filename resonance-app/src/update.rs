@@ -1,5 +1,6 @@
 /// Update logic and subscription for the Resonance application.
 use crate::message::*;
+use crate::state;
 use crate::state::*;
 use crate::theme;
 use crate::util::db_to_gain;
@@ -30,7 +31,8 @@ fn is_gated_message(message: &Message) -> bool {
         | Message::MidiClip(_)
         | Message::MidiEditor(_)
         | Message::Plugin(_)
-        | Message::Viewport(_) => true,
+        | Message::Viewport(_)
+        | Message::GlobalTrack(_) => true,
         // Tab switches / auxiliary overlays: block so they can't
         // steal focus from the startup modal.
         Message::Ui(UiMessage::SwitchView(_))
@@ -44,7 +46,8 @@ fn is_gated_message(message: &Message) -> bool {
         | Message::Ui(UiMessage::SelectTrack(_))
         | Message::Ui(UiMessage::ConfirmSaveAndQuit)
         | Message::Ui(UiMessage::ConfirmDiscardAndQuit)
-        | Message::Ui(UiMessage::CancelQuit) => false,
+        | Message::Ui(UiMessage::CancelQuit)
+        | Message::Ui(UiMessage::ToggleGlobalTracks) => false,
         // Project I/O drives the modal itself: always allow.
         Message::ProjectIo(_) => false,
         // Timer tick: harmless, drives VU meters — allow.
@@ -133,6 +136,102 @@ impl crate::Resonance {
             Message::Compose(m) => {
                 crate::update::compose::handle(self, m);
             }
+
+            // ---- Global track events (tempo / time signature) ----
+            Message::GlobalTrack(GlobalTrackMessage::AddTempoEvent { bar, bpm }) => {
+                // Replace if an event at this bar already exists.
+                if let Some(existing) = self.tempo_events.iter_mut().find(|e| e.bar == bar) {
+                    existing.bpm = bpm;
+                } else {
+                    self.tempo_events.push(state::TempoEvent { bar, bpm });
+                    self.tempo_events.sort_by_key(|e| e.bar);
+                }
+                // If the playhead is at or past this bar, update active tempo.
+                let event_sample = state::bar_to_sample(
+                    bar, &self.tempo_events, &self.signature_events, self.sample_rate,
+                );
+                if self.transport.playhead >= event_sample {
+                    self.transport.bpm = bpm;
+                    self.transport.bpm_input = format!("{:.0}", bpm);
+                    self.engine.send(AudioCommand::SetBpm { bpm });
+                }
+            }
+            Message::GlobalTrack(GlobalTrackMessage::RemoveTempoEvent(index)) => {
+                if index > 0 && index < self.tempo_events.len() {
+                    self.tempo_events.remove(index);
+                    // Re-apply tempo at current playhead position.
+                    let (bpm, _, _) = state::tempo_at_sample(
+                        self.transport.playhead, &self.tempo_events,
+                        &self.signature_events, self.sample_rate,
+                    );
+                    self.transport.bpm = bpm;
+                    self.transport.bpm_input = format!("{:.0}", bpm);
+                    self.engine.send(AudioCommand::SetBpm { bpm });
+                }
+            }
+            Message::GlobalTrack(GlobalTrackMessage::AddSignatureEvent { bar, numerator, denominator }) => {
+                if let Some(existing) = self.signature_events.iter_mut().find(|e| e.bar == bar) {
+                    existing.numerator = numerator;
+                    existing.denominator = denominator;
+                } else {
+                    self.signature_events.push(state::SignatureEvent { bar, numerator, denominator });
+                    self.signature_events.sort_by_key(|e| e.bar);
+                }
+                let event_sample = state::bar_to_sample(
+                    bar, &self.tempo_events, &self.signature_events, self.sample_rate,
+                );
+                if self.transport.playhead >= event_sample {
+                    self.transport.time_sig_num = numerator;
+                    self.transport.time_sig_den = denominator;
+                    self.engine.send(AudioCommand::SetTimeSignature { numerator, denominator });
+                }
+            }
+            Message::GlobalTrack(GlobalTrackMessage::RemoveSignatureEvent(index)) => {
+                if index > 0 && index < self.signature_events.len() {
+                    self.signature_events.remove(index);
+                    let (_, num, den) = state::tempo_at_sample(
+                        self.transport.playhead, &self.tempo_events,
+                        &self.signature_events, self.sample_rate,
+                    );
+                    self.transport.time_sig_num = num;
+                    self.transport.time_sig_den = den;
+                    self.engine.send(AudioCommand::SetTimeSignature { numerator: num, denominator: den });
+                }
+            }
+            Message::GlobalTrack(GlobalTrackMessage::SelectEvent(sel)) => {
+                self.interaction.selected_global_event = sel;
+            }
+            Message::GlobalTrack(GlobalTrackMessage::DeleteSelectedEvent) => {
+                if let Some(sel) = self.interaction.selected_global_event.take() {
+                    match sel.kind {
+                        state::GlobalTrackKind::Tempo => {
+                            if sel.index > 0 && sel.index < self.tempo_events.len() {
+                                self.tempo_events.remove(sel.index);
+                                let (bpm, _, _) = state::tempo_at_sample(
+                                    self.transport.playhead, &self.tempo_events,
+                                    &self.signature_events, self.sample_rate,
+                                );
+                                self.transport.bpm = bpm;
+                                self.transport.bpm_input = format!("{:.0}", bpm);
+                                self.engine.send(AudioCommand::SetBpm { bpm });
+                            }
+                        }
+                        state::GlobalTrackKind::Signature => {
+                            if sel.index > 0 && sel.index < self.signature_events.len() {
+                                self.signature_events.remove(sel.index);
+                                let (_, num, den) = state::tempo_at_sample(
+                                    self.transport.playhead, &self.tempo_events,
+                                    &self.signature_events, self.sample_rate,
+                                );
+                                self.transport.time_sig_num = num;
+                                self.transport.time_sig_den = den;
+                                self.engine.send(AudioCommand::SetTimeSignature { numerator: num, denominator: den });
+                            }
+                        }
+                    }
+                }
+            }
+
             Message::Transport(TransportMessage::Play) => {
                 self.engine.send(AudioCommand::Play);
                 self.transport.playing = true;
@@ -385,6 +484,12 @@ impl crate::Resonance {
                     Ok(parsed) => {
                         self.transport.bpm = parsed.clamp(20.0, 300.0);
                         self.engine.send(AudioCommand::SetBpm { bpm: self.transport.bpm });
+                        // Keep the bar-0 tempo event in sync.
+                        if let Some(first) = self.tempo_events.first_mut() {
+                            if first.bar == 0 {
+                                first.bpm = self.transport.bpm;
+                            }
+                        }
                     }
                     Err(_) => {}
                 }
@@ -423,6 +528,13 @@ impl crate::Resonance {
                     numerator: num,
                     denominator: den,
                 });
+                // Keep the bar-0 signature event in sync.
+                if let Some(first) = self.signature_events.first_mut() {
+                    if first.bar == 0 {
+                        first.numerator = num;
+                        first.denominator = den;
+                    }
+                }
             }
             Message::Plugin(PluginMessage::AddPluginToTrack(track_id, plugin)) => {
                 self.engine.send(AudioCommand::AddPlugin {
@@ -892,6 +1004,9 @@ impl crate::Resonance {
             }
             Message::Ui(UiMessage::CancelQuit) => {
                 self.confirm_quit = None;
+            }
+            Message::Ui(UiMessage::ToggleGlobalTracks) => {
+                self.viewport.global_tracks_expanded = !self.viewport.global_tracks_expanded;
             }
             // Handled by `update()` before dispatch is called; no-op
             // here to keep the match exhaustive.

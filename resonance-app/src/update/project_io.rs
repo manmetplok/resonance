@@ -179,6 +179,8 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         busses,
         section_definitions: r.compose.to_project_definitions(),
         section_placements: r.compose.to_project_placements(),
+        tempo_events: r.tempo_events.clone(),
+        signature_events: r.signature_events.clone(),
     }
 }
 
@@ -213,6 +215,23 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.confirm_quit = None;
     r.compose
         .load_from_project(&project.section_definitions, &project.section_placements);
+
+    // Restore tempo/signature events. If the project has none (legacy),
+    // create a single event at bar 0 from the global BPM/sig.
+    if project.tempo_events.is_empty() {
+        r.tempo_events = vec![crate::state::TempoEvent { bar: 0, bpm: project.bpm }];
+    } else {
+        r.tempo_events = project.tempo_events.clone();
+    }
+    if project.signature_events.is_empty() {
+        r.signature_events = vec![crate::state::SignatureEvent {
+            bar: 0,
+            numerator: project.time_sig_num,
+            denominator: project.time_sig_den,
+        }];
+    } else {
+        r.signature_events = project.signature_events.clone();
+    }
 
     r.engine.send(AudioCommand::SetBpm { bpm: r.transport.bpm });
     r.engine.send(AudioCommand::SetTimeSignature {

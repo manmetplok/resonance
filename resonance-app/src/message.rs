@@ -5,7 +5,10 @@
 /// dedicated arm of the top-level match in `update.rs`.
 use crate::compose::ComposeMessage;
 use crate::project::LoadedProject;
-use crate::state::{ClipEdge, InstrumentIcon, InstrumentType, LoopDragTarget, ViewMode};
+use crate::state::{
+    ClipEdge, InstrumentIcon, InstrumentType, LoopDragTarget,
+    SelectedGlobalEvent, ViewMode,
+};
 use resonance_audio::types::{
     BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
 };
@@ -14,6 +17,7 @@ use resonance_audio::types::{
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     Compose(ComposeMessage),
+    GlobalTrack(GlobalTrackMessage),
     Transport(TransportMessage),
     Track(TrackMessage),
     Bus(BusMessage),
@@ -249,4 +253,22 @@ pub(crate) enum UiMessage {
     ConfirmDiscardAndQuit,
     /// User cancelled the unsaved-changes quit dialog.
     CancelQuit,
+    /// Toggle the global tracks area (tempo, time signature) in the arrange view.
+    ToggleGlobalTracks,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum GlobalTrackMessage {
+    /// Add a tempo change event at the given bar with the given BPM.
+    AddTempoEvent { bar: u32, bpm: f32 },
+    /// Remove a tempo event by index (bar 0 cannot be removed).
+    RemoveTempoEvent(usize),
+    /// Add a time signature change event at the given bar.
+    AddSignatureEvent { bar: u32, numerator: u8, denominator: u8 },
+    /// Remove a signature event by index (bar 0 cannot be removed).
+    RemoveSignatureEvent(usize),
+    /// Select an event on a global track.
+    SelectEvent(Option<SelectedGlobalEvent>),
+    /// Delete the currently selected global track event.
+    DeleteSelectedEvent,
 }

@@ -62,6 +62,13 @@ pub struct ProjectFile {
     pub section_definitions: Vec<ProjectSectionDefinition>,
     #[serde(default)]
     pub section_placements: Vec<ProjectSectionPlacement>,
+    /// Tempo change events on the tempo track. Empty on legacy projects
+    /// (a single event at bar 0 with the project BPM is inferred).
+    #[serde(default)]
+    pub tempo_events: Vec<crate::state::TempoEvent>,
+    /// Time signature change events. Empty on legacy projects.
+    #[serde(default)]
+    pub signature_events: Vec<crate::state::SignatureEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

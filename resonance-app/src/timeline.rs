@@ -5,7 +5,7 @@ use iced::widget::canvas;
 use iced::{keyboard, mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::theme;
-use crate::state::{ClipEdge, ClipState, LoopDragTarget, MidiClipState, TrackState};
+use crate::state::{self, ClipEdge, ClipState, LoopDragTarget, MidiClipState, TrackState};
 use crate::message::*;
 
 use resonance_audio::types::{ClipId, TrackId, TICKS_PER_QUARTER_NOTE};
@@ -71,6 +71,10 @@ pub struct TimelineCanvas<'a> {
     pub midi_clips: &'a [MidiClipState],
     pub selected_midi_clip: Option<ClipId>,
     pub selected_track: Option<TrackId>,
+    pub global_tracks_expanded: bool,
+    pub tempo_events: &'a [crate::state::TempoEvent],
+    pub signature_events: &'a [crate::state::SignatureEvent],
+    pub selected_global_event: Option<crate::state::SelectedGlobalEvent>,
 }
 
 impl TimelineCanvas<'_> {
@@ -84,8 +88,24 @@ impl TimelineCanvas<'_> {
         self.seconds_per_beat() * self.time_sig_num as f32
     }
 
+    /// Height of the global tracks area (tempo + time signature rows).
+    /// Returns 0.0 when collapsed.
+    pub(crate) fn global_tracks_height(&self) -> f32 {
+        if self.global_tracks_expanded {
+            2.0 * theme::GLOBAL_TRACK_ROW_HEIGHT
+        } else {
+            0.0
+        }
+    }
+
+    /// Total fixed header height: ruler + global tracks area.
+    /// This is the Y offset where regular track rows begin.
+    pub(crate) fn fixed_header_height(&self) -> f32 {
+        theme::RULER_HEIGHT + self.global_tracks_height()
+    }
+
     /// Convert a sample position to pixel x coordinate.
-    fn sample_to_x(&self, sample: u64) -> f32 {
+    pub(crate) fn sample_to_x(&self, sample: u64) -> f32 {
         (sample as f64 / self.sample_rate as f64) as f32 * self.zoom - self.scroll_offset
     }
 
@@ -113,15 +133,15 @@ impl TimelineCanvas<'_> {
         content.max(viewport_width * 1.5).max(viewport_width)
     }
 
-    /// Total vertical content height (tracks + ruler). Excludes
-    /// sub-tracks since the arrange view hides them entirely.
+    /// Total vertical content height (tracks + ruler + global tracks).
+    /// Excludes sub-tracks since the arrange view hides them entirely.
     pub(crate) fn content_height_px(&self) -> f32 {
         let visible = self
             .tracks
             .iter()
             .filter(|t| t.sub_track.is_none())
             .count();
-        30.0 + visible as f32 * theme::TRACK_HEIGHT
+        self.fixed_header_height() + visible as f32 * theme::TRACK_HEIGHT
     }
 
     /// Tracks visible in the arrange view, sorted by `order`. Excludes
@@ -164,6 +184,8 @@ pub struct TimelineState {
     h_scrollbar_grab: Option<f32>,
     /// Vertical scrollbar drag in progress (y-offset within the thumb).
     v_scrollbar_grab: Option<f32>,
+    /// Tracks the most recent click on a global track for double-click detection.
+    last_global_click: Option<(Instant, state::GlobalTrackKind)>,
 }
 
 type UpdateResult = (canvas::event::Status, Option<Message>);
@@ -182,7 +204,7 @@ impl TimelineCanvas<'_> {
     ) -> (Option<ScrollbarRects>, Option<ScrollbarRects>) {
         let content_w = self.content_width_px(bounds.width);
         let content_h = self.content_height_px();
-        let ruler_height = theme::RULER_HEIGHT;
+        let header_h = self.fixed_header_height();
         let h = scrollbar::h_rects(
             bounds,
             content_w,
@@ -191,7 +213,7 @@ impl TimelineCanvas<'_> {
                 bounds,
                 content_h,
                 self.scroll_offset_y,
-                ruler_height,
+                header_h,
                 true,
             )
             .is_some(),
@@ -200,7 +222,7 @@ impl TimelineCanvas<'_> {
             bounds,
             content_h,
             self.scroll_offset_y,
-            ruler_height,
+            header_h,
             h.is_some(),
         );
         (h, v)
@@ -244,11 +266,11 @@ impl TimelineCanvas<'_> {
         clip_start_sample: u64,
         duration_samples: u64,
     ) -> Option<HitKind> {
-        let ruler_height = theme::RULER_HEIGHT;
+        let header_height = self.fixed_header_height();
         let track_idx = track_index(sorted_tracks, clip_track_id)?;
         let row_y = hit_test::track_row_y(
             track_idx,
-            ruler_height,
+            header_height,
             self.scroll_offset_y,
             theme::TRACK_HEIGHT,
         );
@@ -277,6 +299,7 @@ impl TimelineCanvas<'_> {
             return (canvas::event::Status::Ignored, None);
         };
         let ruler_height = theme::RULER_HEIGHT;
+        let header_height = self.fixed_header_height();
         let (h_rects, v_rects) = self.scrollbar_rects(bounds);
 
         // Horizontal scrollbar hit test.
@@ -305,7 +328,7 @@ impl TimelineCanvas<'_> {
                     state.v_scrollbar_grab = Some(pos.y - sb.thumb.y);
                 } else {
                     let new_scroll = scroll_from_thumb_pos(
-                        pos.y - ruler_height - sb.thumb.height / 2.0,
+                        pos.y - header_height - sb.thumb.height / 2.0,
                         sb.travel,
                         sb.max_scroll,
                     );
@@ -352,6 +375,11 @@ impl TimelineCanvas<'_> {
                 self.zoom,
             );
             return captured(Message::Transport(TransportMessage::SeekToSample(snapped)));
+        }
+
+        // Clicks in the global tracks area (between ruler and track lanes).
+        if pos.y >= ruler_height && pos.y < header_height && self.global_tracks_expanded {
+            return self.handle_global_track_click(state, pos, bounds);
         }
 
         // Clip hit-testing (track area)
@@ -453,8 +481,7 @@ impl TimelineCanvas<'_> {
         // Clicked on empty track area → select the track under the cursor
         // and deselect any active clip selection.
         let clicked_track = {
-            let ruler_height = theme::RULER_HEIGHT;
-            let track_idx = ((pos.y - ruler_height + self.scroll_offset_y) / theme::TRACK_HEIGHT)
+            let track_idx = ((pos.y - header_height + self.scroll_offset_y) / theme::TRACK_HEIGHT)
                 .floor()
                 .max(0.0) as usize;
             sorted_tracks.get(track_idx).map(|t| t.id)
@@ -471,7 +498,6 @@ impl TimelineCanvas<'_> {
         let Some(pos) = cursor.position_in(bounds) else {
             return (canvas::event::Status::Ignored, None);
         };
-        let ruler_height = theme::RULER_HEIGHT;
 
         // Horizontal scrollbar drag.
         if let Some(grab) = state.h_scrollbar_grab {
@@ -506,7 +532,6 @@ impl TimelineCanvas<'_> {
             }
             Some(ClipInteraction::MidiTrim { .. }) => captured(Message::MidiClip(MidiClipMessage::UpdateMidiClipTrim(pos.x))),
             None => {
-                let _ = ruler_height;
                 (canvas::event::Status::Ignored, None)
             }
         }
@@ -534,6 +559,98 @@ impl TimelineCanvas<'_> {
         (canvas::event::Status::Ignored, None)
     }
 
+    /// Handle a click in the global tracks area. Single click selects an
+    /// existing event; double-click on empty space adds a new event at
+    /// the clicked bar position.
+    fn handle_global_track_click(
+        &self,
+        state: &mut TimelineState,
+        pos: Point,
+        _bounds: Rectangle,
+    ) -> UpdateResult {
+        let ruler_height = theme::RULER_HEIGHT;
+        let row_h = theme::GLOBAL_TRACK_ROW_HEIGHT;
+        let in_tempo = pos.y >= ruler_height && pos.y < ruler_height + row_h;
+        let in_sig = pos.y >= ruler_height + row_h && pos.y < ruler_height + 2.0 * row_h;
+
+        // Determine which bar the click is at.
+        let seconds = ((pos.x + self.scroll_offset) / self.zoom).max(0.0);
+        let spbar = self.seconds_per_bar();
+        let bar = (seconds / spbar).floor().max(0.0) as u32;
+
+        // Check if click is near an existing event marker.
+        if in_tempo {
+            for (i, event) in self.tempo_events.iter().enumerate() {
+                let sample = state::bar_to_sample(
+                    event.bar, self.tempo_events, self.signature_events, self.sample_rate,
+                );
+                let ex = self.sample_to_x(sample);
+                if (pos.x - ex).abs() < 8.0 {
+                    return captured(Message::GlobalTrack(GlobalTrackMessage::SelectEvent(
+                        Some(state::SelectedGlobalEvent {
+                            kind: state::GlobalTrackKind::Tempo,
+                            index: i,
+                        }),
+                    )));
+                }
+            }
+            // Double-click detection for adding new tempo events.
+            let now = std::time::Instant::now();
+            let is_double = state.last_global_click
+                .map(|(t, k)| {
+                    k == state::GlobalTrackKind::Tempo
+                        && now.duration_since(t).as_millis() <= DOUBLE_CLICK_MS
+                })
+                .unwrap_or(false);
+            state.last_global_click = Some((now, state::GlobalTrackKind::Tempo));
+            if is_double {
+                state.last_global_click = None;
+                return captured(Message::GlobalTrack(GlobalTrackMessage::AddTempoEvent {
+                    bar,
+                    bpm: self.bpm,
+                }));
+            }
+            // Single click on empty space → deselect.
+            return captured(Message::GlobalTrack(GlobalTrackMessage::SelectEvent(None)));
+        }
+
+        if in_sig {
+            for (i, event) in self.signature_events.iter().enumerate() {
+                let sample = state::bar_to_sample(
+                    event.bar, self.tempo_events, self.signature_events, self.sample_rate,
+                );
+                let ex = self.sample_to_x(sample);
+                if (pos.x - ex).abs() < 8.0 {
+                    return captured(Message::GlobalTrack(GlobalTrackMessage::SelectEvent(
+                        Some(state::SelectedGlobalEvent {
+                            kind: state::GlobalTrackKind::Signature,
+                            index: i,
+                        }),
+                    )));
+                }
+            }
+            let now = std::time::Instant::now();
+            let is_double = state.last_global_click
+                .map(|(t, k)| {
+                    k == state::GlobalTrackKind::Signature
+                        && now.duration_since(t).as_millis() <= DOUBLE_CLICK_MS
+                })
+                .unwrap_or(false);
+            state.last_global_click = Some((now, state::GlobalTrackKind::Signature));
+            if is_double {
+                state.last_global_click = None;
+                return captured(Message::GlobalTrack(GlobalTrackMessage::AddSignatureEvent {
+                    bar,
+                    numerator: self.time_sig_num,
+                    denominator: 4,
+                }));
+            }
+            return captured(Message::GlobalTrack(GlobalTrackMessage::SelectEvent(None)));
+        }
+
+        (canvas::event::Status::Captured, None)
+    }
+
     fn handle_key(&self, key: &keyboard::Key) -> UpdateResult {
         use keyboard::key::Named;
         let is_delete = matches!(
@@ -542,6 +659,10 @@ impl TimelineCanvas<'_> {
         );
         if !is_delete {
             return (canvas::event::Status::Ignored, None);
+        }
+        // Delete selected global track event.
+        if self.selected_global_event.is_some() {
+            return captured(Message::GlobalTrack(GlobalTrackMessage::DeleteSelectedEvent));
         }
         if let Some(clip_id) = self.selected_midi_clip {
             return captured(Message::MidiClip(MidiClipMessage::DeleteMidiClip(clip_id)));
@@ -622,7 +743,8 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let ruler_height = 30.0;
+        let ruler_height = theme::RULER_HEIGHT;
+        let header_height = self.fixed_header_height();
         let y_off = self.scroll_offset_y;
 
         // Draw ruler background
@@ -632,16 +754,19 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             theme::RULER_BG,
         );
 
+        // Draw global tracks area (tempo + time signature) between ruler and tracks
+        self.draw_global_tracks(&mut frame, bounds.width, ruler_height);
+
         // Draw track backgrounds. Only non-sub-tracks are rendered; the
         // mixer view is where sub-track lanes live.
         let sorted_tracks = self.visible_tracks_sorted();
         let track_area_height = sorted_tracks.len() as f32 * theme::TRACK_HEIGHT;
 
         for (i, track) in sorted_tracks.iter().enumerate() {
-            let y = ruler_height + i as f32 * theme::TRACK_HEIGHT - y_off;
+            let y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
 
             // Skip tracks entirely above or below the visible area
-            if y + theme::TRACK_HEIGHT < ruler_height || y > bounds.height {
+            if y + theme::TRACK_HEIGHT < header_height || y > bounds.height {
                 continue;
             }
 
@@ -688,43 +813,43 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         }
 
         // Draw bar/beat grid lines through track area
-        self.draw_grid_lines(&mut frame, bounds.width, ruler_height, track_area_height, y_off);
+        self.draw_grid_lines(&mut frame, bounds.width, header_height, track_area_height, y_off);
 
         // Draw bar/beat ruler
         self.draw_ruler(&mut frame, bounds.width, ruler_height);
 
         // Draw audio clips
         for clip in self.clips {
-            self.draw_clip(&mut frame, clip, &sorted_tracks, ruler_height, y_off, bounds.height);
+            self.draw_clip(&mut frame, clip, &sorted_tracks, header_height, y_off, bounds.height);
         }
 
         // Draw MIDI clips
         for clip in self.midi_clips {
-            self.draw_midi_clip(&mut frame, clip, &sorted_tracks, ruler_height, y_off, bounds.height);
+            self.draw_midi_clip(&mut frame, clip, &sorted_tracks, header_height, y_off, bounds.height);
         }
 
         // Draw loop in/out markers
         if self.loop_enabled {
             let loop_in_x = self.sample_to_x(self.loop_in);
             let loop_out_x = self.sample_to_x(self.loop_out);
-            let total_height = (ruler_height + track_area_height - y_off).max(bounds.height);
+            let total_height = (header_height + track_area_height - y_off).max(bounds.height);
             let loop_color = theme::LOOP_MARKER;
 
             // Dim overlay outside loop range (over track area only)
             if loop_in_x > 0.0 {
                 frame.fill_rectangle(
-                    Point::new(0.0, ruler_height),
-                    Size::new(loop_in_x.min(bounds.width), total_height - ruler_height),
+                    Point::new(0.0, header_height),
+                    Size::new(loop_in_x.min(bounds.width), total_height - header_height),
                     Color::from_rgba(0.0, 0.0, 0.0, 0.15),
                 );
             }
             if loop_out_x < bounds.width {
                 let right_start = loop_out_x.max(0.0);
                 frame.fill_rectangle(
-                    Point::new(right_start, ruler_height),
+                    Point::new(right_start, header_height),
                     Size::new(
                         (bounds.width - right_start).max(0.0),
-                        total_height - ruler_height,
+                        total_height - header_height,
                     ),
                     Color::from_rgba(0.0, 0.0, 0.0, 0.15),
                 );
@@ -778,7 +903,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         let playhead_seconds = (self.playhead as f64 / self.sample_rate as f64) as f32;
         let playhead_x = playhead_seconds * self.zoom - self.scroll_offset;
         if playhead_x >= 0.0 && playhead_x <= bounds.width {
-            let total_height = (ruler_height + track_area_height - y_off).max(bounds.height);
+            let total_height = (header_height + track_area_height - y_off).max(bounds.height);
 
             // Playhead triangle at top
             let triangle = canvas::Path::new(|builder| {

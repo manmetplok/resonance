@@ -3,8 +3,10 @@
 use iced::Task;
 
 use crate::message::Message;
+use crate::state;
 use crate::theme;
 use crate::Resonance;
+use resonance_audio::types::AudioCommand;
 
 /// Handle the per-frame subscription tick.
 pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
@@ -14,6 +16,7 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
         tasks.push(task);
     }
     update_vu_meters(r);
+    sync_tempo_at_playhead(r);
     auto_follow_playhead(r);
     if tasks.is_empty() {
         Task::none()
@@ -55,6 +58,33 @@ fn update_vu_meters(r: &mut Resonance) {
     }
     r.master_level_l = (r.master_level_l * theme::PEAK_DECAY).max(master_peak_l);
     r.master_level_r = (r.master_level_r * theme::PEAK_DECAY).max(master_peak_r);
+}
+
+/// During playback, detect when the playhead crosses a tempo or time
+/// signature change point and send the updated values to the engine.
+fn sync_tempo_at_playhead(r: &mut Resonance) {
+    if !r.transport.playing || r.tempo_events.len() <= 1 && r.signature_events.len() <= 1 {
+        return;
+    }
+    let (bpm, num, den) = state::tempo_at_sample(
+        r.transport.playhead,
+        &r.tempo_events,
+        &r.signature_events,
+        r.sample_rate,
+    );
+    if (bpm - r.transport.bpm).abs() > 0.01 {
+        r.transport.bpm = bpm;
+        r.transport.bpm_input = format!("{:.0}", bpm);
+        r.engine.send(AudioCommand::SetBpm { bpm });
+    }
+    if num != r.transport.time_sig_num || den != r.transport.time_sig_den {
+        r.transport.time_sig_num = num;
+        r.transport.time_sig_den = den;
+        r.engine.send(AudioCommand::SetTimeSignature {
+            numerator: num,
+            denominator: den,
+        });
+    }
 }
 
 fn auto_follow_playhead(r: &mut Resonance) {

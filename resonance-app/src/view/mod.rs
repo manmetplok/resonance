@@ -195,6 +195,10 @@ impl crate::Resonance {
             midi_clips: &self.midi_clips,
             selected_midi_clip: self.interaction.selected_midi_clip,
             selected_track: self.interaction.selected_track,
+            global_tracks_expanded: self.viewport.global_tracks_expanded,
+            tempo_events: &self.tempo_events,
+            signature_events: &self.signature_events,
+            selected_global_event: self.interaction.selected_global_event,
         };
 
         let canvas_el = canvas(timeline_data)

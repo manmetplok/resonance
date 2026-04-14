@@ -46,6 +46,11 @@ pub(crate) struct Resonance {
     /// Compose tab state: section definitions, placements, chord progressions.
     pub(crate) compose: compose::ComposeState,
 
+    /// Tempo change events on the tempo track (sorted by bar number).
+    pub(crate) tempo_events: Vec<state::TempoEvent>,
+    /// Time signature change events on the signature track (sorted by bar).
+    pub(crate) signature_events: Vec<state::SignatureEvent>,
+
     // Sub-state groupings. See `state.rs` for definitions.
     pub(crate) transport: TransportState,
     pub(crate) viewport: ArrangeViewport,
@@ -196,6 +201,9 @@ impl Resonance {
             clips: Vec::new(),
             midi_clips: Vec::new(),
             compose: compose::ComposeState::default(),
+
+            tempo_events: vec![state::TempoEvent { bar: 0, bpm: 120.0 }],
+            signature_events: vec![state::SignatureEvent { bar: 0, numerator: 4, denominator: 4 }],
 
             transport: TransportState::default(),
             viewport: ArrangeViewport::default(),

@@ -2,6 +2,123 @@
 use resonance_audio::types::*;
 use serde::{Deserialize, Serialize};
 
+// ---------------------------------------------------------------------------
+// Global track events (tempo & time signature changes)
+// ---------------------------------------------------------------------------
+
+/// A tempo change on the tempo track. Bar 0 is always present as the
+/// initial project tempo; additional events mark tempo changes at later bars.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TempoEvent {
+    /// 0-based bar number where this tempo takes effect.
+    pub bar: u32,
+    pub bpm: f32,
+}
+
+/// A time signature change on the signature track. Bar 0 is always present.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignatureEvent {
+    /// 0-based bar number where this signature takes effect.
+    pub bar: u32,
+    pub numerator: u8,
+    pub denominator: u8,
+}
+
+/// Compute the sample position of the start of a given bar number,
+/// considering all tempo and signature changes. Both event lists must be
+/// sorted by bar number and have an entry at bar 0.
+pub fn bar_to_sample(
+    bar: u32,
+    tempo_events: &[TempoEvent],
+    signature_events: &[SignatureEvent],
+    sample_rate: u32,
+) -> u64 {
+    let mut sample_pos: f64 = 0.0;
+    let mut current_bpm = tempo_events.first().map(|e| e.bpm).unwrap_or(120.0);
+    let mut current_num = signature_events.first().map(|e| e.numerator).unwrap_or(4);
+    let mut current_bar: u32 = 0;
+
+    // Indices into the event lists, skipping the initial bar-0 entries.
+    let mut ti = if tempo_events.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
+    let mut si = if signature_events.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
+
+    while current_bar < bar {
+        // Find the next change point (tempo or signature).
+        let next_bar = [
+            tempo_events.get(ti).map(|e| e.bar),
+            signature_events.get(si).map(|e| e.bar),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+
+        let advance_to = match next_bar {
+            Some(b) if b <= bar => b,
+            _ => bar,
+        };
+
+        let bars_elapsed = advance_to - current_bar;
+        let samples_per_beat = sample_rate as f64 * 60.0 / current_bpm as f64;
+        let samples_per_bar = samples_per_beat * current_num as f64;
+        sample_pos += bars_elapsed as f64 * samples_per_bar;
+        current_bar = advance_to;
+
+        // Apply events at this bar.
+        if let Some(e) = tempo_events.get(ti) {
+            if e.bar == current_bar {
+                current_bpm = e.bpm;
+                ti += 1;
+            }
+        }
+        if let Some(e) = signature_events.get(si) {
+            if e.bar == current_bar {
+                current_num = e.numerator;
+                si += 1;
+            }
+        }
+    }
+
+    sample_pos.round() as u64
+}
+
+/// Find the tempo and time signature active at a given sample position.
+pub fn tempo_at_sample(
+    sample_pos: u64,
+    tempo_events: &[TempoEvent],
+    signature_events: &[SignatureEvent],
+    sample_rate: u32,
+) -> (f32, u8, u8) {
+    let bpm = tempo_events.first().map(|e| e.bpm).unwrap_or(120.0);
+    let num = signature_events.first().map(|e| e.numerator).unwrap_or(4);
+    let den = signature_events.first().map(|e| e.denominator).unwrap_or(4);
+
+    let mut active_bpm = bpm;
+    let mut active_num = num;
+    let mut active_den = den;
+
+    // Check each tempo event's sample position.
+    for e in tempo_events {
+        let event_sample = bar_to_sample(e.bar, tempo_events, signature_events, sample_rate);
+        if event_sample <= sample_pos {
+            active_bpm = e.bpm;
+        } else {
+            break;
+        }
+    }
+
+    for e in signature_events {
+        let event_sample = bar_to_sample(e.bar, tempo_events, signature_events, sample_rate);
+        if event_sample <= sample_pos {
+            active_num = e.numerator;
+            active_den = e.denominator;
+        } else {
+            break;
+        }
+    }
+
+    (active_bpm, active_num, active_den)
+}
+
 /// Sub-type of an instrument track, surfaced in the Compose tab. Only used
 /// for display and icon defaulting — the audio engine itself treats all
 /// instrument tracks identically.
@@ -507,6 +624,8 @@ pub struct ArrangeViewport {
     pub viewport_width: f32,
     pub timeline_content_width: f32,
     pub timeline_content_height: f32,
+    /// Whether the global tracks area (tempo, time signature) is expanded.
+    pub global_tracks_expanded: bool,
 }
 
 impl Default for ArrangeViewport {
@@ -518,8 +637,24 @@ impl Default for ArrangeViewport {
             viewport_width: 1000.0,
             timeline_content_width: 1000.0,
             timeline_content_height: 0.0,
+            global_tracks_expanded: true,
         }
     }
+}
+
+/// Which global track lane an event belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlobalTrackKind {
+    Tempo,
+    Signature,
+}
+
+/// A selected event on a global track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectedGlobalEvent {
+    pub kind: GlobalTrackKind,
+    /// Index into the corresponding events vec.
+    pub index: usize,
 }
 
 /// Transient clip interaction state: current selection, active drag/trim,
@@ -535,6 +670,8 @@ pub struct ClipInteractionState {
     pub midi_clip_drag: Option<MidiClipDragState>,
     pub midi_clip_trim: Option<MidiClipTrimState>,
     pub editing_midi_clip: Option<MidiEditorState>,
+    /// Currently selected event on a global track (tempo or signature).
+    pub selected_global_event: Option<SelectedGlobalEvent>,
 }
 
 /// Project save/load and offline-bounce progress state.

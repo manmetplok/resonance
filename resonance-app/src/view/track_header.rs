@@ -13,23 +13,83 @@ use crate::view::controls::{
 };
 use crate::Resonance;
 
+/// Font Awesome caret-down / caret-right for collapse toggle.
+const CARET_DOWN: char = '\u{f0d7}';
+const CARET_RIGHT: char = '\u{f0da}';
+
 pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
     let mut headers = column![].spacing(0);
 
-    // Ruler header with "+" button to add a track
+    // Ruler header with "+" button and global tracks toggle
+    let expanded = r.viewport.global_tracks_expanded;
+    let caret = if expanded { CARET_DOWN } else { CARET_RIGHT };
+    let toggle_btn = button(
+        theme::icon(caret).size(10).color(theme::TEXT_DIM),
+    )
+    .on_press(Message::Ui(UiMessage::ToggleGlobalTracks))
+    .style(|_theme, status| theme::small_button_style(status))
+    .padding([0, 4]);
+
     let add_btn = button(text("+").size(16).color(theme::TEXT))
         .on_press(Message::Ui(UiMessage::OpenAddTrackMenu))
         .style(|_theme, status| theme::small_button_style(status))
         .padding([0, 6]);
-    let add_row = row![Space::with_width(6), add_btn]
-        .align_y(alignment::Vertical::Center)
-        .height(theme::RULER_HEIGHT);
+    let add_row = row![
+        Space::with_width(4),
+        toggle_btn,
+        Space::with_width(2),
+        add_btn,
+    ]
+    .align_y(alignment::Vertical::Center)
+    .height(theme::RULER_HEIGHT);
     headers = headers.push(
         container(add_row)
             .width(Length::Fill)
             .height(theme::RULER_HEIGHT)
             .style(theme::panel_dark_bg),
     );
+
+    // Global tracks area (tempo + time signature) — visible when expanded
+    if expanded {
+        let row_h = theme::GLOBAL_TRACK_ROW_HEIGHT;
+        let gt_style = |_theme: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(theme::GLOBAL_TRACK_BG)),
+            border: iced::Border {
+                color: theme::SEPARATOR,
+                width: 0.0,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        };
+
+        // Tempo row
+        let tempo_row = container(
+            row![
+                Space::with_width(8),
+                text("Tempo").size(11).color(theme::TEXT_DIM),
+            ]
+            .align_y(alignment::Vertical::Center)
+            .height(row_h),
+        )
+        .width(Length::Fill)
+        .height(row_h)
+        .style(gt_style);
+        headers = headers.push(tempo_row);
+
+        // Time Signature row
+        let sig_row = container(
+            row![
+                Space::with_width(8),
+                text("Time Sig").size(11).color(theme::TEXT_DIM),
+            ]
+            .align_y(alignment::Vertical::Center)
+            .height(row_h),
+        )
+        .width(Length::Fill)
+        .height(row_h)
+        .style(gt_style);
+        headers = headers.push(sig_row);
+    }
 
     let sorted_tracks: Vec<&TrackState> = r
         .sorted_tracks()

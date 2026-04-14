@@ -6,11 +6,11 @@
     - I want to create presets for track (bas guitar, rhythm guitar, solo, etc) we should have user presets, and a number of default presets.
 
 ##Arrange tab
-    -We need a place for global tracks like tempo track, and signature changes, my idea would an collapsable area between the normal tracks and the time indication
-    -Implement tempo track and signature track
+    - [x] We need a place for global tracks like tempo track, and signature changes, my idea would an collapsable area between the normal tracks and the time indication
+    - [x] Implement tempo track and signature track
     - [x] Selecting a track should highlight it
     - [x] Move the delete track button to the top right position. Its different from the rest of the buttons
-    -The solo functionality does not seem to work.
+    - [x] The solo functionality does not seem to work.
 
 ##Mix tab
     -We need a new solution for subtracks. My suggestion would be to make the collapsed view the default. But then make it a bit wider (maybe two slots, and show db meters of all subtracks. When expendanded the user can modify gain etc.
@@ -21,7 +21,7 @@
     
 
 ##Plugins general
-    - We need better control, maybe knobs are better then slider.
+    - We need better controls, the current control boxes run out of screen, maybe knobs are better then slider. Also the visuals (scopes etc) can be smaller, and maybe stacked. Lets come up with a coherent design for each plugin and inplement it.
 
 ##Delay plugin
     - [x] Feedback range is to large afaik

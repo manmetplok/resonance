@@ -6,11 +6,166 @@ use iced::widget::canvas;
 use iced::{Color, Point, Size};
 use resonance_audio::types::TICKS_PER_QUARTER_NOTE;
 
-use crate::state::{ClipState, MidiClipState, TrackState};
+use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
 use crate::timeline::TimelineCanvas;
 
 impl TimelineCanvas<'_> {
+    /// Draw the global tracks area (tempo + time signature) between the
+    /// ruler and the regular track lanes. Shows event markers at their
+    /// bar positions with BPM / time-sig labels.
+    pub(super) fn draw_global_tracks(
+        &self,
+        frame: &mut canvas::Frame,
+        width: f32,
+        ruler_height: f32,
+    ) {
+        if !self.global_tracks_expanded {
+            return;
+        }
+        let row_h = theme::GLOBAL_TRACK_ROW_HEIGHT;
+
+        // ---- Tempo row background ----
+        let tempo_y = ruler_height;
+        frame.fill_rectangle(
+            Point::new(0.0, tempo_y),
+            Size::new(width, row_h),
+            theme::GLOBAL_TRACK_BG,
+        );
+        // Separator
+        frame.fill_rectangle(
+            Point::new(0.0, tempo_y + row_h - 1.0),
+            Size::new(width, 1.0),
+            theme::SEPARATOR,
+        );
+
+        // ---- Time signature row background ----
+        let sig_y = ruler_height + row_h;
+        frame.fill_rectangle(
+            Point::new(0.0, sig_y),
+            Size::new(width, row_h),
+            theme::GLOBAL_TRACK_BG,
+        );
+        // Bottom separator
+        frame.fill_rectangle(
+            Point::new(0.0, sig_y + row_h - 1.0),
+            Size::new(width, 1.0),
+            theme::SEPARATOR,
+        );
+
+        // ---- Draw tempo event markers ----
+        for (i, event) in self.tempo_events.iter().enumerate() {
+            let sample = state::bar_to_sample(
+                event.bar, self.tempo_events, self.signature_events, self.sample_rate,
+            );
+            let x = self.sample_to_x(sample);
+            if x > width + 50.0 || x < -50.0 {
+                continue;
+            }
+            // Find the next event to determine the block width.
+            let next_x = self.tempo_events.get(i + 1).map(|ne| {
+                let ns = state::bar_to_sample(
+                    ne.bar, self.tempo_events, self.signature_events, self.sample_rate,
+                );
+                self.sample_to_x(ns)
+            }).unwrap_or(width);
+            let block_w = (next_x - x).max(2.0).min(width - x.max(0.0));
+
+            let is_selected = self.selected_global_event == Some(state::SelectedGlobalEvent {
+                kind: state::GlobalTrackKind::Tempo,
+                index: i,
+            });
+
+            // Block fill
+            let block_color = if is_selected {
+                Color::from_rgba(0.9, 0.55, 0.15, 0.25)
+            } else {
+                Color::from_rgba(0.9, 0.55, 0.15, 0.12)
+            };
+            frame.fill_rectangle(
+                Point::new(x.max(0.0), tempo_y + 1.0),
+                Size::new(block_w, row_h - 2.0),
+                block_color,
+            );
+
+            // Vertical marker line
+            if x >= 0.0 {
+                let marker_color = if is_selected { theme::ACCENT } else { theme::TEXT_DIM };
+                frame.fill_rectangle(
+                    Point::new(x, tempo_y),
+                    Size::new(1.0, row_h),
+                    marker_color,
+                );
+            }
+
+            // BPM label
+            let label_x = x.max(2.0) + 3.0;
+            if label_x < width - 10.0 {
+                frame.fill_text(canvas::Text {
+                    content: format!("{:.0}", event.bpm),
+                    position: Point::new(label_x, tempo_y + 5.0),
+                    color: if is_selected { theme::ACCENT } else { theme::TEXT_DIM },
+                    size: 10.0.into(),
+                    ..canvas::Text::default()
+                });
+            }
+        }
+
+        // ---- Draw signature event markers ----
+        for (i, event) in self.signature_events.iter().enumerate() {
+            let sample = state::bar_to_sample(
+                event.bar, self.tempo_events, self.signature_events, self.sample_rate,
+            );
+            let x = self.sample_to_x(sample);
+            if x > width + 50.0 || x < -50.0 {
+                continue;
+            }
+            let next_x = self.signature_events.get(i + 1).map(|ne| {
+                let ns = state::bar_to_sample(
+                    ne.bar, self.tempo_events, self.signature_events, self.sample_rate,
+                );
+                self.sample_to_x(ns)
+            }).unwrap_or(width);
+            let block_w = (next_x - x).max(2.0).min(width - x.max(0.0));
+
+            let is_selected = self.selected_global_event == Some(state::SelectedGlobalEvent {
+                kind: state::GlobalTrackKind::Signature,
+                index: i,
+            });
+
+            let block_color = if is_selected {
+                Color::from_rgba(0.3, 0.6, 0.9, 0.25)
+            } else {
+                Color::from_rgba(0.3, 0.6, 0.9, 0.12)
+            };
+            frame.fill_rectangle(
+                Point::new(x.max(0.0), sig_y + 1.0),
+                Size::new(block_w, row_h - 2.0),
+                block_color,
+            );
+
+            if x >= 0.0 {
+                let marker_color = if is_selected { theme::ACCENT } else { theme::TEXT_DIM };
+                frame.fill_rectangle(
+                    Point::new(x, sig_y),
+                    Size::new(1.0, row_h),
+                    marker_color,
+                );
+            }
+
+            let label_x = x.max(2.0) + 3.0;
+            if label_x < width - 10.0 {
+                frame.fill_text(canvas::Text {
+                    content: format!("{}/{}", event.numerator, event.denominator),
+                    position: Point::new(label_x, sig_y + 5.0),
+                    color: if is_selected { theme::ACCENT } else { theme::TEXT_DIM },
+                    size: 10.0.into(),
+                    ..canvas::Text::default()
+                });
+            }
+        }
+    }
+
     /// Draw vertical bar and beat grid lines in the track area.
     pub(super) fn draw_grid_lines(
         &self,
