@@ -4,7 +4,6 @@
 use iced::widget::text::LineHeight;
 use iced::widget::{button, column, container, mouse_area, row, text, text_input, Space};
 use iced::{alignment, Element, Font, Length};
-use resonance_audio::types::TempoMap;
 
 use crate::message::*;
 use crate::state::ViewMode;
@@ -12,14 +11,23 @@ use crate::theme::{self, fa};
 use crate::Resonance;
 
 pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
-    let tempo = TempoMap {
-        bpm: r.transport.bpm,
-        numerator: r.transport.time_sig_num,
-        denominator: r.transport.time_sig_den,
-        metronome_enabled: r.transport.metronome_enabled,
-    };
-    let bar_beat_str = tempo.format_position(r.transport.playhead, r.sample_rate);
-    let time_str = tempo.format_time(r.transport.playhead, r.sample_rate);
+    // Use the GUI-side tempo map for correct bar/beat display with tempo changes.
+    let (bar_0, frac) = crate::state::sample_to_bar(
+        r.transport.playhead,
+        &r.tempo_events,
+        &r.signature_events,
+        r.sample_rate,
+    );
+    let num_beats = r.transport.time_sig_num as f64;
+    let beat_frac = frac * num_beats;
+    let beat = beat_frac.floor() as u32 + 1;
+    let bar = bar_0 + 1; // 1-based
+    let bar_beat_str = format!("{}.{}", bar, beat);
+
+    let total_secs = r.transport.playhead as f64 / r.sample_rate as f64;
+    let minutes = (total_secs / 60.0).floor() as u32;
+    let seconds = total_secs - (minutes as f64 * 60.0);
+    let time_str = format!("{:02}:{:06.3}", minutes, seconds);
 
     // ---- Transport buttons (uniform size/padding/style) -----------------
     const TRANSPORT_ICON_SIZE: u16 = 16;

@@ -24,99 +24,225 @@ pub struct SignatureEvent {
     pub denominator: u8,
 }
 
+/// Return the interpolated BPM at a fractional bar position.
+/// Between events at different bars the BPM ramps linearly.
+/// When multiple events share the same bar (step change) the last
+/// value at that bar wins.
+pub fn bpm_at_bar(bar: f64, tempo_events: &[TempoEvent]) -> f64 {
+    if tempo_events.is_empty() {
+        return 120.0;
+    }
+    let mut prev_bpm = tempo_events[0].bpm as f64;
+    let mut prev_bar = tempo_events[0].bar as f64;
+    let mut next: Option<&TempoEvent> = None;
+
+    for e in tempo_events {
+        if (e.bar as f64) <= bar {
+            prev_bpm = e.bpm as f64;
+            prev_bar = e.bar as f64;
+        } else {
+            next = Some(e);
+            break;
+        }
+    }
+
+    // Interpolate if we're between two events at different bars.
+    if let Some(ne) = next {
+        if prev_bar < bar {
+            let t = (bar - prev_bar) / (ne.bar as f64 - prev_bar);
+            return prev_bpm + (ne.bpm as f64 - prev_bpm) * t;
+        }
+    }
+
+    prev_bpm
+}
+
+/// Return the arrival BPM at a bar — the ramp target approaching from
+/// the left. For step changes (multiple events at one bar), returns
+/// the first event's value.
+pub fn arrival_bpm_at_bar_gui(bar: u32, tempo_events: &[TempoEvent]) -> f64 {
+    if tempo_events.is_empty() {
+        return 120.0;
+    }
+    for e in tempo_events {
+        if e.bar == bar {
+            return e.bpm as f64;
+        }
+        if e.bar > bar {
+            break;
+        }
+    }
+    bpm_at_bar(bar as f64, tempo_events)
+}
+
+/// Compute the average BPM across a bar for smooth sample accumulation.
+/// Uses departure at bar start, arrival at bar end.
+pub fn avg_bpm_for_bar(bar: u32, tempo_events: &[TempoEvent]) -> f64 {
+    let bpm_start = bpm_at_bar(bar as f64, tempo_events);
+    let bpm_end = arrival_bpm_at_bar_gui(bar + 1, tempo_events);
+    (bpm_start + bpm_end) / 2.0
+}
+
 /// Compute the sample position of the start of a given bar number,
-/// considering all tempo and signature changes. Both event lists must be
-/// sorted by bar number and have an entry at bar 0.
+/// considering all tempo and signature changes with smooth linear BPM
+/// interpolation between events.
 pub fn bar_to_sample(
     bar: u32,
     tempo_events: &[TempoEvent],
     signature_events: &[SignatureEvent],
     sample_rate: u32,
 ) -> u64 {
+    let sr = sample_rate as f64;
     let mut sample_pos: f64 = 0.0;
-    let mut current_bpm = tempo_events.first().map(|e| e.bpm).unwrap_or(120.0);
-    let mut current_num = signature_events.first().map(|e| e.numerator).unwrap_or(4);
-    let mut current_bar: u32 = 0;
+    let mut cur_num = signature_events.first().map(|e| e.numerator).unwrap_or(4);
+    let mut si: usize = if signature_events.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
 
-    // Indices into the event lists, skipping the initial bar-0 entries.
-    let mut ti = if tempo_events.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
-    let mut si = if signature_events.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
-
-    while current_bar < bar {
-        // Find the next change point (tempo or signature).
-        let next_bar = [
-            tempo_events.get(ti).map(|e| e.bar),
-            signature_events.get(si).map(|e| e.bar),
-        ]
-        .into_iter()
-        .flatten()
-        .min();
-
-        let advance_to = match next_bar {
-            Some(b) if b <= bar => b,
-            _ => bar,
-        };
-
-        let bars_elapsed = advance_to - current_bar;
-        let samples_per_beat = sample_rate as f64 * 60.0 / current_bpm as f64;
-        let samples_per_bar = samples_per_beat * current_num as f64;
-        sample_pos += bars_elapsed as f64 * samples_per_bar;
-        current_bar = advance_to;
-
-        // Apply events at this bar.
-        if let Some(e) = tempo_events.get(ti) {
-            if e.bar == current_bar {
-                current_bpm = e.bpm;
-                ti += 1;
-            }
+    for b in 0..bar {
+        while let Some(e) = signature_events.get(si) {
+            if e.bar == b { cur_num = e.numerator; si += 1; } else { break; }
         }
-        if let Some(e) = signature_events.get(si) {
-            if e.bar == current_bar {
-                current_num = e.numerator;
-                si += 1;
-            }
-        }
+        let bpm = avg_bpm_for_bar(b, tempo_events);
+        let samples_per_beat = sr * 60.0 / bpm;
+        sample_pos += samples_per_beat * cur_num as f64;
     }
 
     sample_pos.round() as u64
 }
 
-/// Find the tempo and time signature active at a given sample position.
+/// Find the tempo and time signature active at a given sample position,
+/// with smooth linear BPM interpolation between tempo events.
 pub fn tempo_at_sample(
     sample_pos: u64,
     tempo_events: &[TempoEvent],
     signature_events: &[SignatureEvent],
     sample_rate: u32,
 ) -> (f32, u8, u8) {
-    let bpm = tempo_events.first().map(|e| e.bpm).unwrap_or(120.0);
-    let num = signature_events.first().map(|e| e.numerator).unwrap_or(4);
-    let den = signature_events.first().map(|e| e.denominator).unwrap_or(4);
+    let sr = sample_rate as f64;
+    let mut acc: f64 = 0.0;
+    let mut cur_num = signature_events.first().map(|e| e.numerator).unwrap_or(4);
+    let mut cur_den = signature_events.first().map(|e| e.denominator).unwrap_or(4);
+    let mut si: usize = if signature_events.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
 
-    let mut active_bpm = bpm;
-    let mut active_num = num;
-    let mut active_den = den;
-
-    // Check each tempo event's sample position.
-    for e in tempo_events {
-        let event_sample = bar_to_sample(e.bar, tempo_events, signature_events, sample_rate);
-        if event_sample <= sample_pos {
-            active_bpm = e.bpm;
-        } else {
-            break;
+    for b in 0u32.. {
+        while let Some(e) = signature_events.get(si) {
+            if e.bar == b { cur_num = e.numerator; cur_den = e.denominator; si += 1; }
+            else { break; }
         }
+        let bpm = avg_bpm_for_bar(b, tempo_events);
+        let samples_per_beat = sr * 60.0 / bpm;
+        let samples_per_bar = samples_per_beat * cur_num as f64;
+
+        if acc + samples_per_bar > sample_pos as f64 {
+            // Compute the exact fractional bar position and return
+            // the continuously interpolated BPM at that point.
+            let frac = (sample_pos as f64 - acc) / samples_per_bar;
+            let exact_bpm = bpm_at_bar(b as f64 + frac, tempo_events);
+            return (exact_bpm as f32, cur_num, cur_den);
+        }
+        acc += samples_per_bar;
+        if b > 20_000 { break; }
     }
 
-    for e in signature_events {
-        let event_sample = bar_to_sample(e.bar, tempo_events, signature_events, sample_rate);
-        if event_sample <= sample_pos {
-            active_num = e.numerator;
-            active_den = e.denominator;
-        } else {
-            break;
+    let bpm = tempo_events.last().map(|e| e.bpm).unwrap_or(120.0);
+    (bpm, cur_num, cur_den)
+}
+
+/// Convert a sample position to a (bar, fraction) pair where fraction
+/// is 0.0..1.0 within the bar. Used for pixel→bar mapping during drag.
+pub fn sample_to_bar(
+    sample_pos: u64,
+    tempo_events: &[TempoEvent],
+    signature_events: &[SignatureEvent],
+    sample_rate: u32,
+) -> (u32, f64) {
+    let sr = sample_rate as f64;
+    let mut acc: f64 = 0.0;
+    let mut cur_num = signature_events.first().map(|e| e.numerator).unwrap_or(4);
+    let mut si: usize = if signature_events.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
+
+    for b in 0u32.. {
+        while let Some(e) = signature_events.get(si) {
+            if e.bar == b { cur_num = e.numerator; si += 1; } else { break; }
         }
+        let bpm = avg_bpm_for_bar(b, tempo_events);
+        let samples_per_beat = sr * 60.0 / bpm;
+        let samples_per_bar = samples_per_beat * cur_num as f64;
+
+        if acc + samples_per_bar > sample_pos as f64 {
+            let frac = (sample_pos as f64 - acc) / samples_per_bar;
+            return (b, frac);
+        }
+        acc += samples_per_bar;
+        if b > 20_000 { break; }
     }
 
-    (active_bpm, active_num, active_den)
+    (0, 0.0)
+}
+
+/// Convert a tick offset from a clip's start sample to an absolute sample,
+/// integrating tempo changes. GUI-side equivalent of `TempoMap::tick_to_abs_sample`.
+pub fn tick_to_abs_sample(
+    clip_start: u64,
+    tick_offset: u64,
+    tempo_events: &[TempoEvent],
+    signature_events: &[SignatureEvent],
+    sample_rate: u32,
+) -> u64 {
+    if tick_offset == 0 {
+        return clip_start;
+    }
+    let sr = sample_rate as f64;
+    let ppq = TICKS_PER_QUARTER_NOTE as f64;
+
+    if tempo_events.len() <= 1 {
+        let bpm = tempo_events.first().map(|e| e.bpm as f64).unwrap_or(120.0);
+        let spt = (sr * 60.0 / bpm) / ppq;
+        return clip_start + (tick_offset as f64 * spt) as u64;
+    }
+
+    let mut sample_pos: f64 = 0.0;
+    let mut tick_pos: f64 = 0.0;
+    let mut cur_num = signature_events.first().map(|e| e.numerator).unwrap_or(4);
+    let mut si: usize = if signature_events.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
+    let mut clip_tick: f64 = 0.0;
+    let mut found_start = false;
+
+    for b in 0u32..20_001 {
+        while let Some(e) = signature_events.get(si) {
+            if e.bar == b { cur_num = e.numerator; si += 1; } else { break; }
+        }
+        let ticks_in_bar = cur_num as f64 * ppq;
+        let bpm_s = bpm_at_bar(b as f64, tempo_events);
+        let bpm_e = arrival_bpm_at_bar_gui(b + 1, tempo_events);
+        let avg = (bpm_s + bpm_e) / 2.0;
+        let bar_samples = sr * 60.0 / avg * cur_num as f64;
+
+        if !found_start && (clip_start as f64) < sample_pos + bar_samples {
+            let sf = if bar_samples > 0.0 {
+                (clip_start as f64 - sample_pos) / bar_samples
+            } else { 0.0 };
+            clip_tick = tick_pos + sample_frac_to_tick_frac(sf, bpm_s, bpm_e) * ticks_in_bar;
+            found_start = true;
+        }
+
+        if found_start {
+            let target = clip_tick + tick_offset as f64;
+            if target < tick_pos + ticks_in_bar {
+                let tf = (target - tick_pos) / ticks_in_bar;
+                let sf = tick_frac_to_sample_frac(tf, bpm_s, bpm_e);
+                return (sample_pos + sf * bar_samples) as u64;
+            }
+        }
+
+        sample_pos += bar_samples;
+        tick_pos += ticks_in_bar;
+    }
+
+    // Fallback
+    let bpm = tempo_events.last().map(|e| e.bpm as f64).unwrap_or(120.0);
+    let spt = (sr * 60.0 / bpm) / ppq;
+    if !found_start { clip_tick = tick_pos; }
+    (sample_pos + (clip_tick + tick_offset as f64 - tick_pos) * spt) as u64
 }
 
 /// Sub-type of an instrument track, surfaced in the Compose tab. Only used

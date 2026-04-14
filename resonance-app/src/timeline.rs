@@ -8,7 +8,7 @@ use crate::theme;
 use crate::state::{self, ClipEdge, ClipState, LoopDragTarget, MidiClipState, TrackState};
 use crate::message::*;
 
-use resonance_audio::types::{ClipId, TrackId, TICKS_PER_QUARTER_NOTE};
+use resonance_audio::types::{ClipId, TrackId};
 
 pub mod hit_test;
 pub mod scrollbar;
@@ -19,11 +19,9 @@ use scrollbar::{ScrollbarRects, scroll_from_thumb_pos};
 /// Maximum interval between two clicks to count as a double-click.
 const DOUBLE_CLICK_MS: u128 = 400;
 
-/// Snap a sample position to the nearest grid line at the current zoom,
-/// matching the bar/beat grid drawn in the timeline. At high zoom
-/// (bar wider than 40 px) this snaps to beats; lower zoom drops to
-/// bars, and at very low zoom it follows the same `bar_step` stride
-/// used by `draw_grid_lines`.
+/// Snap a sample position to the nearest bar or beat boundary,
+/// accounting for the tempo map. At high zoom (bar wider than 40 px)
+/// snaps to beats; lower zoom snaps to bars.
 pub fn snap_sample_to_grid(
     sample: u64,
     bpm: f32,
@@ -31,23 +29,76 @@ pub fn snap_sample_to_grid(
     sample_rate: u32,
     zoom: f32,
 ) -> u64 {
+    snap_sample_to_grid_tempo(sample, bpm, time_sig_num, sample_rate, zoom, &[], &[])
+}
+
+/// Tempo-map-aware version of `snap_sample_to_grid`. When tempo/signature
+/// events are provided, bar boundaries are computed correctly across
+/// tempo changes.
+pub fn snap_sample_to_grid_tempo(
+    sample: u64,
+    bpm: f32,
+    time_sig_num: u8,
+    sample_rate: u32,
+    zoom: f32,
+    tempo_events: &[crate::state::TempoEvent],
+    signature_events: &[crate::state::SignatureEvent],
+) -> u64 {
     if bpm <= 0.0 || time_sig_num == 0 || zoom <= 0.0 {
         return sample;
     }
-    let samples_per_beat = sample_rate as f64 * 60.0 / bpm as f64;
-    let samples_per_bar = samples_per_beat * time_sig_num as f64;
-    let bar_pixel_width = (samples_per_bar / sample_rate as f64) as f32 * zoom;
-    let step = if bar_pixel_width >= 40.0 {
-        samples_per_beat
-    } else if bar_pixel_width >= 20.0 {
-        samples_per_bar
-    } else {
-        samples_per_bar * (20.0 / bar_pixel_width).ceil() as f64
-    };
-    if step <= 0.0 {
-        return sample;
+    // When there's no meaningful tempo map, use the flat-BPM path.
+    if tempo_events.len() <= 1 {
+        let samples_per_beat = sample_rate as f64 * 60.0 / bpm as f64;
+        let samples_per_bar = samples_per_beat * time_sig_num as f64;
+        let bar_pixel_width = (samples_per_bar / sample_rate as f64) as f32 * zoom;
+        let step = if bar_pixel_width >= 40.0 {
+            samples_per_beat
+        } else if bar_pixel_width >= 20.0 {
+            samples_per_bar
+        } else {
+            samples_per_bar * (20.0 / bar_pixel_width).ceil() as f64
+        };
+        if step <= 0.0 {
+            return sample;
+        }
+        return ((sample as f64 / step).round() * step).round() as u64;
     }
-    ((sample as f64 / step).round() * step).round() as u64
+
+    // Tempo map is active: find which bar we're in and snap to the
+    // nearest bar or beat boundary.
+    let (bar, frac) = state::sample_to_bar(sample, tempo_events, signature_events, sample_rate);
+
+    // Determine snap resolution from the local bar pixel width.
+    let local_bpm = state::bpm_at_bar(bar as f64, tempo_events);
+    let cur_num = signature_events.iter().rev()
+        .find(|e| e.bar <= bar).map(|e| e.numerator).unwrap_or(time_sig_num);
+    let spb = sample_rate as f64 * 60.0 / local_bpm;
+    let bar_samples = spb * cur_num as f64;
+    let bar_px = (bar_samples / sample_rate as f64) as f32 * zoom;
+
+    let snap_to_beats = bar_px >= 40.0;
+
+    if snap_to_beats {
+        // Snap to the nearest beat within the bar.
+        let beat_frac = frac * cur_num as f64;
+        let nearest_beat = beat_frac.round() as u32;
+        if nearest_beat >= cur_num as u32 {
+            // Snaps to start of next bar
+            state::bar_to_sample(bar + 1, tempo_events, signature_events, sample_rate)
+        } else {
+            // Snaps to beat within this bar
+            let bar_start = state::bar_to_sample(bar, tempo_events, signature_events, sample_rate);
+            let bar_end = state::bar_to_sample(bar + 1, tempo_events, signature_events, sample_rate);
+            let total = (bar_end - bar_start) as f64;
+            let beat_frac_pos = nearest_beat as f64 / cur_num as f64;
+            bar_start + (beat_frac_pos * total) as u64
+        }
+    } else {
+        // Snap to the nearest bar.
+        let nearest_bar = if frac >= 0.5 { bar + 1 } else { bar };
+        state::bar_to_sample(nearest_bar, tempo_events, signature_events, sample_rate)
+    }
 }
 
 /// Data passed to the timeline canvas for rendering.
@@ -78,16 +129,6 @@ pub struct TimelineCanvas<'a> {
 }
 
 impl TimelineCanvas<'_> {
-    /// Seconds per beat at current BPM.
-    pub(crate) fn seconds_per_beat(&self) -> f32 {
-        60.0 / self.bpm
-    }
-
-    /// Seconds per bar.
-    pub(crate) fn seconds_per_bar(&self) -> f32 {
-        self.seconds_per_beat() * self.time_sig_num as f32
-    }
-
     /// Height of the global tracks area (tempo + time signature rows).
     /// Returns 0.0 when collapsed.
     pub(crate) fn global_tracks_height(&self) -> f32 {
@@ -120,11 +161,11 @@ impl TimelineCanvas<'_> {
                 max_sample = end;
             }
         }
-        let samples_per_tick =
-            (self.sample_rate as f64 * 60.0 / self.bpm as f64) / TICKS_PER_QUARTER_NOTE as f64;
         for c in self.midi_clips {
-            let dur = (c.duration_ticks as f64 * samples_per_tick) as u64;
-            let end = c.start_sample + dur;
+            let end = state::tick_to_abs_sample(
+                c.start_sample, c.duration_ticks,
+                self.tempo_events, self.signature_events, self.sample_rate,
+            );
             if end > max_sample {
                 max_sample = end;
             }
@@ -169,6 +210,17 @@ enum ClipInteraction {
     MidiTrim { clip_id: ClipId, edge: ClipEdge },
 }
 
+/// Active drag on a tempo event point.
+#[derive(Debug)]
+struct TempoDrag {
+    /// Index into `tempo_events` at drag start.
+    index: usize,
+    /// Original BPM of the dragged event.
+    original_bpm: f32,
+    /// Mouse y at drag start.
+    anchor_y: f32,
+}
+
 /// Local state for the timeline canvas, tracking active drag operations.
 #[derive(Debug, Default)]
 pub struct TimelineState {
@@ -186,6 +238,8 @@ pub struct TimelineState {
     v_scrollbar_grab: Option<f32>,
     /// Tracks the most recent click on a global track for double-click detection.
     last_global_click: Option<(Instant, state::GlobalTrackKind)>,
+    /// Active tempo-event drag.
+    tempo_drag: Option<TempoDrag>,
 }
 
 type UpdateResult = (canvas::event::Status, Option<Message>);
@@ -367,12 +421,14 @@ impl TimelineCanvas<'_> {
         if pos.y < ruler_height {
             let seconds = ((pos.x + self.scroll_offset) / self.zoom).max(0.0);
             let sample = (seconds as f64 * self.sample_rate as f64) as u64;
-            let snapped = snap_sample_to_grid(
+            let snapped = snap_sample_to_grid_tempo(
                 sample,
                 self.bpm,
                 self.time_sig_num,
                 self.sample_rate,
                 self.zoom,
+                self.tempo_events,
+                self.signature_events,
             );
             return captured(Message::Transport(TransportMessage::SeekToSample(snapped)));
         }
@@ -386,10 +442,12 @@ impl TimelineCanvas<'_> {
         let sorted_tracks = self.visible_tracks_sorted();
 
         // Check MIDI clips (reverse order so topmost wins)
-        let samples_per_tick =
-            (self.sample_rate as f64 * 60.0 / self.bpm as f64) / TICKS_PER_QUARTER_NOTE as f64;
         for clip in self.midi_clips.iter().rev() {
-            let duration_samples = (clip.duration_ticks as f64 * samples_per_tick) as u64;
+            let clip_end = state::tick_to_abs_sample(
+                clip.start_sample, clip.duration_ticks,
+                self.tempo_events, self.signature_events, self.sample_rate,
+            );
+            let duration_samples = clip_end.saturating_sub(clip.start_sample);
             let Some(hit) = self.hit_test_lane(
                 pos,
                 &sorted_tracks,
@@ -524,6 +582,18 @@ impl TimelineCanvas<'_> {
         if state.dragging_loop {
             return captured(Message::Transport(TransportMessage::UpdateLoopDrag(pos.x)));
         }
+        // Tempo event drag: vertical = BPM (1 px = 1 BPM), horizontal = bar.
+        if let Some(drag) = &state.tempo_drag {
+            let bar = self.x_to_bar(pos.x);
+            let delta_y = drag.anchor_y - pos.y; // up = positive = increase BPM
+            let bpm = (drag.original_bpm + delta_y).clamp(20.0, 300.0);
+            let index = drag.index;
+            return captured(Message::GlobalTrack(GlobalTrackMessage::UpdateTempoEvent {
+                index,
+                bar,
+                bpm,
+            }));
+        }
         match &state.clip_interaction {
             Some(ClipInteraction::Move { .. }) => captured(Message::Clip(ClipMessage::UpdateClipDrag(pos.x, pos.y))),
             Some(ClipInteraction::Trim { .. }) => captured(Message::Clip(ClipMessage::UpdateClipTrim(pos.x))),
@@ -548,6 +618,9 @@ impl TimelineCanvas<'_> {
             state.dragging_loop = false;
             return captured(Message::Transport(TransportMessage::EndLoopDrag));
         }
+        if state.tempo_drag.take().is_some() {
+            return captured(Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag));
+        }
         if let Some(interaction) = state.clip_interaction.take() {
             return match interaction {
                 ClipInteraction::Move { .. } => captured(Message::Clip(ClipMessage::EndClipDrag)),
@@ -559,9 +632,31 @@ impl TimelineCanvas<'_> {
         (canvas::event::Status::Ignored, None)
     }
 
-    /// Handle a click in the global tracks area. Single click selects an
-    /// existing event; double-click on empty space adds a new event at
-    /// the clicked bar position.
+    /// Compute BPM range for the tempo row graph (matches draw code).
+    fn tempo_bpm_range(&self) -> (f32, f32) {
+        let mut min_bpm = f32::MAX;
+        let mut max_bpm = f32::MIN;
+        for e in self.tempo_events {
+            min_bpm = min_bpm.min(e.bpm);
+            max_bpm = max_bpm.max(e.bpm);
+        }
+        let range = (max_bpm - min_bpm).max(10.0);
+        let pad = range * 0.15;
+        (min_bpm - pad, max_bpm + pad)
+    }
+
+    /// Map a pixel x-position to a bar number using the tempo map.
+    fn x_to_bar(&self, x: f32) -> u32 {
+        let seconds = ((x + self.scroll_offset) / self.zoom).max(0.0);
+        let sample = (seconds as f64 * self.sample_rate as f64) as u64;
+        let (bar, frac) = state::sample_to_bar(
+            sample, self.tempo_events, self.signature_events, self.sample_rate,
+        );
+        if frac >= 0.5 { bar + 1 } else { bar }
+    }
+
+    /// Handle a click in the global tracks area. Single click on a tempo
+    /// point starts a drag; double-click on empty space adds a new event.
     fn handle_global_track_click(
         &self,
         state: &mut TimelineState,
@@ -573,26 +668,40 @@ impl TimelineCanvas<'_> {
         let in_tempo = pos.y >= ruler_height && pos.y < ruler_height + row_h;
         let in_sig = pos.y >= ruler_height + row_h && pos.y < ruler_height + 2.0 * row_h;
 
-        // Determine which bar the click is at.
-        let seconds = ((pos.x + self.scroll_offset) / self.zoom).max(0.0);
-        let spbar = self.seconds_per_bar();
-        let bar = (seconds / spbar).floor().max(0.0) as u32;
+        let bar = self.x_to_bar(pos.x);
 
-        // Check if click is near an existing event marker.
+        // Check if click is near an existing tempo event point.
+        // For step changes (two events at same bar), pick the closest by
+        // y-distance so both points are individually draggable.
         if in_tempo {
+            let (lo, hi) = self.tempo_bpm_range();
+            let graph_top = ruler_height + 3.0;
+            let graph_bot = ruler_height + row_h - 3.0;
+            let graph_h = graph_bot - graph_top;
+
+            let mut best: Option<(usize, f32)> = None; // (index, distance²)
             for (i, event) in self.tempo_events.iter().enumerate() {
                 let sample = state::bar_to_sample(
                     event.bar, self.tempo_events, self.signature_events, self.sample_rate,
                 );
                 let ex = self.sample_to_x(sample);
-                if (pos.x - ex).abs() < 8.0 {
-                    return captured(Message::GlobalTrack(GlobalTrackMessage::SelectEvent(
-                        Some(state::SelectedGlobalEvent {
-                            kind: state::GlobalTrackKind::Tempo,
-                            index: i,
-                        }),
-                    )));
+                let ey = graph_bot - ((event.bpm - lo) / (hi - lo)) * graph_h;
+                let dx = pos.x - ex;
+                let dy = pos.y - ey;
+                let dist2 = dx * dx + dy * dy;
+                if dx.abs() < 10.0 && dy.abs() < 12.0 {
+                    if best.map_or(true, |(_, d)| dist2 < d) {
+                        best = Some((i, dist2));
+                    }
                 }
+            }
+            if let Some((i, _)) = best {
+                state.tempo_drag = Some(TempoDrag {
+                    index: i,
+                    original_bpm: self.tempo_events[i].bpm,
+                    anchor_y: pos.y,
+                });
+                return captured(Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(i)));
             }
             // Double-click detection for adding new tempo events.
             let now = std::time::Instant::now();
@@ -605,9 +714,12 @@ impl TimelineCanvas<'_> {
             state.last_global_click = Some((now, state::GlobalTrackKind::Tempo));
             if is_double {
                 state.last_global_click = None;
+                // Add at the interpolated BPM for this bar so the point
+                // appears on the current line.
+                let bpm = state::bpm_at_bar(bar as f64, self.tempo_events) as f32;
                 return captured(Message::GlobalTrack(GlobalTrackMessage::AddTempoEvent {
                     bar,
-                    bpm: self.bpm,
+                    bpm,
                 }));
             }
             // Single click on empty space → deselect.

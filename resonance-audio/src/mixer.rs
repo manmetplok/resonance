@@ -273,7 +273,8 @@ fn collect_midi_events(
     track_id: TrackId,
     playhead: u64,
     frames: usize,
-    samples_per_tick: f64,
+    tempo_map: &TempoMap,
+    sample_rate: u32,
     out: &mut Vec<PendingNoteEvent>,
 ) {
     let buf_end = playhead + frames as u64;
@@ -295,11 +296,18 @@ fn collect_midi_events(
             let effective_start = note.start_tick.max(visible_start);
             let effective_end = (note.start_tick + note.duration_ticks).min(visible_end);
 
-            // Convert to absolute sample positions
-            let note_abs_start =
-                clip.start_sample + ((effective_start - visible_start) as f64 * samples_per_tick) as u64;
-            let note_abs_end =
-                clip.start_sample + ((effective_end - visible_start) as f64 * samples_per_tick) as u64;
+            // Convert to absolute sample positions using the tempo map
+            // so tick→sample accounts for tempo changes across the clip.
+            let note_abs_start = tempo_map.tick_to_abs_sample(
+                clip.start_sample,
+                effective_start - visible_start,
+                sample_rate,
+            );
+            let note_abs_end = tempo_map.tick_to_abs_sample(
+                clip.start_sample,
+                effective_end - visible_start,
+                sample_rate,
+            );
 
             // Emit NoteOn if it falls in this buffer
             if note_abs_start >= playhead && note_abs_start < buf_end {
@@ -333,11 +341,12 @@ pub(crate) fn collect_midi_events_bounce(
     track_id: TrackId,
     playhead: u64,
     frames: usize,
-    samples_per_tick: f64,
+    tempo_map: &TempoMap,
+    sample_rate: u32,
     out: &mut Vec<PendingNoteEvent>,
 ) {
     out.clear();
-    collect_midi_events(midi_clips, track_id, playhead, frames, samples_per_tick, out);
+    collect_midi_events(midi_clips, track_id, playhead, frames, tempo_map, sample_rate, out);
 }
 
 /// Render one contiguous timeline sub-block into a slice of the output.
@@ -361,7 +370,8 @@ fn render_timeline_block(
     clips_guard: &[AudioClip],
     midi_clips_guard: &[MidiClip],
     plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
-    samples_per_tick: f64,
+    tempo_map: &TempoMap,
+    sample_rate: u32,
     any_solo: bool,
     active_busses: usize,
     playhead: u64,
@@ -415,7 +425,8 @@ fn render_timeline_block(
                 track.id,
                 playhead,
                 frames,
-                samples_per_tick,
+                tempo_map,
+                sample_rate,
                 note_event_buf,
             );
 
@@ -806,18 +817,28 @@ pub(crate) fn mix_audio(
     let output_frames = data.len() / channels;
     let frames = output_frames.min(buf_frames);
 
-    // Snapshot tempo for plugin transport (once per block, avoids lock contention).
-    let transport_snap: Option<(f64, u16, u16, bool, f64)> = tempo_map
-        .try_read()
-        .map(|tm| {
-            let bpm = tm.bpm as f64;
-            let playing = shared.playing.load(std::sync::atomic::Ordering::Relaxed);
-            let pos = shared.playhead.load(std::sync::atomic::Ordering::Relaxed) as f64
-                / sample_rate as f64
-                * bpm
-                / 60.0;
-            (bpm, tm.numerator as u16, tm.denominator as u16, playing, pos)
-        });
+    // Snapshot tempo once per block. Hold the read guard so the bar
+    // table is available for tempo-map-aware MIDI tick→sample conversion
+    // in the rendering path. The read lock is held for one audio buffer
+    // (~1 ms) — writers (engine thread) wait only during tempo changes.
+    let playhead_now = shared.playhead.load(std::sync::atomic::Ordering::Relaxed);
+    struct TempoSnap { bpm: f64, num: u16, den: u16, metronome: bool }
+    let tempo_guard = tempo_map.try_read();
+    let tempo_snap = tempo_guard.as_ref().map(|tm| {
+        TempoSnap {
+            bpm: tm.bpm as f64,
+            num: tm.numerator as u16,
+            den: tm.denominator as u16,
+            metronome: tm.metronome_enabled,
+        }
+    });
+    let snap_bpm = tempo_snap.as_ref().map(|s| s.bpm).unwrap_or(120.0);
+
+    let transport_snap: Option<(f64, u16, u16, bool, f64)> = tempo_snap.as_ref().map(|s| {
+        let playing = shared.playing.load(std::sync::atomic::Ordering::Relaxed);
+        let pos = playhead_now as f64 / sample_rate as f64 * s.bpm / 60.0;
+        (s.bpm, s.num, s.den, playing, pos)
+    });
 
     // Read monitor input with jitter margin to avoid underflows.
     // Skip stale monitor data to keep latency at ~1 buffer period.
@@ -1032,13 +1053,9 @@ pub(crate) fn mix_audio(
 
     let active_busses = busses_guard.len().min(bus_bufs.len());
 
-    // Read tempo for MIDI tick conversion
-    let samples_per_tick = if let Some(tm) = tempo_map.try_read() {
-        tm.samples_per_beat(sample_rate) / TICKS_PER_QUARTER_NOTE as f64
-    } else {
-        // Fallback: 120 BPM
-        (sample_rate as f64 * 60.0 / 120.0) / TICKS_PER_QUARTER_NOTE as f64
-    };
+    // Resolve a &TempoMap for tempo-map-aware MIDI tick→sample conversion.
+    let default_tm = TempoMap::default();
+    let tm_ref: &TempoMap = tempo_guard.as_deref().unwrap_or(&default_tm);
 
     let any_solo = tracks_guard
         .values()
@@ -1087,7 +1104,8 @@ pub(crate) fn mix_audio(
             &clips_guard,
             &midi_clips_guard,
             &plugins_guard,
-            samples_per_tick,
+            tm_ref,
+            sample_rate,
             any_solo,
             active_busses,
             playhead,
@@ -1118,7 +1136,8 @@ pub(crate) fn mix_audio(
             &clips_guard,
             &midi_clips_guard,
             &plugins_guard,
-            samples_per_tick,
+            tm_ref,
+            sample_rate,
             any_solo,
             active_busses,
             loop_in,
@@ -1144,7 +1163,8 @@ pub(crate) fn mix_audio(
             &clips_guard,
             &midi_clips_guard,
             &plugins_guard,
-            samples_per_tick,
+            tm_ref,
+            sample_rate,
             any_solo,
             active_busses,
             playhead,
@@ -1183,12 +1203,90 @@ pub(crate) fn mix_audio(
     // mapping from output frame index to timeline frame changes at the seam:
     // frames before `head_frames` play from `playhead`, frames after play
     // from `loop_in`.
-    if let Some(tm) = tempo_map.try_read() {
-        if tm.metronome_enabled {
-            let spb = tm.samples_per_beat(sample_rate);
-            let numerator = tm.numerator as u64;
+    if let Some(snap) = tempo_snap.as_ref() {
+        if snap.metronome {
             let click_duration_samples = (sample_rate as f32 * CLICK_DURATION_SECS) as u64;
 
+            // Collect beat boundaries near the buffer into a small stack
+            // array: (beat_sample, is_downbeat). At most ~8 beats can
+            // overlap one audio buffer even at extreme tempos.
+            let mut beats = [(0u64, false); 16];
+            let mut n_beats = 0usize;
+
+            // Determine the timeline ranges covered by this buffer.
+            // With a loop seam there are two disjoint ranges.
+            let ranges: [(u64, u64); 2];
+            let n_ranges;
+            match seam_split {
+                Some((head, tail, loop_in)) => {
+                    ranges = [
+                        (playhead, playhead + head as u64),
+                        (loop_in, loop_in + tail as u64),
+                    ];
+                    n_ranges = 2;
+                }
+                None => {
+                    ranges = [
+                        (playhead, playhead + output_frames as u64),
+                        (0, 0),
+                    ];
+                    n_ranges = 1;
+                }
+            }
+
+            if tm_ref.bar_count() > 0 {
+                for ri in 0..n_ranges {
+                    let (r_start, r_end) = ranges[ri];
+                    let search_start = r_start.saturating_sub(click_duration_samples);
+                    let Some(start_bar) = tm_ref.bar_index_at(search_start) else {
+                        continue;
+                    };
+                    let mut bar_idx = start_bar;
+                    'bar: loop {
+                        let num_beats = tm_ref.beats_in_bar(bar_idx);
+                        for beat in 0..num_beats {
+                            let Some(bs) = tm_ref.beat_sample_in_bar(bar_idx, beat, sample_rate)
+                            else {
+                                break 'bar;
+                            };
+                            if bs >= r_end {
+                                break 'bar;
+                            }
+                            if bs + click_duration_samples > r_start && n_beats < 16 {
+                                beats[n_beats] = (bs, beat == 0);
+                                n_beats += 1;
+                            }
+                        }
+                        bar_idx += 1;
+                        if bar_idx >= tm_ref.bar_count() {
+                            break;
+                        }
+                    }
+                }
+            } else {
+                // No bar table — flat BPM beat positions.
+                let spb = sample_rate as f64 * 60.0 / snap_bpm;
+                let numerator = snap.num as u64;
+                for ri in 0..n_ranges {
+                    let (r_start, r_end) = ranges[ri];
+                    let search_start = r_start.saturating_sub(click_duration_samples);
+                    let first_beat = (search_start as f64 / spb).floor() as u64;
+                    let mut bi = first_beat;
+                    loop {
+                        let bs = (bi as f64 * spb).round() as u64;
+                        if bs >= r_end {
+                            break;
+                        }
+                        if bs + click_duration_samples > r_start && n_beats < 16 {
+                            beats[n_beats] = (bs, bi % numerator == 0);
+                            n_beats += 1;
+                        }
+                        bi += 1;
+                    }
+                }
+            }
+
+            // Render clicks: for each frame, check if any beat is active.
             for frame_offset in 0..output_frames {
                 let timeline_frame = match seam_split {
                     Some((head, _, loop_in)) if frame_offset >= head => {
@@ -1196,24 +1294,27 @@ pub(crate) fn mix_audio(
                     }
                     _ => playhead + frame_offset as u64,
                 };
-                // Use round() to avoid drift: find the nearest beat boundary
-                let beat_index = (timeline_frame as f64 / spb).floor();
-                let beat_start = (beat_index * spb).round() as u64;
-                let beat_pos = timeline_frame.saturating_sub(beat_start);
-
-                if beat_pos < click_duration_samples {
-                    let t = beat_pos as f32 / sample_rate as f32;
-                    let beat_in_bar = (beat_index as u64) % numerator;
-                    let freq = if beat_in_bar == 0 { CLICK_FREQ_DOWNBEAT } else { CLICK_FREQ_UPBEAT };
-                    let amplitude = CLICK_AMPLITUDE * (-t * CLICK_DECAY_RATE).exp();
-                    let click = amplitude * (2.0 * std::f32::consts::PI * freq * t).sin();
-
-                    let out_idx = frame_offset * channels;
-                    if channels >= 2 {
-                        data[out_idx] += click;
-                        data[out_idx + 1] += click;
-                    } else {
-                        data[out_idx] += click;
+                for bi in 0..n_beats {
+                    let (beat_sample, is_downbeat) = beats[bi];
+                    let beat_pos = timeline_frame.saturating_sub(beat_sample);
+                    if beat_pos < click_duration_samples && timeline_frame >= beat_sample {
+                        let t = beat_pos as f32 / sample_rate as f32;
+                        let freq = if is_downbeat {
+                            CLICK_FREQ_DOWNBEAT
+                        } else {
+                            CLICK_FREQ_UPBEAT
+                        };
+                        let amplitude = CLICK_AMPLITUDE * (-t * CLICK_DECAY_RATE).exp();
+                        let click =
+                            amplitude * (2.0 * std::f32::consts::PI * freq * t).sin();
+                        let out_idx = frame_offset * channels;
+                        if channels >= 2 {
+                            data[out_idx] += click;
+                            data[out_idx + 1] += click;
+                        } else {
+                            data[out_idx] += click;
+                        }
+                        break;
                     }
                 }
             }

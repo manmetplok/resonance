@@ -36,6 +36,8 @@ pub use clip::{
 pub use commands::AudioCommand;
 pub use events::AudioEvent;
 pub use tempo::{
-    InputDeviceInfo, ParamInfo, PluginDescInfo, ScannedPlugin, TempoMap, TICKS_PER_QUARTER_NOTE,
+    InputDeviceInfo, ParamInfo, PluginDescInfo, ScannedPlugin, SignaturePoint, TempoMap,
+    TempoPoint, TICKS_PER_QUARTER_NOTE, arrival_bpm_at_bar, avg_bpm_for_bar, bpm_at_bar,
+    sample_frac_to_tick_frac, tick_frac_to_sample_frac,
 };
 pub use track::{Bus, MasterBus, Track};

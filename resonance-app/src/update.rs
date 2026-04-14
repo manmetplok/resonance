@@ -139,34 +139,39 @@ impl crate::Resonance {
 
             // ---- Global track events (tempo / time signature) ----
             Message::GlobalTrack(GlobalTrackMessage::AddTempoEvent { bar, bpm }) => {
-                // Replace if an event at this bar already exists.
-                if let Some(existing) = self.tempo_events.iter_mut().find(|e| e.bar == bar) {
-                    existing.bpm = bpm;
-                } else {
-                    self.tempo_events.push(state::TempoEvent { bar, bpm });
-                    self.tempo_events.sort_by_key(|e| e.bar);
-                }
-                // If the playhead is at or past this bar, update active tempo.
-                let event_sample = state::bar_to_sample(
-                    bar, &self.tempo_events, &self.signature_events, self.sample_rate,
-                );
-                if self.transport.playhead >= event_sample {
-                    self.transport.bpm = bpm;
-                    self.transport.bpm_input = format!("{:.0}", bpm);
-                    self.engine.send(AudioCommand::SetBpm { bpm });
+                self.tempo_events.push(state::TempoEvent { bar, bpm });
+                self.tempo_events.sort_by_key(|e| e.bar);
+                self.sync_tempo_display();
+                self.send_tempo_events_to_engine();
+            }
+            // Start drag: select the event and begin undo group.
+            Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(index)) => {
+                self.interaction.selected_global_event = Some(state::SelectedGlobalEvent {
+                    kind: state::GlobalTrackKind::Tempo,
+                    index,
+                });
+            }
+            // End drag: sort events and commit undo.
+            Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag) => {
+                self.tempo_events.sort_by_key(|e| e.bar);
+                self.send_tempo_events_to_engine();
+            }
+            Message::GlobalTrack(GlobalTrackMessage::UpdateTempoEvent { index, bar, bpm }) => {
+                let bpm = bpm.clamp(20.0, 300.0);
+                if let Some(event) = self.tempo_events.get_mut(index) {
+                    event.bar = if index == 0 { 0 } else { bar };
+                    event.bpm = bpm;
+                    self.sync_tempo_display();
+                    // During drag: lightweight SetBpm only (no table rebuild).
+                    // Full SetTempoEvents sent on EndTempoDrag.
+                    self.engine.send(AudioCommand::SetBpm { bpm: self.transport.bpm });
                 }
             }
             Message::GlobalTrack(GlobalTrackMessage::RemoveTempoEvent(index)) => {
                 if index > 0 && index < self.tempo_events.len() {
                     self.tempo_events.remove(index);
-                    // Re-apply tempo at current playhead position.
-                    let (bpm, _, _) = state::tempo_at_sample(
-                        self.transport.playhead, &self.tempo_events,
-                        &self.signature_events, self.sample_rate,
-                    );
-                    self.transport.bpm = bpm;
-                    self.transport.bpm_input = format!("{:.0}", bpm);
-                    self.engine.send(AudioCommand::SetBpm { bpm });
+                    self.sync_tempo_display();
+                    self.send_tempo_events_to_engine();
                 }
             }
             Message::GlobalTrack(GlobalTrackMessage::AddSignatureEvent { bar, numerator, denominator }) => {
@@ -207,13 +212,8 @@ impl crate::Resonance {
                         state::GlobalTrackKind::Tempo => {
                             if sel.index > 0 && sel.index < self.tempo_events.len() {
                                 self.tempo_events.remove(sel.index);
-                                let (bpm, _, _) = state::tempo_at_sample(
-                                    self.transport.playhead, &self.tempo_events,
-                                    &self.signature_events, self.sample_rate,
-                                );
-                                self.transport.bpm = bpm;
-                                self.transport.bpm_input = format!("{:.0}", bpm);
-                                self.engine.send(AudioCommand::SetBpm { bpm });
+                                self.sync_tempo_display();
+                                self.send_tempo_events_to_engine();
                             }
                         }
                         state::GlobalTrackKind::Signature => {
@@ -490,11 +490,10 @@ impl crate::Resonance {
                                 first.bpm = self.transport.bpm;
                             }
                         }
+                        self.send_tempo_events_to_engine();
                     }
                     Err(_) => {}
                 }
-                // Always rewrite the buffer from the current (possibly clamped
-                // or reverted) BPM so the field shows a sane value.
                 self.transport.bpm_input = format!("{:.0}", self.transport.bpm);
             }
             Message::Transport(TransportMessage::CyclePrecountBars) => {
@@ -647,12 +646,14 @@ impl crate::Resonance {
                     // bar/beat grid so loop markers line up with the ruler.
                     let seconds = (x + self.viewport.scroll_offset) / self.viewport.zoom;
                     let raw = (seconds.max(0.0) as f64 * self.sample_rate as f64) as u64;
-                    let sample = crate::timeline::snap_sample_to_grid(
+                    let sample = crate::timeline::snap_sample_to_grid_tempo(
                         raw,
                         self.transport.bpm,
                         self.transport.time_sig_num,
                         self.sample_rate,
                         self.viewport.zoom,
+                        &self.tempo_events,
+                        &self.signature_events,
                     );
                     match self.transport.dragging_loop {
                         Some(LoopDragTarget::In) => {

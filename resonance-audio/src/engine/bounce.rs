@@ -98,10 +98,7 @@ pub(crate) fn to_wav(
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
     let mut write_error = false;
 
-    let bounce_spt = {
-        let tm = tempo_map.read();
-        tm.samples_per_beat(sample_rate) / TICKS_PER_QUARTER_NOTE as f64
-    };
+    let bounce_tm = tempo_map.read();
 
     let mut pos = render_start;
     while pos < render_end && !write_error {
@@ -142,7 +139,8 @@ pub(crate) fn to_wav(
                     track.id,
                     pos,
                     frames,
-                    bounce_spt,
+                    &bounce_tm,
+                    sample_rate,
                     &mut bounce_note_buf,
                 );
                 let mut plugin_iter = track.plugin_ids.iter();

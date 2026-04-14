@@ -4,7 +4,6 @@
 //! so `timeline.rs` can stay focused on canvas event handling and state.
 use iced::widget::canvas;
 use iced::{Color, Point, Size};
-use resonance_audio::types::TICKS_PER_QUARTER_NOTE;
 
 use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
@@ -12,8 +11,9 @@ use crate::timeline::TimelineCanvas;
 
 impl TimelineCanvas<'_> {
     /// Draw the global tracks area (tempo + time signature) between the
-    /// ruler and the regular track lanes. Shows event markers at their
-    /// bar positions with BPM / time-sig labels.
+    /// ruler and the regular track lanes. The tempo row shows a line
+    /// graph (like Logic Pro) with draggable points connected by lines;
+    /// the signature row keeps the block-marker style.
     pub(super) fn draw_global_tracks(
         &self,
         frame: &mut canvas::Frame,
@@ -53,61 +53,158 @@ impl TimelineCanvas<'_> {
             theme::SEPARATOR,
         );
 
-        // ---- Draw tempo event markers ----
-        for (i, event) in self.tempo_events.iter().enumerate() {
-            let sample = state::bar_to_sample(
-                event.bar, self.tempo_events, self.signature_events, self.sample_rate,
-            );
-            let x = self.sample_to_x(sample);
-            if x > width + 50.0 || x < -50.0 {
-                continue;
+        // ---- Draw tempo line graph ----
+        if !self.tempo_events.is_empty() {
+            // Determine BPM range for vertical mapping.
+            let mut min_bpm = f32::MAX;
+            let mut max_bpm = f32::MIN;
+            for e in self.tempo_events {
+                min_bpm = min_bpm.min(e.bpm);
+                max_bpm = max_bpm.max(e.bpm);
             }
-            // Find the next event to determine the block width.
-            let next_x = self.tempo_events.get(i + 1).map(|ne| {
-                let ns = state::bar_to_sample(
-                    ne.bar, self.tempo_events, self.signature_events, self.sample_rate,
-                );
-                self.sample_to_x(ns)
-            }).unwrap_or(width);
-            let block_w = (next_x - x).max(2.0).min(width - x.max(0.0));
+            // Add padding so points aren't flush with edges; ensure a
+            // minimum range so a flat tempo doesn't compress to zero.
+            let range = (max_bpm - min_bpm).max(10.0);
+            let pad = range * 0.15;
+            let lo = min_bpm - pad;
+            let hi = max_bpm + pad;
 
-            let is_selected = self.selected_global_event == Some(state::SelectedGlobalEvent {
-                kind: state::GlobalTrackKind::Tempo,
-                index: i,
-            });
+            let graph_top = tempo_y + 3.0;
+            let graph_bot = tempo_y + row_h - 3.0;
+            let graph_h = graph_bot - graph_top;
 
-            // Block fill
-            let block_color = if is_selected {
-                Color::from_rgba(0.9, 0.55, 0.15, 0.25)
-            } else {
-                Color::from_rgba(0.9, 0.55, 0.15, 0.12)
+            // Map BPM to y within the tempo row (high BPM = top).
+            let bpm_to_y = |bpm: f32| -> f32 {
+                graph_bot - ((bpm - lo) / (hi - lo)) * graph_h
             };
-            frame.fill_rectangle(
-                Point::new(x.max(0.0), tempo_y + 1.0),
-                Size::new(block_w, row_h - 2.0),
-                block_color,
-            );
 
-            // Vertical marker line
-            if x >= 0.0 {
-                let marker_color = if is_selected { theme::ACCENT } else { theme::TEXT_DIM };
-                frame.fill_rectangle(
-                    Point::new(x, tempo_y),
-                    Size::new(1.0, row_h),
-                    marker_color,
-                );
+            // Build (x, y, bpm, is_selected) for each event point.
+            let points: Vec<(f32, f32, f32, bool)> = self
+                .tempo_events
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    let sample = state::bar_to_sample(
+                        e.bar,
+                        self.tempo_events,
+                        self.signature_events,
+                        self.sample_rate,
+                    );
+                    let x = self.sample_to_x(sample);
+                    let y = bpm_to_y(e.bpm);
+                    let selected = self.selected_global_event
+                        == Some(state::SelectedGlobalEvent {
+                            kind: state::GlobalTrackKind::Tempo,
+                            index: i,
+                        });
+                    (x, y, e.bpm, selected)
+                })
+                .collect();
+
+            // Draw connecting lines and filled area.
+            let line_color = Color::from_rgba(0.9, 0.55, 0.15, 0.7);
+            let fill_color = Color::from_rgba(0.9, 0.55, 0.15, 0.10);
+
+            for pair in points.windows(2) {
+                let (x1, y1, _, _) = pair[0];
+                let (x2, y2, _, _) = pair[1];
+                if x2 < -50.0 || x1 > width + 50.0 {
+                    continue;
+                }
+                // Filled area under the line segment.
+                let steps = ((x2 - x1).abs() as u32).max(1).min(400);
+                for s in 0..steps {
+                    let t = s as f32 / steps as f32;
+                    let px = x1 + t * (x2 - x1);
+                    let py = y1 + t * (y2 - y1);
+                    if px >= 0.0 && px <= width {
+                        frame.fill_rectangle(
+                            Point::new(px, py),
+                            Size::new(1.0, graph_bot - py),
+                            fill_color,
+                        );
+                    }
+                }
+                // Line itself (2 px wide via two 1 px rects).
+                let steps = ((x2 - x1).abs() as u32).max(1).min(800);
+                for s in 0..=steps {
+                    let t = s as f32 / steps as f32;
+                    let px = x1 + t * (x2 - x1);
+                    let py = y1 + t * (y2 - y1);
+                    if px >= 0.0 && px <= width {
+                        frame.fill_rectangle(
+                            Point::new(px, py - 0.5),
+                            Size::new(1.0, 2.0),
+                            line_color,
+                        );
+                    }
+                }
             }
 
-            // BPM label
-            let label_x = x.max(2.0) + 3.0;
-            if label_x < width - 10.0 {
-                frame.fill_text(canvas::Text {
-                    content: format!("{:.0}", event.bpm),
-                    position: Point::new(label_x, tempo_y + 5.0),
-                    color: if is_selected { theme::ACCENT } else { theme::TEXT_DIM },
-                    size: 10.0.into(),
-                    ..canvas::Text::default()
-                });
+            // Extend the last point to the right edge.
+            if let Some(&(last_x, last_y, _, _)) = points.last() {
+                if last_x < width {
+                    let start = last_x.max(0.0);
+                    frame.fill_rectangle(
+                        Point::new(start, last_y),
+                        Size::new(width - start, graph_bot - last_y),
+                        fill_color,
+                    );
+                    frame.fill_rectangle(
+                        Point::new(start, last_y - 0.5),
+                        Size::new(width - start, 2.0),
+                        line_color,
+                    );
+                }
+            }
+
+            // Draw event points (dots) and BPM labels.
+            for (i, &(x, y, bpm, selected)) in points.iter().enumerate() {
+                if x > width + 50.0 || x < -50.0 {
+                    continue;
+                }
+                // Dot.
+                let dot_r = if selected { 4.0 } else { 3.0 };
+                let dot_color = if selected {
+                    theme::ACCENT
+                } else {
+                    Color::from_rgb(0.9, 0.55, 0.15)
+                };
+                if x >= -dot_r && x <= width + dot_r {
+                    frame.fill_rectangle(
+                        Point::new(x - dot_r, y - dot_r),
+                        Size::new(dot_r * 2.0, dot_r * 2.0),
+                        dot_color,
+                    );
+                }
+                // Vertical marker line.
+                if i > 0 && x >= 0.0 {
+                    let marker_color = if selected {
+                        theme::ACCENT
+                    } else {
+                        Color::from_rgba(0.9, 0.55, 0.15, 0.3)
+                    };
+                    frame.fill_rectangle(
+                        Point::new(x, tempo_y),
+                        Size::new(1.0, row_h),
+                        marker_color,
+                    );
+                }
+                // BPM label.
+                let label_x = x.max(2.0) + 5.0;
+                if label_x < width - 10.0 {
+                    frame.fill_text(canvas::Text {
+                        content: format!("{:.0}", bpm),
+                        position: Point::new(label_x, tempo_y + 2.0),
+                        color: if selected {
+                            theme::ACCENT
+                        } else {
+                            theme::TEXT_DIM
+                        },
+                        size: 10.0.into(),
+                        ..canvas::Text::default()
+                    });
+                }
             }
         }
 
@@ -167,6 +264,8 @@ impl TimelineCanvas<'_> {
     }
 
     /// Draw vertical bar and beat grid lines in the track area.
+    /// Iterates bars using per-bar tempo and time-signature values so
+    /// that grid spacing correctly follows tempo changes.
     pub(super) fn draw_grid_lines(
         &self,
         frame: &mut canvas::Frame,
@@ -175,125 +274,141 @@ impl TimelineCanvas<'_> {
         track_area_height: f32,
         _y_off: f32,
     ) {
-        let spb_seconds = self.seconds_per_beat();
-        let spbar_seconds = self.seconds_per_bar();
         let line_height = track_area_height.max(600.0);
+        let sr = self.sample_rate as f64;
 
-        let start_time = self.scroll_offset / self.zoom;
-        let end_time = start_time + width / self.zoom;
+        // Walk bars from 0, accumulating sample positions with interpolation.
+        let mut sample_pos: f64 = 0.0;
+        let mut cur_num = self.signature_events.first().map(|e| e.numerator).unwrap_or(4);
+        let mut si: usize = if self.signature_events.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
 
-        // Determine bar step for readability at low zoom
-        let bar_pixel_width = spbar_seconds * self.zoom;
-        let bar_step = if bar_pixel_width < 20.0 {
-            (20.0 / bar_pixel_width).ceil() as u32
-        } else {
-            1
-        };
-
-        let first_bar = (start_time / spbar_seconds).floor() as i64;
-        let last_bar = (end_time / spbar_seconds).ceil() as i64;
-
-        for bar_idx in first_bar..=last_bar {
-            if bar_step > 1 && bar_idx.rem_euclid(bar_step as i64) != 0 {
-                continue;
+        for bar in 0u32.. {
+            while let Some(e) = self.signature_events.get(si) {
+                if e.bar == bar { cur_num = e.numerator; si += 1; } else { break; }
             }
-            let bar_time = bar_idx as f32 * spbar_seconds;
 
-            // Bar line
-            let x = bar_time * self.zoom - self.scroll_offset;
-            if x >= -1.0 && x <= width + 1.0 {
+            let cur_bpm = state::avg_bpm_for_bar(bar, self.tempo_events);
+            let samples_per_beat = sr * 60.0 / cur_bpm;
+            let samples_per_bar = samples_per_beat * cur_num as f64;
+            let bar_seconds = samples_per_bar / sr;
+            let bar_pixel_width = bar_seconds as f32 * self.zoom;
+
+            let x = (sample_pos / sr) as f32 * self.zoom - self.scroll_offset;
+
+            // Past the right edge — done.
+            if x > width + 1.0 { break; }
+            // Safety limit.
+            if bar > 20_000 { break; }
+
+            // Bar step: skip bars for readability at low zoom.
+            let bar_step = if bar_pixel_width < 20.0 {
+                (20.0 / bar_pixel_width).ceil() as u32
+            } else {
+                1
+            };
+            let draw_this = bar_step <= 1 || bar % bar_step == 0;
+
+            if draw_this && x >= -1.0 {
                 frame.fill_rectangle(
                     Point::new(x, ruler_height),
                     Size::new(1.0, line_height),
                     theme::BAR_LINE,
                 );
-            }
 
-            // Beat lines within this bar (skip beat 1, that's the bar line)
-            if bar_pixel_width >= 40.0 {
-                for beat in 1..self.time_sig_num {
-                    let beat_time = bar_time + beat as f32 * spb_seconds;
-                    let bx = beat_time * self.zoom - self.scroll_offset;
-                    if bx >= 0.0 && bx <= width {
-                        frame.fill_rectangle(
-                            Point::new(bx, ruler_height),
-                            Size::new(1.0, line_height),
-                            theme::BEAT_LINE,
-                        );
+                // Beat lines within this bar.
+                if bar_pixel_width >= 40.0 {
+                    for beat in 1..cur_num {
+                        let beat_sample = sample_pos + beat as f64 * samples_per_beat;
+                        let bx = (beat_sample / sr) as f32 * self.zoom - self.scroll_offset;
+                        if bx >= 0.0 && bx <= width {
+                            frame.fill_rectangle(
+                                Point::new(bx, ruler_height),
+                                Size::new(1.0, line_height),
+                                theme::BEAT_LINE,
+                            );
+                        }
                     }
                 }
             }
+
+            sample_pos += samples_per_bar;
         }
     }
 
     /// Draw the bar/beat ruler at the top.
+    /// Uses per-bar tempo and time-signature values so bar numbers are
+    /// positioned correctly when tempo changes.
     pub(super) fn draw_ruler(
         &self,
         frame: &mut canvas::Frame,
         width: f32,
         ruler_height: f32,
     ) {
-        let spbar_seconds = self.seconds_per_bar();
-        let spb_seconds = self.seconds_per_beat();
+        let sr = self.sample_rate as f64;
 
-        let start_time = self.scroll_offset / self.zoom;
-        let end_time = start_time + width / self.zoom;
+        let mut sample_pos: f64 = 0.0;
+        let mut cur_num = self.signature_events.first().map(|e| e.numerator).unwrap_or(4);
+        let mut si: usize = if self.signature_events.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
 
-        // Determine bar step for readability at low zoom
-        let bar_pixel_width = spbar_seconds * self.zoom;
-        let bar_step = if bar_pixel_width < 40.0 {
-            (40.0 / bar_pixel_width).ceil() as u32
-        } else {
-            1
-        };
-
-        let first_bar = (start_time / spbar_seconds).floor() as i64;
-        let last_bar = (end_time / spbar_seconds).ceil() as i64;
-
-        for bar_idx in first_bar..=last_bar {
-            let bar_time = bar_idx as f32 * spbar_seconds;
-            let bar_number = bar_idx + 1; // 1-based
-
-            if bar_step > 1 && bar_idx.rem_euclid(bar_step as i64) != 0 {
-                continue;
+        for bar in 0u32.. {
+            while let Some(e) = self.signature_events.get(si) {
+                if e.bar == bar { cur_num = e.numerator; si += 1; } else { break; }
             }
 
-            let x = bar_time * self.zoom - self.scroll_offset;
+            let cur_bpm = state::avg_bpm_for_bar(bar, self.tempo_events);
+            let samples_per_beat = sr * 60.0 / cur_bpm;
+            let samples_per_bar = samples_per_beat * cur_num as f64;
+            let bar_seconds = samples_per_bar / sr;
+            let bar_pixel_width = bar_seconds as f32 * self.zoom;
 
-            if x < -1.0 || x > width + 1.0 {
-                continue;
-            }
+            let x = (sample_pos / sr) as f32 * self.zoom - self.scroll_offset;
 
-            // Major tick (bar)
-            frame.fill_rectangle(
-                Point::new(x, ruler_height - 12.0),
-                Size::new(1.0, 12.0),
-                theme::TEXT_DIM,
-            );
+            if x > width + 1.0 { break; }
+            if bar > 20_000 { break; }
 
-            // Bar number label
-            frame.fill_text(canvas::Text {
-                content: format!("{}", bar_number),
-                position: Point::new(x + 3.0, ruler_height - 24.0),
-                color: theme::TEXT_DIM,
-                size: 11.0.into(),
-                ..canvas::Text::default()
-            });
+            let bar_step = if bar_pixel_width < 40.0 {
+                (40.0 / bar_pixel_width).ceil() as u32
+            } else {
+                1
+            };
+            let draw_this = bar_step <= 1 || bar % bar_step == 0;
 
-            // Beat ticks within bar (only if enough space)
-            if bar_pixel_width >= 40.0 {
-                for beat in 1..self.time_sig_num {
-                    let beat_time = bar_time + beat as f32 * spb_seconds;
-                    let bx = beat_time * self.zoom - self.scroll_offset;
-                    if bx >= 0.0 && bx <= width {
-                        frame.fill_rectangle(
-                            Point::new(bx, ruler_height - 6.0),
-                            Size::new(1.0, 6.0),
-                            Color::from_rgb(0.25, 0.25, 0.25),
-                        );
+            if draw_this && x >= -1.0 {
+                let bar_number = bar as i64 + 1; // 1-based
+
+                // Major tick (bar)
+                frame.fill_rectangle(
+                    Point::new(x, ruler_height - 12.0),
+                    Size::new(1.0, 12.0),
+                    theme::TEXT_DIM,
+                );
+
+                // Bar number label
+                frame.fill_text(canvas::Text {
+                    content: format!("{}", bar_number),
+                    position: Point::new(x + 3.0, ruler_height - 24.0),
+                    color: theme::TEXT_DIM,
+                    size: 11.0.into(),
+                    ..canvas::Text::default()
+                });
+
+                // Beat ticks within bar (only if enough space)
+                if bar_pixel_width >= 40.0 {
+                    for beat in 1..cur_num {
+                        let beat_sample = sample_pos + beat as f64 * samples_per_beat;
+                        let bx = (beat_sample / sr) as f32 * self.zoom - self.scroll_offset;
+                        if bx >= 0.0 && bx <= width {
+                            frame.fill_rectangle(
+                                Point::new(bx, ruler_height - 6.0),
+                                Size::new(1.0, 6.0),
+                                Color::from_rgb(0.25, 0.25, 0.25),
+                            );
+                        }
                     }
                 }
             }
+
+            sample_pos += samples_per_bar;
         }
 
         // Ruler bottom line
@@ -450,10 +565,12 @@ impl TimelineCanvas<'_> {
         }
         let clip_height = theme::TRACK_HEIGHT - 4.0;
 
-        // Convert tick duration to samples, then to seconds for pixel width
-        let samples_per_tick =
-            (self.sample_rate as f64 * 60.0 / self.bpm as f64) / TICKS_PER_QUARTER_NOTE as f64;
-        let duration_samples = clip.duration_ticks as f64 * samples_per_tick;
+        // Convert tick duration to samples integrating the tempo map.
+        let clip_end_sample = state::tick_to_abs_sample(
+            clip.start_sample, clip.duration_ticks,
+            self.tempo_events, self.signature_events, self.sample_rate,
+        );
+        let duration_samples = clip_end_sample.saturating_sub(clip.start_sample) as f64;
         let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
         let duration_seconds = duration_samples as f32 / self.sample_rate as f32;
 
