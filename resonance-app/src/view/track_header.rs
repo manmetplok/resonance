@@ -2,11 +2,11 @@
 //! a "+" add-track button plus one stacked header cell per visible track.
 //! Sub-tracks are intentionally hidden here — they only make sense in the
 //! mixer where they get per-bus routing.
-use iced::widget::{button, column, container, mouse_area, row, text, Space};
+use iced::widget::{button, column, container, mouse_area, pick_list, row, text, Space};
 use iced::{alignment, Element, Length};
 
 use crate::message::*;
-use crate::state::TrackState;
+use crate::state::{self, TrackState};
 use crate::theme;
 use crate::view::controls::{
     delete_button, monitor_button, mono_button, mute_button, record_arm_button, solo_button,
@@ -76,19 +76,14 @@ pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
         .style(gt_style);
         headers = headers.push(tempo_row);
 
-        // Time Signature row
-        let sig_row = container(
-            row![
-                Space::with_width(8),
-                text("Time Sig").size(11).color(theme::TEXT_DIM),
-            ]
-            .align_y(alignment::Vertical::Center)
-            .height(row_h),
-        )
-        .width(Length::Fill)
-        .height(row_h)
-        .style(gt_style);
-        headers = headers.push(sig_row);
+        // Time Signature row — shows an inline editor when an event is selected.
+        let sig_row = view_signature_header(r, row_h);
+        headers = headers.push(
+            container(sig_row)
+                .width(Length::Fill)
+                .height(row_h)
+                .style(gt_style),
+        );
     }
 
     let sorted_tracks: Vec<&TrackState> = r
@@ -235,4 +230,90 @@ fn view_track_header(track: &TrackState, is_selected: bool) -> Element<'_, Messa
     mouse_area(header)
         .on_press(Message::Ui(UiMessage::SelectTrack(Some(track_id))))
         .into()
+}
+
+/// Numerator wrapper for the pick_list (needs Display + PartialEq).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Numerator(u8);
+impl std::fmt::Display for Numerator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Denominator wrapper for the pick_list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Denominator(u8);
+impl std::fmt::Display for Denominator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Render the Time Sig header row. When a signature event is selected,
+/// show inline pick_lists for editing numerator and denominator.
+fn view_signature_header<'a>(r: &'a Resonance, row_h: f32) -> Element<'a, Message> {
+    let label = text("Time Sig").size(11).color(theme::TEXT_DIM);
+
+    // Check if a signature event is selected.
+    let selected = r.interaction.selected_global_event.and_then(|sel| {
+        if sel.kind == state::GlobalTrackKind::Signature {
+            r.signature_events.get(sel.index).map(|ev| (sel.index, ev))
+        } else {
+            None
+        }
+    });
+
+    let content = if let Some((idx, event)) = selected {
+        let num = event.numerator;
+        let den = event.denominator;
+
+        let nums: Vec<Numerator> = (1..=16).map(Numerator).collect();
+        let dens: Vec<Denominator> = [2, 4, 8, 16].iter().copied().map(Denominator).collect();
+
+        let num_picker = pick_list(nums, Some(Numerator(num)), move |n: Numerator| {
+            Message::GlobalTrack(GlobalTrackMessage::UpdateSignatureEvent {
+                index: idx,
+                numerator: n.0,
+                denominator: den,
+            })
+        })
+        .text_size(11)
+        .width(42);
+
+        let den_picker = pick_list(dens, Some(Denominator(den)), move |d: Denominator| {
+            Message::GlobalTrack(GlobalTrackMessage::UpdateSignatureEvent {
+                index: idx,
+                numerator: num,
+                denominator: d.0,
+            })
+        })
+        .text_size(11)
+        .width(42);
+
+        let slash = text("/").size(12).color(theme::TEXT_DIM);
+
+        row![
+            Space::with_width(8),
+            label,
+            Space::with_width(8),
+            num_picker,
+            slash,
+            den_picker,
+        ]
+        .spacing(2)
+        .align_y(alignment::Vertical::Center)
+        .height(row_h)
+        .into()
+    } else {
+        row![
+            Space::with_width(8),
+            label,
+        ]
+        .align_y(alignment::Vertical::Center)
+        .height(row_h)
+        .into()
+    };
+
+    content
 }

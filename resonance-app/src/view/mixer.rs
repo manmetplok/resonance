@@ -9,6 +9,7 @@ use crate::view::controls::{
 };
 use crate::view::knob::pan_knob;
 use iced::widget::{button, column, container, pick_list, row, scrollable, text, Space};
+use iced::widget::text::Shaping;
 use iced::{alignment, Color, Element, Font, Length};
 use resonance_audio::types::*;
 
@@ -279,51 +280,23 @@ impl crate::Resonance {
 
         let name_text = text(track.name.clone()).size(13).color(name_color);
 
-        // Save-as-preset button (only for normal tracks, not sub-tracks).
-        let save_preset_btn: Option<Element<'_, Message>> = if !is_sub {
-            let track_id = track.id;
-            Some(
-                button(
-                    theme::icon(fa::FLOPPY_DISK)
-                        .size(9)
-                        .color(theme::TEXT_DIM),
-                )
-                .on_press(Message::Track(TrackMessage::SaveTrackAsPreset(track_id)))
-                .padding([2, 3])
-                .style(|_theme, status| theme::small_button_style(status))
-                .into(),
-            )
-        } else {
-            None
-        };
-
         let track_name: Element<'_, Message> = if has_sub_tracks {
-            let glyph = if is_collapsed { "\u{25B8}" } else { "\u{25BE}" };
+            let glyph = if is_collapsed { fa::CARET_RIGHT } else { fa::CARET_DOWN };
             let track_id = track.id;
-            let toggle = button(text(glyph).size(10).color(theme::TEXT_DIM))
+            let toggle = button(theme::icon(glyph).size(10).color(theme::TEXT_DIM))
                 .on_press(Message::Track(TrackMessage::ToggleSubTracksVisible(track_id)))
                 .padding([2, 4])
                 .style(|_theme, status| theme::small_button_style(status));
-            let mut name_row = row![toggle, name_text]
+            let name_row = row![toggle, name_text]
                 .spacing(4)
                 .align_y(alignment::Vertical::Center);
-            if let Some(btn) = save_preset_btn {
-                name_row = name_row
-                    .push(Space::with_width(Length::Fill))
-                    .push(btn);
-            }
             container(name_row)
                 .width(Length::Fill)
                 .padding([6, 4])
                 .into()
         } else {
-            let mut name_row = row![name_text]
+            let name_row = row![name_text]
                 .align_y(alignment::Vertical::Center);
-            if let Some(btn) = save_preset_btn {
-                name_row = name_row
-                    .push(Space::with_width(Length::Fill))
-                    .push(btn);
-            }
             container(name_row)
                 .width(Length::Fill)
                 .padding([6, 4])
@@ -598,7 +571,8 @@ impl crate::Resonance {
             let v_sep = container(Space::new(1, Length::Fill))
                 .style(theme::separator_bg);
 
-            let right_col = self.view_collapsed_subtrack_meters(track.id);
+            let right_col = container(self.view_collapsed_subtrack_meters(track.id))
+                .padding([0, 4]);
 
             let strip_content = row![left_col, v_sep, right_col]
                 .height(Length::Fill)
@@ -642,16 +616,23 @@ impl crate::Resonance {
             .collect();
         subtracks.sort_by_key(|t| t.order);
 
-        let mut meters_row = row![].spacing(6);
-        for sub in subtracks {
-            let name: String = if sub.name.chars().count() > 5 {
-                let mut s: String = sub.name.chars().take(4).collect();
+        let mut meters_row = row![].spacing(4);
+        for sub in &subtracks {
+            // Show the port label (after "→") rather than the full name,
+            // so "Instrument 2 → Kick" displays as "Kick" instead of "Inst.".
+            let short_name = sub
+                .name
+                .split(" \u{2192} ")
+                .nth(1)
+                .unwrap_or(&sub.name);
+            let label: String = if short_name.chars().count() > 6 {
+                let mut s: String = short_name.chars().take(5).collect();
                 s.push('.');
                 s
             } else {
-                sub.name.clone()
+                short_name.to_string()
             };
-            let name_label = text(name).size(8).color(theme::TEXT_DIM);
+            let name_label = text(label).size(9).color(theme::TEXT_DIM);
             let meter = meter_v(sub.level_l, sub.level_r, theme::FADER_HEIGHT);
             let col = column![name_label, meter]
                 .spacing(2)
@@ -659,11 +640,17 @@ impl crate::Resonance {
             meters_row = meters_row.push(col);
         }
 
+        let title = text(format!("{} outs", subtracks.len()))
+            .size(9)
+            .color(theme::TEXT_DIM);
+
         column![
+            title,
             Space::with_height(Length::Fill),
             meters_row,
             Space::with_height(24),
         ]
+        .spacing(2)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
@@ -674,12 +661,12 @@ impl crate::Resonance {
     fn view_track_output_picker(&self, track: &TrackState) -> Element<'_, Message> {
         let mut choices: Vec<OutputChoice> = Vec::with_capacity(1 + self.registry.busses.len());
         choices.push(OutputChoice {
-            label: "→ Master".to_string(),
+            label: format!("{} Master", fa::ARROW_RIGHT),
             output: TrackOutput::Master,
         });
         for bus in self.sorted_busses() {
             choices.push(OutputChoice {
-                label: format!("→ {}", bus.name),
+                label: format!("{} {}", fa::ARROW_RIGHT, bus.name),
                 output: TrackOutput::Bus(bus.id),
             });
         }
@@ -697,6 +684,7 @@ impl crate::Resonance {
             Message::Track(TrackMessage::SetTrackOutput(track_id, choice.output))
         })
         .text_size(9)
+        .text_shaping(Shaping::Advanced)
         .width(Length::Fill);
 
         container(picker)

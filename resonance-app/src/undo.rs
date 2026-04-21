@@ -434,9 +434,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             // UI gesture — nothing to undo.
             TrackMessage::CancelRemoveTrack => UndoAction::Skip,
             // Preset operations that don't mutate project state.
-            TrackMessage::SaveTrackAsPreset(_) | TrackMessage::DeleteUserPreset(_) => {
-                UndoAction::Skip
-            }
+            TrackMessage::DeleteUserPreset(_) => UndoAction::Skip,
             _ => UndoAction::Record,
         },
 
@@ -474,7 +472,6 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             ClipMessage::UpdateClipDrag(_, _) | ClipMessage::UpdateClipTrim(_) => {
                 UndoAction::Skip
             }
-            ClipMessage::SelectClip(_) => UndoAction::Skip,
             ClipMessage::DeleteClip(_) => UndoAction::Record,
         },
 

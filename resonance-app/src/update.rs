@@ -169,9 +169,6 @@ impl crate::Resonance {
                     self.engine.send(AudioCommand::SetBpm { bpm: self.transport.bpm });
                 }
             }
-            Message::GlobalTrack(GlobalTrackMessage::RemoveTempoEvent(index)) => {
-                self.remove_tempo_event(index);
-            }
             Message::GlobalTrack(GlobalTrackMessage::AddSignatureEvent { bar, numerator, denominator }) => {
                 if let Some(existing) = self.signature_events.iter_mut().find(|e| e.bar == bar) {
                     existing.numerator = numerator;
@@ -187,9 +184,28 @@ impl crate::Resonance {
                     self.transport.time_sig_den = denominator;
                     self.engine.send(AudioCommand::SetTimeSignature { numerator, denominator });
                 }
+                // Auto-select the new/updated event so the inline editor appears.
+                if let Some(idx) = self.signature_events.iter().position(|e| e.bar == bar) {
+                    self.interaction.selected_global_event = Some(state::SelectedGlobalEvent {
+                        kind: state::GlobalTrackKind::Signature,
+                        index: idx,
+                    });
+                }
             }
-            Message::GlobalTrack(GlobalTrackMessage::RemoveSignatureEvent(index)) => {
-                self.remove_signature_event(index);
+            Message::GlobalTrack(GlobalTrackMessage::UpdateSignatureEvent { index, numerator, denominator }) => {
+                if let Some(event) = self.signature_events.get_mut(index) {
+                    event.numerator = numerator;
+                    event.denominator = denominator;
+                }
+                self.rebuild_and_send_tempo();
+                if let Some(event) = self.signature_events.get(index) {
+                    let event_sample = self.tempo_map.bar_to_sample(event.bar);
+                    if self.transport.playhead >= event_sample {
+                        self.transport.time_sig_num = numerator;
+                        self.transport.time_sig_den = denominator;
+                        self.engine.send(AudioCommand::SetTimeSignature { numerator, denominator });
+                    }
+                }
             }
             Message::GlobalTrack(GlobalTrackMessage::SelectEvent(sel)) => {
                 self.interaction.selected_global_event = sel;
@@ -656,9 +672,6 @@ impl crate::Resonance {
                     });
                 }
             }
-            Message::Clip(ClipMessage::SelectClip(id)) => {
-                self.interaction.selected_clip = id;
-            }
             Message::Clip(ClipMessage::StartClipDrag { clip_id, grab_offset_x, start_x, start_y }) => {
                 clips::start_clip_drag(self, clip_id, grab_offset_x, start_x, start_y);
             }
@@ -838,10 +851,6 @@ impl crate::Resonance {
                     });
                 }
                 self.mixer.add_track_menu_open = false;
-            }
-            Message::Track(TrackMessage::SaveTrackAsPreset(track_id)) => {
-                self.pending_preset_save = Some(track_id);
-                self.engine.send(AudioCommand::SaveAllPluginStates);
             }
             Message::Track(TrackMessage::DeleteUserPreset(name)) => {
                 if let Err(e) = crate::presets::delete_user_preset(&name) {

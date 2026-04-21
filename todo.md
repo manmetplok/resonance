@@ -3,7 +3,7 @@
 ##General
     - [x] Conformation when a user wants to kill the app, but there are unsaved changes
     - [x] Conformation when a user wants to delete a track which has content.
-    - I want to create presets for track (bas guitar, rhythm guitar, solo, etc) we should have user presets, and a number of default presets.
+    - [x] I want to create presets for track (bas guitar, rhythm guitar, solo, etc) we should have user presets, and a number of default presets.
 
 ##Arrange tab
     - [x] We need a place for global tracks like tempo track, and signature changes, my idea would an collapsable area between the normal tracks and the time indication
@@ -13,7 +13,7 @@
     - [x] The solo functionality does not seem to work.
 
 ##Mix tab
-    -We need a new solution for subtracks. My suggestion would be to make the collapsed view the default. But then make it a bit wider (maybe two slots, and show db meters of all subtracks. When expendanded the user can modify gain etc.
+    - [x] We need a new solution for subtracks. My suggestion would be to make the collapsed view the default. But then make it a bit wider (maybe two slots, and show db meters of all subtracks. When expendanded the user can modify gain etc.
     - [x] Something goes wrong when saving with busses. When opening a saved project the bus is there, but does not work. When removing the bus, audio can be heard again.
 
 ##Compose tab

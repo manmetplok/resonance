@@ -100,8 +100,6 @@ pub(crate) enum TrackMessage {
     SetTrackOutput(TrackId, TrackOutput),
     /// Create a new track from a preset template.
     AddTrackFromPreset(Box<TrackPreset>),
-    /// Save the given track's current configuration as a user preset.
-    SaveTrackAsPreset(TrackId),
     /// Delete a user preset by name.
     DeleteUserPreset(String),
 }
@@ -128,7 +126,6 @@ pub(crate) enum MasterMessage {
 #[derive(Debug, Clone)]
 pub(crate) enum ClipMessage {
     DeleteClip(ClipId),
-    SelectClip(Option<ClipId>),
     StartClipDrag {
         clip_id: ClipId,
         grab_offset_x: f32,
@@ -268,8 +265,6 @@ pub(crate) enum UiMessage {
 pub(crate) enum GlobalTrackMessage {
     /// Add a tempo change event at the given bar with the given BPM.
     AddTempoEvent { bar: u32, bpm: f32 },
-    /// Remove a tempo event by index (bar 0 cannot be removed).
-    RemoveTempoEvent(usize),
     /// Update an existing tempo event in-place (drag interaction).
     UpdateTempoEvent { index: usize, bar: u32, bpm: f32 },
     /// Start dragging a tempo event (undo begin + select).
@@ -278,8 +273,8 @@ pub(crate) enum GlobalTrackMessage {
     EndTempoDrag,
     /// Add a time signature change event at the given bar.
     AddSignatureEvent { bar: u32, numerator: u8, denominator: u8 },
-    /// Remove a signature event by index (bar 0 cannot be removed).
-    RemoveSignatureEvent(usize),
+    /// Update an existing signature event's numerator or denominator.
+    UpdateSignatureEvent { index: usize, numerator: u8, denominator: u8 },
     /// Select an event on a global track.
     SelectEvent(Option<SelectedGlobalEvent>),
     /// Delete the currently selected global track event.

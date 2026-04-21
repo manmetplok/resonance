@@ -64,6 +64,12 @@ pub mod fa {
     pub const EYE: char = '\u{f06e}';
     /// Trash can — used for the track delete button.
     pub const TRASH: char = '\u{f1f8}';
+    /// Caret pointing right — collapsed indicator.
+    pub const CARET_RIGHT: char = '\u{f0da}';
+    /// Caret pointing down — expanded indicator.
+    pub const CARET_DOWN: char = '\u{f0d7}';
+    /// Arrow pointing right — used for output routing labels.
+    pub const ARROW_RIGHT: char = '\u{f061}';
 }
 
 // Core palette
