@@ -4,6 +4,7 @@
 /// sub-state layout of [`crate::Resonance`]. Each sub-enum is handled by a
 /// dedicated arm of the top-level match in `update.rs`.
 use crate::compose::ComposeMessage;
+use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
 use crate::state::{
     ClipEdge, InstrumentIcon, InstrumentType, LoopDragTarget,
@@ -97,6 +98,12 @@ pub(crate) enum TrackMessage {
     /// Toggle whether a parent track's sub-tracks are shown in the mixer.
     ToggleSubTracksVisible(TrackId),
     SetTrackOutput(TrackId, TrackOutput),
+    /// Create a new track from a preset template.
+    AddTrackFromPreset(Box<TrackPreset>),
+    /// Save the given track's current configuration as a user preset.
+    SaveTrackAsPreset(TrackId),
+    /// Delete a user preset by name.
+    DeleteUserPreset(String),
 }
 
 #[derive(Debug, Clone)]

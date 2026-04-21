@@ -433,6 +433,10 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             // Dismissing the delete-confirmation dialog is a transient
             // UI gesture — nothing to undo.
             TrackMessage::CancelRemoveTrack => UndoAction::Skip,
+            // Preset operations that don't mutate project state.
+            TrackMessage::SaveTrackAsPreset(_) | TrackMessage::DeleteUserPreset(_) => {
+                UndoAction::Skip
+            }
             _ => UndoAction::Record,
         },
 

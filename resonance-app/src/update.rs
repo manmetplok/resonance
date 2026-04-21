@@ -824,6 +824,31 @@ impl crate::Resonance {
                     .send(AudioCommand::SetTrackOutput { track_id, output });
                 self.with_track_mut(track_id, |t| t.output = output);
             }
+            Message::Track(TrackMessage::AddTrackFromPreset(preset)) => {
+                self.pending_track_preset = Some(*preset.clone());
+                if preset.track_type == "instrument" {
+                    self.engine.send(AudioCommand::AddInstrumentTrack {
+                        id_hint: None,
+                        name: Some(preset.name.clone()),
+                    });
+                } else {
+                    self.engine.send(AudioCommand::AddTrack {
+                        id_hint: None,
+                        name: Some(preset.name.clone()),
+                    });
+                }
+                self.mixer.add_track_menu_open = false;
+            }
+            Message::Track(TrackMessage::SaveTrackAsPreset(track_id)) => {
+                self.pending_preset_save = Some(track_id);
+                self.engine.send(AudioCommand::SaveAllPluginStates);
+            }
+            Message::Track(TrackMessage::DeleteUserPreset(name)) => {
+                if let Err(e) = crate::presets::delete_user_preset(&name) {
+                    self.error_message = Some(format!("Delete preset: {e}"));
+                }
+                self.user_presets = crate::presets::load_user_presets();
+            }
             Message::Bus(BusMessage::AddPluginToBus(bus_id, plugin)) => {
                 self.engine.send(AudioCommand::AddPluginToBus {
                     bus_id,

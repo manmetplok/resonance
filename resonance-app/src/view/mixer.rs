@@ -1,7 +1,7 @@
 /// Mixer view rendering for the Resonance application.
 use crate::message::*;
 use crate::state::*;
-use crate::theme;
+use crate::theme::{self, fa};
 use crate::util::format_pan;
 use crate::view::controls::{
     bus_remove_button, fader_section, fx_bypass_button, meter_v, monitor_button, mono_button,
@@ -278,6 +278,25 @@ impl crate::Resonance {
                 .contains(&track.id);
 
         let name_text = text(track.name.clone()).size(13).color(name_color);
+
+        // Save-as-preset button (only for normal tracks, not sub-tracks).
+        let save_preset_btn: Option<Element<'_, Message>> = if !is_sub {
+            let track_id = track.id;
+            Some(
+                button(
+                    theme::icon(fa::FLOPPY_DISK)
+                        .size(9)
+                        .color(theme::TEXT_DIM),
+                )
+                .on_press(Message::Track(TrackMessage::SaveTrackAsPreset(track_id)))
+                .padding([2, 3])
+                .style(|_theme, status| theme::small_button_style(status))
+                .into(),
+            )
+        } else {
+            None
+        };
+
         let track_name: Element<'_, Message> = if has_sub_tracks {
             let glyph = if is_collapsed { "\u{25B8}" } else { "\u{25BE}" };
             let track_id = track.id;
@@ -285,19 +304,28 @@ impl crate::Resonance {
                 .on_press(Message::Track(TrackMessage::ToggleSubTracksVisible(track_id)))
                 .padding([2, 4])
                 .style(|_theme, status| theme::small_button_style(status));
-            container(
-                row![toggle, name_text]
-                    .spacing(4)
-                    .align_y(alignment::Vertical::Center),
-            )
-            .width(Length::Fill)
-            .center_x(Length::Fill)
-            .padding([6, 4])
-            .into()
-        } else {
-            container(name_text)
+            let mut name_row = row![toggle, name_text]
+                .spacing(4)
+                .align_y(alignment::Vertical::Center);
+            if let Some(btn) = save_preset_btn {
+                name_row = name_row
+                    .push(Space::with_width(Length::Fill))
+                    .push(btn);
+            }
+            container(name_row)
                 .width(Length::Fill)
-                .center_x(Length::Fill)
+                .padding([6, 4])
+                .into()
+        } else {
+            let mut name_row = row![name_text]
+                .align_y(alignment::Vertical::Center);
+            if let Some(btn) = save_preset_btn {
+                name_row = name_row
+                    .push(Space::with_width(Length::Fill))
+                    .push(btn);
+            }
+            container(name_row)
+                .width(Length::Fill)
                 .padding([6, 4])
                 .into()
         };

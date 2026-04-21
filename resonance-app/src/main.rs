@@ -6,6 +6,7 @@ pub(crate) mod compose;
 mod engine_events;
 mod message;
 mod midi_editor;
+pub(crate) mod presets;
 pub(crate) mod project;
 pub(crate) mod recent;
 pub(crate) mod state;
@@ -82,6 +83,24 @@ pub(crate) struct Resonance {
     /// GUI state instead.
     pub(crate) plugin_state_cache:
         std::collections::HashMap<resonance_audio::types::PluginInstanceId, Vec<u8>>,
+
+    // ---- Track presets ----
+
+    /// Built-in default track presets (baked into the binary).
+    pub(crate) default_presets: Vec<presets::TrackPreset>,
+    /// User-saved track presets (loaded from disk on startup).
+    pub(crate) user_presets: Vec<presets::TrackPreset>,
+    /// When set, the next `TrackAdded` / `InstrumentTrackAdded` engine
+    /// event will apply this preset to the newly created track.
+    pub(crate) pending_track_preset: Option<presets::TrackPreset>,
+    /// When set, the next `AllPluginStatesSaved` event will capture
+    /// plugin states for this track and save it as a user preset.
+    pub(crate) pending_preset_save: Option<resonance_audio::types::TrackId>,
+    /// Plugin state blobs to apply as PluginAdded events arrive for a
+    /// preset-created track. Tuple of (target track id, ordered list of
+    /// state blobs matching the preset's plugin chain).
+    pub(crate) pending_preset_plugin_states:
+        Option<(resonance_audio::types::TrackId, Vec<Option<Vec<u8>>>)>,
 }
 
 fn main() -> iced::Result {
@@ -296,6 +315,11 @@ impl Resonance {
             dirty: false,
             confirm_quit: None,
             quit_after_save: None,
+            default_presets: presets::default_presets(),
+            user_presets: presets::load_user_presets(),
+            pending_track_preset: None,
+            pending_preset_save: None,
+            pending_preset_plugin_states: None,
         };
 
         (app, iced::Task::none())

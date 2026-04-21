@@ -48,7 +48,11 @@ impl crate::Resonance {
                 }
                 let order = self.registry.next_track_order;
                 self.registry.next_track_order += 1;
-                self.registry.tracks.push(TrackState::new_audio(track_id, order));
+                let mut track = TrackState::new_audio(track_id, order);
+                if let Some(preset) = self.pending_track_preset.take() {
+                    self.apply_preset_to_track(&mut track, &preset);
+                }
+                self.registry.tracks.push(track);
             }
             AudioEvent::TrackRemoved { track_id } => {
                 if let Some(sel_clip_id) = self.interaction.selected_clip {
@@ -172,6 +176,33 @@ impl crate::Resonance {
                     }
                 }
 
+                // If this plugin was added as part of a preset, load
+                // the saved plugin state blob (if any). Pop the first
+                // entry from the pending list to stay in order.
+                if let Some((pending_track, ref mut states)) =
+                    self.pending_preset_plugin_states
+                {
+                    if pending_track == track_id {
+                        if let Some(entry) = if states.is_empty() { None } else { Some(states.remove(0)) } {
+                            if let Some(data) = entry {
+                                self.engine.send(AudioCommand::LoadPluginState {
+                                    instance_id,
+                                    data,
+                                });
+                            }
+                        }
+                    }
+                }
+                // Clean up once all preset plugin states have been consumed.
+                if self
+                    .pending_preset_plugin_states
+                    .as_ref()
+                    .map(|(_, s)| s.is_empty())
+                    .unwrap_or(false)
+                {
+                    self.pending_preset_plugin_states = None;
+                }
+
                 // Seed the undo plugin-state cache with the plugin's
                 // initial CLAP state. Snapshots taken before the user
                 // interacts with the plugin will have the default blob
@@ -293,6 +324,10 @@ impl crate::Resonance {
                 for (instance_id, data) in &states {
                     self.plugin_state_cache.insert(*instance_id, data.clone());
                 }
+                // If a preset save was pending, build and save it now.
+                if let Some(track_id) = self.pending_preset_save.take() {
+                    self.finish_preset_save(track_id);
+                }
                 if let Some(ref mut save) = self.io.save_state {
                     save.plugin_states = states;
                     save.plugins_done = true;
@@ -323,8 +358,11 @@ impl crate::Resonance {
                     return Task::none();
                 }
                 let order = self.registry.tracks.len();
-                self.registry.tracks
-                    .push(TrackState::new_instrument(track_id, order));
+                let mut track = TrackState::new_instrument(track_id, order);
+                if let Some(preset) = self.pending_track_preset.take() {
+                    self.apply_preset_to_track(&mut track, &preset);
+                }
+                self.registry.tracks.push(track);
             }
 
             // -- MIDI clip events --
@@ -521,6 +559,113 @@ impl crate::Resonance {
             }
         }
         Task::none()
+    }
+
+    /// Apply a preset's settings and plugin chain to a newly created track.
+    /// Called from the `TrackAdded`/`InstrumentTrackAdded` handlers when
+    /// `pending_track_preset` was set.
+    fn apply_preset_to_track(
+        &mut self,
+        track: &mut TrackState,
+        preset: &crate::presets::TrackPreset,
+    ) {
+        track.name = preset.name.clone();
+        track.volume = preset.volume;
+        track.pan = preset.pan;
+        track.mono = preset.mono;
+        track.instrument_type = preset.instrument_type;
+        track.instrument_icon = preset.instrument_icon;
+        track.role = preset.role;
+
+        let track_id = track.id;
+
+        // Push mixer settings to the engine.
+        self.engine.send(AudioCommand::SetTrackVolume {
+            track_id,
+            volume: crate::util::db_to_gain(preset.volume),
+        });
+        self.engine.send(AudioCommand::SetTrackPan {
+            track_id,
+            pan: preset.pan,
+        });
+        self.engine.send(AudioCommand::SetTrackMono {
+            track_id,
+            mono: preset.mono,
+        });
+
+        // Add preset plugins to the track.
+        for pp in &preset.plugins {
+            self.engine.send(AudioCommand::AddPlugin {
+                track_id,
+                clap_file_path: pp.clap_file_path.clone(),
+                clap_plugin_id: pp.clap_plugin_id.clone(),
+                id_hint: None,
+            });
+        }
+
+        // Plugin state loading is deferred: we don't know the instance ids
+        // yet (they're assigned by the engine). The PluginAdded event will
+        // fire for each plugin. We store the preset plugin states so we can
+        // match them up. For now, state loading for preset plugins relies on
+        // the plugin states being sent after the AddPlugin command returns
+        // via PluginAdded — we store them for deferred application.
+        //
+        // We stash the pending states in a simple list keyed by the order
+        // (index) in the preset's plugin chain, so when PluginAdded fires
+        // for this track we can pop the next state and apply it.
+        if preset.plugins.iter().any(|p| p.state.is_some()) {
+            let states: Vec<Option<Vec<u8>>> = preset
+                .plugins
+                .iter()
+                .map(|p| p.state.clone())
+                .collect();
+            self.pending_preset_plugin_states = Some((track_id, states));
+        }
+    }
+
+    /// Complete a "Save track as preset" operation. Builds a `TrackPreset`
+    /// from the track's current state and the freshly-captured plugin
+    /// state blobs, then writes it to disk.
+    fn finish_preset_save(&mut self, track_id: TrackId) {
+        let track = match self.registry.tracks.iter().find(|t| t.id == track_id) {
+            Some(t) => t,
+            None => return,
+        };
+
+        let plugins: Vec<crate::presets::PresetPlugin> = track
+            .plugins
+            .iter()
+            .map(|p| crate::presets::PresetPlugin {
+                plugin_name: p.plugin_name.clone(),
+                clap_plugin_id: p.clap_plugin_id.clone(),
+                clap_file_path: p.clap_file_path.clone(),
+                state: self.plugin_state_cache.get(&p.instance_id).cloned(),
+            })
+            .collect();
+
+        let preset = crate::presets::TrackPreset {
+            name: track.name.clone(),
+            track_type: match track.track_type {
+                TrackType::Audio => "audio".to_string(),
+                TrackType::Instrument => "instrument".to_string(),
+            },
+            volume: track.volume,
+            pan: track.pan,
+            mono: track.mono,
+            instrument_type: track.instrument_type,
+            instrument_icon: track.instrument_icon,
+            role: track.role,
+            plugins,
+        };
+
+        match crate::presets::save_user_preset(&preset) {
+            Ok(_) => {
+                self.user_presets = crate::presets::load_user_presets();
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Save preset: {e}"));
+            }
+        }
     }
 
     fn try_finish_save(&mut self) -> Task<Message> {
