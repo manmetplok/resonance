@@ -17,3 +17,4 @@ hound = "3.5"
 midly = "0.5"
 memmap2 = "0.9"
 bytemuck = "1"
+serde = { version = "1", features = ["derive"] }

@@ -227,7 +227,7 @@ impl AudioEngine {
                 (0..crate::mixer::MAX_PLUGIN_OUTPUT_PORTS)
                     .map(|_| (vec![0.0f32; audio_buf_frames], vec![0.0f32; audio_buf_frames]))
                     .collect();
-            let mut note_event_buf: Vec<PendingNoteEvent> = Vec::with_capacity(256);
+            let mut note_event_buf: Vec<PendingNoteEvent> = Vec::with_capacity(mixer::MAX_MIDI_EVENTS_PER_BUFFER);
             // Monitor scratch + ring are sized for the widest multi-channel
             // interleaved input we're likely to see (e.g. an 18-in audio
             // interface). 32 channels × a few blocks of headroom covers

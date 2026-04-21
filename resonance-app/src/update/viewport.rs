@@ -3,7 +3,6 @@
 use iced::Task;
 
 use crate::message::Message;
-use crate::state;
 use crate::theme;
 use crate::Resonance;
 use resonance_audio::types::AudioCommand;
@@ -67,10 +66,8 @@ fn sync_tempo_at_playhead(r: &mut Resonance) {
     if !r.transport.playing || r.tempo_events.len() <= 1 && r.signature_events.len() <= 1 {
         return;
     }
-    let (bpm, num, den) = state::tempo_at_sample(
+    let (bpm, num, den) = r.tempo_map.tempo_at_sample(
         r.transport.playhead,
-        &r.tempo_events,
-        &r.signature_events,
         r.sample_rate,
     );
     // Display only — no engine command.

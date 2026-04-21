@@ -265,9 +265,17 @@ fn apply_master_volume_and_peaks(
         .fetch_max(master_peak_r.to_bits(), Ordering::Relaxed);
 }
 
+/// Maximum MIDI events collected per buffer per track. Prevents the
+/// pre-allocated `note_event_buf` Vec from reallocating on the audio
+/// thread. 512 events = 256 simultaneous note-on + note-off pairs,
+/// far beyond what a single buffer can practically contain.
+pub(crate) const MAX_MIDI_EVENTS_PER_BUFFER: usize = 512;
+
 /// Collect sample-accurate note events from MIDI clips for a given track and buffer range.
 /// Converts tick-based note positions to absolute sample positions using the tempo map.
-/// `out` must be pre-allocated and is cleared before use.
+/// `out` must be pre-allocated and is cleared before use. Stops collecting
+/// once `MAX_MIDI_EVENTS_PER_BUFFER` is reached to avoid allocation on the
+/// real-time thread.
 fn collect_midi_events(
     midi_clips: &[MidiClip],
     track_id: TrackId,
@@ -311,6 +319,9 @@ fn collect_midi_events(
 
             // Emit NoteOn if it falls in this buffer
             if note_abs_start >= playhead && note_abs_start < buf_end {
+                if out.len() >= MAX_MIDI_EVENTS_PER_BUFFER {
+                    break;
+                }
                 out.push(PendingNoteEvent {
                     is_note_on: true,
                     note: note.note,
@@ -321,6 +332,9 @@ fn collect_midi_events(
 
             // Emit NoteOff if it falls in this buffer
             if note_abs_end >= playhead && note_abs_end < buf_end {
+                if out.len() >= MAX_MIDI_EVENTS_PER_BUFFER {
+                    break;
+                }
                 out.push(PendingNoteEvent {
                     is_note_on: false,
                     note: note.note,

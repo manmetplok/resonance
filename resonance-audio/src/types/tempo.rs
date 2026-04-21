@@ -1,5 +1,7 @@
 //! Tempo map and plugin/device info types.
 
+use serde::{Deserialize, Serialize};
+
 /// Ticks per quarter note for MIDI timing (standard PPQ).
 pub const TICKS_PER_QUARTER_NOTE: u64 = 480;
 
@@ -64,7 +66,7 @@ impl std::fmt::Display for ScannedPlugin {
 }
 
 /// A tempo change point on the tempo track.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TempoPoint {
     /// 0-based bar number where this tempo takes effect.
     pub bar: u32,
@@ -72,7 +74,7 @@ pub struct TempoPoint {
 }
 
 /// A time signature change point on the signature track.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignaturePoint {
     /// 0-based bar number where this signature takes effect.
     pub bar: u32,
@@ -179,6 +181,10 @@ struct BarEntry {
     tick: u64,
     /// Number of ticks in this bar (depends on time signature).
     ticks_in_bar: u32,
+    /// Time signature numerator active at this bar.
+    numerator: u8,
+    /// Time signature denominator active at this bar.
+    denominator: u8,
 }
 
 /// Tempo and time signature state.
@@ -218,7 +224,7 @@ impl TempoMap {
     pub fn rebuild_bar_table(&mut self, sample_rate: u32) {
         self.table_sample_rate = sample_rate;
         self.bar_table.clear();
-        if self.tempo_points.len() <= 1 {
+        if sample_rate == 0 {
             return;
         }
         let sr = sample_rate as f64;
@@ -236,9 +242,11 @@ impl TempoMap {
             .max()
             .unwrap_or(0);
         let table_end = (last_bar + 200).min(10_000);
+        let mut cur_den = self.signature_points.first()
+            .map(|e| e.denominator).unwrap_or(self.denominator);
         for b in 0u32..table_end {
             while let Some(e) = self.signature_points.get(si) {
-                if e.bar == b { cur_num = e.numerator; si += 1; } else { break; }
+                if e.bar == b { cur_num = e.numerator; cur_den = e.denominator; si += 1; } else { break; }
             }
             let bpm = bpm_at_bar(b as f64, &self.tempo_points) as f32;
             let arr = arrival_bpm_at_bar(b, &self.tempo_points) as f32;
@@ -249,6 +257,8 @@ impl TempoMap {
                 arrival_bpm: arr,
                 tick: tick_pos,
                 ticks_in_bar,
+                numerator: cur_num,
+                denominator: cur_den,
             });
             tick_pos += ticks_in_bar as u64;
             let avg = avg_bpm_for_bar(b, &self.tempo_points);
@@ -478,5 +488,89 @@ impl TempoMap {
         let minutes = (total_secs / 60.0).floor() as u32;
         let seconds = total_secs - (minutes as f64 * 60.0);
         format!("{:02}:{:06.3}", minutes, seconds)
+    }
+
+    /// Sample position at the start of a given 0-based bar number.
+    /// Uses the precomputed bar table for O(1) lookup.
+    pub fn bar_to_sample(&self, bar: u32) -> u64 {
+        if let Some(entry) = self.bar_table.get(bar as usize) {
+            return entry.sample;
+        }
+        // Past end of bar table: extrapolate from the last entry.
+        if let Some(last) = self.bar_table.last() {
+            let bars_past = bar as u64 - (self.bar_table.len() as u64 - 1);
+            let spb = self.table_sample_rate as f64 * 60.0 / last.bpm as f64;
+            let num = last.numerator as f64;
+            return last.sample + (bars_past as f64 * spb * num) as u64;
+        }
+        // No bar table at all: flat BPM.
+        let spb = self.table_sample_rate as f64 * 60.0 / self.bpm as f64;
+        (bar as f64 * spb * self.numerator as f64) as u64
+    }
+
+    /// Return the interpolated (bpm, numerator, denominator) at a sample
+    /// position. Uses the bar table for O(log n) lookup.
+    pub fn tempo_at_sample(&self, sample_pos: u64, sample_rate: u32) -> (f32, u8, u8) {
+        if self.bar_table.is_empty() {
+            return (self.bpm, self.numerator, self.denominator);
+        }
+        let idx = match self.bar_table.binary_search_by_key(&sample_pos, |e| e.sample) {
+            Ok(i) => i,
+            Err(0) => 0,
+            Err(i) => i - 1,
+        };
+        let entry = &self.bar_table[idx];
+        let bpm = self.bpm_at(sample_pos, sample_rate);
+        (bpm, entry.numerator, entry.denominator)
+    }
+
+    /// Convert a sample position to a (bar, fraction) pair where bar is
+    /// 0-based and fraction is 0.0..1.0 within the bar.
+    pub fn sample_to_bar(&self, sample_pos: u64, sample_rate: u32) -> (u32, f64) {
+        if self.bar_table.is_empty() {
+            let spb = sample_rate as f64 * 60.0 / self.bpm as f64;
+            let bar_samples = spb * self.numerator as f64;
+            if bar_samples <= 0.0 {
+                return (0, 0.0);
+            }
+            let bar = (sample_pos as f64 / bar_samples).floor() as u32;
+            let frac = (sample_pos as f64 - bar as f64 * bar_samples) / bar_samples;
+            return (bar, frac);
+        }
+        let idx = match self.bar_table.binary_search_by_key(&sample_pos, |e| e.sample) {
+            Ok(i) => i,
+            Err(0) => 0,
+            Err(i) => i - 1,
+        };
+        let entry = &self.bar_table[idx];
+        let bar = idx as u32;
+        if let Some(next) = self.bar_table.get(idx + 1) {
+            let span = (next.sample - entry.sample) as f64;
+            let frac = if span > 0.0 {
+                (sample_pos - entry.sample) as f64 / span
+            } else {
+                0.0
+            };
+            (bar, frac)
+        } else {
+            // Past the last bar entry: extrapolate.
+            let spb = sample_rate as f64 * 60.0 / entry.bpm as f64;
+            let bar_samples = spb * entry.numerator as f64;
+            if bar_samples <= 0.0 {
+                return (bar, 0.0);
+            }
+            let samples_past = (sample_pos - entry.sample) as f64;
+            let extra_bars = (samples_past / bar_samples).floor() as u32;
+            let frac = (samples_past - extra_bars as f64 * bar_samples) / bar_samples;
+            (bar + extra_bars, frac)
+        }
+    }
+
+    /// Return the time signature numerator active at a given 0-based bar.
+    pub fn numerator_at_bar(&self, bar: u32) -> u8 {
+        if let Some(entry) = self.bar_table.get(bar as usize) {
+            return entry.numerator;
+        }
+        self.bar_table.last().map(|e| e.numerator).unwrap_or(self.numerator)
     }
 }

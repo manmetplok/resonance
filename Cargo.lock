@@ -3714,6 +3714,7 @@ dependencies = [
  "parking_lot 0.12.5",
  "resonance-dsp",
  "ringbuf",
+ "serde",
  "symphonia",
 ]
 

@@ -8,7 +8,7 @@ use crate::theme;
 use crate::state::{self, ClipEdge, ClipState, LoopDragTarget, MidiClipState, TrackState};
 use crate::message::*;
 
-use resonance_audio::types::{ClipId, TrackId};
+use resonance_audio::types::{ClipId, TempoMap, TrackId, bpm_at_bar};
 
 pub mod hit_test;
 pub mod scrollbar;
@@ -29,26 +29,25 @@ pub fn snap_sample_to_grid(
     sample_rate: u32,
     zoom: f32,
 ) -> u64 {
-    snap_sample_to_grid_tempo(sample, bpm, time_sig_num, sample_rate, zoom, &[], &[])
+    let tm = TempoMap::default();
+    snap_sample_to_grid_tempo(sample, bpm, time_sig_num, sample_rate, zoom, &tm)
 }
 
-/// Tempo-map-aware version of `snap_sample_to_grid`. When tempo/signature
-/// events are provided, bar boundaries are computed correctly across
-/// tempo changes.
+/// Tempo-map-aware version of `snap_sample_to_grid`. Uses the shared
+/// `TempoMap` for bar boundary computation.
 pub fn snap_sample_to_grid_tempo(
     sample: u64,
     bpm: f32,
     time_sig_num: u8,
     sample_rate: u32,
     zoom: f32,
-    tempo_events: &[crate::state::TempoEvent],
-    signature_events: &[crate::state::SignatureEvent],
+    tempo_map: &TempoMap,
 ) -> u64 {
     if bpm <= 0.0 || time_sig_num == 0 || zoom <= 0.0 {
         return sample;
     }
     // When there's no meaningful tempo map, use the flat-BPM path.
-    if tempo_events.len() <= 1 {
+    if tempo_map.tempo_points.len() <= 1 {
         let samples_per_beat = sample_rate as f64 * 60.0 / bpm as f64;
         let samples_per_bar = samples_per_beat * time_sig_num as f64;
         let bar_pixel_width = (samples_per_bar / sample_rate as f64) as f32 * zoom;
@@ -67,12 +66,11 @@ pub fn snap_sample_to_grid_tempo(
 
     // Tempo map is active: find which bar we're in and snap to the
     // nearest bar or beat boundary.
-    let (bar, frac) = state::sample_to_bar(sample, tempo_events, signature_events, sample_rate);
+    let (bar, frac) = tempo_map.sample_to_bar(sample, sample_rate);
 
     // Determine snap resolution from the local bar pixel width.
-    let local_bpm = state::bpm_at_bar(bar as f64, tempo_events);
-    let cur_num = signature_events.iter().rev()
-        .find(|e| e.bar <= bar).map(|e| e.numerator).unwrap_or(time_sig_num);
+    let local_bpm = bpm_at_bar(bar as f64, &tempo_map.tempo_points);
+    let cur_num = tempo_map.numerator_at_bar(bar);
     let spb = sample_rate as f64 * 60.0 / local_bpm;
     let bar_samples = spb * cur_num as f64;
     let bar_px = (bar_samples / sample_rate as f64) as f32 * zoom;
@@ -85,11 +83,11 @@ pub fn snap_sample_to_grid_tempo(
         let nearest_beat = beat_frac.round() as u32;
         if nearest_beat >= cur_num as u32 {
             // Snaps to start of next bar
-            state::bar_to_sample(bar + 1, tempo_events, signature_events, sample_rate)
+            tempo_map.bar_to_sample(bar + 1)
         } else {
             // Snaps to beat within this bar
-            let bar_start = state::bar_to_sample(bar, tempo_events, signature_events, sample_rate);
-            let bar_end = state::bar_to_sample(bar + 1, tempo_events, signature_events, sample_rate);
+            let bar_start = tempo_map.bar_to_sample(bar);
+            let bar_end = tempo_map.bar_to_sample(bar + 1);
             let total = (bar_end - bar_start) as f64;
             let beat_frac_pos = nearest_beat as f64 / cur_num as f64;
             bar_start + (beat_frac_pos * total) as u64
@@ -97,7 +95,7 @@ pub fn snap_sample_to_grid_tempo(
     } else {
         // Snap to the nearest bar.
         let nearest_bar = if frac >= 0.5 { bar + 1 } else { bar };
-        state::bar_to_sample(nearest_bar, tempo_events, signature_events, sample_rate)
+        tempo_map.bar_to_sample(nearest_bar)
     }
 }
 
@@ -123,8 +121,7 @@ pub struct TimelineCanvas<'a> {
     pub selected_midi_clip: Option<ClipId>,
     pub selected_track: Option<TrackId>,
     pub global_tracks_expanded: bool,
-    pub tempo_events: &'a [crate::state::TempoEvent],
-    pub signature_events: &'a [crate::state::SignatureEvent],
+    pub tempo_map: &'a TempoMap,
     pub selected_global_event: Option<crate::state::SelectedGlobalEvent>,
 }
 
@@ -162,9 +159,8 @@ impl TimelineCanvas<'_> {
             }
         }
         for c in self.midi_clips {
-            let end = state::tick_to_abs_sample(
-                c.start_sample, c.duration_ticks,
-                self.tempo_events, self.signature_events, self.sample_rate,
+            let end = self.tempo_map.tick_to_abs_sample(
+                c.start_sample, c.duration_ticks, self.sample_rate,
             );
             if end > max_sample {
                 max_sample = end;
@@ -427,8 +423,7 @@ impl TimelineCanvas<'_> {
                 self.time_sig_num,
                 self.sample_rate,
                 self.zoom,
-                self.tempo_events,
-                self.signature_events,
+                self.tempo_map,
             );
             return captured(Message::Transport(TransportMessage::SeekToSample(snapped)));
         }
@@ -443,9 +438,8 @@ impl TimelineCanvas<'_> {
 
         // Check MIDI clips (reverse order so topmost wins)
         for clip in self.midi_clips.iter().rev() {
-            let clip_end = state::tick_to_abs_sample(
-                clip.start_sample, clip.duration_ticks,
-                self.tempo_events, self.signature_events, self.sample_rate,
+            let clip_end = self.tempo_map.tick_to_abs_sample(
+                clip.start_sample, clip.duration_ticks, self.sample_rate,
             );
             let duration_samples = clip_end.saturating_sub(clip.start_sample);
             let Some(hit) = self.hit_test_lane(
@@ -636,7 +630,7 @@ impl TimelineCanvas<'_> {
     fn tempo_bpm_range(&self) -> (f32, f32) {
         let mut min_bpm = f32::MAX;
         let mut max_bpm = f32::MIN;
-        for e in self.tempo_events {
+        for e in &self.tempo_map.tempo_points {
             min_bpm = min_bpm.min(e.bpm);
             max_bpm = max_bpm.max(e.bpm);
         }
@@ -649,9 +643,7 @@ impl TimelineCanvas<'_> {
     fn x_to_bar(&self, x: f32) -> u32 {
         let seconds = ((x + self.scroll_offset) / self.zoom).max(0.0);
         let sample = (seconds as f64 * self.sample_rate as f64) as u64;
-        let (bar, frac) = state::sample_to_bar(
-            sample, self.tempo_events, self.signature_events, self.sample_rate,
-        );
+        let (bar, frac) = self.tempo_map.sample_to_bar(sample, self.sample_rate);
         if frac >= 0.5 { bar + 1 } else { bar }
     }
 
@@ -680,10 +672,8 @@ impl TimelineCanvas<'_> {
             let graph_h = graph_bot - graph_top;
 
             let mut best: Option<(usize, f32)> = None; // (index, distance²)
-            for (i, event) in self.tempo_events.iter().enumerate() {
-                let sample = state::bar_to_sample(
-                    event.bar, self.tempo_events, self.signature_events, self.sample_rate,
-                );
+            for (i, event) in self.tempo_map.tempo_points.iter().enumerate() {
+                let sample = self.tempo_map.bar_to_sample(event.bar);
                 let ex = self.sample_to_x(sample);
                 let ey = graph_bot - ((event.bpm - lo) / (hi - lo)) * graph_h;
                 let dx = pos.x - ex;
@@ -698,7 +688,7 @@ impl TimelineCanvas<'_> {
             if let Some((i, _)) = best {
                 state.tempo_drag = Some(TempoDrag {
                     index: i,
-                    original_bpm: self.tempo_events[i].bpm,
+                    original_bpm: self.tempo_map.tempo_points[i].bpm,
                     anchor_y: pos.y,
                 });
                 return captured(Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(i)));
@@ -716,7 +706,7 @@ impl TimelineCanvas<'_> {
                 state.last_global_click = None;
                 // Add at the interpolated BPM for this bar so the point
                 // appears on the current line.
-                let bpm = state::bpm_at_bar(bar as f64, self.tempo_events) as f32;
+                let bpm = bpm_at_bar(bar as f64, &self.tempo_map.tempo_points) as f32;
                 return captured(Message::GlobalTrack(GlobalTrackMessage::AddTempoEvent {
                     bar,
                     bpm,
@@ -727,10 +717,8 @@ impl TimelineCanvas<'_> {
         }
 
         if in_sig {
-            for (i, event) in self.signature_events.iter().enumerate() {
-                let sample = state::bar_to_sample(
-                    event.bar, self.tempo_events, self.signature_events, self.sample_rate,
-                );
+            for (i, event) in self.tempo_map.signature_points.iter().enumerate() {
+                let sample = self.tempo_map.bar_to_sample(event.bar);
                 let ex = self.sample_to_x(sample);
                 if (pos.x - ex).abs() < 8.0 {
                     return captured(Message::GlobalTrack(GlobalTrackMessage::SelectEvent(

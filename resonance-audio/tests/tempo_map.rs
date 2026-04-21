@@ -199,9 +199,9 @@ fn frac_slower_tempo_means_more_samples_early() {
 // ========================================================================
 
 #[test]
-fn bar_table_empty_for_single_tempo() {
+fn bar_table_built_for_single_tempo() {
     let tm = make_tempo_map(&[(0, 120.0)], &[(0, 4, 4)]);
-    assert_eq!(tm.bar_count(), 0, "single tempo point should not build a bar table");
+    assert!(tm.bar_count() > 0, "bar table should always be built when sample_rate > 0");
 }
 
 #[test]
@@ -362,9 +362,10 @@ fn tick_to_abs_sample_with_step_change() {
 // ========================================================================
 
 #[test]
-fn bar_index_at_empty_table() {
+fn bar_index_at_single_tempo() {
     let tm = make_tempo_map(&[(0, 120.0)], &[(0, 4, 4)]);
-    assert_eq!(tm.bar_index_at(0), None);
+    // Bar table is always built now, so bar 0 should be found.
+    assert_eq!(tm.bar_index_at(0), Some(0));
 }
 
 #[test]

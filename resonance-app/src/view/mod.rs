@@ -196,8 +196,7 @@ impl crate::Resonance {
             selected_midi_clip: self.interaction.selected_midi_clip,
             selected_track: self.interaction.selected_track,
             global_tracks_expanded: self.viewport.global_tracks_expanded,
-            tempo_events: &self.tempo_events,
-            signature_events: &self.signature_events,
+            tempo_map: &self.tempo_map,
             selected_global_event: self.interaction.selected_global_event,
         };
 

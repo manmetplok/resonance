@@ -12,10 +12,8 @@ use crate::Resonance;
 
 pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
     // Use the GUI-side tempo map for correct bar/beat display with tempo changes.
-    let (bar_0, frac) = crate::state::sample_to_bar(
+    let (bar_0, frac) = r.tempo_map.sample_to_bar(
         r.transport.playhead,
-        &r.tempo_events,
-        &r.signature_events,
         r.sample_rate,
     );
     let num_beats = r.transport.time_sig_num as f64;

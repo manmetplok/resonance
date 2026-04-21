@@ -234,7 +234,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     }
 
     r.engine.send(AudioCommand::SetBpm { bpm: r.transport.bpm });
-    r.send_tempo_events_to_engine();
+    r.rebuild_and_send_tempo();
     r.engine.send(AudioCommand::SetTimeSignature {
         numerator: r.transport.time_sig_num,
         denominator: r.transport.time_sig_den,

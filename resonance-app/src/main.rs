@@ -50,6 +50,9 @@ pub(crate) struct Resonance {
     pub(crate) tempo_events: Vec<state::TempoEvent>,
     /// Time signature change events on the signature track (sorted by bar).
     pub(crate) signature_events: Vec<state::SignatureEvent>,
+    /// GUI-side tempo map — shared implementation with the audio engine.
+    /// Rebuilt from `tempo_events` / `signature_events` whenever they change.
+    pub(crate) tempo_map: TempoMap,
 
     // Sub-state groupings. See `state.rs` for definitions.
     pub(crate) transport: TransportState,
@@ -92,29 +95,42 @@ fn main() -> iced::Result {
 }
 
 impl Resonance {
-    /// Update the transport BPM display from the current tempo events.
+    /// Rebuild the GUI-side tempo map from the current events and send the
+    /// events to the audio engine. Call whenever `tempo_events` or
+    /// `signature_events` are modified.
+    pub(crate) fn rebuild_and_send_tempo(&mut self) {
+        self.tempo_map.tempo_points = self.tempo_events.clone();
+        self.tempo_map.signature_points = self.signature_events.clone();
+        self.tempo_map.bpm = self.transport.bpm;
+        self.tempo_map.numerator = self.transport.time_sig_num;
+        self.tempo_map.denominator = self.transport.time_sig_den;
+        self.tempo_map.rebuild_bar_table(self.sample_rate);
+        // Send to engine so its TempoMap stays in sync.
+        self.engine.send(AudioCommand::SetTempoEvents {
+            tempo: self.tempo_events.clone(),
+            signature: self.signature_events.clone(),
+        });
+    }
+
+    /// Rebuild only the GUI-side tempo map (no engine send). Used when
+    /// only UI display needs updating, e.g. during tempo drags.
+    pub(crate) fn rebuild_tempo_map(&mut self) {
+        self.tempo_map.tempo_points = self.tempo_events.clone();
+        self.tempo_map.signature_points = self.signature_events.clone();
+        self.tempo_map.bpm = self.transport.bpm;
+        self.tempo_map.numerator = self.transport.time_sig_num;
+        self.tempo_map.denominator = self.transport.time_sig_den;
+        self.tempo_map.rebuild_bar_table(self.sample_rate);
+    }
+
+    /// Update the transport BPM display from the current tempo map.
     pub(crate) fn sync_tempo_display(&mut self) {
-        let (bpm, _, _) = state::tempo_at_sample(
+        let (bpm, _, _) = self.tempo_map.tempo_at_sample(
             self.transport.playhead,
-            &self.tempo_events,
-            &self.signature_events,
             self.sample_rate,
         );
         self.transport.bpm = bpm;
         self.transport.bpm_input = format!("{:.1}", bpm);
-    }
-
-    /// Send the full tempo event list to the audio engine so it can
-    /// compute BPM at any playhead position without per-tick commands.
-    pub(crate) fn send_tempo_events_to_engine(&self) {
-        use resonance_audio::types::{AudioCommand, TempoPoint, SignaturePoint};
-        let tempo: Vec<TempoPoint> = self.tempo_events.iter().map(|e| {
-            TempoPoint { bar: e.bar, bpm: e.bpm }
-        }).collect();
-        let signature: Vec<SignaturePoint> = self.signature_events.iter().map(|e| {
-            SignaturePoint { bar: e.bar, numerator: e.numerator, denominator: e.denominator }
-        }).collect();
-        self.engine.send(AudioCommand::SetTempoEvents { tempo, signature });
     }
 
     pub(crate) fn sorted_tracks(&self) -> Vec<&TrackState> {
@@ -229,6 +245,7 @@ impl Resonance {
 
             tempo_events: vec![state::TempoEvent { bar: 0, bpm: 120.0 }],
             signature_events: vec![state::SignatureEvent { bar: 0, numerator: 4, denominator: 4 }],
+            tempo_map: TempoMap::default(),
 
             transport: TransportState::default(),
             viewport: ArrangeViewport::default(),

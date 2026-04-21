@@ -141,8 +141,8 @@ impl crate::Resonance {
             Message::GlobalTrack(GlobalTrackMessage::AddTempoEvent { bar, bpm }) => {
                 self.tempo_events.push(state::TempoEvent { bar, bpm });
                 self.tempo_events.sort_by_key(|e| e.bar);
+                self.rebuild_and_send_tempo();
                 self.sync_tempo_display();
-                self.send_tempo_events_to_engine();
             }
             // Start drag: select the event and begin undo group.
             Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(index)) => {
@@ -154,24 +154,26 @@ impl crate::Resonance {
             // End drag: sort events and commit undo.
             Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag) => {
                 self.tempo_events.sort_by_key(|e| e.bar);
-                self.send_tempo_events_to_engine();
+                self.rebuild_and_send_tempo();
             }
             Message::GlobalTrack(GlobalTrackMessage::UpdateTempoEvent { index, bar, bpm }) => {
                 let bpm = bpm.clamp(20.0, 300.0);
                 if let Some(event) = self.tempo_events.get_mut(index) {
                     event.bar = if index == 0 { 0 } else { bar };
                     event.bpm = bpm;
+                    // During drag: rebuild local map for correct display,
+                    // but only send lightweight SetBpm to engine. Full
+                    // SetTempoEvents sent on EndTempoDrag.
+                    self.rebuild_tempo_map();
                     self.sync_tempo_display();
-                    // During drag: lightweight SetBpm only (no table rebuild).
-                    // Full SetTempoEvents sent on EndTempoDrag.
                     self.engine.send(AudioCommand::SetBpm { bpm: self.transport.bpm });
                 }
             }
             Message::GlobalTrack(GlobalTrackMessage::RemoveTempoEvent(index)) => {
                 if index > 0 && index < self.tempo_events.len() {
                     self.tempo_events.remove(index);
+                    self.rebuild_and_send_tempo();
                     self.sync_tempo_display();
-                    self.send_tempo_events_to_engine();
                 }
             }
             Message::GlobalTrack(GlobalTrackMessage::AddSignatureEvent { bar, numerator, denominator }) => {
@@ -182,9 +184,8 @@ impl crate::Resonance {
                     self.signature_events.push(state::SignatureEvent { bar, numerator, denominator });
                     self.signature_events.sort_by_key(|e| e.bar);
                 }
-                let event_sample = state::bar_to_sample(
-                    bar, &self.tempo_events, &self.signature_events, self.sample_rate,
-                );
+                self.rebuild_and_send_tempo();
+                let event_sample = self.tempo_map.bar_to_sample(bar);
                 if self.transport.playhead >= event_sample {
                     self.transport.time_sig_num = numerator;
                     self.transport.time_sig_den = denominator;
@@ -194,9 +195,9 @@ impl crate::Resonance {
             Message::GlobalTrack(GlobalTrackMessage::RemoveSignatureEvent(index)) => {
                 if index > 0 && index < self.signature_events.len() {
                     self.signature_events.remove(index);
-                    let (_, num, den) = state::tempo_at_sample(
-                        self.transport.playhead, &self.tempo_events,
-                        &self.signature_events, self.sample_rate,
+                    self.rebuild_and_send_tempo();
+                    let (_, num, den) = self.tempo_map.tempo_at_sample(
+                        self.transport.playhead, self.sample_rate,
                     );
                     self.transport.time_sig_num = num;
                     self.transport.time_sig_den = den;
@@ -212,16 +213,16 @@ impl crate::Resonance {
                         state::GlobalTrackKind::Tempo => {
                             if sel.index > 0 && sel.index < self.tempo_events.len() {
                                 self.tempo_events.remove(sel.index);
+                                self.rebuild_and_send_tempo();
                                 self.sync_tempo_display();
-                                self.send_tempo_events_to_engine();
                             }
                         }
                         state::GlobalTrackKind::Signature => {
                             if sel.index > 0 && sel.index < self.signature_events.len() {
                                 self.signature_events.remove(sel.index);
-                                let (_, num, den) = state::tempo_at_sample(
-                                    self.transport.playhead, &self.tempo_events,
-                                    &self.signature_events, self.sample_rate,
+                                self.rebuild_and_send_tempo();
+                                let (_, num, den) = self.tempo_map.tempo_at_sample(
+                                    self.transport.playhead, self.sample_rate,
                                 );
                                 self.transport.time_sig_num = num;
                                 self.transport.time_sig_den = den;
@@ -490,7 +491,7 @@ impl crate::Resonance {
                                 first.bpm = self.transport.bpm;
                             }
                         }
-                        self.send_tempo_events_to_engine();
+                        self.rebuild_and_send_tempo();
                     }
                     Err(_) => {}
                 }
@@ -652,8 +653,7 @@ impl crate::Resonance {
                         self.transport.time_sig_num,
                         self.sample_rate,
                         self.viewport.zoom,
-                        &self.tempo_events,
-                        &self.signature_events,
+                        &self.tempo_map,
                     );
                     match self.transport.dragging_loop {
                         Some(LoopDragTarget::In) => {

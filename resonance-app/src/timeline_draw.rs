@@ -7,6 +7,7 @@ use iced::{Color, Point, Size};
 
 use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
+use resonance_audio::types::avg_bpm_for_bar;
 use crate::timeline::TimelineCanvas;
 
 impl TimelineCanvas<'_> {
@@ -54,11 +55,11 @@ impl TimelineCanvas<'_> {
         );
 
         // ---- Draw tempo line graph ----
-        if !self.tempo_events.is_empty() {
+        if !self.tempo_map.tempo_points.is_empty() {
             // Determine BPM range for vertical mapping.
             let mut min_bpm = f32::MAX;
             let mut max_bpm = f32::MIN;
-            for e in self.tempo_events {
+            for e in &self.tempo_map.tempo_points {
                 min_bpm = min_bpm.min(e.bpm);
                 max_bpm = max_bpm.max(e.bpm);
             }
@@ -80,16 +81,11 @@ impl TimelineCanvas<'_> {
 
             // Build (x, y, bpm, is_selected) for each event point.
             let points: Vec<(f32, f32, f32, bool)> = self
-                .tempo_events
+                .tempo_map.tempo_points
                 .iter()
                 .enumerate()
                 .map(|(i, e)| {
-                    let sample = state::bar_to_sample(
-                        e.bar,
-                        self.tempo_events,
-                        self.signature_events,
-                        self.sample_rate,
-                    );
+                    let sample = self.tempo_map.bar_to_sample(e.bar);
                     let x = self.sample_to_x(sample);
                     let y = bpm_to_y(e.bpm);
                     let selected = self.selected_global_event
@@ -209,19 +205,14 @@ impl TimelineCanvas<'_> {
         }
 
         // ---- Draw signature event markers ----
-        for (i, event) in self.signature_events.iter().enumerate() {
-            let sample = state::bar_to_sample(
-                event.bar, self.tempo_events, self.signature_events, self.sample_rate,
-            );
+        for (i, event) in self.tempo_map.signature_points.iter().enumerate() {
+            let sample = self.tempo_map.bar_to_sample(event.bar);
             let x = self.sample_to_x(sample);
             if x > width + 50.0 || x < -50.0 {
                 continue;
             }
-            let next_x = self.signature_events.get(i + 1).map(|ne| {
-                let ns = state::bar_to_sample(
-                    ne.bar, self.tempo_events, self.signature_events, self.sample_rate,
-                );
-                self.sample_to_x(ns)
+            let next_x = self.tempo_map.signature_points.get(i + 1).map(|ne| {
+                self.sample_to_x(self.tempo_map.bar_to_sample(ne.bar))
             }).unwrap_or(width);
             let block_w = (next_x - x).max(2.0).min(width - x.max(0.0));
 
@@ -279,15 +270,15 @@ impl TimelineCanvas<'_> {
 
         // Walk bars from 0, accumulating sample positions with interpolation.
         let mut sample_pos: f64 = 0.0;
-        let mut cur_num = self.signature_events.first().map(|e| e.numerator).unwrap_or(4);
-        let mut si: usize = if self.signature_events.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
+        let mut cur_num = self.tempo_map.signature_points.first().map(|e| e.numerator).unwrap_or(4);
+        let mut si: usize = if self.tempo_map.signature_points.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
 
         for bar in 0u32.. {
-            while let Some(e) = self.signature_events.get(si) {
+            while let Some(e) = self.tempo_map.signature_points.get(si) {
                 if e.bar == bar { cur_num = e.numerator; si += 1; } else { break; }
             }
 
-            let cur_bpm = state::avg_bpm_for_bar(bar, self.tempo_events);
+            let cur_bpm = avg_bpm_for_bar(bar, &self.tempo_map.tempo_points);
             let samples_per_beat = sr * 60.0 / cur_bpm;
             let samples_per_bar = samples_per_beat * cur_num as f64;
             let bar_seconds = samples_per_bar / sr;
@@ -347,15 +338,15 @@ impl TimelineCanvas<'_> {
         let sr = self.sample_rate as f64;
 
         let mut sample_pos: f64 = 0.0;
-        let mut cur_num = self.signature_events.first().map(|e| e.numerator).unwrap_or(4);
-        let mut si: usize = if self.signature_events.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
+        let mut cur_num = self.tempo_map.signature_points.first().map(|e| e.numerator).unwrap_or(4);
+        let mut si: usize = if self.tempo_map.signature_points.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
 
         for bar in 0u32.. {
-            while let Some(e) = self.signature_events.get(si) {
+            while let Some(e) = self.tempo_map.signature_points.get(si) {
                 if e.bar == bar { cur_num = e.numerator; si += 1; } else { break; }
             }
 
-            let cur_bpm = state::avg_bpm_for_bar(bar, self.tempo_events);
+            let cur_bpm = avg_bpm_for_bar(bar, &self.tempo_map.tempo_points);
             let samples_per_beat = sr * 60.0 / cur_bpm;
             let samples_per_bar = samples_per_beat * cur_num as f64;
             let bar_seconds = samples_per_bar / sr;
@@ -566,9 +557,8 @@ impl TimelineCanvas<'_> {
         let clip_height = theme::TRACK_HEIGHT - 4.0;
 
         // Convert tick duration to samples integrating the tempo map.
-        let clip_end_sample = state::tick_to_abs_sample(
-            clip.start_sample, clip.duration_ticks,
-            self.tempo_events, self.signature_events, self.sample_rate,
+        let clip_end_sample = self.tempo_map.tick_to_abs_sample(
+            clip.start_sample, clip.duration_ticks, self.sample_rate,
         );
         let duration_samples = clip_end_sample.saturating_sub(clip.start_sample) as f64;
         let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
