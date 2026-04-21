@@ -60,8 +60,9 @@ fn update_vu_meters(r: &mut Resonance) {
     r.master_level_r = (r.master_level_r * theme::PEAK_DECAY).max(master_peak_r);
 }
 
-/// During playback, detect when the playhead crosses a tempo or time
-/// signature change point and send the updated values to the engine.
+/// During playback, update the transport BPM display from the tempo
+/// map. The engine computes its own BPM from the shared tempo events
+/// so no `SetBpm` commands are sent here.
 fn sync_tempo_at_playhead(r: &mut Resonance) {
     if !r.transport.playing || r.tempo_events.len() <= 1 && r.signature_events.len() <= 1 {
         return;
@@ -72,11 +73,10 @@ fn sync_tempo_at_playhead(r: &mut Resonance) {
         &r.signature_events,
         r.sample_rate,
     );
-    if (bpm - r.transport.bpm).abs() > 0.01 {
-        r.transport.bpm = bpm;
-        r.transport.bpm_input = format!("{:.0}", bpm);
-        r.engine.send(AudioCommand::SetBpm { bpm });
-    }
+    // Display only — no engine command.
+    r.transport.bpm = bpm;
+    r.transport.bpm_input = format!("{:.1}", bpm);
+
     if num != r.transport.time_sig_num || den != r.transport.time_sig_den {
         r.transport.time_sig_num = num;
         r.transport.time_sig_den = den;

@@ -263,6 +263,12 @@ pub(crate) enum GlobalTrackMessage {
     AddTempoEvent { bar: u32, bpm: f32 },
     /// Remove a tempo event by index (bar 0 cannot be removed).
     RemoveTempoEvent(usize),
+    /// Update an existing tempo event in-place (drag interaction).
+    UpdateTempoEvent { index: usize, bar: u32, bpm: f32 },
+    /// Start dragging a tempo event (undo begin + select).
+    StartTempoDrag(usize),
+    /// Finish dragging a tempo event (undo commit).
+    EndTempoDrag,
     /// Add a time signature change event at the given bar.
     AddSignatureEvent { bar: u32, numerator: u8, denominator: u8 },
     /// Remove a signature event by index (bar 0 cannot be removed).

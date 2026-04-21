@@ -397,6 +397,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         Message::Ui(_) => UndoAction::Skip,
         Message::ProjectIo(_) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::SelectEvent(_)) => UndoAction::Skip,
+        Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(_)) => UndoAction::Begin,
+        Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag) => UndoAction::Commit,
+        Message::GlobalTrack(GlobalTrackMessage::UpdateTempoEvent { .. }) => UndoAction::Skip,
         Message::GlobalTrack(_) => UndoAction::Record,
 
         Message::Transport(t) => match t {
@@ -566,6 +569,8 @@ mod tests {
                 busses: Vec::new(),
                 section_definitions: Vec::new(),
                 section_placements: Vec::new(),
+                tempo_events: Vec::new(),
+                signature_events: Vec::new(),
             },
             project_dir: PathBuf::new(),
             midi_notes: HashMap::new(),

@@ -825,7 +825,7 @@ pub struct ProjectIoState {
 #[derive(Debug, Default)]
 pub struct MixerUiState {
     pub selected_plugin: Option<PluginInstanceId>,
-    pub collapsed_sub_track_parents: std::collections::HashSet<TrackId>,
+    pub expanded_sub_track_parents: std::collections::HashSet<TrackId>,
     pub add_track_menu_open: bool,
     pub settings_open: bool,
 }

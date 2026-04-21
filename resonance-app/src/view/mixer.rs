@@ -4,7 +4,7 @@ use crate::state::*;
 use crate::theme;
 use crate::util::format_pan;
 use crate::view::controls::{
-    bus_remove_button, fader_section, fx_bypass_button, monitor_button, mono_button,
+    bus_remove_button, fader_section, fx_bypass_button, meter_v, monitor_button, mono_button,
     mute_button, record_arm_button, solo_button,
 };
 use crate::view::knob::pan_knob;
@@ -72,9 +72,9 @@ impl crate::Resonance {
         let mut track_strip_row = row![].spacing(2);
         for track in &sorted_tracks {
             if let Some(link) = track.sub_track {
-                if self
+                if !self
                     .mixer
-                    .collapsed_sub_track_parents
+                    .expanded_sub_track_parents
                     .contains(&link.parent_track_id)
                 {
                     continue;
@@ -263,7 +263,7 @@ impl crate::Resonance {
 
         // Parent instrument tracks that have at least one sub-track show
         // a small collapse/expand button next to the name. Clicking it
-        // toggles `collapsed_sub_track_parents`, which view_mixer reads
+        // toggles `expanded_sub_track_parents`, which view_mixer reads
         // before rendering each sub-track strip.
         let has_sub_tracks = !is_sub
             && self
@@ -271,10 +271,11 @@ impl crate::Resonance {
                 .tracks
                 .iter()
                 .any(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id));
-        let is_collapsed = self
-            .mixer
-            .collapsed_sub_track_parents
-            .contains(&track.id);
+        let is_collapsed = has_sub_tracks
+            && !self
+                .mixer
+                .expanded_sub_track_parents
+                .contains(&track.id);
 
         let name_text = text(track.name.clone()).size(13).color(name_color);
         let track_name: Element<'_, Message> = if has_sub_tracks {
@@ -540,32 +541,104 @@ impl crate::Resonance {
             .align_y(alignment::Vertical::Top)
             .into();
 
-        let strip_content = column![
-            track_name,
-            button_row,
-            plugin_fill,
-            fx_pan_block,
-            fader_block,
-            output_picker,
-            bottom_section,
-        ]
-        .spacing(4)
-        .padding(6)
-        .width(theme::MIXER_STRIP_WIDTH)
-        .height(Length::Fill);
+        let strip_style = move |_theme: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(bg)),
+            border: iced::Border {
+                color: border_color,
+                width: 0.5,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        };
 
-        container(strip_content)
-            .height(Length::Fill)
-            .style(move |_theme| container::Style {
-                background: Some(iced::Background::Color(bg)),
-                border: iced::Border {
-                    color: border_color,
-                    width: 0.5,
-                    radius: 0.0.into(),
-                },
-                ..Default::default()
-            })
-            .into()
+        if is_collapsed {
+            // Two-column layout: normal controls on the left, compact
+            // subtrack meters on the right.
+            let left_col = column![
+                track_name,
+                button_row,
+                plugin_fill,
+                fx_pan_block,
+                fader_block,
+                output_picker,
+                bottom_section,
+            ]
+            .spacing(4)
+            .width(theme::MIXER_STRIP_WIDTH - 12)
+            .height(Length::Fill);
+
+            let v_sep = container(Space::new(1, Length::Fill))
+                .style(theme::separator_bg);
+
+            let right_col = self.view_collapsed_subtrack_meters(track.id);
+
+            let strip_content = row![left_col, v_sep, right_col]
+                .height(Length::Fill)
+                .padding(6)
+                .width(theme::MIXER_STRIP_WIDTH * 2);
+
+            container(strip_content)
+                .height(Length::Fill)
+                .style(strip_style)
+                .into()
+        } else {
+            let strip_content = column![
+                track_name,
+                button_row,
+                plugin_fill,
+                fx_pan_block,
+                fader_block,
+                output_picker,
+                bottom_section,
+            ]
+            .spacing(4)
+            .padding(6)
+            .width(theme::MIXER_STRIP_WIDTH)
+            .height(Length::Fill);
+
+            container(strip_content)
+                .height(Length::Fill)
+                .style(strip_style)
+                .into()
+        }
+    }
+
+    /// Compact subtrack meters shown in the right half of a collapsed
+    /// parent strip. Each subtrack gets a name label and stereo meter bars.
+    fn view_collapsed_subtrack_meters(&self, parent_id: TrackId) -> Element<'_, Message> {
+        let mut subtracks: Vec<&TrackState> = self
+            .registry
+            .tracks
+            .iter()
+            .filter(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == parent_id))
+            .collect();
+        subtracks.sort_by_key(|t| t.order);
+
+        let mut meters_row = row![].spacing(6);
+        for sub in subtracks {
+            let name: String = if sub.name.chars().count() > 5 {
+                let mut s: String = sub.name.chars().take(4).collect();
+                s.push('.');
+                s
+            } else {
+                sub.name.clone()
+            };
+            let name_label = text(name).size(8).color(theme::TEXT_DIM);
+            let meter = meter_v(sub.level_l, sub.level_r, theme::FADER_HEIGHT);
+            let col = column![name_label, meter]
+                .spacing(2)
+                .align_x(alignment::Horizontal::Center);
+            meters_row = meters_row.push(col);
+        }
+
+        column![
+            Space::with_height(Length::Fill),
+            meters_row,
+            Space::with_height(24),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     /// Pick-list of available output destinations (Master + all busses)

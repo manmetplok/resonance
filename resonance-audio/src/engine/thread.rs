@@ -137,6 +137,15 @@ pub(crate) fn engine_thread(
         // recording stream opens.
         transport::poll_precount(&ctx, &mut state);
 
+        // Sync the stable `bpm` field from the tempo event table so
+        // the mixer (audio thread) always sees the correct tempo for
+        // the current playhead position.
+        {
+            let playhead = ctx.shared.playhead.load(std::sync::atomic::Ordering::Relaxed);
+            let mut tm = ctx.tempo_map.write();
+            tm.sync_bpm_at(playhead, ctx.sample_rate);
+        }
+
         // Drain recording ring buffer into per-track buffers
         if ctx.shared.recording.load(Ordering::Relaxed) {
             state.rec.drain_ring_to_buffers();
@@ -164,6 +173,9 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         AudioCommand::Stop => transport::handle_stop(ctx, state),
         AudioCommand::SeekTo(pos) => transport::handle_seek_to(ctx, pos),
         AudioCommand::SetBpm { bpm } => transport::handle_set_bpm(ctx, bpm),
+        AudioCommand::SetTempoEvents { tempo, signature } => {
+            transport::handle_set_tempo_events(ctx, tempo, signature)
+        }
         AudioCommand::SetTimeSignature {
             numerator,
             denominator,

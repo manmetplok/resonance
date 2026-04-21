@@ -205,7 +205,7 @@ pub const TRACK_HEIGHT: f32 = 80.0;
 pub const RULER_HEIGHT: f32 = 30.0;
 /// Height of each global track row (tempo, time signature) in the
 /// collapsible area between the ruler and the regular tracks.
-pub const GLOBAL_TRACK_ROW_HEIGHT: f32 = 24.0;
+pub const GLOBAL_TRACK_ROW_HEIGHT: f32 = 40.0;
 /// Background for global track rows (slightly distinct from ruler).
 pub const GLOBAL_TRACK_BG: Color = Color::from_rgb(
     0x15 as f32 / 255.0,

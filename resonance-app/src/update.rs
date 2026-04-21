@@ -468,10 +468,10 @@ impl crate::Resonance {
                 }
             }
             Message::Track(TrackMessage::ToggleSubTracksVisible(id)) => {
-                if !self.mixer.collapsed_sub_track_parents.insert(id) {
+                if !self.mixer.expanded_sub_track_parents.insert(id) {
                     // Already present — the insert was a no-op, so toggle
-                    // to the expanded state by removing.
-                    self.mixer.collapsed_sub_track_parents.remove(&id);
+                    // back to the collapsed state by removing.
+                    self.mixer.expanded_sub_track_parents.remove(&id);
                 }
             }
             Message::Transport(TransportMessage::SetBpmText(s)) => {

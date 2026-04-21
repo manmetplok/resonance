@@ -1,7 +1,10 @@
 //! GUI → engine command enum.
 use std::path::PathBuf;
 
-use super::{BusId, ClipId, MidiNote, PluginInstanceId, SamplePos, TrackId, TrackOutput};
+use super::{
+    BusId, ClipId, MidiNote, PluginInstanceId, SamplePos, SignaturePoint, TempoPoint, TrackId,
+    TrackOutput,
+};
 
 /// Commands sent from the GUI to the audio engine.
 #[derive(Debug, Clone)]
@@ -104,6 +107,12 @@ pub enum AudioCommand {
     ListInputDevices,
     SetBpm {
         bpm: f32,
+    },
+    /// Send the full tempo event list so the engine can compute BPM
+    /// at any playhead position internally, without per-tick updates.
+    SetTempoEvents {
+        tempo: Vec<TempoPoint>,
+        signature: Vec<SignaturePoint>,
     },
     SetTimeSignature {
         numerator: u8,

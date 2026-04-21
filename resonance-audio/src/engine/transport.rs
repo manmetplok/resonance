@@ -282,6 +282,20 @@ pub(crate) fn handle_set_bpm(ctx: &HandlerCtx, bpm: f32) {
     ctx.tempo_map.write().bpm = bpm.clamp(20.0, 999.0);
 }
 
+pub(crate) fn handle_set_tempo_events(
+    ctx: &HandlerCtx,
+    tempo: Vec<crate::types::TempoPoint>,
+    signature: Vec<crate::types::SignaturePoint>,
+) {
+    let mut tm = ctx.tempo_map.write();
+    if let Some(first) = tempo.first() {
+        tm.bpm = first.bpm;
+    }
+    tm.tempo_points = tempo;
+    tm.signature_points = signature;
+    tm.rebuild_bar_table(ctx.sample_rate);
+}
+
 pub(crate) fn handle_set_time_signature(
     ctx: &HandlerCtx,
     numerator: u8,

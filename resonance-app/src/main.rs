@@ -92,6 +92,31 @@ fn main() -> iced::Result {
 }
 
 impl Resonance {
+    /// Update the transport BPM display from the current tempo events.
+    pub(crate) fn sync_tempo_display(&mut self) {
+        let (bpm, _, _) = state::tempo_at_sample(
+            self.transport.playhead,
+            &self.tempo_events,
+            &self.signature_events,
+            self.sample_rate,
+        );
+        self.transport.bpm = bpm;
+        self.transport.bpm_input = format!("{:.1}", bpm);
+    }
+
+    /// Send the full tempo event list to the audio engine so it can
+    /// compute BPM at any playhead position without per-tick commands.
+    pub(crate) fn send_tempo_events_to_engine(&self) {
+        use resonance_audio::types::{AudioCommand, TempoPoint, SignaturePoint};
+        let tempo: Vec<TempoPoint> = self.tempo_events.iter().map(|e| {
+            TempoPoint { bar: e.bar, bpm: e.bpm }
+        }).collect();
+        let signature: Vec<SignaturePoint> = self.signature_events.iter().map(|e| {
+            SignaturePoint { bar: e.bar, numerator: e.numerator, denominator: e.denominator }
+        }).collect();
+        self.engine.send(AudioCommand::SetTempoEvents { tempo, signature });
+    }
+
     pub(crate) fn sorted_tracks(&self) -> Vec<&TrackState> {
         self.registry.sorted_tracks()
     }
