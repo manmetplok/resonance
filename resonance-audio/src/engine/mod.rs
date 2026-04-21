@@ -129,7 +129,7 @@ impl AudioEngine {
         let channels = config.channels() as usize;
         let default_rate = config.sample_rate().0;
 
-        // Prefer the PipeWire graph sample rate (typically 48000) to avoid resampling.
+        // Prefer the PipeWire graph sample rate to avoid resampling.
         // cpal's default_output_config often returns 44100 via ALSA compat, but the
         // actual hardware/graph runs at a different rate -- causing PipeWire to resample
         // every buffer and inflating the quantum (e.g. 1102 frames instead of 128).

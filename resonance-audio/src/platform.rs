@@ -23,6 +23,8 @@ pub(crate) enum DeviceDirection {
 /// Pick the best sample rate: prefer the PipeWire graph rate to avoid resampling.
 /// Falls back to the default config rate if we can't determine the graph rate.
 /// Works for both input and output devices.
+///
+/// Priority: pw-metadata graph rate > pactl sink rate > cpal default.
 pub(crate) fn pick_sample_rate(
     device: &cpal::Device,
     default_config: &cpal::SupportedStreamConfig,
@@ -30,29 +32,30 @@ pub(crate) fn pick_sample_rate(
 ) -> u32 {
     let default_rate = default_config.sample_rate().0;
 
-    // Try to read PipeWire's graph rate from pw-metadata
-    if let Some(graph_rate) = default_sink_sample_rate() {
-        // Verify the device actually supports this rate
+    // Try pw-metadata first (authoritative graph rate), then pactl as fallback.
+    let candidates = [pipewire_graph_rate(), default_sink_sample_rate()];
+
+    for candidate in candidates.into_iter().flatten() {
         let supported = match direction {
             DeviceDirection::Output => {
                 device.supported_output_configs().ok().map(|mut configs| {
                     configs.any(|c| {
-                        c.min_sample_rate().0 <= graph_rate
-                            && graph_rate <= c.max_sample_rate().0
+                        c.min_sample_rate().0 <= candidate
+                            && candidate <= c.max_sample_rate().0
                     })
                 })
             }
             DeviceDirection::Input => {
                 device.supported_input_configs().ok().map(|mut configs| {
                     configs.any(|c| {
-                        c.min_sample_rate().0 <= graph_rate
-                            && graph_rate <= c.max_sample_rate().0
+                        c.min_sample_rate().0 <= candidate
+                            && candidate <= c.max_sample_rate().0
                     })
                 })
             }
         };
         if supported == Some(true) {
-            return graph_rate;
+            return candidate;
         }
     }
 
@@ -116,9 +119,25 @@ fn run_pw_metadata(key: &str) -> Option<String> {
     None
 }
 
+/// Query PipeWire's graph sample rate via `pw-metadata`.
+///
+/// Prefers `clock.force-rate` (user override) when non-zero, otherwise
+/// reads `clock.rate`. This reflects the actual rate the graph runs at,
+/// unlike `pactl list sinks short` which can report a stale/internal rate
+/// (e.g. 48000) even when the graph is running at 96000.
+pub(crate) fn pipewire_graph_rate() -> Option<u32> {
+    if let Some(forced) = run_pw_metadata("clock.force-rate")
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|v| *v > 0)
+    {
+        return Some(forced);
+    }
+    run_pw_metadata("clock.rate").and_then(|s| s.parse().ok())
+}
+
 /// Query the default output device's actual sample rate via pactl.
 /// This matches the hardware rate, avoiding PipeWire resampling.
-pub(crate) fn default_sink_sample_rate() -> Option<u32> {
+fn default_sink_sample_rate() -> Option<u32> {
     let sink_name = run_pactl(&["get-default-sink"])?.trim().to_string();
     let sinks = run_pactl(&["list", "sinks", "short"])?;
     for line in sinks.lines() {
