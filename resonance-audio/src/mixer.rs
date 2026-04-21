@@ -16,11 +16,7 @@ use crate::clap_host::{StereoBufMut, SyncClapInstance};
 use crate::engine::SharedState;
 use crate::types::*;
 
-/// Maximum number of plugin output ports the mixer allocates scratch
-/// for per block. The drum plugin uses 7; picking 8 leaves a little
-/// headroom for future multi-output plugins without blowing past the
-/// scratch-array size.
-pub(crate) const MAX_PLUGIN_OUTPUT_PORTS: usize = 8;
+pub(crate) use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
 
 /// Latch a pre-captured transport snapshot onto a plugin instance so the
 /// next `process()` call delivers it through the CLAP transport event.
@@ -257,6 +253,11 @@ fn apply_master_volume_and_peaks(
     if channels < 2 {
         master_peak_r = master_peak_l;
     }
+    // SAFETY of fetch_max on bit-punned f32: IEEE 754 binary32 bit
+    // ordering matches u32 ordering for non-negative values. This is
+    // correct here because peak values are always >= 0 (.abs() is
+    // applied before this point). Negative or NaN values would break
+    // the ordering invariant.
     shared
         .master_peak_l_bits
         .fetch_max(master_peak_l.to_bits(), Ordering::Relaxed);
@@ -265,11 +266,7 @@ fn apply_master_volume_and_peaks(
         .fetch_max(master_peak_r.to_bits(), Ordering::Relaxed);
 }
 
-/// Maximum MIDI events collected per buffer per track. Prevents the
-/// pre-allocated `note_event_buf` Vec from reallocating on the audio
-/// thread. 512 events = 256 simultaneous note-on + note-off pairs,
-/// far beyond what a single buffer can practically contain.
-pub(crate) const MAX_MIDI_EVENTS_PER_BUFFER: usize = 512;
+pub(crate) use crate::limits::MAX_MIDI_EVENTS_PER_BUFFER;
 
 /// Collect sample-accurate note events from MIDI clips for a given track and buffer range.
 /// Converts tick-based note positions to absolute sample positions using the tempo map.
@@ -1224,7 +1221,8 @@ pub(crate) fn mix_audio(
             // Collect beat boundaries near the buffer into a small stack
             // array: (beat_sample, is_downbeat). At most ~8 beats can
             // overlap one audio buffer even at extreme tempos.
-            let mut beats = [(0u64, false); 16];
+            use crate::limits::MAX_METRONOME_BEATS_PER_BUFFER;
+            let mut beats = [(0u64, false); MAX_METRONOME_BEATS_PER_BUFFER];
             let mut n_beats = 0usize;
 
             // Determine the timeline ranges covered by this buffer.
@@ -1266,7 +1264,7 @@ pub(crate) fn mix_audio(
                             if bs >= r_end {
                                 break 'bar;
                             }
-                            if bs + click_duration_samples > r_start && n_beats < 16 {
+                            if bs + click_duration_samples > r_start && n_beats < MAX_METRONOME_BEATS_PER_BUFFER {
                                 beats[n_beats] = (bs, beat == 0);
                                 n_beats += 1;
                             }
@@ -1291,7 +1289,7 @@ pub(crate) fn mix_audio(
                         if bs >= r_end {
                             break;
                         }
-                        if bs + click_duration_samples > r_start && n_beats < 16 {
+                        if bs + click_duration_samples > r_start && n_beats < MAX_METRONOME_BEATS_PER_BUFFER {
                             beats[n_beats] = (bs, bi % numerator == 0);
                             n_beats += 1;
                         }

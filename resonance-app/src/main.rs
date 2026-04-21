@@ -133,6 +133,31 @@ impl Resonance {
         self.transport.bpm_input = format!("{:.1}", bpm);
     }
 
+    /// Remove a tempo event by index (must be > 0 to protect the initial
+    /// event), rebuild the tempo map, and sync the BPM display.
+    pub(crate) fn remove_tempo_event(&mut self, index: usize) {
+        if index > 0 && index < self.tempo_events.len() {
+            self.tempo_events.remove(index);
+            self.rebuild_and_send_tempo();
+            self.sync_tempo_display();
+        }
+    }
+
+    /// Remove a signature event by index (must be > 0 to protect the initial
+    /// event), rebuild the tempo map, and sync the time-signature display.
+    pub(crate) fn remove_signature_event(&mut self, index: usize) {
+        if index > 0 && index < self.signature_events.len() {
+            self.signature_events.remove(index);
+            self.rebuild_and_send_tempo();
+            let (_, num, den) = self.tempo_map.tempo_at_sample(
+                self.transport.playhead, self.sample_rate,
+            );
+            self.transport.time_sig_num = num;
+            self.transport.time_sig_den = den;
+            self.engine.send(AudioCommand::SetTimeSignature { numerator: num, denominator: den });
+        }
+    }
+
     pub(crate) fn sorted_tracks(&self) -> Vec<&TrackState> {
         self.registry.sorted_tracks()
     }
@@ -148,7 +173,9 @@ impl Resonance {
         id: TrackId,
         f: impl FnOnce(&mut TrackState) -> R,
     ) -> Option<R> {
-        self.registry.with_track_mut(id, f)
+        let result = self.registry.with_track_mut(id, f);
+        debug_assert!(result.is_some(), "with_track_mut: no track with id {id:?}");
+        result
     }
 
     /// Run `f` on the bus with the given id, returning whatever `f`
@@ -158,7 +185,9 @@ impl Resonance {
         id: BusId,
         f: impl FnOnce(&mut BusState) -> R,
     ) -> Option<R> {
-        self.registry.with_bus_mut(id, f)
+        let result = self.registry.with_bus_mut(id, f);
+        debug_assert!(result.is_some(), "with_bus_mut: no bus with id {id:?}");
+        result
     }
 
     /// Locate a plugin slot on any track, bus, or master by instance id
@@ -186,10 +215,12 @@ impl Resonance {
                 return Some(f(p));
             }
         }
-        self.master_plugins
+        let result = self.master_plugins
             .iter_mut()
             .find(|p| p.instance_id == instance_id)
-            .map(f)
+            .map(f);
+        debug_assert!(result.is_some(), "with_plugin_mut: no plugin with id {instance_id:?}");
+        result
     }
 
     /// Find the index in `self.registry.tracks` of the visible track at the

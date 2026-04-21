@@ -190,11 +190,16 @@ impl Track {
     }
 
     /// Atomically update peak L to the max of the current and new value.
+    ///
+    /// Uses `fetch_max` on bit-punned `AtomicU32`. This works because `v`
+    /// is always non-negative (`.abs()` applied at call sites), and IEEE 754
+    /// binary32 bit ordering matches u32 ordering for non-negative values.
     pub fn update_peak_l(&self, v: f32) {
         self.peak_l_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
     }
 
     /// Atomically update peak R to the max of the current and new value.
+    /// See [`update_peak_l`](Self::update_peak_l) for the non-negative invariant.
     pub fn update_peak_r(&self, v: f32) {
         self.peak_r_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
     }
@@ -277,10 +282,12 @@ impl Bus {
         self.fx_bypassed.store(v, Ordering::Relaxed);
     }
 
+    /// See [`Track::update_peak_l`] for the non-negative invariant.
     pub fn update_peak_l(&self, v: f32) {
         self.peak_l_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
     }
 
+    /// See [`Track::update_peak_l`] for the non-negative invariant.
     pub fn update_peak_r(&self, v: f32) {
         self.peak_r_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
     }

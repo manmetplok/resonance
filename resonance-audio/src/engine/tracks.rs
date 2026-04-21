@@ -74,6 +74,12 @@ pub(crate) fn handle_add_track(
     let _ = ctx.event_tx.send(AudioEvent::TrackAdded { track_id: id });
 }
 
+/// Create a sub-track in the engine for one output port of a multi-output
+/// plugin. Sub-tracks are a UI-initiated concept: the UI creates them in
+/// response to `PluginAdded` events (see `engine_events.rs`). The engine
+/// stores them as regular `Track`s with `sub_track_of` set; the mixer
+/// reads this field during mixdown to route output ports to the
+/// sub-track's own fader/pan/bus chain.
 pub(crate) fn handle_create_sub_track(
     ctx: &HandlerCtx,
     sub_id: TrackId,
@@ -85,6 +91,10 @@ pub(crate) fn handle_create_sub_track(
     // replays saved sub-tracks, then PluginAdded re-fires the
     // auto-create path; the second hit should be a no-op.
     if ctx.tracks.read().contains_key(&sub_id) {
+        return;
+    }
+    if !ctx.tracks.read().contains_key(&parent_track_id) {
+        debug_assert!(false, "CreateSubTrack: parent track {parent_track_id:?} not found");
         return;
     }
     let track = Track::new_sub_track(sub_id, name, parent_track_id, output_port_index);

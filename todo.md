@@ -48,42 +48,14 @@
       Short-term: diff old and new snapshots and only replay changed tracks/plugins.
       Long-term: consider command-based undo with inverse operations.
 
-    - Deduplicate tempo/signature event removal logic in `update.rs:141-233`.
-      AddTempoEvent, RemoveTempoEvent, AddSignatureEvent, RemoveSignatureEvent,
-      and DeleteSelectedEvent all repeat the same pattern (validate index > 0,
-      remove from vec, rebuild, sync display). Extract a generic helper like
-      `remove_global_event(events, index, rebuild_fn)`.
+    - [x] Deduplicate tempo/signature event removal logic in `update.rs:141-233`.
 
-    - Add debug-build warnings for silent track/clip lookup misses.
-      Throughout `update.rs`, calls like `self.with_track_mut(id, |t| ...)` silently
-      no-op if the track doesn't exist. Add `debug_assert!` or `tracing::warn!` on
-      the `None` path so undo/redo desync issues are immediately visible during
-      development. Keep silent in release builds.
+    - [x] Add debug-build warnings for silent track/clip lookup misses.
 
-    - Promote sub-tracks to an engine concept or document the gap.
-      Sub-tracks (multi-output instrument routing) are created only in the UI
-      when `PluginAdded` events arrive (`resonance-app/src/engine_events.rs`).
-      The audio engine has no "sub-track" concept — they're regular tracks with
-      `sub_track_of` set. If the UI-side creation fails, audio routing is wrong.
-      Either make the engine emit `SubTrackCreated` events, or add defensive
-      checks and a clear doc comment explaining the abstraction boundary.
+    - [x] Promote sub-tracks to an engine concept or document the gap.
 
-    - Document `fetch_max` invariant on peak level atomics.
-      `resonance-audio/src/mixer.rs:260-265` uses `fetch_max` on bit-punned
-      `AtomicU32` for peak metering. This only works because peak values are always
-      non-negative (`.abs()` is applied). Add a comment at the `fetch_max` site
-      explaining this invariant, or use a wrapper that does
-      `loop { CAS with f32::max }` for correctness regardless.
+    - [x] Document `fetch_max` invariant on peak level atomics.
 
-    - Cap `ClapInstance.pending_params` to prevent unbounded growth.
-      `resonance-audio/src/clap_host.rs` — `pending_params: Vec<(u32, f64)>`
-      grows without limit if the GUI automates many parameters between process
-      calls. Cap at 128 entries, deduplicating by param_id (keep last value).
+    - [x] Cap `ClapInstance.pending_params` to prevent unbounded growth.
 
-    - Centralize and document hard-coded limits.
-      `MAX_PLUGIN_OUTPUT_PORTS = 8` (mixer.rs:23), `MAX_BUSSES = 32`
-      (engine/mod.rs:16), `MAX_INPUT_CHANNELS = 32`, undo history = 200
-      (undo.rs:23), metronome = 16 beats/buffer. Add a `limits.rs` or a
-      doc comment block that lists all limits in one place, and add runtime
-      validation (log a warning) when a limit is hit rather than silently
-      truncating.
+    - [x] Centralize and document hard-coded limits.

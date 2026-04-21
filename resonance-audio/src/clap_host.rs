@@ -546,8 +546,15 @@ impl ClapInstance {
     }
 
     /// Queue a parameter change to be sent during the next process() call.
+    /// Deduplicates by param_id (last value wins) and caps at 128 entries
+    /// to prevent unbounded growth when the GUI automates many parameters
+    /// between process calls.
     pub fn set_param(&mut self, param_id: u32, value: f64) {
-        self.pending_params.push((param_id, value));
+        if let Some(existing) = self.pending_params.iter_mut().find(|(id, _)| *id == param_id) {
+            existing.1 = value;
+        } else if self.pending_params.len() < crate::limits::MAX_PENDING_PARAMS {
+            self.pending_params.push((param_id, value));
+        }
     }
 
     /// Queue a note-on event to be sent during the next process() call.

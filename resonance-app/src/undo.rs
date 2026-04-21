@@ -18,9 +18,7 @@ use resonance_audio::types::{AudioCommand, ClipId, MidiNote, PluginInstanceId};
 use crate::project::{LoadedProject, ProjectFile};
 use crate::state::TrackRole;
 
-/// Maximum number of entries retained on the undo stack. Matches the
-/// capacity agreed on for v1; not user-configurable yet.
-pub const DEFAULT_HISTORY_CAPACITY: usize = 200;
+pub use resonance_audio::limits::DEFAULT_HISTORY_CAPACITY;
 
 /// Runtime-only compose state that isn't captured in `ProjectFile` and
 /// therefore can't be rebuilt by `replay_loaded_project` alone. Applied

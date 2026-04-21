@@ -10,10 +10,7 @@
 /// engine thread wakes at ~60 Hz, so even a pathological scheduling
 /// gap fits inside this.
 pub(crate) const RECORDING_RING_SIZE: usize = 96000 * 2 * 10;
-/// Hard cap on concurrent busses. Used to pre-allocate bus summing
-/// buffers at startup so the audio thread never has to allocate on a
-/// bus add. 32 is well past what any realistic project needs.
-pub(crate) const MAX_BUSSES: usize = 32;
+pub(crate) use crate::limits::MAX_BUSSES;
 
 use indexmap::IndexMap;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
@@ -232,7 +229,7 @@ impl AudioEngine {
             // interleaved input we're likely to see (e.g. an 18-in audio
             // interface). 32 channels × a few blocks of headroom covers
             // everything reasonable without leaking meaningful RAM.
-            const MAX_INPUT_CHANNELS: usize = 32;
+            use crate::limits::MAX_INPUT_CHANNELS;
             let mut monitor_temp =
                 vec![0.0f32; audio_buf_frames * MAX_INPUT_CHANNELS];
             let monitor_ring =

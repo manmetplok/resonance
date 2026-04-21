@@ -170,11 +170,7 @@ impl crate::Resonance {
                 }
             }
             Message::GlobalTrack(GlobalTrackMessage::RemoveTempoEvent(index)) => {
-                if index > 0 && index < self.tempo_events.len() {
-                    self.tempo_events.remove(index);
-                    self.rebuild_and_send_tempo();
-                    self.sync_tempo_display();
-                }
+                self.remove_tempo_event(index);
             }
             Message::GlobalTrack(GlobalTrackMessage::AddSignatureEvent { bar, numerator, denominator }) => {
                 if let Some(existing) = self.signature_events.iter_mut().find(|e| e.bar == bar) {
@@ -193,16 +189,7 @@ impl crate::Resonance {
                 }
             }
             Message::GlobalTrack(GlobalTrackMessage::RemoveSignatureEvent(index)) => {
-                if index > 0 && index < self.signature_events.len() {
-                    self.signature_events.remove(index);
-                    self.rebuild_and_send_tempo();
-                    let (_, num, den) = self.tempo_map.tempo_at_sample(
-                        self.transport.playhead, self.sample_rate,
-                    );
-                    self.transport.time_sig_num = num;
-                    self.transport.time_sig_den = den;
-                    self.engine.send(AudioCommand::SetTimeSignature { numerator: num, denominator: den });
-                }
+                self.remove_signature_event(index);
             }
             Message::GlobalTrack(GlobalTrackMessage::SelectEvent(sel)) => {
                 self.interaction.selected_global_event = sel;
@@ -210,25 +197,8 @@ impl crate::Resonance {
             Message::GlobalTrack(GlobalTrackMessage::DeleteSelectedEvent) => {
                 if let Some(sel) = self.interaction.selected_global_event.take() {
                     match sel.kind {
-                        state::GlobalTrackKind::Tempo => {
-                            if sel.index > 0 && sel.index < self.tempo_events.len() {
-                                self.tempo_events.remove(sel.index);
-                                self.rebuild_and_send_tempo();
-                                self.sync_tempo_display();
-                            }
-                        }
-                        state::GlobalTrackKind::Signature => {
-                            if sel.index > 0 && sel.index < self.signature_events.len() {
-                                self.signature_events.remove(sel.index);
-                                self.rebuild_and_send_tempo();
-                                let (_, num, den) = self.tempo_map.tempo_at_sample(
-                                    self.transport.playhead, self.sample_rate,
-                                );
-                                self.transport.time_sig_num = num;
-                                self.transport.time_sig_den = den;
-                                self.engine.send(AudioCommand::SetTimeSignature { numerator: num, denominator: den });
-                            }
-                        }
+                        state::GlobalTrackKind::Tempo => self.remove_tempo_event(sel.index),
+                        state::GlobalTrackKind::Signature => self.remove_signature_event(sel.index),
                     }
                 }
             }

@@ -1,5 +1,6 @@
 pub mod clap_host;
 pub mod decode;
+pub mod limits;
 pub mod midi_io;
 pub mod types;
 mod engine;

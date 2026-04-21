@@ -180,19 +180,36 @@ impl crate::Resonance {
                 self.engine
                     .send(AudioCommand::SavePluginState { instance_id });
 
+                // --- Sub-track abstraction boundary ---
+                //
+                // Sub-tracks are a UI-only concept: they are regular tracks
+                // with `sub_track_of` set, created here when a multi-output
+                // plugin is added. The audio engine has no dedicated
+                // "sub-track" type — `CreateSubTrack` simply inserts a
+                // `Track` with a `sub_track_of` field that the mixer reads
+                // during mixdown to route output ports.
+                //
+                // Because sub-tracks originate here, not in the engine, a
+                // failure in this code path (e.g. parent track removed
+                // between PluginAdded dispatch and this point) would leave
+                // audio routing orphaned. We guard against that below.
+                //
                 // Auto-create sub-tracks for multi-output plugins.
                 // Skips ports already represented (so project load, which
                 // replays saved sub-tracks before the PluginAdded event,
                 // doesn't double up). Parent track's own existing name is
                 // prefixed onto each sub-track ("Drums → Kick").
                 if output_port_count > 1 {
-                    let parent_name = self
+                    let Some(parent_name) = self
                         .registry
                         .tracks
                         .iter()
                         .find(|t| t.id == track_id)
                         .map(|t| t.name.clone())
-                        .unwrap_or_else(|| format!("Track {}", track_id));
+                    else {
+                        debug_assert!(false, "sub-track creation: parent track {track_id:?} not found");
+                        return Task::none();
+                    };
                     for port_idx in 1..output_port_count {
                         let already = self.registry.tracks.iter().any(|t| {
                             t.sub_track
