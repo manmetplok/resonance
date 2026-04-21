@@ -16,6 +16,90 @@ use crate::state::*;
 use crate::util::db_to_gain;
 use crate::Resonance;
 
+/// Route a `ProjectIoMessage` to the appropriate handler.
+pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
+    match m {
+        ProjectIoMessage::BounceToWav => {
+            return bounce_dialog();
+        }
+        ProjectIoMessage::BouncePathSelected(Some(path)) => {
+            r.io.bouncing = true;
+            r.engine.send(AudioCommand::BounceToWav { path });
+        }
+        ProjectIoMessage::BouncePathSelected(None) => {}
+        ProjectIoMessage::SaveProject => {
+            if r.io.project_path.is_some() {
+                return start_save(r);
+            } else {
+                return r.update(Message::ProjectIo(ProjectIoMessage::SaveProjectAs));
+            }
+        }
+        ProjectIoMessage::SaveProjectAs => {
+            return save_project_as_dialog();
+        }
+        ProjectIoMessage::SavePathSelected(Some(path)) => {
+            let path = if path.ends_with(".rproj") {
+                std::path::PathBuf::from(path)
+            } else {
+                std::path::PathBuf::from(format!("{path}.rproj"))
+            };
+            r.io.project_path = Some(path);
+            return start_save(r);
+        }
+        ProjectIoMessage::SavePathSelected(None) => {}
+        ProjectIoMessage::OpenProject => {
+            return open_project_dialog();
+        }
+        ProjectIoMessage::OpenPathSelected(Some(path)) => {
+            let path = std::path::PathBuf::from(path);
+            r.io.project_path = Some(path.clone());
+            r.engine.send(AudioCommand::SetProjectDir(path.clone()));
+            return load_project_task(path);
+        }
+        ProjectIoMessage::OpenPathSelected(None) => {}
+        ProjectIoMessage::OpenRecent(path) => {
+            r.io.project_path = Some(path.clone());
+            r.engine.send(AudioCommand::SetProjectDir(path.clone()));
+            return load_project_task(path);
+        }
+        ProjectIoMessage::ProjectSaved(Ok(())) => {
+            r.io.save_state = None;
+            r.dirty = false;
+            r.io.has_active_project = true;
+            if let Some(ref path) = r.io.project_path {
+                crate::recent::add(&mut r.io.recent_projects, path);
+            }
+            if let Some(id) = r.quit_after_save.take() {
+                return iced::window::close(id);
+            }
+        }
+        ProjectIoMessage::ProjectSaved(Err(e)) => {
+            r.io.save_state = None;
+            r.quit_after_save = None;
+            r.error_message = Some(format!("Save failed: {e}"));
+        }
+        ProjectIoMessage::ProjectLoaded(Ok(loaded)) => {
+            r.engine.send(AudioCommand::Stop);
+            r.transport.playing = false;
+            r.transport.recording = false;
+            r.io.loading = true;
+            r.io.pending_load = Some(loaded);
+            r.undo.clear();
+            r.plugin_state_cache.clear();
+            r.dirty = false;
+            r.engine.send(AudioCommand::ClearAll);
+            r.io.has_active_project = true;
+            if let Some(ref path) = r.io.project_path {
+                crate::recent::add(&mut r.io.recent_projects, path);
+            }
+        }
+        ProjectIoMessage::ProjectLoaded(Err(e)) => {
+            r.error_message = Some(format!("Load failed: {e}"));
+        }
+    }
+    Task::none()
+}
+
 /// Begin an async save. Requires `self.io.project_path` to already be set;
 /// callers use `Message::ProjectIo(ProjectIoMessage::SaveProjectAs)` first if the project has never
 /// been saved. Initializes the `SaveCollector` state machine, tells

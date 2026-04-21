@@ -2,10 +2,25 @@
 //! drains engine events and decays VU meter levels).
 use iced::Task;
 
-use crate::message::Message;
+use crate::message::{Message, ViewportMessage};
 use crate::theme;
 use crate::Resonance;
 use resonance_audio::types::AudioCommand;
+
+/// Route a `ViewportMessage` to the appropriate handler.
+pub fn handle(r: &mut Resonance, m: ViewportMessage) -> Task<Message> {
+    match m {
+        ViewportMessage::ZoomIn => zoom_in(r),
+        ViewportMessage::ZoomOut => zoom_out(r),
+        ViewportMessage::ScrollX(delta) => scroll_x_delta(r, delta),
+        ViewportMessage::ScrollY(delta) => scroll_y_delta(r, delta),
+        ViewportMessage::ScrollToX(x) => scroll_to_x(r, x),
+        ViewportMessage::ScrollToY(y) => scroll_to_y(r, y),
+        ViewportMessage::ViewportWidth(w) => viewport_width(r, w),
+        ViewportMessage::TimelineContentSize(w, h) => timeline_content_size(r, w, h),
+    }
+    Task::none()
+}
 
 /// Handle the per-frame subscription tick.
 pub fn handle_tick(r: &mut Resonance) -> Task<Message> {

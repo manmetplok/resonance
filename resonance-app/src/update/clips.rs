@@ -2,10 +2,43 @@
 //! The two flavours share most of their logic — edge-threshold trims,
 //! pixel-to-sample conversions, target-track hit-tests — so they live
 //! side by side here.
+use iced::Task;
 use resonance_audio::types::*;
 
+use crate::message::{ClipMessage, Message};
 use crate::state::*;
 use crate::Resonance;
+
+/// Route a `ClipMessage` to the appropriate handler.
+pub fn handle(r: &mut Resonance, m: ClipMessage) -> Task<Message> {
+    match m {
+        ClipMessage::DeleteClip(id) => {
+            r.engine.send(AudioCommand::DeleteClip { clip_id: id });
+            if r.interaction.selected_clip == Some(id) {
+                r.interaction.selected_clip = None;
+            }
+        }
+        ClipMessage::StartClipDrag { clip_id, grab_offset_x, start_x, start_y } => {
+            start_clip_drag(r, clip_id, grab_offset_x, start_x, start_y);
+        }
+        ClipMessage::UpdateClipDrag(x, y) => {
+            update_clip_drag(r, x, y);
+        }
+        ClipMessage::EndClipDrag => {
+            end_clip_drag(r);
+        }
+        ClipMessage::StartClipTrim { clip_id, edge, anchor_x } => {
+            start_clip_trim(r, clip_id, edge, anchor_x);
+        }
+        ClipMessage::UpdateClipTrim(x) => {
+            update_clip_trim(r, x);
+        }
+        ClipMessage::EndClipTrim => {
+            end_clip_trim(r);
+        }
+    }
+    Task::none()
+}
 
 // -- Audio clip drag/trim ----------------------------------------------
 

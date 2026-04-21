@@ -35,7 +35,7 @@
 
 ##Architecture / code health (from code review)
 
-    - Break up the `Resonance` god object (`resonance-app/src/main.rs:25-82`).
+    - [x] Break up the `Resonance` god object (`resonance-app/src/main.rs:25-82`).
       The struct holds 30+ fields and every message routes through a single 1000-line
       `dispatch()` in `update.rs`. Give each sub-state (`TransportState`, `MixerUiState`,
       `ClipInteractionState`, etc.) its own `handle()` method that takes the relevant
