@@ -5305,6 +5305,7 @@ dependencies = [
  "khronos-egl",
  "libloading 0.8.9",
  "raw-window-handle",
+ "resonance-plugin",
  "smithay-client-toolkit 0.20.0",
  "wayland-client",
  "wayland-egl",

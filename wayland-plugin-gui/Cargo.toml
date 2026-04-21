@@ -23,6 +23,9 @@ glow = "0.17"
 egui = { version = "0.34", features = ["default_fonts"], default-features = false }
 egui_glow = { version = "0.34", default-features = false }
 
+# Plugin param types for widget helpers.
+resonance-plugin = { path = "../resonance-plugin" }
+
 # Misc.
 raw-window-handle = "0.6"
 

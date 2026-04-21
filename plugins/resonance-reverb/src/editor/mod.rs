@@ -20,7 +20,6 @@ mod impulse_view;
 mod meters;
 mod tank_view;
 mod theme;
-mod widgets;
 
 const WINDOW_W: u32 = 1320;
 const WINDOW_H: u32 = 660;
@@ -60,7 +59,7 @@ impl EditorFactory for ReverbEditorFactory {
             EditorOptions {
                 title: "Resonance Reverb".to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
-                min_size: (1080, 560),
+                min_size: (720, 560),
                 resizable: true,
             },
         )
@@ -142,7 +141,7 @@ impl EditorApp for ReverbEditorApp {
             .show_inside(ui, |ui| draw_header(ui, self));
 
         egui::Panel::bottom("reverb_strip")
-            .exact_size(180.0)
+            .exact_size(200.0)
             .show_inside(ui, |ui| controls::draw(ui, &self.params));
 
         egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));

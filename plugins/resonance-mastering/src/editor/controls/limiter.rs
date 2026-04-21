@@ -23,15 +23,20 @@ pub fn draw(ui: &mut egui::Ui, params: &LimiterParams) {
 
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            widgets::control_column(ui, "On", "enable", |ui| {
-                widgets::bool_checkbox(ui, &params.on, "");
-            });
-            widgets::control_column(ui, "Ceiling", "dBTP", |ui| {
-                widgets::float_slider(ui, &params.ceiling, -6.0..=0.0, 1, " dB");
-            });
-            widgets::control_column(ui, "Release", "", |ui| {
-                widgets::float_slider_log(ui, &params.release, 5.0..=500.0, 0, " ms");
-            });
+            widgets::bool_checkbox(ui, &params.on, "On");
+            ui.add_space(8.0);
+
+            let v = params.ceiling.value();
+            widgets::float_knob(
+                ui, &params.ceiling, -6.0..=0.0, -0.3,
+                "Ceiling", "dBTP", &format!("{:.1} dB", v), false,
+            );
+
+            let v = params.release.value();
+            widgets::float_knob(
+                ui, &params.release, 5.0..=500.0, 50.0,
+                "Release", "", &format!("{:.0} ms", v), true,
+            );
         });
 
         ui.add_space(8.0);
@@ -39,7 +44,7 @@ pub fn draw(ui: &mut egui::Ui, params: &LimiterParams) {
             ui.add_space(16.0);
             ui.label(
                 egui::RichText::new(
-                    "Lookahead: 5 ms · 4× oversampled ITU-R BS.1770-4 true-peak detection",
+                    "Lookahead: 5 ms \u{00b7} 4\u{00d7} oversampled ITU-R BS.1770-4 true-peak detection",
                 )
                 .size(10.0)
                 .color(theme::TEXT_DIM),

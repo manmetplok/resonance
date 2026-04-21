@@ -23,18 +23,23 @@ pub fn draw(ui: &mut egui::Ui, params: &ImagerParams) {
 
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            widgets::control_column(ui, "On", "enable", |ui| {
-                widgets::bool_checkbox(ui, &params.on, "");
-            });
-            widgets::control_column(ui, "Width", "0 mono .. 2 wide", |ui| {
-                widgets::float_slider(ui, &params.width, 0.0..=2.0, 2, "");
-            });
-            widgets::control_column(ui, "Side HPF", "enable", |ui| {
-                widgets::bool_checkbox(ui, &params.side_hpf_on, "");
-            });
-            widgets::control_column(ui, "HPF Freq", "keep bass mono", |ui| {
-                widgets::float_slider_log(ui, &params.side_hpf_freq, 20.0..=400.0, 0, " Hz");
-            });
+            widgets::bool_checkbox(ui, &params.on, "On");
+            ui.add_space(8.0);
+
+            let v = params.width.value();
+            widgets::float_knob(
+                ui, &params.width, 0.0..=2.0, 1.0,
+                "Width", "0 mono .. 2 wide", &format!("{:.2}", v), false,
+            );
+
+            widgets::bool_checkbox(ui, &params.side_hpf_on, "Side HPF");
+            ui.add_space(8.0);
+
+            let v = params.side_hpf_freq.value();
+            widgets::float_knob(
+                ui, &params.side_hpf_freq, 20.0..=400.0, 120.0,
+                "HPF Freq", "keep bass mono", &format!("{:.0} Hz", v), true,
+            );
         });
     });
 }

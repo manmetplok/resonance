@@ -27,15 +27,18 @@ pub fn draw(ui: &mut egui::Ui, params: &DitherParams) {
 
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            widgets::control_column(ui, "On", "enable", |ui| {
-                widgets::bool_checkbox(ui, &params.on, "");
-            });
-            widgets::control_column(ui, "Target", "bit depth", |ui| {
+            widgets::bool_checkbox(ui, &params.on, "On");
+            ui.add_space(8.0);
+            ui.vertical(|ui| {
+                ui.label(
+                    egui::RichText::new("Target Bit Depth")
+                        .size(10.0)
+                        .color(theme::TEXT_DIM),
+                );
                 widgets::int_combo(ui, &params.target_bits, "dith_bits_combo", BIT_LABELS);
             });
-            widgets::control_column(ui, "Noise Shape", "HF tilt", |ui| {
-                widgets::bool_checkbox(ui, &params.noise_shape, "");
-            });
+            ui.add_space(8.0);
+            widgets::bool_checkbox(ui, &params.noise_shape, "Noise Shape");
         });
 
         ui.add_space(8.0);

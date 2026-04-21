@@ -21,7 +21,7 @@
     
 
 ##Plugins general
-    - We need better controls, the current control boxes run out of screen, maybe knobs are better then slider. Also the visuals (scopes etc) can be smaller, and maybe stacked. Lets come up with a coherent design for each plugin and inplement it.
+    - [x] We need better controls, the current control boxes run out of screen, maybe knobs are better then slider. Also the visuals (scopes etc) can be smaller, and maybe stacked. Lets come up with a coherent design for each plugin and inplement it.
 
 ##Delay plugin
     - [x] Feedback range is to large afaik

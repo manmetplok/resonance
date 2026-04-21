@@ -1,9 +1,10 @@
 //! Multiband compressor control panel.
 //!
-//! Top row: master on + three crossover frequencies.
-//! Bottom row: four per-band columns, each with enable, threshold,
-//! ratio, and gain.
+//! Top row: master on + three crossover frequency knobs.
+//! Bottom row: four per-band groups, each with enable, threshold,
+//! ratio, and gain knobs.
 
+use resonance_plugin::Param;
 use wayland_plugin_gui::egui;
 
 use crate::params::MultibandParams;
@@ -28,9 +29,27 @@ pub fn draw(ui: &mut egui::Ui, params: &MultibandParams) {
             ui.add_space(16.0);
             ui.label(egui::RichText::new("Crossovers:").size(11.0).color(theme::TEXT_DIM));
             ui.add_space(4.0);
-            crossover_slider(ui, &params.xo1, "LO/LM", 40.0..=400.0);
-            crossover_slider(ui, &params.xo2, "LM/HM", 250.0..=2500.0);
-            crossover_slider(ui, &params.xo3, "HM/HI", 1500.0..=10_000.0);
+
+            let v = params.xo1.value();
+            let def = params.xo1.default_plain() as f32;
+            widgets::float_knob(
+                ui, &params.xo1, 40.0..=400.0, def,
+                "LO/LM", "", &format!("{:.0} Hz", v), true,
+            );
+
+            let v = params.xo2.value();
+            let def = params.xo2.default_plain() as f32;
+            widgets::float_knob(
+                ui, &params.xo2, 250.0..=2500.0, def,
+                "LM/HM", "", &format!("{:.0} Hz", v), true,
+            );
+
+            let v = params.xo3.value();
+            let def = params.xo3.default_plain() as f32;
+            widgets::float_knob(
+                ui, &params.xo3, 1500.0..=10_000.0, def,
+                "HM/HI", "", &format!("{:.0} Hz", v), true,
+            );
         });
         ui.add_space(6.0);
 
@@ -44,30 +63,44 @@ pub fn draw(ui: &mut egui::Ui, params: &MultibandParams) {
                     2 => "High-Mid",
                     _ => "High",
                 };
-                widgets::control_column(ui, title, "", |ui| {
-                    widgets::bool_checkbox(ui, &band.on, "On");
-                    ui.label(egui::RichText::new("Threshold").size(9.0).color(theme::TEXT_DIM));
-                    widgets::float_slider(ui, &band.threshold, -40.0..=0.0, 1, " dB");
-                    ui.label(egui::RichText::new("Ratio").size(9.0).color(theme::TEXT_DIM));
-                    widgets::float_slider(ui, &band.ratio, 1.0..=8.0, 1, ":1");
-                    ui.label(egui::RichText::new("Gain").size(9.0).color(theme::TEXT_DIM));
-                    widgets::float_slider(ui, &band.gain, -12.0..=12.0, 1, " dB");
+
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(title)
+                                .strong()
+                                .size(11.0)
+                                .color(theme::TEXT),
+                        );
+                        widgets::bool_checkbox(ui, &band.on, "On");
+                    });
+                    ui.horizontal(|ui| {
+                        let v = band.threshold.value();
+                        let def = band.threshold.default_plain() as f32;
+                        widgets::float_knob(
+                            ui, &band.threshold, -40.0..=0.0, def,
+                            "Threshold", "", &format!("{:.1} dB", v), false,
+                        );
+
+                        let v = band.ratio.value();
+                        let def = band.ratio.default_plain() as f32;
+                        widgets::float_knob(
+                            ui, &band.ratio, 1.0..=8.0, def,
+                            "Ratio", "", &format!("{:.1}:1", v), false,
+                        );
+
+                        let v = band.gain.value();
+                        let def = band.gain.default_plain() as f32;
+                        widgets::float_knob(
+                            ui, &band.gain, -12.0..=12.0, def,
+                            "Gain", "", &format!("{:.1} dB", v), false,
+                        );
+                    });
                 });
+                if i + 1 < NUM_BANDS {
+                    ui.add_space(8.0);
+                }
             }
         });
     });
-}
-
-fn crossover_slider(
-    ui: &mut egui::Ui,
-    param: &resonance_plugin::FloatParam,
-    label: &str,
-    range: std::ops::RangeInclusive<f32>,
-) {
-    ui.vertical(|ui| {
-        ui.label(egui::RichText::new(label).size(9.0).color(theme::TEXT_DIM));
-        ui.spacing_mut().slider_width = 120.0;
-        widgets::float_slider_log(ui, param, range, 0, " Hz");
-    });
-    ui.add_space(6.0);
 }

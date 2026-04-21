@@ -54,7 +54,7 @@ impl EditorFactory for CompressorEditorFactory {
             EditorOptions {
                 title: "Resonance Compressor".to_string(),
                 initial_size: (960, 540),
-                min_size: (720, 420),
+                min_size: (680, 400),
                 resizable: true,
             },
         )
@@ -136,7 +136,7 @@ impl EditorApp for CompressorEditorApp {
             .show_inside(ui, |ui| draw_header(ui, self));
 
         egui::Panel::bottom("comp_strip")
-            .exact_size(160.0)
+            .exact_size(110.0)
             .show_inside(ui, |ui| draw_control_strip(ui, self));
 
         egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
@@ -228,180 +228,82 @@ fn draw_center(ui: &mut egui::Ui, app: &mut CompressorEditorApp) {
 }
 
 fn draw_control_strip(ui: &mut egui::Ui, app: &mut CompressorEditorApp) {
+    use wayland_plugin_gui::widgets;
+
     ui.add_space(4.0);
+    // Row 1: core dynamics controls.
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        control_column(ui, "Threshold", "", |ui| {
-            let mut v = app.params.threshold.value();
-            if ui
-                .add(
-                    egui::Slider::new(&mut v, -60.0..=0.0)
-                        .suffix(" dB")
-                        .fixed_decimals(1)
-                        .show_value(true),
-                )
-                .changed()
-            {
-                app.params.threshold.set_value(v);
-            }
-        });
-        control_column(ui, "Ratio", "", |ui| {
-            let mut v = app.params.ratio.value();
-            if ui
-                .add(
-                    egui::Slider::new(&mut v, 1.0..=20.0)
-                        .logarithmic(true)
-                        .fixed_decimals(1)
-                        .show_value(true),
-                )
-                .changed()
-            {
-                app.params.ratio.set_value(v);
-            }
-        });
-        control_column(ui, "Attack", "", |ui| {
-            let mut v = app.params.attack.value();
-            if ui
-                .add(
-                    egui::Slider::new(&mut v, 0.1..=200.0)
-                        .logarithmic(true)
-                        .suffix(" ms")
-                        .fixed_decimals(2)
-                        .show_value(true),
-                )
-                .changed()
-            {
-                app.params.attack.set_value(v);
-            }
-        });
-        control_column(ui, "Release", "", |ui| {
-            let mut v = app.params.release.value();
-            if ui
-                .add(
-                    egui::Slider::new(&mut v, 5.0..=2000.0)
-                        .logarithmic(true)
-                        .suffix(" ms")
-                        .fixed_decimals(1)
-                        .show_value(true),
-                )
-                .changed()
-            {
-                app.params.release.set_value(v);
-            }
-        });
-        control_column(ui, "Knee", "", |ui| {
-            let mut v = app.params.knee.value();
-            if ui
-                .add(
-                    egui::Slider::new(&mut v, 0.0..=12.0)
-                        .suffix(" dB")
-                        .fixed_decimals(1)
-                        .show_value(true),
-                )
-                .changed()
-            {
-                app.params.knee.set_value(v);
-            }
-        });
-        control_column(ui, "Makeup", "", |ui| {
-            let mut v = app.params.makeup.value();
-            if ui
-                .add(
-                    egui::Slider::new(&mut v, -12.0..=24.0)
-                        .suffix(" dB")
-                        .fixed_decimals(1)
-                        .show_value(true),
-                )
-                .changed()
-            {
-                app.params.makeup.set_value(v);
-            }
-            let mut auto = app.params.auto_makeup.value();
-            if ui.checkbox(&mut auto, "Auto").changed() {
-                app.params.auto_makeup.set_value(auto);
-            }
-        });
-        control_column(ui, "Mix", "", |ui| {
-            let mut v = app.params.mix.value();
-            if ui
-                .add(
-                    egui::Slider::new(&mut v, 0.0..=1.0)
-                        .suffix("")
-                        .fixed_decimals(2)
-                        .show_value(true),
-                )
-                .changed()
-            {
-                app.params.mix.set_value(v);
-            }
-        });
-        control_column(ui, "Detector", "Peak ↔ RMS", |ui| {
-            let mut v = app.params.detector_mix.value();
-            if ui
-                .add(
-                    egui::Slider::new(&mut v, 0.0..=1.0)
-                        .fixed_decimals(2)
-                        .show_value(true),
-                )
-                .changed()
-            {
-                app.params.detector_mix.set_value(v);
-            }
-        });
-        control_column(ui, "SC HPF", "", |ui| {
-            let mut on = app.params.sc_hpf_on.value();
-            if ui.checkbox(&mut on, "On").changed() {
-                app.params.sc_hpf_on.set_value(on);
-            }
-            let mut v = app.params.sc_hpf_freq.value();
-            if ui
-                .add(
-                    egui::Slider::new(&mut v, 20.0..=500.0)
-                        .logarithmic(true)
-                        .suffix(" Hz")
-                        .fixed_decimals(0)
-                        .show_value(true),
-                )
-                .changed()
-            {
-                app.params.sc_hpf_freq.set_value(v);
-            }
+        widgets::float_knob(
+            ui, &app.params.threshold, -60.0..=0.0, -20.0,
+            "Threshold", "",
+            &format!("{:.1} dB", app.params.threshold.value()),
+            false,
+        );
+        ui.add_space(4.0);
+        widgets::float_knob(
+            ui, &app.params.ratio, 1.0..=20.0, 4.0,
+            "Ratio", "",
+            &format!("{:.1}:1", app.params.ratio.value()),
+            true,
+        );
+        ui.add_space(4.0);
+        widgets::float_knob(
+            ui, &app.params.attack, 0.1..=200.0, 10.0,
+            "Attack", "",
+            &format!("{:.1} ms", app.params.attack.value()),
+            true,
+        );
+        ui.add_space(4.0);
+        widgets::float_knob(
+            ui, &app.params.release, 5.0..=2000.0, 100.0,
+            "Release", "",
+            &format!("{:.0} ms", app.params.release.value()),
+            true,
+        );
+        ui.add_space(4.0);
+        widgets::float_knob(
+            ui, &app.params.knee, 0.0..=12.0, 3.0,
+            "Knee", "",
+            &format!("{:.1} dB", app.params.knee.value()),
+            false,
+        );
+        ui.add_space(4.0);
+        widgets::float_knob(
+            ui, &app.params.makeup, -12.0..=24.0, 0.0,
+            "Makeup", "",
+            &format!("{:.1} dB", app.params.makeup.value()),
+            false,
+        );
+        ui.add_space(4.0);
+        widgets::float_knob(
+            ui, &app.params.mix, 0.0..=1.0, 1.0,
+            "Mix", "dry/wet",
+            &format!("{:.0}%", app.params.mix.value() * 100.0),
+            false,
+        );
+        ui.add_space(4.0);
+        widgets::float_knob(
+            ui, &app.params.detector_mix, 0.0..=1.0, 0.0,
+            "Detector", "Peak/RMS",
+            &format!("{:.2}", app.params.detector_mix.value()),
+            false,
+        );
+        ui.add_space(4.0);
+        widgets::float_knob(
+            ui, &app.params.sc_hpf_freq, 20.0..=500.0, 80.0,
+            "SC HPF", "",
+            &format!("{:.0} Hz", app.params.sc_hpf_freq.value()),
+            true,
+        );
+        ui.add_space(8.0);
+        // Toggles.
+        ui.vertical(|ui| {
+            ui.add_space(16.0);
+            widgets::bool_checkbox(ui, &app.params.auto_makeup, "Auto Gain");
+            widgets::bool_checkbox(ui, &app.params.sc_hpf_on, "SC HPF On");
         });
     });
-}
-
-fn control_column(
-    ui: &mut egui::Ui,
-    label: &str,
-    sub: &str,
-    mut contents: impl FnMut(&mut egui::Ui),
-) {
-    egui::Frame::group(ui.style())
-        .fill(theme::PANEL)
-        .stroke(egui::Stroke::new(1.0, theme::BORDER))
-        .inner_margin(egui::Margin::same(6))
-        .show(ui, |ui| {
-            ui.vertical(|ui| {
-                ui.set_min_width(110.0);
-                ui.set_max_width(110.0);
-                ui.spacing_mut().slider_width = 98.0;
-                ui.label(
-                    egui::RichText::new(label)
-                        .strong()
-                        .color(theme::TEXT),
-                );
-                if !sub.is_empty() {
-                    ui.label(
-                        egui::RichText::new(sub)
-                            .size(9.0)
-                            .color(theme::TEXT_DIM),
-                    );
-                }
-                ui.add_space(4.0);
-                contents(ui);
-            });
-        });
-    ui.add_space(4.0);
 }
 
 fn load_preset(params: &CompressorParams, json: &str) {

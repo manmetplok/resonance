@@ -1,7 +1,8 @@
 //! Parametric EQ control panel — used for both the corrective and
-//! tonal EQ stages. Lays out the four bands as four compact columns
-//! across the panel, each with enable / type / freq / Q / gain.
+//! tonal EQ stages. Lays out the four bands as horizontal rows of
+//! knobs, each with enable / type / freq / Q / gain.
 
+use resonance_plugin::Param;
 use wayland_plugin_gui::egui;
 
 use crate::params::EqStageParams;
@@ -26,12 +27,19 @@ pub fn draw(ui: &mut egui::Ui, params: &EqStageParams, title: &str) {
         });
         ui.add_space(4.0);
 
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            for i in 0..NUM_BANDS {
-                let band = &params.bands[i];
-                let col_title = format!("Band {}", i + 1);
-                widgets::control_column(ui, &col_title, "", |ui| {
+        for i in 0..NUM_BANDS {
+            let band = &params.bands[i];
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+
+                ui.vertical(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(format!("Band {}", i + 1))
+                            .strong()
+                            .size(11.0)
+                            .color(theme::TEXT),
+                    );
                     widgets::bool_checkbox(ui, &band.on, "On");
                     widgets::int_combo(
                         ui,
@@ -39,14 +47,33 @@ pub fn draw(ui: &mut egui::Ui, params: &EqStageParams, title: &str) {
                         &format!("{}_type_{i}", title),
                         TYPE_LABELS,
                     );
-                    ui.label(egui::RichText::new("Freq").size(9.0).color(theme::TEXT_DIM));
-                    widgets::float_slider_log(ui, &band.freq, 20.0..=20_000.0, 0, " Hz");
-                    ui.label(egui::RichText::new("Q").size(9.0).color(theme::TEXT_DIM));
-                    widgets::float_slider_log(ui, &band.q, 0.1..=24.0, 2, "");
-                    ui.label(egui::RichText::new("Gain").size(9.0).color(theme::TEXT_DIM));
-                    widgets::float_slider(ui, &band.gain, -24.0..=24.0, 1, " dB");
                 });
+                ui.add_space(8.0);
+
+                let v = band.freq.value();
+                let def = band.freq.default_plain() as f32;
+                widgets::float_knob(
+                    ui, &band.freq, 20.0..=20_000.0, def,
+                    "Freq", "", &format!("{:.0} Hz", v), true,
+                );
+
+                let v = band.q.value();
+                let def = band.q.default_plain() as f32;
+                widgets::float_knob(
+                    ui, &band.q, 0.1..=24.0, def,
+                    "Q", "", &format!("{:.2}", v), true,
+                );
+
+                let v = band.gain.value();
+                let def = band.gain.default_plain() as f32;
+                widgets::float_knob(
+                    ui, &band.gain, -24.0..=24.0, def,
+                    "Gain", "", &format!("{:.1} dB", v), false,
+                );
+            });
+            if i + 1 < NUM_BANDS {
+                ui.add_space(2.0);
             }
-        });
+        }
     });
 }

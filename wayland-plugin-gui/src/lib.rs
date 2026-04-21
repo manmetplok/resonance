@@ -26,6 +26,7 @@ mod egl_context;
 mod error;
 mod input;
 mod window_thread;
+pub mod widgets;
 
 pub use app::EditorApp;
 pub use editor::{Editor, EditorOptions};

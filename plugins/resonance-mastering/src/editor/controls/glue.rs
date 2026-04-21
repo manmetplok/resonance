@@ -23,30 +23,50 @@ pub fn draw(ui: &mut egui::Ui, params: &GlueCompressorParams) {
 
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            widgets::control_column(ui, "On", "enable", |ui| {
-                widgets::bool_checkbox(ui, &params.on, "");
-            });
-            widgets::control_column(ui, "Threshold", "", |ui| {
-                widgets::float_slider(ui, &params.threshold, -40.0..=0.0, 1, " dB");
-            });
-            widgets::control_column(ui, "Ratio", "", |ui| {
-                widgets::float_slider(ui, &params.ratio, 1.0..=8.0, 1, ":1");
-            });
-            widgets::control_column(ui, "Attack", "", |ui| {
-                widgets::float_slider_log(ui, &params.attack, 1.0..=200.0, 1, " ms");
-            });
-            widgets::control_column(ui, "Release", "", |ui| {
-                widgets::float_slider_log(ui, &params.release, 10.0..=1000.0, 0, " ms");
-            });
-            widgets::control_column(ui, "Knee", "", |ui| {
-                widgets::float_slider(ui, &params.knee, 0.0..=12.0, 1, " dB");
-            });
-            widgets::control_column(ui, "Makeup", "", |ui| {
-                widgets::float_slider(ui, &params.makeup, -6.0..=12.0, 1, " dB");
-            });
-            widgets::control_column(ui, "Mix", "parallel", |ui| {
-                widgets::float_slider(ui, &params.mix, 0.0..=1.0, 2, "");
-            });
+            widgets::bool_checkbox(ui, &params.on, "On");
+            ui.add_space(8.0);
+
+            let v = params.threshold.value();
+            widgets::float_knob(
+                ui, &params.threshold, -40.0..=0.0, -18.0,
+                "Threshold", "", &format!("{:.1} dB", v), false,
+            );
+
+            let v = params.ratio.value();
+            widgets::float_knob(
+                ui, &params.ratio, 1.0..=8.0, 2.0,
+                "Ratio", "", &format!("{:.1}:1", v), false,
+            );
+
+            let v = params.attack.value();
+            widgets::float_knob(
+                ui, &params.attack, 1.0..=200.0, 30.0,
+                "Attack", "", &format!("{:.1} ms", v), true,
+            );
+
+            let v = params.release.value();
+            widgets::float_knob(
+                ui, &params.release, 10.0..=1000.0, 150.0,
+                "Release", "", &format!("{:.0} ms", v), true,
+            );
+
+            let v = params.knee.value();
+            widgets::float_knob(
+                ui, &params.knee, 0.0..=12.0, 6.0,
+                "Knee", "", &format!("{:.1} dB", v), false,
+            );
+
+            let v = params.makeup.value();
+            widgets::float_knob(
+                ui, &params.makeup, -6.0..=12.0, 0.0,
+                "Makeup", "", &format!("{:.1} dB", v), false,
+            );
+
+            let v = params.mix.value();
+            widgets::float_knob(
+                ui, &params.mix, 0.0..=1.0, 1.0,
+                "Mix", "parallel", &format!("{:.0}%", v * 100.0), false,
+            );
         });
     });
 }
