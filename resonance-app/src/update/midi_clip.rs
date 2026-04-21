@@ -8,8 +8,7 @@ use crate::Resonance;
 pub fn handle(r: &mut Resonance, m: MidiClipMessage) -> Task<Message> {
     match m {
         MidiClipMessage::DeleteMidiClip(id) => {
-            r.engine
-                .send(AudioCommand::DeleteMidiClip { clip_id: id });
+            r.engine.send(AudioCommand::DeleteMidiClip { clip_id: id });
             if r.interaction.selected_midi_clip == Some(id) {
                 r.interaction.selected_midi_clip = None;
             }
@@ -20,13 +19,7 @@ pub fn handle(r: &mut Resonance, m: MidiClipMessage) -> Task<Message> {
             start_x,
             start_y,
         } => {
-            clips::start_midi_clip_drag(
-                r,
-                clip_id,
-                grab_offset_x,
-                start_x,
-                start_y,
-            );
+            clips::start_midi_clip_drag(r, clip_id, grab_offset_x, start_x, start_y);
         }
         MidiClipMessage::UpdateMidiClipDrag(x, y) => {
             clips::update_midi_clip_drag(r, x, y);

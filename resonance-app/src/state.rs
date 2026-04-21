@@ -639,12 +639,7 @@ impl TrackRegistry {
 
     /// Run `f` on the bus with the given id, returning whatever `f` returns.
     /// `None` if the bus doesn't exist.
-    pub fn with_bus_mut<R>(
-        &mut self,
-        id: BusId,
-        f: impl FnOnce(&mut BusState) -> R,
-    ) -> Option<R> {
+    pub fn with_bus_mut<R>(&mut self, id: BusId, f: impl FnOnce(&mut BusState) -> R) -> Option<R> {
         self.busses.iter_mut().find(|b| b.id == id).map(f)
     }
-
 }

@@ -101,7 +101,10 @@ mod tests {
             let table = a + frac * (b - a);
             let expected = (phase * 2.0 * std::f32::consts::PI).sin();
             let err = (table - expected).abs();
-            assert!(err < 1e-3, "phase={phase}: table={table}, sin={expected}, err={err}");
+            assert!(
+                err < 1e-3,
+                "phase={phase}: table={table}, sin={expected}, err={err}"
+            );
         }
     }
 

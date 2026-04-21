@@ -73,8 +73,7 @@ pub struct Limiter {
 
 impl Limiter {
     pub fn new(sample_rate: f32) -> Self {
-        let lookahead_samples =
-            ((LOOKAHEAD_MS * 0.001 * sample_rate).ceil() as usize).max(8);
+        let lookahead_samples = ((LOOKAHEAD_MS * 0.001 * sample_rate).ceil() as usize).max(8);
         Self {
             sample_rate,
             lookahead_samples,
@@ -112,12 +111,7 @@ impl Limiter {
         -20.0 * lin.log10()
     }
 
-    pub fn process_stereo(
-        &mut self,
-        left: &mut [f32],
-        right: &mut [f32],
-        cfg: &LimiterConfig,
-    ) {
+    pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &LimiterConfig) {
         let frames = left.len().min(right.len());
         if frames == 0 {
             return;

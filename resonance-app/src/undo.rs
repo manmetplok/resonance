@@ -269,9 +269,7 @@ impl crate::Resonance {
     /// them. Also false during an in-flight restore so intermediate
     /// states mid-replay don't end up in the history.
     pub(crate) fn can_record_undo(&self) -> bool {
-        self.io.has_active_project
-            && self.io.project_path.is_some()
-            && !self.io.loading
+        self.io.has_active_project && self.io.project_path.is_some() && !self.io.loading
     }
 
     /// True when an undo or redo would be safe to start right now. The
@@ -442,17 +440,16 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             BusMessage::SetBusVolume(id, _) => {
                 UndoAction::RecordCoalesced(CoalesceKey::BusVolume(*id))
             }
-            BusMessage::SetBusPan(id, _) => {
-                UndoAction::RecordCoalesced(CoalesceKey::BusPan(*id))
-            }
+            BusMessage::SetBusPan(id, _) => UndoAction::RecordCoalesced(CoalesceKey::BusPan(*id)),
             _ => UndoAction::Record,
         },
 
         Message::Master(_) => UndoAction::Record,
 
         Message::Plugin(p) => match p {
-            PluginMessage::AddPluginToTrack(_, _)
-            | PluginMessage::RemovePluginFromTrack(_, _) => UndoAction::Record,
+            PluginMessage::AddPluginToTrack(_, _) | PluginMessage::RemovePluginFromTrack(_, _) => {
+                UndoAction::Record
+            }
             PluginMessage::SetPluginParam(instance_id, param_id, _) => {
                 UndoAction::RecordCoalesced(CoalesceKey::PluginParam {
                     instance_id: *instance_id,
@@ -469,9 +466,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
                 UndoAction::Begin
             }
             ClipMessage::EndClipDrag | ClipMessage::EndClipTrim => UndoAction::Commit,
-            ClipMessage::UpdateClipDrag(_, _) | ClipMessage::UpdateClipTrim(_) => {
-                UndoAction::Skip
-            }
+            ClipMessage::UpdateClipDrag(_, _) | ClipMessage::UpdateClipTrim(_) => UndoAction::Skip,
             ClipMessage::DeleteClip(_) => UndoAction::Record,
         },
 
@@ -481,8 +476,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             MidiClipMessage::EndMidiClipDrag | MidiClipMessage::EndMidiClipTrim => {
                 UndoAction::Commit
             }
-            MidiClipMessage::UpdateMidiClipDrag(_, _)
-            | MidiClipMessage::UpdateMidiClipTrim(_) => UndoAction::Skip,
+            MidiClipMessage::UpdateMidiClipDrag(_, _) | MidiClipMessage::UpdateMidiClipTrim(_) => {
+                UndoAction::Skip
+            }
             MidiClipMessage::DeleteMidiClip(_) => UndoAction::Record,
         },
 

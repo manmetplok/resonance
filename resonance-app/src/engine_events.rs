@@ -26,7 +26,8 @@ impl crate::Resonance {
                 // just update its waveform and total frames. Otherwise push new.
                 if let Some(clip) = self.clips.iter_mut().find(|c| c.id == clip_id) {
                     clip.waveform_peaks = waveform_peaks;
-                    clip.total_frames = duration_samples + clip.trim_start_frames + clip.trim_end_frames;
+                    clip.total_frames =
+                        duration_samples + clip.trim_start_frames + clip.trim_end_frames;
                 } else {
                     self.clips.push(ClipState {
                         id: clip_id,
@@ -56,12 +57,19 @@ impl crate::Resonance {
             }
             AudioEvent::TrackRemoved { track_id } => {
                 if let Some(sel_clip_id) = self.interaction.selected_clip {
-                    if self.clips.iter().any(|c| c.id == sel_clip_id && c.track_id == track_id) {
+                    if self
+                        .clips
+                        .iter()
+                        .any(|c| c.id == sel_clip_id && c.track_id == track_id)
+                    {
                         self.interaction.selected_clip = None;
                     }
                 }
                 if let Some(sel_plugin_id) = self.mixer.selected_plugin {
-                    if self.registry.tracks.iter()
+                    if self
+                        .registry
+                        .tracks
+                        .iter()
                         .filter(|t| t.id == track_id)
                         .any(|t| t.plugins.iter().any(|p| p.instance_id == sel_plugin_id))
                     {
@@ -161,7 +169,11 @@ impl crate::Resonance {
                 // Idempotent: if the plugin slot already exists (created by project load),
                 // just update its params and has_gui. Otherwise push a new slot.
                 if let Some(track) = self.registry.tracks.iter_mut().find(|t| t.id == track_id) {
-                    if let Some(slot) = track.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
+                    if let Some(slot) = track
+                        .plugins
+                        .iter_mut()
+                        .find(|p| p.instance_id == instance_id)
+                    {
                         slot.params = params;
                         slot.has_gui = has_gui;
                     } else {
@@ -179,16 +191,16 @@ impl crate::Resonance {
                 // If this plugin was added as part of a preset, load
                 // the saved plugin state blob (if any). Pop the first
                 // entry from the pending list to stay in order.
-                if let Some((pending_track, ref mut states)) =
-                    self.pending_preset_plugin_states
-                {
+                if let Some((pending_track, ref mut states)) = self.pending_preset_plugin_states {
                     if pending_track == track_id {
-                        if let Some(entry) = if states.is_empty() { None } else { Some(states.remove(0)) } {
+                        if let Some(entry) = if states.is_empty() {
+                            None
+                        } else {
+                            Some(states.remove(0))
+                        } {
                             if let Some(data) = entry {
-                                self.engine.send(AudioCommand::LoadPluginState {
-                                    instance_id,
-                                    data,
-                                });
+                                self.engine
+                                    .send(AudioCommand::LoadPluginState { instance_id, data });
                             }
                         }
                     }
@@ -238,13 +250,19 @@ impl crate::Resonance {
                         .find(|t| t.id == track_id)
                         .map(|t| t.name.clone())
                     else {
-                        debug_assert!(false, "sub-track creation: parent track {track_id:?} not found");
+                        debug_assert!(
+                            false,
+                            "sub-track creation: parent track {track_id:?} not found"
+                        );
                         return Task::none();
                     };
                     for port_idx in 1..output_port_count {
                         let already = self.registry.tracks.iter().any(|t| {
                             t.sub_track
-                                .map(|l| l.parent_track_id == track_id && l.output_port_index == port_idx as u32)
+                                .map(|l| {
+                                    l.parent_track_id == track_id
+                                        && l.output_port_index == port_idx as u32
+                                })
                                 .unwrap_or(false)
                         });
                         if already {
@@ -367,8 +385,14 @@ impl crate::Resonance {
 
             // -- MIDI clip events --
             AudioEvent::MidiClipCreated {
-                clip_id, track_id, start_sample, duration_ticks,
-                name, notes, trim_start_ticks, trim_end_ticks,
+                clip_id,
+                track_id,
+                start_sample,
+                duration_ticks,
+                name,
+                notes,
+                trim_start_ticks,
+                trim_end_ticks,
             } => {
                 // Idempotent: skip if the MIDI clip already exists (created by project load).
                 if self.midi_clips.iter().any(|c| c.id == clip_id) {
@@ -385,13 +409,22 @@ impl crate::Resonance {
                     trim_end_ticks,
                 });
             }
-            AudioEvent::MidiClipMoved { clip_id, new_start_sample, new_track_id } => {
+            AudioEvent::MidiClipMoved {
+                clip_id,
+                new_start_sample,
+                new_track_id,
+            } => {
                 if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
                     clip.start_sample = new_start_sample;
                     clip.track_id = new_track_id;
                 }
             }
-            AudioEvent::MidiClipTrimmed { clip_id, new_start_sample, trim_start_ticks, trim_end_ticks } => {
+            AudioEvent::MidiClipTrimmed {
+                clip_id,
+                new_start_sample,
+                trim_start_ticks,
+                trim_end_ticks,
+            } => {
                 if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
                     clip.start_sample = new_start_sample;
                     clip.trim_start_ticks = trim_start_ticks;
@@ -405,18 +438,28 @@ impl crate::Resonance {
             // -- MIDI note editing events --
             AudioEvent::MidiNoteAdded { clip_id, note } => {
                 if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
-                    let pos = clip.notes.partition_point(|n| n.start_tick <= note.start_tick);
+                    let pos = clip
+                        .notes
+                        .partition_point(|n| n.start_tick <= note.start_tick);
                     clip.notes.insert(pos, note);
                 }
             }
-            AudioEvent::MidiNoteRemoved { clip_id, note_index } => {
+            AudioEvent::MidiNoteRemoved {
+                clip_id,
+                note_index,
+            } => {
                 if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
                     if note_index < clip.notes.len() {
                         clip.notes.remove(note_index);
                     }
                 }
             }
-            AudioEvent::MidiNoteMoved { clip_id, note_index, new_start_tick, new_note } => {
+            AudioEvent::MidiNoteMoved {
+                clip_id,
+                note_index,
+                new_start_tick,
+                new_note,
+            } => {
                 if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
                     if note_index < clip.notes.len() {
                         clip.notes[note_index].start_tick = new_start_tick;
@@ -425,14 +468,22 @@ impl crate::Resonance {
                     }
                 }
             }
-            AudioEvent::MidiNoteResized { clip_id, note_index, new_duration_ticks } => {
+            AudioEvent::MidiNoteResized {
+                clip_id,
+                note_index,
+                new_duration_ticks,
+            } => {
                 if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
                     if note_index < clip.notes.len() {
                         clip.notes[note_index].duration_ticks = new_duration_ticks;
                     }
                 }
             }
-            AudioEvent::MidiNoteVelocitySet { clip_id, note_index, velocity } => {
+            AudioEvent::MidiNoteVelocitySet {
+                clip_id,
+                note_index,
+                velocity,
+            } => {
                 if let Some(clip) = self.midi_clips.iter_mut().find(|c| c.id == clip_id) {
                     if note_index < clip.notes.len() {
                         clip.notes[note_index].velocity = velocity;
@@ -447,11 +498,16 @@ impl crate::Resonance {
                 }
                 let order = self.registry.next_bus_order;
                 self.registry.next_bus_order += 1;
-                self.registry.busses.push(BusState::new(bus_id, order, name));
+                self.registry
+                    .busses
+                    .push(BusState::new(bus_id, order, name));
             }
             AudioEvent::BusRemoved { bus_id } => {
                 if let Some(sel) = self.mixer.selected_plugin {
-                    if self.registry.busses.iter()
+                    if self
+                        .registry
+                        .busses
+                        .iter()
                         .filter(|b| b.id == bus_id)
                         .any(|b| b.plugins.iter().any(|p| p.instance_id == sel))
                     {
@@ -477,8 +533,10 @@ impl crate::Resonance {
                 has_gui,
             } => {
                 if let Some(bus) = self.registry.busses.iter_mut().find(|b| b.id == bus_id) {
-                    if let Some(slot) =
-                        bus.plugins.iter_mut().find(|p| p.instance_id == instance_id)
+                    if let Some(slot) = bus
+                        .plugins
+                        .iter_mut()
+                        .find(|p| p.instance_id == instance_id)
                     {
                         slot.params = params;
                         slot.has_gui = has_gui;
@@ -496,7 +554,10 @@ impl crate::Resonance {
                 self.engine
                     .send(AudioCommand::SavePluginState { instance_id });
             }
-            AudioEvent::BusPluginRemoved { bus_id, instance_id } => {
+            AudioEvent::BusPluginRemoved {
+                bus_id,
+                instance_id,
+            } => {
                 if let Some(bus) = self.registry.busses.iter_mut().find(|b| b.id == bus_id) {
                     bus.plugins.retain(|p| p.instance_id != instance_id);
                 }
@@ -534,23 +595,19 @@ impl crate::Resonance {
                     .send(AudioCommand::SavePluginState { instance_id });
             }
             AudioEvent::MasterPluginRemoved { instance_id } => {
-                self.master_plugins
-                    .retain(|p| p.instance_id != instance_id);
+                self.master_plugins.retain(|p| p.instance_id != instance_id);
                 if self.mixer.selected_plugin == Some(instance_id) {
                     self.mixer.selected_plugin = None;
                 }
                 self.plugin_state_cache.remove(&instance_id);
             }
             AudioEvent::TrackFxBypassChanged { track_id, bypassed } => {
-                if let Some(track) =
-                    self.registry.tracks.iter_mut().find(|t| t.id == track_id)
-                {
+                if let Some(track) = self.registry.tracks.iter_mut().find(|t| t.id == track_id) {
                     track.fx_bypassed = bypassed;
                 }
             }
             AudioEvent::BusFxBypassChanged { bus_id, bypassed } => {
-                if let Some(bus) = self.registry.busses.iter_mut().find(|b| b.id == bus_id)
-                {
+                if let Some(bus) = self.registry.busses.iter_mut().find(|b| b.id == bus_id) {
                     bus.fx_bypassed = bypassed;
                 }
             }
@@ -614,11 +671,8 @@ impl crate::Resonance {
         // (index) in the preset's plugin chain, so when PluginAdded fires
         // for this track we can pop the next state and apply it.
         if preset.plugins.iter().any(|p| p.state.is_some()) {
-            let states: Vec<Option<Vec<u8>>> = preset
-                .plugins
-                .iter()
-                .map(|p| p.state.clone())
-                .collect();
+            let states: Vec<Option<Vec<u8>>> =
+                preset.plugins.iter().map(|p| p.state.clone()).collect();
             self.pending_preset_plugin_states = Some((track_id, states));
         }
     }
@@ -669,7 +723,10 @@ impl crate::Resonance {
     }
 
     fn try_finish_save(&mut self) -> Task<Message> {
-        let both_done = self.io.save_state.as_ref()
+        let both_done = self
+            .io
+            .save_state
+            .as_ref()
             .map(|s| s.clips_done && s.plugins_done)
             .unwrap_or(false);
 
@@ -684,16 +741,17 @@ impl crate::Resonance {
 
         // Snapshot MIDI clips by id so the async save task can
         // write them as `.mid` files without touching `Resonance`.
-        let midi_clips: Vec<(resonance_audio::types::ClipId, Vec<resonance_audio::types::MidiNote>)> =
-            self.midi_clips
-                .iter()
-                .map(|mc| (mc.id, mc.notes.clone()))
-                .collect();
+        let midi_clips: Vec<(
+            resonance_audio::types::ClipId,
+            Vec<resonance_audio::types::MidiNote>,
+        )> = self
+            .midi_clips
+            .iter()
+            .map(|mc| (mc.id, mc.notes.clone()))
+            .collect();
 
         Task::perform(
-            async move {
-                project::save_project(&path, &project_file, &plugin_states, &midi_clips)
-            },
+            async move { project::save_project(&path, &project_file, &plugin_states, &midi_clips) },
             |r| Message::ProjectIo(ProjectIoMessage::ProjectSaved(r)),
         )
     }

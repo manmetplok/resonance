@@ -156,12 +156,7 @@ fn sample_transition(from: Function, rng: &mut XorShift) -> Function {
     Function::Tonic
 }
 
-fn chord_for_function(
-    scale: Scale,
-    func: Function,
-    sevenths: bool,
-    rng: &mut XorShift,
-) -> Chord {
+fn chord_for_function(scale: Scale, func: Function, sevenths: bool, rng: &mut XorShift) -> Chord {
     let degrees = degrees_for(func);
     let degree = degrees[rng.next_range(degrees.len())];
     diatonic_chord(scale, degree, sevenths)
@@ -254,10 +249,22 @@ mod tests {
     #[test]
     fn c_major_diatonic_sevenths() {
         let scale = Scale::new(PitchClass::C, Mode::Major);
-        assert_eq!(diatonic_chord(scale, 1, true), Chord::new(PitchClass::C, ChordQuality::Maj7));
-        assert_eq!(diatonic_chord(scale, 2, true), Chord::new(PitchClass::D, ChordQuality::Min7));
-        assert_eq!(diatonic_chord(scale, 5, true), Chord::new(PitchClass::G, ChordQuality::Dom7));
-        assert_eq!(diatonic_chord(scale, 7, true), Chord::new(PitchClass::B, ChordQuality::HalfDim7));
+        assert_eq!(
+            diatonic_chord(scale, 1, true),
+            Chord::new(PitchClass::C, ChordQuality::Maj7)
+        );
+        assert_eq!(
+            diatonic_chord(scale, 2, true),
+            Chord::new(PitchClass::D, ChordQuality::Min7)
+        );
+        assert_eq!(
+            diatonic_chord(scale, 5, true),
+            Chord::new(PitchClass::G, ChordQuality::Dom7)
+        );
+        assert_eq!(
+            diatonic_chord(scale, 7, true),
+            Chord::new(PitchClass::B, ChordQuality::HalfDim7)
+        );
     }
 
     #[test]
@@ -309,7 +316,11 @@ mod tests {
             let chords = walk_progression(&p);
             assert_eq!(chords.len(), 4);
             assert_eq!(chords[0].root, PitchClass::C, "seed {seed} first chord");
-            assert_eq!(chords.last().unwrap().root, PitchClass::C, "seed {seed} last chord");
+            assert_eq!(
+                chords.last().unwrap().root,
+                PitchClass::C,
+                "seed {seed} last chord"
+            );
         }
     }
 
@@ -347,7 +358,12 @@ mod tests {
     #[test]
     fn single_chord_progression_is_tonic() {
         let scale = Scale::new(PitchClass::C, Mode::Major);
-        let p = ProgressionParams { scale, chord_count: 1, seventh_chords: false, seed: 0 };
+        let p = ProgressionParams {
+            scale,
+            chord_count: 1,
+            seventh_chords: false,
+            seed: 0,
+        };
         let chords = walk_progression(&p);
         assert_eq!(chords.len(), 1);
         assert_eq!(chords[0].root, PitchClass::C);

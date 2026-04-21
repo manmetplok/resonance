@@ -208,11 +208,18 @@ mod tests {
         let out = voice_lead(&prev, &next, (52, 76));
         assert_eq!(out.len(), 3);
         // Total movement bound: no voice moves more than 2 semitones.
-        let cost: i32 = prev.iter().zip(out.iter()).map(|(&p, &n)| {
-            // prev is sorted; out is sorted; compare in order for sanity.
-            (p as i32 - n as i32).abs()
-        }).sum();
-        assert!(cost <= 4, "voice leading too jumpy: cost={cost}, out={out:?}");
+        let cost: i32 = prev
+            .iter()
+            .zip(out.iter())
+            .map(|(&p, &n)| {
+                // prev is sorted; out is sorted; compare in order for sanity.
+                (p as i32 - n as i32).abs()
+            })
+            .sum();
+        assert!(
+            cost <= 4,
+            "voice leading too jumpy: cost={cost}, out={out:?}"
+        );
         // All three pitch classes must be present.
         let pcs: std::collections::HashSet<u8> = out.iter().map(|n| n % 12).collect();
         assert!(pcs.contains(&(F.to_semitone())));
@@ -227,7 +234,11 @@ mod tests {
         let prev = [67u8, 71, 74];
         let out = voice_lead(&prev, &[C, E, G], (55, 80));
         assert_eq!(out.len(), 3);
-        let cost: i32 = prev.iter().zip(out.iter()).map(|(&p, &n)| (p as i32 - n as i32).abs()).sum();
+        let cost: i32 = prev
+            .iter()
+            .zip(out.iter())
+            .map(|(&p, &n)| (p as i32 - n as i32).abs())
+            .sum();
         assert!(cost <= 4);
     }
 

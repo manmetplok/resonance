@@ -206,6 +206,9 @@ mod tests {
             }
         }
         let gain_db = 10.0 * (out_sq / in_sq).log10();
-        assert!(gain_db < -6.0, "30 Hz K-weighted gain = {gain_db} dB (expected < -6)");
+        assert!(
+            gain_db < -6.0,
+            "30 Hz K-weighted gain = {gain_db} dB (expected < -6)"
+        );
     }
 }

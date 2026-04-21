@@ -93,11 +93,7 @@ pub(crate) fn handle_set_bus_mute(ctx: &HandlerCtx, bus_id: BusId, muted: bool) 
     }
 }
 
-pub(crate) fn handle_set_bus_fx_bypass(
-    ctx: &HandlerCtx,
-    bus_id: BusId,
-    bypassed: bool,
-) {
+pub(crate) fn handle_set_bus_fx_bypass(ctx: &HandlerCtx, bus_id: BusId, bypassed: bool) {
     if let Some(bus) = ctx.busses.read().get(&bus_id) {
         bus.set_fx_bypassed(bypassed);
     }
@@ -112,11 +108,7 @@ pub(crate) fn handle_set_bus_name(ctx: &HandlerCtx, bus_id: BusId, name: String)
     }
 }
 
-pub(crate) fn handle_set_track_output(
-    ctx: &HandlerCtx,
-    track_id: TrackId,
-    output: TrackOutput,
-) {
+pub(crate) fn handle_set_track_output(ctx: &HandlerCtx, track_id: TrackId, output: TrackOutput) {
     if let Some(track) = ctx.tracks.read().get(&track_id) {
         track.set_output(output);
     }
@@ -135,11 +127,11 @@ pub(crate) fn handle_add_plugin_to_bus(
         Some(idx) => idx,
         None => return,
     };
-    let actual_plugin_id =
-        match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id, ctx) {
-            Some(id) => id,
-            None => return,
-        };
+    let actual_plugin_id = match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id, ctx)
+    {
+        Some(id) => id,
+        None => return,
+    };
     let plugin_name = state.bundles[bundle_idx]
         .descriptors()
         .iter()
@@ -158,9 +150,10 @@ pub(crate) fn handle_add_plugin_to_bus(
             }
             let params = instance.query_params();
             let has_gui = instance.has_gui();
-            ctx.plugins
-                .write()
-                .insert(instance_id, parking_lot::Mutex::new(SyncClapInstance(instance)));
+            ctx.plugins.write().insert(
+                instance_id,
+                parking_lot::Mutex::new(SyncClapInstance(instance)),
+            );
             if let Some(bus) = ctx.busses.write().get_mut(&bus_id) {
                 bus.plugin_ids.push(instance_id);
             }
@@ -175,9 +168,10 @@ pub(crate) fn handle_add_plugin_to_bus(
             });
         }
         Err(e) => {
-            let _ = ctx
-                .event_tx
-                .send(AudioEvent::Error(format!("Failed to create plugin instance: {}", e)));
+            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                "Failed to create plugin instance: {}",
+                e
+            )));
         }
     }
 }

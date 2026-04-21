@@ -66,11 +66,7 @@ pub fn draw(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc<Work
         });
 }
 
-fn draw_contents(
-    ui: &mut egui::Ui,
-    panel: &mut DownloadPanelState,
-    worker: &Arc<WorkerHandle>,
-) {
+fn draw_contents(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc<WorkerHandle>) {
     // Kick off the index fetch on first open.
     if !panel.did_initial_fetch {
         panel.did_initial_fetch = true;
@@ -108,11 +104,7 @@ fn draw_contents(
     }
 }
 
-fn draw_header(
-    ui: &mut egui::Ui,
-    panel: &mut DownloadPanelState,
-    worker: &Arc<WorkerHandle>,
-) {
+fn draw_header(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc<WorkerHandle>) {
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new("DOWNLOAD KITS")
@@ -277,8 +269,7 @@ fn draw_kit_row(
                                     let _ = std::fs::remove_dir_all(path);
                                 }
                             }
-                            let _ =
-                                registry::remove_installed(&kit.name, &ContentType::Drumkit);
+                            let _ = registry::remove_installed(&kit.name, &ContentType::Drumkit);
                             panel.pending_delete = None;
                         }
                         if ui.button("Cancel").clicked() {

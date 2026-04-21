@@ -40,11 +40,7 @@ pub fn decode_file(path: &str, target_sample_rate: u32) -> Result<(Vec<f32>, Str
         .ok_or_else(|| "No default track found".to_string())?;
 
     let source_sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
-    let channels = track
-        .codec_params
-        .channels
-        .map(|c| c.count())
-        .unwrap_or(2);
+    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2);
     let track_id = track.id;
 
     let mut decoder = symphonia::default::get_codecs()

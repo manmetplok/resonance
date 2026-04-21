@@ -1,5 +1,4 @@
 /// The ResonancePlugin trait -- what plugin authors implement.
-
 use std::sync::Arc;
 
 use crate::param::Param;

@@ -10,11 +10,25 @@ use wayland_plugin_gui::egui;
 use crate::editor::theme;
 
 pub fn draw_input_meter(painter: &egui::Painter, rect: egui::Rect, db: f32) {
-    draw_level_meter(painter, rect, db, LevelMode::FromBottom, theme::ACCENT, "IN");
+    draw_level_meter(
+        painter,
+        rect,
+        db,
+        LevelMode::FromBottom,
+        theme::ACCENT,
+        "IN",
+    );
 }
 
 pub fn draw_output_meter(painter: &egui::Painter, rect: egui::Rect, db: f32) {
-    draw_level_meter(painter, rect, db, LevelMode::FromBottom, theme::ACCENT, "OUT");
+    draw_level_meter(
+        painter,
+        rect,
+        db,
+        LevelMode::FromBottom,
+        theme::ACCENT,
+        "OUT",
+    );
 }
 
 pub fn draw_gr_meter(painter: &egui::Painter, rect: egui::Rect, db: f32) {
@@ -62,10 +76,7 @@ fn draw_level_meter(
     for &t in ticks {
         let y = value_to_y(t, mode, inner);
         painter.line_segment(
-            [
-                egui::pos2(inner.left(), y),
-                egui::pos2(inner.right(), y),
-            ],
+            [egui::pos2(inner.left(), y), egui::pos2(inner.right(), y)],
             egui::Stroke::new(0.3, theme::BORDER),
         );
     }

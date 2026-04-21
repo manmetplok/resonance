@@ -176,7 +176,10 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
                 if is_this_expanded {
                     frame.fill_text(canvas::Text {
                         content: "(editing - double-click to collapse)".to_string(),
-                        position: Point::new(NAME_COLUMN_WIDTH + 10.0, row_rect.y + row_rect.height * 0.5 - 6.0),
+                        position: Point::new(
+                            NAME_COLUMN_WIDTH + 10.0,
+                            row_rect.y + row_rect.height * 0.5 - 6.0,
+                        ),
                         color: theme::TEXT_DIM,
                         size: 10.0.into(),
                         ..canvas::Text::default()
@@ -344,13 +347,11 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
             if let Some(track_id) = self.hit_test_add_button(pos, bounds) {
                 return (
                     canvas::event::Status::Captured,
-                    Some(Message::Compose(
-                        ComposeMessage::CreateMidiClipInSection {
-                            track_id,
-                            start_sample: self.section_start,
-                            length_bars: self.section_length_bars,
-                        },
-                    )),
+                    Some(Message::Compose(ComposeMessage::CreateMidiClipInSection {
+                        track_id,
+                        start_sample: self.section_start,
+                        length_bars: self.section_length_bars,
+                    })),
                 );
             }
             if let Some(msg) = self.hit_test_note_edit(pos, bounds) {
@@ -543,7 +544,10 @@ impl<'a> ComposeTrackCanvas<'a> {
             height: clip_area.height - NOTE_GRID_PAD * 2.0,
         };
         frame.stroke(
-            &Path::rectangle(Point::new(rect.x, rect.y), Size::new(rect.width, rect.height)),
+            &Path::rectangle(
+                Point::new(rect.x, rect.y),
+                Size::new(rect.width, rect.height),
+            ),
             Stroke::default()
                 .with_width(1.0)
                 .with_color(Color::from_rgba(0.38, 0.58, 0.38, 0.55)),

@@ -12,10 +12,9 @@ use crate::Resonance;
 
 pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
     // Use the GUI-side tempo map for correct bar/beat display with tempo changes.
-    let (bar_0, frac) = r.tempo_map.sample_to_bar(
-        r.transport.playhead,
-        r.sample_rate,
-    );
+    let (bar_0, frac) = r
+        .tempo_map
+        .sample_to_bar(r.transport.playhead, r.sample_rate);
     let num_beats = r.transport.time_sig_num as f64;
     let beat_frac = frac * num_beats;
     let beat = beat_frac.floor() as u32 + 1;
@@ -31,9 +30,21 @@ pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
     const TRANSPORT_ICON_SIZE: u16 = 16;
     let button_pad = iced::Padding::from([6, 10]);
 
-    let skip_back = transport_icon_btn(fa::BACKWARD_STEP, Message::Transport(TransportMessage::SkipBack), button_pad);
-    let stop_btn = transport_icon_btn(fa::STOP, Message::Transport(TransportMessage::Stop), button_pad);
-    let skip_fwd = transport_icon_btn(fa::FORWARD_STEP, Message::Transport(TransportMessage::SkipForward), button_pad);
+    let skip_back = transport_icon_btn(
+        fa::BACKWARD_STEP,
+        Message::Transport(TransportMessage::SkipBack),
+        button_pad,
+    );
+    let stop_btn = transport_icon_btn(
+        fa::STOP,
+        Message::Transport(TransportMessage::Stop),
+        button_pad,
+    );
+    let skip_fwd = transport_icon_btn(
+        fa::FORWARD_STEP,
+        Message::Transport(TransportMessage::SkipForward),
+        button_pad,
+    );
 
     let play_pause: Element<'_, Message> = if r.transport.playing {
         button(

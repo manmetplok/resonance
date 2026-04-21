@@ -28,8 +28,7 @@ impl ResonancePlugin for ResonanceDelay {
     const NAME: &'static str = "Resonance Delay";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-    const DESCRIPTION: &'static str =
-        "Tempo-synced stereo delay with digital and analog modes";
+    const DESCRIPTION: &'static str = "Tempo-synced stereo delay with digital and analog modes";
     const FEATURES: &'static [&'static str] = &["audio-effect", "stereo", "delay"];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
@@ -166,8 +165,14 @@ impl ResonancePlugin for ResonanceDelay {
         );
         let time_ms_current = self.smoothers.time_ms.current();
         let delay_ms = if sync && tempo.is_some() {
-            sync::delay_samples(sync, division.min(11), time_ms_current, tempo, self.sample_rate, max_delay)
-                / self.sample_rate
+            sync::delay_samples(
+                sync,
+                division.min(11),
+                time_ms_current,
+                tempo,
+                self.sample_rate,
+                max_delay,
+            ) / self.sample_rate
                 * 1000.0
         } else {
             time_ms_current

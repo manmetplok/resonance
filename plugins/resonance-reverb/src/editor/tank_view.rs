@@ -58,8 +58,8 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, app: &ReverbEditorApp) {
 
     // Column geometry.
     let col_gap = 6.0f32;
-    let col_w = (columns_area.width() - col_gap * (FDN_CHANNELS as f32 - 1.0))
-        / FDN_CHANNELS as f32;
+    let col_w =
+        (columns_area.width() - col_gap * (FDN_CHANNELS as f32 - 1.0)) / FDN_CHANNELS as f32;
     let max_col_h = columns_area.height();
 
     let energies = app.viz.read_channel_energies();
@@ -138,7 +138,10 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, app: &ReverbEditorApp) {
         .powf(0.6);
     let bus_fill = egui::Rect::from_min_max(
         bus_rect.min,
-        egui::pos2(bus_rect.left() + bus_norm * bus_rect.width(), bus_rect.bottom()),
+        egui::pos2(
+            bus_rect.left() + bus_norm * bus_rect.width(),
+            bus_rect.bottom(),
+        ),
     );
     painter.rect_filled(bus_fill, 1.0, theme::ACCENT);
 }

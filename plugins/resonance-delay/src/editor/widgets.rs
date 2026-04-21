@@ -1,6 +1,6 @@
+use egui::Ui;
 use wayland_plugin_gui::egui;
 use wayland_plugin_gui::widgets;
-use egui::Ui;
 
 use crate::params::DelayParams;
 
@@ -13,8 +13,14 @@ pub fn param_knob(ui: &mut Ui, params: &DelayParams, index: usize) {
     let display = p.display(val as f64);
 
     if widgets::knob(
-        ui, &mut val, min..=max, default,
-        p.name(), "", &display, false,
+        ui,
+        &mut val,
+        min..=max,
+        default,
+        p.name(),
+        "",
+        &display,
+        false,
     ) {
         p.set_plain(val as f64);
     }

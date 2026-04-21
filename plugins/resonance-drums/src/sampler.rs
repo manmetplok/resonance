@@ -3,7 +3,9 @@
 use crossbeam_channel::{unbounded, Receiver, Sender, TryRecvError};
 
 use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
-use crate::kit::{self, LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, OVERHEAD_PORT_INDEX};
+use crate::kit::{
+    self, LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, OVERHEAD_PORT_INDEX,
+};
 use crate::params::DrumParams;
 use crate::voice::{BalanceSide, Voice, VoiceDestination, VoiceState, MAX_VOICES, RELEASE_SAMPLES};
 
@@ -207,7 +209,9 @@ impl DrumSampler {
         self.voice_counter += 1;
         let shared_age = self.voice_counter;
         for i in 0..dest_count {
-            let Some(dest) = destinations[i] else { continue };
+            let Some(dest) = destinations[i] else {
+                continue;
+            };
             let voice_idx = self.find_free_voice(pad_index);
             let voice = &mut self.voices[voice_idx];
             voice.active = true;
@@ -269,7 +273,11 @@ impl DrumSampler {
         let mut pad_oh = [0.0f32; NUM_PADS];
         let mut pad_balance = [0.5f32; NUM_PADS];
         for (i, pad) in params.pads.iter().enumerate() {
-            pad_volume[i] = if pad.mute.value() { 0.0 } else { pad.volume.value() };
+            pad_volume[i] = if pad.mute.value() {
+                0.0
+            } else {
+                pad.volume.value()
+            };
             pad_pan[i] = pad.pan.value();
             pad_oh[i] = pad.oh_blend.value();
             pad_balance[i] = pad.balance.value();
@@ -336,9 +344,7 @@ impl DrumSampler {
                     voice.active = false;
                     break;
                 }
-                if voice.state == VoiceState::Releasing
-                    && voice.release_pos >= RELEASE_SAMPLES
-                {
+                if voice.state == VoiceState::Releasing && voice.release_pos >= RELEASE_SAMPLES {
                     voice.active = false;
                     break;
                 }
@@ -676,7 +682,10 @@ mod tests {
 
         sampler.note_on(drum_map::KICK, 0.8);
         let active: Vec<_> = sampler.voices.iter().filter(|v| v.active).collect();
-        assert!(active.is_empty(), "no voices should be spawned for an empty pad");
+        assert!(
+            active.is_empty(),
+            "no voices should be spawned for an empty pad"
+        );
     }
 
     #[test]
@@ -704,7 +713,11 @@ mod tests {
         sampler.reset();
         sampler.note_on(drum_map::SNARE, 0.8);
         let snare_rr_0 = active_rr_indices(&sampler, 1);
-        assert_eq!(snare_rr_0, vec![0], "snare rr should start at 0 independently");
+        assert_eq!(
+            snare_rr_0,
+            vec![0],
+            "snare rr should start at 0 independently"
+        );
     }
 
     #[test]
@@ -808,9 +821,11 @@ mod tests {
 
         // Fill all pad slots; only pad 0 matters.
         sampler.pads = std::iter::once(kick_pad)
-            .chain(drum_map::PAD_MAPPINGS[1..].iter().map(|m| {
-                make_test_pad(1, 1, m.output_group, m.choke_group)
-            }))
+            .chain(
+                drum_map::PAD_MAPPINGS[1..]
+                    .iter()
+                    .map(|m| make_test_pad(1, 1, m.output_group, m.choke_group)),
+            )
             .collect();
 
         sampler.note_on(drum_map::KICK, 0.8);
@@ -821,7 +836,11 @@ mod tests {
             .iter()
             .filter(|v| v.active && v.pad_index == 0)
             .collect();
-        assert_eq!(active.len(), 3, "kick with 2 close + OH should spawn 3 voices");
+        assert_eq!(
+            active.len(),
+            3,
+            "kick with 2 close + OH should spawn 3 voices"
+        );
 
         // All three must share the same rr_index.
         let rr = active[0].rr_index;

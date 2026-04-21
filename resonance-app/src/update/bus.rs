@@ -38,8 +38,7 @@ pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
                 b.muted
             });
             if let Some(muted) = new_muted {
-                r.engine
-                    .send(AudioCommand::SetBusMute { bus_id, muted });
+                r.engine.send(AudioCommand::SetBusMute { bus_id, muted });
             }
         }
         BusMessage::ToggleBusFxBypass(bus_id) => {

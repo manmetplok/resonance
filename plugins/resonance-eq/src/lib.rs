@@ -70,7 +70,8 @@ impl ResonancePlugin for ResonanceEq {
 
     fn initialize(&mut self, sample_rate: f32, max_buffer_size: u32) -> bool {
         self.output_gain_smoother.set_sample_rate(sample_rate);
-        self.output_gain_smoother.reset(self.params.output_gain.value());
+        self.output_gain_smoother
+            .reset(self.params.output_gain.value());
         self.dsp = Some(EqDsp::new(sample_rate));
         self.analyzers = Some(StereoAnalyzers::new(sample_rate, max_buffer_size as usize));
         true

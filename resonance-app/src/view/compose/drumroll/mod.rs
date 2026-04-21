@@ -91,8 +91,7 @@ pub fn clip_for_track(
         if clip.track_id != track_id {
             return None;
         }
-        let clip_end =
-            clip.start_sample + (clip.duration_ticks as f64 * samples_per_tick) as u64;
+        let clip_end = clip.start_sample + (clip.duration_ticks as f64 * samples_per_tick) as u64;
         (clip_end > section_start && clip.start_sample < section_end).then_some(clip.id)
     })
 }

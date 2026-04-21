@@ -48,8 +48,7 @@ pub struct Tuner {
 impl Tuner {
     pub fn new(sample_rate: f32) -> Self {
         let tau_min = ((sample_rate / PITCH_MAX_HZ).floor() as usize).max(2);
-        let tau_max = ((sample_rate / PITCH_MIN_HZ).ceil() as usize)
-            .min(FRAME_LEN / 2 - 1);
+        let tau_max = ((sample_rate / PITCH_MIN_HZ).ceil() as usize).min(FRAME_LEN / 2 - 1);
         let buf_len = tau_max + 1;
         Self {
             sample_rate,

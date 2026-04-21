@@ -4,13 +4,7 @@ use wayland_plugin_gui::egui;
 
 use crate::editor::theme;
 
-pub fn draw(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    shape: i32,
-    depth: f32,
-    live_phase: f32,
-) {
+pub fn draw(ui: &mut egui::Ui, rect: egui::Rect, shape: i32, depth: f32, live_phase: f32) {
     let painter = ui.painter_at(rect);
 
     painter.rect_filled(rect, 4.0, theme::PANEL);

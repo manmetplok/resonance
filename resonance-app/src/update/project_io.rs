@@ -303,7 +303,10 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // Restore tempo/signature events. If the project has none (legacy),
     // create a single event at bar 0 from the global BPM/sig.
     if project.tempo_events.is_empty() {
-        r.tempo_events = vec![crate::state::TempoEvent { bar: 0, bpm: project.bpm }];
+        r.tempo_events = vec![crate::state::TempoEvent {
+            bar: 0,
+            bpm: project.bpm,
+        }];
     } else {
         r.tempo_events = project.tempo_events.clone();
     }
@@ -317,7 +320,9 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
         r.signature_events = project.signature_events.clone();
     }
 
-    r.engine.send(AudioCommand::SetBpm { bpm: r.transport.bpm });
+    r.engine.send(AudioCommand::SetBpm {
+        bpm: r.transport.bpm,
+    });
     r.rebuild_and_send_tempo();
     r.engine.send(AudioCommand::SetTimeSignature {
         numerator: r.transport.time_sig_num,
@@ -411,11 +416,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 
     // Replay MIDI clips from the parsed `.mid` files.
     for pmc in &project.midi_clips {
-        let notes: Vec<MidiNote> = loaded
-            .midi_notes
-            .get(&pmc.id)
-            .cloned()
-            .unwrap_or_default();
+        let notes: Vec<MidiNote> = loaded.midi_notes.get(&pmc.id).cloned().unwrap_or_default();
 
         r.engine.send(AudioCommand::LoadMidiClipDirect {
             clip_id: pmc.id,

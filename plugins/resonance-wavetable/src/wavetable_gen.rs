@@ -7,7 +7,6 @@
 ///
 /// Keep constants and layout in sync with `wavetable.rs`. The loader validates
 /// the header and will panic at plugin init if there is a mismatch.
-
 use std::io::Write;
 use std::path::Path;
 

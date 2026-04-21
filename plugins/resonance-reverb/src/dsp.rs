@@ -5,7 +5,6 @@
 ///
 /// The diffusion network blurs input into dense reflections using Hadamard mixing.
 /// The FDN provides the decaying tail with Householder feedback and frequency-dependent damping.
-
 use resonance_dsp::{DelayLine, Lfo, OnePole, SimpleRng};
 
 const CHANNELS: usize = 8;
@@ -27,7 +26,7 @@ const MAX_FDN_MULT: f32 = 2.0;
 pub const ER_TAPS: usize = 12;
 const ER_BASE_MAX_MS: f32 = 220.0; // Upper bound for the longest tap at time_scale=1.0
 const ER_TIME_MIN: f32 = 0.25; // er_time=0 → 0.25× base
-const ER_TIME_MAX: f32 = 2.0;  // er_time=1 → 2.0× base
+const ER_TIME_MAX: f32 = 2.0; // er_time=1 → 2.0× base
 
 /// A single diffusion step: N delay lines + Hadamard mix + polarity flips.
 struct DiffusionStep {
@@ -136,7 +135,10 @@ impl EarlyReflections {
             // Small per-side jitter so L/R don't land exactly on top of each other.
             let jitter_l = ((rng.next_u32() & 0xffff) as f32 / 65535.0 - 0.5) * 8.0;
             let jitter_r = ((rng.next_u32() & 0xffff) as f32 / 65535.0 - 0.5) * 8.0;
-            base_times_ms[i] = ((center_ms + jitter_l).max(1.0), (center_ms + jitter_r).max(1.0));
+            base_times_ms[i] = (
+                (center_ms + jitter_l).max(1.0),
+                (center_ms + jitter_r).max(1.0),
+            );
 
             // Exponential gain decay across taps with random polarity.
             let decay = (-3.0 * t).exp();
@@ -162,8 +164,10 @@ impl EarlyReflections {
 
     fn recompute_scaled(&mut self) {
         for i in 0..ER_TAPS {
-            let ms = (self.base_times_ms[i].0 * self.time_scale,
-                      self.base_times_ms[i].1 * self.time_scale);
+            let ms = (
+                self.base_times_ms[i].0 * self.time_scale,
+                self.base_times_ms[i].1 * self.time_scale,
+            );
             self.scaled_ms[i] = ms;
             self.scaled_samples[i] = (
                 (ms.0 * 0.001 * self.sample_rate).max(1.0),
@@ -466,7 +470,13 @@ impl ReverbDsp {
     }
 
     /// Process a single stereo sample pair. Returns (wet_l, wet_r).
-    pub fn process(&mut self, left: f32, right: f32, diffusion_amount: f32, width: f32) -> (f32, f32) {
+    pub fn process(
+        &mut self,
+        left: f32,
+        right: f32,
+        diffusion_amount: f32,
+        width: f32,
+    ) -> (f32, f32) {
         // Pre-delay
         let dl = self.predelay_l.tap(self.predelay_samples);
         let dr = self.predelay_r.tap(self.predelay_samples);
@@ -540,8 +550,7 @@ impl ReverbDsp {
         // 0.995 coefficient gives a ~200-sample time constant (~4 ms @ 48 k).
         for c in 0..CHANNELS {
             let mag = self.fdn_feedback[c].abs();
-            self.channel_energy_smoothed[c] =
-                self.channel_energy_smoothed[c] * 0.995 + mag * 0.005;
+            self.channel_energy_smoothed[c] = self.channel_energy_smoothed[c] * 0.995 + mag * 0.005;
         }
 
         // Mix 8 channels to stereo with width control
@@ -638,4 +647,3 @@ fn householder_in_place(data: &mut [f32; CHANNELS]) {
         *x += factor;
     }
 }
-

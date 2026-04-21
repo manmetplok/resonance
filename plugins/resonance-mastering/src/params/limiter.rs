@@ -48,7 +48,10 @@ impl Default for LimiterParams {
                 "lim_ceiling",
                 "Ceiling",
                 -0.3,
-                FloatRange::Linear { min: -6.0, max: 0.0 },
+                FloatRange::Linear {
+                    min: -6.0,
+                    max: 0.0,
+                },
             )
             .with_value_to_string(format_dbtp(1)),
             release: FloatParam::new(

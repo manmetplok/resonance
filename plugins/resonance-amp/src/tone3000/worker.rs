@@ -345,4 +345,3 @@ fn sanitize_filename(label: &str, id: i64) -> String {
     }
     format!("{out}_{id}.nam")
 }
-

@@ -136,7 +136,11 @@ mod tests {
         }
         let r = l.clone();
         m.push_stereo(&l, &r);
-        assert!((m.correlation() - 1.0).abs() < 1e-3, "got {}", m.correlation());
+        assert!(
+            (m.correlation() - 1.0).abs() < 1e-3,
+            "got {}",
+            m.correlation()
+        );
     }
 
     #[test]
@@ -149,7 +153,11 @@ mod tests {
         }
         let r: Vec<f32> = l.iter().map(|&x| -x).collect();
         m.push_stereo(&l, &r);
-        assert!((m.correlation() + 1.0).abs() < 1e-3, "got {}", m.correlation());
+        assert!(
+            (m.correlation() + 1.0).abs() < 1e-3,
+            "got {}",
+            m.correlation()
+        );
     }
 
     #[test]

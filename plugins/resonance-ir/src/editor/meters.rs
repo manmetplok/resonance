@@ -58,14 +58,8 @@ fn draw_channel_pair(
     fill: egui::Color32,
 ) {
     let bar_h = (rect.height() - 2.0) * 0.5;
-    let top = egui::Rect::from_min_max(
-        rect.min,
-        egui::pos2(rect.right(), rect.top() + bar_h),
-    );
-    let bot = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.bottom() - bar_h),
-        rect.max,
-    );
+    let top = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + bar_h));
+    let bot = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - bar_h), rect.max);
     draw_bar(painter, top, l_db, fill);
     draw_bar(painter, bot, r_db, fill);
 }
@@ -77,10 +71,7 @@ fn draw_bar(painter: &egui::Painter, rect: egui::Rect, db: f32, fill: egui::Colo
         return;
     }
     let w = norm * rect.width();
-    let fill_rect = egui::Rect::from_min_max(
-        rect.min,
-        egui::pos2(rect.left() + w, rect.bottom()),
-    );
+    let fill_rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + w, rect.bottom()));
     let color = if db > -1.0 {
         theme::DANGER
     } else if db > -6.0 {

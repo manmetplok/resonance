@@ -116,5 +116,8 @@ fn draw_trace(
         i += step;
     }
 
-    painter.add(egui::Shape::line(pts, egui::Stroke::new(stroke_width, color)));
+    painter.add(egui::Shape::line(
+        pts,
+        egui::Stroke::new(stroke_width, color),
+    ));
 }

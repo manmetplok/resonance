@@ -35,8 +35,7 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         UiMessage::ConfirmSaveAndQuit => {
             let window_id = r.confirm_quit.take();
             r.quit_after_save = window_id;
-            return r
-                .update(Message::ProjectIo(ProjectIoMessage::SaveProject));
+            return r.update(Message::ProjectIo(ProjectIoMessage::SaveProject));
         }
         UiMessage::ConfirmDiscardAndQuit => {
             if let Some(id) = r.confirm_quit.take() {
@@ -47,8 +46,7 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             r.confirm_quit = None;
         }
         UiMessage::ToggleGlobalTracks => {
-            r.viewport.global_tracks_expanded =
-                !r.viewport.global_tracks_expanded;
+            r.viewport.global_tracks_expanded = !r.viewport.global_tracks_expanded;
         }
     }
     Task::none()

@@ -1,5 +1,4 @@
 /// Platform-specific audio device functions (PipeWire / PulseAudio).
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -37,22 +36,16 @@ pub(crate) fn pick_sample_rate(
 
     for candidate in candidates.into_iter().flatten() {
         let supported = match direction {
-            DeviceDirection::Output => {
-                device.supported_output_configs().ok().map(|mut configs| {
-                    configs.any(|c| {
-                        c.min_sample_rate().0 <= candidate
-                            && candidate <= c.max_sample_rate().0
-                    })
+            DeviceDirection::Output => device.supported_output_configs().ok().map(|mut configs| {
+                configs.any(|c| {
+                    c.min_sample_rate().0 <= candidate && candidate <= c.max_sample_rate().0
                 })
-            }
-            DeviceDirection::Input => {
-                device.supported_input_configs().ok().map(|mut configs| {
-                    configs.any(|c| {
-                        c.min_sample_rate().0 <= candidate
-                            && candidate <= c.max_sample_rate().0
-                    })
+            }),
+            DeviceDirection::Input => device.supported_input_configs().ok().map(|mut configs| {
+                configs.any(|c| {
+                    c.min_sample_rate().0 <= candidate && candidate <= c.max_sample_rate().0
                 })
-            }
+            }),
         };
         if supported == Some(true) {
             return candidate;

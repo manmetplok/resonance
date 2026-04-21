@@ -71,7 +71,6 @@ impl EqParams {
             _ => unreachable!(),
         }
     }
-
 }
 
 /// Frequency formatter: Hz below 1 kHz, kHz above.
@@ -186,4 +185,3 @@ impl Default for EqParams {
         }
     }
 }
-

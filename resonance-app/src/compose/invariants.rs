@@ -74,6 +74,9 @@ mod tests {
             scale: None,
             progression_seed: 0,
             generate_params: crate::compose::GenerateParams::default(),
+            generator_spec: None,
+            generator_seed: 0,
+            generated_material: None,
         }
     }
 

@@ -1,5 +1,4 @@
 /// Resonance Amp - A guitar amp simulator CLAP plugin using NAM models.
-
 use parking_lot::Mutex;
 use std::path::Path;
 use std::sync::atomic::AtomicI32;
@@ -137,8 +136,7 @@ impl ResonancePlugin for ResonanceAmp {
     const NAME: &'static str = "Resonance Amp";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-    const DESCRIPTION: &'static str =
-        "Guitar amp simulator using Neural Amp Modeler profiles";
+    const DESCRIPTION: &'static str = "Guitar amp simulator using Neural Amp Modeler profiles";
     const FEATURES: &'static [&'static str] = &["audio-effect", "mono", "stereo"];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
@@ -184,7 +182,9 @@ impl ResonancePlugin for ResonanceAmp {
         }
     }
 
-    fn param_count(&self) -> usize { 3 }
+    fn param_count(&self) -> usize {
+        3
+    }
 
     fn param(&self, index: usize) -> &dyn Param {
         match index {
@@ -198,8 +198,10 @@ impl ResonancePlugin for ResonanceAmp {
     fn initialize(&mut self, sample_rate: f32, max_buffer_size: u32) -> bool {
         self.input_gain_smoother.set_sample_rate(sample_rate);
         self.output_gain_smoother.set_sample_rate(sample_rate);
-        self.input_gain_smoother.reset(self.params.input_gain.value());
-        self.output_gain_smoother.reset(self.params.output_gain.value());
+        self.input_gain_smoother
+            .reset(self.params.input_gain.value());
+        self.output_gain_smoother
+            .reset(self.params.output_gain.value());
 
         self.tuner = Some(Tuner::new(sample_rate));
         self.dc_l.reset();

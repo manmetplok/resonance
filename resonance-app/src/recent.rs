@@ -125,7 +125,12 @@ mod tests {
         insert_pure(&mut list, Path::new("/b"), 99);
         assert_eq!(list[0].path, PathBuf::from("/b"));
         assert_eq!(list[0].last_opened_secs, 99);
-        assert_eq!(list.iter().filter(|e| e.path == PathBuf::from("/b")).count(), 1);
+        assert_eq!(
+            list.iter()
+                .filter(|e| e.path == PathBuf::from("/b"))
+                .count(),
+            1
+        );
     }
 
     #[test]

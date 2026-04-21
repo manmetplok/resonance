@@ -14,11 +14,10 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
             r.sync_tempo_display();
         }
         GlobalTrackMessage::StartTempoDrag(index) => {
-            r.interaction.selected_global_event =
-                Some(state::SelectedGlobalEvent {
-                    kind: state::GlobalTrackKind::Tempo,
-                    index,
-                });
+            r.interaction.selected_global_event = Some(state::SelectedGlobalEvent {
+                kind: state::GlobalTrackKind::Tempo,
+                index,
+            });
         }
         GlobalTrackMessage::EndTempoDrag => {
             r.tempo_events.sort_by_key(|e| e.bar);
@@ -31,8 +30,9 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
                 event.bpm = bpm;
                 r.rebuild_tempo_map();
                 r.sync_tempo_display();
-                r.engine
-                    .send(AudioCommand::SetBpm { bpm: r.transport.bpm });
+                r.engine.send(AudioCommand::SetBpm {
+                    bpm: r.transport.bpm,
+                });
             }
         }
         GlobalTrackMessage::AddSignatureEvent {
@@ -40,9 +40,7 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
             numerator,
             denominator,
         } => {
-            if let Some(existing) =
-                r.signature_events.iter_mut().find(|e| e.bar == bar)
-            {
+            if let Some(existing) = r.signature_events.iter_mut().find(|e| e.bar == bar) {
                 existing.numerator = numerator;
                 existing.denominator = denominator;
             } else {
@@ -63,14 +61,11 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
                     denominator,
                 });
             }
-            if let Some(idx) =
-                r.signature_events.iter().position(|e| e.bar == bar)
-            {
-                r.interaction.selected_global_event =
-                    Some(state::SelectedGlobalEvent {
-                        kind: state::GlobalTrackKind::Signature,
-                        index: idx,
-                    });
+            if let Some(idx) = r.signature_events.iter().position(|e| e.bar == bar) {
+                r.interaction.selected_global_event = Some(state::SelectedGlobalEvent {
+                    kind: state::GlobalTrackKind::Signature,
+                    index: idx,
+                });
             }
         }
         GlobalTrackMessage::UpdateSignatureEvent {
@@ -101,12 +96,8 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
         GlobalTrackMessage::DeleteSelectedEvent => {
             if let Some(sel) = r.interaction.selected_global_event.take() {
                 match sel.kind {
-                    state::GlobalTrackKind::Tempo => {
-                        r.remove_tempo_event(sel.index)
-                    }
-                    state::GlobalTrackKind::Signature => {
-                        r.remove_signature_event(sel.index)
-                    }
+                    state::GlobalTrackKind::Tempo => r.remove_tempo_event(sel.index),
+                    state::GlobalTrackKind::Signature => r.remove_signature_event(sel.index),
                 }
             }
         }

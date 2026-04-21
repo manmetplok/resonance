@@ -23,12 +23,10 @@ pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
     // Ruler header with "+" button and global tracks toggle
     let expanded = r.viewport.global_tracks_expanded;
     let caret = if expanded { CARET_DOWN } else { CARET_RIGHT };
-    let toggle_btn = button(
-        theme::icon(caret).size(10).color(theme::TEXT_DIM),
-    )
-    .on_press(Message::Ui(UiMessage::ToggleGlobalTracks))
-    .style(|_theme, status| theme::small_button_style(status))
-    .padding([0, 4]);
+    let toggle_btn = button(theme::icon(caret).size(10).color(theme::TEXT_DIM))
+        .on_press(Message::Ui(UiMessage::ToggleGlobalTracks))
+        .style(|_theme, status| theme::small_button_style(status))
+        .padding([0, 4]);
 
     let add_btn = button(text("+").size(16).color(theme::TEXT))
         .on_press(Message::Ui(UiMessage::OpenAddTrackMenu))
@@ -131,11 +129,7 @@ fn view_track_header(track: &TrackState, is_selected: bool) -> Element<'_, Messa
     // iced from line-wrapping and the enclosing container's clip flag
     // trims any glyph that overflows the available width. Sub-tracks
     // render dimmer since they're driven by their parent plugin.
-    let name_color = if is_sub {
-        theme::TEXT_DIM
-    } else {
-        theme::TEXT
-    };
+    let name_color = if is_sub { theme::TEXT_DIM } else { theme::TEXT };
     let name = text(track.name.clone())
         .size(13)
         .color(name_color)
@@ -143,12 +137,14 @@ fn view_track_header(track: &TrackState, is_selected: bool) -> Element<'_, Messa
     // For non-sub-tracks, place the delete button in the top-right corner
     // so it is visually separated from the transport/monitoring controls.
     let name_row = if is_sub {
-        row![container(name).width(Length::Fill).clip(true)]
-            .align_y(alignment::Vertical::Center)
+        row![container(name).width(Length::Fill).clip(true)].align_y(alignment::Vertical::Center)
     } else {
         row![
             container(name).width(Length::Fill).clip(true),
-            delete_button(Message::Track(TrackMessage::RequestRemoveTrack(track.id)), 12),
+            delete_button(
+                Message::Track(TrackMessage::RequestRemoveTrack(track.id)),
+                12
+            ),
         ]
         .spacing(4)
         .align_y(alignment::Vertical::Center)
@@ -159,8 +155,16 @@ fn view_track_header(track: &TrackState, is_selected: bool) -> Element<'_, Messa
     // mono — those all belong to their parent.
     let icon_row: iced::widget::Row<'_, Message> = if is_sub {
         row![
-            mute_button(track.muted, Message::Track(TrackMessage::ToggleMute(track.id)), 12),
-            solo_button(track.soloed, Message::Track(TrackMessage::ToggleSolo(track.id)), 12),
+            mute_button(
+                track.muted,
+                Message::Track(TrackMessage::ToggleMute(track.id)),
+                12
+            ),
+            solo_button(
+                track.soloed,
+                Message::Track(TrackMessage::ToggleSolo(track.id)),
+                12
+            ),
             Space::with_width(Length::Fill),
         ]
         .spacing(4)
@@ -170,8 +174,16 @@ fn view_track_header(track: &TrackState, is_selected: bool) -> Element<'_, Messa
             mono_button(track.mono, track.id, 12),
             monitor_button(track.monitor_enabled, track.id, 12),
             record_arm_button(track.record_armed, track.id, 12),
-            mute_button(track.muted, Message::Track(TrackMessage::ToggleMute(track.id)), 12),
-            solo_button(track.soloed, Message::Track(TrackMessage::ToggleSolo(track.id)), 12),
+            mute_button(
+                track.muted,
+                Message::Track(TrackMessage::ToggleMute(track.id)),
+                12
+            ),
+            solo_button(
+                track.soloed,
+                Message::Track(TrackMessage::ToggleSolo(track.id)),
+                12
+            ),
             Space::with_width(Length::Fill),
         ]
         .spacing(4)
@@ -306,13 +318,10 @@ fn view_signature_header<'a>(r: &'a Resonance, row_h: f32) -> Element<'a, Messag
         .height(row_h)
         .into()
     } else {
-        row![
-            Space::with_width(8),
-            label,
-        ]
-        .align_y(alignment::Vertical::Center)
-        .height(row_h)
-        .into()
+        row![Space::with_width(8), label,]
+            .align_y(alignment::Vertical::Center)
+            .height(row_h)
+            .into()
     };
 
     content

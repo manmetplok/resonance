@@ -118,12 +118,7 @@ impl Saturator {
         self.lf_shelf_r.reset();
     }
 
-    pub fn process_stereo(
-        &mut self,
-        left: &mut [f32],
-        right: &mut [f32],
-        cfg: &SaturatorConfig,
-    ) {
+    pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &SaturatorConfig) {
         if !cfg.enabled {
             return;
         }

@@ -26,11 +26,11 @@ pub(crate) fn handle_add_plugin(
         None => return,
     };
 
-    let actual_plugin_id =
-        match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id, ctx) {
-            Some(id) => id,
-            None => return,
-        };
+    let actual_plugin_id = match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id, ctx)
+    {
+        Some(id) => id,
+        None => return,
+    };
 
     let plugin_name = state.bundles[bundle_idx]
         .descriptors()
@@ -57,9 +57,10 @@ pub(crate) fn handle_add_plugin(
             let output_port_count = instance.output_port_count();
             let output_port_names = instance.output_port_names();
 
-            ctx.plugins
-                .write()
-                .insert(instance_id, parking_lot::Mutex::new(SyncClapInstance(instance)));
+            ctx.plugins.write().insert(
+                instance_id,
+                parking_lot::Mutex::new(SyncClapInstance(instance)),
+            );
 
             if let Some(track) = ctx.tracks.write().get_mut(&track_id) {
                 track.plugin_ids.push(instance_id);
@@ -78,9 +79,10 @@ pub(crate) fn handle_add_plugin(
             });
         }
         Err(e) => {
-            let _ = ctx
-                .event_tx
-                .send(AudioEvent::Error(format!("Failed to create plugin instance: {}", e)));
+            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                "Failed to create plugin instance: {}",
+                e
+            )));
         }
     }
 }
@@ -114,19 +116,16 @@ pub(crate) fn handle_set_plugin_param(
     }
 }
 
-pub(crate) fn handle_open_plugin_editor(
-    ctx: &HandlerCtx,
-    instance_id: PluginInstanceId,
-) {
+pub(crate) fn handle_open_plugin_editor(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
     if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
         // open_gui is a main-thread operation; the audio thread holds
         // a different lock. Block briefly if the audio thread is
         // mid-process and retry.
         if let Some(mut inst) = mutex.try_lock() {
             if !inst.0.open_gui() {
-                let _ = ctx
-                    .event_tx
-                    .send(AudioEvent::Error("Failed to open plugin editor".to_string()));
+                let _ = ctx.event_tx.send(AudioEvent::Error(
+                    "Failed to open plugin editor".to_string(),
+                ));
             }
         } else {
             let _ = ctx
@@ -136,10 +135,7 @@ pub(crate) fn handle_open_plugin_editor(
     }
 }
 
-pub(crate) fn handle_close_plugin_editor(
-    ctx: &HandlerCtx,
-    instance_id: PluginInstanceId,
-) {
+pub(crate) fn handle_close_plugin_editor(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
     if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
         if let Some(mut inst) = mutex.try_lock() {
             inst.0.close_gui();
@@ -151,18 +147,14 @@ pub(crate) fn handle_close_plugin_editor(
     }
 }
 
-pub(crate) fn handle_save_plugin_state(
-    ctx: &HandlerCtx,
-    instance_id: PluginInstanceId,
-) {
+pub(crate) fn handle_save_plugin_state(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
     if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
         if let Some(inst) = mutex.try_lock() {
             let data = inst.0.save_state();
             if let Some(data) = data {
-                let _ = ctx.event_tx.send(AudioEvent::PluginStateSaved {
-                    instance_id,
-                    data,
-                });
+                let _ = ctx
+                    .event_tx
+                    .send(AudioEvent::PluginStateSaved { instance_id, data });
             }
         } else {
             // Audio thread holds the lock — retry next tick

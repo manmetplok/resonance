@@ -1,5 +1,4 @@
 /// Multi-shape LFO: sine, triangle, saw, square, sample & hold.
-
 use resonance_dsp::SimpleRng;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -55,9 +54,7 @@ impl MultiLfo {
     /// Advance one sample. Returns value in -1..1.
     pub fn next(&mut self, shape: LfoShape, rng: &mut SimpleRng) -> f32 {
         let out = match shape {
-            LfoShape::Sine => {
-                (self.phase * std::f32::consts::TAU).sin()
-            }
+            LfoShape::Sine => (self.phase * std::f32::consts::TAU).sin(),
             LfoShape::Triangle => {
                 if self.phase < 0.25 {
                     self.phase * 4.0
@@ -67,11 +64,13 @@ impl MultiLfo {
                     self.phase * 4.0 - 4.0
                 }
             }
-            LfoShape::Saw => {
-                2.0 * self.phase - 1.0
-            }
+            LfoShape::Saw => 2.0 * self.phase - 1.0,
             LfoShape::Square => {
-                if self.phase < 0.5 { 1.0 } else { -1.0 }
+                if self.phase < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
             }
             LfoShape::SampleAndHold => {
                 // Latch new random value on phase wrap

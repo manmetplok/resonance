@@ -259,10 +259,7 @@ fn tab_button(ui: &mut egui::Ui, current: &mut WtTab, this: WtTab, label: &str) 
         theme::TEXT_DIM
     };
     if ui
-        .add(
-            egui::Button::new(egui::RichText::new(label).color(color).strong())
-                .frame(false),
-        )
+        .add(egui::Button::new(egui::RichText::new(label).color(color).strong()).frame(false))
         .clicked()
     {
         *current = this;

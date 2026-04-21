@@ -117,7 +117,12 @@ pub fn draw(
     ));
 
     // Phase labels.
-    let phase_labels = [("A", adsr.attack / total * 0.5), ("D", (adsr.attack + adsr.decay / 2.0) / total), ("S", (t_sustain_start + sustain_display_s / 2.0) / total), ("R", (t_release_start + adsr.release / 2.0) / total)];
+    let phase_labels = [
+        ("A", adsr.attack / total * 0.5),
+        ("D", (adsr.attack + adsr.decay / 2.0) / total),
+        ("S", (t_sustain_start + sustain_display_s / 2.0) / total),
+        ("R", (t_release_start + adsr.release / 2.0) / total),
+    ];
     for (label, rel_x) in phase_labels.iter() {
         let x = left + rel_x * width;
         painter.text(

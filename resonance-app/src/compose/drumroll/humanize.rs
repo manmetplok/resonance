@@ -85,8 +85,7 @@ impl Default for HumanizeScope {
 }
 
 impl HumanizeScope {
-    pub const ALL: [HumanizeScope; 2] =
-        [HumanizeScope::SelectedPad, HumanizeScope::AllPads];
+    pub const ALL: [HumanizeScope; 2] = [HumanizeScope::SelectedPad, HumanizeScope::AllPads];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -169,8 +168,8 @@ pub fn humanize(notes: &[MidiNote], params: &HumanizeParams) -> Vec<MidiNote> {
         };
 
         // Timing: ±amount * 50% of a step.
-        let max_timing_shift = (params.timing_amount.clamp(0.0, 1.0) * 0.5
-            * params.step_ticks as f32) as i64;
+        let max_timing_shift =
+            (params.timing_amount.clamp(0.0, 1.0) * 0.5 * params.step_ticks as f32) as i64;
         let timing_shift = if max_timing_shift == 0 {
             0
         } else {

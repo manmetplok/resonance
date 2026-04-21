@@ -22,7 +22,9 @@ use resonance_plugin::formatters::v2s_f32_db;
 use resonance_plugin::*;
 
 pub use dither::DitherParams;
-pub use eq_stage::{BandParams, EqStageParams, CORRECTIVE_DEFAULTS, TONAL_DEFAULTS, PARAMS_PER_STAGE};
+pub use eq_stage::{
+    BandParams, EqStageParams, CORRECTIVE_DEFAULTS, PARAMS_PER_STAGE, TONAL_DEFAULTS,
+};
 pub use glue_compressor::GlueCompressorParams;
 pub use imager::ImagerParams;
 pub use limiter::LimiterParams;

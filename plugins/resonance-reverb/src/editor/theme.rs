@@ -19,8 +19,7 @@ pub const DANGER: egui::Color32 = egui::Color32::from_rgb(0xff, 0x6a, 0x6a);
 
 /// Filled-polygon colour for the analytic decay envelope in the impulse
 /// view — accent blue at ~25% alpha, premultiplied.
-pub const TAIL_GLOW: egui::Color32 =
-    egui::Color32::from_rgba_premultiplied(0x16, 0x37, 0x45, 0x40);
+pub const TAIL_GLOW: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x16, 0x37, 0x45, 0x40);
 
 /// A warmer accent used for early-reflection spikes so they read as a
 /// distinct layer in front of the tail polygon.

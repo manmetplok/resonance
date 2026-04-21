@@ -28,8 +28,18 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         // Delay.
         section_header(&mut cols[1], "DELAY");
         bool_checkbox(&mut cols[1], "Enabled", &app.params.delay.enabled);
-        float_slider(&mut cols[1], "Time L", &app.params.delay.time_l, Some(" ms"));
-        float_slider(&mut cols[1], "Time R", &app.params.delay.time_r, Some(" ms"));
+        float_slider(
+            &mut cols[1],
+            "Time L",
+            &app.params.delay.time_l,
+            Some(" ms"),
+        );
+        float_slider(
+            &mut cols[1],
+            "Time R",
+            &app.params.delay.time_r,
+            Some(" ms"),
+        );
         float_slider(&mut cols[1], "Feedback", &app.params.delay.feedback, None);
         float_slider(&mut cols[1], "Mix", &app.params.delay.mix, None);
 

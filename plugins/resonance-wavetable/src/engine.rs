@@ -1,5 +1,4 @@
 /// Synth engine: voice allocation, rendering, portamento, effects.
-
 use resonance_dsp::SimpleRng;
 
 use crate::effects::{Chorus, StereoDelay};
@@ -56,11 +55,13 @@ impl SynthEngine {
 
     pub fn initialize(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
-        self.voices = (0..MAX_VOICES).map(|_| {
-            let mut v = Voice::new();
-            v.set_sample_rate(sample_rate);
-            v
-        }).collect();
+        self.voices = (0..MAX_VOICES)
+            .map(|_| {
+                let mut v = Voice::new();
+                v.set_sample_rate(sample_rate);
+                v
+            })
+            .collect();
         self.voice_counter = 0;
         self.last_note = None;
 
@@ -159,10 +160,7 @@ impl SynthEngine {
             // No active voices: reflect the current params where it makes
             // sense so the UI still shows sensible values when idle.
             viz.store_filter_cutoff_live(params.filter.cutoff.value());
-            viz.store_osc_positions(
-                params.osc1.position.value(),
-                params.osc2.position.value(),
-            );
+            viz.store_osc_positions(params.osc1.position.value(), params.osc2.position.value());
             viz.store_lfo_phase(0, self.global_lfo1.phase);
             viz.store_lfo_phase(1, self.global_lfo2.phase);
             viz.store_lfo_phase(2, self.global_lfo3.phase);
@@ -171,7 +169,11 @@ impl SynthEngine {
 
     fn find_free_voice(&self, note: u8, max_voices: usize) -> usize {
         // Count active voices
-        let active_count = self.voices.iter().filter(|v| v.state != VoiceState::Idle).count();
+        let active_count = self
+            .voices
+            .iter()
+            .filter(|v| v.state != VoiceState::Idle)
+            .count();
 
         // 1. Prefer idle voice
         if let Some(idx) = self.voices.iter().position(|v| v.state == VoiceState::Idle) {
@@ -181,7 +183,10 @@ impl SynthEngine {
         }
 
         // 2. Steal oldest releasing voice
-        if let Some((idx, _)) = self.voices.iter().enumerate()
+        if let Some((idx, _)) = self
+            .voices
+            .iter()
+            .enumerate()
             .filter(|(_, v)| v.state == VoiceState::Releasing)
             .min_by_key(|(_, v)| v.age)
         {
@@ -189,7 +194,10 @@ impl SynthEngine {
         }
 
         // 3. Steal oldest voice with same note
-        if let Some((idx, _)) = self.voices.iter().enumerate()
+        if let Some((idx, _)) = self
+            .voices
+            .iter()
+            .enumerate()
             .filter(|(_, v)| v.note == note)
             .min_by_key(|(_, v)| v.age)
         {
@@ -197,7 +205,9 @@ impl SynthEngine {
         }
 
         // 4. Steal oldest voice overall
-        self.voices.iter().enumerate()
+        self.voices
+            .iter()
+            .enumerate()
             .min_by_key(|(_, v)| v.age)
             .map(|(i, _)| i)
             .unwrap_or(0)

@@ -116,7 +116,7 @@ pub fn evaluate_mod_matrix(
             ModSource::Env2 => mod_env_val * 2.0 - 1.0, // 0..1 -> -1..1
             ModSource::Velocity => velocity * 2.0 - 1.0,
             ModSource::KeyTrack => key_track,
-            ModSource::ModWheel => 0.0, // future: MIDI CC
+            ModSource::ModWheel => 0.0,   // future: MIDI CC
             ModSource::Aftertouch => 0.0, // future
             ModSource::None => 0.0,
         };

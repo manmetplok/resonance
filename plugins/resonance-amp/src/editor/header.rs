@@ -96,11 +96,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
             (name, position)
         };
 
-        ui.label(
-            egui::RichText::new(name_text)
-                .size(13.0)
-                .color(theme::TEXT),
-        );
+        ui.label(egui::RichText::new(name_text).size(13.0).color(theme::TEXT));
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(position_text)

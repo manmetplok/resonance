@@ -107,13 +107,23 @@ mod tests {
         let threshold = -20.0;
         let slope = 0.75;
         // Just below lower knee edge = 0 GR.
-        let lower = soft_knee_gain_reduction_db(threshold - half_knee - 0.01, threshold, knee, half_knee, slope);
+        let lower = soft_knee_gain_reduction_db(
+            threshold - half_knee - 0.01,
+            threshold,
+            knee,
+            half_knee,
+            slope,
+        );
         assert!(lower.abs() < 1e-2);
         // At upper knee edge the knee formula should match the linear
         // formula with a tight tolerance.
-        let at_edge = soft_knee_gain_reduction_db(threshold + half_knee, threshold, knee, half_knee, slope);
+        let at_edge =
+            soft_knee_gain_reduction_db(threshold + half_knee, threshold, knee, half_knee, slope);
         let linear = slope * half_knee;
-        assert!((at_edge - linear).abs() < 1e-4, "knee {at_edge} vs linear {linear}");
+        assert!(
+            (at_edge - linear).abs() < 1e-4,
+            "knee {at_edge} vs linear {linear}"
+        );
     }
 
     #[test]

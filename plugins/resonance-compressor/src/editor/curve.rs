@@ -54,7 +54,10 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, p: CurveParams) {
     // Threshold indicator — a vertical line at the threshold input level.
     let thr_x = plot.left() + db_to_x(threshold, plot.width());
     painter.line_segment(
-        [egui::pos2(thr_x, plot.top()), egui::pos2(thr_x, plot.bottom())],
+        [
+            egui::pos2(thr_x, plot.top()),
+            egui::pos2(thr_x, plot.bottom()),
+        ],
         egui::Stroke::new(1.0, theme::TEXT_DIM),
     );
 

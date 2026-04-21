@@ -40,8 +40,7 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
 }
 
 fn update_vu_meters(r: &mut Resonance) {
-    let (track_peaks, bus_peaks, master_peak_l, master_peak_r) =
-        r.engine.read_and_clear_peaks();
+    let (track_peaks, bus_peaks, master_peak_l, master_peak_r) = r.engine.read_and_clear_peaks();
     for track in &mut r.registry.tracks {
         track.level_l *= theme::PEAK_DECAY;
         track.level_r *= theme::PEAK_DECAY;
@@ -81,10 +80,9 @@ fn sync_tempo_at_playhead(r: &mut Resonance) {
     if !r.transport.playing || r.tempo_events.len() <= 1 && r.signature_events.len() <= 1 {
         return;
     }
-    let (bpm, num, den) = r.tempo_map.tempo_at_sample(
-        r.transport.playhead,
-        r.sample_rate,
-    );
+    let (bpm, num, den) = r
+        .tempo_map
+        .tempo_at_sample(r.transport.playhead, r.sample_rate);
     // Display only — no engine command.
     r.transport.bpm = bpm;
     r.transport.bpm_input = format!("{:.1}", bpm);

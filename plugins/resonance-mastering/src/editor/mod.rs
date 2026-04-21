@@ -101,7 +101,10 @@ impl PluginEditor for RuntimeEditorHandle {
         false
     }
     fn can_resize(&self) -> bool {
-        self.runtime.as_ref().map(|r| r.is_resizable()).unwrap_or(false)
+        self.runtime
+            .as_ref()
+            .map(|r| r.is_resizable())
+            .unwrap_or(false)
     }
 }
 
@@ -199,10 +202,7 @@ fn draw_header(ui: &mut egui::Ui, app: &mut MasteringEditorApp) {
 
         let snap = app.viz.load_snapshot();
         let target = app.params.target_lufs.value();
-        ui.label(
-            egui::RichText::new(format!("Ref line: {target:.1} LUFS"))
-                .color(theme::TEXT_DIM),
-        );
+        ui.label(egui::RichText::new(format!("Ref line: {target:.1} LUFS")).color(theme::TEXT_DIM));
         ui.separator();
         let int_text = if snap.integrated_lufs.is_finite() {
             format!("Integrated: {:>5.1} LUFS", snap.integrated_lufs)
@@ -214,14 +214,20 @@ fn draw_header(ui: &mut egui::Ui, app: &mut MasteringEditorApp) {
         ui.separator();
         let glue_gr = app.viz.glue_gr_db();
         ui.label(
-            egui::RichText::new(format!("Glue GR: {glue_gr:>4.1} dB"))
-                .color(if glue_gr > 0.5 { theme::ACCENT } else { theme::TEXT_DIM }),
+            egui::RichText::new(format!("Glue GR: {glue_gr:>4.1} dB")).color(if glue_gr > 0.5 {
+                theme::ACCENT
+            } else {
+                theme::TEXT_DIM
+            }),
         );
         ui.separator();
         let lim_gr = app.viz.limiter_gr_db();
         ui.label(
-            egui::RichText::new(format!("Lim GR: {lim_gr:>4.1} dB"))
-                .color(if lim_gr > 0.5 { theme::WARN } else { theme::TEXT_DIM }),
+            egui::RichText::new(format!("Lim GR: {lim_gr:>4.1} dB")).color(if lim_gr > 0.5 {
+                theme::WARN
+            } else {
+                theme::TEXT_DIM
+            }),
         );
     });
 }

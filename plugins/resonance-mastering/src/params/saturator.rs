@@ -60,7 +60,10 @@ impl Default for SaturatorParams {
                 "sat_drive",
                 "Sat Drive",
                 3.0,
-                FloatRange::Linear { min: 0.0, max: 18.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 18.0,
+                },
             )
             .with_unit(" dB")
             .with_value_to_string(v2s_f32_db(1)),

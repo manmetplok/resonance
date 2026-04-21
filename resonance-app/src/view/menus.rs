@@ -1,5 +1,7 @@
 //! Overlay menus (add-track popover, etc.)
-use iced::widget::{button, column, container, mouse_area, opaque, row, scrollable, stack, text, Space};
+use iced::widget::{
+    button, column, container, mouse_area, opaque, row, scrollable, stack, text, Space,
+};
 use iced::{alignment, Color, Element, Length};
 
 use crate::message::*;
@@ -30,16 +32,14 @@ fn preset_button(preset: &TrackPreset, is_user: bool) -> Element<'_, Message> {
             .on_press(Message::Track(TrackMessage::DeleteUserPreset(name)))
             .style(|_theme, status| theme::small_button_style(status))
             .padding([0, 3]);
-        btn_row = btn_row
-            .push(Space::with_width(Length::Fill))
-            .push(del);
+        btn_row = btn_row.push(Space::with_width(Length::Fill)).push(del);
     }
 
     let preset_clone = preset.clone();
     button(btn_row)
-        .on_press(Message::Track(TrackMessage::AddTrackFromPreset(
-            Box::new(preset_clone),
-        )))
+        .on_press(Message::Track(TrackMessage::AddTrackFromPreset(Box::new(
+            preset_clone,
+        ))))
         .width(Length::Fill)
         .padding([4, 10])
         .style(|_theme, status| theme::transport_button_style(status))
@@ -125,8 +125,7 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
     let menu_content = menu.padding(8).width(200);
 
     // Wrap in a scrollable so long preset lists don't overflow the window.
-    let scrollable_menu = scrollable(menu_content)
-        .height(Length::Shrink);
+    let scrollable_menu = scrollable(menu_content).height(Length::Shrink);
 
     let menu_container = container(opaque(scrollable_menu)).style(|_theme| container::Style {
         background: Some(iced::Background::Color(theme::PANEL)),

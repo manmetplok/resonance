@@ -55,7 +55,8 @@ impl IntegratedAccumulator {
             debug_assert!(
                 false,
                 "IntegratedAccumulator exceeded cap of {} blocks ({:.0} min)",
-                self.cap, MAX_SESSION_SECONDS / 60.0
+                self.cap,
+                MAX_SESSION_SECONDS / 60.0
             );
         }
     }

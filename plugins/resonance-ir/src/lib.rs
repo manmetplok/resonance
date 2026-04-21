@@ -1,7 +1,6 @@
-/// Resonance IR - An impulse response convolution CLAP plugin for cab and room emulation.
-
-use resonance_plugin::*;
 use parking_lot::Mutex;
+/// Resonance IR - An impulse response convolution CLAP plugin for cab and room emulation.
+use resonance_plugin::*;
 use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
@@ -91,14 +90,9 @@ impl ResonancePlugin for ResonanceIr {
     const NAME: &'static str = "Resonance IR";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-    const DESCRIPTION: &'static str =
-        "Impulse response convolution for cabinet and room emulation";
-    const FEATURES: &'static [&'static str] = &[
-        "audio-effect",
-        "stereo",
-        "cabinet_simulator",
-        "reverb",
-    ];
+    const DESCRIPTION: &'static str = "Impulse response convolution for cabinet and room emulation";
+    const FEATURES: &'static [&'static str] =
+        &["audio-effect", "stereo", "cabinet_simulator", "reverb"];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
@@ -123,7 +117,9 @@ impl ResonancePlugin for ResonanceIr {
         }
     }
 
-    fn param_count(&self) -> usize { 3 }
+    fn param_count(&self) -> usize {
+        3
+    }
 
     fn param(&self, index: usize) -> &dyn Param {
         match index {

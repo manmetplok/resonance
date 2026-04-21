@@ -229,11 +229,7 @@ fn apply_master_fx_chain(
 
 /// Apply master volume, hard clip at [-1.0, 1.0], and update master peak level atomics.
 #[inline]
-fn apply_master_volume_and_peaks(
-    data: &mut [f32],
-    channels: usize,
-    shared: &SharedState,
-) {
+fn apply_master_volume_and_peaks(data: &mut [f32], channels: usize, shared: &SharedState) {
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
     let output_frames = data.len() / channels;
     let mut master_peak_l = 0.0f32;
@@ -357,7 +353,15 @@ pub(crate) fn collect_midi_events_bounce(
     out: &mut Vec<PendingNoteEvent>,
 ) {
     out.clear();
-    collect_midi_events(midi_clips, track_id, playhead, frames, tempo_map, sample_rate, out);
+    collect_midi_events(
+        midi_clips,
+        track_id,
+        playhead,
+        frames,
+        tempo_map,
+        sample_rate,
+        out,
+    );
 }
 
 /// Render one contiguous timeline sub-block into a slice of the output.
@@ -450,16 +454,17 @@ fn render_timeline_block(
                         latch_transport(&mut inst, transport_snap);
                         for event in note_event_buf.iter() {
                             if event.is_note_on {
-                                inst.0.queue_note_on(event.note, event.velocity, event.sample_offset);
+                                inst.0.queue_note_on(
+                                    event.note,
+                                    event.velocity,
+                                    event.sample_offset,
+                                );
                             } else {
                                 inst.0.queue_note_off(event.note, event.sample_offset);
                             }
                         }
 
-                        let port_count = inst
-                            .0
-                            .output_port_count()
-                            .min(port_scratch.len());
+                        let port_count = inst.0.output_port_count().min(port_scratch.len());
                         if port_count > 1 {
                             // Multi-output instrument: fan out into the
                             // per-port scratch pool, then copy port 0 back
@@ -467,12 +472,10 @@ fn render_timeline_block(
                             // the track chain (effects + fader + bus
                             // routing) runs unchanged.
                             {
-                                let mut views: [Option<StereoBufMut<'_>>;
-                                    MAX_PLUGIN_OUTPUT_PORTS] = Default::default();
-                                for (i, (pl, pr)) in port_scratch
-                                    .iter_mut()
-                                    .take(port_count)
-                                    .enumerate()
+                                let mut views: [Option<StereoBufMut<'_>>; MAX_PLUGIN_OUTPUT_PORTS] =
+                                    Default::default();
+                                for (i, (pl, pr)) in
+                                    port_scratch.iter_mut().take(port_count).enumerate()
                                 {
                                     pl[..frames].fill(0.0);
                                     pr[..frames].fill(0.0);
@@ -507,10 +510,8 @@ fn render_timeline_block(
                                 }
                             }
                             // Port 0 → main track buffer for effect chain.
-                            track_buf_l[..frames]
-                                .copy_from_slice(&port_scratch[0].0[..frames]);
-                            track_buf_r[..frames]
-                                .copy_from_slice(&port_scratch[0].1[..frames]);
+                            track_buf_l[..frames].copy_from_slice(&port_scratch[0].0[..frames]);
+                            track_buf_r[..frames].copy_from_slice(&port_scratch[0].1[..frames]);
                             extra_ports_filled = port_count;
                             has_audio = true;
                         } else {
@@ -651,7 +652,13 @@ fn render_timeline_block(
         };
         if !routed_to_bus {
             sum_to_output(
-                data, channels, frames, track_buf_l, track_buf_r, gain_l, gain_r,
+                data,
+                channels,
+                frames,
+                track_buf_l,
+                track_buf_r,
+                gain_l,
+                gain_r,
             );
         }
 
@@ -687,11 +694,7 @@ fn render_timeline_block(
                         if let Some(mutex) = plugins_guard.get(&plugin_id) {
                             if let Some(mut inst) = mutex.try_lock() {
                                 latch_transport(&mut inst, transport_snap);
-                                inst.0.process(
-                                    &mut pl[..frames],
-                                    &mut pr[..frames],
-                                    frames,
-                                );
+                                inst.0.process(&mut pl[..frames], &mut pr[..frames], frames);
                             }
                         }
                     }
@@ -741,11 +744,8 @@ fn render_timeline_block(
                 if let Some(mutex) = plugins_guard.get(&plugin_id) {
                     if let Some(mut inst) = mutex.try_lock() {
                         latch_transport(&mut inst, transport_snap);
-                        inst.0.process(
-                            &mut bus_buf_l[..frames],
-                            &mut bus_buf_r[..frames],
-                            frames,
-                        );
+                        inst.0
+                            .process(&mut bus_buf_l[..frames], &mut bus_buf_r[..frames], frames);
                     }
                 }
             }
@@ -833,15 +833,18 @@ pub(crate) fn mix_audio(
     // in the rendering path. The read lock is held for one audio buffer
     // (~1 ms) — writers (engine thread) wait only during tempo changes.
     let playhead_now = shared.playhead.load(std::sync::atomic::Ordering::Relaxed);
-    struct TempoSnap { bpm: f64, num: u16, den: u16, metronome: bool }
+    struct TempoSnap {
+        bpm: f64,
+        num: u16,
+        den: u16,
+        metronome: bool,
+    }
     let tempo_guard = tempo_map.try_read();
-    let tempo_snap = tempo_guard.as_ref().map(|tm| {
-        TempoSnap {
-            bpm: tm.bpm as f64,
-            num: tm.numerator as u16,
-            den: tm.denominator as u16,
-            metronome: tm.metronome_enabled,
-        }
+    let tempo_snap = tempo_guard.as_ref().map(|tm| TempoSnap {
+        bpm: tm.bpm as f64,
+        num: tm.numerator as u16,
+        den: tm.denominator as u16,
+        metronome: tm.metronome_enabled,
     });
     let snap_bpm = tempo_snap.as_ref().map(|s| s.bpm).unwrap_or(120.0);
 
@@ -936,8 +939,7 @@ pub(crate) fn mix_audio(
         if let Some(tm) = tempo_map.try_read() {
             let spb = tm.samples_per_beat(sample_rate);
             let numerator = tm.numerator as u64;
-            let click_duration_samples =
-                (sample_rate as f32 * CLICK_DURATION_SECS) as u64;
+            let click_duration_samples = (sample_rate as f32 * CLICK_DURATION_SECS) as u64;
             for frame_offset in 0..click_frames {
                 let elapsed = elapsed_at_start + frame_offset as u64;
                 let beat_index = (elapsed as f64 / spb).floor();
@@ -952,8 +954,7 @@ pub(crate) fn mix_audio(
                         CLICK_FREQ_UPBEAT
                     };
                     let amplitude = CLICK_AMPLITUDE * (-t * CLICK_DECAY_RATE).exp();
-                    let click =
-                        amplitude * (2.0 * std::f32::consts::PI * freq * t).sin();
+                    let click = amplitude * (2.0 * std::f32::consts::PI * freq * t).sin();
                     let out_idx = frame_offset * channels;
                     if channels >= 2 {
                         data[out_idx] += click;
@@ -985,14 +986,14 @@ pub(crate) fn mix_audio(
     if !shared.playing.load(Ordering::Relaxed) {
         // Even when stopped, output monitored audio for armed tracks
         if monitor_frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
-            let (Some(tracks_guard), Some(plugins_guard)) =
-                (tracks.try_read(), plugins.try_read())
+            let (Some(tracks_guard), Some(plugins_guard)) = (tracks.try_read(), plugins.try_read())
             else {
                 return;
             };
             let any_solo = tracks_guard.values().any(|t| t.soloed());
-            let is_audible =
-                |t: &&Track| -> bool { t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed()) };
+            let is_audible = |t: &&Track| -> bool {
+                t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed())
+            };
             let any_monitor = tracks_guard.values().any(|t| is_audible(&t));
 
             if any_monitor {
@@ -1056,8 +1057,7 @@ pub(crate) fn mix_audio(
     )
     else {
         // Lock contended -- advance playhead to avoid desync, output silence this buffer
-        let new_playhead =
-            advance_playhead_silent(shared, playhead, output_frames as u64);
+        let new_playhead = advance_playhead_silent(shared, playhead, output_frames as u64);
         shared.playhead.store(new_playhead, Ordering::Relaxed);
         return;
     };
@@ -1087,10 +1087,7 @@ pub(crate) fn mix_audio(
     // start past it, failing the `playhead < hi` test. With `>=`, that
     // aligned case renders the full block as `head` and sets `tail = 0`,
     // snapping the playhead back to `loop_in` for the next buffer.
-    let seam_split: Option<(usize, usize, u64)> = if shared
-        .loop_enabled
-        .load(Ordering::Relaxed)
-    {
+    let seam_split: Option<(usize, usize, u64)> = if shared.loop_enabled.load(Ordering::Relaxed) {
         let lo = shared.loop_in.load(Ordering::Relaxed);
         let hi = shared.loop_out.load(Ordering::Relaxed);
         if hi > lo && playhead < hi && playhead + frames as u64 >= hi {
@@ -1158,7 +1155,8 @@ pub(crate) fn mix_audio(
             bus_bufs,
             port_scratch,
             note_event_buf,
-            &monitor_temp[tail_monitor_start..tail_monitor_start + tail_monitor_frames * frame_stride],
+            &monitor_temp
+                [tail_monitor_start..tail_monitor_start + tail_monitor_frames * frame_stride],
             tail_monitor_frames,
             input_channels,
             transport_snap,
@@ -1238,10 +1236,7 @@ pub(crate) fn mix_audio(
                     n_ranges = 2;
                 }
                 None => {
-                    ranges = [
-                        (playhead, playhead + output_frames as u64),
-                        (0, 0),
-                    ];
+                    ranges = [(playhead, playhead + output_frames as u64), (0, 0)];
                     n_ranges = 1;
                 }
             }
@@ -1264,7 +1259,9 @@ pub(crate) fn mix_audio(
                             if bs >= r_end {
                                 break 'bar;
                             }
-                            if bs + click_duration_samples > r_start && n_beats < MAX_METRONOME_BEATS_PER_BUFFER {
+                            if bs + click_duration_samples > r_start
+                                && n_beats < MAX_METRONOME_BEATS_PER_BUFFER
+                            {
                                 beats[n_beats] = (bs, beat == 0);
                                 n_beats += 1;
                             }
@@ -1289,7 +1286,9 @@ pub(crate) fn mix_audio(
                         if bs >= r_end {
                             break;
                         }
-                        if bs + click_duration_samples > r_start && n_beats < MAX_METRONOME_BEATS_PER_BUFFER {
+                        if bs + click_duration_samples > r_start
+                            && n_beats < MAX_METRONOME_BEATS_PER_BUFFER
+                        {
                             beats[n_beats] = (bs, bi % numerator == 0);
                             n_beats += 1;
                         }
@@ -1317,8 +1316,7 @@ pub(crate) fn mix_audio(
                             CLICK_FREQ_UPBEAT
                         };
                         let amplitude = CLICK_AMPLITUDE * (-t * CLICK_DECAY_RATE).exp();
-                        let click =
-                            amplitude * (2.0 * std::f32::consts::PI * freq * t).sin();
+                        let click = amplitude * (2.0 * std::f32::consts::PI * freq * t).sin();
                         let out_idx = frame_offset * channels;
                         if channels >= 2 {
                             data[out_idx] += click;

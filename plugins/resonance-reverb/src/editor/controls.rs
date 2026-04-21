@@ -26,43 +26,67 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             widgets::float_knob(
-                ui, &params.predelay, 0.0..=250.0, 0.0,
-                "Pre-delay", "before tail",
+                ui,
+                &params.predelay,
+                0.0..=250.0,
+                0.0,
+                "Pre-delay",
+                "before tail",
                 &format!("{:.0} ms", params.predelay.value()),
                 false,
             );
             ui.add_space(4.0);
             widgets::float_knob(
-                ui, &params.er_level, 0.0..=1.0, 0.5,
-                "ER Level", "early refl.",
+                ui,
+                &params.er_level,
+                0.0..=1.0,
+                0.5,
+                "ER Level",
+                "early refl.",
                 &format!("{:.2}", params.er_level.value()),
                 false,
             );
             ui.add_space(4.0);
             widgets::float_knob(
-                ui, &params.er_time, 0.0..=1.0, 0.5,
-                "ER Time", "tap spread",
+                ui,
+                &params.er_time,
+                0.0..=1.0,
+                0.5,
+                "ER Time",
+                "tap spread",
                 &format!("{:.2}", params.er_time.value()),
                 false,
             );
             ui.add_space(4.0);
             widgets::float_knob(
-                ui, &params.size, 0.0..=1.0, 0.5,
-                "Size", "",
+                ui,
+                &params.size,
+                0.0..=1.0,
+                0.5,
+                "Size",
+                "",
                 &format!("{:.0}%", params.size.value() * 100.0),
                 false,
             );
             ui.add_space(4.0);
             widgets::float_knob(
-                ui, &params.decay, 0.1..=30.0, 2.0,
-                "Decay", "RT60",
+                ui,
+                &params.decay,
+                0.1..=30.0,
+                2.0,
+                "Decay",
+                "RT60",
                 &format!("{:.2} s", params.decay.value()),
                 true,
             );
             ui.add_space(4.0);
             widgets::float_knob(
-                ui, &params.damping, 200.0..=20000.0, 8000.0,
-                "Damping", "HF cutoff",
+                ui,
+                &params.damping,
+                200.0..=20000.0,
+                8000.0,
+                "Damping",
+                "HF cutoff",
                 &format!("{:.0} Hz", params.damping.value()),
                 true,
             );
@@ -73,36 +97,56 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             widgets::float_knob(
-                ui, &params.diffusion, 0.0..=1.0, 0.7,
-                "Diffusion", "",
+                ui,
+                &params.diffusion,
+                0.0..=1.0,
+                0.7,
+                "Diffusion",
+                "",
                 &format!("{:.2}", params.diffusion.value()),
                 false,
             );
             ui.add_space(4.0);
             widgets::float_knob(
-                ui, &params.mod_rate, 0.0..=5.0, 0.5,
-                "Mod Rate", "chorus",
+                ui,
+                &params.mod_rate,
+                0.0..=5.0,
+                0.5,
+                "Mod Rate",
+                "chorus",
                 &format!("{:.2} Hz", params.mod_rate.value()),
                 false,
             );
             ui.add_space(4.0);
             widgets::float_knob(
-                ui, &params.mod_depth, 0.0..=1.0, 0.3,
-                "Mod Depth", "",
+                ui,
+                &params.mod_depth,
+                0.0..=1.0,
+                0.3,
+                "Mod Depth",
+                "",
                 &format!("{:.2}", params.mod_depth.value()),
                 false,
             );
             ui.add_space(4.0);
             widgets::float_knob(
-                ui, &params.width, 0.0..=1.0, 1.0,
-                "Width", "stereo",
+                ui,
+                &params.width,
+                0.0..=1.0,
+                1.0,
+                "Width",
+                "stereo",
                 &format!("{:.0}%", params.width.value() * 100.0),
                 false,
             );
             ui.add_space(4.0);
             widgets::float_knob(
-                ui, &params.mix, 0.0..=1.0, 0.3,
-                "Mix", "dry/wet",
+                ui,
+                &params.mix,
+                0.0..=1.0,
+                0.3,
+                "Mix",
+                "dry/wet",
                 &format!("{:.0}%", params.mix.value() * 100.0),
                 false,
             );

@@ -95,7 +95,10 @@ impl Default for CompressorParams {
                 "threshold",
                 "Threshold",
                 -18.0,
-                FloatRange::Linear { min: -60.0, max: 0.0 },
+                FloatRange::Linear {
+                    min: -60.0,
+                    max: 0.0,
+                },
             )
             .with_unit(" dB")
             .with_value_to_string(v2s_f32_db(1)),
@@ -142,7 +145,10 @@ impl Default for CompressorParams {
                 "knee",
                 "Knee",
                 6.0,
-                FloatRange::Linear { min: 0.0, max: 12.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 12.0,
+                },
             )
             .with_unit(" dB")
             .with_value_to_string(v2s_f32_db(1)),
@@ -151,21 +157,19 @@ impl Default for CompressorParams {
                 "makeup",
                 "Makeup",
                 0.0,
-                FloatRange::Linear { min: -12.0, max: 24.0 },
+                FloatRange::Linear {
+                    min: -12.0,
+                    max: 24.0,
+                },
             )
             .with_smoother(SmoothingStyle::Logarithmic(20.0))
             .with_unit(" dB")
             .with_value_to_string(v2s_f32_db(1)),
 
-            mix: FloatParam::new(
-                "mix",
-                "Mix",
-                1.0,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .with_smoother(SmoothingStyle::Linear(20.0))
-            .with_unit("%")
-            .with_value_to_string(v2s_f32_percent(0)),
+            mix: FloatParam::new("mix", "Mix", 1.0, FloatRange::Linear { min: 0.0, max: 1.0 })
+                .with_smoother(SmoothingStyle::Linear(20.0))
+                .with_unit("%")
+                .with_value_to_string(v2s_f32_percent(0)),
 
             detector_mix: FloatParam::new(
                 "detector_mix",

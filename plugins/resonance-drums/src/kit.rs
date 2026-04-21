@@ -93,7 +93,6 @@ impl LoadedSample {
     }
 }
 
-
 /// Decode a WAV file from a byte slice into stereo interleaved f32 samples,
 /// resampled to the target sample rate if necessary.
 pub fn decode_wav(data: &[u8], target_sample_rate: f32) -> Result<Vec<f32>, String> {

@@ -177,20 +177,19 @@ pub fn load_kit_from_manifest(
     pad_choices: &[PadMicChoices; NUM_PADS],
     articulations: &[bool; NUM_PADS],
 ) -> Result<LoadedKit, String> {
-    let bytes = std::fs::read(manifest_path)
-        .map_err(|e| format!("read manifest: {e}"))?;
+    let bytes = std::fs::read(manifest_path).map_err(|e| format!("read manifest: {e}"))?;
 
     // Two-phase parse: first as raw JSON so we can strip the optional
     // `_meta` key (which has a different shape than a drum piece), then
     // deserialize the remaining entries as the usual KitManifest.
-    let mut raw: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("parse manifest JSON: {e}"))?;
+    let mut raw: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parse manifest JSON: {e}"))?;
     // Remove _meta if present so it doesn't trip up the KitManifest deserializer.
     if let Some(obj) = raw.as_object_mut() {
         obj.remove("_meta");
     }
-    let manifest: KitManifest = serde_json::from_value(raw)
-        .map_err(|e| format!("parse manifest pieces: {e}"))?;
+    let manifest: KitManifest =
+        serde_json::from_value(raw).map_err(|e| format!("parse manifest pieces: {e}"))?;
 
     let kit_dir = manifest_path
         .parent()
@@ -200,7 +199,8 @@ pub fn load_kit_from_manifest(
 
     let mut pads = Vec::with_capacity(NUM_PADS);
     for (pad_idx, mapping) in PAD_MAPPINGS.iter().enumerate() {
-        let piece_name = if articulations[pad_idx] && !DRUMMICA_ARTICULATION_ALT[pad_idx].is_empty() {
+        let piece_name = if articulations[pad_idx] && !DRUMMICA_ARTICULATION_ALT[pad_idx].is_empty()
+        {
             DRUMMICA_ARTICULATION_ALT[pad_idx]
         } else {
             DRUMMICA_MAPPING[pad_idx]
@@ -279,8 +279,7 @@ pub fn spawn_loader(
                     // by dropping this load (the newer one wins anyway).
                     let _ = bridge.kit_sender.try_send(kit.pads);
                     *bridge.kit_path.lock().unwrap() = Some(manifest_path);
-                    *bridge.kit_status.lock().unwrap() =
-                        KitStatus::Loaded { name, num_pads };
+                    *bridge.kit_status.lock().unwrap() = KitStatus::Loaded { name, num_pads };
                 }
                 Ok(Err(message)) => {
                     *bridge.kit_status.lock().unwrap() = KitStatus::Error { message };
@@ -428,8 +427,8 @@ fn decode_layers(
         let mut round_robins = Vec::with_capacity(filenames.len());
         for filename in filenames {
             let path = kit_dir.join(filename);
-            let bytes = std::fs::read(&path)
-                .map_err(|e| format!("read {}: {e}", path.display()))?;
+            let bytes =
+                std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
             let data = decode_wav(&bytes, target_sr)
                 .map_err(|e| format!("decode {}: {e}", path.display()))?;
             round_robins.push(LoadedSample::from_data(data));
@@ -517,9 +516,21 @@ mod tests {
 
         // Kick and snare each have two close mic positions (In+Out and
         // Top+Btm respectively) so they must load two banks.
-        assert_eq!(kit.pads[0].close_mics.len(), 2, "kick should load KickIn + KickOut");
-        assert_eq!(kit.pads[1].close_mics.len(), 2, "snare should load SNTop + SNBtm");
-        assert_eq!(kit.pads[25].close_mics.len(), 2, "rimshot should load SNTop + SNBtm");
+        assert_eq!(
+            kit.pads[0].close_mics.len(),
+            2,
+            "kick should load KickIn + KickOut"
+        );
+        assert_eq!(
+            kit.pads[1].close_mics.len(),
+            2,
+            "snare should load SNTop + SNBtm"
+        );
+        assert_eq!(
+            kit.pads[25].close_mics.len(),
+            2,
+            "rimshot should load SNTop + SNBtm"
+        );
 
         // Tom pads each have a single position mic.
         for tom_idx in [9, 10, 11] {
@@ -553,13 +564,22 @@ mod tests {
 
         // Every pad that maps to a Drummica piece has an overhead bank.
         for (i, pad) in kit.pads.iter().enumerate() {
-            assert!(pad.overhead.is_some(), "pad {} ({}) should have an overhead bank", i, pad.name);
+            assert!(
+                pad.overhead.is_some(),
+                "pad {} ({}) should have an overhead bank",
+                i,
+                pad.name
+            );
         }
 
         // Every loaded bank must have at least one velocity layer and RR.
         for pad in &kit.pads {
             for bank in pad.close_mics.iter().chain(pad.overhead.iter()) {
-                assert!(!bank.layers.is_empty(), "bank {} has no layers", bank.setup_key);
+                assert!(
+                    !bank.layers.is_empty(),
+                    "bank {} has no layers",
+                    bank.setup_key
+                );
                 for layer in &bank.layers {
                     assert!(
                         !layer.round_robins.is_empty(),
@@ -571,7 +591,10 @@ mod tests {
         }
 
         // Catalog should mention every Drummica position we expect.
-        for position in ["KickIn", "KickOut", "SNTop", "SNBtm", "Hat", "Tom01", "Tom02", "TomFloor", "OHsAB", "OHsXY"] {
+        for position in [
+            "KickIn", "KickOut", "SNTop", "SNBtm", "Hat", "Tom01", "Tom02", "TomFloor", "OHsAB",
+            "OHsXY",
+        ] {
             assert!(
                 kit.catalog.positions.contains_key(position),
                 "catalog missing position {}",
@@ -603,7 +626,11 @@ mod tests {
         .expect("drummica kit with articulation toggle should load cleanly");
         assert_eq!(kit.pads.len(), NUM_PADS);
         // Kick should still have 2 close mics even with ohne Teppich.
-        assert_eq!(kit.pads[0].close_mics.len(), 2, "kick ohne Teppich should still load KickIn + KickOut");
+        assert_eq!(
+            kit.pads[0].close_mics.len(),
+            2,
+            "kick ohne Teppich should still load KickIn + KickOut"
+        );
     }
 
     #[test]

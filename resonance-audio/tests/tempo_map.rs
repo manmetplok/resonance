@@ -4,10 +4,7 @@ const SR: u32 = 48000;
 
 // ---- Helper to build a TempoMap with events and a rebuilt bar table ----
 
-fn make_tempo_map(
-    tempo: &[(u32, f32)],
-    sigs: &[(u32, u8, u8)],
-) -> TempoMap {
+fn make_tempo_map(tempo: &[(u32, f32)], sigs: &[(u32, u8, u8)]) -> TempoMap {
     let mut tm = TempoMap::default();
     tm.tempo_points = tempo
         .iter()
@@ -191,7 +188,10 @@ fn frac_slower_tempo_means_more_samples_early() {
     // high at the start), so the sample fraction should be LESS than
     // the tick fraction at the midpoint.
     let sf = tick_frac_to_sample_frac(0.5, 150.0, 100.0);
-    assert!(sf < 0.5, "expected sf < 0.5 with decelerating BPM, got {sf}");
+    assert!(
+        sf < 0.5,
+        "expected sf < 0.5 with decelerating BPM, got {sf}"
+    );
 }
 
 // ========================================================================
@@ -201,7 +201,10 @@ fn frac_slower_tempo_means_more_samples_early() {
 #[test]
 fn bar_table_built_for_single_tempo() {
     let tm = make_tempo_map(&[(0, 120.0)], &[(0, 4, 4)]);
-    assert!(tm.bar_count() > 0, "bar table should always be built when sample_rate > 0");
+    assert!(
+        tm.bar_count() > 0,
+        "bar table should always be built when sample_rate > 0"
+    );
 }
 
 #[test]
@@ -223,10 +226,7 @@ fn bpm_at_no_bar_table_returns_field() {
 
 #[test]
 fn bpm_at_with_ramp() {
-    let tm = make_tempo_map(
-        &[(0, 120.0), (4, 120.0)],
-        &[(0, 4, 4)],
-    );
+    let tm = make_tempo_map(&[(0, 120.0), (4, 120.0)], &[(0, 4, 4)]);
     // Constant 120 → should stay ~120 everywhere
     let bpm = tm.bpm_at(0, SR);
     assert!((bpm - 120.0).abs() < 0.5, "expected ~120, got {bpm}");
@@ -235,13 +235,13 @@ fn bpm_at_with_ramp() {
 #[test]
 fn bpm_at_bar_start_matches_departure() {
     // 150 → 120 over 4 bars
-    let tm = make_tempo_map(
-        &[(0, 150.0), (4, 120.0)],
-        &[(0, 4, 4)],
-    );
+    let tm = make_tempo_map(&[(0, 150.0), (4, 120.0)], &[(0, 4, 4)]);
     // At sample 0 (bar 0), BPM should be departure = 150
     let bpm = tm.bpm_at(0, SR);
-    assert!((bpm - 150.0).abs() < 0.1, "bar 0 start: expected ~150, got {bpm}");
+    assert!(
+        (bpm - 150.0).abs() < 0.1,
+        "bar 0 start: expected ~150, got {bpm}"
+    );
 }
 
 // ========================================================================
@@ -266,10 +266,7 @@ fn position_to_bars_constant_tempo() {
 #[test]
 fn position_to_bars_with_tempo_change() {
     // 150 BPM for bar 0, 120 BPM from bar 1 onwards
-    let tm = make_tempo_map(
-        &[(0, 150.0), (1, 120.0)],
-        &[(0, 4, 4)],
-    );
+    let tm = make_tempo_map(&[(0, 150.0), (1, 120.0)], &[(0, 4, 4)]);
     // Bar 0 at 150 BPM: samples_per_beat = 48000*60/150 = 19200
     // But with ramp to 120, avg_bpm_for_bar(0) = (150+120)/2 = 135
     // bar 0 samples ≈ 4 * 48000*60/135 ≈ 85333
@@ -310,10 +307,7 @@ fn tick_to_abs_sample_one_bar_constant() {
 fn tick_to_abs_sample_with_tempo_ramp() {
     // Bar 0: 120 BPM, Bar 2: 180 BPM. A clip at bar 0 with ticks
     // spanning into bar 1 should account for the ramp.
-    let tm = make_tempo_map(
-        &[(0, 120.0), (2, 180.0)],
-        &[(0, 4, 4)],
-    );
+    let tm = make_tempo_map(&[(0, 120.0), (2, 180.0)], &[(0, 4, 4)]);
     // 1920 ticks = 1 bar. In a constant 120 BPM world that's 96000 samples.
     // With the ramp, bar 0's avg BPM is (120 + 150)/2 = 135, so
     // bar 0 samples ≈ 4 * 48000*60/135 ≈ 85333.
@@ -337,14 +331,7 @@ fn tick_to_abs_sample_clip_starting_mid_bar() {
 #[test]
 fn tick_to_abs_sample_with_step_change() {
     // 150 at bar 0, step change at bar 2: arrival 109, departure 150.
-    let tm = make_tempo_map(
-        &[
-            (0, 150.0),
-            (2, 109.0),
-            (2, 150.0),
-        ],
-        &[(0, 4, 4)],
-    );
+    let tm = make_tempo_map(&[(0, 150.0), (2, 109.0), (2, 150.0)], &[(0, 4, 4)]);
     // A clip from bar 0, one bar of ticks (1920), should span bar 0
     // which ramps from 150 to the arrival at bar 1.
     // arrival_bpm_at_bar(1) = interpolated = 150+(109-150)*0.5 = 129.5
@@ -370,39 +357,27 @@ fn bar_index_at_single_tempo() {
 
 #[test]
 fn bar_index_at_start() {
-    let tm = make_tempo_map(
-        &[(0, 120.0), (4, 160.0)],
-        &[(0, 4, 4)],
-    );
+    let tm = make_tempo_map(&[(0, 120.0), (4, 160.0)], &[(0, 4, 4)]);
     assert_eq!(tm.bar_index_at(0), Some(0));
 }
 
 #[test]
 fn beats_in_bar_default_4_4() {
-    let tm = make_tempo_map(
-        &[(0, 120.0), (4, 160.0)],
-        &[(0, 4, 4)],
-    );
+    let tm = make_tempo_map(&[(0, 120.0), (4, 160.0)], &[(0, 4, 4)]);
     assert_eq!(tm.beats_in_bar(0), 4);
     assert_eq!(tm.beats_in_bar(1), 4);
 }
 
 #[test]
 fn beat_sample_in_bar_beat_0_is_bar_start() {
-    let tm = make_tempo_map(
-        &[(0, 120.0), (4, 160.0)],
-        &[(0, 4, 4)],
-    );
+    let tm = make_tempo_map(&[(0, 120.0), (4, 160.0)], &[(0, 4, 4)]);
     // Beat 0 of bar 0 should be at sample 0.
     assert_eq!(tm.beat_sample_in_bar(0, 0, SR), Some(0));
 }
 
 #[test]
 fn beat_sample_in_bar_out_of_range() {
-    let tm = make_tempo_map(
-        &[(0, 120.0), (4, 160.0)],
-        &[(0, 4, 4)],
-    );
+    let tm = make_tempo_map(&[(0, 120.0), (4, 160.0)], &[(0, 4, 4)]);
     // Beat 4 in a 4/4 bar doesn't exist (0-based: 0,1,2,3).
     assert_eq!(tm.beat_sample_in_bar(0, 4, SR), None);
 }
@@ -410,10 +385,7 @@ fn beat_sample_in_bar_out_of_range() {
 #[test]
 fn beat_sample_in_bar_constant_tempo_evenly_spaced() {
     // Constant 120 BPM: beats at 0, 24000, 48000, 72000.
-    let tm = make_tempo_map(
-        &[(0, 120.0), (4, 120.0)],
-        &[(0, 4, 4)],
-    );
+    let tm = make_tempo_map(&[(0, 120.0), (4, 120.0)], &[(0, 4, 4)]);
     let expected_spb: u64 = 24000;
     for beat in 0..4u32 {
         let s = tm.beat_sample_in_bar(0, beat, SR).unwrap();
@@ -431,10 +403,7 @@ fn beat_sample_in_bar_constant_tempo_evenly_spaced() {
 
 #[test]
 fn sync_bpm_at_updates_field() {
-    let mut tm = make_tempo_map(
-        &[(0, 120.0), (4, 160.0)],
-        &[(0, 4, 4)],
-    );
+    let mut tm = make_tempo_map(&[(0, 120.0), (4, 160.0)], &[(0, 4, 4)]);
     assert!((tm.bpm - 120.0).abs() < 0.01);
     // Move to a position mid-ramp and sync
     let mid = tm.tick_to_abs_sample(0, 1920 * 2, SR); // ~bar 2
@@ -508,12 +477,7 @@ fn user_scenario_150_rit_109_back_to_150() {
 fn user_scenario_bar_table_consistent() {
     // Same setup: verify the bar table produces consistent positions.
     let tm = make_tempo_map(
-        &[
-            (0, 150.0),
-            (1, 150.0),
-            (2, 109.0),
-            (2, 150.0),
-        ],
+        &[(0, 150.0), (1, 150.0), (2, 109.0), (2, 150.0)],
         &[(0, 4, 4)],
     );
 
@@ -559,10 +523,7 @@ fn tick_to_sample_and_back_constant() {
 
 #[test]
 fn tick_to_sample_and_back_with_ramp() {
-    let tm = make_tempo_map(
-        &[(0, 120.0), (4, 180.0)],
-        &[(0, 4, 4)],
-    );
+    let tm = make_tempo_map(&[(0, 120.0), (4, 180.0)], &[(0, 4, 4)]);
     // 2 bars of ticks from sample 0 should land at bar 3 beat 1
     let sample = tm.tick_to_abs_sample(0, 1920 * 2, SR);
     let (bar, beat, frac) = tm.position_to_bars(sample, SR);

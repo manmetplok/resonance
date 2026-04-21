@@ -1,12 +1,11 @@
+use parking_lot::Mutex;
 /// Plugin parameters: dry/wet mix, output gain, persisted IR path, and file selector.
 ///
 /// The params here only store atomic current values and shared paths
 /// — no smoothers. Per-parameter smoothing lives in [`IrSmoothers`]
 /// below, which the plugin owns directly (not via `Arc`) so the audio
 /// thread can mutate smoother state through `&mut self`.
-
 use resonance_plugin::*;
-use parking_lot::Mutex;
 use std::sync::Arc;
 
 pub const MAX_FILE_INDEX: i32 = 999;

@@ -29,11 +29,7 @@ pub(crate) fn handle_set_track_mute(ctx: &HandlerCtx, track_id: TrackId, muted: 
     }
 }
 
-pub(crate) fn handle_set_track_fx_bypass(
-    ctx: &HandlerCtx,
-    track_id: TrackId,
-    bypassed: bool,
-) {
+pub(crate) fn handle_set_track_fx_bypass(ctx: &HandlerCtx, track_id: TrackId, bypassed: bool) {
     if let Some(track) = ctx.tracks.read().get(&track_id) {
         track.set_fx_bypassed(bypassed);
     }
@@ -94,18 +90,17 @@ pub(crate) fn handle_create_sub_track(
         return;
     }
     if !ctx.tracks.read().contains_key(&parent_track_id) {
-        debug_assert!(false, "CreateSubTrack: parent track {parent_track_id:?} not found");
+        debug_assert!(
+            false,
+            "CreateSubTrack: parent track {parent_track_id:?} not found"
+        );
         return;
     }
     let track = Track::new_sub_track(sub_id, name, parent_track_id, output_port_index);
     ctx.tracks.write().insert(sub_id, track);
 }
 
-pub(crate) fn handle_remove_track(
-    ctx: &HandlerCtx,
-    state: &mut HandlerState,
-    track_id: TrackId,
-) {
+pub(crate) fn handle_remove_track(ctx: &HandlerCtx, state: &mut HandlerState, track_id: TrackId) {
     // Remove plugins for this track -- extract under write lock, then
     // drop instances outside the lock so audio callback isn't blocked.
     let removed_plugins: Vec<_> = {
@@ -164,11 +159,7 @@ pub(crate) fn handle_remove_track(
     }
 }
 
-pub(crate) fn handle_set_track_record_arm(
-    ctx: &HandlerCtx,
-    track_id: TrackId,
-    armed: bool,
-) {
+pub(crate) fn handle_set_track_record_arm(ctx: &HandlerCtx, track_id: TrackId, armed: bool) {
     if let Some(track) = ctx.tracks.read().get(&track_id) {
         track.set_record_armed(armed);
     }
@@ -191,7 +182,9 @@ pub(crate) fn handle_set_track_monitor(
     }
     // Update monitoring flag: true if any track has monitoring enabled.
     let any_monitoring = ctx.tracks.read().values().any(|t| t.monitor_enabled());
-    ctx.shared.monitoring.store(any_monitoring, Ordering::SeqCst);
+    ctx.shared
+        .monitoring
+        .store(any_monitoring, Ordering::SeqCst);
 
     if any_monitoring && state.rec.input_stream.is_none() {
         // Start input stream: monitoring on but no stream active.
@@ -216,9 +209,10 @@ pub(crate) fn handle_set_track_monitor(
                 ctx.shared.input_channels.store(in_ch, Ordering::Release);
             }
             Err(e) => {
-                let _ = ctx
-                    .event_tx
-                    .send(AudioEvent::Error(format!("Failed to start monitoring: {}", e)));
+                let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                    "Failed to start monitoring: {}",
+                    e
+                )));
             }
         }
     } else if !any_monitoring && !ctx.shared.recording.load(Ordering::SeqCst) {
@@ -238,11 +232,7 @@ pub(crate) fn handle_set_track_input_device(
     }
 }
 
-pub(crate) fn handle_set_track_input_port(
-    ctx: &HandlerCtx,
-    track_id: TrackId,
-    port_index: u16,
-) {
+pub(crate) fn handle_set_track_input_port(ctx: &HandlerCtx, track_id: TrackId, port_index: u16) {
     if let Some(track) = ctx.tracks.read().get(&track_id) {
         track.set_input_port(port_index);
     }

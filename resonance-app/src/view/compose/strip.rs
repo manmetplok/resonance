@@ -202,4 +202,3 @@ fn edit_form<'a>(
     .align_y(alignment::Vertical::Center)
     .into()
 }
-

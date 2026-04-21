@@ -28,8 +28,14 @@ pub fn draw(ui: &mut egui::Ui, params: &ImagerParams) {
 
             let v = params.width.value();
             widgets::float_knob(
-                ui, &params.width, 0.0..=2.0, 1.0,
-                "Width", "0 mono .. 2 wide", &format!("{:.2}", v), false,
+                ui,
+                &params.width,
+                0.0..=2.0,
+                1.0,
+                "Width",
+                "0 mono .. 2 wide",
+                &format!("{:.2}", v),
+                false,
             );
 
             widgets::bool_checkbox(ui, &params.side_hpf_on, "Side HPF");
@@ -37,8 +43,14 @@ pub fn draw(ui: &mut egui::Ui, params: &ImagerParams) {
 
             let v = params.side_hpf_freq.value();
             widgets::float_knob(
-                ui, &params.side_hpf_freq, 20.0..=400.0, 120.0,
-                "HPF Freq", "keep bass mono", &format!("{:.0} Hz", v), true,
+                ui,
+                &params.side_hpf_freq,
+                20.0..=400.0,
+                120.0,
+                "HPF Freq",
+                "keep bass mono",
+                &format!("{:.0} Hz", v),
+                true,
             );
         });
     });

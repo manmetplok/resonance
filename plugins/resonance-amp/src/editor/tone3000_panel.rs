@@ -116,11 +116,7 @@ pub fn draw(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &Arc<Work
         });
 }
 
-fn draw_contents(
-    ui: &mut egui::Ui,
-    panel: &mut Tone3000PanelState,
-    worker: &Arc<WorkerHandle>,
-) {
+fn draw_contents(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &Arc<WorkerHandle>) {
     draw_header(ui, panel, worker);
     ui.add_space(6.0);
     ui.separator();
@@ -171,11 +167,7 @@ fn draw_contents(
     }
 }
 
-fn draw_header(
-    ui: &mut egui::Ui,
-    panel: &mut Tone3000PanelState,
-    worker: &Arc<WorkerHandle>,
-) {
+fn draw_header(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &Arc<WorkerHandle>) {
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new("TONE3000")
@@ -229,11 +221,7 @@ fn draw_status_pill(ui: &mut egui::Ui, status: &Status) {
     ui.label(egui::RichText::new(text).color(color).size(11.0));
 }
 
-fn draw_search_row(
-    ui: &mut egui::Ui,
-    panel: &mut Tone3000PanelState,
-    worker: &Arc<WorkerHandle>,
-) {
+fn draw_search_row(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &Arc<WorkerHandle>) {
     let connected = matches!(
         worker.state.lock().status,
         Status::Connected | Status::Searching | Status::LoadingModels | Status::Downloading(_)
@@ -245,8 +233,7 @@ fn draw_search_row(
                     .hint_text("search amp tones…")
                     .desired_width(320.0),
             );
-            let submitted =
-                resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let submitted = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
             let sort_changed = draw_sort_dropdown(ui, &mut panel.sort);
 
@@ -266,10 +253,7 @@ fn draw_sort_dropdown(ui: &mut egui::Ui, sort: &mut SortMode) -> bool {
         .selected_text(sort.label())
         .show_ui(ui, |ui| {
             for &mode in SortMode::ALL {
-                if ui
-                    .selectable_label(*sort == mode, mode.label())
-                    .clicked()
-                {
+                if ui.selectable_label(*sort == mode, mode.label()).clicked() {
                     *sort = mode;
                     changed = true;
                 }
@@ -365,13 +349,21 @@ fn draw_tone_row(
     selected_tone: Option<i64>,
 ) {
     let selected = selected_tone == Some(tone.id);
-    let bg = if selected { theme::PANEL_LIGHT } else { theme::PANEL };
+    let bg = if selected {
+        theme::PANEL_LIGHT
+    } else {
+        theme::PANEL
+    };
 
     let frame = egui::Frame::new()
         .fill(bg)
         .stroke(egui::Stroke::new(
             1.0,
-            if selected { theme::ACCENT } else { theme::BORDER },
+            if selected {
+                theme::ACCENT
+            } else {
+                theme::BORDER
+            },
         ))
         .inner_margin(egui::Margin::same(6))
         .outer_margin(egui::Margin::symmetric(0, 2));
@@ -403,11 +395,7 @@ fn draw_tone_row(
     });
 
     let click_id = ui.id().with(("tone3000_tone_row", tone.id));
-    let click = ui.interact(
-        frame_resp.response.rect,
-        click_id,
-        egui::Sense::click(),
-    );
+    let click = ui.interact(frame_resp.response.rect, click_id, egui::Sense::click());
     if click.clicked() {
         worker.send(Command::ListModels(tone.id));
     }

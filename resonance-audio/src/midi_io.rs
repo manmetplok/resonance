@@ -73,11 +73,11 @@ pub fn write_midi_file(path: &Path, notes: &[MidiNote]) -> Result<(), String> {
     };
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     let mut buf: Vec<u8> = Vec::new();
-    smf.write(&mut buf).map_err(|e| format!("serialize smf: {e}"))?;
+    smf.write(&mut buf)
+        .map_err(|e| format!("serialize smf: {e}"))?;
     std::fs::write(path, buf).map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(())
 }

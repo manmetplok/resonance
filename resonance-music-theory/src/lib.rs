@@ -1,5 +1,6 @@
 pub mod chord;
 pub mod derive;
+pub mod generator;
 pub mod pitch;
 pub mod progression;
 mod rng;
@@ -10,6 +11,10 @@ pub use chord::{Chord, ChordQuality};
 pub use derive::{
     derive_bass, derive_melody, derive_pad, BassParams, BassStyle, GeneratedNote, MelodyParams,
     MelodyStyle, PadParams, TimedChord,
+};
+pub use generator::{
+    Degree, GenContext, GenerateError, GeneratedChord, GeneratedMaterial, Generator, GeneratorSpec,
+    MarkovTable, TableRegistry,
 };
 pub use pitch::PitchClass;
 pub use progression::{

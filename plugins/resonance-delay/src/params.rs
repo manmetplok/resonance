@@ -70,7 +70,10 @@ impl Default for DelayParams {
                 "feedback",
                 "Feedback",
                 0.45,
-                FloatRange::Linear { min: 0.0, max: 0.95 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 0.95,
+                },
             )
             .with_unit("%")
             .with_value_to_string(formatters::v2s_f32_percentage(0))
@@ -93,12 +96,7 @@ impl Default for DelayParams {
                 IntRange::Linear { min: 0, max: 1 },
             ),
 
-            routing: IntParam::new(
-                "routing",
-                "Routing",
-                0,
-                IntRange::Linear { min: 0, max: 2 },
-            ),
+            routing: IntParam::new("routing", "Routing", 0, IntRange::Linear { min: 0, max: 2 }),
 
             stereo_offset: FloatParam::new(
                 "stereo_offset",

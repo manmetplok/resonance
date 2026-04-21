@@ -33,8 +33,16 @@ pub fn record_arm_button<'a>(
 }
 
 /// Mute toggle button (speaker-with-X — accent when muted).
-pub fn mute_button<'a>(muted: bool, on_press: Message, size: u16) -> iced::widget::Button<'a, Message> {
-    let color = if muted { theme::ACCENT } else { theme::TEXT_DIM };
+pub fn mute_button<'a>(
+    muted: bool,
+    on_press: Message,
+    size: u16,
+) -> iced::widget::Button<'a, Message> {
+    let color = if muted {
+        theme::ACCENT
+    } else {
+        theme::TEXT_DIM
+    };
     button(theme::icon(fa::VOLUME_XMARK).size(size).color(color))
         .on_press(on_press)
         .style(|_theme, status| theme::small_button_style(status))
@@ -204,9 +212,13 @@ where
         .font(Font::MONOSPACE)
         .color(theme::TEXT_DIM);
     column![
-        container(row![meters, fader].spacing(4).align_y(alignment::Vertical::Center))
-            .width(Length::Fill)
-            .center_x(Length::Fill),
+        container(
+            row![meters, fader]
+                .spacing(4)
+                .align_y(alignment::Vertical::Center)
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill),
         label,
     ]
     .spacing(2)

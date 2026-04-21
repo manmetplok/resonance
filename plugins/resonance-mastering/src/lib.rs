@@ -53,8 +53,7 @@ impl ResonancePlugin for ResonanceMastering {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str =
         "Automatic mastering plugin — analyzer + linear-phase mastering chain";
-    const FEATURES: &'static [&'static str] =
-        &["audio-effect", "mastering", "analyzer", "stereo"];
+    const FEATURES: &'static [&'static str] = &["audio-effect", "mastering", "analyzer", "stereo"];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
@@ -76,11 +75,7 @@ impl ResonancePlugin for ResonanceMastering {
 
     fn initialize(&mut self, sample_rate: f32, max_buffer_size: u32) -> bool {
         self.viz.assistant.set_sample_rate(sample_rate);
-        self.chain = Some(Chain::new(
-            sample_rate,
-            max_buffer_size as usize,
-            &self.viz,
-        ));
+        self.chain = Some(Chain::new(sample_rate, max_buffer_size as usize, &self.viz));
         true
     }
 
@@ -126,4 +121,3 @@ impl ResonancePlugin for ResonanceMastering {
 }
 
 resonance_plugin::export_clap!(ResonanceMastering);
-

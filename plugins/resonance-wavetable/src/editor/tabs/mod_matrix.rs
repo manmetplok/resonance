@@ -62,7 +62,10 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                 ui.label(egui::RichText::new(format!("{}", i + 1)).color(theme::TEXT_DIM));
 
                 // Source combo box.
-                let mut src_idx = slot.source.value().clamp(0, (SOURCE_NAMES.len() - 1) as i32) as usize;
+                let mut src_idx =
+                    slot.source
+                        .value()
+                        .clamp(0, (SOURCE_NAMES.len() - 1) as i32) as usize;
                 egui::ComboBox::from_id_salt(format!("src_{}", i))
                     .selected_text(SOURCE_NAMES[src_idx])
                     .width(120.0)
@@ -76,7 +79,10 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                     });
 
                 // Destination combo box.
-                let mut dst_idx = slot.destination.value().clamp(0, (DEST_NAMES.len() - 1) as i32) as usize;
+                let mut dst_idx =
+                    slot.destination
+                        .value()
+                        .clamp(0, (DEST_NAMES.len() - 1) as i32) as usize;
                 egui::ComboBox::from_id_salt(format!("dst_{}", i))
                     .selected_text(DEST_NAMES[dst_idx])
                     .width(150.0)

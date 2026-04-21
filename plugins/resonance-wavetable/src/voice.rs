@@ -1,5 +1,4 @@
 /// Per-voice state for the wavetable synthesizer.
-
 use crate::envelope::AdsrEnvelope;
 use crate::filter::StateVariableFilter;
 use crate::lfo::MultiLfo;
@@ -160,12 +159,7 @@ impl Voice {
         for u in 0..MAX_UNISON {
             self.unison[u].reset();
         }
-        distribute_unison(
-            &mut self.unison,
-            self.unison_count,
-            detune_cents,
-            spread,
-        );
+        distribute_unison(&mut self.unison, self.unison_count, detune_cents, spread);
     }
 
     pub fn release(&mut self) {

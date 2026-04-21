@@ -33,13 +33,21 @@ impl BandParams {
             ),
             band_type: IntParam::new(
                 leak_id(format!("{prefix}_b{band_index}_type")),
-                leak_name(format!("{} B{} Type", prefix.to_uppercase(), band_index + 1)),
+                leak_name(format!(
+                    "{} B{} Type",
+                    prefix.to_uppercase(),
+                    band_index + 1
+                )),
                 defaults.band_type as i32,
                 IntRange::Linear { min: 0, max: 4 },
             ),
             freq: FloatParam::new(
                 leak_id(format!("{prefix}_b{band_index}_freq")),
-                leak_name(format!("{} B{} Freq", prefix.to_uppercase(), band_index + 1)),
+                leak_name(format!(
+                    "{} B{} Freq",
+                    prefix.to_uppercase(),
+                    band_index + 1
+                )),
                 defaults.freq_hz,
                 FloatRange::Skewed {
                     min: 20.0,
@@ -61,7 +69,11 @@ impl BandParams {
             ),
             gain: FloatParam::new(
                 leak_id(format!("{prefix}_b{band_index}_gain")),
-                leak_name(format!("{} B{} Gain", prefix.to_uppercase(), band_index + 1)),
+                leak_name(format!(
+                    "{} B{} Gain",
+                    prefix.to_uppercase(),
+                    band_index + 1
+                )),
                 defaults.gain_db,
                 FloatRange::Linear {
                     min: -24.0,

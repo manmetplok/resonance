@@ -47,13 +47,11 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     ui.horizontal(|ui| {
         // Left side: viewer + frame strip + wavetable picker.
         ui.vertical(|ui| {
-            let (viewer_id, viewer_rect) =
-                ui.allocate_space(egui::vec2(340.0, 170.0));
+            let (viewer_id, viewer_rect) = ui.allocate_space(egui::vec2(340.0, 170.0));
             let _ = viewer_id;
             waveform::draw(ui, viewer_rect, wt_idx, position, live_pos);
 
-            let (strip_id, strip_rect) =
-                ui.allocate_space(egui::vec2(340.0, 22.0));
+            let (strip_id, strip_rect) = ui.allocate_space(egui::vec2(340.0, 22.0));
             let _ = strip_id;
             frame_strip::draw(ui, strip_rect, wt_idx, position);
 
@@ -61,8 +59,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             ui.horizontal(|ui| {
                 let prev = ui.button("<");
                 ui.label(
-                    egui::RichText::new(display_waves::wavetable_name(wt_idx))
-                        .color(theme::ACCENT),
+                    egui::RichText::new(display_waves::wavetable_name(wt_idx)).color(theme::ACCENT),
                 );
                 let next = ui.button(">");
                 if prev.clicked() && wt_idx > 0 {
@@ -89,7 +86,11 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         ui.vertical(|ui| {
             section_header(
                 ui,
-                if app.selected_osc == 0 { "OSC 1" } else { "OSC 2" },
+                if app.selected_osc == 0 {
+                    "OSC 1"
+                } else {
+                    "OSC 2"
+                },
             );
             bool_checkbox(ui, "Enabled", &osc_params.enabled);
             float_slider(ui, "Position", &osc_params.position, Some("%"));

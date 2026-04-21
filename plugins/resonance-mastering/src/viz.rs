@@ -119,4 +119,3 @@ impl MasteringViz {
         f32::from_bits(self.limiter_gr_db.load(Ordering::Relaxed))
     }
 }
-

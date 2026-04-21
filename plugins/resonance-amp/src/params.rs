@@ -1,5 +1,4 @@
 /// Plugin parameters: input/output gain, persisted model path, and file selector.
-
 use parking_lot::Mutex;
 use resonance_plugin::*;
 use std::sync::Arc;

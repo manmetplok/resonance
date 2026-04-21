@@ -89,7 +89,11 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
             } else {
                 theme::SEPARATOR
             };
-            let tick_h = if is_bar { RULER_HEIGHT } else { RULER_HEIGHT * 0.5 };
+            let tick_h = if is_bar {
+                RULER_HEIGHT
+            } else {
+                RULER_HEIGHT * 0.5
+            };
             frame.stroke(
                 &Path::line(Point::new(x, 0.0), Point::new(x, tick_h)),
                 Stroke::default().with_width(1.0).with_color(tick_color),
@@ -117,7 +121,12 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
         let block_top = RULER_HEIGHT + 3.0;
         let block_h = bounds.height - block_top - 3.0;
         for chord in &self.definition.chords {
-            let (start, dur) = apply_drag_preview(chord.id, chord.start_beat, chord.duration_beats, &state.drag);
+            let (start, dur) = apply_drag_preview(
+                chord.id,
+                chord.start_beat,
+                chord.duration_beats,
+                &state.drag,
+            );
             let x = start as f32 * beat_width;
             let w = (dur as f32 * beat_width - 1.0).max(2.0);
             let selected = Some(chord.id) == self.selected_chord_id;
@@ -190,9 +199,7 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
                     if beat >= chord.start_beat && beat < end {
                         let chord_left_px = chord.start_beat as f32 * beat_width;
                         let chord_right_px = end as f32 * beat_width;
-                        if chord_right_px - pos.x <= RESIZE_HANDLE_PX
-                            && chord.duration_beats >= 1
-                        {
+                        if chord_right_px - pos.x <= RESIZE_HANDLE_PX && chord.duration_beats >= 1 {
                             state.drag = Some(ChordDrag::Resize {
                                 chord_id: chord.id,
                                 pending_duration_beats: chord.duration_beats,
@@ -258,7 +265,8 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
                         grab_beat,
                         pending_start_beat,
                     } => {
-                        let chord = match self.definition.chords.iter().find(|c| c.id == *chord_id) {
+                        let chord = match self.definition.chords.iter().find(|c| c.id == *chord_id)
+                        {
                             Some(c) => c,
                             None => return (canvas::event::Status::Ignored, None),
                         };
@@ -271,7 +279,8 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
                         chord_id,
                         pending_duration_beats,
                     } => {
-                        let chord = match self.definition.chords.iter().find(|c| c.id == *chord_id) {
+                        let chord = match self.definition.chords.iter().find(|c| c.id == *chord_id)
+                        {
                             Some(c) => c,
                             None => return (canvas::event::Status::Ignored, None),
                         };

@@ -101,9 +101,7 @@ mod tests {
         assert_eq!(
             p,
             vec![
-                true, false, false, false,
-                true, false, false, false,
-                true, false, false, false,
+                true, false, false, false, true, false, false, false, true, false, false, false,
                 true, false, false, false,
             ]
         );
@@ -150,8 +148,10 @@ mod tests {
     #[test]
     fn pattern_to_notes_spaces_evenly() {
         // 4 hits over 16 ticks → one hit every 4 ticks.
-        let p = vec![true, false, false, false, true, false, false, false,
-                     true, false, false, false, true, false, false, false];
+        let p = vec![
+            true, false, false, false, true, false, false, false, true, false, false, false, true,
+            false, false, false,
+        ];
         let notes = pattern_to_notes(&p, 36, 0.9, 16);
         assert_eq!(notes.len(), 4);
         assert_eq!(notes[0].start_tick, 0);

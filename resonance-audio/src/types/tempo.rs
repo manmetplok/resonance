@@ -230,23 +230,40 @@ impl TempoMap {
         let sr = sample_rate as f64;
         let mut sample_pos: f64 = 0.0;
         let mut tick_pos: u64 = 0;
-        let mut cur_num = self.signature_points.first()
-            .map(|e| e.numerator).unwrap_or(self.numerator);
-        let mut si: usize = if self.signature_points.first()
-            .map(|e| e.bar) == Some(0) { 1 } else { 0 };
+        let mut cur_num = self
+            .signature_points
+            .first()
+            .map(|e| e.numerator)
+            .unwrap_or(self.numerator);
+        let mut si: usize = if self.signature_points.first().map(|e| e.bar) == Some(0) {
+            1
+        } else {
+            0
+        };
 
         // Build table from bar 0 to the last event + generous margin.
-        let last_bar = self.tempo_points.iter()
+        let last_bar = self
+            .tempo_points
+            .iter()
             .map(|e| e.bar)
             .chain(self.signature_points.iter().map(|e| e.bar))
             .max()
             .unwrap_or(0);
         let table_end = (last_bar + 200).min(10_000);
-        let mut cur_den = self.signature_points.first()
-            .map(|e| e.denominator).unwrap_or(self.denominator);
+        let mut cur_den = self
+            .signature_points
+            .first()
+            .map(|e| e.denominator)
+            .unwrap_or(self.denominator);
         for b in 0u32..table_end {
             while let Some(e) = self.signature_points.get(si) {
-                if e.bar == b { cur_num = e.numerator; cur_den = e.denominator; si += 1; } else { break; }
+                if e.bar == b {
+                    cur_num = e.numerator;
+                    cur_den = e.denominator;
+                    si += 1;
+                } else {
+                    break;
+                }
             }
             let bpm = bpm_at_bar(b as f64, &self.tempo_points) as f32;
             let arr = arrival_bpm_at_bar(b, &self.tempo_points) as f32;
@@ -275,7 +292,10 @@ impl TempoMap {
             return self.bpm;
         }
         // Binary search for the last bar entry <= sample_pos.
-        let idx = match self.bar_table.binary_search_by_key(&sample_pos, |e| e.sample) {
+        let idx = match self
+            .bar_table
+            .binary_search_by_key(&sample_pos, |e| e.sample)
+        {
             Ok(i) => i,
             Err(0) => 0,
             Err(i) => i - 1,
@@ -311,11 +331,16 @@ impl TempoMap {
         if self.bar_table.is_empty() {
             return None;
         }
-        Some(match self.bar_table.binary_search_by_key(&sample_pos, |e| e.sample) {
-            Ok(i) => i,
-            Err(0) => 0,
-            Err(i) => i - 1,
-        })
+        Some(
+            match self
+                .bar_table
+                .binary_search_by_key(&sample_pos, |e| e.sample)
+            {
+                Ok(i) => i,
+                Err(0) => 0,
+                Err(i) => i - 1,
+            },
+        )
     }
 
     /// Number of beats in bar `bar_idx`.
@@ -373,7 +398,10 @@ impl TempoMap {
             let frac = total_beats.fract();
             return (bar, beat_in_bar, frac);
         }
-        let idx = match self.bar_table.binary_search_by_key(&sample_pos, |e| e.sample) {
+        let idx = match self
+            .bar_table
+            .binary_search_by_key(&sample_pos, |e| e.sample)
+        {
             Ok(i) => i,
             Err(0) => 0,
             Err(i) => i - 1,
@@ -388,9 +416,8 @@ impl TempoMap {
             } else {
                 0.0
             };
-            let tick_frac = sample_frac_to_tick_frac(
-                sample_frac, entry.bpm as f64, next.arrival_bpm as f64,
-            );
+            let tick_frac =
+                sample_frac_to_tick_frac(sample_frac, entry.bpm as f64, next.arrival_bpm as f64);
             let beat_frac = tick_frac * num_beats;
             let beat = beat_frac.floor() as u8 + 1;
             (bar, beat, beat_frac.fract())
@@ -410,13 +437,15 @@ impl TempoMap {
             return clip_start;
         }
         if self.bar_table.is_empty() {
-            let spt = (sample_rate as f64 * 60.0 / self.bpm as f64)
-                / TICKS_PER_QUARTER_NOTE as f64;
+            let spt = (sample_rate as f64 * 60.0 / self.bpm as f64) / TICKS_PER_QUARTER_NOTE as f64;
             return clip_start + (tick_offset as f64 * spt) as u64;
         }
 
         // Find the bar containing clip_start
-        let start_idx = match self.bar_table.binary_search_by_key(&clip_start, |e| e.sample) {
+        let start_idx = match self
+            .bar_table
+            .binary_search_by_key(&clip_start, |e| e.sample)
+        {
             Ok(i) => i,
             Err(0) => 0,
             Err(i) => i - 1,
@@ -432,13 +461,11 @@ impl TempoMap {
             } else {
                 0.0
             };
-            let tick_frac = sample_frac_to_tick_frac(
-                sample_frac, se.bpm as f64, ne.arrival_bpm as f64,
-            );
+            let tick_frac =
+                sample_frac_to_tick_frac(sample_frac, se.bpm as f64, ne.arrival_bpm as f64);
             se.tick as f64 + tick_frac * se.ticks_in_bar as f64
         } else {
-            let spt = (sample_rate as f64 * 60.0 / se.bpm as f64)
-                / TICKS_PER_QUARTER_NOTE as f64;
+            let spt = (sample_rate as f64 * 60.0 / se.bpm as f64) / TICKS_PER_QUARTER_NOTE as f64;
             se.tick as f64 + (clip_start - se.sample) as f64 / spt
         };
 
@@ -465,13 +492,11 @@ impl TempoMap {
             } else {
                 0.0
             };
-            let sample_frac = tick_frac_to_sample_frac(
-                tick_frac, te.bpm as f64, ne.arrival_bpm as f64,
-            );
+            let sample_frac =
+                tick_frac_to_sample_frac(tick_frac, te.bpm as f64, ne.arrival_bpm as f64);
             te.sample + (sample_frac * bar_samples) as u64
         } else {
-            let spt = (sample_rate as f64 * 60.0 / te.bpm as f64)
-                / TICKS_PER_QUARTER_NOTE as f64;
+            let spt = (sample_rate as f64 * 60.0 / te.bpm as f64) / TICKS_PER_QUARTER_NOTE as f64;
             te.sample + (ticks_into_bar * spt) as u64
         }
     }
@@ -514,7 +539,10 @@ impl TempoMap {
         if self.bar_table.is_empty() {
             return (self.bpm, self.numerator, self.denominator);
         }
-        let idx = match self.bar_table.binary_search_by_key(&sample_pos, |e| e.sample) {
+        let idx = match self
+            .bar_table
+            .binary_search_by_key(&sample_pos, |e| e.sample)
+        {
             Ok(i) => i,
             Err(0) => 0,
             Err(i) => i - 1,
@@ -537,7 +565,10 @@ impl TempoMap {
             let frac = (sample_pos as f64 - bar as f64 * bar_samples) / bar_samples;
             return (bar, frac);
         }
-        let idx = match self.bar_table.binary_search_by_key(&sample_pos, |e| e.sample) {
+        let idx = match self
+            .bar_table
+            .binary_search_by_key(&sample_pos, |e| e.sample)
+        {
             Ok(i) => i,
             Err(0) => 0,
             Err(i) => i - 1,
@@ -571,6 +602,9 @@ impl TempoMap {
         if let Some(entry) = self.bar_table.get(bar as usize) {
             return entry.numerator;
         }
-        self.bar_table.last().map(|e| e.numerator).unwrap_or(self.numerator)
+        self.bar_table
+            .last()
+            .map(|e| e.numerator)
+            .unwrap_or(self.numerator)
     }
 }

@@ -85,7 +85,6 @@ pub(crate) struct Resonance {
         std::collections::HashMap<resonance_audio::types::PluginInstanceId, Vec<u8>>,
 
     // ---- Track presets ----
-
     /// Built-in default track presets (baked into the binary).
     pub(crate) default_presets: Vec<presets::TrackPreset>,
     /// User-saved track presets (loaded from disk on startup).
@@ -144,10 +143,9 @@ impl Resonance {
 
     /// Update the transport BPM display from the current tempo map.
     pub(crate) fn sync_tempo_display(&mut self) {
-        let (bpm, _, _) = self.tempo_map.tempo_at_sample(
-            self.transport.playhead,
-            self.sample_rate,
-        );
+        let (bpm, _, _) = self
+            .tempo_map
+            .tempo_at_sample(self.transport.playhead, self.sample_rate);
         self.transport.bpm = bpm;
         self.transport.bpm_input = format!("{:.1}", bpm);
     }
@@ -168,12 +166,15 @@ impl Resonance {
         if index > 0 && index < self.signature_events.len() {
             self.signature_events.remove(index);
             self.rebuild_and_send_tempo();
-            let (_, num, den) = self.tempo_map.tempo_at_sample(
-                self.transport.playhead, self.sample_rate,
-            );
+            let (_, num, den) = self
+                .tempo_map
+                .tempo_at_sample(self.transport.playhead, self.sample_rate);
             self.transport.time_sig_num = num;
             self.transport.time_sig_den = den;
-            self.engine.send(AudioCommand::SetTimeSignature { numerator: num, denominator: den });
+            self.engine.send(AudioCommand::SetTimeSignature {
+                numerator: num,
+                denominator: den,
+            });
         }
     }
 
@@ -234,11 +235,15 @@ impl Resonance {
                 return Some(f(p));
             }
         }
-        let result = self.master_plugins
+        let result = self
+            .master_plugins
             .iter_mut()
             .find(|p| p.instance_id == instance_id)
             .map(f);
-        debug_assert!(result.is_some(), "with_plugin_mut: no plugin with id {instance_id:?}");
+        debug_assert!(
+            result.is_some(),
+            "with_plugin_mut: no plugin with id {instance_id:?}"
+        );
         result
     }
 
@@ -294,7 +299,11 @@ impl Resonance {
             compose: compose::ComposeState::default(),
 
             tempo_events: vec![state::TempoEvent { bar: 0, bpm: 120.0 }],
-            signature_events: vec![state::SignatureEvent { bar: 0, numerator: 4, denominator: 4 }],
+            signature_events: vec![state::SignatureEvent {
+                bar: 0,
+                numerator: 4,
+                denominator: 4,
+            }],
             tempo_map: TempoMap::default(),
 
             transport: TransportState::default(),

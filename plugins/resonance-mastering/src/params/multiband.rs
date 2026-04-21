@@ -32,7 +32,10 @@ impl MultibandBandParams {
                 leak(format!("{prefix}_b{index}_thresh")),
                 leak(format!("MB B{} Threshold", index + 1)),
                 -18.0,
-                FloatRange::Linear { min: -40.0, max: 0.0 },
+                FloatRange::Linear {
+                    min: -40.0,
+                    max: 0.0,
+                },
             )
             .with_unit(" dB")
             .with_value_to_string(v2s_f32_db(1)),
@@ -47,7 +50,10 @@ impl MultibandBandParams {
                 leak(format!("{prefix}_b{index}_gain")),
                 leak(format!("MB B{} Gain", index + 1)),
                 0.0,
-                FloatRange::Linear { min: -12.0, max: 12.0 },
+                FloatRange::Linear {
+                    min: -12.0,
+                    max: 12.0,
+                },
             )
             .with_unit(" dB")
             .with_value_to_string(v2s_f32_db(1)),
@@ -99,11 +105,7 @@ impl MultibandParams {
     }
 
     pub fn snapshot(&self) -> MultibandConfig {
-        let mut xo = [
-            self.xo1.value(),
-            self.xo2.value(),
-            self.xo3.value(),
-        ];
+        let mut xo = [self.xo1.value(), self.xo2.value(), self.xo3.value()];
         // Enforce monotonic ordering (xo1 < xo2 < xo3) so the crossover
         // design is always well-defined.
         if xo[1] <= xo[0] {

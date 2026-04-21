@@ -20,9 +20,7 @@ use crate::clap_host::{ClapBundle, SyncClapInstance};
 use crate::recording::RecordingState;
 use crate::types::*;
 
-use super::{
-    bounce, busses, clips, master, midi, plugins, scan, tracks, transport, SharedState,
-};
+use super::{bounce, busses, clips, master, midi, plugins, scan, tracks, transport, SharedState};
 
 /// Read-only handle to shared project state and channels. Passed by
 /// reference into every handler so they can lock the relevant maps and
@@ -34,8 +32,7 @@ pub(crate) struct HandlerCtx<'a> {
     pub master: &'a Arc<RwLock<MasterBus>>,
     pub clips: &'a Arc<RwLock<Vec<AudioClip>>>,
     pub midi_clips: &'a Arc<RwLock<Vec<MidiClip>>>,
-    pub plugins:
-        &'a Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    pub plugins: &'a Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
     pub tempo_map: &'a Arc<RwLock<TempoMap>>,
     pub monitor_prod: &'a Arc<Mutex<ringbuf::HeapProd<f32>>>,
     pub event_tx: &'a Sender<AudioEvent>,
@@ -114,7 +111,9 @@ pub(crate) fn engine_thread(
     let mut last_playhead_report = std::time::Instant::now();
 
     // Report actual sample rate to GUI
-    let _ = ctx.event_tx.send(AudioEvent::SampleRateDetected { sample_rate });
+    let _ = ctx
+        .event_tx
+        .send(AudioEvent::SampleRateDetected { sample_rate });
 
     // Add a default track
     {
@@ -141,7 +140,10 @@ pub(crate) fn engine_thread(
         // the mixer (audio thread) always sees the correct tempo for
         // the current playhead position.
         {
-            let playhead = ctx.shared.playhead.load(std::sync::atomic::Ordering::Relaxed);
+            let playhead = ctx
+                .shared
+                .playhead
+                .load(std::sync::atomic::Ordering::Relaxed);
             let mut tm = ctx.tempo_map.write();
             tm.sync_bpm_at(playhead, ctx.sample_rate);
         }
@@ -247,9 +249,7 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         AudioCommand::SetTrackMute { track_id, muted } => {
             tracks::handle_set_track_mute(ctx, track_id, muted)
         }
-        AudioCommand::SetMasterVolume { volume } => {
-            tracks::handle_set_master_volume(ctx, volume)
-        }
+        AudioCommand::SetMasterVolume { volume } => tracks::handle_set_master_volume(ctx, volume),
         AudioCommand::SetTrackSolo { track_id, soloed } => {
             tracks::handle_set_track_solo(ctx, track_id, soloed)
         }
@@ -261,16 +261,8 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             parent_track_id,
             output_port_index,
             name,
-        } => tracks::handle_create_sub_track(
-            ctx,
-            sub_id,
-            parent_track_id,
-            output_port_index,
-            name,
-        ),
-        AudioCommand::RemoveTrack { track_id } => {
-            tracks::handle_remove_track(ctx, state, track_id)
-        }
+        } => tracks::handle_create_sub_track(ctx, sub_id, parent_track_id, output_port_index, name),
+        AudioCommand::RemoveTrack { track_id } => tracks::handle_remove_track(ctx, state, track_id),
         AudioCommand::SetTrackRecordArm { track_id, armed } => {
             tracks::handle_set_track_record_arm(ctx, track_id, armed)
         }
@@ -355,14 +347,9 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             start_sample,
             duration_ticks,
             name,
-        } => midi::handle_create_midi_clip(
-            ctx,
-            state,
-            track_id,
-            start_sample,
-            duration_ticks,
-            name,
-        ),
+        } => {
+            midi::handle_create_midi_clip(ctx, state, track_id, start_sample, duration_ticks, name)
+        }
         AudioCommand::LoadMidiClipDirect {
             clip_id,
             track_id,
@@ -401,9 +388,7 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             trim_start_ticks,
             trim_end_ticks,
         ),
-        AudioCommand::DeleteMidiClip { clip_id } => {
-            midi::handle_delete_midi_clip(ctx, clip_id)
-        }
+        AudioCommand::DeleteMidiClip { clip_id } => midi::handle_delete_midi_clip(ctx, clip_id),
         AudioCommand::AddMidiNote { clip_id, note } => {
             midi::handle_add_midi_note(ctx, clip_id, note)
         }
@@ -416,13 +401,7 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             note_index,
             new_start_tick,
             new_note,
-        } => midi::handle_move_midi_note(
-            ctx,
-            clip_id,
-            note_index,
-            new_start_tick,
-            new_note,
-        ),
+        } => midi::handle_move_midi_note(ctx, clip_id, note_index, new_start_tick, new_note),
         AudioCommand::ResizeMidiNote {
             clip_id,
             note_index,
@@ -443,22 +422,16 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         }
 
         // -- Busses --
-        AudioCommand::AddBus { id_hint, name } => {
-            busses::handle_add_bus(ctx, state, id_hint, name)
-        }
+        AudioCommand::AddBus { id_hint, name } => busses::handle_add_bus(ctx, state, id_hint, name),
         AudioCommand::RemoveBus { bus_id } => busses::handle_remove_bus(ctx, bus_id),
         AudioCommand::SetBusVolume { bus_id, volume } => {
             busses::handle_set_bus_volume(ctx, bus_id, volume)
         }
-        AudioCommand::SetBusPan { bus_id, pan } => {
-            busses::handle_set_bus_pan(ctx, bus_id, pan)
-        }
+        AudioCommand::SetBusPan { bus_id, pan } => busses::handle_set_bus_pan(ctx, bus_id, pan),
         AudioCommand::SetBusMute { bus_id, muted } => {
             busses::handle_set_bus_mute(ctx, bus_id, muted)
         }
-        AudioCommand::SetBusName { bus_id, name } => {
-            busses::handle_set_bus_name(ctx, bus_id, name)
-        }
+        AudioCommand::SetBusName { bus_id, name } => busses::handle_set_bus_name(ctx, bus_id, name),
         AudioCommand::SetTrackOutput { track_id, output } => {
             busses::handle_set_track_output(ctx, track_id, output)
         }
@@ -485,13 +458,9 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             clap_file_path,
             clap_plugin_id,
             id_hint,
-        } => master::handle_add_plugin_to_master(
-            ctx,
-            state,
-            clap_file_path,
-            clap_plugin_id,
-            id_hint,
-        ),
+        } => {
+            master::handle_add_plugin_to_master(ctx, state, clap_file_path, clap_plugin_id, id_hint)
+        }
         AudioCommand::RemovePluginFromMaster { instance_id } => {
             master::handle_remove_plugin_from_master(ctx, instance_id)
         }

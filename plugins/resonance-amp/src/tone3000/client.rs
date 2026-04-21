@@ -44,8 +44,9 @@ impl Tone3000Client {
             .query("page_size", "25")
             .call()
             .map_err(ClientError::from)?;
-        let page: PaginatedResponse<Tone> =
-            resp.into_json().map_err(|e| ClientError::Parse(e.to_string()))?;
+        let page: PaginatedResponse<Tone> = resp
+            .into_json()
+            .map_err(|e| ClientError::Parse(e.to_string()))?;
         Ok(page.data)
     }
 
@@ -59,8 +60,9 @@ impl Tone3000Client {
             .query("page_size", "100")
             .call()
             .map_err(ClientError::from)?;
-        let page: PaginatedResponse<Model> =
-            resp.into_json().map_err(|e| ClientError::Parse(e.to_string()))?;
+        let page: PaginatedResponse<Model> = resp
+            .into_json()
+            .map_err(|e| ClientError::Parse(e.to_string()))?;
         Ok(page.data)
     }
 

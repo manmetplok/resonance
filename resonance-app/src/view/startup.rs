@@ -33,7 +33,9 @@ pub(crate) fn view_startup_overlay(r: &Resonance) -> Element<'_, Message> {
     );
 
     let title = text("Resonance").size(36).color(theme::ACCENT);
-    let subtitle = text("Start a project to begin").size(14).color(theme::TEXT_DIM);
+    let subtitle = text("Start a project to begin")
+        .size(14)
+        .color(theme::TEXT_DIM);
 
     let new_btn = wide_button(
         fa::FLOPPY_DISK,

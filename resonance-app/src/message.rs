@@ -7,13 +7,11 @@ use crate::compose::ComposeMessage;
 use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
 use crate::state::{
-    ClipEdge, InstrumentIcon, InstrumentType, LoopDragTarget,
-    SelectedGlobalEvent, ViewMode,
+    ClipEdge, InstrumentIcon, InstrumentType, LoopDragTarget, SelectedGlobalEvent, ViewMode,
 };
 use resonance_audio::types::{
     BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
 };
-
 
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
@@ -272,9 +270,17 @@ pub(crate) enum GlobalTrackMessage {
     /// Finish dragging a tempo event (undo commit).
     EndTempoDrag,
     /// Add a time signature change event at the given bar.
-    AddSignatureEvent { bar: u32, numerator: u8, denominator: u8 },
+    AddSignatureEvent {
+        bar: u32,
+        numerator: u8,
+        denominator: u8,
+    },
     /// Update an existing signature event's numerator or denominator.
-    UpdateSignatureEvent { index: usize, numerator: u8, denominator: u8 },
+    UpdateSignatureEvent {
+        index: usize,
+        numerator: u8,
+        denominator: u8,
+    },
     /// Select an event on a global track.
     SelectEvent(Option<SelectedGlobalEvent>),
     /// Delete the currently selected global track event.

@@ -71,9 +71,7 @@ fn random_state() -> String {
 /// user either approves in the browser or [`timeout`] elapses.
 pub fn run_authorization_flow(timeout: Duration) -> Result<StoredTokens, String> {
     if TONE3000_CLIENT_ID.is_empty() {
-        return Err(
-            "Tone3000 client_id is not configured — edit tone3000/mod.rs".to_string(),
-        );
+        return Err("Tone3000 client_id is not configured — edit tone3000/mod.rs".to_string());
     }
 
     // Tone3000 normalises the stored redirect URI to `localhost` with a
@@ -103,8 +101,7 @@ pub fn run_authorization_flow(timeout: Duration) -> Result<StoredTokens, String>
 
     let authorize_url = build_authorize_url(&redirect_uri, &challenge, &state);
     debug_log(&format!("authorize_url: {authorize_url}\n"));
-    webbrowser::open(&authorize_url)
-        .map_err(|e| format!("open browser: {e}"))?;
+    webbrowser::open(&authorize_url).map_err(|e| format!("open browser: {e}"))?;
 
     let (code, returned_state) = wait_for_redirect(&server, timeout)?;
     debug_log(&format!(
@@ -236,10 +233,9 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(v) = u8::from_str_radix(
-                std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
-                16,
-            ) {
+            if let Ok(v) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
                 out.push(v);
                 i += 3;
                 continue;
@@ -334,6 +330,7 @@ pub fn write_all_to(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> 
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
     let mut f = fs::File::create(path).map_err(|e| format!("create {}: {e}", path.display()))?;
-    f.write_all(bytes).map_err(|e| format!("write {}: {e}", path.display()))?;
+    f.write_all(bytes)
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(())
 }

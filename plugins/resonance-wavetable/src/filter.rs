@@ -70,13 +70,7 @@ impl StateVariableFilter {
     /// - `resonance`: 0..1 (0 = no resonance, 1 = self-oscillation)
     /// - `sample_rate`: audio sample rate
     /// - `drive`: 0..1 input drive (soft-clip)
-    pub fn set_coeffs(
-        &mut self,
-        cutoff_hz: f32,
-        resonance: f32,
-        sample_rate: f32,
-        drive: f32,
-    ) {
+    pub fn set_coeffs(&mut self, cutoff_hz: f32, resonance: f32, sample_rate: f32, drive: f32) {
         let cutoff = cutoff_hz.clamp(20.0, sample_rate * 0.49);
         let g = (std::f32::consts::PI * cutoff / sample_rate).tan();
         // Damping: k=2 means no resonance, k->0 means self-oscillation.

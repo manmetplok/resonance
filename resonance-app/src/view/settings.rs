@@ -25,10 +25,21 @@ pub(crate) fn view_settings_overlay(_r: &Resonance) -> Element<'_, Message> {
 
     let section = |label: &'static str| text(label).size(11).color(theme::TEXT_DIM);
 
-    let open_btn = wide_button(fa::FOLDER_OPEN, "Open Project...", Message::ProjectIo(ProjectIoMessage::OpenProject));
-    let save_btn = wide_button(fa::FLOPPY_DISK, "Save Project", Message::ProjectIo(ProjectIoMessage::SaveProject));
-    let save_as_btn =
-        wide_button(fa::FLOPPY_DISK, "Save Project As...", Message::ProjectIo(ProjectIoMessage::SaveProjectAs));
+    let open_btn = wide_button(
+        fa::FOLDER_OPEN,
+        "Open Project...",
+        Message::ProjectIo(ProjectIoMessage::OpenProject),
+    );
+    let save_btn = wide_button(
+        fa::FLOPPY_DISK,
+        "Save Project",
+        Message::ProjectIo(ProjectIoMessage::SaveProject),
+    );
+    let save_as_btn = wide_button(
+        fa::FLOPPY_DISK,
+        "Save Project As...",
+        Message::ProjectIo(ProjectIoMessage::SaveProjectAs),
+    );
 
     let close_btn = button(text("Close").size(13).color(theme::TEXT))
         .on_press(Message::Ui(UiMessage::CloseSettings))

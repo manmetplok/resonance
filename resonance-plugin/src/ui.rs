@@ -2,7 +2,6 @@
 ///
 /// This module provides the shared event type, param data struct, theme constants,
 /// and reusable widget helpers that plugin UIs are built from.
-
 pub use iced;
 
 use iced::widget::{button, column, row, slider, text};
@@ -80,8 +79,12 @@ pub fn view_generic_params<'a>(params: &[UiParam]) -> Element<'a, PluginUiEvent>
             .color(TEXT_DIM);
 
         let param_row = column![
-            row![param_label, iced::widget::Space::with_width(Length::Fill), param_value_text]
-                .spacing(2),
+            row![
+                param_label,
+                iced::widget::Space::with_width(Length::Fill),
+                param_value_text
+            ]
+            .spacing(2),
             param_slider,
         ]
         .spacing(1);
@@ -89,4 +92,3 @@ pub fn view_generic_params<'a>(params: &[UiParam]) -> Element<'a, PluginUiEvent>
     }
     controls.into()
 }
-

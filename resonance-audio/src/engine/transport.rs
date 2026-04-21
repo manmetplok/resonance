@@ -15,11 +15,7 @@ pub(crate) fn handle_play(ctx: &HandlerCtx) {
     ctx.shared.playing.store(true, Ordering::SeqCst);
 }
 
-pub(crate) fn handle_record(
-    ctx: &HandlerCtx,
-    state: &mut HandlerState,
-    precount_bars: u8,
-) {
+pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState, precount_bars: u8) {
     if precount_bars == 0 {
         let start_sample = ctx.shared.playhead.load(Ordering::SeqCst);
         begin_recording_stream(ctx, state, start_sample);
@@ -104,11 +100,7 @@ pub(crate) fn poll_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
     ctx.shared.count_in_active.store(false, Ordering::SeqCst);
 }
 
-fn begin_recording_stream(
-    ctx: &HandlerCtx,
-    state: &mut HandlerState,
-    start_sample: SamplePos,
-) {
+fn begin_recording_stream(ctx: &HandlerCtx, state: &mut HandlerState, start_sample: SamplePos) {
     // Recording must have a project directory to stream WAVs into.
     // The startup modal guarantees a project is always selected, so
     // hitting this branch is a programmer error — surface it rather
@@ -152,8 +144,7 @@ fn begin_recording_stream(
         return;
     }
 
-    let source_name: Option<String> =
-        armed_tracks.iter().find_map(|info| info.device.clone());
+    let source_name: Option<String> = armed_tracks.iter().find_map(|info| info.device.clone());
 
     let ring_size = super::RECORDING_RING_SIZE;
     let ring = ringbuf::HeapRb::<f32>::new(ring_size);
@@ -173,9 +164,10 @@ fn begin_recording_stream(
     ) {
         Ok(triple) => triple,
         Err(e) => {
-            let _ = ctx
-                .event_tx
-                .send(AudioEvent::Error(format!("Failed to start recording: {}", e)));
+            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                "Failed to start recording: {}",
+                e
+            )));
             return;
         }
     };
@@ -230,11 +222,9 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
     cancel_precount(ctx, state);
 
     if was_recording {
-        state.rec.finalize_recording(
-            ctx.sample_rate,
-            ctx.clips.as_ref(),
-            ctx.event_tx,
-        );
+        state
+            .rec
+            .finalize_recording(ctx.sample_rate, ctx.clips.as_ref(), ctx.event_tx);
         state.rec.input_stream = None;
     }
 }
@@ -247,11 +237,9 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
     cancel_precount(ctx, state);
 
     if was_recording {
-        state.rec.finalize_recording(
-            ctx.sample_rate,
-            ctx.clips.as_ref(),
-            ctx.event_tx,
-        );
+        state
+            .rec
+            .finalize_recording(ctx.sample_rate, ctx.clips.as_ref(), ctx.event_tx);
         state.rec.input_stream = None;
     }
 
@@ -296,11 +284,7 @@ pub(crate) fn handle_set_tempo_events(
     tm.rebuild_bar_table(ctx.sample_rate);
 }
 
-pub(crate) fn handle_set_time_signature(
-    ctx: &HandlerCtx,
-    numerator: u8,
-    denominator: u8,
-) {
+pub(crate) fn handle_set_time_signature(ctx: &HandlerCtx, numerator: u8, denominator: u8) {
     let mut tm = ctx.tempo_map.write();
     tm.numerator = numerator.max(1);
     tm.denominator = denominator.max(1);

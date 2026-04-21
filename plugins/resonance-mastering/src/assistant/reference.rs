@@ -80,11 +80,7 @@ pub fn load_from_path(path: &str) -> Result<ReferenceTrack, String> {
         .sample_rate
         .map(|sr| sr as f32)
         .unwrap_or(48_000.0);
-    let channels = codec_params
-        .channels
-        .map(|c| c.count())
-        .unwrap_or(2)
-        .max(1);
+    let channels = codec_params.channels.map(|c| c.count()).unwrap_or(2).max(1);
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&codec_params, &DecoderOptions::default())
@@ -162,4 +158,3 @@ fn append_frames(
         }
     }
 }
-

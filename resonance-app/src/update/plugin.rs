@@ -34,9 +34,7 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                 value,
             });
             r.with_plugin_mut(instance_id, |p| {
-                if let Some(param) =
-                    p.params.iter_mut().find(|pp| pp.id == param_id)
-                {
+                if let Some(param) = p.params.iter_mut().find(|pp| pp.id == param_id) {
                     param.current_value = value;
                 }
             });
@@ -50,8 +48,7 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             r.engine
                 .send(AudioCommand::ClosePluginEditor { instance_id });
             r.with_plugin_mut(instance_id, |p| p.editor_open = false);
-            r.engine
-                .send(AudioCommand::SavePluginState { instance_id });
+            r.engine.send(AudioCommand::SavePluginState { instance_id });
         }
     }
     Task::none()

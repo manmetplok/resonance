@@ -29,8 +29,7 @@ pub struct Wavetable {
     pub frames: Vec<WavetableFrame>,
 }
 
-static WAVETABLE_BYTES: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/wavetables.bin"));
+static WAVETABLE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wavetables.bin"));
 
 /// Parse the embedded bundle into `Vec<Wavetable>`. Runs once per plugin
 /// instance at `initialize()` time; typical cost is a few milliseconds.

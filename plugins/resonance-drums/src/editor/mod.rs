@@ -41,7 +41,14 @@ fn reload_kit(bridge: &KitBridge) {
     let overhead_key = bridge.overhead_setup_key.lock().unwrap().clone();
     let choices = bridge.pad_choices.lock().unwrap().clone();
     let articulations = *bridge.articulations.lock().unwrap();
-    kit_loader::spawn_loader(path, target_sr, bridge, overhead_key, choices, articulations);
+    kit_loader::spawn_loader(
+        path,
+        target_sr,
+        bridge,
+        overhead_key,
+        choices,
+        articulations,
+    );
 }
 
 mod theme;
@@ -236,10 +243,7 @@ impl DrumsEditorApp {
         let kit_dir = std::path::PathBuf::from(&item.path);
         let Some(manifest_path) = Self::find_manifest(&kit_dir) else {
             *self.bridge.kit_status.lock().unwrap() = KitStatus::Error {
-                message: format!(
-                    "no drum_samples.json found in {}",
-                    kit_dir.display()
-                ),
+                message: format!("no drum_samples.json found in {}", kit_dir.display()),
             };
             return;
         };
@@ -366,9 +370,7 @@ impl EditorApp for DrumsEditorApp {
                 self.download_panel.open = true;
             }
             let status = self.bridge.kit_status.lock().unwrap().clone();
-            ui.label(
-                egui::RichText::new(format_kit_status(&status)).color(theme::TEXT_DIM),
-            );
+            ui.label(egui::RichText::new(format_kit_status(&status)).color(theme::TEXT_DIM));
         });
 
         // Installed kits combo box — lets the user pick from previously
@@ -407,10 +409,7 @@ impl EditorApp for DrumsEditorApp {
                     .show_ui(ui, |ui| {
                         for item in &self.installed_kits {
                             if ui
-                                .selectable_label(
-                                    item.name == current_kit_name,
-                                    &item.name,
-                                )
+                                .selectable_label(item.name == current_kit_name, &item.name)
                                 .clicked()
                             {
                                 kit_to_load = Some(item.clone());
@@ -446,9 +445,7 @@ impl EditorApp for DrumsEditorApp {
                 .selected_text(label)
                 .show_ui(ui, |ui| {
                     if overhead_setups.is_empty() {
-                        ui.label(
-                            egui::RichText::new("(load a kit first)").color(theme::TEXT_DIM),
-                        );
+                        ui.label(egui::RichText::new("(load a kit first)").color(theme::TEXT_DIM));
                     }
                     for key in &overhead_setups {
                         if ui
@@ -616,12 +613,8 @@ impl DrumsEditorApp {
                                 );
                             }
                             for key in &available {
-                                if ui
-                                    .selectable_label(*key == current, key.as_str())
-                                    .clicked()
-                                {
-                                    choices_to_apply
-                                        .push((position.to_string(), key.clone()));
+                                if ui.selectable_label(*key == current, key.as_str()).clicked() {
+                                    choices_to_apply.push((position.to_string(), key.clone()));
                                 }
                             }
                         });

@@ -162,27 +162,18 @@ fn draw_header(ui: &mut egui::Ui, app: &mut DelayEditorApp) {
 
         let bpm = app.viz.read_bpm();
         if bpm > 0.0 {
-            ui.label(
-                egui::RichText::new(format!("{bpm:.1} BPM"))
-                    .color(theme::TEXT),
-            );
+            ui.label(egui::RichText::new(format!("{bpm:.1} BPM")).color(theme::TEXT));
             ui.add_space(12.0);
         }
 
         let delay_ms = app.viz.read_delay_time_ms();
-        ui.label(
-            egui::RichText::new(format!("{delay_ms:.1} ms"))
-                .color(theme::TEXT_DIM),
-        );
+        ui.label(egui::RichText::new(format!("{delay_ms:.1} ms")).color(theme::TEXT_DIM));
 
         if app.params.sync.value() {
             let div = app.params.division.value() as usize;
             if let Some(label) = DIVISION_LABELS.get(div) {
                 ui.add_space(8.0);
-                ui.label(
-                    egui::RichText::new(*label)
-                        .color(theme::ACCENT),
-                );
+                ui.label(egui::RichText::new(*label).color(theme::ACCENT));
             }
         }
 
@@ -199,8 +190,7 @@ fn draw_header(ui: &mut egui::Ui, app: &mut DelayEditorApp) {
             _ => "Stereo",
         };
         ui.label(
-            egui::RichText::new(format!("{char_label} · {route_label}"))
-                .color(theme::TEXT_DIM),
+            egui::RichText::new(format!("{char_label} · {route_label}")).color(theme::TEXT_DIM),
         );
 
         // Freeze indicator.
@@ -212,16 +202,9 @@ fn draw_header(ui: &mut egui::Ui, app: &mut DelayEditorApp) {
             } else {
                 (theme::BORDER, theme::TEXT_DIM, "freeze")
             };
-            ui.label(
-                egui::RichText::new(label)
-                    .strong()
-                    .color(text_color),
-            );
+            ui.label(egui::RichText::new(label).strong().color(text_color));
             ui.add_space(4.0);
-            let (rect, _) = ui.allocate_exact_size(
-                egui::vec2(10.0, 10.0),
-                egui::Sense::hover(),
-            );
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
             ui.painter().circle_filled(rect.center(), 5.0, dot_color);
         });
     });

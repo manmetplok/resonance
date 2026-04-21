@@ -41,18 +41,66 @@ impl DrumPadMap {
         let misc = [0.74, 0.54, 0.92];
         Self {
             pads: vec![
-                DrumPad { note: 36, name: "Kick", color: kit },
-                DrumPad { note: 38, name: "Snare", color: kit },
-                DrumPad { note: 37, name: "Rimshot", color: kit },
-                DrumPad { note: 39, name: "Clap", color: kit },
-                DrumPad { note: 42, name: "Hi-Hat Closed", color: hat },
-                DrumPad { note: 46, name: "Hi-Hat Open", color: hat },
-                DrumPad { note: 50, name: "Tom High", color: tom },
-                DrumPad { note: 47, name: "Tom Mid", color: tom },
-                DrumPad { note: 45, name: "Tom Low", color: tom },
-                DrumPad { note: 49, name: "Crash", color: cym },
-                DrumPad { note: 51, name: "Ride", color: cym },
-                DrumPad { note: 56, name: "Cowbell", color: misc },
+                DrumPad {
+                    note: 36,
+                    name: "Kick",
+                    color: kit,
+                },
+                DrumPad {
+                    note: 38,
+                    name: "Snare",
+                    color: kit,
+                },
+                DrumPad {
+                    note: 37,
+                    name: "Rimshot",
+                    color: kit,
+                },
+                DrumPad {
+                    note: 39,
+                    name: "Clap",
+                    color: kit,
+                },
+                DrumPad {
+                    note: 42,
+                    name: "Hi-Hat Closed",
+                    color: hat,
+                },
+                DrumPad {
+                    note: 46,
+                    name: "Hi-Hat Open",
+                    color: hat,
+                },
+                DrumPad {
+                    note: 50,
+                    name: "Tom High",
+                    color: tom,
+                },
+                DrumPad {
+                    note: 47,
+                    name: "Tom Mid",
+                    color: tom,
+                },
+                DrumPad {
+                    note: 45,
+                    name: "Tom Low",
+                    color: tom,
+                },
+                DrumPad {
+                    note: 49,
+                    name: "Crash",
+                    color: cym,
+                },
+                DrumPad {
+                    note: 51,
+                    name: "Ride",
+                    color: cym,
+                },
+                DrumPad {
+                    note: 56,
+                    name: "Cowbell",
+                    color: misc,
+                },
             ],
         }
     }

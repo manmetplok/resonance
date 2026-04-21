@@ -36,10 +36,7 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, viz: &AmpViz) {
 
     // Square plot centred in the panel.
     let side = inner.width().min(inner.height());
-    let origin = egui::pos2(
-        inner.center().x - side * 0.5,
-        inner.center().y - side * 0.5,
-    );
+    let origin = egui::pos2(inner.center().x - side * 0.5, inner.center().y - side * 0.5);
     let plot = egui::Rect::from_min_size(origin, egui::vec2(side, side));
 
     draw_axes(painter, plot);
@@ -114,10 +111,7 @@ fn draw_axes(painter: &egui::Painter, rect: egui::Rect) {
 fn draw_curve(painter: &egui::Painter, rect: egui::Rect, curve: &[f32; CURVE_POINTS]) {
     // Auto-scale the output so curves for hot profiles (>1.0) and clean
     // profiles (≈ linear) both fill the panel nicely.
-    let peak = curve
-        .iter()
-        .fold(0.0f32, |m, &v| m.max(v.abs()))
-        .max(0.2);
+    let peak = curve.iter().fold(0.0f32, |m, &v| m.max(v.abs())).max(0.2);
     let scale = 0.95 / peak;
 
     let mut pts = Vec::with_capacity(CURVE_POINTS);

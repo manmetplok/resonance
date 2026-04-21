@@ -76,8 +76,7 @@ pub fn v_rects(
     ruler_height: f32,
     show_h_bar: bool,
 ) -> Option<ScrollbarRects> {
-    let viewport_height = bounds.height - ruler_height
-        - if show_h_bar { THICKNESS } else { 0.0 };
+    let viewport_height = bounds.height - ruler_height - if show_h_bar { THICKNESS } else { 0.0 };
     let track_content_h = content_height - ruler_height;
     if viewport_height <= 0.0 || track_content_h <= viewport_height + 0.5 {
         return None;

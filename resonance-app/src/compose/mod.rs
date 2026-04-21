@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use resonance_audio::types::ClipId;
-use resonance_music_theory::{Chord, Scale};
+use resonance_music_theory::{Chord, GeneratedMaterial, GeneratorSpec, Scale};
 
 use crate::project::{ProjectSectionChord, ProjectSectionDefinition, ProjectSectionPlacement};
 use crate::state::TrackRole;
@@ -32,6 +32,12 @@ pub struct SectionDefinitionState {
     /// Persisted generator knobs — chord count, beats per chord,
     /// per-derive params (pad register, bass style, melody style).
     pub generate_params: GenerateParams,
+    /// Optional generator specification.
+    pub generator_spec: Option<GeneratorSpec>,
+    /// Seed for the generator.
+    pub generator_seed: u64,
+    /// Last materialized output from the generator.
+    pub generated_material: Option<GeneratedMaterial>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,7 +177,8 @@ impl ComposeState {
     }
 
     pub fn selected_placement(&self) -> Option<&SectionPlacementState> {
-        self.selected_placement_id.and_then(|id| self.find_placement(id))
+        self.selected_placement_id
+            .and_then(|id| self.find_placement(id))
     }
 
     /// Serialize the current state to the persisted project representation.
@@ -196,6 +203,9 @@ impl ComposeState {
                 scale: d.scale,
                 progression_seed: d.progression_seed,
                 generate_params: d.generate_params.clone(),
+                generator_spec: d.generator_spec.clone(),
+                generator_seed: d.generator_seed,
+                generated_material: d.generated_material.clone(),
             })
             .collect()
     }
@@ -237,6 +247,9 @@ impl ComposeState {
                 scale: d.scale,
                 progression_seed: d.progression_seed,
                 generate_params: d.generate_params.clone(),
+                generator_spec: d.generator_spec.clone(),
+                generator_seed: d.generator_seed,
+                generated_material: d.generated_material.clone(),
             })
             .collect();
         // Runtime-only state: start each load with an empty derived-clip
@@ -263,7 +276,11 @@ impl ComposeState {
             .definitions
             .iter()
             .map(|d| d.id)
-            .chain(self.definitions.iter().flat_map(|d| d.chords.iter().map(|c| c.id)))
+            .chain(
+                self.definitions
+                    .iter()
+                    .flat_map(|d| d.chords.iter().map(|c| c.id)),
+            )
             .chain(self.placements.iter().map(|p| p.id))
             .max()
             .unwrap_or(0);
@@ -297,13 +314,15 @@ mod tests {
                     id: chord_b,
                     start_beat: 4,
                     duration_beats: 2,
-                    chord: Chord::new(PitchClass::D, ChordQuality::Min7)
-                        .with_bass(PitchClass::F),
+                    chord: Chord::new(PitchClass::D, ChordQuality::Min7).with_bass(PitchClass::F),
                 },
             ],
             scale: Some(Scale::new(PitchClass::C, Mode::Minor)),
             progression_seed: 12345,
             generate_params: GenerateParams::default(),
+            generator_spec: None,
+            generator_seed: 0,
+            generated_material: None,
         });
         let placement_id = state.fresh_id();
         state.placements.push(SectionPlacementState {
@@ -379,8 +398,7 @@ mod tests {
     /// loads.
     #[test]
     fn loads_old_project_files_without_chords_or_scale() {
-        let legacy_json =
-            r#"[{"id":1,"name":"Intro","color":[0,0,0],"length_bars":4}]"#;
+        let legacy_json = r#"[{"id":1,"name":"Intro","color":[0,0,0],"length_bars":4}]"#;
         let parsed: Vec<crate::project::ProjectSectionDefinition> =
             serde_json::from_str(legacy_json).expect("legacy deserialize");
         assert_eq!(parsed.len(), 1);

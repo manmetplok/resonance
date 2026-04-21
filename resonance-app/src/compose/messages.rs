@@ -1,7 +1,5 @@
 use resonance_audio::types::TrackId;
-use resonance_music_theory::{
-    BassStyle, Chord, ChordQuality, MelodyStyle, PitchClass, Scale,
-};
+use resonance_music_theory::{BassStyle, Chord, ChordQuality, MelodyStyle, PitchClass, Scale};
 
 use crate::compose::drumroll::DrumrollMessage;
 use crate::compose::DeriveKind;
@@ -29,12 +27,16 @@ pub enum ComposeMessage {
     ConfirmCreateSection,
 
     // Edit-section inline form (for the currently selected placement)
-    OpenEditSectionDialog { definition_id: u64 },
+    OpenEditSectionDialog {
+        definition_id: u64,
+    },
     CancelEditSectionDialog,
     SetEditSectionName(String),
     SetEditSectionLength(String),
     ConfirmEditSection,
-    CycleSectionColor { definition_id: u64 },
+    CycleSectionColor {
+        definition_id: u64,
+    },
 
     // Section definitions
     CreateSection {
@@ -83,7 +85,9 @@ pub enum ComposeMessage {
     ClearInstrumentDetails,
 
     /// Expand a track into the full-width inline piano-roll editor.
-    ExpandTrack { track_id: TrackId },
+    ExpandTrack {
+        track_id: TrackId,
+    },
     /// Collapse the expanded editor back to the compact overview.
     CollapseTrack,
     /// Scroll the expanded editor horizontally.
@@ -126,28 +130,52 @@ pub enum ComposeMessage {
     /// from the section's scale + generate_params. Does not bump the
     /// seed — callers who want a new progression should send
     /// `RerollProgression` instead.
-    GenerateProgression { definition_id: u64 },
+    GenerateProgression {
+        definition_id: u64,
+    },
 
     /// Bump the progression seed and regenerate. Cascade: any derived
     /// clips already in place for this section are refreshed.
-    RerollProgression { definition_id: u64 },
+    RerollProgression {
+        definition_id: u64,
+    },
 
     /// Set the target chord count for the next generated progression.
-    SetGenerateChordCount { definition_id: u64, chord_count: u32 },
+    SetGenerateChordCount {
+        definition_id: u64,
+        chord_count: u32,
+    },
     /// Set beats per chord for the next generated progression.
-    SetGenerateBeatsPerChord { definition_id: u64, beats_per_chord: u32 },
+    SetGenerateBeatsPerChord {
+        definition_id: u64,
+        beats_per_chord: u32,
+    },
     /// Toggle seventh chords in the next generated progression.
-    SetGenerateSeventhChords { definition_id: u64, seventh_chords: bool },
+    SetGenerateSeventhChords {
+        definition_id: u64,
+        seventh_chords: bool,
+    },
 
     /// Change bass style on a section's generate params.
-    SetBassStyle { definition_id: u64, style: BassStyle },
+    SetBassStyle {
+        definition_id: u64,
+        style: BassStyle,
+    },
     /// Change melody style on a section's generate params.
-    SetMelodyStyle { definition_id: u64, style: MelodyStyle },
+    SetMelodyStyle {
+        definition_id: u64,
+        style: MelodyStyle,
+    },
 
     /// Derive MIDI clips for one role on every placement of this section.
-    DerivePart { definition_id: u64, kind: DeriveKind },
+    DerivePart {
+        definition_id: u64,
+        kind: DeriveKind,
+    },
     /// Derive pad, bass and lead parts in one shot.
-    DeriveAllParts { definition_id: u64 },
+    DeriveAllParts {
+        definition_id: u64,
+    },
 
     /// Set or clear a track's arrangement role.
     SetTrackRole {

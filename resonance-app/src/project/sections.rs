@@ -1,4 +1,4 @@
-use resonance_music_theory::{Chord, Scale};
+use resonance_music_theory::{Chord, GeneratedMaterial, GeneratorSpec, Scale};
 use serde::{Deserialize, Serialize};
 
 use crate::compose::GenerateParams;
@@ -20,6 +20,18 @@ pub struct ProjectSectionDefinition {
     /// Per-section knobs for the progression + derive generators.
     #[serde(default)]
     pub generate_params: GenerateParams,
+    /// Optional generator specification. When present, the section's chord
+    /// content is produced by running this spec with `generator_seed`.
+    #[serde(default)]
+    pub generator_spec: Option<GeneratorSpec>,
+    /// Seed for the generator. Re-rolling increments this to produce a
+    /// fresh progression from the same spec.
+    #[serde(default)]
+    pub generator_seed: u64,
+    /// Last materialized output from the generator. Persisted so the
+    /// section is fully reconstructable without re-running the generator.
+    #[serde(default)]
+    pub generated_material: Option<GeneratedMaterial>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

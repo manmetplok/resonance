@@ -187,14 +187,20 @@ fn draw_er_spikes(
             let h = (g_l * er_level).clamp(0.0, 1.0) * max_spike_up;
             let stem_top = egui::pos2(x_l, axis_y - h);
             let stem_bot = egui::pos2(x_l, axis_y);
-            painter.line_segment([stem_top, stem_bot], egui::Stroke::new(1.5, theme::ER_SPIKE));
+            painter.line_segment(
+                [stem_top, stem_bot],
+                egui::Stroke::new(1.5, theme::ER_SPIKE),
+            );
             painter.circle_filled(stem_top, 1.8, theme::ER_SPIKE);
         }
         if x_r >= rect.left() && x_r <= rect.right() {
             let h = (g_r * er_level).clamp(0.0, 1.0) * max_spike_dn;
             let stem_top = egui::pos2(x_r, axis_y);
             let stem_bot = egui::pos2(x_r, axis_y + h);
-            painter.line_segment([stem_top, stem_bot], egui::Stroke::new(1.5, theme::ER_SPIKE));
+            painter.line_segment(
+                [stem_top, stem_bot],
+                egui::Stroke::new(1.5, theme::ER_SPIKE),
+            );
             painter.circle_filled(stem_bot, 1.8, theme::ER_SPIKE);
         }
     }
@@ -288,12 +294,7 @@ fn draw_decay_envelope(
     ));
 }
 
-fn draw_live_trace(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    axis_y: f32,
-    app: &ReverbEditorApp,
-) {
+fn draw_live_trace(painter: &egui::Painter, rect: egui::Rect, axis_y: f32, app: &ReverbEditorApp) {
     // Snapshot the ring buffer.
     let samples: [f32; TAIL_HISTORY_LEN] = {
         let guard = app.viz.tail.lock();

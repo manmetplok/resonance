@@ -4,17 +4,17 @@ use std::time::Instant;
 use iced::widget::canvas;
 use iced::{keyboard, mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
-use crate::theme;
-use crate::state::{self, ClipEdge, ClipState, LoopDragTarget, MidiClipState, TrackState};
 use crate::message::*;
+use crate::state::{self, ClipEdge, ClipState, LoopDragTarget, MidiClipState, TrackState};
+use crate::theme;
 
-use resonance_audio::types::{ClipId, TempoMap, TrackId, bpm_at_bar};
+use resonance_audio::types::{bpm_at_bar, ClipId, TempoMap, TrackId};
 
 pub mod hit_test;
 pub mod scrollbar;
 
-use hit_test::{HitKind, track_index};
-use scrollbar::{ScrollbarRects, scroll_from_thumb_pos};
+use hit_test::{track_index, HitKind};
+use scrollbar::{scroll_from_thumb_pos, ScrollbarRects};
 
 /// Maximum interval between two clicks to count as a double-click.
 const DOUBLE_CLICK_MS: u128 = 400;
@@ -160,7 +160,9 @@ impl TimelineCanvas<'_> {
         }
         for c in self.midi_clips {
             let end = self.tempo_map.tick_to_abs_sample(
-                c.start_sample, c.duration_ticks, self.sample_rate,
+                c.start_sample,
+                c.duration_ticks,
+                self.sample_rate,
             );
             if end > max_sample {
                 max_sample = end;
@@ -173,11 +175,7 @@ impl TimelineCanvas<'_> {
     /// Total vertical content height (tracks + ruler + global tracks).
     /// Excludes sub-tracks since the arrange view hides them entirely.
     pub(crate) fn content_height_px(&self) -> f32 {
-        let visible = self
-            .tracks
-            .iter()
-            .filter(|t| t.sub_track.is_none())
-            .count();
+        let visible = self.tracks.iter().filter(|t| t.sub_track.is_none()).count();
         self.fixed_header_height() + visible as f32 * theme::TRACK_HEIGHT
     }
 
@@ -259,14 +257,7 @@ impl TimelineCanvas<'_> {
             bounds,
             content_w,
             self.scroll_offset,
-            scrollbar::v_rects(
-                bounds,
-                content_h,
-                self.scroll_offset_y,
-                header_h,
-                true,
-            )
-            .is_some(),
+            scrollbar::v_rects(bounds, content_h, self.scroll_offset_y, header_h, true).is_some(),
         );
         let v = scrollbar::v_rects(
             bounds,
@@ -439,7 +430,9 @@ impl TimelineCanvas<'_> {
         // Check MIDI clips (reverse order so topmost wins)
         for clip in self.midi_clips.iter().rev() {
             let clip_end = self.tempo_map.tick_to_abs_sample(
-                clip.start_sample, clip.duration_ticks, self.sample_rate,
+                clip.start_sample,
+                clip.duration_ticks,
+                self.sample_rate,
             );
             let duration_samples = clip_end.saturating_sub(clip.start_sample);
             let Some(hit) = self.hit_test_lane(
@@ -463,13 +456,17 @@ impl TimelineCanvas<'_> {
             state.last_midi_click = Some((now, clip.id));
             if is_double_click {
                 state.last_midi_click = None;
-                return captured(Message::MidiEditor(MidiEditorMessage::OpenMidiEditor(clip.id)));
+                return captured(Message::MidiEditor(MidiEditorMessage::OpenMidiEditor(
+                    clip.id,
+                )));
             }
 
             return match hit {
                 HitKind::Trim(edge) => {
-                    state.clip_interaction =
-                        Some(ClipInteraction::MidiTrim { clip_id: clip.id, edge });
+                    state.clip_interaction = Some(ClipInteraction::MidiTrim {
+                        clip_id: clip.id,
+                        edge,
+                    });
                     captured(Message::MidiClip(MidiClipMessage::StartMidiClipTrim {
                         clip_id: clip.id,
                         edge,
@@ -506,8 +503,10 @@ impl TimelineCanvas<'_> {
 
             return match hit {
                 HitKind::Trim(edge) => {
-                    state.clip_interaction =
-                        Some(ClipInteraction::Trim { clip_id: clip.id, edge });
+                    state.clip_interaction = Some(ClipInteraction::Trim {
+                        clip_id: clip.id,
+                        edge,
+                    });
                     captured(Message::Clip(ClipMessage::StartClipTrim {
                         clip_id: clip.id,
                         edge,
@@ -555,8 +554,7 @@ impl TimelineCanvas<'_> {
         if let Some(grab) = state.h_scrollbar_grab {
             let (h_rects, _) = self.scrollbar_rects(bounds);
             if let Some(sb) = h_rects {
-                let new_scroll =
-                    scroll_from_thumb_pos(pos.x - grab, sb.travel, sb.max_scroll);
+                let new_scroll = scroll_from_thumb_pos(pos.x - grab, sb.travel, sb.max_scroll);
                 return captured(Message::Viewport(ViewportMessage::ScrollToX(new_scroll)));
             }
         }
@@ -564,11 +562,8 @@ impl TimelineCanvas<'_> {
         if let Some(grab) = state.v_scrollbar_grab {
             let (_, v_rects) = self.scrollbar_rects(bounds);
             if let Some(sb) = v_rects {
-                let new_scroll = scroll_from_thumb_pos(
-                    pos.y - sb.track.y - grab,
-                    sb.travel,
-                    sb.max_scroll,
-                );
+                let new_scroll =
+                    scroll_from_thumb_pos(pos.y - sb.track.y - grab, sb.travel, sb.max_scroll);
                 return captured(Message::Viewport(ViewportMessage::ScrollToY(new_scroll)));
             }
         }
@@ -589,15 +584,19 @@ impl TimelineCanvas<'_> {
             }));
         }
         match &state.clip_interaction {
-            Some(ClipInteraction::Move { .. }) => captured(Message::Clip(ClipMessage::UpdateClipDrag(pos.x, pos.y))),
-            Some(ClipInteraction::Trim { .. }) => captured(Message::Clip(ClipMessage::UpdateClipTrim(pos.x))),
-            Some(ClipInteraction::MidiMove { .. }) => {
-                captured(Message::MidiClip(MidiClipMessage::UpdateMidiClipDrag(pos.x, pos.y)))
+            Some(ClipInteraction::Move { .. }) => {
+                captured(Message::Clip(ClipMessage::UpdateClipDrag(pos.x, pos.y)))
             }
-            Some(ClipInteraction::MidiTrim { .. }) => captured(Message::MidiClip(MidiClipMessage::UpdateMidiClipTrim(pos.x))),
-            None => {
-                (canvas::event::Status::Ignored, None)
+            Some(ClipInteraction::Trim { .. }) => {
+                captured(Message::Clip(ClipMessage::UpdateClipTrim(pos.x)))
             }
+            Some(ClipInteraction::MidiMove { .. }) => captured(Message::MidiClip(
+                MidiClipMessage::UpdateMidiClipDrag(pos.x, pos.y),
+            )),
+            Some(ClipInteraction::MidiTrim { .. }) => captured(Message::MidiClip(
+                MidiClipMessage::UpdateMidiClipTrim(pos.x),
+            )),
+            None => (canvas::event::Status::Ignored, None),
         }
     }
 
@@ -619,8 +618,12 @@ impl TimelineCanvas<'_> {
             return match interaction {
                 ClipInteraction::Move { .. } => captured(Message::Clip(ClipMessage::EndClipDrag)),
                 ClipInteraction::Trim { .. } => captured(Message::Clip(ClipMessage::EndClipTrim)),
-                ClipInteraction::MidiMove { .. } => captured(Message::MidiClip(MidiClipMessage::EndMidiClipDrag)),
-                ClipInteraction::MidiTrim { .. } => captured(Message::MidiClip(MidiClipMessage::EndMidiClipTrim)),
+                ClipInteraction::MidiMove { .. } => {
+                    captured(Message::MidiClip(MidiClipMessage::EndMidiClipDrag))
+                }
+                ClipInteraction::MidiTrim { .. } => {
+                    captured(Message::MidiClip(MidiClipMessage::EndMidiClipTrim))
+                }
             };
         }
         (canvas::event::Status::Ignored, None)
@@ -644,7 +647,11 @@ impl TimelineCanvas<'_> {
         let seconds = ((x + self.scroll_offset) / self.zoom).max(0.0);
         let sample = (seconds as f64 * self.sample_rate as f64) as u64;
         let (bar, frac) = self.tempo_map.sample_to_bar(sample, self.sample_rate);
-        if frac >= 0.5 { bar + 1 } else { bar }
+        if frac >= 0.5 {
+            bar + 1
+        } else {
+            bar
+        }
     }
 
     /// Handle a click in the global tracks area. Single click on a tempo
@@ -695,7 +702,8 @@ impl TimelineCanvas<'_> {
             }
             // Double-click detection for adding new tempo events.
             let now = std::time::Instant::now();
-            let is_double = state.last_global_click
+            let is_double = state
+                .last_global_click
                 .map(|(t, k)| {
                     k == state::GlobalTrackKind::Tempo
                         && now.duration_since(t).as_millis() <= DOUBLE_CLICK_MS
@@ -721,16 +729,17 @@ impl TimelineCanvas<'_> {
                 let sample = self.tempo_map.bar_to_sample(event.bar);
                 let ex = self.sample_to_x(sample);
                 if (pos.x - ex).abs() < 8.0 {
-                    return captured(Message::GlobalTrack(GlobalTrackMessage::SelectEvent(
-                        Some(state::SelectedGlobalEvent {
+                    return captured(Message::GlobalTrack(GlobalTrackMessage::SelectEvent(Some(
+                        state::SelectedGlobalEvent {
                             kind: state::GlobalTrackKind::Signature,
                             index: i,
-                        }),
-                    )));
+                        },
+                    ))));
                 }
             }
             let now = std::time::Instant::now();
-            let is_double = state.last_global_click
+            let is_double = state
+                .last_global_click
                 .map(|(t, k)| {
                     k == state::GlobalTrackKind::Signature
                         && now.duration_since(t).as_millis() <= DOUBLE_CLICK_MS
@@ -739,11 +748,13 @@ impl TimelineCanvas<'_> {
             state.last_global_click = Some((now, state::GlobalTrackKind::Signature));
             if is_double {
                 state.last_global_click = None;
-                return captured(Message::GlobalTrack(GlobalTrackMessage::AddSignatureEvent {
-                    bar,
-                    numerator: self.time_sig_num,
-                    denominator: 4,
-                }));
+                return captured(Message::GlobalTrack(
+                    GlobalTrackMessage::AddSignatureEvent {
+                        bar,
+                        numerator: self.time_sig_num,
+                        denominator: 4,
+                    },
+                ));
             }
             return captured(Message::GlobalTrack(GlobalTrackMessage::SelectEvent(None)));
         }
@@ -762,7 +773,9 @@ impl TimelineCanvas<'_> {
         }
         // Delete selected global track event.
         if self.selected_global_event.is_some() {
-            return captured(Message::GlobalTrack(GlobalTrackMessage::DeleteSelectedEvent));
+            return captured(Message::GlobalTrack(
+                GlobalTrackMessage::DeleteSelectedEvent,
+            ));
         }
         if let Some(clip_id) = self.selected_midi_clip {
             return captured(Message::MidiClip(MidiClipMessage::DeleteMidiClip(clip_id)));
@@ -779,7 +792,9 @@ impl TimelineCanvas<'_> {
     fn report_viewport(&self, state: &mut TimelineState, bounds: Rectangle) -> Option<Message> {
         if (bounds.width - state.last_reported_width).abs() > 1.0 {
             state.last_reported_width = bounds.width;
-            return Some(Message::Viewport(ViewportMessage::ViewportWidth(bounds.width)));
+            return Some(Message::Viewport(ViewportMessage::ViewportWidth(
+                bounds.width,
+            )));
         }
         let cw = self.content_width_px(bounds.width);
         let ch = self.content_height_px();
@@ -788,7 +803,9 @@ impl TimelineCanvas<'_> {
         {
             state.last_reported_content_width = cw;
             state.last_reported_content_height = ch;
-            return Some(Message::Viewport(ViewportMessage::TimelineContentSize(cw, ch)));
+            return Some(Message::Viewport(ViewportMessage::TimelineContentSize(
+                cw, ch,
+            )));
         }
         None
     }
@@ -913,19 +930,39 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         }
 
         // Draw bar/beat grid lines through track area
-        self.draw_grid_lines(&mut frame, bounds.width, header_height, track_area_height, y_off);
+        self.draw_grid_lines(
+            &mut frame,
+            bounds.width,
+            header_height,
+            track_area_height,
+            y_off,
+        );
 
         // Draw bar/beat ruler
         self.draw_ruler(&mut frame, bounds.width, ruler_height);
 
         // Draw audio clips
         for clip in self.clips {
-            self.draw_clip(&mut frame, clip, &sorted_tracks, header_height, y_off, bounds.height);
+            self.draw_clip(
+                &mut frame,
+                clip,
+                &sorted_tracks,
+                header_height,
+                y_off,
+                bounds.height,
+            );
         }
 
         // Draw MIDI clips
         for clip in self.midi_clips {
-            self.draw_midi_clip(&mut frame, clip, &sorted_tracks, header_height, y_off, bounds.height);
+            self.draw_midi_clip(
+                &mut frame,
+                clip,
+                &sorted_tracks,
+                header_height,
+                y_off,
+                bounds.height,
+            );
         }
 
         // Draw loop in/out markers
@@ -1056,4 +1093,3 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         vec![frame.into_geometry()]
     }
 }
-

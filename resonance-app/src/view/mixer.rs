@@ -8,8 +8,8 @@ use crate::view::controls::{
     mute_button, record_arm_button, solo_button,
 };
 use crate::view::knob::pan_knob;
-use iced::widget::{button, column, container, pick_list, row, scrollable, text, Space};
 use iced::widget::text::Shaping;
+use iced::widget::{button, column, container, pick_list, row, scrollable, text, Space};
 use iced::{alignment, Color, Element, Font, Length};
 use resonance_audio::types::*;
 
@@ -60,7 +60,6 @@ impl std::fmt::Display for PortChoice {
     }
 }
 
-
 impl crate::Resonance {
     pub(crate) fn view_mixer(&self) -> Element<'_, Message> {
         let sorted_tracks = self.sorted_tracks();
@@ -95,8 +94,7 @@ impl crate::Resonance {
         )
         .width(Length::Fill);
         let master_strip = self.view_master_strip(&available_plugins);
-        let v_separator_tracks =
-            container(Space::new(1, Length::Fill)).style(theme::separator_bg);
+        let v_separator_tracks = container(Space::new(1, Length::Fill)).style(theme::separator_bg);
         let tracks_area = row![scrollable_tracks, v_separator_tracks, master_strip]
             .height(Length::FillPortion(1));
 
@@ -111,8 +109,7 @@ impl crate::Resonance {
         )
         .width(Length::Fill);
         let add_bus_strip = self.view_add_bus_strip();
-        let v_separator_busses =
-            container(Space::new(1, Length::Fill)).style(theme::separator_bg);
+        let v_separator_busses = container(Space::new(1, Length::Fill)).style(theme::separator_bg);
         let busses_area = row![scrollable_busses, v_separator_busses, add_bus_strip]
             .height(Length::FillPortion(1));
 
@@ -140,12 +137,10 @@ impl crate::Resonance {
     /// occupies in the top row, but in the bus row. Clicking it dispatches
     /// `Message::Bus(BusMessage::AddBus)`.
     fn view_add_bus_strip(&self) -> Element<'_, Message> {
-        let label = container(
-            text("Busses").size(11).color(theme::TEXT_DIM),
-        )
-        .width(Length::Fill)
-        .center_x(Length::Fill)
-        .padding([6, 4]);
+        let label = container(text("Busses").size(11).color(theme::TEXT_DIM))
+            .width(Length::Fill)
+            .center_x(Length::Fill)
+            .padding([6, 4]);
 
         let add_btn = button(text("+ Bus").size(11).color(theme::TEXT))
             .on_press(Message::Bus(BusMessage::AddBus))
@@ -236,7 +231,9 @@ impl crate::Resonance {
             .padding(1);
 
         let remove_msg = match owner {
-            PluginOwner::Track(track_id) => Message::Plugin(PluginMessage::RemovePluginFromTrack(track_id, pid)),
+            PluginOwner::Track(track_id) => {
+                Message::Plugin(PluginMessage::RemovePluginFromTrack(track_id, pid))
+            }
             PluginOwner::Bus(bus_id) => Message::Bus(BusMessage::RemovePluginFromBus(bus_id, pid)),
             PluginOwner::Master => Message::Master(MasterMessage::RemovePluginFromMaster(pid)),
         };
@@ -245,17 +242,17 @@ impl crate::Resonance {
             .style(|_theme, status| theme::small_button_style(status))
             .padding(1);
 
-        row![
-            name_btn,
-            Space::with_width(Length::Fill),
-            plugin_del,
-        ]
-        .spacing(2)
-        .align_y(alignment::Vertical::Center)
-        .into()
+        row![name_btn, Space::with_width(Length::Fill), plugin_del,]
+            .spacing(2)
+            .align_y(alignment::Vertical::Center)
+            .into()
     }
 
-    fn view_channel_strip(&self, track: &TrackState, available_plugins: &[ScannedPlugin]) -> Element<'_, Message> {
+    fn view_channel_strip(
+        &self,
+        track: &TrackState,
+        available_plugins: &[ScannedPlugin],
+    ) -> Element<'_, Message> {
         // Sub-tracks get a slimmer strip variant — no FX chain and no
         // input/arm section, because they're fed entirely from their
         // parent plugin's output port.
@@ -272,19 +269,22 @@ impl crate::Resonance {
                 .tracks
                 .iter()
                 .any(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id));
-        let is_collapsed = has_sub_tracks
-            && !self
-                .mixer
-                .expanded_sub_track_parents
-                .contains(&track.id);
+        let is_collapsed =
+            has_sub_tracks && !self.mixer.expanded_sub_track_parents.contains(&track.id);
 
         let name_text = text(track.name.clone()).size(13).color(name_color);
 
         let track_name: Element<'_, Message> = if has_sub_tracks {
-            let glyph = if is_collapsed { fa::CARET_RIGHT } else { fa::CARET_DOWN };
+            let glyph = if is_collapsed {
+                fa::CARET_RIGHT
+            } else {
+                fa::CARET_DOWN
+            };
             let track_id = track.id;
             let toggle = button(theme::icon(glyph).size(10).color(theme::TEXT_DIM))
-                .on_press(Message::Track(TrackMessage::ToggleSubTracksVisible(track_id)))
+                .on_press(Message::Track(TrackMessage::ToggleSubTracksVisible(
+                    track_id,
+                )))
                 .padding([2, 4])
                 .style(|_theme, status| theme::small_button_style(status));
             let name_row = row![toggle, name_text]
@@ -295,8 +295,7 @@ impl crate::Resonance {
                 .padding([6, 4])
                 .into()
         } else {
-            let name_row = row![name_text]
-                .align_y(alignment::Vertical::Center);
+            let name_row = row![name_text].align_y(alignment::Vertical::Center);
             container(name_row)
                 .width(Length::Fill)
                 .padding([6, 4])
@@ -309,8 +308,16 @@ impl crate::Resonance {
             mono_button(track.mono, track.id, 12),
             monitor_button(track.monitor_enabled, track.id, 12),
             record_arm_button(track.record_armed, track.id, 12),
-            mute_button(track.muted, Message::Track(TrackMessage::ToggleMute(track.id)), 12),
-            solo_button(track.soloed, Message::Track(TrackMessage::ToggleSolo(track.id)), 12),
+            mute_button(
+                track.muted,
+                Message::Track(TrackMessage::ToggleMute(track.id)),
+                12
+            ),
+            solo_button(
+                track.soloed,
+                Message::Track(TrackMessage::ToggleSolo(track.id)),
+                12
+            ),
             fx_bypass_button(
                 track.fx_bypassed,
                 Message::Track(TrackMessage::ToggleTrackFxBypass(track.id)),
@@ -334,15 +341,19 @@ impl crate::Resonance {
         if is_sub {
             // FX slots: every plugin on the sub-track is an effect.
             for plugin in &track.plugins {
-                plugin_section = plugin_section.push(
-                    self.view_plugin_slot_row(PluginOwner::Track(track.id), plugin, false),
-                );
+                plugin_section = plugin_section.push(self.view_plugin_slot_row(
+                    PluginOwner::Track(track.id),
+                    plugin,
+                    false,
+                ));
             }
         } else if is_instrument_track {
             if let Some(plugin) = track.plugins.first() {
-                plugin_section = plugin_section.push(
-                    self.view_plugin_slot_row(PluginOwner::Track(track.id), plugin, true),
-                );
+                plugin_section = plugin_section.push(self.view_plugin_slot_row(
+                    PluginOwner::Track(track.id),
+                    plugin,
+                    true,
+                ));
             } else if !available_plugins.is_empty() {
                 // Empty instrument slot: show a picker filtered to instruments.
                 let instruments: Vec<ScannedPlugin> = available_plugins
@@ -355,36 +366,40 @@ impl crate::Resonance {
                     let inst_picker = pick_list(
                         instruments,
                         None::<ScannedPlugin>,
-                        move |plugin: ScannedPlugin| Message::Plugin(PluginMessage::AddPluginToTrack(track_id, plugin)),
+                        move |plugin: ScannedPlugin| {
+                            Message::Plugin(PluginMessage::AddPluginToTrack(track_id, plugin))
+                        },
                     )
                     .placeholder("+ Instrument")
                     .text_size(10)
                     .width(Length::Fill);
                     plugin_section = plugin_section.push(inst_picker);
                 } else {
-                    plugin_section = plugin_section.push(
-                        text("No instruments").size(9).color(theme::TEXT_DIM),
-                    );
+                    plugin_section =
+                        plugin_section.push(text("No instruments").size(9).color(theme::TEXT_DIM));
                 }
             }
 
             // Thin separator between instrument slot and FX chain.
-            plugin_section = plugin_section.push(
-                container(Space::new(Length::Fill, 1)).style(theme::separator_bg),
-            );
+            plugin_section = plugin_section
+                .push(container(Space::new(Length::Fill, 1)).style(theme::separator_bg));
 
             // FX slots: plugins after the instrument.
             for plugin in track.plugins.iter().skip(1) {
-                plugin_section = plugin_section.push(
-                    self.view_plugin_slot_row(PluginOwner::Track(track.id), plugin, false),
-                );
+                plugin_section = plugin_section.push(self.view_plugin_slot_row(
+                    PluginOwner::Track(track.id),
+                    plugin,
+                    false,
+                ));
             }
         } else {
             // Audio track: all plugins are FX.
             for plugin in &track.plugins {
-                plugin_section = plugin_section.push(
-                    self.view_plugin_slot_row(PluginOwner::Track(track.id), plugin, false),
-                );
+                plugin_section = plugin_section.push(self.view_plugin_slot_row(
+                    PluginOwner::Track(track.id),
+                    plugin,
+                    false,
+                ));
             }
         }
 
@@ -425,14 +440,19 @@ impl crate::Resonance {
 
         // Pan knob — vertical drag to change, double-click to reset.
         let id = track.id;
-        let pan_ctrl = pan_knob(track.pan, move |v| Message::Track(TrackMessage::SetTrackPan(id, v)));
+        let pan_ctrl = pan_knob(track.pan, move |v| {
+            Message::Track(TrackMessage::SetTrackPan(id, v))
+        });
         let pan_label = format_pan(track.pan);
         let pan_row = row![
             text("Pan").size(9).color(theme::TEXT_DIM),
             Space::with_width(Length::Fill),
             pan_ctrl,
             Space::with_width(Length::Fill),
-            text(pan_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
+            text(pan_label)
+                .size(9)
+                .font(Font::MONOSPACE)
+                .color(theme::TEXT_DIM),
         ]
         .spacing(2)
         .align_y(alignment::Vertical::Center);
@@ -449,12 +469,9 @@ impl crate::Resonance {
         };
 
         let track_id_for_fader = track.id;
-        let fader_block = fader_section(
-            track.level_l,
-            track.level_r,
-            track.volume,
-            move |v| Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v)),
-        );
+        let fader_block = fader_section(track.level_l, track.level_r, track.volume, move |v| {
+            Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
+        });
 
         // Input device + port picker (when armed). The port dropdown
         // lets the user pick a specific channel on the selected device —
@@ -468,17 +485,17 @@ impl crate::Resonance {
                 .as_ref()
                 .and_then(|name| self.input_devices.iter().find(|d| &d.name == name))
                 .cloned();
-            let device_channels = selected_device
-                .as_ref()
-                .map(|d| d.channels)
-                .unwrap_or(0);
+            let device_channels = selected_device.as_ref().map(|d| d.channels).unwrap_or(0);
 
             let track_id = track.id;
             let device_picker = pick_list(
                 self.input_devices.clone(),
                 selected_device,
                 move |device: InputDeviceInfo| {
-                    Message::Track(TrackMessage::SetTrackInputDevice(track_id, Some(device.name)))
+                    Message::Track(TrackMessage::SetTrackInputDevice(
+                        track_id,
+                        Some(device.name),
+                    ))
                 },
             )
             .placeholder("Select input...")
@@ -504,20 +521,19 @@ impl crate::Resonance {
                     })
                     .collect();
                 let selected_port = PortChoice {
-                    index: track.input_port_index.min(last_valid_index.saturating_sub(1)),
+                    index: track
+                        .input_port_index
+                        .min(last_valid_index.saturating_sub(1)),
                     mono: is_mono,
                 };
                 if !ports.is_empty() {
                     let track_id = track.id;
-                    let port_picker = pick_list(
-                        ports,
-                        Some(selected_port),
-                        move |choice: PortChoice| {
+                    let port_picker =
+                        pick_list(ports, Some(selected_port), move |choice: PortChoice| {
                             Message::Track(TrackMessage::SetTrackInputPort(track_id, choice.index))
-                        },
-                    )
-                    .text_size(10)
-                    .width(Length::Fill);
+                        })
+                        .text_size(10)
+                        .width(Length::Fill);
                     bottom_section = bottom_section.push(port_picker);
                 }
             }
@@ -530,7 +546,11 @@ impl crate::Resonance {
         } else {
             theme::PANEL_DARK
         };
-        let border_color = if track.record_armed { theme::RECORD_RED } else { theme::SEPARATOR };
+        let border_color = if track.record_armed {
+            theme::RECORD_RED
+        } else {
+            theme::SEPARATOR
+        };
 
         // The plugin section renders for every strip — sub-tracks show an
         // effects-only chain, instrument tracks show the instrument slot +
@@ -568,11 +588,10 @@ impl crate::Resonance {
             .width(theme::MIXER_STRIP_WIDTH - 12)
             .height(Length::Fill);
 
-            let v_sep = container(Space::new(1, Length::Fill))
-                .style(theme::separator_bg);
+            let v_sep = container(Space::new(1, Length::Fill)).style(theme::separator_bg);
 
-            let right_col = container(self.view_collapsed_subtrack_meters(track.id))
-                .padding([0, 4]);
+            let right_col =
+                container(self.view_collapsed_subtrack_meters(track.id)).padding([0, 4]);
 
             let strip_content = row![left_col, v_sep, right_col]
                 .height(Length::Fill)
@@ -620,11 +639,7 @@ impl crate::Resonance {
         for sub in &subtracks {
             // Show the port label (after "→") rather than the full name,
             // so "Instrument 2 → Kick" displays as "Kick" instead of "Inst.".
-            let short_name = sub
-                .name
-                .split(" \u{2192} ")
-                .nth(1)
-                .unwrap_or(&sub.name);
+            let short_name = sub.name.split(" \u{2192} ").nth(1).unwrap_or(&sub.name);
             let label: String = if short_name.chars().count() > 6 {
                 let mut s: String = short_name.chars().take(5).collect();
                 s.push('.');
@@ -687,9 +702,7 @@ impl crate::Resonance {
         .text_shaping(Shaping::Advanced)
         .width(Length::Fill);
 
-        container(picker)
-            .width(Length::Fill)
-            .into()
+        container(picker).width(Length::Fill).into()
     }
 
     /// Render a bus channel strip. Structurally similar to a track strip
@@ -700,17 +713,19 @@ impl crate::Resonance {
         bus: &BusState,
         available_plugins: &[ScannedPlugin],
     ) -> Element<'_, Message> {
-        let bus_name = container(
-            text(bus.name.clone()).size(13).color(theme::TEXT),
-        )
-        .width(Length::Fill)
-        .center_x(Length::Fill)
-        .padding([6, 4]);
+        let bus_name = container(text(bus.name.clone()).size(13).color(theme::TEXT))
+            .width(Length::Fill)
+            .center_x(Length::Fill)
+            .padding([6, 4]);
 
         // Mute + FX bypass + Remove buttons — same icons as the track header.
         let bus_id = bus.id;
         let button_row = row![
-            mute_button(bus.muted, Message::Bus(BusMessage::ToggleBusMute(bus_id)), 12),
+            mute_button(
+                bus.muted,
+                Message::Bus(BusMessage::ToggleBusMute(bus_id)),
+                12
+            ),
             fx_bypass_button(
                 bus.fx_bypassed,
                 Message::Bus(BusMessage::ToggleBusFxBypass(bus_id)),
@@ -725,9 +740,11 @@ impl crate::Resonance {
         // Plugin chain (all effects — no instrument slot on busses).
         let mut plugin_section = column![].spacing(2).width(Length::Fill);
         for plugin in &bus.plugins {
-            plugin_section = plugin_section.push(
-                self.view_plugin_slot_row(PluginOwner::Bus(bus_id), plugin, false),
-            );
+            plugin_section = plugin_section.push(self.view_plugin_slot_row(
+                PluginOwner::Bus(bus_id),
+                plugin,
+                false,
+            ));
         }
 
         // Extract the +FX picker so it can dock above the pan knob (same
@@ -747,7 +764,9 @@ impl crate::Resonance {
                     pick_list(
                         effects,
                         None::<ScannedPlugin>,
-                        move |plugin: ScannedPlugin| Message::Bus(BusMessage::AddPluginToBus(bus_id, plugin)),
+                        move |plugin: ScannedPlugin| {
+                            Message::Bus(BusMessage::AddPluginToBus(bus_id, plugin))
+                        },
                     )
                     .placeholder("+ FX")
                     .text_size(10)
@@ -758,14 +777,19 @@ impl crate::Resonance {
         };
 
         // Pan knob — vertical drag to change, double-click to reset.
-        let pan_ctrl = pan_knob(bus.pan, move |v| Message::Bus(BusMessage::SetBusPan(bus_id, v)));
+        let pan_ctrl = pan_knob(bus.pan, move |v| {
+            Message::Bus(BusMessage::SetBusPan(bus_id, v))
+        });
         let pan_label = format_pan(bus.pan);
         let pan_row = row![
             text("Pan").size(9).color(theme::TEXT_DIM),
             Space::with_width(Length::Fill),
             pan_ctrl,
             Space::with_width(Length::Fill),
-            text(pan_label).size(9).font(Font::MONOSPACE).color(theme::TEXT_DIM),
+            text(pan_label)
+                .size(9)
+                .font(Font::MONOSPACE)
+                .color(theme::TEXT_DIM),
         ]
         .spacing(2)
         .align_y(alignment::Vertical::Center);
@@ -788,17 +812,11 @@ impl crate::Resonance {
             .height(Length::Fill)
             .align_y(alignment::Vertical::Top);
 
-        let strip_content = column![
-            bus_name,
-            button_row,
-            plugin_fill,
-            fx_pan_block,
-            fader_block,
-        ]
-        .spacing(4)
-        .padding(6)
-        .width(theme::MIXER_STRIP_WIDTH)
-        .height(Length::Fill);
+        let strip_content = column![bus_name, button_row, plugin_fill, fx_pan_block, fader_block,]
+            .spacing(4)
+            .padding(6)
+            .width(theme::MIXER_STRIP_WIDTH)
+            .height(Length::Fill);
 
         container(strip_content)
             .height(Length::Fill)
@@ -807,31 +825,27 @@ impl crate::Resonance {
     }
 
     fn view_master_strip(&self, available_plugins: &[ScannedPlugin]) -> Element<'_, Message> {
-        let label = container(
-            text("Master").size(14).color(theme::ACCENT),
-        )
-        .width(Length::Fill)
-        .center_x(Length::Fill)
-        .padding([6, 4]);
+        let label = container(text("Master").size(14).color(theme::ACCENT))
+            .width(Length::Fill)
+            .center_x(Length::Fill)
+            .padding([6, 4]);
 
         // FX bypass button, centered in its own row so the master strip
         // has a dedicated control spot (tracks and busses share a row
         // with other toggles; the master strip only has this one).
-        let button_row = container(
-            fx_bypass_button(
-                self.master_fx_bypassed,
-                Message::Master(MasterMessage::ToggleMasterFxBypass),
-                10,
-            ),
-        )
+        let button_row = container(fx_bypass_button(
+            self.master_fx_bypassed,
+            Message::Master(MasterMessage::ToggleMasterFxBypass),
+            10,
+        ))
         .width(Length::Fill)
         .center_x(Length::Fill);
 
         // Plugin chain — every plugin is an effect.
         let mut plugin_section = column![].spacing(2).width(Length::Fill);
         for plugin in &self.master_plugins {
-            plugin_section = plugin_section
-                .push(self.view_plugin_slot_row(PluginOwner::Master, plugin, false));
+            plugin_section =
+                plugin_section.push(self.view_plugin_slot_row(PluginOwner::Master, plugin, false));
         }
 
         // `+ FX` picker (filtered to effects). Only rendered when we
@@ -848,13 +862,9 @@ impl crate::Resonance {
                 None
             } else {
                 Some(
-                    pick_list(
-                        effects,
-                        None::<ScannedPlugin>,
-                        |plugin: ScannedPlugin| {
-                            Message::Master(MasterMessage::AddPluginToMaster(plugin))
-                        },
-                    )
+                    pick_list(effects, None::<ScannedPlugin>, |plugin: ScannedPlugin| {
+                        Message::Master(MasterMessage::AddPluginToMaster(plugin))
+                    })
                     .placeholder("+ FX")
                     .text_size(10)
                     .width(Length::Fill)
@@ -920,13 +930,18 @@ impl crate::Resonance {
         let selected_id = self.mixer.selected_plugin?;
 
         // Find the plugin across all tracks, busses, and the master chain.
-        let plugin = self.registry.tracks.iter()
+        let plugin = self
+            .registry
+            .tracks
+            .iter()
             .flat_map(|t| t.plugins.iter())
             .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
             .chain(self.master_plugins.iter())
             .find(|p| p.instance_id == selected_id)?;
 
-        let ui_params: Vec<resonance_plugin::ui::UiParam> = plugin.params.iter()
+        let ui_params: Vec<resonance_plugin::ui::UiParam> = plugin
+            .params
+            .iter()
             .map(|p| resonance_plugin::ui::UiParam {
                 id: p.id,
                 name: p.name.clone(),
@@ -938,9 +953,7 @@ impl crate::Resonance {
             .collect();
 
         let plugin_element = match &plugin.custom {
-            PluginCustomState::Generic => {
-                resonance_plugin::ui::view_generic_params(&ui_params)
-            }
+            PluginCustomState::Generic => resonance_plugin::ui::view_generic_params(&ui_params),
         };
 
         let inst_id = selected_id;
@@ -955,7 +968,9 @@ impl crate::Resonance {
 
         // Header with plugin name, optional Open Editor button, and close.
         let mut header = row![
-            text(plugin.plugin_name.clone()).size(12).color(theme::ACCENT),
+            text(plugin.plugin_name.clone())
+                .size(12)
+                .color(theme::ACCENT),
             Space::with_width(Length::Fill),
         ]
         .spacing(8)
@@ -982,19 +997,18 @@ impl crate::Resonance {
 
         header = header.push(
             button(text("\u{00d7}").size(14).color(theme::TEXT_DIM))
-                .on_press(Message::Plugin(PluginMessage::TogglePluginPanel(selected_id)))
+                .on_press(Message::Plugin(PluginMessage::TogglePluginPanel(
+                    selected_id,
+                )))
                 .style(|_theme, status| theme::small_button_style(status))
                 .padding(2),
         );
 
-        let panel_content = column![header, mapped]
-            .spacing(6)
-            .padding(10);
+        let panel_content = column![header, mapped].spacing(6).padding(10);
 
-        let panel = container(
-            scrollable(panel_content)
-                .direction(scrollable::Direction::Vertical(scrollable::Scrollbar::default()))
-        )
+        let panel = container(scrollable(panel_content).direction(
+            scrollable::Direction::Vertical(scrollable::Scrollbar::default()),
+        ))
         .width(Length::Fill)
         .height(200)
         .style(theme::panel_bg);

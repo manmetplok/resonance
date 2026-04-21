@@ -107,9 +107,10 @@ pub(crate) fn handle_import_clip(
         });
     if let Err(e) = spawn_result {
         state.active_imports.fetch_sub(1, Ordering::Relaxed);
-        let _ = ctx
-            .event_tx
-            .send(AudioEvent::Error(format!("Failed to spawn decode thread: {}", e)));
+        let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+            "Failed to spawn decode thread: {}",
+            e
+        )));
     }
 }
 
@@ -267,16 +268,16 @@ pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut Han
             Action::Copy(src_path) => {
                 if let Some(parent) = target.parent() {
                     if let Err(e) = std::fs::create_dir_all(parent) {
-                        let _ = ctx.event_tx.send(AudioEvent::Error(format!(
-                            "Create audio dir: {e}"
-                        )));
+                        let _ = ctx
+                            .event_tx
+                            .send(AudioEvent::Error(format!("Create audio dir: {e}")));
                         return;
                     }
                 }
                 if let Err(e) = std::fs::copy(src_path, &target) {
-                    let _ = ctx.event_tx.send(AudioEvent::Error(format!(
-                        "Copy clip {clip_id} WAV: {e}"
-                    )));
+                    let _ = ctx
+                        .event_tx
+                        .send(AudioEvent::Error(format!("Copy clip {clip_id} WAV: {e}")));
                     return;
                 }
                 needs_remap.push(*clip_id);
@@ -310,7 +311,9 @@ pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut Han
 
     let clip_files: Vec<(ClipId, String)> =
         entries.into_iter().map(|(id, rel, _)| (id, rel)).collect();
-    let _ = ctx.event_tx.send(AudioEvent::ClipsSavedToProjectDir { clip_files });
+    let _ = ctx
+        .event_tx
+        .send(AudioEvent::ClipsSavedToProjectDir { clip_files });
 }
 
 /// Write a stereo-interleaved f32 buffer to a 32-bit float WAV.
@@ -318,8 +321,7 @@ pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut Han
 /// transcode path and the save-time fallback for in-RAM clips.
 fn transcode_to_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     let spec = WavSpec {
         channels: 2,

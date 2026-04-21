@@ -266,8 +266,7 @@ fn generate_block<'a>(
         Space::with_height(6),
         sevenths,
         Space::with_height(8),
-        row![generate_btn, Space::with_width(4), reroll_btn]
-            .align_y(alignment::Vertical::Center),
+        row![generate_btn, Space::with_width(4), reroll_btn].align_y(alignment::Vertical::Center),
         Space::with_height(12),
         text("Bass style").size(11).color(theme::TEXT_DIM),
         bass_picker,

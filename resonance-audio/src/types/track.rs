@@ -91,8 +91,7 @@ impl Track {
     }
 
     pub fn set_input_port(&self, port: u16) {
-        self.input_port_bits
-            .store(port as u32, Ordering::Relaxed);
+        self.input_port_bits.store(port as u32, Ordering::Relaxed);
     }
 
     /// Construct a sub-track feeding from `parent_track_id`'s output port

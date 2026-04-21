@@ -122,11 +122,7 @@ fn decode_to_interleaved(data: &[u8]) -> Result<Decoded, String> {
         .sample_rate
         .map(|sr| sr as f32)
         .ok_or_else(|| "WAV missing sample rate".to_string())?;
-    let channels = codec_params
-        .channels
-        .map(|c| c.count())
-        .unwrap_or(1)
-        .max(1);
+    let channels = codec_params.channels.map(|c| c.count()).unwrap_or(1).max(1);
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&codec_params, &DecoderOptions::default())

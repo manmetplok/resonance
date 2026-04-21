@@ -1,5 +1,4 @@
 /// Utility functions for the Resonance application.
-
 use std::borrow::Cow;
 
 /// Convert dB to linear gain. -60 dB or below maps to 0.0 (silence).

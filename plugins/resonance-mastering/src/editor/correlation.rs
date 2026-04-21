@@ -13,10 +13,8 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, value: f32) {
         egui::StrokeKind::Inside,
     );
 
-    let label_rect = egui::Rect::from_min_max(
-        rect.left_top(),
-        egui::pos2(rect.right(), rect.top() + 16.0),
-    );
+    let label_rect =
+        egui::Rect::from_min_max(rect.left_top(), egui::pos2(rect.right(), rect.top() + 16.0));
     painter.text(
         label_rect.center(),
         egui::Align2::CENTER_CENTER,

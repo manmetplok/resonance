@@ -54,7 +54,8 @@ pub fn draw(ui: &mut egui::Ui, rect: egui::Rect, app: &mut EqEditorApp) {
 
     // Snapshot every band once per frame so the curve, node list, and hit
     // testing all see the same state.
-    let snapshots: [BandSnapshot; NUM_BANDS] = std::array::from_fn(|i| app.params.bands[i].snapshot());
+    let snapshots: [BandSnapshot; NUM_BANDS] =
+        std::array::from_fn(|i| app.params.bands[i].snapshot());
 
     draw_composite_curve(&painter, plot, &snapshots);
     nodes::draw_and_interact(ui, plot, app, &snapshots);
@@ -155,7 +156,10 @@ fn draw_spectrum(painter: &egui::Painter, plot: egui::Rect, snap: &SpectrumSnaps
 
     // Top edge stroke — slightly brighter accent so the spectrum envelope
     // reads as a crisp line on top of the translucent fill.
-    painter.add(egui::Shape::line(top, egui::Stroke::new(1.0, spectrum_stroke())));
+    painter.add(egui::Shape::line(
+        top,
+        egui::Stroke::new(1.0, spectrum_stroke()),
+    ));
 }
 
 /// Map an already-tilted dB value into an absolute y coordinate within
@@ -222,7 +226,9 @@ fn spectrum_stroke() -> egui::Color32 {
 
 fn draw_grid(painter: &egui::Painter, plot: egui::Rect) {
     // Vertical gridlines at decades + half-decades.
-    for freq in [20.0, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0] {
+    for freq in [
+        20.0, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0,
+    ] {
         let x = plot.left() + freq_to_x(freq, plot.width());
         painter.line_segment(
             [egui::pos2(x, plot.top()), egui::pos2(x, plot.bottom())],
@@ -268,11 +274,12 @@ fn draw_composite_curve(
 ) {
     // Build per-band coefficient caches once and reuse for every frequency
     // sample to keep the render cheap.
-    let band_coeffs: [(usize, [Biquad; MAX_STAGES_PER_BAND]); NUM_BANDS] = std::array::from_fn(|i| {
-        let mut stages = [Biquad::identity(); MAX_STAGES_PER_BAND];
-        let n = crate::band::configure_stages(&snapshots[i], VIS_SR, &mut stages);
-        (n, stages)
-    });
+    let band_coeffs: [(usize, [Biquad; MAX_STAGES_PER_BAND]); NUM_BANDS] =
+        std::array::from_fn(|i| {
+            let mut stages = [Biquad::identity(); MAX_STAGES_PER_BAND];
+            let n = crate::band::configure_stages(&snapshots[i], VIS_SR, &mut stages);
+            (n, stages)
+        });
 
     let mut points: Vec<egui::Pos2> = Vec::with_capacity(NUM_POINTS);
     for i in 0..NUM_POINTS {

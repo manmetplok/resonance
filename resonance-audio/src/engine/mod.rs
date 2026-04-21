@@ -97,7 +97,8 @@ pub struct AudioEngine {
     master: Arc<parking_lot::RwLock<MasterBus>>,
     clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
     midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>>,
-    plugins: Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
+    plugins:
+        Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
     tempo_map: Arc<parking_lot::RwLock<TempoMap>>,
     monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     sample_rate: u32,
@@ -118,9 +119,7 @@ impl AudioEngine {
             .default_output_device()
             .ok_or_else(|| "No audio output device found".to_string())?;
 
-        let device_name = device
-            .name()
-            .unwrap_or_else(|_| "<unnamed>".to_string());
+        let device_name = device.name().unwrap_or_else(|_| "<unnamed>".to_string());
 
         let config = device
             .default_output_config()
@@ -188,8 +187,9 @@ impl AudioEngine {
         let tempo_audio = Arc::clone(&tempo_map);
 
         // Plugin instances shared between engine thread and audio callback
-        let plugins: Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>> =
-            Arc::new(parking_lot::RwLock::new(IndexMap::new()));
+        let plugins: Arc<
+            parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>,
+        > = Arc::new(parking_lot::RwLock::new(IndexMap::new()));
         let plugins_audio = Arc::clone(&plugins);
 
         let mut stream_config: cpal::StreamConfig = config.into();
@@ -215,25 +215,34 @@ impl AudioEngine {
             // runtime never allocates on the audio thread. mix_audio only
             // uses the first N slots where N = current bus count.
             let mut bus_bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..MAX_BUSSES)
-                .map(|_| (vec![0.0f32; audio_buf_frames], vec![0.0f32; audio_buf_frames]))
+                .map(|_| {
+                    (
+                        vec![0.0f32; audio_buf_frames],
+                        vec![0.0f32; audio_buf_frames],
+                    )
+                })
                 .collect();
             // Per-plugin-output-port scratch used for multi-output
             // instruments (resonance-drums declares 7 ports; this pool
             // carries room for a couple more).
-            let mut port_scratch: Vec<(Vec<f32>, Vec<f32>)> =
-                (0..crate::mixer::MAX_PLUGIN_OUTPUT_PORTS)
-                    .map(|_| (vec![0.0f32; audio_buf_frames], vec![0.0f32; audio_buf_frames]))
-                    .collect();
-            let mut note_event_buf: Vec<PendingNoteEvent> = Vec::with_capacity(mixer::MAX_MIDI_EVENTS_PER_BUFFER);
+            let mut port_scratch: Vec<(Vec<f32>, Vec<f32>)> = (0
+                ..crate::mixer::MAX_PLUGIN_OUTPUT_PORTS)
+                .map(|_| {
+                    (
+                        vec![0.0f32; audio_buf_frames],
+                        vec![0.0f32; audio_buf_frames],
+                    )
+                })
+                .collect();
+            let mut note_event_buf: Vec<PendingNoteEvent> =
+                Vec::with_capacity(mixer::MAX_MIDI_EVENTS_PER_BUFFER);
             // Monitor scratch + ring are sized for the widest multi-channel
             // interleaved input we're likely to see (e.g. an 18-in audio
             // interface). 32 channels × a few blocks of headroom covers
             // everything reasonable without leaking meaningful RAM.
             use crate::limits::MAX_INPUT_CHANNELS;
-            let mut monitor_temp =
-                vec![0.0f32; audio_buf_frames * MAX_INPUT_CHANNELS];
-            let monitor_ring =
-                ringbuf::HeapRb::<f32>::new(audio_quantum * MAX_INPUT_CHANNELS * 4);
+            let mut monitor_temp = vec![0.0f32; audio_buf_frames * MAX_INPUT_CHANNELS];
+            let monitor_ring = ringbuf::HeapRb::<f32>::new(audio_quantum * MAX_INPUT_CHANNELS * 4);
             let (prod, mut monitor_cons) = monitor_ring.split();
             let result = device.build_output_stream(
                 config,
@@ -269,27 +278,26 @@ impl AudioEngine {
             result.map(|stream| (stream, prod))
         };
 
-        let (stream, monitor_prod_raw, used_fixed_buffer) =
-            match build_stream(&stream_config) {
-                Ok((stream, prod)) => (stream, prod, true),
-                Err(fixed_err) => {
-                    // Fall back to default buffer size if fixed quantum was rejected.
-                    let mut fallback_config = stream_config.clone();
-                    fallback_config.buffer_size = cpal::BufferSize::Default;
-                    match build_stream(&fallback_config) {
-                        Ok((stream, prod)) => {
-                            eprintln!(
+        let (stream, monitor_prod_raw, used_fixed_buffer) = match build_stream(&stream_config) {
+            Ok((stream, prod)) => (stream, prod, true),
+            Err(fixed_err) => {
+                // Fall back to default buffer size if fixed quantum was rejected.
+                let mut fallback_config = stream_config.clone();
+                fallback_config.buffer_size = cpal::BufferSize::Default;
+                match build_stream(&fallback_config) {
+                    Ok((stream, prod)) => {
+                        eprintln!(
                                 "audio: Fixed({}) rejected ({}) — falling back to BufferSize::Default (HIGH LATENCY)",
                                 quantum, fixed_err
                             );
-                            (stream, prod, false)
-                        }
-                        Err(e) => {
-                            return Err(format!("Failed to build output stream: {}", e));
-                        }
+                        (stream, prod, false)
+                    }
+                    Err(e) => {
+                        return Err(format!("Failed to build output stream: {}", e));
                     }
                 }
-            };
+            }
+        };
 
         // One-line negotiation summary so latency regressions are diagnosable
         // from stderr alone. `probed_*` being None means the pw-metadata
@@ -410,10 +418,8 @@ impl AudioEngine {
         } else {
             Vec::new()
         };
-        let ml =
-            f32::from_bits(self.shared.master_peak_l_bits.swap(0, Ordering::Relaxed));
-        let mr =
-            f32::from_bits(self.shared.master_peak_r_bits.swap(0, Ordering::Relaxed));
+        let ml = f32::from_bits(self.shared.master_peak_l_bits.swap(0, Ordering::Relaxed));
+        let mr = f32::from_bits(self.shared.master_peak_r_bits.swap(0, Ordering::Relaxed));
         (track_levels, bus_levels, ml, mr)
     }
 }

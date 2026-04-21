@@ -124,7 +124,11 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
                 return (
                     canvas::event::Status::Captured,
                     Some(Message::Compose(ComposeMessage::Drumroll(
-                        DrumrollMessage::ToggleStep { clip_id, pad_index, step },
+                        DrumrollMessage::ToggleStep {
+                            clip_id,
+                            pad_index,
+                            step,
+                        },
                     ))),
                 );
             }
@@ -150,7 +154,12 @@ impl<'a> ComposeDrumCanvas<'a> {
 
     fn track_row_rect(&self, index: usize, bounds: Rectangle) -> Rectangle {
         let y = index as f32 * DRUM_TRACK_HEIGHT - self.scroll_offset_y;
-        Rectangle { x: 0.0, y, width: bounds.width, height: DRUM_TRACK_HEIGHT }
+        Rectangle {
+            x: 0.0,
+            y,
+            width: bounds.width,
+            height: DRUM_TRACK_HEIGHT,
+        }
     }
 
     fn clip_area(&self, row: Rectangle) -> Rectangle {
@@ -233,7 +242,11 @@ impl<'a> ComposeDrumCanvas<'a> {
         frame.fill_text(canvas::Text {
             content: track.instrument_icon.glyph().to_string(),
             position: Point::new(10.0, row_rect.y + row_rect.height * 0.5 - 12.0),
-            color: if is_selected { theme::ACCENT } else { theme::TEXT },
+            color: if is_selected {
+                theme::ACCENT
+            } else {
+                theme::TEXT
+            },
             size: 14.0.into(),
             font: theme::ICON_FONT,
             ..canvas::Text::default()
@@ -255,7 +268,11 @@ impl<'a> ComposeDrumCanvas<'a> {
         frame.fill_rectangle(
             Point::new(NAME_COLUMN_WIDTH, row_rect.y),
             Size::new(1.0, row_rect.height),
-            if is_selected { theme::ACCENT } else { theme::SEPARATOR },
+            if is_selected {
+                theme::ACCENT
+            } else {
+                theme::SEPARATOR
+            },
         );
 
         let clip_area = self.clip_area(row_rect);
@@ -443,7 +460,10 @@ impl<'a> ComposeDrumCanvas<'a> {
                 Color::from_rgba(pad.color[0], pad.color[1], pad.color[2], alpha),
             );
             frame.stroke(
-                &Path::rectangle(Point::new(cell.x, cell.y), Size::new(cell.width, cell.height)),
+                &Path::rectangle(
+                    Point::new(cell.x, cell.y),
+                    Size::new(cell.width, cell.height),
+                ),
                 Stroke::default()
                     .with_width(1.0)
                     .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.6)),

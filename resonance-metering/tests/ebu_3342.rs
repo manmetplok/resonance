@@ -27,8 +27,5 @@ fn stepped_minus_20_minus_30_minus_20_yields_near_10_lu() {
     }
     let v = lra.lra_lu();
     // Allow the EBU ±1 LU tolerance.
-    assert!(
-        (v - 10.0).abs() < 1.0,
-        "LRA = {v} LU (expected 10 ± 1)"
-    );
+    assert!((v - 10.0).abs() < 1.0, "LRA = {v} LU (expected 10 ± 1)");
 }

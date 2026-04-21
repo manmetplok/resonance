@@ -1,5 +1,4 @@
 /// Parameter types: FloatParam, IntParam, BoolParam and the Param trait.
-
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -89,10 +88,7 @@ impl FloatParam {
         self
     }
 
-    pub fn with_value_to_string(
-        mut self,
-        f: Arc<dyn Fn(f32) -> String + Send + Sync>,
-    ) -> Self {
+    pub fn with_value_to_string(mut self, f: Arc<dyn Fn(f32) -> String + Send + Sync>) -> Self {
         self.value_to_string = Some(f);
         self
     }
@@ -217,7 +213,6 @@ impl IntParam {
     pub fn set_value(&self, v: i32) {
         self.value.store(v, Ordering::Relaxed);
     }
-
 }
 
 impl Param for IntParam {
@@ -294,13 +289,21 @@ impl Param for BoolParam {
         self.name
     }
     fn get_plain(&self) -> f64 {
-        if self.value() { 1.0 } else { 0.0 }
+        if self.value() {
+            1.0
+        } else {
+            0.0
+        }
     }
     fn set_plain(&self, v: f64) {
         self.set_value(v >= 0.5);
     }
     fn default_plain(&self) -> f64 {
-        if self.default { 1.0 } else { 0.0 }
+        if self.default {
+            1.0
+        } else {
+            0.0
+        }
     }
     fn min_plain(&self) -> f64 {
         0.0
@@ -309,7 +312,11 @@ impl Param for BoolParam {
         1.0
     }
     fn display(&self, value: f64) -> String {
-        if value >= 0.5 { "On".to_string() } else { "Off".to_string() }
+        if value >= 0.5 {
+            "On".to_string()
+        } else {
+            "Off".to_string()
+        }
     }
     fn parse(&self, text: &str) -> Option<f64> {
         match text.trim().to_lowercase().as_str() {

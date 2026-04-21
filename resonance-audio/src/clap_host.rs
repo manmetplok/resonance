@@ -7,27 +7,25 @@ use std::ptr;
 
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
-use clap_sys::ext::audio_ports::{
-    clap_audio_port_info, clap_plugin_audio_ports, CLAP_EXT_AUDIO_PORTS,
-};
 use clap_sys::events::{
     clap_event_header, clap_event_note, clap_event_param_value, clap_event_transport,
     clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF,
     CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT,
-    CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO,
-    CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING,
+    CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE,
+    CLAP_TRANSPORT_IS_PLAYING,
 };
-use clap_sys::ext::gui::{
-    clap_plugin_gui, CLAP_EXT_GUI, CLAP_WINDOW_API_WAYLAND,
+use clap_sys::ext::audio_ports::{
+    clap_audio_port_info, clap_plugin_audio_ports, CLAP_EXT_AUDIO_PORTS,
 };
+use clap_sys::ext::gui::{clap_plugin_gui, CLAP_EXT_GUI, CLAP_WINDOW_API_WAYLAND};
 use clap_sys::ext::params::{clap_plugin_params, CLAP_EXT_PARAMS};
 use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
-use clap_sys::stream::{clap_istream, clap_ostream};
+use clap_sys::fixedpoint::CLAP_BEATTIME_FACTOR;
 use clap_sys::host::clap_host;
 use clap_sys::plugin::clap_plugin;
-use clap_sys::fixedpoint::CLAP_BEATTIME_FACTOR;
 use clap_sys::process::clap_process;
+use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
 
 use crate::types::{ParamInfo, PluginDescInfo};
@@ -134,16 +132,16 @@ impl ClapBundle {
         let path_str = path
             .to_str()
             .ok_or_else(|| "Invalid path encoding".to_string())?;
-        let path_cstring =
-            CString::new(path_str).map_err(|e| format!("Invalid path: {}", e))?;
+        let path_cstring = CString::new(path_str).map_err(|e| format!("Invalid path: {}", e))?;
 
         let library = unsafe { libloading::Library::new(path) }
             .map_err(|e| format!("Failed to load library: {}", e))?;
 
         let entry: *const clap_plugin_entry = unsafe {
-            let symbol: libloading::Symbol<*const clap_plugin_entry> = library
-                .get(b"clap_entry")
-                .map_err(|e| format!("No clap_entry symbol: {}", e))?;
+            let symbol: libloading::Symbol<*const clap_plugin_entry> =
+                library
+                    .get(b"clap_entry")
+                    .map_err(|e| format!("No clap_entry symbol: {}", e))?;
             *symbol
         };
 
@@ -151,8 +149,8 @@ impl ClapBundle {
             return Err("clap_entry is null".to_string());
         }
 
-        let init_fn = unsafe { (*entry).init }
-            .ok_or_else(|| "clap_entry.init is null".to_string())?;
+        let init_fn =
+            unsafe { (*entry).init }.ok_or_else(|| "clap_entry.init is null".to_string())?;
         let ok = unsafe { init_fn(path_cstring.as_ptr()) };
         if !ok {
             return Err("clap_entry.init() failed".to_string());
@@ -205,7 +203,12 @@ impl ClapBundle {
                 }
             }
 
-            descriptors.push(PluginDescInfo { id, name, vendor, is_instrument });
+            descriptors.push(PluginDescInfo {
+                id,
+                name,
+                vendor,
+                is_instrument,
+            });
         }
 
         Ok(ClapBundle {
@@ -502,7 +505,8 @@ impl ClapInstance {
         let mut result = Vec::with_capacity(count as usize);
 
         for i in 0..count {
-            let mut info = std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::uninit();
+            let mut info =
+                std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::uninit();
             let ok = unsafe {
                 match (*params).get_info {
                     Some(f) => f(self.plugin, i, info.as_mut_ptr()),
@@ -550,7 +554,11 @@ impl ClapInstance {
     /// to prevent unbounded growth when the GUI automates many parameters
     /// between process calls.
     pub fn set_param(&mut self, param_id: u32, value: f64) {
-        if let Some(existing) = self.pending_params.iter_mut().find(|(id, _)| *id == param_id) {
+        if let Some(existing) = self
+            .pending_params
+            .iter_mut()
+            .find(|(id, _)| *id == param_id)
+        {
             existing.1 = value;
         } else if self.pending_params.len() < crate::limits::MAX_PENDING_PARAMS {
             self.pending_params.push((param_id, value));
@@ -559,7 +567,8 @@ impl ClapInstance {
 
     /// Queue a note-on event to be sent during the next process() call.
     pub fn queue_note_on(&mut self, key: u8, velocity: f32, sample_offset: u32) {
-        self.pending_notes.push((true, key, velocity, sample_offset));
+        self.pending_notes
+            .push((true, key, velocity, sample_offset));
     }
 
     /// Queue a note-off event to be sent during the next process() call.
@@ -803,14 +812,7 @@ impl ClapInstance {
 
     /// Latch the current transport state so the next process() call can
     /// forward it to the plugin via `clap_event_transport`.
-    pub fn set_transport(
-        &mut self,
-        bpm: f64,
-        num: u16,
-        den: u16,
-        playing: bool,
-        pos_beats: f64,
-    ) {
+    pub fn set_transport(&mut self, bpm: f64, num: u16, den: u16, playing: bool, pos_beats: f64) {
         self.transport_bpm = bpm;
         self.transport_num = num;
         self.transport_den = den;
@@ -901,23 +903,26 @@ impl ClapInstance {
 
         // Build note events from pending notes (reuse pre-allocated buffer)
         self.note_event_buf.clear();
-        self.note_event_buf
-            .extend(self.pending_notes.drain(..).map(|(is_on, key, vel, offset)| {
-                clap_event_note {
-                    header: clap_event_header {
-                        size: std::mem::size_of::<clap_event_note>() as u32,
-                        time: offset,
-                        space_id: CLAP_CORE_EVENT_SPACE_ID,
-                        type_: if is_on { CLAP_EVENT_NOTE_ON } else { CLAP_EVENT_NOTE_OFF },
-                        flags: 0,
+        self.note_event_buf.extend(self.pending_notes.drain(..).map(
+            |(is_on, key, vel, offset)| clap_event_note {
+                header: clap_event_header {
+                    size: std::mem::size_of::<clap_event_note>() as u32,
+                    time: offset,
+                    space_id: CLAP_CORE_EVENT_SPACE_ID,
+                    type_: if is_on {
+                        CLAP_EVENT_NOTE_ON
+                    } else {
+                        CLAP_EVENT_NOTE_OFF
                     },
-                    note_id: -1,
-                    port_index: 0,
-                    channel: 0,
-                    key: key as i16,
-                    velocity: vel as f64,
-                }
-            }));
+                    flags: 0,
+                },
+                note_id: -1,
+                port_index: 0,
+                channel: 0,
+                key: key as i16,
+                velocity: vel as f64,
+            },
+        ));
 
         let mut event_ctx = MixedEventListCtx {
             param_events: std::mem::take(&mut self.param_event_buf),
@@ -944,8 +949,7 @@ impl ClapInstance {
                 transport_flags |= CLAP_TRANSPORT_IS_PLAYING;
             }
         }
-        let beats_fp =
-            (self.transport_pos_beats * CLAP_BEATTIME_FACTOR as f64).round() as i64;
+        let beats_fp = (self.transport_pos_beats * CLAP_BEATTIME_FACTOR as f64).round() as i64;
         let transport_event = clap_event_transport {
             header: clap_event_header {
                 size: std::mem::size_of::<clap_event_transport>() as u32,

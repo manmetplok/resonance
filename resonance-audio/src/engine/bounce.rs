@@ -331,9 +331,7 @@ pub(crate) fn to_wav(
                 let _ = event_tx.send(AudioEvent::BounceComplete { path });
             }
             Err(e) => {
-                let _ = event_tx.send(AudioEvent::BounceError(format!(
-                    "WAV finalize error: {e}"
-                )));
+                let _ = event_tx.send(AudioEvent::BounceError(format!("WAV finalize error: {e}")));
             }
         }
     }

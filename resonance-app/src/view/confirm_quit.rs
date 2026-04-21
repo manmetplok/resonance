@@ -8,9 +8,7 @@ use crate::message::*;
 use crate::theme;
 use crate::Resonance;
 
-pub(crate) fn view_confirm_quit_overlay<'a>(
-    _r: &'a Resonance,
-) -> Element<'a, Message> {
+pub(crate) fn view_confirm_quit_overlay<'a>(_r: &'a Resonance) -> Element<'a, Message> {
     // Backdrop swallows pointer input so the DAW behind is inert while
     // the dialog is up. Clicking the dimmed area cancels the quit.
     let backdrop = mouse_area(
@@ -27,11 +25,9 @@ pub(crate) fn view_confirm_quit_overlay<'a>(
     .on_press(Message::Ui(UiMessage::CancelQuit));
 
     let title = text("Unsaved Changes").size(20).color(theme::ACCENT);
-    let explanation = text(
-        "You have unsaved changes. What would you like to do?",
-    )
-    .size(13)
-    .color(theme::TEXT);
+    let explanation = text("You have unsaved changes. What would you like to do?")
+        .size(13)
+        .color(theme::TEXT);
 
     let cancel_btn = button(text("Cancel").size(13).color(theme::TEXT))
         .on_press(Message::Ui(UiMessage::CancelQuit))
@@ -48,9 +44,14 @@ pub(crate) fn view_confirm_quit_overlay<'a>(
         .padding([8, 18])
         .style(|_theme, status| theme::accent_button_style(status));
 
-    let button_row = row![Space::with_width(Length::Fill), cancel_btn, discard_btn, save_btn]
-        .spacing(8)
-        .align_y(alignment::Vertical::Center);
+    let button_row = row![
+        Space::with_width(Length::Fill),
+        cancel_btn,
+        discard_btn,
+        save_btn
+    ]
+    .spacing(8)
+    .align_y(alignment::Vertical::Center);
 
     let dialog_content = column![
         title,

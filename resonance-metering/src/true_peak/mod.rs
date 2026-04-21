@@ -60,7 +60,10 @@ impl TruePeakMeter {
 
     /// Per-channel true peaks in dBTP.
     pub fn per_channel_dbtp(&self) -> (f32, f32) {
-        (linear_to_dbtp(self.left.peak()), linear_to_dbtp(self.right.peak()))
+        (
+            linear_to_dbtp(self.left.peak()),
+            linear_to_dbtp(self.right.peak()),
+        )
     }
 }
 
@@ -134,10 +137,17 @@ mod tests {
         let true_peak = m.peak_linear();
         // The oversampled true peak should recover more than the discrete
         // samples alone.
-        assert!(true_peak >= discrete_peak,
-            "true peak {} should be >= discrete {}", true_peak, discrete_peak);
+        assert!(
+            true_peak >= discrete_peak,
+            "true peak {} should be >= discrete {}",
+            true_peak,
+            discrete_peak
+        );
         // And it should get close to 1.0 (within 1 dB).
-        assert!(m.peak_dbtp() > -1.0,
-            "expected near-unity true peak, got {} dBTP", m.peak_dbtp());
+        assert!(
+            m.peak_dbtp() > -1.0,
+            "expected near-unity true peak, got {} dBTP",
+            m.peak_dbtp()
+        );
     }
 }

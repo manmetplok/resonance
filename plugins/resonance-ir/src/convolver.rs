@@ -2,7 +2,6 @@
 ///
 /// Splits the IR into fixed-size segments, FFTs each one, then for each input block:
 /// FFT input -> complex multiply with each IR segment -> IFFT -> overlap-add.
-
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 use std::sync::Arc;
@@ -205,4 +204,3 @@ impl StereoConvolver {
         self.right.reset();
     }
 }
-

@@ -3,9 +3,7 @@ use iced::{alignment, Element, Length};
 
 use resonance_audio::types::ClipId;
 
-use crate::compose::drumroll::{
-    AccentPattern, DrumrollMessage, DrumrollViewState, HumanizeScope,
-};
+use crate::compose::drumroll::{AccentPattern, DrumrollMessage, DrumrollViewState, HumanizeScope};
 use crate::compose::ComposeMessage;
 use crate::message::*;
 use crate::state::{InstrumentType, TrackState};
@@ -49,23 +47,25 @@ pub fn view<'a>(
     .padding([4, 6])
     .width(Length::Fill);
 
-    let steps_picker = pick_list(
-        vec![4u32, 8, 16, 32],
-        Some(state.steps_per_bar),
-        |n| Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetStepsPerBar(n))),
-    )
+    let steps_picker = pick_list(vec![4u32, 8, 16, 32], Some(state.steps_per_bar), |n| {
+        Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetStepsPerBar(n)))
+    })
     .text_size(12)
     .padding([4, 6])
     .width(Length::Fill);
 
     let velocity_slider = slider(0.0..=1.0, state.default_velocity, |v| {
-        Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetDefaultVelocity(v)))
+        Message::Compose(ComposeMessage::Drumroll(
+            DrumrollMessage::SetDefaultVelocity(v),
+        ))
     })
     .step(0.01)
     .width(Length::Fill);
 
     let euclid_steps = text_input("Steps", &state.euclid_steps_input)
-        .on_input(|s| Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetEuclidSteps(s))))
+        .on_input(|s| {
+            Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetEuclidSteps(s)))
+        })
         .size(12)
         .padding([4, 6])
         .width(Length::Fill);
@@ -75,7 +75,11 @@ pub fn view<'a>(
         .padding([4, 6])
         .width(Length::Fill);
     let euclid_rot = text_input("Rotation", &state.euclid_rotation_input)
-        .on_input(|s| Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetEuclidRotation(s))))
+        .on_input(|s| {
+            Message::Compose(ComposeMessage::Drumroll(
+                DrumrollMessage::SetEuclidRotation(s),
+            ))
+        })
         .size(12)
         .padding([4, 6])
         .width(Length::Fill);
@@ -119,17 +123,23 @@ pub fn view<'a>(
 
     // --- Humanize block --------------------------------------------------
     let hum_vel_slider = slider(0.0..=1.0, state.humanize_velocity, |v| {
-        Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeVelocity(v)))
+        Message::Compose(ComposeMessage::Drumroll(
+            DrumrollMessage::SetHumanizeVelocity(v),
+        ))
     })
     .step(0.01)
     .width(Length::Fill);
     let hum_timing_slider = slider(0.0..=1.0, state.humanize_timing, |v| {
-        Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeTiming(v)))
+        Message::Compose(ComposeMessage::Drumroll(
+            DrumrollMessage::SetHumanizeTiming(v),
+        ))
     })
     .step(0.01)
     .width(Length::Fill);
     let hum_swing_slider = slider(0.0..=1.0, state.humanize_swing, |v| {
-        Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeSwing(v)))
+        Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeSwing(
+            v,
+        )))
     })
     .step(0.01)
     .width(Length::Fill);
@@ -137,14 +147,18 @@ pub fn view<'a>(
         AccentPattern::ALL.to_vec(),
         Some(state.humanize_accent),
         |p| {
-            Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeAccent(p)))
+            Message::Compose(ComposeMessage::Drumroll(
+                DrumrollMessage::SetHumanizeAccent(p),
+            ))
         },
     )
     .text_size(12)
     .padding([4, 6])
     .width(Length::Fill);
     let accent_slider = slider(0.0..=1.0, state.humanize_accent_amount, |v| {
-        Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeAccentAmount(v)))
+        Message::Compose(ComposeMessage::Drumroll(
+            DrumrollMessage::SetHumanizeAccentAmount(v),
+        ))
     })
     .step(0.01)
     .width(Length::Fill);
@@ -152,7 +166,9 @@ pub fn view<'a>(
         HumanizeScope::ALL.to_vec(),
         Some(state.humanize_scope),
         |s| {
-            Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeScope(s)))
+            Message::Compose(ComposeMessage::Drumroll(DrumrollMessage::SetHumanizeScope(
+                s,
+            )))
         },
     )
     .text_size(12)
@@ -223,9 +239,12 @@ pub fn view<'a>(
         Space::with_height(4),
         text("Accent pattern").size(10).color(theme::TEXT_DIM),
         accent_picker,
-        text(format!("Accent amount: {:.2}", state.humanize_accent_amount))
-            .size(10)
-            .color(theme::TEXT_DIM),
+        text(format!(
+            "Accent amount: {:.2}",
+            state.humanize_accent_amount
+        ))
+        .size(10)
+        .color(theme::TEXT_DIM),
         accent_slider,
         Space::with_height(4),
         text("Scope").size(10).color(theme::TEXT_DIM),

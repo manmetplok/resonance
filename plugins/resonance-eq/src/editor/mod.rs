@@ -236,10 +236,7 @@ fn analyzer_segment(
     } else {
         theme::TEXT_DIM
     };
-    let button = egui::Button::new(
-        egui::RichText::new(label).color(color).strong(),
-    )
-    .frame(false);
+    let button = egui::Button::new(egui::RichText::new(label).color(color).strong()).frame(false);
     if ui.add(button).clicked() {
         *current = this;
     }
@@ -316,10 +313,7 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
                             BandKind::LowCut,
                             BandKind::HighCut,
                         ] {
-                            if ui
-                                .selectable_label(kind == opt, opt.short_name())
-                                .clicked()
-                            {
+                            if ui.selectable_label(kind == opt, opt.short_name()).clicked() {
                                 kind = opt;
                                 band.kind.set_value(kind.to_index());
                             }

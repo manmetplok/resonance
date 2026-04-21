@@ -114,8 +114,8 @@ impl ClipSource {
     /// Also pre-touches every page to avoid major page faults on
     /// the audio thread the first time the clip is played.
     pub fn open_wav(path: &Path) -> Result<Self, String> {
-        let file = std::fs::File::open(path)
-            .map_err(|e| format!("open wav {}: {e}", path.display()))?;
+        let file =
+            std::fs::File::open(path).map_err(|e| format!("open wav {}: {e}", path.display()))?;
         let mmap = unsafe { memmap2::Mmap::map(&file) }
             .map_err(|e| format!("mmap {}: {e}", path.display()))?;
 
@@ -170,8 +170,7 @@ fn locate_wav_float_data(bytes: &[u8]) -> Result<(usize, usize), String> {
     let mut fmt_ok = false;
     while cursor + 8 <= bytes.len() {
         let id = &bytes[cursor..cursor + 4];
-        let size =
-            u32::from_le_bytes(bytes[cursor + 4..cursor + 8].try_into().unwrap()) as usize;
+        let size = u32::from_le_bytes(bytes[cursor + 4..cursor + 8].try_into().unwrap()) as usize;
         let chunk_start = cursor + 8;
         let chunk_end = chunk_start + size;
         if chunk_end > bytes.len() {
@@ -182,11 +181,15 @@ fn locate_wav_float_data(bytes: &[u8]) -> Result<(usize, usize), String> {
             if size < 16 {
                 return Err("fmt chunk too small".into());
             }
-            let format = u16::from_le_bytes(bytes[chunk_start..chunk_start + 2].try_into().unwrap());
+            let format =
+                u16::from_le_bytes(bytes[chunk_start..chunk_start + 2].try_into().unwrap());
             let channels =
                 u16::from_le_bytes(bytes[chunk_start + 2..chunk_start + 4].try_into().unwrap());
-            let bits_per_sample =
-                u16::from_le_bytes(bytes[chunk_start + 14..chunk_start + 16].try_into().unwrap());
+            let bits_per_sample = u16::from_le_bytes(
+                bytes[chunk_start + 14..chunk_start + 16]
+                    .try_into()
+                    .unwrap(),
+            );
             // `hound` writes float WAVs using WAVE_FORMAT_EXTENSIBLE
             // (0xFFFE) with a SubFormat GUID. The first two bytes
             // of that GUID carry the real format code, so we
@@ -198,7 +201,9 @@ fn locate_wav_float_data(bytes: &[u8]) -> Result<(usize, usize), String> {
                     return Err("extensible fmt chunk too small".into());
                 }
                 u16::from_le_bytes(
-                    bytes[chunk_start + 24..chunk_start + 26].try_into().unwrap(),
+                    bytes[chunk_start + 24..chunk_start + 26]
+                        .try_into()
+                        .unwrap(),
                 )
             } else {
                 format

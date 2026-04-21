@@ -1,5 +1,4 @@
 /// General MIDI drum map constants and pad configuration.
-
 use crate::kit::OutputGroup;
 
 pub const NUM_PADS: usize = 30;
@@ -14,18 +13,18 @@ pub const NUM_PADS: usize = 30;
 // --- GM standard notes ---
 pub const KICK: u8 = 36;
 pub const SNARE: u8 = 38;
-pub const RIMSHOT: u8 = 37;       // GM: Side Stick / Rimshot
+pub const RIMSHOT: u8 = 37; // GM: Side Stick / Rimshot
 pub const HIHAT_CLOSED: u8 = 42;
 pub const HIHAT_OPEN: u8 = 46;
-pub const HIHAT_PEDAL: u8 = 44;   // GM: Pedal Hi-Hat
-pub const TOM_LOW: u8 = 45;       // GM: Low Tom
-pub const TOM_MID: u8 = 47;       // GM: Low-Mid Tom
-pub const TOM_HIGH: u8 = 50;      // GM: High Tom
+pub const HIHAT_PEDAL: u8 = 44; // GM: Pedal Hi-Hat
+pub const TOM_LOW: u8 = 45; // GM: Low Tom
+pub const TOM_MID: u8 = 47; // GM: Low-Mid Tom
+pub const TOM_HIGH: u8 = 50; // GM: High Tom
 pub const CRASH_16_EDGE: u8 = 49; // GM: Crash Cymbal 1
 pub const CRASH_18_EDGE: u8 = 57; // GM: Crash Cymbal 2
-pub const RIDE_EDGE: u8 = 51;     // GM: Ride Cymbal 1
-pub const RIDE_BELL: u8 = 53;     // GM: Ride Bell
-pub const CHINA_EDGE: u8 = 52;    // GM: Chinese Cymbal
+pub const RIDE_EDGE: u8 = 51; // GM: Ride Cymbal 1
+pub const RIDE_BELL: u8 = 53; // GM: Ride Bell
+pub const CHINA_EDGE: u8 = 52; // GM: Chinese Cymbal
 
 // --- Extended / non-GM notes (using free slots below 35 and above 81) ---
 pub const SNARE_SIDESTICK: u8 = 39; // repurposed from GM Clap
@@ -43,7 +42,7 @@ pub const CRASH_18_TIP: u8 = 58;
 pub const RIDE_TIP: u8 = 59;
 pub const CHINA_BELL: u8 = 60;
 pub const CHINA_TIP: u8 = 61;
-pub const COUNT_STICK: u8 = 31;    // GM: Sticks (31)
+pub const COUNT_STICK: u8 = 31; // GM: Sticks (31)
 
 /// Choke group IDs. Pads in the same choke group silence each other.
 pub const CHOKE_HIHAT: u8 = 1;

@@ -1,6 +1,5 @@
 /// Plugin parameters: master volume + per-pad volume, pan, mute, OH blend,
 /// balance, and articulation toggle.
-
 use resonance_plugin::*;
 
 use crate::drum_map::NUM_PADS;
@@ -63,7 +62,8 @@ impl PadParams {
         let oh_name: &'static str = Box::leak(format!("Pad {} OH Blend", index).into_boxed_str());
         let bal_id: &'static str = Box::leak(format!("pad_{}_balance", index).into_boxed_str());
         let bal_name: &'static str = Box::leak(format!("Pad {} Balance", index).into_boxed_str());
-        let art_id: &'static str = Box::leak(format!("pad_{}_articulation", index).into_boxed_str());
+        let art_id: &'static str =
+            Box::leak(format!("pad_{}_articulation", index).into_boxed_str());
         let art_name: &'static str =
             Box::leak(format!("Pad {} Articulation", index).into_boxed_str());
 

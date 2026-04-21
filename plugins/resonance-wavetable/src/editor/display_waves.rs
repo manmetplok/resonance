@@ -138,7 +138,11 @@ fn basic(buf: &mut FrameBuf, frame: usize) {
         }
         2 => {
             // Band-limited-ish saw via 32 harmonics.
-            sum_harmonics(buf, |h| -2.0 / (TAU * h as f32) * (-1.0_f32).powi(h as i32 + 1), 32);
+            sum_harmonics(
+                buf,
+                |h| -2.0 / (TAU * h as f32) * (-1.0_f32).powi(h as i32 + 1),
+                32,
+            );
         }
         _ => {
             // Square via odd harmonics.
@@ -182,7 +186,7 @@ fn pwm(buf: &mut FrameBuf, frame: usize, frame_count: usize) {
 fn formant(buf: &mut FrameBuf, frame: usize, frame_count: usize) {
     // Five vowel formant spectra, interpolated via a triangle through A-E-I-O-U.
     let vowels: [[(usize, f32); 4]; 5] = [
-        [(1, 1.0), (5, 0.6), (11, 0.4), (16, 0.2)], // A
+        [(1, 1.0), (5, 0.6), (11, 0.4), (16, 0.2)],  // A
         [(1, 1.0), (4, 0.7), (14, 0.6), (22, 0.25)], // E
         [(1, 1.0), (3, 0.5), (17, 0.7), (24, 0.3)],  // I
         [(1, 1.0), (2, 0.8), (6, 0.4), (13, 0.2)],   // O
@@ -215,14 +219,22 @@ fn digital(buf: &mut FrameBuf, frame: usize, frame_count: usize) {
 
 fn harmonic_sweep(buf: &mut FrameBuf, frame: usize, frame_count: usize) {
     let max_h = 1 + (frame * 32 / frame_count.max(1));
-    sum_harmonics(buf, |h| if h <= max_h { 1.0 / h as f32 } else { 0.0 }, max_h.max(1));
+    sum_harmonics(
+        buf,
+        |h| if h <= max_h { 1.0 / h as f32 } else { 0.0 },
+        max_h.max(1),
+    );
 }
 
 fn metallic(buf: &mut FrameBuf, frame: usize, frame_count: usize) {
     // Harmonic -> inharmonic (shift odd harmonics by a ratio).
     let ratio = 1.0 + (frame as f32 / frame_count.max(1) as f32) * 0.4;
     for h in 1..=12 {
-        let freq_mult = if h % 2 == 0 { h as f32 } else { h as f32 * ratio };
+        let freq_mult = if h % 2 == 0 {
+            h as f32
+        } else {
+            h as f32 * ratio
+        };
         for (i, s) in buf.iter_mut().enumerate() {
             *s += (i as f32 / N_POINTS as f32 * TAU * freq_mult).sin() / h as f32;
         }

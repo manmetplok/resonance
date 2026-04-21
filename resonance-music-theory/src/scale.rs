@@ -99,12 +99,12 @@ mod tests {
         let s = Scale::new(PitchClass::C, Mode::Major);
         // C D E F G A B across any octave
         for base in [0u8, 12, 24, 36, 60, 72, 84].iter() {
-            assert!(s.contains(base + 0));  // C
-            assert!(s.contains(base + 2));  // D
-            assert!(s.contains(base + 4));  // E
-            assert!(s.contains(base + 5));  // F
-            assert!(s.contains(base + 7));  // G
-            assert!(s.contains(base + 9));  // A
+            assert!(s.contains(base + 0)); // C
+            assert!(s.contains(base + 2)); // D
+            assert!(s.contains(base + 4)); // E
+            assert!(s.contains(base + 5)); // F
+            assert!(s.contains(base + 7)); // G
+            assert!(s.contains(base + 9)); // A
             assert!(s.contains(base + 11)); // B
             assert!(!s.contains(base + 1)); // C#
             assert!(!s.contains(base + 3)); // D#

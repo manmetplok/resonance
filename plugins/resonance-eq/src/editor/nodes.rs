@@ -11,9 +11,7 @@
 use wayland_plugin_gui::egui;
 
 use crate::band::{BandKind, BandSlope};
-use crate::editor::response::{
-    color_for_kind, db_to_y, freq_to_x, x_to_freq, y_to_db,
-};
+use crate::editor::response::{color_for_kind, db_to_y, freq_to_x, x_to_freq, y_to_db};
 use crate::editor::{theme, EqEditorApp};
 use crate::params::{BandSnapshot, NUM_BANDS};
 

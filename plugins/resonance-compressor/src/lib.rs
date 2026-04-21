@@ -36,8 +36,7 @@ impl ResonancePlugin for ResonanceCompressor {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str =
         "Stereo feed-forward compressor with soft knee, sidechain HPF, and parallel mix";
-    const FEATURES: &'static [&'static str] =
-        &["audio-effect", "compressor", "stereo", "dynamics"];
+    const FEATURES: &'static [&'static str] = &["audio-effect", "compressor", "stereo", "dynamics"];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
 

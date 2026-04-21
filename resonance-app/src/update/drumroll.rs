@@ -1,6 +1,4 @@
-use resonance_audio::types::{
-    AudioCommand, ClipId, MidiNote, TICKS_PER_QUARTER_NOTE,
-};
+use resonance_audio::types::{AudioCommand, ClipId, MidiNote, TICKS_PER_QUARTER_NOTE};
 
 use crate::compose::drumroll::humanize::{self, HumanizeParams, HumanizeScope};
 use crate::compose::drumroll::{euclidean, DrumrollMessage};
@@ -42,7 +40,11 @@ pub fn handle(r: &mut crate::Resonance, msg: DrumrollMessage) {
             r.compose.drumroll.euclid_rotation_input = out;
         }
 
-        DrumrollMessage::ToggleStep { clip_id, pad_index, step } => {
+        DrumrollMessage::ToggleStep {
+            clip_id,
+            pad_index,
+            step,
+        } => {
             let Some(pad) = r.compose.drumroll.pad_map.get(pad_index).cloned() else {
                 return;
             };
@@ -61,11 +63,15 @@ pub fn handle(r: &mut crate::Resonance, msg: DrumrollMessage) {
                 return;
             }
             // Find an existing note on this pad that lies inside this step.
-            let existing = clip.notes.iter().position(|n| {
-                n.note == pad.note && (n.start_tick / step_ticks) == step as u64
-            });
+            let existing = clip
+                .notes
+                .iter()
+                .position(|n| n.note == pad.note && (n.start_tick / step_ticks) == step as u64);
             if let Some(note_index) = existing {
-                r.engine.send(AudioCommand::RemoveMidiNote { clip_id, note_index });
+                r.engine.send(AudioCommand::RemoveMidiNote {
+                    clip_id,
+                    note_index,
+                });
             } else {
                 r.engine.send(AudioCommand::AddMidiNote {
                     clip_id,
@@ -233,12 +239,13 @@ fn send_pad_edits(
     adds: Vec<MidiNote>,
 ) {
     for note_index in removals {
-        r.engine
-            .send(AudioCommand::RemoveMidiNote { clip_id, note_index });
+        r.engine.send(AudioCommand::RemoveMidiNote {
+            clip_id,
+            note_index,
+        });
     }
     for note in adds {
-        r.engine
-            .send(AudioCommand::AddMidiNote { clip_id, note });
+        r.engine.send(AudioCommand::AddMidiNote { clip_id, note });
     }
 }
 
@@ -279,14 +286,32 @@ mod tests {
     #[test]
     fn euclid_edits_removes_only_target_pad() {
         let notes = vec![
-            MidiNote { note: 36, velocity: 0.9, start_tick: 0, duration_ticks: 10 },
-            MidiNote { note: 38, velocity: 0.9, start_tick: 10, duration_ticks: 10 },
-            MidiNote { note: 36, velocity: 0.9, start_tick: 20, duration_ticks: 10 },
+            MidiNote {
+                note: 36,
+                velocity: 0.9,
+                start_tick: 0,
+                duration_ticks: 10,
+            },
+            MidiNote {
+                note: 38,
+                velocity: 0.9,
+                start_tick: 10,
+                duration_ticks: 10,
+            },
+            MidiNote {
+                note: 36,
+                velocity: 0.9,
+                start_tick: 20,
+                duration_ticks: 10,
+            },
         ];
         let clip = clip_with_notes(notes);
-        let new_notes = vec![
-            MidiNote { note: 36, velocity: 0.8, start_tick: 5, duration_ticks: 10 },
-        ];
+        let new_notes = vec![MidiNote {
+            note: 36,
+            velocity: 0.8,
+            start_tick: 5,
+            duration_ticks: 10,
+        }];
         let (removals, adds) = euclid_edits_for(&clip, 36, new_notes);
         // Removals target indices 0 and 2 (note 36), sorted descending.
         assert_eq!(removals, vec![2, 0]);
@@ -308,9 +333,24 @@ mod tests {
     #[test]
     fn humanize_edits_selected_pad_only_touches_matching_notes() {
         let notes = vec![
-            MidiNote { note: 36, velocity: 0.9, start_tick: 0, duration_ticks: 120 },
-            MidiNote { note: 38, velocity: 0.9, start_tick: 120, duration_ticks: 120 },
-            MidiNote { note: 36, velocity: 0.9, start_tick: 240, duration_ticks: 120 },
+            MidiNote {
+                note: 36,
+                velocity: 0.9,
+                start_tick: 0,
+                duration_ticks: 120,
+            },
+            MidiNote {
+                note: 38,
+                velocity: 0.9,
+                start_tick: 120,
+                duration_ticks: 120,
+            },
+            MidiNote {
+                note: 36,
+                velocity: 0.9,
+                start_tick: 240,
+                duration_ticks: 120,
+            },
         ];
         let clip = clip_with_notes(notes);
         let params = HumanizeParams {

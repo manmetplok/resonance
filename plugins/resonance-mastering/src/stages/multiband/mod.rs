@@ -136,12 +136,7 @@ impl Multiband {
     }
 
     /// Process a stereo block in place.
-    pub fn process_stereo(
-        &mut self,
-        left: &mut [f32],
-        right: &mut [f32],
-        cfg: &MultibandConfig,
-    ) {
+    pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &MultibandConfig) {
         let frames = left.len().min(right.len()).min(self.max_buffer);
         if frames == 0 {
             return;
@@ -266,4 +261,3 @@ impl Multiband {
         }
     }
 }
-

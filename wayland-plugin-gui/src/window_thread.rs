@@ -25,8 +25,8 @@ use smithay_client_toolkit::shell::xdg::window::{
 use smithay_client_toolkit::shell::xdg::XdgShell;
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::{
-    delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer,
-    delegate_registry, delegate_seat, delegate_xdg_shell, delegate_xdg_window, registry_handlers,
+    delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer, delegate_registry,
+    delegate_seat, delegate_xdg_shell, delegate_xdg_window, registry_handlers,
 };
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::wl_keyboard::WlKeyboard;
@@ -75,8 +75,8 @@ impl EditorThread {
         ready_tx: SyncSender<Result<(), EditorError>>,
     ) -> Result<(), EditorError> {
         // -------- Wayland connection + globals --------
-        let conn = Connection::connect_to_env()
-            .map_err(|e| EditorError::WaylandConnect(e.to_string()))?;
+        let conn =
+            Connection::connect_to_env().map_err(|e| EditorError::WaylandConnect(e.to_string()))?;
 
         let (globals, event_queue) = registry_queue_init::<State>(&conn)
             .map_err(|e| EditorError::WaylandConnect(e.to_string()))?;
@@ -481,7 +481,8 @@ impl KeyboardHandler for State {
         _: u32,
         event: KeyEvent,
     ) {
-        self.input.process_key(&event, true, &mut self.pending_events);
+        self.input
+            .process_key(&event, true, &mut self.pending_events);
         self.needs_redraw = true;
     }
     fn repeat_key(
@@ -492,7 +493,8 @@ impl KeyboardHandler for State {
         _: u32,
         event: KeyEvent,
     ) {
-        self.input.process_key(&event, true, &mut self.pending_events);
+        self.input
+            .process_key(&event, true, &mut self.pending_events);
         self.needs_redraw = true;
     }
     fn release_key(
@@ -503,7 +505,8 @@ impl KeyboardHandler for State {
         _: u32,
         event: KeyEvent,
     ) {
-        self.input.process_key(&event, false, &mut self.pending_events);
+        self.input
+            .process_key(&event, false, &mut self.pending_events);
         self.needs_redraw = true;
     }
     fn update_modifiers(
@@ -549,8 +552,16 @@ impl WindowHandler for State {
         _serial: u32,
     ) {
         let (w, h) = (
-            configure.new_size.0.map(NonZeroU32::get).unwrap_or(self.size.0),
-            configure.new_size.1.map(NonZeroU32::get).unwrap_or(self.size.1),
+            configure
+                .new_size
+                .0
+                .map(NonZeroU32::get)
+                .unwrap_or(self.size.0),
+            configure
+                .new_size
+                .1
+                .map(NonZeroU32::get)
+                .unwrap_or(self.size.1),
         );
         self.pending_size = Some((w, h));
         if !self.configured {

@@ -1,5 +1,4 @@
 /// LSTM inference engine for NAM models.
-
 use super::parse::{LstmConfig, WeightReader};
 use super::{fast_tanh, matvec, matvec_add, sigmoid, validate_matvec_dims, NamInference};
 
@@ -79,17 +78,27 @@ impl LstmModel {
 
         // Validate matvec dimensions for all LSTM layers at load time.
         for (i, layer) in layers.iter().enumerate() {
-            let x_buf = if i == 0 { &input_buf[..layer.input_size] } else { &h[0][..] };
+            let x_buf = if i == 0 {
+                &input_buf[..layer.input_size]
+            } else {
+                &h[0][..]
+            };
             if !validate_matvec_dims(&layer.w_ih, x_buf, &gates, 4 * hs, layer.input_size) {
                 return Err(format!(
                     "LSTM layer {}: w_ih dimension mismatch (w_ih={}, input_size={}, gates={})",
-                    i, layer.w_ih.len(), layer.input_size, gates.len()
+                    i,
+                    layer.w_ih.len(),
+                    layer.input_size,
+                    gates.len()
                 ));
             }
             if !validate_matvec_dims(&layer.w_hh, &h[0], &gates, 4 * hs, hs) {
                 return Err(format!(
                     "LSTM layer {}: w_hh dimension mismatch (w_hh={}, hs={}, gates={})",
-                    i, layer.w_hh.len(), hs, gates.len()
+                    i,
+                    layer.w_hh.len(),
+                    hs,
+                    gates.len()
                 ));
             }
         }
@@ -130,13 +139,7 @@ impl NamInference for LstmModel {
             for j in 0..4 * hs {
                 self.gates[j] += layer.b_ih[j];
             }
-            matvec_add(
-                &layer.w_hh,
-                &self.h[layer_idx],
-                4 * hs,
-                hs,
-                &mut self.gates,
-            );
+            matvec_add(&layer.w_hh, &self.h[layer_idx], 4 * hs, hs, &mut self.gates);
             for j in 0..4 * hs {
                 self.gates[j] += layer.b_hh[j];
             }

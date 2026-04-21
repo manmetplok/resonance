@@ -1,12 +1,17 @@
-use wayland_plugin_gui::egui;
 use egui::{Painter, Rect, Stroke, StrokeKind};
+use wayland_plugin_gui::egui;
 
-use crate::viz::DelayViz;
 use super::theme;
+use crate::viz::DelayViz;
 
 pub fn draw(painter: &Painter, rect: Rect, viz: &DelayViz) {
     painter.rect_filled(rect, 4.0, theme::PANEL);
-    painter.rect_stroke(rect, 4.0, Stroke::new(1.0, theme::BORDER), StrokeKind::Inside);
+    painter.rect_stroke(
+        rect,
+        4.0,
+        Stroke::new(1.0, theme::BORDER),
+        StrokeKind::Inside,
+    );
 
     let (times_l, levels_l, times_r, levels_r) = viz.read_echo_taps();
 

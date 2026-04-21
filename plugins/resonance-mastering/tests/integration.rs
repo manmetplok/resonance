@@ -37,10 +37,12 @@ fn state_round_trips_through_save_load() {
         (plugin.params().target_lufs.value() - other.params().target_lufs.value()).abs() < 1e-3
     );
     assert!(
-        (plugin.params().input_trim_db.value() - other.params().input_trim_db.value()).abs()
-            < 1e-3
+        (plugin.params().input_trim_db.value() - other.params().input_trim_db.value()).abs() < 1e-3
     );
-    assert_eq!(plugin.params().bypass.value(), other.params().bypass.value());
+    assert_eq!(
+        plugin.params().bypass.value(),
+        other.params().bypass.value()
+    );
     assert_eq!(
         plugin.params().corrective_eq.bands[1].on.value(),
         other.params().corrective_eq.bands[1].on.value()
@@ -138,9 +140,7 @@ fn bell_cut_propagates_through_chain() {
         .freq
         .set_value(1000.0);
     plugin.params().corrective_eq.bands[1].q.set_value(1.0);
-    plugin.params().corrective_eq.bands[1]
-        .gain
-        .set_value(-12.0);
+    plugin.params().corrective_eq.bands[1].gain.set_value(-12.0);
 
     let latency = plugin.latency_samples() as usize;
     let total = latency + 8192;
@@ -166,11 +166,7 @@ fn glue_compressor_reduces_loud_signal_through_chain() {
     let mut plugin = ResonanceMastering::new();
     plugin.initialize(48_000.0, 4096);
     plugin.params().glue_compressor.on.set_value(true);
-    plugin
-        .params()
-        .glue_compressor
-        .threshold
-        .set_value(-30.0);
+    plugin.params().glue_compressor.threshold.set_value(-30.0);
     plugin.params().glue_compressor.ratio.set_value(8.0);
     plugin.params().glue_compressor.attack.set_value(1.0);
     plugin.params().glue_compressor.release.set_value(50.0);

@@ -1,5 +1,4 @@
 /// Post-voice effects: distortion, chorus, stereo delay.
-
 use resonance_dsp::{DelayLine, OnePole};
 
 // ---------------------------------------------------------------------------

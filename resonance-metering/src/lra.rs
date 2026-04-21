@@ -70,15 +70,15 @@ impl LraMeter {
         }
         // Compute the p95 reference from the absolute-gated set, then
         // relative-gate at `p95 + LRA_RELATIVE_GATE_LU`.
-        let mut abs_lufs: Vec<f64> = abs_gated.iter().map(|&ms| block_mean_square_to_lufs(ms)).collect();
+        let mut abs_lufs: Vec<f64> = abs_gated
+            .iter()
+            .map(|&ms| block_mean_square_to_lufs(ms))
+            .collect();
         abs_lufs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let p95 = percentile(&abs_lufs, 0.95);
         let threshold = p95 + LRA_RELATIVE_GATE_LU;
 
-        let mut gated: Vec<f64> = abs_lufs
-            .into_iter()
-            .filter(|&l| l >= threshold)
-            .collect();
+        let mut gated: Vec<f64> = abs_lufs.into_iter().filter(|&l| l >= threshold).collect();
         if gated.is_empty() {
             return 0.0;
         }

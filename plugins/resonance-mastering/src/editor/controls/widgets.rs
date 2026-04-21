@@ -14,12 +14,7 @@ pub const COL_WIDTH: f32 = 108.0;
 
 /// Labeled combo box bound to an `IntParam`. `labels` is indexed by the
 /// integer value (offset from range min).
-pub fn int_combo(
-    ui: &mut egui::Ui,
-    param: &IntParam,
-    id: &str,
-    labels: &[&str],
-) {
+pub fn int_combo(ui: &mut egui::Ui, param: &IntParam, id: &str, labels: &[&str]) {
     let current = param.value();
     let min = param.min_plain() as i32;
     let idx = (current - min).clamp(0, labels.len() as i32 - 1) as usize;
@@ -29,10 +24,7 @@ pub fn int_combo(
         .selected_text(current_label)
         .show_ui(ui, |ui| {
             for (i, label) in labels.iter().enumerate() {
-                if ui
-                    .selectable_label(i == idx, *label)
-                    .clicked()
-                {
+                if ui.selectable_label(i == idx, *label).clicked() {
                     param.set_value(min + i as i32);
                 }
             }

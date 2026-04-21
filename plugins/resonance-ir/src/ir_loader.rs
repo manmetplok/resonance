@@ -1,5 +1,4 @@
 /// IR (Impulse Response) WAV file loading and resampling.
-
 use std::path::Path;
 
 /// A loaded impulse response: one or two channels of f32 samples.

@@ -160,8 +160,5 @@ fn draw_channel(
     // Envelope stroke (skip the bookend baseline points so the line
     // doesn't zig-zag from the centre at either edge).
     let stroke_pts = pts[1..pts.len() - 1].to_vec();
-    painter.add(egui::Shape::line(
-        stroke_pts,
-        egui::Stroke::new(1.2, color),
-    ));
+    painter.add(egui::Shape::line(stroke_pts, egui::Stroke::new(1.2, color)));
 }

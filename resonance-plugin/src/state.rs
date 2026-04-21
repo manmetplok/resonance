@@ -2,7 +2,6 @@
 ///
 /// Default format is plain JSON: `{ "params": { "id": value, ... } }`
 /// Plugins can override save_state/load_state to add custom fields at the top level.
-
 use crate::param::Param;
 
 /// Serialize all parameters to a JSON value.

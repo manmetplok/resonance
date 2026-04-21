@@ -18,9 +18,7 @@ use crate::midi_editor::PianoRollCanvas;
 use crate::state::*;
 use crate::theme;
 use crate::timeline::TimelineCanvas;
-use iced::widget::{
-    button, canvas, column, container, row, stack, text, Space,
-};
+use iced::widget::{button, canvas, column, container, row, stack, text, Space};
 use iced::{alignment, Element, Length};
 use resonance_audio::types::*;
 
@@ -167,7 +165,8 @@ impl crate::Resonance {
 
     fn view_timeline(&self) -> Element<'_, Message> {
         let recording_tracks: Vec<TrackId> = if self.transport.recording {
-            self.registry.tracks
+            self.registry
+                .tracks
                 .iter()
                 .filter(|t| t.record_armed)
                 .map(|t| t.id)

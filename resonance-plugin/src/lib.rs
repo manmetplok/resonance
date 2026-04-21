@@ -1,7 +1,6 @@
 /// resonance-plugin: Lightweight CLAP plugin framework for the Resonance project.
 ///
 /// Replaces nih-plug with a thin abstraction over clack-plugin.
-
 pub mod clap_bridge;
 pub mod formatters;
 pub mod gui;
@@ -49,9 +48,7 @@ pub fn stable_hash(s: &str) -> u32 {
 macro_rules! export_clap {
     ($plugin:ty) => {
         $crate::clack_reexport::clack_export_entry!(
-            $crate::clack_reexport::entry::SinglePluginEntry::<
-                $crate::ClapBridge<$plugin>,
-            >
+            $crate::clack_reexport::entry::SinglePluginEntry::<$crate::ClapBridge<$plugin>>
         );
     };
 }

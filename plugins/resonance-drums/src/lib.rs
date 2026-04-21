@@ -8,10 +8,10 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use resonance_plugin::*;
 
 #[cfg(feature = "editor")]
-mod editor;
-#[cfg(feature = "editor")]
 pub(crate) mod download;
 mod drum_map;
+#[cfg(feature = "editor")]
+mod editor;
 mod kit;
 mod kit_loader;
 mod mic_catalog;
@@ -100,7 +100,9 @@ impl ResonancePlugin for ResonanceDrums {
             kit_sender,
             load_generation: Arc::new(AtomicU64::new(0)),
             catalog: Arc::new(Mutex::new(ManifestMicCatalog::default())),
-            pad_choices: Arc::new(Mutex::new(std::array::from_fn(|_| PadMicChoices::default()))),
+            pad_choices: Arc::new(Mutex::new(std::array::from_fn(|_| {
+                PadMicChoices::default()
+            }))),
             overhead_setup_key: Arc::new(Mutex::new(DEFAULT_OVERHEAD_SETUP.to_string())),
             articulations: Arc::new(Mutex::new([false; drum_map::NUM_PADS])),
         };
@@ -139,13 +141,15 @@ impl ResonancePlugin for ResonanceDrums {
     fn output_layout(&self) -> Vec<resonance_plugin::OutputPortSpec> {
         // 7 stereo output ports: Main + 5 drum groups + Overhead. See the
         // pad mapping in `drum_map.rs` for which pad feeds which port.
-        ["Main", "Kick", "Snare", "Toms", "Hats", "Cymbals", "Overhead"]
-            .iter()
-            .map(|name| resonance_plugin::OutputPortSpec {
-                name: name.to_string(),
-                channel_count: 2,
-            })
-            .collect()
+        [
+            "Main", "Kick", "Snare", "Toms", "Hats", "Cymbals", "Overhead",
+        ]
+        .iter()
+        .map(|name| resonance_plugin::OutputPortSpec {
+            name: name.to_string(),
+            channel_count: 2,
+        })
+        .collect()
     }
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
@@ -320,10 +324,8 @@ impl ExtraStateSaver for DrumsExtraState {
         );
         // Per-pad articulation toggles as an array of booleans.
         let arts = self.articulations.lock().unwrap();
-        let arts_array: Vec<serde_json::Value> = arts
-            .iter()
-            .map(|&v| serde_json::Value::Bool(v))
-            .collect();
+        let arts_array: Vec<serde_json::Value> =
+            arts.iter().map(|&v| serde_json::Value::Bool(v)).collect();
         map.insert(
             "articulations".to_string(),
             serde_json::Value::Array(arts_array),
@@ -383,18 +385,14 @@ mod tests {
     #[test]
     fn state_roundtrip_preserves_kit_path() {
         let src = ResonanceDrums::new();
-        *src.bridge.kit_path.lock().unwrap() =
-            Some(PathBuf::from("/some/kit/drum_samples.json"));
+        *src.bridge.kit_path.lock().unwrap() = Some(PathBuf::from("/some/kit/drum_samples.json"));
 
         let bytes = src.save_state();
 
         let mut dst = ResonanceDrums::new();
         assert!(dst.load_state(&bytes));
         let restored = dst.bridge.kit_path.lock().unwrap().clone();
-        assert_eq!(
-            restored,
-            Some(PathBuf::from("/some/kit/drum_samples.json"))
-        );
+        assert_eq!(restored, Some(PathBuf::from("/some/kit/drum_samples.json")));
     }
 
     /// save_state with no kit followed by load_state clears any prior path.
@@ -428,8 +426,7 @@ mod tests {
         DrumsExtraState,
     ) {
         let kit_path = Arc::new(Mutex::new(initial_path));
-        let overhead_setup_key =
-            Arc::new(Mutex::new(DEFAULT_OVERHEAD_SETUP.to_string()));
+        let overhead_setup_key = Arc::new(Mutex::new(DEFAULT_OVERHEAD_SETUP.to_string()));
         let pad_choices = Arc::new(Mutex::new(std::array::from_fn(|_| {
             PadMicChoices::default()
         })));
@@ -440,16 +437,21 @@ mod tests {
             pad_choices: pad_choices.clone(),
             articulations: articulations.clone(),
         };
-        (kit_path, overhead_setup_key, pad_choices, articulations, saver)
+        (
+            kit_path,
+            overhead_setup_key,
+            pad_choices,
+            articulations,
+            saver,
+        )
     }
 
     #[test]
     fn extra_saver_roundtrip_active_path() {
         // Construct the saver the same way editor_factory / new() would,
         // holding shared arcs for each persisted field.
-        let (_kp, _oh, _pc, _art, saver) = make_saver_bundle(Some(PathBuf::from(
-            "/active/path/drum_samples.json",
-        )));
+        let (_kp, _oh, _pc, _art, saver) =
+            make_saver_bundle(Some(PathBuf::from("/active/path/drum_samples.json")));
 
         // Serialize — this is what clap_bridge::save() would do on the
         // plugin-is-None branch.
@@ -474,8 +476,7 @@ mod tests {
     /// A loaded null kit_path through the saver clears previously stored path.
     #[test]
     fn extra_saver_null_clears_active_path() {
-        let (kit_path, _, _, _, saver) =
-            make_saver_bundle(Some(PathBuf::from("/stale.json")));
+        let (kit_path, _, _, _, saver) = make_saver_bundle(Some(PathBuf::from("/stale.json")));
 
         // State without a kit_path (simulating a save with no kit loaded).
         let state = serde_json::json!({ "params": {}, "kit_path": serde_json::Value::Null });
@@ -532,8 +533,8 @@ mod tests {
         let (_, _, _, art_arc, saver) = make_saver_bundle(None);
         {
             let mut guard = art_arc.lock().unwrap();
-            guard[0] = true;  // Kick -> ohne Teppich
-            guard[9] = true;  // Tom High -> ohne Teppich
+            guard[0] = true; // Kick -> ohne Teppich
+            guard[9] = true; // Tom High -> ohne Teppich
         }
 
         let mut json = serde_json::json!({ "params": {} });

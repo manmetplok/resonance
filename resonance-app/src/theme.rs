@@ -301,11 +301,7 @@ pub fn tab_button_style(active: bool, status: button::Status) -> button::Style {
 /// Button style for a section placement in the Compose tab strip. Fills the
 /// button with the section's configured color (dimmed when inactive) and
 /// highlights it with an accent border when it is the current selection.
-pub fn section_button_style(
-    active: bool,
-    color: [u8; 3],
-    status: button::Status,
-) -> button::Style {
+pub fn section_button_style(active: bool, color: [u8; 3], status: button::Status) -> button::Style {
     let base = Color::from_rgb(
         color[0] as f32 / 255.0,
         color[1] as f32 / 255.0,

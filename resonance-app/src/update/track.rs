@@ -33,8 +33,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 if r.compose.expanded_track_id == Some(id) {
                     r.compose.expanded_track_id = None;
                 }
-                r.engine
-                    .send(AudioCommand::RemoveTrack { track_id: id });
+                r.engine.send(AudioCommand::RemoveTrack { track_id: id });
             }
         }
         TrackMessage::ConfirmRemoveTrack => {
@@ -45,8 +44,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 if r.compose.expanded_track_id == Some(id) {
                     r.compose.expanded_track_id = None;
                 }
-                r.engine
-                    .send(AudioCommand::RemoveTrack { track_id: id });
+                r.engine.send(AudioCommand::RemoveTrack { track_id: id });
             }
         }
         TrackMessage::CancelRemoveTrack => {
@@ -59,8 +57,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             if r.compose.expanded_track_id == Some(id) {
                 r.compose.expanded_track_id = None;
             }
-            r.engine
-                .send(AudioCommand::RemoveTrack { track_id: id });
+            r.engine.send(AudioCommand::RemoveTrack { track_id: id });
         }
         TrackMessage::SetTrackVolume(id, vol_db) => {
             r.engine.send(AudioCommand::SetTrackVolume {
@@ -144,8 +141,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
         TrackMessage::SetInstrumentType(track_id, ty) => {
             r.with_track_mut(track_id, |t| {
                 t.instrument_type = ty;
-                t.instrument_icon =
-                    crate::state::InstrumentIcon::default_for(ty);
+                t.instrument_icon = crate::state::InstrumentIcon::default_for(ty);
             });
         }
         TrackMessage::SetInstrumentIcon(track_id, icon) => {
@@ -169,10 +165,8 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.mono
             });
             if let Some(mono) = new_mono {
-                r.engine.send(AudioCommand::SetTrackMono {
-                    track_id: id,
-                    mono,
-                });
+                r.engine
+                    .send(AudioCommand::SetTrackMono { track_id: id, mono });
             }
         }
         TrackMessage::SetTrackInputDevice(id, device_name) => {
@@ -192,8 +186,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             }
         }
         TrackMessage::SetTrackInputPort(id, port_index) => {
-            let updated =
-                r.with_track_mut(id, |t| t.input_port_index = port_index);
+            let updated = r.with_track_mut(id, |t| t.input_port_index = port_index);
             if updated.is_some() {
                 r.engine.send(AudioCommand::SetTrackInputPort {
                     track_id: id,

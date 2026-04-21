@@ -79,11 +79,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut IrEditorApp) {
             (name, position)
         };
 
-        ui.label(
-            egui::RichText::new(name_text)
-                .size(13.0)
-                .color(theme::TEXT),
-        );
+        ui.label(egui::RichText::new(name_text).size(13.0).color(theme::TEXT));
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(position_text)
@@ -94,11 +90,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut IrEditorApp) {
         ui.add_space(12.0);
         let info = app.ir_info.lock().clone();
         if !info.is_empty() {
-            ui.label(
-                egui::RichText::new(info)
-                    .size(11.0)
-                    .color(theme::TEXT_DIM),
-            );
+            ui.label(egui::RichText::new(info).size(11.0).color(theme::TEXT_DIM));
         }
     });
 }

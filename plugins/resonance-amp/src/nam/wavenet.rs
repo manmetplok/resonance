@@ -3,7 +3,6 @@
 /// Follows the NAM (Neural Amp Modeler) weight serialization order:
 /// Per LayerArray (stack): rechannel, layers (conv+bias, input_mixin, layer1x1), head_rechannel
 /// Then: head MLP layers, head_scale.
-
 use super::parse::{WaveNetConfig, WeightReader};
 use super::{fast_tanh, matvec, matvec_add, sigmoid, validate_matvec_dims, NamInference};
 
@@ -130,8 +129,8 @@ pub struct WaveNetModel {
 
     // Pre-allocated scratch buffers (sized for max needed)
     activation: Vec<f32>,
-    conv_out: Vec<f32>,   // mid_ch sized
-    mixin_buf: Vec<f32>,  // mid_ch sized
+    conv_out: Vec<f32>,  // mid_ch sized
+    mixin_buf: Vec<f32>, // mid_ch sized
     residual_buf: Vec<f32>,
     skip_accum: Vec<f32>,
     rechannel_buf: Vec<f32>,
@@ -305,7 +304,13 @@ impl WaveNetModel {
 
         for (si, rc) in rechannels.iter().enumerate() {
             if let Some(ref rc) = rc {
-                if !validate_matvec_dims(&rc.weight, &scratch_activation[..rc.in_ch], &scratch_activation[..rc.out_ch], rc.out_ch, rc.in_ch) {
+                if !validate_matvec_dims(
+                    &rc.weight,
+                    &scratch_activation[..rc.in_ch],
+                    &scratch_activation[..rc.out_ch],
+                    rc.out_ch,
+                    rc.in_ch,
+                ) {
                     return Err(format!("WaveNet stack {si}: rechannel dimension mismatch"));
                 }
             }
@@ -315,29 +320,65 @@ impl WaveNetModel {
                 let ch = layer.channels;
                 let mid_ch = layer.mid_ch;
                 for (tap_idx, w) in layer.w_conv.iter().enumerate() {
-                    if !validate_matvec_dims(w, &scratch_activation[..ch], &scratch_conv_out[..mid_ch], mid_ch, ch) {
+                    if !validate_matvec_dims(
+                        w,
+                        &scratch_activation[..ch],
+                        &scratch_conv_out[..mid_ch],
+                        mid_ch,
+                        ch,
+                    ) {
                         return Err(format!("WaveNet stack {si} layer {li} tap {tap_idx}: conv weight dimension mismatch"));
                     }
                 }
                 if let Some(ref w_mixin) = layer.w_input_mixin {
                     let cond_size = w_mixin.len() / mid_ch;
-                    if !validate_matvec_dims(w_mixin, &scratch_activation[..cond_size], &scratch_conv_out[..mid_ch], mid_ch, cond_size) {
-                        return Err(format!("WaveNet stack {si} layer {li}: input_mixin dimension mismatch"));
+                    if !validate_matvec_dims(
+                        w_mixin,
+                        &scratch_activation[..cond_size],
+                        &scratch_conv_out[..mid_ch],
+                        mid_ch,
+                        cond_size,
+                    ) {
+                        return Err(format!(
+                            "WaveNet stack {si} layer {li}: input_mixin dimension mismatch"
+                        ));
                     }
                 }
                 if let Some(ref l1x1) = layer.layer1x1 {
-                    if !validate_matvec_dims(&l1x1.weight, &scratch_activation[..l1x1.in_ch], &scratch_activation[..l1x1.out_ch], l1x1.out_ch, l1x1.in_ch) {
-                        return Err(format!("WaveNet stack {si} layer {li}: layer1x1 dimension mismatch"));
+                    if !validate_matvec_dims(
+                        &l1x1.weight,
+                        &scratch_activation[..l1x1.in_ch],
+                        &scratch_activation[..l1x1.out_ch],
+                        l1x1.out_ch,
+                        l1x1.in_ch,
+                    ) {
+                        return Err(format!(
+                            "WaveNet stack {si} layer {li}: layer1x1 dimension mismatch"
+                        ));
                     }
                 }
             }
             let hr = &head_rechannels[si];
-            if !validate_matvec_dims(&hr.weight, &scratch_activation[..hr.in_ch], &scratch_head_buf[..hr.out_ch], hr.out_ch, hr.in_ch) {
-                return Err(format!("WaveNet stack {si}: head_rechannel dimension mismatch"));
+            if !validate_matvec_dims(
+                &hr.weight,
+                &scratch_activation[..hr.in_ch],
+                &scratch_head_buf[..hr.out_ch],
+                hr.out_ch,
+                hr.in_ch,
+            ) {
+                return Err(format!(
+                    "WaveNet stack {si}: head_rechannel dimension mismatch"
+                ));
             }
         }
         for (hi, hl) in head_layers.iter().enumerate() {
-            if !validate_matvec_dims(&hl.weight, &scratch_head_buf[..hl.in_features], &scratch_head_buf[..hl.out_features], hl.out_features, hl.in_features) {
+            if !validate_matvec_dims(
+                &hl.weight,
+                &scratch_head_buf[..hl.in_features],
+                &scratch_head_buf[..hl.out_features],
+                hl.out_features,
+                hl.in_features,
+            ) {
                 return Err(format!("WaveNet head layer {hi}: dimension mismatch"));
             }
         }
@@ -373,8 +414,16 @@ impl NamInference for WaveNetModel {
         self.head_input.fill(0.0);
 
         for (stack_idx, stack) in self.stacks.iter().enumerate() {
-            let ch = if let Some(layer) = stack.first() { layer.channels } else { continue };
-            let mid_ch = if let Some(layer) = stack.first() { layer.mid_ch } else { continue };
+            let ch = if let Some(layer) = stack.first() {
+                layer.channels
+            } else {
+                continue;
+            };
+            let mid_ch = if let Some(layer) = stack.first() {
+                layer.mid_ch
+            } else {
+                continue;
+            };
 
             // Rechannel if needed
             if let Some(ref rc) = self.rechannels[stack_idx] {
@@ -419,7 +468,13 @@ impl NamInference for WaveNetModel {
                 // Input mixin: add condition signal projected to mid_ch
                 if let Some(ref w_mixin) = layer.w_input_mixin {
                     let cond_size = w_mixin.len() / mid_ch;
-                    matvec(w_mixin, &self.rechannel_buf[..cond_size], mid_ch, cond_size, &mut self.mixin_buf);
+                    matvec(
+                        w_mixin,
+                        &self.rechannel_buf[..cond_size],
+                        mid_ch,
+                        cond_size,
+                        &mut self.mixin_buf,
+                    );
                     for c in 0..mid_ch {
                         self.conv_out[c] += self.mixin_buf[c];
                     }
@@ -446,7 +501,13 @@ impl NamInference for WaveNetModel {
                 // Residual connection
                 match &layer.layer1x1 {
                     Some(l1x1) => {
-                        matvec(&l1x1.weight, &self.activation[..l1x1.in_ch], l1x1.out_ch, l1x1.in_ch, &mut self.residual_buf);
+                        matvec(
+                            &l1x1.weight,
+                            &self.activation[..l1x1.in_ch],
+                            l1x1.out_ch,
+                            l1x1.in_ch,
+                            &mut self.residual_buf,
+                        );
                         for c in 0..l1x1.out_ch {
                             self.residual_buf[c] += l1x1.bias[c];
                         }
@@ -471,7 +532,13 @@ impl NamInference for WaveNetModel {
             for c in 0..ch {
                 self.skip_accum[c] = fast_tanh(self.skip_accum[c]);
             }
-            matvec(&hr.weight, &self.skip_accum[..hr.in_ch], hr.out_ch, hr.in_ch, &mut self.head_buf_a);
+            matvec(
+                &hr.weight,
+                &self.skip_accum[..hr.in_ch],
+                hr.out_ch,
+                hr.in_ch,
+                &mut self.head_buf_a,
+            );
             for c in 0..hr.out_ch {
                 self.head_input[c] += self.head_buf_a[c] + hr.bias[c];
             }
@@ -496,7 +563,13 @@ impl NamInference for WaveNetModel {
             } else {
                 (&self.head_buf_b as &[f32], &mut self.head_buf_a)
             };
-            matvec(&head_layer.weight, &src[..current_size], head_layer.out_features, head_layer.in_features, dst);
+            matvec(
+                &head_layer.weight,
+                &src[..current_size],
+                head_layer.out_features,
+                head_layer.in_features,
+                dst,
+            );
             for j in 0..head_layer.out_features {
                 dst[j] += head_layer.bias[j];
             }
@@ -509,7 +582,11 @@ impl NamInference for WaveNetModel {
             use_a = !use_a;
         }
 
-        let result = if use_a { self.head_buf_a[0] } else { self.head_buf_b[0] };
+        let result = if use_a {
+            self.head_buf_a[0]
+        } else {
+            self.head_buf_b[0]
+        };
         result * self.head_scale
     }
 

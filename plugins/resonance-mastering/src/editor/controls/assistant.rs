@@ -36,11 +36,9 @@ pub fn draw(
             );
             ui.add_space(16.0);
             ui.label(
-                egui::RichText::new(
-                    "Pick a target, let ~10 s of audio play, then Analyze.",
-                )
-                .size(10.0)
-                .color(theme::TEXT_DIM),
+                egui::RichText::new("Pick a target, let ~10 s of audio play, then Analyze.")
+                    .size(10.0)
+                    .color(theme::TEXT_DIM),
             );
         });
         ui.add_space(6.0);
@@ -70,20 +68,14 @@ pub fn draw(
             ui.add_space(12.0);
             ui.label(egui::RichText::new("Target:").color(theme::TEXT_DIM));
             if ui
-                .selectable_label(
-                    *target_source == TargetSource::Genre,
-                    "Genre preset",
-                )
+                .selectable_label(*target_source == TargetSource::Genre, "Genre preset")
                 .clicked()
             {
                 *target_source = TargetSource::Genre;
             }
             ui.add_space(4.0);
             if ui
-                .selectable_label(
-                    *target_source == TargetSource::Reference,
-                    "Reference track",
-                )
+                .selectable_label(*target_source == TargetSource::Reference, "Reference track")
                 .clicked()
             {
                 *target_source = TargetSource::Reference;
@@ -103,10 +95,7 @@ pub fn draw(
                         .show_ui(ui, |ui| {
                             for &g in Genre::ALL {
                                 if ui
-                                    .selectable_label(
-                                        *selected_genre == g,
-                                        g.label(),
-                                    )
+                                    .selectable_label(*selected_genre == g, g.label())
                                     .clicked()
                                 {
                                     *selected_genre = g;
@@ -165,8 +154,7 @@ pub fn draw(
 
             ui.add_space(24.0);
             let can_analyze = fraction > 0.2
-                && (*target_source == TargetSource::Genre
-                    || assistant.reference().is_some());
+                && (*target_source == TargetSource::Genre || assistant.reference().is_some());
             if ui
                 .add_enabled(can_analyze, egui::Button::new("Analyze"))
                 .clicked()
@@ -201,11 +189,7 @@ pub fn draw(
                 ui.vertical(|ui| {
                     ui.set_min_width(280.0);
                     ui.set_max_width(280.0);
-                    ui.label(
-                        egui::RichText::new("Analysis")
-                            .strong()
-                            .color(theme::TEXT),
-                    );
+                    ui.label(egui::RichText::new("Analysis").strong().color(theme::TEXT));
                     ui.add_space(2.0);
                     stat_row(ui, "Duration", format!("{:.1} s", analysis.duration_s));
                     stat_row(
@@ -246,12 +230,9 @@ pub fn draw(
                         }
                         ui.add_space(6.0);
                         if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("Apply suggestions")
-                                        .color(theme::ACCENT),
-                                ),
-                            )
+                            .add(egui::Button::new(
+                                egui::RichText::new("Apply suggestions").color(theme::ACCENT),
+                            ))
                             .clicked()
                         {
                             s.apply_to(params);

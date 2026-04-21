@@ -18,7 +18,12 @@ pub fn handle(r: &mut Resonance, m: ClipMessage) -> Task<Message> {
                 r.interaction.selected_clip = None;
             }
         }
-        ClipMessage::StartClipDrag { clip_id, grab_offset_x, start_x, start_y } => {
+        ClipMessage::StartClipDrag {
+            clip_id,
+            grab_offset_x,
+            start_x,
+            start_y,
+        } => {
             start_clip_drag(r, clip_id, grab_offset_x, start_x, start_y);
         }
         ClipMessage::UpdateClipDrag(x, y) => {
@@ -27,7 +32,11 @@ pub fn handle(r: &mut Resonance, m: ClipMessage) -> Task<Message> {
         ClipMessage::EndClipDrag => {
             end_clip_drag(r);
         }
-        ClipMessage::StartClipTrim { clip_id, edge, anchor_x } => {
+        ClipMessage::StartClipTrim {
+            clip_id,
+            edge,
+            anchor_x,
+        } => {
             start_clip_trim(r, clip_id, edge, anchor_x);
         }
         ClipMessage::UpdateClipTrim(x) => {
@@ -64,7 +73,11 @@ pub fn start_clip_drag(
 }
 
 pub fn update_clip_drag(r: &mut Resonance, x: f32, y: f32) {
-    let original_track_id = r.interaction.clip_drag.as_ref().map(|d| d.original_track_id);
+    let original_track_id = r
+        .interaction
+        .clip_drag
+        .as_ref()
+        .map(|d| d.original_track_id);
     let Some(orig) = original_track_id else {
         return;
     };
@@ -104,12 +117,7 @@ pub fn end_clip_drag(r: &mut Resonance) {
     }
 }
 
-pub fn start_clip_trim(
-    r: &mut Resonance,
-    clip_id: ClipId,
-    edge: ClipEdge,
-    anchor_x: f32,
-) {
+pub fn start_clip_trim(r: &mut Resonance, clip_id: ClipId, edge: ClipEdge, anchor_x: f32) {
     if let Some(clip) = r.clips.iter().find(|c| c.id == clip_id) {
         r.interaction.selected_clip = Some(clip_id);
         r.interaction.selected_track = Some(clip.track_id);
@@ -149,8 +157,7 @@ pub fn update_clip_trim(r: &mut Resonance, x: f32) {
     match trim.edge {
         ClipEdge::Left => {
             let original_edge = trim.original_start_sample;
-            let raw_target =
-                (original_edge as i64 + delta_samples_signed).max(0) as u64;
+            let raw_target = (original_edge as i64 + delta_samples_signed).max(0) as u64;
             let snapped_delta = snap(raw_target) as i64 - original_edge as i64;
             let max_trim = trim
                 .original_total_frames
@@ -162,10 +169,8 @@ pub fn update_clip_trim(r: &mut Resonance, x: f32) {
                 trim.original_trim_start
                     .saturating_sub((-snapped_delta) as u64)
             };
-            let actual_delta =
-                new_trim_start as i64 - trim.original_trim_start as i64;
-            let new_start =
-                (trim.original_start_sample as i64 + actual_delta).max(0) as u64;
+            let actual_delta = new_trim_start as i64 - trim.original_trim_start as i64;
+            let new_start = (trim.original_start_sample as i64 + actual_delta).max(0) as u64;
             let new_duration = trim
                 .original_total_frames
                 .saturating_sub(new_trim_start)
@@ -182,8 +187,7 @@ pub fn update_clip_trim(r: &mut Resonance, x: f32) {
                 .saturating_sub(trim.original_trim_start)
                 .saturating_sub(trim.original_trim_end);
             let original_edge = trim.original_start_sample + original_duration;
-            let raw_target =
-                (original_edge as i64 + delta_samples_signed).max(0) as u64;
+            let raw_target = (original_edge as i64 + delta_samples_signed).max(0) as u64;
             let snapped_delta = snap(raw_target) as i64 - original_edge as i64;
             let max_trim = trim
                 .original_total_frames
@@ -243,7 +247,11 @@ pub fn start_midi_clip_drag(
 }
 
 pub fn update_midi_clip_drag(r: &mut Resonance, x: f32, y: f32) {
-    let original_track_id = r.interaction.midi_clip_drag.as_ref().map(|d| d.original_track_id);
+    let original_track_id = r
+        .interaction
+        .midi_clip_drag
+        .as_ref()
+        .map(|d| d.original_track_id);
     let Some(orig) = original_track_id else {
         return;
     };
@@ -283,12 +291,7 @@ pub fn end_midi_clip_drag(r: &mut Resonance) {
     }
 }
 
-pub fn start_midi_clip_trim(
-    r: &mut Resonance,
-    clip_id: ClipId,
-    edge: ClipEdge,
-    anchor_x: f32,
-) {
+pub fn start_midi_clip_trim(r: &mut Resonance, clip_id: ClipId, edge: ClipEdge, anchor_x: f32) {
     if let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) {
         r.interaction.selected_midi_clip = Some(clip_id);
         r.interaction.selected_clip = None;
@@ -331,18 +334,14 @@ pub fn update_midi_clip_trim(r: &mut Resonance, x: f32) {
             r.viewport.zoom,
         )
     };
-    let original_duration_samples =
-        (trim.original_duration_ticks as f64 * samples_per_tick) as u64;
+    let original_duration_samples = (trim.original_duration_ticks as f64 * samples_per_tick) as u64;
 
     match trim.edge {
         ClipEdge::Left => {
             let original_edge = trim.original_start_sample;
-            let raw_target =
-                (original_edge as i64 + delta_samples_signed).max(0) as u64;
-            let snapped_delta_samples =
-                snap(raw_target) as i64 - original_edge as i64;
-            let snapped_delta_ticks =
-                (snapped_delta_samples as f64 / samples_per_tick) as i64;
+            let raw_target = (original_edge as i64 + delta_samples_signed).max(0) as u64;
+            let snapped_delta_samples = snap(raw_target) as i64 - original_edge as i64;
+            let snapped_delta_ticks = (snapped_delta_samples as f64 / samples_per_tick) as i64;
             let max_trim = total_ticks
                 .saturating_sub(trim.original_trim_end_ticks)
                 .saturating_sub(min_ticks);
@@ -352,11 +351,9 @@ pub fn update_midi_clip_trim(r: &mut Resonance, x: f32) {
                 trim.original_trim_start_ticks
                     .saturating_sub((-snapped_delta_ticks) as u64)
             };
-            let trim_delta =
-                new_trim_start as i64 - trim.original_trim_start_ticks as i64;
+            let trim_delta = new_trim_start as i64 - trim.original_trim_start_ticks as i64;
             let sample_delta = (trim_delta as f64 * samples_per_tick) as i64;
-            let new_start =
-                (trim.original_start_sample as i64 + sample_delta).max(0) as u64;
+            let new_start = (trim.original_start_sample as i64 + sample_delta).max(0) as u64;
             let new_duration = total_ticks
                 .saturating_sub(new_trim_start)
                 .saturating_sub(trim.original_trim_end_ticks);
@@ -368,12 +365,9 @@ pub fn update_midi_clip_trim(r: &mut Resonance, x: f32) {
         }
         ClipEdge::Right => {
             let original_edge = trim.original_start_sample + original_duration_samples;
-            let raw_target =
-                (original_edge as i64 + delta_samples_signed).max(0) as u64;
-            let snapped_delta_samples =
-                snap(raw_target) as i64 - original_edge as i64;
-            let snapped_delta_ticks =
-                (snapped_delta_samples as f64 / samples_per_tick) as i64;
+            let raw_target = (original_edge as i64 + delta_samples_signed).max(0) as u64;
+            let snapped_delta_samples = snap(raw_target) as i64 - original_edge as i64;
+            let snapped_delta_ticks = (snapped_delta_samples as f64 / samples_per_tick) as i64;
             let max_trim = total_ticks
                 .saturating_sub(trim.original_trim_start_ticks)
                 .saturating_sub(min_ticks);

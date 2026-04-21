@@ -157,11 +157,7 @@ pub(crate) fn handle_add_midi_note(ctx: &HandlerCtx, clip_id: ClipId, note: Midi
     }
 }
 
-pub(crate) fn handle_remove_midi_note(
-    ctx: &HandlerCtx,
-    clip_id: ClipId,
-    note_index: usize,
-) {
+pub(crate) fn handle_remove_midi_note(ctx: &HandlerCtx, clip_id: ClipId, note_index: usize) {
     let mut guard = ctx.midi_clips.write();
     if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
         if note_index < clip.notes.len() {
@@ -236,12 +232,7 @@ pub(crate) fn handle_set_midi_note_velocity(
     }
 }
 
-pub(crate) fn handle_send_note_on(
-    ctx: &HandlerCtx,
-    track_id: TrackId,
-    note: u8,
-    velocity: f32,
-) {
+pub(crate) fn handle_send_note_on(ctx: &HandlerCtx, track_id: TrackId, note: u8, velocity: f32) {
     let tracks_guard = ctx.tracks.read();
     if let Some(track) = tracks_guard.get(&track_id) {
         if track.track_type == TrackType::Instrument {

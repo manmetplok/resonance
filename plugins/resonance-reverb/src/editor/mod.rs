@@ -179,19 +179,14 @@ fn draw_header(ui: &mut egui::Ui, app: &mut ReverbEditorApp) {
         let decay = app.params.decay.value();
         let size = app.params.size.value();
         let diff = app.params.diffusion.value();
+        ui.label(egui::RichText::new(format!("RT60 {decay:>4.1} s")).color(theme::TEXT));
+        ui.add_space(12.0);
         ui.label(
-            egui::RichText::new(format!("RT60 {decay:>4.1} s"))
-                .color(theme::TEXT),
+            egui::RichText::new(format!("Size {:>3.0}%", size * 100.0)).color(theme::TEXT_DIM),
         );
         ui.add_space(12.0);
         ui.label(
-            egui::RichText::new(format!("Size {:>3.0}%", size * 100.0))
-                .color(theme::TEXT_DIM),
-        );
-        ui.add_space(12.0);
-        ui.label(
-            egui::RichText::new(format!("Diffusion {:>3.0}%", diff * 100.0))
-                .color(theme::TEXT_DIM),
+            egui::RichText::new(format!("Diffusion {:>3.0}%", diff * 100.0)).color(theme::TEXT_DIM),
         );
 
         // Freeze indicator pinned to the right.
@@ -203,17 +198,10 @@ fn draw_header(ui: &mut egui::Ui, app: &mut ReverbEditorApp) {
             } else {
                 (theme::BORDER, theme::TEXT_DIM, "freeze")
             };
-            ui.label(
-                egui::RichText::new(label)
-                    .strong()
-                    .color(text_color),
-            );
+            ui.label(egui::RichText::new(label).strong().color(text_color));
             ui.add_space(4.0);
             // Painted dot.
-            let (rect, _) = ui.allocate_exact_size(
-                egui::vec2(10.0, 10.0),
-                egui::Sense::hover(),
-            );
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
             ui.painter().circle_filled(rect.center(), 5.0, dot_color);
         });
     });

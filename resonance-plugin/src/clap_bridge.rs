@@ -4,7 +4,6 @@
 /// - ClapShared: holds param metadata + atomic values, host handle (Send+Sync)
 /// - ClapMainThread: holds Option<P> (plugin when not active), extension impls
 /// - ClapAudioProcessor: holds P (plugin when active), processes audio
-
 use std::fmt::Write as FmtWrite;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -22,8 +21,8 @@ use clack_extensions::note_ports::{
     PluginNotePortsImpl,
 };
 use clack_extensions::params::{
-    ParamInfo, ParamInfoFlags, ParamInfoWriter, ParamDisplayWriter,
-    PluginAudioProcessorParams, PluginMainThreadParams, PluginParams,
+    ParamDisplayWriter, ParamInfo, ParamInfoFlags, ParamInfoWriter, PluginAudioProcessorParams,
+    PluginMainThreadParams, PluginParams,
 };
 use clack_extensions::state::{PluginState, PluginStateImpl};
 use clack_plugin::prelude::*;
@@ -163,7 +162,10 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             }
         }
 
-        plugin.initialize(audio_config.sample_rate as f32, audio_config.max_frames_count);
+        plugin.initialize(
+            audio_config.sample_rate as f32,
+            audio_config.max_frames_count,
+        );
 
         let max_frames = audio_config.max_frames_count as usize;
         let port_count = shared.output_ports.len();
@@ -259,8 +261,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // loaded state is not immediately clobbered.
         for i in 0..self.plugin.param_count() {
             if i < self.shared.param_values.len() {
-                self.shared
-                    .set_value(i, self.plugin.param(i).get_plain());
+                self.shared.set_value(i, self.plugin.param(i).get_plain());
             }
         }
 
@@ -290,18 +291,25 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
 
         if P::INPUT_CHANNELS.is_some() {
             if let Some(mut pair) = audio.port_pair(0) {
-                let mut channels = pair.channels()?.into_f32().ok_or(PluginError::Message("Expected f32 audio"))?;
+                let mut channels = pair
+                    .channels()?
+                    .into_f32()
+                    .ok_or(PluginError::Message("Expected f32 audio"))?;
                 if let Some(ch) = channels.channel_pair(0) {
                     match ch {
                         ChannelPair::InPlace(buf) => input_left.copy_from_slice(&buf[..frames]),
-                        ChannelPair::InputOutput(inp, _) => input_left.copy_from_slice(&inp[..frames]),
+                        ChannelPair::InputOutput(inp, _) => {
+                            input_left.copy_from_slice(&inp[..frames])
+                        }
                         _ => input_left.fill(0.0),
                     }
                 }
                 if let Some(ch) = channels.channel_pair(1) {
                     match ch {
                         ChannelPair::InPlace(buf) => input_right.copy_from_slice(&buf[..frames]),
-                        ChannelPair::InputOutput(inp, _) => input_right.copy_from_slice(&inp[..frames]),
+                        ChannelPair::InputOutput(inp, _) => {
+                            input_right.copy_from_slice(&inp[..frames])
+                        }
                         _ => input_right.fill(0.0),
                     }
                 }
@@ -326,8 +334,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // The tiny allocation here (up to 8 output ports × 16 bytes each)
         // is acceptable on the audio thread — far cheaper than copying
         // audio data, and the plugin call itself does real work.
-        let mut port_views: Vec<OutputBuffer<'_>> =
-            Vec::with_capacity(self.output_scratch.len());
+        let mut port_views: Vec<OutputBuffer<'_>> = Vec::with_capacity(self.output_scratch.len());
         for (l, r) in self.output_scratch.iter_mut() {
             port_views.push(OutputBuffer {
                 left: &mut l[..frames],
@@ -354,7 +361,9 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             let (scratch_l, scratch_r) = &self.output_scratch[port_index];
             if let Some(ch) = channels.channel_pair(0) {
                 match ch {
-                    ChannelPair::InPlace(buf) => buf[..frames].copy_from_slice(&scratch_l[..frames]),
+                    ChannelPair::InPlace(buf) => {
+                        buf[..frames].copy_from_slice(&scratch_l[..frames])
+                    }
                     ChannelPair::InputOutput(_, out) => {
                         out[..frames].copy_from_slice(&scratch_l[..frames])
                     }
@@ -366,7 +375,9 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             }
             if let Some(ch) = channels.channel_pair(1) {
                 match ch {
-                    ChannelPair::InPlace(buf) => buf[..frames].copy_from_slice(&scratch_r[..frames]),
+                    ChannelPair::InPlace(buf) => {
+                        buf[..frames].copy_from_slice(&scratch_r[..frames])
+                    }
                     ChannelPair::InputOutput(_, out) => {
                         out[..frames].copy_from_slice(&scratch_r[..frames])
                     }
@@ -457,7 +468,9 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
         let count = temp.param_count();
         let output_ports = temp.output_layout();
         if output_ports.is_empty() {
-            return Err(PluginError::Message("Plugin must declare at least one output port"));
+            return Err(PluginError::Message(
+                "Plugin must declare at least one output port",
+            ));
         }
         for port in &output_ports {
             if port.channel_count != 1 && port.channel_count != 2 {
@@ -469,7 +482,8 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
 
         let mut param_metas: Vec<ParamMeta> = Vec::with_capacity(count);
         let mut param_values: Vec<AtomicU64> = Vec::with_capacity(count);
-        let mut clap_id_to_slot: std::collections::HashMap<u32, usize> = std::collections::HashMap::with_capacity(count);
+        let mut clap_id_to_slot: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::with_capacity(count);
 
         for i in 0..count {
             let p = temp.param(i);
@@ -545,7 +559,11 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
 impl<'a, P: ResonancePlugin> PluginAudioPortsImpl for ClapMainThread<'a, P> {
     fn count(&mut self, is_input: bool) -> u32 {
         if is_input {
-            if self.shared.input_channels.is_some() { 1 } else { 0 }
+            if self.shared.input_channels.is_some() {
+                1
+            } else {
+                0
+            }
         } else {
             self.shared.output_ports.len() as u32
         }
@@ -925,17 +943,26 @@ impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
     fn get_size(&mut self) -> Option<GuiSize> {
         if let Some(editor) = &self.editor {
             let (w, h) = editor.size();
-            Some(GuiSize { width: w, height: h })
+            Some(GuiSize {
+                width: w,
+                height: h,
+            })
         } else if let Some(factory) = &self.editor_factory {
             let (w, h) = factory.preferred_size();
-            Some(GuiSize { width: w, height: h })
+            Some(GuiSize {
+                width: w,
+                height: h,
+            })
         } else {
             None
         }
     }
 
     fn can_resize(&mut self) -> bool {
-        self.editor.as_ref().map(|e| e.can_resize()).unwrap_or(false)
+        self.editor
+            .as_ref()
+            .map(|e| e.can_resize())
+            .unwrap_or(false)
     }
 
     fn set_size(&mut self, size: GuiSize) -> Result<(), PluginError> {

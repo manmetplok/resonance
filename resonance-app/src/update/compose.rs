@@ -55,8 +55,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
             start_sample,
             length_bars,
         } => {
-            let duration_ticks =
-                length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
+            let duration_ticks = length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
             r.engine.send(AudioCommand::CreateMidiClip {
                 track_id,
                 start_sample,
@@ -213,7 +212,11 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
             );
         }
 
-        ComposeMessage::CreateSection { name, length_bars, color } => {
+        ComposeMessage::CreateSection {
+            name,
+            length_bars,
+            color,
+        } => {
             if length_bars == 0 {
                 r.compose.last_error = Some("Section length must be at least 1 bar".into());
                 return;
@@ -228,6 +231,9 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 scale: None,
                 progression_seed: id.wrapping_mul(0x9E3779B97F4A7C15),
                 generate_params: crate::compose::GenerateParams::default(),
+                generator_spec: None,
+                generator_seed: 0,
+                generated_material: None,
             });
             // Auto-place the new definition at the first free slot so the user
             // immediately sees the section on the strip.
@@ -243,14 +249,20 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
             r.compose.last_error = None;
         }
 
-        ComposeMessage::RenameSection { definition_id, name } => {
+        ComposeMessage::RenameSection {
+            definition_id,
+            name,
+        } => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 def.name = name;
                 r.compose.last_error = None;
             }
         }
 
-        ComposeMessage::ResizeSection { definition_id, length_bars } => {
+        ComposeMessage::ResizeSection {
+            definition_id,
+            length_bars,
+        } => {
             if length_bars == 0 {
                 r.compose.last_error = Some("Section length must be at least 1 bar".into());
                 return;
@@ -267,11 +279,8 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 for p in snapshot.iter().filter(|p| p.definition_id == definition_id) {
                     // Temporarily treat this placement as if it were the new
                     // length and see if it collides with any other placement.
-                    let others: Vec<SectionPlacementState> = snapshot
-                        .iter()
-                        .filter(|q| q.id != p.id)
-                        .cloned()
-                        .collect();
+                    let others: Vec<SectionPlacementState> =
+                        snapshot.iter().filter(|q| q.id != p.id).cloned().collect();
                     if placement_overlaps(&others, &definitions, p.start_bar, length_bars, None) {
                         r.compose.last_error = Some(
                             "Cannot grow section: a placement would overlap a neighbour".into(),
@@ -285,9 +294,14 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 .compose
                 .find_definition(definition_id)
                 .map(|d| {
-                    d.chords
-                        .iter()
-                        .all(|c| chord_fits_in_section(c.start_beat, c.duration_beats, length_bars, time_sig_num))
+                    d.chords.iter().all(|c| {
+                        chord_fits_in_section(
+                            c.start_beat,
+                            c.duration_beats,
+                            length_bars,
+                            time_sig_num,
+                        )
+                    })
                 })
                 .unwrap_or(true);
             if !chords_fit {
@@ -301,7 +315,10 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
             }
         }
 
-        ComposeMessage::SetSectionScale { definition_id, scale } => {
+        ComposeMessage::SetSectionScale {
+            definition_id,
+            scale,
+        } => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 def.scale = scale;
                 r.compose.last_error = None;
@@ -315,16 +332,18 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 .iter()
                 .any(|p| p.definition_id == definition_id);
             if in_use {
-                r.compose.last_error = Some(
-                    "Cannot delete a section while placements still reference it".into(),
-                );
+                r.compose.last_error =
+                    Some("Cannot delete a section while placements still reference it".into());
                 return;
             }
             r.compose.definitions.retain(|d| d.id != definition_id);
             r.compose.last_error = None;
         }
 
-        ComposeMessage::PlaceSection { definition_id, start_bar } => {
+        ComposeMessage::PlaceSection {
+            definition_id,
+            start_bar,
+        } => {
             let length_bars = match r.compose.find_definition(definition_id) {
                 Some(d) => d.length_bars,
                 None => return,
@@ -452,7 +471,11 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
             r.compose.last_error = None;
         }
 
-        ComposeMessage::EditChord { definition_id, chord_id, chord } => {
+        ComposeMessage::EditChord {
+            definition_id,
+            chord_id,
+            chord,
+        } => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 if let Some(c) = def.chords.iter_mut().find(|c| c.id == chord_id) {
                     c.chord = chord;
@@ -507,21 +530,21 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 r.compose.last_error = Some("Chord duration must be at least 1 beat".into());
                 return;
             }
-            let (length_bars, start_beat, overlap) =
-                match r.compose.find_definition(definition_id) {
-                    Some(d) => {
-                        let c = match d.chords.iter().find(|c| c.id == chord_id) {
-                            Some(c) => c,
-                            None => return,
-                        };
-                        (
-                            d.length_bars,
-                            c.start_beat,
-                            chord_overlaps(&d.chords, c.start_beat, duration_beats, Some(chord_id)),
-                        )
-                    }
-                    None => return,
-                };
+            let (length_bars, start_beat, overlap) = match r.compose.find_definition(definition_id)
+            {
+                Some(d) => {
+                    let c = match d.chords.iter().find(|c| c.id == chord_id) {
+                        Some(c) => c,
+                        None => return,
+                    };
+                    (
+                        d.length_bars,
+                        c.start_beat,
+                        chord_overlaps(&d.chords, c.start_beat, duration_beats, Some(chord_id)),
+                    )
+                }
+                None => return,
+            };
             if !chord_fits_in_section(start_beat, duration_beats, length_bars, time_sig_num) {
                 r.compose.last_error = Some("Chord would extend past the section".into());
                 return;
@@ -538,7 +561,10 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
             r.compose.last_error = None;
         }
 
-        ComposeMessage::DeleteChord { definition_id, chord_id } => {
+        ComposeMessage::DeleteChord {
+            definition_id,
+            chord_id,
+        } => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 def.chords.retain(|c| c.id != chord_id);
             }
@@ -567,38 +593,56 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
             cascade_rederive(r, definition_id);
         }
 
-        ComposeMessage::SetGenerateChordCount { definition_id, chord_count } => {
+        ComposeMessage::SetGenerateChordCount {
+            definition_id,
+            chord_count,
+        } => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 def.generate_params.chord_count = chord_count.max(1).min(32);
                 r.compose.last_error = None;
             }
         }
-        ComposeMessage::SetGenerateBeatsPerChord { definition_id, beats_per_chord } => {
+        ComposeMessage::SetGenerateBeatsPerChord {
+            definition_id,
+            beats_per_chord,
+        } => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 def.generate_params.beats_per_chord = beats_per_chord.max(1).min(16);
                 r.compose.last_error = None;
             }
         }
-        ComposeMessage::SetGenerateSeventhChords { definition_id, seventh_chords } => {
+        ComposeMessage::SetGenerateSeventhChords {
+            definition_id,
+            seventh_chords,
+        } => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 def.generate_params.seventh_chords = seventh_chords;
                 r.compose.last_error = None;
             }
         }
-        ComposeMessage::SetBassStyle { definition_id, style } => {
+        ComposeMessage::SetBassStyle {
+            definition_id,
+            style,
+        } => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 def.generate_params.bass.style = style;
                 r.compose.last_error = None;
             }
         }
-        ComposeMessage::SetMelodyStyle { definition_id, style } => {
+        ComposeMessage::SetMelodyStyle {
+            definition_id,
+            style,
+        } => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 def.generate_params.melody.style = style;
                 r.compose.last_error = None;
             }
         }
 
-        ComposeMessage::DerivePart { definition_id, kind } => {
+        ComposeMessage::DerivePart {
+            definition_id,
+            kind,
+        } => {
             derive_part(r, definition_id, kind);
         }
 

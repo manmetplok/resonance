@@ -1,5 +1,4 @@
 /// Wavetable oscillator with band-limited mip-map selection and cubic Hermite interpolation.
-
 use crate::wavetable::{Wavetable, NUM_OCTAVES};
 
 /// Read a wavetable with anti-aliased mip-map crossfading and frame interpolation.

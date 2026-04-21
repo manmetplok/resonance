@@ -63,9 +63,24 @@ pub fn draw(
     // Numeric readouts.
     let readout_y = rect.bottom() - 22.0;
     let third = rect.width() / 3.0;
-    draw_readout(painter, egui::pos2(rect.left() + third * 0.5, readout_y), "M", momentary);
-    draw_readout(painter, egui::pos2(rect.left() + third * 1.5, readout_y), "S", short_term);
-    draw_readout(painter, egui::pos2(rect.left() + third * 2.5, readout_y), "I", integrated);
+    draw_readout(
+        painter,
+        egui::pos2(rect.left() + third * 0.5, readout_y),
+        "M",
+        momentary,
+    );
+    draw_readout(
+        painter,
+        egui::pos2(rect.left() + third * 1.5, readout_y),
+        "S",
+        short_term,
+    );
+    draw_readout(
+        painter,
+        egui::pos2(rect.left() + third * 2.5, readout_y),
+        "I",
+        integrated,
+    );
 }
 
 fn draw_bar(painter: &egui::Painter, rect: egui::Rect, lufs: f32, label: &str) {

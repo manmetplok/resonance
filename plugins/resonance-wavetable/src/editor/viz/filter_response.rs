@@ -80,11 +80,7 @@ pub fn draw(
         [egui::pos2(live_x, top), egui::pos2(live_x, bottom)],
         egui::Stroke::new(1.0, theme::WARN),
     );
-    painter.circle_filled(
-        egui::pos2(live_x, top + height * 0.5),
-        3.5,
-        theme::WARN,
-    );
+    painter.circle_filled(egui::pos2(live_x, top + height * 0.5), 3.5, theme::WARN);
 }
 
 fn freq_to_x(freq: f32, width: f32) -> f32 {

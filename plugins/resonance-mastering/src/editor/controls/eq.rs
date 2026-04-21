@@ -53,22 +53,40 @@ pub fn draw(ui: &mut egui::Ui, params: &EqStageParams, title: &str) {
                 let v = band.freq.value();
                 let def = band.freq.default_plain() as f32;
                 widgets::float_knob(
-                    ui, &band.freq, 20.0..=20_000.0, def,
-                    "Freq", "", &format!("{:.0} Hz", v), true,
+                    ui,
+                    &band.freq,
+                    20.0..=20_000.0,
+                    def,
+                    "Freq",
+                    "",
+                    &format!("{:.0} Hz", v),
+                    true,
                 );
 
                 let v = band.q.value();
                 let def = band.q.default_plain() as f32;
                 widgets::float_knob(
-                    ui, &band.q, 0.1..=24.0, def,
-                    "Q", "", &format!("{:.2}", v), true,
+                    ui,
+                    &band.q,
+                    0.1..=24.0,
+                    def,
+                    "Q",
+                    "",
+                    &format!("{:.2}", v),
+                    true,
                 );
 
                 let v = band.gain.value();
                 let def = band.gain.default_plain() as f32;
                 widgets::float_knob(
-                    ui, &band.gain, -24.0..=24.0, def,
-                    "Gain", "", &format!("{:.1} dB", v), false,
+                    ui,
+                    &band.gain,
+                    -24.0..=24.0,
+                    def,
+                    "Gain",
+                    "",
+                    &format!("{:.1} dB", v),
+                    false,
                 );
             });
             if i + 1 < NUM_BANDS {

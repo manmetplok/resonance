@@ -93,11 +93,7 @@ pub(crate) fn scan_plugins(
             // Handle both .clap files and .clap directories (bundles).
             let is_clap = path.extension().map(|e| e == "clap").unwrap_or(false);
             // Also follow symlinks to .so files named *.clap.
-            let is_clap = is_clap
-                || path
-                    .to_str()
-                    .map(|s| s.ends_with(".clap"))
-                    .unwrap_or(false);
+            let is_clap = is_clap || path.to_str().map(|s| s.ends_with(".clap")).unwrap_or(false);
 
             if !is_clap {
                 continue;

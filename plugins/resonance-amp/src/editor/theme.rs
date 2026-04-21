@@ -22,8 +22,7 @@ pub const WARN: egui::Color32 = egui::Color32::from_rgb(0xff, 0xb6, 0x4a);
 pub const DANGER: egui::Color32 = egui::Color32::from_rgb(0xff, 0x6a, 0x6a);
 
 /// Oscilloscope: dim trace for the dry input signal.
-pub const SCOPE_IN: egui::Color32 =
-    egui::Color32::from_rgba_premultiplied(0x5a, 0xc8, 0xfa, 0x70);
+pub const SCOPE_IN: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x5a, 0xc8, 0xfa, 0x70);
 /// Oscilloscope: bright trace for the post-model output signal.
 pub const SCOPE_OUT: egui::Color32 = egui::Color32::from_rgb(0xa8, 0xe1, 0xff);
 

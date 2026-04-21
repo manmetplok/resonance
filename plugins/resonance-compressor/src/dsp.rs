@@ -15,9 +15,7 @@
 //! All intermediate quantities downstream of the detector are in dB so
 //! that the soft-knee formula and makeup gain are linear and cheap.
 
-use resonance_dsp::{
-    db_to_linear, linear_to_db, soft_knee_gain_reduction_db, Ballistics, Biquad,
-};
+use resonance_dsp::{db_to_linear, linear_to_db, soft_knee_gain_reduction_db, Ballistics, Biquad};
 
 use crate::params::CompressorParams;
 use crate::viz::{CompressorViz, HISTORY_STEP_SAMPLES};
@@ -133,7 +131,8 @@ impl CompressorDsp {
         // disabled we bypass by using an identity biquad (same coefficient
         // path, effectively a no-op).
         if sc_hpf_on {
-            self.sc_hpf.set_high_pass(self.sample_rate, sc_hpf_freq, 0.707);
+            self.sc_hpf
+                .set_high_pass(self.sample_rate, sc_hpf_freq, 0.707);
         } else {
             self.sc_hpf.set_identity();
         }

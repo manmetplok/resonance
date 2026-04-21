@@ -227,9 +227,7 @@ fn fetch_index(agent: &ureq::Agent) -> Result<ServerIndex, String> {
         .get(INDEX_URL)
         .call()
         .map_err(|e| format!("fetch index: {e}"))?;
-    let index: ServerIndex = resp
-        .into_json()
-        .map_err(|e| format!("parse index: {e}"))?;
+    let index: ServerIndex = resp.into_json().map_err(|e| format!("parse index: {e}"))?;
     Ok(index)
 }
 
@@ -258,12 +256,11 @@ fn download_and_extract(
 
     // Stream to a temporary file so we don't hold GiBs in RAM.
     let dir = drumkits_dir().ok_or_else(|| "no data dir".to_string())?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
 
     let tmp_path = dir.join(format!(".{}.zip.part", sanitize(&kit.name)));
-    let mut tmp_file = std::fs::File::create(&tmp_path)
-        .map_err(|e| format!("create temp file: {e}"))?;
+    let mut tmp_file =
+        std::fs::File::create(&tmp_path).map_err(|e| format!("create temp file: {e}"))?;
 
     // Read in 256 KiB chunks, updating progress.
     let mut reader = resp.into_reader();
@@ -303,10 +300,8 @@ fn download_and_extract(
 }
 
 fn extract_zip(zip_path: &PathBuf, dest: &PathBuf) -> Result<(), String> {
-    let file = std::fs::File::open(zip_path)
-        .map_err(|e| format!("open zip: {e}"))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("read zip: {e}"))?;
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("open zip: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("read zip: {e}"))?;
 
     for i in 0..archive.len() {
         let mut entry = archive

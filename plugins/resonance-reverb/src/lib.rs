@@ -1,5 +1,4 @@
 /// Resonance Reverb - An algorithmic reverb using diffusion networks and FDN.
-
 use std::sync::Arc;
 
 use resonance_plugin::*;
@@ -48,7 +47,9 @@ impl ResonancePlugin for ResonanceReverb {
         }
     }
 
-    fn param_count(&self) -> usize { PARAM_COUNT }
+    fn param_count(&self) -> usize {
+        PARAM_COUNT
+    }
 
     fn param(&self, index: usize) -> &dyn Param {
         self.params.param_at(index)
@@ -148,7 +149,8 @@ impl ResonancePlugin for ResonanceReverb {
         );
         self.viz.store_channel_energies(&reverb.channel_energies());
         self.viz.store_fdn_delay_ms(&reverb.fdn_delay_ms());
-        self.viz.store_er_taps(&reverb.er_tap_times_ms(), &reverb.er_tap_gains());
+        self.viz
+            .store_er_taps(&reverb.er_tap_times_ms(), &reverb.er_tap_gains());
         self.viz.push_tail_rms(reverb.take_wet_rms());
     }
 
@@ -224,7 +226,10 @@ mod tests {
             assert!(x.is_finite(), "non-finite sample: {x}");
         }
         let tail_energy: f32 = left[200..].iter().map(|x| x.abs()).sum();
-        assert!(tail_energy > 1e-4, "expected audible tail, got {tail_energy}");
+        assert!(
+            tail_energy > 1e-4,
+            "expected audible tail, got {tail_energy}"
+        );
     }
 
     /// Diagnostic: dumps the impulse response envelope so it's visible

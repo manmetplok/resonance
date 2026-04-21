@@ -51,7 +51,10 @@ impl BandKind {
     }
 
     pub fn uses_gain(self) -> bool {
-        matches!(self, BandKind::Bell | BandKind::LowShelf | BandKind::HighShelf)
+        matches!(
+            self,
+            BandKind::Bell | BandKind::LowShelf | BandKind::HighShelf
+        )
     }
 }
 

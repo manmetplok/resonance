@@ -28,11 +28,11 @@ pub(crate) fn handle_add_plugin_to_master(
         Some(idx) => idx,
         None => return,
     };
-    let actual_plugin_id =
-        match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id, ctx) {
-            Some(id) => id,
-            None => return,
-        };
+    let actual_plugin_id = match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id, ctx)
+    {
+        Some(id) => id,
+        None => return,
+    };
     let plugin_name = state.bundles[bundle_idx]
         .descriptors()
         .iter()
@@ -51,9 +51,10 @@ pub(crate) fn handle_add_plugin_to_master(
             }
             let params = instance.query_params();
             let has_gui = instance.has_gui();
-            ctx.plugins
-                .write()
-                .insert(instance_id, parking_lot::Mutex::new(SyncClapInstance(instance)));
+            ctx.plugins.write().insert(
+                instance_id,
+                parking_lot::Mutex::new(SyncClapInstance(instance)),
+            );
             ctx.master.write().plugin_ids.push(instance_id);
             let _ = ctx.event_tx.send(AudioEvent::MasterPluginAdded {
                 instance_id,
@@ -65,17 +66,15 @@ pub(crate) fn handle_add_plugin_to_master(
             });
         }
         Err(e) => {
-            let _ = ctx
-                .event_tx
-                .send(AudioEvent::Error(format!("Failed to create plugin instance: {}", e)));
+            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                "Failed to create plugin instance: {}",
+                e
+            )));
         }
     }
 }
 
-pub(crate) fn handle_remove_plugin_from_master(
-    ctx: &HandlerCtx,
-    instance_id: PluginInstanceId,
-) {
+pub(crate) fn handle_remove_plugin_from_master(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
     ctx.master
         .write()
         .plugin_ids

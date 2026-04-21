@@ -16,7 +16,9 @@ pub enum DrumrollMessage {
     },
     /// Sidebar: pick a pad to focus (euclidean Apply, Clear pad, etc.
     /// target the selected pad).
-    SelectPad { pad_index: usize },
+    SelectPad {
+        pad_index: usize,
+    },
     /// Change the step-grid resolution. Only {4, 8, 16, 32} are accepted.
     SetStepsPerBar(u32),
     /// Velocity used for newly added hits on the selected pad.
@@ -47,5 +49,7 @@ pub enum DrumrollMessage {
     /// Apply the humanizer to every in-scope note in the clip. Notes are
     /// re-snapped to the grid first so repeated Apply clicks produce
     /// independent realizations rather than compounding drift.
-    ApplyHumanize { clip_id: ClipId },
+    ApplyHumanize {
+        clip_id: ClipId,
+    },
 }

@@ -436,7 +436,8 @@ mod tests {
             in_memory_bytes
         );
         assert_eq!(
-            track_buf.frames_written, 48_000 * 10,
+            track_buf.frames_written,
+            48_000 * 10,
             "wrong number of frames streamed to disk"
         );
 

@@ -68,13 +68,11 @@ pub fn save_registry(registry: &InstalledRegistry) -> Result<(), String> {
 /// Save to a specific path (useful for testing).
 pub fn save_registry_to(registry: &InstalledRegistry, path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    let json = serde_json::to_string_pretty(registry)
-        .map_err(|e| format!("serialize registry: {e}"))?;
-    std::fs::write(path, json.as_bytes())
-        .map_err(|e| format!("write {}: {e}", path.display()))?;
+    let json =
+        serde_json::to_string_pretty(registry).map_err(|e| format!("serialize registry: {e}"))?;
+    std::fs::write(path, json.as_bytes()).map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(())
 }
 

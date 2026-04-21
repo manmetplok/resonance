@@ -5,7 +5,6 @@
 /// center detent, vertical mouse drag to change value, shift for fine
 /// adjust, and a double-click anywhere on the knob body to reset to
 /// center.
-
 use std::time::Instant;
 
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
@@ -117,10 +116,7 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
                 center.x + (radius - 4.0) * a.cos(),
                 center.y - (radius - 4.0) * a.sin(),
             );
-            let outer = Point::new(
-                center.x + radius * a.cos(),
-                center.y - radius * a.sin(),
-            );
+            let outer = Point::new(center.x + radius * a.cos(), center.y - radius * a.sin());
             frame.stroke(
                 &Path::line(inner, outer),
                 Stroke::default()
@@ -166,10 +162,7 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
                 state.last_click = Some(now);
                 if is_double {
                     state.drag_anchor_y = None;
-                    return (
-                        canvas::event::Status::Captured,
-                        Some((self.on_change)(0.0)),
-                    );
+                    return (canvas::event::Status::Captured, Some((self.on_change)(0.0)));
                 }
                 state.drag_anchor_y = Some(pos.y);
                 state.drag_anchor_value = self.value;
@@ -194,10 +187,7 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
                 if (new - self.value).abs() < f32::EPSILON {
                     return (canvas::event::Status::Captured, None);
                 }
-                (
-                    canvas::event::Status::Captured,
-                    Some((self.on_change)(new)),
-                )
+                (canvas::event::Status::Captured, Some((self.on_change)(new)))
             }
             _ => (canvas::event::Status::Ignored, None),
         }

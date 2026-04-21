@@ -63,12 +63,7 @@ impl Dither {
         self.prev_r = 0.0;
     }
 
-    pub fn process_stereo(
-        &mut self,
-        left: &mut [f32],
-        right: &mut [f32],
-        cfg: &DitherConfig,
-    ) {
+    pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &DitherConfig) {
         if !cfg.enabled {
             return;
         }

@@ -59,10 +59,8 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, viz: &AmpViz) {
         inner.min,
         egui::pos2(inner.right(), inner.top() + inner.height() * 0.55),
     );
-    let bar_rect = egui::Rect::from_min_max(
-        egui::pos2(inner.left(), top_rect.bottom() + 2.0),
-        inner.max,
-    );
+    let bar_rect =
+        egui::Rect::from_min_max(egui::pos2(inner.left(), top_rect.bottom() + 2.0), inner.max);
 
     // Note name and cents label.
     if active {

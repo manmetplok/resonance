@@ -70,8 +70,7 @@ impl LinearPhaseEq {
     ) {
         if *bands != self.cached_bands {
             self.cached_bands = *bands;
-            let enabled: Vec<BandConfig> =
-                bands.iter().copied().filter(|b| b.enabled).collect();
+            let enabled: Vec<BandConfig> = bands.iter().copied().filter(|b| b.enabled).collect();
             // Split the borrow so the designer result (which borrows
             // from `self.designer`) can coexist with mutable borrows
             // of the two convolver fields.

@@ -1,5 +1,4 @@
 /// NAM .nam file parsing and model construction.
-
 use serde::Deserialize;
 use std::path::Path;
 
@@ -204,18 +203,13 @@ fn determine_gated(layer: &NewLayerArrayConfig) -> Result<bool, String> {
                 other => Err(format!("Unsupported gating_mode: {other}")),
             },
             serde_json::Value::Array(arr) => {
-                let first = arr
-                    .first()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("none");
+                let first = arr.first().and_then(|v| v.as_str()).unwrap_or("none");
                 if first != "gated" && first != "none" {
                     return Err(format!("Unsupported gating_mode: {first}"));
                 }
                 for v in arr {
                     if v.as_str().unwrap_or("none") != first {
-                        return Err(
-                            "Mixed per-layer gating modes not supported".into(),
-                        );
+                        return Err("Mixed per-layer gating modes not supported".into());
                     }
                 }
                 Ok(first == "gated")

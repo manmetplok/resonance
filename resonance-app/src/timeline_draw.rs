@@ -7,8 +7,8 @@ use iced::{Color, Point, Size};
 
 use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
-use resonance_audio::types::avg_bpm_for_bar;
 use crate::timeline::TimelineCanvas;
+use resonance_audio::types::avg_bpm_for_bar;
 
 impl TimelineCanvas<'_> {
     /// Draw the global tracks area (tempo + time signature) between the
@@ -75,13 +75,12 @@ impl TimelineCanvas<'_> {
             let graph_h = graph_bot - graph_top;
 
             // Map BPM to y within the tempo row (high BPM = top).
-            let bpm_to_y = |bpm: f32| -> f32 {
-                graph_bot - ((bpm - lo) / (hi - lo)) * graph_h
-            };
+            let bpm_to_y = |bpm: f32| -> f32 { graph_bot - ((bpm - lo) / (hi - lo)) * graph_h };
 
             // Build (x, y, bpm, is_selected) for each event point.
             let points: Vec<(f32, f32, f32, bool)> = self
-                .tempo_map.tempo_points
+                .tempo_map
+                .tempo_points
                 .iter()
                 .enumerate()
                 .map(|(i, e)| {
@@ -211,15 +210,19 @@ impl TimelineCanvas<'_> {
             if x > width + 50.0 || x < -50.0 {
                 continue;
             }
-            let next_x = self.tempo_map.signature_points.get(i + 1).map(|ne| {
-                self.sample_to_x(self.tempo_map.bar_to_sample(ne.bar))
-            }).unwrap_or(width);
+            let next_x = self
+                .tempo_map
+                .signature_points
+                .get(i + 1)
+                .map(|ne| self.sample_to_x(self.tempo_map.bar_to_sample(ne.bar)))
+                .unwrap_or(width);
             let block_w = (next_x - x).max(2.0).min(width - x.max(0.0));
 
-            let is_selected = self.selected_global_event == Some(state::SelectedGlobalEvent {
-                kind: state::GlobalTrackKind::Signature,
-                index: i,
-            });
+            let is_selected = self.selected_global_event
+                == Some(state::SelectedGlobalEvent {
+                    kind: state::GlobalTrackKind::Signature,
+                    index: i,
+                });
 
             let block_color = if is_selected {
                 Color::from_rgba(0.3, 0.6, 0.9, 0.25)
@@ -233,12 +236,12 @@ impl TimelineCanvas<'_> {
             );
 
             if x >= 0.0 {
-                let marker_color = if is_selected { theme::ACCENT } else { theme::TEXT_DIM };
-                frame.fill_rectangle(
-                    Point::new(x, sig_y),
-                    Size::new(1.0, row_h),
-                    marker_color,
-                );
+                let marker_color = if is_selected {
+                    theme::ACCENT
+                } else {
+                    theme::TEXT_DIM
+                };
+                frame.fill_rectangle(Point::new(x, sig_y), Size::new(1.0, row_h), marker_color);
             }
 
             let label_x = x.max(2.0) + 3.0;
@@ -246,7 +249,11 @@ impl TimelineCanvas<'_> {
                 frame.fill_text(canvas::Text {
                     content: format!("{}/{}", event.numerator, event.denominator),
                     position: Point::new(label_x, sig_y + 5.0),
-                    color: if is_selected { theme::ACCENT } else { theme::TEXT_DIM },
+                    color: if is_selected {
+                        theme::ACCENT
+                    } else {
+                        theme::TEXT_DIM
+                    },
                     size: 10.0.into(),
                     ..canvas::Text::default()
                 });
@@ -270,12 +277,26 @@ impl TimelineCanvas<'_> {
 
         // Walk bars from 0, accumulating sample positions with interpolation.
         let mut sample_pos: f64 = 0.0;
-        let mut cur_num = self.tempo_map.signature_points.first().map(|e| e.numerator).unwrap_or(4);
-        let mut si: usize = if self.tempo_map.signature_points.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
+        let mut cur_num = self
+            .tempo_map
+            .signature_points
+            .first()
+            .map(|e| e.numerator)
+            .unwrap_or(4);
+        let mut si: usize = if self.tempo_map.signature_points.first().map(|e| e.bar) == Some(0) {
+            1
+        } else {
+            0
+        };
 
         for bar in 0u32.. {
             while let Some(e) = self.tempo_map.signature_points.get(si) {
-                if e.bar == bar { cur_num = e.numerator; si += 1; } else { break; }
+                if e.bar == bar {
+                    cur_num = e.numerator;
+                    si += 1;
+                } else {
+                    break;
+                }
             }
 
             let cur_bpm = avg_bpm_for_bar(bar, &self.tempo_map.tempo_points);
@@ -287,9 +308,13 @@ impl TimelineCanvas<'_> {
             let x = (sample_pos / sr) as f32 * self.zoom - self.scroll_offset;
 
             // Past the right edge — done.
-            if x > width + 1.0 { break; }
+            if x > width + 1.0 {
+                break;
+            }
             // Safety limit.
-            if bar > 20_000 { break; }
+            if bar > 20_000 {
+                break;
+            }
 
             // Bar step: skip bars for readability at low zoom.
             let bar_step = if bar_pixel_width < 20.0 {
@@ -329,21 +354,30 @@ impl TimelineCanvas<'_> {
     /// Draw the bar/beat ruler at the top.
     /// Uses per-bar tempo and time-signature values so bar numbers are
     /// positioned correctly when tempo changes.
-    pub(super) fn draw_ruler(
-        &self,
-        frame: &mut canvas::Frame,
-        width: f32,
-        ruler_height: f32,
-    ) {
+    pub(super) fn draw_ruler(&self, frame: &mut canvas::Frame, width: f32, ruler_height: f32) {
         let sr = self.sample_rate as f64;
 
         let mut sample_pos: f64 = 0.0;
-        let mut cur_num = self.tempo_map.signature_points.first().map(|e| e.numerator).unwrap_or(4);
-        let mut si: usize = if self.tempo_map.signature_points.first().map(|e| e.bar) == Some(0) { 1 } else { 0 };
+        let mut cur_num = self
+            .tempo_map
+            .signature_points
+            .first()
+            .map(|e| e.numerator)
+            .unwrap_or(4);
+        let mut si: usize = if self.tempo_map.signature_points.first().map(|e| e.bar) == Some(0) {
+            1
+        } else {
+            0
+        };
 
         for bar in 0u32.. {
             while let Some(e) = self.tempo_map.signature_points.get(si) {
-                if e.bar == bar { cur_num = e.numerator; si += 1; } else { break; }
+                if e.bar == bar {
+                    cur_num = e.numerator;
+                    si += 1;
+                } else {
+                    break;
+                }
             }
 
             let cur_bpm = avg_bpm_for_bar(bar, &self.tempo_map.tempo_points);
@@ -354,8 +388,12 @@ impl TimelineCanvas<'_> {
 
             let x = (sample_pos / sr) as f32 * self.zoom - self.scroll_offset;
 
-            if x > width + 1.0 { break; }
-            if bar > 20_000 { break; }
+            if x > width + 1.0 {
+                break;
+            }
+            if bar > 20_000 {
+                break;
+            }
 
             let bar_step = if bar_pixel_width < 40.0 {
                 (40.0 / bar_pixel_width).ceil() as u32
@@ -558,7 +596,9 @@ impl TimelineCanvas<'_> {
 
         // Convert tick duration to samples integrating the tempo map.
         let clip_end_sample = self.tempo_map.tick_to_abs_sample(
-            clip.start_sample, clip.duration_ticks, self.sample_rate,
+            clip.start_sample,
+            clip.duration_ticks,
+            self.sample_rate,
         );
         let duration_samples = clip_end_sample.saturating_sub(clip.start_sample) as f64;
         let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
@@ -569,11 +609,7 @@ impl TimelineCanvas<'_> {
 
         // Teal/cyan clip body
         let midi_body_color = Color::from_rgb(0.12, 0.22, 0.25);
-        frame.fill_rectangle(
-            Point::new(x, y),
-            Size::new(w, clip_height),
-            midi_body_color,
-        );
+        frame.fill_rectangle(Point::new(x, y), Size::new(w, clip_height), midi_body_color);
 
         // Draw note rectangles inside the clip body
         let header_height = 18.0;
@@ -601,8 +637,7 @@ impl TimelineCanvas<'_> {
             if total_ticks > 0.0 {
                 for note in &clip.notes {
                     // Horizontal position: note start relative to clip visible start
-                    let note_start_in_clip =
-                        note.start_tick as f32 - clip.trim_start_ticks as f32;
+                    let note_start_in_clip = note.start_tick as f32 - clip.trim_start_ticks as f32;
                     if note_start_in_clip + note.duration_ticks as f32 <= 0.0 {
                         continue; // note is before visible area
                     }

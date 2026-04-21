@@ -43,20 +43,14 @@ impl EglContext {
         logical_size: (u32, u32),
         scale: i32,
     ) -> Result<Self, EditorError> {
-        let egl = unsafe {
-            Egl::load_required().map_err(|e| EditorError::EglInit(e.to_string()))?
-        };
+        let egl = unsafe { Egl::load_required().map_err(|e| EditorError::EglInit(e.to_string()))? };
 
         // Raw wl_display pointer for EGL — from wayland-backend.
         let display_ptr = conn.backend().display_ptr() as *mut c_void;
 
         let display = unsafe {
-            egl.get_platform_display(
-                EGL_PLATFORM_WAYLAND_KHR,
-                display_ptr,
-                &[egl::ATTRIB_NONE],
-            )
-            .map_err(|e| EditorError::EglInit(format!("get_platform_display: {e}")))?
+            egl.get_platform_display(EGL_PLATFORM_WAYLAND_KHR, display_ptr, &[egl::ATTRIB_NONE])
+                .map_err(|e| EditorError::EglInit(format!("get_platform_display: {e}")))?
         };
 
         egl.initialize(display)
@@ -143,7 +137,12 @@ impl EglContext {
 
     pub fn make_current(&self) -> Result<(), EditorError> {
         self.egl
-            .make_current(self.display, Some(self.surface), Some(self.surface), Some(self.context))
+            .make_current(
+                self.display,
+                Some(self.surface),
+                Some(self.surface),
+                Some(self.context),
+            )
             .map_err(|e| EditorError::EglContext(format!("make_current: {e}")))
     }
 

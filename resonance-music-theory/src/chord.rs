@@ -97,7 +97,11 @@ pub struct Chord {
 
 impl Chord {
     pub fn new(root: PitchClass, quality: ChordQuality) -> Self {
-        Self { root, quality, bass: None }
+        Self {
+            root,
+            quality,
+            bass: None,
+        }
     }
 
     pub fn with_bass(mut self, bass: PitchClass) -> Self {
@@ -150,7 +154,10 @@ mod tests {
     #[test]
     fn c_major_pitch_classes() {
         let c = Chord::new(PitchClass::C, ChordQuality::Maj);
-        assert_eq!(c.pitch_classes(), vec![PitchClass::C, PitchClass::E, PitchClass::G]);
+        assert_eq!(
+            c.pitch_classes(),
+            vec![PitchClass::C, PitchClass::E, PitchClass::G]
+        );
     }
 
     #[test]

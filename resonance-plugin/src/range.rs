@@ -111,8 +111,7 @@ impl IntRange {
         let normalized = normalized.clamp(0.0, 1.0);
         match self {
             IntRange::Linear { min, max } => {
-                ((*min as f64 + normalized * (*max - *min) as f64).round() as i32)
-                    .clamp(*min, *max)
+                ((*min as f64 + normalized * (*max - *min) as f64).round() as i32).clamp(*min, *max)
             }
         }
     }

@@ -373,8 +373,8 @@ impl SynthEngine {
                             sub.osc1_phase += oscillator::phase_inc(freq, sample_rate);
                             sub.osc1_phase -= sub.osc1_phase.floor();
 
-                            let pan = (snap.osc1_pan + sub.pan_offset + mods.osc1_pan)
-                                .clamp(-1.0, 1.0);
+                            let pan =
+                                (snap.osc1_pan + sub.pan_offset + mods.osc1_pan).clamp(-1.0, 1.0);
                             let (pl, pr) = constant_power_pan(pan);
                             let level = snap.osc1_level * (1.0 - snap.osc_balance.max(0.0));
                             osc_l += sample * level * pl;
@@ -396,11 +396,10 @@ impl SynthEngine {
                             sub.osc2_phase += oscillator::phase_inc(freq, sample_rate);
                             sub.osc2_phase -= sub.osc2_phase.floor();
 
-                            let pan = (snap.osc2_pan + sub.pan_offset + mods.osc2_pan)
-                                .clamp(-1.0, 1.0);
+                            let pan =
+                                (snap.osc2_pan + sub.pan_offset + mods.osc2_pan).clamp(-1.0, 1.0);
                             let (pl, pr) = constant_power_pan(pan);
-                            let level =
-                                snap.osc2_level * (1.0 + snap.osc_balance.min(0.0).abs());
+                            let level = snap.osc2_level * (1.0 + snap.osc_balance.min(0.0).abs());
                             osc_l += sample * level * pl;
                             osc_r += sample * level * pr;
                         }
@@ -415,29 +414,19 @@ impl SynthEngine {
                 // immediately when a voice was just triggered.
                 if snap.filter_enabled {
                     if coeff_tick || voice.filter_dirty {
-                        let key_offset =
-                            snap.filter_keytrack * (voice.current_pitch - 60.0) / 12.0;
+                        let key_offset = snap.filter_keytrack * (voice.current_pitch - 60.0) / 12.0;
                         let env_offset = snap.filter_env_depth * mod_env_val;
                         let cutoff = snap.filter_cutoff
-                            * 2.0f32.powf(
-                                key_offset + env_offset * 5.0 + mods.filter_cutoff * 5.0,
-                            );
+                            * 2.0f32.powf(key_offset + env_offset * 5.0 + mods.filter_cutoff * 5.0);
                         let cutoff = cutoff.clamp(20.0, 20000.0);
-                        let reso =
-                            (snap.filter_reso + mods.filter_resonance).clamp(0.0, 1.0);
+                        let reso = (snap.filter_reso + mods.filter_resonance).clamp(0.0, 1.0);
 
-                        voice.filter_l.set_coeffs(
-                            cutoff,
-                            reso,
-                            sample_rate,
-                            snap.filter_drive,
-                        );
-                        voice.filter_r.set_coeffs(
-                            cutoff,
-                            reso,
-                            sample_rate,
-                            snap.filter_drive,
-                        );
+                        voice
+                            .filter_l
+                            .set_coeffs(cutoff, reso, sample_rate, snap.filter_drive);
+                        voice
+                            .filter_r
+                            .set_coeffs(cutoff, reso, sample_rate, snap.filter_drive);
                         voice.last_filter_cutoff = cutoff;
                         voice.filter_dirty = false;
                     }

@@ -169,11 +169,9 @@ impl crate::Resonance {
         }
     }
 
-
     pub(crate) fn subscription(&self) -> Subscription<Message> {
-        let tick =
-            iced::time::every(std::time::Duration::from_millis(theme::TICK_INTERVAL_MS))
-                .map(|_| Message::Tick);
+        let tick = iced::time::every(std::time::Duration::from_millis(theme::TICK_INTERVAL_MS))
+            .map(|_| Message::Tick);
         let keys = keyboard::on_key_press(|key, modifiers| {
             if modifiers.command() {
                 match key {
@@ -194,9 +192,7 @@ impl crate::Resonance {
                             Some(Message::Undo)
                         }
                     }
-                    keyboard::Key::Character(ref c) if c.as_str() == "y" => {
-                        Some(Message::Redo)
-                    }
+                    keyboard::Key::Character(ref c) if c.as_str() == "y" => Some(Message::Redo),
                     _ => None,
                 }
             } else {
@@ -208,8 +204,7 @@ impl crate::Resonance {
                 }
             }
         });
-        let close_requests =
-            iced::window::close_requests().map(Message::WindowCloseRequested);
+        let close_requests = iced::window::close_requests().map(Message::WindowCloseRequested);
         Subscription::batch([tick, keys, close_requests])
     }
 }

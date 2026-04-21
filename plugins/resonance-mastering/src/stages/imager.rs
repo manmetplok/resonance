@@ -55,12 +55,7 @@ impl Imager {
         self.side_hpf.reset();
     }
 
-    pub fn process_stereo(
-        &mut self,
-        left: &mut [f32],
-        right: &mut [f32],
-        cfg: &ImagerConfig,
-    ) {
+    pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &ImagerConfig) {
         if !cfg.enabled {
             return;
         }

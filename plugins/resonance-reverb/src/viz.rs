@@ -144,11 +144,7 @@ impl ReverbViz {
         out
     }
 
-    pub fn store_er_taps(
-        &self,
-        times: &[(f32, f32); ER_TAPS],
-        gains: &[(f32, f32); ER_TAPS],
-    ) {
+    pub fn store_er_taps(&self, times: &[(f32, f32); ER_TAPS], gains: &[(f32, f32); ER_TAPS]) {
         for i in 0..ER_TAPS {
             self.er_tap_ms_l[i].store(times[i].0.to_bits(), Ordering::Relaxed);
             self.er_tap_ms_r[i].store(times[i].1.to_bits(), Ordering::Relaxed);

@@ -474,7 +474,11 @@ mod tests {
     use crate::scale::Mode;
 
     fn tc(chord: Chord, start_beat: u32, duration_beats: u32) -> TimedChord {
-        TimedChord { chord, start_beat, duration_beats }
+        TimedChord {
+            chord,
+            start_beat,
+            duration_beats,
+        }
     }
 
     // ---------- Pad ----------
@@ -502,7 +506,10 @@ mod tests {
             tc(Chord::new(F, ChordQuality::Maj7), 4, 4),
             tc(Chord::new(G, ChordQuality::Dom7), 8, 4),
         ];
-        let p = PadParams { register: (48, 72), velocity: 0.7 };
+        let p = PadParams {
+            register: (48, 72),
+            velocity: 0.7,
+        };
         for n in derive_pad(&chords, &p, 480) {
             assert!(n.note >= 48 && n.note <= 72, "{} out of register", n.note);
         }
@@ -516,8 +523,16 @@ mod tests {
         ];
         let notes = derive_pad(&chords, &PadParams::default(), 480);
         // First chord at beat 0 → start_tick 0; second at beat 4 → 1920.
-        let c_start: Vec<u64> = notes.iter().filter(|n| n.start_tick == 0).map(|n| n.start_tick).collect();
-        let g_start: Vec<u64> = notes.iter().filter(|n| n.start_tick == 1920).map(|n| n.start_tick).collect();
+        let c_start: Vec<u64> = notes
+            .iter()
+            .filter(|n| n.start_tick == 0)
+            .map(|n| n.start_tick)
+            .collect();
+        let g_start: Vec<u64> = notes
+            .iter()
+            .filter(|n| n.start_tick == 1920)
+            .map(|n| n.start_tick)
+            .collect();
         assert_eq!(c_start.len(), 3);
         assert_eq!(g_start.len(), 3);
     }
@@ -536,7 +551,10 @@ mod tests {
             tc(Chord::new(G, ChordQuality::Maj), 4, 4),
             tc(Chord::new(A, ChordQuality::Min), 8, 4),
         ];
-        let p = BassParams { style: BassStyle::RootHold, ..BassParams::default() };
+        let p = BassParams {
+            style: BassStyle::RootHold,
+            ..BassParams::default()
+        };
         let notes = derive_bass(&chords, None, &p, 480);
         assert_eq!(notes.len(), 3);
         assert_eq!(notes[0].duration_ticks, 4 * 480);
@@ -545,7 +563,10 @@ mod tests {
     #[test]
     fn bass_root_pulse_has_one_note_per_beat() {
         let chords = vec![tc(Chord::new(C, ChordQuality::Maj), 0, 4)];
-        let p = BassParams { style: BassStyle::RootPulse, ..BassParams::default() };
+        let p = BassParams {
+            style: BassStyle::RootPulse,
+            ..BassParams::default()
+        };
         let notes = derive_bass(&chords, None, &p, 480);
         assert_eq!(notes.len(), 4);
         assert!(notes.iter().all(|n| n.note == notes[0].note));
@@ -556,7 +577,10 @@ mod tests {
         // Am/G: root should be G, not A.
         let chord = Chord::new(A, ChordQuality::Min).with_bass(G);
         let chords = vec![tc(chord, 0, 4)];
-        let p = BassParams { style: BassStyle::RootHold, ..BassParams::default() };
+        let p = BassParams {
+            style: BassStyle::RootHold,
+            ..BassParams::default()
+        };
         let notes = derive_bass(&chords, None, &p, 480);
         assert_eq!(notes.len(), 1);
         // Expect G at or above base_note 28 (E1) — the nearest G ≥ 28 is G1 = 31.
@@ -569,7 +593,10 @@ mod tests {
             tc(Chord::new(C, ChordQuality::Maj), 0, 4),
             tc(Chord::new(G, ChordQuality::Maj), 4, 4),
         ];
-        let p = BassParams { style: BassStyle::Walking, ..BassParams::default() };
+        let p = BassParams {
+            style: BassStyle::Walking,
+            ..BassParams::default()
+        };
         let notes = derive_bass(&chords, None, &p, 480);
         assert_eq!(notes.len(), 8);
     }
@@ -581,11 +608,18 @@ mod tests {
             tc(Chord::new(G, ChordQuality::Maj), 4, 4),
         ];
         let scale = Scale::new(C, Mode::Major);
-        let p = BassParams { style: BassStyle::Walking, ..BassParams::default() };
+        let p = BassParams {
+            style: BassStyle::Walking,
+            ..BassParams::default()
+        };
         let notes = derive_bass(&chords, Some(scale), &p, 480);
         // Every note must belong to the scale.
         for n in &notes {
-            assert!(scale.contains(n.note), "walking bass note {} not in C major", n.note);
+            assert!(
+                scale.contains(n.note),
+                "walking bass note {} not in C major",
+                n.note
+            );
         }
         // Should produce one note per beat across both chords.
         assert_eq!(notes.len(), 8);
@@ -640,7 +674,11 @@ mod tests {
         };
         let notes = derive_melody(&chords, Some(scale), &p, 480, 7);
         for n in &notes {
-            assert!(scale.contains(n.note), "walk note {} not in C major", n.note);
+            assert!(
+                scale.contains(n.note),
+                "walk note {} not in C major",
+                n.note
+            );
         }
     }
 

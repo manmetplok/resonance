@@ -220,8 +220,7 @@ pub fn save_project(
     for (instance_id, data) in plugin_states {
         let file_name = format!("plugin_{instance_id}.bin");
         let file_path = plugins_dir.join(&file_name);
-        std::fs::write(&file_path, data)
-            .map_err(|e| format!("Write {file_name}: {e}"))?;
+        std::fs::write(&file_path, data).map_err(|e| format!("Write {file_name}: {e}"))?;
     }
 
     // Write MIDI clips as Standard MIDI Files.
@@ -232,8 +231,8 @@ pub fn save_project(
     }
 
     // Write project.json.
-    let json = serde_json::to_string_pretty(project)
-        .map_err(|e| format!("Serialize project: {e}"))?;
+    let json =
+        serde_json::to_string_pretty(project).map_err(|e| format!("Serialize project: {e}"))?;
     std::fs::write(path.join("project.json"), json)
         .map_err(|e| format!("Write project.json: {e}"))?;
 
@@ -247,7 +246,11 @@ pub fn save_project(
 pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
     let json_path = if path.join("project.json").exists() {
         path.join("project.json")
-    } else if path.file_name().map(|f| f == "project.json").unwrap_or(false) {
+    } else if path
+        .file_name()
+        .map(|f| f == "project.json")
+        .unwrap_or(false)
+    {
         path.to_path_buf()
     } else {
         return Err("No project.json found".to_string());
@@ -258,8 +261,8 @@ pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| path.to_path_buf());
 
-    let json = std::fs::read_to_string(&json_path)
-        .map_err(|e| format!("Read project.json: {e}"))?;
+    let json =
+        std::fs::read_to_string(&json_path).map_err(|e| format!("Read project.json: {e}"))?;
     let file: ProjectFile =
         serde_json::from_str(&json).map_err(|e| format!("Parse project.json: {e}"))?;
 

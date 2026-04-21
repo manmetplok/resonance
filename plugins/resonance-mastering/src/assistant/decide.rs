@@ -116,7 +116,10 @@ impl Suggestions {
         params.limiter.release.set_value(self.limiter_release_ms);
 
         params.glue_compressor.on.set_value(self.glue_enabled);
-        params.glue_compressor.threshold.set_value(self.glue_threshold_db);
+        params
+            .glue_compressor
+            .threshold
+            .set_value(self.glue_threshold_db);
         params.glue_compressor.ratio.set_value(self.glue_ratio);
 
         if self.tonal_low_shelf_gain_db.abs() > 0.25 {

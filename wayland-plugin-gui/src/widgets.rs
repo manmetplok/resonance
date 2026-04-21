@@ -54,7 +54,16 @@ pub fn knob(
     let changed = handle_knob_input(&response, value, &range, default, logarithmic);
 
     if ui.is_rect_visible(rect) {
-        draw_knob(ui, rect, *value, &range, knob_radius, label, sub_label, value_text);
+        draw_knob(
+            ui,
+            rect,
+            *value,
+            &range,
+            knob_radius,
+            label,
+            sub_label,
+            value_text,
+        );
     }
 
     changed
@@ -140,13 +149,29 @@ fn draw_knob(
     let arc_width = 3.5f32;
 
     // Background arc.
-    draw_arc(&painter, center, radius, ARC_START, ARC_END, track_width, TRACK_COLOR);
+    draw_arc(
+        &painter,
+        center,
+        radius,
+        ARC_START,
+        ARC_END,
+        track_width,
+        TRACK_COLOR,
+    );
 
     // Value arc.
     let normalized = normalize(value, range);
     let value_angle = ARC_START + normalized * (ARC_END - ARC_START);
     if normalized > 0.001 {
-        draw_arc(&painter, center, radius, ARC_START, value_angle, arc_width, ARC_COLOR);
+        draw_arc(
+            &painter,
+            center,
+            radius,
+            ARC_START,
+            value_angle,
+            arc_width,
+            ARC_COLOR,
+        );
     }
 
     // Indicator dot at the value position.
@@ -305,7 +330,16 @@ pub fn float_knob(
     logarithmic: bool,
 ) {
     let mut v = param.value();
-    if knob(ui, &mut v, range, default, label, sub_label, value_text, logarithmic) {
+    if knob(
+        ui,
+        &mut v,
+        range,
+        default,
+        label,
+        sub_label,
+        value_text,
+        logarithmic,
+    ) {
         param.set_value(v);
     }
 }

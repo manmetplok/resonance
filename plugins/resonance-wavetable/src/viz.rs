@@ -79,13 +79,16 @@ impl WavetableVizState {
 
     #[inline]
     pub fn store_filter_cutoff_live(&self, hz: f32) {
-        self.filter_cutoff_live.store(hz.to_bits(), Ordering::Relaxed);
+        self.filter_cutoff_live
+            .store(hz.to_bits(), Ordering::Relaxed);
     }
 
     #[inline]
     pub fn store_osc_positions(&self, osc1: f32, osc2: f32) {
-        self.osc1_position_live.store(osc1.to_bits(), Ordering::Relaxed);
-        self.osc2_position_live.store(osc2.to_bits(), Ordering::Relaxed);
+        self.osc1_position_live
+            .store(osc1.to_bits(), Ordering::Relaxed);
+        self.osc2_position_live
+            .store(osc2.to_bits(), Ordering::Relaxed);
     }
 
     #[inline]
@@ -240,8 +243,8 @@ impl Default for ScopeCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::thread;
     use std::time::{Duration, Instant};
 

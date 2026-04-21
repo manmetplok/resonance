@@ -26,7 +26,9 @@ fn is_black_key(note: u8) -> bool {
 
 /// Returns a human-readable note name (e.g. "C4", "F#3").
 fn note_name(note: u8) -> String {
-    let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    let names = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
     let octave = (note / 12) as i8 - 1;
     format!("{}{}", names[note as usize % 12], octave)
 }
@@ -57,10 +59,7 @@ enum DragMode {
         original_start_tick: u64,
     },
     /// Resizing a note from its right edge.
-    ResizeNote {
-        note_index: usize,
-        anchor_tick: u64,
-    },
+    ResizeNote { note_index: usize, anchor_tick: u64 },
 }
 
 /// Local state for the piano roll canvas, tracking drags and previews.
@@ -130,7 +129,10 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                         state.previewing_note = Some(note);
                         return (
                             canvas::event::Status::Captured,
-                            Some(Message::MidiEditor(MidiEditorMessage::PreviewNote(self.track_id, note))),
+                            Some(Message::MidiEditor(MidiEditorMessage::PreviewNote(
+                                self.track_id,
+                                note,
+                            ))),
                         );
                     }
 
@@ -163,7 +165,9 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                                     });
                                     return (
                                         canvas::event::Status::Captured,
-                                        Some(Message::MidiEditor(MidiEditorMessage::SelectNote { note_index: Some(i) })),
+                                        Some(Message::MidiEditor(MidiEditorMessage::SelectNote {
+                                            note_index: Some(i),
+                                        })),
                                     );
                                 }
                                 // Body: move
@@ -176,7 +180,9 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                                 });
                                 return (
                                     canvas::event::Status::Captured,
-                                    Some(Message::MidiEditor(MidiEditorMessage::SelectNote { note_index: Some(i) })),
+                                    Some(Message::MidiEditor(MidiEditorMessage::SelectNote {
+                                        note_index: Some(i),
+                                    })),
                                 );
                             }
                         }
@@ -239,7 +245,7 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                         }) => {
                             if pos.x >= grid_x && pos.y < grid_h {
                                 let tick = self.x_to_tick(pos.x - grid_x);
-                                let raw_tick = (tick as i64 + start_tick_offset) .max(0) as u64;
+                                let raw_tick = (tick as i64 + start_tick_offset).max(0) as u64;
                                 let snapped_tick = self.snap(raw_tick);
                                 let note = self.y_to_note(pos.y, grid_h);
                                 return (
@@ -260,7 +266,8 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                             if pos.x >= grid_x {
                                 let tick = self.x_to_tick(pos.x - grid_x);
                                 let snapped = self.snap(tick);
-                                let new_dur = snapped.saturating_sub(*anchor_tick).max(self.snap_ticks);
+                                let new_dur =
+                                    snapped.saturating_sub(*anchor_tick).max(self.snap_ticks);
                                 return (
                                     canvas::event::Status::Captured,
                                     Some(Message::MidiEditor(MidiEditorMessage::ResizeNote {
@@ -282,7 +289,10 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                 if let Some(note) = state.previewing_note.take() {
                     return (
                         canvas::event::Status::Captured,
-                        Some(Message::MidiEditor(MidiEditorMessage::StopPreview(self.track_id, note))),
+                        Some(Message::MidiEditor(MidiEditorMessage::StopPreview(
+                            self.track_id,
+                            note,
+                        ))),
                     );
                 }
             }
@@ -328,11 +338,7 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
         let grid_h = bounds.height - VELOCITY_LANE_HEIGHT;
 
         // --- Background ---
-        frame.fill_rectangle(
-            Point::ORIGIN,
-            bounds.size(),
-            theme::BG,
-        );
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
 
         // --- Note row backgrounds ---
         self.draw_note_rows(&mut frame, grid_x, grid_w, grid_h);
@@ -378,7 +384,11 @@ impl PianoRollCanvas<'_> {
     /// Convert a pixel x offset within the grid area to a tick position.
     fn x_to_tick(&self, x: f32) -> u64 {
         let tick = (x + self.scroll_x) / self.zoom_x;
-        if tick < 0.0 { 0 } else { tick as u64 }
+        if tick < 0.0 {
+            0
+        } else {
+            tick as u64
+        }
     }
 
     /// Convert a note duration in ticks to pixel width.
@@ -472,11 +482,7 @@ impl PianoRollCanvas<'_> {
                 };
                 let width = if is_bar { 1.0 } else { 1.0 };
 
-                frame.fill_rectangle(
-                    Point::new(x, 0.0),
-                    Size::new(width, grid_h),
-                    color,
-                );
+                frame.fill_rectangle(Point::new(x, 0.0), Size::new(width, grid_h), color);
             }
         }
 
@@ -518,11 +524,7 @@ impl PianoRollCanvas<'_> {
 
             // Note body color varies with velocity
             let v = n.velocity.clamp(0.0, 1.0);
-            let note_color = Color::from_rgb(
-                0.3 + v * 0.5,
-                0.5 + v * 0.3,
-                0.9,
-            );
+            let note_color = Color::from_rgb(0.3 + v * 0.5, 0.5 + v * 0.3, 0.9);
 
             frame.fill_rectangle(Point::new(x, y), Size::new(w, h), note_color);
 
@@ -570,7 +572,11 @@ impl PianoRollCanvas<'_> {
             } else {
                 Color::from_rgb(0.22, 0.22, 0.22)
             };
-            let key_w = if black { KEYBOARD_WIDTH * 0.65 } else { KEYBOARD_WIDTH - 1.0 };
+            let key_w = if black {
+                KEYBOARD_WIDTH * 0.65
+            } else {
+                KEYBOARD_WIDTH - 1.0
+            };
 
             frame.fill_rectangle(Point::new(0.0, y), Size::new(key_w, h - 1.0), key_color);
 

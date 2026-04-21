@@ -1,5 +1,4 @@
 /// All parameters for the wavetable synthesizer (87 total).
-
 use resonance_plugin::*;
 
 use crate::modulation::NUM_MOD_SLOTS;
@@ -122,7 +121,11 @@ impl WavetableParams {
                 "glide_time",
                 "Glide Time",
                 0.0,
-                FloatRange::Skewed { min: 0.0, max: 2000.0, factor: -2.0 },
+                FloatRange::Skewed {
+                    min: 0.0,
+                    max: 2000.0,
+                    factor: -2.0,
+                },
             )
             .with_unit(" ms")
             .with_value_to_string(formatters::v2s_f32_rounded(0)),
@@ -140,7 +143,10 @@ impl WavetableParams {
                 "osc_balance",
                 "Osc Balance",
                 0.0,
-                FloatRange::Linear { min: -1.0, max: 1.0 },
+                FloatRange::Linear {
+                    min: -1.0,
+                    max: 1.0,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
@@ -295,34 +301,53 @@ impl OscParams {
                 wt_id,
                 wt_name,
                 default_wt,
-                IntRange::Linear { min: 0, max: (NUM_WAVETABLES - 1) as i32 },
+                IntRange::Linear {
+                    min: 0,
+                    max: (NUM_WAVETABLES - 1) as i32,
+                },
             ),
             position: FloatParam::new(
-                pos_id, pos_name, 0.0,
+                pos_id,
+                pos_name,
+                0.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             coarse: IntParam::new(
-                coarse_id, coarse_name, 0,
+                coarse_id,
+                coarse_name,
+                0,
                 IntRange::Linear { min: -24, max: 24 },
             ),
             fine: FloatParam::new(
-                fine_id, fine_name, 0.0,
-                FloatRange::Linear { min: -100.0, max: 100.0 },
+                fine_id,
+                fine_name,
+                0.0,
+                FloatRange::Linear {
+                    min: -100.0,
+                    max: 100.0,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))
             .with_unit(" ct")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
             level: FloatParam::new(
-                level_id, level_name, default_level,
+                level_id,
+                level_name,
+                default_level,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_smoother(SmoothingStyle::Linear(5.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             pan: FloatParam::new(
-                pan_id, pan_name, 0.0,
-                FloatRange::Linear { min: -1.0, max: 1.0 },
+                pan_id,
+                pan_name,
+                0.0,
+                FloatRange::Linear {
+                    min: -1.0,
+                    max: 1.0,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
@@ -353,31 +378,56 @@ impl EnvParams {
 
         Self {
             attack: FloatParam::new(
-                a_id, a_name, default_attack,
-                FloatRange::Skewed { min: 0.001, max: 5.0, factor: -2.0 },
+                a_id,
+                a_name,
+                default_attack,
+                FloatRange::Skewed {
+                    min: 0.001,
+                    max: 5.0,
+                    factor: -2.0,
+                },
             )
             .with_unit(" s")
             .with_value_to_string(formatters::v2s_f32_rounded(3)),
             decay: FloatParam::new(
-                d_id, d_name, default_decay,
-                FloatRange::Skewed { min: 0.001, max: 10.0, factor: -2.0 },
+                d_id,
+                d_name,
+                default_decay,
+                FloatRange::Skewed {
+                    min: 0.001,
+                    max: 10.0,
+                    factor: -2.0,
+                },
             )
             .with_unit(" s")
             .with_value_to_string(formatters::v2s_f32_rounded(3)),
             sustain: FloatParam::new(
-                s_id, s_name, default_sustain,
+                s_id,
+                s_name,
+                default_sustain,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             release: FloatParam::new(
-                r_id, r_name, default_release,
-                FloatRange::Skewed { min: 0.001, max: 10.0, factor: -2.0 },
+                r_id,
+                r_name,
+                default_release,
+                FloatRange::Skewed {
+                    min: 0.001,
+                    max: 10.0,
+                    factor: -2.0,
+                },
             )
             .with_unit(" s")
             .with_value_to_string(formatters::v2s_f32_rounded(3)),
             curve: FloatParam::new(
-                c_id, c_name, 0.0,
-                FloatRange::Linear { min: -1.0, max: 1.0 },
+                c_id,
+                c_name,
+                0.0,
+                FloatRange::Linear {
+                    min: -1.0,
+                    max: 1.0,
+                },
             )
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
         }
@@ -388,36 +438,55 @@ impl FilterParams {
     fn new() -> Self {
         Self {
             filter_type: IntParam::new(
-                "filter_type", "Filter Type", 0,
+                "filter_type",
+                "Filter Type",
+                0,
                 IntRange::Linear { min: 0, max: 3 },
             ),
             cutoff: FloatParam::new(
-                "filter_cutoff", "Filter Cutoff", 8000.0,
-                FloatRange::Skewed { min: 20.0, max: 20000.0, factor: -2.5 },
+                "filter_cutoff",
+                "Filter Cutoff",
+                8000.0,
+                FloatRange::Skewed {
+                    min: 20.0,
+                    max: 20000.0,
+                    factor: -2.5,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(5.0))
             .with_unit(" Hz")
             .with_value_to_string(formatters::v2s_f32_rounded(0)),
             resonance: FloatParam::new(
-                "filter_resonance", "Filter Resonance", 0.0,
+                "filter_resonance",
+                "Filter Resonance",
+                0.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_smoother(SmoothingStyle::Linear(5.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             env_depth: FloatParam::new(
-                "filter_env_depth", "Filter Env Depth", 0.0,
-                FloatRange::Linear { min: -1.0, max: 1.0 },
+                "filter_env_depth",
+                "Filter Env Depth",
+                0.0,
+                FloatRange::Linear {
+                    min: -1.0,
+                    max: 1.0,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
             keytrack: FloatParam::new(
-                "filter_keytrack", "Filter Key Track", 0.0,
+                "filter_keytrack",
+                "Filter Key Track",
+                0.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             enabled: BoolParam::new("filter_enabled", "Filter On", true),
             drive: FloatParam::new(
-                "filter_drive", "Filter Drive", 0.0,
+                "filter_drive",
+                "Filter Drive",
+                0.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_smoother(SmoothingStyle::Linear(5.0))
@@ -435,19 +504,26 @@ impl LfoParams {
         let dp_id: &'static str = Box::leak(format!("lfo{}_depth", num).into_boxed_str());
         let dp_name: &'static str = Box::leak(format!("LFO {} Depth", num).into_boxed_str());
         let rtr_id: &'static str = Box::leak(format!("lfo{}_retrigger", num).into_boxed_str());
-        let rtr_name: &'static str =
-            Box::leak(format!("LFO {} Retrigger", num).into_boxed_str());
+        let rtr_name: &'static str = Box::leak(format!("LFO {} Retrigger", num).into_boxed_str());
 
         Self {
             shape: IntParam::new(sh_id, sh_name, 0, IntRange::Linear { min: 0, max: 4 }),
             rate: FloatParam::new(
-                rt_id, rt_name, default_rate,
-                FloatRange::Skewed { min: 0.01, max: 50.0, factor: -2.0 },
+                rt_id,
+                rt_name,
+                default_rate,
+                FloatRange::Skewed {
+                    min: 0.01,
+                    max: 50.0,
+                    factor: -2.0,
+                },
             )
             .with_unit(" Hz")
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
             depth: FloatParam::new(
-                dp_id, dp_name, default_depth,
+                dp_id,
+                dp_name,
+                default_depth,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))
@@ -461,18 +537,27 @@ impl UnisonParams {
     fn new() -> Self {
         Self {
             voices: IntParam::new(
-                "unison_voices", "Unison Voices", 1,
+                "unison_voices",
+                "Unison Voices",
+                1,
                 IntRange::Linear { min: 1, max: 7 },
             ),
             detune: FloatParam::new(
-                "unison_detune", "Unison Detune", 15.0,
-                FloatRange::Linear { min: 0.0, max: 100.0 },
+                "unison_detune",
+                "Unison Detune",
+                15.0,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 100.0,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))
             .with_unit(" ct")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
             spread: FloatParam::new(
-                "unison_spread", "Unison Spread", 0.5,
+                "unison_spread",
+                "Unison Spread",
+                0.5,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))
@@ -487,8 +572,7 @@ impl ModSlotParams {
         let src_name: &'static str =
             Box::leak(format!("Mod {} Source", index + 1).into_boxed_str());
         let dst_id: &'static str = Box::leak(format!("mod_{}_dst", index + 1).into_boxed_str());
-        let dst_name: &'static str =
-            Box::leak(format!("Mod {} Dest", index + 1).into_boxed_str());
+        let dst_name: &'static str = Box::leak(format!("Mod {} Dest", index + 1).into_boxed_str());
         let amt_id: &'static str = Box::leak(format!("mod_{}_amt", index + 1).into_boxed_str());
         let amt_name: &'static str =
             Box::leak(format!("Mod {} Amount", index + 1).into_boxed_str());
@@ -497,8 +581,13 @@ impl ModSlotParams {
             source: IntParam::new(src_id, src_name, 0, IntRange::Linear { min: 0, max: 8 }),
             destination: IntParam::new(dst_id, dst_name, 0, IntRange::Linear { min: 0, max: 11 }),
             amount: FloatParam::new(
-                amt_id, amt_name, 0.0,
-                FloatRange::Linear { min: -1.0, max: 1.0 },
+                amt_id,
+                amt_name,
+                0.0,
+                FloatRange::Linear {
+                    min: -1.0,
+                    max: 1.0,
+                },
             )
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
         }
@@ -510,19 +599,29 @@ impl ChorusParams {
         Self {
             enabled: BoolParam::new("chorus_enabled", "Chorus On", false),
             rate: FloatParam::new(
-                "chorus_rate", "Chorus Rate", 1.0,
-                FloatRange::Skewed { min: 0.1, max: 5.0, factor: -1.0 },
+                "chorus_rate",
+                "Chorus Rate",
+                1.0,
+                FloatRange::Skewed {
+                    min: 0.1,
+                    max: 5.0,
+                    factor: -1.0,
+                },
             )
             .with_unit(" Hz")
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
             depth: FloatParam::new(
-                "chorus_depth", "Chorus Depth", 0.3,
+                "chorus_depth",
+                "Chorus Depth",
+                0.3,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             mix: FloatParam::new(
-                "chorus_mix", "Chorus Mix", 0.5,
+                "chorus_mix",
+                "Chorus Mix",
+                0.5,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))
@@ -536,27 +635,46 @@ impl DelayParams {
         Self {
             enabled: BoolParam::new("delay_enabled", "Delay On", false),
             time_l: FloatParam::new(
-                "delay_time_l", "Delay Time L", 375.0,
-                FloatRange::Skewed { min: 10.0, max: 2000.0, factor: -1.5 },
+                "delay_time_l",
+                "Delay Time L",
+                375.0,
+                FloatRange::Skewed {
+                    min: 10.0,
+                    max: 2000.0,
+                    factor: -1.5,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(50.0))
             .with_unit(" ms")
             .with_value_to_string(formatters::v2s_f32_rounded(0)),
             time_r: FloatParam::new(
-                "delay_time_r", "Delay Time R", 500.0,
-                FloatRange::Skewed { min: 10.0, max: 2000.0, factor: -1.5 },
+                "delay_time_r",
+                "Delay Time R",
+                500.0,
+                FloatRange::Skewed {
+                    min: 10.0,
+                    max: 2000.0,
+                    factor: -1.5,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(50.0))
             .with_unit(" ms")
             .with_value_to_string(formatters::v2s_f32_rounded(0)),
             feedback: FloatParam::new(
-                "delay_feedback", "Delay Feedback", 0.4,
-                FloatRange::Linear { min: 0.0, max: 0.95 },
+                "delay_feedback",
+                "Delay Feedback",
+                0.4,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 0.95,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             mix: FloatParam::new(
-                "delay_mix", "Delay Mix", 0.25,
+                "delay_mix",
+                "Delay Mix",
+                0.25,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))
@@ -570,13 +688,21 @@ impl DistortionParams {
         Self {
             enabled: BoolParam::new("dist_enabled", "Distortion On", false),
             drive: FloatParam::new(
-                "dist_drive", "Distortion Drive", 1.0,
-                FloatRange::Skewed { min: 1.0, max: 20.0, factor: -1.5 },
+                "dist_drive",
+                "Distortion Drive",
+                1.0,
+                FloatRange::Skewed {
+                    min: 1.0,
+                    max: 20.0,
+                    factor: -1.5,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(5.0))
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
             mix: FloatParam::new(
-                "dist_mix", "Distortion Mix", 0.5,
+                "dist_mix",
+                "Distortion Mix",
+                0.5,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_smoother(SmoothingStyle::Linear(10.0))

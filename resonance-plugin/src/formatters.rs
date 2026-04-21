@@ -1,5 +1,4 @@
 /// Value formatting and parsing functions for plugin parameters.
-
 use std::sync::Arc;
 
 /// Format a gain value (linear) as decibels, rounded to the given decimal places.
@@ -16,7 +15,11 @@ pub fn v2s_f32_gain_to_db(decimals: usize) -> Arc<dyn Fn(f32) -> String + Send +
 /// Parse a dB string back to a linear gain value.
 pub fn s2v_f32_gain_to_db() -> Arc<dyn Fn(&str) -> Option<f32> + Send + Sync> {
     Arc::new(|s: &str| {
-        let s = s.trim().trim_end_matches(" dB").trim_end_matches("dB").trim();
+        let s = s
+            .trim()
+            .trim_end_matches(" dB")
+            .trim_end_matches("dB")
+            .trim();
         if s == "-inf" {
             return Some(0.0);
         }

@@ -9,10 +9,28 @@ pub struct PresetEntry {
 }
 
 pub const PRESETS: &[PresetEntry] = &[
-    PresetEntry { name: "Tight Room",     json: include_str!("../presets/tight_room.json") },
-    PresetEntry { name: "Vocal Plate",    json: include_str!("../presets/vocal_plate.json") },
-    PresetEntry { name: "Warm Hall",      json: include_str!("../presets/warm_hall.json") },
-    PresetEntry { name: "Cathedral",      json: include_str!("../presets/cathedral.json") },
-    PresetEntry { name: "Ambient Bloom",  json: include_str!("../presets/ambient_bloom.json") },
-    PresetEntry { name: "Shimmer Drone",  json: include_str!("../presets/shimmer_drone.json") },
+    PresetEntry {
+        name: "Tight Room",
+        json: include_str!("../presets/tight_room.json"),
+    },
+    PresetEntry {
+        name: "Vocal Plate",
+        json: include_str!("../presets/vocal_plate.json"),
+    },
+    PresetEntry {
+        name: "Warm Hall",
+        json: include_str!("../presets/warm_hall.json"),
+    },
+    PresetEntry {
+        name: "Cathedral",
+        json: include_str!("../presets/cathedral.json"),
+    },
+    PresetEntry {
+        name: "Ambient Bloom",
+        json: include_str!("../presets/ambient_bloom.json"),
+    },
+    PresetEntry {
+        name: "Shimmer Drone",
+        json: include_str!("../presets/shimmer_drone.json"),
+    },
 ];

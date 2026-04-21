@@ -36,12 +36,11 @@ impl PlrMeter {
         } else {
             0.0
         };
-        let psr =
-            if short_term_lufs.is_finite() && short_term_true_peak_dbtp.is_finite() {
-                short_term_true_peak_dbtp - short_term_lufs
-            } else {
-                0.0
-            };
+        let psr = if short_term_lufs.is_finite() && short_term_true_peak_dbtp.is_finite() {
+            short_term_true_peak_dbtp - short_term_lufs
+        } else {
+            0.0
+        };
         PlrReadout {
             plr_db: plr,
             psr_db: psr,
@@ -62,7 +61,12 @@ mod tests {
 
     #[test]
     fn silent_input_yields_zero() {
-        let r = PlrMeter::compute(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+        let r = PlrMeter::compute(
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        );
         assert_eq!(r.plr_db, 0.0);
         assert_eq!(r.psr_db, 0.0);
     }
