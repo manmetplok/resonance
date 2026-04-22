@@ -10,7 +10,7 @@ use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::{container, Canvas};
 use iced::{mouse, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
 
-use resonance_audio::types::{TrackId, TICKS_PER_QUARTER_NOTE};
+use resonance_audio::types::{TempoMap, TrackId, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::Scale;
 
 use crate::compose::{ComposeMessage, SectionDefinitionState, SectionPlacementState};
@@ -57,9 +57,8 @@ pub fn view<'a>(
     placement: &'a SectionPlacementState,
     definition: &'a SectionDefinitionState,
 ) -> Element<'a, Message> {
-    let samples_per_bar = samples_per_bar(app);
-    let section_start = placement.start_bar as u64 * samples_per_bar;
-    let section_end = section_start + definition.length_bars as u64 * samples_per_bar;
+    let section_start = app.tempo_map.bar_to_sample(placement.start_bar);
+    let section_end = app.tempo_map.bar_to_sample(placement.start_bar + definition.length_bars);
 
     let canvas = Canvas::new(ExpandedEditorCanvas {
         track_id,
@@ -68,9 +67,9 @@ pub fn view<'a>(
         section_end,
         section_length_bars: definition.length_bars,
         sample_rate: app.sample_rate,
-        bpm: app.transport.bpm,
+        tempo_map: &app.tempo_map,
+        start_bar: placement.start_bar,
         scale: definition.scale,
-        time_sig_num: app.transport.time_sig_num,
         zoom_y: app.compose.expanded_zoom_y,
         scroll_x: app.compose.expanded_scroll_x,
         scroll_y: app.compose.expanded_scroll_y,
@@ -91,9 +90,9 @@ pub struct ExpandedEditorCanvas<'a> {
     pub section_end: u64,
     pub section_length_bars: u32,
     pub sample_rate: u32,
-    pub bpm: f32,
+    pub tempo_map: &'a TempoMap,
+    pub start_bar: u32,
     pub scale: Option<Scale>,
-    pub time_sig_num: u8,
     pub zoom_y: f32,
     pub scroll_x: f32,
     pub scroll_y: f32,
@@ -354,9 +353,14 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
 // ---------------------------------------------------------------------------
 
 impl<'a> ExpandedEditorCanvas<'a> {
-    /// Section duration in ticks.
+    /// Section duration in ticks, summing per-bar numerators.
     fn section_ticks(&self) -> u64 {
-        self.section_length_bars as u64 * self.time_sig_num as u64 * TICKS_PER_QUARTER_NOTE
+        (0..self.section_length_bars)
+            .map(|b| {
+                self.tempo_map.numerator_at_bar(self.start_bar + b) as u64
+                    * TICKS_PER_QUARTER_NOTE
+            })
+            .sum()
     }
 
     /// Compute pixels-per-tick so the full section fills `grid_w`.
@@ -396,12 +400,9 @@ impl<'a> ExpandedEditorCanvas<'a> {
         note.clamp(0, 127) as u8
     }
 
-    fn samples_per_tick(&self) -> f64 {
-        self.sample_rate as f64 * 60.0 / self.bpm as f64 / TICKS_PER_QUARTER_NOTE as f64
-    }
-
-    fn midi_clip_duration_samples(&self, clip: &MidiClipState) -> u64 {
-        (clip.duration_ticks as f64 * self.samples_per_tick()) as u64
+    fn midi_clip_end_sample(&self, clip: &MidiClipState) -> u64 {
+        self.tempo_map
+            .tick_to_abs_sample(clip.start_sample, clip.duration_ticks, self.sample_rate)
     }
 }
 
@@ -427,7 +428,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
             .iter()
             .filter(|c| c.track_id == self.track_id)
         {
-            let clip_end = clip.start_sample + self.midi_clip_duration_samples(clip);
+            let clip_end = self.midi_clip_end_sample(clip);
             if clip_end <= self.section_start || clip.start_sample >= self.section_end {
                 continue;
             }
@@ -469,7 +470,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
             .iter()
             .filter(|c| c.track_id == self.track_id)
         {
-            let clip_end = clip.start_sample + self.midi_clip_duration_samples(clip);
+            let clip_end = self.midi_clip_end_sample(clip);
             if self.section_start >= clip.start_sample && self.section_start < clip_end {
                 return (
                     canvas::event::Status::Captured,
@@ -499,7 +500,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
             .iter()
             .filter(|c| c.track_id == self.track_id)
         {
-            let clip_end = clip.start_sample + self.midi_clip_duration_samples(clip);
+            let clip_end = self.midi_clip_end_sample(clip);
             if clip_end <= self.section_start || clip.start_sample >= self.section_end {
                 continue;
             }
@@ -623,42 +624,61 @@ impl<'a> ExpandedEditorCanvas<'a> {
         grid_h: f32,
         zoom_x: f32,
     ) {
-        let total_beats = self.section_length_bars * self.time_sig_num as u32;
-        if total_beats == 0 {
+        if self.section_length_bars == 0 {
             return;
         }
         let tpb = TICKS_PER_QUARTER_NOTE;
-        let ticks_per_bar = tpb * self.time_sig_num as u64;
         let total_ticks = self.section_ticks();
 
-        for beat in 0..=total_beats {
-            let tick = beat as u64 * tpb;
-            let x = grid_x + self.tick_to_x(tick, zoom_x);
-            if x < grid_x || x > grid_x + grid_w {
-                continue;
+        // Walk bars for correct placement with varying time signatures.
+        let mut tick_pos: u64 = 0;
+        for bar_offset in 0..self.section_length_bars {
+            let bar = self.start_bar + bar_offset;
+            let num = self.tempo_map.numerator_at_bar(bar) as u64;
+            let bar_ticks = num * tpb;
+
+            // Bar line
+            let x = grid_x + self.tick_to_x(tick_pos, zoom_x);
+            if x >= grid_x && x <= grid_x + grid_w {
+                frame.fill_rectangle(
+                    Point::new(x, TOOLBAR_HEIGHT),
+                    Size::new(1.5, grid_h),
+                    Color::from_rgb(0.30, 0.30, 0.34),
+                );
+                if tick_pos < total_ticks {
+                    frame.fill_text(canvas::Text {
+                        content: format!("{}", bar_offset + 1),
+                        position: Point::new(x + 3.0, TOOLBAR_HEIGHT + 2.0),
+                        color: theme::TEXT_DIM,
+                        size: 9.0.into(),
+                        ..canvas::Text::default()
+                    });
+                }
             }
-            let is_bar = tick % ticks_per_bar == 0;
-            let color = if is_bar {
-                Color::from_rgb(0.30, 0.30, 0.34)
-            } else {
-                Color::from_rgb(0.18, 0.18, 0.20)
-            };
+
+            // Beat lines within this bar
+            for beat in 1..num {
+                let beat_tick = tick_pos + beat * tpb;
+                let bx = grid_x + self.tick_to_x(beat_tick, zoom_x);
+                if bx >= grid_x && bx <= grid_x + grid_w {
+                    frame.fill_rectangle(
+                        Point::new(bx, TOOLBAR_HEIGHT),
+                        Size::new(1.0, grid_h),
+                        Color::from_rgb(0.18, 0.18, 0.20),
+                    );
+                }
+            }
+
+            tick_pos += bar_ticks;
+        }
+        // Final bar line at section end
+        let x = grid_x + self.tick_to_x(tick_pos, zoom_x);
+        if x >= grid_x && x <= grid_x + grid_w {
             frame.fill_rectangle(
                 Point::new(x, TOOLBAR_HEIGHT),
-                Size::new(if is_bar { 1.5 } else { 1.0 }, grid_h),
-                color,
+                Size::new(1.5, grid_h),
+                Color::from_rgb(0.30, 0.30, 0.34),
             );
-
-            if is_bar && tick < total_ticks {
-                let bar_num = tick / ticks_per_bar + 1;
-                frame.fill_text(canvas::Text {
-                    content: format!("{}", bar_num),
-                    position: Point::new(x + 3.0, TOOLBAR_HEIGHT + 2.0),
-                    color: theme::TEXT_DIM,
-                    size: 9.0.into(),
-                    ..canvas::Text::default()
-                });
-            }
         }
 
         // Subdivision lines (16th notes) when zoomed in enough
@@ -689,7 +709,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
             .iter()
             .filter(|c| c.track_id == self.track_id)
         {
-            let clip_end = clip.start_sample + self.midi_clip_duration_samples(clip);
+            let clip_end = self.midi_clip_end_sample(clip);
             if clip_end <= self.section_start || clip.start_sample >= self.section_end {
                 continue;
             }
@@ -775,7 +795,3 @@ impl<'a> ExpandedEditorCanvas<'a> {
     }
 }
 
-fn samples_per_bar(app: &Resonance) -> u64 {
-    let samples_per_beat = app.sample_rate as f64 * 60.0 / app.transport.bpm as f64;
-    (samples_per_beat * app.transport.time_sig_num as f64) as u64
-}

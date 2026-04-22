@@ -23,10 +23,6 @@ pub enum DrumrollMessage {
     SetStepsPerBar(u32),
     /// Velocity used for newly added hits on the selected pad.
     SetDefaultVelocity(f32),
-    /// Buffered text inputs for the euclidean form.
-    SetEuclidSteps(String),
-    SetEuclidHits(String),
-    SetEuclidRotation(String),
     /// Apply the current euclidean parameters to the selected pad on the
     /// given clip. Replaces any existing hits on that pad.
     GenerateEuclideanPad {

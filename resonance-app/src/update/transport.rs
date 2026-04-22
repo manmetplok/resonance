@@ -2,12 +2,36 @@ use iced::Task;
 use resonance_audio::types::AudioCommand;
 
 use crate::message::{Message, TransportMessage};
-use crate::state::LoopDragTarget;
+use crate::state::{LoopDragTarget, ViewMode};
 use crate::Resonance;
 
 pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
     match m {
         TransportMessage::Play => {
+            // In Compose mode with a selected section, auto-loop that section
+            if r.view_mode == ViewMode::Compose {
+                if let Some((placement, definition)) =
+                    r.compose.selected_placement().and_then(|p| {
+                        r.compose.find_definition(p.definition_id).map(|d| (p, d))
+                    })
+                {
+                    let loop_in = r.tempo_map.bar_to_sample(placement.start_bar);
+                    let loop_out = r
+                        .tempo_map
+                        .bar_to_sample(placement.start_bar + definition.length_bars);
+                    r.transport.loop_in = loop_in;
+                    r.transport.loop_out = loop_out;
+                    r.transport.loop_enabled = true;
+                    r.transport.loop_range_set = true;
+                    r.engine.send(AudioCommand::SetLoopRange {
+                        enabled: true,
+                        loop_in,
+                        loop_out,
+                    });
+                    r.engine.send(AudioCommand::SeekTo(loop_in));
+                    r.transport.playhead = loop_in;
+                }
+            }
             r.engine.send(AudioCommand::Play);
             r.transport.playing = true;
         }

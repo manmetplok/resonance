@@ -368,4 +368,62 @@ mod tests {
         assert_eq!(chords.len(), 1);
         assert_eq!(chords[0].root, PitchClass::C);
     }
+
+    #[test]
+    fn b_minor_diatonic_triads() {
+        let scale = Scale::new(PitchClass::B, Mode::Minor);
+        let triads = diatonic_triads(scale);
+        // i - ii° - III - iv - v - VI - VII
+        assert_eq!(triads[0], Chord::new(PitchClass::B, ChordQuality::Min));
+        assert_eq!(triads[1], Chord::new(PitchClass::Cs, ChordQuality::Dim));
+        assert_eq!(triads[2], Chord::new(PitchClass::D, ChordQuality::Maj));
+        assert_eq!(triads[3], Chord::new(PitchClass::E, ChordQuality::Min));
+        assert_eq!(triads[4], Chord::new(PitchClass::Fs, ChordQuality::Min));
+        assert_eq!(triads[5], Chord::new(PitchClass::G, ChordQuality::Maj));
+        assert_eq!(triads[6], Chord::new(PitchClass::A, ChordQuality::Maj));
+    }
+
+    #[test]
+    fn b_minor_degree_1_is_minor() {
+        let scale = Scale::new(PitchClass::B, Mode::Minor);
+        let chord = diatonic_chord(scale, 1, false);
+        assert_eq!(chord, Chord::new(PitchClass::B, ChordQuality::Min));
+    }
+
+    #[test]
+    fn b_minor_degree_1_seventh_is_minor7() {
+        let scale = Scale::new(PitchClass::B, Mode::Minor);
+        let chord = diatonic_chord(scale, 1, true);
+        assert_eq!(chord, Chord::new(PitchClass::B, ChordQuality::Min7));
+    }
+
+    #[test]
+    fn minor_scale_walk_tonic_is_minor() {
+        // For any minor-scale walk, the first and last chords (tonic) must
+        // be minor — never major.
+        for root in [PitchClass::A, PitchClass::B, PitchClass::D, PitchClass::E] {
+            let scale = Scale::new(root, Mode::Minor);
+            for seed in 0..20 {
+                let p = ProgressionParams {
+                    scale,
+                    chord_count: 4,
+                    seventh_chords: false,
+                    seed,
+                };
+                let chords = walk_progression(&p);
+                assert_eq!(
+                    chords[0].quality,
+                    ChordQuality::Min,
+                    "{root:?} minor seed {seed}: tonic should be minor, got {:?}",
+                    chords[0]
+                );
+                assert_eq!(
+                    chords.last().unwrap().quality,
+                    ChordQuality::Min,
+                    "{root:?} minor seed {seed}: final should be minor, got {:?}",
+                    chords.last().unwrap()
+                );
+            }
+        }
+    }
 }

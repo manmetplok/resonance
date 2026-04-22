@@ -8,6 +8,7 @@ use crate::theme;
 pub mod chord_lane;
 pub mod drumroll;
 pub mod expanded_editor;
+pub mod global_tracks;
 pub mod lane_inspector;
 pub mod popover;
 pub mod strip;
@@ -45,14 +46,24 @@ impl crate::Resonance {
                 // track area reserves `NAME_COLUMN_WIDTH` on its left for the
                 // track name labels, so the chord lane is padded the same
                 // amount to keep bar 1 aligned in both.
-                let chord_lane = row![
+                let global_tracks_row = row![
                     Space::with_width(Length::Fixed(tracks::NAME_COLUMN_WIDTH)),
-                    chord_lane::view(
-                        definition,
-                        self.transport.time_sig_num,
-                        self.compose.selected_chord_id,
+                    global_tracks::view(
+                        &self.tempo_map,
+                        placement.start_bar,
+                        definition.length_bars,
                     ),
                 ];
+
+                let chords_selected =
+                    matches!(self.compose.selected_lane, SelectedLane::Chords);
+                let chord_lane = chord_lane::view(
+                    definition,
+                    &self.tempo_map,
+                    placement.start_bar,
+                    self.compose.selected_chord_id,
+                    chords_selected,
+                );
 
                 let editor: Element<'_, Message> = match self.compose.selected_chord_id {
                     Some(chord_id) if definition.chords.iter().any(|c| c.id == chord_id) => {
@@ -67,12 +78,12 @@ impl crate::Resonance {
                 let left_column = match self.compose.expanded_track_id {
                     Some(track_id) if self.registry.tracks.iter().any(|t| t.id == track_id) => {
                         let expanded = expanded_editor::view(self, track_id, placement, definition);
-                        column![chord_lane, editor, synth_tracks, expanded]
+                        column![global_tracks_row, chord_lane, editor, synth_tracks, expanded]
                             .spacing(0)
                             .width(Length::Fill)
                             .height(Length::Fill)
                     }
-                    _ => column![chord_lane, editor, synth_tracks, drum_tracks]
+                    _ => column![global_tracks_row, chord_lane, editor, synth_tracks, drum_tracks]
                         .spacing(0)
                         .width(Length::Fill)
                         .height(Length::Fill),

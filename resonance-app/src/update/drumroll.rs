@@ -19,27 +19,6 @@ pub fn handle(r: &mut crate::Resonance, msg: DrumrollMessage) {
         DrumrollMessage::SetDefaultVelocity(v) => {
             r.compose.drumroll.default_velocity = v.clamp(0.0, 1.0);
         }
-        DrumrollMessage::SetEuclidSteps(s) => {
-            r.compose.drumroll.euclid_steps_input =
-                s.chars().filter(|c| c.is_ascii_digit()).collect();
-        }
-        DrumrollMessage::SetEuclidHits(s) => {
-            r.compose.drumroll.euclid_hits_input =
-                s.chars().filter(|c| c.is_ascii_digit()).collect();
-        }
-        DrumrollMessage::SetEuclidRotation(s) => {
-            // Allow a single leading '-' and then digits.
-            let mut out = String::new();
-            for (i, c) in s.chars().enumerate() {
-                if i == 0 && c == '-' {
-                    out.push(c);
-                } else if c.is_ascii_digit() {
-                    out.push(c);
-                }
-            }
-            r.compose.drumroll.euclid_rotation_input = out;
-        }
-
         DrumrollMessage::ToggleStep {
             clip_id,
             pad_index,
@@ -89,14 +68,38 @@ pub fn handle(r: &mut crate::Resonance, msg: DrumrollMessage) {
             let Some(pad) = r.compose.drumroll.pad_map.get(pad_index).cloned() else {
                 return;
             };
-            let steps = parse_u32(&r.compose.drumroll.euclid_steps_input, 16).max(1);
-            let hits = parse_u32(&r.compose.drumroll.euclid_hits_input, 4).min(steps);
-            let rotation = parse_i32(&r.compose.drumroll.euclid_rotation_input, 0);
-            let velocity = r.compose.drumroll.default_velocity;
-
             let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) else {
                 return;
             };
+
+            // Read euclidean parameters from the lane generator config
+            // (the model that the UI text inputs actually update).
+            let track_id = clip.track_id;
+            let euclid_params = r
+                .compose
+                .selected_placement()
+                .and_then(|p| r.compose.find_definition(p.definition_id))
+                .and_then(|def| def.lane_generators.get(&track_id))
+                .and_then(|cfg| match &cfg.kind {
+                    crate::compose::LaneGeneratorKind::Drum(dc) => {
+                        dc.voices.get(&pad_index)
+                    }
+                    _ => None,
+                })
+                .and_then(|mode| match mode {
+                    crate::compose::DrumVoiceMode::Euclidean {
+                        steps,
+                        hits,
+                        rotation,
+                    } => Some((*steps, *hits, *rotation)),
+                    _ => None,
+                });
+
+            let (steps, hits, rotation) = euclid_params.unwrap_or((16, 4, 0));
+            let steps = steps.max(1);
+            let hits = hits.min(steps);
+            let velocity = r.compose.drumroll.default_velocity;
+
             let pattern = euclidean::bjorklund(steps, hits, rotation);
             let new_notes =
                 euclidean::pattern_to_notes(&pattern, pad.note, velocity, clip.duration_ticks);
@@ -257,13 +260,6 @@ pub fn step_ticks_for(steps_per_bar: u32, time_sig_num: u8) -> u64 {
     ticks_per_bar / steps_per_bar as u64
 }
 
-fn parse_u32(s: &str, default: u32) -> u32 {
-    s.parse().unwrap_or(default)
-}
-
-fn parse_i32(s: &str, default: i32) -> i32 {
-    s.parse().unwrap_or(default)
-}
 
 #[cfg(test)]
 mod tests {

@@ -3,7 +3,7 @@ pub mod canvas;
 use iced::widget::{container, Canvas};
 use iced::{Element, Length};
 
-use resonance_audio::types::{ClipId, TrackId, TICKS_PER_QUARTER_NOTE};
+use resonance_audio::types::{ClipId, TrackId};
 
 use crate::compose::{SectionDefinitionState, SectionPlacementState};
 use crate::message::Message;
@@ -36,9 +36,8 @@ pub fn view<'a>(
             .into();
     }
 
-    let samples_per_bar = samples_per_bar(app);
-    let section_start = placement.start_bar as u64 * samples_per_bar;
-    let section_end = section_start + definition.length_bars as u64 * samples_per_bar;
+    let section_start = app.tempo_map.bar_to_sample(placement.start_bar);
+    let section_end = app.tempo_map.bar_to_sample(placement.start_bar + definition.length_bars);
 
     let canvas_prog = ComposeDrumCanvas {
         tracks: &app.registry.tracks,
@@ -49,8 +48,8 @@ pub fn view<'a>(
         section_length_bars: definition.length_bars,
         steps_per_bar: app.compose.drumroll.steps_per_bar,
         sample_rate: app.sample_rate,
-        bpm: app.transport.bpm,
-        time_sig_num: app.transport.time_sig_num,
+        tempo_map: &app.tempo_map,
+        start_bar: placement.start_bar,
         scroll_offset_y: app.viewport.scroll_offset_y,
         details_track_id: app.compose.details_track_id(),
         selected_pad: app.compose.drumroll.selected_pad,
@@ -67,11 +66,6 @@ pub fn view<'a>(
     .into()
 }
 
-fn samples_per_bar(app: &Resonance) -> u64 {
-    let samples_per_beat = app.sample_rate as f64 * 60.0 / app.transport.bpm as f64;
-    (samples_per_beat * app.transport.time_sig_num as f64) as u64
-}
-
 /// Look up the first MIDI clip on `track_id` that overlaps the current
 /// section. Used by the sidebar controls to decide whether the
 /// Apply/Clear buttons can target a clip yet.
@@ -81,16 +75,17 @@ pub fn clip_for_track(
     definition: &SectionDefinitionState,
     track_id: TrackId,
 ) -> Option<ClipId> {
-    let samples_per_bar = samples_per_bar(app);
-    let section_start = placement.start_bar as u64 * samples_per_bar;
-    let section_end = section_start + definition.length_bars as u64 * samples_per_bar;
-    let samples_per_beat = app.sample_rate as f64 * 60.0 / app.transport.bpm as f64;
-    let samples_per_tick = samples_per_beat / TICKS_PER_QUARTER_NOTE as f64;
+    let section_start = app.tempo_map.bar_to_sample(placement.start_bar);
+    let section_end = app.tempo_map.bar_to_sample(placement.start_bar + definition.length_bars);
     app.midi_clips.iter().find_map(|clip| {
         if clip.track_id != track_id {
             return None;
         }
-        let clip_end = clip.start_sample + (clip.duration_ticks as f64 * samples_per_tick) as u64;
+        let clip_end = app.tempo_map.tick_to_abs_sample(
+            clip.start_sample,
+            clip.duration_ticks,
+            app.sample_rate,
+        );
         (clip_end > section_start && clip.start_sample < section_end).then_some(clip.id)
     })
 }

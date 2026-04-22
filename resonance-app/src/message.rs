@@ -88,8 +88,10 @@ pub(crate) enum TrackMessage {
     /// Rename a track (edited from the Compose instrument details panel).
     SetTrackName(TrackId, String),
     /// Change an instrument track's sub-type (synth vs drum).
+    #[allow(dead_code)]
     SetInstrumentType(TrackId, InstrumentType),
     /// Change an instrument track's display icon.
+    #[allow(dead_code)]
     SetInstrumentIcon(TrackId, InstrumentIcon),
     SetTrackInputDevice(TrackId, Option<String>),
     SetTrackInputPort(TrackId, u16),

@@ -1,7 +1,7 @@
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::{mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
-use resonance_audio::types::{ClipId, TrackId, TrackType, TICKS_PER_QUARTER_NOTE};
+use resonance_audio::types::{ClipId, TempoMap, TrackId, TrackType, TICKS_PER_QUARTER_NOTE};
 
 use crate::compose::drumroll::{DrumPadMap, DrumrollMessage};
 use crate::compose::ComposeMessage;
@@ -33,8 +33,8 @@ pub struct ComposeDrumCanvas<'a> {
     pub section_length_bars: u32,
     pub steps_per_bar: u32,
     pub sample_rate: u32,
-    pub bpm: f32,
-    pub time_sig_num: u8,
+    pub tempo_map: &'a TempoMap,
+    pub start_bar: u32,
     pub scroll_offset_y: f32,
     pub details_track_id: Option<TrackId>,
     pub selected_pad: Option<usize>,
@@ -187,7 +187,9 @@ impl<'a> ComposeDrumCanvas<'a> {
     }
 
     fn step_ticks(&self) -> u64 {
-        let ticks_per_bar = TICKS_PER_QUARTER_NOTE * self.time_sig_num as u64;
+        // Use the first bar's numerator as the base for step subdivision.
+        let num = self.tempo_map.numerator_at_bar(self.start_bar) as u64;
+        let ticks_per_bar = TICKS_PER_QUARTER_NOTE * num;
         if self.steps_per_bar == 0 {
             ticks_per_bar
         } else {
@@ -195,12 +197,9 @@ impl<'a> ComposeDrumCanvas<'a> {
         }
     }
 
-    fn samples_per_tick(&self) -> f64 {
-        self.sample_rate as f64 * 60.0 / self.bpm as f64 / TICKS_PER_QUARTER_NOTE as f64
-    }
-
-    fn midi_clip_duration_samples(&self, clip: &MidiClipState) -> u64 {
-        (clip.duration_ticks as f64 * self.samples_per_tick()) as u64
+    fn midi_clip_end_sample(&self, clip: &MidiClipState) -> u64 {
+        self.tempo_map
+            .tick_to_abs_sample(clip.start_sample, clip.duration_ticks, self.sample_rate)
     }
 
     fn pad_row_y(&self, grid_area: Rectangle, pad_index: usize) -> f32 {
@@ -213,7 +212,7 @@ impl<'a> ComposeDrumCanvas<'a> {
     fn find_section_clip(&self, track_id: TrackId) -> Option<&'a MidiClipState> {
         self.midi_clips.iter().find(|c| {
             c.track_id == track_id && {
-                let end = c.start_sample + self.midi_clip_duration_samples(c);
+                let end = self.midi_clip_end_sample(c);
                 end > self.section_start && c.start_sample < self.section_end
             }
         })
@@ -402,7 +401,8 @@ impl<'a> ComposeDrumCanvas<'a> {
             return;
         }
         let step_w = grid_area.width / total_steps as f32;
-        let beat_step = self.steps_per_bar / self.time_sig_num.max(1) as u32;
+        let num = self.tempo_map.numerator_at_bar(self.start_bar).max(1) as u32;
+        let beat_step = self.steps_per_bar / num;
         let bar_step = self.steps_per_bar;
         for step in 0..=total_steps {
             let x = grid_area.x + step as f32 * step_w;

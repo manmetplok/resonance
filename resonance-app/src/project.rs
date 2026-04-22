@@ -266,10 +266,10 @@ pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
     let file: ProjectFile =
         serde_json::from_str(&json).map_err(|e| format!("Parse project.json: {e}"))?;
 
-    if file.version != PROJECT_FORMAT_VERSION {
+    if file.version > PROJECT_FORMAT_VERSION {
         return Err(format!(
-            "Unsupported project version {}. This build only loads v{} projects; \
-             re-save from an older build first.",
+            "Project version {} is newer than this build (v{}). \
+             Please update Resonance.",
             file.version, PROJECT_FORMAT_VERSION
         ));
     }

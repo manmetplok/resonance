@@ -139,6 +139,7 @@ pub enum ComposeMessage {
     },
 
     /// Set or clear a track's arrangement role.
+    #[allow(dead_code)]
     SetTrackRole {
         track_id: TrackId,
         role: Option<TrackRole>,
@@ -164,6 +165,7 @@ pub enum ChordInspectorMsg {
     /// Set the end-degree constraint (None = any).
     SetEndDegree(Option<Degree>),
     /// Toggle the lock on a chord at the given index in generated_material.
+    #[allow(dead_code)]
     ToggleLock(usize),
     /// First-time generation: create a GeneratorSpec from current controls.
     Generate,

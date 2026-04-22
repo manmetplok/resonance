@@ -514,7 +514,66 @@ fn length_zero() {
 }
 
 // ---------------------------------------------------------------------------
-// 13. Display for Degree
+// 14. Markov degrees projected to minor scales produce correct qualities
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pop_degrees_projected_to_b_minor_have_correct_quality() {
+    use resonance_music_theory::progression::diatonic_chord;
+    use resonance_music_theory::{Mode, PitchClass, Scale};
+
+    let scale = Scale::new(PitchClass::B, Mode::Minor);
+    let spec = pop_spec(8);
+    let locked = no_locks(8);
+
+    // The pop table uses major-key degree constants (I, IV, V, etc.).
+    // When projected to a minor scale via diatonic_chord(), the qualities
+    // must match the scale: degree 1 in B minor = Bm, not B major.
+    for seed in 0..50u64 {
+        let mat = generate_with(&spec, seed, &locked).unwrap();
+        for gc in &mat.chords {
+            let chord = if gc.degree.flat {
+                gc.degree.to_chord(scale)
+            } else {
+                diatonic_chord(scale, gc.degree.root, false)
+            };
+            let expected = diatonic_chord(scale, gc.degree.root, false);
+            assert_eq!(
+                chord.quality, expected.quality,
+                "seed {seed}: degree {} projected to B minor should be {:?}, got {:?}",
+                gc.degree.root, expected, chord
+            );
+        }
+    }
+}
+
+#[test]
+fn minor_scale_tonic_is_always_minor_across_tables() {
+    use resonance_music_theory::progression::diatonic_chord;
+    use resonance_music_theory::{Mode, PitchClass, Scale};
+
+    let scale = Scale::new(PitchClass::B, Mode::Minor);
+
+    // For every table, degree 1 projected to a minor scale must be minor.
+    for (table_id, _order) in [
+        ("pop", 1),
+        ("modal", 1),
+        ("metal", 1),
+        ("post-rock", 1),
+        ("jazz", 2),
+        ("classical", 2),
+    ] {
+        let chord = diatonic_chord(scale, 1, false);
+        assert_eq!(
+            chord.quality,
+            resonance_music_theory::ChordQuality::Min,
+            "table {table_id}: degree 1 in B minor should be minor"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 15. Display for Degree
 // ---------------------------------------------------------------------------
 
 #[test]

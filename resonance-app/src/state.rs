@@ -31,6 +31,7 @@ impl Default for InstrumentType {
 }
 
 impl InstrumentType {
+    #[allow(dead_code)]
     pub const ALL: [InstrumentType; 2] = [InstrumentType::Synth, InstrumentType::Drum];
 
     pub fn as_str(self) -> &'static str {
@@ -59,6 +60,7 @@ pub enum TrackRole {
 }
 
 impl TrackRole {
+    #[allow(dead_code)]
     pub const ALL: [TrackRole; 3] = [TrackRole::Pad, TrackRole::Bass, TrackRole::Lead];
 
     pub fn as_str(self) -> &'static str {
@@ -97,6 +99,7 @@ impl Default for InstrumentIcon {
 }
 
 impl InstrumentIcon {
+    #[allow(dead_code)]
     pub const ALL: [InstrumentIcon; 7] = [
         InstrumentIcon::Music,
         InstrumentIcon::Drum,

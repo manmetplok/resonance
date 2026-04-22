@@ -4,7 +4,7 @@ use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::{container, Canvas};
 use iced::{mouse, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
 
-use resonance_audio::types::{TrackId, TrackType, TICKS_PER_QUARTER_NOTE};
+use resonance_audio::types::{TempoMap, TrackId, TrackType, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::Scale;
 
 use crate::compose::{ComposeMessage, SectionDefinitionState, SectionPlacementState};
@@ -45,9 +45,8 @@ pub fn view<'a>(
     placement: &'a SectionPlacementState,
     definition: &'a SectionDefinitionState,
 ) -> Element<'a, Message> {
-    let samples_per_bar = samples_per_bar(app);
-    let section_start = placement.start_bar as u64 * samples_per_bar;
-    let section_end = section_start + definition.length_bars as u64 * samples_per_bar;
+    let section_start = app.tempo_map.bar_to_sample(placement.start_bar);
+    let section_end = app.tempo_map.bar_to_sample(placement.start_bar + definition.length_bars);
 
     let cropped = Canvas::new(ComposeTrackCanvas {
         tracks: &app.registry.tracks,
@@ -56,10 +55,10 @@ pub fn view<'a>(
         section_end,
         section_length_bars: definition.length_bars,
         sample_rate: app.sample_rate,
-        bpm: app.transport.bpm,
+        tempo_map: &app.tempo_map,
+        start_bar: placement.start_bar,
         scroll_offset_y: app.viewport.scroll_offset_y,
         scale: definition.scale,
-        time_sig_num: app.transport.time_sig_num,
         details_track_id: app.compose.details_track_id(),
         expanded_track_id: app.compose.expanded_track_id,
     })
@@ -86,10 +85,10 @@ pub struct ComposeTrackCanvas<'a> {
     pub section_end: u64,
     pub section_length_bars: u32,
     pub sample_rate: u32,
-    pub bpm: f32,
+    pub tempo_map: &'a TempoMap,
+    pub start_bar: u32,
     pub scroll_offset_y: f32,
     pub scale: Option<Scale>,
-    pub time_sig_num: u8,
     pub details_track_id: Option<TrackId>,
     /// When set, this track is expanded into the full editor; other tracks
     /// are rendered as collapsed name-only strips.
@@ -255,11 +254,12 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
 
                 let mut has_clip_in_section = false;
                 for clip in self.midi_clips.iter().filter(|c| c.track_id == track.id) {
-                    let clip_end = clip.start_sample + self.midi_clip_duration_samples(clip);
-                    if let Some(range) = self.clip_range(clip.start_sample, clip_end) {
+                    if let Some(tick_range) = self.clip_tick_range(clip) {
                         has_clip_in_section = true;
-                        self.draw_clip_outline(&mut frame, clip_rect, range);
-                        self.draw_notes(&mut frame, clip, clip_rect);
+                        let clip_start_tick =
+                            self.sample_to_section_tick(clip.start_sample);
+                        self.draw_clip_outline(&mut frame, clip_rect, tick_range);
+                        self.draw_notes(&mut frame, clip, clip_rect, clip_start_tick);
                     }
                 }
 
@@ -425,20 +425,65 @@ impl<'a> ComposeTrackCanvas<'a> {
         }
     }
 
-    fn sample_to_x(&self, sample: u64, clip_width: f32) -> f32 {
-        let span = (self.section_end - self.section_start) as f64;
-        if span <= 0.0 {
-            return 0.0;
-        }
-        let t = (sample as f64 - self.section_start as f64) / span;
-        (t * clip_width as f64) as f32
+    /// Total ticks in the section, summing per-bar numerators.
+    fn section_total_ticks(&self) -> u64 {
+        (0..self.section_length_bars)
+            .map(|b| {
+                self.tempo_map.numerator_at_bar(self.start_bar + b) as u64
+                    * TICKS_PER_QUARTER_NOTE
+            })
+            .sum()
     }
 
-    fn clip_range(&self, start: u64, end: u64) -> Option<(u64, u64)> {
-        if end <= self.section_start || start >= self.section_end {
+    /// Map a section-relative tick position to pixel x within `clip_width`.
+    fn tick_to_x(&self, tick: f64, clip_width: f32) -> f32 {
+        let total = self.section_total_ticks() as f64;
+        if total <= 0.0 {
+            return 0.0;
+        }
+        (tick / total * clip_width as f64) as f32
+    }
+
+    /// Inverse of `tick_to_x`: pixel x to section-relative tick.
+    fn x_to_tick(&self, x: f32, clip_width: f32) -> f64 {
+        let total = self.section_total_ticks() as f64;
+        if clip_width <= 0.0 {
+            return 0.0;
+        }
+        x as f64 / clip_width as f64 * total
+    }
+
+    /// Convert an absolute sample position to a section-relative tick.
+    fn sample_to_section_tick(&self, sample: u64) -> f64 {
+        let (bar, frac) = self.tempo_map.sample_to_bar(sample, self.sample_rate);
+        let mut tick: f64 = 0.0;
+        if bar > self.start_bar {
+            for b in self.start_bar..bar {
+                tick +=
+                    self.tempo_map.numerator_at_bar(b) as f64 * TICKS_PER_QUARTER_NOTE as f64;
+            }
+        } else if bar < self.start_bar {
+            for b in bar..self.start_bar {
+                tick -=
+                    self.tempo_map.numerator_at_bar(b) as f64 * TICKS_PER_QUARTER_NOTE as f64;
+            }
+        }
+        let bar_ticks =
+            self.tempo_map.numerator_at_bar(bar) as f64 * TICKS_PER_QUARTER_NOTE as f64;
+        tick += frac * bar_ticks;
+        tick
+    }
+
+    /// Tick range of a clip within the section, or `None` if the clip
+    /// doesn't overlap.
+    fn clip_tick_range(&self, clip: &MidiClipState) -> Option<(f64, f64)> {
+        let clip_start_tick = self.sample_to_section_tick(clip.start_sample);
+        let clip_end_tick = clip_start_tick + clip.duration_ticks as f64;
+        let section_ticks = self.section_total_ticks() as f64;
+        if clip_end_tick <= 0.0 || clip_start_tick >= section_ticks {
             return None;
         }
-        Some((start.max(self.section_start), end.min(self.section_end)))
+        Some((clip_start_tick.max(0.0), clip_end_tick.min(section_ticks)))
     }
 
     fn pitch_to_y(&self, midi: u8, clip_area: Rectangle) -> f32 {
@@ -506,36 +551,66 @@ impl<'a> ComposeTrackCanvas<'a> {
     }
 
     fn draw_beat_grid(&self, frame: &mut Frame, clip_area: Rectangle) {
-        let total_beats = self.section_length_bars * self.time_sig_num as u32;
-        if total_beats == 0 || clip_area.width <= 0.0 {
+        if self.section_length_bars == 0 || clip_area.width <= 0.0 {
             return;
         }
-        let beat_w = clip_area.width / total_beats as f32;
-        let bar_beats = self.time_sig_num as u32;
-        for beat in 0..=total_beats {
-            let x = clip_area.x + beat as f32 * beat_w;
-            let is_bar = beat % bar_beats == 0;
-            let color = if is_bar {
-                Color::from_rgb(0.30, 0.30, 0.34)
-            } else {
-                Color::from_rgb(0.18, 0.18, 0.20)
-            };
+        let mut tick_pos: u64 = 0;
+        for bar_offset in 0..self.section_length_bars {
+            let bar = self.start_bar + bar_offset;
+            let num = self.tempo_map.numerator_at_bar(bar) as u64;
+            let bar_ticks = num * TICKS_PER_QUARTER_NOTE;
+
+            // Bar line
+            let x = clip_area.x + self.tick_to_x(tick_pos as f64, clip_area.width);
             frame.stroke(
                 &Path::line(
                     Point::new(x, clip_area.y + NOTE_GRID_PAD),
                     Point::new(x, clip_area.y + clip_area.height - NOTE_GRID_PAD),
                 ),
                 Stroke::default()
-                    .with_width(if is_bar { 1.5 } else { 1.0 })
-                    .with_color(color),
+                    .with_width(1.5)
+                    .with_color(Color::from_rgb(0.30, 0.30, 0.34)),
             );
+
+            // Beat lines within this bar
+            for beat in 1..num {
+                let beat_tick = tick_pos + beat * TICKS_PER_QUARTER_NOTE;
+                let bx = clip_area.x + self.tick_to_x(beat_tick as f64, clip_area.width);
+                frame.stroke(
+                    &Path::line(
+                        Point::new(bx, clip_area.y + NOTE_GRID_PAD),
+                        Point::new(bx, clip_area.y + clip_area.height - NOTE_GRID_PAD),
+                    ),
+                    Stroke::default()
+                        .with_width(1.0)
+                        .with_color(Color::from_rgb(0.18, 0.18, 0.20)),
+                );
+            }
+
+            tick_pos += bar_ticks;
         }
+        // Final bar line at section end
+        let x = clip_area.x + self.tick_to_x(tick_pos as f64, clip_area.width);
+        frame.stroke(
+            &Path::line(
+                Point::new(x, clip_area.y + NOTE_GRID_PAD),
+                Point::new(x, clip_area.y + clip_area.height - NOTE_GRID_PAD),
+            ),
+            Stroke::default()
+                .with_width(1.5)
+                .with_color(Color::from_rgb(0.30, 0.30, 0.34)),
+        );
     }
 
-    fn draw_clip_outline(&self, frame: &mut Frame, clip_area: Rectangle, range: (u64, u64)) {
-        let (vis_start, vis_end) = range;
-        let x = clip_area.x + self.sample_to_x(vis_start, clip_area.width);
-        let right = clip_area.x + self.sample_to_x(vis_end, clip_area.width);
+    fn draw_clip_outline(
+        &self,
+        frame: &mut Frame,
+        clip_area: Rectangle,
+        tick_range: (f64, f64),
+    ) {
+        let (vis_start, vis_end) = tick_range;
+        let x = clip_area.x + self.tick_to_x(vis_start, clip_area.width);
+        let right = clip_area.x + self.tick_to_x(vis_end, clip_area.width);
         let w = (right - x).max(2.0);
         let rect = Rectangle {
             x,
@@ -554,17 +629,26 @@ impl<'a> ComposeTrackCanvas<'a> {
         );
     }
 
-    fn draw_notes(&self, frame: &mut Frame, clip: &MidiClipState, clip_area: Rectangle) {
-        let samples_per_tick = self.samples_per_tick();
+    fn draw_notes(
+        &self,
+        frame: &mut Frame,
+        clip: &MidiClipState,
+        clip_area: Rectangle,
+        clip_start_tick: f64,
+    ) {
         let cell_h = self.cell_height(clip_area);
+        let total_ticks = self.section_total_ticks() as f64;
         for note in &clip.notes {
-            let note_start = clip.start_sample + (note.start_tick as f64 * samples_per_tick) as u64;
-            let note_end = note_start + (note.duration_ticks as f64 * samples_per_tick) as u64;
-            let Some((vs, ve)) = self.clip_range(note_start, note_end) else {
+            let note_start_tick = clip_start_tick + note.start_tick as f64;
+            let note_end_tick = note_start_tick + note.duration_ticks as f64;
+            // Clamp to section bounds
+            if note_end_tick <= 0.0 || note_start_tick >= total_ticks {
                 continue;
-            };
-            let x = clip_area.x + self.sample_to_x(vs, clip_area.width);
-            let right = clip_area.x + self.sample_to_x(ve, clip_area.width);
+            }
+            let vs = note_start_tick.max(0.0);
+            let ve = note_end_tick.min(total_ticks);
+            let x = clip_area.x + self.tick_to_x(vs, clip_area.width);
+            let right = clip_area.x + self.tick_to_x(ve, clip_area.width);
             let w = (right - x).max(2.0);
             let y = self.pitch_to_y(note.note, clip_area);
             let h = (cell_h - 1.0).max(2.0);
@@ -650,13 +734,7 @@ impl<'a> ComposeTrackCanvas<'a> {
                 continue;
             }
             let has_clip = self.midi_clips.iter().any(|c| {
-                c.track_id == track.id
-                    && self
-                        .clip_range(
-                            c.start_sample,
-                            c.start_sample + self.midi_clip_duration_samples(c),
-                        )
-                        .is_some()
+                c.track_id == track.id && self.clip_tick_range(c).is_some()
             });
             if has_clip {
                 return None;
@@ -685,6 +763,7 @@ impl<'a> ComposeTrackCanvas<'a> {
             return None;
         }
         let tracks = self.sorted_tracks();
+        let total_ticks = self.section_total_ticks() as f64;
         for (idx, track) in tracks.iter().enumerate() {
             let row = self.track_row_rect(idx, bounds);
             if pos.y < row.y || pos.y > row.y + row.height {
@@ -696,20 +775,21 @@ impl<'a> ComposeTrackCanvas<'a> {
                 width: (row.width - NAME_COLUMN_WIDTH).max(0.0),
                 height: row.height,
             };
-            let samples_per_tick = self.samples_per_tick();
             let cell_h = self.cell_height(clip_area);
 
+            // Check existing notes for removal
             for clip in self.midi_clips.iter().filter(|c| c.track_id == track.id) {
+                let clip_start_tick = self.sample_to_section_tick(clip.start_sample);
                 for (note_index, note) in clip.notes.iter().enumerate() {
-                    let note_start =
-                        clip.start_sample + (note.start_tick as f64 * samples_per_tick) as u64;
-                    let note_end =
-                        note_start + (note.duration_ticks as f64 * samples_per_tick) as u64;
-                    let Some((vs, ve)) = self.clip_range(note_start, note_end) else {
+                    let note_start_tick = clip_start_tick + note.start_tick as f64;
+                    let note_end_tick = note_start_tick + note.duration_ticks as f64;
+                    if note_end_tick <= 0.0 || note_start_tick >= total_ticks {
                         continue;
-                    };
-                    let x = clip_area.x + self.sample_to_x(vs, clip_area.width);
-                    let right = clip_area.x + self.sample_to_x(ve, clip_area.width);
+                    }
+                    let vs = note_start_tick.max(0.0);
+                    let ve = note_end_tick.min(total_ticks);
+                    let x = clip_area.x + self.tick_to_x(vs, clip_area.width);
+                    let right = clip_area.x + self.tick_to_x(ve, clip_area.width);
                     let y = self.pitch_to_y(note.note, clip_area);
                     let h = (cell_h - 1.0).max(2.0);
                     if pos.x >= x && pos.x <= right && pos.y >= y && pos.y <= y + h {
@@ -721,6 +801,7 @@ impl<'a> ComposeTrackCanvas<'a> {
                 }
             }
 
+            // Click in empty space: add note
             let Some(pitch) = self.y_to_pitch(pos.y, clip_area) else {
                 return None;
             };
@@ -728,16 +809,13 @@ impl<'a> ComposeTrackCanvas<'a> {
             if rel_x < 0.0 || rel_x > clip_area.width {
                 return None;
             }
-            let span = (self.section_end - self.section_start) as f64;
-            let abs_sample =
-                self.section_start as f64 + (rel_x as f64 / clip_area.width as f64) * span;
-            let abs_sample = abs_sample as u64;
+            let section_tick = self.x_to_tick(rel_x, clip_area.width);
 
             for clip in self.midi_clips.iter().filter(|c| c.track_id == track.id) {
-                let clip_end = clip.start_sample + self.midi_clip_duration_samples(clip);
-                if abs_sample >= clip.start_sample && abs_sample < clip_end {
-                    let offset_samples = abs_sample - clip.start_sample;
-                    let raw_tick = (offset_samples as f64 / samples_per_tick) as u64;
+                let clip_start_tick = self.sample_to_section_tick(clip.start_sample);
+                let clip_end_tick = clip_start_tick + clip.duration_ticks as f64;
+                if section_tick >= clip_start_tick && section_tick < clip_end_tick {
+                    let raw_tick = (section_tick - clip_start_tick) as u64;
                     let snapped = snap_tick(raw_tick, DEFAULT_NEW_NOTE_TICKS);
                     return Some(Message::MidiEditor(MidiEditorMessage::AddNote {
                         clip_id: clip.id,
@@ -753,13 +831,6 @@ impl<'a> ComposeTrackCanvas<'a> {
         None
     }
 
-    fn samples_per_tick(&self) -> f64 {
-        self.sample_rate as f64 * 60.0 / self.bpm as f64 / TICKS_PER_QUARTER_NOTE as f64
-    }
-
-    fn midi_clip_duration_samples(&self, clip: &MidiClipState) -> u64 {
-        (clip.duration_ticks as f64 * self.samples_per_tick()) as u64
-    }
 }
 
 fn snap_tick(tick: u64, snap: u64) -> u64 {
@@ -767,9 +838,4 @@ fn snap_tick(tick: u64, snap: u64) -> u64 {
         return tick;
     }
     (tick / snap) * snap
-}
-
-fn samples_per_bar(app: &Resonance) -> u64 {
-    let samples_per_beat = app.sample_rate as f64 * 60.0 / app.transport.bpm as f64;
-    (samples_per_beat * app.transport.time_sig_num as f64) as u64
 }

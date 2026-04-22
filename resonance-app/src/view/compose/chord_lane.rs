@@ -2,11 +2,14 @@ use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::Canvas;
 use iced::{mouse, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
 
+use resonance_audio::types::TempoMap;
 use resonance_music_theory::{ChordQuality, PitchClass};
 
-use crate::compose::{ComposeMessage, SectionDefinitionState};
+use crate::compose::{ComposeMessage, SelectedLane, SectionDefinitionState};
 use crate::message::Message;
 use crate::theme;
+
+use super::tracks::NAME_COLUMN_WIDTH;
 
 pub const LANE_HEIGHT: f32 = 64.0;
 const RULER_HEIGHT: f32 = 18.0;
@@ -18,13 +21,17 @@ const RESIZE_HANDLE_PX: f32 = 8.0;
 
 pub fn view<'a>(
     definition: &'a SectionDefinitionState,
-    time_sig_num: u8,
+    tempo_map: &'a TempoMap,
+    start_bar: u32,
     selected_chord_id: Option<u64>,
+    chords_selected: bool,
 ) -> Element<'a, Message> {
     Canvas::new(ChordLaneCanvas {
         definition,
-        time_sig_num,
+        tempo_map,
+        start_bar,
         selected_chord_id,
+        chords_selected,
     })
     .width(Length::Fill)
     .height(Length::Fixed(LANE_HEIGHT))
@@ -33,8 +40,10 @@ pub fn view<'a>(
 
 pub struct ChordLaneCanvas<'a> {
     pub definition: &'a SectionDefinitionState,
-    pub time_sig_num: u8,
+    pub tempo_map: &'a TempoMap,
+    pub start_bar: u32,
     pub selected_chord_id: Option<u64>,
+    pub chords_selected: bool,
 }
 
 #[derive(Debug, Default)]
@@ -71,49 +80,101 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
 
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::PANEL_DARK);
-
-        let total_beats = self.total_beats();
-        if total_beats == 0 {
-            return vec![frame.into_geometry()];
-        }
-        let beat_width = bounds.width / total_beats as f32;
-        let bar_beats = self.time_sig_num as u32;
-
-        // Ruler ticks + bar numbers
-        for beat in 0..=total_beats {
-            let x = beat as f32 * beat_width;
-            let is_bar = beat % bar_beats == 0;
-            let tick_color = if is_bar {
-                theme::TEXT_DIM
+        // ---- Name column (track header) ----
+        let name_bg = if self.chords_selected {
+            Color::from_rgb(0.22, 0.22, 0.27)
+        } else {
+            theme::PANEL
+        };
+        frame.fill_rectangle(
+            Point::ORIGIN,
+            Size::new(NAME_COLUMN_WIDTH, bounds.height),
+            name_bg,
+        );
+        frame.fill_text(canvas::Text {
+            content: "Chords".to_string(),
+            position: Point::new(10.0, bounds.height * 0.5 - 7.0),
+            color: if self.chords_selected {
+                theme::ACCENT
+            } else {
+                theme::TEXT
+            },
+            size: 12.0.into(),
+            ..canvas::Text::default()
+        });
+        // Divider between name column and grid
+        frame.fill_rectangle(
+            Point::new(NAME_COLUMN_WIDTH, 0.0),
+            Size::new(1.0, bounds.height),
+            if self.chords_selected {
+                theme::ACCENT
             } else {
                 theme::SEPARATOR
-            };
-            let tick_h = if is_bar {
-                RULER_HEIGHT
-            } else {
-                RULER_HEIGHT * 0.5
-            };
-            frame.stroke(
-                &Path::line(Point::new(x, 0.0), Point::new(x, tick_h)),
-                Stroke::default().with_width(1.0).with_color(tick_color),
-            );
-            if is_bar && beat < total_beats {
-                let bar_num = (beat / bar_beats) + 1;
-                frame.fill_text(canvas::Text {
-                    content: format!("{}", bar_num),
-                    position: Point::new(x + 3.0, 2.0),
-                    color: theme::TEXT_DIM,
-                    size: 10.0.into(),
-                    ..canvas::Text::default()
-                });
-            }
+            },
+        );
+
+        // ---- Grid area (right of name column) ----
+        let grid_x = NAME_COLUMN_WIDTH;
+        let grid_w = (bounds.width - NAME_COLUMN_WIDTH).max(0.0);
+
+        frame.fill_rectangle(
+            Point::new(grid_x, 0.0),
+            Size::new(grid_w, bounds.height),
+            theme::PANEL_DARK,
+        );
+
+        let total_beats = self.total_beats();
+        if total_beats == 0 || grid_w <= 0.0 {
+            return vec![frame.into_geometry()];
         }
+        let beat_width = grid_w / total_beats as f32;
+
+        // Ruler ticks + bar numbers — walk bars for correct placement
+        // with varying time signatures.
+        let mut beat_pos: u32 = 0;
+        for bar_offset in 0..self.definition.length_bars {
+            let bar = self.start_bar + bar_offset;
+            let num = self.tempo_map.numerator_at_bar(bar) as u32;
+
+            // Bar line
+            let x = grid_x + beat_pos as f32 * beat_width;
+            frame.stroke(
+                &Path::line(Point::new(x, 0.0), Point::new(x, RULER_HEIGHT)),
+                Stroke::default().with_width(1.0).with_color(theme::TEXT_DIM),
+            );
+            // Bar number
+            frame.fill_text(canvas::Text {
+                content: format!("{}", bar_offset + 1),
+                position: Point::new(x + 3.0, 2.0),
+                color: theme::TEXT_DIM,
+                size: 10.0.into(),
+                ..canvas::Text::default()
+            });
+
+            // Beat ticks within this bar
+            for beat in 1..num {
+                let bx = grid_x + (beat_pos + beat) as f32 * beat_width;
+                frame.stroke(
+                    &Path::line(Point::new(bx, 0.0), Point::new(bx, RULER_HEIGHT * 0.5)),
+                    Stroke::default()
+                        .with_width(1.0)
+                        .with_color(theme::SEPARATOR),
+                );
+            }
+
+            beat_pos += num;
+        }
+        // Final bar line at section end
+        let x = grid_x + beat_pos as f32 * beat_width;
+        frame.stroke(
+            &Path::line(Point::new(x, 0.0), Point::new(x, RULER_HEIGHT)),
+            Stroke::default().with_width(1.0).with_color(theme::TEXT_DIM),
+        );
 
         // Separator between ruler and chord area
         frame.fill_rectangle(
-            Point::new(0.0, RULER_HEIGHT),
-            Size::new(bounds.width, 1.0),
+            Point::new(grid_x, RULER_HEIGHT),
+            Size::new(grid_w, 1.0),
             theme::SEPARATOR,
         );
 
@@ -127,7 +188,7 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
                 chord.duration_beats,
                 &state.drag,
             );
-            let x = start as f32 * beat_width;
+            let x = grid_x + start as f32 * beat_width;
             let w = (dur as f32 * beat_width - 1.0).max(2.0);
             let selected = Some(chord.id) == self.selected_chord_id;
             let dragging = matches!(state.drag, Some(ChordDrag::Move { chord_id, .. } | ChordDrag::Resize { chord_id, .. }) if chord_id == chord.id);
@@ -164,6 +225,13 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
             });
         }
 
+        // Bottom separator
+        frame.fill_rectangle(
+            Point::new(0.0, bounds.height - 1.0),
+            Size::new(bounds.width, 1.0),
+            theme::SEPARATOR,
+        );
+
         vec![frame.into_geometry()]
     }
 
@@ -174,21 +242,35 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> (canvas::event::Status, Option<Message>) {
+        let grid_x = NAME_COLUMN_WIDTH;
+        let grid_w = (bounds.width - NAME_COLUMN_WIDTH).max(0.0);
         let total_beats = self.total_beats();
-        if total_beats == 0 || bounds.width <= 0.0 {
+        if total_beats == 0 || grid_w <= 0.0 {
             return (canvas::event::Status::Ignored, None);
         }
-        let beat_width = bounds.width / total_beats as f32;
+        let beat_width = grid_w / total_beats as f32;
 
         match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let Some(pos) = cursor.position_in(bounds) else {
                     return (canvas::event::Status::Ignored, None);
                 };
+
+                // Click on the name column: select the chords lane.
+                if pos.x < NAME_COLUMN_WIDTH {
+                    return (
+                        canvas::event::Status::Captured,
+                        Some(Message::Compose(ComposeMessage::SelectLane(
+                            SelectedLane::Chords,
+                        ))),
+                    );
+                }
+
                 if pos.y < RULER_HEIGHT {
                     return (canvas::event::Status::Ignored, None);
                 }
-                let beat = (pos.x / beat_width) as u32;
+                let rel_x = pos.x - grid_x;
+                let beat = (rel_x / beat_width) as u32;
                 if beat >= total_beats {
                     return (canvas::event::Status::Ignored, None);
                 }
@@ -197,8 +279,7 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
                 for chord in &self.definition.chords {
                     let end = chord.start_beat + chord.duration_beats;
                     if beat >= chord.start_beat && beat < end {
-                        let chord_left_px = chord.start_beat as f32 * beat_width;
-                        let chord_right_px = end as f32 * beat_width;
+                        let chord_right_px = grid_x + end as f32 * beat_width;
                         if chord_right_px - pos.x <= RESIZE_HANDLE_PX && chord.duration_beats >= 1 {
                             state.drag = Some(ChordDrag::Resize {
                                 chord_id: chord.id,
@@ -212,7 +293,6 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
                                 pending_start_beat: chord.start_beat,
                             });
                         }
-                        let _ = chord_left_px;
                         return (
                             canvas::event::Status::Captured,
                             Some(Message::Compose(ComposeMessage::SelectChord {
@@ -257,7 +337,8 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
                 let Some(drag) = state.drag.as_mut() else {
                     return (canvas::event::Status::Ignored, None);
                 };
-                let beat_f = (pos.x / beat_width).max(0.0);
+                let rel_x = (pos.x - grid_x).max(0.0);
+                let beat_f = (rel_x / beat_width).max(0.0);
                 let beat = (beat_f as u32).min(total_beats.saturating_sub(1));
                 match drag {
                     ChordDrag::Move {
@@ -284,7 +365,7 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
                             Some(c) => c,
                             None => return (canvas::event::Status::Ignored, None),
                         };
-                        let end_beat = ((pos.x / beat_width).ceil() as u32).min(total_beats);
+                        let end_beat = ((rel_x / beat_width).ceil() as u32).min(total_beats);
                         let new_dur = end_beat.saturating_sub(chord.start_beat).max(1);
                         *pending_duration_beats = new_dur;
                         (canvas::event::Status::Captured, None)
@@ -348,10 +429,11 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
                 let Some(pos) = cursor.position_in(bounds) else {
                     return (canvas::event::Status::Ignored, None);
                 };
-                if pos.y < RULER_HEIGHT {
+                if pos.x < NAME_COLUMN_WIDTH || pos.y < RULER_HEIGHT {
                     return (canvas::event::Status::Ignored, None);
                 }
-                let beat = (pos.x / beat_width) as u32;
+                let rel_x = pos.x - grid_x;
+                let beat = (rel_x / beat_width) as u32;
                 for chord in &self.definition.chords {
                     let end = chord.start_beat + chord.duration_beats;
                     if beat >= chord.start_beat && beat < end {
@@ -373,8 +455,11 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
 }
 
 impl<'a> ChordLaneCanvas<'a> {
+    /// Total beats in the section, summing per-bar numerators.
     fn total_beats(&self) -> u32 {
-        self.definition.length_bars * self.time_sig_num as u32
+        (0..self.definition.length_bars)
+            .map(|b| self.tempo_map.numerator_at_bar(self.start_bar + b) as u32)
+            .sum()
     }
 }
 

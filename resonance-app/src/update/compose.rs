@@ -789,13 +789,17 @@ fn generate_chord_lane(r: &mut crate::Resonance, definition_id: u64, respect_loc
     }
 
     // Project degrees to concrete chords using the scale.
+    // For diatonic degrees (flat=false), derive the chord quality from the
+    // scale's interval pattern so that e.g. degree 1 in B minor produces
+    // Bm, not B major. For borrowed chords (flat=true), use the explicit
+    // quality stored in the Degree since they're intentionally non-diatonic.
     let mut new_chords = Vec::with_capacity(material.chords.len());
     for (i, gc) in material.chords.iter().enumerate() {
         let id = r.compose.fresh_id();
-        let chord = if def.seventh_chords {
-            diatonic_chord(scale, gc.degree.root, true)
-        } else {
+        let chord = if gc.degree.flat {
             gc.degree.to_chord(scale)
+        } else {
+            diatonic_chord(scale, gc.degree.root, def.seventh_chords)
         };
         new_chords.push(ChordState {
             id,
