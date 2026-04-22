@@ -192,6 +192,17 @@ impl Degree {
         quality: ChordQuality::HalfDim7,
     };
 
+    /// The seven diatonic triads in major-key voicing order (I ii iii IV V vi vii°).
+    pub const DIATONIC_TRIADS: [Self; 7] = [
+        Self::I,
+        Self::II_MIN,
+        Self::III_MIN,
+        Self::IV,
+        Self::V,
+        Self::VI_MIN,
+        Self::VII_DIM,
+    ];
+
     /// Project this degree into an absolute [`Chord`] using the given scale.
     ///
     /// The scale's interval table determines the root pitch; the `flat`

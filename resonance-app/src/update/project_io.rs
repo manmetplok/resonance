@@ -363,6 +363,10 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
         replay_track(r, pt, &loaded);
     }
 
+    // Migrate old generate_params + track roles to lane_generators
+    // for projects predating the unified lane generator system.
+    r.compose.migrate_old_generate_params(&r.registry.tracks);
+
     // Replay busses (must come before SetTrackOutput so the target
     // bus exists at the time the routing is set).
     for pb in &project.busses {

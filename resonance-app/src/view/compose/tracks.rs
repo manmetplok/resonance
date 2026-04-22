@@ -60,7 +60,7 @@ pub fn view<'a>(
         scroll_offset_y: app.viewport.scroll_offset_y,
         scale: definition.scale,
         time_sig_num: app.transport.time_sig_num,
-        details_track_id: app.compose.details_track_id,
+        details_track_id: app.compose.details_track_id(),
         expanded_track_id: app.compose.expanded_track_id,
     })
     .width(Length::Fill)
@@ -318,9 +318,9 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
                     if let Some(track_id) = clicked_track {
                         return (
                             canvas::event::Status::Captured,
-                            Some(Message::Compose(
-                                ComposeMessage::SelectInstrumentForDetails { track_id },
-                            )),
+                            Some(Message::Compose(ComposeMessage::SelectLane(
+                                crate::compose::SelectedLane::Instrument(track_id),
+                            ))),
                         );
                     }
                 }
@@ -335,9 +335,9 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
                 if let Some(track_id) = self.hit_test_name_column(pos, bounds) {
                     return (
                         canvas::event::Status::Captured,
-                        Some(Message::Compose(
-                            ComposeMessage::SelectInstrumentForDetails { track_id },
-                        )),
+                        Some(Message::Compose(ComposeMessage::SelectLane(
+                            crate::compose::SelectedLane::Instrument(track_id),
+                        ))),
                     );
                 }
                 return (canvas::event::Status::Ignored, None);

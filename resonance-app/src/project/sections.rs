@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
+use resonance_audio::types::TrackId;
 use resonance_music_theory::{Chord, GeneratedMaterial, GeneratorSpec, Scale};
 use serde::{Deserialize, Serialize};
 
-use crate::compose::GenerateParams;
+use crate::compose::{GenerateParams, LaneGeneratorConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectSectionDefinition {
@@ -18,20 +21,31 @@ pub struct ProjectSectionDefinition {
     #[serde(default)]
     pub progression_seed: u64,
     /// Per-section knobs for the progression + derive generators.
+    /// Retained for backwards-compatible loading of old projects.
     #[serde(default)]
     pub generate_params: GenerateParams,
-    /// Optional generator specification. When present, the section's chord
-    /// content is produced by running this spec with `generator_seed`.
+    /// Optional chord generator specification.
     #[serde(default)]
     pub generator_spec: Option<GeneratorSpec>,
-    /// Seed for the generator. Re-rolling increments this to produce a
-    /// fresh progression from the same spec.
+    /// Seed for the chord generator.
     #[serde(default)]
     pub generator_seed: u64,
-    /// Last materialized output from the generator. Persisted so the
-    /// section is fully reconstructable without re-running the generator.
+    /// Last materialized output from the chord generator.
     #[serde(default)]
     pub generated_material: Option<GeneratedMaterial>,
+    /// Per-track generator configuration for this section.
+    #[serde(default)]
+    pub lane_generators: HashMap<TrackId, LaneGeneratorConfig>,
+    /// Beats per chord — layout parameter for chord generation.
+    #[serde(default = "default_beats_per_chord")]
+    pub beats_per_chord: u32,
+    /// Build seventh chords during generation.
+    #[serde(default)]
+    pub seventh_chords: bool,
+}
+
+fn default_beats_per_chord() -> u32 {
+    4
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

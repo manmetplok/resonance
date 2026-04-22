@@ -1,8 +1,10 @@
 use resonance_audio::types::TrackId;
-use resonance_music_theory::{BassStyle, Chord, ChordQuality, MelodyStyle, PitchClass, Scale};
+use resonance_music_theory::{
+    BassStyle, Chord, ChordQuality, Degree, MelodyStyle, PitchClass, Scale,
+};
 
 use crate::compose::drumroll::DrumrollMessage;
-use crate::compose::DeriveKind;
+use crate::compose::{DrumVoiceMode, LaneGeneratorKindTag, SelectedLane};
 use crate::state::TrackRole;
 
 #[derive(Debug, Clone)]
@@ -78,11 +80,9 @@ pub enum ComposeMessage {
     },
     ClearChordSelection,
 
-    // Instrument details panel in the Compose track area
-    SelectInstrumentForDetails {
-        track_id: TrackId,
-    },
-    ClearInstrumentDetails,
+    // ---- Lane selection (unified) ----
+    /// Select a lane in the Compose view. Updates the right-hand inspector.
+    SelectLane(SelectedLane),
 
     /// Expand a track into the full-width inline piano-roll editor.
     ExpandTrack {
@@ -125,56 +125,17 @@ pub enum ComposeMessage {
         chord_id: u64,
     },
 
-    // ---- Generate / derive ----
-    /// Replace the section's chord list with a progression generated
-    /// from the section's scale + generate_params. Does not bump the
-    /// seed — callers who want a new progression should send
-    /// `RerollProgression` instead.
-    GenerateProgression {
+    // ---- Chord lane inspector ----
+    ChordInspector {
         definition_id: u64,
+        msg: ChordInspectorMsg,
     },
 
-    /// Bump the progression seed and regenerate. Cascade: any derived
-    /// clips already in place for this section are refreshed.
-    RerollProgression {
+    // ---- Per-track lane inspector ----
+    LaneInspector {
         definition_id: u64,
-    },
-
-    /// Set the target chord count for the next generated progression.
-    SetGenerateChordCount {
-        definition_id: u64,
-        chord_count: u32,
-    },
-    /// Set beats per chord for the next generated progression.
-    SetGenerateBeatsPerChord {
-        definition_id: u64,
-        beats_per_chord: u32,
-    },
-    /// Toggle seventh chords in the next generated progression.
-    SetGenerateSeventhChords {
-        definition_id: u64,
-        seventh_chords: bool,
-    },
-
-    /// Change bass style on a section's generate params.
-    SetBassStyle {
-        definition_id: u64,
-        style: BassStyle,
-    },
-    /// Change melody style on a section's generate params.
-    SetMelodyStyle {
-        definition_id: u64,
-        style: MelodyStyle,
-    },
-
-    /// Derive MIDI clips for one role on every placement of this section.
-    DerivePart {
-        definition_id: u64,
-        kind: DeriveKind,
-    },
-    /// Derive pad, bass and lead parts in one shot.
-    DeriveAllParts {
-        definition_id: u64,
+        track_id: TrackId,
+        msg: LaneInspectorMsg,
     },
 
     /// Set or clear a track's arrangement role.
@@ -182,4 +143,79 @@ pub enum ComposeMessage {
         track_id: TrackId,
         role: Option<TrackRole>,
     },
+}
+
+// ---------------------------------------------------------------------------
+// Chord lane inspector sub-messages
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub enum ChordInspectorMsg {
+    /// Select which Markov table to use.
+    SetTable(String),
+    /// Set the number of chords to generate.
+    SetLength(u8),
+    /// Set the beat duration of each generated chord.
+    SetBeatsPerChord(u32),
+    /// Toggle seventh chords on/off.
+    SetSeventhChords(bool),
+    /// Set the start-degree constraint (None = any).
+    SetStartDegree(Option<Degree>),
+    /// Set the end-degree constraint (None = any).
+    SetEndDegree(Option<Degree>),
+    /// Toggle the lock on a chord at the given index in generated_material.
+    ToggleLock(usize),
+    /// First-time generation: create a GeneratorSpec from current controls.
+    Generate,
+    /// Bump seed and regenerate (respecting locks).
+    Regenerate,
+}
+
+// ---------------------------------------------------------------------------
+// Per-track lane inspector sub-messages
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub enum LaneInspectorMsg {
+    /// Switch the generator type for this lane.
+    SetGenerator(LaneGeneratorKindTag),
+
+    // Bass
+    SetBassStyle(BassStyle),
+    SetBassBaseNote(u8),
+    SetBassVelocity(f32),
+
+    // Melody
+    SetMelodyStyle(MelodyStyle),
+    SetMelodyRegisterLow(u8),
+    SetMelodyRegisterHigh(u8),
+    SetMelodyNoteValue(u32),
+    SetMelodyRestDensity(f32),
+    SetMelodyVelocity(f32),
+
+    // Pad
+    SetPadRegisterLow(u8),
+    SetPadRegisterHigh(u8),
+    SetPadVelocity(f32),
+
+    // Drum euclidean (per-voice)
+    SetDrumVoiceMode {
+        pad_index: usize,
+        mode: DrumVoiceMode,
+    },
+    SetDrumEuclidSteps {
+        pad_index: usize,
+        steps: u32,
+    },
+    SetDrumEuclidHits {
+        pad_index: usize,
+        hits: u32,
+    },
+    SetDrumEuclidRotation {
+        pad_index: usize,
+        rotation: i32,
+    },
+
+    /// Regenerate this lane from its generator spec + section chords.
+    Regenerate,
 }

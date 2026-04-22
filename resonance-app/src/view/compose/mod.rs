@@ -1,16 +1,15 @@
 use iced::widget::{column, container, row, text, Space};
 use iced::{alignment, Element, Length};
 
+use crate::compose::SelectedLane;
 use crate::message::Message;
-use crate::state::InstrumentType;
 use crate::theme;
 
 pub mod chord_lane;
 pub mod drumroll;
 pub mod expanded_editor;
-pub mod instrument_panel;
+pub mod lane_inspector;
 pub mod popover;
-pub mod scale_panel;
 pub mod strip;
 pub mod tracks;
 
@@ -79,22 +78,23 @@ impl crate::Resonance {
                         .height(Length::Fill),
                 };
 
-                // The right-side panel swaps between scale info for the
-                // section (default), synth instrument details, and the
-                // drumroll pattern controls for drum tracks.
-                let right_panel: Element<'_, Message> = match self
-                    .compose
-                    .details_track_id
-                    .and_then(|id| self.registry.tracks.iter().find(|t| t.id == id))
-                {
-                    Some(track) if track.instrument_type == InstrumentType::Drum => {
-                        let clip_id =
-                            drumroll::clip_for_track(self, placement, definition, track.id);
-                        drumroll::controls::view(&self.compose.drumroll, track, clip_id)
+                // Unified right-hand inspector panel: context-sensitive
+                // based on which lane is selected.
+                let clip_id_for_drum = match &self.compose.selected_lane {
+                    SelectedLane::Drums(track_id) => {
+                        drumroll::clip_for_track(self, placement, definition, *track_id)
                     }
-                    Some(track) => instrument_panel::view(track),
-                    None => scale_panel::view(definition, &self.registry.tracks),
+                    _ => None,
                 };
+
+                let right_panel = lane_inspector::view(
+                    definition,
+                    &self.compose.selected_lane,
+                    &self.registry.tracks,
+                    &self.compose.drumroll,
+                    clip_id_for_drum,
+                    &self.table_registry,
+                );
 
                 row![left_column, right_panel]
                     .spacing(0)

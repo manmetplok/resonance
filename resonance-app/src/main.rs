@@ -1,6 +1,7 @@
 use iced::Size;
 use resonance_audio::types::*;
 use resonance_audio::AudioEngine;
+use resonance_music_theory::TableRegistry;
 
 pub(crate) mod compose;
 mod engine_events;
@@ -46,6 +47,9 @@ pub(crate) struct Resonance {
     pub(crate) midi_clips: Vec<MidiClipState>,
     /// Compose tab state: section definitions, placements, chord progressions.
     pub(crate) compose: compose::ComposeState,
+    /// Markov table registry for chord generators. Constructed once at
+    /// startup with all built-in tables.
+    pub(crate) table_registry: TableRegistry,
 
     /// Tempo change events on the tempo track (sorted by bar number).
     pub(crate) tempo_events: Vec<state::TempoEvent>,
@@ -297,6 +301,7 @@ impl Resonance {
             clips: Vec::new(),
             midi_clips: Vec::new(),
             compose: compose::ComposeState::default(),
+            table_registry: TableRegistry::with_builtins(),
 
             tempo_events: vec![state::TempoEvent { bar: 0, bpm: 120.0 }],
             signature_events: vec![state::SignatureEvent {

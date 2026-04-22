@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
-use resonance_audio::types::ClipId;
-use resonance_music_theory::{Chord, GeneratedMaterial, GeneratorSpec, Scale};
+use resonance_audio::types::{ClipId, TrackId};
+use resonance_music_theory::{
+    BassParams, Chord, GeneratedMaterial, GeneratorSpec, MelodyParams, PadParams, Scale,
+};
+use serde::{Deserialize, Serialize};
 
 use crate::project::{ProjectSectionChord, ProjectSectionDefinition, ProjectSectionPlacement};
-use crate::state::TrackRole;
 
 pub mod drumroll;
 pub mod generate;
@@ -14,6 +16,73 @@ pub mod messages;
 pub use drumroll::DrumrollViewState;
 pub use generate::{DeriveKind, GenerateParams};
 pub use messages::ComposeMessage;
+
+// ---------------------------------------------------------------------------
+// Lane selection
+// ---------------------------------------------------------------------------
+
+/// Which lane is currently focused in the Compose view. Determines what the
+/// right-hand inspector panel shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectedLane {
+    /// The chord strip at the top of the section.
+    Chords,
+    /// A synth (non-drum) instrument track.
+    Instrument(TrackId),
+    /// A drum track.
+    Drums(TrackId),
+}
+
+// ---------------------------------------------------------------------------
+// Per-lane generator configuration
+// ---------------------------------------------------------------------------
+
+/// Persisted per-track generator configuration within a section. Absent
+/// entry in the map = Manual (no generator for that lane).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LaneGeneratorConfig {
+    pub kind: LaneGeneratorKind,
+    pub seed: u64,
+}
+
+/// What kind of generator drives a lane.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum LaneGeneratorKind {
+    Bass(BassParams),
+    Melody(MelodyParams),
+    Pad(PadParams),
+    Drum(DrumLaneConfig),
+}
+
+/// Per-voice euclidean configuration for a drum lane.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DrumLaneConfig {
+    /// Keyed by pad index.
+    pub voices: HashMap<usize, DrumVoiceMode>,
+}
+
+/// Whether a single drum voice is manually edited or euclidean-generated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "mode")]
+pub enum DrumVoiceMode {
+    Manual,
+    Euclidean {
+        steps: u32,
+        hits: u32,
+        rotation: i32,
+    },
+}
+
+/// Tag-only enum used in the UI dropdown for selecting a generator kind
+/// without carrying the full params.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneGeneratorKindTag {
+    Manual,
+    Bass,
+    Melody,
+    Pad,
+}
 
 /// Runtime mirror of `ProjectSectionDefinition`. Kept separate so future
 /// runtime-only fields (e.g. editor UI state) can be added without touching
@@ -31,13 +100,28 @@ pub struct SectionDefinitionState {
     pub progression_seed: u64,
     /// Persisted generator knobs — chord count, beats per chord,
     /// per-derive params (pad register, bass style, melody style).
+    /// Retained for backwards-compatible loading of old projects;
+    /// new code reads `generator_spec` + `lane_generators` instead.
     pub generate_params: GenerateParams,
-    /// Optional generator specification.
+    /// Optional chord generator specification (MarkovProgression).
     pub generator_spec: Option<GeneratorSpec>,
-    /// Seed for the generator.
+    /// Seed for the chord generator. Re-rolling increments this to
+    /// produce a fresh progression from the same spec.
     pub generator_seed: u64,
-    /// Last materialized output from the generator.
+    /// Last materialized output from the chord generator. Persisted so
+    /// the section is fully reconstructable without re-running the
+    /// generator. The `locked` flag on each chord carries through as
+    /// both user intent and output.
     pub generated_material: Option<GeneratedMaterial>,
+    /// Per-track generator configuration for this section. Keyed by
+    /// TrackId. An absent entry means the lane is Manual (no generator).
+    pub lane_generators: HashMap<TrackId, LaneGeneratorConfig>,
+    /// Beats each chord occupies on the section grid. Kept at section
+    /// level because it's a layout parameter, not a generator parameter.
+    pub beats_per_chord: u32,
+    /// Build diatonic seventh chords instead of triads during chord
+    /// generation.
+    pub seventh_chords: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -76,10 +160,9 @@ pub struct ComposeState {
     /// Currently highlighted chord in the chord lane. The chord editor row
     /// only appears when this is set.
     pub selected_chord_id: Option<u64>,
-    /// When `Some`, the right side of that track's row in the Compose tab
-    /// shows an instrument details panel (name / type / icon) instead of
-    /// the note grid.
-    pub details_track_id: Option<resonance_audio::types::TrackId>,
+    /// Which lane is focused in the Compose view. Determines what the
+    /// right-hand inspector panel shows.
+    pub selected_lane: SelectedLane,
     /// Transient UI state for the drumroll block (selected pad, euclidean
     /// form buffers, pad map). Not persisted.
     pub drumroll: DrumrollViewState,
@@ -93,11 +176,11 @@ pub struct ComposeState {
     pub expanded_scroll_x: f32,
     /// Vertical scroll offset (pixels) for the expanded editor.
     pub expanded_scroll_y: f32,
-    /// Derived clips we created, keyed by (definition_id, placement_id,
-    /// role). Runtime-only: rebuilt on project load by scanning clip
-    /// names in `r.midi_clips`. The re-derive path uses this to delete
+    /// Generated clips we created, keyed by (definition_id, placement_id,
+    /// track_id). Runtime-only: rebuilt on project load by scanning clip
+    /// names in `r.midi_clips`. The regeneration path uses this to delete
     /// old clips before issuing fresh ones.
-    pub derived_clips: HashMap<(u64, u64, TrackRole), ClipId>,
+    pub derived_clips: HashMap<(u64, u64, TrackId), ClipId>,
     /// Monotonic id used when allocating fresh `ClipId`s for derived
     /// clips. Kept in the high range so it never collides with engine-
     /// allocated ids coming from `CreateMidiClip`.
@@ -138,7 +221,7 @@ impl Default for ComposeState {
             new_section_form: None,
             edit_section_form: None,
             selected_chord_id: None,
-            details_track_id: None,
+            selected_lane: SelectedLane::Chords,
             expanded_track_id: None,
             expanded_zoom_y: 12.0,
             expanded_scroll_x: 0.0,
@@ -151,6 +234,15 @@ impl Default for ComposeState {
 }
 
 impl ComposeState {
+    /// Backwards-compatible accessor: returns the TrackId of the currently
+    /// selected lane if it's an instrument or drum track.
+    pub fn details_track_id(&self) -> Option<TrackId> {
+        match &self.selected_lane {
+            SelectedLane::Instrument(id) | SelectedLane::Drums(id) => Some(*id),
+            SelectedLane::Chords => None,
+        }
+    }
+
     pub fn fresh_id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
@@ -206,6 +298,9 @@ impl ComposeState {
                 generator_spec: d.generator_spec.clone(),
                 generator_seed: d.generator_seed,
                 generated_material: d.generated_material.clone(),
+                lane_generators: d.lane_generators.clone(),
+                beats_per_chord: d.beats_per_chord,
+                seventh_chords: d.seventh_chords,
             })
             .collect()
     }
@@ -250,6 +345,9 @@ impl ComposeState {
                 generator_spec: d.generator_spec.clone(),
                 generator_seed: d.generator_seed,
                 generated_material: d.generated_material.clone(),
+                lane_generators: d.lane_generators.clone(),
+                beats_per_chord: d.beats_per_chord,
+                seventh_chords: d.seventh_chords,
             })
             .collect();
         // Runtime-only state: start each load with an empty derived-clip
@@ -269,6 +367,7 @@ impl ComposeState {
         self.scroll_y = 0.0;
         self.last_error = None;
         self.expanded_track_id = None;
+        self.selected_lane = SelectedLane::Chords;
 
         // Advance the id counter past anything we just loaded so fresh_id()
         // never collides with persisted ids.
@@ -285,6 +384,65 @@ impl ComposeState {
             .max()
             .unwrap_or(0);
         self.next_id = self.next_id.max(max_id);
+    }
+
+    /// Post-load migration: populate `lane_generators` from old `generate_params`
+    /// + track roles when loading a project that predates the lane generator system.
+    /// Call after tracks are loaded.
+    pub fn migrate_old_generate_params(&mut self, tracks: &[crate::state::TrackState]) {
+        use crate::state::TrackRole;
+
+        for def in &mut self.definitions {
+            // Only migrate if lane_generators is empty (old project) and
+            // generate_params has non-default values.
+            if !def.lane_generators.is_empty() {
+                continue;
+            }
+
+            // Migrate beats_per_chord / seventh_chords from old generate_params
+            // if they're still at defaults (meaning the project file didn't have
+            // the new fields).
+            if def.beats_per_chord == 4 && def.generate_params.beats_per_chord != 4 {
+                def.beats_per_chord = def.generate_params.beats_per_chord;
+            }
+            if !def.seventh_chords && def.generate_params.seventh_chords {
+                def.seventh_chords = true;
+            }
+
+            // Create lane generator configs from tracks with roles.
+            for t in tracks.iter().filter(|t| t.sub_track.is_none()) {
+                match t.role {
+                    Some(TrackRole::Bass) => {
+                        def.lane_generators.insert(
+                            t.id,
+                            LaneGeneratorConfig {
+                                kind: LaneGeneratorKind::Bass(def.generate_params.bass.clone()),
+                                seed: def.progression_seed,
+                            },
+                        );
+                    }
+                    Some(TrackRole::Lead) => {
+                        def.lane_generators.insert(
+                            t.id,
+                            LaneGeneratorConfig {
+                                kind: LaneGeneratorKind::Melody(def.generate_params.melody.clone()),
+                                seed: def.progression_seed,
+                            },
+                        );
+                    }
+                    Some(TrackRole::Pad) => {
+                        def.lane_generators.insert(
+                            t.id,
+                            LaneGeneratorConfig {
+                                kind: LaneGeneratorKind::Pad(def.generate_params.pad.clone()),
+                                seed: def.progression_seed,
+                            },
+                        );
+                    }
+                    None => {}
+                }
+            }
+        }
     }
 }
 
@@ -323,6 +481,9 @@ mod tests {
             generator_spec: None,
             generator_seed: 0,
             generated_material: None,
+            lane_generators: HashMap::new(),
+            beats_per_chord: 4,
+            seventh_chords: false,
         });
         let placement_id = state.fresh_id();
         state.placements.push(SectionPlacementState {

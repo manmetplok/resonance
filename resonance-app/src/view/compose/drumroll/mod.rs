@@ -1,5 +1,4 @@
 pub mod canvas;
-pub mod controls;
 
 use iced::widget::{container, Canvas};
 use iced::{Element, Length};
@@ -53,7 +52,7 @@ pub fn view<'a>(
         bpm: app.transport.bpm,
         time_sig_num: app.transport.time_sig_num,
         scroll_offset_y: app.viewport.scroll_offset_y,
-        details_track_id: app.compose.details_track_id,
+        details_track_id: app.compose.details_track_id(),
         selected_pad: app.compose.drumroll.selected_pad,
     };
 

@@ -77,6 +77,9 @@ mod tests {
             generator_spec: None,
             generator_seed: 0,
             generated_material: None,
+            lane_generators: std::collections::HashMap::new(),
+            beats_per_chord: 4,
+            seventh_chords: false,
         }
     }
 

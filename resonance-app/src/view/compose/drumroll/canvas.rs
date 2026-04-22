@@ -89,9 +89,9 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
                 if let Some(track_id) = self.hit_test_name_column(pos, bounds) {
                     return (
                         canvas::event::Status::Captured,
-                        Some(Message::Compose(
-                            ComposeMessage::SelectInstrumentForDetails { track_id },
-                        )),
+                        Some(Message::Compose(ComposeMessage::SelectLane(
+                            crate::compose::SelectedLane::Drums(track_id),
+                        ))),
                     );
                 }
                 return (canvas::event::Status::Ignored, None);

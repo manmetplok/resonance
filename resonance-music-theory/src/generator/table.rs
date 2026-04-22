@@ -29,6 +29,25 @@ pub struct MarkovTable {
     pub transitions: HashMap<Vec<Degree>, Vec<(Degree, f32)>>,
 }
 
+impl MarkovTable {
+    /// All unique degrees that appear in this table (as history keys or
+    /// as successor values), sorted for deterministic display order.
+    pub fn degrees(&self) -> Vec<Degree> {
+        let mut set = std::collections::HashSet::new();
+        for (key, transitions) in &self.transitions {
+            for d in key {
+                set.insert(*d);
+            }
+            for &(d, _) in transitions {
+                set.insert(d);
+            }
+        }
+        let mut v: Vec<Degree> = set.into_iter().collect();
+        v.sort();
+        v
+    }
+}
+
 /// Registry of named [`MarkovTable`]s. Generators look up tables by id
 /// at generation time. Call [`TableRegistry::with_builtins`] to get a
 /// registry pre-populated with all built-in tables.

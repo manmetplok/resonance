@@ -1,14 +1,18 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
-use resonance_audio::types::{AudioCommand, TICKS_PER_QUARTER_NOTE};
-use resonance_music_theory::{walk_progression, Chord, ProgressionParams};
+use resonance_audio::types::{AudioCommand, TrackId, TICKS_PER_QUARTER_NOTE};
+use resonance_music_theory::{
+    diatonic_chord, BassParams, Chord, GenContext, Generator, GeneratorSpec, MelodyParams,
+    PadParams,
+};
 
 use crate::compose::invariants::{chord_fits_in_section, chord_overlaps, placement_overlaps};
+use crate::compose::messages::{ChordInspectorMsg, LaneInspectorMsg};
 use crate::compose::{
     generate, ChordState, ComposeMessage, ComposeState, DeriveKind, EditSectionForm,
-    NewSectionForm, SectionDefinitionState, SectionPlacementState,
+    LaneGeneratorConfig, LaneGeneratorKind, LaneGeneratorKindTag, NewSectionForm,
+    SectionDefinitionState, SectionPlacementState, SelectedLane,
 };
-use crate::state::TrackRole;
 
 /// Stock section names offered in the order Intro → Verse → Chorus → Bridge
 /// → Outro. Whichever is not yet present in the project is used as the
@@ -122,7 +126,6 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                     return;
                 }
             };
-            // Apply rename via dedicated handler so invariants stay centralized.
             handle(
                 r,
                 ComposeMessage::RenameSection {
@@ -130,8 +133,6 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                     name,
                 },
             );
-            // Attempt resize next; failures surface in last_error and keep
-            // the form open so the user can adjust.
             handle(
                 r,
                 ComposeMessage::ResizeSection {
@@ -145,8 +146,6 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
         }
 
         ComposeMessage::CycleSectionColor { definition_id } => {
-            // Rotate through the fixed palette so the user can recolor
-            // without needing a color picker widget.
             let current = r
                 .compose
                 .find_definition(definition_id)
@@ -177,7 +176,6 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
 
         ComposeMessage::SetNewSectionLength(input) => {
             if let Some(form) = r.compose.new_section_form.as_mut() {
-                // Accept only digits so the field cannot hold garbage.
                 form.length_input = input.chars().filter(|c| c.is_ascii_digit()).collect();
             }
         }
@@ -200,8 +198,6 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 }
             };
             r.compose.new_section_form = None;
-            // Delegate to the existing CreateSection handler so the
-            // auto-placement + id bookkeeping stay in one place.
             handle(
                 r,
                 ComposeMessage::CreateSection {
@@ -232,11 +228,12 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 progression_seed: id.wrapping_mul(0x9E3779B97F4A7C15),
                 generate_params: crate::compose::GenerateParams::default(),
                 generator_spec: None,
-                generator_seed: 0,
+                generator_seed: id.wrapping_mul(0x517CC1B727220A95),
                 generated_material: None,
+                lane_generators: HashMap::new(),
+                beats_per_chord: 4,
+                seventh_chords: false,
             });
-            // Auto-place the new definition at the first free slot so the user
-            // immediately sees the section on the strip.
             let start_bar = first_free_bar(&r.compose, length_bars);
             let placement_id = r.compose.fresh_id();
             r.compose.placements.push(SectionPlacementState {
@@ -267,8 +264,6 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 r.compose.last_error = Some("Section length must be at least 1 bar".into());
                 return;
             }
-            // Resizing a definition affects every placement that references it.
-            // Check that none of them would overlap a neighbor at the new length.
             let old_length = match r.compose.find_definition(definition_id) {
                 Some(d) => d.length_bars,
                 None => return,
@@ -277,8 +272,6 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 let snapshot = r.compose.placements.clone();
                 let definitions = r.compose.definitions.clone();
                 for p in snapshot.iter().filter(|p| p.definition_id == definition_id) {
-                    // Temporarily treat this placement as if it were the new
-                    // length and see if it collides with any other placement.
                     let others: Vec<SectionPlacementState> =
                         snapshot.iter().filter(|q| q.id != p.id).cloned().collect();
                     if placement_overlaps(&others, &definitions, p.start_bar, length_bars, None) {
@@ -289,7 +282,6 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                     }
                 }
             }
-            // Also ensure existing chords still fit in the (possibly smaller) section.
             let chords_fit = r
                 .compose
                 .find_definition(definition_id)
@@ -386,36 +378,36 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
 
         ComposeMessage::SelectChord { chord_id } => {
             r.compose.selected_chord_id = Some(chord_id);
+            r.compose.selected_lane = SelectedLane::Chords;
         }
 
         ComposeMessage::ClearChordSelection => {
             r.compose.selected_chord_id = None;
         }
 
-        ComposeMessage::SelectInstrumentForDetails { track_id } => {
-            // Toggle: clicking the same track's name again clears details.
-            r.compose.details_track_id = if r.compose.details_track_id == Some(track_id) {
-                None
-            } else {
-                Some(track_id)
-            };
-        }
-
-        ComposeMessage::ClearInstrumentDetails => {
-            r.compose.details_track_id = None;
+        ComposeMessage::SelectLane(lane) => {
+            r.compose.selected_lane = lane;
         }
 
         ComposeMessage::ExpandTrack { track_id } => {
-            // Toggle: expanding the same track again collapses.
             if r.compose.expanded_track_id == Some(track_id) {
                 r.compose.expanded_track_id = None;
             } else {
                 r.compose.expanded_track_id = Some(track_id);
-                // Also select this track for the details panel.
-                r.compose.details_track_id = Some(track_id);
-                // Reset scroll for the new expanded view.
+                // Also select this track's lane.
+                let is_drum = r
+                    .registry
+                    .tracks
+                    .iter()
+                    .find(|t| t.id == track_id)
+                    .map(|t| t.instrument_type == crate::state::InstrumentType::Drum)
+                    .unwrap_or(false);
+                r.compose.selected_lane = if is_drum {
+                    SelectedLane::Drums(track_id)
+                } else {
+                    SelectedLane::Instrument(track_id)
+                };
                 r.compose.expanded_scroll_x = 0.0;
-                // Start scrolled so mid-range pitches (around C4=60) are visible.
                 r.compose.expanded_scroll_y = 40.0 * r.compose.expanded_zoom_y;
             }
         }
@@ -469,6 +461,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 def.chords.sort_by_key(|c| c.start_beat);
             }
             r.compose.last_error = None;
+            propagate_chord_change(r, definition_id);
         }
 
         ComposeMessage::EditChord {
@@ -482,6 +475,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 }
             }
             r.compose.last_error = None;
+            propagate_chord_change(r, definition_id);
         }
 
         ComposeMessage::MoveChord {
@@ -519,6 +513,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 def.chords.sort_by_key(|c| c.start_beat);
             }
             r.compose.last_error = None;
+            propagate_chord_change(r, definition_id);
         }
 
         ComposeMessage::ResizeChord {
@@ -559,6 +554,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 }
             }
             r.compose.last_error = None;
+            propagate_chord_change(r, definition_id);
         }
 
         ComposeMessage::DeleteChord {
@@ -572,86 +568,21 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 r.compose.selected_chord_id = None;
             }
             r.compose.last_error = None;
+            propagate_chord_change(r, definition_id);
         }
 
-        // ---- Generate / derive ----
-        ComposeMessage::GenerateProgression { definition_id } => {
-            generate_progression(r, definition_id);
+        // ---- Chord lane inspector ----
+        ComposeMessage::ChordInspector { definition_id, msg } => {
+            handle_chord_inspector(r, definition_id, msg);
         }
 
-        ComposeMessage::RerollProgression { definition_id } => {
-            // Bump the seed then regenerate. Use a golden-ratio hop so
-            // successive rerolls don't get stuck in a tight neighbourhood
-            // of the same xorshift state.
-            if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.progression_seed = def
-                    .progression_seed
-                    .wrapping_add(0x9E3779B97F4A7C15)
-                    .wrapping_add(1);
-            }
-            generate_progression(r, definition_id);
-            cascade_rederive(r, definition_id);
-        }
-
-        ComposeMessage::SetGenerateChordCount {
+        // ---- Per-track lane inspector ----
+        ComposeMessage::LaneInspector {
             definition_id,
-            chord_count,
+            track_id,
+            msg,
         } => {
-            if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.generate_params.chord_count = chord_count.max(1).min(32);
-                r.compose.last_error = None;
-            }
-        }
-        ComposeMessage::SetGenerateBeatsPerChord {
-            definition_id,
-            beats_per_chord,
-        } => {
-            if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.generate_params.beats_per_chord = beats_per_chord.max(1).min(16);
-                r.compose.last_error = None;
-            }
-        }
-        ComposeMessage::SetGenerateSeventhChords {
-            definition_id,
-            seventh_chords,
-        } => {
-            if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.generate_params.seventh_chords = seventh_chords;
-                r.compose.last_error = None;
-            }
-        }
-        ComposeMessage::SetBassStyle {
-            definition_id,
-            style,
-        } => {
-            if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.generate_params.bass.style = style;
-                r.compose.last_error = None;
-            }
-        }
-        ComposeMessage::SetMelodyStyle {
-            definition_id,
-            style,
-        } => {
-            if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.generate_params.melody.style = style;
-                r.compose.last_error = None;
-            }
-        }
-
-        ComposeMessage::DerivePart {
-            definition_id,
-            kind,
-        } => {
-            derive_part(r, definition_id, kind);
-        }
-
-        ComposeMessage::DeriveAllParts { definition_id } => {
-            // Stop at the first role that has no target track, so
-            // last_error communicates the missing role clearly.
-            derive_part(r, definition_id, DeriveKind::Pad);
-            derive_part(r, definition_id, DeriveKind::Bass);
-            derive_part(r, definition_id, DeriveKind::Lead);
+            handle_lane_inspector(r, definition_id, track_id, msg);
         }
 
         ComposeMessage::SetTrackRole { track_id, role } => {
@@ -662,125 +593,555 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
     }
 }
 
-/// Regenerate the section's chord list from its current scale and
-/// generate params, using the section's current seed.
-fn generate_progression(r: &mut crate::Resonance, definition_id: u64) {
+// ===========================================================================
+// Chord lane inspector handler
+// ===========================================================================
+
+fn handle_chord_inspector(r: &mut crate::Resonance, definition_id: u64, msg: ChordInspectorMsg) {
+    match msg {
+        ChordInspectorMsg::SetTable(table_id) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                match &mut def.generator_spec {
+                    Some(GeneratorSpec::MarkovProgression {
+                        table_id: tid,
+                        start,
+                        end,
+                        ..
+                    }) => {
+                        *tid = table_id;
+                        // Clear degree constraints — the new table may have
+                        // a different vocabulary.
+                        *start = None;
+                        *end = None;
+                    }
+                    None => {
+                        def.generator_spec = Some(GeneratorSpec::MarkovProgression {
+                            length: def.generate_params.chord_count as u8,
+                            table_id,
+                            order: 1,
+                            start: None,
+                            end: None,
+                        });
+                    }
+                }
+                r.compose.last_error = None;
+            }
+        }
+
+        ChordInspectorMsg::SetLength(length) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                match &mut def.generator_spec {
+                    Some(GeneratorSpec::MarkovProgression { length: l, .. }) => {
+                        *l = length;
+                    }
+                    None => {
+                        def.generator_spec = Some(GeneratorSpec::MarkovProgression {
+                            length,
+                            table_id: "pop".to_string(),
+                            order: 1,
+                            start: None,
+                            end: None,
+                        });
+                    }
+                }
+                // Keep old generate_params in sync for migration.
+                def.generate_params.chord_count = length as u32;
+                r.compose.last_error = None;
+            }
+        }
+
+        ChordInspectorMsg::SetBeatsPerChord(beats) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                def.beats_per_chord = beats.max(1).min(16);
+                def.generate_params.beats_per_chord = def.beats_per_chord;
+                r.compose.last_error = None;
+            }
+        }
+
+        ChordInspectorMsg::SetSeventhChords(on) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                def.seventh_chords = on;
+                def.generate_params.seventh_chords = on;
+                r.compose.last_error = None;
+            }
+        }
+
+        ChordInspectorMsg::SetStartDegree(degree) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                if let Some(GeneratorSpec::MarkovProgression { start, .. }) =
+                    &mut def.generator_spec
+                {
+                    *start = degree;
+                }
+                r.compose.last_error = None;
+            }
+        }
+
+        ChordInspectorMsg::SetEndDegree(degree) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                if let Some(GeneratorSpec::MarkovProgression { end, .. }) = &mut def.generator_spec
+                {
+                    *end = degree;
+                }
+                r.compose.last_error = None;
+            }
+        }
+
+        ChordInspectorMsg::ToggleLock(index) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                if let Some(ref mut material) = def.generated_material {
+                    if let Some(chord) = material.chords.get_mut(index) {
+                        chord.locked = !chord.locked;
+                    }
+                }
+                r.compose.last_error = None;
+            }
+        }
+
+        ChordInspectorMsg::Generate => {
+            generate_chord_lane(r, definition_id, false);
+        }
+
+        ChordInspectorMsg::Regenerate => {
+            // Bump the seed
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                def.generator_seed = def
+                    .generator_seed
+                    .wrapping_add(0x9E3779B97F4A7C15)
+                    .wrapping_add(1);
+            }
+            generate_chord_lane(r, definition_id, true);
+        }
+    }
+}
+
+/// Generate a chord progression using the MarkovProgression generator.
+fn generate_chord_lane(r: &mut crate::Resonance, definition_id: u64, respect_locks: bool) {
     let time_sig_num = r.transport.time_sig_num;
-    let def_snapshot = match r.compose.find_definition(definition_id) {
-        Some(d) => d.clone(),
-        None => return,
-    };
-    let Some(scale) = def_snapshot.scale else {
-        r.compose.last_error = Some("Pick a scale before generating a progression".into());
-        return;
-    };
-    let params = ProgressionParams {
-        scale,
-        chord_count: def_snapshot.generate_params.chord_count.max(1),
-        seventh_chords: def_snapshot.generate_params.seventh_chords,
-        seed: def_snapshot.progression_seed,
-    };
-    let chords = walk_progression(&params);
-
-    let beats_per_chord = def_snapshot.generate_params.beats_per_chord.max(1);
-    let section_beats = def_snapshot.length_bars * time_sig_num as u32;
-    let total_beats = chords.len() as u32 * beats_per_chord;
-    if total_beats > section_beats {
-        r.compose.last_error = Some(format!(
-            "Generated {} chords × {} beats won't fit in {} bars",
-            chords.len(),
-            beats_per_chord,
-            def_snapshot.length_bars
-        ));
-        return;
-    }
-
-    // Build the new ChordState list. Fresh ids so nothing lingers from
-    // the previous progression.
-    let mut new_chords = Vec::with_capacity(chords.len());
-    for (i, chord) in chords.iter().enumerate() {
-        let id = r.compose.fresh_id();
-        new_chords.push(ChordState {
-            id,
-            start_beat: i as u32 * beats_per_chord,
-            duration_beats: beats_per_chord,
-            chord: *chord,
-        });
-    }
-    if let Some(def) = r.compose.find_definition_mut(definition_id) {
-        def.chords = new_chords;
-    }
-    r.compose.selected_chord_id = None;
-    r.compose.last_error = None;
-}
-
-/// Re-run every derive that already has clips for this section. Used
-/// after a progression reroll so existing Pad/Bass/Lead tracks stay in
-/// sync with the new chord list.
-fn cascade_rederive(r: &mut crate::Resonance, definition_id: u64) {
-    let roles: HashSet<TrackRole> = r
-        .compose
-        .derived_clips
-        .keys()
-        .filter(|(d, _, _)| *d == definition_id)
-        .map(|(_, _, role)| *role)
-        .collect();
-    for role in roles {
-        let kind = match role {
-            TrackRole::Pad => DeriveKind::Pad,
-            TrackRole::Bass => DeriveKind::Bass,
-            TrackRole::Lead => DeriveKind::Lead,
-        };
-        derive_part(r, definition_id, kind);
-    }
-}
-
-/// Run the deriver for `kind` and emit the commands to replace every
-/// derived clip of that role for every placement of this section.
-fn derive_part(r: &mut crate::Resonance, definition_id: u64, kind: DeriveKind) {
-    let role = match kind {
-        DeriveKind::Pad => TrackRole::Pad,
-        DeriveKind::Bass => TrackRole::Bass,
-        DeriveKind::Lead => TrackRole::Lead,
-    };
-
-    // Target track: first non-sub-track with the matching role.
-    let Some(target_track_id) = r
-        .registry
-        .tracks
-        .iter()
-        .filter(|t| t.sub_track.is_none())
-        .find(|t| t.role == Some(role))
-        .map(|t| t.id)
-    else {
-        r.compose.last_error = Some(format!("No track tagged as {}", role.as_str()));
-        return;
-    };
-
     let def = match r.compose.find_definition(definition_id) {
         Some(d) => d.clone(),
         None => return,
     };
-    if def.chords.is_empty() {
-        r.compose.last_error = Some("Section has no chords to derive from".into());
+    let Some(scale) = def.scale else {
+        r.compose.last_error = Some("Pick a scale before generating a progression".into());
+        return;
+    };
+
+    // Ensure we have a generator spec; create a default one if absent.
+    let spec = def
+        .generator_spec
+        .clone()
+        .unwrap_or_else(|| GeneratorSpec::MarkovProgression {
+            length: def.generate_params.chord_count.max(1) as u8,
+            table_id: "pop".to_string(),
+            order: 1,
+            start: None,
+            end: None,
+        });
+
+    let length = match &spec {
+        GeneratorSpec::MarkovProgression { length, .. } => *length as usize,
+    };
+
+    // Build locked positions from existing generated_material
+    let locked: Vec<Option<resonance_music_theory::Degree>> = if respect_locks {
+        def.generated_material
+            .as_ref()
+            .map(|m| {
+                m.chords
+                    .iter()
+                    .map(|c| if c.locked { Some(c.degree) } else { None })
+                    .collect()
+            })
+            .unwrap_or_else(|| vec![None; length])
+    } else {
+        vec![None; length]
+    };
+
+    // Pad or truncate locked vector to match requested length
+    let mut locked_padded = locked;
+    locked_padded.resize(length, None);
+
+    let ctx = GenContext {
+        registry: &r.table_registry,
+        locked: &locked_padded,
+    };
+
+    let material = match spec.generate(def.generator_seed, &ctx) {
+        Ok(m) => m,
+        Err(e) => {
+            r.compose.last_error = Some(format!("Generation failed: {e}"));
+            return;
+        }
+    };
+
+    let beats_per_chord = def.beats_per_chord.max(1);
+    let section_beats = def.length_bars * time_sig_num as u32;
+    let total_beats = material.chords.len() as u32 * beats_per_chord;
+    if total_beats > section_beats {
+        r.compose.last_error = Some(format!(
+            "Generated {} chords × {} beats won't fit in {} bars",
+            material.chords.len(),
+            beats_per_chord,
+            def.length_bars
+        ));
         return;
     }
 
-    // Pure generation. Seed lives on the section so the same section
-    // always produces the same derived parts until the user rerolls.
+    // Project degrees to concrete chords using the scale.
+    let mut new_chords = Vec::with_capacity(material.chords.len());
+    for (i, gc) in material.chords.iter().enumerate() {
+        let id = r.compose.fresh_id();
+        let chord = if def.seventh_chords {
+            diatonic_chord(scale, gc.degree.root, true)
+        } else {
+            gc.degree.to_chord(scale)
+        };
+        new_chords.push(ChordState {
+            id,
+            start_beat: i as u32 * beats_per_chord,
+            duration_beats: beats_per_chord,
+            chord,
+        });
+    }
+
+    if let Some(def) = r.compose.find_definition_mut(definition_id) {
+        def.chords = new_chords;
+        def.generated_material = Some(material);
+        // Persist the spec if it was created implicitly.
+        if def.generator_spec.is_none() {
+            def.generator_spec = Some(spec);
+        }
+    }
+    r.compose.selected_chord_id = None;
+    r.compose.last_error = None;
+
+    // Cascade: regenerate all dependent instrument lanes.
+    propagate_chord_change(r, definition_id);
+}
+
+// ===========================================================================
+// Per-track lane inspector handler
+// ===========================================================================
+
+fn handle_lane_inspector(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    msg: LaneInspectorMsg,
+) {
+    match msg {
+        LaneInspectorMsg::SetGenerator(tag) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                match tag {
+                    LaneGeneratorKindTag::Manual => {
+                        def.lane_generators.remove(&track_id);
+                    }
+                    LaneGeneratorKindTag::Bass => {
+                        def.lane_generators.insert(
+                            track_id,
+                            LaneGeneratorConfig {
+                                kind: LaneGeneratorKind::Bass(BassParams::default()),
+                                seed: definition_id.wrapping_mul(0x9E3779B97F4A7C15),
+                            },
+                        );
+                    }
+                    LaneGeneratorKindTag::Melody => {
+                        def.lane_generators.insert(
+                            track_id,
+                            LaneGeneratorConfig {
+                                kind: LaneGeneratorKind::Melody(MelodyParams::default()),
+                                seed: definition_id.wrapping_mul(0x517CC1B727220A95),
+                            },
+                        );
+                    }
+                    LaneGeneratorKindTag::Pad => {
+                        def.lane_generators.insert(
+                            track_id,
+                            LaneGeneratorConfig {
+                                kind: LaneGeneratorKind::Pad(PadParams::default()),
+                                seed: definition_id.wrapping_mul(0x6C62272E07BB0142),
+                            },
+                        );
+                    }
+                }
+                r.compose.last_error = None;
+            }
+        }
+
+        // Bass parameter updates
+        LaneInspectorMsg::SetBassStyle(style) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Bass(p) = kind {
+                    p.style = style;
+                }
+            });
+        }
+        LaneInspectorMsg::SetBassBaseNote(note) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Bass(p) = kind {
+                    p.base_note = note;
+                }
+            });
+        }
+        LaneInspectorMsg::SetBassVelocity(v) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Bass(p) = kind {
+                    p.velocity = v;
+                }
+            });
+        }
+
+        // Melody parameter updates
+        LaneInspectorMsg::SetMelodyStyle(style) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Melody(p) = kind {
+                    p.style = style;
+                }
+            });
+        }
+        LaneInspectorMsg::SetMelodyRegisterLow(note) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Melody(p) = kind {
+                    p.register.0 = note;
+                }
+            });
+        }
+        LaneInspectorMsg::SetMelodyRegisterHigh(note) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Melody(p) = kind {
+                    p.register.1 = note;
+                }
+            });
+        }
+        LaneInspectorMsg::SetMelodyNoteValue(ticks) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Melody(p) = kind {
+                    p.note_value_ticks = ticks;
+                }
+            });
+        }
+        LaneInspectorMsg::SetMelodyRestDensity(d) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Melody(p) = kind {
+                    p.rest_density = d;
+                }
+            });
+        }
+        LaneInspectorMsg::SetMelodyVelocity(v) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Melody(p) = kind {
+                    p.velocity = v;
+                }
+            });
+        }
+
+        // Pad parameter updates
+        LaneInspectorMsg::SetPadRegisterLow(note) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Pad(p) = kind {
+                    p.register.0 = note;
+                }
+            });
+        }
+        LaneInspectorMsg::SetPadRegisterHigh(note) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Pad(p) = kind {
+                    p.register.1 = note;
+                }
+            });
+        }
+        LaneInspectorMsg::SetPadVelocity(v) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Pad(p) = kind {
+                    p.velocity = v;
+                }
+            });
+        }
+
+        // Drum voice mode
+        LaneInspectorMsg::SetDrumVoiceMode { pad_index, mode } => {
+            ensure_drum_config(r, definition_id, track_id);
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Drum(dc) = kind {
+                    dc.voices.insert(pad_index, mode);
+                }
+            });
+        }
+        LaneInspectorMsg::SetDrumEuclidSteps { pad_index, steps } => {
+            update_drum_voice(r, definition_id, track_id, pad_index, |mode| {
+                if let crate::compose::DrumVoiceMode::Euclidean { steps: s, .. } = mode {
+                    *s = steps.max(1);
+                }
+            });
+        }
+        LaneInspectorMsg::SetDrumEuclidHits { pad_index, hits } => {
+            update_drum_voice(r, definition_id, track_id, pad_index, |mode| {
+                if let crate::compose::DrumVoiceMode::Euclidean { hits: h, steps, .. } = mode {
+                    *h = hits.min(*steps);
+                }
+            });
+        }
+        LaneInspectorMsg::SetDrumEuclidRotation {
+            pad_index,
+            rotation,
+        } => {
+            update_drum_voice(r, definition_id, track_id, pad_index, |mode| {
+                if let crate::compose::DrumVoiceMode::Euclidean { rotation: rot, .. } = mode {
+                    *rot = rotation;
+                }
+            });
+        }
+
+        LaneInspectorMsg::Regenerate => {
+            regenerate_lane(r, definition_id, track_id);
+        }
+    }
+}
+
+/// Helper: mutate a lane's generator kind in-place.
+fn update_lane_gen(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    f: impl FnOnce(&mut LaneGeneratorKind),
+) {
+    if let Some(def) = r.compose.find_definition_mut(definition_id) {
+        if let Some(cfg) = def.lane_generators.get_mut(&track_id) {
+            f(&mut cfg.kind);
+        }
+        r.compose.last_error = None;
+    }
+}
+
+/// Ensure a drum lane config exists for the given track.
+fn ensure_drum_config(r: &mut crate::Resonance, definition_id: u64, track_id: TrackId) {
+    if let Some(def) = r.compose.find_definition_mut(definition_id) {
+        def.lane_generators
+            .entry(track_id)
+            .or_insert_with(|| LaneGeneratorConfig {
+                kind: LaneGeneratorKind::Drum(crate::compose::DrumLaneConfig::default()),
+                seed: 0,
+            });
+    }
+}
+
+/// Helper: mutate a specific drum voice's mode in-place.
+fn update_drum_voice(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    pad_index: usize,
+    f: impl FnOnce(&mut crate::compose::DrumVoiceMode),
+) {
+    if let Some(def) = r.compose.find_definition_mut(definition_id) {
+        if let Some(cfg) = def.lane_generators.get_mut(&track_id) {
+            if let LaneGeneratorKind::Drum(dc) = &mut cfg.kind {
+                if let Some(mode) = dc.voices.get_mut(&pad_index) {
+                    f(mode);
+                }
+            }
+        }
+        r.compose.last_error = None;
+    }
+}
+
+// ===========================================================================
+// Chord change propagation
+// ===========================================================================
+
+/// When chords change, regenerate all instrument lanes that have a
+/// chord-reading generator (Bass, Melody, Pad).
+fn propagate_chord_change(r: &mut crate::Resonance, definition_id: u64) {
+    let track_ids: Vec<TrackId> = r
+        .compose
+        .find_definition(definition_id)
+        .map(|def| {
+            def.lane_generators
+                .iter()
+                .filter(|(_, cfg)| {
+                    matches!(
+                        cfg.kind,
+                        LaneGeneratorKind::Bass(_)
+                            | LaneGeneratorKind::Melody(_)
+                            | LaneGeneratorKind::Pad(_)
+                    )
+                })
+                .map(|(tid, _)| *tid)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    for tid in track_ids {
+        regenerate_lane(r, definition_id, tid);
+    }
+}
+
+/// Regenerate a single instrument lane, producing MIDI clips for all
+/// placements of the section.
+fn regenerate_lane(r: &mut crate::Resonance, definition_id: u64, track_id: TrackId) {
+    let def = match r.compose.find_definition(definition_id) {
+        Some(d) => d.clone(),
+        None => return,
+    };
+
+    let Some(config) = def.lane_generators.get(&track_id) else {
+        return;
+    };
+
+    if def.chords.is_empty() {
+        return;
+    }
+
+    // Determine derive kind from lane generator kind.
+    let kind = match &config.kind {
+        LaneGeneratorKind::Bass(_) => DeriveKind::Bass,
+        LaneGeneratorKind::Melody(_) => DeriveKind::Lead,
+        LaneGeneratorKind::Pad(_) => DeriveKind::Pad,
+        LaneGeneratorKind::Drum(_) => return, // drums don't read chord context
+    };
+
+    // Build ad-hoc GenerateParams from the lane config to feed into derive_notes.
+    let gen_params = match &config.kind {
+        LaneGeneratorKind::Bass(p) => {
+            let mut gp = crate::compose::GenerateParams::default();
+            gp.bass = p.clone();
+            gp
+        }
+        LaneGeneratorKind::Melody(p) => {
+            let mut gp = crate::compose::GenerateParams::default();
+            gp.melody = p.clone();
+            gp
+        }
+        LaneGeneratorKind::Pad(p) => {
+            let mut gp = crate::compose::GenerateParams::default();
+            gp.pad = p.clone();
+            gp
+        }
+        _ => return,
+    };
+
     let notes = generate::derive_notes(
         kind,
         &def.chords,
         def.scale,
-        &def.generate_params,
+        &gen_params,
         TICKS_PER_QUARTER_NOTE as u32,
-        def.progression_seed,
+        config.seed,
     );
 
     let time_sig_num = r.transport.time_sig_num;
     let samples_per_bar = compose_samples_per_bar(r.sample_rate, r.transport.bpm, time_sig_num);
     let duration_ticks = def.length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
-    let name = format!("{} · {}", def.name, role.as_str());
+
+    let track_name = r
+        .registry
+        .tracks
+        .iter()
+        .find(|t| t.id == track_id)
+        .map(|t| t.name.as_str())
+        .unwrap_or("Track");
+    let name = format!("{} · {}", def.name, track_name);
 
     let placements: Vec<(u64, u32)> = r
         .compose
@@ -791,12 +1152,10 @@ fn derive_part(r: &mut crate::Resonance, definition_id: u64, kind: DeriveKind) {
         .collect();
 
     for (placement_id, start_bar) in placements {
-        // Delete any previous derived clip at this slot so the new one
-        // doesn't stack on top of it.
-        if let Some(old_id) = r
-            .compose
-            .derived_clips
-            .remove(&(definition_id, placement_id, role))
+        if let Some(old_id) =
+            r.compose
+                .derived_clips
+                .remove(&(definition_id, placement_id, track_id))
         {
             r.engine
                 .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
@@ -806,7 +1165,7 @@ fn derive_part(r: &mut crate::Resonance, definition_id: u64, kind: DeriveKind) {
         let start_sample = start_bar as u64 * samples_per_bar;
         r.engine.send(AudioCommand::LoadMidiClipDirect {
             clip_id,
-            track_id: target_track_id,
+            track_id,
             start_sample,
             duration_ticks,
             notes: notes.clone(),
@@ -816,20 +1175,21 @@ fn derive_part(r: &mut crate::Resonance, definition_id: u64, kind: DeriveKind) {
         });
         r.compose
             .derived_clips
-            .insert((definition_id, placement_id, role), clip_id);
+            .insert((definition_id, placement_id, track_id), clip_id);
     }
 
     r.compose.last_error = None;
 }
+
+// ===========================================================================
+// Helpers
+// ===========================================================================
 
 fn compose_samples_per_bar(sample_rate: u32, bpm: f32, time_sig_num: u8) -> u64 {
     let samples_per_beat = sample_rate as f64 * 60.0 / bpm as f64;
     (samples_per_beat * time_sig_num as f64) as u64
 }
 
-/// Find the earliest bar where a placement of the given length would not
-/// collide with any existing placement. Scans bar-by-bar; adequate for
-/// interactive use since project lengths are small.
 fn first_free_bar(state: &ComposeState, length_bars: u32) -> u32 {
     let mut candidate = 0u32;
     loop {
@@ -844,7 +1204,7 @@ fn first_free_bar(state: &ComposeState, length_bars: u32) -> u32 {
         }
         candidate += 1;
         if candidate > 10_000 {
-            return candidate; // sanity cap; should never hit
+            return candidate;
         }
     }
 }

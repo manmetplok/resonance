@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use resonance_audio::types::{AudioCommand, ClipId, MidiNote, PluginInstanceId};
 
 use crate::project::{LoadedProject, ProjectFile};
-use crate::state::TrackRole;
+use resonance_audio::types::TrackId;
 
 pub use resonance_audio::limits::DEFAULT_HISTORY_CAPACITY;
 
@@ -25,7 +25,7 @@ pub use resonance_audio::limits::DEFAULT_HISTORY_CAPACITY;
 /// to `Resonance::compose` after the replay completes.
 #[derive(Debug, Clone, Default)]
 pub struct UndoExtras {
-    pub compose_derived_clips: HashMap<(u64, u64, TrackRole), ClipId>,
+    pub compose_derived_clips: HashMap<(u64, u64, TrackId), ClipId>,
     pub compose_next_derived_clip_id: u64,
 }
 
@@ -510,8 +510,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | ComposeMessage::SelectSectionPlacement { .. }
             | ComposeMessage::SelectChord { .. }
             | ComposeMessage::ClearChordSelection
-            | ComposeMessage::SelectInstrumentForDetails { .. }
-            | ComposeMessage::ClearInstrumentDetails
+            | ComposeMessage::SelectLane(_)
             | ComposeMessage::ExpandTrack { .. }
             | ComposeMessage::CollapseTrack
             | ComposeMessage::ExpandedScrollX(_)
