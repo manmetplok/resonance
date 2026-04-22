@@ -1,6 +1,6 @@
 use resonance_audio::types::TrackId;
 use resonance_music_theory::{
-    BassStyle, Chord, ChordQuality, Degree, MelodyStyle, PitchClass, Scale,
+    BassStyle, Chord, ChordQuality, ContourPreference, Degree, MelodyStyle, PitchClass, Scale,
 };
 
 use crate::compose::drumroll::DrumrollMessage;
@@ -192,6 +192,12 @@ pub enum LaneInspectorMsg {
     SetMelodyNoteValue(u32),
     SetMelodyRestDensity(f32),
     SetMelodyVelocity(f32),
+    SetMelodyComplexity(f32),
+    SetMelodyArticulation(f32),
+    SetMelodyContour(ContourPreference),
+    SetMelodyPhraseLen(u8),
+    SetMelodyMotifLen(u8),
+    SetMelodyLeapChance(f32),
 
     // Pad
     SetPadRegisterLow(u8),

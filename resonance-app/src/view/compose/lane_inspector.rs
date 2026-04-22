@@ -10,7 +10,7 @@ use iced::{alignment, Element, Length};
 
 use resonance_audio::types::TrackId;
 use resonance_music_theory::{
-    BassStyle, Degree, MelodyStyle, Mode, PitchClass, Scale, TableRegistry,
+    BassStyle, ContourPreference, Degree, MelodyStyle, Mode, PitchClass, Scale, TableRegistry,
 };
 
 use crate::compose::drumroll::DrumrollMessage;
@@ -805,7 +805,7 @@ fn melody_controls<'a>(
     .step(0.01)
     .width(Length::Fill);
 
-    column![
+    let mut col = column![
         text("Style").size(11).color(theme::TEXT_DIM),
         style_picker,
         Space::with_height(4),
@@ -814,20 +814,146 @@ fn melody_controls<'a>(
         text("Register high").size(11).color(theme::TEXT_DIM),
         reg_hi_picker,
         Space::with_height(4),
-        text("Note value").size(11).color(theme::TEXT_DIM),
-        nv_picker,
-        Space::with_height(4),
-        text(format!("Rest density: {:.2}", params.rest_density))
-            .size(11)
-            .color(theme::TEXT_DIM),
-        rest_slider,
-        text(format!("Velocity: {:.2}", params.velocity))
-            .size(11)
-            .color(theme::TEXT_DIM),
-        vel_slider,
     ]
-    .spacing(2)
-    .into()
+    .spacing(2);
+
+    // Arp-only controls
+    if params.style != MelodyStyle::Motif {
+        col = col
+            .push(text("Note value").size(11).color(theme::TEXT_DIM))
+            .push(nv_picker);
+    }
+
+    col = col
+        .push(Space::with_height(4))
+        .push(
+            text(format!("Rest density: {:.2}", params.rest_density))
+                .size(11)
+                .color(theme::TEXT_DIM),
+        )
+        .push(rest_slider)
+        .push(
+            text(format!("Velocity: {:.2}", params.velocity))
+                .size(11)
+                .color(theme::TEXT_DIM),
+        )
+        .push(vel_slider);
+
+    // Motif-specific controls
+    if params.style == MelodyStyle::Motif {
+        let complexity_slider = slider(0.0..=1.0, params.complexity, move |v| {
+            Message::Compose(ComposeMessage::LaneInspector {
+                definition_id,
+                track_id,
+                msg: LaneInspectorMsg::SetMelodyComplexity(v),
+            })
+        })
+        .step(0.01)
+        .width(Length::Fill);
+
+        let articulation_slider = slider(0.0..=1.0, params.articulation, move |v| {
+            Message::Compose(ComposeMessage::LaneInspector {
+                definition_id,
+                track_id,
+                msg: LaneInspectorMsg::SetMelodyArticulation(v),
+            })
+        })
+        .step(0.01)
+        .width(Length::Fill);
+
+        let contour_picker = pick_list(
+            ContourPreference::ALL.to_vec(),
+            Some(params.contour),
+            move |c| {
+                Message::Compose(ComposeMessage::LaneInspector {
+                    definition_id,
+                    track_id,
+                    msg: LaneInspectorMsg::SetMelodyContour(c),
+                })
+            },
+        )
+        .text_size(12)
+        .padding([4, 6])
+        .width(Length::Fill);
+
+        let phrase_len_options = vec![
+            PhraseLenPick(2),
+            PhraseLenPick(4),
+            PhraseLenPick(8),
+        ];
+        let phrase_len_picker = pick_list(
+            phrase_len_options,
+            Some(PhraseLenPick(params.phrase_len)),
+            move |pick| {
+                Message::Compose(ComposeMessage::LaneInspector {
+                    definition_id,
+                    track_id,
+                    msg: LaneInspectorMsg::SetMelodyPhraseLen(pick.0),
+                })
+            },
+        )
+        .text_size(12)
+        .padding([4, 6])
+        .width(Length::Fill);
+
+        let motif_len_options = vec![
+            MotifLenPick(0),
+            MotifLenPick(2),
+            MotifLenPick(3),
+            MotifLenPick(4),
+            MotifLenPick(5),
+            MotifLenPick(6),
+        ];
+        let motif_len_picker = pick_list(
+            motif_len_options,
+            Some(MotifLenPick(params.motif_len)),
+            move |pick| {
+                Message::Compose(ComposeMessage::LaneInspector {
+                    definition_id,
+                    track_id,
+                    msg: LaneInspectorMsg::SetMelodyMotifLen(pick.0),
+                })
+            },
+        )
+        .text_size(12)
+        .padding([4, 6])
+        .width(Length::Fill);
+
+        let leap_slider = slider(0.0..=1.0, params.leap_chance, move |v| {
+            Message::Compose(ComposeMessage::LaneInspector {
+                definition_id,
+                track_id,
+                msg: LaneInspectorMsg::SetMelodyLeapChance(v),
+            })
+        })
+        .step(0.01)
+        .width(Length::Fill);
+
+        col = col
+            .push(Space::with_height(4))
+            .push(text(format!("Complexity: {:.2}", params.complexity))
+                .size(11)
+                .color(theme::TEXT_DIM))
+            .push(complexity_slider)
+            .push(text(format!("Articulation: {:.2}", params.articulation))
+                .size(11)
+                .color(theme::TEXT_DIM))
+            .push(articulation_slider)
+            .push(Space::with_height(4))
+            .push(text("Contour").size(11).color(theme::TEXT_DIM))
+            .push(contour_picker)
+            .push(text("Phrase length").size(11).color(theme::TEXT_DIM))
+            .push(phrase_len_picker)
+            .push(text("Motif length").size(11).color(theme::TEXT_DIM))
+            .push(motif_len_picker)
+            .push(Space::with_height(4))
+            .push(text(format!("Leap chance: {:.2}", params.leap_chance))
+                .size(11)
+                .color(theme::TEXT_DIM))
+            .push(leap_slider);
+    }
+
+    col.into()
 }
 
 fn pad_controls<'a>(
@@ -1275,6 +1401,30 @@ struct NoteValuePick(u32, &'static str);
 impl std::fmt::Display for NoteValuePick {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.1)
+    }
+}
+
+/// Phrase length pick for motif generator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PhraseLenPick(u8);
+
+impl std::fmt::Display for PhraseLenPick {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} chords", self.0)
+    }
+}
+
+/// Motif length pick for motif generator (0 = auto).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MotifLenPick(u8);
+
+impl std::fmt::Display for MotifLenPick {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0 == 0 {
+            f.write_str("Auto")
+        } else {
+            write!(f, "{} notes", self.0)
+        }
     }
 }
 

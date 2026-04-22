@@ -935,6 +935,48 @@ fn handle_lane_inspector(
                 }
             });
         }
+        LaneInspectorMsg::SetMelodyComplexity(c) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Melody(p) = kind {
+                    p.complexity = c;
+                }
+            });
+        }
+        LaneInspectorMsg::SetMelodyArticulation(a) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Melody(p) = kind {
+                    p.articulation = a;
+                }
+            });
+        }
+        LaneInspectorMsg::SetMelodyContour(contour) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Melody(p) = kind {
+                    p.contour = contour;
+                }
+            });
+        }
+        LaneInspectorMsg::SetMelodyPhraseLen(len) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Melody(p) = kind {
+                    p.phrase_len = len;
+                }
+            });
+        }
+        LaneInspectorMsg::SetMelodyMotifLen(len) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Melody(p) = kind {
+                    p.motif_len = len;
+                }
+            });
+        }
+        LaneInspectorMsg::SetMelodyLeapChance(c) => {
+            update_lane_gen(r, definition_id, track_id, |kind| {
+                if let LaneGeneratorKind::Melody(p) = kind {
+                    p.leap_chance = c;
+                }
+            });
+        }
 
         // Pad parameter updates
         LaneInspectorMsg::SetPadRegisterLow(note) => {
