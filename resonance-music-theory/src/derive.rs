@@ -198,7 +198,7 @@ pub fn derive_bass(
                 }
             }
             BassStyle::RootFifth => {
-                let fifth_pc = tc.chord.root.transpose(7);
+                let fifth_pc = root_pc.transpose(7);
                 let fifth_midi = nearest_midi_above(fifth_pc, root_midi);
                 for b in 0..beats {
                     let note = if b % 2 == 0 { root_midi } else { fifth_midi };
@@ -211,9 +211,13 @@ pub fn derive_bass(
                 }
             }
             BassStyle::Octave => {
-                let up = root_midi.saturating_add(12);
+                let up = root_midi.checked_add(12).filter(|&n| n <= 127);
                 for b in 0..beats {
-                    let note = if b % 2 == 0 { root_midi } else { up };
+                    let note = if b % 2 == 0 || up.is_none() {
+                        root_midi
+                    } else {
+                        up.unwrap()
+                    };
                     out.push(GeneratedNote {
                         note,
                         velocity: params.velocity,
@@ -424,6 +428,14 @@ pub fn derive_melody(
                                 }
                                 if next > params.register.1 {
                                     next = step_scale(&scale, next, -1);
+                                }
+                                // Final clamp: if still out of register
+                                // (very narrow range), fall back to a
+                                // chord tone.
+                                if next < params.register.0
+                                    || next > params.register.1
+                                {
+                                    next = tones[0];
                                 }
                                 next
                             }

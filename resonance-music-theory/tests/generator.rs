@@ -476,7 +476,33 @@ fn degree_to_chord_a_minor() {
 }
 
 // ---------------------------------------------------------------------------
-// 12. Length 0 returns empty material
+// 12. End constraint conflicts with locked last position
+// ---------------------------------------------------------------------------
+
+#[test]
+fn end_conflicts_with_lock() {
+    let spec = GeneratorSpec::MarkovProgression {
+        length: 4,
+        table_id: "pop".to_string(),
+        order: 1,
+        start: None,
+        end: Some(Degree::I),
+    };
+    // Lock the last position to V, conflicting with end = I.
+    let mut locked = no_locks(4);
+    locked[3] = Some(Degree::V);
+
+    let result = generate_with(&spec, 42, &locked);
+    assert!(result.is_err(), "should return error for lock/end conflict");
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, GenerateError::EndConflictsWithLock),
+        "expected EndConflictsWithLock, got: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 13. Length 0 returns empty material
 // ---------------------------------------------------------------------------
 
 #[test]

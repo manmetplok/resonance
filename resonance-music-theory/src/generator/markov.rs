@@ -194,7 +194,11 @@ pub fn generate(
             .as_ref()
             .expect("all positions should be filled");
         if last.degree != end_deg {
-            return Err(GenerateError::EndUnreachable { steps: 0 });
+            return if last.locked {
+                Err(GenerateError::EndConflictsWithLock)
+            } else {
+                Err(GenerateError::EndUnreachable { steps: 0 })
+            };
         }
     }
 
@@ -256,12 +260,17 @@ fn get_candidates(
     sorted_candidates(&all)
 }
 
-/// Sort candidates by degree for deterministic iteration order. This is
-/// necessary because `HashMap` iteration order is non-deterministic across
-/// runs (hash randomization), and the merged candidate list from back-off
-/// depends on that order.
+/// Merge duplicate degrees by summing their weights and sort by degree
+/// for deterministic iteration order. Merging is necessary because
+/// back-off can collect the same degree from multiple conditioning keys,
+/// and sorting is necessary because `HashMap` iteration order is
+/// non-deterministic across runs (hash randomization).
 fn sorted_candidates(candidates: &[(Degree, f32)]) -> Vec<(Degree, f32)> {
-    let mut v = candidates.to_vec();
+    let mut map: HashMap<Degree, f32> = HashMap::new();
+    for &(d, w) in candidates {
+        *map.entry(d).or_insert(0.0) += w;
+    }
+    let mut v: Vec<(Degree, f32)> = map.into_iter().collect();
     v.sort_by_key(|a| a.0);
     v
 }
@@ -338,16 +347,5 @@ fn precompute_reachability(
 /// Collect all unique degrees that appear in a table (both as keys and
 /// as successors). Sorted for deterministic fallback sampling.
 fn collect_all_degrees(table: &MarkovTable) -> Vec<Degree> {
-    let mut set = HashSet::new();
-    for (key, transitions) in &table.transitions {
-        for d in key {
-            set.insert(*d);
-        }
-        for &(d, _) in transitions {
-            set.insert(d);
-        }
-    }
-    let mut v: Vec<Degree> = set.into_iter().collect();
-    v.sort();
-    v
+    table.degrees()
 }

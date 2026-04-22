@@ -125,4 +125,8 @@ pub enum GenerateError {
         /// How many transitions remained when the generator gave up.
         steps: usize,
     },
+    /// The end-degree constraint conflicts with a locked chord at the
+    /// last position.
+    #[error("end degree conflicts with locked chord at last position")]
+    EndConflictsWithLock,
 }
