@@ -2,11 +2,11 @@
 //!
 //! Takes an offline [`AnalysisResult`] plus a [`Target`] (a stored
 //! genre curve or a loaded reference track), compares the analyzed
-//! spectrum to the target, derives a handful of practical suggestions
-//! (tonal shelves, glue compressor, limiter), and packages them into
-//! a [`Suggestions`] struct with human-readable rationale. The UI
-//! displays the rationale verbatim so the user can see *why* each
-//! decision was made before applying it.
+//! spectrum to the target, derives practical suggestions (input trim,
+//! tonal shelves, glue compressor, stereo imager, limiter), and
+//! packages them into a [`Suggestions`] struct with human-readable
+//! rationale. The UI displays the rationale verbatim so the user can
+//! see *why* each decision was made before applying it.
 
 use super::analyze::{AnalysisResult, NUM_SPECTRUM_BINS};
 use super::reference::ReferenceTrack;
@@ -90,14 +90,21 @@ fn bins_for_range(range: (f32, f32)) -> (usize, usize) {
 pub struct Suggestions {
     pub target_label: String,
     pub target_lufs: f32,
+    pub input_trim_db: f32,
     pub limiter_enabled: bool,
     pub limiter_ceiling_db: f32,
     pub limiter_release_ms: f32,
     pub glue_enabled: bool,
     pub glue_threshold_db: f32,
     pub glue_ratio: f32,
+    pub glue_attack_ms: f32,
+    pub glue_release_ms: f32,
+    pub glue_makeup_db: f32,
     pub tonal_low_shelf_gain_db: f32,
     pub tonal_high_shelf_gain_db: f32,
+    pub imager_enabled: bool,
+    pub imager_width: f32,
+    pub imager_side_hpf: bool,
     pub rationale: Vec<String>,
 }
 
@@ -110,6 +117,7 @@ impl Suggestions {
     /// slots are replaced.
     pub fn apply_to(&self, params: &MasteringParams) {
         params.target_lufs.set_value(self.target_lufs);
+        params.input_trim_db.set_value(self.input_trim_db);
 
         params.limiter.on.set_value(self.limiter_enabled);
         params.limiter.ceiling.set_value(self.limiter_ceiling_db);
@@ -121,6 +129,12 @@ impl Suggestions {
             .threshold
             .set_value(self.glue_threshold_db);
         params.glue_compressor.ratio.set_value(self.glue_ratio);
+        params.glue_compressor.attack.set_value(self.glue_attack_ms);
+        params
+            .glue_compressor
+            .release
+            .set_value(self.glue_release_ms);
+        params.glue_compressor.makeup.set_value(self.glue_makeup_db);
 
         if self.tonal_low_shelf_gain_db.abs() > 0.25 {
             let b = &params.tonal_eq.bands[0];
@@ -137,6 +151,15 @@ impl Suggestions {
             b.freq.set_value(8_000.0);
             b.q.set_value(0.707);
             b.gain.set_value(self.tonal_high_shelf_gain_db);
+        }
+
+        params.imager.on.set_value(self.imager_enabled);
+        if self.imager_enabled {
+            params.imager.width.set_value(self.imager_width);
+            params.imager.side_hpf_on.set_value(self.imager_side_hpf);
+            if self.imager_side_hpf {
+                params.imager.side_hpf_freq.set_value(120.0);
+            }
         }
     }
 }
@@ -161,7 +184,25 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
     let target_mid = mean_range(&target_curve, mid_start, mid_end);
     let offset = target_mid - analyzed_mid;
 
-    // 2. Measure low- and high-band divergence from the target curve.
+    // 2. Input trim — bring the signal close to the target loudness so
+    //    that the rest of the chain (compressor, limiter) operates in a
+    //    useful range. Clamped to the param's ±24 dB range.
+    let loudness_gap = target_lufs - analysis.integrated_lufs;
+    // Leave a few dB of headroom for the limiter to work with rather
+    // than slamming exactly to target.
+    let input_trim_db = (loudness_gap - 3.0).clamp(-24.0, 24.0);
+    if input_trim_db.abs() >= 0.5 {
+        rationale.push(format!(
+            "Input trim: {:+.1} dB (input is {:.1} LU {} target)",
+            input_trim_db,
+            loudness_gap.abs(),
+            direction_word(-loudness_gap),
+        ));
+    } else {
+        rationale.push("Input level already near target.".to_string());
+    }
+
+    // 3. Measure low- and high-band divergence from the target curve.
     let low_diff = mean_diff(analyzed, &target_curve, low_start, low_end, offset);
     let high_diff = mean_diff(analyzed, &target_curve, high_start, high_end, offset);
 
@@ -191,28 +232,67 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
         rationale.push("High band already matches target.".to_string());
     }
 
-    // 3. Glue compressor decision based on crest factor.
-    let (glue_enabled, glue_threshold_db, glue_ratio) = if analysis.crest_db > 15.0 {
+    // 4. Glue compressor decision based on crest factor.
+    // Use the post-trim level to estimate how much the glue compressor
+    // will reduce gain, so the makeup suggestion accounts for the trim.
+    let estimated_lufs = analysis.integrated_lufs + input_trim_db;
+
+    let (glue_enabled, glue_threshold_db, glue_ratio, glue_attack_ms, glue_release_ms, glue_makeup_db) =
+        if analysis.crest_db > 15.0 {
+            // Wide dynamics — gentle glue with slow attack to preserve transients.
+            let makeup = estimate_glue_makeup(-18.0, 2.0, estimated_lufs);
+            rationale.push(format!(
+                "Glue compressor: gentle 2:1 at \u{2212}18 dB, {:.1} dB makeup (crest {:.1} dB leaves room for glue)",
+                makeup, analysis.crest_db
+            ));
+            (true, -18.0, 2.0, 30.0, 200.0, makeup)
+        } else if analysis.crest_db > 10.0 {
+            // Moderate dynamics — slightly faster and heavier.
+            let makeup = estimate_glue_makeup(-14.0, 2.5, estimated_lufs);
+            rationale.push(format!(
+                "Glue compressor: moderate 2.5:1 at \u{2212}14 dB, {:.1} dB makeup (crest {:.1} dB)",
+                makeup, analysis.crest_db
+            ));
+            (true, -14.0, 2.5, 20.0, 150.0, makeup)
+        } else {
+            rationale.push(format!(
+                "Glue compressor: disabled (crest {:.1} dB is already dense)",
+                analysis.crest_db
+            ));
+            (false, -18.0, 2.0, 30.0, 150.0, 0.0)
+        };
+
+    // 5. Stereo imager decision based on correlation.
+    let (imager_enabled, imager_width, imager_side_hpf) = if analysis.correlation > 0.92 {
+        // Very mono / narrow — suggest gentle widening with a side HPF
+        // to keep the low-end centered.
         rationale.push(format!(
-            "Glue compressor: gentle 2:1 at −18 dB (crest {:.1} dB leaves room for glue)",
-            analysis.crest_db
+            "Stereo imager: widen to 130% (correlation {:.2} is very narrow)",
+            analysis.correlation
         ));
-        (true, -18.0, 2.0)
-    } else if analysis.crest_db > 10.0 {
+        (true, 1.3, true)
+    } else if analysis.correlation > 0.80 {
         rationale.push(format!(
-            "Glue compressor: moderate 2.5:1 at −14 dB (crest {:.1} dB)",
-            analysis.crest_db
+            "Stereo imager: widen to 115% (correlation {:.2} is slightly narrow)",
+            analysis.correlation
         ));
-        (true, -14.0, 2.5)
+        (true, 1.15, true)
+    } else if analysis.correlation < 0.3 {
+        // Very wide / out of phase — pull it in a bit.
+        rationale.push(format!(
+            "Stereo imager: narrow to 85% (correlation {:.2} is very wide, may collapse in mono)",
+            analysis.correlation
+        ));
+        (true, 0.85, false)
     } else {
         rationale.push(format!(
-            "Glue compressor: disabled (crest {:.1} dB is already dense)",
-            analysis.crest_db
+            "Stereo width OK (correlation {:.2}).",
+            analysis.correlation
         ));
-        (false, -18.0, 2.0)
+        (false, 1.0, false)
     };
 
-    // 4. Limiter + loudness target.
+    // 6. Limiter + loudness target.
     let limiter_enabled = true;
     let limiter_ceiling_db = -0.3;
     let limiter_release_ms = 50.0;
@@ -225,26 +305,43 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
         target_lufs, target_label
     ));
 
-    // 5. Loudness diagnostic — not a suggestion itself, just a fact.
-    let headroom = target_lufs - analysis.integrated_lufs;
+    // 7. Loudness diagnostic — not a suggestion itself, just a fact.
     rationale.push(format!(
         "Input integrated loudness: {:.1} LUFS ({:+.1} LU from target)",
-        analysis.integrated_lufs, headroom
+        analysis.integrated_lufs, loudness_gap
     ));
 
     Suggestions {
         target_label,
         target_lufs,
+        input_trim_db,
         limiter_enabled,
         limiter_ceiling_db,
         limiter_release_ms,
         glue_enabled,
         glue_threshold_db,
         glue_ratio,
+        glue_attack_ms,
+        glue_release_ms,
+        glue_makeup_db,
         tonal_low_shelf_gain_db,
         tonal_high_shelf_gain_db,
+        imager_enabled,
+        imager_width,
+        imager_side_hpf,
         rationale,
     }
+}
+
+/// Rough makeup gain estimate: uses the estimated post-trim average
+/// level (LUFS, close enough to dBFS for this purpose) to figure out
+/// how much signal sits above the compressor threshold, then
+/// compensates ~60% of the resulting gain reduction.
+fn estimate_glue_makeup(threshold_db: f32, ratio: f32, estimated_lufs: f32) -> f32 {
+    let above = (estimated_lufs - threshold_db).max(0.0);
+    let reduction = above * (1.0 - 1.0 / ratio);
+    // Compensate ~60% of the estimated reduction, clamped to sane range.
+    (reduction * 0.6).clamp(0.0, 12.0)
 }
 
 fn mean_range(values: &[f32], start: usize, end: usize) -> f32 {
@@ -306,6 +403,7 @@ mod tests {
         let s = build(&a, &Target::Genre(Genre::Rock));
         assert!(s.glue_enabled);
         assert!((s.glue_ratio - 2.0).abs() < 1e-6);
+        assert!(s.glue_makeup_db > 0.0, "expected positive makeup gain");
     }
 
     #[test]
@@ -349,6 +447,48 @@ mod tests {
             s.tonal_high_shelf_gain_db > 2.0,
             "expected a high-shelf boost, got {}",
             s.tonal_high_shelf_gain_db
+        );
+    }
+
+    #[test]
+    fn quiet_input_suggests_positive_trim() {
+        let flat = vec![0.0_f32; NUM_SPECTRUM_BINS];
+        let mut a = dummy_analysis(14.0, flat);
+        a.integrated_lufs = -34.0;
+        let s = build(&a, &Target::Genre(Genre::Rock));
+        // Target is -11 LUFS, input is -34 → gap of 23 LU → trim ~20 dB
+        assert!(
+            s.input_trim_db > 15.0,
+            "expected large positive trim, got {}",
+            s.input_trim_db
+        );
+    }
+
+    #[test]
+    fn narrow_stereo_suggests_widening() {
+        let flat = vec![0.0_f32; NUM_SPECTRUM_BINS];
+        let mut a = dummy_analysis(14.0, flat);
+        a.correlation = 0.95;
+        let s = build(&a, &Target::Genre(Genre::Rock));
+        assert!(s.imager_enabled);
+        assert!(
+            s.imager_width > 1.0,
+            "expected widening, got {}",
+            s.imager_width
+        );
+    }
+
+    #[test]
+    fn very_wide_stereo_suggests_narrowing() {
+        let flat = vec![0.0_f32; NUM_SPECTRUM_BINS];
+        let mut a = dummy_analysis(14.0, flat);
+        a.correlation = 0.1;
+        let s = build(&a, &Target::Genre(Genre::Rock));
+        assert!(s.imager_enabled);
+        assert!(
+            s.imager_width < 1.0,
+            "expected narrowing, got {}",
+            s.imager_width
         );
     }
 }

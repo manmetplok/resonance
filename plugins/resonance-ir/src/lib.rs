@@ -42,6 +42,8 @@ pub struct ResonanceIr {
     ir_info: Arc<Mutex<String>>,
     last_file_index: i32,
     sample_rate: f32,
+    /// Convolution block size, scaled with sample rate to keep latency ~2.7ms.
+    block_size: usize,
     /// Atomic load request for the persistent loader thread (-1 = no request).
     load_request: Arc<AtomicI32>,
     /// Handle to the persistent loader thread; dropped on plugin drop.
@@ -81,6 +83,7 @@ impl ResonanceIr {
             load_request: self.load_request.clone(),
             viz: self.viz.clone(),
             sample_rate: self.sample_rate,
+            block_size: self.block_size,
         }));
     }
 }
@@ -97,6 +100,7 @@ impl ResonancePlugin for ResonanceIr {
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
     fn new() -> Self {
+        let block_size = convolver::block_size_for_sample_rate(44100.0);
         Self {
             params: Arc::new(IrParams::default()),
             smoothers: IrSmoothers::new(),
@@ -107,10 +111,11 @@ impl ResonancePlugin for ResonanceIr {
             ir_info: Arc::new(Mutex::new(String::new())),
             last_file_index: -1,
             sample_rate: 44100.0,
+            block_size,
             load_request: Arc::new(AtomicI32::new(-1)),
             loader_handle: None,
-            bypass_delay_l: resonance_dsp::DelayLine::new(convolver::BLOCK_SIZE),
-            bypass_delay_r: resonance_dsp::DelayLine::new(convolver::BLOCK_SIZE),
+            bypass_delay_l: resonance_dsp::DelayLine::new(block_size),
+            bypass_delay_r: resonance_dsp::DelayLine::new(block_size),
             pending_convolver: None,
             fade_out_remaining: 0,
             fade_in_remaining: 0,
@@ -132,8 +137,9 @@ impl ResonancePlugin for ResonanceIr {
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         self.sample_rate = sample_rate;
-        self.bypass_delay_l = resonance_dsp::DelayLine::new(convolver::BLOCK_SIZE);
-        self.bypass_delay_r = resonance_dsp::DelayLine::new(convolver::BLOCK_SIZE);
+        self.block_size = convolver::block_size_for_sample_rate(sample_rate);
+        self.bypass_delay_l = resonance_dsp::DelayLine::new(self.block_size);
+        self.bypass_delay_r = resonance_dsp::DelayLine::new(self.block_size);
         self.smoothers.prepare(sample_rate, &self.params);
 
         let path = self.params.ir_path.lock().clone();
@@ -146,6 +152,7 @@ impl ResonancePlugin for ResonanceIr {
             loader::load_into(
                 &path,
                 sample_rate,
+                self.block_size,
                 &self.convolver_mailbox,
                 &self.ir_name,
                 &self.ir_info,
@@ -236,19 +243,24 @@ impl ResonancePlugin for ResonanceIr {
             in_peak_l = in_peak_l.max(dry_l.abs());
             in_peak_r = in_peak_r.max(dry_r.abs());
 
+            // Always feed the bypass delay lines so the dry signal stays
+            // time-aligned with the convolver's block_size latency.
+            let delayed_l = self.bypass_delay_l.tap(self.block_size);
+            let delayed_r = self.bypass_delay_r.tap(self.block_size);
+            self.bypass_delay_l.push(dry_l);
+            self.bypass_delay_r.push(dry_r);
+
             match &mut self.active_convolver {
                 Some(conv) => {
                     let (wet_l, wet_r) = conv.process_sample(dry_l, dry_r);
 
                     let dry_amount = 1.0 - dry_wet;
-                    left[i] = (dry_l * dry_amount + wet_l * dry_wet) * output_gain * fade_gain;
-                    right[i] = (dry_r * dry_amount + wet_r * dry_wet) * output_gain * fade_gain;
+                    left[i] =
+                        (delayed_l * dry_amount + wet_l * dry_wet) * output_gain * fade_gain;
+                    right[i] =
+                        (delayed_r * dry_amount + wet_r * dry_wet) * output_gain * fade_gain;
                 }
                 None => {
-                    let delayed_l = self.bypass_delay_l.tap(convolver::BLOCK_SIZE);
-                    let delayed_r = self.bypass_delay_r.tap(convolver::BLOCK_SIZE);
-                    self.bypass_delay_l.push(dry_l);
-                    self.bypass_delay_r.push(dry_r);
                     left[i] = delayed_l * output_gain * fade_gain;
                     right[i] = delayed_r * output_gain * fade_gain;
                 }
@@ -282,7 +294,7 @@ impl ResonancePlugin for ResonanceIr {
     }
 
     fn latency_samples(&self) -> u32 {
-        convolver::BLOCK_SIZE as u32
+        self.block_size as u32
     }
 
     #[cfg(feature = "editor")]

@@ -59,7 +59,27 @@ pub enum LaneGeneratorKind {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DrumLaneConfig {
     /// Keyed by pad index.
+    #[serde(deserialize_with = "deserialize_usize_keys", default)]
     pub voices: HashMap<usize, DrumVoiceMode>,
+}
+
+/// serde_json serializes `HashMap<usize, V>` with string keys but its
+/// default `Deserialize` for `usize` rejects string keys on some platforms.
+/// This helper parses them back.
+fn deserialize_usize_keys<'de, V, D>(deserializer: D) -> Result<HashMap<usize, V>, D::Error>
+where
+    V: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    let string_map: HashMap<String, V> = HashMap::deserialize(deserializer)?;
+    string_map
+        .into_iter()
+        .map(|(k, v)| {
+            k.parse::<usize>()
+                .map(|k| (k, v))
+                .map_err(serde::de::Error::custom)
+        })
+        .collect()
 }
 
 /// Whether a single drum voice is manually edited or euclidean-generated.

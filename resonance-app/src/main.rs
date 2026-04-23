@@ -3,6 +3,7 @@ use resonance_audio::types::*;
 use resonance_audio::AudioEngine;
 use resonance_music_theory::TableRegistry;
 
+mod chord_sheet_pdf;
 pub(crate) mod compose;
 mod engine_events;
 mod message;

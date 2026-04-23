@@ -33,4 +33,20 @@ pub const PRESETS: &[PresetEntry] = &[
         name: "Shimmer Drone",
         json: include_str!("../presets/shimmer_drone.json"),
     },
+    PresetEntry {
+        name: "Snare Plate",
+        json: include_str!("../presets/snare_plate.json"),
+    },
+    PresetEntry {
+        name: "Snare Tight",
+        json: include_str!("../presets/snare_tight.json"),
+    },
+    PresetEntry {
+        name: "Snare Ambient",
+        json: include_str!("../presets/snare_ambient.json"),
+    },
+    PresetEntry {
+        name: "Snare Gated",
+        json: include_str!("../presets/snare_gated.json"),
+    },
 ];

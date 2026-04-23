@@ -237,6 +237,8 @@ pub(crate) enum ProjectIoMessage {
     OpenPathSelected(Option<String>),
     ProjectSaved(Result<(), String>),
     ProjectLoaded(Result<Box<LoadedProject>, String>),
+    ExportChordSheet,
+    ChordSheetPathSelected(Option<String>, Vec<u8>),
 }
 
 #[derive(Debug, Clone)]

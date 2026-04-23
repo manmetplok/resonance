@@ -1,5 +1,8 @@
 //! Core drum sampler engine: sample loading, voice management, and audio rendering.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+
 use crossbeam_channel::{unbounded, Receiver, Sender, TryRecvError};
 
 use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
@@ -11,7 +14,7 @@ use crate::voice::{BalanceSide, Voice, VoiceDestination, VoiceState, MAX_VOICES,
 
 /// Maximum velocity layer count we track per pad in the round-robin counter
 /// array. Drummica's deepest pad has 28 layers, so 32 is a comfortable cap.
-pub(crate) const MAX_LAYERS: usize = 32;
+pub const MAX_LAYERS: usize = 32;
 
 /// One stereo output buffer pair for a single plugin output port. Callers
 /// build a slice of these (one per port) and hand it to `render_frame`.
@@ -27,6 +30,9 @@ pub struct DrumSampler {
     /// Monotonic round-robin counter per (pad, layer). Advanced on each
     /// note_on; indexed modulo the layer's RR count to pick the next take.
     rr_counters: [[u32; MAX_LAYERS]; NUM_PADS],
+    /// Shared display state for the editor: packed `rr_index | (n_rrs << 16)`.
+    /// Written after each `note_on`; `None` when running headless / in tests.
+    last_rr: Option<Arc<[AtomicU32; NUM_PADS]>>,
     /// Receives new kit versions from the loader thread. The audio thread is
     /// the sole consumer; `try_recv` at the top of each process block swaps
     /// in a freshly loaded kit without blocking.
@@ -55,9 +61,16 @@ impl DrumSampler {
             voices: (0..MAX_VOICES).map(|_| Voice::new()).collect(),
             voice_counter: 0,
             rr_counters: [[0; MAX_LAYERS]; NUM_PADS],
+            last_rr: None,
             kit_receiver,
             janitor_sender,
         }
+    }
+
+    /// Attach the shared last-RR display array so the editor can show
+    /// per-pad round-robin indicators.
+    pub fn set_last_rr(&mut self, last_rr: Arc<[AtomicU32; NUM_PADS]>) {
+        self.last_rr = Some(last_rr);
     }
 
     /// Load the embedded default samples as a single-bank fallback kit.
@@ -163,6 +176,14 @@ impl DrumSampler {
         let counter_slot = layer_index.min(MAX_LAYERS - 1);
         let n_rrs = layer.round_robins.len();
         let rr_index = pick_rr(&mut self.rr_counters[pad_index][counter_slot], n_rrs);
+
+        // Publish the last-played RR for the editor display.
+        if let Some(ref last_rr) = self.last_rr {
+            last_rr[pad_index].store(
+                (rr_index as u32) | ((n_rrs as u32) << 16),
+                Ordering::Relaxed,
+            );
+        }
 
         // Single-layer fallback pads bake dynamics into the MIDI velocity;
         // multi-layer kits have the velocity layer already shaped so we
@@ -420,7 +441,7 @@ impl DrumSampler {
 ///
 /// Uses equal-width buckets. Callers must guarantee `n_layers >= 1`; with
 /// `n_layers == 1` the result is always 0.
-pub(crate) fn pick_velocity_layer(velocity: f32, n_layers: usize) -> usize {
+pub fn pick_velocity_layer(velocity: f32, n_layers: usize) -> usize {
     debug_assert!(n_layers >= 1, "n_layers must be at least 1");
     if n_layers <= 1 {
         return 0;
@@ -430,7 +451,7 @@ pub(crate) fn pick_velocity_layer(velocity: f32, n_layers: usize) -> usize {
 
 /// Advance a round-robin counter and return the RR index for this trigger.
 /// Wraps the counter at `u32::MAX` so it can run indefinitely.
-pub(crate) fn pick_rr(counter: &mut u32, n_rrs: usize) -> usize {
+pub fn pick_rr(counter: &mut u32, n_rrs: usize) -> usize {
     debug_assert!(n_rrs >= 1, "n_rrs must be at least 1");
     let idx = (*counter as usize) % n_rrs;
     *counter = counter.wrapping_add(1);

@@ -4,20 +4,22 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use drum_map::NUM_PADS;
+
 use crossbeam_channel::{bounded, Receiver, Sender};
 use resonance_plugin::*;
 
 #[cfg(feature = "editor")]
 pub(crate) mod download;
-mod drum_map;
+pub mod drum_map;
 #[cfg(feature = "editor")]
 mod editor;
-mod kit;
+pub mod kit;
 mod kit_loader;
 mod mic_catalog;
 mod params;
-mod sampler;
-mod voice;
+pub mod sampler;
+pub mod voice;
 
 #[cfg(feature = "editor")]
 use download::WorkerHandle;
@@ -60,6 +62,10 @@ pub(crate) struct KitBridge {
     /// Per-pad articulation toggle state. When true, the loader uses the
     /// alternate piece name (e.g. "ohne Teppich"). Persisted via plugin state.
     pub articulations: Arc<Mutex<[bool; drum_map::NUM_PADS]>>,
+    /// Last-played round-robin display state. Written by the audio thread
+    /// after each `note_on`, read by the editor for per-pad RR indicators.
+    /// Packed as `rr_index | (n_rrs << 16)`; zero means "never triggered".
+    pub last_rr: Arc<[AtomicU32; NUM_PADS]>,
 }
 
 pub struct ResonanceDrums {
@@ -105,10 +111,13 @@ impl ResonancePlugin for ResonanceDrums {
             }))),
             overhead_setup_key: Arc::new(Mutex::new(DEFAULT_OVERHEAD_SETUP.to_string())),
             articulations: Arc::new(Mutex::new([false; drum_map::NUM_PADS])),
+            last_rr: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
         };
+        let mut sampler = DrumSampler::new(kit_receiver);
+        sampler.set_last_rr(bridge.last_rr.clone());
         Self {
             params: Arc::new(DrumParams::default()),
-            sampler: DrumSampler::new(kit_receiver),
+            sampler,
             bridge,
             #[cfg(feature = "editor")]
             download_worker: Arc::new(download::spawn()),

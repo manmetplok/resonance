@@ -66,6 +66,7 @@ pub struct LoaderDeps {
     pub load_request: Arc<AtomicI32>,
     pub viz: Arc<IrViz>,
     pub sample_rate: f32,
+    pub block_size: usize,
 }
 
 pub fn start(deps: LoaderDeps) -> LoaderHandle {
@@ -108,6 +109,7 @@ fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
         load_into(
             &path,
             deps.sample_rate,
+            deps.block_size,
             &deps.mailbox,
             &deps.ir_name,
             &deps.ir_info,
@@ -123,6 +125,7 @@ fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
 pub fn load_into(
     path: &str,
     sample_rate: f32,
+    block_size: usize,
     mailbox: &Mutex<Option<StereoConvolver>>,
     ir_name: &Mutex<String>,
     ir_info: &Mutex<String>,
@@ -151,7 +154,7 @@ pub fn load_into(
             } else {
                 None
             };
-            let conv = StereoConvolver::new(&ir_data.left, right_ir);
+            let conv = StereoConvolver::new(&ir_data.left, right_ir, block_size);
 
             *ir_name.lock() = name;
             *ir_info.lock() = info;

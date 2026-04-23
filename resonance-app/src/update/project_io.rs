@@ -96,6 +96,20 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         ProjectIoMessage::ProjectLoaded(Err(e)) => {
             r.error_message = Some(format!("Load failed: {e}"));
         }
+        ProjectIoMessage::ExportChordSheet => {
+            let pdf_bytes = crate::chord_sheet_pdf::build_chord_sheet_pdf(
+                &r.compose,
+                r.transport.bpm,
+                r.transport.time_sig_num,
+            );
+            return chord_sheet_dialog(pdf_bytes);
+        }
+        ProjectIoMessage::ChordSheetPathSelected(Some(path), data) => {
+            if let Err(e) = std::fs::write(&path, &data) {
+                r.error_message = Some(format!("Export failed: {e}"));
+            }
+        }
+        ProjectIoMessage::ChordSheetPathSelected(None, _) => {}
     }
     Task::none()
 }
@@ -721,6 +735,24 @@ pub fn bounce_dialog() -> Task<Message> {
                 .map(|f| f.path().to_string_lossy().to_string())
         },
         |r| Message::ProjectIo(ProjectIoMessage::BouncePathSelected(r)),
+    )
+}
+
+pub fn chord_sheet_dialog(data: Vec<u8>) -> Task<Message> {
+    let default_dir = default_projects_dir();
+    Task::perform(
+        async move {
+            let path = rfd::AsyncFileDialog::new()
+                .set_title("Export Chord Sheet")
+                .set_directory(&default_dir)
+                .set_file_name("chords.pdf")
+                .add_filter("PDF", &["pdf"])
+                .save_file()
+                .await
+                .map(|f| f.path().to_string_lossy().to_string());
+            (path, data)
+        },
+        |(path, data)| Message::ProjectIo(ProjectIoMessage::ChordSheetPathSelected(path, data)),
     )
 }
 

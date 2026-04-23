@@ -2,7 +2,7 @@ use iced::widget::{button, container, row, text, text_input, Space};
 use iced::{alignment, Element, Length};
 
 use crate::compose::{ComposeMessage, ComposeState, EditSectionForm, NewSectionForm};
-use crate::message::Message;
+use crate::message::{Message, ProjectIoMessage};
 use crate::theme;
 
 pub fn view(state: &ComposeState) -> Element<'_, Message> {
@@ -55,6 +55,15 @@ pub fn view(state: &ComposeState) -> Element<'_, Message> {
                 .padding([4, 10])
                 .style(|_theme, status| theme::transport_button_style(status));
             items.push(edit_btn.into());
+        }
+
+        // Export chord sheet (available when any sections exist)
+        if !state.definitions.is_empty() {
+            let export_btn = button(text("Export chords").size(12))
+                .on_press(Message::ProjectIo(ProjectIoMessage::ExportChordSheet))
+                .padding([4, 10])
+                .style(|_theme, status| theme::transport_button_style(status));
+            items.push(export_btn.into());
         }
     }
 

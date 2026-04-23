@@ -53,6 +53,18 @@ fn reload_kit(bridge: &KitBridge) {
 
 mod theme;
 
+/// Decode a packed `rr_index | (n_rrs << 16)` atomic value into
+/// `(rr_index, n_rrs)`. Returns `None` for the sentinel zero (pad
+/// never triggered).
+fn unpack_rr_display(packed: u32) -> Option<(usize, usize)> {
+    let n_rrs = (packed >> 16) as usize;
+    if n_rrs == 0 {
+        return None;
+    }
+    let rr_index = (packed & 0xFFFF) as usize;
+    Some((rr_index, n_rrs))
+}
+
 const INITIAL_SIZE: (u32, u32) = (720, 440);
 const MIN_SIZE: (u32, u32) = (560, 360);
 
@@ -479,7 +491,27 @@ impl EditorApp for DrumsEditorApp {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for i in 0..NUM_PADS {
                         let name = PAD_MAPPINGS[i].name;
-                        ui.selectable_value(&mut self.selected_pad, i, name);
+                        let rr_label = unpack_rr_display(
+                            self.bridge.last_rr[i].load(Ordering::Relaxed),
+                        );
+                        let selected = self.selected_pad == i;
+                        ui.horizontal(|ui| {
+                            if ui.selectable_label(selected, name).clicked() {
+                                self.selected_pad = i;
+                            }
+                            if let Some((idx, total)) = rr_label {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(format!("{}/{}", idx + 1, total))
+                                                .size(9.0)
+                                                .color(theme::TEXT_DIM),
+                                        );
+                                    },
+                                );
+                            }
+                        });
                     }
                 });
             });

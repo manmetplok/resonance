@@ -1,5 +1,6 @@
 pub mod chord;
 pub mod derive;
+pub mod fretboard;
 pub mod generator;
 pub mod pitch;
 pub mod progression;
@@ -22,4 +23,5 @@ pub use progression::{
     ProgressionParams, TRANSITIONS,
 };
 pub use scale::{Mode, Scale};
+pub use fretboard::{voicing as fretboard_voicing, FretboardVoicing, Tuning, GUITAR_6, GUITAR_8, BASS_4, BASS_5, ALL_TUNINGS};
 pub use voicing::{close_voicing, nearest_midi_above, nearest_midi_to, voice_lead};
