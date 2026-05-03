@@ -375,7 +375,8 @@ impl crate::Resonance {
                 if self.registry.tracks.iter().any(|t| t.id == track_id) {
                     return Task::none();
                 }
-                let order = self.registry.tracks.len();
+                let order = self.registry.next_track_order;
+                self.registry.next_track_order += 1;
                 let mut track = TrackState::new_instrument(track_id, order);
                 if let Some(preset) = self.pending_track_preset.take() {
                     self.apply_preset_to_track(&mut track, &preset);

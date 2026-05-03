@@ -66,7 +66,7 @@ impl MultibandBandParams {
             1 => &self.threshold,
             2 => &self.ratio,
             3 => &self.gain,
-            _ => unreachable!("mb band param sub-index {sub}"),
+            _ => &self.on,
         }
     }
 
@@ -100,7 +100,7 @@ impl MultibandParams {
                 let sub = (i - GLOBAL_PARAMS) % PARAMS_PER_BAND;
                 self.bands[band_idx].param_at(sub)
             }
-            _ => unreachable!("multiband param index {index}"),
+            _ => &self.on,
         }
     }
 

@@ -29,7 +29,7 @@ mod download_panel;
 /// setup that needs the sample banks to be re-decoded. No-op if there's no
 /// kit path yet or the host hasn't activated the plugin.
 fn reload_kit(bridge: &KitBridge) {
-    let path = match bridge.kit_path.lock().unwrap().clone() {
+    let path = match bridge.kit_path.lock().clone() {
         Some(p) => p,
         None => return,
     };
@@ -38,9 +38,9 @@ fn reload_kit(bridge: &KitBridge) {
         return;
     }
     let target_sr = f32::from_bits(sr_bits);
-    let overhead_key = bridge.overhead_setup_key.lock().unwrap().clone();
-    let choices = bridge.pad_choices.lock().unwrap().clone();
-    let articulations = *bridge.articulations.lock().unwrap();
+    let overhead_key = bridge.overhead_setup_key.lock().clone();
+    let choices = bridge.pad_choices.lock().clone();
+    let articulations = *bridge.articulations.lock();
     kit_loader::spawn_loader(
         path,
         target_sr,
@@ -254,22 +254,22 @@ impl DrumsEditorApp {
     fn load_installed_kit(&self, item: &InstalledItem) {
         let kit_dir = std::path::PathBuf::from(&item.path);
         let Some(manifest_path) = Self::find_manifest(&kit_dir) else {
-            *self.bridge.kit_status.lock().unwrap() = KitStatus::Error {
+            *self.bridge.kit_status.lock() = KitStatus::Error {
                 message: format!("no drum_samples.json found in {}", kit_dir.display()),
             };
             return;
         };
         let sr_bits = self.bridge.sample_rate.load(Ordering::Acquire);
         if sr_bits == 0 {
-            *self.bridge.kit_status.lock().unwrap() = KitStatus::Error {
+            *self.bridge.kit_status.lock() = KitStatus::Error {
                 message: "plugin not yet activated by host".to_string(),
             };
             return;
         }
         let target_sr = f32::from_bits(sr_bits);
-        let overhead_key = self.bridge.overhead_setup_key.lock().unwrap().clone();
-        let choices = self.bridge.pad_choices.lock().unwrap().clone();
-        let articulations = *self.bridge.articulations.lock().unwrap();
+        let overhead_key = self.bridge.overhead_setup_key.lock().clone();
+        let choices = self.bridge.pad_choices.lock().clone();
+        let articulations = *self.bridge.articulations.lock();
         kit_loader::spawn_loader(
             manifest_path,
             target_sr,
@@ -293,15 +293,15 @@ impl DrumsEditorApp {
         // plugin — without a sample rate we'd decode at the wrong pitch.
         let sr_bits = self.bridge.sample_rate.load(Ordering::Acquire);
         if sr_bits == 0 {
-            *self.bridge.kit_status.lock().unwrap() = KitStatus::Error {
+            *self.bridge.kit_status.lock() = KitStatus::Error {
                 message: "plugin not yet activated by host".to_string(),
             };
             return;
         }
         let target_sr = f32::from_bits(sr_bits);
-        let overhead_key = self.bridge.overhead_setup_key.lock().unwrap().clone();
-        let choices = self.bridge.pad_choices.lock().unwrap().clone();
-        let articulations = *self.bridge.articulations.lock().unwrap();
+        let overhead_key = self.bridge.overhead_setup_key.lock().clone();
+        let choices = self.bridge.pad_choices.lock().clone();
+        let articulations = *self.bridge.articulations.lock();
         kit_loader::spawn_loader(
             path,
             target_sr,
@@ -381,7 +381,7 @@ impl EditorApp for DrumsEditorApp {
             if ui.add(dl_btn).clicked() {
                 self.download_panel.open = true;
             }
-            let status = self.bridge.kit_status.lock().unwrap().clone();
+            let status = self.bridge.kit_status.lock().clone();
             ui.label(egui::RichText::new(format_kit_status(&status)).color(theme::TEXT_DIM));
         });
 
@@ -393,7 +393,7 @@ impl EditorApp for DrumsEditorApp {
             // Derive the "currently loaded" kit name from kit_status so the
             // combo box reflects what's active.
             let current_kit_name = {
-                let status = self.bridge.kit_status.lock().unwrap();
+                let status = self.bridge.kit_status.lock();
                 match &*status {
                     KitStatus::Loaded { name, .. } => name.clone(),
                     KitStatus::Loading { path } => path
@@ -437,7 +437,7 @@ impl EditorApp for DrumsEditorApp {
 
         // Snapshot the catalog once per frame so we don't re-lock on every
         // dropdown. The `.clone()` is cheap compared to the UI work.
-        let catalog = self.bridge.catalog.lock().unwrap().clone();
+        let catalog = self.bridge.catalog.lock().clone();
         let overhead_setups = catalog.overhead_setups();
 
         ui.horizontal(|ui| {
@@ -446,7 +446,7 @@ impl EditorApp for DrumsEditorApp {
                     .color(theme::TEXT_DIM)
                     .size(11.0),
             );
-            let current_overhead = self.bridge.overhead_setup_key.lock().unwrap().clone();
+            let current_overhead = self.bridge.overhead_setup_key.lock().clone();
             let label = if overhead_setups.is_empty() {
                 current_overhead.clone()
             } else {
@@ -469,7 +469,7 @@ impl EditorApp for DrumsEditorApp {
                     }
                 });
             if let Some(key) = new_choice {
-                *self.bridge.overhead_setup_key.lock().unwrap() = key;
+                *self.bridge.overhead_setup_key.lock() = key;
                 reload_kit(&self.bridge);
             }
         });
@@ -583,7 +583,7 @@ impl DrumsEditorApp {
                     .strong()
                     .color(theme::TEXT_DIM),
             );
-            let current_art = self.bridge.articulations.lock().unwrap()[pad_idx];
+            let current_art = self.bridge.articulations.lock()[pad_idx];
             let label = if current_art {
                 "ohne Teppich (snare wires off)"
             } else {
@@ -591,7 +591,7 @@ impl DrumsEditorApp {
             };
             let mut toggled = current_art;
             if ui.checkbox(&mut toggled, label).changed() {
-                self.bridge.articulations.lock().unwrap()[pad_idx] = toggled;
+                self.bridge.articulations.lock()[pad_idx] = toggled;
                 // Also update the param so it persists in the plugin state.
                 pad.articulation.set_plain(if toggled { 1.0 } else { 0.0 });
                 reload_kit(&self.bridge);
@@ -623,7 +623,6 @@ impl DrumsEditorApp {
                     .bridge
                     .pad_choices
                     .lock()
-                    .unwrap()
                     .get(pad_idx)
                     .and_then(|c| c.close_setups.get(*position).cloned())
                     .or_else(|| available.first().cloned())
@@ -654,7 +653,7 @@ impl DrumsEditorApp {
             }
             if !choices_to_apply.is_empty() {
                 {
-                    let mut guard = self.bridge.pad_choices.lock().unwrap();
+                    let mut guard = self.bridge.pad_choices.lock();
                     for (position, key) in choices_to_apply {
                         guard[pad_idx].close_setups.insert(position, key);
                     }

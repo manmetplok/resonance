@@ -84,7 +84,7 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
                 }
                 r.rebuild_and_send_tempo();
             }
-            r.transport.bpm_input = format!("{:.0}", r.transport.bpm);
+            r.transport.bpm_input = format!("{:.1}", r.transport.bpm);
         }
         TransportMessage::CyclePrecountBars => {
             r.transport.precount_bars = match r.transport.precount_bars {

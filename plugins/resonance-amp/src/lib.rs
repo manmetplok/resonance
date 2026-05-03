@@ -191,7 +191,7 @@ impl ResonancePlugin for ResonanceAmp {
             0 => &self.params.file_select,
             1 => &self.params.input_gain,
             2 => &self.params.output_gain,
-            _ => unreachable!("invalid param index {index}"),
+            _ => &self.params.file_select,
         }
     }
 
@@ -438,14 +438,7 @@ impl ResonancePlugin for ResonanceAmp {
     }
 }
 
-/// Convert a linear amplitude to dBFS. `0.0` → `-inf`, `1.0` → `0 dB`.
-fn linear_to_db(linear: f32) -> f32 {
-    if linear <= 1e-9 {
-        f32::NEG_INFINITY
-    } else {
-        20.0 * linear.log10()
-    }
-}
+use resonance_dsp::linear_to_db;
 
 /// Persists the NAM model path alongside the plugin's params. Holds only
 /// the shared `Arc<Mutex<String>>` so the CLAP bridge can serialize it

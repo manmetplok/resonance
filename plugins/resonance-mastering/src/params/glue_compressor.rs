@@ -29,7 +29,7 @@ impl GlueCompressorParams {
             5 => &self.knee,
             6 => &self.makeup,
             7 => &self.mix,
-            _ => unreachable!("glue compressor param index {index}"),
+            _ => &self.on,
         }
     }
 

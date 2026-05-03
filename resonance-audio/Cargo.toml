@@ -5,16 +5,17 @@ edition = "2021"
 
 [dependencies]
 cpal = "0.15"
-symphonia = { version = "0.5", features = ["mp3", "ogg", "flac", "wav", "pcm", "aac"] }
-crossbeam-channel = "0.5"
-parking_lot = "0.12"
+symphonia.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
 ringbuf = "0.4"
 clap-sys = "0.5"
 libloading = "0.8"
 indexmap = "2"
+resonance-common = { path = "../resonance-common" }
 resonance-dsp = { path = "../resonance-dsp" }
 hound = "3.5"
 midly = "0.5"
 memmap2 = "0.9"
-bytemuck = "1"
-serde = { version = "1", features = ["derive"] }
+bytemuck.workspace = true
+serde.workspace = true

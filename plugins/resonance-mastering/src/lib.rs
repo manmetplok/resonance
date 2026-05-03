@@ -104,6 +104,10 @@ impl ResonancePlugin for ResonanceMastering {
         resonance_common::flush_denormals();
 
         if self.params.bypass.value() {
+            // Keep metering active even when bypassed so the UI stays live.
+            if let Some(chain) = &mut self.chain {
+                chain.meters.feed(left, right, &self.viz);
+            }
             return;
         }
         if let Some(chain) = &mut self.chain {

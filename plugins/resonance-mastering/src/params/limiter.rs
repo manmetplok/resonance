@@ -21,7 +21,7 @@ impl LimiterParams {
             0 => &self.on,
             1 => &self.ceiling,
             2 => &self.release,
-            _ => unreachable!("limiter param index {index}"),
+            _ => &self.on,
         }
     }
 

@@ -2,7 +2,9 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use drum_map::NUM_PADS;
 
@@ -143,7 +145,7 @@ impl ResonancePlugin for ResonanceDrums {
             3 => &pad.oh_blend,
             4 => &pad.balance,
             5 => &pad.articulation,
-            _ => unreachable!(),
+            _ => &pad.volume,
         }
     }
 
@@ -170,11 +172,11 @@ impl ResonancePlugin for ResonanceDrums {
         // If a kit path was set (either by a prior session via load_state or
         // by the editor) re-kick the loader at the current sample rate so the
         // kit decodes to the host's rate.
-        let path = self.bridge.kit_path.lock().unwrap().clone();
+        let path = self.bridge.kit_path.lock().clone();
         if let Some(path) = path {
-            let overhead_key = self.bridge.overhead_setup_key.lock().unwrap().clone();
-            let choices = self.bridge.pad_choices.lock().unwrap().clone();
-            let articulations = *self.bridge.articulations.lock().unwrap();
+            let overhead_key = self.bridge.overhead_setup_key.lock().clone();
+            let choices = self.bridge.pad_choices.lock().clone();
+            let articulations = *self.bridge.articulations.lock();
             kit_loader::spawn_loader(
                 path,
                 sample_rate,
@@ -300,7 +302,6 @@ impl ExtraStateSaver for DrumsExtraState {
         let path = self
             .kit_path
             .lock()
-            .unwrap()
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned());
         map.insert(
@@ -312,10 +313,10 @@ impl ExtraStateSaver for DrumsExtraState {
         );
         map.insert(
             "overhead_setup_key".to_string(),
-            serde_json::Value::String(self.overhead_setup_key.lock().unwrap().clone()),
+            serde_json::Value::String(self.overhead_setup_key.lock().clone()),
         );
         // Per-pad close-mic choices as an array of `{position: setup_key}` maps.
-        let choices = self.pad_choices.lock().unwrap();
+        let choices = self.pad_choices.lock();
         let pads_array: Vec<serde_json::Value> = choices
             .iter()
             .map(|pc| {
@@ -332,7 +333,7 @@ impl ExtraStateSaver for DrumsExtraState {
             serde_json::Value::Array(pads_array),
         );
         // Per-pad articulation toggles as an array of booleans.
-        let arts = self.articulations.lock().unwrap();
+        let arts = self.articulations.lock();
         let arts_array: Vec<serde_json::Value> =
             arts.iter().map(|&v| serde_json::Value::Bool(v)).collect();
         map.insert(
@@ -347,17 +348,17 @@ impl ExtraStateSaver for DrumsExtraState {
         // previously remembered path on this instance. The actual loader
         // is spawned from `initialize()` because the sample rate isn't
         // known until the host activates the plugin.
-        *self.kit_path.lock().unwrap() = state
+        *self.kit_path.lock() = state
             .get("kit_path")
             .and_then(|v| v.as_str())
             .map(PathBuf::from);
 
         if let Some(s) = state.get("overhead_setup_key").and_then(|v| v.as_str()) {
-            *self.overhead_setup_key.lock().unwrap() = s.to_string();
+            *self.overhead_setup_key.lock() = s.to_string();
         }
 
         if let Some(arr) = state.get("pad_mic_choices").and_then(|v| v.as_array()) {
-            let mut guard = self.pad_choices.lock().unwrap();
+            let mut guard = self.pad_choices.lock();
             for (i, pad_val) in arr.iter().enumerate().take(drum_map::NUM_PADS) {
                 let mut choices = PadMicChoices::default();
                 if let Some(obj) = pad_val.as_object() {
@@ -372,7 +373,7 @@ impl ExtraStateSaver for DrumsExtraState {
         }
 
         if let Some(arr) = state.get("articulations").and_then(|v| v.as_array()) {
-            let mut guard = self.articulations.lock().unwrap();
+            let mut guard = self.articulations.lock();
             for (i, val) in arr.iter().enumerate().take(drum_map::NUM_PADS) {
                 if let Some(b) = val.as_bool() {
                     guard[i] = b;
@@ -394,13 +395,13 @@ mod tests {
     #[test]
     fn state_roundtrip_preserves_kit_path() {
         let src = ResonanceDrums::new();
-        *src.bridge.kit_path.lock().unwrap() = Some(PathBuf::from("/some/kit/drum_samples.json"));
+        *src.bridge.kit_path.lock() = Some(PathBuf::from("/some/kit/drum_samples.json"));
 
         let bytes = src.save_state();
 
         let mut dst = ResonanceDrums::new();
         assert!(dst.load_state(&bytes));
-        let restored = dst.bridge.kit_path.lock().unwrap().clone();
+        let restored = dst.bridge.kit_path.lock().clone();
         assert_eq!(restored, Some(PathBuf::from("/some/kit/drum_samples.json")));
     }
 
@@ -412,10 +413,10 @@ mod tests {
 
         let mut dst = ResonanceDrums::new();
         // Pre-populate a stale path; load_state should clear it.
-        *dst.bridge.kit_path.lock().unwrap() = Some(PathBuf::from("/stale/path.json"));
+        *dst.bridge.kit_path.lock() = Some(PathBuf::from("/stale/path.json"));
 
         assert!(dst.load_state(&bytes));
-        assert_eq!(*dst.bridge.kit_path.lock().unwrap(), None);
+        assert_eq!(*dst.bridge.kit_path.lock(), None);
     }
 
     /// Round-trip through the `ExtraStateSaver` interface directly. This
@@ -476,7 +477,7 @@ mod tests {
         restored_saver.load(&json);
 
         assert_eq!(
-            *restored_path.lock().unwrap(),
+            *restored_path.lock(),
             Some(PathBuf::from("/active/path/drum_samples.json")),
             "kit_path should round-trip through the saver"
         );
@@ -490,7 +491,7 @@ mod tests {
         // State without a kit_path (simulating a save with no kit loaded).
         let state = serde_json::json!({ "params": {}, "kit_path": serde_json::Value::Null });
         saver.load(&state);
-        assert_eq!(*kit_path.lock().unwrap(), None);
+        assert_eq!(*kit_path.lock(), None);
     }
 
     /// Per-pad close-mic choices and the global overhead setup round-trip
@@ -499,9 +500,9 @@ mod tests {
     fn extra_saver_roundtrips_mic_choices() {
         let (_, oh_arc, pad_arc, _, saver) = make_saver_bundle(None);
         // Inject user edits.
-        *oh_arc.lock().unwrap() = "24_OHsAB_KM184".to_string();
+        *oh_arc.lock() = "24_OHsAB_KM184".to_string();
         {
-            let mut guard = pad_arc.lock().unwrap();
+            let mut guard = pad_arc.lock();
             guard[0]
                 .close_setups
                 .insert("KickIn".to_string(), "01_KickIn_e901".to_string());
@@ -520,8 +521,8 @@ mod tests {
 
         let (_, oh2, pad2, _, restored) = make_saver_bundle(None);
         restored.load(&json);
-        assert_eq!(*oh2.lock().unwrap(), "24_OHsAB_KM184");
-        let guard = pad2.lock().unwrap();
+        assert_eq!(*oh2.lock(), "24_OHsAB_KM184");
+        let guard = pad2.lock();
         assert_eq!(
             guard[0].close_setups.get("KickIn"),
             Some(&"01_KickIn_e901".to_string())
@@ -541,7 +542,7 @@ mod tests {
     fn extra_saver_roundtrips_articulations() {
         let (_, _, _, art_arc, saver) = make_saver_bundle(None);
         {
-            let mut guard = art_arc.lock().unwrap();
+            let mut guard = art_arc.lock();
             guard[0] = true; // Kick -> ohne Teppich
             guard[9] = true; // Tom High -> ohne Teppich
         }
@@ -553,7 +554,7 @@ mod tests {
 
         let (_, _, _, art2, restored) = make_saver_bundle(None);
         restored.load(&json);
-        let guard = art2.lock().unwrap();
+        let guard = art2.lock();
         assert!(guard[0], "kick articulation should be true");
         assert!(guard[9], "tom high articulation should be true");
         assert!(!guard[1], "snare articulation should be false (default)");

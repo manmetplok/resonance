@@ -17,9 +17,9 @@ editor = ["dep:wayland-plugin-gui", "dep:egui"]
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
-serde_json = "1"
-rustfft = "6"
-parking_lot = "0.12"
+serde_json.workspace = true
+rustfft.workspace = true
+parking_lot.workspace = true
 
 wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
-egui = { version = "0.34", features = ["default_fonts"], default-features = false, optional = true }
+egui = { workspace = true, optional = true }

@@ -5,6 +5,6 @@ edition = "2021"
 description = "BS.1770-4 LUFS, true-peak, LRA, spectrum, correlation, PLR/PSR for Resonance plugins"
 
 [dependencies]
-rustfft = "6"
-arc-swap = "1"
+rustfft.workspace = true
+arc-swap.workspace = true
 resonance-dsp = { path = "../resonance-dsp" }

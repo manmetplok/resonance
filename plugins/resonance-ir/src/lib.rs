@@ -131,7 +131,7 @@ impl ResonancePlugin for ResonanceIr {
             0 => &self.params.file_select,
             1 => &self.params.dry_wet,
             2 => &self.params.output_gain,
-            _ => unreachable!("invalid param index {index}"),
+            _ => &self.params.file_select,
         }
     }
 
@@ -182,9 +182,9 @@ impl ResonancePlugin for ResonanceIr {
         _events: &mut EventIterator<'_>,
         _tempo: Option<TempoInfo>,
     ) {
-        let main = outputs
-            .first_mut()
-            .expect("resonance-ir always has a main output");
+        let Some(main) = outputs.first_mut() else {
+            return;
+        };
         let left = &mut *main.left;
         let right = &mut *main.right;
         resonance_common::flush_denormals();

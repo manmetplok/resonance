@@ -370,7 +370,7 @@ impl ClapBundle {
             output_port_count,
             pending_params: Vec::new(),
             param_event_buf: Vec::new(),
-            pending_notes: Vec::new(),
+            pending_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
             note_event_buf: Vec::new(),
             audio_out_buffers,
             audio_out_ptrs,
@@ -567,13 +567,17 @@ impl ClapInstance {
 
     /// Queue a note-on event to be sent during the next process() call.
     pub fn queue_note_on(&mut self, key: u8, velocity: f32, sample_offset: u32) {
-        self.pending_notes
-            .push((true, key, velocity, sample_offset));
+        if self.pending_notes.len() < crate::limits::MAX_PENDING_NOTES {
+            self.pending_notes
+                .push((true, key, velocity, sample_offset));
+        }
     }
 
     /// Queue a note-off event to be sent during the next process() call.
     pub fn queue_note_off(&mut self, key: u8, sample_offset: u32) {
-        self.pending_notes.push((false, key, 0.0, sample_offset));
+        if self.pending_notes.len() < crate::limits::MAX_PENDING_NOTES {
+            self.pending_notes.push((false, key, 0.0, sample_offset));
+        }
     }
 
     /// Send note-off for all 128 MIDI notes (to clear stuck notes).

@@ -38,7 +38,7 @@ impl ReverbParams {
             9 => &self.width,
             10 => &self.mix,
             11 => &self.freeze,
-            _ => unreachable!("invalid reverb param index {index}"),
+            _ => &self.predelay,
         }
     }
 }

@@ -36,7 +36,7 @@ impl DelayParams {
             11 => &self.mod_rate,
             12 => &self.mod_depth,
             13 => &self.freeze,
-            _ => unreachable!("invalid delay param index {index}"),
+            _ => &self.sync,
         }
     }
 }

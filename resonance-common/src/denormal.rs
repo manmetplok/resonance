@@ -13,7 +13,7 @@ pub fn flush_denormals() {
             "or dword ptr [rsp], 0x8040",
             "ldmxcsr [rsp]",
             "add rsp, 4",
-            options(nostack, nomem),
+            options(preserves_flags),
         );
     }
     #[cfg(target_arch = "x86")]
@@ -24,7 +24,7 @@ pub fn flush_denormals() {
             "or dword ptr [esp], 0x8040",
             "ldmxcsr [esp]",
             "add esp, 4",
-            options(nostack, nomem),
+            options(preserves_flags),
         );
     }
     #[cfg(target_arch = "aarch64")]

@@ -278,6 +278,7 @@ fn collect_midi_events(
     sample_rate: u32,
     out: &mut Vec<PendingNoteEvent>,
 ) {
+    out.clear();
     let buf_end = playhead + frames as u64;
 
     for clip in midi_clips.iter().filter(|c| c.track_id == track_id) {
@@ -822,6 +823,8 @@ pub(crate) fn mix_audio(
     buf_frames: usize,
     quantum: usize,
 ) {
+    resonance_common::flush_denormals();
+
     // Zero the output buffer
     data.fill(0.0);
 

@@ -92,7 +92,7 @@ impl BandParams {
             2 => &self.freq,
             3 => &self.q,
             4 => &self.gain,
-            _ => unreachable!("band param sub-index {sub_index}"),
+            _ => &self.on,
         }
     }
 

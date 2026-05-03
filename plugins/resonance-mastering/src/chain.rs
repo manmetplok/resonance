@@ -31,7 +31,7 @@ pub struct Chain {
     imager: Imager,
     limiter: Limiter,
     dither: Dither,
-    meters: MeteringCore,
+    pub(crate) meters: MeteringCore,
     /// Smoothed input-trim gain (linear). Ramped toward the param's
     /// current value across each block so pushing the trim slider
     /// doesn't click.

@@ -33,6 +33,21 @@ impl DelayDsp {
         }
     }
 
+    /// Set tone filter coefficients once per block to avoid expensive
+    /// trig recomputation on every sample.
+    pub fn set_tone_filters(&mut self, hi_cut: f32, lo_cut: f32, character: i32, delay_samples: f32) {
+        let delay_sec = delay_samples / self.sample_rate;
+        let effective_hi_cut = if character == 1 {
+            hi_cut * (-delay_sec * 0.6).exp()
+        } else {
+            hi_cut
+        };
+        self.lp_l.set_cutoff(effective_hi_cut, self.sample_rate);
+        self.lp_r.set_cutoff(effective_hi_cut, self.sample_rate);
+        self.hp_l.set_high_pass(self.sample_rate, lo_cut, 0.707);
+        self.hp_r.set_high_pass(self.sample_rate, lo_cut, 0.707);
+    }
+
     pub fn clear(&mut self) {
         self.delay_l.clear();
         self.delay_r.clear();
@@ -53,8 +68,6 @@ impl DelayDsp {
         character: i32,
         routing: i32,
         stereo_offset: f32,
-        hi_cut: f32,
-        lo_cut: f32,
         drive: f32,
         mod_rate: f32,
         mod_depth: f32,
@@ -85,19 +98,7 @@ impl DelayDsp {
         let wet_l = self.delay_l.tap_linear(delay_l_samp);
         let wet_r = self.delay_r.tap_linear(delay_r_samp);
 
-        // Tone filtering: high-pass and low-pass on the feedback path.
-        // In analog mode the LP cutoff decays with each echo iteration.
-        let delay_sec = delay_samples / self.sample_rate;
-        let effective_hi_cut = if character == 1 {
-            hi_cut * (-delay_sec * 0.6).exp()
-        } else {
-            hi_cut
-        };
-        self.lp_l.set_cutoff(effective_hi_cut, self.sample_rate);
-        self.lp_r.set_cutoff(effective_hi_cut, self.sample_rate);
-        self.hp_l.set_high_pass(self.sample_rate, lo_cut, 0.707);
-        self.hp_r.set_high_pass(self.sample_rate, lo_cut, 0.707);
-
+        // Tone filtering: coefficients are set per-block via set_tone_filters().
         let filt_l = self.hp_l.process(self.lp_l.process(wet_l));
         let filt_r = self.hp_r.process(self.lp_r.process(wet_r));
 

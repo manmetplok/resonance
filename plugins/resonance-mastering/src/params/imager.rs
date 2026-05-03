@@ -23,7 +23,7 @@ impl ImagerParams {
             1 => &self.width,
             2 => &self.side_hpf_on,
             3 => &self.side_hpf_freq,
-            _ => unreachable!("imager param index {index}"),
+            _ => &self.on,
         }
     }
 

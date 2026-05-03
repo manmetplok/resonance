@@ -64,7 +64,7 @@ impl crate::Resonance {
     pub(crate) fn view_mixer(&self) -> Element<'_, Message> {
         let sorted_tracks = self.sorted_tracks();
         let sorted_busses = self.sorted_busses();
-        let available_plugins = self.available_plugins.clone();
+        let available_plugins = &self.available_plugins;
 
         // -- Top row: track strips + master strip on the right. --
         // Skip sub-tracks whose parent is currently collapsed in the

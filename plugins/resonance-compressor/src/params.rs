@@ -47,7 +47,7 @@ impl CompressorParams {
             8 => &self.sc_hpf_freq,
             9 => &self.sc_hpf_on,
             10 => &self.auto_makeup,
-            _ => unreachable!("invalid compressor param index {index}"),
+            _ => &self.threshold,
         }
     }
 }

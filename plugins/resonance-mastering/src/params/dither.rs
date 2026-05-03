@@ -18,7 +18,7 @@ impl DitherParams {
             0 => &self.on,
             1 => &self.target_bits,
             2 => &self.noise_shape,
-            _ => unreachable!("dither param index {index}"),
+            _ => &self.on,
         }
     }
 

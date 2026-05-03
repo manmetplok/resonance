@@ -331,23 +331,30 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         }
 
         // Build a transient slice of OutputBuffer views over the scratch.
-        // The tiny allocation here (up to 8 output ports × 16 bytes each)
-        // is acceptable on the audio thread — far cheaper than copying
-        // audio data, and the plugin call itself does real work.
-        let mut port_views: Vec<OutputBuffer<'_>> = Vec::with_capacity(self.output_scratch.len());
-        for (l, r) in self.output_scratch.iter_mut() {
-            port_views.push(OutputBuffer {
+        // Uses a stack array (max 8 ports) to avoid heap allocation.
+        let mut port_views_arr: [std::mem::MaybeUninit<OutputBuffer<'_>>; 8] =
+            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        let port_count = self.output_scratch.len().min(8);
+        let mut port_views_len = 0;
+        for (l, r) in self.output_scratch.iter_mut().take(port_count) {
+            port_views_arr[port_views_len].write(OutputBuffer {
                 left: &mut l[..frames],
                 right: &mut r[..frames],
             });
+            port_views_len += 1;
         }
+        // SAFETY: we just initialized exactly port_views_len elements.
+        let port_views = unsafe {
+            std::slice::from_raw_parts_mut(
+                port_views_arr.as_mut_ptr() as *mut OutputBuffer<'_>,
+                port_views_len,
+            )
+        };
 
         self.plugin
-            .process(&mut port_views, frames, &mut event_iter, tempo);
+            .process(port_views, frames, &mut event_iter, tempo);
 
-        // Drop the port views so the scratch is free to be re-borrowed for
-        // the write-back pass below.
-        drop(port_views);
+        // port_views borrows end here (OutputBuffer has no Drop impl).
 
         // Copy each declared output port back into the host's audio buffers.
         for port_index in 0..self.output_scratch.len() {

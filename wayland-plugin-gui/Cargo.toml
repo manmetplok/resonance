@@ -20,7 +20,7 @@ glow = "0.17"
 # no glyphs are loaded, the font atlas is empty, and text has zero-width metrics
 # (layouts collapse, text is invisible). egui_glow's default features pull in
 # egui-winit which we don't want, so we disable them and wire glow manually.
-egui = { version = "0.34", features = ["default_fonts"], default-features = false }
+egui.workspace = true
 egui_glow = { version = "0.34", default-features = false }
 
 # Plugin param types for widget helpers.

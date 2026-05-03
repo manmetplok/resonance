@@ -1,15 +1,11 @@
 //! Stereo correlation over a ~100 ms sliding window.
 //!
 //! Uses per-sample running sums of `L*L`, `R*R`, `L*R` maintained over a
-//! fixed-size ring buffer. The published value is smoothed with a one-pole
-//! filter so meter readings don't flicker during phase transitions.
-
-use resonance_dsp::OnePole;
+//! fixed-size ring buffer. The ~100 ms sliding window provides sufficient
+//! visual smoothing for meter displays.
 
 /// Window length in seconds.
 const WINDOW_SECS: f32 = 0.1;
-/// Smoother cutoff in Hz.
-const SMOOTH_HZ: f32 = 6.0;
 
 pub struct CorrelationMeter {
     ring_ll: Box<[f64]>,
@@ -22,15 +18,12 @@ pub struct CorrelationMeter {
     sum_rr: f64,
     sum_lr: f64,
 
-    smoother: OnePole,
     sample_rate: f32,
 }
 
 impl CorrelationMeter {
     pub fn new(sample_rate: f32) -> Self {
         let len = ((WINDOW_SECS * sample_rate) as usize).max(4);
-        let mut smoother = OnePole::new();
-        smoother.set_cutoff(SMOOTH_HZ, sample_rate);
         Self {
             ring_ll: vec![0.0; len].into_boxed_slice(),
             ring_rr: vec![0.0; len].into_boxed_slice(),
@@ -40,7 +33,6 @@ impl CorrelationMeter {
             sum_ll: 0.0,
             sum_rr: 0.0,
             sum_lr: 0.0,
-            smoother,
             sample_rate,
         }
     }
@@ -54,7 +46,6 @@ impl CorrelationMeter {
         self.sum_ll = 0.0;
         self.sum_rr = 0.0;
         self.sum_lr = 0.0;
-        self.smoother.clear();
     }
 
     /// Feed a stereo block.
@@ -92,18 +83,14 @@ impl CorrelationMeter {
             self.sum_rr = 0.0;
         }
 
-        let instantaneous = compute_correlation(self.sum_ll, self.sum_rr, self.sum_lr);
-        // One-pole smoother keeps UI readings visually stable.
-        let _ = self.smoother.process(instantaneous);
     }
 
-    /// Latest smoothed stereo correlation in `[-1, 1]`.
+    /// Latest stereo correlation in `[-1, 1]`.
+    ///
+    /// Computed from the sliding-window sums; the ~100 ms window already
+    /// provides visual smoothing so an additional one-pole filter is
+    /// unnecessary.
     pub fn correlation(&self) -> f32 {
-        // OnePole::process mutates, but we want the current state.
-        // Peek by computing the current instantaneous value then
-        // falling back on the smoother's output. Since we updated it
-        // in push_stereo, `process(0.0)` would nudge it toward zero —
-        // instead we reconstruct from the sums (same as instantaneous).
         compute_correlation(self.sum_ll, self.sum_rr, self.sum_lr)
     }
 

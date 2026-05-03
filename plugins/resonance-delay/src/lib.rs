@@ -108,6 +108,17 @@ impl ResonancePlugin for ResonanceDelay {
 
         let max_delay = (self.sample_rate * 4.0) + 256.0;
 
+        // Set tone filter coefficients once per block (avoids per-sample trig).
+        let block_delay_samp = sync::delay_samples(
+            sync,
+            division,
+            self.smoothers.time_ms.current(),
+            tempo,
+            self.sample_rate,
+            max_delay,
+        );
+        dsp.set_tone_filters(hi_cut, lo_cut, character, block_delay_samp);
+
         // Update viz with current BPM.
         if let Some(t) = tempo {
             self.viz.store_bpm(t.bpm);
@@ -139,8 +150,6 @@ impl ResonancePlugin for ResonanceDelay {
                 character,
                 routing,
                 stereo_offset,
-                hi_cut,
-                lo_cut,
                 drive,
                 mod_rate,
                 mod_depth,
@@ -207,13 +216,7 @@ impl ResonancePlugin for ResonanceDelay {
     }
 }
 
-fn linear_to_db(linear: f32) -> f32 {
-    if linear <= 1e-9 {
-        f32::NEG_INFINITY
-    } else {
-        20.0 * linear.log10()
-    }
-}
+use resonance_dsp::linear_to_db;
 
 resonance_plugin::export_clap!(ResonanceDelay);
 

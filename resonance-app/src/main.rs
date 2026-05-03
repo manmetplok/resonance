@@ -122,13 +122,7 @@ impl Resonance {
     /// events to the audio engine. Call whenever `tempo_events` or
     /// `signature_events` are modified.
     pub(crate) fn rebuild_and_send_tempo(&mut self) {
-        self.tempo_map.tempo_points = self.tempo_events.clone();
-        self.tempo_map.signature_points = self.signature_events.clone();
-        self.tempo_map.bpm = self.transport.bpm;
-        self.tempo_map.numerator = self.transport.time_sig_num;
-        self.tempo_map.denominator = self.transport.time_sig_den;
-        self.tempo_map.rebuild_bar_table(self.sample_rate);
-        // Send to engine so its TempoMap stays in sync.
+        self.rebuild_tempo_map();
         self.engine.send(AudioCommand::SetTempoEvents {
             tempo: self.tempo_events.clone(),
             signature: self.signature_events.clone(),
@@ -145,6 +139,7 @@ impl Resonance {
         self.tempo_map.denominator = self.transport.time_sig_den;
         self.tempo_map.rebuild_bar_table(self.sample_rate);
     }
+
 
     /// Update the transport BPM display from the current tempo map.
     pub(crate) fn sync_tempo_display(&mut self) {
@@ -275,8 +270,7 @@ impl Resonance {
         let engine = match AudioEngine::new() {
             Ok(engine) => engine,
             Err(e) => {
-                eprintln!("Audio engine init failed: {e}");
-                std::process::exit(1);
+                panic!("Audio engine init failed: {e}");
             }
         };
 

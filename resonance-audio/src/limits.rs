@@ -32,6 +32,11 @@ pub const MAX_METRONOME_BEATS_PER_BUFFER: usize = 16;
 /// silently dropped. Duplicate param_ids always update in place.
 pub const MAX_PENDING_PARAMS: usize = 128;
 
+/// Maximum pending note events queued between process() calls.
+/// Prevents unbounded Vec growth on the audio thread. 256 covers
+/// a full all_notes_off (128) plus a generous burst of new notes.
+pub const MAX_PENDING_NOTES: usize = 256;
+
 /// Maximum number of undo history entries retained. Not
 /// user-configurable yet.
 pub const DEFAULT_HISTORY_CAPACITY: usize = 200;

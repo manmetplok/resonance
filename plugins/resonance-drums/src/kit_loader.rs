@@ -246,7 +246,7 @@ pub fn spawn_loader(
         .spawn(move || {
             // Publish "Loading" only if we're still the latest load.
             if bridge.load_generation.load(Ordering::Acquire) == stamp {
-                *bridge.kit_status.lock().unwrap() = KitStatus::Loading {
+                *bridge.kit_status.lock() = KitStatus::Loading {
                     path: manifest_path.clone(),
                 };
             }
@@ -274,18 +274,18 @@ pub fn spawn_loader(
                         .and_then(|p| p.file_name())
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_else(|| "kit".to_string());
-                    *bridge.catalog.lock().unwrap() = kit.catalog;
+                    *bridge.catalog.lock() = kit.catalog;
                     // Best-effort send; if the channel is full, coalesce
                     // by dropping this load (the newer one wins anyway).
                     let _ = bridge.kit_sender.try_send(kit.pads);
-                    *bridge.kit_path.lock().unwrap() = Some(manifest_path);
-                    *bridge.kit_status.lock().unwrap() = KitStatus::Loaded { name, num_pads };
+                    *bridge.kit_path.lock() = Some(manifest_path);
+                    *bridge.kit_status.lock() = KitStatus::Loaded { name, num_pads };
                 }
                 Ok(Err(message)) => {
-                    *bridge.kit_status.lock().unwrap() = KitStatus::Error { message };
+                    *bridge.kit_status.lock() = KitStatus::Error { message };
                 }
                 Err(_) => {
-                    *bridge.kit_status.lock().unwrap() = KitStatus::Error {
+                    *bridge.kit_status.lock() = KitStatus::Error {
                         message: "loader panicked".to_string(),
                     };
                 }

@@ -98,7 +98,7 @@ pub(crate) fn to_wav(
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
     let mut write_error = false;
 
-    let bounce_tm = tempo_map.read();
+    let bounce_tm = tempo_map.read().clone();
 
     let mut pos = render_start;
     while pos < render_end && !write_error {

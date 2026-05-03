@@ -25,7 +25,7 @@ impl SaturatorParams {
             2 => &self.character,
             3 => &self.mix,
             4 => &self.shaper,
-            _ => unreachable!("saturator param index {index}"),
+            _ => &self.on,
         }
     }
 

@@ -163,14 +163,7 @@ impl ResonancePlugin for ResonanceReverb {
     }
 }
 
-/// Convert a linear amplitude to dBFS. `0.0` → `-inf`, `1.0` → `0 dB`.
-fn linear_to_db(linear: f32) -> f32 {
-    if linear <= 1e-9 {
-        f32::NEG_INFINITY
-    } else {
-        20.0 * linear.log10()
-    }
-}
+use resonance_dsp::linear_to_db;
 
 resonance_plugin::export_clap!(ResonanceReverb);
 

@@ -10,7 +10,7 @@
 //! builder on `Resonance`. Message interception, keyboard shortcuts, and
 //! the restore path are added in later phases.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
 use resonance_audio::types::{AudioCommand, ClipId, MidiNote, PluginInstanceId};
@@ -83,8 +83,8 @@ pub enum CoalesceKey {
 /// and a coalesce slot for knob/fader bursts.
 #[derive(Debug, Default)]
 pub struct UndoHistory {
-    undo: Vec<UndoSnapshot>,
-    redo: Vec<UndoSnapshot>,
+    undo: VecDeque<UndoSnapshot>,
+    redo: VecDeque<UndoSnapshot>,
     /// Snapshot captured at the start of an in-progress gesture. Committed
     /// to the undo stack on gesture end, discarded on cancel.
     pending: Option<UndoSnapshot>,
@@ -98,8 +98,8 @@ pub struct UndoHistory {
 impl UndoHistory {
     pub fn new() -> Self {
         Self {
-            undo: Vec::new(),
-            redo: Vec::new(),
+            undo: VecDeque::new(),
+            redo: VecDeque::new(),
             pending: None,
             coalesce_key: None,
             capacity: DEFAULT_HISTORY_CAPACITY,
@@ -121,7 +121,7 @@ impl UndoHistory {
     /// Record a finished action. Clears the redo stack — any new mutation
     /// invalidates the redo history — and trims to `capacity`.
     pub fn record(&mut self, snapshot: UndoSnapshot) {
-        self.undo.push(snapshot);
+        self.undo.push_back(snapshot);
         self.redo.clear();
         self.trim();
         self.coalesce_key = None;
@@ -137,7 +137,7 @@ impl UndoHistory {
             self.redo.clear();
             return;
         }
-        self.undo.push(snapshot);
+        self.undo.push_back(snapshot);
         self.redo.clear();
         self.trim();
         self.coalesce_key = Some(key);
@@ -148,7 +148,7 @@ impl UndoHistory {
     /// restoring the popped snapshot.
     pub fn pop_undo(&mut self) -> Option<UndoSnapshot> {
         self.coalesce_key = None;
-        self.undo.pop()
+        self.undo.pop_back()
     }
 
     /// Pop the newest redo entry. The caller is responsible for pushing
@@ -156,14 +156,14 @@ impl UndoHistory {
     /// restoring the popped snapshot.
     pub fn pop_redo(&mut self) -> Option<UndoSnapshot> {
         self.coalesce_key = None;
-        self.redo.pop()
+        self.redo.pop_back()
     }
 
     /// Push a snapshot onto the redo stack without touching the undo stack.
     /// Used when entering an undo: current state goes to redo so it can be
     /// restored by a subsequent redo.
     pub fn push_redo(&mut self, snapshot: UndoSnapshot) {
-        self.redo.push(snapshot);
+        self.redo.push_back(snapshot);
         self.coalesce_key = None;
     }
 
@@ -171,7 +171,7 @@ impl UndoHistory {
     /// Used when entering a redo: current state goes to undo so it can be
     /// restored by a subsequent undo.
     pub fn push_undo(&mut self, snapshot: UndoSnapshot) {
-        self.undo.push(snapshot);
+        self.undo.push_back(snapshot);
         self.trim();
         self.coalesce_key = None;
     }
@@ -204,7 +204,7 @@ impl UndoHistory {
 
     fn trim(&mut self) {
         while self.undo.len() > self.capacity {
-            self.undo.remove(0);
+            self.undo.pop_front();
         }
     }
 }

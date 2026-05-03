@@ -399,7 +399,7 @@ impl SynthEngine {
                             let pan =
                                 (snap.osc2_pan + sub.pan_offset + mods.osc2_pan).clamp(-1.0, 1.0);
                             let (pl, pr) = constant_power_pan(pan);
-                            let level = snap.osc2_level * (1.0 + snap.osc_balance.min(0.0).abs());
+                            let level = snap.osc2_level * (1.0 - snap.osc_balance.min(0.0).abs());
                             osc_l += sample * level * pl;
                             osc_r += sample * level * pr;
                         }

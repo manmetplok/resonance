@@ -68,7 +68,7 @@ impl EqParams {
             3 => &b.q,
             4 => &b.kind,
             5 => &b.slope,
-            _ => unreachable!(),
+            _ => &b.enabled,
         }
     }
 }
