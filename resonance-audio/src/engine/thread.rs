@@ -95,6 +95,12 @@ pub(crate) struct HandlerState {
     /// `(midi_outbound_last_playhead .. current_playhead]` and emits
     /// NoteOn/NoteOff for them.
     pub midi_outbound_last_playhead: u64,
+    /// Last MIDI input device list sent to the GUI. Compared against
+    /// the next enumeration so a steady-state poll (no plug events)
+    /// doesn't trigger a redundant `MidiInputDevicesListed` round-trip.
+    pub last_midi_input_devices: Vec<crate::midi_hardware::MidiDeviceInfo>,
+    /// Same idea, output side.
+    pub last_midi_output_devices: Vec<crate::midi_hardware::MidiDeviceInfo>,
 }
 
 /// Hard cap on concurrent clip decode threads. Import commands past this
@@ -135,6 +141,8 @@ pub(crate) fn engine_thread(
         midi_recording: HashMap::new(),
         midi_outbound_held: HashMap::new(),
         midi_outbound_last_playhead: 0,
+        last_midi_input_devices: Vec::new(),
+        last_midi_output_devices: Vec::new(),
     };
     let ctx = HandlerCtx {
         shared: &shared,
@@ -482,7 +490,7 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             midi::handle_send_note_off(ctx, state, track_id, note)
         }
         AudioCommand::ListMidiInputDevices => midi::handle_list_midi_inputs(ctx, state),
-        AudioCommand::ListMidiOutputDevices => midi::handle_list_midi_outputs(ctx),
+        AudioCommand::ListMidiOutputDevices => midi::handle_list_midi_outputs(ctx, state),
         AudioCommand::SetTrackMidiInput {
             track_id,
             device,

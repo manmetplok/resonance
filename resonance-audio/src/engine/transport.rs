@@ -227,6 +227,7 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
             .finalize_recording(ctx.sample_rate, ctx.clips.as_ref(), ctx.event_tx);
         state.rec.input_stream = None;
     }
+    panic_all_instrument_plugins(ctx);
     super::midi::close_open_recordings(ctx, state);
 }
 
@@ -244,24 +245,31 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
         state.rec.input_stream = None;
     }
 
-    // Send all-notes-off to instrument plugins to prevent stuck notes
-    {
-        let tracks_guard = ctx.tracks.read();
-        let plugins_guard = ctx.plugins.read();
-        for track in tracks_guard.values() {
-            if track.track_type == TrackType::Instrument {
-                if let Some(&inst_id) = track.plugin_ids.first() {
-                    if let Some(mutex) = plugins_guard.get(&inst_id) {
-                        let mut inst = mutex.lock();
-                        inst.0.all_notes_off();
-                    }
+    panic_all_instrument_plugins(ctx);
+    super::midi::close_open_recordings(ctx, state);
+
+    let _ = ctx.event_tx.send(AudioEvent::Stopped);
+}
+
+/// Send all-notes-off to every instrument plugin's primary instance.
+/// Called from Pause and Stop so a hardware key still held when the
+/// user pauses doesn't leave the plugin sustaining indefinitely (no
+/// hardware NoteOff will arrive once the user lets go past Pause).
+/// Mirrors the loop-seam panic pattern in
+/// `mixer::panic_instrument_tracks`.
+fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
+    let tracks_guard = ctx.tracks.read();
+    let plugins_guard = ctx.plugins.read();
+    for track in tracks_guard.values() {
+        if track.track_type == TrackType::Instrument {
+            if let Some(&inst_id) = track.plugin_ids.first() {
+                if let Some(mutex) = plugins_guard.get(&inst_id) {
+                    let mut inst = mutex.lock();
+                    inst.0.all_notes_off();
                 }
             }
         }
     }
-    super::midi::close_open_recordings(ctx, state);
-
-    let _ = ctx.event_tx.send(AudioEvent::Stopped);
 }
 
 pub(crate) fn handle_seek_to(ctx: &HandlerCtx, pos: u64) {

@@ -36,8 +36,11 @@ impl std::fmt::Display for MidiDeviceInfo {
     }
 }
 
-/// MIDI events crossing thread boundaries between the midir input
-/// callback / audio thread and the engine control thread.
+/// Hardware MIDI input drained from the midir-spawned thread on the
+/// engine control thread. Carries the wall-clock instant at which the
+/// midir callback fired so the recorder can compensate for the
+/// engine-thread drain delay (~16 ms) and write the note at its
+/// actual press time rather than at processing time.
 #[derive(Debug, Clone)]
 pub enum LiveMidiEvent {
     /// Hardware MIDI input arrived on a track's configured input port.
@@ -49,22 +52,12 @@ pub enum LiveMidiEvent {
         track_id: TrackId,
         note: u8,
         velocity: f32,
+        arrival: std::time::Instant,
     },
     InboundNoteOff {
         track_id: TrackId,
         note: u8,
-    },
-    /// Timeline playback emitted a note on a track that has a MIDI
-    /// output device configured. Sent from the audio thread; drained
-    /// on the engine control thread and forwarded to the device.
-    OutboundTimelineNoteOn {
-        track_id: TrackId,
-        note: u8,
-        velocity: f32,
-    },
-    OutboundTimelineNoteOff {
-        track_id: TrackId,
-        note: u8,
+        arrival: std::time::Instant,
     },
 }
 
@@ -223,8 +216,13 @@ fn open_input(
             &port,
             "resonance-input-conn",
             move |_timestamp, raw, _| {
+                // midir's `_timestamp` is platform-specific (microseconds
+                // from connection-open on ALSA, but not portable), so
+                // capture an `Instant` ourselves — it's monotonic and
+                // we only ever subtract it from another `Instant`.
+                let arrival = std::time::Instant::now();
                 let filter_val = filter_callback.load(Ordering::Relaxed);
-                if let Some(event) = parse_live_event(raw, track_id, filter_val) {
+                if let Some(event) = parse_live_event(raw, track_id, filter_val, arrival) {
                     let _ = tx_callback.try_send(event);
                 }
             },
@@ -250,8 +248,15 @@ fn encode_channel_filter(c: Option<u8>) -> u8 {
 /// [`LiveMidiEvent::InboundNoteOn`] / `InboundNoteOff`. Returns
 /// `None` for non-note messages, channel-filtered messages, or
 /// malformed data. A NoteOn with velocity 0 is normalised to
-/// NoteOff to follow the running-status convention.
-fn parse_live_event(raw: &[u8], track_id: TrackId, filter: u8) -> Option<LiveMidiEvent> {
+/// NoteOff to follow the running-status convention. `arrival` is the
+/// wall-clock instant at which the midir callback fired and gets
+/// stamped on the resulting event.
+fn parse_live_event(
+    raw: &[u8],
+    track_id: TrackId,
+    filter: u8,
+    arrival: std::time::Instant,
+) -> Option<LiveMidiEvent> {
     let status = *raw.first()?;
     let kind = status & 0xF0;
     let channel = status & 0x0F;
@@ -263,18 +268,27 @@ fn parse_live_event(raw: &[u8], track_id: TrackId, filter: u8) -> Option<LiveMid
             let note = raw[1] & 0x7F;
             let velocity = raw[2] & 0x7F;
             if velocity == 0 {
-                Some(LiveMidiEvent::InboundNoteOff { track_id, note })
+                Some(LiveMidiEvent::InboundNoteOff {
+                    track_id,
+                    note,
+                    arrival,
+                })
             } else {
                 Some(LiveMidiEvent::InboundNoteOn {
                     track_id,
                     note,
                     velocity: velocity as f32 / 127.0,
+                    arrival,
                 })
             }
         }
         0x80 if raw.len() >= 3 => {
             let note = raw[1] & 0x7F;
-            Some(LiveMidiEvent::InboundNoteOff { track_id, note })
+            Some(LiveMidiEvent::InboundNoteOff {
+                track_id,
+                note,
+                arrival,
+            })
         }
         _ => None,
     }
@@ -420,11 +434,18 @@ impl Default for MidiOutputRegistry {
 }
 
 /// Parse raw MIDI bytes from a hardware input port. Exposed for
-/// tests under `resonance-audio/tests/`.
+/// tests under `resonance-audio/tests/`. Stamps the result with a
+/// fresh `Instant::now()` — tests that care about the value can
+/// destructure the event and check it; the rest can ignore it.
 pub fn parse_live_event_for_test(
     raw: &[u8],
     track_id: TrackId,
     channel_filter: Option<u8>,
 ) -> Option<LiveMidiEvent> {
-    parse_live_event(raw, track_id, encode_channel_filter(channel_filter))
+    parse_live_event(
+        raw,
+        track_id,
+        encode_channel_filter(channel_filter),
+        std::time::Instant::now(),
+    )
 }

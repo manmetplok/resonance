@@ -12,6 +12,7 @@ fn note_on_basic() {
             track_id,
             note,
             velocity,
+            ..
         } => {
             assert_eq!(track_id, 7);
             assert_eq!(note, 60);
@@ -29,6 +30,7 @@ fn note_on_zero_velocity_is_note_off() {
         LiveMidiEvent::InboundNoteOff {
             track_id: 7,
             note: 60,
+            ..
         }
     ));
 }
@@ -41,6 +43,7 @@ fn explicit_note_off() {
         LiveMidiEvent::InboundNoteOff {
             track_id: 1,
             note: 64,
+            ..
         }
     ));
 }

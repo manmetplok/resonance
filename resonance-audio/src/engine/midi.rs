@@ -299,21 +299,27 @@ pub(crate) fn handle_send_note_off(
 
 pub(crate) fn handle_list_midi_inputs(ctx: &HandlerCtx, state: &mut HandlerState) {
     let devices = enumerate_midi_inputs();
-    // Reconcile pending input requests: a controller that was
-    // configured but not present at the time may have just been
-    // plugged in. Opening connections here makes "unplug, replug"
-    // work without the user touching the picker again.
+    // Always reconcile: a fresh connect attempt for a pending track
+    // is cheap and the only way "unplug, replug" recovers without
+    // user intervention. The unchanged-list dedupe below only
+    // suppresses the GUI round-trip, not the reconnect attempt.
     state.midi_inputs.reconcile();
-    let _ = ctx
-        .event_tx
-        .send(AudioEvent::MidiInputDevicesListed { devices });
+    if devices != state.last_midi_input_devices {
+        state.last_midi_input_devices = devices.clone();
+        let _ = ctx
+            .event_tx
+            .send(AudioEvent::MidiInputDevicesListed { devices });
+    }
 }
 
-pub(crate) fn handle_list_midi_outputs(ctx: &HandlerCtx) {
+pub(crate) fn handle_list_midi_outputs(ctx: &HandlerCtx, state: &mut HandlerState) {
     let devices = enumerate_midi_outputs();
-    let _ = ctx
-        .event_tx
-        .send(AudioEvent::MidiOutputDevicesListed { devices });
+    if devices != state.last_midi_output_devices {
+        state.last_midi_output_devices = devices.clone();
+        let _ = ctx
+            .event_tx
+            .send(AudioEvent::MidiOutputDevicesListed { devices });
+    }
 }
 
 pub(crate) fn handle_set_track_midi_input(
@@ -346,20 +352,16 @@ pub(crate) fn handle_set_track_midi_output(
     channel: Option<u8>,
 ) {
     // Mirror onto the engine-side track. The audio thread reads
-    // `midi_output_device` via arc-swap (no lock), so this update is
-    // visible to the next mix block immediately.
+    // `midi_output_device` via arc-swap (no lock), so the swap is
+    // visible to the next mix block immediately even though the map
+    // itself is held under a write lock for the channel update.
     {
-        let tracks = ctx.tracks.read();
-        if let Some(t) = tracks.get(&track_id) {
+        let mut tracks = ctx.tracks.write();
+        if let Some(t) = tracks.get_mut(&track_id) {
             match &device {
                 Some(name) => t.midi_output_device.store(Some(Arc::new(name.clone()))),
                 None => t.midi_output_device.store(None),
             }
-        }
-    }
-    {
-        let mut tracks = ctx.tracks.write();
-        if let Some(t) = tracks.get_mut(&track_id) {
             t.midi_output_channel = channel;
         }
     }
@@ -369,11 +371,10 @@ pub(crate) fn handle_set_track_midi_output(
 }
 
 /// Dispatch a single drained `LiveMidiEvent`. Routes inbound notes
-/// to the track's instrument plugin (live monitoring), to a
-/// recording clip (when the track is armed during playback), and to
-/// the track's MIDI output device (Thru). Routes timeline-sourced
-/// outbound events directly to the device, which is the Phase 2
-/// "play timeline → external synth" path.
+/// to the track's instrument plugin (live monitoring) and to a
+/// recording clip (when the track is armed during playback). Thru
+/// to the track's hardware MIDI output is handled inside
+/// `handle_send_note_on/off`.
 pub(crate) fn handle_live_midi_event(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
@@ -384,42 +385,22 @@ pub(crate) fn handle_live_midi_event(
             track_id,
             note,
             velocity,
+            arrival,
         } => {
             // handle_send_note_on already routes to plugin AND to
             // the configured MIDI output (Thru). Record-into-clip
             // happens separately; recording must not also re-emit
             // the note.
             handle_send_note_on(ctx, state, track_id, note, velocity);
-            handle_record_midi_event(ctx, state, track_id, true, note, velocity);
+            handle_record_midi_event(ctx, state, track_id, true, note, velocity, arrival);
         }
-        LiveMidiEvent::InboundNoteOff { track_id, note } => {
-            handle_send_note_off(ctx, state, track_id, note);
-            handle_record_midi_event(ctx, state, track_id, false, note, 0.0);
-        }
-        LiveMidiEvent::OutboundTimelineNoteOn {
+        LiveMidiEvent::InboundNoteOff {
             track_id,
             note,
-            velocity,
+            arrival,
         } => {
-            let channel = ctx
-                .tracks
-                .read()
-                .get(&track_id)
-                .and_then(|t| t.midi_output_channel)
-                .unwrap_or(0);
-            let velocity_u8 = (velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
-            state
-                .midi_outputs
-                .send_note_on(track_id, channel, note, velocity_u8);
-        }
-        LiveMidiEvent::OutboundTimelineNoteOff { track_id, note } => {
-            let channel = ctx
-                .tracks
-                .read()
-                .get(&track_id)
-                .and_then(|t| t.midi_output_channel)
-                .unwrap_or(0);
-            state.midi_outputs.send_note_off(track_id, channel, note);
+            handle_send_note_off(ctx, state, track_id, note);
+            handle_record_midi_event(ctx, state, track_id, false, note, 0.0, arrival);
         }
     }
 }
@@ -427,6 +408,13 @@ pub(crate) fn handle_live_midi_event(
 /// Append a live note event into the track's currently-recording
 /// MIDI clip when the track is record-armed and transport is
 /// playing. Lazily creates a clip on the first NoteOn.
+///
+/// `arrival` is the wall-clock instant the midir callback fired for
+/// this event. The recorder uses it to rewind the playhead by the
+/// engine-thread drain delay (typically ~16 ms) so the recorded
+/// `start_tick` reflects the actual key-press moment instead of the
+/// processing moment. Without this, every recorded MIDI note would
+/// land one engine tick late.
 pub(crate) fn handle_record_midi_event(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
@@ -434,6 +422,7 @@ pub(crate) fn handle_record_midi_event(
     is_note_on: bool,
     note: u8,
     velocity: f32,
+    arrival: std::time::Instant,
 ) {
     if !ctx.shared.playing.load(Ordering::Relaxed) {
         return;
@@ -450,20 +439,33 @@ pub(crate) fn handle_record_midi_event(
         return;
     }
 
-    let playhead_sample = ctx.shared.playhead.load(Ordering::Relaxed);
-    let abs_tick = sample_to_abs_tick(&ctx.tempo_map.read(), playhead_sample, ctx.sample_rate);
+    // Press-time playhead = current playhead minus elapsed-since-arrival,
+    // converted to samples. Capture both `now` and `playhead` close
+    // together so the math reflects the same instant on both sides.
+    let now = std::time::Instant::now();
+    let playhead_now = ctx.shared.playhead.load(Ordering::Relaxed);
+    let elapsed_secs = now.saturating_duration_since(arrival).as_secs_f64();
+    let elapsed_samples = (elapsed_secs * ctx.sample_rate as f64) as u64;
+    let press_sample = playhead_now.saturating_sub(elapsed_samples);
+    let abs_tick = sample_to_abs_tick(&ctx.tempo_map.read(), press_sample, ctx.sample_rate);
 
     if is_note_on {
-        let rec = state.midi_recording.entry(track_id).or_insert_with(|| {
-            // Lazy clip creation on the first note. Start the clip
-            // exactly at the current playhead so the first note has
-            // start_tick = 0.
+        // Manual entry-or-insert: the closure form would force a
+        // disjoint borrow of `state.next_clip_id` that the borrow
+        // checker can't always prove safe.
+        let needs_new_clip = !state.midi_recording.contains_key(&track_id);
+        if needs_new_clip {
             let clip_id = state.next_clip_id;
             state.next_clip_id += 1;
+            // Lazy clip creation on the first note. Start the clip
+            // exactly at the press-time sample so the first note has
+            // start_tick = 0 *and* the clip lines up with where the
+            // user actually started playing rather than where the
+            // engine thread happened to wake up.
             let clip = MidiClip {
                 id: clip_id,
                 track_id,
-                start_sample: playhead_sample,
+                start_sample: press_sample,
                 duration_ticks: 0,
                 notes: Vec::new(),
                 name: format!("MIDI Take {}", clip_id),
@@ -474,21 +476,49 @@ pub(crate) fn handle_record_midi_event(
             let _ = ctx.event_tx.send(AudioEvent::MidiClipCreated {
                 clip_id,
                 track_id,
-                start_sample: playhead_sample,
+                start_sample: press_sample,
                 duration_ticks: 0,
                 name: format!("MIDI Take {}", clip_id),
                 notes: Vec::new(),
                 trim_start_ticks: 0,
                 trim_end_ticks: 0,
             });
-            RecordingMidiState {
-                clip_id,
-                clip_start_tick: abs_tick,
-                open_notes: HashMap::new(),
-            }
-        });
+            state.midi_recording.insert(
+                track_id,
+                RecordingMidiState {
+                    clip_id,
+                    clip_start_tick: abs_tick,
+                    open_notes: HashMap::new(),
+                },
+            );
+        }
+        let rec = state.midi_recording.get_mut(&track_id).expect("just inserted");
         let clip_id = rec.clip_id;
         let start_tick = abs_tick.saturating_sub(rec.clip_start_tick);
+
+        // Same-key retrigger: if a NoteOn arrives while the same key
+        // is already held, treat it as an implicit NoteOff for the
+        // earlier press. Without this, the open_notes overwrite
+        // would orphan the first note at duration_ticks = 0 and the
+        // matching NoteOff would later close the wrong note.
+        let prior_open_idx = rec.open_notes.remove(&note);
+        if let Some(prior_idx) = prior_open_idx {
+            let mut clips = ctx.midi_clips.write();
+            if let Some(clip) = clips.iter_mut().find(|c| c.id == clip_id) {
+                if let Some(prev) = clip.notes.get_mut(prior_idx) {
+                    let prev_dur = start_tick.saturating_sub(prev.start_tick);
+                    prev.duration_ticks = prev_dur;
+                    let new_clip_dur = clip.duration_ticks.max(prev.start_tick + prev_dur);
+                    clip.duration_ticks = new_clip_dur;
+                    let _ = ctx.event_tx.send(AudioEvent::MidiNoteResized {
+                        clip_id,
+                        note_index: prior_idx,
+                        new_duration_ticks: prev_dur,
+                    });
+                }
+            }
+        }
+
         let new_note = MidiNote {
             note,
             velocity,
