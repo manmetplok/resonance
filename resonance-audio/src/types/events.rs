@@ -1,4 +1,6 @@
 //! Engine → GUI event enum.
+use crate::midi_hardware::MidiDeviceInfo;
+
 use super::{
     BusId, ClipId, InputDeviceInfo, MidiNote, ParamInfo, PluginInstanceId, SamplePos,
     ScannedPlugin, TrackId,
@@ -207,5 +209,15 @@ pub enum AudioEvent {
     },
     MasterFxBypassChanged {
         bypassed: bool,
+    },
+
+    // -- Hardware MIDI I/O --
+    /// Result of `AudioCommand::ListMidiInputDevices`.
+    MidiInputDevicesListed {
+        devices: Vec<MidiDeviceInfo>,
+    },
+    /// Result of `AudioCommand::ListMidiOutputDevices`.
+    MidiOutputDevicesListed {
+        devices: Vec<MidiDeviceInfo>,
     },
 }

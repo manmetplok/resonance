@@ -227,6 +227,7 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
             .finalize_recording(ctx.sample_rate, ctx.clips.as_ref(), ctx.event_tx);
         state.rec.input_stream = None;
     }
+    super::midi::close_open_recordings(ctx, state);
 }
 
 pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
@@ -258,6 +259,7 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
             }
         }
     }
+    super::midi::close_open_recordings(ctx, state);
 
     let _ = ctx.event_tx.send(AudioEvent::Stopped);
 }

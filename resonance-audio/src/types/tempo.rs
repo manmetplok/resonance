@@ -429,6 +429,49 @@ impl TempoMap {
         }
     }
 
+    /// Convert an absolute sample position to an absolute tick using
+    /// the bar table. Inverse of [`Self::tick_to_abs_sample`] for a
+    /// `clip_start` of 0. Used by the live MIDI recorder to
+    /// timestamp incoming notes against the project tempo map.
+    pub fn sample_to_abs_tick(&self, sample_pos: u64, sample_rate: u32) -> u64 {
+        if self.bar_table.is_empty() {
+            let spt =
+                (sample_rate as f64 * 60.0 / self.bpm as f64) / TICKS_PER_QUARTER_NOTE as f64;
+            if spt <= 0.0 {
+                return 0;
+            }
+            return (sample_pos as f64 / spt) as u64;
+        }
+        let idx = match self
+            .bar_table
+            .binary_search_by_key(&sample_pos, |e| e.sample)
+        {
+            Ok(i) => i,
+            Err(0) => 0,
+            Err(i) => i - 1,
+        };
+        let entry = &self.bar_table[idx];
+        if let Some(next) = self.bar_table.get(idx + 1) {
+            let bar_samples = (next.sample - entry.sample) as f64;
+            let sample_frac = if bar_samples > 0.0 {
+                (sample_pos - entry.sample) as f64 / bar_samples
+            } else {
+                0.0
+            };
+            let tick_frac =
+                sample_frac_to_tick_frac(sample_frac, entry.bpm as f64, next.arrival_bpm as f64);
+            entry.tick + (tick_frac * entry.ticks_in_bar as f64) as u64
+        } else {
+            // Past the last cached bar: extrapolate at the bar's BPM.
+            let spt =
+                (sample_rate as f64 * 60.0 / entry.bpm as f64) / TICKS_PER_QUARTER_NOTE as f64;
+            if spt <= 0.0 {
+                return entry.tick;
+            }
+            entry.tick + ((sample_pos - entry.sample) as f64 / spt) as u64
+        }
+    }
+
     /// Convert a tick offset from a clip's start sample to an absolute
     /// sample position, integrating tempo changes via the bar table.
     /// O(log n) — safe for the real-time audio callback.

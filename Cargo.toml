@@ -18,6 +18,7 @@ dirs = "5"
 bytemuck = { version = "1", features = ["derive"] }
 crossbeam-channel = "0.5"
 arc-swap = "1"
+midir = "0.10"
 
 [profile.release]
 lto = "thin"

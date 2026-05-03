@@ -8,6 +8,7 @@
 //! `clips`, `midi`, `plugins`, `busses`). They take `&HandlerCtx` +
 //! `&mut HandlerState` + the command payload and execute synchronously.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use indexmap::IndexMap;
 use parking_lot::{Mutex, RwLock};
 
 use crate::clap_host::{ClapBundle, SyncClapInstance};
+use crate::midi_hardware::{LiveMidiEvent, MidiInputRegistry, MidiOutputRegistry};
 use crate::recording::RecordingState;
 use crate::types::*;
 
@@ -42,6 +44,20 @@ pub(crate) struct HandlerCtx<'a> {
     pub quantum: usize,
 }
 
+/// Per-track state for ongoing live MIDI recording. Kept on the
+/// engine control thread so it never leaks into the audio callback.
+pub(crate) struct RecordingMidiState {
+    /// MIDI clip currently being recorded into.
+    pub clip_id: ClipId,
+    /// Absolute tick at the clip's start sample. Used to convert the
+    /// per-event playhead tick into the clip-relative `start_tick`.
+    pub clip_start_tick: u64,
+    /// Currently held notes: pitch → index in the clip's `notes` vec.
+    /// On NoteOff we look the note up here, set its `duration_ticks`,
+    /// and remove the entry. Stuck NoteOns get closed at transport stop.
+    pub open_notes: HashMap<u8, usize>,
+}
+
 /// Mutable engine-thread-local state that persists across command
 /// dispatches: monotonic id counters, the recording session, the loaded
 /// CLAP bundles, and the concurrent-import counter.
@@ -57,6 +73,28 @@ pub(crate) struct HandlerState {
     /// whenever the app opens, creates, or saves-as a project.
     /// Recording and import refuse to run when this is `None`.
     pub project_dir: Option<PathBuf>,
+    /// Hardware MIDI input registry. Owns one open midir connection
+    /// per track configured for hardware input. The connection's
+    /// callback runs on a midir-spawned thread and feeds
+    /// [`LiveMidiEvent`]s into the engine thread via a bounded channel.
+    pub midi_inputs: MidiInputRegistry,
+    /// Hardware MIDI output registry. Refcounts midir output
+    /// connections across tracks that share the same physical port.
+    pub midi_outputs: MidiOutputRegistry,
+    /// Per-track recording state for live MIDI. A fresh entry is
+    /// created lazily on the first NoteOn for an armed instrument
+    /// track during playback; cleared on transport stop.
+    pub midi_recording: HashMap<TrackId, RecordingMidiState>,
+    /// Notes currently sounding on hardware MIDI outputs from
+    /// timeline playback. Keyed by `(track_id, note)`; value carries
+    /// the note's end-sample plus the channel it was sent on (so a
+    /// later channel change doesn't strand the stuck note).
+    pub midi_outbound_held: HashMap<(TrackId, u8), (u64, u8)>,
+    /// Last playhead seen by the timeline → output poll. The next
+    /// poll iterates notes whose start/end fall in
+    /// `(midi_outbound_last_playhead .. current_playhead]` and emits
+    /// NoteOn/NoteOff for them.
+    pub midi_outbound_last_playhead: u64,
 }
 
 /// Hard cap on concurrent clip decode threads. Import commands past this
@@ -77,6 +115,8 @@ pub(crate) fn engine_thread(
     tempo_map: Arc<RwLock<TempoMap>>,
     plugins_arc: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
     monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
+    live_midi_tx: Sender<LiveMidiEvent>,
+    live_midi_rx: Receiver<LiveMidiEvent>,
     sample_rate: u32,
     buf_frames: usize,
     quantum: usize,
@@ -90,6 +130,11 @@ pub(crate) fn engine_thread(
         bundles: Vec::new(),
         active_imports: Arc::new(AtomicUsize::new(0)),
         project_dir: None,
+        midi_inputs: MidiInputRegistry::new(live_midi_tx),
+        midi_outputs: MidiOutputRegistry::new(),
+        midi_recording: HashMap::new(),
+        midi_outbound_held: HashMap::new(),
+        midi_outbound_last_playhead: 0,
     };
     let ctx = HandlerCtx {
         shared: &shared,
@@ -130,6 +175,22 @@ pub(crate) fn engine_thread(
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
         }
+
+        // Drain any hardware MIDI input that's queued up since the
+        // previous iteration. Each event is dispatched into the same
+        // queue_note_on/off path as `AudioCommand::SendNoteOn`, plus
+        // optional record-into-clip and Thru-to-output.
+        for ev in live_midi_rx.try_iter() {
+            midi::handle_live_midi_event(&ctx, &mut state, ev);
+        }
+
+        // Step the timeline → MIDI output bridge: any note whose
+        // start/end falls in (last_playhead..current_playhead] gets
+        // sent to the configured hardware output. Granularity is
+        // engine-thread cadence (~16 ms); precise enough for most
+        // hardware-synth use cases and simpler than a lock-free
+        // audio→engine queue.
+        midi::poll_timeline_to_midi_output(&ctx, &mut state);
 
         // Advance any pending record count-in: once the playhead
         // catches up to the user's original record-start, the real
@@ -416,10 +477,22 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             track_id,
             note,
             velocity,
-        } => midi::handle_send_note_on(ctx, track_id, note, velocity),
+        } => midi::handle_send_note_on(ctx, state, track_id, note, velocity),
         AudioCommand::SendNoteOff { track_id, note } => {
-            midi::handle_send_note_off(ctx, track_id, note)
+            midi::handle_send_note_off(ctx, state, track_id, note)
         }
+        AudioCommand::ListMidiInputDevices => midi::handle_list_midi_inputs(ctx, state),
+        AudioCommand::ListMidiOutputDevices => midi::handle_list_midi_outputs(ctx),
+        AudioCommand::SetTrackMidiInput {
+            track_id,
+            device,
+            channel,
+        } => midi::handle_set_track_midi_input(ctx, state, track_id, device, channel),
+        AudioCommand::SetTrackMidiOutput {
+            track_id,
+            device,
+            channel,
+        } => midi::handle_set_track_midi_output(ctx, state, track_id, device, channel),
 
         // -- Busses --
         AudioCommand::AddBus { id_hint, name } => busses::handle_add_bus(ctx, state, id_hint, name),

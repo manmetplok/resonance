@@ -194,6 +194,58 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 });
             }
         }
+        TrackMessage::SetTrackMidiInputDevice(id, device) => {
+            let updated = r.with_track_mut(id, |t| {
+                t.midi_input_device = device.clone();
+                t.midi_input_channel
+            });
+            if let Some(channel) = updated {
+                r.engine.send(AudioCommand::SetTrackMidiInput {
+                    track_id: id,
+                    device,
+                    channel,
+                });
+            }
+        }
+        TrackMessage::SetTrackMidiOutputDevice(id, device) => {
+            let updated = r.with_track_mut(id, |t| {
+                t.midi_output_device = device.clone();
+                t.midi_output_channel
+            });
+            if let Some(channel) = updated {
+                r.engine.send(AudioCommand::SetTrackMidiOutput {
+                    track_id: id,
+                    device,
+                    channel,
+                });
+            }
+        }
+        TrackMessage::SetTrackMidiInputChannel(id, channel) => {
+            let device = r.with_track_mut(id, |t| {
+                t.midi_input_channel = channel;
+                t.midi_input_device.clone()
+            });
+            if let Some(device) = device {
+                r.engine.send(AudioCommand::SetTrackMidiInput {
+                    track_id: id,
+                    device,
+                    channel,
+                });
+            }
+        }
+        TrackMessage::SetTrackMidiOutputChannel(id, channel) => {
+            let device = r.with_track_mut(id, |t| {
+                t.midi_output_channel = channel;
+                t.midi_output_device.clone()
+            });
+            if let Some(device) = device {
+                r.engine.send(AudioCommand::SetTrackMidiOutput {
+                    track_id: id,
+                    device,
+                    channel,
+                });
+            }
+        }
         TrackMessage::ToggleSubTracksVisible(id) => {
             if !r.mixer.expanded_sub_track_parents.insert(id) {
                 r.mixer.expanded_sub_track_parents.remove(&id);

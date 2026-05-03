@@ -11,6 +11,7 @@ use crate::view::knob::pan_knob;
 use iced::widget::text::Shaping;
 use iced::widget::{button, column, container, pick_list, row, scrollable, text, Space};
 use iced::{alignment, Color, Element, Font, Length};
+use resonance_audio::midi_hardware::MidiDeviceInfo;
 use resonance_audio::types::*;
 
 /// Which container a plugin slot belongs to. Used so `view_plugin_slot_row`
@@ -58,6 +59,80 @@ impl std::fmt::Display for PortChoice {
             write!(f, "In {}/{}", one_based, one_based + 1)
         }
     }
+}
+
+/// Wrapper around `Option<MidiDeviceInfo>` so the MIDI pickers can
+/// include a "(None)" entry that clears the assignment. iced's
+/// `pick_list` requires `Display + Clone + PartialEq` on its option
+/// type and a value-typed match against the current selection, so we
+/// store the device name and either render it verbatim or render
+/// "(None)" for the unset variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MidiPickerChoice(Option<String>);
+
+impl std::fmt::Display for MidiPickerChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            None => f.write_str("(None)"),
+            Some(name) => f.write_str(name),
+        }
+    }
+}
+
+/// Build the option list for a MIDI picker: an explicit "(None)"
+/// entry plus every currently-enumerated device, plus the track's
+/// configured device if it isn't currently present (so the user
+/// sees what was previously chosen even with the controller
+/// unplugged).
+fn midi_choices(
+    available: &[MidiDeviceInfo],
+    configured: Option<&str>,
+) -> Vec<MidiPickerChoice> {
+    let mut choices: Vec<MidiPickerChoice> = Vec::with_capacity(available.len() + 2);
+    choices.push(MidiPickerChoice(None));
+    for d in available {
+        choices.push(MidiPickerChoice(Some(d.name.clone())));
+    }
+    if let Some(name) = configured {
+        if !available.iter().any(|d| d.name == name) {
+            choices.push(MidiPickerChoice(Some(name.to_string())));
+        }
+    }
+    choices
+}
+
+/// MIDI channel picker entry. `None` represents "Omni" for inputs
+/// (accept any channel) and "default channel 1" for outputs. The
+/// inner value is the 0-indexed channel (0..=15) so it matches the
+/// raw MIDI status nibble.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MidiChannelChoice(Option<u8>);
+
+impl std::fmt::Display for MidiChannelChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            None => f.write_str("Omni"),
+            Some(ch) => write!(f, "Ch {}", ch + 1),
+        }
+    }
+}
+
+/// Channel picker options for an input filter: "Omni" plus 1..=16.
+fn input_channel_choices() -> Vec<MidiChannelChoice> {
+    let mut v = Vec::with_capacity(17);
+    v.push(MidiChannelChoice(None));
+    for ch in 0u8..16 {
+        v.push(MidiChannelChoice(Some(ch)));
+    }
+    v
+}
+
+/// Channel picker options for an output: 1..=16. Outputs always
+/// emit on a specific channel, so there's no "Omni" entry — the
+/// `None` selection is rendered as channel 1 for compatibility but
+/// not offered as a separate pick.
+fn output_channel_choices() -> Vec<MidiChannelChoice> {
+    (0u8..16).map(|ch| MidiChannelChoice(Some(ch))).collect()
 }
 
 impl crate::Resonance {
@@ -536,6 +611,76 @@ impl crate::Resonance {
                         .width(Length::Fill);
                     bottom_section = bottom_section.push(port_picker);
                 }
+            }
+        }
+
+        // MIDI in / MIDI out pickers — instrument tracks only.
+        // Always visible (independent of record_armed) so a controller
+        // can be wired up for live play without arming the track.
+        // Sub-tracks share their parent's MIDI routing, so they don't
+        // get pickers of their own.
+        if track.track_type == TrackType::Instrument && track.sub_track.is_none() {
+            let track_id = track.id;
+            let in_choices = midi_choices(
+                &self.midi_input_devices,
+                track.midi_input_device.as_deref(),
+            );
+            let in_selected = MidiPickerChoice(track.midi_input_device.clone());
+            let in_picker = pick_list(in_choices, Some(in_selected), move |choice| {
+                Message::Track(TrackMessage::SetTrackMidiInputDevice(track_id, choice.0))
+            })
+            .placeholder("MIDI in...")
+            .text_size(10)
+            .width(Length::Fill);
+            bottom_section = bottom_section.push(in_picker);
+
+            // Show the input channel picker only when an input device
+            // is configured — pointless otherwise, and removing it
+            // saves vertical space on every other instrument strip.
+            if track.midi_input_device.is_some() {
+                let in_ch_picker = pick_list(
+                    input_channel_choices(),
+                    Some(MidiChannelChoice(track.midi_input_channel)),
+                    move |choice| {
+                        Message::Track(TrackMessage::SetTrackMidiInputChannel(track_id, choice.0))
+                    },
+                )
+                .text_size(10)
+                .width(Length::Fill);
+                bottom_section = bottom_section.push(in_ch_picker);
+            }
+
+            let out_choices = midi_choices(
+                &self.midi_output_devices,
+                track.midi_output_device.as_deref(),
+            );
+            let out_selected = MidiPickerChoice(track.midi_output_device.clone());
+            let out_picker = pick_list(out_choices, Some(out_selected), move |choice| {
+                Message::Track(TrackMessage::SetTrackMidiOutputDevice(track_id, choice.0))
+            })
+            .placeholder("MIDI out...")
+            .text_size(10)
+            .width(Length::Fill);
+            bottom_section = bottom_section.push(out_picker);
+
+            if track.midi_output_device.is_some() {
+                // Outputs always emit on a specific channel — there
+                // is no "Omni" semantics. Default to channel 1 when
+                // unset on the engine side, and show "Ch 1" here.
+                let selected =
+                    MidiChannelChoice(Some(track.midi_output_channel.unwrap_or(0)));
+                let out_ch_picker = pick_list(
+                    output_channel_choices(),
+                    Some(selected),
+                    move |choice| {
+                        Message::Track(TrackMessage::SetTrackMidiOutputChannel(
+                            track_id, choice.0,
+                        ))
+                    },
+                )
+                .text_size(10)
+                .width(Length::Fill);
+                bottom_section = bottom_section.push(out_ch_picker);
             }
         }
 

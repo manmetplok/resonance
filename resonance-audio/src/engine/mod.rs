@@ -21,6 +21,7 @@ use crossbeam_channel::{Receiver, Sender};
 use ringbuf::traits::Split;
 
 use crate::clap_host::SyncClapInstance;
+use crate::midi_hardware::LiveMidiEvent;
 use crate::mixer;
 use crate::platform::{self, DeviceDirection};
 use crate::types::*;
@@ -29,7 +30,7 @@ mod bounce;
 mod busses;
 mod clips;
 mod master;
-mod midi;
+pub(crate) mod midi;
 mod plugins;
 mod scan;
 mod thread;
@@ -143,6 +144,10 @@ impl AudioEngine {
 
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<AudioCommand>();
         let (event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
+        // Bounded so a stuck engine thread can never let hardware
+        // MIDI events queue without bound. 1024 fits a comfortable
+        // burst at typical engine-thread cadence (~60 Hz wakeups).
+        let (live_midi_tx, live_midi_rx) = crossbeam_channel::bounded::<LiveMidiEvent>(1024);
 
         let shared = Arc::new(SharedState {
             playhead: AtomicU64::new(0),
@@ -351,6 +356,8 @@ impl AudioEngine {
                     tempo_ctrl,
                     plugins_ctrl,
                     monitor_prod_audio,
+                    live_midi_tx,
+                    live_midi_rx,
                     sample_rate,
                     buf_frames,
                     quantum,

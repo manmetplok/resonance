@@ -2,6 +2,8 @@
 //! audio callback.
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+use arc_swap::ArcSwapOption;
+
 use super::{BusId, PluginInstanceId, TrackId, TrackOutput, TrackType};
 
 /// Sentinel value used in `Track::output_bus_bits` to encode
@@ -55,6 +57,21 @@ pub struct Track {
     /// The tuple is `(parent_track_id, output_port_index)` where index 0
     /// is reserved for the parent's own main output.
     pub sub_track_of: Option<(TrackId, u32)>,
+    /// Hardware MIDI input device name. The engine control thread
+    /// reads this when applying `SetTrackMidiInput`; the audio callback
+    /// never touches it.
+    pub midi_input_device: Option<String>,
+    /// Channel filter for hardware MIDI input. `None` = omni.
+    pub midi_input_channel: Option<u8>,
+    /// Hardware MIDI output device name. Read on the audio thread to
+    /// decide whether timeline notes should also be ferried to the
+    /// engine thread for hardware send-out — kept in an
+    /// `ArcSwapOption<String>` so the audio thread reads are cheap
+    /// and edits never touch a mutex.
+    pub midi_output_device: ArcSwapOption<String>,
+    /// Channel that hardware MIDI output uses. None = channel 1.
+    /// Only read on the engine control thread.
+    pub midi_output_channel: Option<u8>,
 }
 
 impl Track {
@@ -82,6 +99,10 @@ impl Track {
             input_port_bits: AtomicU32::new(0),
             plugin_ids: Vec::new(),
             sub_track_of: None,
+            midi_input_device: None,
+            midi_input_channel: None,
+            midi_output_device: ArcSwapOption::const_empty(),
+            midi_output_channel: None,
         }
     }
 

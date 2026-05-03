@@ -273,6 +273,34 @@ pub enum AudioCommand {
         note: u8,
     },
 
+    // -- Hardware MIDI I/O --
+    /// Enumerate hardware MIDI input ports and emit
+    /// `AudioEvent::MidiInputDevicesListed`.
+    ListMidiInputDevices,
+    /// Enumerate hardware MIDI output ports and emit
+    /// `AudioEvent::MidiOutputDevicesListed`.
+    ListMidiOutputDevices,
+    /// Set the hardware MIDI input device for an instrument track.
+    /// Notes received from the device are routed to the track's
+    /// instrument plugin and (when armed) recorded into a MIDI clip.
+    /// `device = None` disconnects.
+    SetTrackMidiInput {
+        track_id: TrackId,
+        device: Option<String>,
+        /// 0-indexed channel filter (0..=15), or `None` for omni.
+        channel: Option<u8>,
+    },
+    /// Set the hardware MIDI output device for an instrument track.
+    /// Notes played by the track (timeline + live input) are also
+    /// sent to this device — the instrument plugin still plays.
+    /// `device = None` disconnects.
+    SetTrackMidiOutput {
+        track_id: TrackId,
+        device: Option<String>,
+        /// 0-indexed channel (0..=15) the output uses. `None` = channel 1.
+        channel: Option<u8>,
+    },
+
     // -- Bus commands --
     /// Add a bus. See [`AudioCommand::AddTrack`] for how `id_hint`/`name`
     /// are honoured.

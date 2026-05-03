@@ -615,6 +615,12 @@ impl crate::Resonance {
             AudioEvent::MasterFxBypassChanged { bypassed } => {
                 self.master_fx_bypassed = bypassed;
             }
+            AudioEvent::MidiInputDevicesListed { devices } => {
+                self.midi_input_devices = devices;
+            }
+            AudioEvent::MidiOutputDevicesListed { devices } => {
+                self.midi_output_devices = devices;
+            }
         }
         Task::none()
     }

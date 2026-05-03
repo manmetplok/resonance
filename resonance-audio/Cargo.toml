@@ -16,6 +16,8 @@ resonance-common = { path = "../resonance-common" }
 resonance-dsp = { path = "../resonance-dsp" }
 hound = "3.5"
 midly = "0.5"
+midir.workspace = true
+arc-swap.workspace = true
 memmap2 = "0.9"
 bytemuck.workspace = true
 serde.workspace = true

@@ -32,11 +32,25 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
     update_vu_meters(r);
     sync_tempo_at_playhead(r);
     auto_follow_playhead(r);
+    refresh_midi_devices_if_stale(r);
     if tasks.is_empty() {
         Task::none()
     } else {
         Task::batch(tasks)
     }
+}
+
+/// Re-enumerate hardware MIDI ports periodically so a freshly
+/// plugged controller appears in pickers without a restart.
+/// Cadence is intentionally low (every 2 s) — ALSA seq enumeration
+/// is cheap, but doing it every frame would still be wasteful.
+fn refresh_midi_devices_if_stale(r: &mut Resonance) {
+    if r.midi_devices_last_refresh.elapsed() < std::time::Duration::from_secs(2) {
+        return;
+    }
+    r.midi_devices_last_refresh = std::time::Instant::now();
+    r.engine.send(AudioCommand::ListMidiInputDevices);
+    r.engine.send(AudioCommand::ListMidiOutputDevices);
 }
 
 fn update_vu_meters(r: &mut Resonance) {

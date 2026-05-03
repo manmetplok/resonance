@@ -1,0 +1,430 @@
+//! Hardware MIDI device enumeration and per-track input/output
+//! connection management.
+//!
+//! Threading model:
+//! - The engine control thread owns the registries and is the only
+//!   place that calls [`midir`] APIs (open/close connections, send
+//!   notes). This keeps midir's per-platform mutexes (ALSA seq /
+//!   CoreMIDI / WinMM) far away from the audio callback.
+//! - Each opened input port spawns its own thread inside `midir`,
+//!   which drives the closure registered with `connect()`. That
+//!   closure parses the incoming MIDI bytes, applies the channel
+//!   filter, and pushes a [`LiveMidiEvent`] into a bounded crossbeam
+//!   channel. The engine control thread drains that channel each
+//!   iteration and dispatches the event into the existing
+//!   `handle_send_note_on` / `handle_send_note_off` paths.
+//! - Output sends happen on the engine control thread only.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
+
+use crossbeam_channel::Sender;
+use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
+
+use crate::types::TrackId;
+
+/// A hardware MIDI port the user can pick from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MidiDeviceInfo {
+    pub name: String,
+}
+
+impl std::fmt::Display for MidiDeviceInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
+/// MIDI events crossing thread boundaries between the midir input
+/// callback / audio thread and the engine control thread.
+#[derive(Debug, Clone)]
+pub enum LiveMidiEvent {
+    /// Hardware MIDI input arrived on a track's configured input port.
+    /// Drained on the engine control thread and routed to:
+    /// (1) the track's instrument plugin via `queue_note_on`,
+    /// (2) the track's record clip if armed and transport is playing,
+    /// (3) the track's MIDI output device if configured (Thru).
+    InboundNoteOn {
+        track_id: TrackId,
+        note: u8,
+        velocity: f32,
+    },
+    InboundNoteOff {
+        track_id: TrackId,
+        note: u8,
+    },
+    /// Timeline playback emitted a note on a track that has a MIDI
+    /// output device configured. Sent from the audio thread; drained
+    /// on the engine control thread and forwarded to the device.
+    OutboundTimelineNoteOn {
+        track_id: TrackId,
+        note: u8,
+        velocity: f32,
+    },
+    OutboundTimelineNoteOff {
+        track_id: TrackId,
+        note: u8,
+    },
+}
+
+/// Enumerate currently-available MIDI input devices.
+pub fn enumerate_midi_inputs() -> Vec<MidiDeviceInfo> {
+    let input = match MidiInput::new("resonance-enumerate-in") {
+        Ok(i) => i,
+        Err(_) => return Vec::new(),
+    };
+    input
+        .ports()
+        .iter()
+        .filter_map(|p| input.port_name(p).ok())
+        .map(|name| MidiDeviceInfo { name })
+        .collect()
+}
+
+/// Enumerate currently-available MIDI output devices.
+pub fn enumerate_midi_outputs() -> Vec<MidiDeviceInfo> {
+    let output = match MidiOutput::new("resonance-enumerate-out") {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    output
+        .ports()
+        .iter()
+        .filter_map(|p| output.port_name(p).ok())
+        .map(|name| MidiDeviceInfo { name })
+        .collect()
+}
+
+/// Encodes the channel filter as either omni (`u8::MAX`) or a
+/// specific 0-indexed channel (0..=15). Stored in an atomic so that
+/// changing the filter doesn't require restarting the connection.
+const CHANNEL_OMNI: u8 = u8::MAX;
+
+struct ActiveInputConn {
+    device_name: String,
+    _conn: MidiInputConnection<()>,
+    channel_filter: Arc<AtomicU8>,
+}
+
+/// Per-track hardware MIDI input registry. Owns one open
+/// [`MidiInputConnection`] per track, plus a "pending" set for
+/// tracks whose configured device isn't currently plugged in.
+pub struct MidiInputRegistry {
+    connections: HashMap<TrackId, ActiveInputConn>,
+    pending: HashMap<TrackId, (String, Option<u8>)>,
+    tx: Sender<LiveMidiEvent>,
+}
+
+impl MidiInputRegistry {
+    pub fn new(tx: Sender<LiveMidiEvent>) -> Self {
+        Self {
+            connections: HashMap::new(),
+            pending: HashMap::new(),
+            tx,
+        }
+    }
+
+    /// Set a track's MIDI input source. `device_name = None` removes
+    /// any existing connection and clears any pending request. If the
+    /// requested device isn't currently present the request is stored
+    /// as pending and reconciled on the next [`Self::reconcile`] call.
+    pub fn set_track_input(
+        &mut self,
+        track_id: TrackId,
+        device_name: Option<String>,
+        channel_filter: Option<u8>,
+    ) -> Result<(), String> {
+        // Live update: if a connection already exists for this track
+        // and only the channel filter changed, swap the atomic in
+        // place rather than re-opening.
+        if let Some(active) = self.connections.get(&track_id) {
+            if Some(&active.device_name) == device_name.as_ref() {
+                active
+                    .channel_filter
+                    .store(encode_channel_filter(channel_filter), Ordering::Relaxed);
+                return Ok(());
+            }
+        }
+
+        // Drop any previous connection on this track.
+        self.connections.remove(&track_id);
+        self.pending.remove(&track_id);
+
+        let Some(name) = device_name else {
+            return Ok(());
+        };
+
+        // Try to open the requested device immediately. If it isn't
+        // present, store the desire as pending and surface no error
+        // — the user gets feedback through the picker (the
+        // configured-but-missing italic style).
+        match open_input(&name, track_id, channel_filter, self.tx.clone()) {
+            Ok(active) => {
+                self.connections.insert(track_id, active);
+                Ok(())
+            }
+            Err(_) => {
+                self.pending.insert(track_id, (name, channel_filter));
+                Ok(())
+            }
+        }
+    }
+
+    /// Drop any connection associated with a removed track.
+    pub fn remove_track(&mut self, track_id: TrackId) {
+        self.connections.remove(&track_id);
+        self.pending.remove(&track_id);
+    }
+
+    /// Walk the pending set and try to open connections for any
+    /// devices that have just appeared. Called after every
+    /// enumeration so a freshly plugged-in controller starts working
+    /// without the user touching the picker.
+    pub fn reconcile(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let pending: Vec<(TrackId, String, Option<u8>)> = self
+            .pending
+            .iter()
+            .map(|(k, (n, c))| (*k, n.clone(), *c))
+            .collect();
+        for (track_id, name, channel) in pending {
+            if let Ok(active) = open_input(&name, track_id, channel, self.tx.clone()) {
+                self.connections.insert(track_id, active);
+                self.pending.remove(&track_id);
+            }
+        }
+    }
+}
+
+/// Try to open the named MIDI input port and wire up the message
+/// callback. Used both by `set_track_input` and by `reconcile`.
+fn open_input(
+    name: &str,
+    track_id: TrackId,
+    channel_filter: Option<u8>,
+    tx: Sender<LiveMidiEvent>,
+) -> Result<ActiveInputConn, String> {
+    let input =
+        MidiInput::new("resonance-input").map_err(|e| format!("create midi input: {e}"))?;
+    let port = input
+        .ports()
+        .into_iter()
+        .find(|p| input.port_name(p).map(|n| n == name).unwrap_or(false))
+        .ok_or_else(|| format!("midi input port not found: {name}"))?;
+
+    let filter = Arc::new(AtomicU8::new(encode_channel_filter(channel_filter)));
+    let filter_callback = Arc::clone(&filter);
+    let tx_callback = tx;
+    let conn = input
+        .connect(
+            &port,
+            "resonance-input-conn",
+            move |_timestamp, raw, _| {
+                let filter_val = filter_callback.load(Ordering::Relaxed);
+                if let Some(event) = parse_live_event(raw, track_id, filter_val) {
+                    let _ = tx_callback.try_send(event);
+                }
+            },
+            (),
+        )
+        .map_err(|e| format!("connect midi input {name}: {e}"))?;
+
+    Ok(ActiveInputConn {
+        device_name: name.to_string(),
+        _conn: conn,
+        channel_filter: filter,
+    })
+}
+
+fn encode_channel_filter(c: Option<u8>) -> u8 {
+    match c {
+        Some(ch) if ch <= 15 => ch,
+        _ => CHANNEL_OMNI,
+    }
+}
+
+/// Parse a raw MIDI status byte slice from `midir` into a
+/// [`LiveMidiEvent::InboundNoteOn`] / `InboundNoteOff`. Returns
+/// `None` for non-note messages, channel-filtered messages, or
+/// malformed data. A NoteOn with velocity 0 is normalised to
+/// NoteOff to follow the running-status convention.
+fn parse_live_event(raw: &[u8], track_id: TrackId, filter: u8) -> Option<LiveMidiEvent> {
+    let status = *raw.first()?;
+    let kind = status & 0xF0;
+    let channel = status & 0x0F;
+    if filter != CHANNEL_OMNI && channel != filter {
+        return None;
+    }
+    match kind {
+        0x90 if raw.len() >= 3 => {
+            let note = raw[1] & 0x7F;
+            let velocity = raw[2] & 0x7F;
+            if velocity == 0 {
+                Some(LiveMidiEvent::InboundNoteOff { track_id, note })
+            } else {
+                Some(LiveMidiEvent::InboundNoteOn {
+                    track_id,
+                    note,
+                    velocity: velocity as f32 / 127.0,
+                })
+            }
+        }
+        0x80 if raw.len() >= 3 => {
+            let note = raw[1] & 0x7F;
+            Some(LiveMidiEvent::InboundNoteOff { track_id, note })
+        }
+        _ => None,
+    }
+}
+
+// -----------------------------------------------------------------------------
+// MIDI output
+// -----------------------------------------------------------------------------
+
+struct ActiveOutputConn {
+    conn: MidiOutputConnection,
+    refcount: usize,
+}
+
+/// Per-device hardware MIDI output registry. Multiple tracks can
+/// target the same physical device; the registry refcounts the
+/// underlying [`MidiOutputConnection`] so the device opens once.
+pub struct MidiOutputRegistry {
+    connections: HashMap<String, ActiveOutputConn>,
+    track_assignments: HashMap<TrackId, String>,
+}
+
+impl MidiOutputRegistry {
+    pub fn new() -> Self {
+        Self {
+            connections: HashMap::new(),
+            track_assignments: HashMap::new(),
+        }
+    }
+
+    /// Assign or clear a track's MIDI output device. Refcounts the
+    /// underlying device connection so multiple tracks can share one
+    /// physical port.
+    pub fn set_track_output(
+        &mut self,
+        track_id: TrackId,
+        device_name: Option<String>,
+    ) -> Result<(), String> {
+        // Drop any previous assignment for this track first, sending
+        // All Notes Off so a hardware synth doesn't sustain a stale
+        // note across the reassign.
+        if let Some(prev_name) = self.track_assignments.remove(&track_id) {
+            self.send_all_notes_off(&prev_name);
+            if let Some(active) = self.connections.get_mut(&prev_name) {
+                active.refcount = active.refcount.saturating_sub(1);
+                if active.refcount == 0 {
+                    self.connections.remove(&prev_name);
+                }
+            }
+        }
+
+        let Some(name) = device_name else {
+            return Ok(());
+        };
+
+        if let Some(active) = self.connections.get_mut(&name) {
+            active.refcount += 1;
+            self.track_assignments.insert(track_id, name);
+            return Ok(());
+        }
+
+        let output = MidiOutput::new("resonance-output")
+            .map_err(|e| format!("create midi output: {e}"))?;
+        let port = output
+            .ports()
+            .into_iter()
+            .find(|p| output.port_name(p).map(|n| n == name).unwrap_or(false))
+            .ok_or_else(|| format!("midi output port not found: {name}"))?;
+        let conn = output
+            .connect(&port, "resonance-output-conn")
+            .map_err(|e| format!("connect midi output {name}: {e}"))?;
+
+        self.connections.insert(
+            name.clone(),
+            ActiveOutputConn { conn, refcount: 1 },
+        );
+        self.track_assignments.insert(track_id, name);
+        Ok(())
+    }
+
+    /// Drop any connection associated with a removed track.
+    pub fn remove_track(&mut self, track_id: TrackId) {
+        let _ = self.set_track_output(track_id, None);
+    }
+
+    /// Send a Note On to the device assigned to `track_id`, if any.
+    pub fn send_note_on(&mut self, track_id: TrackId, channel: u8, note: u8, velocity: u8) {
+        let Some(name) = self.track_assignments.get(&track_id).cloned() else {
+            return;
+        };
+        if let Some(active) = self.connections.get_mut(&name) {
+            let ch = channel & 0x0F;
+            let _ = active.conn.send(&[0x90 | ch, note & 0x7F, velocity & 0x7F]);
+        }
+    }
+
+    /// Send a Note Off to the device assigned to `track_id`, if any.
+    pub fn send_note_off(&mut self, track_id: TrackId, channel: u8, note: u8) {
+        let Some(name) = self.track_assignments.get(&track_id).cloned() else {
+            return;
+        };
+        if let Some(active) = self.connections.get_mut(&name) {
+            let ch = channel & 0x0F;
+            let _ = active.conn.send(&[0x80 | ch, note & 0x7F, 0]);
+        }
+    }
+
+    /// Send `All Notes Off` (CC 123 = 0) on every channel of `device_name`.
+    /// Called whenever a track's assignment changes, the track is
+    /// removed, or the engine shuts down — without this, a hardware
+    /// synth would sustain whatever note was held when the connection
+    /// went away.
+    fn send_all_notes_off(&mut self, device_name: &str) {
+        if let Some(active) = self.connections.get_mut(device_name) {
+            for ch in 0u8..=15 {
+                let _ = active.conn.send(&[0xB0 | ch, 123, 0]);
+            }
+        }
+    }
+
+    /// Send `All Notes Off` on every connected device. Called from
+    /// the transport-stop handler so stuck notes never outlive a
+    /// `Stop` press.
+    pub fn all_notes_off_everywhere(&mut self) {
+        let names: Vec<String> = self.connections.keys().cloned().collect();
+        for name in names {
+            self.send_all_notes_off(&name);
+        }
+    }
+
+    /// True if the track has a configured output device. Used by the
+    /// engine thread to decide whether to forward inbound or
+    /// timeline notes onto the hardware.
+    pub fn has_output(&self, track_id: TrackId) -> bool {
+        self.track_assignments.contains_key(&track_id)
+    }
+}
+
+impl Default for MidiOutputRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Parse raw MIDI bytes from a hardware input port. Exposed for
+/// tests under `resonance-audio/tests/`.
+pub fn parse_live_event_for_test(
+    raw: &[u8],
+    track_id: TrackId,
+    channel_filter: Option<u8>,
+) -> Option<LiveMidiEvent> {
+    parse_live_event(raw, track_id, encode_channel_filter(channel_filter))
+}

@@ -220,6 +220,19 @@ pub struct TrackState {
     /// chain of their own, and no record arm — they're fed entirely from
     /// the parent plugin's fan-out. `None` on all normal tracks.
     pub sub_track: Option<SubTrackLink>,
+    /// Hardware MIDI input device the user picked for this track. Notes
+    /// arriving on this device feed the track's instrument plugin (live
+    /// monitoring) and, when the track is record-armed during playback,
+    /// are captured into a MIDI clip on the timeline.
+    pub midi_input_device: Option<String>,
+    /// Channel filter for hardware MIDI input. `None` = omni (accept any).
+    pub midi_input_channel: Option<u8>,
+    /// Hardware MIDI output device. Notes played on this track (currently
+    /// live input passthrough; timeline playback to external is a future
+    /// extension) are also sent here in addition to the instrument plugin.
+    pub midi_output_device: Option<String>,
+    /// Channel that hardware MIDI output uses (`None` = channel 1).
+    pub midi_output_channel: Option<u8>,
 }
 
 /// Identifies a sub-track's parent and which plugin output port it reads.
@@ -259,6 +272,10 @@ impl TrackState {
             instrument_icon: InstrumentIcon::Music,
             role: None,
             sub_track: None,
+            midi_input_device: None,
+            midi_input_channel: None,
+            midi_output_device: None,
+            midi_output_channel: None,
         }
     }
 
@@ -287,6 +304,10 @@ impl TrackState {
             instrument_icon: InstrumentIcon::Music,
             role: None,
             sub_track: None,
+            midi_input_device: None,
+            midi_input_channel: None,
+            midi_output_device: None,
+            midi_output_channel: None,
         }
     }
 

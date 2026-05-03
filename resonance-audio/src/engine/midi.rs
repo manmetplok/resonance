@@ -2,9 +2,14 @@
 //! live-MIDI note-on/note-off passthrough to the track's instrument
 //! plugin.
 
+use std::collections::HashMap;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
+use crate::midi_hardware::{enumerate_midi_inputs, enumerate_midi_outputs, LiveMidiEvent};
 use crate::types::*;
 
-use super::thread::{HandlerCtx, HandlerState};
+use super::thread::{HandlerCtx, HandlerState, RecordingMidiState};
 
 pub(crate) fn handle_add_instrument_track(
     ctx: &HandlerCtx,
@@ -232,32 +237,562 @@ pub(crate) fn handle_set_midi_note_velocity(
     }
 }
 
-pub(crate) fn handle_send_note_on(ctx: &HandlerCtx, track_id: TrackId, note: u8, velocity: f32) {
-    let tracks_guard = ctx.tracks.read();
-    if let Some(track) = tracks_guard.get(&track_id) {
-        if track.track_type == TrackType::Instrument {
-            if let Some(&inst_id) = track.plugin_ids.first() {
-                let plugins_guard = ctx.plugins.read();
-                if let Some(mutex) = plugins_guard.get(&inst_id) {
-                    let mut inst = mutex.lock();
-                    inst.0.queue_note_on(note, velocity, 0);
+pub(crate) fn handle_send_note_on(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    track_id: TrackId,
+    note: u8,
+    velocity: f32,
+) {
+    let channel = {
+        let tracks_guard = ctx.tracks.read();
+        let Some(track) = tracks_guard.get(&track_id) else {
+            return;
+        };
+        if track.track_type != TrackType::Instrument {
+            return;
+        }
+        if let Some(&inst_id) = track.plugin_ids.first() {
+            let plugins_guard = ctx.plugins.read();
+            if let Some(mutex) = plugins_guard.get(&inst_id) {
+                let mut inst = mutex.lock();
+                inst.0.queue_note_on(note, velocity, 0);
+            }
+        }
+        track.midi_output_channel.unwrap_or(0)
+    };
+    let velocity_u8 = (velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
+    state
+        .midi_outputs
+        .send_note_on(track_id, channel, note, velocity_u8);
+}
+
+pub(crate) fn handle_send_note_off(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    track_id: TrackId,
+    note: u8,
+) {
+    let channel = {
+        let tracks_guard = ctx.tracks.read();
+        let Some(track) = tracks_guard.get(&track_id) else {
+            return;
+        };
+        if track.track_type != TrackType::Instrument {
+            return;
+        }
+        if let Some(&inst_id) = track.plugin_ids.first() {
+            let plugins_guard = ctx.plugins.read();
+            if let Some(mutex) = plugins_guard.get(&inst_id) {
+                let mut inst = mutex.lock();
+                inst.0.queue_note_off(note, 0);
+            }
+        }
+        track.midi_output_channel.unwrap_or(0)
+    };
+    state.midi_outputs.send_note_off(track_id, channel, note);
+}
+
+// -----------------------------------------------------------------------------
+// Hardware MIDI I/O
+// -----------------------------------------------------------------------------
+
+pub(crate) fn handle_list_midi_inputs(ctx: &HandlerCtx, state: &mut HandlerState) {
+    let devices = enumerate_midi_inputs();
+    // Reconcile pending input requests: a controller that was
+    // configured but not present at the time may have just been
+    // plugged in. Opening connections here makes "unplug, replug"
+    // work without the user touching the picker again.
+    state.midi_inputs.reconcile();
+    let _ = ctx
+        .event_tx
+        .send(AudioEvent::MidiInputDevicesListed { devices });
+}
+
+pub(crate) fn handle_list_midi_outputs(ctx: &HandlerCtx) {
+    let devices = enumerate_midi_outputs();
+    let _ = ctx
+        .event_tx
+        .send(AudioEvent::MidiOutputDevicesListed { devices });
+}
+
+pub(crate) fn handle_set_track_midi_input(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    track_id: TrackId,
+    device: Option<String>,
+    channel: Option<u8>,
+) {
+    // Persist the desired config on the engine-side track for
+    // subsequent saves and for the registry's reconnect-on-replug
+    // path. Plain field write — only the engine thread reads it.
+    {
+        let mut tracks = ctx.tracks.write();
+        if let Some(t) = tracks.get_mut(&track_id) {
+            t.midi_input_device = device.clone();
+            t.midi_input_channel = channel;
+        }
+    }
+    if let Err(e) = state.midi_inputs.set_track_input(track_id, device, channel) {
+        let _ = ctx.event_tx.send(AudioEvent::Error(e));
+    }
+}
+
+pub(crate) fn handle_set_track_midi_output(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    track_id: TrackId,
+    device: Option<String>,
+    channel: Option<u8>,
+) {
+    // Mirror onto the engine-side track. The audio thread reads
+    // `midi_output_device` via arc-swap (no lock), so this update is
+    // visible to the next mix block immediately.
+    {
+        let tracks = ctx.tracks.read();
+        if let Some(t) = tracks.get(&track_id) {
+            match &device {
+                Some(name) => t.midi_output_device.store(Some(Arc::new(name.clone()))),
+                None => t.midi_output_device.store(None),
+            }
+        }
+    }
+    {
+        let mut tracks = ctx.tracks.write();
+        if let Some(t) = tracks.get_mut(&track_id) {
+            t.midi_output_channel = channel;
+        }
+    }
+    if let Err(e) = state.midi_outputs.set_track_output(track_id, device) {
+        let _ = ctx.event_tx.send(AudioEvent::Error(e));
+    }
+}
+
+/// Dispatch a single drained `LiveMidiEvent`. Routes inbound notes
+/// to the track's instrument plugin (live monitoring), to a
+/// recording clip (when the track is armed during playback), and to
+/// the track's MIDI output device (Thru). Routes timeline-sourced
+/// outbound events directly to the device, which is the Phase 2
+/// "play timeline → external synth" path.
+pub(crate) fn handle_live_midi_event(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    event: LiveMidiEvent,
+) {
+    match event {
+        LiveMidiEvent::InboundNoteOn {
+            track_id,
+            note,
+            velocity,
+        } => {
+            // handle_send_note_on already routes to plugin AND to
+            // the configured MIDI output (Thru). Record-into-clip
+            // happens separately; recording must not also re-emit
+            // the note.
+            handle_send_note_on(ctx, state, track_id, note, velocity);
+            handle_record_midi_event(ctx, state, track_id, true, note, velocity);
+        }
+        LiveMidiEvent::InboundNoteOff { track_id, note } => {
+            handle_send_note_off(ctx, state, track_id, note);
+            handle_record_midi_event(ctx, state, track_id, false, note, 0.0);
+        }
+        LiveMidiEvent::OutboundTimelineNoteOn {
+            track_id,
+            note,
+            velocity,
+        } => {
+            let channel = ctx
+                .tracks
+                .read()
+                .get(&track_id)
+                .and_then(|t| t.midi_output_channel)
+                .unwrap_or(0);
+            let velocity_u8 = (velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
+            state
+                .midi_outputs
+                .send_note_on(track_id, channel, note, velocity_u8);
+        }
+        LiveMidiEvent::OutboundTimelineNoteOff { track_id, note } => {
+            let channel = ctx
+                .tracks
+                .read()
+                .get(&track_id)
+                .and_then(|t| t.midi_output_channel)
+                .unwrap_or(0);
+            state.midi_outputs.send_note_off(track_id, channel, note);
+        }
+    }
+}
+
+/// Append a live note event into the track's currently-recording
+/// MIDI clip when the track is record-armed and transport is
+/// playing. Lazily creates a clip on the first NoteOn.
+pub(crate) fn handle_record_midi_event(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    track_id: TrackId,
+    is_note_on: bool,
+    note: u8,
+    velocity: f32,
+) {
+    if !ctx.shared.playing.load(Ordering::Relaxed) {
+        return;
+    }
+    // Only record into instrument tracks that are armed.
+    let armed = {
+        let tracks = ctx.tracks.read();
+        match tracks.get(&track_id) {
+            Some(t) => t.track_type == TrackType::Instrument && t.record_armed(),
+            None => return,
+        }
+    };
+    if !armed {
+        return;
+    }
+
+    let playhead_sample = ctx.shared.playhead.load(Ordering::Relaxed);
+    let abs_tick = sample_to_abs_tick(&ctx.tempo_map.read(), playhead_sample, ctx.sample_rate);
+
+    if is_note_on {
+        let rec = state.midi_recording.entry(track_id).or_insert_with(|| {
+            // Lazy clip creation on the first note. Start the clip
+            // exactly at the current playhead so the first note has
+            // start_tick = 0.
+            let clip_id = state.next_clip_id;
+            state.next_clip_id += 1;
+            let clip = MidiClip {
+                id: clip_id,
+                track_id,
+                start_sample: playhead_sample,
+                duration_ticks: 0,
+                notes: Vec::new(),
+                name: format!("MIDI Take {}", clip_id),
+                trim_start_ticks: 0,
+                trim_end_ticks: 0,
+            };
+            ctx.midi_clips.write().push(clip);
+            let _ = ctx.event_tx.send(AudioEvent::MidiClipCreated {
+                clip_id,
+                track_id,
+                start_sample: playhead_sample,
+                duration_ticks: 0,
+                name: format!("MIDI Take {}", clip_id),
+                notes: Vec::new(),
+                trim_start_ticks: 0,
+                trim_end_ticks: 0,
+            });
+            RecordingMidiState {
+                clip_id,
+                clip_start_tick: abs_tick,
+                open_notes: HashMap::new(),
+            }
+        });
+        let clip_id = rec.clip_id;
+        let start_tick = abs_tick.saturating_sub(rec.clip_start_tick);
+        let new_note = MidiNote {
+            note,
+            velocity,
+            start_tick,
+            duration_ticks: 0,
+        };
+        let mut clips = ctx.midi_clips.write();
+        if let Some(clip) = clips.iter_mut().find(|c| c.id == clip_id) {
+            // Recording always appends in time order, but a stale
+            // out-of-order event from a midir thread could land
+            // after a later one. Insert sorted so playback stays
+            // deterministic.
+            let pos = clip
+                .notes
+                .partition_point(|n| n.start_tick <= start_tick);
+            clip.notes.insert(pos, new_note.clone());
+            // Track open notes by index. partition_point inserted
+            // at `pos`, so any prior open-note indices ≥ pos shift up.
+            for idx in rec.open_notes.values_mut() {
+                if *idx >= pos {
+                    *idx += 1;
                 }
+            }
+            rec.open_notes.insert(note, pos);
+            // Grow the clip's logical duration so the timeline
+            // keeps drawing it — the user sees the clip extend in
+            // real time as they play.
+            clip.duration_ticks = clip.duration_ticks.max(start_tick + 1);
+            let _ = ctx
+                .event_tx
+                .send(AudioEvent::MidiNoteAdded { clip_id, note: new_note });
+        }
+    } else {
+        // NoteOff — close the matching open note's duration. If we
+        // never saw the matching NoteOn (out-of-order, or playback
+        // started mid-press) drop silently.
+        let Some(rec) = state.midi_recording.get_mut(&track_id) else {
+            return;
+        };
+        let Some(idx) = rec.open_notes.remove(&note) else {
+            return;
+        };
+        let clip_id = rec.clip_id;
+        let mut clips = ctx.midi_clips.write();
+        if let Some(clip) = clips.iter_mut().find(|c| c.id == clip_id) {
+            if let Some(n) = clip.notes.get_mut(idx) {
+                let duration = abs_tick
+                    .saturating_sub(rec.clip_start_tick)
+                    .saturating_sub(n.start_tick);
+                n.duration_ticks = duration;
+                let dur = n.duration_ticks;
+                let note_index = idx;
+                let _ = ctx.event_tx.send(AudioEvent::MidiNoteResized {
+                    clip_id,
+                    note_index,
+                    new_duration_ticks: dur,
+                });
+                clip.duration_ticks = clip.duration_ticks.max(n.start_tick + dur);
             }
         }
     }
 }
 
-pub(crate) fn handle_send_note_off(ctx: &HandlerCtx, track_id: TrackId, note: u8) {
-    let tracks_guard = ctx.tracks.read();
-    if let Some(track) = tracks_guard.get(&track_id) {
-        if track.track_type == TrackType::Instrument {
-            if let Some(&inst_id) = track.plugin_ids.first() {
-                let plugins_guard = ctx.plugins.read();
-                if let Some(mutex) = plugins_guard.get(&inst_id) {
-                    let mut inst = mutex.lock();
-                    inst.0.queue_note_off(note, 0);
+/// Close any still-open recorded notes (e.g. user pressed Stop with
+/// keys held down) and clear per-track recording state. Called from
+/// the transport-stop handler.
+pub(crate) fn close_open_recordings(ctx: &HandlerCtx, state: &mut HandlerState) {
+    if state.midi_recording.is_empty() {
+        return;
+    }
+    let playhead = ctx.shared.playhead.load(Ordering::Relaxed);
+    let abs_tick = sample_to_abs_tick(&ctx.tempo_map.read(), playhead, ctx.sample_rate);
+    let mut clips = ctx.midi_clips.write();
+    for rec in state.midi_recording.values() {
+        let Some(clip) = clips.iter_mut().find(|c| c.id == rec.clip_id) else {
+            continue;
+        };
+        for (_note, idx) in rec.open_notes.iter() {
+            if let Some(n) = clip.notes.get_mut(*idx) {
+                let duration = abs_tick
+                    .saturating_sub(rec.clip_start_tick)
+                    .saturating_sub(n.start_tick);
+                n.duration_ticks = duration;
+            }
+        }
+    }
+    drop(clips);
+    state.midi_recording.clear();
+    // Send All Notes Off on every output port so a hardware synth
+    // doesn't sustain anything we'd lose on the engine side.
+    state.midi_outputs.all_notes_off_everywhere();
+}
+
+/// Convert an absolute sample position to an absolute tick using
+/// the engine's shared tempo map. Thin wrapper over
+/// [`TempoMap::sample_to_abs_tick`].
+fn sample_to_abs_tick(map: &TempoMap, sample_pos: u64, sample_rate: u32) -> u64 {
+    map.sample_to_abs_tick(sample_pos, sample_rate)
+}
+
+/// Resolution of a single outbound poll step against the previous
+/// `last_playhead`. Returned by [`outbound_step_start`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum OutboundStep {
+    /// Normal forward step. Emit notes in `[last, curr)` using the
+    /// contained `last`.
+    Continue(u64),
+    /// Discontinuity (loop wrap, seek, scrub, transport restart).
+    /// Caller must drain any outstanding held notes. If the inner
+    /// option is `Some(loop_in)`, the discontinuity is a loop wrap
+    /// and the caller should still emit notes in `[loop_in, curr)`.
+    /// If `None`, it's a genuine seek/scrub and no notes fire
+    /// retroactively this poll.
+    Discontinuity(Option<u64>),
+}
+
+/// Decide where this poll should start emitting notes from. Pure
+/// helper extracted from [`poll_timeline_to_midi_output`] so the
+/// loop-wrap rewind logic can be unit-tested without spinning up the
+/// full engine thread.
+///
+/// `max_normal_step` is hardcoded to one second (the engine polls at
+/// ~60 Hz, so any apparent jump bigger than that has to be a seek or
+/// loop wrap rather than the playhead simply advancing).
+pub fn outbound_step_start(
+    last_raw: u64,
+    curr: u64,
+    sample_rate: u32,
+    looping: bool,
+    loop_in: u64,
+    loop_out: u64,
+) -> OutboundStep {
+    let max_normal_step = sample_rate as u64;
+    let normal_step = curr >= last_raw && curr - last_raw < max_normal_step;
+    if normal_step {
+        return OutboundStep::Continue(last_raw);
+    }
+    // Loop wrap: backward jump while looping with `curr` in the loop
+    // range. The audio thread snapped the playhead from `loop_out`
+    // back to `loop_in` and advanced from there, so by the time we
+    // poll, `curr` already sits past `loop_in`. Rewind `last` to
+    // `loop_in` so the first note of the new iteration plays.
+    if looping
+        && curr < last_raw
+        && loop_out > loop_in
+        && curr >= loop_in
+        && curr < loop_out
+    {
+        OutboundStep::Discontinuity(Some(loop_in))
+    } else {
+        OutboundStep::Discontinuity(None)
+    }
+}
+
+/// Send hardware MIDI for any timeline note whose start/end fell in
+/// `(last_playhead .. current_playhead]`, on tracks configured with
+/// a MIDI output device. Runs once per engine-thread iteration
+/// (~16 ms granularity).
+///
+/// On stop, on a backward jump, or on a forward jump >1 s (scrub or
+/// seek) we emit NoteOff for everything we have outstanding and
+/// reset the cursor; otherwise the next poll would either re-fire
+/// every note since 0 or strand held notes. A loop wrap (backward
+/// jump while looping with `curr` inside the loop range) is the one
+/// discontinuity we *do* emit notes through — the cursor rewinds to
+/// `loop_in` so the first note of the new iteration plays.
+pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut HandlerState) {
+    let playing = ctx.shared.playing.load(Ordering::Relaxed);
+    if !playing {
+        // Transition to stopped: kill any outstanding hardware notes
+        // so the synth doesn't sustain. Then snap our cursor to the
+        // current playhead so the next Play resumes from there
+        // rather than re-firing every note since the last position.
+        if !state.midi_outbound_held.is_empty() {
+            let drained: Vec<((TrackId, u8), (u64, u8))> =
+                state.midi_outbound_held.drain().collect();
+            for ((tid, note), (_end, channel)) in drained {
+                state.midi_outputs.send_note_off(tid, channel, note);
+            }
+        }
+        state.midi_outbound_last_playhead = ctx.shared.playhead.load(Ordering::Relaxed);
+        return;
+    }
+
+    let curr = ctx.shared.playhead.load(Ordering::Relaxed);
+    let last_raw = state.midi_outbound_last_playhead;
+    let looping = ctx.shared.loop_enabled.load(Ordering::Relaxed);
+    let lo = ctx.shared.loop_in.load(Ordering::Relaxed);
+    let hi = ctx.shared.loop_out.load(Ordering::Relaxed);
+    let last = match outbound_step_start(
+        last_raw,
+        curr,
+        ctx.sample_rate,
+        looping,
+        lo,
+        hi,
+    ) {
+        OutboundStep::Continue(last) => last,
+        OutboundStep::Discontinuity(rewound) => {
+            // Drop every held note from the previous segment before
+            // emitting (or skipping) the new one.
+            let drained: Vec<((TrackId, u8), (u64, u8))> =
+                state.midi_outbound_held.drain().collect();
+            for ((tid, note), (_end, channel)) in drained {
+                state.midi_outputs.send_note_off(tid, channel, note);
+            }
+            match rewound {
+                Some(loop_in) => loop_in,
+                None => {
+                    state.midi_outbound_last_playhead = curr;
+                    return;
+                }
+            }
+        }
+    };
+    if curr == last {
+        return;
+    }
+
+    // Snapshot the tracks with hardware output configured. Cheap
+    // scan; typical projects have a handful of instrument tracks.
+    let output_tracks: Vec<(TrackId, u8)> = {
+        let tracks = ctx.tracks.read();
+        tracks
+            .values()
+            .filter(|t| t.midi_output_device.load_full().is_some())
+            .map(|t| (t.id, t.midi_output_channel.unwrap_or(0)))
+            .collect()
+    };
+    if output_tracks.is_empty() {
+        state.midi_outbound_last_playhead = curr;
+        return;
+    }
+
+    // First: NoteOn for any timeline note that starts in (last..curr].
+    {
+        let tempo = ctx.tempo_map.read();
+        let clips = ctx.midi_clips.read();
+        for (track_id, channel) in &output_tracks {
+            for clip in clips.iter().filter(|c| c.track_id == *track_id) {
+                // Trim is in tick space relative to the clip; the
+                // visible portion is `[trim_start, duration - trim_end]`.
+                let visible_end_tick = clip
+                    .duration_ticks
+                    .saturating_sub(clip.trim_end_ticks);
+                for note in &clip.notes {
+                    if note.start_tick < clip.trim_start_ticks
+                        || note.start_tick >= visible_end_tick
+                    {
+                        continue;
+                    }
+                    // Notes are stored in tick space relative to the
+                    // clip, but `tick_to_abs_sample` projects from
+                    // `clip.start_sample`. Subtract `trim_start_ticks`
+                    // so a trimmed clip's first audible note lands
+                    // exactly at `clip.start_sample`.
+                    let rel_start = note.start_tick - clip.trim_start_ticks;
+                    let rel_end = (note.start_tick + note.duration_ticks)
+                        .min(visible_end_tick)
+                        - clip.trim_start_ticks;
+                    let note_start =
+                        tempo.tick_to_abs_sample(clip.start_sample, rel_start, ctx.sample_rate);
+                    let note_end =
+                        tempo.tick_to_abs_sample(clip.start_sample, rel_end, ctx.sample_rate);
+                    // Half-open interval `[last, curr)`: each
+                    // sample-position is owned by exactly one poll
+                    // step, so a note at the very first playhead
+                    // value (e.g. sample 0 on the first poll after
+                    // play) fires, and no note ever fires twice.
+                    if note_start >= last && note_start < curr {
+                        let velocity_u8 =
+                            (note.velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
+                        state.midi_outputs.send_note_on(
+                            *track_id,
+                            *channel,
+                            note.note,
+                            velocity_u8,
+                        );
+                        // If the same pitch is already held (e.g.
+                        // overlapping notes on the same track), the
+                        // earlier NoteOff time gets clobbered. Most
+                        // hardware synths handle a second NoteOn on a
+                        // held pitch as "retrigger", which matches
+                        // what the user sees on the timeline.
+                        state
+                            .midi_outbound_held
+                            .insert((*track_id, note.note), (note_end, *channel));
+                    }
                 }
             }
         }
     }
+
+    // Second: NoteOff for held notes whose end fell in `[last, curr)`.
+    let to_off: Vec<((TrackId, u8), (u64, u8))> = state
+        .midi_outbound_held
+        .iter()
+        .filter(|(_, (end, _))| *end >= last && *end < curr)
+        .map(|(k, v)| (*k, *v))
+        .collect();
+    for ((tid, note), (_end, channel)) in to_off {
+        state.midi_outbound_held.remove(&(tid, note));
+        state.midi_outputs.send_note_off(tid, channel, note);
+    }
+
+    state.midi_outbound_last_playhead = curr;
 }

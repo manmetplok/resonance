@@ -95,6 +95,14 @@ pub(crate) enum TrackMessage {
     SetInstrumentIcon(TrackId, InstrumentIcon),
     SetTrackInputDevice(TrackId, Option<String>),
     SetTrackInputPort(TrackId, u16),
+    /// Pick the hardware MIDI input device for an instrument track.
+    SetTrackMidiInputDevice(TrackId, Option<String>),
+    /// Pick the hardware MIDI output device for an instrument track.
+    SetTrackMidiOutputDevice(TrackId, Option<String>),
+    /// Pick the input channel filter (`None` = omni / accept all).
+    SetTrackMidiInputChannel(TrackId, Option<u8>),
+    /// Pick the output channel (`None` = default to channel 1).
+    SetTrackMidiOutputChannel(TrackId, Option<u8>),
     /// Toggle whether a parent track's sub-tracks are shown in the mixer.
     ToggleSubTracksVisible(TrackId),
     SetTrackOutput(TrackId, TrackOutput),

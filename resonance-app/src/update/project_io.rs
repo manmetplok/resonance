@@ -188,6 +188,10 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             role: t.role,
             sub_track: t.sub_track,
             input_port_index: Some(t.input_port_index),
+            midi_input_device: t.midi_input_device.clone(),
+            midi_input_channel: t.midi_input_channel,
+            midi_output_device: t.midi_output_device.clone(),
+            midi_output_channel: t.midi_output_channel,
         })
         .collect();
 
@@ -528,6 +532,20 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
             port_index,
         });
     }
+    if pt.midi_input_device.is_some() {
+        r.engine.send(AudioCommand::SetTrackMidiInput {
+            track_id: pt.id,
+            device: pt.midi_input_device.clone(),
+            channel: pt.midi_input_channel,
+        });
+    }
+    if pt.midi_output_device.is_some() {
+        r.engine.send(AudioCommand::SetTrackMidiOutput {
+            track_id: pt.id,
+            device: pt.midi_output_device.clone(),
+            channel: pt.midi_output_channel,
+        });
+    }
 
     // Build GUI track state. Plugin slots are placeholders — their
     // params + has_gui are overwritten when the subsequent
@@ -581,6 +599,10 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
     track.role = pt.role;
     track.sub_track = pt.sub_track;
     track.input_port_index = pt.input_port_index.unwrap_or(0);
+    track.midi_input_device = pt.midi_input_device.clone();
+    track.midi_input_channel = pt.midi_input_channel;
+    track.midi_output_device = pt.midi_output_device.clone();
+    track.midi_output_channel = pt.midi_output_channel;
     r.registry.tracks.push(track);
     r.registry.next_track_order += 1;
 }

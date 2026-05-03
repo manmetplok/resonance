@@ -116,6 +116,19 @@ pub struct ProjectTrack {
     /// load with `None` (no sub-tracks existed before this feature).
     #[serde(default)]
     pub sub_track: Option<crate::state::SubTrackLink>,
+    /// Hardware MIDI input device name. `None` on legacy projects and
+    /// on tracks the user hasn't assigned.
+    #[serde(default)]
+    pub midi_input_device: Option<String>,
+    /// Hardware MIDI input channel filter (0..=15) or omni.
+    #[serde(default)]
+    pub midi_input_channel: Option<u8>,
+    /// Hardware MIDI output device name.
+    #[serde(default)]
+    pub midi_output_device: Option<String>,
+    /// Hardware MIDI output channel (0..=15), or `None` = channel 1.
+    #[serde(default)]
+    pub midi_output_channel: Option<u8>,
 }
 
 /// On-disk bus state.
