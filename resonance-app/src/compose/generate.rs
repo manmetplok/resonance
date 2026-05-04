@@ -8,7 +8,8 @@
 
 use resonance_audio::types::MidiNote;
 use resonance_music_theory::{
-    derive_bass, derive_melody, derive_pad, BassParams, GeneratedNote, MelodyParams, PadParams,
+    derive_bass, derive_bass_motif, derive_melody, derive_motif_melody_with_section, derive_pad,
+    BassParams, BassStyle, GeneratedNote, MelodyParams, MelodyStyle, MotifParams, PadParams,
     TimedChord,
 };
 use serde::{Deserialize, Serialize};
@@ -82,20 +83,38 @@ pub enum DeriveKind {
 }
 
 /// Run the generator for a derive kind against a chord list and the
-/// section's scale, returning the engine-ready MIDI notes.
+/// section's scale, returning the engine-ready MIDI notes. Motif-style
+/// bass and melody lanes route through the section-shared `motif` so
+/// they share the same underlying motif identity within a section.
 pub fn derive_notes(
     kind: DeriveKind,
     chords: &[ChordState],
     scale: Option<resonance_music_theory::Scale>,
     params: &GenerateParams,
+    motif: &MotifParams,
     ticks_per_beat: u32,
     seed: u64,
 ) -> Vec<MidiNote> {
     let timed = to_timed_chords(chords);
     let generated = match kind {
         DeriveKind::Pad => derive_pad(&timed, &params.pad, ticks_per_beat),
-        DeriveKind::Bass => derive_bass(&timed, scale, &params.bass, ticks_per_beat),
-        DeriveKind::Lead => derive_melody(&timed, scale, &params.melody, ticks_per_beat, seed),
+        DeriveKind::Bass => match params.bass.style {
+            BassStyle::Motif => {
+                derive_bass_motif(&timed, scale, &params.bass, motif, seed, ticks_per_beat)
+            }
+            _ => derive_bass(&timed, scale, &params.bass, ticks_per_beat),
+        },
+        DeriveKind::Lead => match params.melody.style {
+            MelodyStyle::Motif => derive_motif_melody_with_section(
+                &timed,
+                scale,
+                &params.melody,
+                motif,
+                seed,
+                ticks_per_beat,
+            ),
+            _ => derive_melody(&timed, scale, &params.melody, ticks_per_beat, seed),
+        },
     };
     to_midi_notes(&generated)
 }

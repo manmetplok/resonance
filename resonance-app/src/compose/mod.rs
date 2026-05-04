@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use resonance_audio::types::{ClipId, TrackId};
 use resonance_music_theory::{
-    BassParams, Chord, GeneratedMaterial, GeneratorSpec, MelodyParams, PadParams, Scale,
+    BassParams, Chord, GeneratedMaterial, GeneratorSpec, MelodyParams, MotifParams, PadParams,
+    Scale,
 };
 use serde::{Deserialize, Serialize};
 
@@ -82,7 +83,8 @@ where
         .collect()
 }
 
-/// Whether a single drum voice is manually edited or euclidean-generated.
+/// Whether a single drum voice is manually edited, euclidean-generated,
+/// or rhythmically locked to the section's shared motif.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "mode")]
 pub enum DrumVoiceMode {
@@ -92,6 +94,12 @@ pub enum DrumVoiceMode {
         hits: u32,
         rotation: i32,
     },
+    /// Each onset of the section's shared motif fires this drum voice.
+    /// Accented motif notes get a velocity boost. No tunable parameters
+    /// — the motif identity is owned by `SectionDefinitionState::motif`,
+    /// and edits there propagate via the regular `propagate_motif_change`
+    /// path.
+    Motif,
 }
 
 /// Tag-only enum used in the UI dropdown for selecting a generator kind
@@ -142,6 +150,10 @@ pub struct SectionDefinitionState {
     /// Build diatonic seventh chords instead of triads during chord
     /// generation.
     pub seventh_chords: bool,
+    /// Section-shared motif knobs. Both melody-Motif and bass-Motif lanes
+    /// in this section read from these so they share the underlying motif
+    /// identity (intervals + rhythm + accents).
+    pub motif: MotifParams,
 }
 
 #[derive(Debug, Clone)]
@@ -321,6 +333,7 @@ impl ComposeState {
                 lane_generators: d.lane_generators.clone(),
                 beats_per_chord: d.beats_per_chord,
                 seventh_chords: d.seventh_chords,
+                motif: d.motif,
             })
             .collect()
     }
@@ -368,6 +381,7 @@ impl ComposeState {
                 lane_generators: d.lane_generators.clone(),
                 beats_per_chord: d.beats_per_chord,
                 seventh_chords: d.seventh_chords,
+                motif: d.motif,
             })
             .collect();
         // Runtime-only state: start each load with an empty derived-clip
@@ -406,11 +420,89 @@ impl ComposeState {
         self.next_id = self.next_id.max(max_id);
     }
 
+    /// After loading a project, repopulate `derived_clips` by matching
+    /// loaded MIDI clips to (placement, lane-generator) pairs by start
+    /// sample + track id, and bump `next_derived_clip_id` past every
+    /// clip id that already lives in the derived range.
+    ///
+    /// Without this, the first regenerate after load would allocate a
+    /// fresh id starting at [`DERIVED_CLIP_ID_BASE`] — colliding with a
+    /// derived clip already saved with that id. The engine would then
+    /// hold two clips at the same id, and the second regenerate's
+    /// `DeleteMidiClip` would wipe both (taking out an unrelated lane).
+    pub fn rebuild_derived_clips(
+        &mut self,
+        midi_clips: &[crate::state::MidiClipState],
+        samples_per_bar: u64,
+    ) {
+        self.derived_clips.clear();
+
+        if samples_per_bar > 0 {
+            for clip in midi_clips {
+                if clip.start_sample % samples_per_bar != 0 {
+                    continue;
+                }
+                let start_bar = (clip.start_sample / samples_per_bar) as u32;
+                let entry = self.placements.iter().find_map(|p| {
+                    if p.start_bar != start_bar {
+                        return None;
+                    }
+                    let def = self.definitions.iter().find(|d| d.id == p.definition_id)?;
+                    if !def.lane_generators.contains_key(&clip.track_id) {
+                        return None;
+                    }
+                    Some((def.id, p.id))
+                });
+                if let Some((def_id, placement_id)) = entry {
+                    self.derived_clips
+                        .insert((def_id, placement_id, clip.track_id), clip.id);
+                }
+            }
+        }
+
+        let max_used = midi_clips
+            .iter()
+            .map(|c| c.id)
+            .filter(|id| *id >= DERIVED_CLIP_ID_BASE)
+            .max();
+        if let Some(m) = max_used {
+            self.next_derived_clip_id = self.next_derived_clip_id.max(m.saturating_add(1));
+        }
+    }
+
     /// Post-load migration: populate `lane_generators` from old `generate_params`
     /// + track roles when loading a project that predates the lane generator system.
     /// Call after tracks are loaded.
     pub fn migrate_old_generate_params(&mut self, tracks: &[crate::state::TrackState]) {
         use crate::state::TrackRole;
+
+        // Migrate motif knobs from any melody lane that still carries them
+        // (predates section-shared MotifParams). Take the first non-default
+        // melody lane found.
+        for def in &mut self.definitions {
+            if def.motif != MotifParams::default() {
+                continue;
+            }
+            let melody_default = MelodyParams::default();
+            if let Some(legacy) = def.lane_generators.values().find_map(|cfg| {
+                if let LaneGeneratorKind::Melody(m) = &cfg.kind {
+                    let differs = m.complexity != melody_default.complexity
+                        || m.motif_len != melody_default.motif_len
+                        || m.leap_chance != melody_default.leap_chance;
+                    if differs {
+                        return Some((m.complexity, m.motif_len, m.leap_chance, cfg.seed));
+                    }
+                }
+                None
+            }) {
+                def.motif.complexity = legacy.0;
+                def.motif.motif_len = legacy.1;
+                def.motif.leap_chance = legacy.2;
+                if def.motif.seed == 0 {
+                    def.motif.seed = legacy.3;
+                }
+            }
+        }
 
         for def in &mut self.definitions {
             // Only migrate if lane_generators is empty (old project) and
@@ -504,6 +596,7 @@ mod tests {
             lane_generators: HashMap::new(),
             beats_per_chord: 4,
             seventh_chords: false,
+            motif: MotifParams::default(),
         });
         let placement_id = state.fresh_id();
         state.placements.push(SectionPlacementState {
@@ -587,5 +680,149 @@ mod tests {
         assert_eq!(parsed[0].length_bars, 4);
         assert!(parsed[0].chords.is_empty());
         assert_eq!(parsed[0].scale, None);
+    }
+
+    /// Section motif knobs round-trip through the project I/O path.
+    #[test]
+    fn section_motif_round_trips_through_project_io() {
+        let mut state = state_with_chords_and_scale();
+        state.definitions[0].motif = MotifParams {
+            seed: 0xDEAD_BEEF_1234_5678,
+            complexity: 0.73,
+            motif_len: 5,
+            leap_chance: 0.42,
+        };
+
+        let project_defs = state.to_project_definitions();
+        let project_placements = state.to_project_placements();
+
+        let mut restored = ComposeState::default();
+        restored.load_from_project(&project_defs, &project_placements);
+
+        let restored_motif = restored.definitions[0].motif;
+        assert_eq!(restored_motif.seed, 0xDEAD_BEEF_1234_5678);
+        assert_eq!(restored_motif.complexity, 0.73);
+        assert_eq!(restored_motif.motif_len, 5);
+        assert_eq!(restored_motif.leap_chance, 0.42);
+    }
+
+    /// A project file without the `motif` key (predating this feature)
+    /// must still deserialize, with motif defaulting via serde.
+    #[test]
+    fn legacy_project_without_motif_field_loads_with_defaults() {
+        let json = r#"{
+            "id": 1,
+            "name": "Legacy",
+            "color": [0, 0, 0],
+            "length_bars": 8
+        }"#;
+        let parsed: crate::project::ProjectSectionDefinition =
+            serde_json::from_str(json).expect("legacy section JSON should parse");
+        assert_eq!(parsed.motif, MotifParams::default());
+    }
+
+    /// Older projects: a melody lane carries non-default complexity / motif_len /
+    /// leap_chance. After migration these should land on `def.motif`.
+    #[test]
+    fn migration_lifts_legacy_melody_motif_knobs_onto_section() {
+        use resonance_music_theory::{MelodyParams, MelodyStyle};
+
+        let mut state = ComposeState::default();
+        let def_id = state.fresh_id();
+        state.definitions.push(SectionDefinitionState {
+            id: def_id,
+            name: "Verse".to_string(),
+            color: [0, 0, 0],
+            length_bars: 8,
+            chords: Vec::new(),
+            scale: None,
+            progression_seed: 0,
+            generate_params: GenerateParams::default(),
+            generator_spec: None,
+            generator_seed: 0,
+            generated_material: None,
+            lane_generators: HashMap::new(),
+            beats_per_chord: 4,
+            seventh_chords: false,
+            motif: MotifParams::default(),
+        });
+
+        let custom_melody = MelodyParams {
+            style: MelodyStyle::Motif,
+            complexity: 0.85,
+            motif_len: 6,
+            leap_chance: 0.55,
+            ..MelodyParams::default()
+        };
+        state.definitions[0].lane_generators.insert(
+            100,
+            LaneGeneratorConfig {
+                kind: LaneGeneratorKind::Melody(custom_melody),
+                seed: 0xCAFEBABE,
+            },
+        );
+
+        state.migrate_old_generate_params(&[]);
+
+        let migrated = &state.definitions[0];
+        assert_eq!(migrated.motif.complexity, 0.85);
+        assert_eq!(migrated.motif.motif_len, 6);
+        assert_eq!(migrated.motif.leap_chance, 0.55);
+        assert_eq!(migrated.motif.seed, 0xCAFEBABE);
+    }
+
+    /// If the section's motif was loaded with explicit values, the
+    /// migration path must not overwrite them.
+    #[test]
+    fn migration_skips_when_motif_already_customized() {
+        use resonance_music_theory::{MelodyParams, MelodyStyle};
+
+        let mut state = ComposeState::default();
+        let def_id = state.fresh_id();
+        state.definitions.push(SectionDefinitionState {
+            id: def_id,
+            name: "Verse".to_string(),
+            color: [0, 0, 0],
+            length_bars: 8,
+            chords: Vec::new(),
+            scale: None,
+            progression_seed: 0,
+            generate_params: GenerateParams::default(),
+            generator_spec: None,
+            generator_seed: 0,
+            generated_material: None,
+            lane_generators: HashMap::new(),
+            beats_per_chord: 4,
+            seventh_chords: false,
+            motif: MotifParams {
+                seed: 7,
+                complexity: 0.1,
+                motif_len: 2,
+                leap_chance: 0.05,
+            },
+        });
+
+        let custom_melody = MelodyParams {
+            style: MelodyStyle::Motif,
+            complexity: 0.99,
+            motif_len: 6,
+            leap_chance: 0.99,
+            ..MelodyParams::default()
+        };
+        state.definitions[0].lane_generators.insert(
+            100,
+            LaneGeneratorConfig {
+                kind: LaneGeneratorKind::Melody(custom_melody),
+                seed: 1234,
+            },
+        );
+
+        state.migrate_old_generate_params(&[]);
+
+        let after = &state.definitions[0];
+        assert_eq!(after.motif.complexity, 0.1);
+        assert_eq!(after.motif.motif_len, 2);
+        assert_eq!(after.motif.leap_chance, 0.05);
+        assert_eq!(after.motif.seed, 7);
     }
 }

@@ -15,7 +15,7 @@
 //!   `handle_send_note_on` / `handle_send_note_off` paths.
 //! - Output sends happen on the engine control thread only.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
@@ -301,6 +301,11 @@ fn parse_live_event(
 struct ActiveOutputConn {
     conn: MidiOutputConnection,
     refcount: usize,
+    /// Every (channel, note) we've sent NoteOn for and not yet sent
+    /// NoteOff for. The panic path uses this to send an explicit
+    /// NoteOff per held note — far more reliable than CC 123, which
+    /// some hardware synths and virtual MIDI bridges ignore.
+    active_notes: HashSet<(u8, u8)>,
 }
 
 /// Per-device hardware MIDI output registry. Multiple tracks can
@@ -363,7 +368,11 @@ impl MidiOutputRegistry {
 
         self.connections.insert(
             name.clone(),
-            ActiveOutputConn { conn, refcount: 1 },
+            ActiveOutputConn {
+                conn,
+                refcount: 1,
+                active_notes: HashSet::new(),
+            },
         );
         self.track_assignments.insert(track_id, name);
         Ok(())
@@ -381,7 +390,9 @@ impl MidiOutputRegistry {
         };
         if let Some(active) = self.connections.get_mut(&name) {
             let ch = channel & 0x0F;
-            let _ = active.conn.send(&[0x90 | ch, note & 0x7F, velocity & 0x7F]);
+            let n = note & 0x7F;
+            let _ = active.conn.send(&[0x90 | ch, n, velocity & 0x7F]);
+            active.active_notes.insert((ch, n));
         }
     }
 
@@ -392,26 +403,37 @@ impl MidiOutputRegistry {
         };
         if let Some(active) = self.connections.get_mut(&name) {
             let ch = channel & 0x0F;
-            let _ = active.conn.send(&[0x80 | ch, note & 0x7F, 0]);
+            let n = note & 0x7F;
+            let _ = active.conn.send(&[0x80 | ch, n, 0]);
+            active.active_notes.remove(&(ch, n));
         }
     }
 
-    /// Send `All Notes Off` (CC 123 = 0) on every channel of `device_name`.
-    /// Called whenever a track's assignment changes, the track is
-    /// removed, or the engine shuts down — without this, a hardware
-    /// synth would sustain whatever note was held when the connection
-    /// went away.
+    /// Full MIDI panic for one device: explicit Note Off for every note
+    /// we know is held, then sustain pedal off (CC 64 = 0) and All Notes
+    /// Off (CC 123 = 0) on every channel.
+    ///
+    /// The explicit Note Offs are the load-bearing part — CC 123 is
+    /// ignored by some hardware synths and virtual MIDI bridges, and
+    /// CC 64 wouldn't release a sustained note even when CC 123 fires.
+    /// The CCs are belt-and-suspenders for any held note we missed.
     fn send_all_notes_off(&mut self, device_name: &str) {
-        if let Some(active) = self.connections.get_mut(device_name) {
-            for ch in 0u8..=15 {
-                let _ = active.conn.send(&[0xB0 | ch, 123, 0]);
-            }
+        let Some(active) = self.connections.get_mut(device_name) else {
+            return;
+        };
+        let held: Vec<(u8, u8)> = active.active_notes.drain().collect();
+        for (ch, note) in held {
+            let _ = active.conn.send(&[0x80 | ch, note, 0]);
+        }
+        for ch in 0u8..=15 {
+            let _ = active.conn.send(&[0xB0 | ch, 64, 0]);
+            let _ = active.conn.send(&[0xB0 | ch, 123, 0]);
         }
     }
 
-    /// Send `All Notes Off` on every connected device. Called from
-    /// the transport-stop handler so stuck notes never outlive a
-    /// `Stop` press.
+    /// MIDI panic on every connected device. Called from the
+    /// transport-stop and shutdown paths so stuck notes never outlive
+    /// a `Stop` press or app quit.
     pub fn all_notes_off_everywhere(&mut self) {
         let names: Vec<String> = self.connections.keys().cloned().collect();
         for name in names {

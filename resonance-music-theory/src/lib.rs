@@ -10,8 +10,10 @@ pub mod voicing;
 
 pub use chord::{Chord, ChordQuality};
 pub use derive::{
-    derive_bass, derive_melody, derive_pad, BassParams, BassStyle, ContourPreference,
-    GeneratedNote, MelodyParams, MelodyStyle, PadParams, TimedChord,
+    derive_bass, derive_bass_motif, derive_melody, derive_motif_melody_with_section,
+    derive_motif_rhythm, derive_pad, BassMotifMode, BassMotifPhrase, BassParams, BassStyle,
+    ContourPreference, GeneratedNote, MelodyParams, MelodyStyle, MotifParams, PadParams,
+    RhythmHit, TimedChord,
 };
 pub use generator::{
     Degree, GenContext, GenerateError, GeneratedChord, GeneratedMaterial, Generator, GeneratorSpec,

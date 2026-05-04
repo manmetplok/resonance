@@ -114,15 +114,20 @@ pub enum BassStyle {
     /// Scale-stepping walking bass that approaches the next chord's root.
     /// Falls back to `RootPulse` when no scale is provided.
     Walking,
+    /// Motif-based bass that consumes the section-shared motif. The exact
+    /// rendering is controlled by `BassParams::motif_mode` and the per-phrase
+    /// development by `BassParams::motif_phrase`.
+    Motif,
 }
 
 impl BassStyle {
-    pub const ALL: [BassStyle; 5] = [
+    pub const ALL: [BassStyle; 6] = [
         BassStyle::RootHold,
         BassStyle::RootPulse,
         BassStyle::RootFifth,
         BassStyle::Octave,
         BassStyle::Walking,
+        BassStyle::Motif,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -132,6 +137,7 @@ impl BassStyle {
             BassStyle::RootFifth => "Root + fifth",
             BassStyle::Octave => "Octave",
             BassStyle::Walking => "Walking",
+            BassStyle::Motif => "Motif",
         }
     }
 }
@@ -142,12 +148,100 @@ impl std::fmt::Display for BassStyle {
     }
 }
 
+/// How a `BassStyle::Motif` lane renders the section-shared motif.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BassMotifMode {
+    /// Same intervals + rhythm, anchored to the chord's bass note in the bass register.
+    SameIntervals,
+    /// Same intervals + rhythm but each note's duration ratio doubled — sits under the melody.
+    Augmented,
+    /// Use only the motif's rhythm + accents; pitches collapse to the chord's bass note.
+    RhythmOnly,
+    /// Take only the motif's first note per chord, on the chord's bass note.
+    FirstNoteOnly,
+}
+
+impl BassMotifMode {
+    pub const ALL: [BassMotifMode; 4] = [
+        BassMotifMode::SameIntervals,
+        BassMotifMode::Augmented,
+        BassMotifMode::RhythmOnly,
+        BassMotifMode::FirstNoteOnly,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BassMotifMode::SameIntervals => "Same intervals",
+            BassMotifMode::Augmented => "Augmented",
+            BassMotifMode::RhythmOnly => "Rhythm only",
+            BassMotifMode::FirstNoteOnly => "First note only",
+        }
+    }
+}
+
+impl std::fmt::Display for BassMotifMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Default for BassMotifMode {
+    fn default() -> Self {
+        BassMotifMode::SameIntervals
+    }
+}
+
+/// How a `BassStyle::Motif` lane chooses per-phrase transforms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BassMotifPhrase {
+    /// `Identity` for every phrase — predictable foundation.
+    Simple,
+    /// Same `Transform` per phrase as the melody picks (shared seed → in lockstep).
+    MirrorMelody,
+    /// Restricted set: `Identity` or `Augment` only.
+    Restricted,
+}
+
+impl BassMotifPhrase {
+    pub const ALL: [BassMotifPhrase; 3] = [
+        BassMotifPhrase::Simple,
+        BassMotifPhrase::MirrorMelody,
+        BassMotifPhrase::Restricted,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BassMotifPhrase::Simple => "Simple",
+            BassMotifPhrase::MirrorMelody => "Mirror melody",
+            BassMotifPhrase::Restricted => "Restricted",
+        }
+    }
+}
+
+impl std::fmt::Display for BassMotifPhrase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Default for BassMotifPhrase {
+    fn default() -> Self {
+        BassMotifPhrase::Simple
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BassParams {
     pub style: BassStyle,
     /// MIDI floor for the bass root. Default E1 (28).
     pub base_note: u8,
     pub velocity: f32,
+    /// How the motif is rendered when `style == Motif`.
+    #[serde(default)]
+    pub motif_mode: BassMotifMode,
+    /// How per-phrase development is handled when `style == Motif`.
+    #[serde(default)]
+    pub motif_phrase: BassMotifPhrase,
 }
 
 impl Default for BassParams {
@@ -156,6 +250,38 @@ impl Default for BassParams {
             style: BassStyle::RootPulse,
             base_note: 28, // E1
             velocity: 0.85,
+            motif_mode: BassMotifMode::SameIntervals,
+            motif_phrase: BassMotifPhrase::Simple,
+        }
+    }
+}
+
+/// Section-level motif knobs shared across all motif-style lanes.
+///
+/// Both the melody motif renderer and the bass motif renderer consume
+/// these so that, when both lanes' styles are `Motif`, they share the
+/// same underlying motif identity (intervals + rhythm + accents). Only
+/// register / velocity / contour / articulation / phrase length differ
+/// per lane.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MotifParams {
+    pub seed: u64,
+    /// 0.0 = simple, 1.0 = maximum development. Drives motif length,
+    /// rhythm pattern, and per-phrase transform variety.
+    pub complexity: f32,
+    /// Motif length override (0 = auto from complexity, else clamped to 2..=6).
+    pub motif_len: u8,
+    /// Probability of a leap vs step when generating motif intervals.
+    pub leap_chance: f32,
+}
+
+impl Default for MotifParams {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            complexity: 0.5,
+            motif_len: 0,
+            leap_chance: 0.21,
         }
     }
 }
@@ -243,6 +369,17 @@ pub fn derive_bass(
                         duration_ticks: tpb,
                     });
                 }
+            }
+            BassStyle::Motif => {
+                // Motif requires section-level MotifParams; without them
+                // (the legacy `derive_bass` entry point), fall back to
+                // RootHold so the lane still produces audible notes.
+                out.push(GeneratedNote {
+                    note: root_midi,
+                    velocity: params.velocity,
+                    start_tick,
+                    duration_ticks: beats as u64 * tpb,
+                });
             }
         }
     }
@@ -578,26 +715,25 @@ const RHYTHM_PATTERNS: &[&[u8]] = &[
     &[1, 1, 2, 1, 1],     // syncopated center
 ];
 
-/// Generate a motif: a short melodic cell of 2-6 notes with relative
-/// intervals and a rhythmic pattern.
-fn generate_motif(
+/// Build a motif: a short melodic cell of 2-6 notes with relative intervals
+/// and a rhythmic pattern. Intervals are unbounded by lane register — each
+/// lane clamps to its own register at render time, so two lanes built from
+/// the same `MotifParams` and chord get identical interval shapes.
+fn build_motif(
     rng: &mut XorShift,
     chord: Chord,
     scale: Option<Scale>,
-    register: (u8, u8),
-    complexity: f32,
-    motif_len_override: u8,
-    leap_chance: f32,
+    motif: &MotifParams,
 ) -> Vec<MotifNote> {
-    let len = if motif_len_override > 0 {
-        (motif_len_override as usize).clamp(2, 6)
+    let len = if motif.motif_len > 0 {
+        (motif.motif_len as usize).clamp(2, 6)
     } else {
-        (2.0 + complexity * 4.0).round() as usize
+        (2.0 + motif.complexity * 4.0).round() as usize
     };
 
     // Pick a rhythm pattern. Higher complexity biases toward later
     // (more complex) patterns.
-    let max_pattern = (complexity * (RHYTHM_PATTERNS.len() - 1) as f32).ceil() as usize;
+    let max_pattern = (motif.complexity * (RHYTHM_PATTERNS.len() - 1) as f32).ceil() as usize;
     let pattern_idx = rng.next_range(max_pattern.max(1) + 1).min(RHYTHM_PATTERNS.len() - 1);
     let rhythm = RHYTHM_PATTERNS[pattern_idx];
 
@@ -623,13 +759,11 @@ fn generate_motif(
         // Choose: step, leap, or repeat.
         let roll = rng.next_f32();
         let repeat_chance = 0.11;
-        let step_chance = 1.0 - leap_chance - repeat_chance;
+        let step_chance = 1.0 - motif.leap_chance - repeat_chance;
 
         let new_interval = if roll < repeat_chance {
-            // Repeat previous pitch.
             current_interval
         } else if roll < repeat_chance + step_chance {
-            // Step: 1-2 semitones.
             let step_size = if rng.next_f32() < 0.6 { 1 } else { 2 };
             let dir: i8 = if rng.next_f32() < 0.5 { 1 } else { -1 };
             let candidate = current_interval + dir * step_size;
@@ -639,7 +773,6 @@ fn generate_motif(
                 snap_to_chord_interval(candidate, &chord_intervals)
             }
         } else {
-            // Leap: 3-7 semitones.
             let leap_size = 3 + (rng.next_f32() * 4.0) as i8;
             let dir: i8 = if rng.next_f32() < 0.5 { 1 } else { -1 };
             let candidate = current_interval + dir * leap_size;
@@ -650,18 +783,7 @@ fn generate_motif(
             }
         };
 
-        // Constrain range to ~10 semitones from anchor.
         current_interval = new_interval.clamp(-10, 10);
-
-        // Clamp to register.
-        let mid = (register.0 as i16 + register.1 as i16) / 2;
-        let test_pitch = mid + current_interval as i16;
-        if test_pitch < register.0 as i16 || test_pitch > register.1 as i16 {
-            current_interval = current_interval.clamp(
-                register.0 as i8 - mid as i8,
-                register.1 as i8 - mid as i8,
-            );
-        }
 
         notes.push(MotifNote {
             interval: current_interval,
@@ -670,13 +792,29 @@ fn generate_motif(
         });
     }
 
-    // Snap last note to a chord-tone interval for resolution.
     if let Some(last) = notes.last_mut() {
         last.interval = snap_to_chord_interval(last.interval, &chord_intervals);
     }
 
     notes
 }
+
+/// Pre-compute the per-phrase Transform sequence for a motif plan. Uses a
+/// fresh RNG seeded only from `motif.seed` so two callers with the same
+/// `MotifParams` always agree on the sequence — this is what makes
+/// `BassMotifPhrase::MirrorMelody` lock to the melody.
+fn plan_motif_transforms(
+    num_phrases: usize,
+    motif_len: usize,
+    complexity: f32,
+    seed: u64,
+) -> Vec<Transform> {
+    let mut rng = XorShift::new(seed.wrapping_add(0xA1B2C3D4E5F60718));
+    (0..num_phrases)
+        .map(|i| pick_transform(motif_len, i, complexity, &mut rng))
+        .collect()
+}
+
 
 /// Get the semitone intervals of a chord's pitch classes relative to
 /// the root (e.g. major = [0, 4, 7]).
@@ -1005,21 +1143,20 @@ fn apply_gap_fill(notes: &mut Vec<GeneratedNote>, scale: &Scale, register: (u8, 
 }
 
 /// Realize a single phrase from the motif and its transformation,
-/// anchored to the chords and shaped by contour.
+/// anchored to the chords and shaped by contour. The Transform is supplied
+/// externally so that lanes which want to share transform plans (bass
+/// `MirrorMelody` mode) can compute them up-front from a fresh RNG.
 fn realize_phrase(
     motif: &[MotifNote],
+    transform: Transform,
     phrase: &PhrasePlan,
     chords: &[TimedChord],
     scale: Option<Scale>,
     register: (u8, u8),
-    rng: &mut XorShift,
-    complexity: f32,
     articulation: f32,
     velocity_base: f32,
     tpb: u64,
-    phrase_idx: usize,
 ) -> Vec<GeneratedNote> {
-    let transform = pick_transform(motif.len(), phrase_idx, complexity, rng);
     let transformed = transform_motif(motif, transform);
     if transformed.is_empty() {
         return Vec::new();
@@ -1118,6 +1255,11 @@ fn realize_phrase(
 }
 
 /// Top-level motif-based melody generator.
+///
+/// Back-compat shim: pulls motif knobs from `MelodyParams`. Direct callers
+/// (and the inline tests) keep working unchanged. The app routes through
+/// [`derive_motif_melody_with_section`] instead so the section's
+/// `MotifParams` wins.
 fn derive_motif_melody(
     chords: &[TimedChord],
     scale: Option<Scale>,
@@ -1125,48 +1267,90 @@ fn derive_motif_melody(
     ticks_per_beat: u32,
     seed: u64,
 ) -> Vec<GeneratedNote> {
-    let tpb = ticks_per_beat as u64;
-    let mut rng = XorShift::new(seed);
+    let motif = MotifParams {
+        seed,
+        complexity: params.complexity,
+        motif_len: params.motif_len,
+        leap_chance: params.leap_chance,
+    };
+    derive_motif_melody_with_section(chords, scale, params, &motif, seed, ticks_per_beat)
+}
 
-    // 1. Generate the seed motif from the first chord.
-    let motif = generate_motif(
-        &mut rng,
-        chords[0].chord,
-        scale,
-        params.register,
-        params.complexity,
-        params.motif_len,
-        params.leap_chance,
+/// Section-aware motif-based melody generator.
+///
+/// `motif_params.seed` drives the shared motif (intervals + rhythm + accents)
+/// and the per-phrase Transform sequence — both shared across all Motif
+/// lanes in a section. `lane_seed` drives lane-local randomness only:
+/// phrase contour selection (when `params.contour == Auto`) and rest-density
+/// hole placement. Pressing Regenerate on a single lane should bump
+/// `lane_seed` so the motif identity stays put while the lane gets a fresh
+/// surface variation.
+pub fn derive_motif_melody_with_section(
+    chords: &[TimedChord],
+    scale: Option<Scale>,
+    params: &MelodyParams,
+    motif_params: &MotifParams,
+    lane_seed: u64,
+    ticks_per_beat: u32,
+) -> Vec<GeneratedNote> {
+    if chords.is_empty() {
+        return Vec::new();
+    }
+    let tpb = ticks_per_beat as u64;
+
+    let mut motif_rng = XorShift::new(motif_params.seed);
+    let motif = build_motif(&mut motif_rng, chords[0].chord, scale, motif_params);
+
+    let mut lane_rng = XorShift::new(lane_seed);
+    let phrases = plan_phrases(chords, params.contour, params.phrase_len, &mut lane_rng);
+    let transforms = plan_motif_transforms(
+        phrases.len(),
+        motif.len(),
+        motif_params.complexity,
+        motif_params.seed,
     );
 
-    // 2. Plan phrases.
-    let phrases = plan_phrases(chords, params.contour, params.phrase_len, &mut rng);
+    // Per-phrase octave displacement keeps the motif identity intact
+    // (same intervals + rhythm) while giving each Regenerate press an
+    // audible shift. Without this, lane_seed only nudges contour and
+    // rest-density randomization — invisible when the user pinned a
+    // specific ContourPreference and rest_density sits at its default 0.
+    let phrase_octave_offsets: Vec<i8> = (0..phrases.len())
+        .map(|i| {
+            if i == 0 {
+                return 0;
+            }
+            let roll = lane_rng.next_f32();
+            if roll < 0.55 {
+                0
+            } else if roll < 0.85 {
+                12
+            } else {
+                -12
+            }
+        })
+        .collect();
 
-    // 3. Realize each phrase.
     let mut all_notes = Vec::new();
     let rest_gap = (tpb as f64 * (0.5 + params.rest_density as f64)) as u64;
 
     for (pi, phrase) in phrases.iter().enumerate() {
         let mut phrase_notes = realize_phrase(
             &motif,
+            transforms[pi],
             phrase,
             chords,
             scale,
             params.register,
-            &mut rng,
-            params.complexity,
             params.articulation,
             params.velocity,
             tpb,
-            pi,
         );
 
-        // 4. Gap-fill large leaps (only when scale is available).
         if let Some(scale) = scale {
             apply_gap_fill(&mut phrase_notes, &scale, params.register);
         }
 
-        // Insert inter-phrase rest by trimming last note of previous phrase.
         if pi > 0 && rest_gap > 0 {
             if let Some(last) = all_notes.last_mut() {
                 let last_note: &mut GeneratedNote = last;
@@ -1176,14 +1360,23 @@ fn derive_motif_melody(
             }
         }
 
+        let octave_shift = phrase_octave_offsets[pi];
+        if octave_shift != 0 {
+            for n in phrase_notes.iter_mut() {
+                let candidate = (n.note as i16 + octave_shift as i16).clamp(0, 127) as u8;
+                if candidate >= params.register.0 && candidate <= params.register.1 {
+                    n.note = candidate;
+                }
+            }
+        }
+
         all_notes.extend(phrase_notes);
     }
 
-    // 5. Apply rest density: probabilistically remove notes.
     if params.rest_density > 0.0 {
         let mut filtered = Vec::with_capacity(all_notes.len());
         for note in all_notes {
-            if rng.next_f32() >= params.rest_density {
+            if lane_rng.next_f32() >= params.rest_density {
                 filtered.push(note);
             }
         }
@@ -1191,6 +1384,251 @@ fn derive_motif_melody(
     }
 
     all_notes
+}
+
+// ---------------------------------------------------------------------------
+// Bass motif renderer
+// ---------------------------------------------------------------------------
+
+/// Section-aware motif-based bass generator. Builds the shared motif from
+/// `motif` + the first chord, then renders it across the chord progression
+/// according to `bass.motif_mode` (what part of the motif to use) and
+/// `bass.motif_phrase` (how to develop it across phrases).
+///
+/// `motif_params.seed` drives the shared motif and Transform plan (so a
+/// melody Motif lane in the same section produces matching interval shapes
+/// and, in `MirrorMelody` mode, matching transforms). `lane_seed` drives
+/// only this lane's phrase-contour selection — pressing Regenerate on the
+/// bass lane bumps `lane_seed` so the bass surface varies while the shared
+/// motif stays put.
+pub fn derive_bass_motif(
+    chords: &[TimedChord],
+    scale: Option<Scale>,
+    bass: &BassParams,
+    motif_params: &MotifParams,
+    lane_seed: u64,
+    ticks_per_beat: u32,
+) -> Vec<GeneratedNote> {
+    if chords.is_empty() {
+        return Vec::new();
+    }
+    let tpb = ticks_per_beat as u64;
+
+    let mut motif_rng = XorShift::new(motif_params.seed);
+    let motif = build_motif(&mut motif_rng, chords[0].chord, scale, motif_params);
+    if motif.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lane_rng = XorShift::new(lane_seed);
+    let phrases = plan_phrases(chords, ContourPreference::Auto, 4, &mut lane_rng);
+
+    // Restricted mode picks transforms from the lane RNG so pressing
+    // Regenerate produces a fresh per-phrase plan without disturbing the
+    // section's shared motif. Simple stays Identity, MirrorMelody stays
+    // locked to the melody.
+    let transforms: Vec<Transform> = match bass.motif_phrase {
+        BassMotifPhrase::Simple => vec![Transform::Identity; phrases.len()],
+        BassMotifPhrase::MirrorMelody => plan_motif_transforms(
+            phrases.len(),
+            motif.len(),
+            motif_params.complexity,
+            motif_params.seed,
+        ),
+        BassMotifPhrase::Restricted => {
+            let mut restricted_rng = XorShift::new(lane_seed.wrapping_add(0xB1A2_5E55_C0FF_EE01));
+            (0..phrases.len())
+                .map(|i| {
+                    if i == 0 || restricted_rng.next_f32() < 0.5 {
+                        Transform::Identity
+                    } else {
+                        Transform::Augment
+                    }
+                })
+                .collect()
+        }
+    };
+
+    // Per-phrase octave displacement keeps the bass motivically identical
+    // (same intervals and rhythm) while giving each Regenerate press an
+    // audible shift — phrases occasionally jump up an octave or drop down,
+    // staying inside the bass register at render time. This is the main
+    // source of lane-local variation for Simple and MirrorMelody modes,
+    // which otherwise have no per-lane randomness.
+    let phrase_octave_offsets: Vec<i8> = (0..phrases.len())
+        .map(|i| {
+            // First phrase always at the anchor octave so the section
+            // opens on the expected pitch.
+            if i == 0 {
+                return 0;
+            }
+            let roll = lane_rng.next_f32();
+            if roll < 0.55 {
+                0
+            } else if roll < 0.85 {
+                12
+            } else {
+                -12
+            }
+        })
+        .collect();
+
+    let mut out = Vec::new();
+    for (pi, phrase) in phrases.iter().enumerate() {
+        let transformed = transform_motif(&motif, transforms[pi]);
+        if transformed.is_empty() {
+            continue;
+        }
+        let octave_shift = phrase_octave_offsets[pi];
+        let phrase_chords = &chords[phrase.chord_range.0..phrase.chord_range.1];
+
+        for tc in phrase_chords {
+            let chord_start = tc.start_beat as u64 * tpb;
+            let chord_ticks = tc.duration_beats as u64 * tpb;
+            if chord_ticks == 0 {
+                continue;
+            }
+            let bass_pc = tc.chord.bass.unwrap_or(tc.chord.root);
+            let base_anchor = nearest_midi_above(bass_pc, bass.base_note);
+            let anchor = shifted_anchor(base_anchor, octave_shift, bass);
+
+            render_bass_motif_chord(
+                &transformed,
+                tc,
+                anchor,
+                bass,
+                scale,
+                chord_start,
+                chord_ticks,
+                tpb,
+                &mut out,
+            );
+        }
+    }
+
+    out
+}
+
+/// Apply an octave shift to a bass anchor while keeping it inside the
+/// configured bass window (`base_note ..= base_note + 24`). If the shift
+/// would take the anchor outside that window, fall back to the unshifted
+/// anchor — the variation is musical, not a license to leave the register.
+fn shifted_anchor(base_anchor: u8, octave_shift: i8, bass: &BassParams) -> u8 {
+    if octave_shift == 0 {
+        return base_anchor;
+    }
+    let lo = bass.base_note;
+    let hi = bass.base_note.saturating_add(24);
+    let candidate = (base_anchor as i16 + octave_shift as i16).clamp(0, 127) as u8;
+    if candidate >= lo && candidate <= hi {
+        candidate
+    } else {
+        base_anchor
+    }
+}
+
+fn render_bass_motif_chord(
+    motif: &[MotifNote],
+    tc: &TimedChord,
+    anchor: u8,
+    bass: &BassParams,
+    scale: Option<Scale>,
+    chord_start: u64,
+    chord_ticks: u64,
+    tpb: u64,
+    out: &mut Vec<GeneratedNote>,
+) {
+    let min_duration = (tpb / 8).max(1);
+    let bass_register = (bass.base_note, bass.base_note.saturating_add(24));
+
+    match bass.motif_mode {
+        BassMotifMode::FirstNoteOnly => {
+            let first = &motif[0];
+            let vel = if first.accent {
+                (bass.velocity + 0.05).min(1.0)
+            } else {
+                bass.velocity
+            };
+            out.push(GeneratedNote {
+                note: anchor,
+                velocity: vel,
+                start_tick: chord_start,
+                duration_ticks: chord_ticks,
+            });
+        }
+        BassMotifMode::RhythmOnly => {
+            let total_ratio: u64 = motif.iter().map(|n| n.duration_ratio as u64).sum();
+            if total_ratio == 0 {
+                return;
+            }
+            let mut tick_cursor = chord_start;
+            let chord_end = chord_start + chord_ticks;
+            let mut idx = 0;
+            while tick_cursor < chord_end {
+                let mn = &motif[idx % motif.len()];
+                let note_ticks = (chord_ticks * mn.duration_ratio as u64 / total_ratio).max(1);
+                let remaining = chord_end - tick_cursor;
+                let actual = note_ticks.min(remaining);
+                if actual < min_duration {
+                    break;
+                }
+                let vel = if mn.accent {
+                    (bass.velocity + 0.05).min(1.0)
+                } else {
+                    bass.velocity
+                };
+                out.push(GeneratedNote {
+                    note: anchor,
+                    velocity: vel,
+                    start_tick: tick_cursor,
+                    duration_ticks: actual,
+                });
+                tick_cursor += actual;
+                idx += 1;
+            }
+        }
+        BassMotifMode::SameIntervals | BassMotifMode::Augmented => {
+            let augment = bass.motif_mode == BassMotifMode::Augmented;
+            let total_ratio: u64 = motif
+                .iter()
+                .map(|n| n.duration_ratio as u64 * if augment { 2 } else { 1 })
+                .sum();
+            if total_ratio == 0 {
+                return;
+            }
+            let mut tick_cursor = chord_start;
+            let chord_end = chord_start + chord_ticks;
+            let mut idx = 0;
+            while tick_cursor < chord_end {
+                let mn = &motif[idx % motif.len()];
+                let dr = mn.duration_ratio as u64 * if augment { 2 } else { 1 };
+                let note_ticks = (chord_ticks * dr / total_ratio).max(1);
+                let remaining = chord_end - tick_cursor;
+                let actual = note_ticks.min(remaining);
+                if actual < min_duration {
+                    break;
+                }
+                let raw = (anchor as i16 + mn.interval as i16).clamp(0, 127) as u8;
+                let clamped = raw.clamp(bass_register.0, bass_register.1);
+                let beat_pos = tick_cursor - chord_start;
+                let aligned =
+                    align_to_harmony(clamped, beat_pos, tpb, tc.chord, scale, bass_register);
+                let vel = if mn.accent {
+                    (bass.velocity + 0.05).min(1.0)
+                } else {
+                    bass.velocity
+                };
+                out.push(GeneratedNote {
+                    note: aligned,
+                    velocity: vel,
+                    start_tick: tick_cursor,
+                    duration_ticks: actual,
+                });
+                tick_cursor += actual;
+                idx += 1;
+            }
+        }
+    }
 }
 
 /// Every MIDI note inside `register` whose pitch class appears in
@@ -1208,6 +1646,92 @@ fn chord_tones_in_register(chord: Chord, register: (u8, u8)) -> Vec<u8> {
     notes.sort_unstable();
     notes.dedup();
     notes
+}
+
+// ---------------------------------------------------------------------------
+// Drum motif rhythm
+// ---------------------------------------------------------------------------
+
+/// One onset in a motif-derived rhythm. Pitch is the caller's
+/// responsibility — drum lanes substitute their own pad note. Accent
+/// flags propagate from the motif so a downstream renderer can lift
+/// accented hits' velocity without re-deriving the motif.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RhythmHit {
+    pub start_tick: u64,
+    pub duration_ticks: u64,
+    pub accent: bool,
+}
+
+/// Project the section-shared motif onto the chord progression as a
+/// pure rhythm: tile the motif's duration ratios across each chord
+/// (same logic as the melody / bass renderers) and emit one
+/// [`RhythmHit`] per onset.
+///
+/// The output rhythm is identical across chords in the progression
+/// because we always use the `Identity` transform. That keeps the
+/// generated drum part rhythmically locked to whatever the user is
+/// playing on the melody / bass lanes — pressing a key that bumps the
+/// motif seed re-derives every motif-driven lane the same way.
+///
+/// This function does no pitch work, so it doesn't need the section's
+/// scale. Drum lanes route the hits through their pad note + velocity
+/// at clip-build time.
+pub fn derive_motif_rhythm(
+    chords: &[TimedChord],
+    motif_params: &MotifParams,
+    ticks_per_beat: u32,
+) -> Vec<RhythmHit> {
+    if chords.is_empty() {
+        return Vec::new();
+    }
+    let tpb = ticks_per_beat as u64;
+
+    let mut motif_rng = XorShift::new(motif_params.seed);
+    let motif = build_motif(&mut motif_rng, chords[0].chord, None, motif_params);
+    if motif.is_empty() {
+        return Vec::new();
+    }
+
+    let total_ratio: u64 = motif.iter().map(|n| n.duration_ratio as u64).sum();
+    if total_ratio == 0 {
+        return Vec::new();
+    }
+    // Drop notes shorter than a 32nd of a quarter — anything finer is
+    // rhythmically unintelligible and tends to create accidental
+    // double-hits when the math rounds.
+    let min_duration = (tpb / 8).max(1);
+
+    let mut out = Vec::new();
+    for tc in chords {
+        let chord_start = tc.start_beat as u64 * tpb;
+        let chord_ticks = tc.duration_beats as u64 * tpb;
+        if chord_ticks == 0 {
+            continue;
+        }
+
+        let mut tick_cursor = chord_start;
+        let chord_end = chord_start + chord_ticks;
+        let mut motif_idx = 0;
+
+        while tick_cursor < chord_end {
+            let mn = &motif[motif_idx % motif.len()];
+            let note_ticks = (chord_ticks * mn.duration_ratio as u64 / total_ratio).max(1);
+            let remaining = chord_end - tick_cursor;
+            let actual = note_ticks.min(remaining);
+            if actual < min_duration {
+                break;
+            }
+            out.push(RhythmHit {
+                start_tick: tick_cursor,
+                duration_ticks: actual,
+                accent: mn.accent,
+            });
+            tick_cursor += actual;
+            motif_idx += 1;
+        }
+    }
+    out
 }
 
 #[cfg(test)]

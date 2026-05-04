@@ -4,13 +4,14 @@
 //! lane is shared harmonic context. Selecting a lane updates this panel.
 
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, slider, text, text_input, Space,
+    button, checkbox, column, container, pick_list, row, slider, text, text_input, tooltip, Space,
 };
 use iced::{alignment, Element, Length};
 
 use resonance_audio::types::TrackId;
 use resonance_music_theory::{
-    BassStyle, ContourPreference, Degree, MelodyStyle, Mode, PitchClass, Scale, TableRegistry,
+    BassMotifMode, BassMotifPhrase, BassStyle, ContourPreference, Degree, MelodyStyle, Mode,
+    PitchClass, Scale, TableRegistry,
 };
 
 use crate::compose::drumroll::DrumrollMessage;
@@ -93,10 +94,15 @@ impl std::fmt::Display for GeneratorPick {
 enum DrumModePick {
     Manual,
     Euclidean,
+    Motif,
 }
 
 impl DrumModePick {
-    const ALL: [DrumModePick; 2] = [DrumModePick::Manual, DrumModePick::Euclidean];
+    const ALL: [DrumModePick; 3] = [
+        DrumModePick::Manual,
+        DrumModePick::Euclidean,
+        DrumModePick::Motif,
+    ];
 }
 
 impl std::fmt::Display for DrumModePick {
@@ -104,6 +110,7 @@ impl std::fmt::Display for DrumModePick {
         f.write_str(match self {
             DrumModePick::Manual => "Manual",
             DrumModePick::Euclidean => "Euclidean",
+            DrumModePick::Motif => "Motif",
         })
     }
 }
@@ -478,24 +485,41 @@ fn chord_body<'a>(
         .size(10)
         .color(theme::TEXT_DIM);
 
+    let motif_block = motif_section_block(definition);
+
     column![
         heading,
         Space::with_height(6),
-        text("Table").size(11).color(theme::TEXT_DIM),
+        label_with_info(
+            "Table",
+            "Markov transition table — picks the genre vocabulary the chord walker draws from. Pop / Modal / Jazz / Post-Rock / Metal / Classical."
+        ),
         table_picker,
         Space::with_height(4),
-        text("Chords").size(11).color(theme::TEXT_DIM),
+        label_with_info(
+            "Chords",
+            "How many chords the generator emits per Generate / Regenerate."
+        ),
         count_picker,
         Space::with_height(4),
-        text("Beats / chord").size(11).color(theme::TEXT_DIM),
+        label_with_info(
+            "Beats / chord",
+            "How many beats each chord occupies on the section grid. With 4 beats/bar, “4” means one chord per bar."
+        ),
         beats_picker,
         Space::with_height(6),
         sevenths,
         Space::with_height(6),
-        text("Start degree").size(11).color(theme::TEXT_DIM),
+        label_with_info(
+            "Start degree",
+            "Constrain the first generated chord to a scale degree (e.g. I, V). “(any)” lets the walker pick freely."
+        ),
         start_picker,
         Space::with_height(4),
-        text("End degree").size(11).color(theme::TEXT_DIM),
+        label_with_info(
+            "End degree",
+            "Constrain the last generated chord to a scale degree (e.g. I for a tonic resolution). “(any)” lets the walker pick freely."
+        ),
         end_picker,
         Space::with_height(8),
         row![gen_btn, Space::with_width(4), regen_btn].align_y(alignment::Vertical::Center),
@@ -504,6 +528,100 @@ fn chord_body<'a>(
         Space::with_height(6),
         lock_label,
         helper,
+        Space::with_height(12),
+        separator(),
+        Space::with_height(8),
+        motif_block,
+    ]
+    .spacing(2)
+    .into()
+}
+
+/// Section-shared motif knobs. Visible in the Chords lane inspector even
+/// when no lane currently consumes them, so the user can dial them in
+/// before flipping a lane to a Motif style.
+fn motif_section_block<'a>(definition: &'a SectionDefinitionState) -> Element<'a, Message> {
+    let definition_id = definition.id;
+    let motif = definition.motif;
+
+    let heading = text("Section motif").size(13).color(theme::ACCENT);
+
+    let complexity_slider = slider(0.0..=1.0, motif.complexity, move |v| {
+        Message::Compose(ComposeMessage::ChordInspector {
+            definition_id,
+            msg: ChordInspectorMsg::SetMotifComplexity(v),
+        })
+    })
+    .step(0.01)
+    .width(Length::Fill);
+
+    let leap_slider = slider(0.0..=1.0, motif.leap_chance, move |v| {
+        Message::Compose(ComposeMessage::ChordInspector {
+            definition_id,
+            msg: ChordInspectorMsg::SetMotifLeapChance(v),
+        })
+    })
+    .step(0.01)
+    .width(Length::Fill);
+
+    let motif_len_options: Vec<MotifLenPick> = vec![
+        MotifLenPick(0),
+        MotifLenPick(2),
+        MotifLenPick(3),
+        MotifLenPick(4),
+        MotifLenPick(5),
+        MotifLenPick(6),
+    ];
+    let motif_len_picker = pick_list(
+        motif_len_options,
+        Some(MotifLenPick(motif.motif_len)),
+        move |pick| {
+            Message::Compose(ComposeMessage::ChordInspector {
+                definition_id,
+                msg: ChordInspectorMsg::SetMotifLen(pick.0),
+            })
+        },
+    )
+    .text_size(12)
+    .padding([4, 6])
+    .width(Length::Fill);
+
+    let regen_btn = button(text("Regenerate motif").size(12))
+        .padding([4, 10])
+        .width(Length::Fill)
+        .style(|_theme, status| theme::transport_button_style(status))
+        .on_press(Message::Compose(ComposeMessage::ChordInspector {
+            definition_id,
+            msg: ChordInspectorMsg::RegenerateMotif,
+        }));
+
+    let seed_label = text(format!("Seed: 0x{:X}", motif.seed))
+        .size(10)
+        .color(theme::TEXT_DIM);
+
+    column![
+        heading,
+        Space::with_height(4),
+        label_with_info(
+            format!("Complexity: {:.2}", motif.complexity),
+            "How elaborate the motif is. Low values produce short, repetitive cells with simple rhythms; high values give longer cells, varied rhythms, and more developmental phrase transforms."
+        ),
+        complexity_slider,
+        label_with_info(
+            format!("Leap chance: {:.2}", motif.leap_chance),
+            "Probability of an interval leap (3–7 semitones) versus a step (1–2 semitones) when building the motif. Higher = more angular, lower = more conjunct."
+        ),
+        leap_slider,
+        Space::with_height(4),
+        label_with_info(
+            "Motif length",
+            "Number of notes in the motif cell. Auto picks 2–6 based on Complexity."
+        ),
+        motif_len_picker,
+        Space::with_height(8),
+        regen_btn,
+        Space::with_height(4),
+        seed_label,
     ]
     .spacing(2)
     .into()
@@ -687,20 +805,80 @@ fn bass_controls<'a>(
     .step(0.01)
     .width(Length::Fill);
 
-    column![
-        text("Style").size(11).color(theme::TEXT_DIM),
+    let mut col = column![
+        label_with_info(
+            "Style",
+            "Bass voicing pattern.\n\u{2022} Root hold: one note per chord, full duration\n\u{2022} Root pulse: root on every beat\n\u{2022} Root + fifth: alternating root/fifth per beat\n\u{2022} Octave: root and root+12 alternating\n\u{2022} Walking: stepwise scale line into next chord (needs a scale)\n\u{2022} Motif: render the section’s shared motif in the bass register"
+        ),
         style_picker,
         Space::with_height(4),
-        text("Base note").size(11).color(theme::TEXT_DIM),
+        label_with_info(
+            "Base note",
+            "MIDI floor for bass roots. Each chord’s root is moved to the nearest pitch at or above this note."
+        ),
         base_note_picker,
         Space::with_height(4),
-        text(format!("Velocity: {:.2}", params.velocity))
-            .size(11)
-            .color(theme::TEXT_DIM),
+        label_with_info(
+            format!("Velocity: {:.2}", params.velocity),
+            "MIDI velocity (0–1) for emitted notes. Accented motif notes get a small +0.05 boost on top."
+        ),
         vel_slider,
     ]
-    .spacing(2)
-    .into()
+    .spacing(2);
+
+    if params.style == BassStyle::Motif {
+        let mode_picker = pick_list(
+            BassMotifMode::ALL.to_vec(),
+            Some(params.motif_mode),
+            move |mode| {
+                Message::Compose(ComposeMessage::LaneInspector {
+                    definition_id,
+                    track_id,
+                    msg: LaneInspectorMsg::SetBassMotifMode(mode),
+                })
+            },
+        )
+        .text_size(12)
+        .padding([4, 6])
+        .width(Length::Fill);
+
+        let phrase_picker = pick_list(
+            BassMotifPhrase::ALL.to_vec(),
+            Some(params.motif_phrase),
+            move |phrase| {
+                Message::Compose(ComposeMessage::LaneInspector {
+                    definition_id,
+                    track_id,
+                    msg: LaneInspectorMsg::SetBassMotifPhrase(phrase),
+                })
+            },
+        )
+        .text_size(12)
+        .padding([4, 6])
+        .width(Length::Fill);
+
+        col = col
+            .push(Space::with_height(8))
+            .push(label_with_info(
+                "Motif mode",
+                "How the bass renders the section motif.\n\u{2022} Same intervals: literal motif at the bass anchor\n\u{2022} Augmented: same intervals, each note 2× longer (slow line under the melody)\n\u{2022} Rhythm only: motif rhythm + accents, pitch is the chord root\n\u{2022} First note only: one note per chord on the chord root"
+            ))
+            .push(mode_picker)
+            .push(Space::with_height(4))
+            .push(label_with_info(
+                "Phrase development",
+                "How per-phrase Transforms are picked.\n\u{2022} Simple: Identity every phrase — predictable foundation\n\u{2022} Mirror melody: same Transform per phrase as the melody motif lane (locked together)\n\u{2022} Restricted: random Identity/Augment per phrase, independent of melody"
+            ))
+            .push(phrase_picker)
+            .push(Space::with_height(4))
+            .push(
+                text("Motif knobs live in the Chords lane.")
+                    .size(10)
+                    .color(theme::TEXT_DIM),
+            );
+    }
+
+    col.into()
 }
 
 fn melody_controls<'a>(
@@ -806,12 +984,21 @@ fn melody_controls<'a>(
     .width(Length::Fill);
 
     let mut col = column![
-        text("Style").size(11).color(theme::TEXT_DIM),
+        label_with_info(
+            "Style",
+            "Melodic generator.\n\u{2022} Arp up / down / up-down: cycle through chord tones\n\u{2022} Motif: develop a short cell across phrases (uses the section motif knobs)"
+        ),
         style_picker,
         Space::with_height(4),
-        text("Register low").size(11).color(theme::TEXT_DIM),
+        label_with_info(
+            "Register low",
+            "Lowest MIDI note this melody is allowed to play."
+        ),
         reg_lo_picker,
-        text("Register high").size(11).color(theme::TEXT_DIM),
+        label_with_info(
+            "Register high",
+            "Highest MIDI note this melody is allowed to play."
+        ),
         reg_hi_picker,
         Space::with_height(4),
     ]
@@ -820,37 +1007,30 @@ fn melody_controls<'a>(
     // Arp-only controls
     if params.style != MelodyStyle::Motif {
         col = col
-            .push(text("Note value").size(11).color(theme::TEXT_DIM))
+            .push(label_with_info(
+                "Note value",
+                "Length of one melody note (arp styles only). Quarter / Eighth / Sixteenth at the project tempo."
+            ))
             .push(nv_picker);
     }
 
     col = col
         .push(Space::with_height(4))
-        .push(
-            text(format!("Rest density: {:.2}", params.rest_density))
-                .size(11)
-                .color(theme::TEXT_DIM),
-        )
+        .push(label_with_info(
+            format!("Rest density: {:.2}", params.rest_density),
+            "Probability that any given slot is silent. 0 = no rests. Higher values produce sparser, more breathing melodies."
+        ))
         .push(rest_slider)
-        .push(
-            text(format!("Velocity: {:.2}", params.velocity))
-                .size(11)
-                .color(theme::TEXT_DIM),
-        )
+        .push(label_with_info(
+            format!("Velocity: {:.2}", params.velocity),
+            "Base MIDI velocity (0–1). Motif accents add a small +0.05 boost on top."
+        ))
         .push(vel_slider);
 
-    // Motif-specific controls
+    // Motif-specific controls — only those that are lane-local. The
+    // motif's own knobs (complexity / motif length / leap chance) live
+    // on the section so every Motif lane shares one identity.
     if params.style == MelodyStyle::Motif {
-        let complexity_slider = slider(0.0..=1.0, params.complexity, move |v| {
-            Message::Compose(ComposeMessage::LaneInspector {
-                definition_id,
-                track_id,
-                msg: LaneInspectorMsg::SetMelodyComplexity(v),
-            })
-        })
-        .step(0.01)
-        .width(Length::Fill);
-
         let articulation_slider = slider(0.0..=1.0, params.articulation, move |v| {
             Message::Compose(ComposeMessage::LaneInspector {
                 definition_id,
@@ -896,61 +1076,30 @@ fn melody_controls<'a>(
         .padding([4, 6])
         .width(Length::Fill);
 
-        let motif_len_options = vec![
-            MotifLenPick(0),
-            MotifLenPick(2),
-            MotifLenPick(3),
-            MotifLenPick(4),
-            MotifLenPick(5),
-            MotifLenPick(6),
-        ];
-        let motif_len_picker = pick_list(
-            motif_len_options,
-            Some(MotifLenPick(params.motif_len)),
-            move |pick| {
-                Message::Compose(ComposeMessage::LaneInspector {
-                    definition_id,
-                    track_id,
-                    msg: LaneInspectorMsg::SetMelodyMotifLen(pick.0),
-                })
-            },
-        )
-        .text_size(12)
-        .padding([4, 6])
-        .width(Length::Fill);
-
-        let leap_slider = slider(0.0..=1.0, params.leap_chance, move |v| {
-            Message::Compose(ComposeMessage::LaneInspector {
-                definition_id,
-                track_id,
-                msg: LaneInspectorMsg::SetMelodyLeapChance(v),
-            })
-        })
-        .step(0.01)
-        .width(Length::Fill);
-
         col = col
             .push(Space::with_height(4))
-            .push(text(format!("Complexity: {:.2}", params.complexity))
-                .size(11)
-                .color(theme::TEXT_DIM))
-            .push(complexity_slider)
-            .push(text(format!("Articulation: {:.2}", params.articulation))
-                .size(11)
-                .color(theme::TEXT_DIM))
+            .push(label_with_info(
+                format!("Articulation: {:.2}", params.articulation),
+                "How short each note sounds relative to its rhythmic slot. 0 = legato (full slot), 1 = staccato (about 45% of the slot)."
+            ))
             .push(articulation_slider)
             .push(Space::with_height(4))
-            .push(text("Contour").size(11).color(theme::TEXT_DIM))
+            .push(label_with_info(
+                "Contour",
+                "Preferred melodic shape per phrase. Auto picks one per phrase from research-weighted distributions; the others pin every phrase to the chosen shape."
+            ))
             .push(contour_picker)
-            .push(text("Phrase length").size(11).color(theme::TEXT_DIM))
+            .push(label_with_info(
+                "Phrase length",
+                "How many chords belong to one phrase. Each phrase gets its own contour and Transform."
+            ))
             .push(phrase_len_picker)
-            .push(text("Motif length").size(11).color(theme::TEXT_DIM))
-            .push(motif_len_picker)
             .push(Space::with_height(4))
-            .push(text(format!("Leap chance: {:.2}", params.leap_chance))
-                .size(11)
-                .color(theme::TEXT_DIM))
-            .push(leap_slider);
+            .push(
+                text("Motif knobs live in the Chords lane.")
+                    .size(10)
+                    .color(theme::TEXT_DIM),
+            );
     }
 
     col.into()
@@ -1011,14 +1160,21 @@ fn pad_controls<'a>(
     .width(Length::Fill);
 
     column![
-        text("Register low").size(11).color(theme::TEXT_DIM),
+        label_with_info(
+            "Register low",
+            "Lowest MIDI note the pad voicings can reach. Voices that fall below this float up an octave."
+        ),
         reg_lo_picker,
-        text("Register high").size(11).color(theme::TEXT_DIM),
+        label_with_info(
+            "Register high",
+            "Highest MIDI note the pad voicings can reach. Voices that rise above this drop an octave."
+        ),
         reg_hi_picker,
         Space::with_height(4),
-        text(format!("Velocity: {:.2}", params.velocity))
-            .size(11)
-            .color(theme::TEXT_DIM),
+        label_with_info(
+            format!("Velocity: {:.2}", params.velocity),
+            "MIDI velocity (0–1) for every emitted pad voice."
+        ),
         vel_slider,
     ]
     .spacing(2)
@@ -1086,6 +1242,7 @@ fn drum_body<'a>(
 
     let current_mode_pick = match voice_mode {
         Some(DrumVoiceMode::Euclidean { .. }) => DrumModePick::Euclidean,
+        Some(DrumVoiceMode::Motif) => DrumModePick::Motif,
         _ => DrumModePick::Manual,
     };
 
@@ -1098,6 +1255,7 @@ fn drum_body<'a>(
                     hits: 4,
                     rotation: 0,
                 },
+                DrumModePick::Motif => DrumVoiceMode::Motif,
             };
             Message::Compose(ComposeMessage::LaneInspector {
                 definition_id,
@@ -1207,6 +1365,39 @@ fn drum_body<'a>(
                 hits_input,
                 text("Rotation").size(10).color(theme::TEXT_DIM),
                 rot_input,
+                Space::with_height(4),
+                apply_btn,
+            ]
+            .spacing(2)
+            .into()
+        }
+        (Some(pad_index), Some(DrumVoiceMode::Motif)) => {
+            // Motif voices have no per-voice knobs — the rhythm comes
+            // straight from the section's shared motif, so the Apply
+            // button is the only control needed. Edits to the motif's
+            // seed / complexity propagate via `propagate_motif_change`.
+            let can_apply = clip_id.is_some();
+            let apply_msg = if can_apply {
+                Some(Message::Compose(ComposeMessage::Drumroll(
+                    DrumrollMessage::GenerateMotifPad {
+                        clip_id: clip_id.unwrap(),
+                        pad_index,
+                    },
+                )))
+            } else {
+                None
+            };
+            let mut apply_btn = button(text("Apply").size(12))
+                .padding([4, 10])
+                .width(Length::Fill)
+                .style(|_theme, status| theme::transport_button_style(status));
+            if let Some(m) = apply_msg {
+                apply_btn = apply_btn.on_press(m);
+            }
+            column![
+                text("Plays the section's shared motif rhythm.")
+                    .size(10)
+                    .color(theme::TEXT_DIM),
                 Space::with_height(4),
                 apply_btn,
             ]
@@ -1426,6 +1617,37 @@ impl std::fmt::Display for MotifLenPick {
             write!(f, "{} notes", self.0)
         }
     }
+}
+
+/// Small info-icon (Font Awesome circle-info) that shows `info` on hover.
+/// Use via [`label_with_info`] to pair a control label with its explanation.
+fn info_icon<'a>(info: &'static str) -> Element<'a, Message> {
+    let icon = container(theme::icon(theme::fa::CIRCLE_INFO).size(10).color(theme::TEXT_DIM))
+        .padding([0, 2]);
+    let tip = container(text(info).size(11).color(theme::TEXT))
+        .max_width(220.0)
+        .padding(8)
+        .style(|_theme: &iced::Theme| container::Style {
+            text_color: Some(theme::TEXT),
+            background: Some(iced::Background::Color(theme::PANEL_DARK)),
+            border: iced::Border {
+                color: theme::SEPARATOR,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..Default::default()
+        });
+    tooltip(icon, tip, tooltip::Position::Top).gap(4).into()
+}
+
+/// Standard small dim label paired with a hoverable info icon. Drop-in
+/// replacement for `text(label).size(11).color(theme::TEXT_DIM)` when
+/// the option deserves a one-sentence explanation.
+fn label_with_info<'a>(label: impl Into<String>, info: &'static str) -> Element<'a, Message> {
+    let label_text = text(label.into()).size(11).color(theme::TEXT_DIM);
+    row![label_text, Space::with_width(4), info_icon(info)]
+        .align_y(alignment::Vertical::Center)
+        .into()
 }
 
 fn separator<'a>() -> Element<'a, Message> {

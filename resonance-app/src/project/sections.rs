@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use resonance_audio::types::TrackId;
-use resonance_music_theory::{Chord, GeneratedMaterial, GeneratorSpec, Scale};
+use resonance_music_theory::{Chord, GeneratedMaterial, GeneratorSpec, MotifParams, Scale};
 use serde::{Deserialize, Serialize};
 
 use crate::compose::{GenerateParams, LaneGeneratorConfig};
@@ -42,6 +42,10 @@ pub struct ProjectSectionDefinition {
     /// Build seventh chords during generation.
     #[serde(default)]
     pub seventh_chords: bool,
+    /// Section-shared motif knobs. Older project files load with the
+    /// default seed/complexity/etc.
+    #[serde(default)]
+    pub motif: MotifParams,
 }
 
 fn default_beats_per_chord() -> u32 {

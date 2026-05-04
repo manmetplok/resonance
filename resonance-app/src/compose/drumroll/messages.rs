@@ -29,6 +29,13 @@ pub enum DrumrollMessage {
         clip_id: ClipId,
         pad_index: usize,
     },
+    /// Apply the section's shared motif rhythm to the selected pad on the
+    /// given clip. One drum hit per motif onset; accented motif notes get
+    /// a velocity boost. Replaces any existing hits on that pad.
+    GenerateMotifPad {
+        clip_id: ClipId,
+        pad_index: usize,
+    },
     /// Remove every note on the given pad in the given clip.
     ClearPad {
         clip_id: ClipId,

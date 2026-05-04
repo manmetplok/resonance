@@ -70,6 +70,8 @@ pub mod fa {
     pub const CARET_DOWN: char = '\u{f0d7}';
     /// Arrow pointing right — used for output routing labels.
     pub const ARROW_RIGHT: char = '\u{f061}';
+    /// Filled circle with an "i" — hover-tooltip info marker.
+    pub const CIRCLE_INFO: char = '\u{f05a}';
 }
 
 // Core palette

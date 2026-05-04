@@ -2,6 +2,7 @@ use resonance_audio::types::{AudioCommand, ClipId, MidiNote, TICKS_PER_QUARTER_N
 
 use crate::compose::drumroll::humanize::{self, HumanizeParams, HumanizeScope};
 use crate::compose::drumroll::{euclidean, DrumrollMessage};
+use crate::compose::generate;
 use crate::state::MidiClipState;
 
 pub fn handle(r: &mut crate::Resonance, msg: DrumrollMessage) {
@@ -103,6 +104,61 @@ pub fn handle(r: &mut crate::Resonance, msg: DrumrollMessage) {
             let pattern = euclidean::bjorklund(steps, hits, rotation);
             let new_notes =
                 euclidean::pattern_to_notes(&pattern, pad.note, velocity, clip.duration_ticks);
+            let (removals, adds) = euclid_edits_for(clip, pad.note, new_notes);
+            send_pad_edits(r, clip_id, removals, adds);
+        }
+
+        DrumrollMessage::GenerateMotifPad { clip_id, pad_index } => {
+            let Some(pad) = r.compose.drumroll.pad_map.get(pad_index).cloned() else {
+                return;
+            };
+            let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) else {
+                return;
+            };
+
+            // Pull the section's chord progression + shared motif from
+            // the placement that owns this clip. If the user moved the
+            // clip off any placement we silently bail — there's no
+            // reasonable rhythm to derive without chord boundaries.
+            let Some((chords, motif_params)) = r
+                .compose
+                .selected_placement()
+                .and_then(|p| r.compose.find_definition(p.definition_id))
+                .map(|def| (def.chords.clone(), def.motif))
+            else {
+                return;
+            };
+            if chords.is_empty() {
+                return;
+            }
+
+            let timed = generate::to_timed_chords(&chords);
+            let hits = resonance_music_theory::derive_motif_rhythm(
+                &timed,
+                &motif_params,
+                TICKS_PER_QUARTER_NOTE as u32,
+            );
+
+            let base_velocity = r.compose.drumroll.default_velocity;
+            let new_notes: Vec<MidiNote> = hits
+                .into_iter()
+                .filter(|h| h.start_tick < clip.duration_ticks)
+                .map(|h| {
+                    let velocity = if h.accent {
+                        (base_velocity + 0.1).min(1.0)
+                    } else {
+                        base_velocity
+                    };
+                    let max_dur = clip.duration_ticks - h.start_tick;
+                    MidiNote {
+                        note: pad.note,
+                        velocity,
+                        start_tick: h.start_tick,
+                        duration_ticks: h.duration_ticks.min(max_dur).max(1),
+                    }
+                })
+                .collect();
+
             let (removals, adds) = euclid_edits_for(clip, pad.note, new_notes);
             send_pad_edits(r, clip_id, removals, adds);
         }

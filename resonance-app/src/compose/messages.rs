@@ -1,6 +1,7 @@
 use resonance_audio::types::TrackId;
 use resonance_music_theory::{
-    BassStyle, Chord, ChordQuality, ContourPreference, Degree, MelodyStyle, PitchClass, Scale,
+    BassMotifMode, BassMotifPhrase, BassStyle, Chord, ChordQuality, ContourPreference, Degree,
+    MelodyStyle, PitchClass, Scale,
 };
 
 use crate::compose::drumroll::DrumrollMessage;
@@ -171,6 +172,13 @@ pub enum ChordInspectorMsg {
     Generate,
     /// Bump seed and regenerate (respecting locks).
     Regenerate,
+
+    // Section-shared motif knobs (consumed by every Motif-style lane).
+    SetMotifComplexity(f32),
+    SetMotifLen(u8),
+    SetMotifLeapChance(f32),
+    /// Bump the section motif seed and re-derive every Motif-style lane.
+    RegenerateMotif,
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +194,8 @@ pub enum LaneInspectorMsg {
     SetBassStyle(BassStyle),
     SetBassBaseNote(u8),
     SetBassVelocity(f32),
+    SetBassMotifMode(BassMotifMode),
+    SetBassMotifPhrase(BassMotifPhrase),
 
     // Melody
     SetMelodyStyle(MelodyStyle),
@@ -194,12 +204,9 @@ pub enum LaneInspectorMsg {
     SetMelodyNoteValue(u32),
     SetMelodyRestDensity(f32),
     SetMelodyVelocity(f32),
-    SetMelodyComplexity(f32),
     SetMelodyArticulation(f32),
     SetMelodyContour(ContourPreference),
     SetMelodyPhraseLen(u8),
-    SetMelodyMotifLen(u8),
-    SetMelodyLeapChance(f32),
 
     // Pad
     SetPadRegisterLow(u8),
