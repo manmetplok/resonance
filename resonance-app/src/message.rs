@@ -269,6 +269,14 @@ pub(crate) enum UiMessage {
     CancelQuit,
     /// Toggle the global tracks area (tempo, time signature) in the arrange view.
     ToggleGlobalTracks,
+    /// Toggle MIDI clock send (engine acts as clock master).
+    ToggleMidiClockSend,
+    /// Pick the hardware port for MIDI clock send. `None` clears.
+    SetMidiClockSendDevice(Option<String>),
+    /// Toggle MIDI clock receive (engine slaves to an external master).
+    ToggleMidiClockRecv,
+    /// Pick the hardware port for MIDI clock receive. `None` clears.
+    SetMidiClockRecvDevice(Option<String>),
 }
 
 #[derive(Debug, Clone)]

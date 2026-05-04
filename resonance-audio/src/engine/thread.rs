@@ -18,6 +18,9 @@ use indexmap::IndexMap;
 use parking_lot::{Mutex, RwLock};
 
 use crate::clap_host::{ClapBundle, SyncClapInstance};
+use crate::midi_clock::{
+    ClockTempoTracker, MidiClockEvent, MidiClockReceiver, MidiClockSender,
+};
 use crate::midi_hardware::{LiveMidiEvent, MidiInputRegistry, MidiOutputRegistry};
 use crate::recording::RecordingState;
 use crate::types::*;
@@ -101,6 +104,21 @@ pub(crate) struct HandlerState {
     pub last_midi_input_devices: Vec<crate::midi_hardware::MidiDeviceInfo>,
     /// Same idea, output side.
     pub last_midi_output_devices: Vec<crate::midi_hardware::MidiDeviceInfo>,
+    /// MIDI clock master (engine emits clock to a hardware device).
+    pub midi_clock_sender: MidiClockSender,
+    /// MIDI clock slave (engine receives clock from a hardware device).
+    pub midi_clock_receiver: MidiClockReceiver,
+    /// Smoothing tempo tracker for incoming clock pulses.
+    pub midi_clock_tempo: ClockTempoTracker,
+    /// True while an external clock master is currently running
+    /// (between Start/Continue and Stop). Used to gate transport
+    /// drive: stray clock pulses outside of run state don't trigger
+    /// playback.
+    pub midi_clock_external_running: bool,
+    /// Last BPM emitted to the GUI from the clock tracker, so we
+    /// only emit when the value moves perceptibly. Avoids a steady
+    /// stream of `MidiClockTempoDetected` events at every pulse.
+    pub midi_clock_last_emitted_bpm: f32,
 }
 
 /// Hard cap on concurrent clip decode threads. Import commands past this
@@ -123,6 +141,8 @@ pub(crate) fn engine_thread(
     monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
     live_midi_tx: Sender<LiveMidiEvent>,
     live_midi_rx: Receiver<LiveMidiEvent>,
+    clock_tx: Sender<MidiClockEvent>,
+    clock_rx: Receiver<MidiClockEvent>,
     sample_rate: u32,
     buf_frames: usize,
     quantum: usize,
@@ -143,6 +163,11 @@ pub(crate) fn engine_thread(
         midi_outbound_last_playhead: 0,
         last_midi_input_devices: Vec::new(),
         last_midi_output_devices: Vec::new(),
+        midi_clock_sender: MidiClockSender::new(),
+        midi_clock_receiver: MidiClockReceiver::new(clock_tx),
+        midi_clock_tempo: ClockTempoTracker::default(),
+        midi_clock_external_running: false,
+        midi_clock_last_emitted_bpm: 0.0,
     };
     let ctx = HandlerCtx {
         shared: &shared,
@@ -192,6 +217,13 @@ pub(crate) fn engine_thread(
             midi::handle_live_midi_event(&ctx, &mut state, ev);
         }
 
+        // Drain incoming MIDI clock messages and apply them to the
+        // transport (Start/Stop/Continue/SongPosition) plus the
+        // smoothing tempo tracker.
+        for ev in clock_rx.try_iter() {
+            midi::handle_midi_clock_event(&ctx, &mut state, ev);
+        }
+
         // Step the timeline → MIDI output bridge: any note whose
         // start/end falls in (last_playhead..current_playhead] gets
         // sent to the configured hardware output. Granularity is
@@ -199,6 +231,11 @@ pub(crate) fn engine_thread(
         // hardware-synth use cases and simpler than a lock-free
         // audio→engine queue.
         midi::poll_timeline_to_midi_output(&ctx, &mut state);
+
+        // Emit MIDI clock pulses to a configured master device. Done
+        // every iteration so the wire-level clock advances at engine
+        // cadence (~60 Hz) rather than only on transport events.
+        midi::poll_midi_clock_send(&ctx, &mut state);
 
         // Advance any pending record count-in: once the playhead
         // catches up to the user's original record-start, the real
@@ -236,13 +273,13 @@ pub(crate) fn engine_thread(
 fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
     match cmd {
         // -- Transport --
-        AudioCommand::Play => transport::handle_play(ctx),
+        AudioCommand::Play => transport::handle_play(ctx, state),
         AudioCommand::Record { precount_bars } => {
             transport::handle_record(ctx, state, precount_bars)
         }
         AudioCommand::Pause => transport::handle_pause(ctx, state),
         AudioCommand::Stop => transport::handle_stop(ctx, state),
-        AudioCommand::SeekTo(pos) => transport::handle_seek_to(ctx, pos),
+        AudioCommand::SeekTo(pos) => transport::handle_seek_to(ctx, state, pos),
         AudioCommand::SetBpm { bpm } => transport::handle_set_bpm(ctx, bpm),
         AudioCommand::SetTempoEvents { tempo, signature } => {
             transport::handle_set_tempo_events(ctx, tempo, signature)
@@ -501,6 +538,12 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             device,
             channel,
         } => midi::handle_set_track_midi_output(ctx, state, track_id, device, channel),
+        AudioCommand::SetMidiClockOutput { device, enabled } => {
+            midi::handle_set_midi_clock_output(ctx, state, device, enabled)
+        }
+        AudioCommand::SetMidiClockInput { device, enabled } => {
+            midi::handle_set_midi_clock_input(ctx, state, device, enabled)
+        }
 
         // -- Busses --
         AudioCommand::AddBus { id_hint, name } => busses::handle_add_bus(ctx, state, id_hint, name),

@@ -11,8 +11,20 @@ use crate::types::*;
 
 use super::thread::{HandlerCtx, HandlerState};
 
-pub(crate) fn handle_play(ctx: &HandlerCtx) {
+pub(crate) fn handle_play(ctx: &HandlerCtx, state: &mut HandlerState) {
+    let was_playing = ctx.shared.playing.load(Ordering::Relaxed);
     ctx.shared.playing.store(true, Ordering::SeqCst);
+    if !was_playing {
+        // Distinguish a fresh start (playhead == 0) from Continue. A
+        // Start resets the receiver's song position pointer; Continue
+        // resumes from wherever the playhead is right now.
+        let pos = ctx.shared.playhead.load(Ordering::Relaxed);
+        if pos == 0 {
+            super::midi::clock_send_start(state);
+        } else {
+            super::midi::clock_send_continue(ctx, state, pos);
+        }
+    }
 }
 
 pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState, precount_bars: u8) {
@@ -217,6 +229,7 @@ fn begin_recording_stream(ctx: &HandlerCtx, state: &mut HandlerState, start_samp
 
 pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
     let was_recording = ctx.shared.recording.load(Ordering::SeqCst);
+    let was_playing = ctx.shared.playing.load(Ordering::Relaxed);
     ctx.shared.playing.store(false, Ordering::SeqCst);
     ctx.shared.recording.store(false, Ordering::SeqCst);
     cancel_precount(ctx, state);
@@ -229,10 +242,18 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
     }
     panic_all_instrument_plugins(ctx);
     super::midi::close_open_recordings(ctx, state);
+    // close_open_recordings bails when no recording is active, so call
+    // all-notes-off directly to silence hardware synths driven by the
+    // timeline.
+    state.midi_outputs.all_notes_off_everywhere();
+    if was_playing {
+        super::midi::clock_send_stop(state);
+    }
 }
 
 pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
     let was_recording = ctx.shared.recording.load(Ordering::SeqCst);
+    let was_playing = ctx.shared.playing.load(Ordering::Relaxed);
     ctx.shared.playing.store(false, Ordering::SeqCst);
     ctx.shared.recording.store(false, Ordering::SeqCst);
     ctx.shared.playhead.store(0, Ordering::SeqCst);
@@ -247,6 +268,14 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
 
     panic_all_instrument_plugins(ctx);
     super::midi::close_open_recordings(ctx, state);
+    state.midi_outputs.all_notes_off_everywhere();
+    if was_playing {
+        super::midi::clock_send_stop(state);
+    }
+    // Park the master clock at song start so the next Play emits a
+    // fresh Start (or Continue from 0) rather than resuming from the
+    // end of the prior segment.
+    super::midi::clock_send_song_position(ctx, state, 0);
 
     let _ = ctx.event_tx.send(AudioEvent::Stopped);
 }
@@ -255,25 +284,34 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
 /// Called from Pause and Stop so a hardware key still held when the
 /// user pauses doesn't leave the plugin sustaining indefinitely (no
 /// hardware NoteOff will arrive once the user lets go past Pause).
-/// Mirrors the loop-seam panic pattern in
-/// `mixer::panic_instrument_tracks`.
+///
+/// `all_notes_off` only *queues* 128 NoteOff events into the plugin's
+/// pending buffer; they're drained on the next `process()` call. When
+/// the audio mixer is in its stopped branch with no monitor track
+/// active it never calls `process()` on these plugins, so we drive a
+/// one-block silent process pass right here (under the same mutex) to
+/// guarantee the events actually reach the plugin.
 fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
     let tracks_guard = ctx.tracks.read();
     let plugins_guard = ctx.plugins.read();
+    let mut silent_l = [0.0f32; 64];
+    let mut silent_r = [0.0f32; 64];
     for track in tracks_guard.values() {
         if track.track_type == TrackType::Instrument {
             if let Some(&inst_id) = track.plugin_ids.first() {
                 if let Some(mutex) = plugins_guard.get(&inst_id) {
                     let mut inst = mutex.lock();
                     inst.0.all_notes_off();
+                    inst.0.process(&mut silent_l, &mut silent_r, 64);
                 }
             }
         }
     }
 }
 
-pub(crate) fn handle_seek_to(ctx: &HandlerCtx, pos: u64) {
+pub(crate) fn handle_seek_to(ctx: &HandlerCtx, state: &mut HandlerState, pos: u64) {
     ctx.shared.playhead.store(pos, Ordering::SeqCst);
+    super::midi::clock_send_song_position(ctx, state, pos);
 }
 
 pub(crate) fn handle_set_bpm(ctx: &HandlerCtx, bpm: f32) {

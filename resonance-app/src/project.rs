@@ -69,6 +69,18 @@ pub struct ProjectFile {
     /// Time signature change events. Empty on legacy projects.
     #[serde(default)]
     pub signature_events: Vec<crate::state::SignatureEvent>,
+    /// Whether the engine should emit MIDI clock to a hardware port.
+    #[serde(default)]
+    pub midi_clock_send_enabled: bool,
+    /// Hardware MIDI output port carrying the master clock.
+    #[serde(default)]
+    pub midi_clock_send_device: Option<String>,
+    /// Whether the engine should slave to incoming MIDI clock.
+    #[serde(default)]
+    pub midi_clock_recv_enabled: bool,
+    /// Hardware MIDI input port carrying the master clock.
+    #[serde(default)]
+    pub midi_clock_recv_device: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

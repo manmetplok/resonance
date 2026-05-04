@@ -21,6 +21,7 @@ use crossbeam_channel::{Receiver, Sender};
 use ringbuf::traits::Split;
 
 use crate::clap_host::SyncClapInstance;
+use crate::midi_clock::MidiClockEvent;
 use crate::midi_hardware::LiveMidiEvent;
 use crate::mixer;
 use crate::platform::{self, DeviceDirection};
@@ -148,6 +149,10 @@ impl AudioEngine {
         // MIDI events queue without bound. 1024 fits a comfortable
         // burst at typical engine-thread cadence (~60 Hz wakeups).
         let (live_midi_tx, live_midi_rx) = crossbeam_channel::bounded::<LiveMidiEvent>(1024);
+        // MIDI clock arrives at 24 PPQN (≈48 msgs/sec at 120 BPM)
+        // plus Start/Stop/Continue. 4096 covers seconds of bursty
+        // input even if the engine thread stalls.
+        let (clock_tx, clock_rx) = crossbeam_channel::bounded::<MidiClockEvent>(4096);
 
         let shared = Arc::new(SharedState {
             playhead: AtomicU64::new(0),
@@ -358,6 +363,8 @@ impl AudioEngine {
                     monitor_prod_audio,
                     live_midi_tx,
                     live_midi_rx,
+                    clock_tx,
+                    clock_rx,
                     sample_rate,
                     buf_frames,
                     quantum,
@@ -387,6 +394,31 @@ impl AudioEngine {
     /// Send a command to the audio engine.
     pub fn send(&self, cmd: AudioCommand) {
         let _ = self.cmd_tx.send(cmd);
+    }
+
+    /// Best-effort synchronous shutdown handshake.
+    ///
+    /// Sends `Stop` (which silences every CLAP instrument and emits
+    /// `All Notes Off` on every connected hardware MIDI output) and
+    /// blocks until the engine acknowledges with `AudioEvent::Stopped`,
+    /// or until `timeout` elapses. Other events that arrive in the
+    /// meantime are drained and discarded — the caller is shutting
+    /// down anyway.
+    ///
+    /// Call this before dropping `AudioEngine` (or before closing the
+    /// app window) so a hardware synth doesn't sustain notes that were
+    /// playing at quit time.
+    pub fn shutdown(&self, timeout: std::time::Duration) {
+        let _ = self.cmd_tx.send(AudioCommand::Stop);
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            let remaining = deadline - std::time::Instant::now();
+            match self.event_rx.recv_timeout(remaining) {
+                Ok(AudioEvent::Stopped) => return,
+                Ok(_) => continue,
+                Err(_) => return,
+            }
+        }
     }
 
     /// Try to receive an event from the audio engine (non-blocking).

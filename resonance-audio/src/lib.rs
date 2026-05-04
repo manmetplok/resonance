@@ -2,6 +2,7 @@ pub mod clap_host;
 pub mod decode;
 mod engine;
 pub mod limits;
+pub mod midi_clock;
 pub mod midi_hardware;
 pub mod midi_io;
 mod mixer;

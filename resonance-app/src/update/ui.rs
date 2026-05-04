@@ -1,4 +1,5 @@
 use iced::Task;
+use resonance_audio::types::AudioCommand;
 
 use crate::message::{Message, ProjectIoMessage, UiMessage};
 use crate::update::project_io;
@@ -39,6 +40,7 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::ConfirmDiscardAndQuit => {
             if let Some(id) = r.confirm_quit.take() {
+                r.engine.shutdown(std::time::Duration::from_millis(150));
                 return iced::window::close(id);
             }
         }
@@ -47,6 +49,34 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::ToggleGlobalTracks => {
             r.viewport.global_tracks_expanded = !r.viewport.global_tracks_expanded;
+        }
+        UiMessage::ToggleMidiClockSend => {
+            r.midi_clock_send_enabled = !r.midi_clock_send_enabled;
+            r.engine.send(AudioCommand::SetMidiClockOutput {
+                device: r.midi_clock_send_device.clone(),
+                enabled: r.midi_clock_send_enabled,
+            });
+        }
+        UiMessage::SetMidiClockSendDevice(device) => {
+            r.midi_clock_send_device = device.clone();
+            r.engine.send(AudioCommand::SetMidiClockOutput {
+                device,
+                enabled: r.midi_clock_send_enabled,
+            });
+        }
+        UiMessage::ToggleMidiClockRecv => {
+            r.midi_clock_recv_enabled = !r.midi_clock_recv_enabled;
+            r.engine.send(AudioCommand::SetMidiClockInput {
+                device: r.midi_clock_recv_device.clone(),
+                enabled: r.midi_clock_recv_enabled,
+            });
+        }
+        UiMessage::SetMidiClockRecvDevice(device) => {
+            r.midi_clock_recv_device = device.clone();
+            r.engine.send(AudioCommand::SetMidiClockInput {
+                device,
+                enabled: r.midi_clock_recv_enabled,
+            });
         }
     }
     Task::none()

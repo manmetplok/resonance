@@ -70,6 +70,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 crate::recent::add(&mut r.io.recent_projects, path);
             }
             if let Some(id) = r.quit_after_save.take() {
+                r.engine.shutdown(std::time::Duration::from_millis(150));
                 return iced::window::close(id);
             }
         }
@@ -283,6 +284,10 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         section_placements: r.compose.to_project_placements(),
         tempo_events: r.tempo_events.clone(),
         signature_events: r.signature_events.clone(),
+        midi_clock_send_enabled: r.midi_clock_send_enabled,
+        midi_clock_send_device: r.midi_clock_send_device.clone(),
+        midi_clock_recv_enabled: r.midi_clock_recv_enabled,
+        midi_clock_recv_device: r.midi_clock_recv_device.clone(),
     }
 }
 
@@ -351,6 +356,21 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     });
     r.engine.send(AudioCommand::SetMasterVolume {
         volume: db_to_gain(r.master_volume),
+    });
+
+    // Restore MIDI clock settings. The engine treats `enabled=false`
+    // as a no-op port-wise, so it's safe to send for legacy projects.
+    r.midi_clock_send_enabled = project.midi_clock_send_enabled;
+    r.midi_clock_send_device = project.midi_clock_send_device.clone();
+    r.midi_clock_recv_enabled = project.midi_clock_recv_enabled;
+    r.midi_clock_recv_device = project.midi_clock_recv_device.clone();
+    r.engine.send(AudioCommand::SetMidiClockOutput {
+        device: r.midi_clock_send_device.clone(),
+        enabled: r.midi_clock_send_enabled,
+    });
+    r.engine.send(AudioCommand::SetMidiClockInput {
+        device: r.midi_clock_recv_device.clone(),
+        enabled: r.midi_clock_recv_enabled,
     });
     r.engine.send(AudioCommand::SetLoopRange {
         enabled: r.transport.loop_enabled,
@@ -462,6 +482,11 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
             trim_end_ticks: pmc.trim_end_ticks,
         });
     }
+
+    let samples_per_beat = r.sample_rate as f64 * 60.0 / r.transport.bpm as f64;
+    let samples_per_bar = (samples_per_beat * r.transport.time_sig_num as f64) as u64;
+    r.compose
+        .rebuild_derived_clips(&r.midi_clips, samples_per_bar);
 
     r.transport.loop_range_set = r.transport.loop_enabled;
 }

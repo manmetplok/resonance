@@ -301,6 +301,23 @@ pub enum AudioCommand {
         channel: Option<u8>,
     },
 
+    /// Configure the global MIDI clock master (Resonance → device).
+    /// When `enabled` is true and `device` is set, the engine emits
+    /// 24-PPQN clock pulses plus Start/Stop/Continue/Song Position
+    /// messages aligned to the project tempo and transport.
+    SetMidiClockOutput {
+        device: Option<String>,
+        enabled: bool,
+    },
+    /// Configure the global MIDI clock slave (device → Resonance).
+    /// When enabled, incoming Start/Continue/Stop messages drive
+    /// transport and clock pulses smooth the project BPM toward the
+    /// external master.
+    SetMidiClockInput {
+        device: Option<String>,
+        enabled: bool,
+    },
+
     // -- Bus commands --
     /// Add a bus. See [`AudioCommand::AddTrack`] for how `id_hint`/`name`
     /// are honoured.

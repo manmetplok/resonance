@@ -220,4 +220,17 @@ pub enum AudioEvent {
     MidiOutputDevicesListed {
         devices: Vec<MidiDeviceInfo>,
     },
+    /// Incoming MIDI Clock Start (0xFA) — external master started its
+    /// transport and the engine is now playing in sync with it.
+    MidiClockStarted,
+    /// Incoming MIDI Clock Continue (0xFB) — external master resumed.
+    MidiClockContinued,
+    /// Incoming MIDI Clock Stop (0xFC) — external master stopped.
+    MidiClockStopped,
+    /// External master tempo derived from incoming clock pulses, in
+    /// BPM. Sent at most a few times per second once the input clock
+    /// stabilises so the GUI BPM display can mirror the master.
+    MidiClockTempoDetected {
+        bpm: f32,
+    },
 }

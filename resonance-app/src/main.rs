@@ -38,6 +38,14 @@ pub(crate) struct Resonance {
     pub(crate) midi_output_devices: Vec<MidiDeviceInfo>,
     /// Wall-clock instant of the last MIDI device list refresh.
     pub(crate) midi_devices_last_refresh: std::time::Instant,
+    /// Whether MIDI clock master output is enabled.
+    pub(crate) midi_clock_send_enabled: bool,
+    /// Hardware MIDI output port carrying the master clock.
+    pub(crate) midi_clock_send_device: Option<String>,
+    /// Whether MIDI clock slave (input) is enabled.
+    pub(crate) midi_clock_recv_enabled: bool,
+    /// Hardware MIDI input port carrying the master clock.
+    pub(crate) midi_clock_recv_device: Option<String>,
     pub(crate) available_plugins: Vec<ScannedPlugin>,
     pub(crate) error_message: Option<String>,
     pub(crate) master_volume: f32,
@@ -298,6 +306,10 @@ impl Resonance {
             midi_input_devices: Vec::new(),
             midi_output_devices: Vec::new(),
             midi_devices_last_refresh: std::time::Instant::now(),
+            midi_clock_send_enabled: false,
+            midi_clock_send_device: None,
+            midi_clock_recv_enabled: false,
+            midi_clock_recv_device: None,
             available_plugins: Vec::new(),
             error_message: None,
             master_volume: 0.0, // 0 dB = unity gain

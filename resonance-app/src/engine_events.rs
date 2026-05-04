@@ -621,6 +621,20 @@ impl crate::Resonance {
             AudioEvent::MidiOutputDevicesListed { devices } => {
                 self.midi_output_devices = devices;
             }
+            AudioEvent::MidiClockStarted => {
+                self.transport.playing = true;
+                self.transport.playhead = 0;
+            }
+            AudioEvent::MidiClockContinued => {
+                self.transport.playing = true;
+            }
+            AudioEvent::MidiClockStopped => {
+                self.transport.playing = false;
+            }
+            AudioEvent::MidiClockTempoDetected { bpm } => {
+                self.transport.bpm = bpm;
+                self.transport.bpm_input = format!("{:.1}", bpm);
+            }
         }
         Task::none()
     }

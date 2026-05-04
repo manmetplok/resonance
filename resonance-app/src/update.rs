@@ -52,7 +52,11 @@ fn is_gated_message(message: &Message) -> bool {
         | Message::Ui(UiMessage::ConfirmSaveAndQuit)
         | Message::Ui(UiMessage::ConfirmDiscardAndQuit)
         | Message::Ui(UiMessage::CancelQuit)
-        | Message::Ui(UiMessage::ToggleGlobalTracks) => false,
+        | Message::Ui(UiMessage::ToggleGlobalTracks)
+        | Message::Ui(UiMessage::ToggleMidiClockSend)
+        | Message::Ui(UiMessage::SetMidiClockSendDevice(_))
+        | Message::Ui(UiMessage::ToggleMidiClockRecv)
+        | Message::Ui(UiMessage::SetMidiClockRecvDevice(_)) => false,
         // Project I/O drives the modal itself: always allow.
         Message::ProjectIo(_) => false,
         // Timer tick: harmless, drives VU meters — allow.
@@ -161,6 +165,7 @@ impl crate::Resonance {
                     self.confirm_quit = Some(id);
                     Task::none()
                 } else {
+                    self.engine.shutdown(std::time::Duration::from_millis(150));
                     iced::window::close(id)
                 }
             }
