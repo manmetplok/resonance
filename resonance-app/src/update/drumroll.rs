@@ -120,11 +120,11 @@ pub fn handle(r: &mut crate::Resonance, msg: DrumrollMessage) {
             // the placement that owns this clip. If the user moved the
             // clip off any placement we silently bail — there's no
             // reasonable rhythm to derive without chord boundaries.
-            let Some((chords, motif_params)) = r
+            let Some((chords, motif_source)) = r
                 .compose
                 .selected_placement()
                 .and_then(|p| r.compose.find_definition(p.definition_id))
-                .map(|def| (def.chords.clone(), def.motif))
+                .map(|def| (def.chords.clone(), def.motif_source.clone()))
             else {
                 return;
             };
@@ -135,7 +135,7 @@ pub fn handle(r: &mut crate::Resonance, msg: DrumrollMessage) {
             let timed = generate::to_timed_chords(&chords);
             let hits = resonance_music_theory::derive_motif_rhythm(
                 &timed,
-                &motif_params,
+                &motif_source,
                 TICKS_PER_QUARTER_NOTE as u32,
             );
 

@@ -179,6 +179,48 @@ pub enum ChordInspectorMsg {
     SetMotifLeapChance(f32),
     /// Bump the section motif seed and re-derive every Motif-style lane.
     RegenerateMotif,
+
+    // Generated-vs-manual motif source.
+    /// Switch between a procedurally generated motif and a hand-drawn one.
+    SetMotifSourceKind(MotifSourceKind),
+    /// Toggle a cell in the manual-motif canvas. `beat_16` is the start
+    /// beat in sixteenth-notes from the motif start; `scale_step` is the
+    /// target row (0 = anchor, +n = up the scale, −n = down).
+    ToggleManualMotifCell { scale_step: i8, beat_16: u8 },
+    /// Toggle a rest at the given beat position. Same insert/replace/
+    /// remove semantics as [`ToggleManualMotifCell`], but the entry has
+    /// no pitch — it advances the motif cursor without emitting a note.
+    ToggleManualMotifRest { beat_16: u8 },
+    /// Cycle the duration of the indexed manual-motif note (1 → 2 → 3 → 4
+    /// → 1 sixteenths).
+    CycleManualMotifNoteDuration { index: usize },
+    /// Toggle the accent flag on the indexed manual-motif note.
+    ToggleManualMotifAccent { index: usize },
+    /// Wipe every note from the manual motif.
+    ClearManualMotif,
+}
+
+/// Which kind of motif a section is using. Drives a radio in the chord
+/// inspector and decides whether the manual-motif canvas is editable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotifSourceKind {
+    Generated,
+    Manual,
+}
+
+impl MotifSourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MotifSourceKind::Generated => "Generated",
+            MotifSourceKind::Manual => "Manual",
+        }
+    }
+}
+
+impl std::fmt::Display for MotifSourceKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 // ---------------------------------------------------------------------------

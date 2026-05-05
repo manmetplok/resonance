@@ -166,6 +166,37 @@ pub enum AudioCommand {
     BounceToWav {
         path: String,
     },
+    /// Bounce in place — render one instrument track (and any of its
+    /// sub-tracks) to a single in-RAM stereo `AudioClip` on
+    /// `target_track_id`. The app pre-creates the audio track via
+    /// [`AudioCommand::AddTrack`] with `id_hint = Some(target_track_id)`
+    /// and pre-allocates `target_clip_id` (same allocator pool as
+    /// `LoadMidiClipDirect`). Excludes master FX / master volume so the
+    /// captured PCM plays back through master once on subsequent
+    /// playback. Used for instrument tracks driven by an internal synth
+    /// plugin; tracks that drive an external MIDI device need a real-
+    /// time bounce that is not implemented by this command.
+    BounceTrackToAudio {
+        source_track_id: TrackId,
+        target_track_id: TrackId,
+        target_clip_id: ClipId,
+        name: String,
+    },
+    /// Real-time "bounce in place" for instrument tracks driven by an
+    /// external MIDI device. The engine snapshots every other track's
+    /// mute state, mutes them all so only the source's MIDI fires to
+    /// hardware, configures `target_track_id`'s audio input + record
+    /// arm, seeks to the source's first MIDI start, and runs the
+    /// transport from there to the last MIDI end + 2 s tail. When the
+    /// playhead crosses the end, the engine pauses, finalizes the
+    /// recording (emits `RecordingFinished`), restores the mute snapshot
+    /// and mutes the source, then emits `TrackBounceCompleted`.
+    BounceTrackRealtimeToAudio {
+        source_track_id: TrackId,
+        target_track_id: TrackId,
+        input_device_name: String,
+        input_port_index: u16,
+    },
     /// Set the current project directory. Recorded and imported
     /// clips are written into `{project_dir}/audio/` as WAV files,
     /// and recording refuses to start if no project directory has

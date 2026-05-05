@@ -1,6 +1,7 @@
 /// View rendering for the Resonance application. The top-level dispatch
 /// lives here; concrete surfaces are in sibling modules (transport,
 /// mixer, compose, track_header, menus, settings).
+pub(crate) mod bounce_dialog;
 pub(crate) mod compose;
 pub(crate) mod confirm_delete_track;
 pub(crate) mod confirm_quit;
@@ -74,6 +75,8 @@ impl crate::Resonance {
                 confirm_delete_track::view_confirm_delete_track_overlay(self, track_id)
             ]
             .into()
+        } else if self.bounce_dialog.is_some() {
+            stack![base, bounce_dialog::view_bounce_dialog_overlay(self)].into()
         } else if self.mixer.settings_open {
             stack![base, settings::view_settings_overlay(self)].into()
         } else if self.mixer.add_track_menu_open {

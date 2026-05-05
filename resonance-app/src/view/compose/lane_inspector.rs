@@ -4,18 +4,19 @@
 //! lane is shared harmonic context. Selecting a lane updates this panel.
 
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, slider, text, text_input, tooltip, Space,
+    button, canvas, checkbox, column, container, pick_list, row, slider, text, text_input, tooltip,
+    Space,
 };
 use iced::{alignment, Element, Length};
 
 use resonance_audio::types::TrackId;
 use resonance_music_theory::{
-    BassMotifMode, BassMotifPhrase, BassStyle, ContourPreference, Degree, MelodyStyle, Mode,
-    PitchClass, Scale, TableRegistry,
+    BassMotifMode, BassMotifPhrase, BassStyle, ContourPreference, Degree, ManualMotifNote,
+    MelodyStyle, Mode, MotifSource, PitchClass, Scale, TableRegistry,
 };
 
 use crate::compose::drumroll::DrumrollMessage;
-use crate::compose::messages::{ChordInspectorMsg, LaneInspectorMsg};
+use crate::compose::messages::{ChordInspectorMsg, LaneInspectorMsg, MotifSourceKind};
 use crate::compose::{
     ComposeMessage, DrumVoiceMode, DrumrollViewState, LaneGeneratorKind, LaneGeneratorKindTag,
     SectionDefinitionState, SelectedLane,
@@ -542,11 +543,30 @@ fn chord_body<'a>(
 /// before flipping a lane to a Motif style.
 fn motif_section_block<'a>(definition: &'a SectionDefinitionState) -> Element<'a, Message> {
     let definition_id = definition.id;
-    let motif = definition.motif;
+    let params = *definition.motif_source.params();
 
     let heading = text("Section motif").size(13).color(theme::ACCENT);
 
-    let complexity_slider = slider(0.0..=1.0, motif.complexity, move |v| {
+    let source_kind = if definition.motif_source.is_manual() {
+        MotifSourceKind::Manual
+    } else {
+        MotifSourceKind::Generated
+    };
+    let source_picker = pick_list(
+        vec![MotifSourceKind::Generated, MotifSourceKind::Manual],
+        Some(source_kind),
+        move |kind| {
+            Message::Compose(ComposeMessage::ChordInspector {
+                definition_id,
+                msg: ChordInspectorMsg::SetMotifSourceKind(kind),
+            })
+        },
+    )
+    .text_size(12)
+    .padding([4, 6])
+    .width(Length::Fill);
+
+    let complexity_slider = slider(0.0..=1.0, params.complexity, move |v| {
         Message::Compose(ComposeMessage::ChordInspector {
             definition_id,
             msg: ChordInspectorMsg::SetMotifComplexity(v),
@@ -555,75 +575,135 @@ fn motif_section_block<'a>(definition: &'a SectionDefinitionState) -> Element<'a
     .step(0.01)
     .width(Length::Fill);
 
-    let leap_slider = slider(0.0..=1.0, motif.leap_chance, move |v| {
-        Message::Compose(ComposeMessage::ChordInspector {
-            definition_id,
-            msg: ChordInspectorMsg::SetMotifLeapChance(v),
-        })
-    })
-    .step(0.01)
-    .width(Length::Fill);
-
-    let motif_len_options: Vec<MotifLenPick> = vec![
-        MotifLenPick(0),
-        MotifLenPick(2),
-        MotifLenPick(3),
-        MotifLenPick(4),
-        MotifLenPick(5),
-        MotifLenPick(6),
-    ];
-    let motif_len_picker = pick_list(
-        motif_len_options,
-        Some(MotifLenPick(motif.motif_len)),
-        move |pick| {
-            Message::Compose(ComposeMessage::ChordInspector {
-                definition_id,
-                msg: ChordInspectorMsg::SetMotifLen(pick.0),
-            })
-        },
-    )
-    .text_size(12)
-    .padding([4, 6])
-    .width(Length::Fill);
-
-    let regen_btn = button(text("Regenerate motif").size(12))
-        .padding([4, 10])
-        .width(Length::Fill)
-        .style(|_theme, status| theme::transport_button_style(status))
-        .on_press(Message::Compose(ComposeMessage::ChordInspector {
-            definition_id,
-            msg: ChordInspectorMsg::RegenerateMotif,
-        }));
-
-    let seed_label = text(format!("Seed: 0x{:X}", motif.seed))
-        .size(10)
-        .color(theme::TEXT_DIM);
-
-    column![
+    let mut col = column![
         heading,
         Space::with_height(4),
         label_with_info(
-            format!("Complexity: {:.2}", motif.complexity),
-            "How elaborate the motif is. Low values produce short, repetitive cells with simple rhythms; high values give longer cells, varied rhythms, and more developmental phrase transforms."
+            "Source",
+            "Generated: the motif is built procedurally from the knobs below.\nManual: draw the motif by hand on the canvas. Phrase transforms still apply, so a manual motif also develops across the section."
+        ),
+        source_picker,
+        Space::with_height(6),
+        label_with_info(
+            format!("Complexity: {:.2}", params.complexity),
+            "Drives the per-phrase Transform plan (how aggressively the motif is varied across the section). In Generated mode it also drives motif length and rhythm complexity."
         ),
         complexity_slider,
-        label_with_info(
-            format!("Leap chance: {:.2}", motif.leap_chance),
-            "Probability of an interval leap (3–7 semitones) versus a step (1–2 semitones) when building the motif. Higher = more angular, lower = more conjunct."
-        ),
-        leap_slider,
-        Space::with_height(4),
-        label_with_info(
-            "Motif length",
-            "Number of notes in the motif cell. Auto picks 2–6 based on Complexity."
-        ),
-        motif_len_picker,
-        Space::with_height(8),
-        regen_btn,
-        Space::with_height(4),
-        seed_label,
     ]
-    .spacing(2)
+    .spacing(2);
+
+    match &definition.motif_source {
+        MotifSource::Generated(_) => {
+            let leap_slider = slider(0.0..=1.0, params.leap_chance, move |v| {
+                Message::Compose(ComposeMessage::ChordInspector {
+                    definition_id,
+                    msg: ChordInspectorMsg::SetMotifLeapChance(v),
+                })
+            })
+            .step(0.01)
+            .width(Length::Fill);
+
+            let motif_len_options: Vec<MotifLenPick> = vec![
+                MotifLenPick(0),
+                MotifLenPick(2),
+                MotifLenPick(3),
+                MotifLenPick(4),
+                MotifLenPick(5),
+                MotifLenPick(6),
+            ];
+            let motif_len_picker = pick_list(
+                motif_len_options,
+                Some(MotifLenPick(params.motif_len)),
+                move |pick| {
+                    Message::Compose(ComposeMessage::ChordInspector {
+                        definition_id,
+                        msg: ChordInspectorMsg::SetMotifLen(pick.0),
+                    })
+                },
+            )
+            .text_size(12)
+            .padding([4, 6])
+            .width(Length::Fill);
+
+            let regen_btn = button(text("Regenerate motif").size(12))
+                .padding([4, 10])
+                .width(Length::Fill)
+                .style(|_theme, status| theme::transport_button_style(status))
+                .on_press(Message::Compose(ComposeMessage::ChordInspector {
+                    definition_id,
+                    msg: ChordInspectorMsg::RegenerateMotif,
+                }));
+
+            let seed_label = text(format!("Seed: 0x{:X}", params.seed))
+                .size(10)
+                .color(theme::TEXT_DIM);
+
+            col = col
+                .push(label_with_info(
+                    format!("Leap chance: {:.2}", params.leap_chance),
+                    "Probability of an interval leap (3–7 semitones) versus a step (1–2 semitones) when building the motif. Higher = more angular, lower = more conjunct.",
+                ))
+                .push(leap_slider)
+                .push(Space::with_height(4))
+                .push(label_with_info(
+                    "Motif length",
+                    "Number of notes in the motif cell. Auto picks 2–6 based on Complexity.",
+                ))
+                .push(motif_len_picker)
+                .push(Space::with_height(8))
+                .push(regen_btn)
+                .push(Space::with_height(4))
+                .push(seed_label);
+        }
+        MotifSource::Manual { notes, .. } => {
+            let canvas_widget = manual_motif_canvas(definition_id, notes, definition.scale);
+            let clear_btn = button(text("Clear motif").size(12))
+                .padding([4, 10])
+                .width(Length::Fill)
+                .style(|_theme, status| theme::transport_button_style(status))
+                .on_press(Message::Compose(ComposeMessage::ChordInspector {
+                    definition_id,
+                    msg: ChordInspectorMsg::ClearManualMotif,
+                }));
+
+            col = col
+                .push(Space::with_height(4))
+                .push(
+                    text(format!(
+                        "Motif: {} note{}",
+                        notes.len(),
+                        if notes.len() == 1 { "" } else { "s" }
+                    ))
+                    .size(11)
+                    .color(theme::TEXT_DIM),
+                )
+                .push(canvas_widget)
+                .push(text("Click empty cell to add a note. Click the bottom row to insert a rest. Click the start of a note/rest to remove it. Right-click to toggle accent. Scroll on a note to cycle its duration.")
+                    .size(10)
+                    .color(theme::TEXT_DIM))
+                .push(Space::with_height(6))
+                .push(clear_btn);
+        }
+    }
+
+    col.into()
+}
+
+fn manual_motif_canvas<'a>(
+    definition_id: u64,
+    notes: &'a [ManualMotifNote],
+    scale: Option<Scale>,
+) -> Element<'a, Message> {
+    use super::manual_motif_canvas::{CELL_H, CELL_W, GRID_COLS, TOTAL_ROWS};
+    let canvas_w = CELL_W * GRID_COLS as f32;
+    let canvas_h = CELL_H * TOTAL_ROWS as f32;
+    canvas(super::manual_motif_canvas::ManualMotifCanvas {
+        definition_id,
+        notes,
+        scale,
+    })
+    .width(Length::Fixed(canvas_w))
+    .height(Length::Fixed(canvas_h))
     .into()
 }
 

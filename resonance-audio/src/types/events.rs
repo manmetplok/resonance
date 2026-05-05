@@ -6,6 +6,19 @@ use super::{
     ScannedPlugin, TrackId,
 };
 
+/// Inline clip payload for the offline "bounce in place" flow. The
+/// realtime flow leaves this `None` because the clip arrives via the
+/// regular `RecordingFinished` channel.
+#[derive(Debug, Clone)]
+pub struct BouncedClipData {
+    pub clip_id: ClipId,
+    pub start_sample: SamplePos,
+    pub duration_samples: u64,
+    pub name: String,
+    /// Downsampled waveform peaks: (min, max) per chunk of frames.
+    pub waveform_peaks: Vec<(f32, f32)>,
+}
+
 /// Events sent from the audio engine back to the GUI.
 #[derive(Debug, Clone)]
 pub enum AudioEvent {
@@ -94,6 +107,19 @@ pub enum AudioEvent {
         path: String,
     },
     BounceError(String),
+    /// "Bounce in place" finished. Covers both the offline (internal
+    /// synth) and realtime (external MIDI) flows; `clip` is `Some` when
+    /// the engine rendered the clip inline (offline) and `None` when
+    /// the realtime branch delivered it via the existing
+    /// `RecordingFinished` event. The app mirrors the source mute
+    /// locally and reorders the new track to sit beneath the source.
+    TrackBounceCompleted {
+        source_track_id: TrackId,
+        target_track_id: TrackId,
+        clip: Option<BouncedClipData>,
+    },
+    /// A "bounce in place" run failed. The string is user-facing.
+    TrackBounceError(String),
     /// Response to `SaveClipsToProjectDir`: every in-engine audio
     /// clip has a `.wav` file on disk. The map is `clip_id` →
     /// project-relative path (e.g. `"audio/clip_42.wav"`), which

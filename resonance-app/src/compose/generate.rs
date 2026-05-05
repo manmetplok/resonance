@@ -9,7 +9,7 @@
 use resonance_audio::types::MidiNote;
 use resonance_music_theory::{
     derive_bass, derive_bass_motif, derive_melody, derive_motif_melody_with_section, derive_pad,
-    BassParams, BassStyle, GeneratedNote, MelodyParams, MelodyStyle, MotifParams, PadParams,
+    BassParams, BassStyle, GeneratedNote, MelodyParams, MelodyStyle, MotifSource, PadParams,
     TimedChord,
 };
 use serde::{Deserialize, Serialize};
@@ -84,14 +84,15 @@ pub enum DeriveKind {
 
 /// Run the generator for a derive kind against a chord list and the
 /// section's scale, returning the engine-ready MIDI notes. Motif-style
-/// bass and melody lanes route through the section-shared `motif` so
-/// they share the same underlying motif identity within a section.
+/// bass and melody lanes route through the section-shared `motif_source`
+/// so they share the same underlying motif identity within a section
+/// (whether it's procedurally generated or hand-drawn).
 pub fn derive_notes(
     kind: DeriveKind,
     chords: &[ChordState],
     scale: Option<resonance_music_theory::Scale>,
     params: &GenerateParams,
-    motif: &MotifParams,
+    motif_source: &MotifSource,
     ticks_per_beat: u32,
     seed: u64,
 ) -> Vec<MidiNote> {
@@ -99,9 +100,14 @@ pub fn derive_notes(
     let generated = match kind {
         DeriveKind::Pad => derive_pad(&timed, &params.pad, ticks_per_beat),
         DeriveKind::Bass => match params.bass.style {
-            BassStyle::Motif => {
-                derive_bass_motif(&timed, scale, &params.bass, motif, seed, ticks_per_beat)
-            }
+            BassStyle::Motif => derive_bass_motif(
+                &timed,
+                scale,
+                &params.bass,
+                motif_source,
+                seed,
+                ticks_per_beat,
+            ),
             _ => derive_bass(&timed, scale, &params.bass, ticks_per_beat),
         },
         DeriveKind::Lead => match params.melody.style {
@@ -109,7 +115,7 @@ pub fn derive_notes(
                 &timed,
                 scale,
                 &params.melody,
-                motif,
+                motif_source,
                 seed,
                 ticks_per_beat,
             ),

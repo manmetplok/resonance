@@ -5,7 +5,7 @@
 use resonance_music_theory::{diatonic_chord, GenContext, Generator, GeneratorSpec};
 
 use super::regenerate::{propagate_chord_change, propagate_motif_change};
-use crate::compose::messages::ChordInspectorMsg;
+use crate::compose::messages::{ChordInspectorMsg, MotifSourceKind};
 use crate::compose::ChordState;
 
 pub(super) fn handle(
@@ -128,7 +128,7 @@ pub(super) fn handle(
 
         ChordInspectorMsg::SetMotifComplexity(c) => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.motif.complexity = c.clamp(0.0, 1.0);
+                def.motif_source.params_mut().complexity = c.clamp(0.0, 1.0);
                 r.compose.last_error = None;
             }
             propagate_motif_change(r, definition_id);
@@ -136,7 +136,7 @@ pub(super) fn handle(
 
         ChordInspectorMsg::SetMotifLen(n) => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.motif.motif_len = n;
+                def.motif_source.params_mut().motif_len = n;
                 r.compose.last_error = None;
             }
             propagate_motif_change(r, definition_id);
@@ -144,7 +144,7 @@ pub(super) fn handle(
 
         ChordInspectorMsg::SetMotifLeapChance(c) => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.motif.leap_chance = c.clamp(0.0, 1.0);
+                def.motif_source.params_mut().leap_chance = c.clamp(0.0, 1.0);
                 r.compose.last_error = None;
             }
             propagate_motif_change(r, definition_id);
@@ -152,8 +152,8 @@ pub(super) fn handle(
 
         ChordInspectorMsg::RegenerateMotif => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.motif.seed = def
-                    .motif
+                let params = def.motif_source.params_mut();
+                params.seed = params
                     .seed
                     .wrapping_add(0x9E3779B97F4A7C15)
                     .wrapping_add(1);
@@ -161,7 +161,103 @@ pub(super) fn handle(
             }
             propagate_motif_change(r, definition_id);
         }
+
+        ChordInspectorMsg::SetMotifSourceKind(kind) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                use resonance_music_theory::MotifSource;
+                let prev_params = *def.motif_source.params();
+                let switched = match (kind, &def.motif_source) {
+                    (MotifSourceKind::Generated, MotifSource::Manual { .. }) => {
+                        def.motif_source = MotifSource::Generated(prev_params);
+                        true
+                    }
+                    (MotifSourceKind::Manual, MotifSource::Generated(_)) => {
+                        def.motif_source = MotifSource::Manual {
+                            notes: MotifSource::default_manual_notes(),
+                            params: prev_params,
+                        };
+                        true
+                    }
+                    _ => false,
+                };
+                if switched {
+                    r.compose.last_error = None;
+                }
+            }
+            propagate_motif_change(r, definition_id);
+        }
+
+        ChordInspectorMsg::ToggleManualMotifCell { scale_step, beat_16 } => {
+            if let Some(notes) = manual_notes_mut(r, definition_id) {
+                resonance_music_theory::toggle_manual_motif_cell(
+                    notes,
+                    resonance_music_theory::ManualMotifCell::Note { scale_step },
+                    beat_16,
+                );
+                r.compose.last_error = None;
+            }
+            propagate_motif_change(r, definition_id);
+        }
+
+        ChordInspectorMsg::ToggleManualMotifRest { beat_16 } => {
+            if let Some(notes) = manual_notes_mut(r, definition_id) {
+                resonance_music_theory::toggle_manual_motif_cell(
+                    notes,
+                    resonance_music_theory::ManualMotifCell::Rest,
+                    beat_16,
+                );
+                r.compose.last_error = None;
+            }
+            propagate_motif_change(r, definition_id);
+        }
+
+        ChordInspectorMsg::CycleManualMotifNoteDuration { index } => {
+            if let Some(notes) = manual_notes_mut(r, definition_id) {
+                if let Some(n) = notes.get_mut(index) {
+                    // Cycle 1 → 2 → 3 → 4 → 1 sixteenths.
+                    n.duration_sixteenths = match n.duration_sixteenths {
+                        1 => 2,
+                        2 => 3,
+                        3 => 4,
+                        _ => 1,
+                    };
+                }
+                r.compose.last_error = None;
+            }
+            propagate_motif_change(r, definition_id);
+        }
+
+        ChordInspectorMsg::ToggleManualMotifAccent { index } => {
+            if let Some(notes) = manual_notes_mut(r, definition_id) {
+                if let Some(n) = notes.get_mut(index) {
+                    n.accent = !n.accent;
+                }
+                r.compose.last_error = None;
+            }
+            propagate_motif_change(r, definition_id);
+        }
+
+        ChordInspectorMsg::ClearManualMotif => {
+            if let Some(notes) = manual_notes_mut(r, definition_id) {
+                notes.clear();
+                r.compose.last_error = None;
+            }
+            propagate_motif_change(r, definition_id);
+        }
     }
+}
+
+/// Borrow the manual-motif note vector on the section identified by
+/// `definition_id`. Returns `None` if the definition doesn't exist or its
+/// motif is currently in `Generated` mode — every manual-motif handler
+/// short-circuits in that case.
+fn manual_notes_mut(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+) -> Option<&mut Vec<resonance_music_theory::ManualMotifNote>> {
+    r.compose
+        .find_definition_mut(definition_id)
+        .and_then(|def| def.motif_source.manual_notes_mut())
 }
 
 /// Generate a chord progression using the MarkovProgression generator.

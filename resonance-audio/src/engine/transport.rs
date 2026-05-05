@@ -112,7 +112,11 @@ pub(crate) fn poll_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
     ctx.shared.count_in_active.store(false, Ordering::SeqCst);
 }
 
-fn begin_recording_stream(ctx: &HandlerCtx, state: &mut HandlerState, start_sample: SamplePos) {
+pub(crate) fn begin_recording_stream(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    start_sample: SamplePos,
+) {
     // Recording must have a project directory to stream WAVs into.
     // The startup modal guarantees a project is always selected, so
     // hitting this branch is a programmer error — surface it rather

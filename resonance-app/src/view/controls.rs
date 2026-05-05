@@ -130,6 +130,29 @@ pub fn delete_button<'a>(on_press: Message, size: u16) -> iced::widget::Button<'
         .padding(2)
 }
 
+/// "Bounce in place" trigger — uses the audio-waveform glyph to imply
+/// rendering MIDI/synth output to a flat audio track. Greyed out when
+/// `enabled` is false (typically: source has no MIDI clips, or no
+/// internal synth + no MIDI Out).
+pub fn bounce_button<'a>(
+    track_id: TrackId,
+    enabled: bool,
+    size: u16,
+) -> iced::widget::Button<'a, Message> {
+    let color = if enabled {
+        theme::TEXT_DIM
+    } else {
+        theme::SEPARATOR
+    };
+    let mut b = button(theme::icon(fa::WAVE_SQUARE).size(size).color(color))
+        .style(|_theme, status| theme::small_button_style(status))
+        .padding(2);
+    if enabled {
+        b = b.on_press(Message::Track(TrackMessage::BounceInPlace(track_id)));
+    }
+    b
+}
+
 /// Bus remove button — same style as delete, used on bus strips.
 pub fn bus_remove_button<'a>(bus_id: BusId, size: u16) -> iced::widget::Button<'a, Message> {
     delete_button(Message::Bus(BusMessage::RemoveBus(bus_id)), size)

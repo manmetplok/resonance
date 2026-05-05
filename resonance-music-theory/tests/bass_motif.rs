@@ -5,11 +5,15 @@
 use resonance_music_theory::{
     derive_bass_motif, derive_motif_melody_with_section, BassMotifMode, BassMotifPhrase,
     BassParams, BassStyle, Chord, ChordQuality, MelodyParams, MelodyStyle, Mode, MotifParams,
-    PitchClass, Scale, TimedChord,
+    MotifSource, PitchClass, Scale, TimedChord,
 };
 
 const TPB: u32 = 480;
 const LANE_SEED: u64 = 9999;
+
+fn gen(p: MotifParams) -> MotifSource {
+    MotifSource::Generated(p)
+}
 
 fn tc(chord: Chord, start_beat: u32, duration_beats: u32) -> TimedChord {
     TimedChord {
@@ -57,7 +61,7 @@ fn melody_params() -> MelodyParams {
 #[test]
 fn bass_motif_empty_in_empty_out() {
     let p = bass_params(BassMotifMode::SameIntervals, BassMotifPhrase::Simple);
-    let out = derive_bass_motif(&[], None, &p, &motif_params(), LANE_SEED, TPB);
+    let out = derive_bass_motif(&[], None, &p, &gen(motif_params()), LANE_SEED, TPB);
     assert!(out.is_empty());
 }
 
@@ -69,7 +73,7 @@ fn bass_motif_first_note_only_emits_one_per_chord() {
         &chords,
         Some(Scale::new(PitchClass::C, Mode::Major)),
         &p,
-        &motif_params(),
+        &gen(motif_params()),
         LANE_SEED,
         TPB,
     );
@@ -85,7 +89,7 @@ fn bass_motif_rhythm_only_uses_chord_bass_pitch() {
     let chords = standard_chords();
     let p = bass_params(BassMotifMode::RhythmOnly, BassMotifPhrase::Simple);
     let scale = Some(Scale::new(PitchClass::C, Mode::Major));
-    let out = derive_bass_motif(&chords, scale, &p, &motif_params(), LANE_SEED, TPB);
+    let out = derive_bass_motif(&chords, scale, &p, &gen(motif_params()), LANE_SEED, TPB);
     assert!(!out.is_empty());
 
     let tpb = TPB as u64;
@@ -113,7 +117,7 @@ fn bass_motif_same_intervals_matches_melody_intervals() {
     let motif = motif_params();
 
     let bass = bass_params(BassMotifMode::SameIntervals, BassMotifPhrase::Simple);
-    let bass_notes = derive_bass_motif(&chords, scale, &bass, &motif, LANE_SEED, TPB);
+    let bass_notes = derive_bass_motif(&chords, scale, &bass, &gen(motif), LANE_SEED, TPB);
 
     let melody_params = MelodyParams {
         register: (28, 52),
@@ -123,7 +127,7 @@ fn bass_motif_same_intervals_matches_melody_intervals() {
         &chords,
         scale,
         &melody_params,
-        &motif,
+        &gen(motif),
         LANE_SEED,
         TPB,
     );
@@ -161,8 +165,8 @@ fn bass_motif_augmented_doubles_durations() {
     let same = bass_params(BassMotifMode::SameIntervals, BassMotifPhrase::Simple);
     let aug = bass_params(BassMotifMode::Augmented, BassMotifPhrase::Simple);
 
-    let same_notes = derive_bass_motif(&chords, scale, &same, &motif, LANE_SEED, TPB);
-    let aug_notes = derive_bass_motif(&chords, scale, &aug, &motif, LANE_SEED, TPB);
+    let same_notes = derive_bass_motif(&chords, scale, &same, &gen(motif), LANE_SEED, TPB);
+    let aug_notes = derive_bass_motif(&chords, scale, &aug, &gen(motif), LANE_SEED, TPB);
 
     let chord_end = chords[0].duration_beats as u64 * TPB as u64;
     let same_count = same_notes.iter().filter(|n| n.start_tick < chord_end).count();
@@ -179,8 +183,8 @@ fn bass_motif_phrase_simple_is_deterministic() {
     let scale = Some(Scale::new(PitchClass::C, Mode::Major));
     let motif = motif_params();
     let p = bass_params(BassMotifMode::SameIntervals, BassMotifPhrase::Simple);
-    let a = derive_bass_motif(&chords, scale, &p, &motif, LANE_SEED, TPB);
-    let b = derive_bass_motif(&chords, scale, &p, &motif, LANE_SEED, TPB);
+    let a = derive_bass_motif(&chords, scale, &p, &gen(motif), LANE_SEED, TPB);
+    let b = derive_bass_motif(&chords, scale, &p, &gen(motif), LANE_SEED, TPB);
     assert_eq!(a, b);
 }
 
@@ -199,7 +203,7 @@ fn bass_motif_phrase_modes_produce_different_outputs() {
         &chords,
         scale,
         &bass_params(BassMotifMode::SameIntervals, BassMotifPhrase::Simple),
-        &motif,
+        &gen(motif),
         LANE_SEED,
         TPB,
     );
@@ -207,7 +211,7 @@ fn bass_motif_phrase_modes_produce_different_outputs() {
         &chords,
         scale,
         &bass_params(BassMotifMode::SameIntervals, BassMotifPhrase::MirrorMelody),
-        &motif,
+        &gen(motif),
         LANE_SEED,
         TPB,
     );
@@ -215,7 +219,7 @@ fn bass_motif_phrase_modes_produce_different_outputs() {
         &chords,
         scale,
         &bass_params(BassMotifMode::SameIntervals, BassMotifPhrase::Restricted),
-        &motif,
+        &gen(motif),
         LANE_SEED,
         TPB,
     );
@@ -229,8 +233,8 @@ fn bass_motif_seed_deterministic() {
     let scale = Some(Scale::new(PitchClass::C, Mode::Major));
     let p = bass_params(BassMotifMode::SameIntervals, BassMotifPhrase::Simple);
     let m = motif_params();
-    let a = derive_bass_motif(&chords, scale, &p, &m, LANE_SEED, TPB);
-    let b = derive_bass_motif(&chords, scale, &p, &m, LANE_SEED, TPB);
+    let a = derive_bass_motif(&chords, scale, &p, &gen(m), LANE_SEED, TPB);
+    let b = derive_bass_motif(&chords, scale, &p, &gen(m), LANE_SEED, TPB);
     assert_eq!(a, b);
 }
 
@@ -241,8 +245,8 @@ fn bass_motif_motif_seed_change_changes_intervals() {
     let p = bass_params(BassMotifMode::SameIntervals, BassMotifPhrase::Simple);
     let m1 = MotifParams { seed: 1, ..motif_params() };
     let m2 = MotifParams { seed: 99, ..motif_params() };
-    let a = derive_bass_motif(&chords, scale, &p, &m1, LANE_SEED, TPB);
-    let b = derive_bass_motif(&chords, scale, &p, &m2, LANE_SEED, TPB);
+    let a = derive_bass_motif(&chords, scale, &p, &gen(m1), LANE_SEED, TPB);
+    let b = derive_bass_motif(&chords, scale, &p, &gen(m2), LANE_SEED, TPB);
     assert_ne!(a, b);
 }
 
@@ -251,7 +255,7 @@ fn bass_motif_stays_in_bass_register() {
     let chords = standard_chords();
     let scale = Some(Scale::new(PitchClass::C, Mode::Major));
     let p = bass_params(BassMotifMode::SameIntervals, BassMotifPhrase::Simple);
-    let out = derive_bass_motif(&chords, scale, &p, &motif_params(), LANE_SEED, TPB);
+    let out = derive_bass_motif(&chords, scale, &p, &gen(motif_params()), LANE_SEED, TPB);
     for n in &out {
         assert!(n.note >= 28, "note {} below base_note 28", n.note);
         assert!(n.note <= 52, "note {} above bass register cap 52", n.note);
@@ -277,8 +281,8 @@ fn bass_lane_seed_change_keeps_motif_intervals() {
     let p = bass_params(BassMotifMode::SameIntervals, BassMotifPhrase::Simple);
     let m = motif_params();
 
-    let a = derive_bass_motif(&chords, scale, &p, &m, 1, TPB);
-    let b = derive_bass_motif(&chords, scale, &p, &m, 999, TPB);
+    let a = derive_bass_motif(&chords, scale, &p, &gen(m), 1, TPB);
+    let b = derive_bass_motif(&chords, scale, &p, &gen(m), 999, TPB);
 
     // Both must have the same number of notes (motif tiles the same way).
     assert_eq!(a.len(), b.len(), "lane-seed change altered note count");
@@ -311,10 +315,10 @@ fn bass_lane_seed_change_changes_some_octaves() {
 
     // Across a range of lane seeds, at least one pair should produce a
     // different MIDI sequence (octave displacement on at least one phrase).
-    let baseline = derive_bass_motif(&chords, scale, &p, &m, 1, TPB);
+    let baseline = derive_bass_motif(&chords, scale, &p, &gen(m), 1, TPB);
     let mut found_variation = false;
     for seed in 2..50u64 {
-        let alt = derive_bass_motif(&chords, scale, &p, &m, seed, TPB);
+        let alt = derive_bass_motif(&chords, scale, &p, &gen(m), seed, TPB);
         if alt != baseline {
             found_variation = true;
             break;
@@ -337,7 +341,7 @@ fn melody_lane_seed_change_does_not_affect_bass_motif_output() {
 
     // Both bass derivations use bass lane seed 1; the melody lane seed is
     // irrelevant to bass output and isn't passed in here at all.
-    let bass_a = derive_bass_motif(&chords, scale, &p, &m, 1, TPB);
-    let bass_b = derive_bass_motif(&chords, scale, &p, &m, 1, TPB);
+    let bass_a = derive_bass_motif(&chords, scale, &p, &gen(m), 1, TPB);
+    let bass_b = derive_bass_motif(&chords, scale, &p, &gen(m), 1, TPB);
     assert_eq!(bass_a, bass_b);
 }

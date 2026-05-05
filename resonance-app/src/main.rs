@@ -88,6 +88,10 @@ pub(crate) struct Resonance {
     /// When set, the confirmation dialog for deleting a track with
     /// content is shown. Holds the track id that the user wants to remove.
     pub(crate) confirm_delete_track: Option<resonance_audio::types::TrackId>,
+    /// When set, the "Bounce in place" dialog is shown for an external
+    /// MIDI track. Holds the source track id plus the user's current
+    /// device/port selection.
+    pub(crate) bounce_dialog: Option<crate::view::bounce_dialog::BounceDialogState>,
     /// True when the project has been modified since the last save.
     pub(crate) dirty: bool,
     /// When set, the "unsaved changes" quit-confirmation dialog is shown.
@@ -346,6 +350,7 @@ impl Resonance {
             undo: UndoHistory::new(),
             plugin_state_cache: std::collections::HashMap::new(),
             confirm_delete_track: None,
+            bounce_dialog: None,
             dirty: false,
             confirm_quit: None,
             quit_after_save: None,

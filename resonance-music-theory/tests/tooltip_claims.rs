@@ -6,10 +6,14 @@
 use resonance_music_theory::{
     derive_bass, derive_bass_motif, derive_melody, derive_motif_melody_with_section, derive_pad,
     BassMotifMode, BassMotifPhrase, BassParams, BassStyle, Chord, ChordQuality, MelodyParams,
-    MelodyStyle, Mode, MotifParams, PadParams, PitchClass, Scale, TimedChord,
+    MelodyStyle, Mode, MotifParams, MotifSource, PadParams, PitchClass, Scale, TimedChord,
 };
 
 const TPB: u32 = 480;
+
+fn gen(p: MotifParams) -> MotifSource {
+    MotifSource::Generated(p)
+}
 
 fn tc(chord: Chord, start_beat: u32, duration_beats: u32) -> TimedChord {
     TimedChord {
@@ -186,8 +190,8 @@ fn section_motif_length_explicit_changes_note_count_per_chord() {
         motif_len: 6,
         leap_chance: 0.21,
     };
-    let notes_short = derive_bass_motif(&chords, scale, &p, &m_short, 0, TPB);
-    let notes_long = derive_bass_motif(&chords, scale, &p, &m_long, 0, TPB);
+    let notes_short = derive_bass_motif(&chords, scale, &p, &gen(m_short), 0, TPB);
+    let notes_long = derive_bass_motif(&chords, scale, &p, &gen(m_long), 0, TPB);
     // A 2-note motif has two duration slots to share the chord; a 6-note
     // motif spreads the same chord across more slots, so it tiles fewer
     // times overall — but each tiling emits more notes. Net: a 6-note
@@ -216,7 +220,7 @@ fn section_motif_length_auto_follows_complexity() {
         &chords,
         scale,
         &p,
-        &MotifParams { seed: 1, complexity: 0.0, motif_len: 0, leap_chance: 0.21 },
+        &gen(MotifParams { seed: 1, complexity: 0.0, motif_len: 0, leap_chance: 0.21 }),
         0,
         TPB,
     );
@@ -224,7 +228,7 @@ fn section_motif_length_auto_follows_complexity() {
         &chords,
         scale,
         &p,
-        &MotifParams { seed: 1, complexity: 1.0, motif_len: 0, leap_chance: 0.21 },
+        &gen(MotifParams { seed: 1, complexity: 1.0, motif_len: 0, leap_chance: 0.21 }),
         0,
         TPB,
     );
@@ -232,7 +236,7 @@ fn section_motif_length_auto_follows_complexity() {
         &chords,
         scale,
         &p,
-        &MotifParams { seed: 1, complexity: 0.5, motif_len: 2, leap_chance: 0.21 },
+        &gen(MotifParams { seed: 1, complexity: 0.5, motif_len: 2, leap_chance: 0.21 }),
         0,
         TPB,
     );
@@ -240,7 +244,7 @@ fn section_motif_length_auto_follows_complexity() {
         &chords,
         scale,
         &p,
-        &MotifParams { seed: 1, complexity: 0.5, motif_len: 6, leap_chance: 0.21 },
+        &gen(MotifParams { seed: 1, complexity: 0.5, motif_len: 6, leap_chance: 0.21 }),
         0,
         TPB,
     );
@@ -292,8 +296,8 @@ fn melody_phrase_length_changes_output() {
         phrase_len: 8,
         ..MelodyParams::default()
     };
-    let a = derive_motif_melody_with_section(&chords, scale, &p_2, &motif, 1, TPB);
-    let b = derive_motif_melody_with_section(&chords, scale, &p_8, &motif, 1, TPB);
+    let a = derive_motif_melody_with_section(&chords, scale, &p_2, &gen(motif), 1, TPB);
+    let b = derive_motif_melody_with_section(&chords, scale, &p_8, &gen(motif), 1, TPB);
     assert_ne!(a, b, "phrase_len 2 and 8 should produce different melodies");
 }
 
@@ -321,9 +325,9 @@ fn melody_articulation_drives_sounding_ratio() {
     };
 
     p.articulation = 0.0;
-    let legato = derive_motif_melody_with_section(&chords, scale, &p, &motif, 0, TPB);
+    let legato = derive_motif_melody_with_section(&chords, scale, &p, &gen(motif), 0, TPB);
     p.articulation = 1.0;
-    let staccato = derive_motif_melody_with_section(&chords, scale, &p, &motif, 0, TPB);
+    let staccato = derive_motif_melody_with_section(&chords, scale, &p, &gen(motif), 0, TPB);
 
     assert_eq!(
         legato.len(),
@@ -409,9 +413,9 @@ fn bass_motif_mirror_melody_transforms_lock_to_motif_seed() {
         ..motif_a
     };
 
-    let a1 = derive_bass_motif(&chords, scale, &p, &motif_a, 5, TPB);
-    let a2 = derive_bass_motif(&chords, scale, &p, &motif_a, 5, TPB);
-    let b = derive_bass_motif(&chords, scale, &p, &motif_b, 5, TPB);
+    let a1 = derive_bass_motif(&chords, scale, &p, &gen(motif_a), 5, TPB);
+    let a2 = derive_bass_motif(&chords, scale, &p, &gen(motif_a), 5, TPB);
+    let b = derive_bass_motif(&chords, scale, &p, &gen(motif_b), 5, TPB);
 
     assert_eq!(a1, a2, "same motif_seed should produce identical Transforms");
     assert_ne!(a1, b, "different motif_seed should produce different Transforms");
@@ -442,16 +446,16 @@ fn bass_motif_restricted_transforms_lock_to_lane_seed() {
     };
 
     // Same (motif, lane) seeds → identical output.
-    let a = derive_bass_motif(&chords, scale, &p, &motif, 7, TPB);
-    let b = derive_bass_motif(&chords, scale, &p, &motif, 7, TPB);
+    let a = derive_bass_motif(&chords, scale, &p, &gen(motif), 7, TPB);
+    let b = derive_bass_motif(&chords, scale, &p, &gen(motif), 7, TPB);
     assert_eq!(a, b);
 
     // Across a sweep of lane seeds, at least one Restricted output should
     // differ on the same motif — otherwise lane_seed has no effect.
-    let baseline = derive_bass_motif(&chords, scale, &p, &motif, 1, TPB);
+    let baseline = derive_bass_motif(&chords, scale, &p, &gen(motif), 1, TPB);
     let mut found_lane_variation = false;
     for lane in 2..50u64 {
-        let alt = derive_bass_motif(&chords, scale, &p, &motif, lane, TPB);
+        let alt = derive_bass_motif(&chords, scale, &p, &gen(motif), lane, TPB);
         if alt != baseline {
             found_lane_variation = true;
             break;

@@ -1,9 +1,57 @@
 use iced::Task;
 use resonance_audio::types::AudioCommand;
 
-use crate::message::{Message, TrackMessage};
+use crate::message::{BounceMessage, Message, TrackMessage};
+use crate::state::TrackState;
 use crate::util::db_to_gain;
 use crate::Resonance;
+
+/// Where a "bounce in place" request should route. Computed from a
+/// track and the project's MIDI clip list — the view uses it to grey
+/// out the trigger button, and the update layer uses it to dispatch
+/// either the offline render or the realtime input-picker dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BounceMode {
+    /// Track has at least one synth plugin: render offline.
+    Internal,
+    /// Track drives external MIDI hardware: open the input picker
+    /// dialog so the user picks which audio input to record from.
+    External,
+}
+
+/// Classify a bounce request. Returns the routing mode on success or a
+/// user-facing reason string when the track isn't bounce-able. The view
+/// only inspects `is_ok()`; the update layer surfaces the message.
+///
+/// When a track has both an internal synth and a configured MIDI Out,
+/// the external path wins — the user explicitly wired hardware output
+/// for a reason and that's the "interesting" sound source.
+pub fn classify_bounce(
+    track: &TrackState,
+    project_midi_clips: impl Iterator<Item = resonance_audio::types::TrackId>,
+) -> Result<BounceMode, &'static str> {
+    use resonance_audio::types::TrackType;
+    if track.track_type != TrackType::Instrument {
+        return Err("Bounce in place is only available on instrument tracks");
+    }
+    if track.sub_track.is_some() {
+        return Err(
+            "Bounce a parent track to capture its sub-tracks, not a sub-track itself",
+        );
+    }
+    if !project_midi_clips.into_iter().any(|tid| tid == track.id) {
+        return Err("Source track has no MIDI clips to bounce");
+    }
+    let has_external_midi = track.midi_output_device.is_some();
+    let has_synth = !track.plugins.is_empty();
+    if has_external_midi {
+        Ok(BounceMode::External)
+    } else if has_synth {
+        Ok(BounceMode::Internal)
+    } else {
+        Err("Bounce: track has no sound source (no internal synth or MIDI Out)")
+    }
+}
 
 pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
     match m {
@@ -277,6 +325,128 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             }
             r.user_presets = crate::presets::load_user_presets();
         }
+        TrackMessage::BounceInPlace(track_id) => {
+            handle_bounce_in_place(r, track_id);
+        }
+        TrackMessage::Bounce(BounceMessage::PickDevice(device)) => {
+            if let Some(d) = r.bounce_dialog.as_mut() {
+                d.selected_device = device;
+                d.selected_port = 0;
+            }
+        }
+        TrackMessage::Bounce(BounceMessage::PickPort(port)) => {
+            if let Some(d) = r.bounce_dialog.as_mut() {
+                d.selected_port = port;
+            }
+        }
+        TrackMessage::Bounce(BounceMessage::Cancel) => {
+            r.bounce_dialog = None;
+        }
+        TrackMessage::Bounce(BounceMessage::Confirm) => {
+            handle_bounce_dialog_confirm(r);
+        }
     }
     Task::none()
+}
+
+fn handle_bounce_dialog_confirm(r: &mut Resonance) {
+    let Some(dialog) = r.bounce_dialog.take() else {
+        return;
+    };
+    let Some(device) = dialog.selected_device.clone() else {
+        r.error_message = Some("Pick an audio input device first".into());
+        // Keep the dialog open by re-stashing it.
+        r.bounce_dialog = Some(dialog);
+        return;
+    };
+    let Some(source) = r.registry.tracks.iter().find(|t| t.id == dialog.source_track_id) else {
+        r.error_message = Some("Bounce: source track not found".into());
+        return;
+    };
+    if r.transport.playing {
+        r.error_message = Some("Stop transport before bouncing".into());
+        r.bounce_dialog = Some(dialog);
+        return;
+    }
+
+    let source_name = source.name.clone();
+    let target_track_id = r.registry.next_sub_track_id;
+    r.registry.next_sub_track_id += 1;
+    let track_name = format!("{source_name} bounce");
+
+    r.engine.send(AudioCommand::AddTrack {
+        id_hint: Some(target_track_id),
+        name: Some(track_name),
+    });
+    r.engine.send(AudioCommand::BounceTrackRealtimeToAudio {
+        source_track_id: dialog.source_track_id,
+        target_track_id,
+        input_device_name: device,
+        input_port_index: dialog.selected_port,
+    });
+}
+
+/// Dispatch a "bounce in place" request — runs the source-track
+/// classifier and either fires the offline render command (internal
+/// synth) or opens the realtime input-picker dialog (external MIDI).
+fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::TrackId) {
+    let Some(source) = r.registry.tracks.iter().find(|t| t.id == track_id) else {
+        r.error_message = Some("Bounce: source track not found".into());
+        return;
+    };
+    let mode = match classify_bounce(source, r.midi_clips.iter().map(|c| c.track_id)) {
+        Ok(mode) => mode,
+        Err(msg) => {
+            r.error_message = Some(msg.into());
+            return;
+        }
+    };
+    if r.transport.playing {
+        r.error_message = Some("Stop transport before bouncing".into());
+        return;
+    }
+
+    match mode {
+        BounceMode::External => {
+            r.bounce_dialog = Some(crate::view::bounce_dialog::BounceDialogState {
+                source_track_id: track_id,
+                selected_device: r.default_input_device_name.clone(),
+                selected_port: 0,
+            });
+            // Make sure the input device list is fresh for the dialog.
+            r.engine.send(AudioCommand::ListInputDevices);
+        }
+        BounceMode::Internal => {
+            internal_bounce_dispatch(r, track_id);
+        }
+    }
+}
+
+/// Allocate the target track + clip ids and fire the offline bounce
+/// command. Caller has already validated the source track.
+fn internal_bounce_dispatch(r: &mut Resonance, track_id: resonance_audio::types::TrackId) {
+    let source_name = r
+        .registry
+        .tracks
+        .iter()
+        .find(|t| t.id == track_id)
+        .map(|t| t.name.clone())
+        .unwrap_or_default();
+    let target_track_id = r.registry.next_sub_track_id;
+    r.registry.next_sub_track_id += 1;
+    let target_clip_id = r.compose.fresh_derived_clip_id();
+
+    let track_name = format!("{source_name} bounce");
+    let clip_name = track_name.clone();
+
+    r.engine.send(AudioCommand::AddTrack {
+        id_hint: Some(target_track_id),
+        name: Some(track_name),
+    });
+    r.engine.send(AudioCommand::BounceTrackToAudio {
+        source_track_id: track_id,
+        target_track_id,
+        target_clip_id,
+        name: clip_name,
+    });
 }

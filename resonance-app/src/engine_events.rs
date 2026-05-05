@@ -321,6 +321,34 @@ impl crate::Resonance {
                 self.io.bouncing = false;
                 self.error_message = Some(format!("Bounce failed: {e}"));
             }
+            AudioEvent::TrackBounceCompleted {
+                source_track_id,
+                target_track_id,
+                clip,
+            } => {
+                // Offline bounce delivers the clip inline; realtime
+                // bounce delivers it via the regular `RecordingFinished`
+                // event handled above and leaves `clip` as `None`.
+                if let Some(c) = clip {
+                    if !self.clips.iter().any(|existing| existing.id == c.clip_id) {
+                        self.clips.push(ClipState {
+                            id: c.clip_id,
+                            track_id: target_track_id,
+                            start_sample: c.start_sample,
+                            duration_samples: c.duration_samples,
+                            name: c.name,
+                            total_frames: c.duration_samples,
+                            trim_start_frames: 0,
+                            trim_end_frames: 0,
+                            waveform_peaks: c.waveform_peaks,
+                        });
+                    }
+                }
+                self.finalize_bounce(source_track_id, target_track_id);
+            }
+            AudioEvent::TrackBounceError(e) => {
+                self.error_message = Some(format!("Bounce in place failed: {e}"));
+            }
             AudioEvent::PluginStateSaved { instance_id, data } => {
                 // Also feeds the undo system's plugin-state cache so
                 // snapshots can replay internal CLAP state on restore.
@@ -637,6 +665,54 @@ impl crate::Resonance {
             }
         }
         Task::none()
+    }
+
+    /// Shared post-bounce wrap-up: mute the source, send the engine the
+    /// matching `SetTrackMute`, and reorder the bounce target so it
+    /// sits right under the source. Called from both the offline
+    /// (`TrackBouncedToAudio`) and realtime (`TrackBounceCompleted`)
+    /// completion handlers.
+    fn finalize_bounce(
+        &mut self,
+        source_track_id: resonance_audio::types::TrackId,
+        target_track_id: resonance_audio::types::TrackId,
+    ) {
+        if let Some(track) = self
+            .registry
+            .tracks
+            .iter_mut()
+            .find(|t| t.id == source_track_id)
+        {
+            track.muted = true;
+        }
+        self.engine.send(AudioCommand::SetTrackMute {
+            track_id: source_track_id,
+            muted: true,
+        });
+        let source_order = self
+            .registry
+            .tracks
+            .iter()
+            .find(|t| t.id == source_track_id)
+            .map(|t| t.order);
+        if let Some(src_order) = source_order {
+            // Bump every track at order > src_order by 1 so we can
+            // slot the new track at src_order + 1.
+            for t in self.registry.tracks.iter_mut() {
+                if t.id != target_track_id && t.order > src_order {
+                    t.order += 1;
+                }
+            }
+            if let Some(t) = self
+                .registry
+                .tracks
+                .iter_mut()
+                .find(|t| t.id == target_track_id)
+            {
+                t.order = src_order + 1;
+            }
+            self.registry.next_track_order += 1;
+        }
     }
 
     /// Apply a preset's settings and plugin chain to a newly created track.

@@ -150,7 +150,7 @@ pub(super) fn regenerate_lane(
         &def.chords,
         def.scale,
         &gen_params,
-        &def.motif,
+        &def.motif_source,
         TICKS_PER_QUARTER_NOTE as u32,
         config.seed,
     );
@@ -227,13 +227,13 @@ fn regenerate_drum_motif_voices(
         return;
     }
     let chords = def.chords.clone();
-    let motif_params = def.motif;
+    let motif_source = def.motif_source.clone();
     let length_bars = def.length_bars;
 
     let timed = generate::to_timed_chords(&chords);
     let hits = resonance_music_theory::derive_motif_rhythm(
         &timed,
-        &motif_params,
+        &motif_source,
         TICKS_PER_QUARTER_NOTE as u32,
     );
     if hits.is_empty() {

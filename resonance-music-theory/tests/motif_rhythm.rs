@@ -2,10 +2,14 @@
 //! motif mode uses to lock a drum voice to the section's shared motif.
 
 use resonance_music_theory::{
-    derive_motif_rhythm, Chord, ChordQuality, MotifParams, PitchClass, TimedChord,
+    derive_motif_rhythm, Chord, ChordQuality, MotifParams, MotifSource, PitchClass, TimedChord,
 };
 
 const TPB: u32 = 480;
+
+fn gen(p: MotifParams) -> MotifSource {
+    MotifSource::Generated(p)
+}
 
 fn tc(chord: Chord, start_beat: u32, duration_beats: u32) -> TimedChord {
     TimedChord {
@@ -17,7 +21,7 @@ fn tc(chord: Chord, start_beat: u32, duration_beats: u32) -> TimedChord {
 
 #[test]
 fn empty_chord_list_returns_empty_rhythm() {
-    let hits = derive_motif_rhythm(&[], &MotifParams::default(), TPB);
+    let hits = derive_motif_rhythm(&[], &gen(MotifParams::default()), TPB);
     assert!(hits.is_empty());
 }
 
@@ -32,8 +36,8 @@ fn fixed_seed_produces_deterministic_rhythm() {
         seed: 42,
         ..MotifParams::default()
     };
-    let a = derive_motif_rhythm(&chords, &params, TPB);
-    let b = derive_motif_rhythm(&chords, &params, TPB);
+    let a = derive_motif_rhythm(&chords, &gen(params), TPB);
+    let b = derive_motif_rhythm(&chords, &gen(params), TPB);
     assert!(!a.is_empty());
     assert_eq!(a, b);
 }
@@ -45,7 +49,7 @@ fn rhythm_first_hit_lands_at_chord_start() {
         seed: 7,
         ..MotifParams::default()
     };
-    let hits = derive_motif_rhythm(&chords, &params, TPB);
+    let hits = derive_motif_rhythm(&chords, &gen(params), TPB);
     let first = hits.first().expect("at least one hit");
     assert_eq!(first.start_tick, 0);
 }
@@ -60,7 +64,7 @@ fn second_chord_hits_start_at_chord_boundary() {
         seed: 11,
         ..MotifParams::default()
     };
-    let hits = derive_motif_rhythm(&chords, &params, TPB);
+    let hits = derive_motif_rhythm(&chords, &gen(params), TPB);
     // The first onset of the second chord must land exactly on its
     // start tick — the rhythm restarts per chord rather than running
     // through the bar line.
@@ -77,7 +81,7 @@ fn second_chord_hits_start_at_chord_boundary() {
 fn rhythm_total_duration_does_not_exceed_chord_span() {
     let chords = vec![tc(Chord::new(PitchClass::C, ChordQuality::Maj), 0, 4)];
     let params = MotifParams::default();
-    let hits = derive_motif_rhythm(&chords, &params, TPB);
+    let hits = derive_motif_rhythm(&chords, &gen(params), TPB);
     let chord_end = 4 * TPB as u64;
     for h in &hits {
         assert!(h.start_tick + h.duration_ticks <= chord_end);
@@ -94,7 +98,7 @@ fn at_least_one_hit_is_accented() {
         seed: 1,
         ..MotifParams::default()
     };
-    let hits = derive_motif_rhythm(&chords, &params, TPB);
+    let hits = derive_motif_rhythm(&chords, &gen(params), TPB);
     assert!(hits.iter().any(|h| h.accent));
 }
 
@@ -103,18 +107,18 @@ fn changing_motif_seed_changes_rhythm() {
     let chords = vec![tc(Chord::new(PitchClass::C, ChordQuality::Maj), 0, 4)];
     let a = derive_motif_rhythm(
         &chords,
-        &MotifParams {
+        &gen(MotifParams {
             seed: 1,
             ..MotifParams::default()
-        },
+        }),
         TPB,
     );
     let b = derive_motif_rhythm(
         &chords,
-        &MotifParams {
+        &gen(MotifParams {
             seed: 2,
             ..MotifParams::default()
-        },
+        }),
         TPB,
     );
     // Different seeds should at least sometimes produce different

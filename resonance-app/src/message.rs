@@ -110,6 +110,32 @@ pub(crate) enum TrackMessage {
     AddTrackFromPreset(Box<TrackPreset>),
     /// Delete a user preset by name.
     DeleteUserPreset(String),
+    /// "Bounce in place" — render this instrument track to a fresh
+    /// audio track and mute the source. Routes to either the offline
+    /// bounce (for tracks with an internal synth) or the bounce
+    /// dialog (for external-MIDI tracks that need a real-time record
+    /// from a chosen audio input).
+    BounceInPlace(TrackId),
+    /// Sub-flow for the realtime "Bounce in place" dialog (external
+    /// MIDI tracks). Grouped under one variant so the top-level
+    /// `TrackMessage` doesn't accumulate dialog plumbing.
+    Bounce(BounceMessage),
+}
+
+/// User actions in the realtime bounce-in-place dialog (only shown for
+/// external-MIDI instrument tracks). The dialog lifecycle: open →
+/// `PickDevice` / `PickPort` → `Confirm` (kicks off the realtime bounce)
+/// or `Cancel` (closes without side effects).
+#[derive(Debug, Clone)]
+pub(crate) enum BounceMessage {
+    /// User picked an audio input device.
+    PickDevice(Option<String>),
+    /// User picked the starting input channel.
+    PickPort(u16),
+    /// User confirmed — kick off the realtime bounce.
+    Confirm,
+    /// User cancelled the dialog.
+    Cancel,
 }
 
 #[derive(Debug, Clone)]

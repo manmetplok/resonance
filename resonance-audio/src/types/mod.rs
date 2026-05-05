@@ -34,7 +34,7 @@ pub use clip::{
     WAVEFORM_PEAK_FRAMES,
 };
 pub use commands::AudioCommand;
-pub use events::AudioEvent;
+pub use events::{AudioEvent, BouncedClipData};
 pub use tempo::{
     arrival_bpm_at_bar, avg_bpm_for_bar, bpm_at_bar, sample_frac_to_tick_frac,
     tick_frac_to_sample_frac, InputDeviceInfo, ParamInfo, PluginDescInfo, ScannedPlugin,

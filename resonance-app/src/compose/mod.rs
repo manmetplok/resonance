@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use resonance_audio::types::{ClipId, TrackId};
 use resonance_music_theory::{
-    BassParams, Chord, GeneratedMaterial, GeneratorSpec, MelodyParams, MotifParams, PadParams,
+    BassParams, Chord, GeneratedMaterial, GeneratorSpec, MelodyParams, MotifParams, MotifSource,
+    PadParams,
     Scale,
 };
 use serde::{Deserialize, Serialize};
@@ -150,10 +151,11 @@ pub struct SectionDefinitionState {
     /// Build diatonic seventh chords instead of triads during chord
     /// generation.
     pub seventh_chords: bool,
-    /// Section-shared motif knobs. Both melody-Motif and bass-Motif lanes
-    /// in this section read from these so they share the underlying motif
-    /// identity (intervals + rhythm + accents).
-    pub motif: MotifParams,
+    /// Section-shared motif source. Either generated procedurally or
+    /// hand-drawn by the user. Every motif-style lane in this section
+    /// reads from this so they share the underlying motif identity
+    /// (intervals + rhythm + accents).
+    pub motif_source: MotifSource,
 }
 
 #[derive(Debug, Clone)]
@@ -333,7 +335,7 @@ impl ComposeState {
                 lane_generators: d.lane_generators.clone(),
                 beats_per_chord: d.beats_per_chord,
                 seventh_chords: d.seventh_chords,
-                motif: d.motif,
+                motif_source: d.motif_source.clone(),
             })
             .collect()
     }
@@ -381,7 +383,7 @@ impl ComposeState {
                 lane_generators: d.lane_generators.clone(),
                 beats_per_chord: d.beats_per_chord,
                 seventh_chords: d.seventh_chords,
-                motif: d.motif,
+                motif_source: d.motif_source.clone(),
             })
             .collect();
         // Runtime-only state: start each load with an empty derived-clip
@@ -478,9 +480,13 @@ impl ComposeState {
 
         // Migrate motif knobs from any melody lane that still carries them
         // (predates section-shared MotifParams). Take the first non-default
-        // melody lane found.
+        // melody lane found. Only applies in Generated mode — Manual motifs
+        // never came from a melody lane.
         for def in &mut self.definitions {
-            if def.motif != MotifParams::default() {
+            let MotifSource::Generated(motif) = &mut def.motif_source else {
+                continue;
+            };
+            if *motif != MotifParams::default() {
                 continue;
             }
             let melody_default = MelodyParams::default();
@@ -495,11 +501,11 @@ impl ComposeState {
                 }
                 None
             }) {
-                def.motif.complexity = legacy.0;
-                def.motif.motif_len = legacy.1;
-                def.motif.leap_chance = legacy.2;
-                if def.motif.seed == 0 {
-                    def.motif.seed = legacy.3;
+                motif.complexity = legacy.0;
+                motif.motif_len = legacy.1;
+                motif.leap_chance = legacy.2;
+                if motif.seed == 0 {
+                    motif.seed = legacy.3;
                 }
             }
         }
@@ -596,7 +602,7 @@ mod tests {
             lane_generators: HashMap::new(),
             beats_per_chord: 4,
             seventh_chords: false,
-            motif: MotifParams::default(),
+            motif_source: MotifSource::default(),
         });
         let placement_id = state.fresh_id();
         state.placements.push(SectionPlacementState {
@@ -686,12 +692,12 @@ mod tests {
     #[test]
     fn section_motif_round_trips_through_project_io() {
         let mut state = state_with_chords_and_scale();
-        state.definitions[0].motif = MotifParams {
+        state.definitions[0].motif_source = MotifSource::Generated(MotifParams {
             seed: 0xDEAD_BEEF_1234_5678,
             complexity: 0.73,
             motif_len: 5,
             leap_chance: 0.42,
-        };
+        });
 
         let project_defs = state.to_project_definitions();
         let project_placements = state.to_project_placements();
@@ -699,11 +705,15 @@ mod tests {
         let mut restored = ComposeState::default();
         restored.load_from_project(&project_defs, &project_placements);
 
-        let restored_motif = restored.definitions[0].motif;
+        let restored_motif = restored.definitions[0].motif_source.params();
         assert_eq!(restored_motif.seed, 0xDEAD_BEEF_1234_5678);
         assert_eq!(restored_motif.complexity, 0.73);
         assert_eq!(restored_motif.motif_len, 5);
         assert_eq!(restored_motif.leap_chance, 0.42);
+        assert!(matches!(
+            restored.definitions[0].motif_source,
+            MotifSource::Generated(_)
+        ));
     }
 
     /// A project file without the `motif` key (predating this feature)
@@ -718,7 +728,32 @@ mod tests {
         }"#;
         let parsed: crate::project::ProjectSectionDefinition =
             serde_json::from_str(json).expect("legacy section JSON should parse");
-        assert_eq!(parsed.motif, MotifParams::default());
+        assert_eq!(parsed.motif_source, MotifSource::default());
+    }
+
+    /// A project file written before the `MotifSource` enum existed stored
+    /// the motif as a flat `MotifParams`. The custom deserializer must
+    /// accept that legacy shape and lift it into `Generated(...)`.
+    #[test]
+    fn legacy_project_with_flat_motif_params_loads_as_generated() {
+        let json = r#"{
+            "id": 1,
+            "name": "Legacy",
+            "color": [0, 0, 0],
+            "length_bars": 8,
+            "motif": { "seed": 7, "complexity": 0.42, "motif_len": 3, "leap_chance": 0.6 }
+        }"#;
+        let parsed: crate::project::ProjectSectionDefinition =
+            serde_json::from_str(json).expect("legacy flat-motif JSON should parse");
+        match parsed.motif_source {
+            MotifSource::Generated(p) => {
+                assert_eq!(p.seed, 7);
+                assert_eq!(p.complexity, 0.42);
+                assert_eq!(p.motif_len, 3);
+                assert_eq!(p.leap_chance, 0.6);
+            }
+            other => panic!("expected Generated, got {other:?}"),
+        }
     }
 
     /// Older projects: a melody lane carries non-default complexity / motif_len /
@@ -744,7 +779,7 @@ mod tests {
             lane_generators: HashMap::new(),
             beats_per_chord: 4,
             seventh_chords: false,
-            motif: MotifParams::default(),
+            motif_source: MotifSource::default(),
         });
 
         let custom_melody = MelodyParams {
@@ -764,11 +799,11 @@ mod tests {
 
         state.migrate_old_generate_params(&[]);
 
-        let migrated = &state.definitions[0];
-        assert_eq!(migrated.motif.complexity, 0.85);
-        assert_eq!(migrated.motif.motif_len, 6);
-        assert_eq!(migrated.motif.leap_chance, 0.55);
-        assert_eq!(migrated.motif.seed, 0xCAFEBABE);
+        let migrated = state.definitions[0].motif_source.params();
+        assert_eq!(migrated.complexity, 0.85);
+        assert_eq!(migrated.motif_len, 6);
+        assert_eq!(migrated.leap_chance, 0.55);
+        assert_eq!(migrated.seed, 0xCAFEBABE);
     }
 
     /// If the section's motif was loaded with explicit values, the
@@ -794,12 +829,12 @@ mod tests {
             lane_generators: HashMap::new(),
             beats_per_chord: 4,
             seventh_chords: false,
-            motif: MotifParams {
+            motif_source: MotifSource::Generated(MotifParams {
                 seed: 7,
                 complexity: 0.1,
                 motif_len: 2,
                 leap_chance: 0.05,
-            },
+            }),
         });
 
         let custom_melody = MelodyParams {
@@ -819,10 +854,10 @@ mod tests {
 
         state.migrate_old_generate_params(&[]);
 
-        let after = &state.definitions[0];
-        assert_eq!(after.motif.complexity, 0.1);
-        assert_eq!(after.motif.motif_len, 2);
-        assert_eq!(after.motif.leap_chance, 0.05);
-        assert_eq!(after.motif.seed, 7);
+        let after = state.definitions[0].motif_source.params();
+        assert_eq!(after.complexity, 0.1);
+        assert_eq!(after.motif_len, 2);
+        assert_eq!(after.leap_chance, 0.05);
+        assert_eq!(after.seed, 7);
     }
 }

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use resonance_audio::types::TrackId;
-use resonance_music_theory::{Chord, GeneratedMaterial, GeneratorSpec, MotifParams, Scale};
-use serde::{Deserialize, Serialize};
+use resonance_music_theory::{Chord, GeneratedMaterial, GeneratorSpec, MotifParams, MotifSource, Scale};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::compose::{GenerateParams, LaneGeneratorConfig};
 
@@ -42,10 +42,38 @@ pub struct ProjectSectionDefinition {
     /// Build seventh chords during generation.
     #[serde(default)]
     pub seventh_chords: bool,
-    /// Section-shared motif knobs. Older project files load with the
-    /// default seed/complexity/etc.
-    #[serde(default)]
-    pub motif: MotifParams,
+    /// Section-shared motif. Either generated procedurally from
+    /// `MotifParams` or hand-drawn by the user. The JSON field is named
+    /// `motif` for backwards compatibility — older project files stored a
+    /// flat `MotifParams` here and still deserialize into
+    /// `MotifSource::Generated(...)`.
+    #[serde(
+        default,
+        rename = "motif",
+        deserialize_with = "deserialize_motif_source_compat"
+    )]
+    pub motif_source: MotifSource,
+}
+
+/// Accept both the historical `motif: { seed, complexity, motif_len,
+/// leap_chance }` JSON shape and the current `motif: { Generated: {...} }`
+/// or `motif: { Manual: {...} }` enum shape, mapping the legacy form to
+/// `MotifSource::Generated`.
+fn deserialize_motif_source_compat<'de, D>(deserializer: D) -> Result<MotifSource, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        Source(MotifSource),
+        Legacy(MotifParams),
+    }
+
+    Ok(match Either::deserialize(deserializer)? {
+        Either::Source(s) => s,
+        Either::Legacy(p) => MotifSource::Generated(p),
+    })
 }
 
 fn default_beats_per_chord() -> u32 {

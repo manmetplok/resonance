@@ -9,7 +9,8 @@ use crate::message::*;
 use crate::state::{self, TrackState};
 use crate::theme;
 use crate::view::controls::{
-    delete_button, monitor_button, mono_button, mute_button, record_arm_button, solo_button,
+    bounce_button, delete_button, monitor_button, mono_button, mute_button, record_arm_button,
+    solo_button,
 };
 use crate::Resonance;
 
@@ -110,7 +111,14 @@ pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
             continue;
         }
         let is_selected = selected_track == Some(track.id);
-        headers = headers.push(view_track_header(track, is_selected));
+        // Single source of truth for whether the bounce trigger is
+        // active — same predicate the update layer uses to dispatch.
+        let bounce_enabled = crate::update::track::classify_bounce(
+            track,
+            r.midi_clips.iter().map(|c| c.track_id),
+        )
+        .is_ok();
+        headers = headers.push(view_track_header(track, is_selected, bounce_enabled));
     }
 
     container(headers)
@@ -121,7 +129,11 @@ pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
         .into()
 }
 
-fn view_track_header(track: &TrackState, is_selected: bool) -> Element<'_, Message> {
+fn view_track_header(
+    track: &TrackState,
+    is_selected: bool,
+    bounce_enabled: bool,
+) -> Element<'_, Message> {
     let track_id = track.id;
     let is_sub = track.sub_track.is_some();
     // Track name on its own line, clipped at the header width so long
@@ -170,7 +182,7 @@ fn view_track_header(track: &TrackState, is_selected: bool) -> Element<'_, Messa
         .spacing(4)
         .align_y(alignment::Vertical::Center)
     } else {
-        row![
+        let mut r = row![
             mono_button(track.mono, track.id, 12),
             monitor_button(track.monitor_enabled, track.id, 12),
             record_arm_button(track.record_armed, track.id, 12),
@@ -184,10 +196,17 @@ fn view_track_header(track: &TrackState, is_selected: bool) -> Element<'_, Messa
                 Message::Track(TrackMessage::ToggleSolo(track.id)),
                 12
             ),
-            Space::with_width(Length::Fill),
         ]
         .spacing(4)
-        .align_y(alignment::Vertical::Center)
+        .align_y(alignment::Vertical::Center);
+        // Only instrument tracks expose the bounce-in-place trigger;
+        // showing a perma-disabled button on every audio track would be
+        // visual noise. The button itself is greyed out when the
+        // current track lacks a sound source or MIDI to render.
+        if track.track_type == resonance_audio::types::TrackType::Instrument {
+            r = r.push(bounce_button(track.id, bounce_enabled, 12));
+        }
+        r.push(Space::with_width(Length::Fill))
     };
 
     let header_col = column![name_row, icon_row].spacing(4);

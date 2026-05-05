@@ -261,10 +261,12 @@ pub(super) fn handle_create(
         lane_generators: HashMap::new(),
         beats_per_chord: 4,
         seventh_chords: false,
-        motif: resonance_music_theory::MotifParams {
-            seed: id.wrapping_mul(0x6C62272E07BB0142),
-            ..resonance_music_theory::MotifParams::default()
-        },
+        motif_source: resonance_music_theory::MotifSource::Generated(
+            resonance_music_theory::MotifParams {
+                seed: id.wrapping_mul(0x6C62272E07BB0142),
+                ..resonance_music_theory::MotifParams::default()
+            },
+        ),
     });
     let start_bar = first_free_bar(&r.compose, length_bars);
     let placement_id = r.compose.fresh_id();

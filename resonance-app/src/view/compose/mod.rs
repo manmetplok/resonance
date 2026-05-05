@@ -10,6 +10,7 @@ pub mod drumroll;
 pub mod expanded_editor;
 pub mod global_tracks;
 pub mod lane_inspector;
+pub mod manual_motif_canvas;
 pub mod popover;
 pub mod strip;
 pub mod tracks;

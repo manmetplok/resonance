@@ -741,11 +741,16 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
 
     // Snapshot the tracks with hardware output configured. Cheap
     // scan; typical projects have a handful of instrument tracks.
+    // Muted tracks are skipped so the user can silence an external
+    // instrument by muting its track — and so a "bounce in place" run
+    // can isolate the source by muting the others. Any held notes on a
+    // newly-muted track still get their NoteOff because the held-notes
+    // map is consulted unconditionally at the bottom of this function.
     let output_tracks: Vec<(TrackId, u8)> = {
         let tracks = ctx.tracks.read();
         tracks
             .values()
-            .filter(|t| t.midi_output_device.load_full().is_some())
+            .filter(|t| t.midi_output_device.load_full().is_some() && !t.muted())
             .map(|t| (t.id, t.midi_output_channel.unwrap_or(0)))
             .collect()
     };

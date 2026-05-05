@@ -28,6 +28,8 @@ use crate::platform::{self, DeviceDirection};
 use crate::types::*;
 
 mod bounce;
+mod bounce_common;
+mod bounce_realtime;
 mod busses;
 mod clips;
 mod master;

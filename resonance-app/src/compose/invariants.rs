@@ -80,7 +80,7 @@ mod tests {
             lane_generators: std::collections::HashMap::new(),
             beats_per_chord: 4,
             seventh_chords: false,
-            motif: resonance_music_theory::MotifParams::default(),
+            motif_source: resonance_music_theory::MotifSource::default(),
         }
     }
 

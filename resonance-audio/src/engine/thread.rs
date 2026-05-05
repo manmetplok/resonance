@@ -25,7 +25,10 @@ use crate::midi_hardware::{LiveMidiEvent, MidiInputRegistry, MidiOutputRegistry}
 use crate::recording::RecordingState;
 use crate::types::*;
 
-use super::{bounce, busses, clips, master, midi, plugins, scan, tracks, transport, SharedState};
+use super::{
+    bounce, bounce_realtime, busses, clips, master, midi, plugins, scan, tracks, transport,
+    SharedState,
+};
 
 /// Read-only handle to shared project state and channels. Passed by
 /// reference into every handler so they can lock the relevant maps and
@@ -119,6 +122,12 @@ pub(crate) struct HandlerState {
     /// only emit when the value moves perceptibly. Avoids a steady
     /// stream of `MidiClockTempoDetected` events at every pulse.
     pub midi_clock_last_emitted_bpm: f32,
+    /// In-flight realtime "bounce in place" run. The engine loop's
+    /// poll hook checks the playhead each iteration and, when it
+    /// crosses `pending_bounce.stop_at`, pauses the transport,
+    /// finalizes the recording, restores the mute snapshot, and emits
+    /// `TrackBounceCompleted`. `None` outside of an active bounce.
+    pub pending_bounce: Option<super::bounce_realtime::PendingBounce>,
 }
 
 /// Hard cap on concurrent clip decode threads. Import commands past this
@@ -168,6 +177,7 @@ pub(crate) fn engine_thread(
         midi_clock_tempo: ClockTempoTracker::default(),
         midi_clock_external_running: false,
         midi_clock_last_emitted_bpm: 0.0,
+        pending_bounce: None,
     };
     let ctx = HandlerCtx {
         shared: &shared,
@@ -241,6 +251,12 @@ pub(crate) fn engine_thread(
         // catches up to the user's original record-start, the real
         // recording stream opens.
         transport::poll_precount(&ctx, &mut state);
+
+        // Drive an in-flight realtime "bounce in place" run: pauses
+        // the transport, restores the mute snapshot, and emits
+        // `TrackBounceCompleted` once the playhead crosses the end of
+        // the source track's MIDI plus tail.
+        bounce_realtime::poll_pending_bounce(&ctx, &mut state);
 
         // Sync the stable `bpm` field from the tempo event table so
         // the mixer (audio thread) always sees the correct tempo for
@@ -442,6 +458,40 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             ctx.tempo_map,
             ctx.sample_rate,
             ctx.event_tx,
+        ),
+        AudioCommand::BounceTrackToAudio {
+            source_track_id,
+            target_track_id,
+            target_clip_id,
+            name,
+        } => bounce::to_audio_clip(
+            source_track_id,
+            target_track_id,
+            target_clip_id,
+            name,
+            ctx.shared,
+            ctx.tracks,
+            ctx.busses,
+            ctx.master,
+            ctx.clips,
+            ctx.midi_clips,
+            ctx.plugins,
+            ctx.tempo_map,
+            ctx.sample_rate,
+            ctx.event_tx,
+        ),
+        AudioCommand::BounceTrackRealtimeToAudio {
+            source_track_id,
+            target_track_id,
+            input_device_name,
+            input_port_index,
+        } => bounce_realtime::handle_bounce_track_realtime(
+            ctx,
+            state,
+            source_track_id,
+            target_track_id,
+            input_device_name,
+            input_port_index,
         ),
 
         // -- Instrument tracks + MIDI --
