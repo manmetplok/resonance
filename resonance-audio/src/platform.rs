@@ -377,7 +377,19 @@ pub(crate) fn build_input_stream(
     let make_callback = move |shared: Arc<SharedState>,
                               mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
                               mut rec_producer: Option<ringbuf::HeapProd<f32>>| {
+        // Print the first callback's frame count so we can tell whether
+        // cpal is actually delivering the channel count it claims.
+        // Some PipeWire-via-ALSA paths "succeed" `set_channels(4)` but
+        // then deliver 2-channel callbacks anyway; that mismatch makes
+        // the deinterleave step misalign.
+        let first_fire = std::sync::Once::new();
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
+            first_fire.call_once(|| {
+                eprintln!(
+                    "[input] first callback: data.len() = {} samples",
+                    data.len()
+                );
+            });
             if shared.recording.load(Ordering::Relaxed) {
                 if let Some(ref mut prod) = rec_producer {
                     let written = prod.push_slice(data);
