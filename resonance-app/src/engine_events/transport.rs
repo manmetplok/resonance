@@ -43,7 +43,25 @@ pub(super) fn bounce_error(r: &mut Resonance, e: String) {
 }
 
 pub(super) fn track_bounce_error(r: &mut Resonance, e: String) {
+    // Drop the in-progress modal — the run is over either way — and
+    // surface the engine's reason as a banner.
+    r.bounce_in_progress = None;
     r.error_message = Some(format!("Bounce in place failed: {e}"));
+}
+
+pub(super) fn track_bounce_cancelled(
+    r: &mut Resonance,
+    _target_track_id: resonance_audio::types::TrackId,
+) {
+    // Engine already removed the empty target track; just drop the
+    // modal. No banner — the user explicitly cancelled.
+    r.bounce_in_progress = None;
+}
+
+pub(super) fn bounce_progress(r: &mut Resonance, fraction: f32) {
+    if let Some(state) = r.bounce_in_progress.as_mut() {
+        state.fraction = fraction.clamp(0.0, 1.0);
+    }
 }
 
 pub(super) fn midi_input_devices(r: &mut Resonance, devices: Vec<MidiDeviceInfo>) {

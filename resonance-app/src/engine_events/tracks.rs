@@ -67,6 +67,8 @@ pub(super) fn bounce_completed(
     target_track_id: TrackId,
     clip: Option<BouncedClipData>,
 ) {
+    // Drop the progress modal — the run finished one way or another.
+    r.bounce_in_progress = None;
     // Offline bounce delivers the clip inline; realtime bounce delivers
     // it via the regular `RecordingFinished` event handled above and
     // leaves `clip` as `None`.

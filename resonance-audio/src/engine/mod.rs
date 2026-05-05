@@ -86,6 +86,14 @@ pub(crate) struct SharedState {
     /// with `count_in_remaining` to derive elapsed frames for beat
     /// alignment inside the mixer's count-in branch.
     pub count_in_total: AtomicU64,
+    /// Cooperative cancel flag for the offline bounce renderer
+    /// (`bounce::to_audio_clip`). The renderer polls this between
+    /// chunks and aborts when it flips to true. The realtime bounce
+    /// path doesn't need it — its cancel goes through `handle_pause`
+    /// directly — but stays in shared state so the offline renderer
+    /// running on the engine thread can be aborted from the same
+    /// `CancelBounce` command without threading another channel.
+    pub bounce_cancel: AtomicBool,
 }
 
 /// The audio engine.
@@ -173,6 +181,7 @@ impl AudioEngine {
             count_in_active: AtomicBool::new(false),
             count_in_remaining: AtomicU64::new(0),
             count_in_total: AtomicU64::new(0),
+            bounce_cancel: AtomicBool::new(false),
         });
 
         let shared_audio = Arc::clone(&shared);

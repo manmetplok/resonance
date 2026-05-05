@@ -94,6 +94,12 @@ pub(crate) struct Resonance {
     /// MIDI track. Holds the source track id plus the user's current
     /// device/port selection.
     pub(crate) bounce_dialog: Option<crate::view::bounce_dialog::BounceDialogState>,
+    /// When set, a bounce-in-place run is in flight. Drives the modal
+    /// progress overlay and gates transport / mutating UI so the user
+    /// can't disturb the render mid-flight. Cleared by
+    /// `TrackBounceCompleted`, `TrackBounceError`, or
+    /// `TrackBounceCancelled`.
+    pub(crate) bounce_in_progress: Option<crate::state::BounceProgressState>,
     /// True when the project has been modified since the last save.
     pub(crate) dirty: bool,
     /// When set, the "unsaved changes" quit-confirmation dialog is shown.
@@ -353,6 +359,7 @@ impl Resonance {
             plugin_state_cache: std::collections::HashMap::new(),
             confirm_delete_track: None,
             bounce_dialog: None,
+            bounce_in_progress: None,
             dirty: false,
             confirm_quit: None,
             quit_after_save: None,

@@ -37,6 +37,12 @@ impl Resonance {
             E::BounceComplete { path } => transport::bounce_complete(self, path),
             E::BounceError(e) => transport::bounce_error(self, e),
             E::TrackBounceError(e) => transport::track_bounce_error(self, e),
+            E::TrackBounceCancelled { target_track_id } => {
+                transport::track_bounce_cancelled(self, target_track_id)
+            }
+            E::BounceProgress { fraction } => {
+                transport::bounce_progress(self, fraction)
+            }
             E::MidiInputDevicesListed { devices } => transport::midi_input_devices(self, devices),
             E::MidiOutputDevicesListed { devices } => transport::midi_output_devices(self, devices),
             E::MidiClockStarted => transport::midi_clock_started(self),

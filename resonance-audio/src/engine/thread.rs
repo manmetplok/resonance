@@ -495,6 +495,18 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             input_port_index,
             mono,
         ),
+        AudioCommand::CancelBounce => {
+            // Set the cooperative cancel flag for both bounce paths.
+            // The offline renderer (running on this thread inside the
+            // current dispatch) won't see it because it blocks the
+            // dispatch loop; in practice the offline render is fast
+            // enough that the user's cancel arrives after it finishes.
+            // The realtime path picks it up on the next engine-loop
+            // iteration via `poll_pending_bounce`.
+            ctx.shared
+                .bounce_cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
 
         // -- Instrument tracks + MIDI --
         AudioCommand::AddInstrumentTrack { id_hint, name } => {

@@ -640,6 +640,12 @@ pub fn to_audio_clip(
         return;
     }
 
+    // Clear any stale cancel flag from a previous run before we start
+    // — the same atomic gates this offline render and serves as the
+    // realtime path's cancel signal, so a leftover `true` would abort
+    // the render before its first chunk.
+    shared.bounce_cancel.store(false, Ordering::Relaxed);
+
     reset_plugins(plugins);
 
     let bounce_tm = tempo_map.read().clone();
@@ -662,15 +668,47 @@ pub fn to_audio_clip(
     // Stereo interleaved output buffer for the whole bounce.
     let mut output = vec![0.0f32; total_frames * 2];
 
+    // Send a 0% progress event up front so the UI shows the modal
+    // populated even before the first chunk completes (which on a long
+    // bounce could be several hundred ms in).
+    let _ = event_tx.send(AudioEvent::BounceProgress { fraction: 0.0 });
+
     let in_filter = move |id: TrackId| filter_set.contains(&id);
     let mut pos = render_start;
+    let mut last_emitted_pct: i32 = 0;
     while pos < render_end {
+        if shared.bounce_cancel.load(Ordering::Relaxed) {
+            // Cooperative cancel: tear down the half-rendered target
+            // track + clip allocation and report back. The clip wasn't
+            // pushed yet (we only push at the very end), so we just
+            // need to remove the freshly-added empty target track.
+            shared.bounce_cancel.store(false, Ordering::Relaxed);
+            let _ = tracks.write().shift_remove(&target_track_id);
+            let _ = event_tx.send(AudioEvent::TrackRemoved {
+                track_id: target_track_id,
+            });
+            let _ = event_tx
+                .send(AudioEvent::TrackBounceCancelled { target_track_id });
+            return;
+        }
+
         let frames = ((render_end - pos) as usize).min(BOUNCE_CHUNK);
         render_chunk(&ctx, &mut scratch, pos, frames, &in_filter, false, false);
         let dst_start = ((pos - render_start) as usize) * 2;
         let src = &scratch.mix_buf[..frames * 2];
         output[dst_start..dst_start + frames * 2].copy_from_slice(src);
         pos += frames as u64;
+
+        // Emit progress at most once per integer percent so we don't
+        // flood the GUI event channel on a long bounce.
+        let pct = (((pos - render_start) as f32 / (render_end - render_start) as f32) * 100.0)
+            as i32;
+        if pct > last_emitted_pct {
+            last_emitted_pct = pct;
+            let _ = event_tx.send(AudioEvent::BounceProgress {
+                fraction: pct as f32 / 100.0,
+            });
+        }
     }
 
     let waveform_peaks = compute_waveform_peaks(&output);

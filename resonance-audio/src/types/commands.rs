@@ -201,6 +201,12 @@ pub enum AudioCommand {
         /// stereo pair want `false`; a single guitar/voice mic wants `true`.
         mono: bool,
     },
+    /// Cancel an in-flight bounce-in-place run. Aborts the offline
+    /// renderer between chunks (via a shared atomic the renderer
+    /// polls), or pauses the transport + restores mute state for the
+    /// realtime path. In both cases the freshly-added target track is
+    /// removed and a `TrackBounceCancelled` event is emitted.
+    CancelBounce,
     /// Set the current project directory. Recorded and imported
     /// clips are written into `{project_dir}/audio/` as WAV files,
     /// and recording refuses to start if no project directory has

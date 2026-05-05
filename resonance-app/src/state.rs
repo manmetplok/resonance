@@ -2,6 +2,25 @@
 use resonance_audio::types::*;
 use serde::{Deserialize, Serialize};
 
+/// Whether an in-flight bounce is rendering offline (CLAP synth) or
+/// recording in real time from an audio input. Drives the progress
+/// modal's wording and gates which features the cancel button enables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BounceMode {
+    Offline,
+    Realtime,
+}
+
+/// Active state for the bounce-in-place progress modal.
+#[derive(Debug, Clone)]
+pub struct BounceProgressState {
+    pub mode: BounceMode,
+    /// Display name of the source track (used in the modal title).
+    pub source_name: String,
+    /// `[0.0, 1.0]` from the engine's `BounceProgress` events.
+    pub fraction: f32,
+}
+
 // ---------------------------------------------------------------------------
 // Global track events (tempo & time signature changes)
 // ---------------------------------------------------------------------------

@@ -353,6 +353,13 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
         TrackMessage::Bounce(BounceMessage::Cancel) => {
             r.bounce_dialog = None;
         }
+        TrackMessage::Bounce(BounceMessage::CancelInProgress) => {
+            // Engine clears `bounce_in_progress` when it emits
+            // `TrackBounceCancelled`; don't drop it locally so the
+            // modal stays up while the engine teardown runs (offline
+            // is fast; realtime needs the audio thread to settle).
+            r.engine.send(AudioCommand::CancelBounce);
+        }
         TrackMessage::Bounce(BounceMessage::Confirm) => {
             handle_bounce_dialog_confirm(r);
         }
@@ -395,6 +402,11 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
         input_device_name: device,
         input_port_index: dialog.selected_port,
         mono: dialog.mono,
+    });
+    r.bounce_in_progress = Some(crate::state::BounceProgressState {
+        mode: crate::state::BounceMode::Realtime,
+        source_name,
+        fraction: 0.0,
     });
 }
 
@@ -451,6 +463,12 @@ fn internal_bounce_dispatch(r: &mut Resonance, track_id: resonance_audio::types:
 
     let track_name = format!("{source_name} bounce");
     let clip_name = track_name.clone();
+
+    r.bounce_in_progress = Some(crate::state::BounceProgressState {
+        mode: crate::state::BounceMode::Offline,
+        source_name: source_name.clone(),
+        fraction: 0.0,
+    });
 
     r.engine.send(AudioCommand::AddTrack {
         id_hint: Some(target_track_id),

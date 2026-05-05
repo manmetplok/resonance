@@ -120,6 +120,22 @@ pub enum AudioEvent {
     },
     /// A "bounce in place" run failed. The string is user-facing.
     TrackBounceError(String),
+    /// "Bounce in place" run was cancelled by the user via
+    /// `AudioCommand::CancelBounce`. Distinct from `TrackBounceError`
+    /// so the app can drop the modal without surfacing a noisy error
+    /// banner. The engine guarantees the freshly-added target track is
+    /// removed before this event fires, so the app only has to clear
+    /// its in-progress state.
+    TrackBounceCancelled {
+        target_track_id: TrackId,
+    },
+    /// Periodic progress update for a "bounce in place" run, emitted
+    /// from both the offline (`to_audio_clip`) and realtime
+    /// (`poll_pending_bounce`) paths so the app can drive a progress
+    /// bar. `fraction` is in `[0.0, 1.0]`.
+    BounceProgress {
+        fraction: f32,
+    },
     /// Response to `SaveClipsToProjectDir`: every in-engine audio
     /// clip has a `.wav` file on disk. The map is `clip_id` →
     /// project-relative path (e.g. `"audio/clip_42.wav"`), which

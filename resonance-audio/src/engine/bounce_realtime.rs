@@ -38,6 +38,10 @@ use super::thread::{HandlerCtx, HandlerState};
 pub(crate) struct PendingBounce {
     pub source_track_id: TrackId,
     pub target_track_id: TrackId,
+    /// Sample the bounce started rendering from. Stored alongside
+    /// `stop_at` so the progress poll can compute fraction
+    /// `(playhead - start_at) / (stop_at - start_at)`.
+    pub start_at: SamplePos,
     /// Sample at which the engine should pause the transport and
     /// finalize the recording. Computed as the last MIDI clip end on
     /// the source plus a fixed tail.
@@ -51,6 +55,9 @@ pub(crate) struct PendingBounce {
     /// the mute snapshot so re-running a bounce on the same target track
     /// doesn't permanently rewrite its input.
     pub prev_target_input_device: Option<String>,
+    /// Last percentage emitted as a `BounceProgress` event, so the
+    /// poll only fires fresh events when fraction changes by ≥1%.
+    pub last_emitted_pct: i32,
 }
 
 pub(crate) fn handle_bounce_track_realtime(
@@ -80,6 +87,12 @@ pub(crate) fn handle_bounce_track_realtime(
         ));
         return;
     }
+
+    // Clear any stale cancel flag from a prior run before we start —
+    // the same atomic gates the offline renderer and signals the
+    // realtime path. A leftover `true` would abort the run on the
+    // very first poll.
+    ctx.shared.bounce_cancel.store(false, Ordering::Relaxed);
 
     // Compute render range from MIDI clips on the source track.
     let (render_start, render_end) = match midi_render_range(
@@ -211,12 +224,19 @@ pub(crate) fn handle_bounce_track_realtime(
         return;
     }
 
+    // Surface the modal-driving 0% event up-front so the GUI shows a
+    // populated progress bar immediately, before the playhead has
+    // actually moved off `render_start`.
+    let _ = ctx.event_tx.send(AudioEvent::BounceProgress { fraction: 0.0 });
+
     state.pending_bounce = Some(PendingBounce {
         source_track_id,
         target_track_id,
+        start_at: render_start,
         stop_at: render_end,
         mute_snapshot,
         prev_target_input_device,
+        last_emitted_pct: 0,
     });
 }
 
@@ -226,10 +246,71 @@ pub(crate) fn handle_bounce_track_realtime(
 /// snapshot, mute the source, disarm the target, and emit
 /// `TrackBounceCompleted`.
 pub(crate) fn poll_pending_bounce(ctx: &HandlerCtx, state: &mut HandlerState) {
-    let Some(bounce) = state.pending_bounce.as_ref() else {
+    // Cancel handling: `CancelBounce` flips `bounce_cancel` for both
+    // the offline and realtime paths. The offline path checks it
+    // between chunks; the realtime path checks it here, runs the
+    // teardown, and emits `TrackBounceCancelled` so the app drops the
+    // modal without showing an error banner.
+    if state.pending_bounce.is_some()
+        && ctx.shared.bounce_cancel.load(Ordering::Relaxed)
+    {
+        ctx.shared.bounce_cancel.store(false, Ordering::Relaxed);
+        let bounce = state.pending_bounce.take().unwrap();
+        super::transport::handle_pause(ctx, state);
+        restore_after_bounce(
+            ctx,
+            &bounce.mute_snapshot,
+            bounce.target_track_id,
+            bounce.prev_target_input_device.clone(),
+        );
+        // Drop the freshly-added empty target track so the user's mix
+        // ends up where it started (minus the rendered clip we just
+        // discarded). The clip was emitted via `RecordingFinished`
+        // during `handle_pause`'s `finalize_recording` if any audio
+        // made it to disk; clean that up too.
+        let removed_clip_ids: Vec<ClipId> = {
+            let clips = ctx.clips.read();
+            clips
+                .iter()
+                .filter(|c| c.track_id == bounce.target_track_id)
+                .map(|c| c.id)
+                .collect()
+        };
+        {
+            let mut clips = ctx.clips.write();
+            clips.retain(|c| c.track_id != bounce.target_track_id);
+        }
+        for clip_id in removed_clip_ids {
+            let _ = ctx.event_tx.send(AudioEvent::ClipDeleted { clip_id });
+        }
+        let _ = ctx.tracks.write().shift_remove(&bounce.target_track_id);
+        let _ = ctx.event_tx.send(AudioEvent::TrackRemoved {
+            track_id: bounce.target_track_id,
+        });
+        let _ = ctx.event_tx.send(AudioEvent::TrackBounceCancelled {
+            target_track_id: bounce.target_track_id,
+        });
+        return;
+    }
+
+    let Some(bounce) = state.pending_bounce.as_mut() else {
         return;
     };
     let playhead = ctx.shared.playhead.load(Ordering::Relaxed);
+
+    // Emit progress at most once per integer percent — the audio
+    // thread is advancing the playhead at sample rate, so this poll
+    // would otherwise spam the GUI channel at engine cadence (~60 Hz).
+    let span = bounce.stop_at.saturating_sub(bounce.start_at).max(1);
+    let elapsed = playhead.saturating_sub(bounce.start_at).min(span);
+    let pct = ((elapsed as f32 / span as f32) * 100.0) as i32;
+    if pct > bounce.last_emitted_pct {
+        bounce.last_emitted_pct = pct;
+        let _ = ctx.event_tx.send(AudioEvent::BounceProgress {
+            fraction: (pct as f32 / 100.0).min(1.0),
+        });
+    }
+
     if playhead < bounce.stop_at {
         return;
     }

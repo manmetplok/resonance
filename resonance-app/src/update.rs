@@ -22,6 +22,36 @@ pub(crate) use project_io::{build_project_file, replay_loaded_project};
 
 /// While the startup modal is up (no active project), swallow
 /// messages that would mutate project state. Engine events don't
+/// True for every user-initiated message we need to drop while a
+/// bounce-in-place run is rendering. The Cancel button on the progress
+/// modal is the one carve-out: that's how the user actually stops the
+/// engine, so it has to flow through.
+fn bounce_blocks_message(message: &Message) -> bool {
+    match message {
+        // Whitelist: cancel button on the in-progress modal.
+        Message::Track(TrackMessage::Bounce(BounceMessage::CancelInProgress)) => false,
+        // Engine event traffic, project I/O, and the timer tick all
+        // need to keep flowing — the bounce relies on `BounceProgress`
+        // / `TrackBounceCompleted` events to clear the modal.
+        Message::ProjectIo(_) | Message::Tick | Message::WindowCloseRequested(_) => false,
+        // Everything else: block.
+        Message::Compose(_)
+        | Message::Transport(_)
+        | Message::Track(_)
+        | Message::Bus(_)
+        | Message::Master(_)
+        | Message::Clip(_)
+        | Message::MidiClip(_)
+        | Message::MidiEditor(_)
+        | Message::Plugin(_)
+        | Message::Viewport(_)
+        | Message::GlobalTrack(_)
+        | Message::Ui(_)
+        | Message::Undo
+        | Message::Redo => true,
+    }
+}
+
 /// flow through `update()` (see `engine_events.rs`), so this only
 /// needs to think about user-initiated variants.
 fn is_gated_message(message: &Message) -> bool {
@@ -76,6 +106,13 @@ impl crate::Resonance {
     /// and committing gesture transactions after.
     pub(crate) fn update(&mut self, message: Message) -> Task<Message> {
         if !self.io.has_active_project && is_gated_message(&message) {
+            return Task::none();
+        }
+        // While a bounce-in-place run is rendering, block every user
+        // input that could disturb the engine — transport changes,
+        // track / clip / plugin edits, view switches. The progress
+        // modal's Cancel button is the one whitelisted exception.
+        if self.bounce_in_progress.is_some() && bounce_blocks_message(&message) {
             return Task::none();
         }
 

@@ -140,6 +140,10 @@ pub(crate) enum BounceMessage {
     Confirm,
     /// User cancelled the dialog.
     Cancel,
+    /// User clicked Cancel on the in-progress modal that's shown while
+    /// a bounce is actually running. Distinct from `Cancel`, which only
+    /// dismisses the pre-bounce input-picker dialog.
+    CancelInProgress,
 }
 
 #[derive(Debug, Clone)]

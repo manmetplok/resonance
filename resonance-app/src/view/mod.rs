@@ -2,6 +2,7 @@
 /// lives here; concrete surfaces are in sibling modules (transport,
 /// mixer, compose, track_header, menus, settings).
 pub(crate) mod bounce_dialog;
+pub(crate) mod bounce_progress;
 pub(crate) mod compose;
 pub(crate) mod confirm_delete_track;
 pub(crate) mod confirm_quit;
@@ -67,6 +68,17 @@ impl crate::Resonance {
 
         if !self.io.has_active_project {
             stack![base, startup::view_startup_overlay(self)].into()
+        } else if self.bounce_in_progress.is_some() {
+            // The bounce progress modal sits above any other overlay
+            // because it gates user input until the engine finishes the
+            // current bounce — letting the quit-confirm or delete-track
+            // dialog appear over it would invite the user into a state
+            // change the engine isn't ready for.
+            stack![
+                base,
+                bounce_progress::view_bounce_progress_overlay(self)
+            ]
+            .into()
         } else if self.confirm_quit.is_some() {
             stack![base, confirm_quit::view_confirm_quit_overlay(self)].into()
         } else if let Some(track_id) = self.confirm_delete_track {
