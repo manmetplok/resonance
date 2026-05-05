@@ -376,18 +376,29 @@ pub(crate) fn build_input_stream(
     let _ = buf_frames; // unused once the monitor path stopped pre-converting
     let make_callback = move |shared: Arc<SharedState>,
                               mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
-                              mut rec_producer: Option<ringbuf::HeapProd<f32>>| {
-        // Print the first callback's frame count so we can tell whether
-        // cpal is actually delivering the channel count it claims.
-        // Some PipeWire-via-ALSA paths "succeed" `set_channels(4)` but
-        // then deliver 2-channel callbacks anyway; that mismatch makes
-        // the deinterleave step misalign.
+                              mut rec_producer: Option<ringbuf::HeapProd<f32>>,
+                              expected_channels: u16| {
+        // Print the first callback's frame count so we can tell
+        // whether cpal is actually delivering the channel count it
+        // claims. PipeWire-via-ALSA can "succeed" `set_channels(4)`
+        // but then deliver 2-channel callbacks anyway; that mismatch
+        // would show up as `data.len() % expected_channels != 0`.
         let first_fire = std::sync::Once::new();
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
             first_fire.call_once(|| {
+                let channels = expected_channels as usize;
+                let frames = if channels == 0 { 0 } else { data.len() / channels };
+                let leftover = if channels == 0 {
+                    0
+                } else {
+                    data.len() % channels
+                };
                 eprintln!(
-                    "[input] first callback: data.len() = {} samples",
-                    data.len()
+                    "[input] first callback: {} samples, expected_channels={}, frames={}, leftover={}",
+                    data.len(),
+                    expected_channels,
+                    frames,
+                    leftover,
                 );
             });
             if shared.recording.load(Ordering::Relaxed) {
@@ -416,7 +427,7 @@ pub(crate) fn build_input_stream(
         cfg.channels = channels;
         device.build_input_stream(
             &cfg,
-            make_callback(shared, mon_producer, rec_producer),
+            make_callback(shared, mon_producer, rec_producer, channels),
             |err| {
                 eprintln!("Input stream error: {}", err);
             },
