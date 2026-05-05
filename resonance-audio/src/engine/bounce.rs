@@ -623,17 +623,22 @@ pub fn to_audio_clip(
         set
     };
 
-    // Compute render range from MIDI clips on the source track only —
-    // sub-tracks have no clips of their own. Add a fixed tail past the
-    // last MIDI clip end for FX / bus reverb decay.
-    let (render_start, render_end) =
-        match midi_render_range(midi_clips, tempo_map, source_track_id, sample_rate) {
-            Ok(range) => range,
-            Err(msg) => {
-                let _ = event_tx.send(AudioEvent::TrackBounceError(msg.into()));
-                return;
-            }
-        };
+    // Compute render range. If the user drew a punch-in/out loop the
+    // loop range wins; otherwise we fall back to the source track's
+    // MIDI extent + 2 s tail.
+    let (render_start, render_end) = match midi_render_range(
+        midi_clips,
+        tempo_map,
+        shared,
+        source_track_id,
+        sample_rate,
+    ) {
+        Ok(range) => range,
+        Err(msg) => {
+            let _ = event_tx.send(AudioEvent::TrackBounceError(msg.into()));
+            return;
+        }
+    };
 
     if render_end <= render_start {
         let _ = event_tx.send(AudioEvent::TrackBounceError("Empty render range".into()));
