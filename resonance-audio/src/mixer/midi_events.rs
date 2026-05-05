@@ -86,8 +86,10 @@ pub(super) fn collect_midi_events(
     out.sort_by_key(|e| e.sample_offset);
 }
 
-/// Public version of collect_midi_events for the bounce path.
-pub(crate) fn collect_midi_events_bounce(
+/// Public version of collect_midi_events for the bounce path. Exposed
+/// outside the crate for integration-test access — production callers
+/// stay inside `resonance-audio`.
+pub fn collect_midi_events_bounce(
     midi_clips: &[MidiClip],
     track_id: TrackId,
     playhead: u64,

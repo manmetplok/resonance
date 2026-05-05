@@ -11,6 +11,7 @@ use resonance_audio::types::{InputDeviceInfo, TrackId};
 
 use crate::message::*;
 use crate::theme;
+use crate::view::mixer::picks::PortChoice;
 use crate::Resonance;
 
 /// Transient state for the dialog. Lives on `Resonance::bounce_dialog`
@@ -21,8 +22,13 @@ pub struct BounceDialogState {
     pub source_track_id: TrackId,
     /// Selected input device name. `None` until the user picks one.
     pub selected_device: Option<String>,
-    /// Selected starting input channel (0-indexed). Defaults to 0.
+    /// Selected starting input channel (0-indexed). Defaults to 0. In
+    /// stereo mode the right channel is `selected_port + 1`.
     pub selected_port: u16,
+    /// Capture as mono (single channel duplicated to L/R) vs stereo
+    /// (a pair of consecutive channels). Defaults to stereo because
+    /// almost every external instrument returns a stereo pair.
+    pub mono: bool,
 }
 
 pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Message> {
@@ -75,21 +81,88 @@ pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
     .text_size(13)
     .width(Length::Fill);
 
-    // Port picker — list every channel 1..=N for the selected device.
+    // Port picker — stereo (default) shows pairs "1/2", "3/4", ...
+    // (the second channel of the pair is `port + 1`); mono shows
+    // every channel 1..=N for capturing a single signal.
     let device_channels = selected_device.as_ref().map(|d| d.channels).unwrap_or(0);
     let port_section: Element<'_, Message> = if device_channels > 0 {
-        let ports: Vec<u16> = (0..device_channels).collect();
-        let pick = pick_list(
-            ports,
-            Some(dialog.selected_port),
-            |p: u16| Message::Track(TrackMessage::Bounce(BounceMessage::PickPort(p))),
-        )
+        let last_valid_index = if dialog.mono {
+            device_channels
+        } else {
+            device_channels.saturating_sub(1)
+        };
+        let ports: Vec<PortChoice> = (0..last_valid_index)
+            .map(|i| PortChoice {
+                index: i,
+                mono: dialog.mono,
+            })
+            .collect();
+        let selected = PortChoice {
+            index: dialog.selected_port.min(last_valid_index.saturating_sub(1)),
+            mono: dialog.mono,
+        };
+        let pick = pick_list(ports, Some(selected), |choice: PortChoice| {
+            Message::Track(TrackMessage::Bounce(BounceMessage::PickPort(choice.index)))
+        })
         .text_size(13)
-        .width(Length::Fixed(120.0));
-        row![text("Channel").size(13).color(theme::TEXT_DIM), pick]
-            .spacing(10)
-            .align_y(alignment::Vertical::Center)
-            .into()
+        .width(Length::Fixed(160.0));
+
+        // Stereo / mono toggle. Two small buttons that swap the picker
+        // labels between pair- and single-channel form. The active mode
+        // is rendered with the accent border so the user can tell which
+        // is selected at a glance — `transport_button_style` alone has
+        // no disabled/selected variant.
+        let toggle_btn = |label: &'static str, selected: bool, on_press: Option<Message>| {
+            let mut b = button(text(label).size(12).color(if selected {
+                iced::Color::WHITE
+            } else {
+                theme::TEXT
+            }))
+            .padding([4, 10])
+            .style(move |_t, status| {
+                let mut s = theme::transport_button_style(status);
+                if selected {
+                    s.border.color = theme::ACCENT;
+                    s.background = Some(iced::Background::Color(iced::Color::from_rgb(
+                        0.2, 0.2, 0.2,
+                    )));
+                }
+                s
+            });
+            if let Some(msg) = on_press {
+                b = b.on_press(msg);
+            }
+            b
+        };
+        let stereo_btn = toggle_btn(
+            "Stereo",
+            !dialog.mono,
+            if dialog.mono {
+                Some(Message::Track(TrackMessage::Bounce(BounceMessage::SetMono(false))))
+            } else {
+                None
+            },
+        );
+        let mono_btn = toggle_btn(
+            "Mono",
+            dialog.mono,
+            if !dialog.mono {
+                Some(Message::Track(TrackMessage::Bounce(BounceMessage::SetMono(true))))
+            } else {
+                None
+            },
+        );
+
+        row![
+            text("Channel").size(13).color(theme::TEXT_DIM),
+            pick,
+            Space::with_width(8),
+            stereo_btn,
+            mono_btn,
+        ]
+        .spacing(8)
+        .align_y(alignment::Vertical::Center)
+        .into()
     } else {
         text("Pick a device first").size(11).color(theme::TEXT_DIM).into()
     };

@@ -130,8 +130,12 @@ pub(crate) enum TrackMessage {
 pub(crate) enum BounceMessage {
     /// User picked an audio input device.
     PickDevice(Option<String>),
-    /// User picked the starting input channel.
+    /// User picked the starting input channel. In stereo mode the right
+    /// channel is `port + 1`; in mono mode the same channel is captured
+    /// to both L and R.
     PickPort(u16),
+    /// Toggle stereo (`false`) vs mono (`true`) capture.
+    SetMono(bool),
     /// User confirmed — kick off the realtime bounce.
     Confirm,
     /// User cancelled the dialog.

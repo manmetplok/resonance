@@ -84,6 +84,28 @@ pub(super) fn bounce_completed(
                 waveform_peaks: c.waveform_peaks,
             });
         }
+    } else {
+        // Realtime bounce: the clip arrived as `RecordingFinished` with
+        // a generic "Recording N" label. Inherit the target track's
+        // name so it's obvious in the timeline which bounce belongs to
+        // which track. Rename the most recently-added clip on the
+        // target — there's only one bounce in flight at a time.
+        let track_name = r
+            .registry
+            .tracks
+            .iter()
+            .find(|t| t.id == target_track_id)
+            .map(|t| t.name.clone());
+        if let Some(name) = track_name {
+            if let Some(clip) = r
+                .clips
+                .iter_mut()
+                .filter(|c| c.track_id == target_track_id)
+                .max_by_key(|c| c.id)
+            {
+                clip.name = name;
+            }
+        }
     }
     super::finalize_bounce(r, source_track_id, target_track_id);
 }

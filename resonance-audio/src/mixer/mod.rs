@@ -23,7 +23,8 @@ mod monitor;
 mod track_block;
 
 pub(crate) use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
-pub(crate) use midi_events::{collect_midi_events_bounce, MAX_MIDI_EVENTS_PER_BUFFER};
+pub use midi_events::collect_midi_events_bounce;
+pub(crate) use midi_events::MAX_MIDI_EVENTS_PER_BUFFER;
 
 use ringbuf::traits::{Consumer, Observer};
 use std::sync::atomic::Ordering;

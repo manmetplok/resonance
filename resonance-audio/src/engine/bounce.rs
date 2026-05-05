@@ -102,6 +102,7 @@ fn render_chunk(
     frames: usize,
     in_filter: &dyn Fn(TrackId) -> bool,
     include_master_fx: bool,
+    respect_mute_solo: bool,
 ) {
     scratch.mix_buf[..frames * 2].fill(0.0);
 
@@ -120,11 +121,19 @@ fn render_chunk(
     let any_solo = tracks_guard.values().any(|t| t.soloed());
 
     for track in tracks_guard.values() {
-        if track.muted() {
-            continue;
-        }
-        if any_solo && !track.soloed() {
-            continue;
+        // For `to_wav` we honour the user's mix (muted/non-soloed tracks
+        // drop out). For `to_audio_clip` (bounce-in-place) `in_filter`
+        // already gates to the source + sub-tracks — and the source is
+        // explicitly muted by `finalize_bounce` after every successful
+        // bounce, so respecting `muted` here would silence every
+        // re-bounce of the same track.
+        if respect_mute_solo {
+            if track.muted() {
+                continue;
+            }
+            if any_solo && !track.soloed() {
+                continue;
+            }
         }
         if !in_filter(track.id) {
             continue;
@@ -396,7 +405,7 @@ pub(crate) fn to_wav(
     let everything = |_: TrackId| true;
     while pos < render_end && !write_error {
         let frames = ((render_end - pos) as usize).min(BOUNCE_CHUNK);
-        render_chunk(&ctx, &mut scratch, pos, frames, &everything, true);
+        render_chunk(&ctx, &mut scratch, pos, frames, &everything, true, true);
 
         for &sample in &scratch.mix_buf[..frames * 2] {
             if let Err(e) = writer.write_sample(sample) {
@@ -520,7 +529,7 @@ pub fn to_audio_clip(
     let mut pos = render_start;
     while pos < render_end {
         let frames = ((render_end - pos) as usize).min(BOUNCE_CHUNK);
-        render_chunk(&ctx, &mut scratch, pos, frames, &in_filter, false);
+        render_chunk(&ctx, &mut scratch, pos, frames, &in_filter, false, false);
         let dst_start = ((pos - render_start) as usize) * 2;
         let src = &scratch.mix_buf[..frames * 2];
         output[dst_start..dst_start + frames * 2].copy_from_slice(src);

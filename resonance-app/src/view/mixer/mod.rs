@@ -5,7 +5,7 @@
 
 mod bus_strip;
 mod master_strip;
-mod picks;
+pub(crate) mod picks;
 mod plugin_panel;
 mod track_strip;
 

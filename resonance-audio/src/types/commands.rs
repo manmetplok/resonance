@@ -196,6 +196,10 @@ pub enum AudioCommand {
         target_track_id: TrackId,
         input_device_name: String,
         input_port_index: u16,
+        /// Capture as mono (one channel duplicated to L/R) vs stereo
+        /// (two consecutive channels). External instruments returning a
+        /// stereo pair want `false`; a single guitar/voice mic wants `true`.
+        mono: bool,
     },
     /// Set the current project directory. Recorded and imported
     /// clips are written into `{project_dir}/audio/` as WAV files,

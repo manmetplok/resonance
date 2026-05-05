@@ -339,6 +339,17 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 d.selected_port = port;
             }
         }
+        TrackMessage::Bounce(BounceMessage::SetMono(mono)) => {
+            if let Some(d) = r.bounce_dialog.as_mut() {
+                d.mono = mono;
+                // Stereo pairs need an even start channel; switching back
+                // to stereo from a port that became invalid would dump the
+                // user on the right channel of an old pair. Snap to 0.
+                if !mono && d.selected_port % 2 != 0 {
+                    d.selected_port = 0;
+                }
+            }
+        }
         TrackMessage::Bounce(BounceMessage::Cancel) => {
             r.bounce_dialog = None;
         }
@@ -383,6 +394,7 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
         target_track_id,
         input_device_name: device,
         input_port_index: dialog.selected_port,
+        mono: dialog.mono,
     });
 }
 
@@ -412,6 +424,7 @@ fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::T
                 source_track_id: track_id,
                 selected_device: r.default_input_device_name.clone(),
                 selected_port: 0,
+                mono: false,
             });
             // Make sure the input device list is fresh for the dialog.
             r.engine.send(AudioCommand::ListInputDevices);

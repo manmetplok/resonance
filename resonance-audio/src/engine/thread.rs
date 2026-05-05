@@ -485,6 +485,7 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             target_track_id,
             input_device_name,
             input_port_index,
+            mono,
         } => bounce_realtime::handle_bounce_track_realtime(
             ctx,
             state,
@@ -492,6 +493,7 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             target_track_id,
             input_device_name,
             input_port_index,
+            mono,
         ),
 
         // -- Instrument tracks + MIDI --

@@ -60,6 +60,7 @@ pub(crate) fn handle_bounce_track_realtime(
     target_track_id: TrackId,
     input_device_name: String,
     input_port_index: u16,
+    mono: bool,
 ) {
     if ctx.shared.playing.load(Ordering::Relaxed) {
         let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
@@ -161,6 +162,7 @@ pub(crate) fn handle_bounce_track_realtime(
             t.set_muted(!allow);
             if t.id == target_track_id {
                 t.set_input_port(input_port_index);
+                t.set_mono(mono);
                 t.set_record_armed(true);
             } else if t.record_armed() {
                 // Disarm any other track that happened to be armed so
@@ -173,6 +175,14 @@ pub(crate) fn handle_bounce_track_realtime(
     // Seek transport to render_start.
     ctx.shared.playhead.store(render_start, Ordering::SeqCst);
 
+    // Run the transport BEFORE opening the recording stream so
+    // `handle_play` sees `was_playing == false` and emits the MIDI
+    // clock Start/Continue (with SPP) for any external sequencer or
+    // arpeggiator the source drives. `begin_recording_stream` sets
+    // `playing = true` itself, which would short-circuit the clock
+    // path if it ran first.
+    super::transport::handle_play(ctx, state);
+
     // Open the recording stream. This allocates the clip id, opens the
     // WAV writer, builds the input stream — same path as a normal
     // Record press.
@@ -183,6 +193,9 @@ pub(crate) fn handle_bounce_track_realtime(
     // unset. Detect that and unwind so we don't leave the user's mix in
     // a half-bounced state.
     if state.rec.input_stream.is_none() {
+        // Pause the transport we just started so the half-bounced state
+        // doesn't leave the playhead drifting forward silently.
+        super::transport::handle_pause(ctx, state);
         restore_after_bounce(
             ctx,
             &mute_snapshot,
@@ -197,9 +210,6 @@ pub(crate) fn handle_bounce_track_realtime(
         ));
         return;
     }
-
-    // Run the transport.
-    super::transport::handle_play(ctx, state);
 
     state.pending_bounce = Some(PendingBounce {
         source_track_id,

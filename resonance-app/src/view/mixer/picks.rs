@@ -34,7 +34,7 @@ impl std::fmt::Display for OutputChoice {
 /// Wrapper so the input-port pick_list can render 1-based channel
 /// numbers and stereo pair labels without reaching into track state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PortChoice {
+pub(crate) struct PortChoice {
     /// 0-indexed channel number on the device.
     pub index: u16,
     /// True if the track is mono — the label shows "In N"; false shows
