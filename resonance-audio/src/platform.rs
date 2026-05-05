@@ -322,13 +322,22 @@ pub(crate) fn build_input_stream(
 
     let host = cpal::default_host();
 
-    // Pick the device. Prefer matching by name from cpal's device list
-    // (works on every host) and fall back to `default_input_device()`,
-    // which on PipeWire-via-ALSA is influenced by `PIPEWIRE_NODE` set
-    // above. The match is loose because pactl source names like
-    // `alsa_input.pci-0000_00_1b.0.analog-stereo` only sometimes appear
-    // verbatim in cpal's enumeration; substring + case-insensitive
-    // gets us the rest of the way.
+    // Pick the device.
+    //
+    // The ALSA PCM `default` is what `cpal::default_input_device()`
+    // gives us, and on most PipeWire-via-ALSA setups that PCM is
+    // configured for stereo only — `set_channels(4)` then fails and
+    // we get a 2-channel capture node regardless of `PIPEWIRE_NODE`.
+    // The explicit ALSA PCM `pipewire` is the same plugin without
+    // the channel restriction; preferring it lets the channel count
+    // we asked for actually take effect.
+    //
+    // Order: pactl source-name match (works on any host), then
+    // `pipewire` PCM, then ALSA `default`.
+    let pipewire_pcm =
+        || host.input_devices().ok().and_then(|mut devs| {
+            devs.find(|d| d.name().map(|n| n == "pipewire").unwrap_or(false))
+        });
     let device = source_name
         .and_then(|name| {
             let target = name.to_ascii_lowercase();
@@ -343,8 +352,13 @@ pub(crate) fn build_input_stream(
                 })
             })
         })
+        .or_else(pipewire_pcm)
         .or_else(|| host.default_input_device())
         .ok_or_else(|| "No input device found".to_string())?;
+    eprintln!(
+        "[input] using device: {:?}",
+        device.name().unwrap_or_else(|_| "<unnamed>".into())
+    );
 
     let default_config = device
         .default_input_config()
@@ -405,12 +419,22 @@ pub(crate) fn build_input_stream(
         Arc::clone(&mon_producer),
         rec_producer.take(),
     ) {
-        Ok(s) => (s, primary_channels),
+        Ok(s) => {
+            eprintln!(
+                "[input] opened {} channels (requested {}, default {})",
+                primary_channels, desired_channels, default_channels
+            );
+            (s, primary_channels)
+        }
         Err(primary_err) => {
             // Fall back to the device's default channel count. The
             // recording / deinterleave layer will then clamp ports past
             // that to the last channel — same caveat as before this
             // fix, but at least monitoring of channels 1+2 still works.
+            eprintln!(
+                "[input] {} channels rejected ({}); falling back to {} channels",
+                primary_channels, primary_err, default_channels
+            );
             match attempt(default_channels, shared, mon_producer, rec_producer) {
                 Ok(s) => (s, default_channels),
                 Err(e) => {
