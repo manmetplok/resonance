@@ -16,6 +16,8 @@ pub(crate) mod state;
 mod theme;
 mod timeline;
 mod timeline_draw;
+mod timeline_input;
+mod timeline_snap;
 pub(crate) mod undo;
 mod update;
 pub(crate) mod util;
