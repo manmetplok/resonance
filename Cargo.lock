@@ -4490,6 +4490,7 @@ dependencies = [
 name = "resonance-audio"
 version = "0.1.0"
 dependencies = [
+ "alsa-sys",
  "arc-swap",
  "bytemuck",
  "clap-sys",

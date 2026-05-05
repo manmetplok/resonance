@@ -10,6 +10,49 @@ use crate::types::*;
 
 use std::sync::atomic::Ordering;
 
+/// Replace ALSA's default `stderr` error handler with a no-op so the
+/// startup PCM probing doesn't print things like "Cannot open device
+/// /dev/dsp" or "unable to open slave" — they're benign (ALSA is just
+/// walking PCM definitions in `asound.conf`) but clutter the logs.
+/// Wrap behind a `Once` so reinit / multiple AudioEngine instances
+/// don't reinstall the handler. Linux-only; other platforms are
+/// no-ops at compile time.
+#[cfg(target_os = "linux")]
+pub(crate) fn silence_alsa_diagnostic_output() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    // Fixed-arity stub to install. ALSA's real handler signature has
+    // C variadic args (printf-style) that stable Rust can't express,
+    // so we declare a non-variadic function and cast its pointer to
+    // the variadic type via a `*const ()` round-trip — same calling
+    // convention, so the stack args ALSA pushes are simply ignored.
+    extern "C" fn null_error_handler(
+        _file: *const std::os::raw::c_char,
+        _line: std::os::raw::c_int,
+        _function: *const std::os::raw::c_char,
+        _err: std::os::raw::c_int,
+        _fmt: *const std::os::raw::c_char,
+    ) {
+    }
+    INIT.call_once(|| {
+        // SAFETY: function pointers, `*const ()`, and
+        // `Option<unsafe extern "C" fn>` are all the same size on all
+        // supported platforms — the niche optimization stores
+        // `Some(fn)` as the function pointer itself. The installed
+        // handler is non-variadic but called by ALSA as variadic;
+        // since we don't read the variadic args, the System V / SysV
+        // / Win64 / AArch64 ABIs all let this work harmlessly.
+        unsafe {
+            let ptr = null_error_handler as *const ();
+            let handler: alsa_sys::snd_lib_error_handler_t = std::mem::transmute(ptr);
+            alsa_sys::snd_lib_error_set_handler(handler);
+        }
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn silence_alsa_diagnostic_output() {}
+
 /// Serializes access to PIPEWIRE_NODE env var manipulation.
 pub(crate) static PIPEWIRE_ENV_LOCK: Mutex<()> = Mutex::new(());
 

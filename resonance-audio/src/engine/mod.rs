@@ -126,6 +126,11 @@ unsafe impl Send for AudioEngine {}
 impl AudioEngine {
     /// Create and start the audio engine. Returns the engine handle.
     pub fn new() -> Result<Self, String> {
+        // Replace ALSA's default stderr error handler before any cpal
+        // / device enumeration so the startup PCM probing doesn't
+        // spam "Cannot open device /dev/dsp" and friends. Idempotent.
+        platform::silence_alsa_diagnostic_output();
+
         let host = cpal::default_host();
         let device = host
             .default_output_device()

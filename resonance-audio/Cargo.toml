@@ -21,3 +21,6 @@ arc-swap.workspace = true
 memmap2 = "0.9"
 bytemuck.workspace = true
 serde.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+alsa-sys = "0.3"
