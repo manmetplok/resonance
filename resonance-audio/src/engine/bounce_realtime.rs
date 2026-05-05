@@ -235,6 +235,37 @@ pub(crate) fn poll_pending_bounce(ctx: &HandlerCtx, state: &mut HandlerState) {
     }
     let bounce = state.pending_bounce.take().unwrap();
 
+    // Snapshot frames captured + peak amplitude for the target track
+    // before handle_pause drains and finalizes the recording state.
+    // Two failure modes we want to surface clearly instead of silently
+    // muting the source with nothing to play in its place:
+    //
+    //  - frames_captured == 0: the cpal input callback never fired, so
+    //    the device the user picked isn't actually delivering frames
+    //    (wrong device name, device unavailable, etc.).
+    //  - peak below `SILENT_THRESHOLD`: the device is delivering frames
+    //    but they're all near-zero, meaning the synth's audio return
+    //    isn't actually connected to that input.
+    const SILENT_THRESHOLD: f32 = 0.0001;
+    let (frames_captured, peak_abs) = state
+        .rec
+        .buffers
+        .get(&bounce.target_track_id)
+        .map(|b| {
+            let mut peak: f32 = 0.0;
+            for (mn, mx) in &b.peaks {
+                peak = peak.max(mn.abs()).max(mx.abs());
+            }
+            // Also consider the in-progress peak window so a recording
+            // shorter than `WAVEFORM_PEAK_FRAMES` doesn't appear silent
+            // just because no chunk closed yet.
+            if b.peak_frames > 0 {
+                peak = peak.max(b.peak_min.abs()).max(b.peak_max.abs());
+            }
+            (b.frames_written, peak)
+        })
+        .unwrap_or((0, 0.0));
+
     // Pause the transport — finalizes the recording stream and emits
     // `RecordingFinished` for every armed track.
     super::transport::handle_pause(ctx, state);
@@ -245,6 +276,23 @@ pub(crate) fn poll_pending_bounce(ctx: &HandlerCtx, state: &mut HandlerState) {
         bounce.target_track_id,
         bounce.prev_target_input_device.clone(),
     );
+
+    if frames_captured == 0 {
+        // No audio reached the WAV. Don't mute the source — the user
+        // hasn't actually replaced its sound with anything yet.
+        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
+            "Bounce captured no audio from the input device. Check that the picked device is the one your external instrument's audio output is wired to."
+                .into(),
+        ));
+        return;
+    }
+    if peak_abs < SILENT_THRESHOLD {
+        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
+            "Bounce recorded silence — the input device opened, but the signal level was effectively zero. Check the cabling between your external instrument and the picked input."
+                .into(),
+        ));
+        return;
+    }
 
     // Mute the source so subsequent playback uses the bounced audio,
     // not the live external instrument.

@@ -234,13 +234,18 @@ impl RecordingState {
     /// resulting files, and push an `AudioClip` per track into the
     /// shared clip map. Emits `RecordingFinished` events with the
     /// incrementally-accumulated waveform peaks.
+    /// Returns the number of audio clips that were actually emitted
+    /// (one per armed track that captured at least one frame). Callers
+    /// like the realtime bounce path use this to detect "stream opened
+    /// but produced no audio" scenarios and surface a clearer error.
     pub fn finalize_recording(
         &mut self,
         _output_sample_rate: u32,
         clips: &parking_lot::RwLock<Vec<AudioClip>>,
         event_tx: &Sender<AudioEvent>,
-    ) {
+    ) -> usize {
         self.drain_ring_to_buffers();
+        let mut clips_emitted = 0usize;
 
         for (track_id, mut track_buf) in self.buffers.drain() {
             // Flush any trailing resampled frame.
@@ -348,9 +353,11 @@ impl RecordingState {
                 name,
                 waveform_peaks: track_buf.peaks.clone(),
             });
+            clips_emitted += 1;
         }
 
         self.ring_consumer = None;
+        clips_emitted
     }
 }
 

@@ -269,8 +269,29 @@ pub(crate) fn build_input_stream(
     }
 
     let host = cpal::default_host();
-    let device = host
-        .default_input_device()
+
+    // Pick the device. Prefer matching by name from cpal's device list
+    // (works on every host) and fall back to `default_input_device()`,
+    // which on PipeWire-via-ALSA is influenced by `PIPEWIRE_NODE` set
+    // above. The match is loose because pactl source names like
+    // `alsa_input.pci-0000_00_1b.0.analog-stereo` only sometimes appear
+    // verbatim in cpal's enumeration; substring + case-insensitive
+    // gets us the rest of the way.
+    let device = source_name
+        .and_then(|name| {
+            let target = name.to_ascii_lowercase();
+            host.input_devices().ok().and_then(|mut devs| {
+                devs.find(|d| {
+                    d.name()
+                        .map(|n| {
+                            let n = n.to_ascii_lowercase();
+                            n == target || n.contains(&target) || target.contains(&n)
+                        })
+                        .unwrap_or(false)
+                })
+            })
+        })
+        .or_else(|| host.default_input_device())
         .ok_or_else(|| "No input device found".to_string())?;
 
     let config = device
