@@ -59,7 +59,7 @@ pub(crate) struct RecordingState {
     pub buffers: HashMap<TrackId, TrackRecordingBuf>,
     pub start_sample: SamplePos,
     pub ring_consumer: Option<ringbuf::HeapCons<f32>>,
-    pub input_stream: Option<cpal::Stream>,
+    pub input_stream: Option<crate::input_handle::InputHandle>,
     pub input_channels: u16,
     pub input_sample_rate: u32,
     pub loop_enabled: bool,

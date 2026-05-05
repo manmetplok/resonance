@@ -24,3 +24,5 @@ serde.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa-sys = "0.3"
+pipewire = { version = "0.9", features = ["v0_3_44"] }
+libspa = "0.9"

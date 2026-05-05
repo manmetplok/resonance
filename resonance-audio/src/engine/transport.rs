@@ -188,6 +188,7 @@ pub(crate) fn begin_recording_stream(
         Arc::clone(ctx.monitor_prod),
         ctx.buf_frames,
         ctx.quantum,
+        ctx.sample_rate,
         desired_channels,
     ) {
         Ok(triple) => triple,

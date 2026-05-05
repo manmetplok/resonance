@@ -220,6 +220,7 @@ pub(crate) fn handle_set_track_monitor(
             Arc::clone(ctx.monitor_prod),
             ctx.buf_frames,
             ctx.quantum,
+            ctx.sample_rate,
             desired_channels,
         ) {
             Ok((stream, in_sr, in_ch)) => {

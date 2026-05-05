@@ -1,6 +1,9 @@
 pub mod clap_host;
 pub mod decode;
 mod engine;
+mod input_handle;
+#[cfg(target_os = "linux")]
+mod input_pipewire;
 pub mod limits;
 pub mod midi_clock;
 pub mod midi_hardware;
