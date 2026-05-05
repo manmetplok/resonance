@@ -319,6 +319,40 @@ pub(crate) fn build_input_stream(
             std::env::set_var("PIPEWIRE_NODE", name);
         }
     }
+    // Force the channel count and an explicit channel-position layout
+    // through `PIPEWIRE_PROPS`. cpal's `set_channels(N)` is honoured by
+    // pipewire-alsa-plugin only as a request — the plugin's own
+    // negotiation defaults the stream to stereo regardless, which is
+    // why a 4-channel cpal stream still ends up as a 2-port capture
+    // node (input_FL / input_FR) in the PipeWire graph. Setting these
+    // properties forces the plugin to create the stream with the
+    // layout we ask for, so channels 3+ actually map to real ports.
+    let position = match desired_channels {
+        1 => "[ MONO ]",
+        2 => "[ FL FR ]",
+        3 => "[ FL FR FC ]",
+        4 => "[ FL FR RL RR ]",
+        5 => "[ FL FR FC SL SR ]",
+        6 => "[ FL FR FC LFE SL SR ]",
+        7 => "[ FL FR FC LFE RC SL SR ]",
+        8 => "[ FL FR FC LFE RL RR SL SR ]",
+        n => {
+            // Beyond surround layouts there's no canonical name; let
+            // pipewire-alsa pick its own positions by omitting the
+            // setting. Channels still take effect.
+            let _ = n;
+            ""
+        }
+    };
+    let props_value = if position.is_empty() {
+        format!("audio.channels={}", desired_channels)
+    } else {
+        format!("audio.channels={} audio.position={}", desired_channels, position)
+    };
+    // SAFETY: same env-mutex guarantee as PIPEWIRE_NODE above.
+    unsafe {
+        std::env::set_var("PIPEWIRE_PROPS", &props_value);
+    }
 
     let host = cpal::default_host();
 
@@ -478,6 +512,7 @@ pub(crate) fn build_input_stream(
     // audio callback). This is a known limitation pending a PIPEWIRE_NODE API in cpal.
     unsafe {
         std::env::remove_var("PIPEWIRE_NODE");
+        std::env::remove_var("PIPEWIRE_PROPS");
     }
 
     Ok((stream, sample_rate, channels))
