@@ -191,11 +191,27 @@ pub(crate) fn handle_set_track_monitor(
 
     if any_monitoring && state.rec.input_stream.is_none() {
         // Start input stream: monitoring on but no stream active.
-        let source_name: Option<String> = {
+        // Figure out the source name and the highest input channel any
+        // monitoring track needs. Without the channel hint, cpal opens
+        // a stereo stream and tracks listening to channels 3+ get
+        // clamped to channel 1.
+        let (source_name, desired_channels) = {
             let tg = ctx.tracks.read();
-            tg.values()
+            let source = tg
+                .values()
                 .find(|t| t.monitor_enabled())
-                .and_then(|t| t.input_device_name.clone())
+                .and_then(|t| t.input_device_name.clone());
+            let max_needed: u16 = tg
+                .values()
+                .filter(|t| t.monitor_enabled())
+                .map(|t| {
+                    let port = t.input_port();
+                    if t.mono() { port + 1 } else { port + 2 }
+                })
+                .max()
+                .unwrap_or(2)
+                .max(2);
+            (source, max_needed)
         };
         match platform::build_input_stream(
             source_name.as_deref(),
@@ -204,6 +220,7 @@ pub(crate) fn handle_set_track_monitor(
             Arc::clone(ctx.monitor_prod),
             ctx.buf_frames,
             ctx.quantum,
+            desired_channels,
         ) {
             Ok((stream, in_sr, in_ch)) => {
                 state.rec.input_stream = Some(stream);

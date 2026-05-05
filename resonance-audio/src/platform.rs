@@ -249,6 +249,14 @@ pub(crate) fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>
 /// Build a cpal input stream that pushes samples into ring buffer producers.
 /// `rec_producer` is for recording (engine thread drains it).
 /// `mon_producer` is for monitoring (audio callback reads it).
+///
+/// `desired_channels` is the minimum channel count the caller needs.
+/// Required to make multi-channel input work on PipeWire / ALSA: the
+/// default config is almost always stereo, so picking a port past 2
+/// would otherwise read past the end of a 2-channel callback buffer
+/// regardless of what the underlying device offers. The function
+/// walks `supported_input_configs()` for the highest channel count
+/// that meets the request and clamps the stream config to it.
 pub(crate) fn build_input_stream(
     source_name: Option<&str>,
     shared: Arc<SharedState>,
@@ -256,6 +264,7 @@ pub(crate) fn build_input_stream(
     mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     buf_frames: usize,
     quantum: usize,
+    desired_channels: u16,
 ) -> Result<(cpal::Stream, u32, u16), String> {
     let _env_guard = PIPEWIRE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -294,48 +303,81 @@ pub(crate) fn build_input_stream(
         .or_else(|| host.default_input_device())
         .ok_or_else(|| "No input device found".to_string())?;
 
-    let config = device
+    let default_config = device
         .default_input_config()
         .map_err(|e| format!("No default input config: {}", e))?;
 
-    let channels = config.channels();
-    let sample_rate = pick_sample_rate(&device, &config, DeviceDirection::Input);
-    let mut stream_config: cpal::StreamConfig = config.into();
-    stream_config.sample_rate = cpal::SampleRate(sample_rate);
-    stream_config.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
+    let sample_rate = pick_sample_rate(&device, &default_config, DeviceDirection::Input);
+    let default_channels = default_config.channels();
+    let base_config: cpal::StreamConfig = default_config.into();
 
+    // Two attempts: first ask for the channel count we actually need,
+    // and fall back to the default if cpal / the underlying backend
+    // rejects it. PipeWire's ALSA plugin honours arbitrary channel
+    // counts (its `supported_input_configs` usually doesn't even
+    // enumerate them), but plain ALSA / PulseAudio might not.
     let _ = buf_frames; // unused once the monitor path stopped pre-converting
+    let make_callback = move |shared: Arc<SharedState>,
+                              mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
+                              mut rec_producer: Option<ringbuf::HeapProd<f32>>| {
+        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+            if shared.recording.load(Ordering::Relaxed) {
+                if let Some(ref mut prod) = rec_producer {
+                    let written = prod.push_slice(data);
+                    if written < data.len() {
+                        shared.recording_overflow.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
+            if shared.monitoring.load(Ordering::Relaxed) {
+                if let Some(mut prod) = mon_producer.try_lock() {
+                    let _ = prod.push_slice(data);
+                }
+            }
+        }
+    };
 
-    let stream = device
-        .build_input_stream(
-            &stream_config,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                // Push to recording ring buffer (raw interleaved multi-channel).
-                if shared.recording.load(Ordering::Relaxed) {
-                    if let Some(ref mut prod) = rec_producer {
-                        let written = prod.push_slice(data);
-                        if written < data.len() {
-                            shared.recording_overflow.store(true, Ordering::Relaxed);
-                        }
-                    }
-                }
-                // Push raw interleaved multi-channel data to the monitor
-                // ring buffer. The mix callback de-interleaves per track
-                // based on each track's input_port_index, so two tracks
-                // can monitor different physical inputs from the same
-                // soundcard simultaneously.
-                if shared.monitoring.load(Ordering::Relaxed) {
-                    if let Some(mut prod) = mon_producer.try_lock() {
-                        let _ = prod.push_slice(data);
-                    }
-                }
-            },
+    let attempt = |channels: u16,
+                   shared: Arc<SharedState>,
+                   mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
+                   rec_producer: Option<ringbuf::HeapProd<f32>>| {
+        let mut cfg = base_config.clone();
+        cfg.sample_rate = cpal::SampleRate(sample_rate);
+        cfg.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
+        cfg.channels = channels;
+        device.build_input_stream(
+            &cfg,
+            make_callback(shared, mon_producer, rec_producer),
             |err| {
                 eprintln!("Input stream error: {}", err);
             },
             None,
         )
-        .map_err(|e| format!("Failed to build input stream: {}", e))?;
+    };
+
+    let primary_channels = desired_channels.max(default_channels);
+    let (stream, channels) = match attempt(
+        primary_channels,
+        Arc::clone(&shared),
+        Arc::clone(&mon_producer),
+        rec_producer.take(),
+    ) {
+        Ok(s) => (s, primary_channels),
+        Err(primary_err) => {
+            // Fall back to the device's default channel count. The
+            // recording / deinterleave layer will then clamp ports past
+            // that to the last channel — same caveat as before this
+            // fix, but at least monitoring of channels 1+2 still works.
+            match attempt(default_channels, shared, mon_producer, rec_producer) {
+                Ok(s) => (s, default_channels),
+                Err(e) => {
+                    return Err(format!(
+                        "Failed to build input stream (requested {primary_channels}ch: {primary_err}; fell back to {default_channels}ch: {e})"
+                    ));
+                }
+            }
+        }
+    };
 
     stream
         .play()

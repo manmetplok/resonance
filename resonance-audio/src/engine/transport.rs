@@ -162,6 +162,17 @@ pub(crate) fn begin_recording_stream(
 
     let source_name: Option<String> = armed_tracks.iter().find_map(|info| info.device.clone());
 
+    // Highest input channel any armed track needs. Required so
+    // cpal/PipeWire opens the capture node with enough channels for
+    // tracks that pick port 2+ — without this, the stream is stereo
+    // and the deinterleave clamps to channel 1.
+    let desired_channels: u16 = armed_tracks
+        .iter()
+        .map(|info| if info.mono { info.port + 1 } else { info.port + 2 })
+        .max()
+        .unwrap_or(2)
+        .max(2);
+
     let ring_size = super::RECORDING_RING_SIZE;
     let ring = ringbuf::HeapRb::<f32>::new(ring_size);
     use ringbuf::traits::Split;
@@ -177,6 +188,7 @@ pub(crate) fn begin_recording_stream(
         Arc::clone(ctx.monitor_prod),
         ctx.buf_frames,
         ctx.quantum,
+        desired_channels,
     ) {
         Ok(triple) => triple,
         Err(e) => {
