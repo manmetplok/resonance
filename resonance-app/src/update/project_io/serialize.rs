@@ -1,0 +1,155 @@
+//! Pure serialization: build a `ProjectFile` from current GUI state.
+//! No I/O, no engine commands, no state mutation — just a transformation
+//! from the runtime model to the on-disk shape.
+
+use resonance_audio::types::*;
+
+use crate::project::{
+    ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin, ProjectTrack,
+    PROJECT_FORMAT_VERSION,
+};
+use crate::Resonance;
+
+/// Serialize current GUI state to the on-disk `ProjectFile` shape.
+pub fn build_project_file(r: &Resonance) -> ProjectFile {
+    let tracks = r
+        .sorted_tracks()
+        .iter()
+        .map(|t| ProjectTrack {
+            id: t.id,
+            name: t.name.clone(),
+            order: t.order,
+            volume: t.volume,
+            pan: t.pan,
+            muted: t.muted,
+            soloed: t.soloed,
+            fx_bypassed: t.fx_bypassed,
+            record_armed: t.record_armed,
+            monitor_enabled: t.monitor_enabled,
+            mono: t.mono,
+            input_device_name: t.input_device_name.clone(),
+            plugins: t
+                .plugins
+                .iter()
+                .map(|p| ProjectPlugin {
+                    instance_id: p.instance_id,
+                    plugin_name: p.plugin_name.clone(),
+                    clap_plugin_id: p.clap_plugin_id.clone(),
+                    clap_file_path: p.clap_file_path.clone(),
+                    state_file: format!("plugins/plugin_{}.bin", p.instance_id),
+                })
+                .collect(),
+            track_type: match t.track_type {
+                TrackType::Audio => "audio".to_string(),
+                TrackType::Instrument => "instrument".to_string(),
+            },
+            output_bus: match t.output {
+                TrackOutput::Master => None,
+                TrackOutput::Bus(id) => Some(id),
+            },
+            instrument_type: t.instrument_type,
+            instrument_icon: t.instrument_icon,
+            role: t.role,
+            sub_track: t.sub_track,
+            input_port_index: Some(t.input_port_index),
+            midi_input_device: t.midi_input_device.clone(),
+            midi_input_channel: t.midi_input_channel,
+            midi_output_device: t.midi_output_device.clone(),
+            midi_output_channel: t.midi_output_channel,
+        })
+        .collect();
+
+    let busses = r
+        .sorted_busses()
+        .iter()
+        .map(|b| ProjectBus {
+            id: b.id,
+            name: b.name.clone(),
+            order: b.order,
+            volume: b.volume,
+            pan: b.pan,
+            muted: b.muted,
+            fx_bypassed: b.fx_bypassed,
+            plugins: b
+                .plugins
+                .iter()
+                .map(|p| ProjectPlugin {
+                    instance_id: p.instance_id,
+                    plugin_name: p.plugin_name.clone(),
+                    clap_plugin_id: p.clap_plugin_id.clone(),
+                    clap_file_path: p.clap_file_path.clone(),
+                    state_file: format!("plugins/plugin_{}.bin", p.instance_id),
+                })
+                .collect(),
+        })
+        .collect();
+
+    let clips = r
+        .clips
+        .iter()
+        .map(|c| ProjectClip {
+            id: c.id,
+            track_id: c.track_id,
+            start_sample: c.start_sample,
+            name: c.name.clone(),
+            total_frames: c.total_frames,
+            trim_start_frames: c.trim_start_frames,
+            trim_end_frames: c.trim_end_frames,
+            audio_file: format!("audio/clip_{}.wav", c.id),
+        })
+        .collect();
+
+    let midi_clips = r
+        .midi_clips
+        .iter()
+        .map(|mc| ProjectMidiClip {
+            id: mc.id,
+            track_id: mc.track_id,
+            start_sample: mc.start_sample,
+            duration_ticks: mc.duration_ticks,
+            name: mc.name.clone(),
+            trim_start_ticks: mc.trim_start_ticks,
+            trim_end_ticks: mc.trim_end_ticks,
+            midi_file: format!("midi/clip_{}.mid", mc.id),
+        })
+        .collect();
+
+    let master_plugins = r
+        .master_plugins
+        .iter()
+        .map(|p| ProjectPlugin {
+            instance_id: p.instance_id,
+            plugin_name: p.plugin_name.clone(),
+            clap_plugin_id: p.clap_plugin_id.clone(),
+            clap_file_path: p.clap_file_path.clone(),
+            state_file: format!("plugins/plugin_{}.bin", p.instance_id),
+        })
+        .collect();
+
+    ProjectFile {
+        version: PROJECT_FORMAT_VERSION,
+        sample_rate: r.sample_rate,
+        bpm: r.transport.bpm,
+        time_sig_num: r.transport.time_sig_num,
+        time_sig_den: r.transport.time_sig_den,
+        metronome_enabled: r.transport.metronome_enabled,
+        master_volume: r.master_volume,
+        master_plugins,
+        master_fx_bypassed: r.master_fx_bypassed,
+        loop_enabled: r.transport.loop_enabled,
+        loop_in: r.transport.loop_in,
+        loop_out: r.transport.loop_out,
+        tracks,
+        clips,
+        midi_clips,
+        busses,
+        section_definitions: r.compose.to_project_definitions(),
+        section_placements: r.compose.to_project_placements(),
+        tempo_events: r.tempo_events.clone(),
+        signature_events: r.signature_events.clone(),
+        midi_clock_send_enabled: r.midi_clock_send_enabled,
+        midi_clock_send_device: r.midi_clock_send_device.clone(),
+        midi_clock_recv_enabled: r.midi_clock_recv_enabled,
+        midi_clock_recv_device: r.midi_clock_recv_device.clone(),
+    }
+}
