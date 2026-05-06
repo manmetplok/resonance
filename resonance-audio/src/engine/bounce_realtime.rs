@@ -69,6 +69,10 @@ pub(crate) fn handle_bounce_track_realtime(
     input_port_index: u16,
     mono: bool,
 ) {
+    eprintln!(
+        "[bounce] realtime: source={} target={} device={:?} port={} mono={}",
+        source_track_id, target_track_id, input_device_name, input_port_index, mono
+    );
     if ctx.shared.playing.load(Ordering::Relaxed) {
         let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
             "Stop transport before bouncing".into(),

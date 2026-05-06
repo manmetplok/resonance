@@ -117,6 +117,7 @@ pub(crate) fn begin_recording_stream(
     state: &mut HandlerState,
     start_sample: SamplePos,
 ) {
+    eprintln!("[record] begin_recording_stream entered");
     // Recording must have a project directory to stream WAVs into.
     // The startup modal guarantees a project is always selected, so
     // hitting this branch is a programmer error — surface it rather
@@ -157,6 +158,7 @@ pub(crate) fn begin_recording_stream(
     };
 
     if armed_tracks.is_empty() {
+        eprintln!("[record] no armed tracks; returning without opening stream");
         return;
     }
 
@@ -172,6 +174,19 @@ pub(crate) fn begin_recording_stream(
         .max()
         .unwrap_or(2)
         .max(2);
+
+    eprintln!(
+        "[record] {} armed track(s); source={:?}, desired_channels={}",
+        armed_tracks.len(),
+        source_name,
+        desired_channels
+    );
+
+    // Drop any existing input stream first so the backend (PipeWire)
+    // can release the source before the new connection opens —
+    // otherwise the second open might race the teardown of the old
+    // monitor stream and end up with the old channel count.
+    state.rec.input_stream = None;
 
     let ring_size = super::RECORDING_RING_SIZE;
     let ring = ringbuf::HeapRb::<f32>::new(ring_size);

@@ -189,12 +189,10 @@ pub(crate) fn handle_set_track_monitor(
         .monitoring
         .store(any_monitoring, Ordering::SeqCst);
 
-    if any_monitoring && state.rec.input_stream.is_none() {
-        // Start input stream: monitoring on but no stream active.
-        // Figure out the source name and the highest input channel any
-        // monitoring track needs. Without the channel hint, cpal opens
-        // a stereo stream and tracks listening to channels 3+ get
-        // clamped to channel 1.
+    if any_monitoring {
+        // Compute the highest input channel any monitoring track needs.
+        // Without this, cpal opens a stereo stream and tracks listening
+        // to channels 3+ get clamped to channel 1.
         let (source_name, desired_channels) = {
             let tg = ctx.tracks.read();
             let source = tg
@@ -213,30 +211,46 @@ pub(crate) fn handle_set_track_monitor(
                 .max(2);
             (source, max_needed)
         };
-        match platform::build_input_stream(
-            source_name.as_deref(),
-            Arc::clone(ctx.shared),
-            None,
-            Arc::clone(ctx.monitor_prod),
-            ctx.buf_frames,
-            ctx.quantum,
-            ctx.sample_rate,
-            desired_channels,
-        ) {
-            Ok((stream, in_sr, in_ch)) => {
-                state.rec.input_stream = Some(stream);
-                state.rec.input_sample_rate = in_sr;
-                state.rec.input_channels = in_ch;
-                ctx.shared.input_channels.store(in_ch, Ordering::Release);
-            }
-            Err(e) => {
-                let _ = ctx.event_tx.send(AudioEvent::Error(format!(
-                    "Failed to start monitoring: {}",
-                    e
-                )));
+        // Rebuild the stream if it doesn't exist OR if the existing one
+        // doesn't carry enough channels for what's now being monitored
+        // (the user may have switched a track from In 1/2 to In 3/4
+        // after monitoring was first enabled).
+        let needs_rebuild = state.rec.input_stream.is_none()
+            || state.rec.input_channels < desired_channels;
+        if needs_rebuild {
+            eprintln!(
+                "[monitor] rebuilding input stream: existing={}ch, needed={}ch",
+                state.rec.input_channels, desired_channels
+            );
+            // Drop the existing stream first so PipeWire releases the
+            // source before we open a new connection — otherwise the
+            // second open might race the teardown.
+            state.rec.input_stream = None;
+            match platform::build_input_stream(
+                source_name.as_deref(),
+                Arc::clone(ctx.shared),
+                None,
+                Arc::clone(ctx.monitor_prod),
+                ctx.buf_frames,
+                ctx.quantum,
+                ctx.sample_rate,
+                desired_channels,
+            ) {
+                Ok((stream, in_sr, in_ch)) => {
+                    state.rec.input_stream = Some(stream);
+                    state.rec.input_sample_rate = in_sr;
+                    state.rec.input_channels = in_ch;
+                    ctx.shared.input_channels.store(in_ch, Ordering::Release);
+                }
+                Err(e) => {
+                    let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                        "Failed to start monitoring: {}",
+                        e
+                    )));
+                }
             }
         }
-    } else if !any_monitoring && !ctx.shared.recording.load(Ordering::SeqCst) {
+    } else if !ctx.shared.recording.load(Ordering::SeqCst) {
         // Stop input stream if no monitoring and not recording.
         state.rec.input_stream = None;
         ctx.shared.input_channels.store(0, Ordering::Release);
