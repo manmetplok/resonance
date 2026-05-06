@@ -389,7 +389,7 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             tracks::handle_set_track_record_arm(ctx, track_id, armed)
         }
         AudioCommand::SetTrackMono { track_id, mono } => {
-            tracks::handle_set_track_mono(ctx, track_id, mono)
+            tracks::handle_set_track_mono(ctx, state, track_id, mono)
         }
         AudioCommand::SetTrackMonitor { track_id, enabled } => {
             tracks::handle_set_track_monitor(ctx, state, track_id, enabled)
@@ -397,11 +397,11 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         AudioCommand::SetTrackInputDevice {
             track_id,
             device_name,
-        } => tracks::handle_set_track_input_device(ctx, track_id, device_name),
+        } => tracks::handle_set_track_input_device(ctx, state, track_id, device_name),
         AudioCommand::SetTrackInputPort {
             track_id,
             port_index,
-        } => tracks::handle_set_track_input_port(ctx, track_id, port_index),
+        } => tracks::handle_set_track_input_port(ctx, state, track_id, port_index),
         AudioCommand::ListInputDevices => tracks::handle_list_input_devices(ctx),
         AudioCommand::ClearAll => tracks::handle_clear_all(ctx, state),
 

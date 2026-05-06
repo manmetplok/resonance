@@ -405,10 +405,6 @@ fn build_input_stream_cpal(
         .or_else(pipewire_pcm)
         .or_else(|| host.default_input_device())
         .ok_or_else(|| "No input device found".to_string())?;
-    eprintln!(
-        "[input] using device: {:?}",
-        device.name().unwrap_or_else(|_| "<unnamed>".into())
-    );
 
     let default_config = device
         .default_input_config()
@@ -426,31 +422,8 @@ fn build_input_stream_cpal(
     let _ = buf_frames; // unused once the monitor path stopped pre-converting
     let make_callback = move |shared: Arc<SharedState>,
                               mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
-                              mut rec_producer: Option<ringbuf::HeapProd<f32>>,
-                              expected_channels: u16| {
-        // Print the first callback's frame count so we can tell
-        // whether cpal is actually delivering the channel count it
-        // claims. PipeWire-via-ALSA can "succeed" `set_channels(4)`
-        // but then deliver 2-channel callbacks anyway; that mismatch
-        // would show up as `data.len() % expected_channels != 0`.
-        let first_fire = std::sync::Once::new();
+                              mut rec_producer: Option<ringbuf::HeapProd<f32>>| {
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            first_fire.call_once(|| {
-                let channels = expected_channels as usize;
-                let frames = if channels == 0 { 0 } else { data.len() / channels };
-                let leftover = if channels == 0 {
-                    0
-                } else {
-                    data.len() % channels
-                };
-                eprintln!(
-                    "[input] first callback: {} samples, expected_channels={}, frames={}, leftover={}",
-                    data.len(),
-                    expected_channels,
-                    frames,
-                    leftover,
-                );
-            });
             if shared.recording.load(Ordering::Relaxed) {
                 if let Some(ref mut prod) = rec_producer {
                     let written = prod.push_slice(data);
@@ -477,7 +450,7 @@ fn build_input_stream_cpal(
         cfg.channels = channels;
         device.build_input_stream(
             &cfg,
-            make_callback(shared, mon_producer, rec_producer, channels),
+            make_callback(shared, mon_producer, rec_producer),
             |err| {
                 eprintln!("Input stream error: {}", err);
             },
@@ -492,13 +465,7 @@ fn build_input_stream_cpal(
         Arc::clone(&mon_producer),
         rec_producer.take(),
     ) {
-        Ok(s) => {
-            eprintln!(
-                "[input] opened {} channels (requested {}, default {})",
-                primary_channels, desired_channels, default_channels
-            );
-            (s, primary_channels)
-        }
+        Ok(s) => (s, primary_channels),
         Err(primary_err) => {
             // Fall back to the device's default channel count. The
             // recording / deinterleave layer will then clamp ports past

@@ -168,10 +168,19 @@ pub(crate) fn handle_set_track_record_arm(ctx: &HandlerCtx, track_id: TrackId, a
     }
 }
 
-pub(crate) fn handle_set_track_mono(ctx: &HandlerCtx, track_id: TrackId, mono: bool) {
+pub(crate) fn handle_set_track_mono(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    track_id: TrackId,
+    mono: bool,
+) {
     if let Some(track) = ctx.tracks.read().get(&track_id) {
         track.set_mono(mono);
     }
+    // Mono ↔ stereo flips the channel count needed (`port + 1` vs
+    // `port + 2`); resync in case the monitor stream is now too
+    // narrow.
+    sync_input_stream(ctx, state);
 }
 
 pub(crate) fn handle_set_track_monitor(
@@ -183,93 +192,125 @@ pub(crate) fn handle_set_track_monitor(
     if let Some(track) = ctx.tracks.read().get(&track_id) {
         track.set_monitor_enabled(enabled);
     }
-    // Update monitoring flag: true if any track has monitoring enabled.
-    let any_monitoring = ctx.tracks.read().values().any(|t| t.monitor_enabled());
-    ctx.shared
-        .monitoring
-        .store(any_monitoring, Ordering::SeqCst);
-
-    if any_monitoring {
-        // Compute the highest input channel any monitoring track needs.
-        // Without this, cpal opens a stereo stream and tracks listening
-        // to channels 3+ get clamped to channel 1.
-        let (source_name, desired_channels) = {
-            let tg = ctx.tracks.read();
-            let source = tg
-                .values()
-                .find(|t| t.monitor_enabled())
-                .and_then(|t| t.input_device_name.clone());
-            let max_needed: u16 = tg
-                .values()
-                .filter(|t| t.monitor_enabled())
-                .map(|t| {
-                    let port = t.input_port();
-                    if t.mono() { port + 1 } else { port + 2 }
-                })
-                .max()
-                .unwrap_or(2)
-                .max(2);
-            (source, max_needed)
-        };
-        // Rebuild the stream if it doesn't exist OR if the existing one
-        // doesn't carry enough channels for what's now being monitored
-        // (the user may have switched a track from In 1/2 to In 3/4
-        // after monitoring was first enabled).
-        let needs_rebuild = state.rec.input_stream.is_none()
-            || state.rec.input_channels < desired_channels;
-        if needs_rebuild {
-            eprintln!(
-                "[monitor] rebuilding input stream: existing={}ch, needed={}ch",
-                state.rec.input_channels, desired_channels
-            );
-            // Drop the existing stream first so PipeWire releases the
-            // source before we open a new connection — otherwise the
-            // second open might race the teardown.
-            state.rec.input_stream = None;
-            match platform::build_input_stream(
-                source_name.as_deref(),
-                Arc::clone(ctx.shared),
-                None,
-                Arc::clone(ctx.monitor_prod),
-                ctx.buf_frames,
-                ctx.quantum,
-                ctx.sample_rate,
-                desired_channels,
-            ) {
-                Ok((stream, in_sr, in_ch)) => {
-                    state.rec.input_stream = Some(stream);
-                    state.rec.input_sample_rate = in_sr;
-                    state.rec.input_channels = in_ch;
-                    ctx.shared.input_channels.store(in_ch, Ordering::Release);
-                }
-                Err(e) => {
-                    let _ = ctx.event_tx.send(AudioEvent::Error(format!(
-                        "Failed to start monitoring: {}",
-                        e
-                    )));
-                }
-            }
-        }
-    } else if !ctx.shared.recording.load(Ordering::SeqCst) {
-        // Stop input stream if no monitoring and not recording.
-        state.rec.input_stream = None;
-        ctx.shared.input_channels.store(0, Ordering::Release);
-    }
+    sync_input_stream(ctx, state);
 }
 
 pub(crate) fn handle_set_track_input_device(
     ctx: &HandlerCtx,
+    state: &mut HandlerState,
     track_id: TrackId,
     device_name: Option<String>,
 ) {
     if let Some(track) = ctx.tracks.write().get_mut(&track_id) {
         track.input_device_name = device_name;
     }
+    sync_input_stream(ctx, state);
 }
 
-pub(crate) fn handle_set_track_input_port(ctx: &HandlerCtx, track_id: TrackId, port_index: u16) {
+pub(crate) fn handle_set_track_input_port(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    track_id: TrackId,
+    port_index: u16,
+) {
     if let Some(track) = ctx.tracks.read().get(&track_id) {
         track.set_input_port(port_index);
+    }
+    sync_input_stream(ctx, state);
+}
+
+/// Reconcile the live input stream with whatever the tracks now want.
+/// Called from every handler that can change a track field the input
+/// stream depends on (monitor toggle, input device, input port, mono
+/// toggle). Opens / rebuilds / closes as needed:
+///
+/// - If any track is monitor-enabled or record-armed and we don't have
+///   a stream, open one.
+/// - If the existing stream's channel count is below what the
+///   currently-active tracks need (e.g. user switched from In 1/2 to
+///   In 3/4 after monitoring was on), drop and reopen.
+/// - If neither monitoring nor recording is active, drop the stream.
+///
+/// Recording-driven rebuilds happen in `transport::begin_recording_stream`
+/// instead — that path knows the start_sample and allocates per-track
+/// WAV writers, neither of which the monitor path does.
+fn sync_input_stream(ctx: &HandlerCtx, state: &mut HandlerState) {
+    let any_monitoring = ctx.tracks.read().values().any(|t| t.monitor_enabled());
+    ctx.shared
+        .monitoring
+        .store(any_monitoring, Ordering::SeqCst);
+    let recording = ctx.shared.recording.load(Ordering::SeqCst);
+
+    if !any_monitoring && !recording {
+        if state.rec.input_stream.is_some() {
+            state.rec.input_stream = None;
+            ctx.shared.input_channels.store(0, Ordering::Release);
+        }
+        return;
+    }
+
+    if recording {
+        // Don't disturb an in-flight recording — its stream was sized
+        // for the armed tracks at record-start and has WAV writers
+        // pinned to its sample rate. begin_recording_stream is the
+        // only path that may rebuild while recording.
+        return;
+    }
+
+    // Pure-monitor path: figure out what's needed and rebuild only if
+    // the existing stream can't deliver enough channels. The source
+    // device follows whichever monitor-enabled track was found first
+    // (the mixer UX scopes monitoring to one source at a time).
+    let (source_name, desired_channels) = {
+        let tg = ctx.tracks.read();
+        let source = tg
+            .values()
+            .find(|t| t.monitor_enabled())
+            .and_then(|t| t.input_device_name.clone());
+        let max_needed: u16 = tg
+            .values()
+            .filter(|t| t.monitor_enabled())
+            .map(|t| {
+                let port = t.input_port();
+                if t.mono() { port + 1 } else { port + 2 }
+            })
+            .max()
+            .unwrap_or(2)
+            .max(2);
+        (source, max_needed)
+    };
+
+    let needs_rebuild = state.rec.input_stream.is_none()
+        || state.rec.input_channels < desired_channels;
+    if !needs_rebuild {
+        return;
+    }
+    // Drop the existing stream first so PipeWire releases the source
+    // before we open a new connection — otherwise the second open
+    // might race the teardown.
+    state.rec.input_stream = None;
+    match platform::build_input_stream(
+        source_name.as_deref(),
+        Arc::clone(ctx.shared),
+        None,
+        Arc::clone(ctx.monitor_prod),
+        ctx.buf_frames,
+        ctx.quantum,
+        ctx.sample_rate,
+        desired_channels,
+    ) {
+        Ok((stream, in_sr, in_ch)) => {
+            state.rec.input_stream = Some(stream);
+            state.rec.input_sample_rate = in_sr;
+            state.rec.input_channels = in_ch;
+            ctx.shared.input_channels.store(in_ch, Ordering::Release);
+        }
+        Err(e) => {
+            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                "Failed to open input stream: {}",
+                e
+            )));
+        }
     }
 }
 

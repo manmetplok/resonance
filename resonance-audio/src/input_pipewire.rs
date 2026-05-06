@@ -71,9 +71,6 @@ struct UserData {
     /// One-shot signal so the builder can wait for the first
     /// `param_changed` to land before returning.
     notify: Arc<(Mutex<bool>, Condvar)>,
-    /// Number of samples we've already counted as "first callback" —
-    /// used to log only the very first delivery for diagnostics.
-    first_callback_logged: bool,
 }
 
 /// Build a PipeWire capture stream targeting `source_name` with at
@@ -150,7 +147,6 @@ pub(crate) fn build(
         channels: Arc::clone(&channels_atomic),
         rate: Arc::clone(&rate_atomic),
         notify: Arc::clone(&notify),
-        first_callback_logged: false,
     };
 
     let listener = stream
@@ -220,10 +216,6 @@ pub(crate) fn build(
 
     let negotiated_rate = rate_atomic.load(Ordering::Acquire);
     let negotiated_channels = channels_atomic.load(Ordering::Acquire);
-    eprintln!(
-        "[input] pipewire negotiated: rate={} channels={}",
-        negotiated_rate, negotiated_channels
-    );
 
     Ok((
         PipeWireInputHandle {
@@ -294,14 +286,6 @@ fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
     // based on `datas.len()` so the same backend handles both.
     let channels = user_data.channels.load(Ordering::Relaxed) as usize;
     let chunk_count = datas.len();
-
-    if !user_data.first_callback_logged {
-        user_data.first_callback_logged = true;
-        eprintln!(
-            "[input] pipewire first callback: chunks={} channels(negotiated)={}",
-            chunk_count, channels
-        );
-    }
 
     if chunk_count == 1 {
         // Interleaved path: cast the byte slice to &[f32] and push.
