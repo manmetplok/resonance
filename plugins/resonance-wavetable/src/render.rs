@@ -17,6 +17,7 @@ use resonance_plugin::{EventIterator, NoteEvent};
 
 use crate::effects::Distortion;
 use crate::engine::SynthEngine;
+use crate::envelope::EnvCoeffs;
 use crate::filter::FilterType;
 use crate::lfo::LfoShape;
 use crate::modulation::{self, ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
@@ -243,6 +244,28 @@ impl SynthEngine {
             }
         }
 
+        // Hoist envelope exponential coefficients out of the per-sample
+        // loop. With 32 voices × 2 envelopes × 48 kHz, leaving the
+        // `.exp()` inside `AdsrEnvelope::next` cost millions of calls
+        // per second — and times+curve are stable for the whole block
+        // since they come straight from `ParamSnapshot`.
+        let amp_coeffs = EnvCoeffs::for_params(
+            snap.amp_attack,
+            snap.amp_decay,
+            snap.amp_sustain,
+            snap.amp_release,
+            snap.amp_curve,
+            self.sample_rate,
+        );
+        let mod_coeffs = EnvCoeffs::for_params(
+            snap.mod_attack,
+            snap.mod_decay,
+            snap.mod_sustain,
+            snap.mod_release,
+            snap.mod_curve,
+            self.sample_rate,
+        );
+
         let mut next_event = events.next_event();
         let sample_rate = self.sample_rate;
 
@@ -319,21 +342,9 @@ impl SynthEngine {
                     global_lfo3_val
                 };
 
-                // Envelopes
-                let amp_env_val = voice.amp_env.next(
-                    snap.amp_attack,
-                    snap.amp_decay,
-                    snap.amp_sustain,
-                    snap.amp_release,
-                    snap.amp_curve,
-                );
-                let mod_env_val = voice.mod_env.next(
-                    snap.mod_attack,
-                    snap.mod_decay,
-                    snap.mod_sustain,
-                    snap.mod_release,
-                    snap.mod_curve,
-                );
+                // Envelopes — coefficients precomputed at block top.
+                let amp_env_val = voice.amp_env.next(&amp_coeffs);
+                let mod_env_val = voice.mod_env.next(&mod_coeffs);
 
                 // Voice finished releasing -- go idle and stop mixing.
                 if voice.amp_env.is_idle() && voice.state == VoiceState::Releasing {

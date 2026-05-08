@@ -104,10 +104,13 @@ impl ClapInstance {
             gui_ext,
             gui_open: false,
             output_port_count,
-            pending_params: Vec::new(),
-            param_event_buf: Vec::new(),
+            // Pre-size every event buffer at activation so the first
+            // process() call after a fresh plugin add doesn't allocate
+            // on the audio thread.
+            pending_params: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
+            param_event_buf: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
             pending_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
-            note_event_buf: Vec::new(),
+            note_event_buf: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
             audio_out_buffers,
             audio_out_ptrs,
             transport_bpm: 120.0,

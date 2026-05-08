@@ -321,6 +321,19 @@ impl TempoMap {
         }
     }
 
+    /// Whether [`sync_bpm_at`](Self::sync_bpm_at) would actually move
+    /// the stable `bpm`. The engine loop checks this under a read lock
+    /// before escalating to a write lock — for static-tempo projects
+    /// (the common case) the answer is always `false`, which keeps the
+    /// audio thread's `tempo_map.try_read()` from contending with us
+    /// every engine tick.
+    pub fn sync_bpm_would_change(&self, sample_pos: u64, sample_rate: u32) -> bool {
+        if self.bar_table.is_empty() {
+            return false;
+        }
+        (self.bpm_at(sample_pos, sample_rate) - self.bpm).abs() > 1e-4
+    }
+
     /// Number of bars in the precomputed bar table.
     pub fn bar_count(&self) -> usize {
         self.bar_table.len()

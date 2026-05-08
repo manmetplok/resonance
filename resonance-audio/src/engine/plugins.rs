@@ -112,7 +112,19 @@ pub(crate) fn handle_set_plugin_param(
     value: f64,
 ) {
     if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
-        mutex.lock().0.set_param(param_id, value);
+        if let Some(mut inst) = mutex.try_lock() {
+            inst.0.set_param(param_id, value);
+        } else {
+            // Audio thread is mid-process(): re-enqueue so the param
+            // change lands on the next iteration rather than blocking
+            // here. Blocking causes the audio thread's own try_lock to
+            // start failing too, which silences the plugin for a block.
+            let _ = ctx.cmd_tx_retry.send(AudioCommand::SetPluginParam {
+                instance_id,
+                param_id,
+                value,
+            });
+        }
     }
 }
 

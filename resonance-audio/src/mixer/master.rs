@@ -85,19 +85,26 @@ pub(super) fn apply_master_volume_and_peaks(data: &mut [f32], channels: usize, s
     let output_frames = data.len() / channels;
     let mut master_peak_l = 0.0f32;
     let mut master_peak_r = 0.0f32;
-    for f in 0..output_frames {
-        let idx = f * channels;
-        if channels >= 2 {
+    // The per-frame `if channels >= 2` branch was preventing
+    // auto-vectorisation; `channels` is loop-invariant so we hoist
+    // the branch into two specialised loops. With buffer sizes of
+    // ~1024 frames per callback this is a noticeable win on the
+    // master pass because the optimiser can now SIMD the multiply +
+    // clamp + abs.
+    if channels >= 2 {
+        for f in 0..output_frames {
+            let idx = f * channels;
             data[idx] = (data[idx] * master_vol).clamp(-1.0, 1.0);
             data[idx + 1] = (data[idx + 1] * master_vol).clamp(-1.0, 1.0);
             master_peak_l = master_peak_l.max(data[idx].abs());
             master_peak_r = master_peak_r.max(data[idx + 1].abs());
-        } else {
+        }
+    } else {
+        for f in 0..output_frames {
+            let idx = f * channels;
             data[idx] = (data[idx] * master_vol).clamp(-1.0, 1.0);
             master_peak_l = master_peak_l.max(data[idx].abs());
         }
-    }
-    if channels < 2 {
         master_peak_r = master_peak_l;
     }
     // SAFETY of fetch_max on bit-punned f32: IEEE 754 binary32 bit

@@ -201,8 +201,10 @@ pub(crate) fn handle_set_track_input_device(
     track_id: TrackId,
     device_name: Option<String>,
 ) {
-    if let Some(track) = ctx.tracks.write().get_mut(&track_id) {
-        track.input_device_name = device_name;
+    if let Some(track) = ctx.tracks.read().get(&track_id) {
+        track
+            .input_device_name
+            .store(device_name.map(std::sync::Arc::new));
     }
     sync_input_stream(ctx, state);
 }
@@ -266,7 +268,7 @@ fn sync_input_stream(ctx: &HandlerCtx, state: &mut HandlerState) {
         let source = tg
             .values()
             .find(|t| t.monitor_enabled())
-            .and_then(|t| t.input_device_name.clone());
+            .and_then(|t| t.input_device_name.load_full().map(|a| (*a).clone()));
         let max_needed: u16 = tg
             .values()
             .filter(|t| t.monitor_enabled())

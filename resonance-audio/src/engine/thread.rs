@@ -260,14 +260,24 @@ pub(crate) fn engine_thread(
 
         // Sync the stable `bpm` field from the tempo event table so
         // the mixer (audio thread) always sees the correct tempo for
-        // the current playhead position.
+        // the current playhead position. Probe under a read lock so
+        // we only escalate to write when the value actually moves —
+        // static-tempo projects skip the write entirely, and even
+        // variable-tempo ones only contend with the audio callback at
+        // tempo-change boundaries.
         {
             let playhead = ctx
                 .shared
                 .playhead
                 .load(std::sync::atomic::Ordering::Relaxed);
-            let mut tm = ctx.tempo_map.write();
-            tm.sync_bpm_at(playhead, ctx.sample_rate);
+            let needs_write = ctx
+                .tempo_map
+                .read()
+                .sync_bpm_would_change(playhead, ctx.sample_rate);
+            if needs_write {
+                let mut tm = ctx.tempo_map.write();
+                tm.sync_bpm_at(playhead, ctx.sample_rate);
+            }
         }
 
         // Drain recording ring buffer into per-track buffers

@@ -149,7 +149,7 @@ pub(crate) fn begin_recording_stream(
             .filter(|t| t.record_armed())
             .map(|t| ArmedInfo {
                 track_id: t.id,
-                device: t.input_device_name.clone(),
+                device: t.input_device_name.load_full().map(|a| (*a).clone()),
                 port: t.input_port(),
                 mono: t.mono(),
             })
@@ -312,8 +312,13 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
 /// pending buffer; they're drained on the next `process()` call. When
 /// the audio mixer is in its stopped branch with no monitor track
 /// active it never calls `process()` on these plugins, so we drive a
-/// one-block silent process pass right here (under the same mutex) to
-/// guarantee the events actually reach the plugin.
+/// one-block silent process pass right here. We deliberately use
+/// `try_lock` rather than blocking — the audio thread's own try_lock
+/// would otherwise fail for whatever block straddles this call and
+/// silence the plugin's tail. If the audio thread is mid-process now,
+/// the next loop seam (or the next playback) will run the queued
+/// NoteOffs, which is acoustically equivalent to what a one-block
+/// silent pass here achieved.
 fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
     let tracks_guard = ctx.tracks.read();
     let plugins_guard = ctx.plugins.read();
@@ -323,9 +328,10 @@ fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
         if track.track_type == TrackType::Instrument {
             if let Some(&inst_id) = track.plugin_ids.first() {
                 if let Some(mutex) = plugins_guard.get(&inst_id) {
-                    let mut inst = mutex.lock();
-                    inst.0.all_notes_off();
-                    inst.0.process(&mut silent_l, &mut silent_r, 64);
+                    if let Some(mut inst) = mutex.try_lock() {
+                        inst.0.all_notes_off();
+                        inst.0.process(&mut silent_l, &mut silent_r, 64);
+                    }
                 }
             }
         }

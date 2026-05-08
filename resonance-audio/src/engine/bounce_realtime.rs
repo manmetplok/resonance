@@ -161,12 +161,14 @@ pub(crate) fn handle_bounce_track_realtime(
     // target's previous input device name so we can restore it when the
     // bounce ends.
     let prev_target_input_device = {
-        let mut tracks_guard = ctx.tracks.write();
+        let tracks_guard = ctx.tracks.read();
         let prev = tracks_guard
             .get(&target_track_id)
-            .and_then(|t| t.input_device_name.clone());
-        if let Some(target) = tracks_guard.get_mut(&target_track_id) {
-            target.input_device_name = Some(input_device_name);
+            .and_then(|t| t.input_device_name.load_full().map(|a| (*a).clone()));
+        if let Some(target) = tracks_guard.get(&target_track_id) {
+            target
+                .input_device_name
+                .store(Some(std::sync::Arc::new(input_device_name)));
         }
         prev
     };
@@ -404,23 +406,18 @@ fn restore_after_bounce(
     target_track_id: TrackId,
     prev_target_input_device: Option<String>,
 ) {
-    {
-        let tracks_guard = ctx.tracks.read();
-        for t in tracks_guard.values() {
-            if let Some(prev) = mute_snapshot.get(&t.id) {
-                t.set_muted(*prev);
-            }
-            if t.id == target_track_id {
-                t.set_record_armed(false);
-            }
+    let tracks_guard = ctx.tracks.read();
+    for t in tracks_guard.values() {
+        if let Some(prev) = mute_snapshot.get(&t.id) {
+            t.set_muted(*prev);
+        }
+        if t.id == target_track_id {
+            t.set_record_armed(false);
         }
     }
-    // `input_device_name` lives directly on the Track (not behind an
-    // atomic) so it needs the write lock.
-    {
-        let mut tracks_guard = ctx.tracks.write();
-        if let Some(target) = tracks_guard.get_mut(&target_track_id) {
-            target.input_device_name = prev_target_input_device;
-        }
+    if let Some(target) = tracks_guard.get(&target_track_id) {
+        target
+            .input_device_name
+            .store(prev_target_input_device.map(std::sync::Arc::new));
     }
 }

@@ -71,6 +71,11 @@ pub(crate) struct RecordingState {
     /// opens and recording begins. `restore_metronome` holds the
     /// metronome's pre-count-in state so it can be put back afterwards.
     pub precount: Option<PrecountState>,
+    /// Reusable per-track deinterleave scratch. Lives here rather than
+    /// being a stack local in `drain_ring_to_buffers` so the engine
+    /// thread doesn't allocate a fresh `Vec` 60× per second while
+    /// recording.
+    deint_scratch: Vec<f32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -92,6 +97,7 @@ impl RecordingState {
             loop_in: 0,
             loop_out: 0,
             precount: None,
+            deint_scratch: Vec::with_capacity(DRAIN_SCRATCH_LEN),
         }
     }
 
@@ -163,7 +169,7 @@ impl RecordingState {
         }
 
         let mut ring_scratch = [0.0f32; DRAIN_SCRATCH_LEN];
-        let mut deint_scratch: Vec<f32> = Vec::with_capacity(DRAIN_SCRATCH_LEN);
+        let deint_scratch = &mut self.deint_scratch;
 
         loop {
             let count = consumer.pop_slice(&mut ring_scratch);
@@ -202,7 +208,7 @@ impl RecordingState {
                 let resampled: Option<Vec<f32>> = if let Some(r) = track_buf.resampler.as_mut() {
                     let mut buf = std::mem::take(&mut track_buf.resample_scratch);
                     buf.clear();
-                    r.process(&deint_scratch, &mut buf);
+                    r.process(deint_scratch, &mut buf);
                     Some(buf)
                 } else {
                     None
@@ -210,7 +216,7 @@ impl RecordingState {
                 let write_result = if let Some(ref buf) = resampled {
                     write_samples_and_peaks(track_buf, buf)
                 } else {
-                    write_samples_and_peaks(track_buf, &deint_scratch)
+                    write_samples_and_peaks(track_buf, deint_scratch)
                 };
                 if let Some(buf) = resampled {
                     track_buf.resample_scratch = buf;

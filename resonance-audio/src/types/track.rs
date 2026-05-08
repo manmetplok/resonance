@@ -41,7 +41,12 @@ pub struct Track {
     /// Stored as an atomic so the audio thread can read the routing
     /// without taking a write lock while the UI edits it.
     output_bus_bits: AtomicU64,
-    pub input_device_name: Option<String>,
+    /// Hardware capture device the track records / monitors from.
+    /// Stored in an `ArcSwapOption` so the engine thread can edit it
+    /// from a `tracks.read()` guard — write-locking the tracks map
+    /// silenced the audio callback for whatever block straddled the
+    /// edit because the mixer's own `try_read` would fail.
+    pub input_device_name: ArcSwapOption<String>,
     /// 0-indexed starting input channel on the track's input device. For
     /// mono tracks this is the single channel captured and duplicated to
     /// L/R; for stereo tracks it's the L channel and `port_index + 1` is
@@ -95,7 +100,7 @@ impl Track {
             peak_l_bits: AtomicU32::new(0),
             peak_r_bits: AtomicU32::new(0),
             output_bus_bits: AtomicU64::new(TRACK_OUTPUT_MASTER),
-            input_device_name: None,
+            input_device_name: ArcSwapOption::const_empty(),
             input_port_bits: AtomicU32::new(0),
             plugin_ids: Vec::new(),
             sub_track_of: None,

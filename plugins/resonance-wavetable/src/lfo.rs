@@ -52,6 +52,7 @@ impl MultiLfo {
     }
 
     /// Advance one sample. Returns value in -1..1.
+    #[inline]
     pub fn next(&mut self, shape: LfoShape, rng: &mut SimpleRng) -> f32 {
         let out = match shape {
             LfoShape::Sine => (self.phase * std::f32::consts::TAU).sin(),
@@ -72,18 +73,25 @@ impl MultiLfo {
                     -1.0
                 }
             }
-            LfoShape::SampleAndHold => {
-                // Latch new random value on phase wrap
-                if self.phase < self.prev_phase {
-                    self.sh_value = (rng.next_u32() as f32 / u32::MAX as f32) * 2.0 - 1.0;
-                }
-                self.sh_value
-            }
+            LfoShape::SampleAndHold => self.sh_value,
         };
 
         self.prev_phase = self.phase;
         self.phase += self.phase_inc;
         self.phase -= self.phase.floor();
+
+        // Latch a new S&H value when the phase wrapped on this advance.
+        // Done after the `out` read so the value held for *this* sample
+        // matches what the user saw the previous frame, and the new
+        // random value is what subsequent samples in this cycle hear.
+        // Pulling the RNG out of the pre-advance match avoids calling
+        // it for every other LFO shape (the old code ran the RNG
+        // unconditionally inside the SH branch even when the phase
+        // hadn't wrapped — multiplied across 32 voices × 3 LFOs that
+        // was a few million unused RNG calls per second).
+        if matches!(shape, LfoShape::SampleAndHold) && self.phase < self.prev_phase {
+            self.sh_value = (rng.next_u32() as f32 / u32::MAX as f32) * 2.0 - 1.0;
+        }
 
         out
     }
