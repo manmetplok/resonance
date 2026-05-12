@@ -12,6 +12,7 @@ pub mod global_tracks;
 pub mod lane_inspector;
 pub mod manual_motif_canvas;
 pub mod popover;
+pub mod scale_stripe;
 pub mod strip;
 pub mod tracks;
 
@@ -58,6 +59,9 @@ impl crate::Resonance {
 
                 let chords_selected =
                     matches!(self.compose.selected_lane, SelectedLane::Chords);
+                let scale_stripe = container(scale_stripe::view(definition))
+                    .width(Length::Fill)
+                    .padding([8, 12]);
                 let chord_lane = chord_lane::view(
                     definition,
                     &self.tempo_map,
@@ -79,15 +83,29 @@ impl crate::Resonance {
                 let left_column = match self.compose.expanded_track_id {
                     Some(track_id) if self.registry.tracks.iter().any(|t| t.id == track_id) => {
                         let expanded = expanded_editor::view(self, track_id, placement, definition);
-                        column![global_tracks_row, chord_lane, editor, synth_tracks, expanded]
-                            .spacing(0)
-                            .width(Length::Fill)
-                            .height(Length::Fill)
-                    }
-                    _ => column![global_tracks_row, chord_lane, editor, synth_tracks, drum_tracks]
+                        column![
+                            scale_stripe,
+                            global_tracks_row,
+                            chord_lane,
+                            editor,
+                            synth_tracks,
+                            expanded
+                        ]
                         .spacing(0)
                         .width(Length::Fill)
-                        .height(Length::Fill),
+                        .height(Length::Fill)
+                    }
+                    _ => column![
+                        scale_stripe,
+                        global_tracks_row,
+                        chord_lane,
+                        editor,
+                        synth_tracks,
+                        drum_tracks
+                    ]
+                    .spacing(0)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
                 };
 
                 // Unified right-hand inspector panel: context-sensitive

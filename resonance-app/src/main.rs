@@ -49,6 +49,11 @@ pub(crate) struct Resonance {
     /// Hardware MIDI input port carrying the master clock.
     pub(crate) midi_clock_recv_device: Option<String>,
     pub(crate) available_plugins: Vec<ScannedPlugin>,
+    /// Cached pick-list option lists for the view layer. Rebuilt only
+    /// when source data changes (devices, busses, plugin scan) so a
+    /// continuous resize doesn't reallocate option vecs every frame.
+    /// See `view::ui_caches` for the cache and rebuild API.
+    pub(crate) view_caches: view::ui_caches::UiViewCaches,
     pub(crate) error_message: Option<String>,
     pub(crate) master_volume: f32,
     pub(crate) master_level_l: f32,
@@ -135,13 +140,62 @@ pub(crate) struct Resonance {
         Option<(resonance_audio::types::TrackId, Vec<Option<Vec<u8>>>)>,
 }
 
+/// Startup tab requested via `--tab arrange|mixer|compose`. Read once at
+/// `main` and threaded into `Resonance::new()` via this module-local
+/// statics — keeps the iced application builder closure capture-free.
+static STARTUP_TAB: std::sync::OnceLock<ViewMode> = std::sync::OnceLock::new();
+static DEMO_MODE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+fn parse_startup_tab() -> Option<ViewMode> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        let value = if let Some(v) = arg.strip_prefix("--tab=") {
+            v.to_string()
+        } else if arg == "--tab" {
+            args.next()?
+        } else {
+            continue;
+        };
+        return match value.to_ascii_lowercase().as_str() {
+            "arrange" => Some(ViewMode::Arrange),
+            "mixer" => Some(ViewMode::Mixer),
+            "compose" => Some(ViewMode::Compose),
+            other => {
+                eprintln!("Unknown --tab value '{other}'. Expected arrange|mixer|compose.");
+                None
+            }
+        };
+    }
+    None
+}
+
+fn parse_demo_flag() -> bool {
+    std::env::args().any(|a| a == "--demo")
+}
+
 fn main() -> iced::Result {
-    iced::application("Resonance", Resonance::update, Resonance::view)
-        .font(theme::ICON_FONT_BYTES)
+    if let Some(tab) = parse_startup_tab() {
+        let _ = STARTUP_TAB.set(tab);
+    }
+    let _ = DEMO_MODE.set(parse_demo_flag());
+
+    let mut app = iced::application("Resonance", Resonance::update, Resonance::view)
+        .font(theme::ICON_FONT_BYTES);
+    for face in theme::UI_FONT_FACES {
+        app = app.font(*face);
+    }
+    app.default_font(theme::UI_FONT)
         .subscription(Resonance::subscription)
         .theme(|_| theme::resonance_theme())
         .window_size(Size::new(1280.0, 720.0))
         .exit_on_close_request(false)
+        // MSAA is expensive on Linux/Wayland with wgpu — every redraw
+        // pays for a 4× sample buffer. Our canvases use rounded paths
+        // sparingly and the lavender accent is forgiving without AA, so
+        // disabling it speeds up the steady-state and makes window
+        // resize visibly smoother. Tested on radv (Vulkan) where the AA
+        // pass was the dominant per-frame cost.
+        .antialiasing(false)
         .run_with(Resonance::new)
 }
 
@@ -323,13 +377,14 @@ impl Resonance {
             midi_clock_recv_enabled: false,
             midi_clock_recv_device: None,
             available_plugins: Vec::new(),
+            view_caches: view::ui_caches::UiViewCaches::default(),
             error_message: None,
             master_volume: 0.0, // 0 dB = unity gain
             master_level_l: 0.0,
             master_level_r: 0.0,
             master_plugins: Vec::new(),
             master_fx_bypassed: false,
-            view_mode: ViewMode::Arrange,
+            view_mode: STARTUP_TAB.get().copied().unwrap_or(ViewMode::Arrange),
             clips: Vec::new(),
             midi_clips: Vec::new(),
             compose: compose::ComposeState::default(),
@@ -370,6 +425,254 @@ impl Resonance {
             pending_preset_plugin_states: None,
         };
 
+        let mut app = app;
+        if DEMO_MODE.get().copied().unwrap_or(false) {
+            seed_demo_content(&mut app);
+        }
+
         (app, iced::Task::none())
     }
+}
+
+/// Populate the GUI-side state with a small set of tracks, busses, clips,
+/// and a Compose section so the views render with content for screenshots.
+/// Bypasses the audio engine entirely — these objects exist only in the
+/// app's `registry` / `compose` / `clips` collections and won't make sound.
+fn seed_demo_content(app: &mut Resonance) {
+    use resonance_audio::types::{MidiNote, SamplePos};
+    use resonance_music_theory::{Chord, ChordQuality, Mode, MotifSource, PitchClass, Scale};
+
+    use crate::compose::{
+        ChordState, GenerateParams, SectionDefinitionState, SectionPlacementState,
+    };
+
+    app.io.has_active_project = true;
+    app.transport.bpm = 90.0;
+    app.transport.bpm_input = "90.0".to_string();
+    app.transport.time_sig_num = 6;
+    app.transport.time_sig_den = 8;
+    app.tempo_events = vec![state::TempoEvent { bar: 0, bpm: 90.0 }];
+    app.signature_events = vec![state::SignatureEvent {
+        bar: 0,
+        numerator: 6,
+        denominator: 8,
+    }];
+    app.rebuild_tempo_map();
+
+    let sr = app.sample_rate as u64;
+    let secs_per_beat = 60.0 / app.transport.bpm as f64;
+    let bar_samples = (secs_per_beat * 6.0 * sr as f64) as u64;
+    app.master_level_l = 0.62;
+    app.master_level_r = 0.48;
+
+    // ---- Tracks ----
+    let mk_instr = |id: u64,
+                    order: usize,
+                    name: &str,
+                    plugin_name: &str,
+                    icon: state::InstrumentIcon|
+     -> TrackState {
+        let mut t = TrackState::new_instrument(id, order);
+        t.name = name.to_string();
+        t.instrument_icon = icon;
+        t.level_l = 0.5;
+        t.level_r = 0.4;
+        if !plugin_name.is_empty() {
+            t.plugins.push(PluginSlotState::new(
+                id * 100,
+                plugin_name.to_string(),
+                String::new(),
+                String::new(),
+                Vec::new(),
+                false,
+            ));
+        }
+        t
+    };
+
+    let mut drums = mk_instr(
+        1,
+        0,
+        "Drums",
+        "Resonance Drums",
+        state::InstrumentIcon::Drum,
+    );
+    drums.instrument_type = state::InstrumentType::Drum;
+
+    let bass = mk_instr(
+        2,
+        1,
+        "Synth Bass",
+        "Resonance Wave",
+        state::InstrumentIcon::Music,
+    );
+    let pad = mk_instr(
+        3,
+        2,
+        "Synth Pad",
+        "Resonance Wave",
+        state::InstrumentIcon::WaveSquare,
+    );
+    let lead = mk_instr(
+        4,
+        3,
+        "Lead Synth",
+        "Resonance Wave",
+        state::InstrumentIcon::Music,
+    );
+
+    let mut audio = TrackState::new_audio(5, 4);
+    audio.name = "Drums Bounce".to_string();
+    audio.muted = true;
+    audio.instrument_icon = state::InstrumentIcon::Microphone;
+
+    app.registry.tracks = vec![drums, bass, pad, lead, audio];
+    app.registry.next_track_order = 5;
+    app.interaction.selected_track = Some(2);
+
+    // ---- Busses ----
+    app.registry.busses = vec![
+        BusState::new(100, 0, "Bus 1 · Drums".to_string()),
+        BusState::new(101, 1, "Bus 2 · FX".to_string()),
+    ];
+    app.registry.busses[0].plugins.push(PluginSlotState::new(
+        10001,
+        "Comp".to_string(),
+        String::new(),
+        String::new(),
+        Vec::new(),
+        false,
+    ));
+    app.registry.busses[0].level_l = 0.55;
+    app.registry.busses[0].level_r = 0.50;
+    app.registry.busses[1].plugins.push(PluginSlotState::new(
+        10002,
+        "Verb".to_string(),
+        String::new(),
+        String::new(),
+        Vec::new(),
+        false,
+    ));
+    app.registry.busses[1].level_l = 0.32;
+    app.registry.busses[1].level_r = 0.30;
+    app.registry.next_bus_order = 2;
+    // Demo seed bypasses the engine event handlers that normally
+    // refresh these caches, so refresh them by hand.
+    app.view_caches.rebuild_output(&app.registry.busses);
+
+    // ---- Clips on the timeline ----
+    let bar_ticks = 480 * 6 / 2; // 6/8 → 6 eighth-note beats per bar
+    let make_midi_clip = |id: u64,
+                          track: u64,
+                          name: &str,
+                          start_bar: u64,
+                          length_bars: u64,
+                          density: u32|
+     -> MidiClipState {
+        let mut notes = Vec::new();
+        let total_ticks = length_bars * bar_ticks;
+        let step = (total_ticks / density as u64).max(60);
+        let mut tick = 0u64;
+        let mut pitch = 60u8;
+        let mut i = 0u32;
+        while tick < total_ticks {
+            notes.push(MidiNote {
+                note: pitch,
+                velocity: 0.8,
+                start_tick: tick,
+                duration_ticks: (step * 9) / 10,
+            });
+            tick += step;
+            i += 1;
+            pitch = 48 + ((i * 5) % 24) as u8;
+        }
+        MidiClipState {
+            id,
+            track_id: track,
+            start_sample: (start_bar * bar_samples) as SamplePos,
+            duration_ticks: total_ticks,
+            name: name.to_string(),
+            notes,
+            trim_start_ticks: 0,
+            trim_end_ticks: 0,
+        }
+    };
+
+    app.midi_clips = vec![
+        make_midi_clip(11, 1, "Pattern A", 0, 6, 32),
+        make_midi_clip(12, 2, "Bm progression", 0, 6, 12),
+        make_midi_clip(13, 3, "Pad", 0, 6, 8),
+        make_midi_clip(14, 4, "Motif", 0, 6, 20),
+    ];
+
+    // Audio bounce on track 5 — uses peaks rather than a real waveform.
+    let peak_count = 256usize;
+    let waveform_peaks = (0..peak_count)
+        .map(|i| {
+            let t = i as f32 / peak_count as f32;
+            let amp = 0.4 + 0.4 * (t * 12.0).sin().abs();
+            (-amp, amp)
+        })
+        .collect();
+    app.clips = vec![ClipState {
+        id: 15,
+        track_id: 5,
+        start_sample: 0,
+        duration_samples: bar_samples * 5 + bar_samples / 2,
+        name: "Drums bounce".to_string(),
+        total_frames: bar_samples * 5 + bar_samples / 2,
+        trim_start_frames: 0,
+        trim_end_frames: 0,
+        waveform_peaks,
+    }];
+
+    // Place the playhead a bit into the song so it's visible.
+    app.transport.playhead = bar_samples * 4;
+
+    // ---- Compose section ----
+    let def_id = app.compose.fresh_id();
+    let chords = [
+        Chord::new(PitchClass::B, ChordQuality::Min),
+        Chord::new(PitchClass::B, ChordQuality::Min),
+        Chord::new(PitchClass::Fs, ChordQuality::Maj),
+        Chord::new(PitchClass::G, ChordQuality::Maj),
+        Chord::new(PitchClass::E, ChordQuality::Min),
+    ];
+    let chord_states: Vec<ChordState> = chords
+        .iter()
+        .enumerate()
+        .map(|(i, c)| ChordState {
+            id: app.compose.fresh_id(),
+            start_beat: i as u32 * 4,
+            duration_beats: 4,
+            chord: *c,
+        })
+        .collect();
+
+    app.compose.definitions.push(SectionDefinitionState {
+        id: def_id,
+        name: "Intro".to_string(),
+        color: [139, 109, 255],
+        length_bars: 8,
+        chords: chord_states,
+        scale: Some(Scale::new(PitchClass::B, Mode::Minor)),
+        progression_seed: 12345,
+        generate_params: GenerateParams::default(),
+        generator_spec: None,
+        generator_seed: 0,
+        generated_material: None,
+        lane_generators: std::collections::HashMap::new(),
+        beats_per_chord: 4,
+        seventh_chords: false,
+        motif_source: MotifSource::default(),
+    });
+
+    let placement_id = app.compose.fresh_id();
+    app.compose.placements.push(SectionPlacementState {
+        id: placement_id,
+        definition_id: def_id,
+        start_bar: 0,
+    });
+    app.compose.selected_placement_id = Some(placement_id);
+    let _ = TrackOutput::Master; // silence unused-import warning when feature flags shift
 }

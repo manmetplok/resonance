@@ -4,6 +4,7 @@
 //! `bus_strip.rs`, `master_strip.rs`, `plugin_panel.rs`.
 
 mod bus_strip;
+mod inspector;
 mod master_strip;
 pub(crate) mod picks;
 mod plugin_panel;
@@ -55,7 +56,7 @@ impl crate::Resonance {
         let master_strip = self.view_master_strip(available_plugins);
         let v_separator_tracks = container(Space::new(1, Length::Fill)).style(theme::separator_bg);
         let tracks_area = row![scrollable_tracks, v_separator_tracks, master_strip]
-            .height(Length::FillPortion(1));
+            .height(Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32));
 
         // -- Bottom row: bus strips + "+ Bus" button on the right. --
         let mut bus_strip_row = row![].spacing(2);
@@ -70,7 +71,7 @@ impl crate::Resonance {
         let add_bus_strip = self.view_add_bus_strip();
         let v_separator_busses = container(Space::new(1, Length::Fill)).style(theme::separator_bg);
         let busses_area = row![scrollable_busses, v_separator_busses, add_bus_strip]
-            .height(Length::FillPortion(1));
+            .height(Length::Fixed(theme::BUS_STRIP_HEIGHT as f32));
 
         let h_sep_mid = container(Space::new(Length::Fill, 1)).style(theme::separator_bg);
 
@@ -85,7 +86,20 @@ impl crate::Resonance {
             mixer_col = mixer_col.push(panel);
         }
 
-        container(mixer_col)
+        // Inspector sits to the right of the strips; a hairline separates
+        // it from the strips column.
+        let inspector_panel = inspector::view(self);
+        let v_sep_inspector =
+            container(Space::new(1, Length::Fill)).style(theme::separator_bg);
+
+        let body = row![
+            container(mixer_col).width(Length::Fill).height(Length::Fill),
+            v_sep_inspector,
+            inspector_panel,
+        ]
+        .height(Length::Fill);
+
+        container(body)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(theme::base_bg)
@@ -158,36 +172,82 @@ impl crate::Resonance {
             )
         };
 
-        let base_color = if is_instrument_slot {
-            Color::from_rgb(0.3, 0.75, 0.8)
-        } else {
-            theme::ACCENT
-        };
-        let name_color = if is_selected { theme::TEXT } else { base_color };
-        let name_btn = button(text(pname).size(9).color(name_color))
-            .on_press(click_msg)
-            .style(move |_theme, status| {
-                if is_selected {
+        // Instrument slots get the design's lavender pill: ◆ glyph
+        // followed by the plugin name on a tinted ACCENT_DIM background
+        // with an ACCENT_LINE border. FX slots stay as a plainer hairline
+        // pill so the eye picks up the instrument as the dominant slot.
+        let name_btn = if is_instrument_slot {
+            let label_color = if is_selected {
+                theme::TEXT_1
+            } else {
+                theme::ACCENT_SOFT
+            };
+            let pill = row![
+                text("\u{25C6}").size(8).color(theme::ACCENT_SOFT),
+                Space::with_width(6),
+                text(pname).size(10).color(label_color),
+            ]
+            .align_y(alignment::Vertical::Center);
+            button(pill)
+                .on_press(click_msg)
+                .width(Length::Fill)
+                .style(move |_theme, status| {
                     let bg = match status {
-                        iced::widget::button::Status::Hovered => Color::from_rgb(0.22, 0.22, 0.28),
-                        iced::widget::button::Status::Pressed => Color::from_rgb(0.15, 0.15, 0.20),
-                        _ => Color::from_rgb(0.18, 0.18, 0.24),
+                        iced::widget::button::Status::Hovered => Color {
+                            a: 0.22,
+                            ..theme::ACCENT
+                        },
+                        iced::widget::button::Status::Pressed => Color {
+                            a: 0.30,
+                            ..theme::ACCENT
+                        },
+                        _ => theme::ACCENT_DIM,
                     };
                     iced::widget::button::Style {
                         background: Some(iced::Background::Color(bg)),
-                        text_color: theme::TEXT,
+                        text_color: theme::ACCENT_SOFT,
                         border: iced::Border {
-                            color: base_color,
+                            color: theme::ACCENT_LINE,
                             width: 1.0,
-                            radius: 2.0.into(),
+                            radius: theme::RADIUS_SM.into(),
                         },
                         ..Default::default()
                     }
-                } else {
-                    theme::small_button_style(status)
-                }
-            })
-            .padding(1);
+                })
+                .padding([5, 8])
+        } else {
+            let label_color = if is_selected {
+                theme::TEXT_1
+            } else {
+                theme::TEXT_2
+            };
+            button(text(pname).size(10).color(label_color))
+                .on_press(click_msg)
+                .width(Length::Fill)
+                .style(move |_theme, status| {
+                    let bg = match status {
+                        iced::widget::button::Status::Hovered => theme::BG_3,
+                        iced::widget::button::Status::Pressed => theme::LINE_2,
+                        _ => theme::BG_1,
+                    };
+                    let border_color = if is_selected {
+                        theme::ACCENT_LINE
+                    } else {
+                        theme::LINE_2
+                    };
+                    iced::widget::button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: label_color,
+                        border: iced::Border {
+                            color: border_color,
+                            width: 1.0,
+                            radius: theme::RADIUS_SM.into(),
+                        },
+                        ..Default::default()
+                    }
+                })
+                .padding([4, 8])
+        };
 
         let remove_msg = match owner {
             PluginOwner::Track(track_id) => {
@@ -201,7 +261,9 @@ impl crate::Resonance {
             .style(|_theme, status| theme::small_button_style(status))
             .padding(1);
 
-        row![name_btn, Space::with_width(Length::Fill), plugin_del,]
+        // Button takes Length::Fill so it stretches to the strip width;
+        // the delete button hugs the right edge.
+        row![name_btn, plugin_del]
             .spacing(2)
             .align_y(alignment::Vertical::Center)
             .into()

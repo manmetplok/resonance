@@ -25,6 +25,7 @@ pub struct ScrollbarRects {
 
 /// Horizontal scrollbar rects. Returns `None` when the content fits the
 /// viewport (no scrollbar needed).
+#[allow(dead_code)]
 pub fn h_rects(
     bounds: Rectangle,
     content_width: f32,

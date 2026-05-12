@@ -35,6 +35,13 @@ pub struct KnobState {
     /// Timestamp of the most recent left-button press; used for the
     /// double-click reset gesture.
     last_click: Option<Instant>,
+    /// Cached drawn geometry. Re-runs only when the value changes, so
+    /// hover/redraw events that don't touch the knob get a free pass
+    /// (Cache compares its stored bounds against the requested bounds).
+    cache: canvas::Cache,
+    /// The value last drawn into `cache`. When the live value drifts
+    /// from this we clear the cache before drawing.
+    cached_value: std::cell::Cell<f32>,
 }
 
 /// Construct a pan knob element. `value` is the current pan in -1..=1;
@@ -64,78 +71,84 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let center = Point::new(bounds.width * 0.5, bounds.height * 0.5);
-        let radius = (bounds.width.min(bounds.height) * 0.5) - 2.0;
+        // Clear the cache only when the externally-supplied value drifts
+        // from what we last drew. The Cache itself handles bounds
+        // changes; everything else (hover, scroll, sibling redraws)
+        // returns the stored geometry without re-stroking the knob.
+        if (state.cached_value.get() - self.value).abs() > f32::EPSILON {
+            state.cache.clear();
+            state.cached_value.set(self.value);
+        }
+        let value = self.value;
+        let geometry = state.cache.draw(renderer, bounds.size(), |frame: &mut Frame| {
+            let center = Point::new(bounds.width * 0.5, bounds.height * 0.5);
+            let radius = (bounds.width.min(bounds.height) * 0.5) - 2.0;
 
-        // Body fill + outer ring.
-        frame.fill(
-            &Path::circle(center, radius),
-            Color::from_rgb(0.14, 0.14, 0.16),
-        );
-        frame.stroke(
-            &Path::circle(center, radius),
-            Stroke::default()
-                .with_width(1.0)
-                .with_color(Color::from_rgb(0.28, 0.28, 0.32)),
-        );
-
-        // Arc showing the portion of the sweep between center and value,
-        // so at C the arc is empty and at L/R it fills half the gauge.
-        let start_angle = std::f32::consts::FRAC_PI_2 + SWEEP * 0.5;
-        let value_angle = start_angle - (self.value * 0.5 + 0.5) * SWEEP;
-        let center_angle = start_angle - 0.5 * SWEEP;
-        let (arc_from, arc_to) = if value_angle <= center_angle {
-            (value_angle, center_angle)
-        } else {
-            (center_angle, value_angle)
-        };
-        let arc_path = Path::new(|b| {
-            b.arc(canvas::path::Arc {
-                center,
-                radius: radius - 2.0,
-                start_angle: iced::Radians(arc_from),
-                end_angle: iced::Radians(arc_to),
-            });
-        });
-        frame.stroke(
-            &arc_path,
-            Stroke::default().with_width(2.0).with_color(theme::ACCENT),
-        );
-
-        // Tick marks at L, C, R positions on the outer ring.
-        for &t in &[0.0f32, 0.5, 1.0] {
-            let a = start_angle - t * SWEEP;
-            let inner = Point::new(
-                center.x + (radius - 4.0) * a.cos(),
-                center.y - (radius - 4.0) * a.sin(),
+            // Body fill + outer ring.
+            frame.fill(
+                &Path::circle(center, radius),
+                Color::from_rgb(0.14, 0.14, 0.16),
             );
-            let outer = Point::new(center.x + radius * a.cos(), center.y - radius * a.sin());
             frame.stroke(
-                &Path::line(inner, outer),
+                &Path::circle(center, radius),
                 Stroke::default()
                     .with_width(1.0)
-                    .with_color(Color::from_rgb(0.45, 0.45, 0.48)),
+                    .with_color(Color::from_rgb(0.28, 0.28, 0.32)),
             );
-        }
 
-        // Indicator line from center toward the current angle.
-        let indicator_end = Point::new(
-            center.x + (radius - 3.0) * value_angle.cos(),
-            center.y - (radius - 3.0) * value_angle.sin(),
-        );
-        frame.stroke(
-            &Path::line(center, indicator_end),
-            Stroke::default().with_width(2.0).with_color(theme::TEXT),
-        );
+            let start_angle = std::f32::consts::FRAC_PI_2 + SWEEP * 0.5;
+            let value_angle = start_angle - (value * 0.5 + 0.5) * SWEEP;
+            let center_angle = start_angle - 0.5 * SWEEP;
+            let (arc_from, arc_to) = if value_angle <= center_angle {
+                (value_angle, center_angle)
+            } else {
+                (center_angle, value_angle)
+            };
+            let arc_path = Path::new(|b| {
+                b.arc(canvas::path::Arc {
+                    center,
+                    radius: radius - 2.0,
+                    start_angle: iced::Radians(arc_from),
+                    end_angle: iced::Radians(arc_to),
+                });
+            });
+            frame.stroke(
+                &arc_path,
+                Stroke::default().with_width(2.0).with_color(theme::ACCENT),
+            );
 
-        vec![frame.into_geometry()]
+            for &t in &[0.0f32, 0.5, 1.0] {
+                let a = start_angle - t * SWEEP;
+                let inner = Point::new(
+                    center.x + (radius - 4.0) * a.cos(),
+                    center.y - (radius - 4.0) * a.sin(),
+                );
+                let outer =
+                    Point::new(center.x + radius * a.cos(), center.y - radius * a.sin());
+                frame.stroke(
+                    &Path::line(inner, outer),
+                    Stroke::default()
+                        .with_width(1.0)
+                        .with_color(Color::from_rgb(0.45, 0.45, 0.48)),
+                );
+            }
+
+            let indicator_end = Point::new(
+                center.x + (radius - 3.0) * value_angle.cos(),
+                center.y - (radius - 3.0) * value_angle.sin(),
+            );
+            frame.stroke(
+                &Path::line(center, indicator_end),
+                Stroke::default().with_width(2.0).with_color(theme::TEXT),
+            );
+        });
+        vec![geometry]
     }
 
     fn update(

@@ -2,7 +2,7 @@
 //! mono/monitor/arm, no instrument slot, no input device picker, no
 //! output selector (busses always go to master).
 
-use iced::widget::{column, container, pick_list, row, text, Space};
+use iced::widget::{column, container, pick_list, row, scrollable, text, Space};
 use iced::{alignment, Element, Font, Length};
 use resonance_audio::types::*;
 
@@ -10,9 +10,7 @@ use crate::message::*;
 use crate::state::*;
 use crate::theme;
 use crate::util::format_pan;
-use crate::view::controls::{
-    bus_remove_button, fader_section, fx_bypass_button, mute_button,
-};
+use crate::view::controls::{bus_remove_button, fader_section, fx_bypass_button, mute_button};
 use crate::view::knob::pan_knob;
 
 use super::picks::PluginOwner;
@@ -23,14 +21,18 @@ impl crate::Resonance {
         bus: &BusState,
         available_plugins: &[ScannedPlugin],
     ) -> Element<'_, Message> {
-        let bus_name = container(text(bus.name.clone()).size(13).color(theme::TEXT))
+        // Bus strips show their name in the warm/amber accent — matches
+        // the design's "audio-or-aggregate" semantic split.
+        let bus_name = container(text(bus.name.clone()).size(13).color(theme::WARM))
             .width(Length::Fill)
             .center_x(Length::Fill)
             .padding([6, 4]);
 
         // Mute + FX bypass + Remove buttons — same icons as the track header.
+        // Fixed-height container so the row doesn't collapse inside a
+        // Length::Fill strip column (same quirk as the track strip).
         let bus_id = bus.id;
-        let button_row = row![
+        let inner_row = row![
             mute_button(
                 bus.muted,
                 Message::Bus(BusMessage::ToggleBusMute(bus_id)),
@@ -39,13 +41,17 @@ impl crate::Resonance {
             fx_bypass_button(
                 bus.fx_bypassed,
                 Message::Bus(BusMessage::ToggleBusFxBypass(bus_id)),
-                10,
+                12,
             ),
             Space::with_width(Length::Fill),
             bus_remove_button(bus_id, 12),
         ]
-        .spacing(4)
+        .spacing(2)
         .align_y(alignment::Vertical::Center);
+        let button_row = container(inner_row)
+            .width(Length::Fill)
+            .height(Length::Fixed(24.0))
+            .padding([2, 4]);
 
         // Plugin chain (all effects — no instrument slot on busses).
         let mut plugin_section = column![].spacing(2).width(Length::Fill);
@@ -58,21 +64,16 @@ impl crate::Resonance {
         }
 
         // Extract the +FX picker so it can dock above the pan knob (same
-        // treatment as track strips).
-        let fx_picker_element: Option<Element<'_, Message>> = if available_plugins.is_empty() {
-            None
-        } else {
-            let effects: Vec<ScannedPlugin> = available_plugins
-                .iter()
-                .filter(|p| !p.is_instrument)
-                .cloned()
-                .collect();
-            if effects.is_empty() {
+        // treatment as track strips). Options come from the cached FX
+        // filter on `view_caches` — cloning that Rc is a refcount bump.
+        let _ = available_plugins;
+        let fx_picker_element: Option<Element<'_, Message>> =
+            if self.view_caches.fx_plugins.is_empty() {
                 None
             } else {
                 Some(
                     pick_list(
-                        effects,
+                        self.view_caches.fx_plugins.clone(),
                         None::<ScannedPlugin>,
                         move |plugin: ScannedPlugin| {
                             Message::Bus(BusMessage::AddPluginToBus(bus_id, plugin))
@@ -83,8 +84,7 @@ impl crate::Resonance {
                     .width(Length::Fill)
                     .into(),
                 )
-            }
-        };
+            };
 
         // Pan knob — vertical drag to change, double-click to reset.
         let pan_ctrl = pan_knob(bus.pan, move |v| {
@@ -116,11 +116,17 @@ impl crate::Resonance {
             Message::Bus(BusMessage::SetBusVolume(bus_id, v))
         });
 
-        // FX section absorbs all slack (same treatment as track strips).
-        let plugin_fill = container(plugin_section)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_y(alignment::Vertical::Top);
+        // FX list scrolls inside its own area between the buttons and
+        // the pan/fader block so adding plugins never pushes the fader
+        // off the strip.
+        let plugin_fill = iced::widget::Scrollable::with_direction(
+            plugin_section,
+            scrollable::Direction::Vertical(
+                scrollable::Scrollbar::default().width(4).scroller_width(4),
+            ),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill);
 
         let strip_content = column![bus_name, button_row, plugin_fill, fx_pan_block, fader_block,]
             .spacing(4)
@@ -129,8 +135,8 @@ impl crate::Resonance {
             .height(Length::Fill);
 
         container(strip_content)
-            .height(Length::Fill)
-            .style(theme::panel_dark_outlined)
+            .height(Length::Fixed(theme::BUS_STRIP_HEIGHT as f32))
+            .style(theme::card_warm)
             .into()
     }
 }

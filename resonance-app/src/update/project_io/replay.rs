@@ -119,6 +119,10 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     for pt in &project.tracks {
         replay_track(r, pt, &loaded);
     }
+    // Defensive: older project files weren't guaranteed to be saved in
+    // .order sequence, and replay relies on the registry staying sorted
+    // by .order for the view layer's invariant.
+    r.registry.resort_tracks();
 
     // Migrate old generate_params + track roles to lane_generators for
     // projects predating the unified lane generator system.
@@ -129,6 +133,9 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     for pb in &project.busses {
         replay_bus(r, pb, &loaded);
     }
+    r.registry.resort_busses();
+    // Output-destination picker depends on the bus list.
+    r.view_caches.rebuild_output(&r.registry.busses);
 
     // Replay master FX chain + bypass state.
     replay_master(r, project, &loaded);
@@ -318,12 +325,18 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
         ));
     }
 
+    let order = r.registry.next_track_order;
     let mut track = if pt.track_type == "instrument" {
-        TrackState::new_instrument(pt.id, r.registry.next_track_order)
+        TrackState::new_instrument(pt.id, order)
     } else {
-        TrackState::new_audio(pt.id, r.registry.next_track_order)
+        TrackState::new_audio(pt.id, order)
     };
-    track.name = pt.name.clone();
+    // Projects saved before the order-based default-naming fix
+    // (commit ~late-2026) stored auto-generated names like
+    // "Track 1000000006" derived from the engine TrackId. Replace
+    // those on load with the new order-based form; user-chosen
+    // names containing digits are left alone.
+    track.name = migrate_auto_name(&pt.name, pt.track_type == "instrument", order);
     track.volume = pt.volume;
     track.pan = pt.pan;
     track.muted = pt.muted;
@@ -434,5 +447,54 @@ fn replay_master(r: &mut Resonance, project: &crate::project::ProjectFile, loade
             Vec::new(),
             false,
         ));
+    }
+}
+
+/// Rewrite legacy auto-generated track names like "Track 1000000006" or
+/// "Instrument 1234567890" to the new order-based form ("Track 4").
+/// Names that aren't a single Track/Instrument + a 7-or-more digit
+/// number pass through unchanged so user labels like "Track 2 (lead)"
+/// or short numbered names like "Track 12" are preserved.
+fn migrate_auto_name(name: &str, is_instrument: bool, order: usize) -> String {
+    let prefix = if is_instrument {
+        "Instrument "
+    } else {
+        "Track "
+    };
+    if let Some(rest) = name.strip_prefix(prefix) {
+        if rest.len() >= 7 && rest.chars().all(|c| c.is_ascii_digit()) {
+            return format!("{}{}", prefix, order + 1);
+        }
+    }
+    name.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::migrate_auto_name;
+
+    #[test]
+    fn migrates_engine_id_track_name() {
+        assert_eq!(migrate_auto_name("Track 1000000006", false, 3), "Track 4");
+        assert_eq!(
+            migrate_auto_name("Instrument 1000000007", true, 5),
+            "Instrument 6"
+        );
+    }
+
+    #[test]
+    fn leaves_short_numbered_names_alone() {
+        assert_eq!(migrate_auto_name("Track 12", false, 7), "Track 12");
+        assert_eq!(migrate_auto_name("Track 99", false, 7), "Track 99");
+    }
+
+    #[test]
+    fn leaves_user_names_alone() {
+        assert_eq!(migrate_auto_name("Bass", false, 1), "Bass");
+        assert_eq!(migrate_auto_name("Lead synth", true, 2), "Lead synth");
+        assert_eq!(
+            migrate_auto_name("Track 1000000006 (vocals)", false, 1),
+            "Track 1000000006 (vocals)"
+        );
     }
 }

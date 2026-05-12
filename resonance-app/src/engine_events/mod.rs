@@ -319,6 +319,9 @@ pub(super) fn finalize_bounce(
             t.order = src_order + 1;
         }
         r.registry.next_track_order += 1;
+        // We just rewrote `.order` on multiple tracks; restore the
+        // sorted-by-order invariant the view layer relies on.
+        r.registry.resort_tracks();
     }
 }
 

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Resonance — Redesign</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* soft dark, low contrast, breathing room */
+    --bg-0: #0f1013;
+    --bg-1: #15161b;
+    --bg-2: #1b1d23;
+    --bg-3: #23262e;
+    --bg-4: #2c2f38;
+    --line: #272a31;
+    --line-2: #1f2229;
+    --text-1: #e8e7e3;
+    --text-2: #9aa0ac;
+    --text-3: #5d626d;
+    --text-4: #3f434c;
+    --accent: #8b6dff;
+    --accent-soft: #a892ff;
+    --accent-dim: rgba(139,109,255,.16);
+    --accent-line: rgba(139,109,255,.34);
+    --warm: #e8c47b;       /* recording / signal warmth */
+    --warm-dim: rgba(232,196,123,.14);
+    --good: #6dd6a3;
+    --bad: #e87b8b;
+    --radius: 10px;
+    --radius-sm: 6px;
+    --radius-lg: 16px;
+    --row-h: 96px;
+    --shadow-1: 0 1px 0 rgba(255,255,255,0.02) inset, 0 1px 2px rgba(0,0,0,0.3);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #0a0b0e; color: var(--text-1); font-family: 'Geist', system-ui, -apple-system, sans-serif; font-feature-settings: "ss01","cv11"; }
+  body { min-height: 100vh; display: grid; place-items: center; padding: 28px; }
+  button { font-family: inherit; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  #stage { width: min(1440px, 100%); aspect-ratio: 16/10; background: var(--bg-1); border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.04); overflow: hidden; }
+</style>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="stage"></div>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="app.jsx"></script>
+  <script type="text/babel" src="arrange.jsx"></script>
+  <script type="text/babel" src="mixer.jsx"></script>
+  <script type="text/babel" src="compose.jsx"></script>
+  <script type="text/babel" src="main.jsx"></script>
+</body>
+</html>

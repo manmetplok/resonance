@@ -125,6 +125,7 @@ pub(super) fn bus_added(r: &mut Resonance, bus_id: BusId, name: String) {
     let order = r.registry.next_bus_order;
     r.registry.next_bus_order += 1;
     r.registry.busses.push(BusState::new(bus_id, order, name));
+    r.view_caches.rebuild_output(&r.registry.busses);
 }
 
 pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
@@ -146,6 +147,7 @@ pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
             track.output = TrackOutput::Master;
         }
     }
+    r.view_caches.rebuild_output(&r.registry.busses);
 }
 
 pub(super) fn bus_fx_bypass_changed(r: &mut Resonance, bus_id: BusId, bypassed: bool) {

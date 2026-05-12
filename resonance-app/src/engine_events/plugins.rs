@@ -168,6 +168,7 @@ pub(super) fn track_removed(
 
 pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
     r.available_plugins = plugins;
+    r.view_caches.rebuild_plugins(&r.available_plugins);
 }
 
 pub(super) fn state_saved(

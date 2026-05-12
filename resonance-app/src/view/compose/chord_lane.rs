@@ -49,6 +49,24 @@ pub struct ChordLaneCanvas<'a> {
 #[derive(Debug, Default)]
 pub struct ChordLaneState {
     drag: Option<ChordDrag>,
+    /// Geometry cache. Repaints only when the section data, drag state,
+    /// or chord selection changes — hover events on sibling widgets
+    /// reuse the stored geometry.
+    cache: canvas::Cache,
+    cache_fingerprint: std::cell::Cell<ChordLaneFingerprint>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ChordLaneFingerprint {
+    chord_count: usize,
+    chord_layout_hash: u64,
+    selected_chord_id: Option<u64>,
+    chords_selected: bool,
+    drag_active: bool,
+    start_bar: u32,
+    length_bars: u32,
+    tempo_points: usize,
+    sig_points: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -78,13 +96,61 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
+        let drag_active = state.drag.is_some();
+        let layout_hash = chord_layout_hash(self.definition);
+        let fp = ChordLaneFingerprint {
+            chord_count: self.definition.chords.len(),
+            chord_layout_hash: layout_hash,
+            selected_chord_id: self.selected_chord_id,
+            chords_selected: self.chords_selected,
+            drag_active,
+            start_bar: self.start_bar,
+            length_bars: self.definition.length_bars,
+            tempo_points: self.tempo_map.tempo_points.len(),
+            sig_points: self.tempo_map.signature_points.len(),
+        };
+        if state.cache_fingerprint.get() != fp {
+            state.cache.clear();
+            state.cache_fingerprint.set(fp);
+        }
+        let geometry = state
+            .cache
+            .draw(renderer, bounds.size(), |frame: &mut Frame| {
+                self.draw_into(frame, bounds, &state.drag);
+            });
+        vec![geometry]
+    }
 
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> (canvas::event::Status, Option<Message>) {
+        self.update_inner(state, event, bounds, cursor)
+    }
+}
+
+fn chord_layout_hash(def: &SectionDefinitionState) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for c in &def.chords {
+        c.id.hash(&mut h);
+        c.start_beat.hash(&mut h);
+        c.duration_beats.hash(&mut h);
+        format!("{}", c.chord).hash(&mut h);
+    }
+    h.finish()
+}
+
+impl<'a> ChordLaneCanvas<'a> {
+    fn draw_into(&self, frame: &mut Frame, bounds: Rectangle, drag: &Option<ChordDrag>) {
         // ---- Name column (track header) ----
         let name_bg = if self.chords_selected {
-            Color::from_rgb(0.22, 0.22, 0.27)
+            theme::BG_2
         } else {
-            theme::PANEL
+            theme::BG_1
         };
         frame.fill_rectangle(
             Point::ORIGIN,
@@ -95,9 +161,9 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
             content: "Chords".to_string(),
             position: Point::new(10.0, bounds.height * 0.5 - 7.0),
             color: if self.chords_selected {
-                theme::ACCENT
+                theme::ACCENT_SOFT
             } else {
-                theme::TEXT
+                theme::TEXT_1
             },
             size: 12.0.into(),
             ..canvas::Text::default()
@@ -120,12 +186,12 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
         frame.fill_rectangle(
             Point::new(grid_x, 0.0),
             Size::new(grid_w, bounds.height),
-            theme::PANEL_DARK,
+            theme::BG_1,
         );
 
         let total_beats = self.total_beats();
         if total_beats == 0 || grid_w <= 0.0 {
-            return vec![frame.into_geometry()];
+            return;
         }
         let beat_width = grid_w / total_beats as f32;
 
@@ -178,49 +244,81 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
             theme::SEPARATOR,
         );
 
-        // Chord blocks (with drag preview overrides)
-        let block_top = RULER_HEIGHT + 3.0;
-        let block_h = bounds.height - block_top - 3.0;
+        // Chord blocks (with drag preview overrides). The redesign frames
+        // each chord as a rounded card with a lavender wash + border;
+        // selected/dragging cards get a stronger lavender border.
+        let block_top = RULER_HEIGHT + 4.0;
+        let block_h = bounds.height - block_top - 4.0;
         for chord in &self.definition.chords {
             let (start, dur) = apply_drag_preview(
                 chord.id,
                 chord.start_beat,
                 chord.duration_beats,
-                &state.drag,
+                drag,
             );
-            let x = grid_x + start as f32 * beat_width;
-            let w = (dur as f32 * beat_width - 1.0).max(2.0);
+            let x = grid_x + start as f32 * beat_width + 1.0;
+            let w = (dur as f32 * beat_width - 2.0).max(2.0);
             let selected = Some(chord.id) == self.selected_chord_id;
-            let dragging = matches!(state.drag, Some(ChordDrag::Move { chord_id, .. } | ChordDrag::Resize { chord_id, .. }) if chord_id == chord.id);
+            let dragging = matches!(drag, Some(ChordDrag::Move { chord_id, .. } | ChordDrag::Resize { chord_id, .. }) if *chord_id == chord.id);
 
             let fill = if selected || dragging {
+                Color {
+                    a: 0.22,
+                    ..theme::ACCENT
+                }
+            } else {
+                theme::BG_2
+            };
+            let border = if selected || dragging {
                 theme::ACCENT
             } else {
-                Color::from_rgb(0.24, 0.34, 0.48)
+                theme::LINE_2
             };
-            frame.fill_rectangle(Point::new(x + 0.5, block_top), Size::new(w, block_h), fill);
-
-            if selected || dragging {
-                frame.stroke(
-                    &Path::rectangle(Point::new(x + 0.5, block_top), Size::new(w, block_h)),
-                    Stroke::default().with_width(1.5).with_color(Color::WHITE),
-                );
-            }
+            let card = Path::rounded_rectangle(
+                Point::new(x, block_top),
+                Size::new(w, block_h),
+                8.0.into(),
+            );
+            frame.fill(&card, fill);
+            frame.stroke(
+                &card,
+                Stroke::default()
+                    .with_width(if selected || dragging { 1.5 } else { 1.0 })
+                    .with_color(border),
+            );
 
             // Right-edge resize hint (tiny vertical bar)
             if w > RESIZE_HANDLE_PX * 2.0 {
                 frame.fill_rectangle(
-                    Point::new(x + w - 3.0, block_top + 2.0),
-                    Size::new(2.0, block_h - 4.0),
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.35),
+                    Point::new(x + w - 4.0, block_top + 6.0),
+                    Size::new(2.0, block_h - 12.0),
+                    Color {
+                        a: 0.28,
+                        ..theme::TEXT_2
+                    },
                 );
             }
 
+            // Roman-numeral degree (small, mono, top-left). Computed
+            // inline against the section's scale; "—" if no scale or the
+            // chord root isn't on the scale.
+            let degree = roman_numeral_for(&chord.chord, self.definition.scale.as_ref());
+            frame.fill_text(canvas::Text {
+                content: degree,
+                position: Point::new(x + 8.0, block_top + 4.0),
+                color: theme::TEXT_3,
+                size: 9.0.into(),
+                font: theme::MONO_FONT,
+                ..canvas::Text::default()
+            });
+
+            // Chord symbol — italic serif, primary text color.
             frame.fill_text(canvas::Text {
                 content: chord.chord.to_string(),
-                position: Point::new(x + 6.0, block_top + 4.0),
-                color: Color::WHITE,
-                size: 12.0.into(),
+                position: Point::new(x + 8.0, block_top + 16.0),
+                color: theme::TEXT_1,
+                size: 18.0.into(),
+                font: theme::SERIF_ITALIC_FONT,
                 ..canvas::Text::default()
             });
         }
@@ -231,13 +329,13 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
             Size::new(bounds.width, 1.0),
             theme::SEPARATOR,
         );
-
-        vec![frame.into_geometry()]
     }
+}
 
-    fn update(
+impl<'a> ChordLaneCanvas<'a> {
+    fn update_inner(
         &self,
-        state: &mut Self::State,
+        state: &mut ChordLaneState,
         event: canvas::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
@@ -461,6 +559,54 @@ impl<'a> ChordLaneCanvas<'a> {
             .map(|b| self.tempo_map.numerator_at_bar(self.start_bar + b) as u32)
             .sum()
     }
+}
+
+/// Roman-numeral degree label for a chord against its section's scale.
+/// Lowercase numerals for minor / diminished qualities; "—" when the
+/// scale is unknown or the chord root isn't a diatonic degree.
+fn roman_numeral_for(
+    chord: &resonance_music_theory::Chord,
+    scale: Option<&resonance_music_theory::Scale>,
+) -> String {
+    use resonance_music_theory::ChordQuality;
+    let Some(scale) = scale else {
+        return String::from("—");
+    };
+    let root_semi = chord.root.to_semitone() as i32;
+    let scale_root = scale.root.to_semitone() as i32;
+    let interval = ((root_semi - scale_root) + 12) % 12;
+    let mut degree_idx = None;
+    for (i, &iv) in scale.mode.intervals().iter().enumerate() {
+        if iv as i32 == interval {
+            degree_idx = Some(i);
+            break;
+        }
+    }
+    let Some(idx) = degree_idx else {
+        return String::from("—");
+    };
+    let upper = ["I", "II", "III", "IV", "V", "VI", "VII"];
+    let lower = ["i", "ii", "iii", "iv", "v", "vi", "vii"];
+    let is_minor_like = matches!(
+        chord.quality,
+        ChordQuality::Min
+            | ChordQuality::Min7
+            | ChordQuality::Dim
+            | ChordQuality::Dim7
+            | ChordQuality::HalfDim7
+    );
+    let mut s = if is_minor_like {
+        lower[idx].to_string()
+    } else {
+        upper[idx].to_string()
+    };
+    if matches!(
+        chord.quality,
+        ChordQuality::Dim | ChordQuality::Dim7 | ChordQuality::HalfDim7
+    ) {
+        s.push('°');
+    }
+    s
 }
 
 /// Applies the active drag's pending values for the given chord so the

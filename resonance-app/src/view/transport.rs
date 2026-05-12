@@ -1,153 +1,133 @@
-//! Top transport bar: view tabs, transport buttons, loop toggle, BPM /
-//! time-sig / metronome panel, settings button. Rendered above everything
-//! else, not specific to the current view mode.
+//! Top of the application — the window chrome (48px) and the transport
+//! bar (56px). The chrome carries brand identity, the project title, and
+//! the segmented view selector. The transport bar carries playback
+//! controls, the BPM / time-sig / position readouts, and the master
+//! stereo meter.
+use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::text::LineHeight;
-use iced::widget::{button, column, container, mouse_area, row, text, text_input, Space};
-use iced::{alignment, Element, Font, Length};
+use iced::widget::{
+    button, canvas as canvas_widget, column, container, mouse_area, row, text, text_input, Space,
+};
+use iced::{alignment, mouse, Element, Length, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::message::*;
 use crate::state::ViewMode;
 use crate::theme::{self, fa};
 use crate::Resonance;
 
+const CHROME_HEIGHT: f32 = 48.0;
+const TRANSPORT_HEIGHT: f32 = 56.0;
+
 pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
-    // Use the GUI-side tempo map for correct bar/beat display with tempo changes.
-    let (bar_0, frac) = r
-        .tempo_map
-        .sample_to_bar(r.transport.playhead, r.sample_rate);
-    let num_beats = r.transport.time_sig_num as f64;
-    let beat_frac = frac * num_beats;
-    let beat = beat_frac.floor() as u32 + 1;
-    let bar = bar_0 + 1; // 1-based
-    let bar_beat_str = format!("{}.{}", bar, beat);
-
-    let total_secs = r.transport.playhead as f64 / r.sample_rate as f64;
-    let minutes = (total_secs / 60.0).floor() as u32;
-    let seconds = total_secs - (minutes as f64 * 60.0);
-    let time_str = format!("{:02}:{:06.3}", minutes, seconds);
-
-    // ---- Transport buttons (uniform size/padding/style) -----------------
-    const TRANSPORT_ICON_SIZE: u16 = 16;
-    let button_pad = iced::Padding::from([6, 10]);
-
-    let skip_back = transport_icon_btn(
-        fa::BACKWARD_STEP,
-        Message::Transport(TransportMessage::SkipBack),
-        button_pad,
-    );
-    let stop_btn = transport_icon_btn(
-        fa::STOP,
-        Message::Transport(TransportMessage::Stop),
-        button_pad,
-    );
-    let skip_fwd = transport_icon_btn(
-        fa::FORWARD_STEP,
-        Message::Transport(TransportMessage::SkipForward),
-        button_pad,
-    );
-
-    let play_pause: Element<'_, Message> = if r.transport.playing {
-        button(
-            theme::icon(fa::PAUSE)
-                .size(TRANSPORT_ICON_SIZE)
-                .color(theme::TEXT),
-        )
-        .on_press(Message::Transport(TransportMessage::Pause))
-        .padding(button_pad)
-        .style(|_theme, status| theme::transport_button_style(status))
-        .into()
-    } else {
-        button(
-            theme::icon(fa::PLAY)
-                .size(TRANSPORT_ICON_SIZE)
-                .color(theme::ACCENT),
-        )
-        .on_press(Message::Transport(TransportMessage::Play))
-        .padding(button_pad)
-        .style(|_theme, status| theme::transport_button_style(status))
-        .into()
-    };
-
-    // Record button: grayed out and unclickable when no track is armed.
-    let any_armed = r.registry.tracks.iter().any(|t| t.record_armed);
-    let rec_color = if any_armed {
-        theme::RECORD_RED
-    } else {
-        theme::TEXT_DIM
-    };
-    let mut rec_btn = button(
-        theme::icon(fa::CIRCLE)
-            .size(TRANSPORT_ICON_SIZE)
-            .color(rec_color),
-    )
-    .padding(button_pad)
-    .style(move |_theme, status| {
-        if any_armed {
-            theme::record_armed_button_style(status)
-        } else {
-            theme::transport_button_style(status)
-        }
-    });
-    if any_armed {
-        rec_btn = rec_btn.on_press(Message::Transport(TransportMessage::Record));
-    }
-
-    let timing_panel = timing_panel(r, bar_beat_str, time_str);
-    let loop_btn = loop_button(r, button_pad, TRANSPORT_ICON_SIZE);
-
-    // Settings icon (Font Awesome bars)
-    let settings_btn = button(
-        theme::icon(fa::BARS)
-            .size(TRANSPORT_ICON_SIZE)
-            .color(theme::TEXT),
-    )
-    .on_press(Message::Ui(UiMessage::OpenSettings))
-    .padding(button_pad)
-    .style(|_theme, status| theme::transport_button_style(status));
-
-    // View mode tabs
-    let arrange_tab = tab_button("Arrange", ViewMode::Arrange, r.view_mode);
-    let mixer_tab = tab_button("Mixer", ViewMode::Mixer, r.view_mode);
-    let compose_tab = tab_button("Compose", ViewMode::Compose, r.view_mode);
-
-    let transport_row = row![
-        Space::with_width(10),
-        arrange_tab,
-        mixer_tab,
-        compose_tab,
-        Space::with_width(10),
-        skip_back,
-        stop_btn,
-        play_pause,
-        rec_btn,
-        skip_fwd,
-        Space::with_width(8),
-        loop_btn,
-        Space::with_width(16),
-        timing_panel,
-        Space::with_width(Length::Fill),
-        settings_btn,
-        Space::with_width(10),
-    ]
-    .spacing(6)
-    .align_y(alignment::Vertical::Center)
-    .height(56);
-
-    container(transport_row)
-        .width(Length::Fill)
-        .style(theme::panel_bg)
+    column![view_chrome(r), view_playback_bar(r)]
+        .spacing(0)
         .into()
 }
 
-fn transport_icon_btn<'a>(
-    glyph: char,
-    on_press: Message,
-    pad: iced::Padding,
-) -> iced::widget::Button<'a, Message> {
-    button(theme::icon(glyph).size(16).color(theme::TEXT))
-        .on_press(on_press)
-        .padding(pad)
-        .style(|_theme, status| theme::transport_button_style(status))
+// ---------------------------------------------------------------------------
+// Chrome row — brand, project title, view tabs, ghost actions.
+// ---------------------------------------------------------------------------
+
+fn view_chrome(r: &Resonance) -> Element<'_, Message> {
+    let brand = row![
+        text("\u{25cf}")
+            .size(11)
+            .color(theme::ACCENT)
+            .line_height(LineHeight::Relative(1.0)),
+        Space::with_width(7),
+        text("Resonance")
+            .size(13)
+            .font(theme::UI_FONT_MEDIUM)
+            .color(theme::TEXT_1)
+            .line_height(LineHeight::Relative(1.0)),
+    ]
+    .align_y(alignment::Vertical::Center);
+
+    let separator = text("/").size(13).color(theme::TEXT_4);
+
+    let project_name = r
+        .io
+        .project_path
+        .as_ref()
+        .and_then(|p| p.file_stem())
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "Untitled".to_string());
+
+    let title = text(project_name)
+        .size(17)
+        .font(theme::SERIF_ITALIC_FONT)
+        .color(theme::TEXT_1)
+        .line_height(LineHeight::Relative(1.0));
+
+    let dirty = if r.dirty { "· unsaved" } else { "· saved" };
+    let dirty_label = text(dirty)
+        .size(12)
+        .color(theme::TEXT_3)
+        .line_height(LineHeight::Relative(1.0));
+
+    let left = row![
+        brand,
+        Space::with_width(16),
+        separator,
+        Space::with_width(8),
+        title,
+        Space::with_width(8),
+        dirty_label,
+    ]
+    .align_y(alignment::Vertical::Center);
+
+    let tabs = container(
+        row![
+            tab_button("Arrange", ViewMode::Arrange, r.view_mode),
+            tab_button("Mixer", ViewMode::Mixer, r.view_mode),
+            tab_button("Compose", ViewMode::Compose, r.view_mode),
+        ]
+        .spacing(2)
+        .padding(3),
+    )
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::BG_2)),
+        border: iced::Border {
+            color: theme::LINE_2,
+            width: 1.0,
+            radius: theme::RADIUS_LG.into(),
+        },
+        ..Default::default()
+    });
+
+    let settings_btn = button(centered_icon(fa::BARS, theme::TEXT_2, 13, 28))
+        .on_press(Message::Ui(UiMessage::OpenSettings))
+        .padding(0)
+        .width(36)
+        .height(28)
+        .style(|_theme, status| theme::ghost_button_style(status));
+
+    let chrome_row = row![
+        Space::with_width(14),
+        left,
+        Space::with_width(Length::Fill),
+        tabs,
+        Space::with_width(Length::Fill),
+        settings_btn,
+        Space::with_width(14),
+    ]
+    .spacing(8)
+    .align_y(alignment::Vertical::Center)
+    .height(CHROME_HEIGHT);
+
+    container(chrome_row)
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_1)),
+            border: iced::Border {
+                color: theme::LINE_2,
+                width: 0.0,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
 fn tab_button<'a>(
@@ -156,201 +136,436 @@ fn tab_button<'a>(
     current: ViewMode,
 ) -> iced::widget::Button<'a, Message> {
     let active = current == mode;
-    button(text(label).size(12))
-        .on_press(Message::Ui(UiMessage::SwitchView(mode)))
-        .style(move |_theme, status| theme::tab_button_style(active, status))
-        .padding([4, 8])
+    button(
+        text(label)
+            .size(12)
+            .font(theme::UI_FONT_MEDIUM)
+            .line_height(LineHeight::Relative(1.0)),
+    )
+    .on_press(Message::Ui(UiMessage::SwitchView(mode)))
+    .style(move |_theme, status| theme::tab_button_style(active, status))
+    .padding([6, 14])
 }
 
-/// Central timing panel: position (bars.beats + mm:ss), BPM, time sig,
-/// metronome + precount. Every sub-block is a two-row column with
-/// identical structure so all values share the same baseline. Every text
-/// element uses `line_height(1.0)` so its layout box equals its font-size;
-/// the icon font and monospace font have wildly different hhea line
-/// metrics, and centering within a fixed-height row otherwise pushes them
-/// to different vertical positions.
-fn timing_panel<'a>(
-    r: &Resonance,
-    bar_beat_str: String,
-    time_str: String,
-) -> iced::widget::Container<'a, Message> {
-    const VALUE_SIZE: u16 = 18;
-    const LABEL_SIZE: u16 = 9;
-    const BLOCK_HEIGHT: f32 = 40.0;
-    const VALUE_ROW_HEIGHT: f32 = 22.0;
-    const LABEL_ROW_HEIGHT: f32 = 12.0;
+// ---------------------------------------------------------------------------
+// Transport row — playback controls + position/BPM/sig/key/loop + meter.
+// ---------------------------------------------------------------------------
 
-    let tight = LineHeight::Relative(1.0);
+fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
+    let (bar_0, frac) = r
+        .tempo_map
+        .sample_to_bar(r.transport.playhead, r.sample_rate);
+    let num_beats = r.transport.time_sig_num as f64;
+    let beat_frac = frac * num_beats;
+    let beat = beat_frac.floor() as u32 + 1;
+    let beat_subdiv = ((beat_frac.fract()) * 1000.0) as u32;
+    let bar = bar_0 + 1;
+    let position_str = format!("{}.{}.{:03}", bar, beat, beat_subdiv);
 
-    fn value_cell<'a>(
-        content: impl Into<Element<'a, Message>>,
-    ) -> iced::widget::Container<'a, Message> {
-        container(content)
-            .width(Length::Fill)
-            .height(VALUE_ROW_HEIGHT)
-            .align_x(alignment::Horizontal::Center)
-            .align_y(alignment::Vertical::Center)
-    }
+    let total_secs = r.transport.playhead as f64 / r.sample_rate as f64;
+    let minutes = (total_secs / 60.0).floor() as u32;
+    let seconds = total_secs - (minutes as f64 * 60.0);
+    let time_str = format!("{:02}:{:06.3}", minutes, seconds);
 
-    fn label_cell<'a>(
-        content: impl Into<Element<'a, Message>>,
-    ) -> iced::widget::Container<'a, Message> {
-        container(content)
-            .width(Length::Fill)
-            .height(LABEL_ROW_HEIGHT)
-            .align_x(alignment::Horizontal::Center)
-            .align_y(alignment::Vertical::Center)
-    }
+    let any_armed = r.registry.tracks.iter().any(|t| t.record_armed);
 
-    let position_block = column![
-        value_cell(
-            text(bar_beat_str)
-                .size(VALUE_SIZE)
-                .line_height(tight)
-                .font(Font::MONOSPACE)
-                .color(theme::ACCENT),
-        ),
-        label_cell(
-            text(time_str)
-                .size(LABEL_SIZE + 1)
-                .line_height(tight)
-                .font(Font::MONOSPACE)
-                .color(theme::TEXT_DIM),
-        ),
+    let prev_btn = transport_btn(fa::BACKWARD_STEP, Message::Transport(TransportMessage::SkipBack));
+    let stop_btn = transport_btn(fa::STOP, Message::Transport(TransportMessage::Stop));
+    let next_btn = transport_btn(
+        fa::FORWARD_STEP,
+        Message::Transport(TransportMessage::SkipForward),
+    );
+
+    let play_pause = play_pause_button(r);
+    let rec_btn = record_button(any_armed);
+
+    let loop_btn = loop_toggle_button(r);
+    let metronome_btn = metronome_toggle_button(r);
+
+    let left = row![
+        prev_btn,
+        stop_btn,
+        play_pause,
+        rec_btn,
+        next_btn,
+        Space::with_width(8),
+        vertical_divider(),
+        Space::with_width(8),
+        loop_btn,
+        metronome_btn,
     ]
-    .width(112)
-    .align_x(alignment::Horizontal::Center);
+    .spacing(4)
+    .align_y(alignment::Vertical::Center);
 
-    let bpm_field = text_input("120", &r.transport.bpm_input)
+    // Stat groups (POSITION | TIME | BPM | SIG | KEY | LOOP).
+    let pos_value = text(position_str)
+        .size(13)
+        .font(theme::MONO_FONT)
+        .color(theme::ACCENT_SOFT)
+        .line_height(LineHeight::Relative(1.0));
+    let position_block = stat_block("POSITION", pos_value, 88).align_x(alignment::Horizontal::Center);
+
+    let time_value = text(time_str)
+        .size(13)
+        .font(theme::MONO_FONT)
+        .color(theme::TEXT_1)
+        .line_height(LineHeight::Relative(1.0));
+    let time_block = stat_block("TIME", time_value, 100);
+
+    let bpm_input = text_input("120", &r.transport.bpm_input)
         .on_input(|s| Message::Transport(TransportMessage::SetBpmText(s)))
         .on_submit(Message::Transport(TransportMessage::CommitBpm))
-        .width(52)
-        .size(VALUE_SIZE)
-        .font(Font::MONOSPACE)
+        .width(50)
+        .size(17)
+        .font(theme::MONO_FONT)
         .align_x(alignment::Horizontal::Center)
         .padding(0)
         .style(theme::borderless_text_input_style);
-    let bpm_block = column![
-        value_cell(bpm_field),
-        label_cell(
-            text("BPM")
-                .size(LABEL_SIZE)
-                .line_height(tight)
-                .color(theme::TEXT_DIM),
-        ),
-    ]
-    .width(60)
-    .align_x(alignment::Horizontal::Center);
+    let bpm_block = stat_block("BPM", bpm_input, 64);
 
-    let time_sig_str = format!("{}/{}", r.transport.time_sig_num, r.transport.time_sig_den);
-    let time_sig_value = mouse_area(
-        text(time_sig_str)
-            .size(VALUE_SIZE)
-            .line_height(tight)
-            .font(Font::MONOSPACE)
-            .color(theme::TEXT),
+    let sig_text = format!("{}/{}", r.transport.time_sig_num, r.transport.time_sig_den);
+    let sig_value = mouse_area(
+        text(sig_text)
+            .size(13)
+            .font(theme::MONO_FONT)
+            .color(theme::TEXT_1)
+            .line_height(LineHeight::Relative(1.0)),
     )
     .on_press(Message::Transport(TransportMessage::CycleTimeSignature));
-    let time_sig_block = column![
-        value_cell(time_sig_value),
-        label_cell(
-            text("SIG")
-                .size(LABEL_SIZE)
-                .line_height(tight)
-                .color(theme::TEXT_DIM),
-        ),
-    ]
-    .width(48)
-    .align_x(alignment::Horizontal::Center);
+    let sig_block = stat_block("SIG", sig_value, 56);
 
-    let met_color = if r.transport.metronome_enabled {
-        theme::METRONOME_ON
-    } else {
-        theme::TEXT_DIM
-    };
-    let met_icon = mouse_area(
-        theme::icon(fa::METRONOME)
-            .size(VALUE_SIZE)
-            .line_height(tight)
-            .color(met_color),
-    )
-    .on_press(Message::Transport(TransportMessage::ToggleMetronome));
+    let key_str = compose_key_label(r);
+    let key_value = text(key_str)
+        .size(13)
+        .font(theme::UI_FONT_MEDIUM)
+        .color(theme::TEXT_1)
+        .line_height(LineHeight::Relative(1.0));
+    let key_block = stat_block("KEY", key_value, 64);
 
-    let precount_label = if r.transport.precount_bars == 0 {
-        "OFF".to_string()
-    } else {
-        format!("{} BAR", r.transport.precount_bars)
-    };
-    let precount_text = mouse_area(
-        text(precount_label)
-            .size(LABEL_SIZE)
-            .line_height(tight)
-            .font(Font::MONOSPACE)
-            .color(theme::TEXT_DIM),
-    )
-    .on_press(Message::Transport(TransportMessage::CyclePrecountBars));
+    let loop_label = format_loop_length(r);
+    let loop_value = text(loop_label)
+        .size(13)
+        .font(theme::MONO_FONT)
+        .color(if r.transport.loop_enabled {
+            theme::TEXT_1
+        } else {
+            theme::TEXT_3
+        })
+        .line_height(LineHeight::Relative(1.0));
+    let loop_block = stat_block("LOOP", loop_value, 80);
 
-    let met_block = column![value_cell(met_icon), label_cell(precount_text)]
-        .width(52)
-        .align_x(alignment::Horizontal::Center);
-
-    let sep = || container(Space::new(1, BLOCK_HEIGHT - 12.0)).style(theme::separator_bg);
-
-    let timing_panel_row = row![
+    let center = row![
         position_block,
-        sep(),
+        stat_separator(),
+        time_block,
+        stat_separator(),
         bpm_block,
-        sep(),
-        time_sig_block,
-        sep(),
-        met_block,
+        stat_separator(),
+        sig_block,
+        stat_separator(),
+        key_block,
+        stat_separator(),
+        loop_block,
     ]
-    .spacing(10)
-    .align_y(alignment::Vertical::Center)
-    .height(BLOCK_HEIGHT);
+    .align_y(alignment::Vertical::Center);
 
-    container(timing_panel_row)
-        .padding(iced::Padding::from([4, 12]))
-        .style(theme::timing_panel_style)
+    let meter = canvas_widget(MasterMeter {
+        level_l: r.master_level_l,
+        level_r: r.master_level_r,
+    })
+    .width(90)
+    .height(10);
+
+    let cpu_text = text("CPU —")
+        .size(11)
+        .font(theme::MONO_FONT)
+        .color(theme::TEXT_3)
+        .line_height(LineHeight::Relative(1.0));
+
+    let right = row![meter, Space::with_width(14), cpu_text]
+        .spacing(0)
+        .align_y(alignment::Vertical::Center);
+
+    let row = row![
+        Space::with_width(14),
+        left,
+        Space::with_width(Length::Fill),
+        center,
+        Space::with_width(Length::Fill),
+        right,
+        Space::with_width(14),
+    ]
+    .spacing(0)
+    .align_y(alignment::Vertical::Center)
+    .height(TRANSPORT_HEIGHT);
+
+    container(row)
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_1)),
+            border: iced::Border {
+                color: theme::LINE_2,
+                width: 0.0,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
-fn loop_button<'a>(
-    r: &Resonance,
-    button_pad: iced::Padding,
+/// Wrap an icon glyph in a fixed-square centered container so the
+/// glyph sits dead center inside its button cell. Iced's button
+/// content takes its natural size and aligns top-left without an
+/// explicit center container — without this, glyphs drift visibly.
+fn centered_icon<'a>(
+    glyph: char,
+    color: iced::Color,
     icon_size: u16,
-) -> iced::widget::Button<'a, Message> {
-    let loop_enabled = r.transport.loop_enabled;
-    let loop_color = if loop_enabled {
-        theme::LOOP_MARKER
+    cell: u16,
+) -> iced::widget::Container<'a, Message> {
+    container(
+        theme::icon(glyph)
+            .size(icon_size)
+            .color(color)
+            .line_height(LineHeight::Relative(1.0)),
+    )
+    .width(cell)
+    .height(cell)
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
+}
+
+fn transport_btn<'a>(glyph: char, on_press: Message) -> iced::widget::Button<'a, Message> {
+    button(centered_icon(glyph, theme::TEXT_1, 14, 32))
+        .on_press(on_press)
+        .padding(0)
+        .width(32)
+        .height(32)
+        .style(|_theme, status| theme::transport_button_style(status))
+}
+
+fn play_pause_button(r: &Resonance) -> Element<'_, Message> {
+    let glyph = if r.transport.playing {
+        fa::PAUSE
     } else {
-        theme::TEXT_DIM
+        fa::PLAY
     };
-    button(theme::icon(fa::BULLSEYE).size(icon_size).color(loop_color))
-        .on_press(Message::Transport(TransportMessage::ToggleLoop))
-        .padding(button_pad)
+    let msg = if r.transport.playing {
+        Message::Transport(TransportMessage::Pause)
+    } else {
+        Message::Transport(TransportMessage::Play)
+    };
+    button(centered_icon(glyph, theme::BG_0, 15, 36))
+        .on_press(msg)
+        .padding(0)
+        .width(36)
+        .height(36)
+        .style(|_theme, status| theme::primary_button_style(status))
+        .into()
+}
+
+fn record_button<'a>(any_armed: bool) -> Element<'a, Message> {
+    let color = if any_armed {
+        theme::BAD
+    } else {
+        theme::TEXT_3
+    };
+    let mut btn = button(centered_icon(fa::CIRCLE, color, 11, 32))
+        .padding(0)
+        .width(32)
+        .height(32)
         .style(move |_theme, status| {
-            if loop_enabled {
-                let bg = match status {
-                    iced::widget::button::Status::Hovered => {
-                        iced::Color::from_rgb(0.25, 0.20, 0.10)
-                    }
-                    iced::widget::button::Status::Pressed => {
-                        iced::Color::from_rgb(0.20, 0.15, 0.08)
-                    }
-                    _ => iced::Color::from_rgb(0.22, 0.18, 0.08),
-                };
-                iced::widget::button::Style {
-                    background: Some(iced::Background::Color(bg)),
-                    text_color: theme::LOOP_MARKER,
-                    border: iced::Border {
-                        color: theme::LOOP_MARKER,
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    ..Default::default()
-                }
+            if any_armed {
+                theme::record_armed_button_style(status)
             } else {
                 theme::transport_button_style(status)
             }
+        });
+    if any_armed {
+        btn = btn.on_press(Message::Transport(TransportMessage::Record));
+    }
+    btn.into()
+}
+
+fn loop_toggle_button(r: &Resonance) -> Element<'_, Message> {
+    let active = r.transport.loop_enabled;
+    let color = if active { theme::WARM } else { theme::TEXT_2 };
+    button(centered_icon(fa::BULLSEYE, color, 14, 32))
+        .on_press(Message::Transport(TransportMessage::ToggleLoop))
+        .padding(0)
+        .width(32)
+        .height(32)
+        .style(move |_theme, status| theme::toggle_button_style(active, theme::WARM, false, status))
+        .into()
+}
+
+fn metronome_toggle_button(r: &Resonance) -> Element<'_, Message> {
+    let active = r.transport.metronome_enabled;
+    let color = if active { theme::GOOD } else { theme::TEXT_2 };
+    button(centered_icon(fa::METRONOME, color, 14, 32))
+        .on_press(Message::Transport(TransportMessage::ToggleMetronome))
+        .padding(0)
+        .width(32)
+    .height(32)
+    .style(move |_theme, status| theme::toggle_button_style(active, theme::GOOD, false, status))
+    .into()
+}
+
+fn vertical_divider<'a>() -> iced::widget::Container<'a, Message> {
+    container(Space::with_height(18))
+        .width(1)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::LINE)),
+            ..Default::default()
         })
+}
+
+fn stat_separator<'a>() -> iced::widget::Container<'a, Message> {
+    container(Space::with_height(28))
+        .width(1)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::LINE_2)),
+            ..Default::default()
+        })
+}
+
+fn stat_block<'a>(
+    label: &'static str,
+    value: impl Into<Element<'a, Message>>,
+    width: u16,
+) -> iced::widget::Container<'a, Message> {
+    let label = text(label)
+        .size(9)
+        .font(theme::UI_FONT_SEMIBOLD)
+        .color(theme::TEXT_3)
+        .line_height(LineHeight::Relative(1.0));
+
+    let body = column![
+        container(value)
+            .width(Length::Fill)
+            .align_x(alignment::Horizontal::Center)
+            .align_y(alignment::Vertical::Center),
+        Space::with_height(3),
+        container(label)
+            .width(Length::Fill)
+            .align_x(alignment::Horizontal::Center),
+    ]
+    .align_x(alignment::Horizontal::Center);
+
+    container(body)
+        .width(Length::Fixed(width as f32))
+        .padding([4, 12])
+}
+
+fn compose_key_label(r: &Resonance) -> String {
+    let scale = r
+        .compose
+        .definitions
+        .iter()
+        .find_map(|d| d.scale.as_ref());
+    let Some(scale) = scale else {
+        return "—".to_string();
+    };
+    let mode_label = match scale.mode {
+        resonance_music_theory::Mode::Major => "maj",
+        resonance_music_theory::Mode::Minor => "min",
+        resonance_music_theory::Mode::Dorian => "dor",
+        resonance_music_theory::Mode::Phrygian => "phr",
+        resonance_music_theory::Mode::Lydian => "lyd",
+        resonance_music_theory::Mode::Mixolydian => "mix",
+        resonance_music_theory::Mode::Locrian => "loc",
+        resonance_music_theory::Mode::HarmonicMinor => "hmin",
+        resonance_music_theory::Mode::MelodicMinor => "mmin",
+    };
+    format!("{} {}", scale.root, mode_label)
+}
+
+fn format_loop_length(r: &Resonance) -> String {
+    if !r.transport.loop_enabled {
+        return "off".to_string();
+    }
+    let len_samples = r.transport.loop_out.saturating_sub(r.transport.loop_in);
+    if len_samples == 0 {
+        return "—".to_string();
+    }
+    let len_secs = len_samples as f64 / r.sample_rate as f64;
+    let secs_per_beat = 60.0 / r.transport.bpm as f64;
+    let secs_per_bar = secs_per_beat * r.transport.time_sig_num as f64;
+    let bars = (len_secs / secs_per_bar).round() as i64;
+    if bars >= 1 {
+        if bars == 1 {
+            "1 bar".to_string()
+        } else {
+            format!("{} bars", bars)
+        }
+    } else {
+        let beats = (len_secs / secs_per_beat).round() as i64;
+        if beats == 1 {
+            "1 beat".to_string()
+        } else {
+            format!("{} beats", beats)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Master stereo meter — two stacked bars rendered as a tiny canvas.
+// ---------------------------------------------------------------------------
+
+struct MasterMeter {
+    level_l: f32,
+    level_r: f32,
+}
+
+impl<Message> canvas::Program<Message> for MasterMeter {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        draw_meter_bar(&mut frame, 0.0, 4.0, bounds.width, self.level_l);
+        draw_meter_bar(&mut frame, 6.0, 4.0, bounds.width, self.level_r);
+        vec![frame.into_geometry()]
+    }
+}
+
+fn draw_meter_bar(frame: &mut Frame, y: f32, height: f32, width: f32, level: f32) {
+    let bg = Path::rectangle(Point::new(0.0, y), Size::new(width, height));
+    frame.fill(&bg, theme::BG_3);
+
+    let level = level.clamp(0.0, 1.0);
+    let fill_w = width * level;
+    if fill_w > 0.0 {
+        // Three-stop gradient approximation: green up to 70%, amber 70-90%,
+        // red above. Filling as up to three rects keeps the canvas cheap.
+        let green_w = (width * 0.70).min(fill_w);
+        if green_w > 0.0 {
+            let p = Path::rectangle(Point::new(0.0, y), Size::new(green_w, height));
+            frame.fill(&p, theme::GOOD);
+        }
+        if fill_w > width * 0.70 {
+            let amber_start = width * 0.70;
+            let amber_w = (width * 0.90 - amber_start).min(fill_w - amber_start);
+            let p = Path::rectangle(Point::new(amber_start, y), Size::new(amber_w, height));
+            frame.fill(&p, theme::WARM);
+        }
+        if fill_w > width * 0.90 {
+            let red_start = width * 0.90;
+            let red_w = fill_w - red_start;
+            let p = Path::rectangle(Point::new(red_start, y), Size::new(red_w, height));
+            frame.fill(&p, theme::BAD);
+        }
+    }
+
+    let outline = Path::rectangle(Point::new(0.0, y), Size::new(width, height));
+    frame.stroke(
+        &outline,
+        Stroke::default().with_color(theme::LINE_2).with_width(1.0),
+    );
 }

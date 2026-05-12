@@ -512,10 +512,14 @@ impl<'a> ComposeTrackCanvas<'a> {
     }
 
     fn draw_grid_background(&self, frame: &mut Frame, clip_area: Rectangle) {
+        // Card backdrop in BG_2 matches the redesign's piano-roll cards.
+        // Black-key rows stay slightly darker (BG_1) so the keyboard
+        // anatomy still reads; out-of-scale rows get a very subtle
+        // warm tint to mark them as outside the section's mode.
         frame.fill_rectangle(
             Point::new(clip_area.x, clip_area.y),
             Size::new(clip_area.width, clip_area.height),
-            Color::from_rgb(0.09, 0.09, 0.10),
+            theme::BG_2,
         );
         let cell_h = self.cell_height(clip_area);
         if cell_h <= 0.0 {
@@ -525,15 +529,16 @@ impl<'a> ComposeTrackCanvas<'a> {
             let y = self.pitch_to_y(midi, clip_area);
             let is_black = matches!(midi % 12, 1 | 3 | 6 | 8 | 10);
             let in_scale = self.scale.map(|s| s.contains(midi)).unwrap_or(true);
-            let base = if is_black {
-                Color::from_rgb(0.07, 0.07, 0.08)
+            let color = if !in_scale {
+                Color {
+                    a: 0.05,
+                    ..theme::WARM
+                }
+            } else if is_black {
+                theme::BG_1
             } else {
-                Color::from_rgb(0.11, 0.11, 0.12)
-            };
-            let color = if in_scale {
-                base
-            } else {
-                Color::from_rgb(base.r * 0.75, base.g * 0.55, base.b * 0.55)
+                // transparent — let the BG_2 backdrop show through
+                continue;
             };
             frame.fill_rectangle(
                 Point::new(clip_area.x, y),
@@ -544,7 +549,7 @@ impl<'a> ComposeTrackCanvas<'a> {
                 frame.fill_rectangle(
                     Point::new(clip_area.x, y + cell_h - 1.0),
                     Size::new(clip_area.width, 1.0),
-                    Color::from_rgb(0.22, 0.22, 0.24),
+                    theme::LINE_2,
                 );
             }
         }
@@ -560,19 +565,17 @@ impl<'a> ComposeTrackCanvas<'a> {
             let num = self.tempo_map.numerator_at_bar(bar) as u64;
             let bar_ticks = num * TICKS_PER_QUARTER_NOTE;
 
-            // Bar line
+            // Bar line — LINE, 1px (matches the redesign's hairline ruler).
             let x = clip_area.x + self.tick_to_x(tick_pos as f64, clip_area.width);
             frame.stroke(
                 &Path::line(
                     Point::new(x, clip_area.y + NOTE_GRID_PAD),
                     Point::new(x, clip_area.y + clip_area.height - NOTE_GRID_PAD),
                 ),
-                Stroke::default()
-                    .with_width(1.5)
-                    .with_color(Color::from_rgb(0.30, 0.30, 0.34)),
+                Stroke::default().with_width(1.0).with_color(theme::LINE),
             );
 
-            // Beat lines within this bar
+            // Beat sub-lines — LINE_2 hairlines.
             for beat in 1..num {
                 let beat_tick = tick_pos + beat * TICKS_PER_QUARTER_NOTE;
                 let bx = clip_area.x + self.tick_to_x(beat_tick as f64, clip_area.width);
@@ -581,9 +584,7 @@ impl<'a> ComposeTrackCanvas<'a> {
                         Point::new(bx, clip_area.y + NOTE_GRID_PAD),
                         Point::new(bx, clip_area.y + clip_area.height - NOTE_GRID_PAD),
                     ),
-                    Stroke::default()
-                        .with_width(1.0)
-                        .with_color(Color::from_rgb(0.18, 0.18, 0.20)),
+                    Stroke::default().with_width(1.0).with_color(theme::LINE_2),
                 );
             }
 
@@ -596,9 +597,7 @@ impl<'a> ComposeTrackCanvas<'a> {
                 Point::new(x, clip_area.y + NOTE_GRID_PAD),
                 Point::new(x, clip_area.y + clip_area.height - NOTE_GRID_PAD),
             ),
-            Stroke::default()
-                .with_width(1.5)
-                .with_color(Color::from_rgb(0.30, 0.30, 0.34)),
+            Stroke::default().with_width(1.0).with_color(theme::LINE),
         );
     }
 
@@ -618,14 +617,16 @@ impl<'a> ComposeTrackCanvas<'a> {
             width: w,
             height: clip_area.height - NOTE_GRID_PAD * 2.0,
         };
+        // Lavender rounded outline matches the Arrange clip styling.
         frame.stroke(
-            &Path::rectangle(
+            &Path::rounded_rectangle(
                 Point::new(rect.x, rect.y),
                 Size::new(rect.width, rect.height),
+                6.0.into(),
             ),
             Stroke::default()
                 .with_width(1.0)
-                .with_color(Color::from_rgba(0.38, 0.58, 0.38, 0.55)),
+                .with_color(theme::ACCENT_LINE),
         );
     }
 
@@ -641,7 +642,6 @@ impl<'a> ComposeTrackCanvas<'a> {
         for note in &clip.notes {
             let note_start_tick = clip_start_tick + note.start_tick as f64;
             let note_end_tick = note_start_tick + note.duration_ticks as f64;
-            // Clamp to section bounds
             if note_end_tick <= 0.0 || note_start_tick >= total_ticks {
                 continue;
             }
@@ -652,15 +652,20 @@ impl<'a> ComposeTrackCanvas<'a> {
             let w = (right - x).max(2.0);
             let y = self.pitch_to_y(note.note, clip_area);
             let h = (cell_h - 1.0).max(2.0);
+            // Lavender notes — velocity raises the alpha so harder hits
+            // pop without changing hue. Rounded 2px corners match the
+            // Arrange clip note style.
             let v = note.velocity.clamp(0.0, 1.0);
-            let fill = Color::from_rgb(0.45 + 0.25 * v, 0.72, 0.42);
-            frame.fill_rectangle(Point::new(x, y), Size::new(w, h), fill);
-            frame.stroke(
-                &Path::rectangle(Point::new(x, y), Size::new(w, h)),
-                Stroke::default()
-                    .with_width(1.0)
-                    .with_color(Color::from_rgb(0.12, 0.22, 0.12)),
-            );
+            let fill = Color {
+                a: 0.55 + 0.40 * v,
+                ..theme::ACCENT_SOFT
+            };
+            let body = if w >= 4.0 && h >= 4.0 {
+                Path::rounded_rectangle(Point::new(x, y), Size::new(w, h), 2.0.into())
+            } else {
+                Path::rectangle(Point::new(x, y), Size::new(w, h))
+            };
+            frame.fill(&body, fill);
         }
     }
 

@@ -73,13 +73,13 @@ pub fn view(state: &ComposeState) -> Element<'_, Message> {
         row(items)
             .spacing(6)
             .align_y(alignment::Vertical::Center)
-            .height(40),
+            .height(44),
     )
     .width(Length::Fill)
     .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(theme::PANEL)),
+        background: Some(iced::Background::Color(theme::BG_1)),
         border: iced::Border {
-            color: theme::SEPARATOR,
+            color: theme::LINE_2,
             width: 1.0,
             radius: 0.0.into(),
         },

@@ -1,51 +1,130 @@
-//! Track header column shown on the left of the Arrange view. Contains
-//! a "+" add-track button plus one stacked header cell per visible track.
-//! Sub-tracks are intentionally hidden here — they only make sense in the
-//! mixer where they get per-bus routing.
+//! Track header column shown on the left of the Arrange view. Matches
+//! the redesign: 28×28 instrument glyph + name/kind stacked column +
+//! a slim 4-button row (mute / solo / arm / monitor). Selection paints a
+//! 2px lavender stripe on the left edge.
+//!
+//! Mono toggle, FX bypass, and bounce-in-place stay on the mixer strip
+//! where channel-strip controls live; the Arrange header is for arranging.
 use iced::widget::{button, column, container, mouse_area, pick_list, row, text, Space};
-use iced::{alignment, Element, Length};
+use iced::{alignment, Color, Element, Length};
 
 use crate::message::*;
 use crate::state::{self, TrackState};
-use crate::theme;
+use crate::theme::{self, fa};
 use crate::view::controls::{
-    bounce_button, delete_button, monitor_button, mono_button, mute_button, record_arm_button,
-    solo_button,
+    delete_button, monitor_button, mute_button, record_arm_button, solo_button,
 };
 use crate::Resonance;
 
-/// Font Awesome caret-down / caret-right for collapse toggle.
-const CARET_DOWN: char = '\u{f0d7}';
-const CARET_RIGHT: char = '\u{f0da}';
-
 pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
+    let fp = track_headers_fingerprint(r);
+    // Lazy-cache the entire column: nothing in the arrange track-header
+    // strip updates per audio tick, so the closure only re-runs on user
+    // input (mute/solo/scroll/etc.). A continuous window resize reuses
+    // the cached tree across every paint.
+    iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
+        build_track_headers(r)
+    })
+    .into()
+}
+
+/// Hashes every arrange-track-header-visible piece of state. Levels
+/// aren't shown in the arrange header column, so the level fields
+/// don't enter the fingerprint and the lazy widget skips redraws when
+/// only meters tick.
+fn track_headers_fingerprint(r: &Resonance) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    r.viewport.global_tracks_expanded.hash(&mut h);
+    r.viewport.scroll_offset_y.to_bits().hash(&mut h);
+    r.interaction.selected_track.hash(&mut h);
+    r.transport.time_sig_num.hash(&mut h);
+    r.transport.time_sig_den.hash(&mut h);
+    // tempo / signature event positions affect the global-tracks header
+    // row when expanded; cheap to hash because the lists are small.
+    r.tempo_events.len().hash(&mut h);
+    for ev in &r.tempo_events {
+        ev.bar.hash(&mut h);
+        ev.bpm.to_bits().hash(&mut h);
+    }
+    r.signature_events.len().hash(&mut h);
+    for ev in &r.signature_events {
+        ev.bar.hash(&mut h);
+        ev.numerator.hash(&mut h);
+        ev.denominator.hash(&mut h);
+    }
+    for t in &r.registry.tracks {
+        if t.sub_track.is_some() {
+            continue;
+        }
+        t.id.hash(&mut h);
+        t.name.hash(&mut h);
+        t.muted.hash(&mut h);
+        t.soloed.hash(&mut h);
+        t.record_armed.hash(&mut h);
+        t.monitor_enabled.hash(&mut h);
+        t.track_type.hash(&mut h);
+        t.instrument_icon.hash(&mut h);
+        t.instrument_type.hash(&mut h);
+        t.input_device_name.hash(&mut h);
+        if let Some(p) = t.plugins.first() {
+            p.plugin_name.hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
     let mut headers = column![].spacing(0);
 
-    // Ruler header with "+" button and global tracks toggle
+    // Header row matching the timeline ruler height — global tracks
+    // toggle + add-track button. Designed as a tiny "Tracks" label row
+    // with a dashed `+` button on the right (per design).
     let expanded = r.viewport.global_tracks_expanded;
-    let caret = if expanded { CARET_DOWN } else { CARET_RIGHT };
-    let toggle_btn = button(theme::icon(caret).size(10).color(theme::TEXT_DIM))
+    let caret = if expanded {
+        fa::CARET_DOWN
+    } else {
+        fa::CARET_RIGHT
+    };
+    let toggle_btn = button(theme::icon(caret).size(10).color(theme::TEXT_3))
         .on_press(Message::Ui(UiMessage::ToggleGlobalTracks))
         .style(|_theme, status| theme::small_button_style(status))
-        .padding([0, 4]);
+        .padding([2, 4]);
 
-    let add_btn = button(text("+").size(16).color(theme::TEXT))
+    let add_btn = button(text("+").size(13).color(theme::TEXT_3))
         .on_press(Message::Ui(UiMessage::OpenAddTrackMenu))
-        .style(|_theme, status| theme::small_button_style(status))
-        .padding([0, 6]);
-    let add_row = row![
-        Space::with_width(4),
+        .style(|_theme, status| theme::ghost_button_style(status))
+        .padding([0, 6])
+        .width(22)
+        .height(22);
+
+    let header_row = row![
+        Space::with_width(10),
         toggle_btn,
-        Space::with_width(2),
+        Space::with_width(4),
+        text("TRACKS")
+            .size(10)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::TEXT_3),
+        Space::with_width(Length::Fill),
         add_btn,
+        Space::with_width(8),
     ]
     .align_y(alignment::Vertical::Center)
     .height(theme::RULER_HEIGHT);
     headers = headers.push(
-        container(add_row)
+        container(header_row)
             .width(Length::Fill)
             .height(theme::RULER_HEIGHT)
-            .style(theme::panel_dark_bg),
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(theme::BG_1)),
+                border: iced::Border {
+                    color: theme::LINE_2,
+                    width: 0.0,
+                    radius: 0.0.into(),
+                },
+                ..Default::default()
+            }),
     );
 
     // Global tracks area (tempo + time signature) — visible when expanded
@@ -54,18 +133,17 @@ pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
         let gt_style = |_theme: &iced::Theme| container::Style {
             background: Some(iced::Background::Color(theme::GLOBAL_TRACK_BG)),
             border: iced::Border {
-                color: theme::SEPARATOR,
+                color: theme::LINE_2,
                 width: 0.0,
                 radius: 0.0.into(),
             },
             ..Default::default()
         };
 
-        // Tempo row
         let tempo_row = container(
             row![
-                Space::with_width(8),
-                text("Tempo").size(11).color(theme::TEXT_DIM),
+                Space::with_width(10),
+                text("Tempo").size(11).color(theme::TEXT_2),
             ]
             .align_y(alignment::Vertical::Center)
             .height(row_h),
@@ -75,7 +153,6 @@ pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
         .style(gt_style);
         headers = headers.push(tempo_row);
 
-        // Time Signature row — shows an inline editor when an event is selected.
         let sig_row = view_signature_header(r, row_h);
         headers = headers.push(
             container(sig_row)
@@ -91,10 +168,8 @@ pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
         .filter(|t| t.sub_track.is_none())
         .collect();
 
-    // Calculate which tracks are visible given scroll_offset_y
     let visible_start = r.viewport.scroll_offset_y / theme::TRACK_HEIGHT;
     let first_visible = visible_start.floor() as usize;
-    // Add top padding for the scrolled-away portion
     let top_pad = first_visible as f32 * theme::TRACK_HEIGHT - r.viewport.scroll_offset_y;
     if first_visible > 0 {
         headers = headers.push(Space::new(
@@ -111,156 +186,224 @@ pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
             continue;
         }
         let is_selected = selected_track == Some(track.id);
-        // Single source of truth for whether the bounce trigger is
-        // active — same predicate the update layer uses to dispatch.
-        let bounce_enabled = crate::update::track::classify_bounce(
-            track,
-            r.midi_clips.iter().map(|c| c.track_id),
-        )
-        .is_ok();
-        headers = headers.push(view_track_header(track, is_selected, bounce_enabled));
+        headers = headers.push(view_track_header(r, track, is_selected));
     }
 
     container(headers)
         .width(theme::TRACK_HEADER_WIDTH)
         .height(Length::Fill)
         .clip(true)
-        .style(theme::panel_outlined)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_1)),
+            border: iced::Border {
+                color: theme::LINE_2,
+                width: 0.0,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        })
         .into()
 }
 
 fn view_track_header(
+    _r: &Resonance,
     track: &TrackState,
     is_selected: bool,
-    bounce_enabled: bool,
-) -> Element<'_, Message> {
+) -> Element<'static, Message> {
     let track_id = track.id;
-    let is_sub = track.sub_track.is_some();
-    // Track name on its own line, clipped at the header width so long
-    // names don't push the icons offscreen. `Wrapping::None` prevents
-    // iced from line-wrapping and the enclosing container's clip flag
-    // trims any glyph that overflows the available width. Sub-tracks
-    // render dimmer since they're driven by their parent plugin.
-    let name_color = if is_sub { theme::TEXT_DIM } else { theme::TEXT };
+
+    // ---- Glyph (28×28 rounded BG_2 square with the track's instrument icon) ----
+    let glyph_char = glyph_for_track(track);
+    let glyph = container(
+        theme::icon(glyph_char)
+            .size(13)
+            .color(theme::TEXT_2),
+    )
+    .width(28)
+    .height(28)
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::BG_2)),
+        border: iced::Border {
+            color: theme::LINE_2,
+            width: 1.0,
+            radius: theme::RADIUS_MD.into(),
+        },
+        ..Default::default()
+    });
+
+    // ---- Name (top) + kind (bottom) ----
     let name = text(track.name.clone())
         .size(13)
-        .color(name_color)
+        .font(theme::UI_FONT_MEDIUM)
+        .color(theme::TEXT_1)
         .wrapping(iced::widget::text::Wrapping::None);
-    // For non-sub-tracks, place the delete button in the top-right corner
-    // so it is visually separated from the transport/monitoring controls.
-    let name_row = if is_sub {
-        row![container(name).width(Length::Fill).clip(true)].align_y(alignment::Vertical::Center)
-    } else {
-        row![
-            container(name).width(Length::Fill).clip(true),
-            delete_button(
-                Message::Track(TrackMessage::RequestRemoveTrack(track.id)),
-                12
-            ),
-        ]
-        .spacing(4)
-        .align_y(alignment::Vertical::Center)
-    };
+    let kind_str = kind_label_for_track(track);
+    let kind = text(kind_str)
+        .size(10)
+        .color(theme::TEXT_3)
+        .wrapping(iced::widget::text::Wrapping::None);
 
-    // Sub-tracks expose a trimmed toolbar: just mute/solo + a per-port
-    // label. They cannot be armed, monitored, deleted, or swapped to
-    // mono — those all belong to their parent.
-    let icon_row: iced::widget::Row<'_, Message> = if is_sub {
-        row![
-            mute_button(
-                track.muted,
-                Message::Track(TrackMessage::ToggleMute(track.id)),
-                12
-            ),
-            solo_button(
-                track.soloed,
-                Message::Track(TrackMessage::ToggleSolo(track.id)),
-                12
-            ),
-            Space::with_width(Length::Fill),
-        ]
-        .spacing(4)
-        .align_y(alignment::Vertical::Center)
-    } else {
-        let mut r = row![
-            mono_button(track.mono, track.id, 12),
-            monitor_button(track.monitor_enabled, track.id, 12),
-            record_arm_button(track.record_armed, track.id, 12),
-            mute_button(
-                track.muted,
-                Message::Track(TrackMessage::ToggleMute(track.id)),
-                12
-            ),
-            solo_button(
-                track.soloed,
-                Message::Track(TrackMessage::ToggleSolo(track.id)),
-                12
-            ),
-        ]
-        .spacing(4)
+    let name_col = column![
+        container(name).width(Length::Fill).clip(true),
+        container(kind).width(Length::Fill).clip(true),
+    ]
+    .spacing(2);
+
+    // ---- 4 mini buttons: Mute / Solo / Arm / Monitor ----
+    let buttons = row![
+        mute_button(
+            track.muted,
+            Message::Track(TrackMessage::ToggleMute(track.id)),
+            12,
+        ),
+        solo_button(
+            track.soloed,
+            Message::Track(TrackMessage::ToggleSolo(track.id)),
+            12,
+        ),
+        record_arm_button(track.record_armed, track.id, 12),
+        monitor_button(track.monitor_enabled, track.id, 12),
+    ]
+    .spacing(2)
+    .align_y(alignment::Vertical::Center);
+
+    // ---- Top-right delete (tiny, hugs the corner) ----
+    let del = delete_button(
+        Message::Track(TrackMessage::RequestRemoveTrack(track.id)),
+        11,
+    );
+
+    // Top of the cell: name + kind, with delete in the corner.
+    let top_row = row![
+        glyph,
+        Space::with_width(10),
+        name_col,
+        Space::with_width(6),
+        del,
+    ]
+    .spacing(0)
+    .align_y(alignment::Vertical::Center);
+
+    // Bottom of the cell: 4-button row, right-aligned to keep the glyph +
+    // name visually the dominant element.
+    let button_row = row![Space::with_width(Length::Fill), buttons]
         .align_y(alignment::Vertical::Center);
-        // Only instrument tracks expose the bounce-in-place trigger;
-        // showing a perma-disabled button on every audio track would be
-        // visual noise. The button itself is greyed out when the
-        // current track lacks a sound source or MIDI to render.
-        if track.track_type == resonance_audio::types::TrackType::Instrument {
-            r = r.push(bounce_button(track.id, bounce_enabled, 12));
-        }
-        r.push(Space::with_width(Length::Fill))
-    };
 
-    let header_col = column![name_row, icon_row].spacing(4);
+    let body_col = column![top_row, Space::with_height(8), button_row,]
+        .spacing(0)
+        .height(Length::Fill);
 
-    // Sub-tracks get an indent on the left so their visual hierarchy
-    // under the parent track is obvious at a glance.
-    let left_pad: f32 = if is_sub { 20.0 } else { 8.0 };
-    let content = container(header_col)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(iced::Padding {
-            top: 6.0,
-            right: 8.0,
-            bottom: 6.0,
-            left: left_pad,
-        })
-        .clip(true);
-
+    // ---- Background, left selection stripe, hairline bottom ----
     let bg = if track.record_armed {
         theme::PANEL_ARMED
     } else if is_selected {
-        theme::PANEL_SELECTED
-    } else if is_sub {
-        theme::PANEL
+        theme::BG_2
     } else {
-        theme::PANEL_DARK
+        theme::BG_1
     };
-    let border_color = if track.record_armed {
-        theme::RECORD_RED
+    let stripe_color = if track.record_armed {
+        theme::BAD
     } else if is_selected {
-        theme::SELECTED_BORDER
+        theme::ACCENT
     } else {
-        theme::SEPARATOR
+        Color::TRANSPARENT
     };
 
-    let header = container(content)
+    let body = container(body_col)
         .width(Length::Fill)
-        .height(theme::TRACK_HEIGHT)
+        .height(Length::Fill)
+        .padding(iced::Padding {
+            top: 10.0,
+            right: 10.0,
+            bottom: 10.0,
+            left: 12.0,
+        });
+
+    let body_with_bg = container(body)
+        .width(Length::Fill)
+        .height(Length::Fill)
         .style(move |_theme| container::Style {
             background: Some(iced::Background::Color(bg)),
-            border: iced::Border {
-                color: border_color,
-                width: if is_selected { 1.0 } else { 0.5 },
-                radius: 0.0.into(),
-            },
             ..Default::default()
         });
 
-    // Wrap in a mouse_area so clicking anywhere on the header selects
-    // the track. The inner buttons (mute, solo, etc.) capture their own
-    // presses, so this only fires on the "dead space" around them.
-    mouse_area(header)
+    let stripe = container(Space::with_height(Length::Fill))
+        .width(2)
+        .height(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(iced::Background::Color(stripe_color)),
+            ..Default::default()
+        });
+
+    let cell = row![stripe, body_with_bg].height(theme::TRACK_HEIGHT);
+
+    // 1px hairline below each cell so rows separate without a heavy border.
+    let hairline = container(Space::with_width(Length::Fill))
+        .height(1)
+        .style(theme::separator_bg);
+
+    let stack = column![cell, hairline].spacing(0);
+
+    mouse_area(stack)
         .on_press(Message::Ui(UiMessage::SelectTrack(Some(track_id))))
         .into()
+}
+
+/// Pick a Font Awesome glyph for the given track. Uses the persisted
+/// `instrument_icon` for instrument tracks; audio tracks get a microphone.
+fn glyph_for_track(track: &TrackState) -> char {
+    match track.track_type {
+        resonance_audio::types::TrackType::Audio => fa::MICROPHONE,
+        resonance_audio::types::TrackType::Instrument => track.instrument_icon.glyph(),
+    }
+}
+
+/// Build the small descriptor line under the track name. Examples:
+/// - Audio track: "Audio · MIC 1" (or just "Audio" when no input is set)
+/// - Instrument track with plugin: "Resonance Wave"
+/// - Drum track: "Kit · Resonance Drums"
+/// - Track with no plugin yet: "Instrument" or "Audio"
+fn kind_label_for_track(track: &TrackState) -> String {
+    use resonance_audio::types::TrackType;
+    let plugin_name = track
+        .plugins
+        .first()
+        .map(|p| p.plugin_name.clone())
+        .unwrap_or_default();
+    // The track-list column is ~140px wide once the glyph + button row
+    // are accounted for, so the kind line cannot exceed ~22 chars at 10px
+    // before it wraps. `short()` enforces an ellipsis well within that.
+    match track.track_type {
+        TrackType::Audio => match track.input_device_name.as_deref() {
+            Some(dev) if !dev.is_empty() => format!("Audio · {}", short(dev, 14)),
+            _ => "Audio".to_string(),
+        },
+        TrackType::Instrument => {
+            if plugin_name.is_empty() {
+                if track.instrument_type == state::InstrumentType::Drum {
+                    "Drum kit".to_string()
+                } else {
+                    "Instrument".to_string()
+                }
+            } else if track.instrument_type == state::InstrumentType::Drum {
+                format!("Kit · {}", short(&plugin_name, 14))
+            } else {
+                short(&plugin_name, 22)
+            }
+        }
+    }
+}
+
+fn short(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
+        t.push('…');
+        t
+    }
 }
 
 /// Numerator wrapper for the pick_list (needs Display + PartialEq).
@@ -272,7 +415,6 @@ impl std::fmt::Display for Numerator {
     }
 }
 
-/// Denominator wrapper for the pick_list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Denominator(u8);
 impl std::fmt::Display for Denominator {
@@ -283,10 +425,9 @@ impl std::fmt::Display for Denominator {
 
 /// Render the Time Sig header row. When a signature event is selected,
 /// show inline pick_lists for editing numerator and denominator.
-fn view_signature_header<'a>(r: &'a Resonance, row_h: f32) -> Element<'a, Message> {
-    let label = text("Time Sig").size(11).color(theme::TEXT_DIM);
+fn view_signature_header(r: &Resonance, row_h: f32) -> Element<'static, Message> {
+    let label = text("Time Sig").size(11).color(theme::TEXT_2);
 
-    // Check if a signature event is selected.
     let selected = r.interaction.selected_global_event.and_then(|sel| {
         if sel.kind == state::GlobalTrackKind::Signature {
             r.signature_events.get(sel.index).map(|ev| (sel.index, ev))
@@ -295,7 +436,7 @@ fn view_signature_header<'a>(r: &'a Resonance, row_h: f32) -> Element<'a, Messag
         }
     });
 
-    let content = if let Some((idx, event)) = selected {
+    if let Some((idx, event)) = selected {
         let num = event.numerator;
         let den = event.denominator;
 
@@ -322,10 +463,10 @@ fn view_signature_header<'a>(r: &'a Resonance, row_h: f32) -> Element<'a, Messag
         .text_size(11)
         .width(42);
 
-        let slash = text("/").size(12).color(theme::TEXT_DIM);
+        let slash = text("/").size(12).color(theme::TEXT_3);
 
         row![
-            Space::with_width(8),
+            Space::with_width(10),
             label,
             Space::with_width(8),
             num_picker,
@@ -337,11 +478,9 @@ fn view_signature_header<'a>(r: &'a Resonance, row_h: f32) -> Element<'a, Messag
         .height(row_h)
         .into()
     } else {
-        row![Space::with_width(8), label,]
+        row![Space::with_width(10), label,]
             .align_y(alignment::Vertical::Center)
             .height(row_h)
             .into()
-    };
-
-    content
+    }
 }

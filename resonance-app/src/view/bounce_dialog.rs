@@ -57,12 +57,15 @@ pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
         .map(|t| t.name.as_str())
         .unwrap_or("track");
 
-    let title = text("Bounce in place").size(20).color(theme::ACCENT);
+    let title = text("Bounce in place")
+        .size(20)
+        .font(theme::SERIF_ITALIC_FONT)
+        .color(theme::TEXT_1);
     let explanation = text(format!(
         "\"{track_name}\" plays an external MIDI instrument. Pick the audio input that's listening to that instrument's return — the bounce will record from there while the timeline plays."
     ))
     .size(13)
-    .color(theme::TEXT);
+    .color(theme::TEXT_2);
 
     // Device picker.
     let selected_device = dialog
@@ -167,15 +170,31 @@ pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
         text("Pick a device first").size(11).color(theme::TEXT_DIM).into()
     };
 
-    let cancel_btn = button(text("Cancel").size(13).color(theme::TEXT))
+    let cancel_btn = button(text("Cancel").size(13).color(theme::TEXT_1))
         .on_press(Message::Track(TrackMessage::Bounce(BounceMessage::Cancel)))
         .padding([8, 18])
-        .style(|_theme, status| theme::transport_button_style(status));
+        .style(|_theme, status| theme::ghost_button_style(status));
 
-    let mut confirm_btn = button(text("Bounce").size(13).color(iced::Color::WHITE))
-        .padding([8, 18])
-        .style(|_theme, status| theme::transport_button_style(status));
-    if dialog.selected_device.is_some() {
+    let confirm_active = dialog.selected_device.is_some();
+    let mut confirm_btn = button(
+        text("Bounce")
+            .size(13)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(if confirm_active {
+                theme::BG_0
+            } else {
+                theme::TEXT_3
+            }),
+    )
+    .padding([8, 18])
+    .style(move |_theme, status| {
+        if confirm_active {
+            theme::primary_button_style(status)
+        } else {
+            theme::ghost_button_style(status)
+        }
+    });
+    if confirm_active {
         confirm_btn = confirm_btn.on_press(Message::Track(TrackMessage::Bounce(BounceMessage::Confirm)));
     }
 
@@ -188,7 +207,10 @@ pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
         Space::with_height(10),
         explanation,
         Space::with_height(16),
-        text("Audio input").size(12).color(theme::TEXT_DIM),
+        text("AUDIO INPUT")
+            .size(10)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::TEXT_3),
         device_picker,
         Space::with_height(8),
         port_section,
@@ -200,11 +222,11 @@ pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
     .width(460);
 
     let dialog = container(dialog_content).style(|_theme| container::Style {
-        background: Some(iced::Background::Color(theme::PANEL)),
+        background: Some(iced::Background::Color(theme::BG_2)),
         border: iced::Border {
-            color: theme::SEPARATOR,
+            color: theme::LINE,
             width: 1.0,
-            radius: 8.0.into(),
+            radius: theme::RADIUS_XL.into(),
         },
         ..Default::default()
     });

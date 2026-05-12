@@ -66,23 +66,21 @@ impl TimelineCanvas<'_> {
         bounds: Rectangle,
     ) -> (Option<ScrollbarRects>, Option<ScrollbarRects>) {
         use crate::timeline::scrollbar;
-        let content_w = self.content_width_px(bounds.width);
+        // Horizontal scroll is now owned by the outer `Scrollable` that
+        // wraps the timeline canvas (see `view_timeline`), so we no
+        // longer draw an in-canvas horizontal scrollbar. The vertical
+        // bar stays — tracks scroll inside the canvas so the ruler
+        // / section band / global-tracks header line up with their lanes.
         let content_h = self.content_height_px();
         let header_h = self.fixed_header_height();
-        let h = scrollbar::h_rects(
-            bounds,
-            content_w,
-            self.scroll_offset,
-            scrollbar::v_rects(bounds, content_h, self.scroll_offset_y, header_h, true).is_some(),
-        );
         let v = scrollbar::v_rects(
             bounds,
             content_h,
             self.scroll_offset_y,
             header_h,
-            h.is_some(),
+            false,
         );
-        (h, v)
+        (None, v)
     }
 
     pub(super) fn handle_wheel(
@@ -97,16 +95,23 @@ impl TimelineCanvas<'_> {
         if cursor.position_in(bounds).is_none() {
             return (canvas::event::Status::Ignored, None);
         }
+        // Horizontal scroll is owned by the outer `Scrollable` that
+        // wraps the timeline canvas — returning `Ignored` for any
+        // wheel-X delta lets the event bubble up so the scrollable can
+        // handle it natively. Vertical scroll stays inside the canvas
+        // because the track lanes scroll in lockstep with the ruler /
+        // section band / global-track header (vertical scrollbar
+        // drawing + drag handling live in the canvas too).
         match delta {
             mouse::ScrollDelta::Lines { x, y } => {
                 if x.abs() > f32::EPSILON {
-                    return captured(Message::Viewport(ViewportMessage::ScrollX(-x * 30.0)));
+                    return (canvas::event::Status::Ignored, None);
                 }
                 captured(Message::Viewport(ViewportMessage::ScrollY(-y * 30.0)))
             }
             mouse::ScrollDelta::Pixels { x, y } => {
                 if x.abs() > f32::EPSILON {
-                    return captured(Message::Viewport(ViewportMessage::ScrollX(-x)));
+                    return (canvas::event::Status::Ignored, None);
                 }
                 captured(Message::Viewport(ViewportMessage::ScrollY(-y)))
             }

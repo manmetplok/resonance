@@ -255,7 +255,7 @@ pub struct TrackState {
 }
 
 /// Identifies a sub-track's parent and which plugin output port it reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SubTrackLink {
     pub parent_track_id: TrackId,
     /// Index into the plugin's declared output-port layout. `0` is the
@@ -266,11 +266,14 @@ pub struct SubTrackLink {
 
 impl TrackState {
     /// New audio track with default settings. `order` comes from the
-    /// caller (usually `next_track_order`).
+    /// caller (usually `next_track_order`). The default name uses the
+    /// 1-based order so the user sees "Track 1", "Track 2", ... rather
+    /// than the engine's internal id (which lives in the billions for
+    /// auto-allocated tracks).
     pub fn new_audio(id: TrackId, order: usize) -> Self {
         Self {
             id,
-            name: format!("Track {}", id),
+            name: format!("Track {}", order + 1),
             volume: 0.0,
             pan: 0.0,
             muted: false,
@@ -302,7 +305,7 @@ impl TrackState {
     pub fn new_instrument(id: TrackId, order: usize) -> Self {
         Self {
             id,
-            name: format!("Instrument {}", id),
+            name: format!("Instrument {}", order + 1),
             volume: 0.0,
             pan: 0.0,
             muted: false,
@@ -576,7 +579,7 @@ impl Default for ArrangeViewport {
             viewport_width: 1000.0,
             timeline_content_width: 1000.0,
             timeline_content_height: 0.0,
-            global_tracks_expanded: true,
+            global_tracks_expanded: false,
         }
     }
 }
@@ -658,16 +661,37 @@ pub struct TrackRegistry {
 }
 
 impl TrackRegistry {
+    /// `tracks` and `busses` are kept sorted by `.order` as an invariant
+    /// so the view layer iterates them directly without an O(n log n)
+    /// resort per frame. Every mutation that pushes, removes, or changes
+    /// `.order` MUST call `resort_tracks` / `resort_busses` afterwards,
+    /// or the on-screen ordering will drift from the data model.
     pub fn sorted_tracks(&self) -> Vec<&TrackState> {
-        let mut v: Vec<&TrackState> = self.tracks.iter().collect();
-        v.sort_by_key(|t| t.order);
-        v
+        debug_assert!(
+            self.tracks.windows(2).all(|w| w[0].order <= w[1].order),
+            "TrackRegistry.tracks must be sorted by .order — call resort_tracks() after the mutation that ordered last"
+        );
+        self.tracks.iter().collect()
     }
 
     pub fn sorted_busses(&self) -> Vec<&BusState> {
-        let mut v: Vec<&BusState> = self.busses.iter().collect();
-        v.sort_by_key(|b| b.order);
-        v
+        debug_assert!(
+            self.busses.windows(2).all(|w| w[0].order <= w[1].order),
+            "TrackRegistry.busses must be sorted by .order — call resort_busses() after the mutation that ordered last"
+        );
+        self.busses.iter().collect()
+    }
+
+    /// Re-establishes the sorted-by-order invariant on `tracks`. Cheap
+    /// for already-sorted slices (Rust's sort is adaptive), so call this
+    /// liberally after any mutation that might break order.
+    pub fn resort_tracks(&mut self) {
+        self.tracks.sort_by_key(|t| t.order);
+    }
+
+    /// Re-establishes the sorted-by-order invariant on `busses`.
+    pub fn resort_busses(&mut self) {
+        self.busses.sort_by_key(|b| b.order);
     }
 
     /// Run `f` on the track with the given id, returning whatever `f`

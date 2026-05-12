@@ -11,6 +11,113 @@ use crate::timeline::TimelineCanvas;
 use resonance_audio::types::avg_bpm_for_bar;
 
 impl TimelineCanvas<'_> {
+    /// Render the compose-section pills above the lanes. Each placement
+    /// becomes a colored pill spanning its bars. Selected placement gets
+    /// the lavender-wash accent; unselected placements use a softer wash
+    /// derived from the section's color.
+    pub(super) fn draw_section_band(
+        &self,
+        frame: &mut canvas::Frame,
+        width: f32,
+        band_top: f32,
+        band_height: f32,
+    ) {
+        // Tinted backdrop so the band reads as a continuous strip even
+        // when the placements are sparse.
+        frame.fill_rectangle(
+            Point::new(0.0, band_top),
+            Size::new(width, band_height),
+            theme::BG_1,
+        );
+        // Bottom hairline.
+        frame.fill_rectangle(
+            Point::new(0.0, band_top + band_height - 1.0),
+            Size::new(width, 1.0),
+            theme::LINE_2,
+        );
+
+        for placement in self.section_placements {
+            let Some(definition) = self
+                .section_definitions
+                .iter()
+                .find(|d| d.id == placement.definition_id)
+            else {
+                continue;
+            };
+            let start_sample = self.tempo_map.bar_to_sample(placement.start_bar);
+            let end_sample = self
+                .tempo_map
+                .bar_to_sample(placement.start_bar + definition.length_bars);
+            let x = self.sample_to_x(start_sample);
+            let next_x = self.sample_to_x(end_sample);
+            if next_x < 0.0 || x > width {
+                continue;
+            }
+
+            let is_selected = self.selected_placement_id == Some(placement.id);
+            let base = Color::from_rgba(
+                definition.color[0] as f32 / 255.0,
+                definition.color[1] as f32 / 255.0,
+                definition.color[2] as f32 / 255.0,
+                if is_selected { 0.32 } else { 0.18 },
+            );
+            let border = Color::from_rgba(
+                definition.color[0] as f32 / 255.0,
+                definition.color[1] as f32 / 255.0,
+                definition.color[2] as f32 / 255.0,
+                if is_selected { 0.85 } else { 0.45 },
+            );
+
+            let pill_x = x.max(0.0);
+            let pill_visible = (next_x.min(width) - pill_x).max(0.0);
+            let pill_y = band_top + 4.0;
+            let pill_h = band_height - 8.0;
+
+            let pill = canvas::Path::rounded_rectangle(
+                Point::new(pill_x, pill_y),
+                Size::new(pill_visible, pill_h),
+                4.0.into(),
+            );
+            frame.fill(&pill, base);
+            frame.stroke(
+                &pill,
+                canvas::Stroke::default()
+                    .with_width(if is_selected { 1.5 } else { 1.0 })
+                    .with_color(border),
+            );
+
+            // Label "Name · NbBars" — only render if there's room.
+            if pill_visible > 50.0 {
+                let bpm = self.tempo_map.bpm;
+                let num = self.tempo_map.numerator;
+                let den = self.tempo_map.denominator;
+                let label = format!(
+                    "{} · {}/{}{}",
+                    definition.name,
+                    num,
+                    den,
+                    if pill_visible > 110.0 {
+                        format!(" · {} bpm", bpm.round() as u32)
+                    } else {
+                        String::new()
+                    }
+                );
+                frame.fill_text(canvas::Text {
+                    content: label,
+                    position: Point::new(pill_x + 8.0, pill_y + 3.0),
+                    color: if is_selected {
+                        theme::ACCENT_SOFT
+                    } else {
+                        theme::TEXT_2
+                    },
+                    size: 10.0.into(),
+                    font: theme::UI_FONT_SEMIBOLD,
+                    ..canvas::Text::default()
+                });
+            }
+        }
+    }
+
     /// Draw the global tracks area (tempo + time signature) between the
     /// ruler and the regular track lanes. The tempo row shows a line
     /// graph (like Logic Pro) with draggable points connected by lines;
@@ -96,9 +203,18 @@ impl TimelineCanvas<'_> {
                 })
                 .collect();
 
-            // Draw connecting lines and filled area.
-            let line_color = Color::from_rgba(0.9, 0.55, 0.15, 0.7);
-            let fill_color = Color::from_rgba(0.9, 0.55, 0.15, 0.10);
+            // Draw connecting lines and filled area. Tempo events read in
+            // the warm/amber accent matching the rest of the redesign's
+            // "playhead / time" semantic; the dim variant softens the
+            // filled area underneath the line.
+            let line_color = Color {
+                a: 0.7,
+                ..theme::WARM
+            };
+            let fill_color = Color {
+                a: 0.10,
+                ..theme::WARM
+            };
 
             for pair in points.windows(2) {
                 let (x1, y1, _, _) = pair[0];
@@ -160,11 +276,7 @@ impl TimelineCanvas<'_> {
                 }
                 // Dot.
                 let dot_r = if selected { 4.0 } else { 3.0 };
-                let dot_color = if selected {
-                    theme::ACCENT
-                } else {
-                    Color::from_rgb(0.9, 0.55, 0.15)
-                };
+                let dot_color = if selected { theme::ACCENT } else { theme::WARM };
                 if x >= -dot_r && x <= width + dot_r {
                     frame.fill_rectangle(
                         Point::new(x - dot_r, y - dot_r),
@@ -177,7 +289,10 @@ impl TimelineCanvas<'_> {
                     let marker_color = if selected {
                         theme::ACCENT
                     } else {
-                        Color::from_rgba(0.9, 0.55, 0.15, 0.3)
+                        Color {
+                            a: 0.30,
+                            ..theme::WARM
+                        }
                     };
                     frame.fill_rectangle(
                         Point::new(x, tempo_y),
@@ -224,10 +339,15 @@ impl TimelineCanvas<'_> {
                     index: i,
                 });
 
+            // Signature change blocks use the lavender accent at low alpha
+            // so they're visible but don't compete with clips for attention.
             let block_color = if is_selected {
-                Color::from_rgba(0.3, 0.6, 0.9, 0.25)
+                theme::ACCENT_DIM
             } else {
-                Color::from_rgba(0.3, 0.6, 0.9, 0.12)
+                Color {
+                    a: 0.08,
+                    ..theme::ACCENT
+                }
             };
             frame.fill_rectangle(
                 Point::new(x.max(0.0), sig_y + 1.0),
@@ -464,43 +584,63 @@ impl TimelineCanvas<'_> {
             None => return,
         };
 
-        let y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT + 2.0 - y_off;
+        // 8px inset top/bottom matches the design.
+        let lane_y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT - y_off;
+        let y = lane_y + 8.0;
+        let clip_height = theme::TRACK_HEIGHT - 16.0;
 
-        // Skip clips on tracks outside visible area
-        if y + theme::TRACK_HEIGHT < ruler_height || y > visible_height {
+        if y + clip_height < ruler_height || y > visible_height {
             return;
         }
-        let clip_height = theme::TRACK_HEIGHT - 4.0;
 
         let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
         let duration_seconds = clip.duration_samples as f32 / self.sample_rate as f32;
 
         let x = start_seconds * self.zoom - self.scroll_offset;
         let w = duration_seconds * self.zoom;
+        if w <= 0.0 {
+            return;
+        }
 
-        // Clip body
-        frame.fill_rectangle(
+        // Audio clips: warm/amber wash + tinted border.
+        let is_selected = self.selected_clip == Some(clip.id);
+        let body_color = Color {
+            a: 0.10,
+            ..theme::WARM
+        };
+        let border_color = if is_selected {
+            theme::ACCENT
+        } else {
+            Color {
+                a: 0.32,
+                ..theme::WARM
+            }
+        };
+
+        let body = canvas::Path::rounded_rectangle(
             Point::new(x, y),
             Size::new(w, clip_height),
-            theme::CLIP_BODY,
+            8.0.into(),
         );
+        frame.fill(&body, body_color);
 
-        // Waveform rendering
+        // Waveform — warm-tinted bars on top of the wash.
         let header_height = 18.0;
         if !clip.waveform_peaks.is_empty() {
             let wave_y = y + header_height;
-            let wave_h = clip_height - header_height;
+            let wave_h = clip_height - header_height - 4.0;
             let wave_center = wave_y + wave_h * 0.5;
 
             let peak_frames = resonance_audio::types::WAVEFORM_PEAK_FRAMES as f32;
             let seconds_per_peak = peak_frames / self.sample_rate as f32;
             let pixels_per_peak = seconds_per_peak * self.zoom;
 
-            // Determine which peaks are visible (accounting for trim)
             let trim_start_peaks = clip.trim_start_frames as f32 / peak_frames;
-            let _total_visible_peaks = clip.duration_samples as f32 / peak_frames;
 
-            let waveform_color = Color::from_rgba(0.7, 0.85, 1.0, 0.5);
+            let waveform_color = Color {
+                a: 0.7,
+                ..theme::WARM
+            };
 
             let start_px = (-x).max(0.0);
             let mut px = start_px;
@@ -513,7 +653,6 @@ impl TimelineCanvas<'_> {
                 let (min_val, max_val) = clip.waveform_peaks[peak_idx];
 
                 let draw_x = x + px;
-                // Only draw if on-screen
                 if draw_x + pixels_per_peak >= 0.0 && draw_x <= w + x {
                     let top = wave_center - max_val * wave_h * 0.5;
                     let bottom = wave_center - min_val * wave_h * 0.5;
@@ -528,14 +667,8 @@ impl TimelineCanvas<'_> {
             }
         }
 
-        // Clip header bar
-        frame.fill_rectangle(
-            Point::new(x, y),
-            Size::new(w, header_height),
-            theme::CLIP_HEADER,
-        );
-
-        // Clip name (truncated safely for multi-byte UTF-8)
+        // Clip name + bar count footer in the header row. Text in WARM
+        // for audio clips so the kind reads at a glance.
         let display_name: String = if clip.name.chars().count() > 20 {
             let mut truncated: String = clip.name.chars().take(17).collect();
             truncated.push_str("...");
@@ -543,32 +676,29 @@ impl TimelineCanvas<'_> {
         } else {
             clip.name.clone()
         };
-        frame.fill_text(canvas::Text {
-            content: display_name,
-            position: Point::new(x + 4.0, y + 2.0),
-            color: theme::TEXT,
-            size: 11.0.into(),
-            ..canvas::Text::default()
-        });
-
-        // Clip border (highlighted if selected)
-        let is_selected = self.selected_clip == Some(clip.id);
-        let border = canvas::Path::rectangle(Point::new(x, y), Size::new(w, clip_height));
-        if is_selected {
-            frame.stroke(
-                &border,
-                canvas::Stroke::default()
-                    .with_color(theme::CLIP_SELECTED_BORDER)
-                    .with_width(2.0),
-            );
-        } else {
-            frame.stroke(
-                &border,
-                canvas::Stroke::default()
-                    .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.3))
-                    .with_width(1.0),
-            );
+        if x + 6.0 < x + w {
+            frame.fill_text(canvas::Text {
+                content: display_name,
+                position: Point::new(x + 9.0, y + 4.0),
+                color: theme::WARM,
+                size: 10.5.into(),
+                ..canvas::Text::default()
+            });
         }
+
+        // Border. Selection wins over normal hairline.
+        let border_w = if is_selected { 1.5 } else { 1.0 };
+        let stroke_path = canvas::Path::rounded_rectangle(
+            Point::new(x, y),
+            Size::new(w, clip_height),
+            8.0.into(),
+        );
+        frame.stroke(
+            &stroke_path,
+            canvas::Stroke::default()
+                .with_color(border_color)
+                .with_width(border_w),
+        );
     }
 
     pub(super) fn draw_midi_clip(
@@ -587,14 +717,14 @@ impl TimelineCanvas<'_> {
             None => return,
         };
 
-        let y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT + 2.0 - y_off;
+        let lane_y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT - y_off;
+        let y = lane_y + 8.0;
+        let clip_height = theme::TRACK_HEIGHT - 16.0;
 
-        if y + theme::TRACK_HEIGHT < ruler_height || y > visible_height {
+        if y + clip_height < ruler_height || y > visible_height {
             return;
         }
-        let clip_height = theme::TRACK_HEIGHT - 4.0;
 
-        // Convert tick duration to samples integrating the tempo map.
         let clip_end_sample = self.tempo_map.tick_to_abs_sample(
             clip.start_sample,
             clip.duration_ticks,
@@ -606,18 +736,36 @@ impl TimelineCanvas<'_> {
 
         let x = start_seconds * self.zoom - self.scroll_offset;
         let w = duration_seconds * self.zoom;
+        if w <= 0.0 {
+            return;
+        }
 
-        // Teal/cyan clip body
-        let midi_body_color = Color::from_rgb(0.12, 0.22, 0.25);
-        frame.fill_rectangle(Point::new(x, y), Size::new(w, clip_height), midi_body_color);
+        // MIDI clips: lavender wash + lavender border.
+        let is_selected = self.selected_midi_clip == Some(clip.id);
+        let body_color = Color {
+            a: 0.10,
+            ..theme::ACCENT
+        };
+        let border_color = if is_selected {
+            theme::ACCENT
+        } else {
+            theme::ACCENT_LINE
+        };
 
-        // Draw note rectangles inside the clip body
+        let body = canvas::Path::rounded_rectangle(
+            Point::new(x, y),
+            Size::new(w, clip_height),
+            8.0.into(),
+        );
+        frame.fill(&body, body_color);
+
+        // Note preview — small lavender rects mapped to the clip's note
+        // range. Drawn dimmed so the wash still reads as lavender.
         let header_height = 18.0;
         let note_area_y = y + header_height;
-        let note_area_h = clip_height - header_height;
+        let note_area_h = clip_height - header_height - 4.0;
 
         if !clip.notes.is_empty() && note_area_h > 2.0 && w > 2.0 {
-            // Find the note range for vertical mapping
             let mut min_note: u8 = 127;
             let mut max_note: u8 = 0;
             for note in &clip.notes {
@@ -628,21 +776,23 @@ impl TimelineCanvas<'_> {
                     max_note = note.note;
                 }
             }
-            // Add padding so notes aren't flush with edges
             let range_min = min_note.saturating_sub(2);
             let range_max = (max_note + 2).min(127);
             let note_range = (range_max - range_min).max(1) as f32;
 
             let total_ticks = clip.duration_ticks as f32;
             if total_ticks > 0.0 {
+                let note_color = Color {
+                    a: 0.85,
+                    ..theme::ACCENT_SOFT
+                };
                 for note in &clip.notes {
-                    // Horizontal position: note start relative to clip visible start
                     let note_start_in_clip = note.start_tick as f32 - clip.trim_start_ticks as f32;
                     if note_start_in_clip + note.duration_ticks as f32 <= 0.0 {
-                        continue; // note is before visible area
+                        continue;
                     }
                     if note_start_in_clip >= total_ticks {
-                        continue; // note is after visible area
+                        continue;
                     }
                     let visible_start = note_start_in_clip.max(0.0);
                     let visible_end =
@@ -651,20 +801,10 @@ impl TimelineCanvas<'_> {
                     let nx = x + (visible_start / total_ticks) * w;
                     let nw = ((visible_end - visible_start) / total_ticks) * w;
 
-                    // Vertical position: highest note at top
                     let ny = note_area_y
                         + (1.0 - (note.note as f32 - range_min as f32) / note_range)
                             * (note_area_h - 3.0);
                     let nh = (note_area_h / note_range).max(2.0).min(6.0);
-
-                    // Color intensity maps to velocity
-                    let vel = note.velocity.clamp(0.0, 1.0);
-                    let note_color = Color::from_rgba(
-                        0.2 + 0.6 * vel,
-                        0.7 + 0.3 * vel,
-                        0.8 + 0.2 * vel,
-                        0.7 + 0.3 * vel,
-                    );
 
                     frame.fill_rectangle(
                         Point::new(nx, ny),
@@ -675,15 +815,7 @@ impl TimelineCanvas<'_> {
             }
         }
 
-        // Clip header bar (teal accent)
-        let midi_header_color = Color::from_rgb(0.15, 0.45, 0.50);
-        frame.fill_rectangle(
-            Point::new(x, y),
-            Size::new(w, header_height),
-            midi_header_color,
-        );
-
-        // Clip name
+        // Clip name in lavender accent.
         let display_name: String = if clip.name.chars().count() > 20 {
             let mut truncated: String = clip.name.chars().take(17).collect();
             truncated.push_str("...");
@@ -693,29 +825,23 @@ impl TimelineCanvas<'_> {
         };
         frame.fill_text(canvas::Text {
             content: display_name,
-            position: Point::new(x + 4.0, y + 2.0),
-            color: theme::TEXT,
-            size: 11.0.into(),
+            position: Point::new(x + 9.0, y + 4.0),
+            color: theme::ACCENT_SOFT,
+            size: 10.5.into(),
             ..canvas::Text::default()
         });
 
-        // Clip border (highlighted if selected)
-        let is_selected = self.selected_midi_clip == Some(clip.id);
-        let border = canvas::Path::rectangle(Point::new(x, y), Size::new(w, clip_height));
-        if is_selected {
-            frame.stroke(
-                &border,
-                canvas::Stroke::default()
-                    .with_color(theme::CLIP_SELECTED_BORDER)
-                    .with_width(2.0),
-            );
-        } else {
-            frame.stroke(
-                &border,
-                canvas::Stroke::default()
-                    .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.3))
-                    .with_width(1.0),
-            );
-        }
+        let border_w = if is_selected { 1.5 } else { 1.0 };
+        let stroke_path = canvas::Path::rounded_rectangle(
+            Point::new(x, y),
+            Size::new(w, clip_height),
+            8.0.into(),
+        );
+        frame.stroke(
+            &stroke_path,
+            canvas::Stroke::default()
+                .with_color(border_color)
+                .with_width(border_w),
+        );
     }
 }

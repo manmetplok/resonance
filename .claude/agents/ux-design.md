@@ -43,6 +43,22 @@ Evaluate the proposed or implemented UI changes against the guidelines:
 - Are view functions pure (no side effects)?
 - Are new elements properly integrated into the existing view hierarchy?
 
+### Performance (cheap-to-rebuild view tree)
+- Any `pick_list` options that are a function of slow-changing state
+  (devices, plugins, bus list) must come from a cached `Rc<[T]>` on
+  `view::ui_caches::UiViewCaches`, not a per-frame `iter().filter().cloned().collect()`.
+  See `.claude/skills/ui-work.md` §11.1.
+- Regions of the tree that don't update per audio tick (the arrange
+  track-header column, the mixer inspector minus its SIGNAL stats)
+  should be wrapped in `iced::widget::lazy` keyed off a state
+  fingerprint. See §11.2 — and never put a `canvas::Cache`-backed
+  widget (meter, knob) inside a lazy region whose hash omits that
+  widget's live data, or the canvas freezes.
+- Value-driven visuals that animate at audio-tick rate (level meters,
+  knob position indicators) belong in a Canvas widget with its own
+  `canvas::Cache`. Don't build them out of resized containers — see
+  §11.4.
+
 Present your findings as a clear list: what's correct, what needs changing, and specific recommendations with code-level detail (which style function to use, which color constant, etc.).
 
 ## Step 4: Implement or guide fixes
@@ -57,8 +73,30 @@ If you're reviewing before implementation, provide specific guidance the program
 
 ## Step 5: Verify
 
-1. Run `cargo check -p resonance-app` to ensure the UI code compiles.
-2. Summarize what was reviewed/changed and any remaining concerns.
+1. Run `cargo build -p resonance-app` to ensure the UI code compiles.
+2. **Capture a screenshot of the affected view and inspect it** — UI work
+   without a visual check is incomplete. Type-checking alone catches
+   logic errors but never alignment, overlap, clipping, or layout drift.
+   Use the screenshot recipe in `.claude/skills/ui-work.md` §10:
+
+   ```bash
+   ./target/debug/resonance-app --tab mixer --demo >/dev/null 2>&1 &
+   APP_PID=$!
+   sleep 4
+   spectacle --activewindow --background \
+     --output /tmp/resonance-shots/mixer.png --nonotify >/dev/null 2>&1
+   sleep 1
+   kill -TERM $APP_PID 2>/dev/null
+   wait $APP_PID 2>/dev/null
+   magick /tmp/resonance-shots/mixer.png -resize 1500 \
+     /tmp/resonance-shots/mixer-display.png
+   ```
+
+   Read the resulting `mixer-display.png` with the Read tool and verify
+   the change actually landed where you intended. Swap `--tab` for
+   `arrange` or `compose` when you've touched those views; capture
+   multiple tabs if the change affects more than one.
+3. Summarize what was reviewed/changed and any remaining concerns.
 
 ## Important notes
 

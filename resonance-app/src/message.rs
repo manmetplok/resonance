@@ -52,6 +52,11 @@ pub(crate) enum TransportMessage {
     SetBpmText(String),
     CommitBpm,
     ToggleMetronome,
+    /// Cycle the recorder precount through 0/1/2/4 bars. The redesigned
+    /// transport bar doesn't surface this yet — the variant + handler
+    /// stay so the feature is one wiring change away when we add a
+    /// click-and-hold or right-click affordance to the metronome.
+    #[allow(dead_code)]
     CyclePrecountBars,
     CycleTimeSignature,
     ToggleLoop,
@@ -238,6 +243,12 @@ pub(crate) enum MidiEditorMessage {
     },
     PreviewNote(TrackId, u8),
     StopPreview(TrackId, u8),
+    /// Horizontal scroll is now driven by the outer `Scrollable` that
+    /// wraps the piano roll canvas, so this variant is currently
+    /// unconstructed. Kept around so a future keyboard-shortcut path
+    /// (or a re-introduced canvas wheel-X handler) can drive it
+    /// without rewiring the undo classifier.
+    #[allow(dead_code)]
     ScrollX(f32),
     ScrollY(f32),
 }
@@ -258,8 +269,18 @@ pub(crate) enum PluginMessage {
 pub(crate) enum ViewportMessage {
     ZoomIn,
     ZoomOut,
+    /// Horizontal scroll is now driven by the outer `Scrollable` that
+    /// wraps the timeline canvas; the canvas-side wheel-X handler
+    /// returns `Ignored` so this variant is currently unconstructed.
+    /// Kept around so a keyboard-shortcut path (or a future
+    /// timeline-relative dispatcher) can drive it without re-plumbing
+    /// the undo classifier.
+    #[allow(dead_code)]
     ScrollX(f32),
     ScrollY(f32),
+    /// Same status as `ScrollX` — horizontal scroll-to is now owned by
+    /// the `Scrollable`; the canvas no longer emits this.
+    #[allow(dead_code)]
     ScrollToX(f32),
     ScrollToY(f32),
     ViewportWidth(f32),

@@ -24,9 +24,17 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     )
     .on_press(Message::Ui(UiMessage::CloseSettings));
 
-    let title = text("Settings").size(20).color(theme::ACCENT);
+    let title = text("Settings")
+        .size(22)
+        .font(theme::SERIF_ITALIC_FONT)
+        .color(theme::TEXT_1);
 
-    let section = |label: &'static str| text(label).size(11).color(theme::TEXT_DIM);
+    let section = |label: &'static str| {
+        text(label)
+            .size(10)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::TEXT_3)
+    };
 
     let open_btn = wide_button(
         fa::FOLDER_OPEN,
@@ -44,10 +52,10 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         Message::ProjectIo(ProjectIoMessage::SaveProjectAs),
     );
 
-    let close_btn = button(text("Close").size(13).color(theme::TEXT))
+    let close_btn = button(text("Close").size(13).color(theme::TEXT_1))
         .on_press(Message::Ui(UiMessage::CloseSettings))
         .padding([6, 14])
-        .style(|_theme, status| theme::transport_button_style(status));
+        .style(|_theme, status| theme::ghost_button_style(status));
 
     let send_toggle = toggle_button(
         "Send MIDI Clock",
@@ -103,11 +111,11 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     .width(420);
 
     let dialog = container(dialog_content).style(|_theme| container::Style {
-        background: Some(iced::Background::Color(theme::PANEL)),
+        background: Some(iced::Background::Color(theme::BG_2)),
         border: iced::Border {
-            color: theme::SEPARATOR,
+            color: theme::LINE,
             width: 1.0,
-            radius: 8.0.into(),
+            radius: theme::RADIUS_XL.into(),
         },
         ..Default::default()
     });
@@ -128,16 +136,16 @@ fn wide_button<'a>(
 ) -> iced::widget::Button<'a, Message> {
     button(
         row![
-            theme::icon(icon).size(14).color(theme::TEXT),
+            theme::icon(icon).size(13).color(theme::TEXT_2),
             Space::with_width(10),
-            text(label).size(13).color(theme::TEXT),
+            text(label).size(13).color(theme::TEXT_1),
         ]
         .align_y(alignment::Vertical::Center),
     )
     .on_press(on_press)
     .padding([8, 14])
     .width(Length::Fill)
-    .style(|_theme, status| theme::transport_button_style(status))
+    .style(|_theme, status| theme::ghost_button_style(status))
 }
 
 /// Pseudo-checkbox button: shows a filled/empty box icon plus a
@@ -155,20 +163,20 @@ fn toggle_button<'a>(
     let icon_color = if enabled {
         theme::ACCENT
     } else {
-        theme::TEXT_DIM
+        theme::TEXT_3
     };
     button(
         row![
-            theme::icon(icon).size(14).color(icon_color),
+            theme::icon(icon).size(13).color(icon_color),
             Space::with_width(10),
-            text(label).size(13).color(theme::TEXT),
+            text(label).size(13).color(theme::TEXT_1),
         ]
         .align_y(alignment::Vertical::Center),
     )
     .on_press(on_press)
     .padding([6, 10])
     .width(Length::Fill)
-    .style(|_theme, status| theme::transport_button_style(status))
+    .style(|_theme, status| theme::ghost_button_style(status))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

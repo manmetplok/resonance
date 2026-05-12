@@ -10,14 +10,14 @@ pub type BusId = u64;
 /// Where a track's post-fader audio lands. Tracks either sum directly
 /// into the master output (the default, matching pre-bus behaviour) or
 /// route into a named bus for group processing before reaching master.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrackOutput {
     Master,
     Bus(BusId),
 }
 
 /// Distinguishes audio recording/playback tracks from instrument (MIDI) tracks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrackType {
     Audio,
     Instrument,

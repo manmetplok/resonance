@@ -66,10 +66,12 @@ pub(super) fn bounce_progress(r: &mut Resonance, fraction: f32) {
 
 pub(super) fn midi_input_devices(r: &mut Resonance, devices: Vec<MidiDeviceInfo>) {
     r.midi_input_devices = devices;
+    r.view_caches.rebuild_midi_input(&r.midi_input_devices);
 }
 
 pub(super) fn midi_output_devices(r: &mut Resonance, devices: Vec<MidiDeviceInfo>) {
     r.midi_output_devices = devices;
+    r.view_caches.rebuild_midi_output(&r.midi_output_devices);
 }
 
 pub(super) fn midi_clock_started(r: &mut Resonance) {

@@ -9,7 +9,7 @@ use crate::theme;
 use resonance_audio::types::{TrackId, TICKS_PER_QUARTER_NOTE};
 
 /// Width of the piano keyboard area on the left side of the editor.
-const KEYBOARD_WIDTH: f32 = 50.0;
+pub const KEYBOARD_WIDTH: f32 = 50.0;
 /// Height of the velocity lane at the bottom of the editor.
 const VELOCITY_LANE_HEIGHT: f32 = 40.0;
 /// Total number of MIDI note rows (0-127).
@@ -67,6 +67,36 @@ enum DragMode {
 pub struct PianoRollState {
     drag: Option<DragMode>,
     previewing_note: Option<u8>,
+    /// Cached drawn geometry — invalidated only when the fingerprint of
+    /// the inputs (notes / scroll / zoom / selection / clip identity)
+    /// changes. Without this the piano roll redrew on every hover and
+    /// engine-event tick, which made window resize feel particularly
+    /// chunky because every paint had to re-rasterize ~100 note rects.
+    cache: canvas::Cache,
+    cache_fingerprint: std::cell::Cell<PianoRollFingerprint>,
+}
+
+/// Minimal projection of the piano roll's inputs into a comparable
+/// value. The draw routine asks for the current fingerprint, compares
+/// it with what was used for the cached geometry, and only re-runs the
+/// drawing closure when something visible has actually changed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PianoRollFingerprint {
+    pub clip_id: u64,
+    pub notes_len: usize,
+    /// Hash of the (note, start_tick, duration_ticks, velocity) tuples
+    /// so an edit inside the clip invalidates the cache even when
+    /// `notes_len` doesn't change.
+    pub notes_hash: u64,
+    pub scroll_x_bits: u32,
+    pub scroll_y_bits: u32,
+    pub zoom_x_bits: u32,
+    pub zoom_y_bits: u32,
+    pub snap_ticks: u64,
+    pub selected_note: Option<usize>,
+    pub time_sig_num: u8,
+    pub drag_active: bool,
+    pub preview_note: Option<u8>,
 }
 
 impl canvas::Program<Message> for PianoRollCanvas<'_> {
@@ -92,13 +122,16 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                 if cursor.position_in(bounds).is_none() {
                     return (canvas::event::Status::Ignored, None);
                 }
+                // Horizontal scroll is handled by the outer `Scrollable`
+                // that wraps this canvas now (see `view_midi_editor_panel`).
+                // Returning `Ignored` lets the event bubble up. Vertical
+                // pitch scroll stays inside the canvas because the
+                // keyboard column needs to scroll in lockstep with the
+                // note rows.
                 match delta {
                     mouse::ScrollDelta::Lines { x, y } => {
                         if x.abs() > f32::EPSILON {
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::MidiEditor(MidiEditorMessage::ScrollX(-x * 30.0))),
-                            );
+                            return (canvas::event::Status::Ignored, None);
                         }
                         return (
                             canvas::event::Status::Captured,
@@ -107,10 +140,7 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                     }
                     mouse::ScrollDelta::Pixels { x, y } => {
                         if x.abs() > f32::EPSILON {
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::MidiEditor(MidiEditorMessage::ScrollX(-x))),
-                            );
+                            return (canvas::event::Status::Ignored, None);
                         }
                         return (
                             canvas::event::Status::Captured,
@@ -326,13 +356,55 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let fp = self.fingerprint(state);
+        if state.cache_fingerprint.get() != fp {
+            state.cache.clear();
+            state.cache_fingerprint.set(fp);
+        }
+        let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
+            self.draw_into(frame, bounds);
+        });
+        vec![geometry]
+    }
+}
+
+impl PianoRollCanvas<'_> {
+    /// Hash of the inputs that affect the drawn geometry. Excludes
+    /// `bounds.size()` because the cache invalidates on size change
+    /// automatically (via `canvas::Cache::draw`), so adding it here
+    /// would double the work during a resize.
+    fn fingerprint(&self, state: &PianoRollState) -> PianoRollFingerprint {
+        use std::hash::{Hash, Hasher};
+        let mut nh = std::collections::hash_map::DefaultHasher::new();
+        for n in &self.clip.notes {
+            n.note.hash(&mut nh);
+            n.start_tick.hash(&mut nh);
+            n.duration_ticks.hash(&mut nh);
+            n.velocity.to_bits().hash(&mut nh);
+        }
+        PianoRollFingerprint {
+            clip_id: self.clip.id,
+            notes_len: self.clip.notes.len(),
+            notes_hash: nh.finish(),
+            scroll_x_bits: self.scroll_x.to_bits(),
+            scroll_y_bits: self.scroll_y.to_bits(),
+            zoom_x_bits: self.zoom_x.to_bits(),
+            zoom_y_bits: self.zoom_y.to_bits(),
+            snap_ticks: self.snap_ticks,
+            selected_note: self.selected_note,
+            time_sig_num: self.time_sig_num,
+            drag_active: state.drag.is_some(),
+            preview_note: state.previewing_note,
+        }
+    }
+
+    fn draw_into(&self, frame: &mut canvas::Frame, bounds: Rectangle) {
         let grid_x = KEYBOARD_WIDTH;
         let grid_w = bounds.width - KEYBOARD_WIDTH;
         let grid_h = bounds.height - VELOCITY_LANE_HEIGHT;
@@ -341,19 +413,19 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
 
         // --- Note row backgrounds ---
-        self.draw_note_rows(&mut frame, grid_x, grid_w, grid_h);
+        self.draw_note_rows(frame, grid_x, grid_w, grid_h);
 
         // --- Grid lines ---
-        self.draw_grid_lines(&mut frame, grid_x, grid_w, grid_h);
+        self.draw_grid_lines(frame, grid_x, grid_w, grid_h);
 
         // --- Notes ---
-        self.draw_notes(&mut frame, grid_x, grid_h);
+        self.draw_notes(frame, grid_x, grid_h);
 
         // --- Piano keyboard ---
-        self.draw_keyboard(&mut frame, grid_h);
+        self.draw_keyboard(frame, grid_h);
 
         // --- Velocity lane ---
-        self.draw_velocity_lane(&mut frame, grid_x, grid_w, grid_h, bounds.height);
+        self.draw_velocity_lane(frame, grid_x, grid_w, grid_h, bounds.height);
 
         // --- Separator lines ---
         // Vertical separator between keyboard and grid
@@ -368,8 +440,6 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
             Size::new(bounds.width, 1.0),
             theme::SEPARATOR,
         );
-
-        vec![frame.into_geometry()]
     }
 }
 
@@ -423,29 +493,30 @@ impl PianoRollCanvas<'_> {
 
     /// Draw alternating row backgrounds for each semitone.
     fn draw_note_rows(&self, frame: &mut canvas::Frame, grid_x: f32, grid_w: f32, grid_h: f32) {
+        // Backdrop is BG_2; only black-key rows darken to BG_1. White
+        // keys reuse the backdrop so the row striping reads softly.
+        frame.fill_rectangle(
+            Point::new(grid_x, 0.0),
+            Size::new(grid_w, grid_h),
+            theme::BG_2,
+        );
         for midi_note in 0..NOTE_COUNT {
             let y = self.note_to_y(midi_note, grid_h);
             let h = self.zoom_y;
 
-            // Skip rows that are entirely outside the visible area
             if y + h < 0.0 || y > grid_h {
                 continue;
             }
 
-            let bg = if is_black_key(midi_note) {
-                Color::from_rgb(0.08, 0.08, 0.08)
-            } else {
-                Color::from_rgb(0.12, 0.12, 0.12)
-            };
+            if is_black_key(midi_note) {
+                frame.fill_rectangle(Point::new(grid_x, y), Size::new(grid_w, h), theme::BG_1);
+            }
 
-            frame.fill_rectangle(Point::new(grid_x, y), Size::new(grid_w, h), bg);
-
-            // Draw a subtle line at C notes for octave boundaries
             if midi_note % 12 == 0 {
                 frame.fill_rectangle(
                     Point::new(grid_x, y + h - 1.0),
                     Size::new(grid_w, 1.0),
-                    Color::from_rgb(0.25, 0.25, 0.25),
+                    theme::LINE_2,
                 );
             }
         }
@@ -503,7 +574,10 @@ impl PianoRollCanvas<'_> {
                 frame.fill_rectangle(
                     Point::new(x, 0.0),
                     Size::new(1.0, grid_h),
-                    Color::from_rgb(0.15, 0.15, 0.15),
+                    Color {
+                        a: 0.5,
+                        ..theme::LINE_2
+                    },
                 );
             }
         }
@@ -517,45 +591,46 @@ impl PianoRollCanvas<'_> {
             let y = self.note_to_y(n.note, grid_h);
             let h = self.zoom_y;
 
-            // Skip notes outside visible area
             if x + w < grid_x || x > grid_x + 2000.0 || y + h < 0.0 || y > grid_h {
                 continue;
             }
 
-            // Note body color varies with velocity
+            // Lavender notes — velocity raises alpha so harder hits
+            // are visually denser without changing hue.
             let v = n.velocity.clamp(0.0, 1.0);
-            let note_color = Color::from_rgb(0.3 + v * 0.5, 0.5 + v * 0.3, 0.9);
-
-            frame.fill_rectangle(Point::new(x, y), Size::new(w, h), note_color);
-
-            // Selection highlight
-            let is_selected = self.selected_note == Some(i);
-            let border_path = canvas::Path::rectangle(Point::new(x, y), Size::new(w, h));
-            if is_selected {
-                frame.stroke(
-                    &border_path,
-                    canvas::Stroke::default()
-                        .with_color(theme::ACCENT)
-                        .with_width(2.0),
-                );
+            let note_color = Color {
+                a: 0.55 + 0.40 * v,
+                ..theme::ACCENT_SOFT
+            };
+            let body = if w >= 4.0 && h >= 4.0 {
+                canvas::Path::rounded_rectangle(
+                    Point::new(x, y),
+                    Size::new(w, h),
+                    2.0.into(),
+                )
             } else {
-                frame.stroke(
-                    &border_path,
-                    canvas::Stroke::default()
-                        .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.4))
-                        .with_width(1.0),
-                );
-            }
+                canvas::Path::rectangle(Point::new(x, y), Size::new(w, h))
+            };
+            frame.fill(&body, note_color);
+
+            let is_selected = self.selected_note == Some(i);
+            let stroke_color = if is_selected { theme::ACCENT } else { theme::ACCENT_LINE };
+            let stroke_w = if is_selected { 1.5 } else { 1.0 };
+            frame.stroke(
+                &body,
+                canvas::Stroke::default()
+                    .with_color(stroke_color)
+                    .with_width(stroke_w),
+            );
         }
     }
 
     /// Draw the piano keyboard on the left side.
     fn draw_keyboard(&self, frame: &mut canvas::Frame, grid_h: f32) {
-        // Keyboard background
         frame.fill_rectangle(
             Point::ORIGIN,
             Size::new(KEYBOARD_WIDTH, grid_h),
-            Color::from_rgb(0.15, 0.15, 0.15),
+            theme::BG_2,
         );
 
         for midi_note in 0..NOTE_COUNT {
@@ -567,11 +642,7 @@ impl PianoRollCanvas<'_> {
             }
 
             let black = is_black_key(midi_note);
-            let key_color = if black {
-                Color::from_rgb(0.10, 0.10, 0.10)
-            } else {
-                Color::from_rgb(0.22, 0.22, 0.22)
-            };
+            let key_color = if black { theme::BG_0 } else { theme::BG_3 };
             let key_w = if black {
                 KEYBOARD_WIDTH * 0.65
             } else {
@@ -580,17 +651,22 @@ impl PianoRollCanvas<'_> {
 
             frame.fill_rectangle(Point::new(0.0, y), Size::new(key_w, h - 1.0), key_color);
 
-            // Draw note name on C notes (or if zoomed in enough)
             if midi_note % 12 == 0 && h >= 8.0 {
                 frame.fill_text(canvas::Text {
                     content: note_name(midi_note),
                     position: Point::new(2.0, y + 1.0),
-                    color: theme::TEXT_DIM,
+                    color: theme::TEXT_3,
                     size: (h * 0.7).min(10.0).into(),
+                    font: theme::MONO_FONT,
                     ..canvas::Text::default()
                 });
             }
         }
+        frame.fill_rectangle(
+            Point::new(KEYBOARD_WIDTH - 1.0, 0.0),
+            Size::new(1.0, grid_h),
+            theme::LINE_2,
+        );
     }
 
     /// Draw the velocity lane at the bottom.
@@ -637,7 +713,7 @@ impl PianoRollCanvas<'_> {
             let color = if is_selected {
                 theme::ACCENT
             } else {
-                Color::from_rgb(0.4, 0.6, 0.9)
+                theme::ACCENT_SOFT
             };
 
             frame.fill_rectangle(Point::new(x, bar_y), Size::new(w, bar_h), color);

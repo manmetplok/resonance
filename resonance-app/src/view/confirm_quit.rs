@@ -24,25 +24,33 @@ pub(crate) fn view_confirm_quit_overlay<'a>(_r: &'a Resonance) -> Element<'a, Me
     )
     .on_press(Message::Ui(UiMessage::CancelQuit));
 
-    let title = text("Unsaved Changes").size(20).color(theme::ACCENT);
+    let title = text("Unsaved changes")
+        .size(20)
+        .font(theme::SERIF_ITALIC_FONT)
+        .color(theme::TEXT_1);
     let explanation = text("You have unsaved changes. What would you like to do?")
         .size(13)
-        .color(theme::TEXT);
+        .color(theme::TEXT_2);
 
-    let cancel_btn = button(text("Cancel").size(13).color(theme::TEXT))
+    let cancel_btn = button(text("Cancel").size(13).color(theme::TEXT_1))
         .on_press(Message::Ui(UiMessage::CancelQuit))
         .padding([8, 18])
-        .style(|_theme, status| theme::transport_button_style(status));
+        .style(|_theme, status| theme::ghost_button_style(status));
 
-    let discard_btn = button(text("Discard & Quit").size(13).color(iced::Color::WHITE))
+    let discard_btn = button(text("Discard & Quit").size(13).color(theme::TEXT_1))
         .on_press(Message::Ui(UiMessage::ConfirmDiscardAndQuit))
         .padding([8, 18])
         .style(|_theme, status| theme::destructive_button_style(status));
 
-    let save_btn = button(text("Save & Quit").size(13).color(iced::Color::WHITE))
-        .on_press(Message::Ui(UiMessage::ConfirmSaveAndQuit))
-        .padding([8, 18])
-        .style(|_theme, status| theme::accent_button_style(status));
+    let save_btn = button(
+        text("Save & Quit")
+            .size(13)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::BG_0),
+    )
+    .on_press(Message::Ui(UiMessage::ConfirmSaveAndQuit))
+    .padding([8, 18])
+    .style(|_theme, status| theme::primary_button_style(status));
 
     let button_row = row![
         Space::with_width(Length::Fill),
@@ -65,11 +73,11 @@ pub(crate) fn view_confirm_quit_overlay<'a>(_r: &'a Resonance) -> Element<'a, Me
     .width(440);
 
     let dialog = container(dialog_content).style(|_theme| container::Style {
-        background: Some(iced::Background::Color(theme::PANEL)),
+        background: Some(iced::Background::Color(theme::BG_2)),
         border: iced::Border {
-            color: theme::SEPARATOR,
+            color: theme::LINE,
             width: 1.0,
-            radius: 8.0.into(),
+            radius: theme::RADIUS_XL.into(),
         },
         ..Default::default()
     });

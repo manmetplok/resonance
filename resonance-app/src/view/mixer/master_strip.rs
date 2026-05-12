@@ -2,7 +2,7 @@
 //! per-channel routing — just the FX chain, the master fader, and the
 //! Bounce-to-WAV button.
 
-use iced::widget::{button, column, container, pick_list, text};
+use iced::widget::{button, column, container, pick_list, scrollable, text};
 use iced::{Element, Length};
 use resonance_audio::types::*;
 
@@ -17,10 +17,16 @@ impl crate::Resonance {
         &self,
         available_plugins: &[ScannedPlugin],
     ) -> Element<'_, Message> {
-        let label = container(text("Master").size(14).color(theme::ACCENT))
-            .width(Length::Fill)
-            .center_x(Length::Fill)
-            .padding([6, 4]);
+        // The design centers an uppercase "MASTER" header.
+        let label = container(
+            text("MASTER")
+                .size(11)
+                .font(theme::UI_FONT_SEMIBOLD)
+                .color(theme::TEXT_1),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .padding([6, 4]);
 
         // FX bypass button, centered in its own row so the master strip
         // has a dedicated control spot (tracks and busses share a row
@@ -41,34 +47,37 @@ impl crate::Resonance {
         }
 
         // `+ FX` picker (filtered to effects). Only rendered when we
-        // have at least one non-instrument plugin available.
-        let fx_picker_element: Option<Element<'_, Message>> = if available_plugins.is_empty() {
-            None
-        } else {
-            let effects: Vec<ScannedPlugin> = available_plugins
-                .iter()
-                .filter(|p| !p.is_instrument)
-                .cloned()
-                .collect();
-            if effects.is_empty() {
+        // have at least one non-instrument plugin available. Options
+        // come from `view_caches.fx_plugins` (Rc clone is a refcount
+        // bump, no per-frame Vec rebuild).
+        let _ = available_plugins;
+        let fx_picker_element: Option<Element<'_, Message>> =
+            if self.view_caches.fx_plugins.is_empty() {
                 None
             } else {
                 Some(
-                    pick_list(effects, None::<ScannedPlugin>, |plugin: ScannedPlugin| {
-                        Message::Master(MasterMessage::AddPluginToMaster(plugin))
-                    })
+                    pick_list(
+                        self.view_caches.fx_plugins.clone(),
+                        None::<ScannedPlugin>,
+                        |plugin: ScannedPlugin| {
+                            Message::Master(MasterMessage::AddPluginToMaster(plugin))
+                        },
+                    )
                     .placeholder("+ FX")
                     .text_size(10)
                     .width(Length::Fill)
                     .into(),
                 )
-            }
-        };
+            };
 
-        let plugin_fill = container(plugin_section)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_y(iced::alignment::Vertical::Top);
+        let plugin_fill = iced::widget::Scrollable::with_direction(
+            plugin_section,
+            scrollable::Direction::Vertical(
+                scrollable::Scrollbar::default().width(4).scroller_width(4),
+            ),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill);
 
         let fx_block = {
             let mut col = iced::widget::Column::new().spacing(0).width(Length::Fill);
@@ -109,11 +118,12 @@ impl crate::Resonance {
         ]
         .spacing(4)
         .padding(8)
-        .width(theme::MASTER_STRIP_WIDTH);
+        .width(theme::MASTER_STRIP_WIDTH)
+        .height(Length::Fill);
 
         container(strip_content)
-            .height(Length::Fill)
-            .style(theme::panel_dark_outlined)
+            .height(Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32))
+            .style(theme::card_selected)
             .into()
     }
 }

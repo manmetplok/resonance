@@ -53,6 +53,11 @@ pub struct TimelineCanvas<'a> {
     pub global_tracks_expanded: bool,
     pub tempo_map: &'a TempoMap,
     pub selected_global_event: Option<crate::state::SelectedGlobalEvent>,
+    /// Compose section placements + definitions, threaded so the
+    /// section-pill band can sit above the lanes. Empty slices => no band.
+    pub section_placements: &'a [crate::compose::SectionPlacementState],
+    pub section_definitions: &'a [crate::compose::SectionDefinitionState],
+    pub selected_placement_id: Option<u64>,
 }
 
 impl TimelineCanvas<'_> {
@@ -66,10 +71,21 @@ impl TimelineCanvas<'_> {
         }
     }
 
-    /// Total fixed header height: ruler + global tracks area.
+    /// Height of the section-pill band sitting under the ruler. Returns
+    /// 0.0 when no sections are placed so empty projects don't take a
+    /// vertical hit.
+    pub(crate) fn section_band_height(&self) -> f32 {
+        if self.section_placements.is_empty() {
+            0.0
+        } else {
+            theme::SECTION_BAND_HEIGHT
+        }
+    }
+
+    /// Total fixed header height: ruler + section band + global tracks area.
     /// This is the Y offset where regular track rows begin.
     pub(crate) fn fixed_header_height(&self) -> f32 {
-        theme::RULER_HEIGHT + self.global_tracks_height()
+        theme::RULER_HEIGHT + self.section_band_height() + self.global_tracks_height()
     }
 
     /// Convert a sample position to pixel x coordinate.
@@ -100,6 +116,40 @@ impl TimelineCanvas<'_> {
         }
         let content = (max_sample as f64 / self.sample_rate as f64) as f32 * self.zoom;
         content.max(viewport_width * 1.5).max(viewport_width)
+    }
+
+    /// Same as `content_width_px` but adds a fixed trailing pad in bars
+    /// instead of inflating to 1.5× a viewport that the canvas never
+    /// directly knows. Used by `view_timeline` to size the canvas
+    /// inside the horizontal `Scrollable` — bounding the canvas to its
+    /// own natural size lets `canvas::Cache` hit across window resizes
+    /// (the cache invalidates on `bounds.size()` changes).
+    pub(crate) fn content_width_natural(&self) -> f32 {
+        let mut max_sample: u64 = 0;
+        for c in self.clips {
+            let end = c.start_sample + c.duration_samples;
+            if end > max_sample {
+                max_sample = end;
+            }
+        }
+        for c in self.midi_clips {
+            let end = self.tempo_map.tick_to_abs_sample(
+                c.start_sample,
+                c.duration_ticks,
+                self.sample_rate,
+            );
+            if end > max_sample {
+                max_sample = end;
+            }
+        }
+        let content = (max_sample as f64 / self.sample_rate as f64) as f32 * self.zoom;
+        // 8 bars of trailing pad so the user can drop new clips just
+        // past the last existing one without immediately scrolling out
+        // of canvas. Floor of 800 px keeps empty projects usable.
+        let seconds_per_bar =
+            self.time_sig_num as f32 * 60.0 / self.bpm.max(1.0);
+        let pad = 8.0 * seconds_per_bar * self.zoom;
+        (content + pad).max(800.0)
     }
 
     /// Total vertical content height (tracks + ruler + global tracks).
@@ -135,6 +185,76 @@ pub struct TimelineState {
     pub(super) last_global_click: Option<(Instant, state::GlobalTrackKind)>,
     /// Active tempo-event drag.
     pub(super) tempo_drag: Option<TempoDrag>,
+    /// Geometry cache — re-runs the draw closure only when the cached
+    /// fingerprint mismatches. Skips a full redraw on every hover /
+    /// sibling-update event, which is most of them.
+    pub(super) cache: canvas::Cache,
+    /// Snapshot of the input fields that affect the rendered geometry
+    /// at the moment the cache was last filled. The draw routine
+    /// compares the current frame's fingerprint to this and invalidates
+    /// the cache when any field changes.
+    pub(super) cache_fingerprint: std::cell::Cell<TimelineFingerprint>,
+}
+
+/// Compact summary of the data the timeline reads. When any of these
+/// values changes between frames, the canvas geometry needs a redraw.
+/// `Default` returns a sentinel value the first frame can never match,
+/// so the very first draw fills the cache.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TimelineFingerprint {
+    pub clips_len: usize,
+    pub midi_clips_len: usize,
+    pub tracks_len: usize,
+    pub playhead: u64,
+    pub zoom_bits: u32,
+    pub scroll_x_bits: u32,
+    pub scroll_y_bits: u32,
+    pub recording_count: usize,
+    pub recording_start_sample: u64,
+    pub loop_enabled: bool,
+    pub loop_in: u64,
+    pub loop_out: u64,
+    pub selected_clip: Option<ClipId>,
+    pub selected_midi_clip: Option<ClipId>,
+    pub selected_track: Option<TrackId>,
+    pub global_tracks_expanded: bool,
+    pub tempo_points: usize,
+    pub signature_points: usize,
+    pub bpm_bits: u32,
+    pub time_sig_num: u8,
+    pub section_placements_len: usize,
+    pub section_definitions_len: usize,
+    pub selected_placement_id: Option<u64>,
+}
+
+impl<'a> TimelineCanvas<'a> {
+    fn fingerprint(&self) -> TimelineFingerprint {
+        TimelineFingerprint {
+            clips_len: self.clips.len(),
+            midi_clips_len: self.midi_clips.len(),
+            tracks_len: self.tracks.len(),
+            playhead: self.playhead,
+            zoom_bits: self.zoom.to_bits(),
+            scroll_x_bits: self.scroll_offset.to_bits(),
+            scroll_y_bits: self.scroll_offset_y.to_bits(),
+            recording_count: self.recording_tracks.len(),
+            recording_start_sample: self.recording_start_sample,
+            loop_enabled: self.loop_enabled,
+            loop_in: self.loop_in,
+            loop_out: self.loop_out,
+            selected_clip: self.selected_clip,
+            selected_midi_clip: self.selected_midi_clip,
+            selected_track: self.selected_track,
+            global_tracks_expanded: self.global_tracks_expanded,
+            tempo_points: self.tempo_map.tempo_points.len(),
+            signature_points: self.tempo_map.signature_points.len(),
+            bpm_bits: self.bpm.to_bits(),
+            time_sig_num: self.time_sig_num,
+            section_placements_len: self.section_placements.len(),
+            section_definitions_len: self.section_definitions.len(),
+            selected_placement_id: self.selected_placement_id,
+        }
+    }
 }
 
 impl canvas::Program<Message> for TimelineCanvas<'_> {
@@ -179,13 +299,30 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        // Cache invalidation: re-runs the body only when our fingerprint
+        // changes. Pure hover/sibling redraws hit the cached geometry.
+        let fp = self.fingerprint();
+        if state.cache_fingerprint.get() != fp {
+            state.cache.clear();
+            state.cache_fingerprint.set(fp);
+        }
+        let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
+            self.draw_into(frame, bounds);
+        });
+        vec![geometry]
+    }
+}
+
+impl<'a> TimelineCanvas<'a> {
+    /// Run the full draw routine onto the given frame. Split out so the
+    /// `Program::draw` impl can wrap it in `canvas::Cache`.
+    fn draw_into(&self, frame: &mut canvas::Frame, bounds: Rectangle) {
         let ruler_height = theme::RULER_HEIGHT;
         let header_height = self.fixed_header_height();
         let y_off = self.scroll_offset_y;
@@ -197,8 +334,18 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             theme::RULER_BG,
         );
 
-        // Draw global tracks area (tempo + time signature) between ruler and tracks
-        self.draw_global_tracks(&mut frame, bounds.width, ruler_height);
+        // Section-pill band — sits under the ruler when at least one
+        // compose section is placed. Render before global tracks so the
+        // global tracks shift down accordingly.
+        let band_top = ruler_height;
+        let band_height = self.section_band_height();
+        if band_height > 0.0 {
+            self.draw_section_band(frame, bounds.width, band_top, band_height);
+        }
+
+        // Draw global tracks area (tempo + time signature) between the
+        // section band and the regular tracks.
+        self.draw_global_tracks(frame, bounds.width, band_top + band_height);
 
         // Draw track backgrounds. Only non-sub-tracks are rendered; the
         // mixer view is where sub-track lanes live.
@@ -257,7 +404,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
 
         // Draw bar/beat grid lines through track area
         self.draw_grid_lines(
-            &mut frame,
+            frame,
             bounds.width,
             header_height,
             track_area_height,
@@ -265,12 +412,12 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         );
 
         // Draw bar/beat ruler
-        self.draw_ruler(&mut frame, bounds.width, ruler_height);
+        self.draw_ruler(frame, bounds.width, ruler_height);
 
         // Draw audio clips
         for clip in self.clips {
             self.draw_clip(
-                &mut frame,
+                frame,
                 clip,
                 &sorted_tracks,
                 header_height,
@@ -282,7 +429,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         // Draw MIDI clips
         for clip in self.midi_clips {
             self.draw_midi_clip(
-                &mut frame,
+                frame,
                 clip,
                 &sorted_tracks,
                 header_height,
@@ -362,27 +509,30 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             }
         }
 
-        // Draw playhead
+        // Draw playhead — warm 1px line + a rounded tab at the top so it
+        // reads against the ruler. Matches the redesign spec: warm line,
+        // 11×11 tab with bottom-rounded corners.
         let playhead_seconds = (self.playhead as f64 / self.sample_rate as f64) as f32;
         let playhead_x = playhead_seconds * self.zoom - self.scroll_offset;
         if playhead_x >= 0.0 && playhead_x <= bounds.width {
             let total_height = (header_height + track_area_height - y_off).max(bounds.height);
 
-            // Playhead triangle at top
-            let triangle = canvas::Path::new(|builder| {
-                builder.move_to(Point::new(playhead_x - 6.0, 0.0));
-                builder.line_to(Point::new(playhead_x + 6.0, 0.0));
-                builder.line_to(Point::new(playhead_x, 8.0));
-                builder.close();
-            });
-            frame.fill(&triangle, theme::ACCENT);
-
-            // Playhead line
+            // Vertical line spans the whole canvas.
             frame.fill_rectangle(
                 Point::new(playhead_x - 0.5, 0.0),
                 Size::new(1.0, total_height),
-                theme::ACCENT,
+                theme::WARM,
             );
+
+            // Tab at the top — wider rectangle with rounded bottom corners.
+            let tab_w = 11.0;
+            let tab_h = 11.0;
+            let tab = canvas::Path::rounded_rectangle(
+                Point::new(playhead_x - tab_w / 2.0, 0.0),
+                Size::new(tab_w, tab_h),
+                iced::border::radius(0.0).bottom(6.0),
+            );
+            frame.fill(&tab, theme::WARM);
         }
 
         // Smart scrollbars — drawn last so they sit above clips + playhead.
@@ -416,6 +566,5 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             );
         }
 
-        vec![frame.into_geometry()]
     }
 }

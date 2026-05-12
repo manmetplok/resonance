@@ -14,6 +14,7 @@ pub(crate) mod settings;
 pub(crate) mod startup;
 pub(crate) mod track_header;
 pub(crate) mod transport;
+pub(crate) mod ui_caches;
 
 use crate::message::*;
 use crate::midi_editor::PianoRollCanvas;
@@ -145,10 +146,28 @@ impl crate::Resonance {
         .width(Length::Fill)
         .style(theme::panel_outlined);
 
+        // The piano roll renders the clip at its native pixel rate —
+        // total width = keyboard column + every tick of the clip
+        // rendered at the current zoom — and lives inside a horizontal
+        // scrollable. Two wins: (a) the canvas widget never resizes
+        // when the window does, so its geometry cache hits across
+        // every paint during a resize, and (b) the notes stay at a
+        // stable pixel size instead of being squashed or stretched by
+        // window resize. The clip's `duration_ticks` is the natural
+        // bound; the extra 4-bar padding leaves room to drag the last
+        // note slightly beyond the loop without immediately running
+        // out of canvas.
+        let extra_ticks: u64 =
+            4 * (self.transport.time_sig_num as u64) * (TICKS_PER_QUARTER_NOTE as u64);
+        let content_ticks: u64 = clip.duration_ticks.saturating_add(extra_ticks);
+        let content_w = crate::midi_editor::KEYBOARD_WIDTH
+            + content_ticks as f32 * editor_state.zoom_x;
         let piano_roll = canvas(PianoRollCanvas {
             clip,
             track_id: editor_state.track_id,
-            scroll_x: editor_state.scroll_x,
+            // scroll_x is now driven entirely by the outer Scrollable;
+            // the canvas always renders content from origin.
+            scroll_x: 0.0,
             scroll_y: editor_state.scroll_y,
             zoom_x: editor_state.zoom_x,
             zoom_y: editor_state.zoom_y,
@@ -156,10 +175,19 @@ impl crate::Resonance {
             selected_note: editor_state.selected_note,
             time_sig_num: self.transport.time_sig_num,
         })
+        .width(Length::Fixed(content_w))
+        .height(Length::Fill);
+
+        let piano_roll_scroll = iced::widget::Scrollable::with_direction(
+            piano_roll,
+            iced::widget::scrollable::Direction::Horizontal(
+                iced::widget::scrollable::Scrollbar::default(),
+            ),
+        )
         .width(Length::Fill)
         .height(Length::Fill);
 
-        let editor_panel = column![editor_toolbar, piano_roll].spacing(0);
+        let editor_panel = column![editor_toolbar, piano_roll_scroll].spacing(0);
 
         Some(
             container(editor_panel)
@@ -196,7 +224,12 @@ impl crate::Resonance {
             playhead: self.transport.playhead,
             sample_rate: self.sample_rate,
             zoom: self.viewport.zoom,
-            scroll_offset: self.viewport.scroll_offset,
+            // Horizontal scrolling is now driven by the outer
+            // `Scrollable` — the canvas always renders content from
+            // sample-zero. The internal scroll_offset field is kept
+            // (so `sample_to_x` and friends keep their signature) but
+            // pinned to 0 from the view side.
+            scroll_offset: 0.0,
             recording_tracks,
             recording_start_sample: self.transport.recording_start_sample,
             bpm: self.transport.bpm,
@@ -212,11 +245,27 @@ impl crate::Resonance {
             global_tracks_expanded: self.viewport.global_tracks_expanded,
             tempo_map: &self.tempo_map,
             selected_global_event: self.interaction.selected_global_event,
+            section_placements: &self.compose.placements,
+            section_definitions: &self.compose.definitions,
+            selected_placement_id: self.compose.selected_placement_id,
         };
 
-        let canvas_el = canvas(timeline_data)
-            .width(Length::Fill)
+        // Fixed canvas width = full content width. With the canvas no
+        // longer set to `Length::Fill`, its `bounds.size()` stays
+        // stable across window resizes and `canvas::Cache` keeps
+        // hitting instead of re-rasterizing every paint.
+        let content_w = timeline_data.content_width_natural();
+        let canvas_inner = canvas(timeline_data)
+            .width(Length::Fixed(content_w))
             .height(Length::Fill);
+        let canvas_el = iced::widget::Scrollable::with_direction(
+            canvas_inner,
+            iced::widget::scrollable::Direction::Horizontal(
+                iced::widget::scrollable::Scrollbar::default(),
+            ),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill);
 
         // Floating zoom buttons, anchored to the bottom-right corner of the
         // timeline. Using Length::Shrink so the overlay only hit-tests the

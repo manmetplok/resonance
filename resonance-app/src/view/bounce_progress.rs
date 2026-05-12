@@ -39,7 +39,10 @@ pub(crate) fn view_bounce_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, 
         BounceMode::Offline => format!("Bouncing \"{}\"", state.source_name),
         BounceMode::Realtime => format!("Recording \"{}\"", state.source_name),
     };
-    let title = text(title_str).size(18).color(theme::ACCENT);
+    let title = text(title_str)
+        .size(18)
+        .font(theme::SERIF_ITALIC_FONT)
+        .color(theme::TEXT_1);
 
     let detail = match state.mode {
         BounceMode::Offline => "Rendering through the instrument and effect chain offline.",
@@ -51,21 +54,24 @@ pub(crate) fn view_bounce_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, 
     let pct = (state.fraction * 100.0).round() as u32;
     let bar = progress_bar(0.0..=1.0, state.fraction).height(Length::Fixed(14.0));
 
-    let cancel = button(text("Cancel").size(13).color(iced::Color::WHITE))
+    let cancel = button(text("Cancel").size(13).color(theme::TEXT_1))
         .on_press(Message::Track(TrackMessage::Bounce(
             BounceMessage::CancelInProgress,
         )))
         .padding([8, 18])
-        .style(|_t, status| theme::transport_button_style(status));
+        .style(|_t, status| theme::ghost_button_style(status));
 
     let dialog_content = column![
         title,
         Space::with_height(8),
-        text(detail).size(13).color(theme::TEXT),
+        text(detail).size(13).color(theme::TEXT_2),
         Space::with_height(16),
         bar,
         Space::with_height(6),
-        text(format!("{pct}%")).size(12).color(theme::TEXT_DIM),
+        text(format!("{pct}%"))
+            .size(12)
+            .font(theme::MONO_FONT)
+            .color(theme::TEXT_3),
         Space::with_height(20),
         row![Space::with_width(Length::Fill), cancel]
             .align_y(alignment::Vertical::Center),
@@ -74,11 +80,11 @@ pub(crate) fn view_bounce_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, 
     .width(420);
 
     let dialog = container(dialog_content).style(|_theme| container::Style {
-        background: Some(iced::Background::Color(theme::PANEL)),
+        background: Some(iced::Background::Color(theme::BG_2)),
         border: iced::Border {
-            color: theme::SEPARATOR,
+            color: theme::LINE,
             width: 1.0,
-            radius: 8.0.into(),
+            radius: theme::RADIUS_XL.into(),
         },
         ..Default::default()
     });

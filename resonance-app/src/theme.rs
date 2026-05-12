@@ -1,4 +1,11 @@
-/// Resonance dark industrial theme.
+//! Resonance theme — soft dark, lavender-accent design system.
+//!
+//! Tokens follow the redesign spec: a layered backdrop (`BG_0..BG_4`),
+//! two border weights (`LINE`, `LINE_2`), four text greys (`TEXT_1..TEXT_4`),
+//! a lavender primary accent with derived soft / dim / line variants, and
+//! three semantic colours (`WARM`, `GOOD`, `BAD`). Older constant names
+//! (`PANEL`, `TEXT`, `ACCENT`, ...) are preserved as aliases so the rest of
+//! the codebase keeps compiling while it migrates piece by piece.
 use iced::font::{Family, Weight};
 use iced::widget::text::{Shaping, Text};
 use iced::widget::{button, container, text, text_input};
@@ -9,12 +16,72 @@ use iced::{Color, Font, Theme};
 /// that a system-installed Font Awesome cannot shadow our modified copy.
 pub const ICON_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/fa-solid-900.otf");
 
+/// Raw bytes for every UI font face we ship. Iced loads each independently
+/// — registration is one entry per weight / style. Order matters only for
+/// load priority; Iced picks the closest available weight for a given
+/// `Font` request.
+pub const UI_FONT_FACES: &[&[u8]] = &[
+    include_bytes!("../assets/fonts/Geist-Light.ttf"),
+    include_bytes!("../assets/fonts/Geist-Regular.ttf"),
+    include_bytes!("../assets/fonts/Geist-Medium.ttf"),
+    include_bytes!("../assets/fonts/Geist-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/Geist-Bold.ttf"),
+    include_bytes!("../assets/fonts/GeistMono-Regular.ttf"),
+    include_bytes!("../assets/fonts/GeistMono-Medium.ttf"),
+    include_bytes!("../assets/fonts/GeistMono-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/InstrumentSerif-Regular.ttf"),
+    include_bytes!("../assets/fonts/InstrumentSerif-Italic.ttf"),
+];
+
 /// Font handle for the bundled, extended icon font.
 pub const ICON_FONT: Font = Font {
     family: Family::Name("Resonance Icons"),
     weight: Weight::Black,
     stretch: iced::font::Stretch::Normal,
     style: iced::font::Style::Normal,
+};
+
+/// Primary UI sans (Geist). When the bundled font isn't available the
+/// platform falls back to the system sans.
+pub const UI_FONT: Font = Font {
+    family: Family::Name("Geist"),
+    weight: Weight::Normal,
+    stretch: iced::font::Stretch::Normal,
+    style: iced::font::Style::Normal,
+};
+
+/// Medium-weight UI sans for emphasised labels and primary buttons.
+pub const UI_FONT_MEDIUM: Font = Font {
+    family: Family::Name("Geist"),
+    weight: Weight::Medium,
+    stretch: iced::font::Stretch::Normal,
+    style: iced::font::Style::Normal,
+};
+
+/// Semibold UI sans for tab labels and section headers.
+pub const UI_FONT_SEMIBOLD: Font = Font {
+    family: Family::Name("Geist"),
+    weight: Weight::Semibold,
+    stretch: iced::font::Stretch::Normal,
+    style: iced::font::Style::Normal,
+};
+
+/// Monospace UI font (Geist Mono). Used for numeric readouts — BPM, dB,
+/// bar counts, seeds.
+pub const MONO_FONT: Font = Font {
+    family: Family::Name("Geist Mono"),
+    weight: Weight::Normal,
+    stretch: iced::font::Stretch::Normal,
+    style: iced::font::Style::Normal,
+};
+
+/// Italic display serif (Instrument Serif). Used sparingly for the project
+/// title in the chrome and for chord symbols in the Compose view.
+pub const SERIF_ITALIC_FONT: Font = Font {
+    family: Family::Name("Instrument Serif"),
+    weight: Weight::Normal,
+    stretch: iced::font::Stretch::Normal,
+    style: iced::font::Style::Italic,
 };
 
 /// Build an icon text element from a Font Awesome codepoint.
@@ -72,160 +139,171 @@ pub mod fa {
     pub const ARROW_RIGHT: char = '\u{f061}';
     /// Filled circle with an "i" — hover-tooltip info marker.
     pub const CIRCLE_INFO: char = '\u{f05a}';
+    /// Counter-clockwise rotating arrow — used for "regenerate / reroll"
+    /// affordances next to a primary Generate button.
+    pub const ARROW_ROTATE_LEFT: char = '\u{f0e2}';
 }
 
-// Core palette
-pub const BG: Color = Color::from_rgb(
-    0x0f as f32 / 255.0,
-    0x0f as f32 / 255.0,
-    0x0f as f32 / 255.0,
-);
+// ---------------------------------------------------------------------------
+// Hex helpers — used to express palette swatches as readable hex pairs.
+// ---------------------------------------------------------------------------
 
-pub const PANEL: Color = Color::from_rgb(
-    0x1a as f32 / 255.0,
-    0x1a as f32 / 255.0,
-    0x1a as f32 / 255.0,
-);
+const fn rgb(r: u8, g: u8, b: u8) -> Color {
+    Color::from_rgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
+}
 
-pub const PANEL_DARK: Color = Color::from_rgb(
-    0x14 as f32 / 255.0,
-    0x14 as f32 / 255.0,
-    0x14 as f32 / 255.0,
-);
+const fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color {
+    Color::from_rgba(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a)
+}
 
-pub const SEPARATOR: Color = Color::from_rgb(
-    0x2a as f32 / 255.0,
-    0x2a as f32 / 255.0,
-    0x2a as f32 / 255.0,
-);
+// ---------------------------------------------------------------------------
+// Backdrop layers — five steps from window to raised control.
+// ---------------------------------------------------------------------------
 
-pub const ACCENT: Color = Color::from_rgb(
-    0xe8 as f32 / 255.0,
-    0x83 as f32 / 255.0,
-    0x2a as f32 / 255.0,
-);
+/// Page / window backdrop. The OS window sits on this.
+pub const BG_0: Color = rgb(0x0f, 0x10, 0x13);
+/// App body — the surface inside the window chrome.
+pub const BG_1: Color = rgb(0x15, 0x16, 0x1b);
+/// Panels, channel strips, cards.
+pub const BG_2: Color = rgb(0x1b, 0x1d, 0x23);
+/// Hover state, raised controls.
+pub const BG_3: Color = rgb(0x23, 0x26, 0x2e);
+/// Fader caps, knob highlights. Reserved for the custom fader chrome —
+/// Iced's vertical_slider doesn't expose enough of its track to use it,
+/// but the token is part of the design surface so it stays available.
+#[allow(dead_code)]
+pub const BG_4: Color = rgb(0x2c, 0x2f, 0x38);
 
-pub const SOLO_YELLOW: Color = Color::from_rgb(
-    0xe6 as f32 / 255.0,
-    0xcc as f32 / 255.0,
-    0x1a as f32 / 255.0,
-);
+// ---------------------------------------------------------------------------
+// Borders / hairlines.
+// ---------------------------------------------------------------------------
 
-pub const CLIP_BODY: Color = Color::from_rgb(
-    0x4a as f32 / 255.0,
-    0x7f as f32 / 255.0,
-    0xa5 as f32 / 255.0,
-);
+/// Standard borders.
+pub const LINE: Color = rgb(0x27, 0x2a, 0x31);
+/// Subtle dividers / inner hairlines.
+pub const LINE_2: Color = rgb(0x1f, 0x22, 0x29);
 
-pub const CLIP_HEADER: Color = Color::from_rgb(
-    0x3a as f32 / 255.0,
-    0x6f as f32 / 255.0,
-    0x95 as f32 / 255.0,
-);
+// ---------------------------------------------------------------------------
+// Text greys.
+// ---------------------------------------------------------------------------
 
-pub const TEXT: Color = Color::from_rgb(
-    0xe0 as f32 / 255.0,
-    0xe0 as f32 / 255.0,
-    0xe0 as f32 / 255.0,
-);
+/// Primary text.
+pub const TEXT_1: Color = rgb(0xe8, 0xe7, 0xe3);
+/// Secondary text.
+pub const TEXT_2: Color = rgb(0x9a, 0xa0, 0xac);
+/// Tertiary / labels.
+pub const TEXT_3: Color = rgb(0x5d, 0x62, 0x6d);
+/// Disabled.
+pub const TEXT_4: Color = rgb(0x3f, 0x43, 0x4c);
 
-pub const TEXT_DIM: Color = Color::from_rgb(
-    0x80 as f32 / 255.0,
-    0x80 as f32 / 255.0,
-    0x80 as f32 / 255.0,
-);
+// ---------------------------------------------------------------------------
+// Accent (lavender) + semantic colours.
+// ---------------------------------------------------------------------------
 
-pub const RULER_BG: Color = Color::from_rgb(
-    0x18 as f32 / 255.0,
-    0x18 as f32 / 255.0,
-    0x18 as f32 / 255.0,
-);
+/// Lavender primary accent — selection, brand, MIDI.
+pub const ACCENT: Color = rgb(0x8b, 0x6d, 0xff);
+/// Lighter lavender — text on dim backgrounds.
+pub const ACCENT_SOFT: Color = rgb(0xa8, 0x92, 0xff);
+/// Lavender wash — selection backgrounds.
+pub const ACCENT_DIM: Color = rgba(0x8b, 0x6d, 0xff, 0.16);
+/// Lavender border — selection outlines.
+pub const ACCENT_LINE: Color = rgba(0x8b, 0x6d, 0xff, 0.34);
 
-pub const TRACK_LINE: Color = Color::from_rgb(
-    0x22 as f32 / 255.0,
-    0x22 as f32 / 255.0,
-    0x22 as f32 / 255.0,
-);
+/// Warm amber — audio clips, busses, playhead.
+pub const WARM: Color = rgb(0xe8, 0xc4, 0x7b);
+/// Warm wash — bus strip background tint. Reserved for a future bus-row
+/// background; currently strips paint a `BG_2` fill with the warm border.
+#[allow(dead_code)]
+pub const WARM_DIM: Color = rgba(0xe8, 0xc4, 0x7b, 0.14);
+/// Warm border — bus strip outlines.
+pub const WARM_LINE: Color = rgba(0xe8, 0xc4, 0x7b, 0.34);
 
-pub const RECORD_RED: Color = Color::from_rgb(
-    0xcc as f32 / 255.0,
-    0x33 as f32 / 255.0,
-    0x33 as f32 / 255.0,
-);
+/// Mint green — meters, success.
+pub const GOOD: Color = rgb(0x6d, 0xd6, 0xa3);
+/// Soft pink — mute, peaking, errors.
+pub const BAD: Color = rgb(0xe8, 0x7b, 0x8b);
 
-pub const PANEL_ARMED: Color = Color::from_rgb(
-    0x1f as f32 / 255.0,
-    0x14 as f32 / 255.0,
-    0x14 as f32 / 255.0,
-);
+// ---------------------------------------------------------------------------
+// Legacy aliases — keep the rest of the codebase compiling while the views
+// migrate. New code should use the tokens above directly.
+// ---------------------------------------------------------------------------
 
-/// Subtle highlight for the currently selected track header and lane.
-pub const PANEL_SELECTED: Color = Color::from_rgb(
-    0x1a as f32 / 255.0,
-    0x1a as f32 / 255.0,
-    0x22 as f32 / 255.0,
-);
+/// Window backdrop. Aliased to BG_1 so existing `base_bg` containers paint
+/// the app body color.
+pub const BG: Color = BG_1;
+/// Panel background (channel strips, track headers, cards).
+pub const PANEL: Color = BG_2;
+/// Recessed sub-area — VU meter background, fader track, mini buttons.
+pub const PANEL_DARK: Color = BG_1;
+/// Standard border.
+pub const SEPARATOR: Color = LINE;
+/// Primary text.
+pub const TEXT: Color = TEXT_1;
+/// Secondary text.
+pub const TEXT_DIM: Color = TEXT_2;
+/// Solo state. The redesign collapses solo/peak/warning into a single warm
+/// amber; the old yellow is preserved for components that still spell it
+/// out explicitly.
+pub const SOLO_YELLOW: Color = WARM;
+/// Ruler background — the timeline strip above the lanes.
+pub const RULER_BG: Color = BG_1;
+/// Track lane separator.
+pub const TRACK_LINE: Color = LINE_2;
+/// Record-armed glow / record button accent.
+pub const RECORD_RED: Color = BAD;
+/// Track lane background while a recording pass is in progress.
+pub const PANEL_ARMED: Color = rgb(0x24, 0x1a, 0x1f);
+/// Selected track lane / header background tint.
+pub const PANEL_SELECTED: Color = BG_2;
+/// VU meter background.
+pub const METER_BG: Color = BG_1;
+/// Bar line in the timeline ruler / lane.
+pub const BAR_LINE: Color = LINE;
+/// Beat sub-line in the timeline lane.
+pub const BEAT_LINE: Color = LINE_2;
+/// Metronome enabled colour.
+pub const METRONOME_ON: Color = GOOD;
+/// Loop region marker / playhead-warm colour.
+pub const LOOP_MARKER: Color = WARM;
+/// Background for the global track rows (tempo / signature).
+pub const GLOBAL_TRACK_BG: Color = BG_2;
 
-/// Border accent for the selected track header.
-pub const SELECTED_BORDER: Color = Color::from_rgb(
-    0x4a as f32 / 255.0,
-    0x4a as f32 / 255.0,
-    0x6a as f32 / 255.0,
-);
+// ---------------------------------------------------------------------------
+// Layout constants. Values follow the redesign spec (96px row, 28px ruler,
+// 260px track-list column, 132px mixer strip).
+// ---------------------------------------------------------------------------
 
-pub const METER_BG: Color = Color::from_rgb(
-    0x08 as f32 / 255.0,
-    0x08 as f32 / 255.0,
-    0x08 as f32 / 255.0,
-);
-
-pub const BAR_LINE: Color = Color::from_rgb(
-    0x30 as f32 / 255.0,
-    0x30 as f32 / 255.0,
-    0x30 as f32 / 255.0,
-);
-
-pub const BEAT_LINE: Color = Color::from_rgb(
-    0x20 as f32 / 255.0,
-    0x20 as f32 / 255.0,
-    0x20 as f32 / 255.0,
-);
-
-pub const METRONOME_ON: Color = Color::from_rgb(
-    0x4a as f32 / 255.0,
-    0xcc as f32 / 255.0,
-    0x4a as f32 / 255.0,
-);
-
-pub const LOOP_MARKER: Color = Color::from_rgb(
-    0xe6 as f32 / 255.0,
-    0xb8 as f32 / 255.0,
-    0x1a as f32 / 255.0,
-);
-
-pub const CLIP_SELECTED_BORDER: Color = Color::from_rgb(
-    0xe8 as f32 / 255.0,
-    0x83 as f32 / 255.0,
-    0x2a as f32 / 255.0,
-);
-
-pub const TRACK_HEIGHT: f32 = 80.0;
-pub const RULER_HEIGHT: f32 = 30.0;
+/// Arrange-view track row height — matches the design's "balanced" density.
+pub const TRACK_HEIGHT: f32 = 96.0;
+/// Timeline ruler height.
+pub const RULER_HEIGHT: f32 = 28.0;
+/// Section band sitting under the ruler. Reserved for the section-pill
+/// strip; not yet rendered on the Arrange canvas.
+#[allow(dead_code)]
+pub const SECTION_BAND_HEIGHT: f32 = 22.0;
 /// Height of each global track row (tempo, time signature) in the
 /// collapsible area between the ruler and the regular tracks.
 pub const GLOBAL_TRACK_ROW_HEIGHT: f32 = 40.0;
-/// Background for global track rows (slightly distinct from ruler).
-pub const GLOBAL_TRACK_BG: Color = Color::from_rgb(
-    0x15 as f32 / 255.0,
-    0x15 as f32 / 255.0,
-    0x15 as f32 / 255.0,
-);
-pub const TRACK_HEADER_WIDTH: u16 = 180;
-pub const MIXER_STRIP_WIDTH: u16 = 160;
-pub const MASTER_STRIP_WIDTH: u16 = 140;
+/// Track-list column width on the Arrange view.
+pub const TRACK_HEADER_WIDTH: u16 = 260;
+/// Standard channel strip width on the Mixer.
+pub const MIXER_STRIP_WIDTH: u16 = 132;
+/// Master strip width.
+pub const MASTER_STRIP_WIDTH: u16 = 156;
+/// Inspector column width on the Mixer.
+pub const INSPECTOR_WIDTH: u16 = 320;
+/// Right-rail column width on the Compose view.
+pub const COMPOSE_RAIL_WIDTH: u16 = 280;
 
 /// Height of the vertical fader used in mixer strips and master strip.
 pub const FADER_HEIGHT: f32 = 120.0;
+/// Fixed total height for a track/master mixer strip. Pins the fader at
+/// the bottom of the strip and lets the FX list scroll inside instead of
+/// resizing the entire strip — keeps mixer resize cheap.
+pub const MIXER_STRIP_HEIGHT: u16 = 460;
+/// Fixed height for bus strips. Slightly shorter than track strips since
+/// busses have no instrument slot.
+pub const BUS_STRIP_HEIGHT: u16 = 380;
 /// Pixel radius around a clip's left/right edge that starts a trim (not move).
 pub const CLIP_EDGE_THRESHOLD: f32 = 6.0;
 /// VU-meter peak decay factor applied per frame tick.
@@ -233,24 +311,43 @@ pub const PEAK_DECAY: f32 = 0.85;
 /// Tick interval (ms) for the subscription timer that drains engine events.
 pub const TICK_INTERVAL_MS: u64 = 16;
 
+// ---------------------------------------------------------------------------
+// Radius scale.
+// ---------------------------------------------------------------------------
+
+/// Cells, tiny buttons.
+pub const RADIUS_XS: f32 = 4.0;
+/// Segmented tabs.
+pub const RADIUS_SM: f32 = 6.0;
+/// Standard buttons + inputs.
+pub const RADIUS_MD: f32 = 7.0;
+/// Clip cards, chord cards, instrument slots.
+pub const RADIUS_LG: f32 = 8.0;
+/// Strip cards, drum grid panel.
+pub const RADIUS_XL: f32 = 12.0;
+
 pub fn resonance_theme() -> Theme {
     Theme::Dark
 }
 
+// ---------------------------------------------------------------------------
+// Button styles.
+// ---------------------------------------------------------------------------
+
 pub fn transport_button_style(status: button::Status) -> button::Style {
     let bg = match status {
-        button::Status::Hovered => Color::from_rgb(0.2, 0.2, 0.2),
-        button::Status::Pressed => Color::from_rgb(0.15, 0.15, 0.15),
-        _ => Color::from_rgb(0.12, 0.12, 0.12),
+        button::Status::Hovered => BG_3,
+        button::Status::Pressed => LINE_2,
+        _ => BG_2,
     };
 
     button::Style {
         background: Some(iced::Background::Color(bg)),
-        text_color: TEXT,
+        text_color: TEXT_1,
         border: iced::Border {
-            color: SEPARATOR,
+            color: LINE,
             width: 1.0,
-            radius: 4.0.into(),
+            radius: RADIUS_LG.into(),
         },
         ..Default::default()
     }
@@ -258,30 +355,39 @@ pub fn transport_button_style(status: button::Status) -> button::Style {
 
 pub fn record_armed_button_style(status: button::Status) -> button::Style {
     let bg = match status {
-        button::Status::Hovered => Color::from_rgb(0.35, 0.12, 0.12),
-        button::Status::Pressed => Color::from_rgb(0.25, 0.08, 0.08),
-        _ => Color::from_rgb(0.30, 0.10, 0.10),
+        button::Status::Hovered => rgb(0x35, 0x18, 0x1f),
+        button::Status::Pressed => rgb(0x2a, 0x12, 0x18),
+        _ => rgb(0x2a, 0x14, 0x1a),
     };
 
     button::Style {
         background: Some(iced::Background::Color(bg)),
-        text_color: RECORD_RED,
+        text_color: BAD,
         border: iced::Border {
-            color: RECORD_RED,
+            color: BAD,
             width: 1.0,
-            radius: 2.0.into(),
+            radius: RADIUS_LG.into(),
         },
         ..Default::default()
     }
 }
 
+/// Tab-style button used for the chrome's segmented Arrange/Mixer/Compose
+/// nav. Active tab fills with `BG_3` and shows primary text; inactive tabs
+/// are transparent with `TEXT_2`.
 pub fn tab_button_style(active: bool, status: button::Status) -> button::Style {
     let bg = match status {
-        button::Status::Hovered => Color::from_rgb(0.22, 0.22, 0.22),
-        button::Status::Pressed => Color::from_rgb(0.15, 0.15, 0.15),
+        button::Status::Hovered => {
+            if active {
+                BG_3
+            } else {
+                BG_2
+            }
+        }
+        button::Status::Pressed => LINE_2,
         _ => {
             if active {
-                Color::from_rgb(0.18, 0.18, 0.18)
+                BG_3
             } else {
                 Color::TRANSPARENT
             }
@@ -290,11 +396,11 @@ pub fn tab_button_style(active: bool, status: button::Status) -> button::Style {
 
     button::Style {
         background: Some(iced::Background::Color(bg)),
-        text_color: if active { ACCENT } else { TEXT_DIM },
+        text_color: if active { TEXT_1 } else { TEXT_2 },
         border: iced::Border {
-            color: if active { ACCENT } else { Color::TRANSPARENT },
-            width: if active { 1.0 } else { 0.0 },
-            radius: 4.0.into(),
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: RADIUS_SM.into(),
         },
         ..Default::default()
     }
@@ -309,16 +415,16 @@ pub fn section_button_style(active: bool, color: [u8; 3], status: button::Status
         color[1] as f32 / 255.0,
         color[2] as f32 / 255.0,
     );
-    let panel = PANEL;
+    let panel = BG_2;
     let inactive = Color::from_rgb(
-        panel.r * 0.7 + base.r * 0.3,
-        panel.g * 0.7 + base.g * 0.3,
-        panel.b * 0.7 + base.b * 0.3,
+        panel.r * 0.78 + base.r * 0.22,
+        panel.g * 0.78 + base.g * 0.22,
+        panel.b * 0.78 + base.b * 0.22,
     );
     let active_bg = Color::from_rgb(
-        panel.r * 0.4 + base.r * 0.6,
-        panel.g * 0.4 + base.g * 0.6,
-        panel.b * 0.4 + base.b * 0.6,
+        panel.r * 0.55 + base.r * 0.45,
+        panel.g * 0.55 + base.g * 0.45,
+        panel.b * 0.55 + base.b * 0.45,
     );
     let bg = match status {
         button::Status::Hovered => active_bg,
@@ -333,18 +439,19 @@ pub fn section_button_style(active: bool, color: [u8; 3], status: button::Status
     };
     button::Style {
         background: Some(iced::Background::Color(bg)),
-        text_color: TEXT,
+        text_color: TEXT_1,
         border: iced::Border {
-            color: if active { ACCENT } else { SEPARATOR },
+            color: if active { ACCENT } else { LINE },
             width: if active { 1.5 } else { 1.0 },
-            radius: 4.0.into(),
+            radius: RADIUS_SM.into(),
         },
         ..Default::default()
     }
 }
 
 /// Toggle button style for active/inactive states with a custom active color.
-/// Used for monitor, metronome, and punch buttons.
+/// Used for monitor, metronome, and punch buttons. Active state uses the
+/// `active_color` for border and text against a soft tinted bg.
 pub fn toggle_button_style(
     active: bool,
     active_color: Color,
@@ -353,9 +460,18 @@ pub fn toggle_button_style(
 ) -> button::Style {
     if active {
         let bg = match status {
-            button::Status::Hovered => Color::from_rgb(0.15, 0.25, 0.15),
-            button::Status::Pressed => Color::from_rgb(0.10, 0.20, 0.10),
-            _ => Color::from_rgb(0.12, 0.20, 0.12),
+            button::Status::Hovered => Color {
+                a: 0.22,
+                ..active_color
+            },
+            button::Status::Pressed => Color {
+                a: 0.30,
+                ..active_color
+            },
+            _ => Color {
+                a: 0.16,
+                ..active_color
+            },
         };
         button::Style {
             background: Some(iced::Background::Color(bg)),
@@ -363,7 +479,7 @@ pub fn toggle_button_style(
             border: iced::Border {
                 color: active_color,
                 width: 1.0,
-                radius: if small { 2.0 } else { 4.0 }.into(),
+                radius: if small { RADIUS_XS } else { RADIUS_LG }.into(),
             },
             ..Default::default()
         }
@@ -374,20 +490,21 @@ pub fn toggle_button_style(
     }
 }
 
-/// Mono/Stereo toggle button style.
+/// Mono/Stereo toggle button style. Lavender outline when stereo, neutral
+/// when forced mono.
 pub fn mono_button_style(is_mono: bool, status: button::Status) -> button::Style {
     let bg = match status {
-        button::Status::Hovered => Color::from_rgb(0.20, 0.20, 0.25),
-        button::Status::Pressed => Color::from_rgb(0.15, 0.15, 0.20),
-        _ => Color::from_rgb(0.18, 0.18, 0.22),
+        button::Status::Hovered => BG_3,
+        button::Status::Pressed => LINE_2,
+        _ => BG_2,
     };
     button::Style {
         background: Some(iced::Background::Color(bg)),
-        text_color: if is_mono { TEXT } else { ACCENT },
+        text_color: if is_mono { TEXT_2 } else { ACCENT_SOFT },
         border: iced::Border {
-            color: if is_mono { SEPARATOR } else { ACCENT },
+            color: if is_mono { LINE } else { ACCENT_LINE },
             width: 1.0,
-            radius: 2.0.into(),
+            radius: RADIUS_XS.into(),
         },
         ..Default::default()
     }
@@ -395,32 +512,64 @@ pub fn mono_button_style(is_mono: bool, status: button::Status) -> button::Style
 
 pub fn small_button_style(status: button::Status) -> button::Style {
     let bg = match status {
-        button::Status::Hovered => Color::from_rgb(0.22, 0.22, 0.22),
-        button::Status::Pressed => Color::from_rgb(0.15, 0.15, 0.15),
+        button::Status::Hovered => BG_3,
+        button::Status::Pressed => LINE_2,
         _ => Color::TRANSPARENT,
     };
 
     button::Style {
         background: Some(iced::Background::Color(bg)),
-        text_color: TEXT,
+        text_color: TEXT_1,
         border: iced::Border {
             color: Color::TRANSPARENT,
             width: 0.0,
-            radius: 2.0.into(),
+            radius: RADIUS_XS.into(),
         },
         ..Default::default()
     }
 }
 
-/// Bordered container style for the compound timing panel (BPM / time sig /
-/// position / metronome).
-pub fn timing_panel_style(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(iced::Background::Color(PANEL_DARK)),
+/// "Ghost" button — transparent body, hairline border, secondary text.
+/// Used for chrome controls (⌘K, Share) and toolbar actions ("Edit
+/// section", "Export chords", "Snapshot", ...).
+pub fn ghost_button_style(status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => BG_2,
+        button::Status::Pressed => LINE_2,
+        _ => Color::TRANSPARENT,
+    };
+    button::Style {
+        background: Some(iced::Background::Color(bg)),
+        text_color: TEXT_2,
         border: iced::Border {
-            color: SEPARATOR,
+            color: LINE,
             width: 1.0,
-            radius: 6.0.into(),
+            radius: RADIUS_MD.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Lavender primary action button — used for the Compose generator's
+/// "Generate" and the play button when in the chrome.
+pub fn primary_button_style(status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => ACCENT_SOFT,
+        button::Status::Pressed => Color {
+            r: ACCENT.r * 0.82,
+            g: ACCENT.g * 0.82,
+            b: ACCENT.b * 0.95,
+            a: 1.0,
+        },
+        _ => ACCENT,
+    };
+    button::Style {
+        background: Some(iced::Background::Color(bg)),
+        text_color: rgb(0x0e, 0x0a, 0x1f),
+        border: iced::Border {
+            color: ACCENT,
+            width: 0.0,
+            radius: RADIUS_MD.into(),
         },
         ..Default::default()
     }
@@ -439,14 +588,12 @@ pub fn borderless_text_input_style(
             width: 0.0,
             radius: 0.0.into(),
         },
-        icon: TEXT_DIM,
-        placeholder: Color { a: 0.4, ..TEXT_DIM },
-        value: ACCENT,
+        icon: TEXT_2,
+        placeholder: Color { a: 0.4, ..TEXT_2 },
+        value: ACCENT_SOFT,
         selection: Color {
-            r: ACCENT.r,
-            g: ACCENT.g,
-            b: ACCENT.b,
             a: 0.35,
+            ..ACCENT
         },
     }
 }
@@ -455,17 +602,26 @@ pub fn borderless_text_input_style(
 /// (e.g. the zoom +/- overlay). Semi-opaque so it reads against clips.
 pub fn floating_button_style(status: button::Status) -> button::Style {
     let bg = match status {
-        button::Status::Hovered => Color::from_rgba(0.22, 0.22, 0.22, 0.92),
-        button::Status::Pressed => Color::from_rgba(0.15, 0.15, 0.15, 0.92),
-        _ => Color::from_rgba(0.12, 0.12, 0.12, 0.85),
+        button::Status::Hovered => Color {
+            a: 0.92,
+            ..BG_3
+        },
+        button::Status::Pressed => Color {
+            a: 0.92,
+            ..LINE_2
+        },
+        _ => Color {
+            a: 0.85,
+            ..BG_2
+        },
     };
     button::Style {
         background: Some(iced::Background::Color(bg)),
-        text_color: TEXT,
+        text_color: TEXT_1,
         border: iced::Border {
-            color: SEPARATOR,
+            color: LINE,
             width: 1.0,
-            radius: 4.0.into(),
+            radius: RADIUS_MD.into(),
         },
         ..Default::default()
     }
@@ -474,84 +630,57 @@ pub fn floating_button_style(status: button::Status) -> button::Style {
 /// Red-tinted button for destructive actions (delete confirmations).
 pub fn destructive_button_style(status: button::Status) -> button::Style {
     let bg = match status {
-        button::Status::Hovered => Color::from_rgb(0.50, 0.14, 0.14),
-        button::Status::Pressed => Color::from_rgb(0.38, 0.10, 0.10),
-        _ => Color::from_rgb(0.45, 0.12, 0.12),
+        button::Status::Hovered => rgb(0x4a, 0x18, 0x22),
+        button::Status::Pressed => rgb(0x36, 0x10, 0x18),
+        _ => rgb(0x3e, 0x14, 0x1d),
     };
     button::Style {
         background: Some(iced::Background::Color(bg)),
-        text_color: Color::WHITE,
+        text_color: TEXT_1,
         border: iced::Border {
-            color: RECORD_RED,
+            color: BAD,
             width: 1.0,
-            radius: 4.0.into(),
+            radius: RADIUS_MD.into(),
         },
         ..Default::default()
     }
 }
 
-/// Accent-coloured button for primary/positive actions (e.g. "Save & Quit").
-pub fn accent_button_style(status: button::Status) -> button::Style {
-    let bg = match status {
-        button::Status::Hovered => Color::from_rgb(0.18, 0.50, 0.72),
-        button::Status::Pressed => Color::from_rgb(0.12, 0.38, 0.58),
-        _ => Color::from_rgb(ACCENT.r, ACCENT.g, ACCENT.b),
-    };
-    button::Style {
-        background: Some(iced::Background::Color(bg)),
-        text_color: Color::WHITE,
-        border: iced::Border {
-            color: ACCENT,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        ..Default::default()
-    }
-}
+// ---- Container style helpers ------------------------------------------------
+// These wrap the most common backdrop+border pairings used throughout the
+// view layer.
 
-// ---- Container style helpers -------------------------------------------
-// These wrap the "flat background container with no border" pattern that
-// appears ~80 times across the view module.
-
-/// Flat PANEL background, no border.
+/// Flat BG_2 (panel) background, no border.
 pub fn panel_bg(_theme: &Theme) -> container::Style {
     container::Style {
-        background: Some(iced::Background::Color(PANEL)),
+        background: Some(iced::Background::Color(BG_2)),
         ..Default::default()
     }
 }
 
-/// Flat PANEL_DARK background, no border.
-pub fn panel_dark_bg(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(iced::Background::Color(PANEL_DARK)),
-        ..Default::default()
-    }
-}
-
-/// Flat BG (base) background, no border.
+/// Flat BG (app body) background, no border.
 pub fn base_bg(_theme: &Theme) -> container::Style {
     container::Style {
-        background: Some(iced::Background::Color(BG)),
+        background: Some(iced::Background::Color(BG_1)),
         ..Default::default()
     }
 }
 
-/// Flat SEPARATOR-color background (for 1px separator Spaces).
+/// Flat LINE-color background (used for 1px separator Spaces).
 pub fn separator_bg(_theme: &Theme) -> container::Style {
     container::Style {
-        background: Some(iced::Background::Color(SEPARATOR)),
+        background: Some(iced::Background::Color(LINE_2)),
         ..Default::default()
     }
 }
 
-/// PANEL background with a subtle SEPARATOR outline. Used on track
-/// header frames.
+/// Panel background with a subtle hairline outline. Used on track header
+/// frames and other "card" containers.
 pub fn panel_outlined(_theme: &Theme) -> container::Style {
     container::Style {
-        background: Some(iced::Background::Color(PANEL)),
+        background: Some(iced::Background::Color(BG_2)),
         border: iced::Border {
-            color: SEPARATOR,
+            color: LINE_2,
             width: 1.0,
             radius: 0.0.into(),
         },
@@ -559,15 +688,42 @@ pub fn panel_outlined(_theme: &Theme) -> container::Style {
     }
 }
 
-/// PANEL_DARK background with a thin SEPARATOR outline. Used on mixer
-/// strip frames.
+/// Recessed background with a thin hairline outline. Used on mixer
+/// strip frames and other inner panels.
 pub fn panel_dark_outlined(_theme: &Theme) -> container::Style {
     container::Style {
-        background: Some(iced::Background::Color(PANEL_DARK)),
+        background: Some(iced::Background::Color(BG_1)),
         border: iced::Border {
-            color: SEPARATOR,
+            color: LINE_2,
             width: 0.5,
             radius: 0.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Card-style container with a lavender selection outline. Used for the
+/// currently selected channel strip and chord card.
+pub fn card_selected(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(BG_2)),
+        border: iced::Border {
+            color: ACCENT_LINE,
+            width: 1.0,
+            radius: RADIUS_XL.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Card-style container with a warm/amber outline. Used for bus strips.
+pub fn card_warm(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(BG_2)),
+        border: iced::Border {
+            color: WARM_LINE,
+            width: 1.0,
+            radius: RADIUS_XL.into(),
         },
         ..Default::default()
     }

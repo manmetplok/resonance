@@ -297,17 +297,70 @@ Never use `iced::Color::from_rgb(...)` inline for anything that belongs to the a
 - `CLIP_BODY`, `CLIP_HEADER`, `CLIP_SELECTED_BORDER` — clip rendering
 - `RULER_BG` — timeline ruler background
 
-### 10. Verifying your changes
+### 10. Verifying your changes — screenshot loop
 
-After any UI work:
+After any UI work, you must **visually verify** the result, not just
+type-check it. The app supports a `--demo` flag that boots into a fully
+seeded project (tracks, busses, clips, compose section) so views render
+with realistic content without a real audio engine, and `--tab
+arrange|mixer|compose` selects which view opens first. Combine those
+with `spectacle` (KDE's window grabber, already installed) and
+ImageMagick `magick` to capture a screenshot you can read with the Read
+tool.
+
+**Canonical recipe** — adapt the `--tab` value and crop region to the
+view you changed:
+
+```bash
+mkdir -p /tmp/resonance-shots
+./target/debug/resonance-app --tab mixer --demo >/dev/null 2>&1 &
+APP_PID=$!
+sleep 4                                # let wgpu/init settle before grabbing
+spectacle --activewindow --background \
+  --output /tmp/resonance-shots/mixer.png --nonotify >/dev/null 2>&1
+sleep 1
+kill -TERM $APP_PID 2>/dev/null
+wait $APP_PID 2>/dev/null
+magick /tmp/resonance-shots/mixer.png -resize 1500 \
+  /tmp/resonance-shots/mixer-display.png
+```
+
+Then **read the PNG with the Read tool** — Claude Code renders the image
+inline so you can inspect alignment, spacing, color, and overlap with
+your own eyes. Don't skip this step; type-checking alone has no opinion
+on whether a strip is the right height or whether two elements overlap.
+
+**Cropping for detail.** When a small region matters (a single mixer
+strip, the transport bar, a track header), follow the screenshot with a
+crop so the detail isn't lost in the resize:
+
+```bash
+magick /tmp/resonance-shots/mixer.png -crop 800x500+200+200 \
+  /tmp/resonance-shots/strip-detail.png
+```
+
+The geometry is `WIDTHxHEIGHT+X+Y` in source-image pixels (before
+resize). Skip the `-resize` step on detail crops so you see the native
+resolution.
+
+**Multi-tab checks.** If a change touches shared chrome (toolbar,
+transport, theme), capture all three tabs in the same loop — replace
+`mixer` with `arrange` / `compose` and rerun. Each tab is a separate
+process invocation; don't try to switch tabs inside a single run.
+
+After the screenshot pass:
 
 1. `cargo build -p resonance-app` — must be warning-free for code you touched.
-2. `cargo run -p resonance-app` — visually confirm the change, especially:
-   - Alignment with neighbouring widgets
-   - Hover/pressed/disabled states
-   - Behaviour when the underlying state is empty (no tracks, no clips, paused, etc.)
-3. If you added/changed an icon glyph, re-verify the glyph bounds match the y=192 project center (see §2).
-4. If you added a scrollable/scrollbarred area, confirm the scrollbar hides when content fits and that wheel/drag both work.
+2. Screenshot the affected view(s) per the recipe above and read the
+   image. Confirm alignment, spacing, hover/pressed/disabled states
+   (use `--tab` plus the demo seed to land on a state that exercises
+   them — e.g. armed tracks are pre-seeded), and behaviour when the
+   underlying state is empty.
+3. If you added/changed an icon glyph, re-verify the glyph bounds match
+   the y=192 project center (see §2) — and screenshot the row that uses
+   it to confirm vertical alignment with neighbouring text.
+4. If you added a scrollable/scrollbarred area, confirm the scrollbar
+   hides when content fits and that wheel/drag both work.
 
 ## Best Practices Summary
 
@@ -323,3 +376,134 @@ After any UI work:
 - **New custom glyphs**: center on y=192, counter-clockwise winding, match ~448-unit vertical span, rename never — only `tools/add_metronome_glyph.py`-style scripts touch the font.
 - **Disabled controls**: drop `.on_press(...)` and dim the text color. No popups asking "please do X first".
 - **Don't duplicate master controls across tabs**: the mixer owns the master fader; the transport must not. Analogous: zoom lives on the timeline, not the transport.
+- **Always screenshot-verify**: never report UI work complete on a `cargo check` alone — boot with `--demo --tab <view>`, grab with `spectacle --activewindow`, read the PNG. See §10.
+- **Per-frame allocations are the silent perf killer**: iced rebuilds the entire widget tree every frame. See §11 for the rules — cached pick-list options on `view_caches`, fixed-height strips, canvas-cached meters, and `iced::widget::lazy` for non-live regions.
+
+## 11. View performance — what to do (and not do) inside `view()`
+
+Resonance's iced GUI rebuilds the entire widget tree per frame. During
+a continuous window resize that's 60+ rebuilds/sec, so anything
+allocated inside `view()` allocates that often. The rules below are
+the difference between a smooth resize and a chunky one.
+
+### 11.1 Cache pick_list options on `view_caches`
+
+`pick_list(options, …)` takes the options by value. Building a fresh
+`Vec` each frame for device lists, plugin lists, or bus-output
+destinations is the single biggest source of resize jank we've found.
+
+The canonical home for these is
+`resonance-app/src/view/ui_caches.rs::UiViewCaches`. Each cached list
+is an `Rc<[T]>` — view code clones the Rc (refcount bump only) and
+passes it to `pick_list`. Rebuild only happens when source data
+changes (device hot-plug, plugin scan, bus add/remove), driven from
+the engine event handler, e.g.:
+
+```rust
+pub(super) fn midi_input_devices(r: &mut Resonance, devices: Vec<MidiDeviceInfo>) {
+    r.midi_input_devices = devices;
+    r.view_caches.rebuild_midi_input(&r.midi_input_devices);
+}
+```
+
+If you add a new pick_list whose options are a function of state that
+doesn't change every frame, add a cache field to `UiViewCaches` plus a
+`rebuild_*` method, and wire the rebuild into the relevant handler(s).
+Don't filter+clone inside `view()`.
+
+For the rare case where the cached list needs a per-call override
+entry (e.g. a stale-but-still-configured MIDI device), wrap it in
+`ChoiceList<T>` (in `ui_caches.rs`) so the cached and owned variants
+both implement `Borrow<[T]>` and slot into `pick_list` identically.
+
+### 11.2 Lazy-wrap regions that don't update per-tick
+
+`iced::widget::lazy(dep_hash, |_| build(...))` caches the produced
+widget tree across frames and only re-runs the closure when `dep_hash`
+changes. Resize doesn't change state, so the cache hits across every
+paint during a resize.
+
+The output of the closure must convert to `Element<'static>` — so the
+build function must only own data it puts into widgets (no `&str`
+slices borrowed from `&Resonance`, no `Element<'a, …>`). Practically,
+update helper signatures from `fn foo<'a>(r: &'a Resonance) -> Element<'a, Message>`
+to `fn foo(r: &Resonance) -> Element<'static, Message>` and let the
+compiler tell you where a borrow leaks through.
+
+**Caveat — never put a `canvas::Cache`-backed widget inside a lazy
+block whose dep hash skips that widget's live data.** The lazy widget
+stores the cached `Element` (which contains the Canvas program with
+its level fields), and the cached Canvas program is reused frame
+after frame with frozen field values. The meter widget in
+`view/controls.rs` is the obvious example — wrapping a strip with
+meters in lazy freezes the meter. Either keep the meter outside the
+lazy area, or keep the entire strip outside lazy.
+
+Reference implementations: `view/mixer/inspector.rs::view` wraps the
+routing + chain groups in `lazy` keyed on `inspector_fingerprint`;
+`view/track_header.rs::view_track_headers` wraps the whole arrange
+header column in `lazy` keyed on `track_headers_fingerprint`. Both
+hash every visible field except levels, so lazy invalidation tracks
+user input + engine events rather than per-tick meter updates.
+
+### 11.3 Cache the sort, not the sort key
+
+`TrackRegistry::tracks` and `.busses` are kept sorted by `.order` as
+an invariant — view code calls `sorted_tracks() / sorted_busses()`
+which iterates them as-is, no per-frame `sort_by_key`. Any mutation
+that changes `.order` (re-ordering, certain track-move flows) must
+call `registry.resort_tracks()` / `resort_busses()` afterwards. Push
+and `retain` preserve order so they don't need a resort.
+
+A debug-only assertion at the top of `sorted_tracks` panics if the
+invariant breaks, so violations show up immediately under `cargo run`.
+
+### 11.4 Render meters as Canvas widgets
+
+`view::controls::meter_v` builds a `StereoMeterCanvas` with a
+`canvas::Cache` keyed on the bit pattern of the two level values.
+Hover and resize redraws hit the cache; only a real level change
+invalidates. Use this pattern any time you need a value-driven visual
+that updates faster than user input — replicate `StereoMeterCanvas` /
+`KnobState` rather than building a column of resized containers.
+
+### 11.5 Fixed-height strips, not Length::Fill chains
+
+The mixer strip card has a fixed `MIXER_STRIP_HEIGHT` (and busses use
+`BUS_STRIP_HEIGHT`). The FX list inside scrolls. Avoid `Length::Fill`
+on every nested container — it forces iced to recompute child layouts
+every time the parent resizes, which is the visible cause of "the
+mixer feels sluggish during resize." See `view::mixer::track_strip`
+for the pattern: fixed-height outer container, scrollable FX list,
+fader pinned at the bottom.
+
+The same pattern applies to **content canvases that own their own
+scroll state**: prefer a fixed-pixel-width canvas inside a horizontal
+`Scrollable` over a `Length::Fill` canvas with internal `scroll_x`.
+Two reasons: (a) the canvas's `canvas::Cache` keys on `bounds.size()`,
+so a Fill canvas invalidates the cache on every paint of a continuous
+resize; a fixed-width canvas hits the cache. (b) Notes / clips stay
+at a stable pixel size instead of being squashed or stretched as the
+window resizes. The piano roll
+(`view::view_midi_editor_panel`) and the arrange timeline
+(`view::view_timeline`) both follow this pattern — canvas width is
+the natural content width plus a small trailing pad, wrapped in a
+horizontal `Scrollable`, and the canvas's wheel-X handler returns
+`Ignored` so the scrollable receives those events instead.
+
+**Vertical scroll can stay internal** when the canvas has tightly
+coupled header rows that must scroll in lockstep with the body
+(ruler + section band + global-tracks header on the timeline; the
+keyboard column on the piano roll). The timeline does this — the
+in-canvas vertical scrollbar lives on, the horizontal one was deleted
+when its handler became dead code. Don't try to put a canvas with
+sticky headers in a `Direction::Both` scrollable unless you're also
+prepared to extract the header into a separate widget.
+
+### 11.6 What we deliberately did NOT do
+
+`Arc<str>` for `TrackState.name` / `BusState.name` / `PluginSlotState.plugin_name`
+was considered. After lazy lands, the widget tree rebuilds only on
+state change (~20Hz max), so per-rebuild `String` allocations are
+negligible. Re-evaluate only if profiling under load points at name
+cloning. Don't do the wide refactor pre-emptively.

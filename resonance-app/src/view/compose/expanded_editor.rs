@@ -172,6 +172,15 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
             theme::SEPARATOR,
         );
 
+        // Grid backdrop in BG_2 so the cards read against the BG_1 app
+        // body. Black-key rows + out-of-scale rows render their own
+        // fills over this; white-key rows just show the backdrop.
+        frame.fill_rectangle(
+            Point::new(grid_x, TOOLBAR_HEIGHT),
+            Size::new(grid_w, grid_h),
+            theme::BG_2,
+        );
+
         // -- Note row backgrounds --
         self.draw_note_rows(&mut frame, grid_x, grid_w, grid_h);
 
@@ -593,24 +602,28 @@ impl<'a> ExpandedEditorCanvas<'a> {
             let is_black = is_black_key(midi_note);
             let in_scale = self.scale.map(|s| s.contains(midi_note)).unwrap_or(true);
 
-            let base = if is_black {
-                Color::from_rgb(0.07, 0.07, 0.08)
+            // Black-key rows render darker against the BG_2 backdrop;
+            // out-of-scale rows get a subtle warm tint. White-key rows
+            // skip the fill entirely so the BG_2 backdrop shows through.
+            let color = if !in_scale {
+                Some(Color {
+                    a: 0.06,
+                    ..theme::WARM
+                })
+            } else if is_black {
+                Some(theme::BG_1)
             } else {
-                Color::from_rgb(0.11, 0.11, 0.12)
+                None
             };
-            let color = if in_scale {
-                base
-            } else {
-                Color::from_rgb(base.r * 0.75, base.g * 0.55, base.b * 0.55)
-            };
-
-            frame.fill_rectangle(Point::new(grid_x, y), Size::new(grid_w, h), color);
+            if let Some(color) = color {
+                frame.fill_rectangle(Point::new(grid_x, y), Size::new(grid_w, h), color);
+            }
 
             if midi_note % 12 == 0 {
                 frame.fill_rectangle(
                     Point::new(grid_x, y + h - 1.0),
                     Size::new(grid_w, 1.0),
-                    Color::from_rgb(0.22, 0.22, 0.24),
+                    theme::LINE_2,
                 );
             }
         }
@@ -637,26 +650,27 @@ impl<'a> ExpandedEditorCanvas<'a> {
             let num = self.tempo_map.numerator_at_bar(bar) as u64;
             let bar_ticks = num * tpb;
 
-            // Bar line
+            // Bar line — LINE, 1px hairline like the rest of the redesign.
             let x = grid_x + self.tick_to_x(tick_pos, zoom_x);
             if x >= grid_x && x <= grid_x + grid_w {
                 frame.fill_rectangle(
                     Point::new(x, TOOLBAR_HEIGHT),
-                    Size::new(1.5, grid_h),
-                    Color::from_rgb(0.30, 0.30, 0.34),
+                    Size::new(1.0, grid_h),
+                    theme::LINE,
                 );
                 if tick_pos < total_ticks {
                     frame.fill_text(canvas::Text {
                         content: format!("{}", bar_offset + 1),
                         position: Point::new(x + 3.0, TOOLBAR_HEIGHT + 2.0),
-                        color: theme::TEXT_DIM,
+                        color: theme::TEXT_3,
                         size: 9.0.into(),
+                        font: theme::MONO_FONT,
                         ..canvas::Text::default()
                     });
                 }
             }
 
-            // Beat lines within this bar
+            // Beat lines — LINE_2 hairlines.
             for beat in 1..num {
                 let beat_tick = tick_pos + beat * tpb;
                 let bx = grid_x + self.tick_to_x(beat_tick, zoom_x);
@@ -664,7 +678,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
                     frame.fill_rectangle(
                         Point::new(bx, TOOLBAR_HEIGHT),
                         Size::new(1.0, grid_h),
-                        Color::from_rgb(0.18, 0.18, 0.20),
+                        theme::LINE_2,
                     );
                 }
             }
@@ -676,15 +690,20 @@ impl<'a> ExpandedEditorCanvas<'a> {
         if x >= grid_x && x <= grid_x + grid_w {
             frame.fill_rectangle(
                 Point::new(x, TOOLBAR_HEIGHT),
-                Size::new(1.5, grid_h),
-                Color::from_rgb(0.30, 0.30, 0.34),
+                Size::new(1.0, grid_h),
+                theme::LINE,
             );
         }
 
-        // Subdivision lines (16th notes) when zoomed in enough
+        // Subdivision lines (16th notes) when zoomed in enough — even
+        // softer than beat lines so they don't compete.
         let sub = tpb / 4;
         let sub_px = sub as f32 * zoom_x;
         if sub_px >= 6.0 {
+            let sub_color = Color {
+                a: 0.5,
+                ..theme::LINE_2
+            };
             for idx in 0..=(total_ticks / sub) {
                 let tick = idx * sub;
                 if tick % tpb == 0 {
@@ -697,7 +716,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
                 frame.fill_rectangle(
                     Point::new(x, TOOLBAR_HEIGHT),
                     Size::new(1.0, grid_h),
-                    Color::from_rgb(0.14, 0.14, 0.15),
+                    sub_color,
                 );
             }
         }
@@ -725,23 +744,42 @@ impl<'a> ExpandedEditorCanvas<'a> {
                     continue;
                 }
 
+                // Lavender notes — velocity drives alpha so harder hits
+                // stand out without changing hue. Rounded corners at
+                // larger sizes pick up the redesign's card vocabulary.
                 let v = n.velocity.clamp(0.0, 1.0);
-                let fill = Color::from_rgb(0.45 + 0.25 * v, 0.72, 0.42);
-                frame.fill_rectangle(Point::new(x, y), Size::new(w, note_h), fill);
+                let fill = Color {
+                    a: 0.55 + 0.40 * v,
+                    ..theme::ACCENT_SOFT
+                };
+                let body = if w >= 4.0 && note_h >= 4.0 {
+                    Path::rounded_rectangle(
+                        Point::new(x, y),
+                        Size::new(w, note_h),
+                        2.0.into(),
+                    )
+                } else {
+                    Path::rectangle(Point::new(x, y), Size::new(w, note_h))
+                };
+                frame.fill(&body, fill);
                 frame.stroke(
-                    &Path::rectangle(Point::new(x, y), Size::new(w, note_h)),
+                    &body,
                     Stroke::default()
                         .with_width(1.0)
-                        .with_color(Color::from_rgb(0.12, 0.22, 0.12)),
+                        .with_color(theme::ACCENT),
                 );
 
                 // Label inside large enough notes
                 if w > 28.0 && note_h > 8.0 {
                     frame.fill_text(canvas::Text {
                         content: note_name(n.note),
-                        position: Point::new(x + 2.0, y + 1.0),
-                        color: Color::from_rgba(0.0, 0.0, 0.0, 0.6),
+                        position: Point::new(x + 4.0, y + 1.0),
+                        color: Color {
+                            a: 0.85,
+                            ..theme::BG_0
+                        },
                         size: (note_h * 0.75).min(10.0).into(),
+                        font: theme::MONO_FONT,
                         ..canvas::Text::default()
                     });
                 }
@@ -750,10 +788,12 @@ impl<'a> ExpandedEditorCanvas<'a> {
     }
 
     fn draw_keyboard(&self, frame: &mut Frame, grid_h: f32) {
+        // Keyboard column matches the redesign's card vocabulary: BG_2
+        // backdrop, BG_3 white-key bars, BG_0 black-key bars on top.
         frame.fill_rectangle(
             Point::new(0.0, TOOLBAR_HEIGHT),
             Size::new(KEYBOARD_WIDTH, grid_h),
-            Color::from_rgb(0.15, 0.15, 0.15),
+            theme::BG_2,
         );
 
         for midi_note in 0..NOTE_COUNT {
@@ -765,11 +805,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
             }
 
             let black = is_black_key(midi_note);
-            let key_color = if black {
-                Color::from_rgb(0.10, 0.10, 0.10)
-            } else {
-                Color::from_rgb(0.22, 0.22, 0.22)
-            };
+            let key_color = if black { theme::BG_0 } else { theme::BG_3 };
             let key_w = if black {
                 KEYBOARD_WIDTH * 0.65
             } else {
@@ -786,12 +822,19 @@ impl<'a> ExpandedEditorCanvas<'a> {
                 frame.fill_text(canvas::Text {
                     content: note_name(midi_note),
                     position: Point::new(2.0, y + 1.0),
-                    color: theme::TEXT_DIM,
+                    color: theme::TEXT_3,
                     size: (h * 0.7).min(11.0).into(),
+                    font: theme::MONO_FONT,
                     ..canvas::Text::default()
                 });
             }
         }
+        // Right-edge hairline so the keyboard reads as a distinct card.
+        frame.fill_rectangle(
+            Point::new(KEYBOARD_WIDTH - 1.0, TOOLBAR_HEIGHT),
+            Size::new(1.0, grid_h),
+            theme::LINE_2,
+        );
     }
 }
 

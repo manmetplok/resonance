@@ -17,7 +17,9 @@ mod chord;
 mod drums;
 mod instrument;
 
-pub const PANEL_WIDTH: f32 = 240.0;
+/// Compose right-rail width. Aliased to the design-system constant so
+/// every right-hand panel widens together if the token shifts.
+pub const PANEL_WIDTH: f32 = theme::COMPOSE_RAIL_WIDTH as f32;
 
 // ===========================================================================
 // Top-level inspector
@@ -64,26 +66,22 @@ pub fn view<'a>(
 
     let content = column![
         scale,
-        Space::with_height(12),
-        separator(),
-        Space::with_height(8),
+        Space::with_height(20),
         lane_switcher,
-        Space::with_height(8),
-        separator(),
-        Space::with_height(8),
+        Space::with_height(20),
         body,
     ]
     .spacing(0)
-    .padding(12);
+    .padding(18);
 
     container(content)
         .width(Length::Fixed(PANEL_WIDTH))
         .height(Length::Fill)
         .style(|_theme| container::Style {
-            background: Some(iced::Background::Color(theme::PANEL)),
+            background: Some(iced::Background::Color(theme::BG_1)),
             border: iced::Border {
-                color: theme::SEPARATOR,
-                width: 1.0,
+                color: theme::LINE_2,
+                width: 0.0,
                 radius: 0.0.into(),
             },
             ..Default::default()
@@ -135,12 +133,19 @@ fn lane_switcher_row<'a>(
         Message::Compose(ComposeMessage::SelectLane(pick.lane))
     })
     .text_size(12)
-    .padding([4, 6])
+    .padding([5, 8])
     .width(Length::Fill);
 
-    column![text("Lane").size(11).color(theme::TEXT_DIM), picker,]
-        .spacing(4)
-        .into()
+    column![
+        text("LANE")
+            .size(10)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::TEXT_3),
+        Space::with_height(4),
+        picker,
+    ]
+    .spacing(0)
+    .into()
 }
 
 // ===========================================================================
