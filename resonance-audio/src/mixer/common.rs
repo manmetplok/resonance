@@ -110,7 +110,7 @@ pub(super) fn panic_instrument_tracks(
     plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
 ) {
     for track in tracks_guard.values() {
-        if track.track_type != TrackType::Instrument {
+        if !track.track_type.accepts_midi() {
             continue;
         }
         let Some(&inst_id) = track.plugin_ids.first() else {

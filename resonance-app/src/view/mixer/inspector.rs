@@ -252,11 +252,11 @@ fn stat_tile(label: &'static str, value: String) -> Element<'static, Message> {
 fn routing_group(r: &crate::Resonance, track: &TrackState) -> Element<'static, Message> {
     let input_block: Element<'static, Message> = match track.track_type {
         TrackType::Audio => audio_input_block(r, track),
-        TrackType::Instrument => midi_input_block(r, track),
+        TrackType::Instrument | TrackType::Vocal => midi_input_block(r, track),
     };
     let output_block = output_block(r, track);
     let midi_out_block: Element<'static, Message> =
-        if track.track_type == TrackType::Instrument && track.sub_track.is_none() {
+        if track.track_type.accepts_midi() && track.sub_track.is_none() {
             midi_output_block(r, track)
         } else {
             Space::with_height(0).into()

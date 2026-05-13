@@ -214,6 +214,30 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.compose
         .rebuild_derived_clips(&r.midi_clips, samples_per_bar);
 
+    // Rebuild the vocal audio clip map so subsequent regen tear-downs
+    // find the loaded clips and clean them up — otherwise the next
+    // Generate Vocal stacks a new clip on top of the old one and the
+    // mixer plays both summed together.
+    use std::collections::{HashMap, HashSet};
+    let vocal_track_ids: HashSet<resonance_audio::types::TrackId> = r
+        .registry
+        .tracks
+        .iter()
+        .filter(|t| t.track_type == resonance_audio::types::TrackType::Vocal)
+        .map(|t| t.id)
+        .collect();
+    let audio_clip_paths: HashMap<resonance_audio::types::ClipId, std::path::PathBuf> = project
+        .clips
+        .iter()
+        .map(|pc| (pc.id, loaded.project_dir.join(&pc.audio_file)))
+        .collect();
+    r.compose.rebuild_vocal_audio_clips(
+        &r.clips,
+        &audio_clip_paths,
+        &vocal_track_ids,
+        samples_per_bar,
+    );
+
     r.transport.loop_range_set = r.transport.loop_enabled;
 }
 
@@ -228,6 +252,11 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
         });
     } else if pt.track_type == "instrument" {
         r.engine.send(AudioCommand::AddInstrumentTrack {
+            id_hint: Some(pt.id),
+            name: Some(pt.name.clone()),
+        });
+    } else if pt.track_type == "vocal" {
+        r.engine.send(AudioCommand::AddVocalTrack {
             id_hint: Some(pt.id),
             name: Some(pt.name.clone()),
         });
@@ -328,6 +357,8 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
     let order = r.registry.next_track_order;
     let mut track = if pt.track_type == "instrument" {
         TrackState::new_instrument(pt.id, order)
+    } else if pt.track_type == "vocal" {
+        TrackState::new_vocal(pt.id, order)
     } else {
         TrackState::new_audio(pt.id, order)
     };

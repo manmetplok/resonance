@@ -1,0 +1,52 @@
+[package]
+name = "svs-poc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+default-run = "svs-poc"
+description = "Singing-voice-synthesis proof of concept: renders a DiffSinger .ds file to WAV via ONNX. Isolated PoC; not consumed by any other Resonance crate."
+
+[[bin]]
+name = "svs-poc"
+path = "src/main.rs"
+
+# Debug helper: prints the I/O signature of an ONNX file.
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
+
+# CLI driver that builds a DiffSinger segment the same way the
+# Resonance app does (lyric → G2P → phoneme durations → f0) and
+# renders it to WAV. Useful for comparing the integration's output
+# against the standalone pipeline without booting the full app.
+[[bin]]
+name = "render_resonance_vocal"
+path = "src/bin/render_resonance_vocal.rs"
+
+[features]
+default = []
+# Enabling these requires the corresponding ONNX Runtime provider libraries on the host.
+# CPU works out of the box; CUDA and ROCm just register the provider on session build.
+cuda = ["ort/cuda"]
+rocm = ["ort/rocm"]
+# Useful for CI smoke without local model files: build only, no runtime.
+
+[dependencies]
+# Defaults pull a prebuilt ONNX Runtime binary for the host platform, so the PoC builds with no
+# system onnxruntime install. `ndarray` enables interop with the ndarray crate for tensor I/O.
+ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
+ndarray = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+hound = "3.5.1"
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+regex = "1"
+resonance-music-theory = { path = "../../resonance-music-theory" }
+
+[dev-dependencies]
+anyhow = "1"

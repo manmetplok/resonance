@@ -28,6 +28,32 @@ pub(crate) fn handle_add_instrument_track(
         .send(AudioEvent::InstrumentTrackAdded { track_id: id });
 }
 
+/// Same as `handle_add_instrument_track` but creates the track with
+/// `TrackType::Vocal` so the view layer can route it to the vocal lane.
+/// Live MIDI input still works (vocal accepts MIDI for staff capture);
+/// playback runs through the audio-clip path.
+pub(crate) fn handle_add_vocal_track(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    id_hint: Option<TrackId>,
+    name: Option<String>,
+) {
+    let id = id_hint.unwrap_or_else(|| {
+        let i = state.next_track_id;
+        state.next_track_id += 1;
+        i
+    });
+    if id_hint.is_some() {
+        state.next_track_id = state.next_track_id.max(id + 1);
+    }
+    let name = name.unwrap_or_else(|| format!("Vocal {}", id));
+    let track = Track::with_type(id, name, TrackType::Vocal);
+    ctx.tracks.write().insert(id, track);
+    let _ = ctx
+        .event_tx
+        .send(AudioEvent::VocalTrackAdded { track_id: id });
+}
+
 pub(crate) fn handle_create_midi_clip(
     ctx: &HandlerCtx,
     state: &mut HandlerState,

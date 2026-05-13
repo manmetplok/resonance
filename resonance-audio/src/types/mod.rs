@@ -16,11 +16,29 @@ pub enum TrackOutput {
     Bus(BusId),
 }
 
-/// Distinguishes audio recording/playback tracks from instrument (MIDI) tracks.
+/// Track flavour. `Audio` is a plain audio-clip track; `Instrument` carries
+/// MIDI clips that feed an instrument plugin; `Vocal` is a singing-voice
+/// track that pairs a MIDI clip (the staff / lyric carrier) with a
+/// rendered audio clip from the SVS pipeline.
+///
+/// Engine code that needs to know "does this track receive MIDI?" should
+/// use [`TrackType::accepts_midi`] rather than matching on `Instrument`
+/// directly, so vocal tracks pick up the same plumbing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrackType {
     Audio,
     Instrument,
+    Vocal,
+}
+
+impl TrackType {
+    /// Track accepts timed MIDI events — schedule MIDI clips, accept live
+    /// MIDI input, drive an instrument plugin. Currently true for
+    /// `Instrument` and `Vocal` (the vocal lane carries MIDI for the staff
+    /// visualisation and for driving the SVS pipeline).
+    pub fn accepts_midi(self) -> bool {
+        matches!(self, TrackType::Instrument | TrackType::Vocal)
+    }
 }
 
 mod clip;

@@ -5,6 +5,7 @@ edition = "2021"
 description = "Music theory primitives (pitch, chord, scale) for Resonance"
 
 [dependencies]
+cmudict-fast = "0.8.0"
 rand = { version = "0.8", default-features = false, features = ["small_rng"] }
 serde.workspace = true
 thiserror = "2"

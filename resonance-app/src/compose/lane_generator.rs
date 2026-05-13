@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use resonance_music_theory::{BassParams, MelodyParams, PadParams};
+use resonance_music_theory::{BassParams, MelodyParams, PadParams, VocalParams};
 use serde::{Deserialize, Serialize};
 
 /// Persisted per-track generator configuration within a section. Absent
@@ -23,6 +23,11 @@ pub enum LaneGeneratorKind {
     Melody(MelodyParams),
     Pad(PadParams),
     Drum(DrumLaneConfig),
+    /// Vocal generator — lyrics + melody + voice/delivery. Persisted in
+    /// the lane config so the right rail can be repainted from saved
+    /// state. Generation itself is stubbed in
+    /// `resonance_music_theory::derive_vocal` for now.
+    Vocal(VocalParams),
 }
 
 /// Per-voice euclidean configuration for a drum lane.
@@ -79,4 +84,5 @@ pub enum LaneGeneratorKindTag {
     Bass,
     Melody,
     Pad,
+    Vocal,
 }

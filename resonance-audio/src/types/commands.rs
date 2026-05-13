@@ -245,6 +245,15 @@ pub enum AudioCommand {
         name: Option<String>,
     },
 
+    // -- Vocal track commands --
+    /// Add a vocal track. Engine-side this is an instrument-shaped track
+    /// (accepts live MIDI) but its playback path runs through the audio
+    /// clip pipeline so the SVS-rendered WAV is what's heard.
+    AddVocalTrack {
+        id_hint: Option<TrackId>,
+        name: Option<String>,
+    },
+
     // -- MIDI clip commands --
     CreateMidiClip {
         track_id: TrackId,

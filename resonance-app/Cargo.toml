@@ -7,7 +7,9 @@ edition = "2021"
 resonance-audio = { path = "../resonance-audio" }
 resonance-music-theory = { path = "../resonance-music-theory" }
 resonance-plugin = { path = "../resonance-plugin", features = ["ui"] }
+svs-poc = { path = "../experiments/svs-poc" }
 iced = { version = "0.13", features = ["canvas", "wgpu", "tokio", "lazy"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 rfd.workspace = true
 serde.workspace = true
 serde_json.workspace = true

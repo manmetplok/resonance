@@ -72,6 +72,7 @@ impl crate::Resonance {
             let glyph_char = match track.track_type {
                 TrackType::Audio => fa::MICROPHONE,
                 TrackType::Instrument => track.instrument_icon.glyph(),
+                TrackType::Vocal => fa::MICROPHONE,
             };
             Some(
                 container(

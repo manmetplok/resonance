@@ -325,7 +325,7 @@ fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
     let mut silent_l = [0.0f32; 64];
     let mut silent_r = [0.0f32; 64];
     for track in tracks_guard.values() {
-        if track.track_type == TrackType::Instrument {
+        if track.track_type.accepts_midi() {
             if let Some(&inst_id) = track.plugin_ids.first() {
                 if let Some(mutex) = plugins_guard.get(&inst_id) {
                     if let Some(mut inst) = mutex.try_lock() {

@@ -155,6 +155,11 @@ pub enum AudioEvent {
         track_id: TrackId,
     },
 
+    // -- Vocal track events --
+    VocalTrackAdded {
+        track_id: TrackId,
+    },
+
     // -- MIDI clip events --
     MidiClipCreated {
         clip_id: ClipId,

@@ -3,7 +3,7 @@
 //! One section, many lanes, each lane has an optional generator, the chord
 //! lane is shared harmonic context. Selecting a lane updates this panel.
 
-use iced::widget::{column, container, pick_list, row, text, tooltip, Space};
+use iced::widget::{column, container, pick_list, row, scrollable, text, tooltip, Space};
 use iced::{alignment, Element, Length};
 
 use resonance_music_theory::TableRegistry;
@@ -102,6 +102,7 @@ fn editing_header<'a>(
 mod chord;
 mod drums;
 mod instrument;
+mod vocal;
 
 /// Compose right-rail width. Aliased to the design-system constant so
 /// every right-hand panel widens together if the token shifts.
@@ -155,7 +156,7 @@ pub fn view<'a>(
         }
     };
 
-    let content = column![
+    let inner = column![
         editing_card,
         Space::with_height(14),
         scale,
@@ -167,7 +168,17 @@ pub fn view<'a>(
     .spacing(0)
     .padding(18);
 
-    container(content)
+    // The vocal generator panel runs ~5 stacked group cards, easily
+    // taller than the viewport. Wrapping the rail in a vertical
+    // scrollable keeps every control reachable on smaller windows.
+    let scrollable_body = scrollable(inner)
+        .direction(scrollable::Direction::Vertical(
+            scrollable::Scrollbar::default(),
+        ))
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+    container(scrollable_body)
         .width(Length::Fixed(PANEL_WIDTH))
         .height(Length::Fill)
         .style(|_theme| container::Style {

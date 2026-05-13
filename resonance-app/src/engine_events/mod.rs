@@ -168,6 +168,7 @@ impl Resonance {
             // Track / bus lifecycle
             E::TrackAdded { track_id } => tracks::added(self, track_id),
             E::InstrumentTrackAdded { track_id } => tracks::instrument_added(self, track_id),
+            E::VocalTrackAdded { track_id } => tracks::vocal_added(self, track_id),
             E::TrackRemoved { track_id } => tracks::removed(self, track_id),
             E::TrackBounceCompleted {
                 source_track_id,
@@ -409,6 +410,7 @@ pub(super) fn finish_preset_save(r: &mut Resonance, track_id: TrackId) {
         track_type: match track.track_type {
             TrackType::Audio => "audio".to_string(),
             TrackType::Instrument => "instrument".to_string(),
+            TrackType::Vocal => "vocal".to_string(),
         },
         volume: track.volume,
         pan: track.pan,

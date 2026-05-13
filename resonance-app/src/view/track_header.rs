@@ -357,6 +357,7 @@ fn glyph_for_track(track: &TrackState) -> char {
     match track.track_type {
         resonance_audio::types::TrackType::Audio => fa::MICROPHONE,
         resonance_audio::types::TrackType::Instrument => track.instrument_icon.glyph(),
+        resonance_audio::types::TrackType::Vocal => fa::MICROPHONE,
     }
 }
 
@@ -393,6 +394,7 @@ fn kind_label_for_track(track: &TrackState) -> String {
                 short(&plugin_name, 22)
             }
         }
+        TrackType::Vocal => "Vocal".to_string(),
     }
 }
 

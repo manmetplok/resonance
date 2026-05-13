@@ -1,7 +1,8 @@
 use resonance_audio::types::TrackId;
 use resonance_music_theory::{
     BassMotifMode, BassMotifPhrase, BassStyle, Chord, ChordQuality, ContourPreference, Degree,
-    MelodyStyle, PitchClass, Scale,
+    MelodyStyle, PitchClass, Scale, SyllableMode, VocalContour, VocalMood, VocalPov,
+    VocalRhymeScheme, VocalTimbre, VoiceType,
 };
 
 use crate::compose::drumroll::DrumrollMessage;
@@ -145,6 +146,39 @@ pub enum ComposeMessage {
         track_id: TrackId,
         role: Option<TrackRole>,
     },
+
+    /// SVS rendering completed off-thread — install the WAV as an audio
+    /// clip on every placement the renderer was launched for. Boxed
+    /// because the payload is large (samples vec).
+    VocalAudioReady(Box<VocalAudioReadyData>),
+    /// SVS render failed; surface the error to the user.
+    VocalAudioFailed { error: String },
+}
+
+/// Payload dispatched when the background SVS render finishes. Carries
+/// the freshly-written WAV path and the placements that should mmap it.
+#[derive(Debug, Clone)]
+pub struct VocalAudioReadyData {
+    pub definition_id: u64,
+    pub track_id: TrackId,
+    pub wav_path: std::path::PathBuf,
+    /// `(placement_id, start_sample)` snapshot taken when the render was
+    /// queued. The render task is fire-and-forget — by the time it
+    /// finishes the user may have edited placements, but the snapshot
+    /// keeps that drift from blowing up the install step.
+    pub placements: Vec<(u64, u64)>,
+    pub clip_name: String,
+    /// Leading frames to skip on playback. The renderer adds a short
+    /// AP padding to every segment so the model ramps in cleanly; the
+    /// trim hides it from the timeline.
+    pub trim_start_frames: u64,
+    /// Trailing frames to skip on playback, mirroring `trim_start`.
+    pub trim_end_frames: u64,
+    /// Snapshot of `compose.vocal_render_epoch[(def, track)]` taken
+    /// when the render was queued. The completion handler compares
+    /// this to the current epoch and drops stale renders so the user
+    /// doesn't end up with two audio clips stacked on the same lane.
+    pub render_epoch: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +288,43 @@ pub enum LaneInspectorMsg {
     SetPadRegisterLow(u8),
     SetPadRegisterHigh(u8),
     SetPadVelocity(f32),
+
+    // Vocal — lyrics
+    SetVocalTheme(String),
+    SetVocalMood(VocalMood),
+    SetVocalPov(VocalPov),
+    SetVocalRhyme(VocalRhymeScheme),
+    SetVocalLines(u8),
+    SetVocalSyllablesMin(u8),
+    SetVocalSyllablesMax(u8),
+    ToggleVocalMatchSyllables,
+    ToggleVocalAvoidCliches,
+    ToggleVocalLockLine(u8),
+    RerollUnlockedLyrics,
+
+    // Vocal — melody
+    SetVocalVoiceType(VoiceType),
+    SetVocalRangeLow(u8),
+    SetVocalRangeHigh(u8),
+    SetVocalContour(VocalContour),
+    SetVocalSyllableMode(SyllableMode),
+    SetVocalChordToneAnchor(f32),
+    SetVocalLeapRange(f32),
+    SetVocalPhraseLength(u8),
+    SetVocalBreath(f32),
+    ToggleVocalStayInScale,
+    ToggleVocalAvoidClashes,
+
+    // Vocal — voice & delivery
+    SetVocalTimbre(VocalTimbre),
+    SetVocalVibrato(f32),
+    SetVocalArticulation(f32),
+    SetVocalConsonantEmphasis(f32),
+
+    // Vocal — actions
+    GenerateVocalAll,
+    GenerateVocalLyricsOnly,
+    GenerateVocalMelodyOnly,
 
     // Drum euclidean (per-voice)
     SetDrumVoiceMode {

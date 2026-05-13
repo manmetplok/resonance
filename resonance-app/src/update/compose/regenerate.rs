@@ -35,7 +35,9 @@ pub(super) fn propagate_motif_change(r: &mut crate::Resonance, definition_id: u6
         .unwrap_or_default();
 
     for tid in melodic_tracks {
-        regenerate_lane(r, definition_id, tid);
+        // Motif propagation doesn't have a Task return channel — vocal
+        // audio render is dropped here, MIDI still updates inline.
+        let _ = regenerate_lane(r, definition_id, tid);
     }
 
     // Drum lanes: snapshot the (track_id, pad_index) pairs that are in
@@ -87,6 +89,7 @@ pub(super) fn propagate_chord_change(r: &mut crate::Resonance, definition_id: u6
                         LaneGeneratorKind::Bass(_)
                             | LaneGeneratorKind::Melody(_)
                             | LaneGeneratorKind::Pad(_)
+                            | LaneGeneratorKind::Vocal(_)
                     )
                 })
                 .map(|(tid, _)| *tid)
@@ -95,35 +98,51 @@ pub(super) fn propagate_chord_change(r: &mut crate::Resonance, definition_id: u6
         .unwrap_or_default();
 
     for tid in track_ids {
-        regenerate_lane(r, definition_id, tid);
+        // Chord-change propagation runs sync from a non-Task context.
+        // The MIDI side of every lane (including vocal) updates inline
+        // inside `regenerate_lane`; we drop the off-thread vocal audio
+        // render task here — the user re-renders audio on demand via
+        // the right-rail "Generate vocal" button.
+        let _ = regenerate_lane(r, definition_id, tid);
     }
 }
 
 /// Regenerate a single instrument lane, producing MIDI clips for all
-/// placements of the section.
+/// placements of the section. For vocal lanes this returns a real
+/// `Task<Message>` driving the off-thread SVS render; for the other
+/// kinds it returns `Task::none()` (all work is synchronous).
 pub(super) fn regenerate_lane(
     r: &mut crate::Resonance,
     definition_id: u64,
     track_id: TrackId,
-) {
+) -> iced::Task<crate::message::Message> {
     let def = match r.compose.find_definition(definition_id) {
         Some(d) => d.clone(),
-        None => return,
+        None => return iced::Task::none(),
     };
 
     let Some(config) = def.lane_generators.get(&track_id) else {
-        return;
+        return iced::Task::none();
     };
 
     if def.chords.is_empty() {
-        return;
+        return iced::Task::none();
     }
 
     let kind = match &config.kind {
         LaneGeneratorKind::Bass(_) => DeriveKind::Bass,
         LaneGeneratorKind::Melody(_) => DeriveKind::Lead,
         LaneGeneratorKind::Pad(_) => DeriveKind::Pad,
-        LaneGeneratorKind::Drum(_) => return, // drums don't read chord context
+        LaneGeneratorKind::Drum(_) => return iced::Task::none(),
+        // Vocal lanes derive both a MIDI clip (notes) and an audio clip
+        // (SVS-synthesised waveform). Dispatch to the dedicated path
+        // instead of reusing the chord-only DeriveKind pipeline. The
+        // seed has already been bumped by the caller (see
+        // `bump_lane_seed`); `roll_vocal_melody` uses the current seed
+        // verbatim so we don't double-bump.
+        LaneGeneratorKind::Vocal(_) => {
+            return super::lane_inspector::roll_vocal_melody(r, definition_id, track_id);
+        }
     };
 
     let gen_params = match &config.kind {
@@ -142,7 +161,7 @@ pub(super) fn regenerate_lane(
             gp.pad = p.clone();
             gp
         }
-        _ => return,
+        _ => return iced::Task::none(),
     };
 
     let notes = generate::derive_notes(
@@ -204,6 +223,7 @@ pub(super) fn regenerate_lane(
     }
 
     r.compose.last_error = None;
+    iced::Task::none()
 }
 
 pub(super) fn compose_samples_per_bar(sample_rate: u32, bpm: f32, time_sig_num: u8) -> u64 {

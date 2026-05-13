@@ -132,7 +132,9 @@ pub(super) fn handle_confirm_create(r: &mut crate::Resonance) {
         }
     };
     r.compose.new_section_form = None;
-    dispatch(
+    // These re-entrant dispatches never produce a real task — section
+    // CRUD is fully synchronous — so dropping the returned Task is safe.
+    let _ = dispatch(
         r,
         ComposeMessage::CreateSection {
             name,
@@ -194,14 +196,14 @@ pub(super) fn handle_confirm_edit(r: &mut crate::Resonance) {
             return;
         }
     };
-    dispatch(
+    let _ = dispatch(
         r,
         ComposeMessage::RenameSection {
             definition_id: form.definition_id,
             name,
         },
     );
-    dispatch(
+    let _ = dispatch(
         r,
         ComposeMessage::ResizeSection {
             definition_id: form.definition_id,

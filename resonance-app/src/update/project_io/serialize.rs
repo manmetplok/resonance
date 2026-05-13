@@ -42,6 +42,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             track_type: match t.track_type {
                 TrackType::Audio => "audio".to_string(),
                 TrackType::Instrument => "instrument".to_string(),
+                TrackType::Vocal => "vocal".to_string(),
             },
             output_bus: match t.output {
                 TrackOutput::Master => None,

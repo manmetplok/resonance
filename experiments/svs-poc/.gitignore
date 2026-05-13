@@ -1,0 +1,9 @@
+# Large model artefacts — fetched on demand by scripts/download_models.sh.
+# Never commit ONNX / zip / WAV blobs to git.
+models/
+*.onnx
+*.zip
+*.wav
+*.emb
+*.dsvocoder
+*.oudep

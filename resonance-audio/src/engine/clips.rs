@@ -319,7 +319,7 @@ pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut Han
 /// Write a stereo-interleaved f32 buffer to a 32-bit float WAV.
 /// Creates the target directory if needed. Used by both the import
 /// transcode path and the save-time fallback for in-RAM clips.
-fn transcode_to_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), String> {
+pub fn transcode_to_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }

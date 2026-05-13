@@ -90,11 +90,27 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
     .padding([6, 10])
     .style(|_theme, status| theme::transport_button_style(status));
 
+    // Warm tint matches the Compose vocal-lane accent so the user
+    // associates the menu item with where the track will appear.
+    let vocal_btn = button(
+        row![
+            theme::icon(fa::MICROPHONE).size(14).color(theme::WARM),
+            Space::with_width(8),
+            text("Vocal").size(13).color(theme::WARM),
+        ]
+        .align_y(alignment::Vertical::Center),
+    )
+    .on_press(Message::Track(TrackMessage::AddVocalTrack))
+    .width(Length::Fill)
+    .padding([6, 10])
+    .style(|_theme, status| theme::transport_button_style(status));
+
     let mut menu = column![
         text("Add Track").size(11).color(theme::TEXT_DIM),
         Space::with_height(4),
         audio_btn,
         inst_btn,
+        vocal_btn,
     ]
     .spacing(2);
 

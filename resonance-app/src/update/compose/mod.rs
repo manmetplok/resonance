@@ -11,7 +11,10 @@
 //!   that fan chord changes / motif-seed bumps to every dependent lane.
 //! - [`expand`] — expanded piano-roll viewport (open track, scroll, zoom).
 
+use iced::Task;
+
 use crate::compose::ComposeMessage;
+use crate::message::Message;
 
 mod chord;
 mod chord_inspector;
@@ -20,7 +23,7 @@ mod lane_inspector;
 mod regenerate;
 mod section;
 
-pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
+pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
     let time_sig_num = r.transport.time_sig_num;
 
     match msg {
@@ -148,7 +151,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
             definition_id,
             track_id,
             msg,
-        } => lane_inspector::handle(r, definition_id, track_id, msg),
+        } => return lane_inspector::handle(r, definition_id, track_id, msg),
 
         // Track role (arrangement metadata)
         ComposeMessage::SetTrackRole { track_id, role } => {
@@ -156,5 +159,15 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) {
                 track.role = role;
             }
         }
+
+        // Vocal audio render completion (dispatched from the background
+        // SVS task that `lane_inspector::handle` queued).
+        ComposeMessage::VocalAudioReady(data) => {
+            lane_inspector::handle_vocal_audio_ready(r, *data);
+        }
+        ComposeMessage::VocalAudioFailed { error } => {
+            r.compose.last_error = Some(error);
+        }
     }
+    Task::none()
 }

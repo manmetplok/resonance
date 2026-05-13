@@ -27,6 +27,7 @@ pub fn view<'a>(
     selected_chord_id: Option<u64>,
     chords_selected: bool,
 ) -> Element<'a, Message> {
+    let width = super::workspace_width(tempo_map, start_bar, definition.length_bars);
     Canvas::new(ChordLaneCanvas {
         definition,
         tempo_map,
@@ -34,7 +35,7 @@ pub fn view<'a>(
         selected_chord_id,
         chords_selected,
     })
-    .width(Length::Fill)
+    .width(Length::Fixed(width))
     .height(Length::Fixed(LANE_HEIGHT))
     .into()
 }

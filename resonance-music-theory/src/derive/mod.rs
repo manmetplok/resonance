@@ -15,6 +15,7 @@ mod motif_engine;
 mod motif_rhythm;
 mod motif_source;
 mod pad;
+mod vocal;
 
 pub use bass::{derive_bass, BassMotifMode, BassMotifPhrase, BassParams, BassStyle};
 pub use melody::{derive_melody, ContourPreference, MelodyParams, MelodyStyle};
@@ -25,6 +26,10 @@ pub use motif_source::{
     toggle_manual_motif_cell, ManualMotifCell, ManualMotifNote, MotifParams, MotifSource,
 };
 pub use pad::{derive_pad, PadParams};
+pub use vocal::{
+    derive_vocal, generate_lyrics, LyricLine, SyllableMode, VocalContour, VocalMood, VocalParams,
+    VocalPov, VocalRhymeScheme, VocalTimbre, VoiceType,
+};
 
 /// A chord positioned on the section's beat grid. Mirrors the app's
 /// `ChordState` so callers don't have to take a dependency on the app

@@ -5,6 +5,7 @@ pub mod drumroll;
 pub mod generate;
 pub mod invariants;
 pub mod messages;
+pub mod vocal_svs;
 
 mod lane_generator;
 mod section;

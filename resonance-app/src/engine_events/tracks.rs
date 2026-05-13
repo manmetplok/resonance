@@ -32,6 +32,19 @@ pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
     r.registry.tracks.push(track);
 }
 
+pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
+    if r.registry.tracks.iter().any(|t| t.id == track_id) {
+        return;
+    }
+    let order = r.registry.next_track_order;
+    r.registry.next_track_order += 1;
+    let mut track = TrackState::new_vocal(track_id, order);
+    if let Some(preset) = r.pending_track_preset.take() {
+        super::apply_preset_to_track(r, &mut track, &preset);
+    }
+    r.registry.tracks.push(track);
+}
+
 pub(super) fn removed(r: &mut Resonance, track_id: TrackId) {
     if let Some(sel_clip_id) = r.interaction.selected_clip {
         if r.clips

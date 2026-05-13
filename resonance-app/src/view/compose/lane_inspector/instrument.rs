@@ -24,11 +24,12 @@ use super::label_with_info;
 struct GeneratorPick(LaneGeneratorKindTag);
 
 impl GeneratorPick {
-    const ALL: [GeneratorPick; 4] = [
+    const ALL: [GeneratorPick; 5] = [
         GeneratorPick(LaneGeneratorKindTag::Manual),
         GeneratorPick(LaneGeneratorKindTag::Bass),
         GeneratorPick(LaneGeneratorKindTag::Melody),
         GeneratorPick(LaneGeneratorKindTag::Pad),
+        GeneratorPick(LaneGeneratorKindTag::Vocal),
     ];
 }
 
@@ -39,6 +40,7 @@ impl std::fmt::Display for GeneratorPick {
             LaneGeneratorKindTag::Bass => "Bass",
             LaneGeneratorKindTag::Melody => "Melody",
             LaneGeneratorKindTag::Pad => "Pad",
+            LaneGeneratorKindTag::Vocal => "Vocal",
         })
     }
 }
@@ -101,6 +103,7 @@ pub(super) fn instrument_body<'a>(
             LaneGeneratorKind::Melody(_) => GeneratorPick(LaneGeneratorKindTag::Melody),
             LaneGeneratorKind::Pad(_) => GeneratorPick(LaneGeneratorKindTag::Pad),
             LaneGeneratorKind::Drum(_) => GeneratorPick(LaneGeneratorKindTag::Manual),
+            LaneGeneratorKind::Vocal(_) => GeneratorPick(LaneGeneratorKindTag::Vocal),
         },
         None => GeneratorPick(LaneGeneratorKindTag::Manual),
     };
@@ -127,6 +130,9 @@ pub(super) fn instrument_body<'a>(
             LaneGeneratorKind::Melody(params) => melody_controls(definition_id, track_id, params),
             LaneGeneratorKind::Pad(params) => pad_controls(definition_id, track_id, params),
             LaneGeneratorKind::Drum(_) => manual_hint(),
+            LaneGeneratorKind::Vocal(params) => {
+                super::vocal::vocal_controls(definition_id, track_id, params, cfg.seed)
+            }
         },
         None => manual_hint(),
     };

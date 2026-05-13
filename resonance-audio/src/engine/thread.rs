@@ -522,6 +522,9 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         AudioCommand::AddInstrumentTrack { id_hint, name } => {
             midi::handle_add_instrument_track(ctx, state, id_hint, name)
         }
+        AudioCommand::AddVocalTrack { id_hint, name } => {
+            midi::handle_add_vocal_track(ctx, state, id_hint, name)
+        }
         AudioCommand::CreateMidiClip {
             track_id,
             start_sample,

@@ -24,12 +24,17 @@ pub fn view<'a>(
     start_bar: u32,
     section_length_bars: u32,
 ) -> Element<'a, Message> {
+    // Global tracks sit to the right of the (`NAME_COLUMN_WIDTH`-wide)
+    // name spacer in the parent row — so the canvas itself only needs to
+    // cover the timeline portion of the workspace.
+    let total_width = super::workspace_width(tempo_map, start_bar, section_length_bars);
+    let canvas_width = (total_width - super::tracks::NAME_COLUMN_WIDTH).max(0.0);
     Canvas::new(ComposeGlobalTracksCanvas {
         tempo_map,
         start_bar,
         section_length_bars,
     })
-    .width(Length::Fill)
+    .width(Length::Fixed(canvas_width))
     .height(Length::Fixed(GLOBAL_TRACKS_HEIGHT))
     .into()
 }

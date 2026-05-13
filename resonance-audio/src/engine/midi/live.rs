@@ -24,7 +24,7 @@ pub(crate) fn handle_send_note_on(
         let Some(track) = tracks_guard.get(&track_id) else {
             return;
         };
-        if track.track_type != TrackType::Instrument {
+        if !track.track_type.accepts_midi() {
             return;
         }
         if let Some(&inst_id) = track.plugin_ids.first() {
@@ -53,7 +53,7 @@ pub(crate) fn handle_send_note_off(
         let Some(track) = tracks_guard.get(&track_id) else {
             return;
         };
-        if track.track_type != TrackType::Instrument {
+        if !track.track_type.accepts_midi() {
             return;
         }
         if let Some(&inst_id) = track.plugin_ids.first() {
@@ -129,7 +129,7 @@ pub(crate) fn handle_record_midi_event(
     let armed = {
         let tracks = ctx.tracks.read();
         match tracks.get(&track_id) {
-            Some(t) => t.track_type == TrackType::Instrument && t.record_armed(),
+            Some(t) => t.track_type.accepts_midi() && t.record_armed(),
             None => return,
         }
     };

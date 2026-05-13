@@ -76,10 +76,10 @@ pub fn view<'a>(
     let section_start = app.tempo_map.bar_to_sample(placement.start_bar);
     let section_end = app.tempo_map.bar_to_sample(placement.start_bar + definition.length_bars);
 
-    // Count visible (non-drum, non-sub) instrument tracks so the canvas can
-    // be sized to fit every row. Without an explicit height the parent
-    // column collapses the canvas to a single-row height inside the
-    // Scrollable workspace.
+    // Vocal tracks render in their own lyric/contour lane above the synth
+    // canvas, so they're filtered out here via `TrackType::Vocal`. Drum
+    // tracks live in the drumroll canvas, and sub-tracks are driven from
+    // their parent.
     let instr_count = app
         .registry
         .tracks
@@ -96,6 +96,11 @@ pub fn view<'a>(
         instr_count.max(1.0) * COMPOSE_TRACK_HEIGHT
     };
 
+    let width = super::workspace_width(
+        &app.tempo_map,
+        placement.start_bar,
+        definition.length_bars,
+    );
     let cropped = Canvas::new(ComposeTrackCanvas {
         tracks: &app.registry.tracks,
         midi_clips: &app.midi_clips,
@@ -110,11 +115,11 @@ pub fn view<'a>(
         details_track_id: app.compose.details_track_id(),
         expanded_track_id: app.compose.expanded_track_id,
     })
-    .width(Length::Fill)
+    .width(Length::Fixed(width))
     .height(Length::Fixed(total_height));
 
     container(cropped)
-        .width(Length::Fill)
+        .width(Length::Fixed(width))
         .height(Length::Fixed(total_height))
         .into()
 }
@@ -357,7 +362,8 @@ impl<'a> ComposeTrackCanvas<'a> {
     fn sorted_tracks(&self) -> Vec<&TrackState> {
         // Exclude sub-tracks: they don't accept MIDI (their audio comes
         // from their parent plugin's output port) and would clutter the
-        // Compose instrument list with empty rows.
+        // Compose instrument list with empty rows. Vocal tracks render in
+        // a dedicated lyric/contour lane above this canvas.
         let mut v: Vec<&TrackState> = self
             .tracks
             .iter()

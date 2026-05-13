@@ -180,10 +180,7 @@ impl crate::Resonance {
     /// logic.
     fn dispatch(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Compose(m) => {
-                compose::handle(self, m);
-                Task::none()
-            }
+            Message::Compose(m) => compose::handle(self, m),
             Message::GlobalTrack(m) => global_track::handle(self, m),
             Message::Transport(m) => transport::handle(self, m),
             Message::Track(m) => track::handle(self, m),

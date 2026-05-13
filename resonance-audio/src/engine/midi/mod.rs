@@ -17,9 +17,9 @@ mod live;
 mod outbound;
 
 pub(crate) use clips::{
-    handle_add_instrument_track, handle_add_midi_note, handle_create_midi_clip,
-    handle_delete_midi_clip, handle_load_midi_clip_direct, handle_move_midi_clip,
-    handle_move_midi_note, handle_remove_midi_note, handle_resize_midi_note,
+    handle_add_instrument_track, handle_add_midi_note, handle_add_vocal_track,
+    handle_create_midi_clip, handle_delete_midi_clip, handle_load_midi_clip_direct,
+    handle_move_midi_clip, handle_move_midi_note, handle_remove_midi_note, handle_resize_midi_note,
     handle_set_midi_note_velocity, handle_trim_midi_clip,
 };
 pub(crate) use clock::{

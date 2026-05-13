@@ -11,11 +11,18 @@ pub mod expanded_editor;
 pub mod global_tracks;
 pub mod lane_inspector;
 pub mod lane_side;
+mod layout;
 pub mod manual_motif_canvas;
 pub mod popover;
 pub mod scale_stripe;
 pub mod strip;
 pub mod tracks;
+pub mod vocal_lane;
+
+// Re-export the shared layout primitives so the existing call sites keep
+// working (`super::workspace_width`, `super::section_total_beats`, etc.).
+#[allow(unused_imports)]
+pub use layout::{section_total_beats, workspace_width, BEAT_PX_COMPOSE};
 
 impl crate::Resonance {
     pub(crate) fn view_compose(&self) -> Element<'_, Message> {
@@ -60,8 +67,18 @@ impl crate::Resonance {
 
                 let chords_selected =
                     matches!(self.compose.selected_lane, SelectedLane::Chords);
+                // Fixed workspace width — every lane (chord, tracks, drum,
+                // global, scale stripe, section/tracks headers) sits in the
+                // same column so cells stay aligned and don't stretch with
+                // window width. The horizontal `scrollable` below handles
+                // overflow when the OS window is narrower than this width.
+                let ws_width = workspace_width(
+                    &self.tempo_map,
+                    placement.start_bar,
+                    definition.length_bars,
+                );
                 let scale_stripe = container(scale_stripe::view(definition))
-                    .width(Length::Fill)
+                    .width(Length::Fixed(ws_width))
                     .padding([8, 12]);
                 let chord_lane = chord_lane::view(
                     definition,
@@ -75,9 +92,12 @@ impl crate::Resonance {
                     Some(chord_id) if definition.chords.iter().any(|c| c.id == chord_id) => {
                         popover::view(definition, chord_id)
                     }
-                    _ => container(Space::with_height(0)).width(Length::Fill).into(),
+                    _ => container(Space::with_height(0))
+                        .width(Length::Fixed(ws_width))
+                        .into(),
                 };
 
+                let vocal_tracks = vocal_lane::view(self, placement, definition);
                 let synth_tracks = tracks::view(self, placement, definition);
                 let drum_tracks = drumroll::view(self, placement, definition);
 
@@ -94,10 +114,9 @@ impl crate::Resonance {
                     .tracks
                     .iter()
                     .filter(|t| {
-                        matches!(
-                            t.track_type,
-                            resonance_audio::types::TrackType::Instrument
-                        ) && t.sub_track.is_none()
+                        use resonance_audio::types::TrackType;
+                        matches!(t.track_type, TrackType::Instrument | TrackType::Vocal)
+                            && t.sub_track.is_none()
                     })
                     .count();
                 let tracks_sub = format!("{} tracks \u{00b7} monophonic", track_count);
@@ -114,12 +133,17 @@ impl crate::Resonance {
                             chord_lane,
                             editor,
                             tracks_group,
+                            vocal_tracks,
                             synth_tracks,
                             expanded
                         ]
                         .spacing(0)
-                        .width(Length::Fill);
+                        .width(Length::Fixed(ws_width));
                         scrollable(inner)
+                            .direction(scrollable::Direction::Both {
+                                vertical: scrollable::Scrollbar::default(),
+                                horizontal: scrollable::Scrollbar::default(),
+                            })
                             .height(Length::Fill)
                             .width(Length::Fill)
                             .into()
@@ -132,12 +156,17 @@ impl crate::Resonance {
                             chord_lane,
                             editor,
                             tracks_group,
+                            vocal_tracks,
                             synth_tracks,
                             drum_tracks
                         ]
                         .spacing(0)
-                        .width(Length::Fill);
+                        .width(Length::Fixed(ws_width));
                         scrollable(inner)
+                            .direction(scrollable::Direction::Both {
+                                vertical: scrollable::Scrollbar::default(),
+                                horizontal: scrollable::Scrollbar::default(),
+                            })
                             .height(Length::Fill)
                             .width(Length::Fill)
                             .into()

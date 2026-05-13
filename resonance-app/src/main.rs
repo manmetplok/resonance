@@ -526,8 +526,17 @@ fn seed_demo_content(app: &mut Resonance) {
     audio.muted = true;
     audio.instrument_icon = state::InstrumentIcon::Microphone;
 
-    app.registry.tracks = vec![drums, bass, pad, lead, audio];
-    app.registry.next_track_order = 5;
+    // Lead Vocal is a `TrackType::Vocal` track — first-class engine flavour
+    // that pairs a MIDI staff with a rendered SVS waveform. No instrument
+    // plugin: the audio comes from the rendered WAV, not from a synth.
+    const VOCAL_TRACK_ID: u64 = 6;
+    let mut vocal = TrackState::new_vocal(VOCAL_TRACK_ID, 5);
+    vocal.name = "Lead Vocal".to_string();
+    vocal.level_l = 0.5;
+    vocal.level_r = 0.4;
+
+    app.registry.tracks = vec![drums, bass, pad, lead, audio, vocal];
+    app.registry.next_track_order = 6;
     app.interaction.selected_track = Some(2);
 
     // ---- Busses ----
@@ -603,6 +612,9 @@ fn seed_demo_content(app: &mut Resonance) {
         make_midi_clip(12, 2, "Bm progression", 0, 6, 12),
         make_midi_clip(13, 3, "Pad", 0, 6, 8),
         make_midi_clip(14, 4, "Motif", 0, 6, 20),
+        // Vocal melody clip is appended after the section is constructed
+        // so the chord progression is available to `derive_vocal`. The
+        // placeholder entry is replaced below.
     ];
 
     // Audio bounce on track 5 — uses peaks rather than a real waveform.
@@ -649,6 +661,20 @@ fn seed_demo_content(app: &mut Resonance) {
         })
         .collect();
 
+    // Pre-seed the Vocal lane generator on the Lead Vocal track so the
+    // demo lands on the new design without the user having to flip the
+    // generator picker.
+    let mut lane_generators = std::collections::HashMap::new();
+    lane_generators.insert(
+        VOCAL_TRACK_ID,
+        crate::compose::LaneGeneratorConfig {
+            kind: crate::compose::LaneGeneratorKind::Vocal(
+                resonance_music_theory::VocalParams::default(),
+            ),
+            seed: 0xC0FFEE_FACE_F00D,
+        },
+    );
+
     app.compose.definitions.push(SectionDefinitionState {
         id: def_id,
         name: "Intro".to_string(),
@@ -661,7 +687,7 @@ fn seed_demo_content(app: &mut Resonance) {
         generator_spec: None,
         generator_seed: 0,
         generated_material: None,
-        lane_generators: std::collections::HashMap::new(),
+        lane_generators,
         beats_per_chord: 4,
         seventh_chords: false,
         motif_source: MotifSource::default(),
@@ -674,5 +700,60 @@ fn seed_demo_content(app: &mut Resonance) {
         start_bar: 0,
     });
     app.compose.selected_placement_id = Some(placement_id);
+
+    // Land in the Lead Vocal lane so the new design surfaces are visible.
+    app.compose.selected_lane = crate::compose::SelectedLane::Instrument(VOCAL_TRACK_ID);
+
+    // Pre-generate the vocal melody so the staff shows real notes on
+    // first boot instead of the synthetic contour fallback.
+    seed_demo_vocal_melody(app, def_id, placement_id, VOCAL_TRACK_ID, 16);
     let _ = TrackOutput::Master; // silence unused-import warning when feature flags shift
+}
+
+/// Pre-bake a vocal MIDI clip for the demo content. Walks the section's
+/// chord progression through `derive_vocal`, materialises a `MidiClipState`
+/// at `clip_id`, and registers it in `compose.derived_clips` so the
+/// vocal lane finds it on first paint.
+fn seed_demo_vocal_melody(
+    app: &mut Resonance,
+    def_id: u64,
+    placement_id: u64,
+    track_id: TrackId,
+    clip_id: u64,
+) {
+    use resonance_audio::types::TICKS_PER_QUARTER_NOTE as TPQN;
+    let Some(def) = app.compose.find_definition(def_id).cloned() else {
+        return;
+    };
+    let Some(cfg) = def.lane_generators.get(&track_id).cloned() else {
+        return;
+    };
+    let crate::compose::LaneGeneratorKind::Vocal(params) = cfg.kind else {
+        return;
+    };
+    let timed = crate::compose::generate::to_timed_chords(&def.chords);
+    let notes = resonance_music_theory::derive_vocal(&timed, &params, TPQN as u32, cfg.seed);
+    let duration_ticks = def.length_bars as u64 * app.transport.time_sig_num as u64 * TPQN;
+    let midi_notes: Vec<MidiNote> = notes
+        .iter()
+        .map(|n| MidiNote {
+            note: n.note,
+            velocity: n.velocity,
+            start_tick: n.start_tick,
+            duration_ticks: n.duration_ticks,
+        })
+        .collect();
+    app.midi_clips.push(MidiClipState {
+        id: clip_id,
+        track_id,
+        start_sample: 0,
+        duration_ticks,
+        name: format!("{} \u{00B7} Lead Vocal", def.name),
+        notes: midi_notes,
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
+    app.compose
+        .derived_clips
+        .insert((def_id, placement_id, track_id), clip_id);
 }

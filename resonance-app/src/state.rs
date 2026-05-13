@@ -333,6 +333,41 @@ impl TrackState {
         }
     }
 
+    /// New vocal track. Behaves engine-side like an instrument track for
+    /// live MIDI input + recording (so users can capture a melody from a
+    /// keyboard), but plays back pre-rendered audio clips from the SVS
+    /// pipeline. Defaults to a microphone icon and the `Vocal` role hint.
+    pub fn new_vocal(id: TrackId, order: usize) -> Self {
+        Self {
+            id,
+            name: format!("Vocal {}", order + 1),
+            volume: 0.0,
+            pan: 0.0,
+            muted: false,
+            soloed: false,
+            fx_bypassed: false,
+            order,
+            record_armed: false,
+            monitor_enabled: false,
+            mono: true,
+            input_device_name: None,
+            input_port_index: 0,
+            plugins: Vec::new(),
+            level_l: 0.0,
+            level_r: 0.0,
+            track_type: TrackType::Vocal,
+            output: TrackOutput::Master,
+            instrument_type: InstrumentType::Synth,
+            instrument_icon: InstrumentIcon::Microphone,
+            role: None,
+            sub_track: None,
+            midi_input_device: None,
+            midi_input_channel: None,
+            midi_output_device: None,
+            midi_output_channel: None,
+        }
+    }
+
     /// New sub-track driven by a parent instrument plugin's output port.
     pub fn new_sub_track(
         id: TrackId,

@@ -56,12 +56,17 @@ pub fn view<'a>(
     };
 
     let total_height = drum_track_count as f32 * DRUM_TRACK_HEIGHT;
+    let width = super::workspace_width(
+        &app.tempo_map,
+        placement.start_bar,
+        definition.length_bars,
+    );
     container(
         Canvas::new(canvas_prog)
-            .width(Length::Fill)
+            .width(Length::Fixed(width))
             .height(Length::Fixed(total_height)),
     )
-    .width(Length::Fill)
+    .width(Length::Fixed(width))
     .height(Length::Fixed(total_height))
     .into()
 }

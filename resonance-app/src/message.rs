@@ -69,6 +69,7 @@ pub(crate) enum TransportMessage {
 pub(crate) enum TrackMessage {
     AddTrack,
     AddInstrumentTrack,
+    AddVocalTrack,
     /// Direct removal — kept as a handler target for the engine command.
     /// All user-facing delete buttons go through `RequestRemoveTrack`
     /// which may show a confirmation dialog first.

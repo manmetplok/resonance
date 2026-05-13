@@ -32,6 +32,7 @@ mod bounce_common;
 mod bounce_realtime;
 mod busses;
 mod clips;
+pub use clips::transcode_to_wav;
 mod master;
 pub(crate) mod midi;
 mod plugins;

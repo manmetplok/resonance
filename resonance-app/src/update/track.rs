@@ -69,6 +69,13 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             });
             r.mixer.add_track_menu_open = false;
         }
+        TrackMessage::AddVocalTrack => {
+            r.engine.send(AudioCommand::AddVocalTrack {
+                id_hint: None,
+                name: None,
+            });
+            r.mixer.add_track_menu_open = false;
+        }
         TrackMessage::RequestRemoveTrack(id) => {
             let has_audio = r.clips.iter().any(|c| c.track_id == id);
             let has_midi = r.midi_clips.iter().any(|c| c.track_id == id);

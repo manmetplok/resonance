@@ -13,7 +13,7 @@ mod platform;
 mod recording;
 pub mod types;
 
-pub use engine::AudioEngine;
+pub use engine::{transcode_to_wav, AudioEngine};
 pub use types::*;
 
 /// Test surface for the hardware-MIDI loop-wrap rewind logic. Exposed
