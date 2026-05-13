@@ -1,4 +1,4 @@
-/// Parameter range types for linear and skewed mappings.
+//! Parameter range types for linear and skewed mappings.
 
 /// Range for float parameters.
 #[derive(Clone)]

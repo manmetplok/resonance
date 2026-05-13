@@ -1,4 +1,4 @@
-/// Per-sample parameter smoothing.
+//! Per-sample parameter smoothing.
 
 /// The smoothing algorithm to use.
 #[derive(Clone, Copy)]
@@ -135,6 +135,7 @@ impl Smoother {
     }
 
     /// Get the next smoothed value (call once per sample).
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> f32 {
         if self.remaining == 0 {
             self.current = self.target;

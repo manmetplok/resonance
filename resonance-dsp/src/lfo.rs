@@ -68,6 +68,7 @@ impl Lfo {
     }
 
     #[inline]
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> f32 {
         let scaled = self.phase * TABLE_SIZE as f32;
         let idx = scaled as usize & TABLE_MASK;

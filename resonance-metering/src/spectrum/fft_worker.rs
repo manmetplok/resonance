@@ -141,9 +141,9 @@ impl FftWorker {
         let mut new_bands = [FLOOR_DB; NUM_OCTAVE_BINS];
         self.octave_table
             .aggregate(&self.mag_db, self.sample_rate, &mut new_bands, FLOOR_DB);
-        for i in 0..NUM_OCTAVE_BINS {
-            let decayed = (self.held_db[i] - decay_per_frame).max(FLOOR_DB);
-            self.held_db[i] = decayed.max(new_bands[i]);
+        for (i, held) in self.held_db.iter_mut().enumerate().take(NUM_OCTAVE_BINS) {
+            let decayed = (*held - decay_per_frame).max(FLOOR_DB);
+            *held = decayed.max(new_bands[i]);
         }
 
         // Publish.

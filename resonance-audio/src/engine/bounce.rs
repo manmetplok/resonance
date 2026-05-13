@@ -222,8 +222,8 @@ fn render_chunk(
                             )
                         };
                         inst.0.process_multi(slice, frames);
-                        for i in 0..port_count {
-                            unsafe { slots[i].assume_init_drop() };
+                        for slot in slots.iter_mut().take(port_count) {
+                            unsafe { slot.assume_init_drop() };
                         }
                         scratch.track_buf_l[..frames]
                             .copy_from_slice(&scratch.port_scratch[0].0[..frames]);

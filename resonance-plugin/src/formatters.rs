@@ -1,4 +1,11 @@
-/// Value formatting and parsing functions for plugin parameters.
+//! Value formatting and parsing functions for plugin parameters.
+//!
+//! Several of these return boxed closure types that clippy thinks are
+//! complex enough to warrant a `type` alias, but they're idiomatic
+//! one-shot factories — the boxed closure is unwieldy specifically to
+//! match the host's parameter API, so we allow the lint module-wide.
+#![allow(clippy::type_complexity)]
+
 use std::sync::Arc;
 
 /// Format a gain value (linear) as decibels, rounded to the given decimal places.

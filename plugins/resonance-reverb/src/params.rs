@@ -186,6 +186,12 @@ pub struct ReverbSmoothers {
     pub mix: Smoother,
 }
 
+impl Default for ReverbSmoothers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReverbSmoothers {
     pub fn new() -> Self {
         Self {

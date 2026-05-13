@@ -171,7 +171,7 @@ impl WavetableParams {
             lfo3: LfoParams::new(3, 0.5, 0.3, false),
 
             // Modulation matrix
-            mod_slots: (0..NUM_MOD_SLOTS).map(|i| ModSlotParams::new(i)).collect(),
+            mod_slots: (0..NUM_MOD_SLOTS).map(ModSlotParams::new).collect(),
 
             // Effects
             chorus: ChorusParams::new(),

@@ -16,7 +16,9 @@
 use super::analyze::NUM_SPECTRUM_BINS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum Genre {
+    #[default]
     Rock,
     Indie,
     Acoustic,
@@ -58,23 +60,18 @@ impl Genre {
     }
 }
 
-impl Default for Genre {
-    fn default() -> Self {
-        Genre::Rock
-    }
-}
 
 /// 1/6-octave target curve for the given genre. Indexed from 20 Hz bin
 /// at `[0]` to 20 kHz bin at `[NUM_SPECTRUM_BINS - 1]`.
 pub fn target_curve(genre: Genre) -> [f32; NUM_SPECTRUM_BINS] {
     let mut curve = [0.0_f32; NUM_SPECTRUM_BINS];
-    for i in 0..NUM_SPECTRUM_BINS {
+    for (i, c) in curve.iter_mut().enumerate() {
         let freq = band_center_hz(i);
         // Pink slope: −3 dB/octave, normalized so 1 kHz = 0 dB.
-        curve[i] = -3.0 * (freq / 1000.0).log2();
+        *c = -3.0 * (freq / 1000.0).log2();
     }
-    for i in 0..NUM_SPECTRUM_BINS {
-        curve[i] += genre_tweak(genre, band_center_hz(i));
+    for (i, c) in curve.iter_mut().enumerate() {
+        *c += genre_tweak(genre, band_center_hz(i));
     }
     curve
 }

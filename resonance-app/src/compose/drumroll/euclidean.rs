@@ -26,9 +26,9 @@ pub fn bjorklund(steps: u32, hits: u32, rotation: i32) -> Vec<bool> {
     let s = steps as u64;
     let h = hits as u64;
     let mut pattern = vec![false; steps_us];
-    for i in 0..steps_us {
+    for (i, slot) in pattern.iter_mut().enumerate() {
         if (i as u64 * h) % s < h {
-            pattern[i] = true;
+            *slot = true;
         }
     }
 

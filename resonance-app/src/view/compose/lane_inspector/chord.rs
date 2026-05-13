@@ -648,7 +648,7 @@ impl<Message> iced::widget::canvas::Program<Message> for MotifPreviewCanvas {
         if self.note_count == 0 {
             return vec![frame.into_geometry()];
         }
-        let n = self.note_count.min(24).max(1);
+        let n = self.note_count.clamp(1, 24);
         let cell_w = bounds.width / n as f32;
         let row_count = 5;
         let row_h = bounds.height / row_count as f32;

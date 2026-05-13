@@ -58,7 +58,7 @@ impl MonoConvolver {
         let fft_inverse = planner.plan_fft_inverse(fft_size);
 
         // Partition IR into segments of block_size and FFT each
-        let num_segments = (ir.len() + block_size - 1) / block_size;
+        let num_segments = ir.len().div_ceil(block_size);
         let num_segments = num_segments.max(1);
 
         let mut ir_segments = Vec::with_capacity(num_segments);

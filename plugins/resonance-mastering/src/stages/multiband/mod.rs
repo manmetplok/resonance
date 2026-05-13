@@ -152,10 +152,8 @@ impl Multiband {
         if !cfg.enabled {
             // Bypass path: output = delayed input. Preserves latency so
             // the host doesn't see a latency change when toggling.
-            for i in 0..frames {
-                left[i] = self.xd_l[i];
-                right[i] = self.xd_r[i];
-            }
+            left[..frames].copy_from_slice(&self.xd_l[..frames]);
+            right[..frames].copy_from_slice(&self.xd_r[..frames]);
             return;
         }
 

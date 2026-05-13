@@ -447,11 +447,11 @@ impl EditorApp for DrumsEditorApp {
                     .size(11.0),
             );
             let current_overhead = self.bridge.overhead_setup_key.lock().clone();
-            let label = if overhead_setups.is_empty() {
-                current_overhead.clone()
-            } else {
-                current_overhead.clone()
-            };
+            // The dropdown label is the currently-selected overhead
+            // setup regardless of whether the menu has any other
+            // entries available (it's just the user-facing display
+            // text on the closed combo box).
+            let label = current_overhead.clone();
             let mut new_choice: Option<String> = None;
             egui::ComboBox::from_id_salt("overhead_setup")
                 .selected_text(label)
@@ -489,8 +489,8 @@ impl EditorApp for DrumsEditorApp {
                         .color(theme::TEXT_DIM),
                 );
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    for i in 0..NUM_PADS {
-                        let name = PAD_MAPPINGS[i].name;
+                    for (i, mapping) in PAD_MAPPINGS.iter().enumerate().take(NUM_PADS) {
+                        let name = mapping.name;
                         let rr_label = unpack_rr_display(
                             self.bridge.last_rr[i].load(Ordering::Relaxed),
                         );
@@ -668,7 +668,7 @@ impl DrumsEditorApp {
                 let (left_label, right_label) = match mapping.close_mic_positions {
                     ["KickIn", "KickOut"] => ("In", "Out"),
                     ["SNTop", "SNBtm"] => ("Top", "Btm"),
-                    [a, b] => (a.as_ref() as &str, b.as_ref() as &str),
+                    [a, b] => (a as &str, b as &str),
                     _ => ("A", "B"),
                 };
                 let mut balance = pad.balance.value();

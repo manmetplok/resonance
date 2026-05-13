@@ -27,6 +27,11 @@ use crate::mixer;
 use crate::platform::{self, DeviceDirection};
 use crate::types::*;
 
+/// `(track_peaks, bus_peaks, master_peak_l, master_peak_r)` snapshot
+/// returned by `AudioEngine::read_and_clear_peaks`. Track / bus peaks
+/// are stored as `(id, left_peak, right_peak)` per element.
+pub type PeakSnapshot = (Vec<(TrackId, f32, f32)>, Vec<(BusId, f32, f32)>, f32, f32);
+
 mod bounce;
 mod bounce_common;
 mod bounce_realtime;
@@ -455,9 +460,7 @@ impl AudioEngine {
 
     /// Read and clear peak levels for all tracks, busses, and master.
     /// Returns (track_peaks, bus_peaks, master_peak_l, master_peak_r).
-    pub fn read_and_clear_peaks(
-        &self,
-    ) -> (Vec<(TrackId, f32, f32)>, Vec<(BusId, f32, f32)>, f32, f32) {
+    pub fn read_and_clear_peaks(&self) -> PeakSnapshot {
         let track_levels = if let Some(guard) = self.tracks.try_read() {
             guard
                 .values()

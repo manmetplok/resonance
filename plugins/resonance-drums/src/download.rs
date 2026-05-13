@@ -7,7 +7,7 @@
 //! - Shared [`State`] behind `Arc<Mutex<…>>` is polled by the UI each frame.
 
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -299,7 +299,7 @@ fn download_and_extract(
     Ok(dest)
 }
 
-fn extract_zip(zip_path: &PathBuf, dest: &PathBuf) -> Result<(), String> {
+fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), String> {
     let file = std::fs::File::open(zip_path).map_err(|e| format!("open zip: {e}"))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("read zip: {e}"))?;
 

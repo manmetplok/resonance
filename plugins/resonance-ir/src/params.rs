@@ -75,6 +75,12 @@ pub struct IrSmoothers {
     pub output_gain: Smoother,
 }
 
+impl Default for IrSmoothers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IrSmoothers {
     pub fn new() -> Self {
         Self {

@@ -69,6 +69,12 @@ pub struct Voice {
     pub age: u64,
 }
 
+impl Default for Voice {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Voice {
     pub fn new() -> Self {
         Self {

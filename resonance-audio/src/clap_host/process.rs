@@ -118,9 +118,9 @@ impl ClapInstance {
         // output slice so callers can pass fewer buffers (in which case
         // the plugin's extra ports are dropped) without crashing.
         let active_out_count = outputs.len().min(self.output_port_count);
-        for i in 0..active_out_count {
-            self.audio_out_ptrs[i][0] = outputs[i].left.as_mut_ptr();
-            self.audio_out_ptrs[i][1] = outputs[i].right.as_mut_ptr();
+        for (i, port) in outputs.iter_mut().enumerate().take(active_out_count) {
+            self.audio_out_ptrs[i][0] = port.left.as_mut_ptr();
+            self.audio_out_ptrs[i][1] = port.right.as_mut_ptr();
             self.audio_out_buffers[i].data32 = self.audio_out_ptrs[i].as_mut_ptr();
             self.audio_out_buffers[i].channel_count = 2;
         }

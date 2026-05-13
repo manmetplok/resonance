@@ -1,12 +1,12 @@
-/// Drum pad mapping used by the Compose drumroll view.
-///
-/// Deliberately mirrors the General MIDI layout shipped by the
-/// `resonance-drums` plugin (kick, snare, hats, toms, cymbals, rim/clap/cowbell)
-/// but does not depend on that crate — both sides independently target GM.
-///
-/// The map is a runtime value (not a `const`) so a future `load_from_file`
-/// loader can replace the default at a single construction site in
-/// `DrumrollViewState::default`.
+//! Drum pad mapping used by the Compose drumroll view.
+//!
+//! Deliberately mirrors the General MIDI layout shipped by the
+//! `resonance-drums` plugin (kick, snare, hats, toms, cymbals, rim/clap/cowbell)
+//! but does not depend on that crate — both sides independently target GM.
+//!
+//! The map is a runtime value (not a `const`) so a future `load_from_file`
+//! loader can replace the default at a single construction site in
+//! `DrumrollViewState::default`.
 
 /// One pad in the drumroll grid.
 #[derive(Debug, Clone)]

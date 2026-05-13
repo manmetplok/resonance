@@ -187,6 +187,12 @@ pub struct DelaySmoothers {
     pub mod_depth: Smoother,
 }
 
+impl Default for DelaySmoothers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DelaySmoothers {
     pub fn new() -> Self {
         Self {

@@ -61,12 +61,11 @@ impl PolyphasePeakDetector {
 
         // Convolve against each polyphase sub-filter. `j = 0` multiplies
         // the most recent sample, i.e. the one we just wrote.
-        for p in 0..PHASES {
+        for taps in FIR.iter().take(PHASES) {
             let mut acc = 0.0_f32;
-            let taps = &FIR[p];
-            for j in 0..TAPS {
+            for (j, &tap) in taps.iter().enumerate().take(TAPS) {
                 let idx = (self.write_pos + TAPS - 1 - j) % TAPS;
-                acc += taps[j] * self.history[idx];
+                acc += tap * self.history[idx];
             }
             let abs = acc.abs();
             if abs > self.peak {

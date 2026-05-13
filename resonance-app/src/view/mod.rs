@@ -157,8 +157,7 @@ impl crate::Resonance {
         // bound; the extra 4-bar padding leaves room to drag the last
         // note slightly beyond the loop without immediately running
         // out of canvas.
-        let extra_ticks: u64 =
-            4 * (self.transport.time_sig_num as u64) * (TICKS_PER_QUARTER_NOTE as u64);
+        let extra_ticks: u64 = 4 * (self.transport.time_sig_num as u64) * TICKS_PER_QUARTER_NOTE;
         let content_ticks: u64 = clip.duration_ticks.saturating_add(extra_ticks);
         let content_w = crate::midi_editor::KEYBOARD_WIDTH
             + content_ticks as f32 * editor_state.zoom_x;

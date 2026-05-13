@@ -120,8 +120,8 @@ pub fn voicing(chord: &Chord, tuning: &Tuning) -> FretboardVoicing {
     if let Some(root_idx) = best_frets.iter().enumerate().position(|(s, f)| {
         f.map(|fret| (tuning.open[s] + fret) % 12 == root_pc).unwrap_or(false)
     }) {
-        for s in 0..root_idx {
-            best_frets[s] = None;
+        for slot in best_frets.iter_mut().take(root_idx) {
+            *slot = None;
         }
     }
 

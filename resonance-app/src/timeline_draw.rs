@@ -223,7 +223,7 @@ impl TimelineCanvas<'_> {
                     continue;
                 }
                 // Filled area under the line segment.
-                let steps = ((x2 - x1).abs() as u32).max(1).min(400);
+                let steps = ((x2 - x1).abs() as u32).clamp(1, 400);
                 for s in 0..steps {
                     let t = s as f32 / steps as f32;
                     let px = x1 + t * (x2 - x1);
@@ -237,7 +237,7 @@ impl TimelineCanvas<'_> {
                     }
                 }
                 // Line itself (2 px wide via two 1 px rects).
-                let steps = ((x2 - x1).abs() as u32).max(1).min(800);
+                let steps = ((x2 - x1).abs() as u32).clamp(1, 800);
                 for s in 0..=steps {
                     let t = s as f32 / steps as f32;
                     let px = x1 + t * (x2 - x1);
@@ -804,7 +804,7 @@ impl TimelineCanvas<'_> {
                     let ny = note_area_y
                         + (1.0 - (note.note as f32 - range_min as f32) / note_range)
                             * (note_area_h - 3.0);
-                    let nh = (note_area_h / note_range).max(2.0).min(6.0);
+                    let nh = (note_area_h / note_range).clamp(2.0, 6.0);
 
                     frame.fill_rectangle(
                         Point::new(nx, ny),

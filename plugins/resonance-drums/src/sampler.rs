@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use crossbeam_channel::{unbounded, Receiver, Sender, TryRecvError};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
 use crate::kit::{
@@ -119,19 +119,14 @@ impl DrumSampler {
     /// old `Vec<LoadedPad>` to the janitor thread so the heap free happens
     /// off-audio.
     pub fn try_swap_kit(&mut self) {
-        loop {
-            match self.kit_receiver.try_recv() {
-                Ok(new_pads) => {
-                    for voice in &mut self.voices {
-                        voice.active = false;
-                    }
-                    self.rr_counters = [[0; MAX_LAYERS]; NUM_PADS];
-                    let old_pads = std::mem::replace(&mut self.pads, new_pads);
-                    if let Err(err) = self.janitor_sender.try_send(old_pads) {
-                        drop(err.into_inner());
-                    }
-                }
-                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+        while let Ok(new_pads) = self.kit_receiver.try_recv() {
+            for voice in &mut self.voices {
+                voice.active = false;
+            }
+            self.rr_counters = [[0; MAX_LAYERS]; NUM_PADS];
+            let old_pads = std::mem::replace(&mut self.pads, new_pads);
+            if let Err(err) = self.janitor_sender.try_send(old_pads) {
+                drop(err.into_inner());
             }
         }
     }
@@ -195,8 +190,8 @@ impl DrumSampler {
         let has_overhead = pad.overhead.is_some();
 
         // Handle choke groups: release any active voices in the same choke group
-        if choke_group.is_some() {
-            self.choke_group(choke_group.unwrap());
+        if let Some(group) = choke_group {
+            self.choke_group(group);
         }
 
         // Build the list of destinations we need to allocate a voice for.
@@ -229,10 +224,11 @@ impl DrumSampler {
         // stealing treats the set as a single unit.
         self.voice_counter += 1;
         let shared_age = self.voice_counter;
-        for i in 0..dest_count {
-            let Some(dest) = destinations[i] else {
+        for dest_slot in destinations.iter().take(dest_count) {
+            let Some(dest) = dest_slot else {
                 continue;
             };
+            let dest = *dest;
             let voice_idx = self.find_free_voice(pad_index);
             let voice = &mut self.voices[voice_idx];
             voice.active = true;

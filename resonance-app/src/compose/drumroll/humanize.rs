@@ -2,8 +2,9 @@ use resonance_audio::types::MidiNote;
 
 /// Accent pattern applied on top of humanized velocities. Notes whose
 /// start step matches the pattern get a velocity boost.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum AccentPattern {
+    #[default]
     None,
     /// Beats 1 and 3 of the bar (the "strong" beats in 4/4).
     Downbeats,
@@ -13,12 +14,6 @@ pub enum AccentPattern {
     EveryBeat,
     /// Every 2nd step = eighth-note pulse at 16 steps/bar in 4/4.
     EveryEighth,
-}
-
-impl Default for AccentPattern {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl AccentPattern {
@@ -51,37 +46,32 @@ impl AccentPattern {
             AccentPattern::Downbeats => {
                 // Beats 1, 3, 5, ... (even-indexed beats within the bar).
                 let beat = step_in_bar / steps_per_beat;
-                step_in_bar % steps_per_beat == 0 && beat % 2 == 0
+                step_in_bar.is_multiple_of(steps_per_beat) && beat.is_multiple_of(2)
             }
             AccentPattern::Backbeats => {
                 let beat = step_in_bar / steps_per_beat;
-                step_in_bar % steps_per_beat == 0 && beat % 2 == 1
+                step_in_bar.is_multiple_of(steps_per_beat) && !beat.is_multiple_of(2)
             }
-            AccentPattern::EveryBeat => step_in_bar % steps_per_beat == 0,
+            AccentPattern::EveryBeat => step_in_bar.is_multiple_of(steps_per_beat),
             AccentPattern::EveryEighth => {
                 // Every half-beat at any resolution: every (steps_per_beat/2)
                 // steps, falling back to every other step when the grid is
                 // too coarse to split a beat.
                 let half = (steps_per_beat / 2).max(1);
-                step_in_bar % half == 0
+                step_in_bar.is_multiple_of(half)
             }
         }
     }
 }
 
 /// Where the humanizer applies its changes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum HumanizeScope {
     /// Only notes matching the currently selected pad's MIDI note.
     SelectedPad,
     /// Every note in the clip.
+    #[default]
     AllPads,
-}
-
-impl Default for HumanizeScope {
-    fn default() -> Self {
-        Self::AllPads
-    }
 }
 
 impl HumanizeScope {

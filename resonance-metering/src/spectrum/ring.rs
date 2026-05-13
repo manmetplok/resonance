@@ -61,7 +61,7 @@ impl SpscRing {
         let tail = self.tail.load(Ordering::Relaxed);
         let head = self.head.load(Ordering::Acquire);
         let used = tail.wrapping_sub(head);
-        if used >= self.mask + 1 {
+        if used > self.mask {
             return false;
         }
         // Safety: producer is the only thread writing to the buffer.

@@ -82,8 +82,8 @@ impl Tuner {
         // Linearised snapshot of the ring in chronological order.
         let mut frame = [0.0f32; FRAME_LEN];
         let start = self.write_pos;
-        for i in 0..FRAME_LEN {
-            frame[i] = self.ring[(start + i) % FRAME_LEN];
+        for (i, slot) in frame.iter_mut().enumerate() {
+            *slot = self.ring[(start + i) % FRAME_LEN];
         }
 
         // Reject blocks that are mostly silent — avoids locking the tuner
@@ -146,7 +146,7 @@ impl Tuner {
 
         // Step 4: parabolic interpolation around tau_star for sub-sample
         // precision. Guards against the endpoints.
-        let refined = if tau_star > self.tau_min && tau_star + 1 <= self.tau_max {
+        let refined = if tau_star > self.tau_min && tau_star < self.tau_max {
             let s0 = self.cmnd[tau_star - 1];
             let s1 = self.cmnd[tau_star];
             let s2 = self.cmnd[tau_star + 1];

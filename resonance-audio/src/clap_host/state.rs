@@ -29,12 +29,12 @@ impl ClapInstance {
             size as i64
         }
 
-        let mut stream = clap_ostream {
+        let stream = clap_ostream {
             ctx: &mut buf as *mut Vec<u8> as *mut c_void,
             write: Some(ostream_write),
         };
 
-        let ok = unsafe { save_fn(self.plugin, &mut stream) };
+        let ok = unsafe { save_fn(self.plugin, &stream) };
         if ok {
             Some(buf)
         } else {
@@ -81,12 +81,12 @@ impl ClapInstance {
             pos: 0,
         };
 
-        let mut stream = clap_istream {
+        let stream = clap_istream {
             ctx: &mut ctx as *mut IstreamCtx as *mut c_void,
             read: Some(istream_read),
         };
 
-        unsafe { load_fn(self.plugin, &mut stream) }
+        unsafe { load_fn(self.plugin, &stream) }
     }
 
     /// Load state with full lifecycle cycle: stop → deactivate → load → activate → start.

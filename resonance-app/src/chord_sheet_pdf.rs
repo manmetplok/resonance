@@ -2,6 +2,12 @@
 //! chord diagrams for guitar (6/8-string), bass (4/5-string), and keyboard.
 //! One page section per instrument. Each section shows a scale diagram
 //! followed by chord voicing diagrams (8 per row).
+//!
+//! The draw helpers take 8–9 arguments each (geometry, layout offsets,
+//! style overrides, …) because they're internal one-shot composers
+//! and the alternative — a config struct — would just bury the call-
+//! site parameters in a builder. Allow the lint module-wide.
+#![allow(clippy::too_many_arguments)]
 
 use std::collections::HashSet;
 

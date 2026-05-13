@@ -192,7 +192,7 @@ pub(super) fn snap_to_chord_interval(interval: i8, chord_intervals: &[i8]) -> i8
     if chord_intervals.is_empty() {
         return interval;
     }
-    let norm = ((interval % 12) + 12) % 12;
+    let norm = interval.rem_euclid(12);
     let octave = interval - norm;
     let mut best = chord_intervals[0];
     let mut best_dist = 12i8;
@@ -410,7 +410,7 @@ pub(super) fn align_to_harmony(
     }
 
     // Strong beat: position is a multiple of 2 beats.
-    let is_strong = tpb > 0 && beat_position % (2 * tpb) == 0;
+    let is_strong = tpb > 0 && beat_position.is_multiple_of(2 * tpb);
 
     if is_strong {
         // Must be a chord tone.
@@ -503,6 +503,7 @@ pub(super) fn apply_gap_fill(notes: &mut Vec<GeneratedNote>, scale: &Scale, regi
 /// anchored to the chords and shaped by contour. The Transform is supplied
 /// externally so that lanes which want to share transform plans (bass
 /// `MirrorMelody` mode) can compute them up-front from a fresh RNG.
+#[allow(clippy::too_many_arguments)]
 fn realize_phrase(
     motif: &[MotifNote],
     transform: Transform,

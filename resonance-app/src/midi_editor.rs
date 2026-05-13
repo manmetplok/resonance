@@ -272,43 +272,39 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                             note_index,
                             start_tick_offset,
                             ..
-                        }) => {
-                            if pos.x >= grid_x && pos.y < grid_h {
-                                let tick = self.x_to_tick(pos.x - grid_x);
-                                let raw_tick = (tick as i64 + start_tick_offset).max(0) as u64;
-                                let snapped_tick = self.snap(raw_tick);
-                                let note = self.y_to_note(pos.y, grid_h);
-                                return (
-                                    canvas::event::Status::Captured,
-                                    Some(Message::MidiEditor(MidiEditorMessage::MoveNote {
-                                        clip_id: self.clip.id,
-                                        note_index: *note_index,
-                                        new_start_tick: snapped_tick,
-                                        new_note: note,
-                                    })),
-                                );
-                            }
+                        }) if pos.x >= grid_x && pos.y < grid_h => {
+                            let tick = self.x_to_tick(pos.x - grid_x);
+                            let raw_tick = (tick as i64 + start_tick_offset).max(0) as u64;
+                            let snapped_tick = self.snap(raw_tick);
+                            let note = self.y_to_note(pos.y, grid_h);
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::MidiEditor(MidiEditorMessage::MoveNote {
+                                    clip_id: self.clip.id,
+                                    note_index: *note_index,
+                                    new_start_tick: snapped_tick,
+                                    new_note: note,
+                                })),
+                            );
                         }
                         Some(DragMode::ResizeNote {
                             note_index,
                             anchor_tick,
-                        }) => {
-                            if pos.x >= grid_x {
-                                let tick = self.x_to_tick(pos.x - grid_x);
-                                let snapped = self.snap(tick);
-                                let new_dur =
-                                    snapped.saturating_sub(*anchor_tick).max(self.snap_ticks);
-                                return (
-                                    canvas::event::Status::Captured,
-                                    Some(Message::MidiEditor(MidiEditorMessage::ResizeNote {
-                                        clip_id: self.clip.id,
-                                        note_index: *note_index,
-                                        new_duration_ticks: new_dur,
-                                    })),
-                                );
-                            }
+                        }) if pos.x >= grid_x => {
+                            let tick = self.x_to_tick(pos.x - grid_x);
+                            let snapped = self.snap(tick);
+                            let new_dur =
+                                snapped.saturating_sub(*anchor_tick).max(self.snap_ticks);
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::MidiEditor(MidiEditorMessage::ResizeNote {
+                                    clip_id: self.clip.id,
+                                    note_index: *note_index,
+                                    new_duration_ticks: new_dur,
+                                })),
+                            );
                         }
-                        None => {}
+                        Some(_) | None => {}
                     }
                 }
             }
@@ -545,15 +541,14 @@ impl PianoRollCanvas<'_> {
                     continue;
                 }
 
-                let is_bar = tick % ticks_per_bar == 0;
+                let is_bar = tick.is_multiple_of(ticks_per_bar);
                 let color = if is_bar {
                     theme::BAR_LINE
                 } else {
                     theme::BEAT_LINE
                 };
-                let width = if is_bar { 1.0 } else { 1.0 };
 
-                frame.fill_rectangle(Point::new(x, 0.0), Size::new(width, grid_h), color);
+                frame.fill_rectangle(Point::new(x, 0.0), Size::new(1.0, grid_h), color);
             }
         }
 
@@ -564,7 +559,7 @@ impl PianoRollCanvas<'_> {
             let last = end_tick / self.snap_ticks + 1;
             for idx in first..=last {
                 let tick = idx * self.snap_ticks;
-                if tick % ticks_per_beat == 0 {
+                if tick.is_multiple_of(ticks_per_beat) {
                     continue; // already drawn as beat/bar line
                 }
                 let x = grid_x + self.tick_to_x(tick);
@@ -700,7 +695,7 @@ impl PianoRollCanvas<'_> {
         // Velocity bars for each note
         for (i, n) in self.clip.notes.iter().enumerate() {
             let x = grid_x + self.tick_to_x(n.start_tick);
-            let w = self.duration_to_width(n.duration_ticks).min(6.0).max(2.0);
+            let w = self.duration_to_width(n.duration_ticks).clamp(2.0, 6.0);
 
             if x + w < grid_x || x > grid_x + 2000.0 {
                 continue;

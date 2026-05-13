@@ -84,8 +84,8 @@ fn frame_from_harmonics(harmonics: &[(usize, f32)], sample_rate: f32) -> Wavetab
                 continue;
             }
             let phase_scale = std::f32::consts::TAU * h as f32 / WAVETABLE_SIZE as f32;
-            for i in 0..WAVETABLE_SIZE {
-                buffer[i] += amp * (i as f32 * phase_scale).sin();
+            for (i, s) in buffer.iter_mut().enumerate() {
+                *s += amp * (i as f32 * phase_scale).sin();
             }
         }
         normalize(&mut buffer);
@@ -102,10 +102,10 @@ fn frame_from_raw(waveform: &[f32], sample_rate: f32) -> WavetableFrame {
         let phase_scale = std::f32::consts::TAU * h as f32 / n as f32;
         let mut cos_sum = 0.0f32;
         let mut sin_sum = 0.0f32;
-        for i in 0..n {
+        for (i, &sample) in waveform.iter().enumerate() {
             let angle = i as f32 * phase_scale;
-            cos_sum += waveform[i] * angle.cos();
-            sin_sum += waveform[i] * angle.sin();
+            cos_sum += sample * angle.cos();
+            sin_sum += sample * angle.sin();
         }
         let amp = (cos_sum * cos_sum + sin_sum * sin_sum).sqrt() * 2.0 / n as f32;
         let phase = (-cos_sum).atan2(sin_sum);
@@ -124,8 +124,8 @@ fn frame_from_raw(waveform: &[f32], sample_rate: f32) -> WavetableFrame {
                 continue;
             }
             let phase_scale = std::f32::consts::TAU * h as f32 / WAVETABLE_SIZE as f32;
-            for i in 0..WAVETABLE_SIZE {
-                buffer[i] += amp * (i as f32 * phase_scale + phase).sin();
+            for (i, s) in buffer.iter_mut().enumerate() {
+                *s += amp * (i as f32 * phase_scale + phase).sin();
             }
         }
         normalize(&mut buffer);
@@ -285,11 +285,10 @@ fn generate_digital(sample_rate: f32) -> Wavetable {
             let t = f as f32 / (num_frames - 1) as f32;
             let levels = (256.0 * (1.0 - t * 0.99)).max(2.0);
             let mut waveform = vec![0.0f32; WAVETABLE_SIZE];
-            for i in 0..WAVETABLE_SIZE {
+            for (i, slot) in waveform.iter_mut().enumerate() {
                 let phase = i as f32 / WAVETABLE_SIZE as f32;
                 let sine = (phase * std::f32::consts::TAU).sin();
-                let quantized = (sine * levels * 0.5).round() / (levels * 0.5);
-                waveform[i] = quantized;
+                *slot = (sine * levels * 0.5).round() / (levels * 0.5);
             }
             frame_from_raw(&waveform, sample_rate)
         })
@@ -385,8 +384,8 @@ fn generate_noise_cycle(sample_rate: f32) -> Wavetable {
                 let amp = 1.0 / (n as f32).powf(rolloff);
                 let phase = (rng.next_u32() as f32 / u32::MAX as f32) * std::f32::consts::TAU;
                 let freq_scale = std::f32::consts::TAU * n as f32 / WAVETABLE_SIZE as f32;
-                for i in 0..WAVETABLE_SIZE {
-                    waveform[i] += amp * (i as f32 * freq_scale + phase).sin();
+                for (i, s) in waveform.iter_mut().enumerate() {
+                    *s += amp * (i as f32 * freq_scale + phase).sin();
                 }
             }
             normalize(&mut waveform);
@@ -403,10 +402,10 @@ fn generate_sync_sweep(sample_rate: f32) -> Wavetable {
         .map(|f| {
             let ratio = 1.0 + f as f32 * 7.0 / (num_frames - 1) as f32;
             let mut waveform = vec![0.0f32; WAVETABLE_SIZE];
-            for i in 0..WAVETABLE_SIZE {
+            for (i, s) in waveform.iter_mut().enumerate() {
                 let phase = (i as f32 / WAVETABLE_SIZE as f32) * ratio;
                 let frac = phase - phase.floor();
-                waveform[i] = 2.0 * frac - 1.0;
+                *s = 2.0 * frac - 1.0;
             }
             frame_from_raw(&waveform, sample_rate)
         })

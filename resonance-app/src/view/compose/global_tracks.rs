@@ -211,7 +211,7 @@ impl<'a> ComposeGlobalTracksCanvas<'a> {
             let (x1, y1, _) = pair[0];
             let (x2, y2, _) = pair[1];
             // Filled area under the line segment.
-            let steps = ((x2 - x1).abs() as u32).max(1).min(400);
+            let steps = ((x2 - x1).abs() as u32).clamp(1, 400);
             for s in 0..steps {
                 let t = s as f32 / steps as f32;
                 let px = x1 + t * (x2 - x1);
@@ -225,7 +225,7 @@ impl<'a> ComposeGlobalTracksCanvas<'a> {
                 }
             }
             // Line itself
-            let steps = ((x2 - x1).abs() as u32).max(1).min(800);
+            let steps = ((x2 - x1).abs() as u32).clamp(1, 800);
             for s in 0..=steps {
                 let t = s as f32 / steps as f32;
                 let px = x1 + t * (x2 - x1);

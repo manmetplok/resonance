@@ -54,8 +54,10 @@ impl std::fmt::Display for BassStyle {
 
 /// How a `BassStyle::Motif` lane renders the section-shared motif.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum BassMotifMode {
     /// Same intervals + rhythm, anchored to the chord's bass note in the bass register.
+    #[default]
     SameIntervals,
     /// Same intervals + rhythm but each note's duration ratio doubled — sits under the melody.
     Augmented,
@@ -89,16 +91,13 @@ impl std::fmt::Display for BassMotifMode {
     }
 }
 
-impl Default for BassMotifMode {
-    fn default() -> Self {
-        BassMotifMode::SameIntervals
-    }
-}
 
 /// How a `BassStyle::Motif` lane chooses per-phrase transforms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum BassMotifPhrase {
     /// `Identity` for every phrase — predictable foundation.
+    #[default]
     Simple,
     /// Same `Transform` per phrase as the melody picks (shared seed → in lockstep).
     MirrorMelody,
@@ -128,11 +127,6 @@ impl std::fmt::Display for BassMotifPhrase {
     }
 }
 
-impl Default for BassMotifPhrase {
-    fn default() -> Self {
-        BassMotifPhrase::Simple
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BassParams {
@@ -213,10 +207,9 @@ pub fn derive_bass(
             BassStyle::Octave => {
                 let up = root_midi.checked_add(12).filter(|&n| n <= 127);
                 for b in 0..beats {
-                    let note = if b % 2 == 0 || up.is_none() {
-                        root_midi
-                    } else {
-                        up.unwrap()
+                    let note = match up {
+                        Some(up) if b % 2 != 0 => up,
+                        _ => root_midi,
                     };
                     out.push(GeneratedNote {
                         note,

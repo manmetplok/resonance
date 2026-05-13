@@ -804,9 +804,7 @@ impl<'a> ComposeTrackCanvas<'a> {
             }
 
             // Click in empty space: add note
-            let Some(pitch) = self.y_to_pitch(pos.y, clip_area) else {
-                return None;
-            };
+            let pitch = self.y_to_pitch(pos.y, clip_area)?;
             let rel_x = pos.x - clip_area.x;
             if rel_x < 0.0 || rel_x > clip_area.width {
                 return None;

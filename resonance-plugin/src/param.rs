@@ -1,4 +1,12 @@
-/// Parameter types: FloatParam, IntParam, BoolParam and the Param trait.
+//! Parameter types: FloatParam, IntParam, BoolParam and the Param trait.
+//!
+//! The Param structs hold `Arc<dyn Fn(...) -> ... + Send + Sync>`
+//! formatter closures whose type signature clippy considers complex.
+//! These are part of the public param API and naturally express
+//! optional host-display hooks; aliasing them away wouldn't aid
+//! readability, so we allow the lint module-wide.
+#![allow(clippy::type_complexity)]
+
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::Arc;
 

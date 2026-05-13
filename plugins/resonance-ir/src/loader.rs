@@ -265,8 +265,8 @@ fn compute_response_db(ir: &[f32], sample_rate: f32) -> [f32; RESPONSE_POINTS] {
 
         let mut sum_sq = 0.0f64;
         let mut count = 0usize;
-        for b in b_low..b_high {
-            let m = buf[b].norm();
+        for bin in &buf[b_low..b_high] {
+            let m = bin.norm();
             sum_sq += (m as f64) * (m as f64);
             count += 1;
         }

@@ -113,6 +113,7 @@ impl Voice {
         self.mod_env.set_sample_rate(sr);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn trigger(
         &mut self,
         note: u8,
@@ -189,9 +190,9 @@ fn distribute_unison(
         unison[0].pan_offset = 0.0;
         return;
     }
-    for i in 0..count {
+    for (i, u) in unison.iter_mut().enumerate().take(count) {
         let t = (i as f32 / (count - 1) as f32) * 2.0 - 1.0; // -1 to +1
-        unison[i].detune_cents = t * detune_cents * 0.5;
-        unison[i].pan_offset = t * spread;
+        u.detune_cents = t * detune_cents * 0.5;
+        u.pan_offset = t * spread;
     }
 }

@@ -47,15 +47,13 @@ pub(super) fn track_added(
     // list to stay in order.
     if let Some((pending_track, ref mut states)) = r.pending_preset_plugin_states {
         if pending_track == track_id {
-            if let Some(entry) = if states.is_empty() {
+            if let Some(Some(data)) = if states.is_empty() {
                 None
             } else {
                 Some(states.remove(0))
             } {
-                if let Some(data) = entry {
-                    r.engine
-                        .send(AudioCommand::LoadPluginState { instance_id, data });
-                }
+                r.engine
+                    .send(AudioCommand::LoadPluginState { instance_id, data });
             }
         }
     }

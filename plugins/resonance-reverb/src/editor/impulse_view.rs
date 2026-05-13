@@ -287,7 +287,7 @@ fn draw_decay_envelope(
     painter.add(egui::Shape::mesh(mesh));
 
     // Crisp outline on top.
-    let outline: Vec<egui::Pos2> = top_pts.iter().copied().collect();
+    let outline: Vec<egui::Pos2> = top_pts.to_vec();
     painter.add(egui::Shape::line(
         outline,
         egui::Stroke::new(1.4, theme::ACCENT),

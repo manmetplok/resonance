@@ -165,8 +165,8 @@ impl NamInference for LstmModel {
         // Output dense layer: dot(weight, h_last) + bias
         let h_last = &self.h[self.layers.len() - 1];
         let mut out = self.output_bias;
-        for j in 0..hs {
-            out += self.output_weight[j] * h_last[j];
+        for (w, h) in self.output_weight.iter().zip(h_last.iter()).take(hs) {
+            out += w * h;
         }
         out * self.head_scale
     }

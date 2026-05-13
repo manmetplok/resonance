@@ -25,7 +25,9 @@ mod saturator;
 mod widgets;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum StageTab {
+    #[default]
     Assistant,
     CorrectiveEq,
     Glue,
@@ -37,11 +39,6 @@ pub enum StageTab {
     Dither,
 }
 
-impl Default for StageTab {
-    fn default() -> Self {
-        StageTab::Assistant
-    }
-}
 
 const TABS: &[(StageTab, &str)] = &[
     (StageTab::Assistant, "Assistant"),

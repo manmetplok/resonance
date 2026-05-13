@@ -118,8 +118,7 @@ pub(super) fn render_metronome_clicks(
     }
 
     if tempo_map.bar_count() > 0 {
-        for ri in 0..n_ranges {
-            let (r_start, r_end) = ranges[ri];
+        for &(r_start, r_end) in ranges.iter().take(n_ranges) {
             let search_start = r_start.saturating_sub(click_duration_samples);
             let Some(start_bar) = tempo_map.bar_index_at(search_start) else {
                 continue;
@@ -151,8 +150,7 @@ pub(super) fn render_metronome_clicks(
         // No bar table — flat BPM beat positions.
         let spb = sample_rate as f64 * 60.0 / flat_bpm;
         let numerator = flat_numerator as u64;
-        for ri in 0..n_ranges {
-            let (r_start, r_end) = ranges[ri];
+        for &(r_start, r_end) in ranges.iter().take(n_ranges) {
             let search_start = r_start.saturating_sub(click_duration_samples);
             let first_beat = (search_start as f64 / spb).floor() as u64;
             let mut bi = first_beat;
@@ -164,7 +162,7 @@ pub(super) fn render_metronome_clicks(
                 if bs + click_duration_samples > r_start
                     && n_beats < MAX_METRONOME_BEATS_PER_BUFFER
                 {
-                    beats[n_beats] = (bs, bi % numerator == 0);
+                    beats[n_beats] = (bs, bi.is_multiple_of(numerator));
                     n_beats += 1;
                 }
                 bi += 1;
@@ -180,8 +178,7 @@ pub(super) fn render_metronome_clicks(
             }
             _ => playhead + frame_offset as u64,
         };
-        for bi in 0..n_beats {
-            let (beat_sample, is_downbeat) = beats[bi];
+        for &(beat_sample, is_downbeat) in beats.iter().take(n_beats) {
             let beat_pos = timeline_frame.saturating_sub(beat_sample);
             if beat_pos < click_duration_samples && timeline_frame >= beat_sample {
                 let t = beat_pos as f32 / sample_rate as f32;

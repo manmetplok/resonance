@@ -140,18 +140,15 @@ pub struct PadMicChoices {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub enum KitStatus {
+    #[default]
     Empty,
     Loading { path: PathBuf },
     Loaded { name: String, num_pads: usize },
     Error { message: String },
 }
 
-impl Default for KitStatus {
-    fn default() -> Self {
-        Self::Empty
-    }
-}
 
 /// Output of a successful kit load — the decoded pads + a snapshot of
 /// the manifest's mic catalog for the GUI.
@@ -409,7 +406,7 @@ fn decode_layers(
 ) -> Result<Vec<VelocityLayer>, String> {
     // Reshape rounds: {RR -> {Vel -> filename}} into {Vel -> [RR filenames]}.
     let mut layers_by_vel: BTreeMap<u32, Vec<&String>> = BTreeMap::new();
-    for (_rr_name, vel_map) in &setup.rounds {
+    for vel_map in setup.rounds.values() {
         for (vel_name, filename) in vel_map {
             let vel_num = parse_vel_index(vel_name).ok_or_else(|| {
                 format!("piece '{piece_name}': unparseable velocity key '{vel_name}'")

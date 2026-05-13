@@ -146,21 +146,18 @@ pub(super) fn regenerate_lane(
     };
 
     let gen_params = match &config.kind {
-        LaneGeneratorKind::Bass(p) => {
-            let mut gp = crate::compose::GenerateParams::default();
-            gp.bass = p.clone();
-            gp
-        }
-        LaneGeneratorKind::Melody(p) => {
-            let mut gp = crate::compose::GenerateParams::default();
-            gp.melody = p.clone();
-            gp
-        }
-        LaneGeneratorKind::Pad(p) => {
-            let mut gp = crate::compose::GenerateParams::default();
-            gp.pad = p.clone();
-            gp
-        }
+        LaneGeneratorKind::Bass(p) => crate::compose::GenerateParams {
+            bass: *p,
+            ..Default::default()
+        },
+        LaneGeneratorKind::Melody(p) => crate::compose::GenerateParams {
+            melody: *p,
+            ..Default::default()
+        },
+        LaneGeneratorKind::Pad(p) => crate::compose::GenerateParams {
+            pad: *p,
+            ..Default::default()
+        },
         _ => return iced::Task::none(),
     };
 

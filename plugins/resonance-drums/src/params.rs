@@ -22,7 +22,7 @@ impl Default for DrumParams {
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
-            pads: std::array::from_fn(|i| PadParams::new(i)),
+            pads: std::array::from_fn(PadParams::new),
         }
     }
 }

@@ -107,11 +107,12 @@ pub fn v_rects(
     })
 }
 
-/// Convert a thumb-relative offset (pointer pixel minus clamp origin) into a
-/// scroll position. Both press-time page-jumps and move-time drags use this:
-/// the axis-specific caller computes `thumb_rel` (typically `pointer - origin
-/// - grab` for drag or `pointer - thumb_size/2` for page-jump) and the
-/// helper handles the clamp + ratio.
+/// Convert a thumb-relative offset (pointer pixel minus clamp origin)
+/// into a scroll position. Both press-time page-jumps and move-time
+/// drags use this: the axis-specific caller computes `thumb_rel`
+/// (typically `pointer − origin − grab` for drag or
+/// `pointer − thumb_size/2` for page-jump) and the helper handles the
+/// clamp + ratio.
 pub fn scroll_from_thumb_pos(thumb_rel: f32, travel: f32, max_scroll: f32) -> f32 {
     let clamped = thumb_rel.clamp(0.0, travel);
     if travel > 0.0 {

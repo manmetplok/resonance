@@ -27,6 +27,10 @@ pub const FDN_CHANNELS: usize = 8;
 /// `dsp::ER_TAPS`.
 pub const ER_TAPS: usize = 12;
 
+/// `(times, gains)` per stereo channel. `times` and `gains` are each
+/// `[(L, R); ER_TAPS]` — one (left, right) pair per tap.
+pub type ErTapsSnapshot = ([(f32, f32); ER_TAPS], [(f32, f32); ER_TAPS]);
+
 /// Fixed-length ring for the wet-RMS history trace.
 pub struct TailHistory {
     pub samples: [f32; TAIL_HISTORY_LEN],
@@ -156,7 +160,7 @@ impl ReverbViz {
         }
     }
 
-    pub fn read_er_taps(&self) -> ([(f32, f32); ER_TAPS], [(f32, f32); ER_TAPS]) {
+    pub fn read_er_taps(&self) -> ErTapsSnapshot {
         let mut times = [(0.0f32, 0.0f32); ER_TAPS];
         let mut gains = [(0.0f32, 0.0f32); ER_TAPS];
         for i in 0..ER_TAPS {

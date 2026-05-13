@@ -512,15 +512,15 @@ impl NamInference for WaveNetModel {
                             self.residual_buf[c] += l1x1.bias[c];
                         }
                         let x_curr = ring.read_current();
-                        for c in 0..ch {
-                            self.activation[c] = x_curr[c] + self.residual_buf[c];
+                        for (c, a) in self.activation.iter_mut().enumerate().take(ch) {
+                            *a = x_curr[c] + self.residual_buf[c];
                         }
                     }
                     None => {
                         // bottleneck == channels: z IS the residual
                         let x_curr = ring.read_current();
-                        for c in 0..ch {
-                            self.activation[c] = x_curr[c] + self.activation[c];
+                        for (c, a) in self.activation.iter_mut().enumerate().take(ch) {
+                            *a += x_curr[c];
                         }
                     }
                 }
@@ -570,12 +570,12 @@ impl NamInference for WaveNetModel {
                 head_layer.in_features,
                 dst,
             );
-            for j in 0..head_layer.out_features {
-                dst[j] += head_layer.bias[j];
+            for (j, v) in dst.iter_mut().enumerate().take(head_layer.out_features) {
+                *v += head_layer.bias[j];
             }
             if head_layer.has_activation {
-                for j in 0..head_layer.out_features {
-                    dst[j] = fast_tanh(dst[j]);
+                for v in dst.iter_mut().take(head_layer.out_features) {
+                    *v = fast_tanh(*v);
                 }
             }
             current_size = head_layer.out_features;

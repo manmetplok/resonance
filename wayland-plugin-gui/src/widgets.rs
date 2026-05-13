@@ -2,6 +2,13 @@
 //!
 //! Provides a rotary knob, labelled control column, and slider helpers
 //! so plugin UIs share a consistent look and compact layout.
+//!
+//! Most builders take 8 arguments (label, value, range, step, formatter,
+//! …) because the widgets need to expose every visual + interaction
+//! knob the plugin editors set per-call; the alternative — wrapping
+//! them in a config struct — adds boilerplate without any readability
+//! win, so we allow the `too_many_arguments` lint module-wide.
+#![allow(clippy::too_many_arguments)]
 
 use egui::{self, Color32, Pos2, Rect, Response, Sense, Stroke, Vec2};
 use std::f32::consts::PI;

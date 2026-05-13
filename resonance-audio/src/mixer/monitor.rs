@@ -24,6 +24,7 @@ use super::common::latch_transport;
 /// `input_channels` tells us how many channels are in each frame, and the
 /// track's own `input_port` picks which channel(s) to route into its
 /// stereo L/R pair.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn process_monitor_track(
     track: &Track,
     monitor_temp: &[f32],

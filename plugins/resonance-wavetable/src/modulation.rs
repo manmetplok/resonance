@@ -1,4 +1,4 @@
-/// Modulation matrix: 8 slots of (source, destination, amount).
+//! Modulation matrix: 8 slots of (source, destination, amount).
 
 pub const NUM_MOD_SLOTS: usize = 8;
 

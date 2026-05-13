@@ -12,6 +12,12 @@ pub struct Tone3000Client {
     agent: ureq::Agent,
 }
 
+impl Default for Tone3000Client {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Tone3000Client {
     pub fn new() -> Self {
         let agent = ureq::AgentBuilder::new()

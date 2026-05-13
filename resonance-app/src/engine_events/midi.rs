@@ -5,6 +5,7 @@ use resonance_audio::types::*;
 use crate::state::MidiClipState;
 use crate::Resonance;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn clip_created(
     r: &mut Resonance,
     clip_id: ClipId,

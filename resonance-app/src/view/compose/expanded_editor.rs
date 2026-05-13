@@ -322,21 +322,19 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
             canvas::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key: iced::keyboard::Key::Character(ref ch),
                 ..
-            }) => {
-                if cursor.position_in(bounds).is_some() {
-                    let s = ch.as_str();
-                    if s == "+" || s == "=" {
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::Compose(ComposeMessage::ExpandedZoomY(2.0))),
-                        );
-                    }
-                    if s == "-" {
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::Compose(ComposeMessage::ExpandedZoomY(-2.0))),
-                        );
-                    }
+            }) if cursor.position_in(bounds).is_some() => {
+                let s = ch.as_str();
+                if s == "+" || s == "=" {
+                    return (
+                        canvas::event::Status::Captured,
+                        Some(Message::Compose(ComposeMessage::ExpandedZoomY(2.0))),
+                    );
+                }
+                if s == "-" {
+                    return (
+                        canvas::event::Status::Captured,
+                        Some(Message::Compose(ComposeMessage::ExpandedZoomY(-2.0))),
+                    );
                 }
             }
 
@@ -706,7 +704,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
             };
             for idx in 0..=(total_ticks / sub) {
                 let tick = idx * sub;
-                if tick % tpb == 0 {
+                if tick.is_multiple_of(tpb) {
                     continue;
                 }
                 let x = grid_x + self.tick_to_x(tick, zoom_x);

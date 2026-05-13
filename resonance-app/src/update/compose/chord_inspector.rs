@@ -66,7 +66,7 @@ pub(super) fn handle(
 
         ChordInspectorMsg::SetBeatsPerChord(beats) => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.beats_per_chord = beats.max(1).min(16);
+                def.beats_per_chord = beats.clamp(1, 16);
                 def.generate_params.beats_per_chord = def.beats_per_chord;
                 r.compose.last_error = None;
             }

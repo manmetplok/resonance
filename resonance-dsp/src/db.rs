@@ -1,4 +1,4 @@
-/// Logarithmic / linear amplitude conversion helpers shared across plugins.
+//! Logarithmic / linear amplitude conversion helpers shared across plugins.
 
 /// Floor used by `linear_to_db` for values at or below ~-200 dB. Chosen so that
 /// downstream code can detect "silence" without needing `-inf` handling.

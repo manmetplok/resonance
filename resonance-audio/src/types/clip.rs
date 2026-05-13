@@ -276,7 +276,7 @@ pub const WAVEFORM_PEAK_FRAMES: usize = 512;
 /// Uses the mono mix (L+R)/2 for display.
 pub fn compute_waveform_peaks(data: &[f32]) -> Vec<(f32, f32)> {
     let total_frames = data.len() / 2;
-    let num_peaks = (total_frames + WAVEFORM_PEAK_FRAMES - 1) / WAVEFORM_PEAK_FRAMES;
+    let num_peaks = total_frames.div_ceil(WAVEFORM_PEAK_FRAMES);
     let mut peaks = Vec::with_capacity(num_peaks);
     for chunk_start in (0..total_frames).step_by(WAVEFORM_PEAK_FRAMES) {
         let chunk_end = (chunk_start + WAVEFORM_PEAK_FRAMES).min(total_frames);

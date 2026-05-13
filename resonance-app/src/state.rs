@@ -37,16 +37,11 @@ pub type SignatureEvent = SignaturePoint;
 /// Sub-type of an instrument track, surfaced in the Compose tab. Only used
 /// for display and icon defaulting — the audio engine itself treats all
 /// instrument tracks identically.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InstrumentType {
+    #[default]
     Synth,
     Drum,
-}
-
-impl Default for InstrumentType {
-    fn default() -> Self {
-        InstrumentType::Synth
-    }
 }
 
 impl InstrumentType {
@@ -100,8 +95,9 @@ impl std::fmt::Display for TrackRole {
 /// Icon shown next to the instrument name in the Compose tab. Backed by a
 /// Font Awesome glyph; kept in an enum so the persisted value survives
 /// font-file renames.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InstrumentIcon {
+    #[default]
     Music,
     Drum,
     Guitar,
@@ -109,12 +105,6 @@ pub enum InstrumentIcon {
     WaveSquare,
     CompactDisc,
     Sliders,
-}
-
-impl Default for InstrumentIcon {
-    fn default() -> Self {
-        InstrumentIcon::Music
-    }
 }
 
 impl InstrumentIcon {

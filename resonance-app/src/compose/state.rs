@@ -369,9 +369,10 @@ impl ComposeState {
         }
     }
 
-    /// Post-load migration: populate `lane_generators` from old `generate_params`
-    /// + track roles when loading a project that predates the lane generator system.
-    /// Call after tracks are loaded.
+    /// Post-load migration: populate `lane_generators` from old
+    /// `generate_params` and track roles when loading a project that
+    /// predates the lane generator system. Call after tracks are
+    /// loaded.
     pub fn migrate_old_generate_params(&mut self, tracks: &[crate::state::TrackState]) {
         use crate::state::TrackRole;
 
@@ -431,7 +432,7 @@ impl ComposeState {
                         def.lane_generators.insert(
                             t.id,
                             LaneGeneratorConfig {
-                                kind: LaneGeneratorKind::Bass(def.generate_params.bass.clone()),
+                                kind: LaneGeneratorKind::Bass(def.generate_params.bass),
                                 seed: def.progression_seed,
                             },
                         );
@@ -440,7 +441,7 @@ impl ComposeState {
                         def.lane_generators.insert(
                             t.id,
                             LaneGeneratorConfig {
-                                kind: LaneGeneratorKind::Melody(def.generate_params.melody.clone()),
+                                kind: LaneGeneratorKind::Melody(def.generate_params.melody),
                                 seed: def.progression_seed,
                             },
                         );
@@ -449,7 +450,7 @@ impl ComposeState {
                         def.lane_generators.insert(
                             t.id,
                             LaneGeneratorConfig {
-                                kind: LaneGeneratorKind::Pad(def.generate_params.pad.clone()),
+                                kind: LaneGeneratorKind::Pad(def.generate_params.pad),
                                 seed: def.progression_seed,
                             },
                         );

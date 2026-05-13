@@ -15,6 +15,7 @@ use crate::download::{Command, ServerKit, Status, WorkerHandle};
 use resonance_common::registry::{self, ContentType};
 
 /// Per-panel UI state, owned by the editor app.
+#[derive(Default)]
 pub struct DownloadPanelState {
     pub open: bool,
     /// Set once after the panel opens so we fetch the index exactly once.
@@ -24,15 +25,6 @@ pub struct DownloadPanelState {
     pending_delete: Option<String>,
 }
 
-impl Default for DownloadPanelState {
-    fn default() -> Self {
-        Self {
-            open: false,
-            did_initial_fetch: false,
-            pending_delete: None,
-        }
-    }
-}
 
 pub fn draw(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc<WorkerHandle>) {
     // Dim the background behind the overlay. Use a Tooltip-order layer so it

@@ -49,7 +49,7 @@ impl OctaveTable {
         let bin_hz = sample_rate / fft_size as f32;
         let max_k = mag_db.len();
 
-        for band in 0..NUM_OCTAVE_BINS {
+        for (band, slot) in out.iter_mut().enumerate().take(NUM_OCTAVE_BINS) {
             let f_low = self.edges[band];
             let f_high = self.edges[band + 1];
             let k_low = ((f_low / bin_hz).floor() as isize).max(0) as usize;
@@ -59,17 +59,16 @@ impl OctaveTable {
                 // No FFT bin falls inside this band; fall back to the
                 // nearest bin centred inside the band range.
                 let k = ((self.center(band) / bin_hz).round() as usize).min(max_k - 1);
-                out[band] = mag_db[k].max(floor_db);
+                *slot = mag_db[k].max(floor_db);
                 continue;
             }
             let mut peak = floor_db;
-            for k in k_low..k_high_excl {
-                let v = mag_db[k];
+            for &v in &mag_db[k_low..k_high_excl] {
                 if v > peak {
                     peak = v;
                 }
             }
-            out[band] = peak;
+            *slot = peak;
         }
     }
 }

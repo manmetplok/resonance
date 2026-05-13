@@ -66,8 +66,8 @@ pub(crate) fn mix_audio(
     >,
     tempo_map: &parking_lot::RwLock<TempoMap>,
     sample_rate: u32,
-    track_buf_l: &mut Vec<f32>,
-    track_buf_r: &mut Vec<f32>,
+    track_buf_l: &mut [f32],
+    track_buf_r: &mut [f32],
     bus_bufs: &mut [(Vec<f32>, Vec<f32>)],
     // Per-plugin-output-port scratch used for multi-output instruments
     // (e.g. resonance-drums with its 7 group/overhead ports). Sized to
@@ -77,7 +77,7 @@ pub(crate) fn mix_audio(
     port_scratch: &mut [(Vec<f32>, Vec<f32>)],
     note_event_buf: &mut Vec<PendingNoteEvent>,
     monitor_cons: &mut ringbuf::HeapCons<f32>,
-    monitor_temp: &mut Vec<f32>,
+    monitor_temp: &mut [f32],
     buf_frames: usize,
     quantum: usize,
 ) {
@@ -151,7 +151,7 @@ pub(crate) fn mix_audio(
                 let is_audible = |t: &&Track| -> bool {
                     t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed())
                 };
-                if let Some(track) = tracks_guard.values().find(|t| is_audible(&t)) {
+                if let Some(track) = tracks_guard.values().find(|t| is_audible(t)) {
                     let processed_frames = process_monitor_track(
                         track,
                         monitor_temp,
@@ -233,7 +233,7 @@ pub(crate) fn mix_audio(
             let any_monitor = tracks_guard.values().any(|t| is_audible(&t));
 
             if any_monitor {
-                if let Some(track) = tracks_guard.values().find(|t| is_audible(&t)) {
+                if let Some(track) = tracks_guard.values().find(|t| is_audible(t)) {
                     let processed_frames = process_monitor_track(
                         track,
                         monitor_temp,

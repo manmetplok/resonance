@@ -146,7 +146,7 @@ impl<'a> canvas::Program<Message> for ManualMotifCanvas<'a> {
         // tones (1, 3, 5, 7 of the scale) get a warmer tint.
         let chord_tone_steps: [i8; 4] = [0, 2, 4, 6];
         for r in 0..GRID_ROWS {
-            let scale_step = (ROW_CENTER - r) as i8;
+            let scale_step = ROW_CENTER - r;
             let y = r as f32 * CELL_H;
             let normalized = scale_step.rem_euclid(7);
             let is_anchor = scale_step == 0;

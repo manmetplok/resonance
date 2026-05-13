@@ -507,10 +507,11 @@ impl TimelineCanvas<'_> {
                 let dx = pos.x - ex;
                 let dy = pos.y - ey;
                 let dist2 = dx * dx + dy * dy;
-                if dx.abs() < 10.0 && dy.abs() < 12.0 {
-                    if best.map_or(true, |(_, d)| dist2 < d) {
-                        best = Some((i, dist2));
-                    }
+                if dx.abs() < 10.0
+                    && dy.abs() < 12.0
+                    && best.is_none_or(|(_, d)| dist2 < d)
+                {
+                    best = Some((i, dist2));
                 }
             }
             if let Some((i, _)) = best {

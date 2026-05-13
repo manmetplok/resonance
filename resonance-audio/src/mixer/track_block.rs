@@ -159,8 +159,8 @@ pub(super) fn render_timeline_block(
                                 inst.0.process_multi(slice, frames);
                                 // Drop the initialized entries before the
                                 // MaybeUninit array goes out of scope.
-                                for i in 0..port_count {
-                                    unsafe { slots[i].assume_init_drop() };
+                                for slot in slots.iter_mut().take(port_count) {
+                                    unsafe { slot.assume_init_drop() };
                                 }
                             }
                             // Port 0 → main track buffer for effect chain.

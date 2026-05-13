@@ -306,6 +306,7 @@ pub(crate) fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>
 /// won. PipeWire init failures fall through to cpal so a system
 /// without a running PipeWire daemon still records (just at the
 /// cpal-via-ALSA cap of two channels).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_input_stream(
     source_name: Option<&str>,
     shared: Arc<SharedState>,

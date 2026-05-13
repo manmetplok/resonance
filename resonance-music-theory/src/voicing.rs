@@ -108,10 +108,10 @@ pub fn voice_lead(prev: &[u8], next_pcs: &[PitchClass], register: (u8, u8)) -> V
     for mut assignment in 0..total {
         let mut voicing = Vec::with_capacity(n_voices);
         let mut used = vec![false; n_pcs];
-        for v in 0..n_voices {
+        for cand in candidates.iter().take(n_voices) {
             let pc_idx = (assignment % n_pcs as u64) as usize;
             assignment /= n_pcs as u64;
-            voicing.push(candidates[v][pc_idx]);
+            voicing.push(cand[pc_idx]);
             used[pc_idx] = true;
         }
         if need_all_pcs && !used.iter().all(|&u| u) {

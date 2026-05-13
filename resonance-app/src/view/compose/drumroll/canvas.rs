@@ -507,9 +507,7 @@ impl<'a> ComposeDrumCanvas<'a> {
             }
             // Only live once the clip exists (label column sits beside a
             // working grid).
-            if self.find_section_clip(track.id).is_none() {
-                return None;
-            }
+            self.find_section_clip(track.id)?;
             let clip_area = self.clip_area(row);
             if pos.x < clip_area.x || pos.x > clip_area.x + PAD_LABEL_WIDTH {
                 return None;

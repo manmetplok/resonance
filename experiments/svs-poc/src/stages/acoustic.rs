@@ -209,7 +209,7 @@ impl AcousticStage {
             .context("extracting mel tensor")?;
 
         Ok(MelOutput {
-            shape: shape.iter().map(|d| *d as i64).collect(),
+            shape: shape.iter().copied().collect(),
             data: data.to_vec(),
         })
     }

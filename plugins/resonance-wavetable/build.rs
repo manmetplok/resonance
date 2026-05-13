@@ -1,7 +1,7 @@
-/// Pre-generates all built-in wavetables at plugin build time and writes them
-/// to `$OUT_DIR/wavetables.bin`. The runtime loads this blob via
-/// `include_bytes!`, avoiding a multi-second additive-synthesis pass at every
-/// plugin instantiation.
+//! Pre-generates all built-in wavetables at plugin build time and writes them
+//! to `$OUT_DIR/wavetables.bin`. The runtime loads this blob via
+//! `include_bytes!`, avoiding a multi-second additive-synthesis pass at every
+//! plugin instantiation.
 
 #[path = "src/wavetable_gen.rs"]
 mod wavetable_gen;

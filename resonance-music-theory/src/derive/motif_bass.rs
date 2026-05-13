@@ -164,6 +164,7 @@ fn shifted_anchor(base_anchor: u8, octave_shift: i8, bass: &BassParams) -> u8 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_bass_motif_chord(
     motif: &[MotifNote],
     tc: &TimedChord,

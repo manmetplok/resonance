@@ -75,15 +75,15 @@ impl DiffusionStep {
 
         // Hadamard mix + polarity flips
         hadamard_in_place(&mut delayed);
-        for c in 0..CHANNELS {
+        for (c, d) in delayed.iter_mut().enumerate() {
             if self.flip[c] {
-                delayed[c] = -delayed[c];
+                *d = -*d;
             }
         }
 
         // Crossfade: diffusion=0 → discrete echoes (raw delays), 1 → fully diffused
-        for c in 0..CHANNELS {
-            channels[c] = raw[c] + diffusion * (delayed[c] - raw[c]);
+        for (c, ch) in channels.iter_mut().enumerate() {
+            *ch = raw[c] + diffusion * (delayed[c] - raw[c]);
         }
     }
 
@@ -272,8 +272,8 @@ impl ReverbDsp {
             // so set_size() can rescale without re-randomizing and the
             // resulting tap positions always stay ≤ max_range_samples.
             let rs = max_range_samples.max(64);
-            for c in 0..CHANNELS {
-                diffusion_ratios[step][c] = ds.delay_samples[c] as f32 / rs as f32;
+            for (c, r) in diffusion_ratios[step].iter_mut().enumerate() {
+                *r = ds.delay_samples[c] as f32 / rs as f32;
             }
             ds
         });
@@ -285,12 +285,12 @@ impl ReverbDsp {
         // produces valid output. Uses the same `2^(c/(N-1))` spread as
         // `set_size` for internal consistency.
         let base_delay_ms = 60.0; // medium-room ballpark
-        let base_samples = (base_delay_ms * 0.001 * sample_rate) as f32;
+        let base_samples = base_delay_ms * 0.001 * sample_rate;
         let mut fdn_delay_samples = [0usize; CHANNELS];
-        for c in 0..CHANNELS {
+        for (c, slot) in fdn_delay_samples.iter_mut().enumerate() {
             let r = c as f32 / (CHANNELS - 1).max(1) as f32;
             let mult = MAX_FDN_MULT.powf(r);
-            fdn_delay_samples[c] = ((mult * base_samples) as usize).max(1);
+            *slot = ((mult * base_samples) as usize).max(1);
         }
 
         // Size each FDN delay line for the longest possible channel
@@ -358,8 +358,8 @@ impl ReverbDsp {
     /// Current FDN delay lengths in ms (affected by `size`).
     pub fn fdn_delay_ms(&self) -> [f32; CHANNELS] {
         let mut out = [0.0f32; CHANNELS];
-        for c in 0..CHANNELS {
-            out[c] = self.fdn_delay_samples[c] as f32 * 1000.0 / self.sample_rate;
+        for (c, o) in out.iter_mut().enumerate() {
+            *o = self.fdn_delay_samples[c] as f32 * 1000.0 / self.sample_rate;
         }
         out
     }
@@ -390,7 +390,7 @@ impl ReverbDsp {
         let size_ms = MIN_SIZE_MS * (MAX_SIZE_MS / MIN_SIZE_MS).powf(t);
         self.room_size_ms = size_ms;
 
-        let base_samples = (size_ms * 0.001 * self.sample_rate) as f32;
+        let base_samples = size_ms * 0.001 * self.sample_rate;
         // Channel spread: `2^(c/(N-1))` gives channel 0 at 1× base,
         // channel N-1 at 2× base — a narrow spread that packs 8 delay
         // lines into a factor-of-two range so feedback reflections
@@ -450,8 +450,7 @@ impl ReverbDsp {
     /// Set pre-delay in milliseconds.
     pub fn set_predelay(&mut self, ms: f32) {
         self.predelay_samples = ((ms * 0.001 * self.sample_rate) as usize)
-            .min(MAX_PREDELAY_SAMPLES - 1)
-            .max(0);
+            .min(MAX_PREDELAY_SAMPLES - 1);
     }
 
     /// Set modulation depth (0..1 normalized).
@@ -528,8 +527,8 @@ impl ReverbDsp {
         // decay, and store for the next sample's FDN input.
         let mut feedback = fdn_output;
         householder_in_place(&mut feedback);
-        for c in 0..CHANNELS {
-            feedback[c] = self.fdn_damping[c].process(feedback[c]) * self.decay_gain;
+        for (c, f) in feedback.iter_mut().enumerate() {
+            *f = self.fdn_damping[c].process(*f) * self.decay_gain;
         }
         self.fdn_feedback = feedback;
 
@@ -541,8 +540,8 @@ impl ReverbDsp {
         // is the FDN tap at `fdn_delay_samples[0]` samples later, i.e.
         // the reverb onset would be pinned to `size_ms`.
         let mut output = [0.0f32; CHANNELS];
-        for c in 0..CHANNELS {
-            output[c] = diffused[c] + fdn_output[c];
+        for (c, o) in output.iter_mut().enumerate() {
+            *o = diffused[c] + fdn_output[c];
         }
 
         // Smooth the |feedback| magnitudes toward a display envelope for the
@@ -557,11 +556,11 @@ impl ReverbDsp {
         // Even channels → left, odd channels → right
         let mut sum_l = 0.0f32;
         let mut sum_r = 0.0f32;
-        for c in 0..CHANNELS {
-            if c % 2 == 0 {
-                sum_l += output[c];
+        for (c, &s) in output.iter().enumerate() {
+            if c.is_multiple_of(2) {
+                sum_l += s;
             } else {
-                sum_r += output[c];
+                sum_r += s;
             }
         }
         let scale = 1.0 / (CHANNELS as f32 / 2.0).sqrt();

@@ -44,8 +44,10 @@ impl std::fmt::Display for MelodyStyle {
 
 /// Preferred melodic contour shape for motif-based generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ContourPreference {
     /// RNG picks per-phrase, weighted by research distributions.
+    #[default]
     Auto,
     /// Rise then fall (most common in folk/pop).
     Arch,
@@ -77,11 +79,6 @@ impl ContourPreference {
     }
 }
 
-impl Default for ContourPreference {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
 
 impl std::fmt::Display for ContourPreference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
