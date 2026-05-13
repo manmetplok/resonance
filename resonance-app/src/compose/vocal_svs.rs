@@ -4,21 +4,22 @@
 //! the acoustic + vocoder ONNX pipeline, and writes a stereo 32-bit-float
 //! WAV the engine can mmap via `AudioCommand::LoadClipFromWav`.
 //!
-//! Each syllable from the lyric draft is run through `vocal_g2p` to
-//! produce ARPAbet phonemes; the note's duration is shared across
-//! those phonemes (consonants short, vowel long) so words like
-//! "morning" actually sound like "morning". The f0 curve is piecewise
-//! constant per note, with optional 5 Hz vibrato modulation when the
-//! user's `vibrato` slider is non-zero.
+//! Each syllable from the lyric draft is run through
+//! `resonance_music_theory::g2p` (CMU dictionary + rule-based fallback)
+//! to produce ARPAbet phonemes; the note's duration is shared across
+//! those phonemes (consonants short, vowel long) so words like "morning"
+//! actually sound like "morning". The f0 curve is piecewise constant per
+//! note with a ~40 ms portamento between adjacent notes; an optional
+//! 5 Hz vibrato modulates the curve when the user's `vibrato` slider is
+//! non-zero.
 
 use std::path::PathBuf;
 
 use resonance_audio::types::MidiNote;
-use resonance_music_theory::{VocalParams, VocalTimbre, VoiceType};
+use resonance_music_theory::{g2p, VocalParams, VocalTimbre, VoiceType};
 use svs_poc::ds::{DsSegment, SampleCurve};
 use svs_poc::pipeline::{self, PipelineArgs};
 use svs_poc::stages::common::ExecutionProvider;
-
 
 /// Where to look for the DiffSinger acoustic + vocoder configs. Resolution
 /// order:
@@ -261,14 +262,13 @@ fn build_segment(
     // across the matching syllable notes so e.g. `hou·ses` becomes
     // `[hh aw] [z ah z]` on two notes (vs. our old rule-based
     // `[hh aw s] [eh s]` which sang as "house-ess").
-    let syllable_phonemes: Vec<Vec<&'static str>> =
-        resonance_music_theory::g2p::phonemes_for_draft(&params.draft);
-    let consonant_emphasis = params.consonant_emphasis.clamp(0.0, 1.0);
+    let syllable_phonemes: Vec<Vec<&'static str>> = g2p::phonemes_for_draft(&params.draft);
+    let consonant_emphasis = params.consonant_emphasis.clamp(0.0, 1.0) as f64;
     // Consonant target duration in seconds. `consonant_emphasis` slides
     // between a brisk 35 ms (low) and a deliberate 85 ms (high). Capped
     // later to half the note's duration so a fast syllable still has a
     // recognisable vowel.
-    let cons_dur_target = 0.035 + 0.050 * consonant_emphasis as f64;
+    let cons_dur_target = 0.035 + 0.050 * consonant_emphasis;
 
     let mut ph_seq: Vec<String> = Vec::new();
     let mut ph_dur: Vec<f64> = Vec::new();
@@ -327,10 +327,7 @@ fn build_segment(
         // Split `sing_sec` across phonemes: each consonant gets up to
         // `cons_dur_target`, capped so consonants never eat more than
         // half the syllable. The vowel(s) absorb the remainder evenly.
-        let n_cons = phonemes
-            .iter()
-            .filter(|p| resonance_music_theory::g2p::is_consonant(p))
-            .count();
+        let n_cons = phonemes.iter().filter(|p| g2p::is_consonant(p)).count();
         let n_vow = phonemes.len().saturating_sub(n_cons).max(1);
         let cons_total_cap = sing_sec * 0.5;
         let cons_each = if n_cons > 0 {
@@ -343,7 +340,7 @@ fn build_segment(
 
         let note_name = &note_name_cache[i];
         for ph in phonemes {
-            let d = if resonance_music_theory::g2p::is_consonant(ph) {
+            let d = if g2p::is_consonant(ph) {
                 cons_each
             } else {
                 vow_each
@@ -426,8 +423,7 @@ fn build_segment(
         let snapshot = f0_samples.clone();
         let mut last_change_idx = 0usize;
         let mut last_val = snapshot[0];
-        for i in 1..snapshot.len() {
-            let cur = snapshot[i];
+        for (i, &cur) in snapshot.iter().enumerate().skip(1) {
             if (cur - last_val).abs() > 0.5 {
                 // Pitch change detected at index i. Linearly ramp the
                 // previous `portamento_frames` from `last_val` (the
@@ -435,9 +431,9 @@ fn build_segment(
                 let start = i.saturating_sub(portamento_frames).max(last_change_idx);
                 let span = i.saturating_sub(start);
                 if span >= 1 {
-                    for k in start..i {
-                        let t = (k - start + 1) as f64 / (span + 1) as f64;
-                        f0_samples[k] = last_val * (1.0 - t) + cur as f64 * t;
+                    for (offset, sample) in f0_samples[start..i].iter_mut().enumerate() {
+                        let t = (offset + 1) as f64 / (span + 1) as f64;
+                        *sample = last_val * (1.0 - t) + cur * t;
                     }
                 }
                 last_val = cur;
@@ -451,7 +447,7 @@ fn build_segment(
     // anything wider sounds like pitch instability rather than
     // expressive vibrato. The pipeline keeps the curve in Hz so we
     // apply the cent offset multiplicatively: f * 2^(cents/1200).
-    let vibrato_depth = params.vibrato.clamp(0.0, 1.0);
+    let vibrato_depth = params.vibrato.clamp(0.0, 1.0) as f64;
     if vibrato_depth > 0.001 {
         let max_cents = 20.0_f64;
         let rate_hz = 5.0_f64;
@@ -459,7 +455,7 @@ fn build_segment(
         for (i, v) in f0_samples.iter_mut().enumerate() {
             if *v > 0.0 {
                 let t = i as f64 * f0_timestep;
-                let cents = max_cents * vibrato_depth as f64 * (two_pi * rate_hz * t).sin();
+                let cents = max_cents * vibrato_depth * (two_pi * rate_hz * t).sin();
                 *v *= 2.0_f64.powf(cents / 1200.0);
             }
         }

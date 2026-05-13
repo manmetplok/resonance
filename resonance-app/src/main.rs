@@ -671,7 +671,7 @@ fn seed_demo_content(app: &mut Resonance) {
             kind: crate::compose::LaneGeneratorKind::Vocal(
                 resonance_music_theory::VocalParams::default(),
             ),
-            seed: 0xC0FFEE_FACE_F00D,
+            seed: 0x00C0_FFEE_FACE_F00D,
         },
     );
 

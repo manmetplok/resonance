@@ -45,17 +45,12 @@ pub fn is_consonant(ph: &str) -> bool {
     CONSONANTS.contains(&ph)
 }
 
-/// Transcribe a single syllable's text to ARPAbet-lowercase phonemes.
-/// Tries the CMU dict first; falls back to letter-pattern rules for
-/// unknown words.
-///
-/// Note: the input is treated as a *whole word* for lookup. The
-/// lyric corpus uses `·` as a syllable separator but the actual word
-/// boundaries are whitespace — callers strip the separator before
-/// passing to G2P (see `syllables_from_draft` below, which preserves
-/// word grouping by splitting on whitespace, not `·`).
-pub fn syllable_to_phonemes(syllable: &str) -> Vec<&'static str> {
-    let cleaned: String = syllable
+/// Transcribe a whole word to ARPAbet-lowercase phonemes. Tries the
+/// CMU dict first; falls back to letter-pattern rules for unknown
+/// words (names, made-up words, typos). Always emits at least one
+/// vowel so the acoustic model has something to sing.
+fn word_to_phonemes(word: &str) -> Vec<&'static str> {
+    let cleaned: String = word
         .to_lowercase()
         .chars()
         .filter(|c| c.is_alphabetic() || *c == '\'')
@@ -80,42 +75,6 @@ pub fn syllable_to_phonemes(syllable: &str) -> Vec<&'static str> {
     // Fallback: letter-pattern rules. Won't match CMU's accuracy but
     // produces something pronounceable for names, made-up words, etc.
     ensure_vowel(rule_based(&cleaned))
-}
-
-/// Walk every syllable separator in the lyric draft and produce a
-/// flat list of *words* in singing order — the `derive_vocal` walker
-/// produces one note per syllable, and we collect one phoneme stream
-/// per syllable from G2P. The lyric corpus uses `·` as a syllable
-/// separator inside words (e.g. `"hou·ses"` is one word) but
-/// G2P really wants the *whole word* so it can look up the right
-/// pronunciation in CMU. So this returns syllables split *also* on
-/// `·`, with each piece tagged with the originating word so the
-/// caller can rebuild full-word lookups when needed.
-///
-/// The simpler use case — one syllable per output entry — is the
-/// existing behaviour: we return strings like `["hou", "ses",
-/// "don't", "break", ...]`. The G2P path then concatenates adjacent
-/// syllables that came from the same word, looks up the whole word
-/// in CMU, and slices the resulting phoneme list back across the
-/// syllable count. See [`phonemes_for_draft`] below for that flow.
-pub fn syllables_from_draft(
-    draft: &[crate::derive::LyricLine],
-) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for line in draft {
-        for raw in line.text.split('\u{00B7}') {
-            let s: String = raw
-                .chars()
-                .filter(|c| c.is_alphabetic() || c.is_whitespace() || *c == '\'')
-                .collect();
-            for word in s.split_whitespace() {
-                if !word.is_empty() {
-                    out.push(word.to_string());
-                }
-            }
-        }
-    }
-    out
 }
 
 /// Map a CMU `Symbol` to the lowercase ARPAbet phoneme string the
@@ -286,7 +245,7 @@ pub fn phonemes_for_draft(draft: &[crate::derive::LyricLine]) -> Vec<Vec<&'stati
 
     let mut out: Vec<Vec<&'static str>> = Vec::new();
     for (word, syl_count) in entries {
-        let phonemes = syllable_to_phonemes(&word);
+        let phonemes = word_to_phonemes(&word);
         if syl_count == 1 {
             out.push(phonemes);
             continue;
@@ -355,10 +314,9 @@ fn split_into_syllables(phonemes: &[&'static str], n: usize) -> Vec<Vec<&'static
             // onset to the new syllable.
             let prev_v = chosen_vowels[k - 1];
             let cur_v = chosen_vowels[k];
-            let cluster_start = ((prev_v + 1)..cur_v)
+            ((prev_v + 1)..cur_v)
                 .find(|&i| is_consonant(phonemes[i]))
-                .unwrap_or(cur_v);
-            cluster_start
+                .unwrap_or(cur_v)
         };
         let end = if k == n - 1 {
             phonemes.len()

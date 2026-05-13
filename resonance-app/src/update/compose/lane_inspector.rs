@@ -725,8 +725,10 @@ fn tear_down_old_vocal_audio(
     definition_id: u64,
     track_id: TrackId,
 ) {
-    use resonance_audio::types::AudioCommand;
-    let stale: Vec<((u64, u64, TrackId), (resonance_audio::types::ClipId, std::path::PathBuf))> = r
+    use resonance_audio::types::{AudioCommand, ClipId};
+    type VocalAudioKey = (u64, u64, TrackId);
+    type VocalAudioEntry = (ClipId, std::path::PathBuf);
+    let stale: Vec<(VocalAudioKey, VocalAudioEntry)> = r
         .compose
         .vocal_audio_clips
         .iter()

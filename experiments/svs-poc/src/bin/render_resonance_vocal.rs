@@ -148,7 +148,7 @@ fn main() -> Result<()> {
         speedup: args.speedup,
         depth: 1000,
     };
-    let rendered = pipeline::render_segments(&[segment.clone()], &pipeline_args)
+    let rendered = pipeline::render_segments(std::slice::from_ref(&segment), &pipeline_args)
         .context("running SVS pipeline")?;
 
     let mut mono = rendered.samples;
@@ -347,15 +347,14 @@ fn build_segment(
         let snapshot = f0_samples.clone();
         let mut last_change_idx = 0usize;
         let mut last_val = snapshot[0];
-        for i in 1..snapshot.len() {
-            let cur = snapshot[i];
+        for (i, &cur) in snapshot.iter().enumerate().skip(1) {
             if (cur - last_val).abs() > 0.5 {
                 let start = i.saturating_sub(portamento_frames).max(last_change_idx);
                 let span = i.saturating_sub(start);
                 if span >= 1 {
-                    for k in start..i {
-                        let t = (k - start + 1) as f64 / (span + 1) as f64;
-                        f0_samples[k] = last_val * (1.0 - t) + cur as f64 * t;
+                    for (offset, sample) in f0_samples[start..i].iter_mut().enumerate() {
+                        let t = (offset + 1) as f64 / (span + 1) as f64;
+                        *sample = last_val * (1.0 - t) + cur * t;
                     }
                 }
                 last_val = cur;
