@@ -9,6 +9,7 @@ use crate::message::Message;
 use crate::state::{InstrumentType, MidiClipState, TrackState};
 use crate::theme;
 
+use super::super::lane_side::{self, LaneKind};
 use super::super::tracks::NAME_COLUMN_WIDTH;
 
 /// Row height of a single pad row in the drum grid. 12 rows per track =
@@ -227,59 +228,35 @@ impl<'a> ComposeDrumCanvas<'a> {
     ) {
         let is_selected = self.details_track_id == Some(track.id);
 
-        // Name column (matches the synth track style).
-        let name_bg = if is_selected {
-            Color::from_rgb(0.22, 0.22, 0.27)
-        } else {
-            theme::PANEL
+        // Side panel — same RHYTHM tag treatment as the bundled design.
+        let side_rect = Rectangle {
+            x: 0.0,
+            y: row_rect.y,
+            width: NAME_COLUMN_WIDTH,
+            height: row_rect.height,
         };
-        frame.fill_rectangle(
-            Point::new(0.0, row_rect.y),
-            Size::new(NAME_COLUMN_WIDTH, row_rect.height),
-            name_bg,
-        );
-        frame.fill_text(canvas::Text {
-            content: track.instrument_icon.glyph().to_string(),
-            position: Point::new(10.0, row_rect.y + row_rect.height * 0.5 - 12.0),
-            color: if is_selected {
-                theme::ACCENT
-            } else {
-                theme::TEXT
-            },
-            size: 14.0.into(),
-            font: theme::ICON_FONT,
-            ..canvas::Text::default()
-        });
-        frame.fill_text(canvas::Text {
-            content: track.name.clone(),
-            position: Point::new(32.0, row_rect.y + row_rect.height * 0.5 - 12.0),
-            color: theme::TEXT,
-            size: 12.0.into(),
-            ..canvas::Text::default()
-        });
-        frame.fill_text(canvas::Text {
-            content: "Drums".to_string(),
-            position: Point::new(10.0, row_rect.y + row_rect.height * 0.5 + 6.0),
-            color: theme::TEXT_DIM,
-            size: 10.0.into(),
-            ..canvas::Text::default()
-        });
-        frame.fill_rectangle(
-            Point::new(NAME_COLUMN_WIDTH, row_rect.y),
-            Size::new(1.0, row_rect.height),
-            if is_selected {
-                theme::ACCENT
-            } else {
-                theme::SEPARATOR
-            },
+        let meta = track
+            .plugins
+            .first()
+            .map(|p| p.plugin_name.clone())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "Drums".to_string());
+        lane_side::draw(
+            frame,
+            side_rect,
+            LaneKind::Rhythm,
+            &track.name,
+            Some(&meta),
+            is_selected,
         );
 
         let clip_area = self.clip_area(row_rect);
-        // Grid background.
+        // Grid background — matches the bundled design's drum grid card
+        // (BG_1 inset surrounded by the lane's side panel + accent border).
         frame.fill_rectangle(
             Point::new(clip_area.x, clip_area.y),
             Size::new(clip_area.width, clip_area.height),
-            Color::from_rgb(0.09, 0.09, 0.10),
+            theme::BG_1,
         );
 
         // Empty state: show "+" button centered in the clip area.
@@ -310,11 +287,12 @@ impl<'a> ComposeDrumCanvas<'a> {
     }
 
     fn draw_pad_label_column(&self, frame: &mut Frame, clip_area: Rectangle) {
-        // Header cell behind the labels.
+        // Header cell behind the labels — BG_2 (the design's drum-grid
+        // card surface).
         frame.fill_rectangle(
             Point::new(clip_area.x, clip_area.y),
             Size::new(PAD_LABEL_WIDTH, clip_area.height),
-            Color::from_rgb(0.12, 0.12, 0.14),
+            theme::BG_2,
         );
         for (idx, pad) in self.pad_map.pads.iter().enumerate() {
             let y = clip_area.y + HEADER_HEIGHT + idx as f32 * PAD_ROW_HEIGHT;
@@ -352,7 +330,7 @@ impl<'a> ComposeDrumCanvas<'a> {
         frame.fill_rectangle(
             Point::new(grid_area.x, clip_area.y),
             Size::new(grid_area.width, HEADER_HEIGHT),
-            Color::from_rgb(0.12, 0.12, 0.14),
+            theme::BG_2,
         );
         let total_steps = self.total_steps();
         if total_steps == 0 || grid_area.width <= 0.0 {
@@ -377,15 +355,17 @@ impl<'a> ComposeDrumCanvas<'a> {
         for (idx, _pad) in self.pad_map.pads.iter().enumerate() {
             let y = self.pad_row_y(grid_area, idx);
             let is_selected = self.selected_pad == Some(idx);
-            let base = if idx % 2 == 0 {
-                Color::from_rgb(0.10, 0.10, 0.11)
-            } else {
-                Color::from_rgb(0.12, 0.12, 0.13)
-            };
             let bg = if is_selected {
-                Color::from_rgb(0.16, 0.16, 0.22)
+                theme::WARM_DIM
+            } else if idx % 2 == 0 {
+                theme::BG_1
             } else {
-                base
+                Color {
+                    r: theme::BG_1.r + 0.012,
+                    g: theme::BG_1.g + 0.012,
+                    b: theme::BG_1.b + 0.012,
+                    a: 1.0,
+                }
             };
             frame.fill_rectangle(
                 Point::new(grid_area.x, y),

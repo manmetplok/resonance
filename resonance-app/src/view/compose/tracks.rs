@@ -13,14 +13,42 @@ use crate::state::{InstrumentType, MidiClipState, TrackState};
 use crate::theme;
 use crate::Resonance;
 
+use super::lane_side::{self, LaneKind};
+
+/// Heuristic: lead-named instrument tracks read as "MELODY", everything else
+/// (bass, pad, generic synth) reads as "ACCOMP". Mirrors the design's
+/// per-lane tag treatment.
+fn lane_kind_for(track: &TrackState) -> LaneKind {
+    if track.instrument_type == InstrumentType::Drum {
+        LaneKind::Rhythm
+    } else if track.name.to_ascii_lowercase().contains("lead") {
+        LaneKind::Melody
+    } else {
+        LaneKind::Accomp
+    }
+}
+
+/// Meta line shown under the track's name in the side panel. Falls back to
+/// the instrument type label when no plugin slot is populated.
+fn track_meta_line(track: &TrackState) -> String {
+    if let Some(slot) = track.plugins.first() {
+        if !slot.plugin_name.is_empty() {
+            return slot.plugin_name.clone();
+        }
+    }
+    track.instrument_type.as_str().to_string()
+}
+
 /// Width reserved on the left edge of the canvas for an inline track-name
 /// label. The Compose tab intentionally does not show the full track header
 /// (mute/solo/arm/plugins) — that is Arrange-only territory. Clicking the
 /// name column opens the instrument details view in the right-side panel.
-pub const NAME_COLUMN_WIDTH: f32 = 110.0;
-/// Row height used inside the Compose track area. Taller than the Arrange
-/// track height so inline note editing has enough vertical room.
-const COMPOSE_TRACK_HEIGHT: f32 = 160.0;
+pub const NAME_COLUMN_WIDTH: f32 = 168.0;
+/// Row height used inside the Compose track area. Matches the bundled
+/// design's lane height closely while still giving the inline piano grid
+/// enough room to read pitch contour at a glance — fine-grained editing
+/// happens in the expanded editor / piano-roll overlay.
+const COMPOSE_TRACK_HEIGHT: f32 = 120.0;
 /// Height for collapsed track strips when another track is expanded.
 const COLLAPSED_TRACK_HEIGHT: f32 = 36.0;
 /// Top/bottom padding inside each row before the note grid starts.
@@ -48,6 +76,26 @@ pub fn view<'a>(
     let section_start = app.tempo_map.bar_to_sample(placement.start_bar);
     let section_end = app.tempo_map.bar_to_sample(placement.start_bar + definition.length_bars);
 
+    // Count visible (non-drum, non-sub) instrument tracks so the canvas can
+    // be sized to fit every row. Without an explicit height the parent
+    // column collapses the canvas to a single-row height inside the
+    // Scrollable workspace.
+    let instr_count = app
+        .registry
+        .tracks
+        .iter()
+        .filter(|t| {
+            matches!(t.track_type, resonance_audio::types::TrackType::Instrument)
+                && t.sub_track.is_none()
+                && t.instrument_type != InstrumentType::Drum
+        })
+        .count() as f32;
+    let total_height = if app.compose.expanded_track_id.is_some() {
+        instr_count.max(1.0) * COLLAPSED_TRACK_HEIGHT
+    } else {
+        instr_count.max(1.0) * COMPOSE_TRACK_HEIGHT
+    };
+
     let cropped = Canvas::new(ComposeTrackCanvas {
         tracks: &app.registry.tracks,
         midi_clips: &app.midi_clips,
@@ -63,11 +111,11 @@ pub fn view<'a>(
         expanded_track_id: app.compose.expanded_track_id,
     })
     .width(Length::Fill)
-    .height(Length::Fill);
+    .height(Length::Fixed(total_height));
 
     container(cropped)
         .width(Length::Fill)
-        .height(Length::Fill)
+        .height(Length::Fixed(total_height))
         .into()
 }
 
@@ -133,43 +181,19 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
 
             if is_expanded {
                 // --- Collapsed strip rendering ---
-                let bg = if is_this_expanded {
-                    Color::from_rgb(0.18, 0.22, 0.18)
-                } else if is_selected_for_details {
-                    Color::from_rgb(0.22, 0.22, 0.27)
-                } else {
-                    theme::PANEL
+                let side_rect = Rectangle {
+                    x: 0.0,
+                    y: row_rect.y,
+                    width: bounds.width,
+                    height: row_rect.height,
                 };
-                frame.fill_rectangle(
-                    Point::new(0.0, row_rect.y),
-                    Size::new(bounds.width, row_rect.height),
-                    bg,
+                lane_side::draw_compact(
+                    &mut frame,
+                    side_rect,
+                    &track.name,
+                    is_selected_for_details,
+                    is_this_expanded,
                 );
-
-                // Icon + name centered vertically
-                frame.fill_text(canvas::Text {
-                    content: track.instrument_icon.glyph().to_string(),
-                    position: Point::new(10.0, row_rect.y + row_rect.height * 0.5 - 8.0),
-                    color: if is_this_expanded {
-                        theme::ACCENT
-                    } else {
-                        theme::TEXT
-                    },
-                    size: 12.0.into(),
-                    font: theme::ICON_FONT,
-                    ..canvas::Text::default()
-                });
-                frame.fill_text(canvas::Text {
-                    content: track.name.clone(),
-                    position: Point::new(30.0, row_rect.y + row_rect.height * 0.5 - 8.0),
-                    color: if is_this_expanded {
-                        theme::ACCENT
-                    } else {
-                        theme::TEXT
-                    },
-                    size: 12.0.into(),
-                    ..canvas::Text::default()
-                });
 
                 // Hint text for expanded track
                 if is_this_expanded {
@@ -193,53 +217,20 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
                 );
             } else {
                 // --- Normal full-height rendering ---
-                let name_bg = if is_selected_for_details {
-                    Color::from_rgb(0.22, 0.22, 0.27)
-                } else {
-                    theme::PANEL
+                let side_rect = Rectangle {
+                    x: 0.0,
+                    y: row_rect.y,
+                    width: NAME_COLUMN_WIDTH,
+                    height: row_rect.height,
                 };
-                frame.fill_rectangle(
-                    Point::new(0.0, row_rect.y),
-                    Size::new(NAME_COLUMN_WIDTH, row_rect.height),
-                    name_bg,
-                );
-
-                // Icon + name on the first line, instrument type on the second.
-                frame.fill_text(canvas::Text {
-                    content: track.instrument_icon.glyph().to_string(),
-                    position: Point::new(10.0, row_rect.y + row_rect.height * 0.5 - 12.0),
-                    color: if is_selected_for_details {
-                        theme::ACCENT
-                    } else {
-                        theme::TEXT
-                    },
-                    size: 14.0.into(),
-                    font: theme::ICON_FONT,
-                    ..canvas::Text::default()
-                });
-                frame.fill_text(canvas::Text {
-                    content: track.name.clone(),
-                    position: Point::new(32.0, row_rect.y + row_rect.height * 0.5 - 12.0),
-                    color: theme::TEXT,
-                    size: 12.0.into(),
-                    ..canvas::Text::default()
-                });
-                frame.fill_text(canvas::Text {
-                    content: track.instrument_type.as_str().to_string(),
-                    position: Point::new(10.0, row_rect.y + row_rect.height * 0.5 + 6.0),
-                    color: theme::TEXT_DIM,
-                    size: 10.0.into(),
-                    ..canvas::Text::default()
-                });
-
-                frame.fill_rectangle(
-                    Point::new(NAME_COLUMN_WIDTH, row_rect.y),
-                    Size::new(1.0, row_rect.height),
-                    if is_selected_for_details {
-                        theme::ACCENT
-                    } else {
-                        theme::SEPARATOR
-                    },
+                let meta = track_meta_line(track);
+                lane_side::draw(
+                    &mut frame,
+                    side_rect,
+                    lane_kind_for(track),
+                    &track.name,
+                    Some(&meta),
+                    is_selected_for_details,
                 );
 
                 let clip_rect = Rectangle {

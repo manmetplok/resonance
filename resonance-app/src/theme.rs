@@ -406,9 +406,97 @@ pub fn tab_button_style(active: bool, status: button::Status) -> button::Style {
     }
 }
 
+/// Chip-style button used for prominent section placements on the Compose
+/// strip. Active section gets a lavender wash + accent border to read as
+/// "currently editing"; inactive sections are flat `BG_2` cards with a
+/// hairline border. Unlike `section_button_style` the chip body does not
+/// reflect the section's color — the color is shown as a small dot inside
+/// the chip so the lavender selection state stays unambiguous.
+pub fn section_chip_button_style(active: bool, status: button::Status) -> button::Style {
+    let bg = match (active, status) {
+        (true, button::Status::Hovered) => Color { a: 0.22, ..ACCENT },
+        (true, _) => ACCENT_DIM,
+        (false, button::Status::Hovered) => BG_3,
+        (false, button::Status::Pressed) => LINE_2,
+        (false, _) => BG_2,
+    };
+    let border_color = if active { ACCENT } else { LINE_2 };
+    let border_width = if active { 1.5 } else { 1.0 };
+    button::Style {
+        background: Some(iced::Background::Color(bg)),
+        text_color: TEXT_1,
+        border: iced::Border {
+            color: border_color,
+            width: border_width,
+            radius: RADIUS_LG.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Container style for the small "EDITING" pill shown on the active section
+/// chip and on the lane inspector header card. Lavender wash + accent
+/// border + soft lavender text on a rounded full-pill shape.
+pub fn editing_pill_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(ACCENT_SOFT),
+        background: Some(iced::Background::Color(ACCENT_DIM)),
+        border: iced::Border {
+            color: ACCENT_LINE,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Warm-tinted variant of `editing_pill_style` — used for the "PER-TRACK"
+/// pill on the lane inspector header when a track lane is active.
+pub fn editing_pill_warm_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(WARM),
+        background: Some(iced::Background::Color(rgba(0xe8, 0xc4, 0x7b, 0.14))),
+        border: iced::Border {
+            color: WARM_LINE,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Card-style container for the lane inspector "EDITING …" context header.
+/// Lavender wash + accent border when a section lane is active.
+pub fn editing_header_card_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(ACCENT_DIM)),
+        border: iced::Border {
+            color: ACCENT_LINE,
+            width: 1.0,
+            radius: RADIUS_LG.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Warm-tinted variant of `editing_header_card_style` — used when a track
+/// lane is active in the lane inspector.
+pub fn editing_header_card_warm_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(rgba(0xe8, 0xc4, 0x7b, 0.10))),
+        border: iced::Border {
+            color: WARM_LINE,
+            width: 1.0,
+            radius: RADIUS_LG.into(),
+        },
+        ..Default::default()
+    }
+}
+
 /// Button style for a section placement in the Compose tab strip. Fills the
 /// button with the section's configured color (dimmed when inactive) and
 /// highlights it with an accent border when it is the current selection.
+#[allow(dead_code)]
 pub fn section_button_style(active: bool, color: [u8; 3], status: button::Status) -> button::Style {
     let base = Color::from_rgb(
         color[0] as f32 / 255.0,

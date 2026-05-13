@@ -13,6 +13,92 @@ use crate::message::*;
 use crate::state::{InstrumentType, TrackState};
 use crate::theme;
 
+/// Resolve the active selection into a display-ready (label, name) pair so
+/// the EDITING context header can render `EDITING SECTION · Intro` or
+/// `EDITING TRACK · Drums` regardless of which lane is focused.
+fn editing_context<'a>(
+    selected: &'a SelectedLane,
+    definition: &'a SectionDefinitionState,
+    tracks: &'a [TrackState],
+) -> (&'static str, String, bool) {
+    match selected {
+        SelectedLane::Chords => ("SECTION", definition.name.clone(), true),
+        SelectedLane::Instrument(id) | SelectedLane::Drums(id) => {
+            let name = tracks
+                .iter()
+                .find(|t| t.id == *id)
+                .map(|t| t.name.clone())
+                .unwrap_or_else(|| "Track".to_string());
+            ("TRACK", name, false)
+        }
+    }
+}
+
+/// EDITING context header card — the prominent banner that tells the user
+/// whether they're editing the section's harmonic skeleton (chords / motif)
+/// or a single track's generator. Lavender for section, warm amber for
+/// track. Matches the "EDITING SECTION · {name}" treatment in the bundled
+/// design and reinforces the GLOBAL / PER-TRACK scope chip on the right.
+fn editing_header<'a>(
+    selected: &'a SelectedLane,
+    definition: &'a SectionDefinitionState,
+    tracks: &'a [TrackState],
+) -> Element<'a, Message> {
+    let (scope_label, name, is_section) = editing_context(selected, definition, tracks);
+    let accent = if is_section {
+        theme::ACCENT_SOFT
+    } else {
+        theme::WARM
+    };
+
+    let editing_label = text(format!("EDITING {}", scope_label))
+        .size(9)
+        .font(theme::UI_FONT_SEMIBOLD)
+        .color(accent);
+
+    let scope_chip_text = text(if is_section { "GLOBAL" } else { "PER-TRACK" })
+        .size(9)
+        .font(theme::UI_FONT_SEMIBOLD)
+        .color(accent);
+    let scope_chip = if is_section {
+        container(scope_chip_text)
+            .padding([2, 8])
+            .style(theme::editing_pill_style)
+    } else {
+        container(scope_chip_text)
+            .padding([2, 8])
+            .style(theme::editing_pill_warm_style)
+    };
+
+    let top_row = row![
+        editing_label,
+        Space::with_width(Length::Fill),
+        scope_chip,
+    ]
+    .align_y(alignment::Vertical::Center);
+
+    let name_text = text(name)
+        .size(22)
+        .font(theme::SERIF_ITALIC_FONT)
+        .color(theme::TEXT_1)
+        .wrapping(iced::widget::text::Wrapping::None);
+
+    let body_row = row![name_text]
+        .align_y(alignment::Vertical::Center)
+        .spacing(8);
+
+    let content = column![top_row, Space::with_height(4), body_row]
+        .spacing(0)
+        .width(Length::Fill);
+
+    let card = container(content).padding([10, 12]).width(Length::Fill);
+    if is_section {
+        card.style(theme::editing_header_card_style).into()
+    } else {
+        card.style(theme::editing_header_card_warm_style).into()
+    }
+}
+
 mod chord;
 mod drums;
 mod instrument;
@@ -33,6 +119,11 @@ pub fn view<'a>(
     clip_id_for_drum: Option<u64>,
     table_registry: &'a TableRegistry,
 ) -> Element<'a, Message> {
+    // EDITING context header — large, unmistakable. Tells the user whether
+    // they're editing the section (lavender) or a track (warm amber) and
+    // shows the active lane's name in italic serif.
+    let editing_card = editing_header(selected_lane, definition, tracks);
+
     // Scale block — always at top, section-global.
     let scale = chord::scale_block(definition);
 
@@ -65,6 +156,8 @@ pub fn view<'a>(
     };
 
     let content = column![
+        editing_card,
+        Space::with_height(14),
         scale,
         Space::with_height(20),
         lane_switcher,

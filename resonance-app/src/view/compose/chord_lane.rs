@@ -9,6 +9,7 @@ use crate::compose::{ComposeMessage, SelectedLane, SectionDefinitionState};
 use crate::message::Message;
 use crate::theme;
 
+use super::lane_side::{self, LaneKind};
 use super::tracks::NAME_COLUMN_WIDTH;
 
 pub const LANE_HEIGHT: f32 = 64.0;
@@ -141,42 +142,37 @@ fn chord_layout_hash(def: &SectionDefinitionState) -> u64 {
         c.duration_beats.hash(&mut h);
         format!("{}", c.chord).hash(&mut h);
     }
+    // Scale feeds the side panel's meta line ("B · 5 chords") so changes to
+    // it have to invalidate the cache.
+    if let Some(scale) = def.scale.as_ref() {
+        scale.root.to_semitone().hash(&mut h);
+        (scale.mode as u8).hash(&mut h);
+    } else {
+        0u8.hash(&mut h);
+    }
     h.finish()
 }
 
 impl<'a> ChordLaneCanvas<'a> {
     fn draw_into(&self, frame: &mut Frame, bounds: Rectangle, drag: &Option<ChordDrag>) {
-        // ---- Name column (track header) ----
-        let name_bg = if self.chords_selected {
-            theme::BG_2
-        } else {
-            theme::BG_1
+        // ---- Lane side panel ----
+        let chord_count = self.definition.chords.len();
+        let scale_word = match (chord_count, self.definition.scale.as_ref()) {
+            (n, Some(scale)) => format!("{} \u{00b7} {} chords", scale.root, n),
+            (n, None) => format!("{} chords", n),
         };
-        frame.fill_rectangle(
-            Point::ORIGIN,
-            Size::new(NAME_COLUMN_WIDTH, bounds.height),
-            name_bg,
-        );
-        frame.fill_text(canvas::Text {
-            content: "Chords".to_string(),
-            position: Point::new(10.0, bounds.height * 0.5 - 7.0),
-            color: if self.chords_selected {
-                theme::ACCENT_SOFT
-            } else {
-                theme::TEXT_1
+        lane_side::draw(
+            frame,
+            Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: NAME_COLUMN_WIDTH,
+                height: bounds.height,
             },
-            size: 12.0.into(),
-            ..canvas::Text::default()
-        });
-        // Divider between name column and grid
-        frame.fill_rectangle(
-            Point::new(NAME_COLUMN_WIDTH, 0.0),
-            Size::new(1.0, bounds.height),
-            if self.chords_selected {
-                theme::ACCENT
-            } else {
-                theme::SEPARATOR
-            },
+            LaneKind::Harmony,
+            "Chords",
+            Some(&scale_word),
+            self.chords_selected,
         );
 
         // ---- Grid area (right of name column) ----
