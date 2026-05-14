@@ -2,7 +2,8 @@ use resonance_audio::types::TrackId;
 use resonance_music_theory::{
     BassMotifMode, BassMotifPhrase, BassStyle, Chord, ChordQuality, ContourPreference, Degree,
     MelodyStyle, PitchClass, Scale, SyllableMode, VocalContour, VocalMood, VocalPov,
-    VocalRhymeScheme, VocalTimbre, VoiceType,
+    VocalRhymeScheme, VocalSinger, VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank,
+    VoiceType,
 };
 
 use crate::compose::drumroll::DrumrollMessage;
@@ -10,9 +11,14 @@ use crate::compose::{DrumVoiceMode, LaneGeneratorKindTag, SelectedLane};
 use crate::state::TrackRole;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Drumroll(...) is retained for projects that load the old flat-pad model.
 pub enum ComposeMessage {
     /// Drumroll view messages (toggle hit, generate euclidean, etc.).
     Drumroll(DrumrollMessage),
+
+    /// Drum-groups messages — project-scoped group management plus the
+    /// per-group generator knobs surfaced in the right rail.
+    DrumGroups(DrumGroupsMessage),
 
     // Create a new MIDI clip that spans the selected section on the given
     // instrument track. Used by the "+" button that appears over empty
@@ -300,12 +306,25 @@ pub enum LaneInspectorMsg {
     ToggleVocalMatchSyllables,
     ToggleVocalAvoidCliches,
     ToggleVocalLockLine(u8),
+    /// Replace the text of a single draft line (1-based) and auto-lock it so
+    /// the next re-roll preserves the user's wording.
+    SetVocalLineText(u8, String),
+    /// Edit action coming from the section-level "bulk lyrics" text editor.
+    /// Carries the raw iced action so the update handler can apply it to
+    /// the lane's editor `Content` and (when the action is an edit) re-parse
+    /// the buffer into individual `LyricLine`s.
+    VocalBulkLyricsAction(iced::widget::text_editor::Action),
     RerollUnlockedLyrics,
+    /// Insert `·` syllable markers into every lyric line based on
+    /// each word's CMU dictionary syllable count. Words that already
+    /// have enough dots are left alone.
+    AutoSyllabifyLyrics,
 
     // Vocal — melody
     SetVocalVoiceType(VoiceType),
     SetVocalRangeLow(u8),
     SetVocalRangeHigh(u8),
+    SetVocalStyle(VocalStyle),
     SetVocalContour(VocalContour),
     SetVocalSyllableMode(SyllableMode),
     SetVocalChordToneAnchor(f32),
@@ -314,10 +333,19 @@ pub enum LaneInspectorMsg {
     SetVocalBreath(f32),
     ToggleVocalStayInScale,
     ToggleVocalAvoidClashes,
+    ToggleVocalUseSectionMotif,
 
     // Vocal — voice & delivery
     SetVocalTimbre(VocalTimbre),
+    SetVocalVoicebank(VocalVoicebank),
+    SetVocalSinger(VocalSinger),
+    SetVocalSingerMeiji(VocalSingerMeiji),
     SetVocalVibrato(f32),
+    SetVocalVibratoRate(f32),
+    SetVocalTension(f32),
+    SetVocalTensionVelocityAmount(f32),
+    SetVocalTensionContourAmount(f32),
+    SetVocalPortamentoMs(f32),
     SetVocalArticulation(f32),
     SetVocalConsonantEmphasis(f32),
 
@@ -326,19 +354,25 @@ pub enum LaneInspectorMsg {
     GenerateVocalLyricsOnly,
     GenerateVocalMelodyOnly,
 
-    // Drum euclidean (per-voice)
+    // Drum euclidean (per-voice) — legacy flat-pad path. Kept around so the
+    // update handler stays compilable; the new grouped UI uses
+    // `DrumGroupsMessage` instead.
+    #[allow(dead_code)]
     SetDrumVoiceMode {
         pad_index: usize,
         mode: DrumVoiceMode,
     },
+    #[allow(dead_code)]
     SetDrumEuclidSteps {
         pad_index: usize,
         steps: u32,
     },
+    #[allow(dead_code)]
     SetDrumEuclidHits {
         pad_index: usize,
         hits: u32,
     },
+    #[allow(dead_code)]
     SetDrumEuclidRotation {
         pad_index: usize,
         rotation: i32,
@@ -346,4 +380,78 @@ pub enum LaneInspectorMsg {
 
     /// Regenerate this lane from its generator spec + section chords.
     Regenerate,
+}
+
+// ---------------------------------------------------------------------------
+// Drum groups
+// ---------------------------------------------------------------------------
+
+/// Messages targeting the project-scoped drum groups. Group definitions
+/// (id, name, color, pads, grid, cycle, phase) live on
+/// [`crate::compose::ComposeState::drum_groups`]. The manager modal and
+/// the right-rail Drum generator both route through these.
+#[derive(Debug, Clone)]
+pub enum DrumGroupsMessage {
+    /// Mark a group as the active selection for the right-rail generator
+    /// and the lane's highlight stripe.
+    SelectGroup { group_id: u64 },
+
+    // ---- Manager modal ----
+    /// Show the modal in "manage groups" mode.
+    OpenManager,
+    /// Hide the modal.
+    CloseManager,
+    /// Pick which group the manager is editing on the right-hand column.
+    ManagerSelectGroup { group_id: u64 },
+    /// Filter text typed into the kit pad search box.
+    ManagerSetFilter(String),
+    /// Add a fresh empty group and select it for editing.
+    AddGroup,
+    /// Delete a group from the project. If the deleted group was selected
+    /// the focus falls back to the first remaining group.
+    DeleteGroup { group_id: u64 },
+    /// Rename a group (the manager's name input).
+    RenameGroup { group_id: u64, name: String },
+    /// Cycle the group's color through the palette by clicking a swatch.
+    SetGroupColor { group_id: u64, color: [u8; 3] },
+    /// Toggle whether a kit pad belongs to the given group. Adding a pad
+    /// to one group removes it from any other.
+    TogglePadAssignment { group_id: u64, note: u8 },
+    /// Remove every pad from a group (the "Clear pads" button).
+    ClearGroupPads { group_id: u64 },
+
+    // ---- Generator knobs (right rail) ----
+    SetGroupGrid { group_id: u64, grid: u8 },
+    SetGroupCycle { group_id: u64, cycle: u32 },
+    SetGroupPhase { group_id: u64, phase: u32 },
+    /// Combined grid+cycle preset — used by the polyrhythm/polymeter
+    /// preset chips. Set both at once so the chip can produce a single
+    /// click that lands on a consistent meter rather than nudging only
+    /// one axis.
+    SetGroupMeter { group_id: u64, grid: u8, cycle: u32 },
+    SetGroupDensity { group_id: u64, density: f32 },
+    SetGroupSwing { group_id: u64, swing: f32 },
+    SetGroupAccent { group_id: u64, accent: f32 },
+    SetGroupHumanize { group_id: u64, humanize: f32 },
+    SetGroupFills { group_id: u64, fills: f32 },
+    /// Update an articulation pad's weight (0..=100).
+    SetPadWeight {
+        group_id: u64,
+        pad_index: usize,
+        weight: u32,
+    },
+    /// Run the group's pattern generator (density/style aware) and bump
+    /// the per-group seed so repeated presses yield variation.
+    GenerateGroup { group_id: u64 },
+    /// Run the generator on every group at once.
+    GenerateAllGroups,
+    /// Flip a single pattern step on / off for one pad. Used by the
+    /// drum lane's cell click. `step` is relative to the visible 1-bar
+    /// preview (0..BEATS_IN_LANE × grid) and gets mapped to the underlying
+    /// pattern index modulo cycle inside the handler.
+    TogglePadStep {
+        group_id: u64,
+        pad_index: usize,
+        step: usize,
+    },
 }

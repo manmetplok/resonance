@@ -20,15 +20,17 @@ mod vocal;
 pub use bass::{derive_bass, BassMotifMode, BassMotifPhrase, BassParams, BassStyle};
 pub use melody::{derive_melody, ContourPreference, MelodyParams, MelodyStyle};
 pub use motif_bass::derive_bass_motif;
-pub use motif_engine::derive_motif_melody_with_section;
+pub use motif_engine::{derive_motif_melody_with_section, motif_intervals};
 pub use motif_rhythm::{derive_motif_rhythm, RhythmHit};
 pub use motif_source::{
     toggle_manual_motif_cell, ManualMotifCell, ManualMotifNote, MotifParams, MotifSource,
 };
 pub use pad::{derive_pad, PadParams};
 pub use vocal::{
-    derive_vocal, generate_lyrics, LyricLine, SyllableMode, VocalContour, VocalMood, VocalParams,
-    VocalPov, VocalRhymeScheme, VocalTimbre, VoiceType,
+    count_syllables, derive_vocal, derive_vocal_with_meter, derive_vocal_with_motif,
+    generate_lyrics, LyricLine, SyllableMode, VocalContour, VocalMood, VocalParams, VocalPov,
+    VocalRhymeScheme, VocalSinger, VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank,
+    VoiceType,
 };
 
 /// A chord positioned on the section's beat grid. Mirrors the app's

@@ -5,13 +5,15 @@
 
 use std::sync::OnceLock;
 
-use iced::widget::{button, column, container, pick_list, row, slider, text, text_input, Space};
+use iced::widget::{
+    button, column, container, pick_list, row, slider, text, text_editor, text_input, Space,
+};
 use iced::{alignment, Background, Border, Color, Element, Length};
 
 use resonance_audio::types::TrackId;
 use resonance_music_theory::{
-    SyllableMode, VocalContour, VocalMood, VocalParams, VocalPov, VocalRhymeScheme, VocalTimbre,
-    VoiceType,
+    SyllableMode, VocalContour, VocalMood, VocalParams, VocalPov, VocalRhymeScheme, VocalSinger,
+    VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank, VoiceType,
 };
 
 use crate::compose::messages::LaneInspectorMsg;
@@ -269,9 +271,10 @@ pub(super) fn vocal_controls<'a>(
     track_id: TrackId,
     params: &'a VocalParams,
     seed: u64,
+    bulk_content: Option<&'a text_editor::Content>,
 ) -> Element<'a, Message> {
     let lyrics_group = lyrics_group(definition_id, track_id, params);
-    let draft_group = draft_group(definition_id, track_id, params);
+    let draft_group = draft_group(definition_id, track_id, params, bulk_content);
     let melody_group = melody_group(definition_id, track_id, params);
     let voice_group = voice_group(definition_id, track_id, params);
     let generate_group = generate_group(definition_id, track_id, seed);
@@ -478,6 +481,7 @@ fn draft_group<'a>(
     definition_id: u64,
     track_id: TrackId,
     params: &'a VocalParams,
+    bulk_content: Option<&'a text_editor::Content>,
 ) -> Element<'a, Message> {
     let title_left = row![
         rail_dot_warm(),
@@ -496,6 +500,8 @@ fn draft_group<'a>(
     ]
     .align_y(alignment::Vertical::Center);
 
+    let bulk_block = bulk_lyrics_block(definition_id, track_id, params, bulk_content);
+
     let mut lines_col = column![].spacing(6);
     for line in &params.draft {
         lines_col = lines_col.push(lyric_line_row(definition_id, track_id, line));
@@ -508,14 +514,25 @@ fn draft_group<'a>(
             msg: LaneInspectorMsg::RerollUnlockedLyrics,
         },
     ));
+    let auto_syl = warm_chip_inactive("Auto-syllabify").on_press(Message::Compose(
+        ComposeMessage::LaneInspector {
+            definition_id,
+            track_id,
+            msg: LaneInspectorMsg::AutoSyllabifyLyrics,
+        },
+    ));
     let rhyme_assist = warm_chip_inactive("Rhyme assist");
     let edit = warm_chip_inactive("Edit");
 
-    let actions = row![reroll, rhyme_assist, edit].spacing(6);
+    let actions = row![reroll, auto_syl, rhyme_assist, edit].spacing(6);
 
     let body = column![
         title,
         Space::with_height(8),
+        bulk_block,
+        Space::with_height(10),
+        dim_label("Per-line preview"),
+        Space::with_height(4),
         lines_col,
         Space::with_height(8),
         actions,
@@ -523,6 +540,47 @@ fn draft_group<'a>(
     .spacing(0);
 
     group_card(body.into())
+}
+
+/// Multi-line text editor that lets the user type a whole section's
+/// lyrics at once. Each non-empty line in the buffer maps to one
+/// `LyricLine`; the per-line preview below stays in sync. The Content
+/// is materialised in the update layer the moment a vocal lane is
+/// selected, so by the time this view runs the `Some(_)` branch is
+/// taken. The `None` branch renders a quiet placeholder for the brief
+/// window before that materialisation completes.
+fn bulk_lyrics_block<'a>(
+    definition_id: u64,
+    track_id: TrackId,
+    params: &'a VocalParams,
+    bulk_content: Option<&'a text_editor::Content>,
+) -> Element<'a, Message> {
+    let height = Length::Fixed(((params.lines.max(4) as f32) * 22.0).min(220.0));
+    let editor: Element<'a, Message> = match bulk_content {
+        Some(content) => text_editor(content)
+            .placeholder("Type the section's lyrics — one line per lyric line…")
+            .on_action(move |action| {
+                Message::Compose(ComposeMessage::LaneInspector {
+                    definition_id,
+                    track_id,
+                    msg: LaneInspectorMsg::VocalBulkLyricsAction(action),
+                })
+            })
+            .padding(8)
+            .height(height)
+            .into(),
+        None => container(
+            text("Loading lyrics editor…")
+                .size(11)
+                .color(theme::TEXT_3),
+        )
+        .padding(8)
+        .height(height)
+        .width(Length::Fill)
+        .into(),
+    };
+
+    column![dim_label("All lyrics"), Space::with_height(4), editor].spacing(0).into()
 }
 
 fn lyric_line_row<'a>(
@@ -559,10 +617,17 @@ fn lyric_line_row<'a>(
         .font(theme::MONO_FONT)
         .color(theme::TEXT_4);
 
-    let lyric = text(line.text.clone())
+    let line_n_for_input = line.n;
+    let lyric = text_input("type a line…", &line.text)
+        .on_input(move |s| {
+            Message::Compose(ComposeMessage::LaneInspector {
+                definition_id,
+                track_id,
+                msg: LaneInspectorMsg::SetVocalLineText(line_n_for_input, s),
+            })
+        })
         .size(12)
-        .font(theme::SERIF_ITALIC_FONT)
-        .color(theme::TEXT_1)
+        .padding([4, 6])
         .width(Length::Fill);
 
     let lock_color = if line.locked { theme::WARM } else { theme::TEXT_4 };
@@ -665,6 +730,25 @@ fn melody_group<'a>(
     ]
     .spacing(0);
     let voice_range_row = row![voice_col, range_col].spacing(10);
+
+    // Style chips — picks the per-syllable generator dispatched in
+    // `derive_vocal`. Wraps to two lines automatically on narrow rails.
+    let style_chips: Vec<Element<'_, Message>> = VocalStyle::ALL
+        .iter()
+        .copied()
+        .map(|s| {
+            chip(
+                s.as_str(),
+                params.style == s,
+                Message::Compose(ComposeMessage::LaneInspector {
+                    definition_id,
+                    track_id,
+                    msg: LaneInspectorMsg::SetVocalStyle(s),
+                }),
+            )
+        })
+        .collect();
+    let style_row = iced::widget::Row::with_children(style_chips).spacing(4).wrap();
 
     // Contour chips
     let mut contour_row = row![].spacing(4);
@@ -769,11 +853,22 @@ fn melody_group<'a>(
         definition_id,
         track_id,
     );
+    let use_motif_toggle = toggle_row(
+        "Use section motif for pitches",
+        params.use_section_motif,
+        LaneInspectorMsg::ToggleVocalUseSectionMotif,
+        definition_id,
+        track_id,
+    );
 
     let body = column![
         title,
         Space::with_height(8),
         voice_range_row,
+        Space::with_height(8),
+        dim_label("Style"),
+        Space::with_height(2),
+        style_row,
         Space::with_height(8),
         dim_label("Phrase contour"),
         Space::with_height(2),
@@ -796,6 +891,8 @@ fn melody_group<'a>(
         stay_in_scale_toggle,
         Space::with_height(4),
         avoid_clash_toggle,
+        Space::with_height(4),
+        use_motif_toggle,
     ]
     .spacing(0);
 
@@ -826,6 +923,80 @@ fn voice_group<'a>(
         ));
     }
 
+    // Voicebank chips — picks the trained DiffSinger model that
+    // produces the singing audio. Each voicebank has its own character;
+    // singer chips below are scoped to the chosen voicebank.
+    let voicebank_chips: Vec<Element<'_, Message>> = VocalVoicebank::ALL
+        .iter()
+        .copied()
+        .map(|v| {
+            chip(
+                v.as_str(),
+                params.voicebank == v,
+                Message::Compose(ComposeMessage::LaneInspector {
+                    definition_id,
+                    track_id,
+                    msg: LaneInspectorMsg::SetVocalVoicebank(v),
+                }),
+            )
+        })
+        .collect();
+    let voicebank_row =
+        iced::widget::Row::with_children(voicebank_chips).spacing(4).wrap();
+
+    // Singer chips — only meaningful for multi-speaker voicebanks.
+    // TIGER ships 7 `tiger_*` speakers; Lilia is single-speaker so the
+    // chip row is hidden when Lilia is selected.
+    let singer_block: Option<Element<'_, Message>> = match params.voicebank {
+        VocalVoicebank::Tiger => {
+            let chips: Vec<Element<'_, Message>> = VocalSinger::ALL
+                .iter()
+                .copied()
+                .map(|s| {
+                    chip(
+                        s.as_str(),
+                        params.singer == s,
+                        Message::Compose(ComposeMessage::LaneInspector {
+                            definition_id,
+                            track_id,
+                            msg: LaneInspectorMsg::SetVocalSinger(s),
+                        }),
+                    )
+                })
+                .collect();
+            let row = iced::widget::Row::with_children(chips).spacing(4).wrap();
+            Some(
+                column![dim_label("Singer"), Space::with_height(2), row]
+                    .spacing(0)
+                    .into(),
+            )
+        }
+        VocalVoicebank::Lilia => None,
+        VocalVoicebank::Meiji => {
+            let chips: Vec<Element<'_, Message>> = VocalSingerMeiji::ALL
+                .iter()
+                .copied()
+                .map(|s| {
+                    chip(
+                        s.as_str(),
+                        params.singer_meiji == s,
+                        Message::Compose(ComposeMessage::LaneInspector {
+                            definition_id,
+                            track_id,
+                            msg: LaneInspectorMsg::SetVocalSingerMeiji(s),
+                        }),
+                    )
+                })
+                .collect();
+            let row = iced::widget::Row::with_children(chips).spacing(4).wrap();
+            Some(
+                column![dim_label("Mode"), Space::with_height(2), row]
+                    .spacing(0)
+                    .into(),
+            )
+        }
+    };
+
     let vibrato_label = dim_label(format!("Vibrato · {:.2}", params.vibrato));
     let vibrato_slider = slider(0.0..=1.0, params.vibrato, move |v| {
         Message::Compose(ComposeMessage::LaneInspector {
@@ -835,6 +1006,98 @@ fn voice_group<'a>(
         })
     })
     .step(0.01)
+    .width(Length::Fill);
+
+    let vibrato_rate_label = dim_label(format!("Vibrato rate · {:.1} Hz", params.vibrato_rate));
+    let vibrato_rate_slider = slider(4.0..=7.0, params.vibrato_rate, move |v| {
+        Message::Compose(ComposeMessage::LaneInspector {
+            definition_id,
+            track_id,
+            msg: LaneInspectorMsg::SetVocalVibratoRate(v),
+        })
+    })
+    .step(0.1)
+    .width(Length::Fill);
+
+    // Tension — only meaningful for voicebanks that accept the
+    // `tension` ONNX input (Lilia today; Meiji once it's added).
+    // The slider always renders for consistency; selecting TIGER just
+    // ignores the value.
+    let tension_label = dim_label(format!(
+        "Tension · {:+.2} ({})",
+        params.tension,
+        if params.tension < -0.05 {
+            "breathy"
+        } else if params.tension > 0.05 {
+            "belted"
+        } else {
+            "neutral"
+        }
+    ));
+    let tension_slider = slider(-1.0..=1.0, params.tension, move |v| {
+        Message::Compose(ComposeMessage::LaneInspector {
+            definition_id,
+            track_id,
+            msg: LaneInspectorMsg::SetVocalTension(v),
+        })
+    })
+    .step(0.05)
+    .width(Length::Fill);
+
+    // Per-syllable velocity → tension. 0 = constant tension; 1 =
+    // strong beats fully tensed.
+    let tension_vel_label = dim_label(format!(
+        "↳ velocity \u{2192} tension · {:.2}",
+        params.tension_velocity_amount
+    ));
+    let tension_vel_slider =
+        slider(0.0..=1.0, params.tension_velocity_amount, move |v| {
+            Message::Compose(ComposeMessage::LaneInspector {
+                definition_id,
+                track_id,
+                msg: LaneInspectorMsg::SetVocalTensionVelocityAmount(v),
+            })
+        })
+        .step(0.05)
+        .width(Length::Fill);
+
+    // Pitch contour → tension. 0 = constant; 1 = top of range belted.
+    let tension_contour_label = dim_label(format!(
+        "↳ contour \u{2192} tension · {:.2}",
+        params.tension_contour_amount
+    ));
+    let tension_contour_slider =
+        slider(0.0..=1.0, params.tension_contour_amount, move |v| {
+            Message::Compose(ComposeMessage::LaneInspector {
+                definition_id,
+                track_id,
+                msg: LaneInspectorMsg::SetVocalTensionContourAmount(v),
+            })
+        })
+        .step(0.05)
+        .width(Length::Fill);
+
+    // Portamento — pitch glide between adjacent notes, in
+    // milliseconds. 0 = hard step, 200 = strong scoop / slide.
+    let portamento_label = dim_label(format!(
+        "Portamento · {:.0} ms ({})",
+        params.portamento_ms,
+        if params.portamento_ms < 15.0 {
+            "snappy"
+        } else if params.portamento_ms > 80.0 {
+            "scoopy"
+        } else {
+            "natural"
+        }
+    ));
+    let portamento_slider = slider(0.0..=200.0, params.portamento_ms, move |v| {
+        Message::Compose(ComposeMessage::LaneInspector {
+            definition_id,
+            track_id,
+            msg: LaneInspectorMsg::SetVocalPortamentoMs(v),
+        })
+    })
+    .step(5.0)
     .width(Length::Fill);
 
     let articulation_label = dim_label(format!("Articulation · {:.2}", params.articulation));
@@ -862,40 +1125,71 @@ fn voice_group<'a>(
     .step(0.01)
     .width(Length::Fill);
 
+    // Slider math is `trim = 0.98 - 0.48 * articulation`, so low =
+    // notes fill the slot (legato) and high = notes are short with
+    // gaps (staccato). Labels reflect that direction.
     let stacc_legato_hint = row![
-        text("\u{00B7} staccato")
+        text("\u{00B7} legato")
             .size(9)
             .font(theme::SERIF_ITALIC_FONT)
             .color(theme::TEXT_4),
         Space::with_width(Length::Fill),
-        text("legato \u{00B7}")
+        text("staccato \u{00B7}")
             .size(9)
             .font(theme::SERIF_ITALIC_FONT)
             .color(theme::TEXT_4),
     ];
 
-    let body = column![
+    let mut body = column![
         title,
         Space::with_height(8),
         dim_label("Timbre"),
         Space::with_height(2),
         timbre_row,
         Space::with_height(8),
-        vibrato_label,
+        dim_label("Voicebank"),
         Space::with_height(2),
-        vibrato_slider,
-        Space::with_height(6),
-        articulation_label,
-        Space::with_height(2),
-        articulation_slider,
-        Space::with_height(2),
-        stacc_legato_hint,
-        Space::with_height(6),
-        consonant_label,
-        Space::with_height(2),
-        consonant_slider,
+        voicebank_row,
     ]
     .spacing(0);
+    if let Some(singer) = singer_block {
+        body = body.push(Space::with_height(8)).push(singer);
+    }
+    let body = body
+        .push(Space::with_height(8))
+        .push(vibrato_label)
+        .push(Space::with_height(2))
+        .push(vibrato_slider)
+        .push(Space::with_height(4))
+        .push(vibrato_rate_label)
+        .push(Space::with_height(2))
+        .push(vibrato_rate_slider)
+        .push(Space::with_height(6))
+        .push(tension_label)
+        .push(Space::with_height(2))
+        .push(tension_slider)
+        .push(Space::with_height(4))
+        .push(tension_vel_label)
+        .push(Space::with_height(2))
+        .push(tension_vel_slider)
+        .push(Space::with_height(4))
+        .push(tension_contour_label)
+        .push(Space::with_height(2))
+        .push(tension_contour_slider)
+        .push(Space::with_height(4))
+        .push(portamento_label)
+        .push(Space::with_height(2))
+        .push(portamento_slider)
+        .push(Space::with_height(6))
+        .push(articulation_label)
+        .push(Space::with_height(2))
+        .push(articulation_slider)
+        .push(Space::with_height(2))
+        .push(stacc_legato_hint)
+        .push(Space::with_height(6))
+        .push(consonant_label)
+        .push(Space::with_height(2))
+        .push(consonant_slider);
 
     group_card(body.into())
 }

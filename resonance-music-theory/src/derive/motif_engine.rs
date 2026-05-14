@@ -173,6 +173,34 @@ pub(super) fn plan_motif_transforms(
 }
 
 
+/// Extract the motif's signed semitone intervals (relative to its
+/// anchor pitch), skipping rests. Used by lanes that don't render the
+/// motif themselves but want to trace its melodic shape — e.g. the
+/// vocal generator's "use section motif" mode.
+///
+/// `Generated` motifs are built with `build_motif` using the same RNG
+/// flow as the melody renderer so the returned intervals match what
+/// the motif lanes produce. `Manual` motifs are read directly from the
+/// user-drawn cells via the existing scale-step mapping.
+pub fn motif_intervals(
+    source: &MotifSource,
+    anchor_chord: Chord,
+    scale: Option<Scale>,
+) -> Vec<i8> {
+    let notes = match source {
+        MotifSource::Generated(p) => {
+            let mut rng = XorShift::new(p.seed);
+            build_motif(&mut rng, anchor_chord, scale, p)
+        }
+        MotifSource::Manual { notes, .. } => manual_motif_to_motif_notes(notes, scale),
+    };
+    notes
+        .iter()
+        .filter(|n| !n.silent)
+        .map(|n| n.interval)
+        .collect()
+}
+
 /// Get the semitone intervals of a chord's pitch classes relative to
 /// the root (e.g. major = [0, 4, 7]).
 pub(super) fn chord_tone_intervals(chord: &Chord) -> Vec<i8> {

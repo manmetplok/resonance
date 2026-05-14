@@ -2,7 +2,8 @@
 
 use resonance_music_theory::{
     derive_vocal, generate_lyrics, Chord, ChordQuality, LyricLine, PitchClass, TimedChord,
-    VocalContour, VocalMood, VocalParams, VocalPov, VocalRhymeScheme, VocalTimbre, VoiceType,
+    VocalContour, VocalMood, VocalParams, VocalPov, VocalRhymeScheme, VocalSinger, VocalStyle,
+    VocalTimbre, VoiceType,
 };
 
 fn b_minor_chords() -> Vec<TimedChord> {
@@ -307,4 +308,341 @@ fn vocal_enum_variants_have_unique_string_labels() {
     let contours: std::collections::HashSet<_> =
         VocalContour::ALL.iter().map(|c| c.as_str()).collect();
     assert_eq!(contours.len(), VocalContour::ALL.len());
+
+    let styles: std::collections::HashSet<_> =
+        VocalStyle::ALL.iter().map(|s| s.as_str()).collect();
+    assert_eq!(styles.len(), VocalStyle::ALL.len());
+}
+
+// ===========================================================================
+// VocalStyle behavior — every style produces in-range, deterministic, one-
+// note-per-syllable output.
+// ===========================================================================
+
+fn syllable_count(text: &str) -> u32 {
+    let dots = text.matches('\u{00B7}').count() as u32;
+    let words = text.split_whitespace().count() as u32;
+    (dots + words).max(1)
+}
+
+#[test]
+fn every_vocal_style_produces_one_note_per_syllable() {
+    let mut p = VocalParams::default();
+    p.draft = generate_lyrics(&p, 0xABCD);
+    let total_syl: u32 = p.draft.iter().map(|l| syllable_count(&l.text)).sum();
+
+    for style in VocalStyle::ALL.iter().copied() {
+        let mut q = p.clone();
+        q.style = style;
+        let notes = derive_vocal(&b_minor_chords(), &q, 480, 0xABCD);
+        assert_eq!(
+            notes.len(),
+            total_syl as usize,
+            "{style} produced wrong note count: {} vs {} syllables",
+            notes.len(),
+            total_syl,
+        );
+    }
+}
+
+#[test]
+fn every_vocal_style_stays_in_range() {
+    let mut p = VocalParams::default();
+    p.draft = generate_lyrics(&p, 0x9999);
+    let (lo, hi) = p.range;
+
+    for style in VocalStyle::ALL.iter().copied() {
+        let mut q = p.clone();
+        q.style = style;
+        let notes = derive_vocal(&b_minor_chords(), &q, 480, 0x9999);
+        for n in &notes {
+            assert!(
+                n.note >= lo && n.note <= hi,
+                "{style} produced note {} outside [{}, {}]",
+                n.note,
+                lo,
+                hi,
+            );
+        }
+    }
+}
+
+#[test]
+fn no_vocal_style_produces_overlapping_notes() {
+    // Each input syllable maps to exactly one note in the SVS
+    // pipeline, so notes must not overlap — overlapping notes mean
+    // two syllables claim the same time window and the second's
+    // pitch fights the first's tail in the rendered audio. Was a
+    // real bug after phrase_start_offset was added (negative pickup
+    // shifted line N+1 to start before line N's terminal sustain
+    // ended).
+    let mut p = VocalParams::default();
+    p.draft = generate_lyrics(&p, 0xBA15ED);
+    for style in VocalStyle::ALL.iter().copied() {
+        let mut q = p.clone();
+        q.style = style;
+        // Multiple seeds to exercise the phrase_start_offset RNG path.
+        for seed in [0xC0FFEE_u64, 0xDEADBEEF, 0xFA11_FA11, 1, 2, 3, 999] {
+            let notes = derive_vocal(&b_minor_chords(), &q, 480, seed);
+            for w in notes.windows(2) {
+                let prev_end = w[0].start_tick + w[0].duration_ticks;
+                assert!(
+                    prev_end <= w[1].start_tick,
+                    "{style} seed={seed:#x}: note at {} ends at {} but next note starts at {}",
+                    w[0].start_tick,
+                    prev_end,
+                    w[1].start_tick,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn every_vocal_style_is_deterministic() {
+    let mut p = VocalParams::default();
+    p.draft = generate_lyrics(&p, 17);
+
+    for style in VocalStyle::ALL.iter().copied() {
+        let mut q = p.clone();
+        q.style = style;
+        let a = derive_vocal(&b_minor_chords(), &q, 480, 17);
+        let b = derive_vocal(&b_minor_chords(), &q, 480, 17);
+        assert_eq!(a.len(), b.len(), "{style} length differs across runs");
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.note, y.note, "{style} pitch differs");
+            assert_eq!(x.start_tick, y.start_tick, "{style} timing differs");
+        }
+    }
+}
+
+#[test]
+fn vocal_styles_produce_distinct_pitch_sequences() {
+    // Different styles should pick different notes most of the time —
+    // this catches regressions where a style accidentally falls back to
+    // PopBallad's behavior.
+    let mut p = VocalParams::default();
+    p.draft = generate_lyrics(&p, 0x7777);
+
+    let mut runs: Vec<(VocalStyle, Vec<u8>)> = Vec::new();
+    for style in VocalStyle::ALL.iter().copied() {
+        let mut q = p.clone();
+        q.style = style;
+        let notes = derive_vocal(&b_minor_chords(), &q, 480, 0x7777);
+        runs.push((style, notes.iter().map(|n| n.note).collect()));
+    }
+    // Compare every pair — at least 80% of pairs should differ. Some
+    // accidental similarity is OK (e.g. Hymnal and Conversational both
+    // hover around the speaking pitch) but most pairs should diverge.
+    let mut differ = 0usize;
+    let mut total = 0usize;
+    for i in 0..runs.len() {
+        for j in (i + 1)..runs.len() {
+            total += 1;
+            if runs[i].1 != runs[j].1 {
+                differ += 1;
+            }
+        }
+    }
+    assert!(
+        differ as f32 / total as f32 >= 0.8,
+        "expected ≥80% of style pairs to produce distinct sequences, got {}/{}",
+        differ,
+        total,
+    );
+}
+
+#[test]
+fn chant_style_uses_a_narrow_pitch_band() {
+    // Chant should anchor on a single speaking pitch with at most a
+    // ~5-semitone spread.
+    let mut p = VocalParams::default();
+    p.style = VocalStyle::Chant;
+    p.draft = generate_lyrics(&p, 33);
+    let notes = derive_vocal(&b_minor_chords(), &p, 480, 33);
+    assert!(!notes.is_empty());
+    let min = notes.iter().map(|n| n.note).min().unwrap();
+    let max = notes.iter().map(|n| n.note).max().unwrap();
+    assert!(
+        max as i16 - min as i16 <= 6,
+        "Chant should sit in a ≤6-semitone band, got [{}, {}] (spread {})",
+        min,
+        max,
+        max as i16 - min as i16,
+    );
+}
+
+#[test]
+fn hymnal_style_uses_only_small_intervals() {
+    // Hymnal walks stepwise — adjacent intervals should not exceed a
+    // major third (4 semitones). The cap_interval helper tightens this
+    // further in practice, but a major third is a comfortable upper
+    // bound that catches any regression where Hymnal accidentally leaps.
+    let mut p = VocalParams::default();
+    p.style = VocalStyle::Hymnal;
+    p.draft = generate_lyrics(&p, 55);
+    let notes = derive_vocal(&b_minor_chords(), &p, 480, 55);
+    assert!(notes.len() >= 2);
+    for w in notes.windows(2) {
+        let interval = (w[1].note as i16 - w[0].note as i16).abs();
+        assert!(
+            interval <= 4,
+            "Hymnal step exceeded a major third: {} -> {} (Δ {})",
+            w[0].note,
+            w[1].note,
+            interval,
+        );
+    }
+}
+
+#[test]
+fn anthemic_style_uses_a_wider_range_than_chant() {
+    // Sanity check: Anthemic should cover more of the available range
+    // than Chant on the same lyrics + chords + seed.
+    let mut base = VocalParams::default();
+    base.draft = generate_lyrics(&base, 81);
+
+    let mut anth = base.clone();
+    anth.style = VocalStyle::Anthemic;
+    let n_anth = derive_vocal(&b_minor_chords(), &anth, 480, 81);
+    let spread_anth = n_anth.iter().map(|n| n.note).max().unwrap()
+        - n_anth.iter().map(|n| n.note).min().unwrap();
+
+    let mut chant = base.clone();
+    chant.style = VocalStyle::Chant;
+    let n_chant = derive_vocal(&b_minor_chords(), &chant, 480, 81);
+    let spread_chant = n_chant.iter().map(|n| n.note).max().unwrap()
+        - n_chant.iter().map(|n| n.note).min().unwrap();
+
+    assert!(
+        spread_anth > spread_chant,
+        "Anthemic spread ({}) should exceed Chant spread ({})",
+        spread_anth,
+        spread_chant,
+    );
+}
+
+#[test]
+fn vocal_style_round_trips_through_serde() {
+    let mut p = VocalParams::default();
+    p.style = VocalStyle::Folk;
+    let json = serde_json::to_string(&p).expect("serialize");
+    let back: VocalParams = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back.style, VocalStyle::Folk);
+}
+
+#[test]
+fn vocal_singer_defaults_match_voice_type() {
+    // The Default impl wires `singer = voice.default_singer()`. Spot-
+    // check a couple of voice types so a regression in the mapping
+    // (e.g. swapping Soprano and Bass) trips the test.
+    let mut p = VocalParams::default();
+    assert_eq!(p.voice, VoiceType::Alto);
+    assert_eq!(p.singer, VocalSinger::Disco);
+
+    p.voice = VoiceType::Soprano;
+    let p2 = VocalParams {
+        voice: VoiceType::Soprano,
+        singer: VoiceType::Soprano.default_singer(),
+        ..VocalParams::default()
+    };
+    assert_eq!(p2.singer, VocalSinger::Glam);
+}
+
+#[test]
+fn vocal_singer_speaker_ids_are_unique_and_tiger_prefixed() {
+    let ids: std::collections::HashSet<&str> =
+        VocalSinger::ALL.iter().map(|s| s.speaker_id()).collect();
+    assert_eq!(ids.len(), VocalSinger::ALL.len(), "duplicate speaker_id");
+    for id in ids {
+        assert!(
+            id.starts_with("tiger_"),
+            "speaker_id `{}` should start with tiger_",
+            id
+        );
+    }
+}
+
+#[test]
+fn vibrato_rate_and_singer_round_trip_through_serde() {
+    let mut p = VocalParams::default();
+    p.vibrato_rate = 6.5;
+    p.singer = VocalSinger::Vinyl;
+    let json = serde_json::to_string(&p).expect("serialize");
+    let back: VocalParams = serde_json::from_str(&json).expect("deserialize");
+    assert!((back.vibrato_rate - 6.5).abs() < 0.001);
+    assert_eq!(back.singer, VocalSinger::Vinyl);
+}
+
+#[test]
+fn vibrato_rate_and_singer_default_when_missing_from_json() {
+    // Older saved projects don't carry vibrato_rate or singer; the
+    // `#[serde(default = …)]` attributes should fill them in.
+    let json = r#"{
+        "theme": "test",
+        "mood": "Yearning",
+        "pov": "FirstSingular",
+        "rhyme": "Abab",
+        "lines": 4,
+        "syllables_min": 7,
+        "syllables_max": 11,
+        "match_syllables_to_melody": true,
+        "avoid_cliches": true,
+        "draft": [],
+        "voice": "Alto",
+        "range": [55, 77],
+        "contour": "Arch",
+        "syllable_mode": "Syllabic",
+        "chord_tone_anchor": 0.65,
+        "leap_range": 0.15,
+        "phrase_length_bars": 2,
+        "breath": 0.45,
+        "stay_in_scale": true,
+        "avoid_clashes": true,
+        "timbre": "Warm",
+        "vibrato": 0.30,
+        "articulation": 0.65,
+        "consonant_emphasis": 0.40
+    }"#;
+    let p: VocalParams = serde_json::from_str(json).expect("deserialize legacy");
+    // Vibrato rate falls back to the historic 5 Hz constant.
+    assert!((p.vibrato_rate - 5.0).abs() < 0.001);
+    // Singer falls back to Alto's default singer (Disco) — *not* the
+    // file's own voice type, since we can't inspect the deserialized
+    // voice from inside a `#[serde(default)]` callback.
+    assert_eq!(p.singer, VocalSinger::Disco);
+}
+
+#[test]
+fn vocal_style_defaults_to_pop_ballad_when_missing() {
+    // Older saved projects don't have a `style` field; the
+    // `#[serde(default)]` attribute should fill it in with PopBallad.
+    let json = r#"{
+        "theme": "test",
+        "mood": "Yearning",
+        "pov": "FirstSingular",
+        "rhyme": "Abab",
+        "lines": 4,
+        "syllables_min": 7,
+        "syllables_max": 11,
+        "match_syllables_to_melody": true,
+        "avoid_cliches": true,
+        "draft": [],
+        "voice": "Alto",
+        "range": [55, 77],
+        "contour": "Arch",
+        "syllable_mode": "Syllabic",
+        "chord_tone_anchor": 0.65,
+        "leap_range": 0.15,
+        "phrase_length_bars": 2,
+        "breath": 0.45,
+        "stay_in_scale": true,
+        "avoid_clashes": true,
+        "timbre": "Warm",
+        "vibrato": 0.30,
+        "articulation": 0.65,
+        "consonant_emphasis": 0.40
+    }"#;
+    let p: VocalParams = serde_json::from_str(json).expect("deserialize legacy");
+    assert_eq!(p.style, VocalStyle::PopBallad);
 }

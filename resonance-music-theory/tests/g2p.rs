@@ -3,7 +3,10 @@
 //! pronunciations, and the multi-syllable word splitter produces
 //! sensible per-note chunks.
 
-use resonance_music_theory::g2p::{is_consonant, phonemes_for_draft, CONSONANTS};
+use resonance_music_theory::g2p::{
+    auto_syllabify_text, cmu_syllable_count, cmu_variant_count, is_consonant, phonemes_for_draft,
+    syllabify_word, CONSONANTS,
+};
 use resonance_music_theory::LyricLine;
 
 fn line(text: &str) -> LyricLine {
@@ -47,11 +50,14 @@ fn cmu_lookup_known_words() {
     // pronunciations come out exactly as CMU specifies (stress
     // numbers dropped).
     let cases = [
-        ("the", vec!["dh", "ah"]),
+        // `the` ends in CMU's AH0 (unstressed) — emitted as the
+        // schwa `ax`, the natural pronunciation of function words.
+        ("the", vec!["dh", "ax"]),
         ("they", vec!["dh", "ey"]),
         ("break", vec!["b", "r", "ey", "k"]),
         ("glass", vec!["g", "l", "ae", "s"]),
-        ("houses", vec!["hh", "aw", "s", "ah", "z"]),
+        // `houses` second syllable is also AH0 → ax.
+        ("houses", vec!["hh", "aw", "s", "ax", "z"]),
     ];
     for (word, expected) in cases {
         let got = phonemes_for_draft(&[line(word)]);
@@ -105,6 +111,174 @@ fn fallback_for_unknown_words_still_emits_vowel() {
 fn empty_lyrics_produces_no_chunks() {
     let chunks = phonemes_for_draft(&[line("")]);
     assert!(chunks.is_empty());
+}
+
+#[test]
+fn cmu_syllable_count_matches_vowel_phonemes() {
+    // Single-vowel words.
+    assert_eq!(cmu_syllable_count("the"), 1);
+    assert_eq!(cmu_syllable_count("break"), 1);
+    assert_eq!(cmu_syllable_count("glass"), 1);
+    // Two vowels in CMU.
+    assert_eq!(cmu_syllable_count("morning"), 2);
+    assert_eq!(cmu_syllable_count("houses"), 2);
+    // Three vowels.
+    assert_eq!(cmu_syllable_count("remember"), 3);
+    assert_eq!(cmu_syllable_count("library"), 3);
+    assert_eq!(cmu_syllable_count("everything"), 3);
+    // Empty / weird input always returns at least 1.
+    assert_eq!(cmu_syllable_count(""), 1);
+    assert_eq!(cmu_syllable_count("..."), 1);
+}
+
+#[test]
+fn syllabify_word_inserts_correct_dot_count() {
+    // No-op when target ≤ existing.
+    assert_eq!(syllabify_word("the", 1), "the");
+    assert_eq!(syllabify_word("hou\u{00B7}ses", 2), "hou\u{00B7}ses");
+    // Inserts up to the target.
+    let out = syllabify_word("morning", 2);
+    assert_eq!(out.matches('\u{00B7}').count(), 1);
+    let out = syllabify_word("library", 3);
+    assert_eq!(out.matches('\u{00B7}').count(), 2);
+    let out = syllabify_word("everything", 3);
+    assert_eq!(out.matches('\u{00B7}').count(), 2);
+}
+
+#[test]
+fn syllabify_word_preserves_existing_dots() {
+    // User-added extra dots (intentional melisma) stay.
+    assert_eq!(syllabify_word("ah\u{00B7}ah\u{00B7}ah", 2), "ah\u{00B7}ah\u{00B7}ah");
+}
+
+#[test]
+fn auto_syllabify_text_fixes_under_dotted_words() {
+    let out = auto_syllabify_text("everything is morning");
+    // `everything` (3 CMU syl) and `morning` (2 syl) get dots; `is` (1 syl) doesn't.
+    assert!(
+        out.matches('\u{00B7}').count() >= 3,
+        "expected ≥3 dots, got {:?}",
+        out
+    );
+}
+
+#[test]
+fn auto_syllabify_text_keeps_punctuation() {
+    // Punctuation around a word should survive the round-trip.
+    let out = auto_syllabify_text("hello, library!");
+    assert!(out.contains(','), "comma lost in {:?}", out);
+    assert!(out.ends_with("!"), "trailing `!` lost in {:?}", out);
+    // hello = 2 syl, library = 3 syl → at least 3 dots total.
+    assert!(
+        out.matches('\u{00B7}').count() >= 3,
+        "expected ≥3 dots, got {:?}",
+        out
+    );
+}
+
+#[test]
+fn inline_phoneme_block_overrides_cmu() {
+    // `[hh ah l ow]` should override CMU's "hello" pronunciation
+    // and emit exactly those phonemes as one syllable.
+    let chunks = phonemes_for_draft(&[line("[hh ah l ow]")]);
+    assert_eq!(chunks, vec![vec!["hh", "ah", "l", "ow"]]);
+}
+
+#[test]
+fn inline_phoneme_block_with_inner_syllable_marks() {
+    // `·` inside the bracket splits the override into multiple syllables.
+    let chunks = phonemes_for_draft(&[line("[l ih \u{00B7} l iy \u{00B7} ah]")]);
+    assert_eq!(
+        chunks,
+        vec![
+            vec!["l", "ih"],
+            vec!["l", "iy"],
+            vec!["ah"],
+        ]
+    );
+}
+
+#[test]
+fn inline_phoneme_block_mixed_with_cmu_words() {
+    // Override a single tricky word inline; surrounding CMU words still work.
+    let chunks = phonemes_for_draft(&[line("the [jh oh r ih t] sings")]);
+    let flat: Vec<&str> = chunks.into_iter().flatten().collect();
+    // "the" → dh ax (schwa); override → jh + r + ih + t (the bogus
+    // "oh" is dropped as not-a-symbol); "sings" → s ih ng z.
+    assert!(flat.starts_with(&["dh", "ax"]));
+    assert!(flat.ends_with(&["s", "ih", "ng", "z"]));
+    // Override survives at least the valid symbols (`jh`, `r`, `ih`, `t`).
+    assert!(flat.contains(&"jh"));
+}
+
+#[test]
+fn inline_phoneme_block_drops_unknown_symbols() {
+    // Typo / unknown phoneme is silently dropped, no panic.
+    let chunks = phonemes_for_draft(&[line("[hh aaa l ow]")]);
+    // "aaa" isn't valid ARPAbet; expect `hh, l, ow` (vowel-injected
+    // before the last consonant by `ensure_vowel`? — no, ensure_vowel
+    // only runs for word_to_phonemes; bracket path uses raw output).
+    // Acceptable behaviour: drop the unknown, keep the rest.
+    let flat: Vec<&str> = chunks.into_iter().flatten().collect();
+    assert!(flat.contains(&"hh"));
+    assert!(flat.contains(&"ow"));
+    assert!(!flat.contains(&"aaa"));
+}
+
+#[test]
+fn unclosed_bracket_falls_through_to_word() {
+    // `[bogus` without a closing `]` shouldn't crash; the leftover
+    // text is just dropped (it doesn't match any word pattern).
+    let chunks = phonemes_for_draft(&[line("the [bogus phoneme stream")]);
+    let flat: Vec<&str> = chunks.into_iter().flatten().collect();
+    // We still get "the" and the trailing words, just no bracket-parsed
+    // phoneme block. No panic is the main success condition.
+    assert!(flat.contains(&"dh"));
+}
+
+#[test]
+fn cmu_variant_count_reports_available_alternates() {
+    // CMU has multiple pronunciations for these.
+    assert!(cmu_variant_count("read") >= 2, "read should have ≥2 variants");
+    assert!(cmu_variant_count("live") >= 2, "live should have ≥2 variants");
+    // OOV word always reports 1.
+    assert_eq!(cmu_variant_count("xyzzy"), 1);
+    // Some single-syllable words also have multiple weak/strong reductions
+    // in CMU (e.g. `the` lists `dh ah` and `dh iy`); just verify ≥ 1.
+    assert!(cmu_variant_count("the") >= 1);
+}
+
+#[test]
+fn multi_pronunciation_hint_picks_alternate() {
+    // `live` defaults to /laɪv/ (adjective). `live(2)` should pick a
+    // different variant — the verb /lɪv/ — which CMU encodes
+    // separately.
+    let default = phonemes_for_draft(&[line("live")]);
+    let alternate = phonemes_for_draft(&[line("live(2)")]);
+    assert_ne!(
+        default, alternate,
+        "live(2) should produce a different phoneme stream than `live`"
+    );
+}
+
+#[test]
+fn multi_pronunciation_out_of_range_clamps() {
+    // `the(99)` clamps to the last available variant (no panic).
+    let chunks = phonemes_for_draft(&[line("the(99)")]);
+    assert!(!chunks.is_empty());
+    assert!(chunks[0].iter().any(|p| !is_consonant(p)));
+}
+
+#[test]
+fn variant_hint_does_not_eat_punctuation_only_paren() {
+    // `morning(` (no closing paren) should not be treated as a hint —
+    // it's just a malformed word with a stray `(`.
+    let chunks = phonemes_for_draft(&[line("morning(")]);
+    let flat: Vec<&str> = chunks.into_iter().flatten().collect();
+    // We still get morning's phonemes (`m ao r n ih ng`); the trailing
+    // `(` is stripped as punctuation.
+    assert!(flat.contains(&"m"));
+    assert!(flat.contains(&"ng"));
 }
 
 #[test]

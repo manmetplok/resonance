@@ -244,8 +244,43 @@ pub(super) fn handle(
                 }
             });
         }
+        LaneInspectorMsg::SetVocalLineText(n, text) => {
+            update_vocal(r, definition_id, track_id, |p| {
+                if let Some(line) = p.draft.iter_mut().find(|l| l.n == n) {
+                    line.text = text;
+                    line.syllables =
+                        resonance_music_theory::count_syllables(&line.text).min(255) as u8;
+                    // Edited lines are implicitly the user's authored version,
+                    // so lock them to keep re-roll from clobbering the text.
+                    line.locked = true;
+                }
+            });
+            sync_bulk_lyrics_from_draft(r, definition_id, track_id);
+        }
+        LaneInspectorMsg::VocalBulkLyricsAction(action) => {
+            handle_bulk_lyrics_action(r, definition_id, track_id, action);
+        }
         LaneInspectorMsg::RerollUnlockedLyrics => {
             roll_vocal_lyrics(r, definition_id, track_id, 0x9E3779B97F4A7C15);
+            sync_bulk_lyrics_from_draft(r, definition_id, track_id);
+        }
+        LaneInspectorMsg::AutoSyllabifyLyrics => {
+            update_vocal(r, definition_id, track_id, |p| {
+                for line in p.draft.iter_mut() {
+                    let new_text =
+                        resonance_music_theory::g2p::auto_syllabify_text(&line.text);
+                    if new_text != line.text {
+                        // Refresh the corpus-stored syllable count to
+                        // match the dotted text so downstream consumers
+                        // (note allocator, SVS pipeline) see the
+                        // higher syllable count too.
+                        line.syllables = resonance_music_theory::count_syllables(&new_text)
+                            .min(255) as u8;
+                        line.text = new_text;
+                    }
+                }
+            });
+            sync_bulk_lyrics_from_draft(r, definition_id, track_id);
         }
 
         // ------------------------------------------------------------------
@@ -266,6 +301,9 @@ pub(super) fn handle(
             update_vocal(r, definition_id, track_id, |p| {
                 p.range.1 = n.max(p.range.0);
             });
+        }
+        LaneInspectorMsg::SetVocalStyle(s) => {
+            update_vocal(r, definition_id, track_id, |p| p.style = s);
         }
         LaneInspectorMsg::SetVocalContour(c) => {
             update_vocal(r, definition_id, track_id, |p| p.contour = c);
@@ -303,6 +341,11 @@ pub(super) fn handle(
                 p.avoid_clashes = !p.avoid_clashes;
             });
         }
+        LaneInspectorMsg::ToggleVocalUseSectionMotif => {
+            update_vocal(r, definition_id, track_id, |p| {
+                p.use_section_motif = !p.use_section_motif;
+            });
+        }
 
         // ------------------------------------------------------------------
         // Vocal voice & delivery
@@ -310,9 +353,43 @@ pub(super) fn handle(
         LaneInspectorMsg::SetVocalTimbre(t) => {
             update_vocal(r, definition_id, track_id, |p| p.timbre = t);
         }
+        LaneInspectorMsg::SetVocalVoicebank(v) => {
+            update_vocal(r, definition_id, track_id, |p| p.voicebank = v);
+        }
+        LaneInspectorMsg::SetVocalSinger(s) => {
+            update_vocal(r, definition_id, track_id, |p| p.singer = s);
+        }
+        LaneInspectorMsg::SetVocalSingerMeiji(s) => {
+            update_vocal(r, definition_id, track_id, |p| p.singer_meiji = s);
+        }
         LaneInspectorMsg::SetVocalVibrato(v) => {
             update_vocal(r, definition_id, track_id, |p| {
                 p.vibrato = v.clamp(0.0, 1.0);
+            });
+        }
+        LaneInspectorMsg::SetVocalVibratoRate(v) => {
+            update_vocal(r, definition_id, track_id, |p| {
+                p.vibrato_rate = v.clamp(2.0, 10.0);
+            });
+        }
+        LaneInspectorMsg::SetVocalTension(v) => {
+            update_vocal(r, definition_id, track_id, |p| {
+                p.tension = v.clamp(-1.0, 1.0);
+            });
+        }
+        LaneInspectorMsg::SetVocalTensionVelocityAmount(v) => {
+            update_vocal(r, definition_id, track_id, |p| {
+                p.tension_velocity_amount = v.clamp(0.0, 1.0);
+            });
+        }
+        LaneInspectorMsg::SetVocalTensionContourAmount(v) => {
+            update_vocal(r, definition_id, track_id, |p| {
+                p.tension_contour_amount = v.clamp(0.0, 1.0);
+            });
+        }
+        LaneInspectorMsg::SetVocalPortamentoMs(v) => {
+            update_vocal(r, definition_id, track_id, |p| {
+                p.portamento_ms = v.clamp(0.0, 250.0);
             });
         }
         LaneInspectorMsg::SetVocalArticulation(v) => {
@@ -331,6 +408,7 @@ pub(super) fn handle(
         // ------------------------------------------------------------------
         LaneInspectorMsg::GenerateVocalLyricsOnly => {
             roll_vocal_lyrics(r, definition_id, track_id, 0xBF58476D1CE4E5B9);
+            sync_bulk_lyrics_from_draft(r, definition_id, track_id);
         }
         LaneInspectorMsg::GenerateVocalMelodyOnly => {
             bump_lane_seed(r, definition_id, track_id, 0x94D049BB133111EB);
@@ -338,6 +416,7 @@ pub(super) fn handle(
         }
         LaneInspectorMsg::GenerateVocalAll => {
             roll_vocal_lyrics(r, definition_id, track_id, 0xBF58476D1CE4E5B9);
+            sync_bulk_lyrics_from_draft(r, definition_id, track_id);
             bump_lane_seed(r, definition_id, track_id, 0xBF58476D1CE4E5B9);
             return roll_vocal_melody(r, definition_id, track_id);
         }
@@ -503,10 +582,30 @@ pub(super) fn roll_vocal_melody(
     }
 
     let timed = crate::compose::generate::to_timed_chords(&def.chords);
-    let notes = resonance_music_theory::derive_vocal(
+    // TODO(meter-changes): the global signature track can change mid
+    // section; for now we pass the transport's prevailing numerator
+    // and accept that a 4/4 → 6/8 mid-section won't shift accents
+    // exactly at the change. Plumb the full SignatureEvent slice
+    // through derive_vocal_with_meter when this matters.
+    let beats_per_bar = r.transport.time_sig_num.max(1) as u32;
+    // Section's shared motif intervals — only consulted when the user
+    // toggled `use_section_motif` on; cheap to compute either way.
+    let motif_intervals: Vec<i8> = timed
+        .first()
+        .map(|first| {
+            resonance_music_theory::motif_intervals(
+                &def.motif_source,
+                first.chord,
+                def.scale,
+            )
+        })
+        .unwrap_or_default();
+    let notes = resonance_music_theory::derive_vocal_with_motif(
         &timed,
         &params,
         TICKS_PER_QUARTER_NOTE as u32,
+        beats_per_bar,
+        Some(&motif_intervals),
         cfg.seed,
     );
     if notes.is_empty() {
@@ -805,6 +904,145 @@ fn render_vocal_wav(
     vocal_svs::write_stereo_wav(&path, &rendered.samples_stereo, rendered.sample_rate)
         .map_err(|e| format!("write WAV {}: {e}", path.display()))?;
     Ok(Some((path, rendered.trim_start_frames, rendered.trim_end_frames)))
+}
+
+/// Rebuild the bulk-lyrics text editor `Content` from the lane's current
+/// `params.draft`. Called after any path that mutates the draft outside
+/// the bulk editor (per-line edits, re-rolls, generate actions) so the
+/// two views stay in sync. Only touches lanes that already have an editor
+/// allocated — first-use materialisation happens lazily in the view.
+fn sync_bulk_lyrics_from_draft(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+) {
+    let Some(def) = r.compose.find_definition(definition_id) else {
+        return;
+    };
+    let Some(cfg) = def.lane_generators.get(&track_id) else {
+        return;
+    };
+    let LaneGeneratorKind::Vocal(params) = &cfg.kind else {
+        return;
+    };
+    let key = (definition_id, track_id);
+    if !r.compose.vocal_bulk_lyrics.contains_key(&key) {
+        return;
+    }
+    let body = draft_to_text(&params.draft);
+    r.compose
+        .vocal_bulk_lyrics
+        .insert(key, iced::widget::text_editor::Content::with_text(&body));
+}
+
+/// Render the draft as a `\n`-joined plain-text body for the bulk editor.
+/// Strips the typographic syllable-separator (`·`) so users see clean
+/// prose; per-line entries can still hold the separator since we only
+/// re-derive on bulk-side edits.
+fn draft_to_text(draft: &[resonance_music_theory::LyricLine]) -> String {
+    draft
+        .iter()
+        .map(|l| l.text.replace('\u{00B7}', "").replace("  ", " "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Apply an action from the bulk-lyrics text editor. Inserts the lane's
+/// `Content` lazily on first use (seeded from the current draft), perfoms
+/// the action, and — when the action is an edit — re-parses the buffer
+/// into individual `LyricLine`s. Each non-empty line becomes one entry,
+/// auto-locked so the next re-roll preserves it.
+fn handle_bulk_lyrics_action(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    action: iced::widget::text_editor::Action,
+) {
+    let key = (definition_id, track_id);
+
+    // Materialise the editor's `Content` on first use, seeded from the
+    // current draft so the user sees their existing lines.
+    if !r.compose.vocal_bulk_lyrics.contains_key(&key) {
+        let initial = r
+            .compose
+            .find_definition(definition_id)
+            .and_then(|d| d.lane_generators.get(&track_id))
+            .and_then(|cfg| match &cfg.kind {
+                LaneGeneratorKind::Vocal(p) => Some(draft_to_text(&p.draft)),
+                _ => None,
+            })
+            .unwrap_or_default();
+        r.compose.vocal_bulk_lyrics.insert(
+            key,
+            iced::widget::text_editor::Content::with_text(&initial),
+        );
+    }
+
+    let is_edit = action.is_edit();
+    if let Some(content) = r.compose.vocal_bulk_lyrics.get_mut(&key) {
+        content.perform(action);
+    }
+
+    if !is_edit {
+        return;
+    }
+
+    // Snapshot the buffer text and rebuild the draft.
+    let body = r
+        .compose
+        .vocal_bulk_lyrics
+        .get(&key)
+        .map(|c| c.text())
+        .unwrap_or_default();
+    update_vocal(r, definition_id, track_id, |p| {
+        rebuild_draft_from_bulk(p, &body);
+    });
+}
+
+/// Parse the bulk editor's text and rewrite `params.draft`. One non-empty
+/// line per `LyricLine`; rhyme tags follow the lane's current rhyme
+/// scheme so the per-line preview's colour chips stay coherent. Empty
+/// trailing lines are stripped, blank lines in the middle are skipped.
+/// `params.lines` is bumped to match so re-rolls operate on the same
+/// shape.
+fn rebuild_draft_from_bulk(p: &mut VocalParams, body: &str) {
+    use resonance_music_theory::LyricLine;
+
+    let pattern: &[u8] = match p.rhyme {
+        resonance_music_theory::VocalRhymeScheme::Aabb => &[0, 0, 1, 1],
+        resonance_music_theory::VocalRhymeScheme::Abab => &[0, 1, 0, 1],
+        resonance_music_theory::VocalRhymeScheme::Abcb => &[0, 1, 2, 1],
+        resonance_music_theory::VocalRhymeScheme::Abba => &[0, 1, 1, 0],
+        resonance_music_theory::VocalRhymeScheme::Free => &[],
+    };
+    let letter_for = |slot: u8| -> char { (b'A' + (slot % 26)) as char };
+
+    let lines: Vec<&str> = body
+        .lines()
+        .map(|l| l.trim_end_matches('\r').trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    let mut out = Vec::with_capacity(lines.len());
+    for (i, text) in lines.iter().enumerate() {
+        let rhyme = if pattern.is_empty() {
+            'F'
+        } else {
+            letter_for(pattern[i % pattern.len()])
+        };
+        out.push(LyricLine {
+            n: (i + 1) as u8,
+            rhyme,
+            syllables: resonance_music_theory::count_syllables(text).min(255) as u8,
+            text: text.to_string(),
+            locked: true,
+        });
+    }
+
+    if !out.is_empty() {
+        p.lines = (out.len() as u8).clamp(1, 16);
+    }
+    p.draft = out;
 }
 
 /// Mutate a specific drum voice's mode in-place.
