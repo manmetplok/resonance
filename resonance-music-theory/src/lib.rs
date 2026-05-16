@@ -13,12 +13,14 @@ pub use chord::{Chord, ChordQuality};
 pub use derive::{
     count_syllables, derive_bass, derive_bass_motif, derive_melody,
     derive_motif_melody_with_section, derive_motif_rhythm, derive_pad, derive_vocal,
-    derive_vocal_with_meter, derive_vocal_with_motif,
-    generate_lyrics, motif_intervals, toggle_manual_motif_cell, BassMotifMode, BassMotifPhrase,
+    derive_melody_fill_vocal, derive_vocal_with_meter, derive_vocal_with_motif,
+    generate_lyrics, motif_intervals, toggle_manual_motif_cell, vocal_phrase_spans,
+    BassMotifMode, BassMotifPhrase,
     BassParams, BassStyle, ContourPreference, GeneratedNote, LyricLine, ManualMotifCell,
     ManualMotifNote, MelodyParams, MelodyStyle, MotifParams, MotifSource, PadParams, RhythmHit,
-    SyllableMode, TimedChord, VocalContour, VocalMood, VocalParams, VocalPov, VocalRhymeScheme,
-    VocalSinger, VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank, VoiceType,
+    SyllableMode, TimedChord, VocalContour, VocalMood, VocalNote, VocalParams, VocalPov,
+    VocalRhymeScheme, VocalSinger, VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank,
+    VoiceType,
 };
 pub use generator::{
     Degree, GenContext, GenerateError, GeneratedChord, GeneratedMaterial, Generator, GeneratorSpec,

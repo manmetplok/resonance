@@ -25,16 +25,21 @@ use resonance_music_theory::{VocalContour, VocalParams};
 
 use resonance_audio::types::ClipId;
 
+use std::time::Instant;
+
 use crate::compose::{
     ComposeMessage, LaneGeneratorKind, SectionDefinitionState, SectionPlacementState, SelectedLane,
 };
-use crate::message::Message;
+use crate::message::{Message, MidiEditorMessage};
 use crate::state::{MidiClipState, TrackState};
 use crate::theme;
 use crate::Resonance;
 
 use super::lane_side::{self, LaneKind};
 use super::tracks::NAME_COLUMN_WIDTH;
+
+/// Maximum gap between two clicks for them to count as a double-click.
+const DOUBLE_CLICK_MS: u128 = 350;
 
 /// Height of a single vocal lane row. Slightly taller than the synth
 /// lanes because the lyric flow needs a comfortable reading line.
@@ -146,8 +151,16 @@ struct VocalLaneCanvas<'a> {
     derived_clip_ids: std::collections::HashMap<u64, ClipId>,
 }
 
+/// Local canvas state — tracks the last single-click on a vocal lane
+/// row so a second click within the double-click window can open the
+/// vocal roll editor.
+#[derive(Debug, Default)]
+pub struct VocalLaneCanvasState {
+    last_click: Option<(Instant, TrackId)>,
+}
+
 impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
-    type State = ();
+    type State = VocalLaneCanvasState;
 
     fn draw(
         &self,
@@ -180,7 +193,7 @@ impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
 
     fn update(
         &self,
-        _state: &mut Self::State,
+        state: &mut Self::State,
         event: canvas::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
@@ -190,14 +203,41 @@ impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
                 return (canvas::event::Status::Ignored, None);
             };
             let idx = (pos.y / VOCAL_LANE_HEIGHT) as usize;
-            if let Some((track_id, _)) = self.vocal_tracks.get(idx) {
-                return (
-                    canvas::event::Status::Captured,
-                    Some(Message::Compose(ComposeMessage::SelectLane(
-                        SelectedLane::Instrument(*track_id),
-                    ))),
-                );
+            let Some((track_id, _)) = self.vocal_tracks.get(idx) else {
+                return (canvas::event::Status::Ignored, None);
+            };
+
+            // Double-click anywhere on the row opens the derived MIDI
+            // clip in the vocal roll editor. Fall back to the lane
+            // selection message on single-click.
+            let now = Instant::now();
+            let is_double_click = state
+                .last_click
+                .map(|(t, tid)| {
+                    tid == *track_id && now.duration_since(t).as_millis() <= DOUBLE_CLICK_MS
+                })
+                .unwrap_or(false);
+            state.last_click = Some((now, *track_id));
+            if is_double_click {
+                state.last_click = None;
+                if let Some(clip_id) = self.derived_clip_ids.get(track_id).copied() {
+                    return (
+                        canvas::event::Status::Captured,
+                        Some(Message::MidiEditor(MidiEditorMessage::OpenMidiEditor(
+                            clip_id,
+                        ))),
+                    );
+                }
+                // Fallback: even without a derived clip, still focus the
+                // lane so the user sees the right rail. Avoids a dead
+                // double-click before the first regenerate.
             }
+            return (
+                canvas::event::Status::Captured,
+                Some(Message::Compose(ComposeMessage::SelectLane(
+                    SelectedLane::Instrument(*track_id),
+                ))),
+            );
         }
         (canvas::event::Status::Ignored, None)
     }

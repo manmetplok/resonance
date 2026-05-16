@@ -486,7 +486,8 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             MidiEditorMessage::AddNote { .. }
             | MidiEditorMessage::RemoveNote { .. }
             | MidiEditorMessage::MoveNote { .. }
-            | MidiEditorMessage::ResizeNote { .. } => UndoAction::Record,
+            | MidiEditorMessage::ResizeNote { .. }
+            | MidiEditorMessage::ToggleSlur { .. } => UndoAction::Record,
             MidiEditorMessage::OpenMidiEditor(_)
             | MidiEditorMessage::OpenSelectedMidiClip
             | MidiEditorMessage::CloseMidiEditor
@@ -569,6 +570,7 @@ mod tests {
                 midi_clock_send_device: None,
                 midi_clock_recv_enabled: false,
                 midi_clock_recv_device: None,
+                drum_groups: Vec::new(),
             },
             project_dir: PathBuf::new(),
             midi_notes: HashMap::new(),

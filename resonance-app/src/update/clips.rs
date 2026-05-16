@@ -404,11 +404,24 @@ pub fn end_midi_clip_trim(r: &mut Resonance) {
 /// Initialize the piano roll editor state for the given MIDI clip.
 pub fn open_midi_editor(r: &mut Resonance, clip_id: ClipId) {
     if let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) {
+        // Vocal tracks render in the vocal-roll variant, which uses a
+        // local note range (the singer's tessitura) rather than the
+        // full 0..127 keyboard. Start it at scroll_y = 0 so the entire
+        // range is in view; the standard piano roll keeps its
+        // historical 5-octave default scroll so it lands around C4.
+        let is_vocal = r
+            .registry
+            .tracks
+            .iter()
+            .find(|t| t.id == clip.track_id)
+            .map(|t| t.track_type == resonance_audio::types::TrackType::Vocal)
+            .unwrap_or(false);
+        let scroll_y = if is_vocal { 0.0 } else { 60.0 * 5.0 };
         r.interaction.editing_midi_clip = Some(MidiEditorState {
             clip_id,
             track_id: clip.track_id,
             scroll_x: 0.0,
-            scroll_y: 60.0 * 5.0,
+            scroll_y,
             zoom_x: 0.5,
             zoom_y: 12.0,
             snap_ticks: TICKS_PER_QUARTER_NOTE / 4,

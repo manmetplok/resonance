@@ -214,9 +214,27 @@ const SEGMENT_PAD_SEC: f64 = 0.3;
 /// `None` when the SVS model files aren't installed (the PoC's download
 /// script hasn't been run, env var unset, etc.) so the caller can fall
 /// back to its existing MIDI-only behaviour silently.
+#[allow(dead_code)]
 pub fn render_vocal_clip(
     notes: &[MidiNote],
     params: &VocalParams,
+    ticks_per_quarter: u32,
+    bpm: f32,
+    engine_sample_rate: u32,
+) -> Result<Option<RenderedVocal>, String> {
+    render_vocal_clip_with_lyrics(notes, params, &[], ticks_per_quarter, bpm, engine_sample_rate)
+}
+
+/// Like [`render_vocal_clip`] but also accepts a per-note lyric slice
+/// (parallel to `notes`). Notes whose lyric equals the OpenUtau slur
+/// marker (`"+"`) get treated as melisma continuations of the previous
+/// syllable instead of consuming a fresh phoneme list. An empty
+/// `lyrics` slice is equivalent to the legacy "every note is its own
+/// syllable" mode.
+pub fn render_vocal_clip_with_lyrics(
+    notes: &[MidiNote],
+    params: &VocalParams,
+    lyrics: &[String],
     ticks_per_quarter: u32,
     bpm: f32,
     engine_sample_rate: u32,
@@ -228,7 +246,7 @@ pub fn render_vocal_clip(
         return Ok(None);
     };
 
-    let segment = build_segment(notes, params, ticks_per_quarter, bpm);
+    let segment = build_segment(notes, params, lyrics, ticks_per_quarter, bpm);
     if segment.ph_seq.is_empty() {
         return Ok(None);
     }
@@ -373,6 +391,7 @@ pub fn render_vocal_clip(
 fn build_segment(
     notes: &[MidiNote],
     params: &VocalParams,
+    lyrics: &[String],
     ticks_per_quarter: u32,
     bpm: f32,
 ) -> DsSegment {
@@ -464,6 +483,39 @@ fn build_segment(
         .map(|n| midi_to_diffsinger_note(n.note))
         .collect();
 
+    // Per-note slur lookup. OpenUtau-style: a lyric of `+` (or `-`)
+    // means "continue the previous syllable's vowel" — that note
+    // consumes no fresh phoneme list and inherits the last vowel of
+    // the prior non-slur note. Empty `lyrics` disables slurring
+    // (legacy 1:1 mapping).
+    let is_slur_note = |i: usize| -> bool {
+        lyrics
+            .get(i)
+            .map(|l| {
+                let s = l.trim();
+                s == "+" || s == "-"
+            })
+            .unwrap_or(false)
+    };
+    // Map each note index to the syllable phoneme list it should
+    // sing. Slur notes inherit the previous non-slur note's index;
+    // non-slur notes count their own position among non-slurs.
+    let syllable_idx_per_note: Vec<usize> = {
+        let mut out = Vec::with_capacity(notes.len());
+        let mut next_syl: usize = 0;
+        let mut last_syl: usize = 0;
+        for i in 0..notes.len() {
+            if is_slur_note(i) {
+                out.push(last_syl);
+            } else {
+                out.push(next_syl);
+                last_syl = next_syl;
+                next_syl += 1;
+            }
+        }
+        out
+    };
+
     // Walk notes back-to-back. We never insert AP between adjacent
     // syllables — the reference fixtures (`twinkle.ds`,
     // `hello_tiger.ds`) keep phonemes flowing continuously and let
@@ -492,20 +544,47 @@ fn build_segment(
             (slot_sec, 0.0)
         };
 
+        // Slur notes sing only the previous syllable's vowel for the
+        // whole slot — no consonants, no new attack. This matches
+        // OpenUtau / DiffSinger's slur semantics: the model gets a
+        // single sustained vowel at the new pitch.
+        let is_slur = is_slur_note(i);
+        let syllable_idx = syllable_idx_per_note[i];
         let fallback = vec!["ah"];
-        let phonemes: &[&'static str] = syllable_phonemes
-            .get(i)
-            .map(|v| v.as_slice())
-            .unwrap_or(&fallback);
+        let phonemes_owned: Vec<&'static str> = if is_slur {
+            // Pick the vowel of the previous (non-slur) syllable to
+            // carry over. Falls back to the source syllable's last
+            // phoneme when it has no vowel at all (degenerate input).
+            let prev = syllable_phonemes
+                .get(syllable_idx)
+                .map(|v| v.as_slice())
+                .unwrap_or(&fallback);
+            let vowel = prev
+                .iter()
+                .rev()
+                .find(|p| !g2p::is_consonant(p))
+                .or_else(|| prev.last())
+                .copied()
+                .unwrap_or("ah");
+            vec![vowel]
+        } else {
+            syllable_phonemes
+                .get(syllable_idx)
+                .cloned()
+                .unwrap_or_else(|| fallback.clone())
+        };
+        let phonemes: &[&'static str] = &phonemes_owned;
 
         // Word-boundary SP: when this syllable is the LAST one of its
         // word (and the next syllable starts a new word), reserve a
         // small silence at the end of the singing slot. The reference
         // DiffSinger fixtures don't insert SP between words, so this
-        // is opt-in — env-var-gated for A/B testing.
-        let inject_sp = word_boundary_sp_sec > 0.0
-            && is_word_end.get(i).copied().unwrap_or(false)
-            && i + 1 < syllable_phonemes.len();
+        // is opt-in — env-var-gated for A/B testing. Suppressed for
+        // slur notes — a melisma never sits on a word boundary.
+        let inject_sp = !is_slur
+            && word_boundary_sp_sec > 0.0
+            && is_word_end.get(syllable_idx).copied().unwrap_or(false)
+            && syllable_idx + 1 < syllable_phonemes.len();
         let sp_sec = if inject_sp {
             word_boundary_sp_sec.min(sing_sec * 0.3)
         } else {

@@ -252,6 +252,15 @@ pub(crate) enum MidiEditorMessage {
     #[allow(dead_code)]
     ScrollX(f32),
     ScrollY(f32),
+    /// Vocal-roll only: toggle the OpenUtau slur marker on the i-th
+    /// note of `clip_id`. `+` continuation ↔ the auto-syllabified
+    /// surface form. Lives on this enum so the vocal roll's key
+    /// handlers can dispatch through the same router as the other
+    /// note edits.
+    ToggleSlur {
+        clip_id: ClipId,
+        note_index: usize,
+    },
 }
 
 #[derive(Debug, Clone)]

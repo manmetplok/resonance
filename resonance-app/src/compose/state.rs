@@ -9,7 +9,7 @@ use resonance_music_theory::{MelodyParams, MotifParams, MotifSource};
 
 use crate::project::{ProjectSectionChord, ProjectSectionDefinition, ProjectSectionPlacement};
 
-use super::drumroll::DrumrollViewState;
+use super::drumroll::{default_drum_groups, default_kit_pads, DrumGroup, DrumrollViewState, KitPadInfo};
 use super::lane_generator::{LaneGeneratorConfig, LaneGeneratorKind};
 use super::section::{
     ChordState, EditSectionForm, NewSectionForm, SectionDefinitionState, SectionPlacementState,
@@ -86,16 +86,45 @@ pub struct ComposeState {
     /// clips. Kept in the high range so it never collides with engine-
     /// allocated ids coming from `CreateMidiClip`.
     pub next_derived_clip_id: u64,
+    /// Per-vocal-lane bulk lyric buffer. Backs the multi-line text editor
+    /// that lets the user type a whole section's lyrics at once. Holds
+    /// cursor + selection state so editing isn't reset on each repaint.
+    /// Lazily populated from the lane's current `params.draft` on first
+    /// use, and re-synced when per-line edits or re-rolls happen.
+    pub vocal_bulk_lyrics: HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
+    /// Per-note lyrics for vocal MIDI clips, keyed by clip id. Index i
+    /// of the inner vec holds the lyric for the i-th note in
+    /// `r.midi_clips[clip].notes`. Carries OpenUtau-style slur markers
+    /// (`"+"`) alongside ordinary syllables — see
+    /// [`resonance_music_theory::VocalNote`] for the convention. The
+    /// engine clip's `MidiNote` list stays unchanged; this side-table
+    /// is the composition layer that adds vocal metadata without
+    /// touching the audio-side type.
+    pub vocal_clip_lyrics: HashMap<ClipId, Vec<String>>,
+    /// Project-scoped drum groups — one set, shared by every drum track
+    /// across every section. Each group owns its own grid/cycle/phase and
+    /// articulation patterns so different groups can run polymetric or
+    /// polyrhythmic patterns against the song's base meter.
+    pub drum_groups: Vec<DrumGroup>,
+    /// Full kit pad library shown by the Drum Groups Manager modal as the
+    /// picker source. Loaded once on construction; mutations come via the
+    /// manager only.
+    pub kit_pads: Vec<KitPadInfo>,
 }
 
 impl Default for ComposeState {
     fn default() -> Self {
+        let mut next_id: u64 = 0;
+        let drum_groups = default_drum_groups(&mut next_id);
+        let mut drumroll = DrumrollViewState::default();
+        drumroll.selected_group_id = drum_groups.first().map(|g| g.id);
+        drumroll.managing_group_id = drum_groups.first().map(|g| g.id);
         Self {
             definitions: Vec::new(),
             placements: Vec::new(),
             selected_placement_id: None,
             scroll_y: 0.0,
-            next_id: 0,
+            next_id,
             last_error: None,
             new_section_form: None,
             edit_section_form: None,
@@ -105,11 +134,15 @@ impl Default for ComposeState {
             expanded_zoom_y: 12.0,
             expanded_scroll_x: 0.0,
             expanded_scroll_y: 0.0,
-            drumroll: DrumrollViewState::default(),
+            drumroll,
             derived_clips: HashMap::new(),
             vocal_audio_clips: HashMap::new(),
             vocal_render_epoch: HashMap::new(),
             next_derived_clip_id: DERIVED_CLIP_ID_BASE,
+            vocal_bulk_lyrics: HashMap::new(),
+            vocal_clip_lyrics: HashMap::new(),
+            drum_groups,
+            kit_pads: default_kit_pads(),
         }
     }
 }
@@ -239,6 +272,7 @@ impl ComposeState {
         self.derived_clips.clear();
         self.vocal_audio_clips.clear();
         self.vocal_render_epoch.clear();
+        self.vocal_clip_lyrics.clear();
         self.next_derived_clip_id = DERIVED_CLIP_ID_BASE;
         self.placements = placements
             .iter()

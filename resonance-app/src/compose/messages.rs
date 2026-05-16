@@ -289,6 +289,7 @@ pub enum LaneInspectorMsg {
     SetMelodyArticulation(f32),
     SetMelodyContour(ContourPreference),
     SetMelodyPhraseLen(u8),
+    ToggleMelodyFillVocalGaps,
 
     // Pad
     SetPadRegisterLow(u8),
@@ -353,6 +354,13 @@ pub enum LaneInspectorMsg {
     GenerateVocalAll,
     GenerateVocalLyricsOnly,
     GenerateVocalMelodyOnly,
+    /// Re-render the audio only, reusing the existing MIDI clip notes
+    /// (which may have been hand-edited in the vocal roll). Doesn't
+    /// bump the lane seed or re-derive notes from chords; just feeds
+    /// the current notes + current `VocalParams` through the SVS
+    /// pipeline. Use this when the user wants to audition their own
+    /// edits without losing them to a re-roll.
+    RerenderVocalAudio,
 
     // Drum euclidean (per-voice) — legacy flat-pad path. Kept around so the
     // update handler stays compilable; the new grouped UI uses

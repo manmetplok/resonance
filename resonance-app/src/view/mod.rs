@@ -21,6 +21,7 @@ use crate::midi_editor::PianoRollCanvas;
 use crate::state::*;
 use crate::theme;
 use crate::timeline::TimelineCanvas;
+use crate::view::compose::vocal_roll;
 use iced::widget::{button, canvas, column, container, row, stack, text, Space};
 use iced::{alignment, Element, Length};
 use resonance_audio::types::*;
@@ -94,6 +95,10 @@ impl crate::Resonance {
             stack![base, settings::view_settings_overlay(self)].into()
         } else if self.mixer.add_track_menu_open {
             stack![base, menus::view_add_track_menu(self)].into()
+        } else if self.compose.drumroll.manager_open
+            && matches!(self.view_mode, ViewMode::Compose)
+        {
+            stack![base, compose::drum_groups_manager::view(self)].into()
         } else {
             base
         }
@@ -129,6 +134,20 @@ impl crate::Resonance {
             .midi_clips
             .iter()
             .find(|c| c.id == editor_state.clip_id)?;
+
+        // Vocal tracks open the vocal roll variant — same piano-roll
+        // skeleton, but with the chord-context strip, lyric strip, and
+        // warm accent that match the rest of the vocal UI.
+        let is_vocal = self
+            .registry
+            .tracks
+            .iter()
+            .find(|t| t.id == editor_state.track_id)
+            .map(|t| t.track_type == TrackType::Vocal)
+            .unwrap_or(false);
+        if is_vocal {
+            return self.view_vocal_roll_panel(clip);
+        }
 
         let close_btn = button(text("Close Editor").size(12).color(theme::TEXT))
             .on_press(Message::MidiEditor(MidiEditorMessage::CloseMidiEditor))
@@ -192,6 +211,88 @@ impl crate::Resonance {
             container(editor_panel)
                 .width(Length::Fill)
                 .height(250)
+                .style(|_theme| container::Style {
+                    background: Some(iced::Background::Color(theme::BG)),
+                    border: iced::Border {
+                        color: theme::SEPARATOR,
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..Default::default()
+                })
+                .into(),
+        )
+    }
+
+    /// Vocal-roll variant of the bottom editor panel. Mirrors
+    /// `view_midi_editor_panel`'s container chrome (so layout is
+    /// identical from the outside) but renders `VocalRollCanvas`
+    /// instead of the piano roll, and adds a warm-tinted breadcrumb
+    /// toolbar that matches the vocal lane visual language.
+    fn view_vocal_roll_panel<'a>(
+        &'a self,
+        clip: &'a MidiClipState,
+    ) -> Option<Element<'a, Message>> {
+        let editor_state = self.interaction.editing_midi_clip.as_ref()?;
+        let vocal_canvas = vocal_roll::build_canvas(self, clip)?;
+        let voice_label = vocal_canvas.voice_label.to_string();
+
+        let close_btn = button(text("Close clip").size(12).color(theme::TEXT))
+            .on_press(Message::MidiEditor(MidiEditorMessage::CloseMidiEditor))
+            .style(|_theme, status| theme::transport_button_style(status))
+            .padding([4, 8]);
+        let editor_label = text(format!("Vocal: {}  ·  {}", clip.name, voice_label))
+            .size(12)
+            .color(theme::WARM);
+        let note_count = text(format!("{} notes", clip.notes.len()))
+            .size(11)
+            .color(theme::TEXT_3)
+            .font(theme::MONO_FONT);
+        let editor_toolbar = container(
+            row![
+                editor_label,
+                Space::with_width(Length::Fixed(12.0)),
+                note_count,
+                Space::with_width(Length::Fill),
+                close_btn,
+            ]
+            .spacing(8)
+            .align_y(alignment::Vertical::Center)
+            .padding([4, 8]),
+        )
+        .width(Length::Fill)
+        .style(theme::panel_outlined);
+
+        // Width matches the piano roll convention so horizontal
+        // scrolling lines up with the clip's natural tick span plus a
+        // little drag headroom.
+        let extra_ticks: u64 = 4 * (self.transport.time_sig_num as u64) * TICKS_PER_QUARTER_NOTE;
+        let content_ticks: u64 = clip.duration_ticks.saturating_add(extra_ticks);
+        let content_w =
+            vocal_roll::VR_KEYBOARD_WIDTH + content_ticks as f32 * editor_state.zoom_x;
+
+        let vocal_canvas_widget = canvas(vocal_canvas)
+            .width(Length::Fixed(content_w))
+            .height(Length::Fill);
+        let vocal_scroll = iced::widget::Scrollable::with_direction(
+            vocal_canvas_widget,
+            iced::widget::scrollable::Direction::Horizontal(
+                iced::widget::scrollable::Scrollbar::default(),
+            ),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill);
+        let editor_panel = column![editor_toolbar, vocal_scroll].spacing(0);
+        // Editor panel height — sized to fit the full vocal tessitura at
+        // the default `zoom_y` plus the toolbar / chord strip / phoneme
+        // strip / velocity lane stacked on top, with extra room for the
+        // pitch curve overlay and slur arcs to read clearly above the
+        // notes. The previous 420 px was tight enough that long notes
+        // pushed the curve into the velocity lane on wide ranges.
+        Some(
+            container(editor_panel)
+                .width(Length::Fill)
+                .height(540)
                 .style(|_theme| container::Style {
                     background: Some(iced::Background::Color(theme::BG)),
                     border: iced::Border {

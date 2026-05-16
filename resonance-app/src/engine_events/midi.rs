@@ -61,6 +61,10 @@ pub(super) fn clip_trimmed(
 
 pub(super) fn clip_deleted(r: &mut Resonance, clip_id: ClipId) {
     r.midi_clips.retain(|c| c.id != clip_id);
+    // Drop the lyric side-table entry — keeping it would only leak
+    // memory and risk collisions if a future clip is allocated the
+    // same id.
+    r.compose.vocal_clip_lyrics.remove(&clip_id);
 }
 
 pub(super) fn note_added(r: &mut Resonance, clip_id: ClipId, note: MidiNote) {
@@ -69,6 +73,17 @@ pub(super) fn note_added(r: &mut Resonance, clip_id: ClipId, note: MidiNote) {
             .notes
             .partition_point(|n| n.start_tick <= note.start_tick);
         clip.notes.insert(pos, note);
+        // Keep the lyric side-table aligned — insert a blank lyric
+        // at the same index so subsequent indices still reference the
+        // right note. The vocal roll fills it in with an auto-syllable
+        // or `+` on demand.
+        if let Some(lyrics) = r.compose.vocal_clip_lyrics.get_mut(&clip_id) {
+            if pos <= lyrics.len() {
+                lyrics.insert(pos, String::new());
+            } else {
+                lyrics.resize(pos + 1, String::new());
+            }
+        }
     }
 }
 
@@ -76,6 +91,11 @@ pub(super) fn note_removed(r: &mut Resonance, clip_id: ClipId, note_index: usize
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         if note_index < clip.notes.len() {
             clip.notes.remove(note_index);
+            if let Some(lyrics) = r.compose.vocal_clip_lyrics.get_mut(&clip_id) {
+                if note_index < lyrics.len() {
+                    lyrics.remove(note_index);
+                }
+            }
         }
     }
 }
@@ -91,7 +111,24 @@ pub(super) fn note_moved(
         if note_index < clip.notes.len() {
             clip.notes[note_index].start_tick = new_start_tick;
             clip.notes[note_index].note = new_note;
+            // The notes vec needs to stay sorted by start_tick. The
+            // lyric side-table is indexed parallel to `notes`, so we
+            // permute it the same way. Build an index permutation
+            // from the pre-sort order, sort, then apply it.
+            let pre: Vec<(u64, u8)> =
+                clip.notes.iter().map(|n| (n.start_tick, n.note)).collect();
             clip.notes.sort_by_key(|n| n.start_tick);
+            if let Some(lyrics) = r.compose.vocal_clip_lyrics.get_mut(&clip_id) {
+                if lyrics.len() == pre.len() {
+                    let mut perm: Vec<usize> = (0..pre.len()).collect();
+                    perm.sort_by_key(|&i| pre[i].0);
+                    // perm[new_i] == old_i. Build new lyrics vec via
+                    // gather.
+                    let new_lyrics: Vec<String> =
+                        perm.iter().map(|&i| lyrics[i].clone()).collect();
+                    *lyrics = new_lyrics;
+                }
+            }
         }
     }
 }

@@ -93,6 +93,47 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
                 editor.scroll_y = (editor.scroll_y + delta).max(0.0);
             }
         }
+        MidiEditorMessage::ToggleSlur { clip_id, note_index } => {
+            toggle_slur(r, clip_id, note_index);
+        }
     }
     Task::none()
+}
+
+/// Toggle the OpenUtau slur marker on the i-th note of `clip_id`. The
+/// lyric side-table treats `""` as "use the next syllable from the
+/// draft", so flipping to `""` reinstates the cursor-driven label
+/// flow — every subsequent non-slur note slides its syllable one slot
+/// left, and the now-spare syllable at the tail returns to the draft.
+/// Flipping to `"+"` does the reverse: the trailing syllables slide
+/// right.
+fn toggle_slur(
+    r: &mut crate::Resonance,
+    clip_id: resonance_audio::types::ClipId,
+    note_index: usize,
+) {
+    use resonance_music_theory::VocalNote;
+
+    let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) else {
+        return;
+    };
+    if note_index >= clip.notes.len() {
+        return;
+    }
+    let note_count = clip.notes.len();
+
+    let entry = r
+        .compose
+        .vocal_clip_lyrics
+        .entry(clip_id)
+        .or_default();
+    if entry.len() < note_count {
+        entry.resize(note_count, String::new());
+    }
+    let current = entry[note_index].trim();
+    if current == VocalNote::SLUR_MARKER || current == "-" {
+        entry[note_index] = String::new();
+    } else {
+        entry[note_index] = VocalNote::SLUR_MARKER.to_string();
+    }
 }

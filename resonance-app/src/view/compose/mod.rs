@@ -6,6 +6,7 @@ use crate::message::Message;
 use crate::theme;
 
 pub mod chord_lane;
+pub mod drum_groups_manager;
 pub mod drumroll;
 pub mod expanded_editor;
 pub mod global_tracks;
@@ -18,6 +19,7 @@ pub mod scale_stripe;
 pub mod strip;
 pub mod tracks;
 pub mod vocal_lane;
+pub mod vocal_roll;
 
 // Re-export the shared layout primitives so the existing call sites keep
 // working (`super::workspace_width`, `super::section_total_beats`, etc.).
@@ -187,8 +189,10 @@ impl crate::Resonance {
                     &self.compose.selected_lane,
                     &self.registry.tracks,
                     &self.compose.drumroll,
+                    &self.compose.drum_groups,
                     clip_id_for_drum,
                     &self.table_registry,
+                    &self.compose.vocal_bulk_lyrics,
                 );
 
                 row![left_column, right_panel]
@@ -200,7 +204,23 @@ impl crate::Resonance {
             None => empty_state(),
         };
 
-        column![strip, status, body]
+        // Bottom editor panel — the piano roll (instrument tracks) or
+        // vocal roll (vocal tracks), opened by double-clicking a clip.
+        // Mirrors the wiring in `view_main_area` so the editor surface
+        // is reachable from either tab.
+        let body_with_editor: Element<'_, Message> =
+            if let Some(editor) = self.view_midi_editor_panel() {
+                column![
+                    container(body).width(Length::Fill).height(Length::Fill),
+                    editor,
+                ]
+                .spacing(0)
+                .into()
+            } else {
+                body
+            };
+
+        column![strip, status, body_with_editor]
             .spacing(0)
             .width(Length::Fill)
             .height(Length::Fill)

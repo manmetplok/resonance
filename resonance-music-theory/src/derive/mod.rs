@@ -18,7 +18,9 @@ mod pad;
 mod vocal;
 
 pub use bass::{derive_bass, BassMotifMode, BassMotifPhrase, BassParams, BassStyle};
-pub use melody::{derive_melody, ContourPreference, MelodyParams, MelodyStyle};
+pub use melody::{
+    derive_melody, derive_melody_fill_vocal, ContourPreference, MelodyParams, MelodyStyle,
+};
 pub use motif_bass::derive_bass_motif;
 pub use motif_engine::{derive_motif_melody_with_section, motif_intervals};
 pub use motif_rhythm::{derive_motif_rhythm, RhythmHit};
@@ -28,9 +30,9 @@ pub use motif_source::{
 pub use pad::{derive_pad, PadParams};
 pub use vocal::{
     count_syllables, derive_vocal, derive_vocal_with_meter, derive_vocal_with_motif,
-    generate_lyrics, LyricLine, SyllableMode, VocalContour, VocalMood, VocalParams, VocalPov,
-    VocalRhymeScheme, VocalSinger, VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank,
-    VoiceType,
+    generate_lyrics, vocal_phrase_spans, LyricLine, SyllableMode, VocalContour, VocalMood,
+    VocalParams, VocalPov, VocalRhymeScheme, VocalSinger, VocalSingerMeiji, VocalStyle,
+    VocalTimbre, VocalVoicebank, VoiceType,
 };
 
 /// A chord positioned on the section's beat grid. Mirrors the app's
@@ -51,5 +53,44 @@ pub struct GeneratedNote {
     pub velocity: f32,
     pub start_tick: u64,
     pub duration_ticks: u64,
+}
+
+/// Vocal-side note: a plain MIDI note plus the per-note lyric. Modelled
+/// as composition so engine code (which only needs the MIDI fields) can
+/// keep ignoring vocal metadata, while the SVS pipeline + vocal roll
+/// can carry the lyric / slur information on the same struct.
+///
+/// **OpenUtau slur convention.** A `lyric` of `+` marks the note as a
+/// *slur*: the previous note's vowel carries through onto this pitch
+/// (one syllable, multiple pitches — i.e. a melisma). `-` does the
+/// same in some other editors; we accept either. Any other lyric is a
+/// regular syllable that maps to its own phoneme list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VocalNote {
+    pub midi: GeneratedNote,
+    pub lyric: String,
+}
+
+impl VocalNote {
+    /// Build a fresh `VocalNote` with the given midi data and lyric.
+    pub fn new(midi: GeneratedNote, lyric: impl Into<String>) -> Self {
+        Self {
+            midi,
+            lyric: lyric.into(),
+        }
+    }
+
+    /// `true` when the note's lyric marks it as a continuation of the
+    /// previous note's syllable rather than its own attack — OpenUtau-
+    /// style `+` (or `-`).
+    pub fn is_slur(&self) -> bool {
+        let l = self.lyric.trim();
+        l == "+" || l == "-"
+    }
+
+    /// The literal slur marker used when toggling a note into a slur.
+    /// Centralised so the GUI and the SVS pipeline never disagree on
+    /// which sigil counts.
+    pub const SLUR_MARKER: &'static str = "+";
 }
 
