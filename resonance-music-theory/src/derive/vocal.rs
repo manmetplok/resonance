@@ -1165,14 +1165,7 @@ pub fn derive_vocal_with_motif(
         Some(ctx) => ctx,
         None => return Vec::new(),
     };
-    let mut notes = match params.style {
-        VocalStyle::PopBallad => derive_pop_ballad(&ctx),
-        VocalStyle::Conversational => derive_conversational(&ctx),
-        VocalStyle::Hymnal => derive_hymnal(&ctx),
-        VocalStyle::Folk => derive_folk(&ctx),
-        VocalStyle::Anthemic => derive_anthemic(&ctx),
-        VocalStyle::Chant => derive_chant(&ctx),
-    };
+    let mut notes = derive_with_profile(&ctx);
     if params.use_section_motif {
         if let Some(intervals) = motif_intervals {
             if !intervals.is_empty() {
@@ -1718,929 +1711,1236 @@ fn rubato_offset(rng: &mut XorShift, max_beats: f32) -> f32 {
 }
 
 // ===========================================================================
-// Style: Pop ballad (legacy default)
+// Style-profile trait + shared walker
 // ===========================================================================
+//
+// Every per-style vocal generator (`derive_pop_ballad`, `derive_folk`, …)
+// used to be a free function with a near-identical outer skeleton:
+// destructure `VocalContext`, loop lines, loop syllables, push notes.
+// The musical decisions inside that skeleton — pitch picking, slot
+// width, rubato, duration, velocity, cadence — were the only parts
+// that actually varied between styles. The trait below carves out
+// exactly those decision points so the loop itself only has to be
+// written once, in `walk_with_profile`.
+//
+// Profile authors do **not** override the walker structure. They
+// implement methods on a unit struct (or, for Folk, a struct that
+// carries the cross-line echo memory) and the walker calls them in
+// the same order every style used in the legacy code. Preserving
+// that order matters: the rng draws inside `pick_pitch` /
+// `dur_beats` / `velocity` must happen in the same sequence the
+// pre-refactor function used or the deterministic output drifts.
 
-/// Stepwise contour-driven walk with breath gaps. The legacy default —
-/// kept here so projects saved before VocalStyle existed render
-/// identically.
-fn derive_pop_ballad(ctx: &VocalContext<'_>) -> Vec<GeneratedNote> {
-    let VocalContext {
-        chords,
-        params,
-        tpb,
-        section_beats,
-        lo,
-        hi,
-        beats_per_bar,
-        ref line_syllables,
-        total_syl,
-        seed,
-        scale,
-    } = *ctx;
-
-    let mut rng = XorShift::new(seed.max(1));
-    let mut out = Vec::with_capacity(total_syl as usize);
-
-    // Start near the middle of the range, snapped to scale.
-    let mut prev_pitch = snap_to_scale(((lo as u16 + hi as u16) / 2) as u8, scale, lo, hi);
-
-    // The breath gap between phrases — eats a fraction of each phrase's
-    // tail. A phrase = one lyric line.
-    let breath_frac = params.breath.clamp(0.0, 0.9);
-
-    // Walk lines. Each line claims (line_syllables / total) of the
-    // section. Beat positions are continuous across lines so the section
-    // packs cleanly.
-    let mut syl_cursor: u32 = 0;
-    for (line_idx, &line_syl) in line_syllables.iter().enumerate() {
-        if line_syl == 0 {
-            continue;
-        }
-        let raw_line_start = syl_cursor as f32 * section_beats as f32 / total_syl as f32;
-        let line_offset = phrase_start_offset(&mut rng, beats_per_bar);
-        let line_start_beat_f = (raw_line_start + line_offset).max(0.0);
-        let line_end_beat_f = (syl_cursor + line_syl) as f32 * section_beats as f32 / total_syl as f32;
-        let line_beat_span = (line_end_beat_f - line_start_beat_f).max(0.001);
-        let sing_span = line_beat_span * (1.0 - breath_frac);
-        let beat_step = sing_span / line_syl as f32;
-
-        for s in 0..line_syl {
-            let progress_in_line = s as f32 / line_syl.max(1) as f32;
-            // Subtle micro-rubato: ±5% of a beat-step around the
-            // rigid grid. Anchor syllables (first, last) stay on the
-            // grid so phrases still land predictably on the chord.
-            let rubato = if s == 0 || s + 1 == line_syl {
-                0.0
-            } else {
-                rubato_offset(&mut rng, beat_step * 0.05)
-            };
-            let beat_f = line_start_beat_f + s as f32 * beat_step + rubato;
-            let beat_round = beat_f.floor().clamp(0.0, (section_beats - 1) as f32) as u32;
-            let chord = chord_at_beat(chords, beat_round);
-
-            // Strong-beat heuristic now mixes the first-of-line bias
-            // with bar-position weight, so accents fall on the
-            // downbeat instead of just every other syllable.
-            let strong = s == 0
-                || s + 1 == line_syl
-                || (s % 2 == 0 && beat_strength(beat_round, beats_per_bar) > 0.5);
-            let anchor = strong && rng.next_f32() < params.chord_tone_anchor;
-
-            // Contour target — global progress across the section, not
-            // per-line, so an Arch shape arches over the whole section.
-            let global_t = (syl_cursor + s) as f32 / (total_syl.saturating_sub(1).max(1)) as f32;
-            let contour_pos = contour_height(params.contour, global_t).clamp(0.0, 1.0);
-            let contour_target = lo as f32
-                + contour_pos * (hi as f32 - lo as f32);
-            // Pull toward contour by 1/3 the gap.
-            let pulled = prev_pitch as f32 * 2.0 / 3.0 + contour_target / 3.0;
-
-            // Step vs leap. Real sung melodies stay mostly within a
-            // 3rd, with the occasional 4th/5th. Pop-ballad surprise:
-            // 12 % chance of a small "passing leap" (3-4 semitones)
-            // even when not in leap mode — gives the line interest
-            // without going outside the SVS-safe interval band.
-            let leap = rng.next_f32() < params.leap_range;
-            let surprise_leap = !leap && rng.next_f32() < 0.12;
-            let step_range = if leap {
-                3..=6
-            } else if surprise_leap {
-                3..=4
-            } else {
-                1..=2
-            };
-            let step = (rng.next_range(*step_range.end() - *step_range.start() + 1)
-                + *step_range.start()) as i16;
-            let direction = if contour_target > prev_pitch as f32 { 1i16 } else { -1 };
-            let walked = (pulled as i16 + step * direction).clamp(lo as i16, hi as i16) as u8;
-
-            let is_final = s + 1 == line_syl;
-            // Cadence pitch: on the final syllable of a line, override
-            // the walked pitch with a phrase-role-appropriate landing.
-            // Antecedent lines (0, 2) end open (scale degree 2/4/7);
-            // consequent lines (1, 3) close on a chord tone, prefer
-            // the root. The result is clamped within an octave of
-            // prev_pitch so the cadence doesn't leap unmusically.
-            let raw_pitch = if is_final {
-                cadence_pitch(phrase_role(line_idx), chord, scale, prev_pitch, (lo, hi))
-                    .unwrap_or_else(|| {
-                        if anchor {
-                            chord
-                                .and_then(|c| chord_tone_nearest(c.chord, (lo, hi), prev_pitch))
-                                .unwrap_or(walked)
-                        } else if params.stay_in_scale {
-                            snap_to_scale(walked, scale, lo, hi)
-                        } else {
-                            walked
-                        }
-                    })
-            } else if anchor {
-                chord
-                    .and_then(|c| chord_tone_nearest(c.chord, (lo, hi), prev_pitch))
-                    .unwrap_or(walked)
-            } else if params.stay_in_scale {
-                snap_to_scale(walked, scale, lo, hi)
-            } else {
-                walked
-            };
-            let pitch = cap_interval(prev_pitch, raw_pitch, lo, hi, scale);
-
-            let articulation = params.articulation.clamp(0.0, 1.0);
-            let base_trim = 0.98 - 0.48 * articulation;
-            let dur_beats = if is_final {
-                terminal_dur_beats(beat_step, articulation)
-            } else {
-                // Per-syllable trim variation: strong beats hold the
-                // note longer (legato), weak beats end short (audible
-                // gap before the next syllable). Adds rhythmic
-                // interest without changing positions on the grid.
-                let trim = rhythm_trim(&mut rng, base_trim, beat_round, beats_per_bar, 0.18);
-                beat_step * trim
-            };
-            let start_tick = (beat_f as f64 * tpb as f64) as u64;
-            let dur_ticks = ((dur_beats as f64 * tpb as f64) as u64).max(tpb / 4);
-
-            let velocity = shape_velocity(
-                &mut rng, 0.74, progress_in_line, 0.9, beat_round, beats_per_bar, 0.7, 0.08,
-            );
-
-            out.push(GeneratedNote {
-                note: pitch,
-                velocity,
-                start_tick,
-                duration_ticks: dur_ticks,
-            });
-            prev_pitch = pitch;
-        }
-
-        syl_cursor += line_syl;
-    }
-
-    out
+/// Per-line shared state computed once by the walker, then passed
+/// (immutably) into every profile method for the line's syllables.
+///
+/// `extras` is the profile's private blob — Folk stores its echo
+/// source and long/short ratios there, Anthemic its climax index,
+/// Chant its triplet-feel flag, etc. The walker treats it as opaque.
+struct LineState<E> {
+    line_idx: usize,
+    line_syl: u32,
+    /// Prefix-sum of `line_syllables[0..line_idx]` — used by
+    /// PopBallad to compute the contour curve's *global* (across-
+    /// section) progress for the syllable, which differs from the
+    /// per-line progress every other style uses.
+    syl_cursor: u32,
+    /// `(line_end_beat_f - line_start_beat_f) * (1 - breath_frac)` —
+    /// Folk and Chant size their per-syllable slots from this.
+    sing_span: f32,
+    /// `sing_span / line_syl`. Profiles that don't reshape rhythm
+    /// (PopBallad, Conversational, Hymnal, Anthemic) use this as
+    /// every syllable's slot directly. Folk + Chant override `slot`
+    /// to return per-syllable values that fluctuate around this.
+    beat_step: f32,
+    /// Prev-pitch *at the start of this line*. Folk reads this so
+    /// echo lines can build their phrase offsets relative to the
+    /// first pitch of the line they're echoing.
+    line_first_pitch: u8,
+    /// Effective register for this line. Hymnal narrows to a 9-st
+    /// band on top of `ctx.lo`; Chant narrows around a centre. Others
+    /// use `(ctx.lo, ctx.hi)`.
+    band_lo: u8,
+    band_hi: u8,
+    articulation: f32,
+    extras: E,
 }
 
-// ===========================================================================
-// Style: Conversational
-// ===========================================================================
-
-/// Talky / spoken-feel: pitches cluster around a "speaking note" in the
-/// lower half of the range, repeating the previous pitch ~50 % of the
-/// time and otherwise stepping by one or two semitones. Lines start
-/// with a tiny rise and end with a tiny fall (verbal cadence). Even
-/// rhythm with breath gap. Ignores the contour preset because the
-/// shape comes from the per-line micro-arc, not the section curve.
-fn derive_conversational(ctx: &VocalContext<'_>) -> Vec<GeneratedNote> {
-    let VocalContext {
-        chords,
-        params,
-        tpb,
-        section_beats,
-        lo,
-        hi,
-        beats_per_bar,
-        ref line_syllables,
-        total_syl,
-        seed,
-        scale,
-    } = *ctx;
-
-    let mut rng = XorShift::new(seed.max(1));
-    let mut out = Vec::with_capacity(total_syl as usize);
-
-    // Speaking pitch — a hair below the middle, snapped to scale.
-    let span = hi as i16 - lo as i16;
-    let speaking_pitch =
-        snap_to_scale((lo as i16 + (span * 4) / 10).clamp(lo as i16, hi as i16) as u8, scale, lo, hi);
-    let mut prev_pitch = speaking_pitch;
-
-    let breath_frac = params.breath.clamp(0.0, 0.9);
-    let articulation = params.articulation.clamp(0.0, 1.0);
-    let trim = 0.95 - 0.45 * articulation;
-
-    let mut syl_cursor: u32 = 0;
-    for (line_idx, &line_syl) in line_syllables.iter().enumerate() {
-        if line_syl == 0 {
-            continue;
-        }
-        let raw_line_start = syl_cursor as f32 * section_beats as f32 / total_syl as f32;
-        let line_offset = phrase_start_offset(&mut rng, beats_per_bar);
-        let line_start_beat_f = (raw_line_start + line_offset).max(0.0);
-        let line_end_beat_f =
-            (syl_cursor + line_syl) as f32 * section_beats as f32 / total_syl as f32;
-        let line_beat_span = (line_end_beat_f - line_start_beat_f).max(0.001);
-        let sing_span = line_beat_span * (1.0 - breath_frac);
-        let beat_step = sing_span / line_syl as f32;
-
-        for s in 0..line_syl {
-            let progress_in_line = s as f32 / line_syl.max(1) as f32;
-            // Larger rubato than PopBallad — talky delivery is
-            // looser, words push and pull against the click.
-            let rubato = if s == 0 || s + 1 == line_syl {
-                0.0
-            } else {
-                rubato_offset(&mut rng, beat_step * 0.10)
-            };
-            let beat_f = line_start_beat_f + s as f32 * beat_step + rubato;
-            let beat_round = beat_f.floor().clamp(0.0, (section_beats - 1) as f32) as u32;
-            let chord = chord_at_beat(chords, beat_round);
-
-            // Pitch repetition with bursts: ~55 % chance to stay on
-            // the previous pitch, but occasionally (10 %) sustain a
-            // run of 2-3 same-pitch syllables for that "spoken
-            // emphasis" feel. Stepwise nudges otherwise.
-            let pitch_pre = if rng.next_f32() < 0.10 {
-                // Trigger a run — re-use prev_pitch with no random walk.
-                prev_pitch
-            } else if rng.next_f32() < 0.55 {
-                prev_pitch
-            } else {
-                let dir: i16 = if rng.next_f32() < 0.5 { 1 } else { -1 };
-                let step: i16 = if rng.next_f32() < 0.18 { 2 } else { 1 };
-                ((prev_pitch as i16 + dir * step).clamp(lo as i16, hi as i16)) as u8
-            };
-
-            // Line-edge inflection: first syllable rises one step,
-            // last falls.
-            let inflected = if s == 0 {
-                ((speaking_pitch as i16 + 1).clamp(lo as i16, hi as i16)) as u8
-            } else if s + 1 == line_syl {
-                ((speaking_pitch as i16 - 1).clamp(lo as i16, hi as i16)) as u8
-            } else {
-                pitch_pre
-            };
-
-            // Strong-beat anchor uses bar position now, not just s%4.
-            let strong = s == 0 || s + 1 == line_syl || beat_strength(beat_round, beats_per_bar) >= 0.65;
-            let is_final = s + 1 == line_syl;
-            let raw = if is_final {
-                cadence_pitch(phrase_role(line_idx), chord, scale, prev_pitch, (lo, hi))
-                    .unwrap_or_else(|| {
-                        chord
-                            .and_then(|c| chord_tone_nearest(c.chord, (lo, hi), inflected))
-                            .unwrap_or(inflected)
-                    })
-            } else if strong {
-                chord
-                    .and_then(|c| chord_tone_nearest(c.chord, (lo, hi), inflected))
-                    .unwrap_or(inflected)
-            } else if params.stay_in_scale {
-                snap_to_scale(inflected, scale, lo, hi)
-            } else {
-                inflected
-            };
-            let pitch = cap_interval(prev_pitch, raw, lo, hi, scale);
-            let dur_beats = if is_final {
-                terminal_dur_beats(beat_step, articulation)
-            } else {
-                // Conversational rhythm: shorter notes overall (talky
-                // delivery), with brief held notes on stressed words.
-                // Wider range than PopBallad — speech feels more
-                // irregular than singing.
-                let trim_local = rhythm_trim(&mut rng, trim, beat_round, beats_per_bar, 0.22);
-                beat_step * trim_local
-            };
-            let start_tick = (beat_f as f64 * tpb as f64) as u64;
-            let dur_ticks = ((dur_beats as f64 * tpb as f64) as u64).max(tpb / 4);
-
-            // Conversational stays softer overall but tracks phrase
-            // shape and bar accent — a real talker raises pitch +
-            // intensity on stressed words.
-            let velocity = shape_velocity(
-                &mut rng, 0.62, progress_in_line, 0.6, beat_round, beats_per_bar, 0.5, 0.06,
-            );
-
-            out.push(GeneratedNote {
-                note: pitch,
-                velocity,
-                start_tick,
-                duration_ticks: dur_ticks,
-            });
-            prev_pitch = pitch;
-        }
-
-        syl_cursor += line_syl;
-    }
-    out
+/// Per-syllable computed inputs the walker hands to the profile.
+/// Built once per `s` and shared between `pick_pitch`, `dur_beats`,
+/// and `velocity` so each method sees a consistent view of the
+/// syllable's grid position + active chord.
+struct StepInputs<'a> {
+    s: u32,
+    is_final: bool,
+    progress_in_line: f32,
+    beat_round: u32,
+    chord: Option<&'a TimedChord>,
+    prev_pitch: u8,
+    /// This syllable's slot width in beats (= `line.beat_step` for
+    /// most styles; overridden by Folk's long-short ratio and Chant's
+    /// triplet-feel).
+    slot: f32,
 }
 
-// ===========================================================================
-// Style: Hymnal
-// ===========================================================================
+/// The contract each `VocalStyle` variant implements. The methods
+/// expose every decision point that varied across the six legacy
+/// per-style functions; everything else (line span math, beat-of-bar
+/// chord lookup, `cap_interval`, the `enforce_no_overlap` pass) is
+/// shared in `walk_with_profile`.
+///
+/// **rng-draw order:** the walker calls `slot`, then `rubato_max`,
+/// then (if non-zero) draws one `rubato_offset`, then `pick_pitch`,
+/// `finalize_pitch`, `dur_beats`, `velocity`. Implementors must
+/// preserve their original draw order *within* each method —
+/// reordering even a single `rng.next_f32()` changes the
+/// deterministic output for that style.
+trait VocalStyleProfile {
+    /// Style-private per-line scratchpad. Set in [`begin_line`],
+    /// read in the rest of the methods.
+    type LineExtras: Default;
 
-/// Strict syllable-per-quarter rhythm, stepwise motion only, narrow
-/// range centered on the chord root. Every line ends on the current
-/// chord's root or third (a cadence). Minimal randomness — the same
-/// seed gives a near-deterministic shape.
-fn derive_hymnal(ctx: &VocalContext<'_>) -> Vec<GeneratedNote> {
+    /// Effective MIDI range for the style. Most styles use the
+    /// user-set `(ctx.lo, ctx.hi)`; Hymnal caps to a 9-semitone band
+    /// at the bottom, Chant narrows to a ~5-semitone band around the
+    /// speaking pitch.
+    fn band(&self, ctx: &VocalContext) -> (u8, u8) {
+        (ctx.lo, ctx.hi)
+    }
+
+    /// Pitch the walker uses as the "previous pitch" for syllable 0
+    /// of the first line. Each style anchors at a different register:
+    /// PopBallad / Anthemic mid, Conversational a hair below mid,
+    /// Folk near the top (descending phrases), Chant / Hymnal at
+    /// the band centre.
+    fn init_prev_pitch(&self, ctx: &VocalContext, band: (u8, u8)) -> u8;
+
+    /// Breath-gap fraction of each line that's silent. Some styles
+    /// clamp the user-set `params.breath` (Folk ≥0.20, Chant ≥0.18,
+    /// Anthemic ×0.6); Hymnal returns 0 (no breath, strict timing).
+    fn breath_frac(&self, params: &VocalParams) -> f32 {
+        params.breath.clamp(0.0, 0.9)
+    }
+
+    /// Whether to apply the random per-line phrase-start offset
+    /// (pickup / anacrusis / off-beat). Hymnal returns `false` —
+    /// strict timing is core to the style.
+    fn use_phrase_start_offset(&self) -> bool {
+        true
+    }
+
+    /// Build the per-line scratchpad. Called once before the
+    /// syllable loop, after `LineState`'s shared fields are filled
+    /// in. Free to consume rng draws — Folk uses one for its
+    /// long-short ratio jitter, Chant one for its triplet-feel
+    /// coin flip.
+    fn begin_line(
+        &mut self,
+        rng: &mut XorShift,
+        ctx: &VocalContext,
+        line: &LineState<Self::LineExtras>,
+    ) -> Self::LineExtras;
+
+    /// Width of syllable `s`'s grid slot in beats. Default = the
+    /// line's uniform `beat_step`. Folk overrides this for its
+    /// long-short pairs; Chant overrides it for triplet-feel.
+    fn slot(&self, line: &LineState<Self::LineExtras>, s: u32) -> f32 {
+        let _ = s;
+        line.beat_step
+    }
+
+    /// Maximum rubato half-width in beats for syllable `s`. The
+    /// walker draws a rubato offset in `[-max, +max]` only when this
+    /// is non-zero **and** `s` is neither the first nor the last
+    /// syllable of the line (line edges stay on the grid so phrases
+    /// still resolve to the chord). Default = 0 (strict grid).
+    fn rubato_max(
+        &self,
+        line: &LineState<Self::LineExtras>,
+        s: u32,
+        slot: f32,
+    ) -> f32 {
+        let _ = (line, s, slot);
+        0.0
+    }
+
+    /// Pick the syllable's pitch — handles cadence override on the
+    /// final syllable, chord-tone anchoring on strong beats, and any
+    /// style-specific snapping (e.g. `snap_to_pentatonic` for Folk).
+    /// The walker then applies `cap_interval` against the line's
+    /// effective band so the final pitch is at most `MAX_INTERVAL`
+    /// semitones from the previous one.
+    fn pick_pitch(
+        &self,
+        ctx: &VocalContext,
+        line: &LineState<Self::LineExtras>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+    ) -> u8;
+
+    /// Syllable duration in beats. Profiles return whatever
+    /// combination of `slot`, `beat_step`, articulation trim, and
+    /// `rhythm_trim` rng jitter they used in the legacy code.
+    fn dur_beats(
+        &self,
+        line: &LineState<Self::LineExtras>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32;
+
+    /// Minimum duration in ticks (post-multiplication by `tpb`).
+    /// Chant overrides this to `tpb / 8` so its tight sixteenth-feel
+    /// notes aren't forced up to a quarter-note floor.
+    fn min_dur_ticks(&self, tpb: u64) -> u64 {
+        (tpb / 4).max(1)
+    }
+
+    /// MIDI velocity for the syllable. Always called — profiles
+    /// build it from [`shape_velocity`] plus optional bumps
+    /// (Anthemic's climax punch, Chant's spit lift).
+    fn velocity(
+        &self,
+        line: &LineState<Self::LineExtras>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32;
+
+    /// Called once per line after the syllable loop. Folk uses this
+    /// to stash the line's pitch offsets in its echo memory so the
+    /// next pair of lines can echo this contour. Default does
+    /// nothing.
+    fn end_line(&mut self, line_idx: usize, line_offsets: Vec<i16>) {
+        let _ = (line_idx, line_offsets);
+    }
+}
+
+/// The single per-syllable walker every `VocalStyleProfile`
+/// implementation flows through. Replaces the six legacy
+/// `derive_*` functions — each style is now just a profile.
+fn walk_with_profile<P: VocalStyleProfile>(
+    ctx: &VocalContext<'_>,
+    mut profile: P,
+) -> Vec<GeneratedNote> {
     let VocalContext {
         chords,
         params,
         tpb,
         section_beats,
-        lo,
-        hi,
         beats_per_bar,
         ref line_syllables,
         total_syl,
         seed,
-        scale,
         ..
     } = *ctx;
 
     let mut rng = XorShift::new(seed.max(1));
     let mut out = Vec::with_capacity(total_syl as usize);
 
-    // Hymnal tessitura: cap at a 9-semitone band centred ~2/5 up the
-    // available range so the melody hovers close to the speaking voice.
-    let band_lo = lo;
-    let band_hi = (lo as i16 + 9).min(hi as i16) as u8;
+    let band = profile.band(ctx);
+    let mut prev_pitch = profile.init_prev_pitch(ctx, band);
 
-    // Beat-step is locked to the line's slice of the section, but each
-    // syllable gets the same duration (no breath-gap stretching). One
-    // line worth of beats is divided evenly.
+    let breath_frac = profile.breath_frac(params);
     let articulation = params.articulation.clamp(0.0, 1.0);
-    let trim = 0.92 - 0.30 * articulation;
-
-    let mut prev_pitch = snap_to_scale(
-        ((band_lo as u16 + band_hi as u16) / 2) as u8,
-        scale,
-        band_lo,
-        band_hi,
-    );
+    let min_dur = profile.min_dur_ticks(tpb);
 
     let mut syl_cursor: u32 = 0;
     for (line_idx, &line_syl) in line_syllables.iter().enumerate() {
         if line_syl == 0 {
             continue;
         }
-        // Hymnal stays on the rigid grid — strict timing is core to
-        // the style. No phrase-start offset.
-        let line_start_beat_f = syl_cursor as f32 * section_beats as f32 / total_syl as f32;
-        let line_end_beat_f =
-            (syl_cursor + line_syl) as f32 * section_beats as f32 / total_syl as f32;
-        let line_beat_span = (line_end_beat_f - line_start_beat_f).max(0.001);
-        let beat_step = line_beat_span / line_syl as f32;
-
-        for s in 0..line_syl {
-            let progress_in_line = s as f32 / line_syl.max(1) as f32;
-            let beat_f = line_start_beat_f + s as f32 * beat_step;
-            let beat_round = beat_f.floor().clamp(0.0, (section_beats - 1) as f32) as u32;
-            let chord = chord_at_beat(chords, beat_round);
-
-            let is_final = s + 1 == line_syl;
-            // Step ±1 semitone with light bias back toward the centre
-            // of the band so the melody doesn't drift to the edges.
-            // Occasionally (12 %) repeat the previous pitch — the
-            // way hymn singers stay on a tone for "Holy, holy" type
-            // figures.
-            let centre = (band_lo as i16 + band_hi as i16) / 2;
-            let drift = (centre - prev_pitch as i16).signum();
-            let raw_step: i16 = if rng.next_f32() < 0.12 {
-                0
-            } else if rng.next_f32() < 0.6 {
-                drift
-            } else if rng.next_f32() < 0.5 {
-                1
-            } else {
-                -1
-            };
-            let mut candidate =
-                ((prev_pitch as i16 + raw_step).clamp(band_lo as i16, band_hi as i16)) as u8;
-
-            if is_final {
-                // Use phrase-role cadence: antecedent lines end open
-                // (2nd / 4th / 7th), consequent end on tonic-family
-                // chord tone. Falls back to nearest chord tone when
-                // no scale-degree match is reachable in the band.
-                if let Some(picked) = cadence_pitch(
-                    phrase_role(line_idx),
-                    chord,
-                    scale,
-                    prev_pitch,
-                    (band_lo, band_hi),
-                ) {
-                    candidate = picked;
-                } else if let Some(c) = chord {
-                    let tones = chord_tones_in_register(c.chord, (band_lo, band_hi));
-                    if let Some(picked) = tones
-                        .iter()
-                        .copied()
-                        .min_by_key(|t| (*t as i16 - prev_pitch as i16).abs())
-                    {
-                        candidate = picked;
-                    }
-                }
-            }
-
-            let snapped = snap_to_scale(candidate, scale, band_lo, band_hi);
-            let pitch = cap_interval(prev_pitch, snapped, band_lo, band_hi, scale);
-
-            let dur_beats = beat_step * trim;
-            let start_tick = (beat_f as f64 * tpb as f64) as u64;
-            let dur_ticks = ((dur_beats as f64 * tpb as f64) as u64).max(tpb / 4);
-
-            // Hymnal stays even-handed — small phrase arch, mild
-            // accent, low jitter. Strict timing is core to the style
-            // so no rubato.
-            let velocity = shape_velocity(
-                &mut rng, 0.72, progress_in_line, 0.45, beat_round, beats_per_bar, 0.4, 0.05,
-            );
-
-            out.push(GeneratedNote {
-                note: pitch,
-                velocity,
-                start_tick,
-                duration_ticks: dur_ticks,
-            });
-            prev_pitch = pitch;
-        }
-
-        syl_cursor += line_syl;
-    }
-    out
-}
-
-// ===========================================================================
-// Style: Folk
-// ===========================================================================
-
-/// Pentatonic, descending-leaning phrases with long-short rhythm pairs.
-/// Lines two-and-four echo the contour shape of lines one-and-three —
-/// the call-and-response structure characteristic of folk songs.
-fn derive_folk(ctx: &VocalContext<'_>) -> Vec<GeneratedNote> {
-    let VocalContext {
-        chords,
-        params,
-        tpb,
-        section_beats,
-        lo,
-        hi,
-        beats_per_bar,
-        ref line_syllables,
-        total_syl,
-        seed,
-        scale,
-    } = *ctx;
-
-    let mut rng = XorShift::new(seed.max(1));
-    let mut out = Vec::with_capacity(total_syl as usize);
-
-    let breath_frac = params.breath.clamp(0.0, 0.9).max(0.20);
-    let articulation = params.articulation.clamp(0.0, 1.0);
-    let trim = 0.92 - 0.40 * articulation;
-
-    // Start near the top of the range so descending lines have somewhere
-    // to fall toward.
-    let span = hi as i16 - lo as i16;
-    let start_pitch =
-        (lo as i16 + (span * 3) / 4).clamp(lo as i16, hi as i16) as u8;
-    let mut prev_pitch = snap_to_pentatonic(start_pitch, scale, lo, hi);
-
-    // Cache the contour shapes we generate for line 0 and 1 so lines 2
-    // and 3 can echo them. Stored as relative semitone offsets from
-    // the line's first pitch.
-    let mut echo_offsets: [Vec<i16>; 2] = [Vec::new(), Vec::new()];
-
-    let mut syl_cursor: u32 = 0;
-    for (line_idx, &line_syl) in line_syllables.iter().enumerate() {
-        if line_syl == 0 {
-            continue;
-        }
-        let raw_line_start = syl_cursor as f32 * section_beats as f32 / total_syl as f32;
-        let line_offset = phrase_start_offset(&mut rng, beats_per_bar);
-        let line_start_beat_f = (raw_line_start + line_offset).max(0.0);
-        let line_end_beat_f =
-            (syl_cursor + line_syl) as f32 * section_beats as f32 / total_syl as f32;
-        let line_beat_span = (line_end_beat_f - line_start_beat_f).max(0.001);
-        let sing_span = line_beat_span * (1.0 - breath_frac);
-        // Long-short pairs — odd-position syllables get 1.4x the slot,
-        // even-position get 0.6x. Total over a pair stays at 2.
-        let pair_unit = sing_span / line_syl as f32;
-
-        // Line 2 echoes line 0; line 3 echoes line 1.
-        let echo_source: Option<&Vec<i16>> = if line_idx >= 2 {
-            echo_offsets.get(line_idx % 2)
+        let raw_line_start =
+            syl_cursor as f32 * section_beats as f32 / total_syl as f32;
+        let line_offset = if profile.use_phrase_start_offset() {
+            phrase_start_offset(&mut rng, beats_per_bar)
         } else {
-            None
-        }
-        .filter(|v| !v.is_empty());
-
-        let line_first_pitch = prev_pitch;
-        let mut this_line_offsets: Vec<i16> = Vec::with_capacity(line_syl as usize);
-
-        // Per-line long-short ratio jitter: alternates roughly
-        // between dotted-eighth + sixteenth and triplet-feel pairs
-        // across lines, so the rhythm doesn't feel mechanically
-        // identical bar-to-bar. ratio = 1.35 ± up to 0.20.
-        let line_long_ratio = 1.35 + (rng.next_f32() - 0.5) * 0.40;
-        let line_short_ratio = 2.0 - line_long_ratio;
-
-        // Compute per-syllable beat positions with the long-short pattern.
-        let mut beat_cursor = 0.0f32;
-
-        for s in 0..line_syl {
-            let progress_in_line = s as f32 / line_syl.max(1) as f32;
-            let is_long = s % 2 == 0;
-            let slot = if is_long {
-                pair_unit * line_long_ratio
-            } else {
-                pair_unit * line_short_ratio
-            };
-            let beat_f = line_start_beat_f + beat_cursor;
-            beat_cursor += slot;
-
-            let beat_round = beat_f.floor().clamp(0.0, (section_beats - 1) as f32) as u32;
-            let chord = chord_at_beat(chords, beat_round);
-
-            // Echo source playback adds a ±1 semitone variation 25 %
-            // of the time so repeated lines aren't carbon copies.
-            let candidate = if let Some(source) = echo_source {
-                let mut off = source.get(s as usize).copied().unwrap_or(0);
-                if rng.next_f32() < 0.25 {
-                    off += if rng.next_f32() < 0.5 { 1 } else { -1 };
-                }
-                ((line_first_pitch as i16 + off).clamp(lo as i16, hi as i16)) as u8
-            } else {
-                // Descending phrase, with stronger jitter and a 5 %
-                // chance of a "stomp leap" (-3 to -5 semitones) for
-                // folk-style modal turnarounds.
-                let descend_target = (start_pitch as f32
-                    - progress_in_line * (span as f32 * 0.45))
-                    .clamp(lo as f32, hi as f32) as u8;
-                let jitter = if rng.next_f32() < 0.05 {
-                    -((rng.next_range(3) as i16) + 3) // -3..-5
-                } else if rng.next_f32() < 0.35 {
-                    if rng.next_f32() < 0.5 { 1 } else { -1 }
-                } else {
-                    0
-                };
-                ((descend_target as i16 + jitter).clamp(lo as i16, hi as i16)) as u8
-            };
-
-            // Stomp on the downbeat: every long-slot syllable that
-            // also lands on a strong bar-position counts as strong.
-            let strong = s == 0
-                || s + 1 == line_syl
-                || (is_long && beat_strength(beat_round, beats_per_bar) >= 0.65);
-            let is_final = s + 1 == line_syl;
-            let raw = if is_final {
-                cadence_pitch(phrase_role(line_idx), chord, scale, prev_pitch, (lo, hi))
-                    .unwrap_or_else(|| {
-                        chord
-                            .and_then(|c| chord_tone_nearest(c.chord, (lo, hi), candidate))
-                            .unwrap_or(candidate)
-                    })
-            } else if strong {
-                chord
-                    .and_then(|c| chord_tone_nearest(c.chord, (lo, hi), candidate))
-                    .unwrap_or(candidate)
-            } else {
-                snap_to_pentatonic(candidate, scale, lo, hi)
-            };
-            let pitch = cap_interval(prev_pitch, raw, lo, hi, scale);
-            this_line_offsets.push(pitch as i16 - line_first_pitch as i16);
-
-            let is_final = s + 1 == line_syl;
-            let dur_beats = if is_final {
-                // Folk uses the long-short slot, so use the average of
-                // long+short for the terminal cap, not the literal slot
-                // (which fluctuates 0.6× ↔ 1.4×).
-                terminal_dur_beats(pair_unit, articulation)
-            } else {
-                // Folk's slot is already long-short; layer trim
-                // jitter on top so even within a long the note is
-                // not always the same length.
-                let trim_local = rhythm_trim(&mut rng, trim, beat_round, beats_per_bar, 0.12);
-                slot * trim_local
-            };
-            let start_tick = (beat_f as f64 * tpb as f64) as u64;
-            let dur_ticks = ((dur_beats as f64 * tpb as f64) as u64).max(tpb / 4);
-
-            // Folk dynamics: arched phrase + heavy bar-position
-            // accent (the stomp). Mid jitter — folk feels human and
-            // a touch loose.
-            let velocity = shape_velocity(
-                &mut rng, 0.70, progress_in_line, 0.7, beat_round, beats_per_bar, 0.85, 0.10,
-            );
-
-            out.push(GeneratedNote {
-                note: pitch,
-                velocity,
-                start_tick,
-                duration_ticks: dur_ticks,
-            });
-            prev_pitch = pitch;
-        }
-
-        if line_idx < 2 {
-            echo_offsets[line_idx] = this_line_offsets;
-        }
-
-        syl_cursor += line_syl;
-    }
-    out
-}
-
-// ===========================================================================
-// Style: Anthemic
-// ===========================================================================
-
-/// Wide-range chorus melody: each line builds to a peak around the 60 %
-/// mark, then resolves back to a chord tone for the cadence. Final
-/// syllables sustain into the breath. Strong chord-tone anchoring on
-/// every other syllable.
-fn derive_anthemic(ctx: &VocalContext<'_>) -> Vec<GeneratedNote> {
-    let VocalContext {
-        chords,
-        params,
-        tpb,
-        section_beats,
-        lo,
-        hi,
-        beats_per_bar,
-        ref line_syllables,
-        total_syl,
-        seed,
-        scale,
-    } = *ctx;
-
-    let mut rng = XorShift::new(seed.max(1));
-    let mut out = Vec::with_capacity(total_syl as usize);
-
-    let breath_frac = (params.breath.clamp(0.0, 0.9) * 0.6).max(0.10);
-    let articulation = params.articulation.clamp(0.0, 1.0);
-    let trim = 0.95 - 0.30 * articulation;
-
-    let mut prev_pitch = snap_to_scale(((lo as u16 + hi as u16) / 2) as u8, scale, lo, hi);
-
-    let mut syl_cursor: u32 = 0;
-    for (line_idx, &line_syl) in line_syllables.iter().enumerate() {
-        if line_syl == 0 {
-            continue;
-        }
-        let raw_line_start = syl_cursor as f32 * section_beats as f32 / total_syl as f32;
-        let line_offset = phrase_start_offset(&mut rng, beats_per_bar);
+            0.0
+        };
         let line_start_beat_f = (raw_line_start + line_offset).max(0.0);
         let line_end_beat_f =
             (syl_cursor + line_syl) as f32 * section_beats as f32 / total_syl as f32;
         let line_beat_span = (line_end_beat_f - line_start_beat_f).max(0.001);
         let sing_span = line_beat_span * (1.0 - breath_frac);
         let beat_step = sing_span / line_syl as f32;
+        let line_first_pitch = prev_pitch;
+        let mut line = LineState {
+            line_idx,
+            line_syl,
+            syl_cursor,
+            sing_span,
+            beat_step,
+            line_first_pitch,
+            band_lo: band.0,
+            band_hi: band.1,
+            articulation,
+            extras: <P::LineExtras as Default>::default(),
+        };
+        line.extras = profile.begin_line(&mut rng, ctx, &line);
 
+        let mut line_offsets: Vec<i16> = Vec::with_capacity(line_syl as usize);
+        let mut beat_cursor = 0.0_f32;
         for s in 0..line_syl {
             let progress_in_line = s as f32 / line_syl.max(1) as f32;
-            let beat_f = line_start_beat_f + s as f32 * beat_step;
+            let slot = profile.slot(&line, s);
+            let rubato_max = profile.rubato_max(&line, s, slot);
+            let rubato = if s == 0 || s + 1 == line_syl || rubato_max == 0.0 {
+                0.0
+            } else {
+                rubato_offset(&mut rng, rubato_max)
+            };
+            let beat_f = line_start_beat_f + beat_cursor + rubato;
+            beat_cursor += slot;
             let beat_round = beat_f.floor().clamp(0.0, (section_beats - 1) as f32) as u32;
             let chord = chord_at_beat(chords, beat_round);
-
-            // Per-line arch: position 0 starts low, peak at 0.6, line
-            // ends mid-low.
-            let t = progress_in_line;
-            let arch = 1.0 - ((t - 0.6).abs() / 0.6_f32.max(1.0 - 0.6_f32)).clamp(0.0, 1.0);
-            let span = hi as f32 - lo as f32;
-            let target = lo as f32 + (0.30 + 0.60 * arch) * span;
-
-            let strong = s % 2 == 0;
             let is_final = s + 1 == line_syl;
-            // Climax syllable: the one closest to the 60 % peak. Gets
-            // a dramatic upward leap — the "chorus money note".
-            let climax_idx = ((line_syl as f32 * 0.6).round() as u32).min(line_syl - 1);
-            let is_climax = s == climax_idx && line_syl >= 4;
-
-            let candidate = target.clamp(lo as f32, hi as f32) as u8;
-            let raw = if is_climax {
-                // Force the highest in-range chord tone for the climax
-                // — the dramatic peak singers always go for in choruses.
-                chord
-                    .and_then(|c| {
-                        let tones = chord_tones_in_register(c.chord, (lo, hi));
-                        tones.into_iter().max()
-                    })
-                    .unwrap_or(candidate)
-            } else if is_final {
-                cadence_pitch(phrase_role(line_idx), chord, scale, prev_pitch, (lo, hi))
-                    .unwrap_or_else(|| {
-                        chord
-                            .and_then(|c| chord_tone_nearest(c.chord, (lo, hi), candidate))
-                            .unwrap_or(candidate)
-                    })
-            } else if strong {
-                chord
-                    .and_then(|c| chord_tone_nearest(c.chord, (lo, hi), candidate))
-                    .unwrap_or(candidate)
-            } else if params.stay_in_scale {
-                snap_to_scale(candidate, scale, lo, hi)
-            } else {
-                candidate
+            let inp = StepInputs {
+                s,
+                is_final,
+                progress_in_line,
+                beat_round,
+                chord,
+                prev_pitch,
+                slot,
             };
-            let pitch = cap_interval(prev_pitch, raw, lo, hi, scale);
-
-            // Final syllable of each line gets a sustain — chorus-style
-            // hold into the breath gap. Anthemic gets a slightly
-            // longer terminal sustain than other styles (chorus
-            // money note feel) — 1.6× instead of 1.4×.
-            let dur_beats = if is_final {
-                let cap = beat_step * 1.6;
-                let normal = beat_step * trim;
-                cap.max(normal)
-            } else if is_climax {
-                // Climax note also gets a sustained hold — the
-                // "money note" of the chorus.
-                beat_step * 1.4
-            } else {
-                // Anthemic uses wider trim variation than PopBallad
-                // — chorus dynamics are big and pushy.
-                let trim_local = rhythm_trim(&mut rng, trim, beat_round, beats_per_bar, 0.20);
-                beat_step * trim_local
-            };
+            let raw = profile.pick_pitch(ctx, &line, &inp, &mut rng);
+            let pitch = cap_interval(prev_pitch, raw, line.band_lo, line.band_hi, ctx.scale);
+            let dur_beats = profile.dur_beats(&line, &inp, &mut rng, beats_per_bar);
+            let velocity = profile.velocity(&line, &inp, &mut rng, beats_per_bar);
             let start_tick = (beat_f as f64 * tpb as f64) as u64;
-            let dur_ticks = ((dur_beats as f64 * tpb as f64) as u64).max(tpb / 4);
-
-            // Anthemic dynamics: maximum arch + accent so the climax
-            // really lands, plus an extra punch on the climax note
-            // itself.
-            let mut velocity = shape_velocity(
-                &mut rng, 0.80, progress_in_line, 1.0, beat_round, beats_per_bar, 0.8, 0.07,
-            );
-            if is_climax {
-                velocity = (velocity + 0.10).clamp(0.4, 1.0);
-            }
-
+            let dur_ticks = ((dur_beats as f64 * tpb as f64) as u64).max(min_dur);
             out.push(GeneratedNote {
                 note: pitch,
                 velocity,
                 start_tick,
                 duration_ticks: dur_ticks,
             });
+            line_offsets.push(pitch as i16 - line_first_pitch as i16);
             prev_pitch = pitch;
         }
-
+        profile.end_line(line_idx, line_offsets);
         syl_cursor += line_syl;
     }
     out
 }
 
+/// Dispatch table — picks the concrete profile for a `VocalStyle`
+/// variant and runs the shared walker.
+fn derive_with_profile(ctx: &VocalContext<'_>) -> Vec<GeneratedNote> {
+    match ctx.params.style {
+        VocalStyle::PopBallad => walk_with_profile(ctx, PopBalladProfile),
+        VocalStyle::Conversational => walk_with_profile(ctx, ConversationalProfile),
+        VocalStyle::Hymnal => walk_with_profile(ctx, HymnalProfile),
+        VocalStyle::Folk => walk_with_profile(ctx, FolkProfile::default()),
+        VocalStyle::Anthemic => walk_with_profile(ctx, AnthemicProfile),
+        VocalStyle::Chant => walk_with_profile(ctx, ChantProfile),
+    }
+}
+
+
 // ===========================================================================
-// Style: Chant
+// Per-style profile implementations
 // ===========================================================================
+//
+// Each profile is a unit struct (Folk carries echo state) whose
+// `impl VocalStyleProfile` mirrors the legacy free function for that
+// style. The numeric constants and the order of rng draws match the
+// pre-refactor code one-for-one so the deterministic output is byte-
+// identical to what the old `derive_pop_ballad` / `derive_folk` / …
+// emitted.
 
-/// Hip-hop / spoken-word: monotone-leaning vocal anchored on the chord
-/// root, with bursts of fast syllables packed into the front of each
-/// beat slot and a short breath at the end of each line. Pitches step
-/// at most 3 semitones from the centre.
-fn derive_chant(ctx: &VocalContext<'_>) -> Vec<GeneratedNote> {
-    let VocalContext {
-        chords,
-        params,
-        tpb,
-        section_beats,
-        lo,
-        hi,
-        beats_per_bar,
-        ref line_syllables,
-        total_syl,
-        seed,
-        scale,
-    } = *ctx;
+/// PopBallad: stepwise contour-driven walk with breath gaps, gentle
+/// chord-tone anchoring on strong beats, surprise passing-leap on a
+/// minority of weak-beat syllables, antecedent/consequent cadence on
+/// each line's terminal note. The legacy default — the only style
+/// that fully respects every Melody slider (contour, anchor, leap).
+struct PopBalladProfile;
 
-    let mut rng = XorShift::new(seed.max(1));
-    let mut out = Vec::with_capacity(total_syl as usize);
+impl VocalStyleProfile for PopBalladProfile {
+    type LineExtras = ();
 
-    // Narrow band, biased to the lower-middle of the range.
-    let span = hi as i16 - lo as i16;
-    let centre = (lo as i16 + (span * 4) / 10).clamp(lo as i16, hi as i16) as u8;
-    let band_lo = (centre as i16 - 2).clamp(lo as i16, hi as i16) as u8;
-    let band_hi = (centre as i16 + 3).clamp(lo as i16, hi as i16) as u8;
+    fn init_prev_pitch(&self, ctx: &VocalContext, band: (u8, u8)) -> u8 {
+        snap_to_scale(((band.0 as u16 + band.1 as u16) / 2) as u8, ctx.scale, band.0, band.1)
+    }
 
-    let breath_frac = params.breath.clamp(0.0, 0.9).max(0.18);
+    fn begin_line(
+        &mut self,
+        _rng: &mut XorShift,
+        _ctx: &VocalContext,
+        _line: &LineState<()>,
+    ) {
+    }
 
-    let mut prev_pitch = snap_to_scale(centre, scale, band_lo, band_hi);
+    fn rubato_max(&self, line: &LineState<()>, _s: u32, _slot: f32) -> f32 {
+        line.beat_step * 0.05
+    }
 
-    let mut syl_cursor: u32 = 0;
-    for (line_idx, &line_syl) in line_syllables.iter().enumerate() {
-        if line_syl == 0 {
-            continue;
-        }
-        let raw_line_start = syl_cursor as f32 * section_beats as f32 / total_syl as f32;
-        let line_offset = phrase_start_offset(&mut rng, beats_per_bar);
-        let line_start_beat_f = (raw_line_start + line_offset).max(0.0);
-        let line_end_beat_f =
-            (syl_cursor + line_syl) as f32 * section_beats as f32 / total_syl as f32;
-        let line_beat_span = (line_end_beat_f - line_start_beat_f).max(0.001);
-        // Pack syllables tighter than the line span: chant rhythm sits
-        // in the front of the bar, then leaves a wider rest. The breath
-        // factor controls how much of the line is "rest" vs sung.
-        let sing_span = line_beat_span * (1.0 - breath_frac);
-        // Burst: each syllable sits on a sixteenth-ish slot. Reduce slot
-        // size with more syllables so we still finish inside sing_span.
-        let slot = sing_span / line_syl as f32;
+    fn pick_pitch(
+        &self,
+        ctx: &VocalContext,
+        line: &LineState<()>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+    ) -> u8 {
+        // Strong-beat heuristic + anchor draw — match original order.
+        let strong = inp.s == 0
+            || inp.s + 1 == line.line_syl
+            || (inp.s.is_multiple_of(2) && beat_strength(inp.beat_round, ctx.beats_per_bar) > 0.5);
+        let anchor = strong && rng.next_f32() < ctx.params.chord_tone_anchor;
 
-        // Per-line rhythm twist: ~30 % chance the line uses a
-        // triplet-feel slot ratio (3 syllables in the time of 2)
-        // instead of straight sixteenths. Picks one of two patterns
-        // up front so the line feels coherent.
-        let triplet_feel = rng.next_f32() < 0.30;
-        let slot_for = |s: u32| -> f32 {
-            if triplet_feel {
-                // Triplet swing: 1.20 / 0.90 / 0.90 repeating.
-                match s % 3 {
-                    0 => slot * 1.20,
-                    _ => slot * 0.90,
+        // Contour target uses GLOBAL progress across the section,
+        // not per-line — Arch arches over the whole section.
+        let global_idx = line.syl_cursor + inp.s;
+        let global_t =
+            global_idx as f32 / (ctx.total_syl.saturating_sub(1).max(1)) as f32;
+        let contour_pos = contour_height(ctx.params.contour, global_t).clamp(0.0, 1.0);
+        let contour_target = line.band_lo as f32
+            + contour_pos * (line.band_hi as f32 - line.band_lo as f32);
+        let pulled = inp.prev_pitch as f32 * 2.0 / 3.0 + contour_target / 3.0;
+
+        // Step vs leap draws — preserve original order.
+        let leap = rng.next_f32() < ctx.params.leap_range;
+        let surprise_leap = !leap && rng.next_f32() < 0.12;
+        let step_range = if leap {
+            3..=6
+        } else if surprise_leap {
+            3..=4
+        } else {
+            1..=2
+        };
+        let step = (rng.next_range(*step_range.end() - *step_range.start() + 1)
+            + *step_range.start()) as i16;
+        let direction = if contour_target > inp.prev_pitch as f32 { 1i16 } else { -1 };
+        let walked =
+            (pulled as i16 + step * direction).clamp(line.band_lo as i16, line.band_hi as i16) as u8;
+
+        if inp.is_final {
+            cadence_pitch(
+                phrase_role(line.line_idx),
+                inp.chord,
+                ctx.scale,
+                inp.prev_pitch,
+                (line.band_lo, line.band_hi),
+            )
+            .unwrap_or_else(|| {
+                if anchor {
+                    inp.chord
+                        .and_then(|c| {
+                            chord_tone_nearest(c.chord, (line.band_lo, line.band_hi), inp.prev_pitch)
+                        })
+                        .unwrap_or(walked)
+                } else if ctx.params.stay_in_scale {
+                    snap_to_scale(walked, ctx.scale, line.band_lo, line.band_hi)
+                } else {
+                    walked
                 }
-            } else {
-                slot
-            }
+            })
+        } else if anchor {
+            inp.chord
+                .and_then(|c| chord_tone_nearest(c.chord, (line.band_lo, line.band_hi), inp.prev_pitch))
+                .unwrap_or(walked)
+        } else if ctx.params.stay_in_scale {
+            snap_to_scale(walked, ctx.scale, line.band_lo, line.band_hi)
+        } else {
+            walked
+        }
+    }
+
+    fn dur_beats(
+        &self,
+        line: &LineState<()>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32 {
+        let base_trim = 0.98 - 0.48 * line.articulation;
+        if inp.is_final {
+            terminal_dur_beats(line.beat_step, line.articulation)
+        } else {
+            let trim = rhythm_trim(rng, base_trim, inp.beat_round, beats_per_bar, 0.18);
+            line.beat_step * trim
+        }
+    }
+
+    fn velocity(
+        &self,
+        _line: &LineState<()>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32 {
+        shape_velocity(
+            rng,
+            0.74,
+            inp.progress_in_line,
+            0.9,
+            inp.beat_round,
+            beats_per_bar,
+            0.7,
+            0.08,
+        )
+    }
+}
+
+/// Conversational: talky/spoken-feel anchored on a speaking pitch a
+/// hair below the centre of the range. Pitches repeat ~55 % of the
+/// time, walk by 1–2 semitones otherwise, with line-edge inflection
+/// (rise on syllable 0, fall on the terminal). Larger rubato than
+/// PopBallad — words push and pull against the click. Ignores
+/// `params.contour` because the shape comes from the per-line
+/// inflection, not a section-spanning curve.
+struct ConversationalProfile;
+
+/// Speaking pitch helper: a hair below the band centre, scale-snapped.
+fn conversational_speaking_pitch(ctx: &VocalContext, band: (u8, u8)) -> u8 {
+    let span = band.1 as i16 - band.0 as i16;
+    snap_to_scale(
+        (band.0 as i16 + (span * 4) / 10).clamp(band.0 as i16, band.1 as i16) as u8,
+        ctx.scale,
+        band.0,
+        band.1,
+    )
+}
+
+impl VocalStyleProfile for ConversationalProfile {
+    type LineExtras = ();
+
+    fn init_prev_pitch(&self, ctx: &VocalContext, band: (u8, u8)) -> u8 {
+        conversational_speaking_pitch(ctx, band)
+    }
+
+    fn begin_line(&mut self, _rng: &mut XorShift, _ctx: &VocalContext, _line: &LineState<()>) {}
+
+    fn rubato_max(&self, line: &LineState<()>, _s: u32, _slot: f32) -> f32 {
+        line.beat_step * 0.10
+    }
+
+    fn pick_pitch(
+        &self,
+        ctx: &VocalContext,
+        line: &LineState<()>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+    ) -> u8 {
+        // Pitch repetition with bursts. The two repeat branches look
+        // collapsible but they're *not*: each performs an independent
+        // rng draw and the second only runs when the first failed.
+        // Merging them would advance rng one fewer step per syllable
+        // and the deterministic output for Conversational would
+        // drift. The first branch (~10 %) flags a "spoken-emphasis
+        // run" where the next syllable also re-uses prev_pitch; the
+        // second branch (~55 % of the remaining 90 %) is the regular
+        // repeat. Order of draws matches `derive_conversational`.
+        #[allow(clippy::if_same_then_else)]
+        let pitch_pre = if rng.next_f32() < 0.10 {
+            inp.prev_pitch
+        } else if rng.next_f32() < 0.55 {
+            inp.prev_pitch
+        } else {
+            let dir: i16 = if rng.next_f32() < 0.5 { 1 } else { -1 };
+            let step: i16 = if rng.next_f32() < 0.18 { 2 } else { 1 };
+            ((inp.prev_pitch as i16 + dir * step).clamp(line.band_lo as i16, line.band_hi as i16))
+                as u8
         };
 
-        let mut beat_cursor = 0.0_f32;
-        for s in 0..line_syl {
-            let progress_in_line = s as f32 / line_syl.max(1) as f32;
-            let cur_slot = slot_for(s);
-            // Aggressive chant rubato: ±8 % of the slot. Spoken-word
-            // delivery doesn't sit on the grid.
-            let rubato = if s == 0 || s + 1 == line_syl {
-                0.0
-            } else {
-                rubato_offset(&mut rng, cur_slot * 0.08)
-            };
-            let beat_f = line_start_beat_f + beat_cursor + rubato;
-            beat_cursor += cur_slot;
-            let beat_round = beat_f.floor().clamp(0.0, (section_beats - 1) as f32) as u32;
-            let chord = chord_at_beat(chords, beat_round);
+        let speaking = conversational_speaking_pitch(ctx, (line.band_lo, line.band_hi));
+        let inflected = if inp.s == 0 {
+            ((speaking as i16 + 1).clamp(line.band_lo as i16, line.band_hi as i16)) as u8
+        } else if inp.s + 1 == line.line_syl {
+            ((speaking as i16 - 1).clamp(line.band_lo as i16, line.band_hi as i16)) as u8
+        } else {
+            pitch_pre
+        };
 
-            // Mostly stay on the previous pitch; punch up on bar
-            // downbeats with a chord tone; small inflections
-            // elsewhere. Adds 8 % chance of a "spit" — jump 3-4
-            // semitones up briefly for emphasis (then snap back next
-            // syllable).
-            let punch_down = beat_strength(beat_round, beats_per_bar) >= 0.65 && rng.next_f32() < 0.5;
-            let spit = !punch_down && rng.next_f32() < 0.08 && s > 0 && s + 1 < line_syl;
-            let is_final = s + 1 == line_syl;
-            let pitch_pre = if is_final {
-                cadence_pitch(
-                    phrase_role(line_idx),
-                    chord,
-                    scale,
-                    prev_pitch,
-                    (band_lo, band_hi),
-                )
-                .unwrap_or_else(|| {
-                    chord
-                        .and_then(|c| chord_tone_nearest(c.chord, (band_lo, band_hi), centre))
-                        .unwrap_or(centre)
-                })
-            } else if s == 0 {
-                chord
+        let strong = inp.s == 0
+            || inp.s + 1 == line.line_syl
+            || beat_strength(inp.beat_round, ctx.beats_per_bar) >= 0.65;
+        if inp.is_final {
+            cadence_pitch(
+                phrase_role(line.line_idx),
+                inp.chord,
+                ctx.scale,
+                inp.prev_pitch,
+                (line.band_lo, line.band_hi),
+            )
+            .unwrap_or_else(|| {
+                inp.chord
                     .and_then(|c| {
-                        chord_tone_nearest(c.chord, (band_lo, band_hi), centre)
+                        chord_tone_nearest(c.chord, (line.band_lo, line.band_hi), inflected)
                     })
-                    .unwrap_or(centre)
-            } else if punch_down {
-                chord
-                    .and_then(|c| chord_tone_nearest(c.chord, (band_lo, band_hi), prev_pitch))
-                    .unwrap_or(prev_pitch)
-            } else if spit {
-                let lift = (rng.next_range(2) as i16) + 3;
-                ((prev_pitch as i16 + lift).clamp(band_lo as i16, band_hi as i16)) as u8
-            } else if s % 4 == 0 && rng.next_f32() < 0.55 {
-                let dir: i16 = if rng.next_f32() < 0.5 { 1 } else { -1 };
-                ((prev_pitch as i16 + dir).clamp(band_lo as i16, band_hi as i16)) as u8
-            } else {
-                prev_pitch
-            };
-            let snapped = snap_to_scale(pitch_pre, scale, band_lo, band_hi);
-            let pitch = cap_interval(prev_pitch, snapped, band_lo, band_hi, scale);
+                    .unwrap_or(inflected)
+            })
+        } else if strong {
+            inp.chord
+                .and_then(|c| chord_tone_nearest(c.chord, (line.band_lo, line.band_hi), inflected))
+                .unwrap_or(inflected)
+        } else if ctx.params.stay_in_scale {
+            snap_to_scale(inflected, ctx.scale, line.band_lo, line.band_hi)
+        } else {
+            inflected
+        }
+    }
 
-            // Chant: short notes packed tight, but vary the trim so
-            // the rhythm has bite. Wider range than other styles —
-            // chant rhythms are characteristically jagged.
-            let dur_beats = cur_slot * rhythm_trim(&mut rng, 0.85, beat_round, beats_per_bar, 0.20);
-            let start_tick = (beat_f as f64 * tpb as f64) as u64;
-            let dur_ticks = ((dur_beats as f64 * tpb as f64) as u64).max(tpb / 8);
+    fn dur_beats(
+        &self,
+        line: &LineState<()>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32 {
+        let trim = 0.95 - 0.45 * line.articulation;
+        if inp.is_final {
+            terminal_dur_beats(line.beat_step, line.articulation)
+        } else {
+            let trim_local = rhythm_trim(rng, trim, inp.beat_round, beats_per_bar, 0.22);
+            line.beat_step * trim_local
+        }
+    }
 
-            // Chant dynamics: heavy bar-position accent, modest arch,
-            // wider jitter for spoken-word feel. Spits get a velocity
-            // bump too.
-            let mut velocity = shape_velocity(
-                &mut rng, 0.65, progress_in_line, 0.4, beat_round, beats_per_bar, 1.0, 0.10,
-            );
-            if spit {
-                velocity = (velocity + 0.12).clamp(0.4, 1.0);
+    fn velocity(
+        &self,
+        _line: &LineState<()>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32 {
+        shape_velocity(
+            rng,
+            0.62,
+            inp.progress_in_line,
+            0.6,
+            inp.beat_round,
+            beats_per_bar,
+            0.5,
+            0.06,
+        )
+    }
+}
+
+/// Hymnal: strict syllable-per-quarter rhythm with stepwise motion
+/// only, narrowed to a 9-semitone band on top of `ctx.lo`, every
+/// line cadencing on a chord tone of the active chord. Minimal
+/// randomness — same seed gives a near-deterministic shape. Skips
+/// the random phrase-start offset (strict timing is core to the
+/// style) and skips the breath-gap fraction (every syllable
+/// occupies its full grid slot).
+struct HymnalProfile;
+
+impl VocalStyleProfile for HymnalProfile {
+    type LineExtras = ();
+
+    fn band(&self, ctx: &VocalContext) -> (u8, u8) {
+        let band_hi = (ctx.lo as i16 + 9).min(ctx.hi as i16) as u8;
+        (ctx.lo, band_hi)
+    }
+
+    fn init_prev_pitch(&self, ctx: &VocalContext, band: (u8, u8)) -> u8 {
+        snap_to_scale(((band.0 as u16 + band.1 as u16) / 2) as u8, ctx.scale, band.0, band.1)
+    }
+
+    fn breath_frac(&self, _params: &VocalParams) -> f32 {
+        0.0
+    }
+
+    fn use_phrase_start_offset(&self) -> bool {
+        false
+    }
+
+    fn begin_line(&mut self, _rng: &mut XorShift, _ctx: &VocalContext, _line: &LineState<()>) {}
+
+    fn pick_pitch(
+        &self,
+        ctx: &VocalContext,
+        line: &LineState<()>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+    ) -> u8 {
+        let centre = (line.band_lo as i16 + line.band_hi as i16) / 2;
+        let drift = (centre - inp.prev_pitch as i16).signum();
+        // Stepwise walk with centre-bias — order of draws matches
+        // the original. Note the nested `else if rng.next_f32()` is
+        // *not* short-circuited by an earlier success: each branch
+        // is reached only if its predecessor failed.
+        let raw_step: i16 = if rng.next_f32() < 0.12 {
+            0
+        } else if rng.next_f32() < 0.6 {
+            drift
+        } else if rng.next_f32() < 0.5 {
+            1
+        } else {
+            -1
+        };
+        let mut candidate = ((inp.prev_pitch as i16 + raw_step)
+            .clamp(line.band_lo as i16, line.band_hi as i16)) as u8;
+
+        if inp.is_final {
+            if let Some(picked) = cadence_pitch(
+                phrase_role(line.line_idx),
+                inp.chord,
+                ctx.scale,
+                inp.prev_pitch,
+                (line.band_lo, line.band_hi),
+            ) {
+                candidate = picked;
+            } else if let Some(c) = inp.chord {
+                let tones = chord_tones_in_register(c.chord, (line.band_lo, line.band_hi));
+                if let Some(picked) = tones
+                    .iter()
+                    .copied()
+                    .min_by_key(|t| (*t as i16 - inp.prev_pitch as i16).abs())
+                {
+                    candidate = picked;
+                }
             }
-
-            out.push(GeneratedNote {
-                note: pitch,
-                velocity,
-                start_tick,
-                duration_ticks: dur_ticks,
-            });
-            prev_pitch = pitch;
         }
 
-        syl_cursor += line_syl;
+        snap_to_scale(candidate, ctx.scale, line.band_lo, line.band_hi)
     }
-    out
+
+    fn dur_beats(
+        &self,
+        line: &LineState<()>,
+        _inp: &StepInputs<'_>,
+        _rng: &mut XorShift,
+        _beats_per_bar: u32,
+    ) -> f32 {
+        let trim = 0.92 - 0.30 * line.articulation;
+        line.beat_step * trim
+    }
+
+    fn velocity(
+        &self,
+        _line: &LineState<()>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32 {
+        shape_velocity(
+            rng,
+            0.72,
+            inp.progress_in_line,
+            0.45,
+            inp.beat_round,
+            beats_per_bar,
+            0.4,
+            0.05,
+        )
+    }
+}
+
+/// Folk: pentatonic, descending-leaning phrases with long-short
+/// rhythm pairs (odd syllables stretched, even compressed). Lines 2
+/// and 3 echo the pitch contour of lines 0 and 1 — the call-and-
+/// response shape characteristic of folk songs. Lines 0 and 1 store
+/// their pitch-offset memory in `echo_offsets`; lines 2+ read it
+/// back through the line index mod 2.
+#[derive(Default)]
+struct FolkProfile {
+    /// Per-line pitch offsets (signed semitones relative to
+    /// `line_first_pitch`) for line 0 and line 1. Populated by
+    /// `end_line` so the second pair of lines can echo them.
+    echo_offsets: [Vec<i16>; 2],
+}
+
+#[derive(Default, Clone)]
+struct FolkLine {
+    pair_unit: f32,
+    long_ratio: f32,
+    short_ratio: f32,
+    start_pitch: u8,
+    descend_span: f32,
+    /// Captured at `begin_line` so `pick_pitch` can read it without
+    /// borrowing `&mut self`.
+    echo_source: Option<Vec<i16>>,
+}
+
+impl VocalStyleProfile for FolkProfile {
+    type LineExtras = FolkLine;
+
+    fn init_prev_pitch(&self, ctx: &VocalContext, band: (u8, u8)) -> u8 {
+        let span = band.1 as i16 - band.0 as i16;
+        let start_pitch =
+            (band.0 as i16 + (span * 3) / 4).clamp(band.0 as i16, band.1 as i16) as u8;
+        snap_to_pentatonic(start_pitch, ctx.scale, band.0, band.1)
+    }
+
+    fn breath_frac(&self, params: &VocalParams) -> f32 {
+        params.breath.clamp(0.0, 0.9).max(0.20)
+    }
+
+    fn begin_line(
+        &mut self,
+        rng: &mut XorShift,
+        _ctx: &VocalContext,
+        line: &LineState<FolkLine>,
+    ) -> FolkLine {
+        // Per-line long-short ratio jitter — one rng draw, must
+        // happen before any syllable draws to match the original
+        // `derive_folk` sequence.
+        let long_ratio = 1.35 + (rng.next_f32() - 0.5) * 0.40;
+        let short_ratio = 2.0 - long_ratio;
+        let pair_unit = line.sing_span / line.line_syl as f32;
+
+        // Echo source is line_idx >= 2's line (line_idx % 2). The
+        // legacy code used `.filter(|v| !v.is_empty())` to gate the
+        // echo when the previous line was empty.
+        let echo_source: Option<Vec<i16>> = if line.line_idx >= 2 {
+            self.echo_offsets
+                .get(line.line_idx % 2)
+                .filter(|v| !v.is_empty())
+                .cloned()
+        } else {
+            None
+        };
+
+        let span = line.band_hi as i16 - line.band_lo as i16;
+        let start_pitch = (line.band_lo as i16 + (span * 3) / 4)
+            .clamp(line.band_lo as i16, line.band_hi as i16) as u8;
+        FolkLine {
+            pair_unit,
+            long_ratio,
+            short_ratio,
+            start_pitch,
+            descend_span: span as f32 * 0.45,
+            echo_source,
+        }
+    }
+
+    fn slot(&self, line: &LineState<FolkLine>, s: u32) -> f32 {
+        if s.is_multiple_of(2) {
+            line.extras.pair_unit * line.extras.long_ratio
+        } else {
+            line.extras.pair_unit * line.extras.short_ratio
+        }
+    }
+
+    fn pick_pitch(
+        &self,
+        ctx: &VocalContext,
+        line: &LineState<FolkLine>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+    ) -> u8 {
+        let candidate = if let Some(source) = line.extras.echo_source.as_ref() {
+            let mut off = source.get(inp.s as usize).copied().unwrap_or(0);
+            if rng.next_f32() < 0.25 {
+                off += if rng.next_f32() < 0.5 { 1 } else { -1 };
+            }
+            ((line.line_first_pitch as i16 + off)
+                .clamp(line.band_lo as i16, line.band_hi as i16)) as u8
+        } else {
+            let descend_target = (line.extras.start_pitch as f32
+                - inp.progress_in_line * line.extras.descend_span)
+                .clamp(line.band_lo as f32, line.band_hi as f32)
+                as u8;
+            // Order of draws matches `derive_folk`: 0.05 first, then
+            // 0.35; the inner `0.5` only fires if 0.35 succeeded.
+            let jitter = if rng.next_f32() < 0.05 {
+                -((rng.next_range(3) as i16) + 3) // -3..-5
+            } else if rng.next_f32() < 0.35 {
+                if rng.next_f32() < 0.5 { 1 } else { -1 }
+            } else {
+                0
+            };
+            ((descend_target as i16 + jitter).clamp(line.band_lo as i16, line.band_hi as i16))
+                as u8
+        };
+
+        let is_long = inp.s.is_multiple_of(2);
+        let strong = inp.s == 0
+            || inp.s + 1 == line.line_syl
+            || (is_long && beat_strength(inp.beat_round, ctx.beats_per_bar) >= 0.65);
+        if inp.is_final {
+            cadence_pitch(
+                phrase_role(line.line_idx),
+                inp.chord,
+                ctx.scale,
+                inp.prev_pitch,
+                (line.band_lo, line.band_hi),
+            )
+            .unwrap_or_else(|| {
+                inp.chord
+                    .and_then(|c| {
+                        chord_tone_nearest(c.chord, (line.band_lo, line.band_hi), candidate)
+                    })
+                    .unwrap_or(candidate)
+            })
+        } else if strong {
+            inp.chord
+                .and_then(|c| chord_tone_nearest(c.chord, (line.band_lo, line.band_hi), candidate))
+                .unwrap_or(candidate)
+        } else {
+            snap_to_pentatonic(candidate, ctx.scale, line.band_lo, line.band_hi)
+        }
+    }
+
+    fn dur_beats(
+        &self,
+        line: &LineState<FolkLine>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32 {
+        let trim = 0.92 - 0.40 * line.articulation;
+        if inp.is_final {
+            terminal_dur_beats(line.extras.pair_unit, line.articulation)
+        } else {
+            let trim_local = rhythm_trim(rng, trim, inp.beat_round, beats_per_bar, 0.12);
+            inp.slot * trim_local
+        }
+    }
+
+    fn velocity(
+        &self,
+        _line: &LineState<FolkLine>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32 {
+        shape_velocity(
+            rng,
+            0.70,
+            inp.progress_in_line,
+            0.7,
+            inp.beat_round,
+            beats_per_bar,
+            0.85,
+            0.10,
+        )
+    }
+
+    fn end_line(&mut self, line_idx: usize, line_offsets: Vec<i16>) {
+        if line_idx < 2 {
+            self.echo_offsets[line_idx] = line_offsets;
+        }
+    }
+}
+
+/// Anthemic: wide-range chorus melody. Each line arcs to a peak
+/// roughly 60 % through the line and the syllable closest to that
+/// peak (the "money note") leaps to the highest in-range chord tone.
+/// Final syllables get an extra-long sustain (1.6× beat-step vs
+/// 1.4× elsewhere) for the held-cadence chorus feel. Strict grid
+/// (no rubato), with strong-beat chord-tone anchoring on every
+/// other syllable.
+struct AnthemicProfile;
+
+#[derive(Default, Clone)]
+struct AnthemicLine {
+    /// Index of the climax syllable (= round(line_syl * 0.6)), or
+    /// `u32::MAX` when `line_syl < 4` (too short for a climax).
+    climax_idx: u32,
+    has_climax: bool,
+}
+
+impl VocalStyleProfile for AnthemicProfile {
+    type LineExtras = AnthemicLine;
+
+    fn init_prev_pitch(&self, ctx: &VocalContext, band: (u8, u8)) -> u8 {
+        snap_to_scale(((band.0 as u16 + band.1 as u16) / 2) as u8, ctx.scale, band.0, band.1)
+    }
+
+    fn breath_frac(&self, params: &VocalParams) -> f32 {
+        (params.breath.clamp(0.0, 0.9) * 0.6).max(0.10)
+    }
+
+    fn begin_line(
+        &mut self,
+        _rng: &mut XorShift,
+        _ctx: &VocalContext,
+        line: &LineState<AnthemicLine>,
+    ) -> AnthemicLine {
+        let climax_idx = ((line.line_syl as f32 * 0.6).round() as u32).min(line.line_syl - 1);
+        AnthemicLine {
+            climax_idx,
+            has_climax: line.line_syl >= 4,
+        }
+    }
+
+    fn pick_pitch(
+        &self,
+        ctx: &VocalContext,
+        line: &LineState<AnthemicLine>,
+        inp: &StepInputs<'_>,
+        _rng: &mut XorShift,
+    ) -> u8 {
+        // Per-line arch: peak at t=0.6. No rng draws here.
+        let t = inp.progress_in_line;
+        let arch = 1.0 - ((t - 0.6).abs() / 0.6_f32.max(1.0 - 0.6_f32)).clamp(0.0, 1.0);
+        let span = line.band_hi as f32 - line.band_lo as f32;
+        let target = line.band_lo as f32 + (0.30 + 0.60 * arch) * span;
+
+        let strong = inp.s.is_multiple_of(2);
+        let is_climax = inp.s == line.extras.climax_idx && line.extras.has_climax;
+        let candidate = target.clamp(line.band_lo as f32, line.band_hi as f32) as u8;
+
+        if is_climax {
+            inp.chord
+                .and_then(|c| {
+                    let tones = chord_tones_in_register(c.chord, (line.band_lo, line.band_hi));
+                    tones.into_iter().max()
+                })
+                .unwrap_or(candidate)
+        } else if inp.is_final {
+            cadence_pitch(
+                phrase_role(line.line_idx),
+                inp.chord,
+                ctx.scale,
+                inp.prev_pitch,
+                (line.band_lo, line.band_hi),
+            )
+            .unwrap_or_else(|| {
+                inp.chord
+                    .and_then(|c| {
+                        chord_tone_nearest(c.chord, (line.band_lo, line.band_hi), candidate)
+                    })
+                    .unwrap_or(candidate)
+            })
+        } else if strong {
+            inp.chord
+                .and_then(|c| chord_tone_nearest(c.chord, (line.band_lo, line.band_hi), candidate))
+                .unwrap_or(candidate)
+        } else if ctx.params.stay_in_scale {
+            snap_to_scale(candidate, ctx.scale, line.band_lo, line.band_hi)
+        } else {
+            candidate
+        }
+    }
+
+    fn dur_beats(
+        &self,
+        line: &LineState<AnthemicLine>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32 {
+        let trim = 0.95 - 0.30 * line.articulation;
+        let is_climax = inp.s == line.extras.climax_idx && line.extras.has_climax;
+        if inp.is_final {
+            // Anthemic terminal: 1.6× beat-step floor (vs the
+            // shared 1.4× cap in `terminal_dur_beats`), so the
+            // chorus money-note holds longer than other styles'.
+            let cap = line.beat_step * 1.6;
+            let normal = line.beat_step * trim;
+            cap.max(normal)
+        } else if is_climax {
+            line.beat_step * 1.4
+        } else {
+            let trim_local = rhythm_trim(rng, trim, inp.beat_round, beats_per_bar, 0.20);
+            line.beat_step * trim_local
+        }
+    }
+
+    fn velocity(
+        &self,
+        line: &LineState<AnthemicLine>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32 {
+        let mut v = shape_velocity(
+            rng,
+            0.80,
+            inp.progress_in_line,
+            1.0,
+            inp.beat_round,
+            beats_per_bar,
+            0.8,
+            0.07,
+        );
+        let is_climax = inp.s == line.extras.climax_idx && line.extras.has_climax;
+        if is_climax {
+            v = (v + 0.10).clamp(0.4, 1.0);
+        }
+        v
+    }
+}
+
+/// Chant: hip-hop / spoken-word monotone-leaning vocal anchored on
+/// the chord root in a narrow 5-semitone band around the speaking
+/// pitch. Bursts of fast syllables (sixteenth-feel by default,
+/// triplet-feel on ~30 % of lines) pack into the front of each line
+/// with a wider breath-gap at the end. Occasional "spit" — a 3-4
+/// semitone lift on a non-edge syllable for emphasis, then snap back.
+struct ChantProfile;
+
+#[derive(Default, Clone)]
+struct ChantLine {
+    /// Speaking-pitch centre, computed from `ctx.lo` / `ctx.hi`
+    /// (NOT the narrowed band — match the legacy `derive_chant`
+    /// math exactly or seed-anchored output drifts).
+    band_centre: u8,
+    /// True ~30 % of lines — switches the syllable slot from
+    /// straight sixteenths to a triplet-swing pattern.
+    triplet_feel: bool,
+    /// Pre-triplet-jitter slot width = `sing_span / line_syl`.
+    base_slot: f32,
+}
+
+impl VocalStyleProfile for ChantProfile {
+    type LineExtras = ChantLine;
+
+    fn band(&self, ctx: &VocalContext) -> (u8, u8) {
+        let span = ctx.hi as i16 - ctx.lo as i16;
+        let centre = (ctx.lo as i16 + (span * 4) / 10).clamp(ctx.lo as i16, ctx.hi as i16) as u8;
+        let band_lo = (centre as i16 - 2).clamp(ctx.lo as i16, ctx.hi as i16) as u8;
+        let band_hi = (centre as i16 + 3).clamp(ctx.lo as i16, ctx.hi as i16) as u8;
+        (band_lo, band_hi)
+    }
+
+    fn init_prev_pitch(&self, ctx: &VocalContext, band: (u8, u8)) -> u8 {
+        // Original chant `centre` is built from `ctx.lo`/`ctx.hi`,
+        // not from the band — match that or the deterministic
+        // output drifts.
+        let span = ctx.hi as i16 - ctx.lo as i16;
+        let centre = (ctx.lo as i16 + (span * 4) / 10).clamp(ctx.lo as i16, ctx.hi as i16) as u8;
+        snap_to_scale(centre, ctx.scale, band.0, band.1)
+    }
+
+    fn breath_frac(&self, params: &VocalParams) -> f32 {
+        params.breath.clamp(0.0, 0.9).max(0.18)
+    }
+
+    fn min_dur_ticks(&self, tpb: u64) -> u64 {
+        (tpb / 8).max(1)
+    }
+
+    fn begin_line(
+        &mut self,
+        rng: &mut XorShift,
+        ctx: &VocalContext,
+        line: &LineState<ChantLine>,
+    ) -> ChantLine {
+        // Triplet-feel draw is the first rng action of the line —
+        // matches original `derive_chant`.
+        let triplet_feel = rng.next_f32() < 0.30;
+        let base_slot = line.sing_span / line.line_syl as f32;
+        // Centre uses ctx.lo / ctx.hi, not the narrowed band.
+        let span = ctx.hi as i16 - ctx.lo as i16;
+        let centre =
+            (ctx.lo as i16 + (span * 4) / 10).clamp(ctx.lo as i16, ctx.hi as i16) as u8;
+        ChantLine {
+            band_centre: centre,
+            triplet_feel,
+            base_slot,
+        }
+    }
+
+    fn slot(&self, line: &LineState<ChantLine>, s: u32) -> f32 {
+        if line.extras.triplet_feel {
+            match s % 3 {
+                0 => line.extras.base_slot * 1.20,
+                _ => line.extras.base_slot * 0.90,
+            }
+        } else {
+            line.extras.base_slot
+        }
+    }
+
+    fn rubato_max(&self, _line: &LineState<ChantLine>, _s: u32, slot: f32) -> f32 {
+        slot * 0.08
+    }
+
+    fn pick_pitch(
+        &self,
+        ctx: &VocalContext,
+        line: &LineState<ChantLine>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+    ) -> u8 {
+        // Order: punch_down draw → spit draw → spit-lift draws OR
+        // the s%4 branch. Must match `derive_chant` exactly.
+        let centre = line.extras.band_centre;
+        let punch_down = beat_strength(inp.beat_round, ctx.beats_per_bar) >= 0.65
+            && rng.next_f32() < 0.5;
+        let spit = !punch_down
+            && rng.next_f32() < 0.08
+            && inp.s > 0
+            && inp.s + 1 < line.line_syl;
+        // Stash the spit flag for `velocity` to pick up so it can
+        // apply the extra +0.12 lift without re-drawing the
+        // predicate (which would advance rng out of sync).
+        CHANT_SPIT_FLAG.with(|f| f.set(spit));
+        let pitch_pre = if inp.is_final {
+            cadence_pitch(
+                phrase_role(line.line_idx),
+                inp.chord,
+                ctx.scale,
+                inp.prev_pitch,
+                (line.band_lo, line.band_hi),
+            )
+            .unwrap_or_else(|| {
+                inp.chord
+                    .and_then(|c| chord_tone_nearest(c.chord, (line.band_lo, line.band_hi), centre))
+                    .unwrap_or(centre)
+            })
+        } else if inp.s == 0 {
+            inp.chord
+                .and_then(|c| chord_tone_nearest(c.chord, (line.band_lo, line.band_hi), centre))
+                .unwrap_or(centre)
+        } else if punch_down {
+            inp.chord
+                .and_then(|c| {
+                    chord_tone_nearest(c.chord, (line.band_lo, line.band_hi), inp.prev_pitch)
+                })
+                .unwrap_or(inp.prev_pitch)
+        } else if spit {
+            let lift = (rng.next_range(2) as i16) + 3;
+            ((inp.prev_pitch as i16 + lift).clamp(line.band_lo as i16, line.band_hi as i16)) as u8
+        } else if inp.s.is_multiple_of(4) && rng.next_f32() < 0.55 {
+            let dir: i16 = if rng.next_f32() < 0.5 { 1 } else { -1 };
+            ((inp.prev_pitch as i16 + dir).clamp(line.band_lo as i16, line.band_hi as i16)) as u8
+        } else {
+            inp.prev_pitch
+        };
+
+        snap_to_scale(pitch_pre, ctx.scale, line.band_lo, line.band_hi)
+    }
+
+    fn dur_beats(
+        &self,
+        _line: &LineState<ChantLine>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32 {
+        inp.slot * rhythm_trim(rng, 0.85, inp.beat_round, beats_per_bar, 0.20)
+    }
+
+    fn velocity(
+        &self,
+        _line: &LineState<ChantLine>,
+        inp: &StepInputs<'_>,
+        rng: &mut XorShift,
+        beats_per_bar: u32,
+    ) -> f32 {
+        // Chant's velocity bump (the "spit" lift) shares the same
+        // boolean `pick_pitch` already drew. Re-drawing it here would
+        // desync rng, so `pick_pitch` stashes the flag in a
+        // thread-local that we drain on read.
+        let mut v = shape_velocity(
+            rng,
+            0.65,
+            inp.progress_in_line,
+            0.4,
+            inp.beat_round,
+            beats_per_bar,
+            1.0,
+            0.10,
+        );
+        if CHANT_SPIT_FLAG.with(|f| f.replace(false)) {
+            v = (v + 0.12).clamp(0.4, 1.0);
+        }
+        v
+    }
+}
+
+// Used to pass Chant's per-syllable `spit` flag from `pick_pitch` to
+// `velocity` without reordering rng draws or adding an extra
+// step-output field. Set in `pick_pitch`, read+cleared in `velocity`.
+// Single-threaded use — the walker runs synchronously.
+thread_local! {
+    static CHANT_SPIT_FLAG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Adopt the chord root + quality of the first chord as a coarse scale
