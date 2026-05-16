@@ -27,6 +27,12 @@ pub use resonance_audio::limits::DEFAULT_HISTORY_CAPACITY;
 pub struct UndoExtras {
     pub compose_derived_clips: HashMap<(u64, u64, TrackId), ClipId>,
     pub compose_next_derived_clip_id: u64,
+    /// Per-clip vocal lyric annotations. Captured so `ToggleSlur` and
+    /// any future per-note lyric override edit are reversible. The
+    /// `ProjectMidiClip` round-trip writes these on save, but during
+    /// a session the undo system snapshots them separately because
+    /// the project-file form of a clip isn't rebuilt on each edit.
+    pub vocal_clip_lyrics: HashMap<ClipId, Vec<String>>,
 }
 
 /// One point in the undo/redo history. Mostly the same shape as
@@ -227,6 +233,7 @@ impl crate::Resonance {
         let extras = UndoExtras {
             compose_derived_clips: self.compose.derived_clips.clone(),
             compose_next_derived_clip_id: self.compose.next_derived_clip_id,
+            vocal_clip_lyrics: self.compose.vocal_clip_lyrics.clone(),
         };
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
@@ -315,6 +322,7 @@ impl crate::Resonance {
     pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
         self.compose.derived_clips = extras.compose_derived_clips;
         self.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
+        self.compose.vocal_clip_lyrics = extras.vocal_clip_lyrics;
     }
 
     /// Attempt to undo. No-ops (returning false) if the history is empty

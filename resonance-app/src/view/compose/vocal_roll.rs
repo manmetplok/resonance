@@ -48,9 +48,6 @@ const HEADER_TOTAL_HEIGHT: f32 = VR_CHORD_STRIP_HEIGHT + VR_PHONEME_STRIP_HEIGHT
 const RESIZE_EDGE_PX: f32 = 6.0;
 /// Default velocity for newly drawn notes.
 const DEFAULT_VELOCITY: f32 = 0.8;
-/// Threshold (in ticks) under which two adjacent notes are considered
-/// "flowing without a rest" — drives the slur-arc rendering.
-const SLUR_GAP_TICKS: u64 = TICKS_PER_QUARTER_NOTE / 32;
 
 /// Returns true if the given MIDI note number corresponds to a black key.
 fn is_black_key(note: u8) -> bool {
@@ -84,11 +81,15 @@ pub struct VocalRollCanvas<'a> {
     pub snap_ticks: u64,
     pub selected_note: Option<usize>,
     pub time_sig_num: u8,
+    /// Section BPM at the playhead. Plumbed in so the pitch-curve
+    /// preview's portamento + vibrato match what the SVS pipeline
+    /// will produce at the same tempo.
+    pub bpm: f32,
     /// Voice name shown in the top-left meta corner.
     pub voice_label: &'a str,
     /// Per-note lyrics from `compose.vocal_clip_lyrics`. Index i aligns
     /// with the i-th `MidiNote`. Slurs are identified by the lyric
-    /// being equal to [`resonance_music_theory::VocalNote::SLUR_MARKER`]
+    /// being equal to [`resonance_music_theory::g2p::SLUR_MARKER`]
     /// (`"+"`).
     pub lyrics: &'a [String],
 }
@@ -128,6 +129,7 @@ pub fn build_canvas<'a>(
         snap_ticks: editor_state.snap_ticks,
         selected_note: editor_state.selected_note,
         time_sig_num: app.transport.time_sig_num,
+        bpm: app.transport.bpm,
         voice_label,
         lyrics,
     })
@@ -208,6 +210,13 @@ pub struct VocalRollFingerprint {
     chords_hash: u64,
     draft_hash: u64,
     lyrics_hash: u64,
+    /// Fields that affect the pitch-curve overlay. Tracked so dragging
+    /// the portamento / vibrato sliders in the right rail invalidates
+    /// the canvas cache and repaints the curve immediately.
+    bpm_bits: u32,
+    portamento_ms_bits: u32,
+    vibrato_bits: u32,
+    vibrato_rate_bits: u32,
 }
 
 impl canvas::Program<Message> for VocalRollCanvas<'_> {
@@ -536,6 +545,10 @@ impl VocalRollCanvas<'_> {
             chords_hash: ch.finish(),
             draft_hash: dh.finish(),
             lyrics_hash: lh.finish(),
+            bpm_bits: self.bpm.to_bits(),
+            portamento_ms_bits: self.params.portamento_ms.to_bits(),
+            vibrato_bits: self.params.vibrato.to_bits(),
+            vibrato_rate_bits: self.params.vibrato_rate.to_bits(),
         }
     }
 
@@ -545,13 +558,13 @@ impl VocalRollCanvas<'_> {
         let grid_top = HEADER_TOTAL_HEIGHT;
         let grid_h = bounds.height - HEADER_TOTAL_HEIGHT - VR_VELOCITY_LANE_HEIGHT;
 
-        // Resolve syllables + phonemes once — both are indexed by note
-        // position. Syllables come from the per-clip side-table (which
-        // carries hand-edits and slur markers); the side-table falls
-        // back to the auto-syllabified draft so legacy clips without
-        // an installed table still get sensible labels.
-        let syllables = effective_syllables(self);
-        let phonemes = g2p::phonemes_for_draft(&self.params.draft);
+        // Resolve every note's (label, phonemes, is_slur) once. Same
+        // helper drives the SVS pipeline, so the lyric labels on
+        // note bodies and the phoneme strip are guaranteed to match
+        // what the engine will sing.
+        let resolved = g2p::resolve_draft(self.params.draft.as_slice());
+        let assigned =
+            g2p::assign_syllables_to_notes(&resolved, self.lyrics, self.clip.notes.len());
 
         // Background
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
@@ -585,7 +598,7 @@ impl VocalRollCanvas<'_> {
 
         // Chord strip + phoneme strip across the grid width.
         self.draw_chord_strip(frame, grid_x, grid_w);
-        self.draw_phoneme_strip(frame, grid_x, grid_w, &phonemes);
+        self.draw_phoneme_strip(frame, grid_x, grid_w, &assigned);
 
         // Note row backgrounds
         self.draw_note_rows(frame, grid_x, grid_w, grid_top, grid_h);
@@ -594,10 +607,10 @@ impl VocalRollCanvas<'_> {
         self.draw_grid_lines(frame, grid_x, grid_w, grid_top, grid_h);
 
         // Notes — drawn before slurs/pitch curve so those overlay on top.
-        self.draw_notes(frame, grid_x, grid_top, grid_h, &syllables);
+        self.draw_notes(frame, grid_x, grid_top, grid_h, &assigned);
 
         // Slur arcs between adjacent flowing notes.
-        self.draw_slurs(frame, grid_x, grid_top, grid_h);
+        self.draw_slurs(frame, grid_x, grid_top, grid_h, &assigned);
 
         // Rendered f0 contour overlay (portamento + vibrato).
         self.draw_pitch_curve(frame, grid_x, grid_w, grid_top, grid_h);
@@ -774,7 +787,7 @@ impl VocalRollCanvas<'_> {
         grid_x: f32,
         grid_top: f32,
         grid_h: f32,
-        syllables: &[String],
+        assigned: &[g2p::AssignedSyllable],
     ) {
         for (i, n) in self.clip.notes.iter().enumerate() {
             let Some(y_local) = self.note_to_y(n.note, grid_h) else {
@@ -788,7 +801,7 @@ impl VocalRollCanvas<'_> {
                 continue;
             }
             let v = n.velocity.clamp(0.0, 1.0);
-            let is_slur = is_slur_note(self.lyrics, i);
+            let is_slur = assigned.get(i).map(|a| a.is_slur).unwrap_or(false);
             // Slur notes paint thinner and more transparent — visually
             // says "this isn't a new attack, just a pitch change inside
             // the previous syllable". Matches the engraving convention
@@ -861,7 +874,7 @@ impl VocalRollCanvas<'_> {
             // against the warm body for legibility. Slur notes show
             // the `+` marker centred (smaller) so the visual reads as
             // a continuation rather than a syllable.
-            let label = syllables.get(i).cloned().unwrap_or_default();
+            let label = assigned.get(i).map(|a| a.label.clone()).unwrap_or_default();
             if !label.is_empty() && w >= 12.0 && h >= 10.0 {
                 let (size, dx) = if is_slur {
                     ((h * 0.7).min(11.0), w * 0.5 - 3.0)
@@ -884,33 +897,26 @@ impl VocalRollCanvas<'_> {
         }
     }
 
-    /// Slur arcs between adjacent notes. The arc is drawn between every
-    /// pair `(a, b)` where `b` is explicitly marked as a slur (`lyric ==
-    /// "+"`) — that's the OpenUtau convention the SVS pipeline reads.
-    /// As a fallback for legacy clips without a lyric side-table, also
-    /// draws an arc when two notes flow without a rest (gap below
-    /// `SLUR_GAP_TICKS`). The arc rises above the higher of the two
-    /// notes — standard engraving for legato.
-    fn draw_slurs(&self, frame: &mut Frame, grid_x: f32, grid_top: f32, grid_h: f32) {
+    /// Slur arcs between adjacent notes. Driven by
+    /// `AssignedSyllable::is_slur` — the same flag the SVS pipeline
+    /// reads — so a visible arc always corresponds to a melisma the
+    /// engine will actually sing. The arc rises above the higher of
+    /// the two notes (standard engraving for legato).
+    fn draw_slurs(
+        &self,
+        frame: &mut Frame,
+        grid_x: f32,
+        grid_top: f32,
+        grid_h: f32,
+        assigned: &[g2p::AssignedSyllable],
+    ) {
         if self.clip.notes.len() < 2 {
             return;
         }
-        let has_lyrics = !self.lyrics.is_empty();
         for (i, win) in self.clip.notes.windows(2).enumerate() {
             let (a, b) = (&win[0], &win[1]);
             let b_index = i + 1;
-            let connected = if has_lyrics {
-                // Side-table available — only draw when the *next*
-                // note is explicitly tagged as a slur. Stops the
-                // editor from showing speculative arcs the SVS will
-                // ignore anyway.
-                is_slur_note(self.lyrics, b_index)
-            } else {
-                // Legacy clip — fall back to the proximity heuristic
-                // so the visual still appears for in-progress files.
-                let end_a = a.start_tick + a.duration_ticks;
-                b.start_tick <= end_a + SLUR_GAP_TICKS
-            };
+            let connected = assigned.get(b_index).map(|x| x.is_slur).unwrap_or(false);
             if !connected {
                 continue;
             }
@@ -963,14 +969,11 @@ impl VocalRollCanvas<'_> {
         if samples < 4 {
             return;
         }
-        // Pre-compute the portamento radius in ticks. Convert `ms` to
-        // beats at the section's BPM. The chord strip already lays out
-        // beats by `tick_to_x`, so converting to ticks keeps us in the
-        // same axis space.
-        let bpm = 90.0_f32.max(1.0); // best-effort default; the curve
-        // is preview-quality so a slight BPM drift between sections is
-        // fine — the absolute portamento duration only matters for
-        // engine audio.
+        // Pre-compute the portamento radius in ticks. Uses the section's
+        // real BPM (plumbed through from `app.transport.bpm`) so the
+        // preview curve and the SVS-rendered audio agree on the
+        // absolute portamento duration.
+        let bpm = self.bpm.max(1.0);
         let portamento_ticks =
             ((self.params.portamento_ms / 1000.0) * (bpm / 60.0) * TICKS_PER_QUARTER_NOTE as f32)
                 .max(0.0) as u64;
@@ -1202,21 +1205,17 @@ impl VocalRollCanvas<'_> {
         }
     }
 
-    /// Phoneme strip — per-note ARPAbet breakdown. Walks the notes with
-    /// the same cursor `effective_syllables` uses, so phonemes shift in
-    /// lockstep with syllables when slurs are added or removed:
-    ///
-    /// * Slur notes (`"+"`) show only the previous syllable's vowel
-    ///   (held over) instead of a fresh phoneme group, matching what
-    ///   the SVS pipeline will actually sing.
-    /// * Non-slur notes consume the next phoneme group from
-    ///   `g2p::phonemes_for_draft`.
+    /// Phoneme strip — per-note ARPAbet breakdown. Reads phonemes
+    /// directly from `AssignedSyllable::phonemes`, so the labels here
+    /// are guaranteed to match what `build_segment` feeds the SVS
+    /// model. Slur notes show the held vowel from the previous
+    /// syllable; non-slur notes show their full phoneme list.
     fn draw_phoneme_strip(
         &self,
         frame: &mut Frame,
         grid_x: f32,
         grid_w: f32,
-        phonemes: &[Vec<&'static str>],
+        assigned: &[g2p::AssignedSyllable],
     ) {
         frame.fill_rectangle(
             Point::new(grid_x, VR_CHORD_STRIP_HEIGHT),
@@ -1234,7 +1233,7 @@ impl VocalRollCanvas<'_> {
         });
         let strip_y = VR_CHORD_STRIP_HEIGHT + 4.0;
 
-        if self.clip.notes.is_empty() || phonemes.is_empty() {
+        if self.clip.notes.is_empty() || assigned.iter().all(|a| a.phonemes.is_empty()) {
             frame.fill_text(canvas::Text {
                 content: "(no phonemes \u{2014} generate from the right rail)".to_string(),
                 position: Point::new(grid_x + 8.0, strip_y + 1.0),
@@ -1246,50 +1245,19 @@ impl VocalRollCanvas<'_> {
             return;
         }
 
-        let mut cursor: usize = 0;
-        // Track the last non-slur syllable's vowel so slur notes can
-        // visualise the held phoneme.
-        let mut last_vowel: Option<&'static str> = None;
         for (i, n) in self.clip.notes.iter().enumerate() {
-            let entry = self.lyrics.get(i).map(|s| s.trim()).unwrap_or("");
-            let is_slur = entry == "+" || entry == "-";
-
-            let display: String = if is_slur {
-                last_vowel
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "+".to_string())
-            } else {
-                // Non-slur: consume the next phoneme list from the
-                // draft. Stops cleanly once the list runs out so a
-                // user-extended phrase doesn't loop the phonemes.
-                let group = phonemes.get(cursor);
-                cursor += 1;
-                let Some(group) = group else { continue };
-                if group.is_empty() {
-                    continue;
-                }
-                // Cache the *last* non-consonant phoneme — that's the
-                // vowel the SVS will sustain into a following slur.
-                if let Some(v) = group.iter().rev().find(|p| !g2p::is_consonant(p)) {
-                    last_vowel = Some(*v);
-                } else if let Some(v) = group.last() {
-                    last_vowel = Some(*v);
-                }
-                group.join(" ")
-            };
-            if display.is_empty() {
+            let Some(a) = assigned.get(i) else { break };
+            if a.phonemes.is_empty() {
                 continue;
             }
-
+            let display = a.phonemes.join(" ");
             let x = grid_x + self.tick_to_x(n.start_tick);
             let nw = self.duration_to_width(n.duration_ticks).max(8.0);
             if x > grid_x + grid_w {
                 break;
             }
             let pill_w = nw.clamp(14.0, 72.0);
-            // Slur pills read lighter — same visual hierarchy as the
-            // notes themselves (slur = continuation, not new attack).
-            let pill_alpha = if is_slur { 0.06 } else { 0.10 };
+            let pill_alpha = if a.is_slur { 0.06 } else { 0.10 };
             frame.fill(
                 &Path::rounded_rectangle(
                     Point::new(x + 1.0, strip_y - 1.0),
@@ -1298,7 +1266,7 @@ impl VocalRollCanvas<'_> {
                 ),
                 Color { a: pill_alpha, ..theme::WARM },
             );
-            let text_color = if is_slur {
+            let text_color = if a.is_slur {
                 Color { a: 0.65, ..theme::WARM }
             } else {
                 theme::WARM
@@ -1321,70 +1289,3 @@ fn chord_label(chord: &resonance_music_theory::Chord) -> String {
     format!("{}{}", chord.root, chord.quality)
 }
 
-/// Per-note labels for the vocal roll. The side-table entries are
-/// interpreted as *annotations*, not absolute labels:
-///
-/// * `""` (empty) — pull the next syllable from the auto-syllabified
-///   draft. This is the default for every note.
-/// * `"+"` (or `"-"`) — slur. The note inherits the previous syllable
-///   and does *not* advance the draft cursor, so every syllable after
-///   the slur shifts one note to the right.
-/// * any other string — explicit per-note lyric override (used for
-///   manual edits; the cursor still advances past this note).
-///
-/// Walking the notes with a cursor like this means adding or removing
-/// a slur in the middle of a phrase moves the trailing syllables in
-/// lockstep without rewriting the side-table — the user sees the
-/// rest of the lyrics slide along.
-fn effective_syllables(c: &VocalRollCanvas<'_>) -> Vec<String> {
-    let note_count = c.clip.notes.len();
-    let pool = draft_syllable_pool(c.params);
-
-    let mut out: Vec<String> = Vec::with_capacity(note_count);
-    let mut cursor: usize = 0;
-    for i in 0..note_count {
-        let entry = c.lyrics.get(i).map(|s| s.trim()).unwrap_or("");
-        if entry == "+" || entry == "-" {
-            out.push("+".to_string());
-        } else if !entry.is_empty() {
-            out.push(entry.to_string());
-            cursor += 1;
-        } else {
-            let label = pool.get(cursor).cloned().unwrap_or_default();
-            out.push(label);
-            cursor += 1;
-        }
-    }
-    out
-}
-
-/// Flatten the lane's `params.draft` into a per-syllable pool. Same
-/// auto-syllabification path the SVS pipeline + g2p use, so the
-/// vocal roll's labels stay aligned with what the model will sing.
-fn draft_syllable_pool(params: &VocalParams) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for line in &params.draft {
-        let syllabified = g2p::auto_syllabify_text(&line.text);
-        for word in syllabified.split_whitespace() {
-            for part in word.split('\u{00B7}') {
-                let t = part.trim();
-                if !t.is_empty() {
-                    out.push(t.to_string());
-                }
-            }
-        }
-    }
-    out
-}
-
-/// `true` when the lyric at `i` is the OpenUtau slur marker (`"+"` or
-/// `"-"`). Returns `false` for empty or out-of-range indices.
-fn is_slur_note(lyrics: &[String], i: usize) -> bool {
-    lyrics
-        .get(i)
-        .map(|l| {
-            let s = l.trim();
-            s == "+" || s == "-"
-        })
-        .unwrap_or(false)
-}

@@ -81,6 +81,14 @@ pub struct ComposeState {
     /// and silently drops the result if it's stale. Stops two
     /// back-to-back regen presses from installing both their audio
     /// clips and producing summed/doubled vocals.
+    ///
+    /// **Keying asymmetry vs. `vocal_audio_clips`:** the audio-clip
+    /// map is keyed `(def, placement, track)` because each placement
+    /// gets its own installed audio clip on the timeline, but the
+    /// *render* itself is per-`(def, track)` — one SVS run produces
+    /// one WAV that fans out to every placement of the definition.
+    /// So the epoch lives at the render scope (this map), not the
+    /// install scope (`vocal_audio_clips`).
     pub vocal_render_epoch: HashMap<(u64, TrackId), u64>,
     /// Monotonic id used when allocating fresh `ClipId`s for derived
     /// clips. Kept in the high range so it never collides with engine-
@@ -93,13 +101,14 @@ pub struct ComposeState {
     /// use, and re-synced when per-line edits or re-rolls happen.
     pub vocal_bulk_lyrics: HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
     /// Per-note lyrics for vocal MIDI clips, keyed by clip id. Index i
-    /// of the inner vec holds the lyric for the i-th note in
+    /// of the inner vec is the annotation for the i-th note in
     /// `r.midi_clips[clip].notes`. Carries OpenUtau-style slur markers
-    /// (`"+"`) alongside ordinary syllables — see
-    /// [`resonance_music_theory::VocalNote`] for the convention. The
-    /// engine clip's `MidiNote` list stays unchanged; this side-table
-    /// is the composition layer that adds vocal metadata without
-    /// touching the audio-side type.
+    /// (`"+"`) and explicit per-note label overrides; empty entries
+    /// mean "use the next syllable from `params.draft` via cursor".
+    /// See [`resonance_music_theory::g2p::SLUR_MARKER`] for the
+    /// convention. The engine clip's `MidiNote` list stays unchanged;
+    /// this side-table is the composition layer that adds vocal
+    /// metadata without touching the audio-side type.
     pub vocal_clip_lyrics: HashMap<ClipId, Vec<String>>,
     /// Project-scoped drum groups — one set, shared by every drum track
     /// across every section. Each group owns its own grid/cycle/phase and

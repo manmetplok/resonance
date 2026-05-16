@@ -575,7 +575,6 @@ pub(super) fn roll_vocal_melody(
     definition_id: u64,
     track_id: TrackId,
 ) -> Task<Message> {
-    use crate::compose::messages::VocalAudioReadyData;
     use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 
     let Some(def) = r.compose.find_definition(definition_id).cloned() else {
@@ -670,16 +669,47 @@ pub(super) fn roll_vocal_melody(
     // Installing an all-empty vec sized to the note count gives the
     // toggle paths a stable starting point without hard-coding labels.
     let initial_lyrics: Vec<String> = vec![String::new(); midi_notes.len()];
-    install_vocal_midi(
+    VocalMidiInstall {
+        definition_id,
+        track_id,
+        placements: &placement_starts,
+        duration_ticks,
+        midi_notes: &midi_notes,
+        lyrics: &initial_lyrics,
+        name: &name,
+    }
+    .install(r);
+    enqueue_vocal_render(
         r,
         definition_id,
         track_id,
-        &placement_starts,
-        duration_ticks,
-        &midi_notes,
-        &initial_lyrics,
-        &name,
-    );
+        midi_notes,
+        initial_lyrics.clone(),
+        params,
+        placement_starts,
+        name,
+    )
+}
+
+/// Shared off-thread vocal render path. Tears down the prior audio
+/// clip, bumps the in-flight epoch (stale-result protection against
+/// back-to-back presses), and spawns the SVS pipeline on a blocking
+/// thread. The two callers — `roll_vocal_melody` (full regenerate)
+/// and `rerender_vocal_audio` (notes-only) — differ only in how they
+/// produce `midi_notes` and `lyrics`; everything after that is
+/// identical, so it lives here.
+#[allow(clippy::too_many_arguments)]
+fn enqueue_vocal_render(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    midi_notes: Vec<resonance_audio::types::MidiNote>,
+    lyrics: Vec<String>,
+    params: resonance_music_theory::VocalParams,
+    placement_starts: Vec<(u64, u64)>,
+    clip_name: String,
+) -> Task<Message> {
+    use crate::compose::messages::VocalAudioReadyData;
     tear_down_old_vocal_audio(r, definition_id, track_id);
 
     // Bump the in-flight epoch for this (def, track) so the completion
@@ -687,8 +717,7 @@ pub(super) fn roll_vocal_melody(
     // back-to-back regen presses would both install their audio clips
     // (the second tear-down can't see the first's still-in-flight
     // clip because it isn't in `vocal_audio_clips` yet) and the mixer
-    // would sum both, producing the doubled-voice distortion the user
-    // reported.
+    // would sum both, producing the doubled-voice distortion.
     let epoch_entry = r
         .compose
         .vocal_render_epoch
@@ -699,19 +728,13 @@ pub(super) fn roll_vocal_melody(
 
     r.compose.last_error = None;
 
-    // Spawn the SVS render off the UI thread. `Task::perform` schedules
-    // the async block on iced's executor; `tokio::task::spawn_blocking`
-    // hops onto a dedicated blocking thread so the diffusion model
-    // doesn't stall the executor.
     let bpm = r.transport.bpm;
     let engine_sr = r.sample_rate;
     let dest_dir = vocal_audio_dir(r);
-    let clip_name = name.clone();
-    let render_lyrics = initial_lyrics.clone();
     Task::perform(
         async move {
             tokio::task::spawn_blocking(move || {
-                render_vocal_wav(&midi_notes, &params, &render_lyrics, bpm, engine_sr, &dest_dir)
+                render_vocal_wav(&midi_notes, &params, &lyrics, bpm, engine_sr, &dest_dir)
             })
             .await
             .unwrap_or_else(|join_err| Err(format!("vocal render task join: {join_err}")))
@@ -729,7 +752,6 @@ pub(super) fn roll_vocal_melody(
                     render_epoch,
                 })),
             ),
-            // SVS models missing: silent — MIDI-only mode still works.
             Ok(None) => Message::Tick,
             Err(error) => Message::Compose(ComposeMessage::VocalAudioFailed { error }),
         },
@@ -751,7 +773,6 @@ pub(super) fn rerender_vocal_audio(
     definition_id: u64,
     track_id: TrackId,
 ) -> Task<Message> {
-    use crate::compose::messages::VocalAudioReadyData;
     use resonance_audio::types::MidiNote;
 
     let Some(def) = r.compose.find_definition(definition_id).cloned() else {
@@ -780,30 +801,20 @@ pub(super) fn rerender_vocal_audio(
         return Task::none();
     }
 
-    // Find the first derived clip for any placement of this section
-    // on this track — every placement of a definition shares the
-    // same MIDI clip in the engine (the audio clip is what gets
-    // installed per-placement), so any one is fine to read notes
-    // from. Fall back early if nothing has been generated yet.
-    let derived_clip_id = placements
-        .iter()
-        .find_map(|(pid, _)| {
-            r.compose
-                .derived_clips
-                .get(&(definition_id, *pid, track_id))
-                .copied()
-        })
-        .or_else(|| {
-            // Fallback: scan the global map for any clip on this
-            // (def, track) — `derived_clips` is keyed by placement
-            // and a rare race during load can leave it sparsely
-            // populated.
-            r.compose
-                .derived_clips
-                .iter()
-                .find(|((def_id, _, tid), _)| *def_id == definition_id && *tid == track_id)
-                .map(|(_, cid)| *cid)
-        });
+    // Find the derived clip for any placement of this section on
+    // this track. Every placement of a definition shares the same
+    // MIDI clip in the engine (only the audio clip is per-placement),
+    // so the first match is always correct. If nothing matches the
+    // (definition, placement, track) key, the section genuinely has
+    // no derived clip — surface that error to the user instead of
+    // falling through to "any clip on this track in any section",
+    // which could render notes from a different part of the song.
+    let derived_clip_id = placements.iter().find_map(|(pid, _)| {
+        r.compose
+            .derived_clips
+            .get(&(definition_id, *pid, track_id))
+            .copied()
+    });
     let Some(clip_id) = derived_clip_id else {
         r.compose.last_error =
             Some("Generate a vocal first \u{2014} no MIDI clip to render.".to_string());
@@ -852,45 +863,15 @@ pub(super) fn rerender_vocal_audio(
     // queuing the new one — same housekeeping `roll_vocal_melody`
     // does, but the MIDI side is left alone (the whole point of
     // this path).
-    tear_down_old_vocal_audio(r, definition_id, track_id);
-
-    let epoch_entry = r
-        .compose
-        .vocal_render_epoch
-        .entry((definition_id, track_id))
-        .or_insert(0);
-    *epoch_entry = epoch_entry.wrapping_add(1);
-    let render_epoch = *epoch_entry;
-
-    r.compose.last_error = None;
-
-    let bpm = r.transport.bpm;
-    let engine_sr = r.sample_rate;
-    let dest_dir = vocal_audio_dir(r);
-    Task::perform(
-        async move {
-            tokio::task::spawn_blocking(move || {
-                render_vocal_wav(&midi_notes, &params, &lyrics, bpm, engine_sr, &dest_dir)
-            })
-            .await
-            .unwrap_or_else(|join_err| Err(format!("vocal render task join: {join_err}")))
-        },
-        move |result| match result {
-            Ok(Some((wav_path, trim_start, trim_end))) => Message::Compose(
-                ComposeMessage::VocalAudioReady(Box::new(VocalAudioReadyData {
-                    definition_id,
-                    track_id,
-                    wav_path,
-                    placements: placement_starts.clone(),
-                    clip_name: clip_name.clone(),
-                    trim_start_frames: trim_start,
-                    trim_end_frames: trim_end,
-                    render_epoch,
-                })),
-            ),
-            Ok(None) => Message::Tick,
-            Err(error) => Message::Compose(ComposeMessage::VocalAudioFailed { error }),
-        },
+    enqueue_vocal_render(
+        r,
+        definition_id,
+        track_id,
+        midi_notes,
+        lyrics,
+        params,
+        placement_starts,
+        clip_name,
     )
 }
 
@@ -960,53 +941,62 @@ pub(super) fn handle_vocal_audio_ready(
     }
 }
 
-/// Send `LoadMidiClipDirect` for every placement, replacing any prior
-/// derived MIDI clip. Stays sync — the staff has to update right away.
-#[allow(clippy::too_many_arguments)]
-fn install_vocal_midi(
-    r: &mut crate::Resonance,
+/// Bundled inputs for installing a freshly-derived vocal MIDI clip
+/// across every placement of a definition. Replaces the prior 8-arg
+/// `install_vocal_midi` function — too many bare parallel arguments
+/// hid a real mixed-responsibility problem.
+struct VocalMidiInstall<'a> {
     definition_id: u64,
     track_id: TrackId,
-    placements: &[(u64, u64)],
+    /// (placement_id, start_sample) pairs — one per placement of the
+    /// section definition.
+    placements: &'a [(u64, u64)],
     duration_ticks: u64,
-    midi_notes: &[resonance_audio::types::MidiNote],
-    lyrics: &[String],
-    name: &str,
-) {
-    use resonance_audio::types::AudioCommand;
-    for &(placement_id, start_sample) in placements {
-        if let Some(old_id) =
+    midi_notes: &'a [resonance_audio::types::MidiNote],
+    /// Per-note lyric annotations — see
+    /// [`crate::compose::state::ComposeState::vocal_clip_lyrics`].
+    lyrics: &'a [String],
+    name: &'a str,
+}
+
+impl VocalMidiInstall<'_> {
+    /// For each placement, tear down the prior derived clip (engine
+    /// + side-tables) and emit a fresh `LoadMidiClipDirect`. Stays
+    /// sync — the staff has to update right away.
+    fn install(&self, r: &mut crate::Resonance) {
+        use resonance_audio::types::AudioCommand;
+        for &(placement_id, start_sample) in self.placements {
+            if let Some(old_id) =
+                r.compose
+                    .derived_clips
+                    .remove(&(self.definition_id, placement_id, self.track_id))
+            {
+                r.engine
+                    .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
+                r.compose.vocal_clip_lyrics.remove(&old_id);
+            }
+            let clip_id = r.compose.fresh_derived_clip_id();
+            r.engine.send(AudioCommand::LoadMidiClipDirect {
+                clip_id,
+                track_id: self.track_id,
+                start_sample,
+                duration_ticks: self.duration_ticks,
+                notes: self.midi_notes.to_vec(),
+                name: self.name.to_string(),
+                trim_start_ticks: 0,
+                trim_end_ticks: 0,
+            });
             r.compose
                 .derived_clips
-                .remove(&(definition_id, placement_id, track_id))
-        {
-            r.engine
-                .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
-            // Drop the old clip's lyric side-table entry so stale
-            // lyrics don't pile up after repeated regenerates.
-            r.compose.vocal_clip_lyrics.remove(&old_id);
+                .insert((self.definition_id, placement_id, self.track_id), clip_id);
+            // Install the parallel lyric side-table — index i lines up
+            // with the i-th note in `midi_notes`. Padded with empty
+            // strings if the caller passed fewer lyrics than notes so
+            // the two vecs always stay the same length.
+            let mut padded: Vec<String> = self.lyrics.to_vec();
+            padded.resize(self.midi_notes.len(), String::new());
+            r.compose.vocal_clip_lyrics.insert(clip_id, padded);
         }
-        let clip_id = r.compose.fresh_derived_clip_id();
-        r.engine.send(AudioCommand::LoadMidiClipDirect {
-            clip_id,
-            track_id,
-            start_sample,
-            duration_ticks,
-            notes: midi_notes.to_vec(),
-            name: name.to_string(),
-            trim_start_ticks: 0,
-            trim_end_ticks: 0,
-        });
-        r.compose
-            .derived_clips
-            .insert((definition_id, placement_id, track_id), clip_id);
-        // Install the parallel lyric side-table — index i lines up
-        // with the i-th note in `midi_notes`. Padded with empty
-        // strings if the caller passed fewer lyrics than notes so
-        // the two vecs always stay the same length.
-        let mut padded: Vec<String> = lyrics.to_vec();
-        padded.resize(midi_notes.len(), String::new());
-        r.compose.vocal_clip_lyrics.insert(clip_id, padded);
     }
 }
 

@@ -81,6 +81,13 @@ pub struct ProjectFile {
     /// Hardware MIDI input port carrying the master clock.
     #[serde(default)]
     pub midi_clock_recv_device: Option<String>,
+    /// Project-scoped drum groups. Each group owns its grid/cycle/phase
+    /// and per-pad patterns; the audio rendering reads these to materialise
+    /// the drum track's MIDI clip on every section placement. Empty on
+    /// legacy projects (which then get the built-in default kit/snare/hat
+    /// layout the first time a new session opens).
+    #[serde(default)]
+    pub drum_groups: Vec<crate::compose::DrumGroup>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +203,14 @@ pub struct ProjectMidiClip {
     pub trim_end_ticks: u64,
     /// Project-relative path to the clip's Standard MIDI File.
     pub midi_file: String,
+    /// Per-note vocal lyric annotations, parallel to the clip's note
+    /// list. Carries OpenUtau-style slur markers (`"+"`) and explicit
+    /// per-note label overrides. Empty when the clip isn't on a vocal
+    /// track or hasn't had any lyric edits applied. Trailing empty
+    /// strings are stripped by the serializer to keep the JSON lean —
+    /// the replay path pads back to `notes.len()` on load.
+    #[serde(default)]
+    pub vocal_lyrics: Vec<String>,
 }
 
 /// Everything needed to reconstruct a project after loading from disk.

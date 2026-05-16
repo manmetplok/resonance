@@ -602,6 +602,196 @@ pub fn phonemes_for_draft(draft: &[crate::derive::LyricLine]) -> Vec<Vec<&'stati
     out
 }
 
+/// OpenUtau-style slur marker. A note whose lyric equals this (or `-`)
+/// continues the previous syllable's vowel rather than starting a new
+/// attack. Centralised so the GUI, the SVS pipeline, and the lyric
+/// side-table never disagree on which sigil counts.
+pub const SLUR_MARKER: &str = "+";
+
+/// `true` when `s` is a slur annotation (`"+"` or `"-"`, ignoring
+/// surrounding whitespace). The single source of truth for the
+/// convention — every call site routes through this.
+pub fn is_slur_lyric(s: &str) -> bool {
+    let t = s.trim();
+    t == "+" || t == "-"
+}
+
+/// One syllable resolved against the lyric draft. Carries the surface
+/// label (the glyphs you'd write on a score), the phoneme list the
+/// SVS model will sing, and a `is_word_end` flag that drives SP
+/// injection between words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSyllable {
+    pub label: String,
+    pub phonemes: Vec<&'static str>,
+    pub is_word_end: bool,
+}
+
+/// One note's assignment after the lyric side-table annotations have
+/// been applied to the resolved draft. The cursor in
+/// [`assign_syllables_to_notes`] produces a `Vec<AssignedSyllable>`
+/// of exactly `note_count` entries — the single source of truth
+/// shared between the vocal roll (lyrics on notes + phoneme strip)
+/// and the SVS pipeline (`build_segment`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssignedSyllable {
+    /// Glyphs to draw on the note body or in the phoneme strip's
+    /// label column. For slurs this is `"+"`. For overrides it's the
+    /// user-typed string; otherwise the resolved-syllable surface.
+    pub label: String,
+    /// Phoneme list the SVS pipeline sings for this note. For slurs
+    /// this is the held vowel from the previous syllable (single
+    /// element vec).
+    pub phonemes: Vec<&'static str>,
+    pub is_slur: bool,
+    /// `true` when the underlying resolved syllable was the last in
+    /// its word *and* this note is non-slur. Slur notes never sit on
+    /// a word boundary by definition.
+    pub is_word_end: bool,
+    /// Which resolved-syllable index this note maps to. Slur notes
+    /// inherit the previous non-slur note's index. Out-of-range when
+    /// the draft has fewer syllables than non-slur notes.
+    pub syllable_index: usize,
+}
+
+/// Resolve every syllable in a lyric draft to its (surface, phonemes,
+/// word-end) tuple. One pass through `tokenize_line` — guarantees the
+/// surface labels and phoneme groups stay in lockstep, so a per-
+/// syllable assertion like `labels.len() == phonemes.len()` becomes a
+/// property of the type rather than a discipline.
+///
+/// Phoneme-block tokens (`[hh ah]` overrides) get their label set to
+/// the bracketed phoneme list — the user explicitly typed phonemes,
+/// not glyphs, so that's the most faithful surface to display.
+pub fn resolve_draft(draft: &[crate::derive::LyricLine]) -> Vec<ResolvedSyllable> {
+    let mut tokens: Vec<LyricToken> = Vec::new();
+    for line in draft {
+        tokens.extend(tokenize_line(&line.text));
+    }
+    let mut out: Vec<ResolvedSyllable> = Vec::new();
+    for token in tokens {
+        match token {
+            LyricToken::PhonemeBlock(groups) => {
+                let last_idx = groups.len().saturating_sub(1);
+                for (i, g) in groups.into_iter().enumerate() {
+                    out.push(ResolvedSyllable {
+                        label: format!("[{}]", g.join(" ")),
+                        phonemes: g,
+                        is_word_end: i == last_idx,
+                    });
+                }
+            }
+            LyricToken::Word { cleaned, syl_count, variant_idx } => {
+                let phonemes = word_to_phonemes_variant(&cleaned, variant_idx);
+                let phoneme_groups: Vec<Vec<&'static str>> = if syl_count <= 1 {
+                    vec![phonemes]
+                } else {
+                    split_into_syllables(&phonemes, syl_count)
+                };
+                // Surface labels via `syllabify_word`, which inserts
+                // `·` markers using the same CMU syllable count the
+                // phoneme split uses. Falling back to the cleaned word
+                // when syllabify-word can't reach the target keeps the
+                // two slices balanced.
+                let with_dots = syllabify_word(&cleaned, syl_count);
+                let labels: Vec<String> = with_dots
+                    .split('\u{00B7}')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                let n = phoneme_groups.len();
+                let last_idx = n.saturating_sub(1);
+                for i in 0..n {
+                    let label = labels.get(i).cloned().unwrap_or_default();
+                    let phonemes = phoneme_groups.get(i).cloned().unwrap_or_default();
+                    out.push(ResolvedSyllable {
+                        label,
+                        phonemes,
+                        is_word_end: i == last_idx,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Map a per-note annotation vec to per-note `AssignedSyllable`s,
+/// walking a cursor through `syllables` and skipping it on slur
+/// notes. The single source of truth for the cursor model — every
+/// view + the SVS pipeline use this.
+///
+/// `annotations[i]` is interpreted as:
+///
+/// * `""` (empty)  — consume the next resolved syllable.
+/// * `"+"` / `"-"` — slur: inherit the previous note's vowel, no
+///   cursor advance.
+/// * anything else — explicit label override (cursor still advances;
+///   phonemes still come from the resolved syllable).
+///
+/// Returns exactly `note_count` entries.
+pub fn assign_syllables_to_notes(
+    syllables: &[ResolvedSyllable],
+    annotations: &[String],
+    note_count: usize,
+) -> Vec<AssignedSyllable> {
+    let mut out: Vec<AssignedSyllable> = Vec::with_capacity(note_count);
+    let mut cursor: usize = 0;
+    let mut last_syllable_idx: usize = 0;
+    let mut last_vowel: Option<&'static str> = None;
+    for i in 0..note_count {
+        let entry = annotations.get(i).map(|s| s.trim()).unwrap_or("");
+        if is_slur_lyric(entry) {
+            let phonemes: Vec<&'static str> =
+                last_vowel.map(|v| vec![v]).unwrap_or_default();
+            out.push(AssignedSyllable {
+                label: SLUR_MARKER.to_string(),
+                phonemes,
+                is_slur: true,
+                is_word_end: false,
+                syllable_index: last_syllable_idx,
+            });
+            continue;
+        }
+        let syl_opt = syllables.get(cursor);
+        let syl_index = cursor;
+        cursor += 1;
+        let Some(syl) = syl_opt else {
+            out.push(AssignedSyllable {
+                label: String::new(),
+                phonemes: Vec::new(),
+                is_slur: false,
+                is_word_end: false,
+                syllable_index: syl_index,
+            });
+            continue;
+        };
+        // Cache the last non-consonant phoneme so a following slur
+        // note can hold the vowel. Falls back to the final phoneme
+        // when the syllable is all-consonant (rare; only happens for
+        // pathological overrides).
+        if let Some(v) = syl.phonemes.iter().rev().find(|p| !is_consonant(p)) {
+            last_vowel = Some(*v);
+        } else if let Some(v) = syl.phonemes.last() {
+            last_vowel = Some(*v);
+        }
+        last_syllable_idx = syl_index;
+        let label = if !entry.is_empty() {
+            entry.to_string()
+        } else {
+            syl.label.clone()
+        };
+        out.push(AssignedSyllable {
+            label,
+            phonemes: syl.phonemes.clone(),
+            is_slur: false,
+            is_word_end: syl.is_word_end,
+            syllable_index: syl_index,
+        });
+    }
+    out
+}
+
 /// Like `phonemes_for_draft` but also returns a parallel `Vec<bool>`
 /// flagging the last syllable of each word. Lets the SVS pipeline
 /// decide whether to insert a short `SP` (silence) between words for

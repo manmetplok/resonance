@@ -75,14 +75,18 @@ pub(super) fn note_added(r: &mut Resonance, clip_id: ClipId, note: MidiNote) {
         clip.notes.insert(pos, note);
         // Keep the lyric side-table aligned — insert a blank lyric
         // at the same index so subsequent indices still reference the
-        // right note. The vocal roll fills it in with an auto-syllable
-        // or `+` on demand.
+        // right note. If the side-table is shorter than the notes vec
+        // (e.g. a clip created by raw `AddMidiNote` before any vocal
+        // edit), pad with empty strings up to `pos` first so the
+        // newly inserted entry lands at the correct position and the
+        // post-insert length matches `clip.notes.len()`.
         if let Some(lyrics) = r.compose.vocal_clip_lyrics.get_mut(&clip_id) {
-            if pos <= lyrics.len() {
-                lyrics.insert(pos, String::new());
-            } else {
-                lyrics.resize(pos + 1, String::new());
+            if lyrics.len() < pos {
+                lyrics.resize(pos, String::new());
             }
+            lyrics.insert(pos, String::new());
+            // Post-condition: lyrics.len() == clip.notes.len().
+            debug_assert_eq!(lyrics.len(), clip.notes.len());
         }
     }
 }

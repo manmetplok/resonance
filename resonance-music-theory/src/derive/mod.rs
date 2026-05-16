@@ -55,42 +55,4 @@ pub struct GeneratedNote {
     pub duration_ticks: u64,
 }
 
-/// Vocal-side note: a plain MIDI note plus the per-note lyric. Modelled
-/// as composition so engine code (which only needs the MIDI fields) can
-/// keep ignoring vocal metadata, while the SVS pipeline + vocal roll
-/// can carry the lyric / slur information on the same struct.
-///
-/// **OpenUtau slur convention.** A `lyric` of `+` marks the note as a
-/// *slur*: the previous note's vowel carries through onto this pitch
-/// (one syllable, multiple pitches — i.e. a melisma). `-` does the
-/// same in some other editors; we accept either. Any other lyric is a
-/// regular syllable that maps to its own phoneme list.
-#[derive(Debug, Clone, PartialEq)]
-pub struct VocalNote {
-    pub midi: GeneratedNote,
-    pub lyric: String,
-}
-
-impl VocalNote {
-    /// Build a fresh `VocalNote` with the given midi data and lyric.
-    pub fn new(midi: GeneratedNote, lyric: impl Into<String>) -> Self {
-        Self {
-            midi,
-            lyric: lyric.into(),
-        }
-    }
-
-    /// `true` when the note's lyric marks it as a continuation of the
-    /// previous note's syllable rather than its own attack — OpenUtau-
-    /// style `+` (or `-`).
-    pub fn is_slur(&self) -> bool {
-        let l = self.lyric.trim();
-        l == "+" || l == "-"
-    }
-
-    /// The literal slur marker used when toggling a note into a slur.
-    /// Centralised so the GUI and the SVS pipeline never disagree on
-    /// which sigil counts.
-    pub const SLUR_MARKER: &'static str = "+";
-}
 

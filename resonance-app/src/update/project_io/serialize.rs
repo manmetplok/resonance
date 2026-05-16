@@ -103,15 +103,32 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
     let midi_clips = r
         .midi_clips
         .iter()
-        .map(|mc| ProjectMidiClip {
-            id: mc.id,
-            track_id: mc.track_id,
-            start_sample: mc.start_sample,
-            duration_ticks: mc.duration_ticks,
-            name: mc.name.clone(),
-            trim_start_ticks: mc.trim_start_ticks,
-            trim_end_ticks: mc.trim_end_ticks,
-            midi_file: format!("midi/clip_{}.mid", mc.id),
+        .map(|mc| {
+            // Per-note lyric annotations from the side-table. Strip
+            // trailing empties so a clip without slurs / overrides
+            // doesn't bloat the project file with an empty-string
+            // array; the replay path pads back to `notes.len()` on
+            // load.
+            let mut vocal_lyrics: Vec<String> = r
+                .compose
+                .vocal_clip_lyrics
+                .get(&mc.id)
+                .cloned()
+                .unwrap_or_default();
+            while vocal_lyrics.last().is_some_and(|s| s.is_empty()) {
+                vocal_lyrics.pop();
+            }
+            ProjectMidiClip {
+                id: mc.id,
+                track_id: mc.track_id,
+                start_sample: mc.start_sample,
+                duration_ticks: mc.duration_ticks,
+                name: mc.name.clone(),
+                trim_start_ticks: mc.trim_start_ticks,
+                trim_end_ticks: mc.trim_end_ticks,
+                midi_file: format!("midi/clip_{}.mid", mc.id),
+                vocal_lyrics,
+            }
         })
         .collect();
 
@@ -152,5 +169,6 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         midi_clock_send_device: r.midi_clock_send_device.clone(),
         midi_clock_recv_enabled: r.midi_clock_recv_enabled,
         midi_clock_recv_device: r.midi_clock_recv_device.clone(),
+        drum_groups: r.compose.drum_groups.clone(),
     }
 }

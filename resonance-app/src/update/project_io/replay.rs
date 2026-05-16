@@ -42,6 +42,24 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.compose
         .load_from_project(&project.section_definitions, &project.section_placements);
 
+    // Restore the project's drum groups (or seed the default kit/snare/
+    // hat layout for legacy projects that predate the grouped model). The
+    // group ids carry through so a freshly-loaded project keeps the same
+    // (group_id × placement) mapping the user authored.
+    if !project.drum_groups.is_empty() {
+        r.compose.drum_groups = project.drum_groups.clone();
+        // Bump the compose id counter past every saved group id so the
+        // manager's "+ New group" doesn't collide.
+        if let Some(max_group_id) = r.compose.drum_groups.iter().map(|g| g.id).max() {
+            r.compose.next_id = r.compose.next_id.max(max_group_id);
+        }
+        // Refresh the right-rail selection to point at a real group.
+        r.compose.drumroll.selected_group_id =
+            r.compose.drum_groups.first().map(|g| g.id);
+        r.compose.drumroll.managing_group_id =
+            r.compose.drum_groups.first().map(|g| g.id);
+    }
+
     // Restore tempo/signature events. If the project has none (legacy),
     // create a single event at bar 0 from the global BPM/sig.
     if project.tempo_events.is_empty() {
@@ -197,6 +215,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
             trim_end_ticks: pmc.trim_end_ticks,
         });
 
+        let note_count = notes.len();
         r.midi_clips.push(MidiClipState {
             id: pmc.id,
             track_id: pmc.track_id,
@@ -207,6 +226,16 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
             trim_start_ticks: pmc.trim_start_ticks,
             trim_end_ticks: pmc.trim_end_ticks,
         });
+
+        // Re-install the lyric side-table. Serializer strips trailing
+        // empties; pad back to the clip's note count so every parallel
+        // walker stays correctly aligned. Skip entirely when the saved
+        // vec is all-empty (legacy projects + non-vocal clips).
+        if !pmc.vocal_lyrics.is_empty() {
+            let mut lyrics = pmc.vocal_lyrics.clone();
+            lyrics.resize(note_count, String::new());
+            r.compose.vocal_clip_lyrics.insert(pmc.id, lyrics);
+        }
     }
 
     let samples_per_beat = r.sample_rate as f64 * 60.0 / r.transport.bpm as f64;
@@ -242,86 +271,104 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 }
 
 fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
+    // Repair sub-track id collisions left by buggier prior versions. If
+    // the saved id is already in use by an earlier-loaded track, allocate
+    // a fresh sub-track id from `next_sub_track_id` (which the pre-loop
+    // bump already advanced past every saved sub-track id, so this won't
+    // collide with later siblings either).
+    let track_id = if pt.sub_track.is_some()
+        && r.registry.tracks.iter().any(|t| t.id == pt.id)
+    {
+        let new_id = r.registry.allocate_sub_track_id();
+        eprintln!(
+            "replay_track: sub-track {:?} id {} collided with existing track; remapped to {}",
+            pt.name, pt.id, new_id
+        );
+        new_id
+    } else {
+        pt.id
+    };
+
     // Register the track / sub-track / instrument-track with the engine.
     if let Some(link) = pt.sub_track {
         r.engine.send(AudioCommand::CreateSubTrack {
-            sub_id: pt.id,
+            sub_id: track_id,
             parent_track_id: link.parent_track_id,
             output_port_index: link.output_port_index,
             name: pt.name.clone(),
         });
     } else if pt.track_type == "instrument" {
         r.engine.send(AudioCommand::AddInstrumentTrack {
-            id_hint: Some(pt.id),
+            id_hint: Some(track_id),
             name: Some(pt.name.clone()),
         });
     } else if pt.track_type == "vocal" {
         r.engine.send(AudioCommand::AddVocalTrack {
-            id_hint: Some(pt.id),
+            id_hint: Some(track_id),
             name: Some(pt.name.clone()),
         });
     } else {
         r.engine.send(AudioCommand::AddTrack {
-            id_hint: Some(pt.id),
+            id_hint: Some(track_id),
             name: Some(pt.name.clone()),
         });
     }
 
     // Set track properties
     r.engine.send(AudioCommand::SetTrackVolume {
-        track_id: pt.id,
+        track_id,
         volume: db_to_gain(pt.volume),
     });
     r.engine.send(AudioCommand::SetTrackPan {
-        track_id: pt.id,
+        track_id,
         pan: pt.pan,
     });
     r.engine.send(AudioCommand::SetTrackMute {
-        track_id: pt.id,
+        track_id,
         muted: pt.muted,
     });
     r.engine.send(AudioCommand::SetTrackSolo {
-        track_id: pt.id,
+        track_id,
         soloed: pt.soloed,
     });
     r.engine.send(AudioCommand::SetTrackRecordArm {
-        track_id: pt.id,
+        track_id,
         armed: pt.record_armed,
     });
     r.engine.send(AudioCommand::SetTrackMonitor {
-        track_id: pt.id,
+        track_id,
         enabled: pt.monitor_enabled,
     });
     r.engine.send(AudioCommand::SetTrackMono {
-        track_id: pt.id,
+        track_id,
         mono: pt.mono,
     });
     r.engine.send(AudioCommand::SetTrackFxBypass {
-        track_id: pt.id,
+        track_id,
         bypassed: pt.fx_bypassed,
     });
     if let Some(ref device) = pt.input_device_name {
         r.engine.send(AudioCommand::SetTrackInputDevice {
-            track_id: pt.id,
+            track_id,
             device_name: Some(device.clone()),
         });
     }
     if let Some(port_index) = pt.input_port_index {
         r.engine.send(AudioCommand::SetTrackInputPort {
-            track_id: pt.id,
+            track_id,
             port_index,
         });
     }
     if pt.midi_input_device.is_some() {
         r.engine.send(AudioCommand::SetTrackMidiInput {
-            track_id: pt.id,
+            track_id,
             device: pt.midi_input_device.clone(),
             channel: pt.midi_input_channel,
         });
     }
     if pt.midi_output_device.is_some() {
         r.engine.send(AudioCommand::SetTrackMidiOutput {
-            track_id: pt.id,
+            track_id,
             device: pt.midi_output_device.clone(),
             channel: pt.midi_output_channel,
         });
@@ -333,7 +380,7 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
     let mut gui_plugins = Vec::new();
     for pp in &pt.plugins {
         r.engine.send(AudioCommand::AddPlugin {
-            track_id: pt.id,
+            track_id,
             clap_file_path: pp.clap_file_path.clone(),
             clap_plugin_id: pp.clap_plugin_id.clone(),
             id_hint: Some(pp.instance_id),
@@ -355,12 +402,25 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
     }
 
     let order = r.registry.next_track_order;
-    let mut track = if pt.track_type == "instrument" {
-        TrackState::new_instrument(pt.id, order)
+    let mut track = if let Some(link) = pt.sub_track {
+        // Sub-tracks are always instrument-typed regardless of what the
+        // saved `track_type` says. Earlier buggy saves could land a
+        // sub-track in a colliding-id slot whose surviving entry had
+        // track_type "vocal"; re-typing here keeps the inspector / mixer
+        // rendering the correct controls after the remap above.
+        TrackState::new_sub_track(
+            track_id,
+            order,
+            pt.name.clone(),
+            link.parent_track_id,
+            link.output_port_index,
+        )
+    } else if pt.track_type == "instrument" {
+        TrackState::new_instrument(track_id, order)
     } else if pt.track_type == "vocal" {
-        TrackState::new_vocal(pt.id, order)
+        TrackState::new_vocal(track_id, order)
     } else {
-        TrackState::new_audio(pt.id, order)
+        TrackState::new_audio(track_id, order)
     };
     // Projects saved before the order-based default-naming fix
     // (commit ~late-2026) stored auto-generated names like

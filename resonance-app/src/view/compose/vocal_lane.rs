@@ -49,40 +49,30 @@ const LYRIC_BAND_HEIGHT: f32 = 42.0;
 
 /// Build the vocal-lane stack. Returns an empty 0-height element when
 /// the section has no vocal-generator lanes.
-/// Fallback when a vocal track exists but the section hasn't been wired
-/// to a `LaneGeneratorKind::Vocal` yet. Lets the lane still render
-/// (with default contour + lyrics) instead of disappearing.
-fn default_vocal_params() -> &'static VocalParams {
-    use std::sync::OnceLock;
-    static DEFAULT: OnceLock<VocalParams> = OnceLock::new();
-    DEFAULT.get_or_init(VocalParams::default)
-}
-
+///
+/// Tracks with `TrackType::Vocal` that don't have a `Vocal` lane
+/// generator configured for this section are skipped entirely —
+/// fabricating default `VocalParams` (the previous behaviour) gave
+/// the user visually wrong ranges (e.g. an alto staff for a soprano
+/// track that hadn't been wired up yet) and confused the contour
+/// fallback. A row only renders once the user has actually configured
+/// a vocal generator for the lane.
 pub fn view<'a>(
     app: &'a Resonance,
     placement: &'a SectionPlacementState,
     definition: &'a SectionDefinitionState,
 ) -> Element<'a, Message> {
-    // Vocal tracks are identified by their track type (engine-level
-    // attribute), not by a per-section lane-generator configuration.
-    // Lane params still live on the section's `LaneGeneratorKind::Vocal`;
-    // tracks without a configured generator fall back to defaults so the
-    // lane is always drawable.
     let vocal_tracks: Vec<(TrackId, &VocalParams)> = app
         .registry
         .tracks
         .iter()
         .filter(|t| t.track_type == TrackType::Vocal)
-        .map(|t| {
-            let params = definition
-                .lane_generators
-                .get(&t.id)
-                .and_then(|cfg| match &cfg.kind {
-                    LaneGeneratorKind::Vocal(p) => Some(p),
-                    _ => None,
-                })
-                .unwrap_or_else(|| default_vocal_params());
-            (t.id, params)
+        .filter_map(|t| {
+            let cfg = definition.lane_generators.get(&t.id)?;
+            let LaneGeneratorKind::Vocal(p) = &cfg.kind else {
+                return None;
+            };
+            Some((t.id, p))
         })
         .collect();
 

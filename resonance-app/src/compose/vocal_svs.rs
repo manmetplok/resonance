@@ -214,23 +214,13 @@ const SEGMENT_PAD_SEC: f64 = 0.3;
 /// `None` when the SVS model files aren't installed (the PoC's download
 /// script hasn't been run, env var unset, etc.) so the caller can fall
 /// back to its existing MIDI-only behaviour silently.
-#[allow(dead_code)]
-pub fn render_vocal_clip(
-    notes: &[MidiNote],
-    params: &VocalParams,
-    ticks_per_quarter: u32,
-    bpm: f32,
-    engine_sample_rate: u32,
-) -> Result<Option<RenderedVocal>, String> {
-    render_vocal_clip_with_lyrics(notes, params, &[], ticks_per_quarter, bpm, engine_sample_rate)
-}
-
-/// Like [`render_vocal_clip`] but also accepts a per-note lyric slice
+/// Render the vocal clip. `lyrics` is a per-note annotation slice
 /// (parallel to `notes`). Notes whose lyric equals the OpenUtau slur
 /// marker (`"+"`) get treated as melisma continuations of the previous
 /// syllable instead of consuming a fresh phoneme list. An empty
 /// `lyrics` slice is equivalent to the legacy "every note is its own
-/// syllable" mode.
+/// syllable" mode and is what the engine sees for non-vocal clips
+/// rendered through the same code path during testing.
 pub fn render_vocal_clip_with_lyrics(
     notes: &[MidiNote],
     params: &VocalParams,
@@ -400,18 +390,21 @@ fn build_segment(
     // in the app.
     let seconds_per_tick = 60.0 / (bpm.max(1.0) as f64 * ticks_per_quarter as f64);
 
-    // Resolve syllable phonemes by walking the lyric draft word by
-    // word. CMU dict gives us proper English pronunciation for each
-    // word; multi-syllable words have their phoneme stream split
-    // across the matching syllable notes so e.g. `hou·ses` becomes
-    // `[hh aw] [z ah z]` on two notes (vs. our old rule-based
-    // `[hh aw s] [eh s]` which sang as "house-ess").
-    let (raw_phonemes, is_word_end) =
-        g2p::phonemes_for_draft_with_word_boundaries(&params.draft);
-    let syllable_phonemes: Vec<Vec<&'static str>> = raw_phonemes
-        .into_iter()
-        .map(|s| s.into_iter().map(|p| substitute_phoneme(params.voicebank, p)).collect())
-        .collect();
+    // Resolve every note's (label, phonemes, is_slur, is_word_end)
+    // via the shared cursor walker in music-theory. Same helper drives
+    // the on-note lyric labels and the phoneme strip in the vocal
+    // roll, so what the user sees and what the model sings can never
+    // disagree on syllable-to-note assignment.
+    let resolved = g2p::resolve_draft(&params.draft);
+    let mut assigned = g2p::assign_syllables_to_notes(&resolved, lyrics, notes.len());
+    // Apply voicebank-specific phoneme substitutions (e.g. Lilia's
+    // `aa` → `a`). The resolver returns the canonical ARPAbet form;
+    // each voicebank rewrites a small set of names at the SVS boundary.
+    for a in assigned.iter_mut() {
+        for p in a.phonemes.iter_mut() {
+            *p = substitute_phoneme(params.voicebank, *p);
+        }
+    }
     // Optional word-boundary SP injection. Off by default (the
     // reference DiffSinger fixtures intentionally flow phonemes
     // continuously). Set RESONANCE_WORD_BOUNDARY_SP_MS=N to insert
@@ -483,39 +476,6 @@ fn build_segment(
         .map(|n| midi_to_diffsinger_note(n.note))
         .collect();
 
-    // Per-note slur lookup. OpenUtau-style: a lyric of `+` (or `-`)
-    // means "continue the previous syllable's vowel" — that note
-    // consumes no fresh phoneme list and inherits the last vowel of
-    // the prior non-slur note. Empty `lyrics` disables slurring
-    // (legacy 1:1 mapping).
-    let is_slur_note = |i: usize| -> bool {
-        lyrics
-            .get(i)
-            .map(|l| {
-                let s = l.trim();
-                s == "+" || s == "-"
-            })
-            .unwrap_or(false)
-    };
-    // Map each note index to the syllable phoneme list it should
-    // sing. Slur notes inherit the previous non-slur note's index;
-    // non-slur notes count their own position among non-slurs.
-    let syllable_idx_per_note: Vec<usize> = {
-        let mut out = Vec::with_capacity(notes.len());
-        let mut next_syl: usize = 0;
-        let mut last_syl: usize = 0;
-        for i in 0..notes.len() {
-            if is_slur_note(i) {
-                out.push(last_syl);
-            } else {
-                out.push(next_syl);
-                last_syl = next_syl;
-                next_syl += 1;
-            }
-        }
-        out
-    };
-
     // Walk notes back-to-back. We never insert AP between adjacent
     // syllables — the reference fixtures (`twinkle.ds`,
     // `hello_tiger.ds`) keep phonemes flowing continuously and let
@@ -545,46 +505,27 @@ fn build_segment(
         };
 
         // Slur notes sing only the previous syllable's vowel for the
-        // whole slot — no consonants, no new attack. This matches
-        // OpenUtau / DiffSinger's slur semantics: the model gets a
-        // single sustained vowel at the new pitch.
-        let is_slur = is_slur_note(i);
-        let syllable_idx = syllable_idx_per_note[i];
+        // whole slot — no consonants, no new attack. `AssignedSyllable`
+        // already encodes this (slur entries carry a single-vowel
+        // phoneme list); fall back to `"ah"` when the resolver couldn't
+        // even produce a vowel (e.g. draft is empty).
+        let assignment = &assigned[i];
         let fallback = vec!["ah"];
-        let phonemes_owned: Vec<&'static str> = if is_slur {
-            // Pick the vowel of the previous (non-slur) syllable to
-            // carry over. Falls back to the source syllable's last
-            // phoneme when it has no vowel at all (degenerate input).
-            let prev = syllable_phonemes
-                .get(syllable_idx)
-                .map(|v| v.as_slice())
-                .unwrap_or(&fallback);
-            let vowel = prev
-                .iter()
-                .rev()
-                .find(|p| !g2p::is_consonant(p))
-                .or_else(|| prev.last())
-                .copied()
-                .unwrap_or("ah");
-            vec![vowel]
+        let phonemes: &[&'static str] = if assignment.phonemes.is_empty() {
+            &fallback
         } else {
-            syllable_phonemes
-                .get(syllable_idx)
-                .cloned()
-                .unwrap_or_else(|| fallback.clone())
+            &assignment.phonemes
         };
-        let phonemes: &[&'static str] = &phonemes_owned;
 
         // Word-boundary SP: when this syllable is the LAST one of its
-        // word (and the next syllable starts a new word), reserve a
-        // small silence at the end of the singing slot. The reference
-        // DiffSinger fixtures don't insert SP between words, so this
-        // is opt-in — env-var-gated for A/B testing. Suppressed for
-        // slur notes — a melisma never sits on a word boundary.
-        let inject_sp = !is_slur
-            && word_boundary_sp_sec > 0.0
-            && is_word_end.get(syllable_idx).copied().unwrap_or(false)
-            && syllable_idx + 1 < syllable_phonemes.len();
+        // word, reserve a small silence at the end of the singing
+        // slot. The reference DiffSinger fixtures don't insert SP
+        // between words, so this is opt-in — env-var-gated for A/B
+        // testing. `AssignedSyllable::is_word_end` is already `false`
+        // for slur notes, so no extra check needed here.
+        let inject_sp = word_boundary_sp_sec > 0.0
+            && assignment.is_word_end
+            && assignment.syllable_index + 1 < resolved.len();
         let sp_sec = if inject_sp {
             word_boundary_sp_sec.min(sing_sec * 0.3)
         } else {

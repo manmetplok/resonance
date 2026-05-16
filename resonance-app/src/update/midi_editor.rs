@@ -112,7 +112,7 @@ fn toggle_slur(
     clip_id: resonance_audio::types::ClipId,
     note_index: usize,
 ) {
-    use resonance_music_theory::VocalNote;
+    use resonance_music_theory::g2p;
 
     let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) else {
         return;
@@ -130,10 +130,9 @@ fn toggle_slur(
     if entry.len() < note_count {
         entry.resize(note_count, String::new());
     }
-    let current = entry[note_index].trim();
-    if current == VocalNote::SLUR_MARKER || current == "-" {
+    if g2p::is_slur_lyric(&entry[note_index]) {
         entry[note_index] = String::new();
     } else {
-        entry[note_index] = VocalNote::SLUR_MARKER.to_string();
+        entry[note_index] = g2p::SLUR_MARKER.to_string();
     }
 }
