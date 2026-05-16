@@ -1191,6 +1191,7 @@ pub fn derive_vocal_with_motif(
 /// clamped within an octave of the previous pitch). The terminal note
 /// of every line keeps its style cadence landing so phrases still
 /// resolve.
+#[allow(clippy::too_many_arguments)]
 fn apply_motif_pitches(
     notes: &mut [GeneratedNote],
     motif_intervals: &[i8],
@@ -1272,6 +1273,47 @@ fn motif_pitch(
     snap_to_scale(candidate, scale, lo, hi)
 }
 
+/// Group `notes` (one per syllable, in lyric order) into per-line
+/// `(start_tick, end_tick)` phrase intervals using `params.draft` to
+/// recover the lyric line boundaries. Each interval's start is the
+/// earliest onset of any note in the line and its end is the latest
+/// note's `start_tick + duration_ticks`. Lines with no syllables are
+/// skipped.
+///
+/// Used by `MelodyParams::fill_vocal_gaps`: the synth fill needs to
+/// know where the actual sung phrases sit, and the lyric line is the
+/// authoritative phrase unit. Time-gap heuristics fail because the
+/// vocal generator's `phrase_start_offset` can pull successive lines
+/// into each other, leaving only a few-tick gap between them.
+pub fn vocal_phrase_spans(
+    notes: &[GeneratedNote],
+    params: &VocalParams,
+) -> Vec<(u64, u64)> {
+    let line_syl: Vec<u32> = params
+        .draft
+        .iter()
+        .map(|l| count_syllables(&l.text))
+        .collect();
+    let mut out = Vec::with_capacity(line_syl.len());
+    let mut cursor = 0usize;
+    for &n_syl in &line_syl {
+        let n = (n_syl as usize).min(notes.len().saturating_sub(cursor));
+        if n == 0 {
+            continue;
+        }
+        let slice = &notes[cursor..cursor + n];
+        let start = slice.iter().map(|x| x.start_tick).min().unwrap_or(0);
+        let end = slice
+            .iter()
+            .map(|x| x.start_tick + x.duration_ticks)
+            .max()
+            .unwrap_or(start);
+        out.push((start, end));
+        cursor += n;
+    }
+    out
+}
+
 /// Final pass: each note's `start_tick + duration_ticks` must not
 /// exceed the next note's `start_tick`. The `phrase_start_offset`
 /// (negative pickup / anacrusis) can shift line N+1 to start before
@@ -1280,27 +1322,29 @@ fn motif_pitch(
 /// so an overlap means two syllables claim the same time window and
 /// the second one's pitch fights the first's tail.
 ///
-/// We sort by `start_tick`, then walk pairs and clip the previous
-/// note's duration to leave at least `tpb / 16` (a 64th note) of
-/// silence into the next note's onset so the SVS render gets a
-/// clean boundary instead of a hard bump.
-fn enforce_no_overlap(notes: &mut Vec<GeneratedNote>, tpb: u64) {
+/// We compute the time order via a permutation (instead of sorting
+/// the notes themselves) so the original lyric order survives — the
+/// app's `vocal_phrase_spans` walks notes in lyric order to recover
+/// per-line phrase intervals, and a sort would mix lines together
+/// when `phrase_start_offset` shifts a later line back into an
+/// earlier one's tail. We trim each note's duration to leave at
+/// least `tpb / 16` (a 64th note) of silence into the next-in-time
+/// note's onset.
+fn enforce_no_overlap(notes: &mut [GeneratedNote], tpb: u64) {
     if notes.len() < 2 {
         return;
     }
-    notes.sort_by_key(|n| n.start_tick);
+    let mut order: Vec<usize> = (0..notes.len()).collect();
+    order.sort_by_key(|&i| notes[i].start_tick);
     let min_gap = (tpb / 16).max(1);
-    for i in 0..notes.len() - 1 {
-        let next_start = notes[i + 1].start_tick;
-        let cur = &mut notes[i];
-        let cur_end = cur.start_tick + cur.duration_ticks;
+    for w in order.windows(2) {
+        let (cur_idx, next_idx) = (w[0], w[1]);
+        let next_start = notes[next_idx].start_tick;
+        let cur_start = notes[cur_idx].start_tick;
+        let cur_end = cur_start + notes[cur_idx].duration_ticks;
         if cur_end + min_gap > next_start {
-            // Trim so the previous note ends `min_gap` before the
-            // next note starts. If the math goes negative (the next
-            // note literally starts before this one — shouldn't
-            // happen post-sort but defensive), clip to a single tick.
-            let new_dur = next_start.saturating_sub(cur.start_tick).saturating_sub(min_gap);
-            cur.duration_ticks = new_dur.max(1);
+            let new_dur = next_start.saturating_sub(cur_start).saturating_sub(min_gap);
+            notes[cur_idx].duration_ticks = new_dur.max(1);
         }
     }
 }
@@ -1623,7 +1667,7 @@ fn cadence_pitch(
             let mut best: Option<u8> = None;
             let mut best_dist = i16::MAX;
             for midi in lo..=hi {
-                let pc = (midi as u8) % 12;
+                let pc = midi % 12;
                 let degree = (pc + 12 - root_pc) % 12;
                 if !open_degrees.contains(&degree) {
                     continue;
@@ -1686,6 +1730,7 @@ fn phrase_start_offset(rng: &mut XorShift, beats_per_bar: u32) -> f32 {
 /// 1 = full ±0.18 envelope swing); `accent_amount` weights the beat
 /// strength contribution; `jitter` is the per-syllable random
 /// half-width.
+#[allow(clippy::too_many_arguments)]
 fn shape_velocity(
     rng: &mut XorShift,
     base: f32,
