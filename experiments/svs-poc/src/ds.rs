@@ -79,6 +79,11 @@ pub struct DsSegment {
     pub breathiness: SampleCurve,
     pub voicing: SampleCurve,
     pub tension: SampleCurve,
+    /// Optional per-token language ids, parallel to `ph_seq`. Used by
+    /// multi-language voicebanks (Meiji) whose acoustic ONNX accepts a
+    /// `languages` input. Empty when the voicebank doesn't expose such
+    /// an input.
+    pub languages: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Default)]

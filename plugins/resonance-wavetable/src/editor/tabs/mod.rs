@@ -9,61 +9,74 @@ pub mod osc;
 
 use wayland_plugin_gui::egui;
 
-use crate::editor::theme;
+use crate::editor::widgets;
 use resonance_plugin::param::{FloatParam, IntParam, Param};
 
-/// Shared helper: labelled horizontal slider over a FloatParam.
-pub(crate) fn float_slider(
+/// Knob driven by a unipolar FloatParam (range mapped to 0..1).
+pub(crate) fn float_knob(
     ui: &mut egui::Ui,
     label: &str,
     param: &FloatParam,
-    display_unit: Option<&str>,
+    unit: Option<&str>,
 ) {
     let min = param.min_plain() as f32;
     let max = param.max_plain() as f32;
-    let mut value = param.value();
-    let unit = display_unit.map(|s| s.to_string());
-    let response = ui.add(
-        egui::Slider::new(&mut value, min..=max)
-            .text(label)
-            .custom_formatter(move |v, _| match &unit {
-                Some(unit) => format!("{:.2}{}", v, unit),
-                None => format!("{:.3}", v),
-            }),
-    );
-    if response.changed() {
-        param.set_value(value);
+    let value = param.value();
+    let unit_val = if max > min {
+        ((value - min) / (max - min)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let formatted = match unit {
+        Some(u) => format!("{:.2}{}", value, u),
+        None => format!("{:.2}", value),
+    };
+    if let Some(new_unit) = widgets::knob_unipolar(ui, label, unit_val, &formatted, 0.0) {
+        let new_plain = (min + new_unit * (max - min)) as f64;
+        param.set_plain(new_plain);
     }
 }
 
-pub(crate) fn int_slider(ui: &mut egui::Ui, label: &str, param: &IntParam) {
-    let min = param.min_plain() as i32;
-    let max = param.max_plain() as i32;
-    let mut value = param.value();
-    let response = ui.add(egui::Slider::new(&mut value, min..=max).text(label));
-    if response.changed() {
-        param.set_plain(value as f64);
-    }
-}
-
-pub(crate) fn bool_checkbox(
+/// Bipolar knob — assumes the param's range is symmetric around 0.
+pub(crate) fn float_knob_bipolar(
     ui: &mut egui::Ui,
     label: &str,
-    param: &resonance_plugin::param::BoolParam,
+    param: &FloatParam,
+    unit: Option<&str>,
 ) {
-    let mut value = param.value();
-    if ui.checkbox(&mut value, label).changed() {
-        param.set_plain(if value { 1.0 } else { 0.0 });
+    let min = param.min_plain() as f32;
+    let max = param.max_plain() as f32;
+    let value = param.value();
+    let half = (max - min) * 0.5;
+    let signed = if half > 0.0 {
+        ((value - (min + half)) / half).clamp(-1.0, 1.0)
+    } else {
+        0.0
+    };
+    let formatted = match unit {
+        Some(u) => format!("{:+.2}{}", value, u),
+        None => format!("{:+.2}", value),
+    };
+    if let Some(new_signed) = widgets::knob_bipolar(ui, label, signed, &formatted, 0.0) {
+        let new_plain = (min + half + new_signed * half) as f64;
+        param.set_plain(new_plain);
     }
 }
 
-/// Helper to draw a labelled section header.
-pub(crate) fn section_header(ui: &mut egui::Ui, title: &str) {
-    ui.label(
-        egui::RichText::new(title)
-            .size(10.0)
-            .strong()
-            .color(theme::TEXT_DIM),
-    );
-    ui.separator();
+/// Integer knob.
+pub(crate) fn int_knob(ui: &mut egui::Ui, label: &str, param: &IntParam) {
+    let min = param.min_plain() as f32;
+    let max = param.max_plain() as f32;
+    let value = param.value() as f32;
+    let unit_val = if max > min {
+        ((value - min) / (max - min)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let formatted = format!("{}", param.value());
+    if let Some(new_unit) = widgets::knob_unipolar(ui, label, unit_val, &formatted, 0.0) {
+        let new_plain = (min + new_unit * (max - min)).round() as f64;
+        param.set_plain(new_plain);
+    }
 }
+

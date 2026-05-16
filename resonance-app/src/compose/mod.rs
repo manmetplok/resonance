@@ -14,12 +14,18 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-pub use drumroll::DrumrollViewState;
+pub use drumroll::{DrumGroup, DrumrollViewState};
+#[allow(unused_imports)]
+pub use drumroll::{
+    default_kit_pads, grid_label, DrumGroupPad, KitPadInfo, GROUP_PALETTE,
+};
 pub use generate::{DeriveKind, GenerateParams};
 pub use lane_generator::{
     DrumLaneConfig, DrumVoiceMode, LaneGeneratorConfig, LaneGeneratorKind, LaneGeneratorKindTag,
 };
 pub use messages::ComposeMessage;
+#[allow(unused_imports)]
+pub use messages::DrumGroupsMessage;
 pub use section::{
     ChordState, EditSectionForm, NewSectionForm, SectionDefinitionState, SectionPlacementState,
     SelectedLane,

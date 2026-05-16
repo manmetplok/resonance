@@ -119,6 +119,13 @@ pub struct MelodyParams {
     /// Only used by the Motif style.
     #[serde(default = "default_leap_chance")]
     pub leap_chance: f32,
+    /// When true the lane only sounds where the section's vocal lane is
+    /// silent — a "fill" between vocal phrases (call-and-response). The
+    /// vocal occupancy mask is collected by the call site and applied
+    /// post-derivation via [`drop_overlapping_vocal`]; the generator
+    /// itself is unaware of the vocal.
+    #[serde(default)]
+    pub fill_vocal_gaps: bool,
 }
 
 fn default_complexity() -> f32 {
@@ -148,8 +155,142 @@ impl Default for MelodyParams {
             phrase_len: default_phrase_len(),
             motif_len: 0,
             leap_chance: default_leap_chance(),
+            fill_vocal_gaps: false,
         }
     }
+}
+
+/// Generate a chord-tone arp that *fills the silences* between
+/// `vocal_spans`. Walks each silence (the section span minus every
+/// occupied interval) in `params.note_value_ticks` steps anchored
+/// to the silence start, emitting a chord-tone note per step. Tones
+/// come from the chord active at the slot's beat and are rotated by
+/// `params.style` (ArpUp / ArpDown / ArpUpDown; Motif falls back to
+/// ArpUp because the motif's own phrase rests would defeat the
+/// "fill every gap" goal). Each note's tail is trimmed to leave a
+/// `min_gap_ticks` margin before the next vocal onset / section end.
+/// Slots that can't produce at least a 32nd-note's worth of sounding
+/// time are skipped so the output doesn't include sub-perceptible
+/// 1-tick stubs jammed up against the next syllable.
+///
+/// `vocal_spans` must be **phrase-level** intervals (one per lyric
+/// line), not per-syllable notes — the silences between syllables
+/// inside a single phrase are big enough for the arp to wedge a
+/// stub into, which yields a jittery fill that fights the vocal
+/// instead of complementing it. Build the spans with
+/// [`crate::vocal_phrase_spans`] from the vocal lane's notes + draft.
+///
+/// Used to implement `MelodyParams::fill_vocal_gaps`. When
+/// `vocal_spans` is empty the whole section gets filled.
+pub fn derive_melody_fill_vocal(
+    chords: &[TimedChord],
+    params: &MelodyParams,
+    vocal_spans: &[(u64, u64)],
+    section_end_ticks: u64,
+    ticks_per_beat: u32,
+    min_gap_ticks: u64,
+) -> Vec<GeneratedNote> {
+    if chords.is_empty() || section_end_ticks == 0 {
+        return Vec::new();
+    }
+    let tpb = ticks_per_beat as u64;
+    let slot_ticks = params.note_value_ticks.max(1) as u64;
+
+    // Sort + collapse phrase intervals so we can walk silences cleanly.
+    // Multiple vocal lanes may overlap; phrase spans within a lane
+    // typically don't, but we handle both with the same merge.
+    let mut intervals: Vec<(u64, u64)> = vocal_spans.to_vec();
+    intervals.sort_by_key(|i| i.0);
+    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(intervals.len());
+    for (s, e) in intervals {
+        match merged.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => merged.push((s, e)),
+        }
+    }
+
+    // Build silence intervals: (gap_start, gap_end) for every region
+    // not covered by any vocal note within the section.
+    let mut silences: Vec<(u64, u64)> = Vec::with_capacity(merged.len() + 1);
+    let mut cursor = 0u64;
+    for (s, e) in &merged {
+        if *s > cursor {
+            silences.push((cursor, *s));
+        }
+        cursor = cursor.max(*e);
+    }
+    if cursor < section_end_ticks {
+        silences.push((cursor, section_end_ticks));
+    }
+
+    // Min sounding duration: a 32nd note (= slot/8 for an 8th, slot/4
+    // for a 16th). Below this we drop the slot — sub-perceptible.
+    let min_sounding = (slot_ticks / 4).max(1);
+    let mut out = Vec::new();
+    let mut chord_idx = 0usize;
+
+    for (gap_start, gap_end) in silences {
+        let mut slot_start = gap_start;
+        let mut slot_in_gap = 0usize;
+        while slot_start + min_sounding <= gap_end {
+            let onset = slot_start;
+            slot_start += slot_ticks;
+
+            // Find the active chord for this onset.
+            let beat = (onset / tpb) as u32;
+            while chord_idx + 1 < chords.len() && chords[chord_idx + 1].start_beat <= beat {
+                chord_idx += 1;
+            }
+            // Walk back if a previous gap pushed chord_idx ahead of us.
+            while chord_idx > 0 && chords[chord_idx].start_beat > beat {
+                chord_idx -= 1;
+            }
+            let tc = &chords[chord_idx];
+            let tones = chord_tones_in_register(tc.chord, params.register);
+            if tones.is_empty() {
+                slot_in_gap += 1;
+                continue;
+            }
+
+            let note = match params.style {
+                MelodyStyle::ArpDown => tones[tones.len() - 1 - (slot_in_gap % tones.len())],
+                MelodyStyle::ArpUpDown => {
+                    let n = tones.len();
+                    if n < 2 {
+                        tones[0]
+                    } else {
+                        let cycle = 2 * n - 2;
+                        let idx = slot_in_gap % cycle;
+                        if idx < n {
+                            tones[idx]
+                        } else {
+                            tones[cycle - idx]
+                        }
+                    }
+                }
+                // ArpUp + Motif (fallback): walk tones bottom-up.
+                _ => tones[slot_in_gap % tones.len()],
+            };
+            slot_in_gap += 1;
+
+            // Cap the tail so we leave `min_gap_ticks` before the next
+            // vocal entry (= gap_end) and at least `min_sounding` ticks
+            // of audible note.
+            let max_end = gap_end.saturating_sub(min_gap_ticks);
+            let dur = slot_ticks.min(max_end.saturating_sub(onset));
+            if dur < min_sounding {
+                break;
+            }
+
+            out.push(GeneratedNote {
+                note,
+                velocity: params.velocity,
+                start_tick: onset,
+                duration_ticks: dur,
+            });
+        }
+    }
+    out
 }
 
 pub fn derive_melody(

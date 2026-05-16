@@ -1,44 +1,59 @@
+//! Compose drum lane — grouped drum-pad canvas.
+//!
+//! Each project-scoped [`DrumGroup`] gets one collapsible block on the
+//! canvas: a group header row (color dot, name, polymeter tag, density
+//! readout) plus one row per articulation pad. Pads inside a group render
+//! against the group's own grid + cycle so polymeter and polyrhythm read
+//! visually — a 7/16 hat group shows its cycle restart as a dashed marker
+//! that doesn't line up with the 4/4 bar.
+
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::{mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
-use resonance_audio::types::{ClipId, TempoMap, TrackId, TrackType, TICKS_PER_QUARTER_NOTE};
+use resonance_audio::types::TrackType;
 
-use crate::compose::drumroll::{DrumPadMap, DrumrollMessage};
+use crate::compose::drumroll::{grid_label, DrumGroup};
+use crate::compose::messages::DrumGroupsMessage;
 use crate::compose::ComposeMessage;
 use crate::message::Message;
-use crate::state::{InstrumentType, MidiClipState, TrackState};
+use crate::state::{InstrumentType, TrackState};
 use crate::theme;
 
 use super::super::lane_side::{self, LaneKind};
 use super::super::tracks::NAME_COLUMN_WIDTH;
 
-/// Row height of a single pad row in the drum grid. 12 rows per track =
-/// 168px + the header gives a touch under 180px per drum track — slightly
-/// taller than a synth row, which is fine for the denser hit grid.
-const PAD_ROW_HEIGHT: f32 = 14.0;
-const HEADER_HEIGHT: f32 = 20.0;
-const PAD_LABEL_WIDTH: f32 = 84.0;
-const NUM_PADS: usize = 12;
+/// Beat count rendered in the lane. One bar = 4 beats. The lane stays
+/// visually compact even when the section is longer — generation happens
+/// off-canvas via the right-rail Generate button.
+const BEATS_IN_LANE: u32 = 4;
+const BEATS_PER_BAR: u32 = 4;
 
-pub const DRUM_TRACK_HEIGHT: f32 = HEADER_HEIGHT + PAD_ROW_HEIGHT * NUM_PADS as f32;
+const GROUP_HEAD_HEIGHT: f32 = 22.0;
+const PAD_ROW_HEIGHT: f32 = 18.0;
+const PAD_LABEL_WIDTH: f32 = 76.0;
+const STEP_HEADER_HEIGHT: f32 = 16.0;
+const LANE_PAD_TOP: f32 = 8.0;
+const LANE_PAD_BOTTOM: f32 = 8.0;
+const GROUP_GAP: f32 = 6.0;
 
-/// Read-only canvas that renders a 12-pad drum grid for every drum-type
-/// instrument track in the current section. Mirrors
-/// `ComposeTrackCanvas` but with a fixed pad layout instead of a pitch grid.
+/// Per-row pad height plus the group header. The total lane height grows
+/// with the number of pads — callers ask for it via [`drum_lane_height`].
+pub fn drum_lane_height(groups: &[DrumGroup]) -> f32 {
+    let pads_total: usize = groups.iter().map(|g| g.pads.len()).sum();
+    LANE_PAD_TOP
+        + STEP_HEADER_HEIGHT
+        + GROUP_HEAD_HEIGHT * groups.len() as f32
+        + PAD_ROW_HEIGHT * pads_total as f32
+        + GROUP_GAP * groups.len().saturating_sub(1) as f32
+        + LANE_PAD_BOTTOM
+}
+
+/// Read-only canvas rendering the grouped drum lane for one drum track.
 pub struct ComposeDrumCanvas<'a> {
-    pub tracks: &'a [TrackState],
-    pub midi_clips: &'a [MidiClipState],
-    pub pad_map: &'a DrumPadMap,
-    pub section_start: u64,
-    pub section_end: u64,
-    pub section_length_bars: u32,
-    pub steps_per_bar: u32,
-    pub sample_rate: u32,
-    pub tempo_map: &'a TempoMap,
-    pub start_bar: u32,
-    pub scroll_offset_y: f32,
-    pub details_track_id: Option<TrackId>,
-    pub selected_pad: Option<usize>,
+    pub track: &'a TrackState,
+    pub groups: &'a [DrumGroup],
+    pub selected_group_id: Option<u64>,
+    pub track_selected: bool,
 }
 
 impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
@@ -53,20 +68,117 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG_1);
 
-        if self.section_end <= self.section_start || bounds.width <= 0.0 {
+        // Lane side panel — RHYTHM tag, track name, meta line.
+        let side_rect = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: NAME_COLUMN_WIDTH,
+            height: bounds.height,
+        };
+        let meta = self
+            .track
+            .plugins
+            .first()
+            .map(|p| p.plugin_name.clone())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| {
+                format!("Resonance Drums · {} groups", self.groups.len())
+            });
+        lane_side::draw(
+            &mut frame,
+            side_rect,
+            LaneKind::Rhythm,
+            &self.track.name,
+            Some(&meta),
+            self.track_selected,
+        );
+
+        let card_rect = Rectangle {
+            x: NAME_COLUMN_WIDTH + 8.0,
+            y: 2.0,
+            width: (bounds.width - NAME_COLUMN_WIDTH - 10.0).max(0.0),
+            height: bounds.height - 4.0,
+        };
+        frame.fill_rectangle(
+            Point::new(card_rect.x, card_rect.y),
+            Size::new(card_rect.width, card_rect.height),
+            theme::BG_2,
+        );
+
+        // Step header — 4 beat numbers, the cell area sits under it.
+        let step_area_x = card_rect.x + PAD_LABEL_WIDTH + 8.0;
+        let step_area_width = (card_rect.width - PAD_LABEL_WIDTH - 16.0).max(0.0);
+        if step_area_width <= 0.0 {
             return vec![frame.into_geometry()];
         }
+        let beat_w = step_area_width / BEATS_IN_LANE as f32;
+        for b in 0..BEATS_IN_LANE {
+            let x = step_area_x + b as f32 * beat_w + beat_w / 2.0 - 4.0;
+            frame.fill_text(canvas::Text {
+                content: format!("{}", b + 1),
+                position: Point::new(x, card_rect.y + 6.0),
+                color: if b == 0 { theme::TEXT_2 } else { theme::TEXT_4 },
+                size: 10.0.into(),
+                ..canvas::Text::default()
+            });
+        }
 
-        let tracks = self.sorted_drum_tracks();
-        for (idx, track) in tracks.iter().enumerate() {
-            let row_rect = self.track_row_rect(idx, bounds);
-            if row_rect.y + row_rect.height < 0.0 || row_rect.y > bounds.height {
-                continue;
+        // Each group occupies a vertical block of its own.
+        let mut y = card_rect.y + STEP_HEADER_HEIGHT + 4.0;
+        for group in self.groups.iter() {
+            let focused = self.track_selected && Some(group.id) == self.selected_group_id;
+            let color = u8_color(group.color);
+            let block_height = GROUP_HEAD_HEIGHT + PAD_ROW_HEIGHT * group.pads.len() as f32;
+
+            // Block background tint when focused.
+            if focused {
+                let tint = Color {
+                    a: 0.06,
+                    ..color
+                };
+                frame.fill_rectangle(
+                    Point::new(card_rect.x + 4.0, y),
+                    Size::new(card_rect.width - 8.0, block_height),
+                    tint,
+                );
+                // Left edge accent stripe.
+                frame.fill_rectangle(
+                    Point::new(card_rect.x + 4.0, y),
+                    Size::new(2.0, block_height),
+                    color,
+                );
             }
 
-            self.draw_track_row(&mut frame, track, row_rect, bounds);
+            // Group header row.
+            draw_group_head(&mut frame, group, color, focused, card_rect, step_area_x, step_area_width, y);
+
+            // Pad rows.
+            let mut pad_y = y + GROUP_HEAD_HEIGHT;
+            let cells = cells_for_group(group);
+            let cell_count = cells.len().max(1);
+            let cell_w = step_area_width / cell_count as f32;
+
+            for (pi, pad) in group.pads.iter().enumerate() {
+                draw_pad_row(
+                    &mut frame,
+                    pad,
+                    group,
+                    color,
+                    focused,
+                    card_rect,
+                    PAD_LABEL_WIDTH,
+                    step_area_x,
+                    cell_w,
+                    &cells,
+                    pad_y,
+                    pi == 0,
+                );
+                pad_y += PAD_ROW_HEIGHT;
+            }
+
+            y += block_height + GROUP_GAP;
         }
 
         vec![frame.into_geometry()]
@@ -84,52 +196,66 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
                 return (canvas::event::Status::Ignored, None);
             };
 
-            // Click the name column: open the instrument details panel
-            // (matches the synth canvas behavior).
+            // Side panel: open the drum lane in the inspector.
             if pos.x < NAME_COLUMN_WIDTH {
-                if let Some(track_id) = self.hit_test_name_column(pos, bounds) {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::Compose(ComposeMessage::SelectLane(
-                            crate::compose::SelectedLane::Drums(track_id),
-                        ))),
-                    );
-                }
-                return (canvas::event::Status::Ignored, None);
-            }
-
-            // Pad label column (inside the clip area, left edge): pick the pad.
-            if let Some(pad_index) = self.hit_test_pad_label(pos, bounds) {
                 return (
                     canvas::event::Status::Captured,
-                    Some(Message::Compose(ComposeMessage::Drumroll(
-                        DrumrollMessage::SelectPad { pad_index },
+                    Some(Message::Compose(ComposeMessage::SelectLane(
+                        crate::compose::SelectedLane::Drums(self.track.id),
                     ))),
                 );
             }
 
-            // Empty-state "+" button: create a clip that spans the section.
-            if let Some(track_id) = self.hit_test_add_button(pos, bounds) {
-                return (
-                    canvas::event::Status::Captured,
-                    Some(Message::Compose(ComposeMessage::CreateMidiClipInSection {
-                        track_id,
-                        start_sample: self.section_start,
-                        length_bars: self.section_length_bars,
-                    })),
-                );
-            }
+            // Step area geometry — mirrors `draw` so cell hit-tests
+            // resolve to the same on-screen rectangles.
+            let card_x = NAME_COLUMN_WIDTH + 8.0;
+            let card_width = (bounds.width - NAME_COLUMN_WIDTH - 10.0).max(0.0);
+            let step_area_x = card_x + PAD_LABEL_WIDTH + 8.0;
+            let step_area_width = (card_width - PAD_LABEL_WIDTH - 16.0).max(0.0);
 
-            // Grid cell click: toggle the step.
-            if let Some((clip_id, pad_index, step)) = self.hit_test_step(pos, bounds) {
+            let card_top = 2.0 + STEP_HEADER_HEIGHT + 4.0;
+            let mut y = card_top;
+            for group in self.groups.iter() {
+                let block_height = GROUP_HEAD_HEIGHT + PAD_ROW_HEIGHT * group.pads.len() as f32;
+                if pos.y < y || pos.y >= y + block_height {
+                    y += block_height + GROUP_GAP;
+                    continue;
+                }
+
+                // Pad-row band: figure out which pad row was hit, then —
+                // if the click landed inside the step area — convert x to
+                // a step index and emit a TogglePadStep. Outside the step
+                // area (or in the header) we fall back to just focusing
+                // the group.
+                let pad_band_top = y + GROUP_HEAD_HEIGHT;
+                if pos.y >= pad_band_top && pos.x >= step_area_x && step_area_width > 0.0 {
+                    let pad_index = ((pos.y - pad_band_top) / PAD_ROW_HEIGHT) as usize;
+                    if pad_index < group.pads.len() {
+                        let cells = cells_for_group(group);
+                        let cell_count = cells.len().max(1);
+                        let cell_w = step_area_width / cell_count as f32;
+                        let step = ((pos.x - step_area_x) / cell_w) as usize;
+                        if step < cells.len() {
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::Compose(ComposeMessage::DrumGroups(
+                                    DrumGroupsMessage::TogglePadStep {
+                                        group_id: group.id,
+                                        pad_index,
+                                        step,
+                                    },
+                                ))),
+                            );
+                        }
+                    }
+                }
+
+                // Header row click or click past the last step — focus
+                // the group instead.
                 return (
                     canvas::event::Status::Captured,
-                    Some(Message::Compose(ComposeMessage::Drumroll(
-                        DrumrollMessage::ToggleStep {
-                            clip_id,
-                            pad_index,
-                            step,
-                        },
+                    Some(Message::Compose(ComposeMessage::DrumGroups(
+                        DrumGroupsMessage::SelectGroup { group_id: group.id },
                     ))),
                 );
             }
@@ -138,460 +264,247 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
     }
 }
 
-impl<'a> ComposeDrumCanvas<'a> {
-    pub fn sorted_drum_tracks(&self) -> Vec<&TrackState> {
-        let mut v: Vec<&TrackState> = self
-            .tracks
-            .iter()
-            .filter(|t| {
-                matches!(t.track_type, TrackType::Instrument)
-                    && t.sub_track.is_none()
-                    && t.instrument_type == InstrumentType::Drum
-            })
-            .collect();
-        v.sort_by_key(|t| t.order);
-        v
-    }
-
-    fn track_row_rect(&self, index: usize, bounds: Rectangle) -> Rectangle {
-        let y = index as f32 * DRUM_TRACK_HEIGHT - self.scroll_offset_y;
-        Rectangle {
-            x: 0.0,
-            y,
-            width: bounds.width,
-            height: DRUM_TRACK_HEIGHT,
-        }
-    }
-
-    fn clip_area(&self, row: Rectangle) -> Rectangle {
-        Rectangle {
-            x: row.x + NAME_COLUMN_WIDTH,
-            y: row.y,
-            width: (row.width - NAME_COLUMN_WIDTH).max(0.0),
-            height: row.height,
-        }
-    }
-
-    fn grid_area(&self, clip_area: Rectangle) -> Rectangle {
-        // Reserve the left edge for the pad labels, and the top for a
-        // step header.
-        Rectangle {
-            x: clip_area.x + PAD_LABEL_WIDTH,
-            y: clip_area.y + HEADER_HEIGHT,
-            width: (clip_area.width - PAD_LABEL_WIDTH).max(0.0),
-            height: (clip_area.height - HEADER_HEIGHT).max(0.0),
-        }
-    }
-
-    fn total_steps(&self) -> u32 {
-        self.section_length_bars * self.steps_per_bar
-    }
-
-    fn step_ticks(&self) -> u64 {
-        // Use the first bar's numerator as the base for step subdivision.
-        let num = self.tempo_map.numerator_at_bar(self.start_bar) as u64;
-        let ticks_per_bar = TICKS_PER_QUARTER_NOTE * num;
-        if self.steps_per_bar == 0 {
-            ticks_per_bar
-        } else {
-            ticks_per_bar / self.steps_per_bar as u64
-        }
-    }
-
-    fn midi_clip_end_sample(&self, clip: &MidiClipState) -> u64 {
-        self.tempo_map
-            .tick_to_abs_sample(clip.start_sample, clip.duration_ticks, self.sample_rate)
-    }
-
-    fn pad_row_y(&self, grid_area: Rectangle, pad_index: usize) -> f32 {
-        grid_area.y + pad_index as f32 * PAD_ROW_HEIGHT
-    }
-
-    /// Find the clip on `track_id` that overlaps the current section, if any.
-    /// Drumroll edits only target the first overlapping clip — multiple clips
-    /// in one section on a drum track is not a supported layout.
-    fn find_section_clip(&self, track_id: TrackId) -> Option<&'a MidiClipState> {
-        self.midi_clips.iter().find(|c| {
-            c.track_id == track_id && {
-                let end = self.midi_clip_end_sample(c);
-                end > self.section_start && c.start_sample < self.section_end
+/// Pre-computed cell positions inside a group's pattern. The cell list is
+/// `cycle` items long (or wrapped to fill `BEATS_IN_LANE * grid` when the
+/// cycle is shorter so the visualisation still spans the lane).
+fn cells_for_group(group: &DrumGroup) -> Vec<CellRef> {
+    let cycle = group.pattern_len().max(1);
+    let visible = (BEATS_IN_LANE * group.grid as u32) as usize;
+    let span = visible.max(cycle);
+    (0..span)
+        .map(|i| {
+            let pattern_idx = (i + group.phase as usize) % cycle;
+            let is_cycle_start = i > 0 && pattern_idx == 0;
+            CellRef {
+                i,
+                pattern_idx,
+                is_cycle_start,
             }
         })
-    }
+        .collect()
+}
 
-    fn draw_track_row(
-        &self,
-        frame: &mut Frame,
-        track: &TrackState,
-        row_rect: Rectangle,
-        bounds: Rectangle,
-    ) {
-        let is_selected = self.details_track_id == Some(track.id);
+struct CellRef {
+    i: usize,
+    pattern_idx: usize,
+    is_cycle_start: bool,
+}
 
-        // Side panel — same RHYTHM tag treatment as the bundled design.
-        let side_rect = Rectangle {
-            x: 0.0,
-            y: row_rect.y,
-            width: NAME_COLUMN_WIDTH,
-            height: row_rect.height,
+#[allow(clippy::too_many_arguments)]
+fn draw_group_head(
+    frame: &mut Frame,
+    group: &DrumGroup,
+    color: Color,
+    focused: bool,
+    card: Rectangle,
+    _step_area_x: f32,
+    _step_area_width: f32,
+    y: f32,
+) {
+    // Color dot.
+    let dot_y = y + GROUP_HEAD_HEIGHT / 2.0 - 3.0;
+    frame.fill_rectangle(
+        Point::new(card.x + 14.0, dot_y),
+        Size::new(6.0, 6.0),
+        color,
+    );
+
+    // Name.
+    frame.fill_text(canvas::Text {
+        content: group.name.to_ascii_uppercase(),
+        position: Point::new(card.x + 26.0, y + 5.0),
+        color: if focused { theme::TEXT_1 } else { theme::TEXT_2 },
+        size: 10.0.into(),
+        font: theme::UI_FONT_SEMIBOLD,
+        ..canvas::Text::default()
+    });
+
+    // Polymeter tag — visible whenever the group's grid or cycle differs
+    // from the section base (4/16, 16 steps).
+    let base_grid = 4u8;
+    let base_cycle = 16u32;
+    let is_odd = group.is_off_grid(base_grid, base_cycle);
+    if is_odd {
+        let tag = format!(
+            "{}/{} \u{00b7} {}",
+            group.cycle,
+            group.grid as u32 * BEATS_PER_BAR,
+            grid_label(group.grid)
+        );
+        // Rough width estimate so the tag tints sit on a darker pill.
+        let tag_w = (tag.len() as f32 * 5.5).max(40.0);
+        let tag_x = card.x + 26.0 + group.name.len() as f32 * 6.5 + 10.0;
+        let tag_y = y + 4.0;
+        let pill = Rectangle {
+            x: tag_x,
+            y: tag_y,
+            width: tag_w,
+            height: 12.0,
         };
-        let meta = track
-            .plugins
-            .first()
-            .map(|p| p.plugin_name.clone())
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| "Drums".to_string());
-        lane_side::draw(
-            frame,
-            side_rect,
-            LaneKind::Rhythm,
-            &track.name,
-            Some(&meta),
-            is_selected,
-        );
-
-        let clip_area = self.clip_area(row_rect);
-        // Grid background — matches the bundled design's drum grid card
-        // (BG_1 inset surrounded by the lane's side panel + accent border).
+        let pill_bg = Color {
+            a: 0.12,
+            ..color
+        };
         frame.fill_rectangle(
-            Point::new(clip_area.x, clip_area.y),
-            Size::new(clip_area.width, clip_area.height),
-            theme::BG_1,
-        );
-
-        // Empty state: show "+" button centered in the clip area.
-        let clip = self.find_section_clip(track.id);
-        if clip.is_none() {
-            self.draw_add_button(frame, clip_area);
-            self.draw_bottom_separator(frame, row_rect, bounds);
-            return;
-        }
-        let clip = clip.unwrap();
-
-        let grid_area = self.grid_area(clip_area);
-
-        self.draw_pad_label_column(frame, clip_area);
-        self.draw_step_header(frame, clip_area, grid_area);
-        self.draw_pad_rows(frame, grid_area);
-        self.draw_step_grid(frame, grid_area);
-        self.draw_lit_cells(frame, grid_area, clip);
-        self.draw_bottom_separator(frame, row_rect, bounds);
-    }
-
-    fn draw_bottom_separator(&self, frame: &mut Frame, row: Rectangle, bounds: Rectangle) {
-        frame.fill_rectangle(
-            Point::new(0.0, row.y + row.height - 1.0),
-            Size::new(bounds.width, 1.0),
-            theme::SEPARATOR,
-        );
-    }
-
-    fn draw_pad_label_column(&self, frame: &mut Frame, clip_area: Rectangle) {
-        // Header cell behind the labels — BG_2 (the design's drum-grid
-        // card surface).
-        frame.fill_rectangle(
-            Point::new(clip_area.x, clip_area.y),
-            Size::new(PAD_LABEL_WIDTH, clip_area.height),
-            theme::BG_2,
-        );
-        for (idx, pad) in self.pad_map.pads.iter().enumerate() {
-            let y = clip_area.y + HEADER_HEIGHT + idx as f32 * PAD_ROW_HEIGHT;
-            let is_selected = self.selected_pad == Some(idx);
-            if is_selected {
-                frame.fill_rectangle(
-                    Point::new(clip_area.x, y),
-                    Size::new(PAD_LABEL_WIDTH, PAD_ROW_HEIGHT),
-                    Color::from_rgb(0.20, 0.20, 0.26),
-                );
-            }
-            // Color swatch on the left edge.
-            frame.fill_rectangle(
-                Point::new(clip_area.x + 2.0, y + 2.0),
-                Size::new(4.0, PAD_ROW_HEIGHT - 4.0),
-                Color::from_rgb(pad.color[0], pad.color[1], pad.color[2]),
-            );
-            frame.fill_text(canvas::Text {
-                content: pad.name.to_string(),
-                position: Point::new(clip_area.x + 10.0, y + 1.0),
-                color: theme::TEXT,
-                size: 10.0.into(),
-                ..canvas::Text::default()
-            });
-        }
-        // Divider between labels and grid.
-        frame.fill_rectangle(
-            Point::new(clip_area.x + PAD_LABEL_WIDTH, clip_area.y),
-            Size::new(1.0, clip_area.height),
-            theme::SEPARATOR,
-        );
-    }
-
-    fn draw_step_header(&self, frame: &mut Frame, clip_area: Rectangle, grid_area: Rectangle) {
-        frame.fill_rectangle(
-            Point::new(grid_area.x, clip_area.y),
-            Size::new(grid_area.width, HEADER_HEIGHT),
-            theme::BG_2,
-        );
-        let total_steps = self.total_steps();
-        if total_steps == 0 || grid_area.width <= 0.0 {
-            return;
-        }
-        let step_w = grid_area.width / total_steps as f32;
-        // Label every bar.
-        for bar in 0..=self.section_length_bars {
-            let x = grid_area.x + bar as f32 * self.steps_per_bar as f32 * step_w;
-            frame.fill_text(canvas::Text {
-                content: format!("{}", bar + 1),
-                position: Point::new(x + 2.0, clip_area.y + 4.0),
-                color: theme::TEXT_DIM,
-                size: 10.0.into(),
-                ..canvas::Text::default()
-            });
-        }
-    }
-
-    fn draw_pad_rows(&self, frame: &mut Frame, grid_area: Rectangle) {
-        // Alternate zebra striping so adjacent pad rows are distinguishable.
-        for (idx, _pad) in self.pad_map.pads.iter().enumerate() {
-            let y = self.pad_row_y(grid_area, idx);
-            let is_selected = self.selected_pad == Some(idx);
-            let bg = if is_selected {
-                theme::WARM_DIM
-            } else if idx % 2 == 0 {
-                theme::BG_1
-            } else {
-                Color {
-                    r: theme::BG_1.r + 0.012,
-                    g: theme::BG_1.g + 0.012,
-                    b: theme::BG_1.b + 0.012,
-                    a: 1.0,
-                }
-            };
-            frame.fill_rectangle(
-                Point::new(grid_area.x, y),
-                Size::new(grid_area.width, PAD_ROW_HEIGHT),
-                bg,
-            );
-        }
-    }
-
-    fn draw_step_grid(&self, frame: &mut Frame, grid_area: Rectangle) {
-        let total_steps = self.total_steps();
-        if total_steps == 0 || grid_area.width <= 0.0 {
-            return;
-        }
-        let step_w = grid_area.width / total_steps as f32;
-        let num = self.tempo_map.numerator_at_bar(self.start_bar).max(1) as u32;
-        let beat_step = self.steps_per_bar / num;
-        let bar_step = self.steps_per_bar;
-        for step in 0..=total_steps {
-            let x = grid_area.x + step as f32 * step_w;
-            let is_bar = step % bar_step == 0;
-            let is_beat = beat_step > 0 && step % beat_step == 0;
-            let (w, color) = if is_bar {
-                (1.5, Color::from_rgb(0.32, 0.32, 0.36))
-            } else if is_beat {
-                (1.0, Color::from_rgb(0.22, 0.22, 0.26))
-            } else {
-                (1.0, Color::from_rgb(0.16, 0.16, 0.18))
-            };
-            frame.stroke(
-                &Path::line(
-                    Point::new(x, grid_area.y),
-                    Point::new(x, grid_area.y + grid_area.height),
-                ),
-                Stroke::default().with_width(w).with_color(color),
-            );
-        }
-    }
-
-    fn draw_lit_cells(&self, frame: &mut Frame, grid_area: Rectangle, clip: &MidiClipState) {
-        let total_steps = self.total_steps();
-        if total_steps == 0 || grid_area.width <= 0.0 {
-            return;
-        }
-        let step_w = grid_area.width / total_steps as f32;
-        let step_ticks = self.step_ticks();
-        if step_ticks == 0 {
-            return;
-        }
-        for note in &clip.notes {
-            let Some(pad_index) = self.pad_map.index_for_note(note.note) else {
-                continue;
-            };
-            let step = note.start_tick / step_ticks;
-            if step as u32 >= total_steps {
-                continue;
-            }
-            let pad = &self.pad_map.pads[pad_index];
-            let y = self.pad_row_y(grid_area, pad_index);
-            let x = grid_area.x + step as f32 * step_w;
-            let v = note.velocity.clamp(0.0, 1.0);
-            let alpha = 0.55 + 0.45 * v;
-            let cell = Rectangle {
-                x: x + 1.0,
-                y: y + 1.0,
-                width: (step_w - 2.0).max(1.0),
-                height: (PAD_ROW_HEIGHT - 2.0).max(1.0),
-            };
-            frame.fill_rectangle(
-                Point::new(cell.x, cell.y),
-                Size::new(cell.width, cell.height),
-                Color::from_rgba(pad.color[0], pad.color[1], pad.color[2], alpha),
-            );
-            frame.stroke(
-                &Path::rectangle(
-                    Point::new(cell.x, cell.y),
-                    Size::new(cell.width, cell.height),
-                ),
-                Stroke::default()
-                    .with_width(1.0)
-                    .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.6)),
-            );
-        }
-    }
-
-    fn add_button_rect(&self, clip_area: Rectangle) -> Rectangle {
-        let size = 32.0f32;
-        Rectangle {
-            x: clip_area.x + clip_area.width / 2.0 - size / 2.0,
-            y: clip_area.y + clip_area.height / 2.0 - size / 2.0,
-            width: size,
-            height: size,
-        }
-    }
-
-    fn draw_add_button(&self, frame: &mut Frame, clip_area: Rectangle) {
-        if clip_area.width < 40.0 {
-            return;
-        }
-        let r = self.add_button_rect(clip_area);
-        frame.fill_rectangle(
-            Point::new(r.x, r.y),
-            Size::new(r.width, r.height),
-            Color::from_rgba(0.0, 0.0, 0.0, 0.35),
-        );
-        frame.stroke(
-            &Path::rectangle(Point::new(r.x, r.y), Size::new(r.width, r.height)),
-            Stroke::default().with_width(1.0).with_color(theme::ACCENT),
+            Point::new(pill.x, pill.y),
+            Size::new(pill.width, pill.height),
+            pill_bg,
         );
         frame.fill_text(canvas::Text {
-            content: "+".to_string(),
-            position: Point::new(r.x + r.width / 2.0 - 5.0, r.y + r.height / 2.0 - 11.0),
-            color: theme::ACCENT,
-            size: 22.0.into(),
+            content: tag,
+            position: Point::new(pill.x + 4.0, pill.y + 1.0),
+            color,
+            size: 8.5.into(),
+            font: theme::MONO_FONT,
             ..canvas::Text::default()
         });
     }
 
-    // Hit-testing ---------------------------------------------------------
+    // Right-aligned meta — "{pad_count} pads · density {pct}%".
+    let pad_word = if group.pads.len() == 1 { "pad" } else { "arts" };
+    let meta = format!(
+        "{} {} \u{00b7} density {}%",
+        group.pads.len(),
+        pad_word,
+        (group.density * 100.0).round() as i32
+    );
+    frame.fill_text(canvas::Text {
+        content: meta,
+        position: Point::new(card.x + card.width - 160.0, y + 5.0),
+        color: theme::TEXT_4,
+        size: 9.5.into(),
+        font: theme::MONO_FONT,
+        ..canvas::Text::default()
+    });
+}
 
-    fn hit_test_name_column(&self, pos: Point, bounds: Rectangle) -> Option<TrackId> {
-        if pos.x >= NAME_COLUMN_WIDTH {
-            return None;
+#[allow(clippy::too_many_arguments)]
+fn draw_pad_row(
+    frame: &mut Frame,
+    pad: &crate::compose::drumroll::DrumGroupPad,
+    group: &DrumGroup,
+    color: Color,
+    focused: bool,
+    card: Rectangle,
+    label_width: f32,
+    step_area_x: f32,
+    cell_w: f32,
+    cells: &[CellRef],
+    y: f32,
+    is_first_pad: bool,
+) {
+    // Pad name.
+    frame.fill_text(canvas::Text {
+        content: pad.name.clone(),
+        position: Point::new(card.x + 26.0, y + 2.0),
+        color: if focused {
+            theme::TEXT_2
+        } else {
+            theme::TEXT_3
+        },
+        size: 11.0.into(),
+        ..canvas::Text::default()
+    });
+
+    // Share %.
+    let share = group.weight_share(
+        group
+            .pads
+            .iter()
+            .position(|p| p.note == pad.note && p.name == pad.name)
+            .unwrap_or(0),
+    );
+    frame.fill_text(canvas::Text {
+        content: format!("{}%", share),
+        position: Point::new(card.x + 6.0 + label_width - 28.0, y + 4.0),
+        color: theme::TEXT_4,
+        size: 9.0.into(),
+        font: theme::MONO_FONT,
+        ..canvas::Text::default()
+    });
+
+    // Cells.
+    for cell in cells {
+        let cx = step_area_x + cell.i as f32 * cell_w;
+        if cx >= step_area_x + cell_w * cells.len() as f32 {
+            break;
         }
-        for (idx, track) in self.sorted_drum_tracks().iter().enumerate() {
-            let row = self.track_row_rect(idx, bounds);
-            if pos.y >= row.y && pos.y <= row.y + row.height {
-                return Some(track.id);
-            }
+        let is_beat_start = (cell.i % group.grid as usize) == 0;
+        let bg = if is_beat_start { theme::LINE_2 } else { theme::BG_1 };
+        let rect = Rectangle {
+            x: cx + 1.0,
+            y: y + 2.0,
+            width: (cell_w - 2.0).max(1.0),
+            height: PAD_ROW_HEIGHT - 4.0,
+        };
+        frame.fill_rectangle(
+            Point::new(rect.x, rect.y),
+            Size::new(rect.width, rect.height),
+            bg,
+        );
+        let on = pad.pattern.get(cell.pattern_idx).copied().unwrap_or(0) > 0;
+        if on {
+            let alpha = 0.55 + (pad.weight as f32 / 250.0).clamp(0.0, 0.4);
+            let fill = Color { a: alpha, ..color };
+            frame.fill_rectangle(
+                Point::new(rect.x, rect.y),
+                Size::new(rect.width, rect.height),
+                fill,
+            );
         }
-        None
     }
 
-    fn hit_test_pad_label(&self, pos: Point, bounds: Rectangle) -> Option<usize> {
-        for (idx, track) in self.sorted_drum_tracks().iter().enumerate() {
-            let row = self.track_row_rect(idx, bounds);
-            if pos.y < row.y || pos.y > row.y + row.height {
-                continue;
+    // Cycle-restart dashed markers — drawn only on the first pad row so
+    // they don't repeat per pad. The marker spans from just above the
+    // group header down through this pad row.
+    if is_first_pad {
+        for cell in cells.iter().filter(|c| c.is_cycle_start) {
+            let cx = step_area_x + cell.i as f32 * cell_w;
+            let stroke = Stroke::default().with_width(1.0).with_color(color);
+            // Dashed manually — iced 0.13 stroke styles don't expose dash
+            // patterns, so draw a stack of short segments.
+            let top = y - GROUP_HEAD_HEIGHT + 6.0;
+            let bottom = y + PAD_ROW_HEIGHT - 2.0;
+            let mut yy = top;
+            while yy < bottom {
+                let segment_end = (yy + 3.0).min(bottom);
+                frame.stroke(
+                    &Path::line(Point::new(cx, yy), Point::new(cx, segment_end)),
+                    stroke.clone(),
+                );
+                yy += 5.0;
             }
-            // Only live once the clip exists (label column sits beside a
-            // working grid).
-            self.find_section_clip(track.id)?;
-            let clip_area = self.clip_area(row);
-            if pos.x < clip_area.x || pos.x > clip_area.x + PAD_LABEL_WIDTH {
-                return None;
-            }
-            let grid_top = clip_area.y + HEADER_HEIGHT;
-            if pos.y < grid_top {
-                return None;
-            }
-            let pad_idx = ((pos.y - grid_top) / PAD_ROW_HEIGHT) as usize;
-            if pad_idx < self.pad_map.len() {
-                return Some(pad_idx);
-            }
-            return None;
+            // Tiny label "→ N" so the user can see the cycle step.
+            frame.fill_text(canvas::Text {
+                content: format!("\u{2192} {}", cell.pattern_idx + 1),
+                position: Point::new(cx + 2.0, top - 2.0),
+                color,
+                size: 8.0.into(),
+                font: theme::MONO_FONT,
+                ..canvas::Text::default()
+            });
         }
-        None
     }
+}
 
-    fn hit_test_add_button(&self, pos: Point, bounds: Rectangle) -> Option<TrackId> {
-        if pos.x < NAME_COLUMN_WIDTH {
-            return None;
-        }
-        for (idx, track) in self.sorted_drum_tracks().iter().enumerate() {
-            let row = self.track_row_rect(idx, bounds);
-            if pos.y < row.y || pos.y > row.y + row.height {
-                continue;
-            }
-            if self.find_section_clip(track.id).is_some() {
-                return None;
-            }
-            let clip_area = self.clip_area(row);
-            let btn = self.add_button_rect(clip_area);
-            if pos.x >= btn.x
-                && pos.x <= btn.x + btn.width
-                && pos.y >= btn.y
-                && pos.y <= btn.y + btn.height
-            {
-                return Some(track.id);
-            }
-            return None;
-        }
-        None
-    }
+fn u8_color(rgb: [u8; 3]) -> Color {
+    Color::from_rgb(
+        rgb[0] as f32 / 255.0,
+        rgb[1] as f32 / 255.0,
+        rgb[2] as f32 / 255.0,
+    )
+}
 
-    fn hit_test_step(&self, pos: Point, bounds: Rectangle) -> Option<(ClipId, usize, u32)> {
-        for (idx, track) in self.sorted_drum_tracks().iter().enumerate() {
-            let row = self.track_row_rect(idx, bounds);
-            if pos.y < row.y || pos.y > row.y + row.height {
-                continue;
-            }
-            let clip = self.find_section_clip(track.id)?;
-            let clip_area = self.clip_area(row);
-            let grid_area = self.grid_area(clip_area);
-            if pos.x < grid_area.x
-                || pos.x > grid_area.x + grid_area.width
-                || pos.y < grid_area.y
-                || pos.y > grid_area.y + grid_area.height
-            {
-                return None;
-            }
-            let pad_index = ((pos.y - grid_area.y) / PAD_ROW_HEIGHT) as usize;
-            if pad_index >= self.pad_map.len() {
-                return None;
-            }
-            let total_steps = self.total_steps();
-            if total_steps == 0 || grid_area.width <= 0.0 {
-                return None;
-            }
-            let step_w = grid_area.width / total_steps as f32;
-            let step = ((pos.x - grid_area.x) / step_w) as u32;
-            if step >= total_steps {
-                return None;
-            }
-            // Restrict to steps that actually fall inside the clip (the
-            // clip may be shorter than the whole section).
-            let step_ticks = self.step_ticks();
-            if step_ticks == 0 {
-                return None;
-            }
-            let step_start_tick = step as u64 * step_ticks;
-            if step_start_tick >= clip.duration_ticks {
-                return None;
-            }
-            return Some((clip.id, pad_index, step));
-        }
-        None
-    }
+/// Sorted list of all drum-type tracks in the registry.
+pub fn sorted_drum_tracks(tracks: &[TrackState]) -> Vec<&TrackState> {
+    let mut v: Vec<&TrackState> = tracks
+        .iter()
+        .filter(|t| {
+            matches!(t.track_type, TrackType::Instrument)
+                && t.sub_track.is_none()
+                && t.instrument_type == InstrumentType::Drum
+        })
+        .collect();
+    v.sort_by_key(|t| t.order);
+    v
 }

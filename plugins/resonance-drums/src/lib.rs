@@ -19,7 +19,7 @@ mod editor;
 pub mod kit;
 mod kit_loader;
 mod mic_catalog;
-mod params;
+pub mod params;
 pub mod sampler;
 pub mod voice;
 

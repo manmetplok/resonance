@@ -245,6 +245,17 @@ fn preprocess_acoustic(
                 .collect(),
         )
     };
+    let tension = if seg.tension.is_empty() {
+        None
+    } else {
+        Some(
+            seg.tension
+                .resample(frame_length, n_frames)
+                .into_iter()
+                .map(|v| v as f32)
+                .collect(),
+        )
+    };
 
     let spk_embed = if acoustic.flags.multi_speakers {
         let speaker = selected_speaker
@@ -279,12 +290,27 @@ fn preprocess_acoustic(
 
     let _ = cfg;
 
+    let languages = if seg.languages.is_empty() {
+        None
+    } else {
+        if seg.languages.len() != tokens.len() {
+            return Err(anyhow!(
+                "segment.languages length {} != tokens length {}",
+                seg.languages.len(),
+                tokens.len()
+            ));
+        }
+        Some(seg.languages.clone())
+    };
+
     Ok(PreprocessedAcoustic {
         tokens,
         durations,
+        languages,
         f0,
         velocity,
         gender,
+        tension,
         energy,
         breathiness,
         spk_embed,

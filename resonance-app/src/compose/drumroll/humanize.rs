@@ -3,6 +3,7 @@ use resonance_audio::types::MidiNote;
 /// Accent pattern applied on top of humanized velocities. Notes whose
 /// start step matches the pattern get a velocity boost.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[allow(dead_code)] // Variants survive as part of the flat-pad humanizer path.
 pub enum AccentPattern {
     #[default]
     None,
@@ -17,6 +18,7 @@ pub enum AccentPattern {
 }
 
 impl AccentPattern {
+    #[allow(dead_code)]
     pub const ALL: [AccentPattern; 5] = [
         AccentPattern::None,
         AccentPattern::Downbeats,
@@ -75,6 +77,7 @@ pub enum HumanizeScope {
 }
 
 impl HumanizeScope {
+    #[allow(dead_code)]
     pub const ALL: [HumanizeScope; 2] = [HumanizeScope::SelectedPad, HumanizeScope::AllPads];
 
     pub fn as_str(self) -> &'static str {

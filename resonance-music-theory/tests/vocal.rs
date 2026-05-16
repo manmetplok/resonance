@@ -1,9 +1,9 @@
 //! Tests for the vocal lyric + melody generators.
 
 use resonance_music_theory::{
-    derive_vocal, generate_lyrics, Chord, ChordQuality, LyricLine, PitchClass, TimedChord,
-    VocalContour, VocalMood, VocalParams, VocalPov, VocalRhymeScheme, VocalSinger, VocalStyle,
-    VocalTimbre, VoiceType,
+    derive_vocal, derive_vocal_with_meter, generate_lyrics, vocal_phrase_spans, Chord,
+    ChordQuality, LyricLine, PitchClass, TimedChord, VocalContour, VocalMood, VocalParams,
+    VocalPov, VocalRhymeScheme, VocalSinger, VocalStyle, VocalTimbre, VoiceType,
 };
 
 fn b_minor_chords() -> Vec<TimedChord> {
@@ -383,7 +383,10 @@ fn no_vocal_style_produces_overlapping_notes() {
         q.style = style;
         // Multiple seeds to exercise the phrase_start_offset RNG path.
         for seed in [0xC0FFEE_u64, 0xDEADBEEF, 0xFA11_FA11, 1, 2, 3, 999] {
-            let notes = derive_vocal(&b_minor_chords(), &q, 480, seed);
+            let mut notes = derive_vocal(&b_minor_chords(), &q, 480, seed);
+            // Generator returns notes in lyric order; sort by start
+            // tick to check the no-overlap property in time order.
+            notes.sort_by_key(|n| n.start_tick);
             for w in notes.windows(2) {
                 let prev_end = w[0].start_tick + w[0].duration_ticks;
                 assert!(
@@ -645,4 +648,50 @@ fn vocal_style_defaults_to_pop_ballad_when_missing() {
     }"#;
     let p: VocalParams = serde_json::from_str(json).expect("deserialize legacy");
     assert_eq!(p.style, VocalStyle::PopBallad);
+}
+
+#[test]
+fn vocal_phrase_spans_returns_one_interval_per_lyric_line() {
+    let chords = b_minor_chords();
+    let mut params = VocalParams::default();
+    // Three short lines so we can count distinct phrases.
+    params.draft = vec![
+        LyricLine { n: 1, rhyme: 'A', text: "one two three".into(), syllables: 3, locked: false },
+        LyricLine { n: 2, rhyme: 'A', text: "four five six".into(), syllables: 3, locked: false },
+        LyricLine { n: 3, rhyme: 'B', text: "sev en eight".into(), syllables: 3, locked: false },
+    ];
+    let notes = derive_vocal_with_meter(&chords, &params, 480, 4, 7);
+    assert!(!notes.is_empty(), "vocal generator must produce notes");
+    let phrases = vocal_phrase_spans(&notes, &params);
+    assert_eq!(phrases.len(), 3, "one phrase per non-empty draft line");
+    // Phrase ends are monotonic (later lines come after earlier lines)
+    // even when phrase_start_offset would shift line N+1 backward into
+    // line N — `enforce_no_overlap` clips line N's tail so the start
+    // ordering is preserved.
+    for w in phrases.windows(2) {
+        assert!(w[0].0 <= w[1].0, "phrase starts should be non-decreasing");
+    }
+    // Each phrase has positive duration.
+    for (s, e) in &phrases {
+        assert!(e > s, "phrase {} .. {} is empty or inverted", s, e);
+    }
+}
+
+#[test]
+fn vocal_phrase_spans_phrase_covers_its_own_notes_only() {
+    let chords = b_minor_chords();
+    let mut params = VocalParams::default();
+    params.draft = vec![
+        LyricLine { n: 1, rhyme: 'A', text: "alpha beta gamma".into(), syllables: 3, locked: false },
+        LyricLine { n: 2, rhyme: 'A', text: "delta epsilon".into(), syllables: 2, locked: false },
+    ];
+    let notes = derive_vocal_with_meter(&chords, &params, 480, 4, 11);
+    assert_eq!(notes.len(), 5, "3 + 2 syllables");
+    let phrases = vocal_phrase_spans(&notes, &params);
+    assert_eq!(phrases.len(), 2);
+    // Phrase 0 spans notes[0..3], phrase 1 spans notes[3..5].
+    let p0_end = notes[0..3].iter().map(|n| n.start_tick + n.duration_ticks).max().unwrap();
+    let p1_start = notes[3..5].iter().map(|n| n.start_tick).min().unwrap();
+    assert_eq!(phrases[0].1, p0_end);
+    assert_eq!(phrases[1].0, p1_start);
 }

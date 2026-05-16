@@ -18,6 +18,7 @@ use crate::message::Message;
 
 mod chord;
 mod chord_inspector;
+pub(crate) mod drum_groups;
 mod expand;
 mod lane_inspector;
 mod regenerate;
@@ -28,6 +29,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
 
     match msg {
         ComposeMessage::Drumroll(m) => crate::update::drumroll::handle(r, m),
+        ComposeMessage::DrumGroups(m) => return drum_groups::handle(r, m),
 
         ComposeMessage::CreateMidiClipInSection {
             track_id,
@@ -98,6 +100,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         }
         ComposeMessage::SelectLane(lane) => {
             r.compose.selected_lane = lane;
+            ensure_vocal_bulk_lyrics_for_selection(r);
         }
 
         // Expanded piano-roll viewport
@@ -170,4 +173,52 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// Ensure the bulk-lyrics text-editor buffer exists for the currently
+/// selected vocal lane. The view layer hands a `&Content` to the iced
+/// widget, so the entry must be present before the first paint to avoid
+/// rendering a dead fallback. Seeded from the lane's current `params.draft`
+/// so the user sees their existing lyrics in the editor.
+pub(crate) fn ensure_vocal_bulk_lyrics_for_selection(r: &mut crate::Resonance) {
+    use crate::compose::{LaneGeneratorKind, SelectedLane};
+    let track_id = match r.compose.selected_lane {
+        SelectedLane::Instrument(id) => id,
+        _ => return,
+    };
+    let Some(placement_id) = r.compose.selected_placement_id else {
+        return;
+    };
+    let Some(placement) = r
+        .compose
+        .placements
+        .iter()
+        .find(|p| p.id == placement_id)
+        .cloned()
+    else {
+        return;
+    };
+    let definition_id = placement.definition_id;
+    let Some(def) = r.compose.find_definition(definition_id) else {
+        return;
+    };
+    let Some(cfg) = def.lane_generators.get(&track_id) else {
+        return;
+    };
+    let LaneGeneratorKind::Vocal(params) = &cfg.kind else {
+        return;
+    };
+    let key = (definition_id, track_id);
+    if r.compose.vocal_bulk_lyrics.contains_key(&key) {
+        return;
+    }
+    let body = params
+        .draft
+        .iter()
+        .map(|l| l.text.replace('\u{00B7}', "").replace("  ", " "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    r.compose
+        .vocal_bulk_lyrics
+        .insert(key, iced::widget::text_editor::Content::with_text(&body));
 }

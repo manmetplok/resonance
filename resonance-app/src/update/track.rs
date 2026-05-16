@@ -395,8 +395,7 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
     }
 
     let source_name = source.name.clone();
-    let target_track_id = r.registry.next_sub_track_id;
-    r.registry.next_sub_track_id += 1;
+    let target_track_id = r.registry.allocate_sub_track_id();
     let track_name = format!("{source_name} bounce");
 
     r.engine.send(AudioCommand::AddTrack {
@@ -464,8 +463,7 @@ fn internal_bounce_dispatch(r: &mut Resonance, track_id: resonance_audio::types:
         .find(|t| t.id == track_id)
         .map(|t| t.name.clone())
         .unwrap_or_default();
-    let target_track_id = r.registry.next_sub_track_id;
-    r.registry.next_sub_track_id += 1;
+    let target_track_id = r.registry.allocate_sub_track_id();
     let target_clip_id = r.compose.fresh_derived_clip_id();
 
     let track_name = format!("{source_name} bounce");

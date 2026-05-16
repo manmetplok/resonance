@@ -10,6 +10,7 @@
 
 /// One pad in the drumroll grid.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // `name` and `color` are read by the old flat-pad inspector path.
 pub struct DrumPad {
     /// General MIDI drum note number (36 = kick, 38 = snare, …).
     pub note: u8,
@@ -105,6 +106,7 @@ impl DrumPadMap {
         }
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.pads.len()
     }
@@ -116,6 +118,7 @@ impl DrumPadMap {
     /// Reverse lookup: find the pad index for a given MIDI note. Returns
     /// `None` if the note isn't in the map (caller should skip unmapped
     /// notes rather than guess).
+    #[allow(dead_code)]
     pub fn index_for_note(&self, note: u8) -> Option<usize> {
         self.pads.iter().position(|p| p.note == note)
     }

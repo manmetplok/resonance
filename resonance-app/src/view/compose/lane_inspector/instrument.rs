@@ -1,10 +1,12 @@
 //! Instrument-lane inspector body: generator picker + the bass / melody /
 //! pad parameter panels.
 
+use std::collections::HashMap;
+
 use iced::widget::{button, column, pick_list, slider, text, text_input, Space};
 use iced::{Element, Length};
 
-use resonance_audio::types::TrackId;
+use resonance_audio::types::{TrackId, TrackType};
 use resonance_music_theory::{
     BassMotifMode, BassMotifPhrase, BassStyle, ContourPreference, MelodyStyle,
 };
@@ -18,19 +20,28 @@ use crate::state::TrackState;
 use crate::theme;
 
 use super::label_with_info;
+use super::vocal::toggle_row;
 
 /// Wrapper for LaneGeneratorKindTag in pick_list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct GeneratorPick(LaneGeneratorKindTag);
 
 impl GeneratorPick {
-    const ALL: [GeneratorPick; 5] = [
+    /// Generator options for a regular instrument (synth) track. The
+    /// vocal generator drives the SVS pipeline and only makes sense on
+    /// a vocal track, so it's intentionally absent here.
+    const INSTRUMENT: [GeneratorPick; 4] = [
         GeneratorPick(LaneGeneratorKindTag::Manual),
         GeneratorPick(LaneGeneratorKindTag::Bass),
         GeneratorPick(LaneGeneratorKindTag::Melody),
         GeneratorPick(LaneGeneratorKindTag::Pad),
-        GeneratorPick(LaneGeneratorKindTag::Vocal),
     ];
+
+    /// Generator options for a vocal track. Vocal tracks only ever
+    /// drive the vocal generator — no Bass/Melody/Pad fit the SVS
+    /// pipeline, and "Manual" would skip generation entirely (which is
+    /// not yet supported on the vocal lane).
+    const VOCAL: [GeneratorPick; 1] = [GeneratorPick(LaneGeneratorKindTag::Vocal)];
 }
 
 impl std::fmt::Display for GeneratorPick {
@@ -83,11 +94,14 @@ impl std::fmt::Display for PhraseLenPick {
 pub(super) fn instrument_body<'a>(
     definition: &'a SectionDefinitionState,
     track: &'a TrackState,
+    vocal_bulk_lyrics: &'a HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
 ) -> Element<'a, Message> {
     let definition_id = definition.id;
     let track_id = track.id;
 
-    let heading = text(&track.name).size(13).color(theme::ACCENT);
+    // Track name appears twice elsewhere (the EDITING TRACK header
+    // above the inspector body and the editable Name text input
+    // below); a third headline here was just visual noise.
 
     // Track details: name, type, icon, role
     let name_input = text_input("Name", &track.name)
@@ -108,8 +122,14 @@ pub(super) fn instrument_body<'a>(
         None => GeneratorPick(LaneGeneratorKindTag::Manual),
     };
 
+    // Filter the picker options by track type — vocal tracks only run
+    // the vocal generator, instrument tracks never do.
+    let gen_options: &[GeneratorPick] = match track.track_type {
+        TrackType::Vocal => &GeneratorPick::VOCAL,
+        _ => &GeneratorPick::INSTRUMENT,
+    };
     let gen_picker = pick_list(
-        GeneratorPick::ALL.to_vec(),
+        gen_options.to_vec(),
         Some(current_gen),
         move |pick| {
             Message::Compose(ComposeMessage::LaneInspector {
@@ -130,9 +150,13 @@ pub(super) fn instrument_body<'a>(
             LaneGeneratorKind::Melody(params) => melody_controls(definition_id, track_id, params),
             LaneGeneratorKind::Pad(params) => pad_controls(definition_id, track_id, params),
             LaneGeneratorKind::Drum(_) => manual_hint(),
-            LaneGeneratorKind::Vocal(params) => {
-                super::vocal::vocal_controls(definition_id, track_id, params, cfg.seed)
-            }
+            LaneGeneratorKind::Vocal(params) => super::vocal::vocal_controls(
+                definition_id,
+                track_id,
+                params,
+                cfg.seed,
+                vocal_bulk_lyrics.get(&(definition_id, track_id)),
+            ),
         },
         None => manual_hint(),
     };
@@ -167,8 +191,6 @@ pub(super) fn instrument_body<'a>(
         .unwrap_or_default();
 
     let mut col = column![
-        heading,
-        Space::with_height(6),
         text("Name").size(11).color(theme::TEXT_DIM),
         name_input,
         Space::with_height(8),
@@ -470,7 +492,15 @@ fn melody_controls<'a>(
             format!("Velocity: {:.2}", params.velocity),
             "Base MIDI velocity (0–1). Motif accents add a small +0.05 boost on top."
         ))
-        .push(vel_slider);
+        .push(vel_slider)
+        .push(Space::with_height(4))
+        .push(toggle_row(
+            "Fill in vocal gaps",
+            params.fill_vocal_gaps,
+            LaneInspectorMsg::ToggleMelodyFillVocalGaps,
+            definition_id,
+            track_id,
+        ));
 
     // Motif-specific controls — only those that are lane-local. The
     // motif's own knobs (complexity / motif length / leap chance) live

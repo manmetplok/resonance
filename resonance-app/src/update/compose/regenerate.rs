@@ -161,15 +161,51 @@ pub(super) fn regenerate_lane(
         _ => return iced::Task::none(),
     };
 
-    let notes = generate::derive_notes(
-        kind,
-        &def.chords,
-        def.scale,
-        &gen_params,
-        &def.motif_source,
-        TICKS_PER_QUARTER_NOTE as u32,
-        config.seed,
-    );
+    // Fill-in-vocal-gaps mode: replace the chosen style's output with
+    // a chord-tone arp that walks every silence in the section's
+    // vocal lane(s). The user explicitly wants every available space
+    // filled — a filter on top of the chosen style only ever removes
+    // notes, so when the style itself doesn't put anything in the
+    // gaps (Motif-style phrasing, dense vocals that overlap the arp
+    // grid), the lane ends up empty.
+    let notes = if matches!(&config.kind, LaneGeneratorKind::Melody(p) if p.fill_vocal_gaps) {
+        let LaneGeneratorKind::Melody(p) = &config.kind else { unreachable!() };
+        let vocal_spans = collect_section_vocal_spans(&def, r.transport.time_sig_num);
+        let timed = generate::to_timed_chords(&def.chords);
+        // 32nd-note margin — keeps the arp tail off the singer's onset
+        // without eating the small silences between phrases.
+        let min_gap = TICKS_PER_QUARTER_NOTE / 8;
+        let section_end_ticks = def.length_bars as u64
+            * r.transport.time_sig_num as u64
+            * TICKS_PER_QUARTER_NOTE;
+        let filled = resonance_music_theory::derive_melody_fill_vocal(
+            &timed,
+            p,
+            &vocal_spans,
+            section_end_ticks,
+            TICKS_PER_QUARTER_NOTE as u32,
+            min_gap,
+        );
+        filled
+            .iter()
+            .map(|n| MidiNote {
+                note: n.note,
+                velocity: n.velocity,
+                start_tick: n.start_tick,
+                duration_ticks: n.duration_ticks,
+            })
+            .collect()
+    } else {
+        generate::derive_notes(
+            kind,
+            &def.chords,
+            def.scale,
+            &gen_params,
+            &def.motif_source,
+            TICKS_PER_QUARTER_NOTE as u32,
+            config.seed,
+        )
+    };
 
     let time_sig_num = r.transport.time_sig_num;
     let samples_per_bar = compose_samples_per_bar(r.sample_rate, r.transport.bpm, time_sig_num);
@@ -226,6 +262,58 @@ pub(super) fn regenerate_lane(
 pub(super) fn compose_samples_per_bar(sample_rate: u32, bpm: f32, time_sig_num: u8) -> u64 {
     let samples_per_beat = sample_rate as f64 * 60.0 / bpm as f64;
     (samples_per_beat * time_sig_num as f64) as u64
+}
+
+/// Derive every vocal lane in the section to a flat list of
+/// **phrase-level** `(start_tick, end_tick)` intervals for the
+/// `MelodyParams::fill_vocal_gaps` path. Returns an empty vec when no
+/// vocal lane exists or every vocal lane has an empty draft.
+///
+/// Phrase spans (not per-syllable notes) are what the fill generator
+/// needs: the natural silences *between* syllables of one phrase are
+/// big enough for the arp to wedge stubs into, so feeding raw notes
+/// produces fill that rattles inside the vocal phrase instead of
+/// complementing it. `vocal_phrase_spans` collapses each lyric line
+/// down to one span (earliest onset → latest offset of its notes),
+/// which is the unit the user thinks of as "the vocal is sounding."
+fn collect_section_vocal_spans(
+    def: &crate::compose::SectionDefinitionState,
+    time_sig_num: u8,
+) -> Vec<(u64, u64)> {
+    let timed = generate::to_timed_chords(&def.chords);
+    if timed.is_empty() {
+        return Vec::new();
+    }
+    let beats_per_bar = time_sig_num.max(1) as u32;
+    let motif_intervals: Vec<i8> = timed
+        .first()
+        .map(|first| {
+            resonance_music_theory::motif_intervals(
+                &def.motif_source,
+                first.chord,
+                def.scale,
+            )
+        })
+        .unwrap_or_default();
+    let mut all = Vec::new();
+    for (_, cfg) in def.lane_generators.iter() {
+        let LaneGeneratorKind::Vocal(params) = &cfg.kind else {
+            continue;
+        };
+        if params.draft.is_empty() {
+            continue;
+        }
+        let notes = resonance_music_theory::derive_vocal_with_motif(
+            &timed,
+            params,
+            TICKS_PER_QUARTER_NOTE as u32,
+            beats_per_bar,
+            Some(&motif_intervals),
+            cfg.seed,
+        );
+        all.extend(resonance_music_theory::vocal_phrase_spans(&notes, params));
+    }
+    all
 }
 
 /// Replace every motif-mode pad's hits on every drum clip overlapping

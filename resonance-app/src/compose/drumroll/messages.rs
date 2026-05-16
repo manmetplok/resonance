@@ -5,6 +5,7 @@ use super::humanize::{AccentPattern, HumanizeScope};
 /// Messages produced by the Compose drumroll view. Routed through
 /// `ComposeMessage::Drumroll` → `crate::update::drumroll::handle`.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Retained for the legacy flat-pad path; not used by the new grouped UI.
 pub enum DrumrollMessage {
     /// User clicked a step cell. Toggles the hit on/off: if an existing
     /// note for this pad lies in this step it is removed, otherwise a new

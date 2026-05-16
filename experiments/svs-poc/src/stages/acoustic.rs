@@ -25,6 +25,10 @@ pub struct AcousticFlags {
     pub tension: bool,
     pub key_shift: bool,
     pub speed: bool,
+    /// Multi-language voicebanks accept a per-token `languages` input
+    /// alongside `tokens` / `durations`. When false, callers should
+    /// leave `PreprocessedAcoustic::languages` as `None`.
+    pub languages: bool,
 }
 
 pub struct AcousticStage {
@@ -66,6 +70,7 @@ impl AcousticStage {
             tension: ins.contains("tension"),
             key_shift: ins.contains("key_shift"),
             speed: ins.contains("speed"),
+            languages: ins.contains("languages"),
         };
         Ok(Self { session, flags })
     }
@@ -97,6 +102,21 @@ impl AcousticStage {
 
         inputs.push(("tokens".into(), Value::from_array(tokens)?.into()));
         inputs.push(("durations".into(), Value::from_array(durations)?.into()));
+        if self.flags.languages {
+            let langs = pd.languages.as_ref().ok_or_else(|| {
+                anyhow!("acoustic model expects `languages` input but none supplied in .ds")
+            })?;
+            if langs.len() != n_tokens {
+                return Err(anyhow!(
+                    "languages length {} != n_tokens {}",
+                    langs.len(),
+                    n_tokens
+                ));
+            }
+            let arr = Array2::<i64>::from_shape_vec((1, n_tokens), langs.clone())
+                .context("packing languages tensor")?;
+            inputs.push(("languages".into(), Value::from_array(arr)?.into()));
+        }
         inputs.push(("f0".into(), Value::from_array(f0)?.into()));
         if self.flags.speedup {
             inputs.push(("speedup".into(), Value::from_array(speedup_scalar)?.into()));
@@ -123,8 +143,8 @@ impl AcousticStage {
             inputs.push(("voicing".into(), Value::from_array(arr)?.into()));
         }
         if self.flags.tension {
-            let arr = Array2::<f32>::from_shape_vec((1, n_frames), vec![0.0; n_frames])
-                .context("packing tension")?;
+            let v = pd.tension_or_default(n_frames);
+            let arr = Array2::<f32>::from_shape_vec((1, n_frames), v).context("packing tension")?;
             inputs.push(("tension".into(), Value::from_array(arr)?.into()));
         }
 
@@ -225,9 +245,14 @@ pub const SPK_EMBED_SIZE: usize = 256;
 pub struct PreprocessedAcoustic {
     pub tokens: Vec<i64>,
     pub durations: Vec<i64>,
+    /// Per-token language ids (parallel to `tokens`). `Some` only for
+    /// multi-language voicebanks whose acoustic ONNX accepts a
+    /// `languages` input.
+    pub languages: Option<Vec<i64>>,
     pub f0: Vec<f64>,
     pub velocity: Option<Vec<f32>>,
     pub gender: Option<Vec<f32>>,
+    pub tension: Option<Vec<f32>>,
     pub energy: Option<Vec<f32>>,
     pub breathiness: Option<Vec<f32>>,
     /// Length `n_frames * SPK_EMBED_SIZE`, row-major over frames.
@@ -241,6 +266,10 @@ impl PreprocessedAcoustic {
 
     pub fn gender_or_default(&self, n_frames: usize) -> Vec<f32> {
         self.gender.clone().unwrap_or_else(|| vec![0.0; n_frames])
+    }
+
+    pub fn tension_or_default(&self, n_frames: usize) -> Vec<f32> {
+        self.tension.clone().unwrap_or_else(|| vec![0.0; n_frames])
     }
 }
 

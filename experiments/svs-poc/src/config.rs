@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -187,10 +187,25 @@ pub fn load_vocoder(path: &Path) -> Result<VocoderConfig> {
     })
 }
 
-/// Read a phoneme dictionary (one phoneme per line) into a `name -> token-id` map.
+/// Read a phoneme dictionary into a `name -> token-id` map. Auto-detects
+/// the on-disk format from the file extension:
+///   - `*.txt`  — one phoneme per line, line index = token id (TIGER /
+///                older OpenVPI exports)
+///   - `*.json` — top-level array of strings *or* object whose keys are
+///                phoneme names with explicit integer ids in the values
+///                (newer voicebanks like LIEE Lilia and Gahata Meiji)
 pub fn load_phoneme_dict(path: &Path) -> Result<std::collections::HashMap<String, i64>> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("reading phoneme dict at {}", path.display()))?;
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("json"))
+        .unwrap_or(false)
+    {
+        return load_phoneme_dict_json(&text)
+            .with_context(|| format!("parsing JSON phoneme dict at {}", path.display()));
+    }
     let mut map = std::collections::HashMap::new();
     for (idx, line) in text.lines().enumerate() {
         let trimmed = line.trim_end_matches('\r').trim();
@@ -198,6 +213,34 @@ pub fn load_phoneme_dict(path: &Path) -> Result<std::collections::HashMap<String
             continue;
         }
         map.insert(trimmed.to_string(), idx as i64);
+    }
+    Ok(map)
+}
+
+/// Parse a JSON phoneme dict. Supports both shapes seen in the wild:
+///   - `["AP", "SP", "a", "ae", ...]`   — index = token id
+///   - `{"AP": 0, "SP": 1, "a": 2, ...}` — explicit id per phoneme
+fn load_phoneme_dict_json(text: &str) -> Result<std::collections::HashMap<String, i64>> {
+    let value: serde_json::Value = serde_json::from_str(text)?;
+    let mut map = std::collections::HashMap::new();
+    match value {
+        serde_json::Value::Array(items) => {
+            for (idx, item) in items.iter().enumerate() {
+                let name = item
+                    .as_str()
+                    .ok_or_else(|| anyhow!("phoneme dict array entry {idx} is not a string"))?;
+                map.insert(name.to_string(), idx as i64);
+            }
+        }
+        serde_json::Value::Object(entries) => {
+            for (name, id_value) in entries {
+                let id = id_value
+                    .as_i64()
+                    .ok_or_else(|| anyhow!("phoneme `{name}` has non-integer id"))?;
+                map.insert(name, id);
+            }
+        }
+        _ => return Err(anyhow!("JSON phoneme dict must be an array or object")),
     }
     Ok(map)
 }

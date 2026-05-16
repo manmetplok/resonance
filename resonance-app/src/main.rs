@@ -701,12 +701,22 @@ fn seed_demo_content(app: &mut Resonance) {
     });
     app.compose.selected_placement_id = Some(placement_id);
 
+    // Land in the Drums lane so the new drum-groups design surfaces are
+    // visible on first boot. Switching back to Vocal is a single click in
+    // the right-rail lane switcher.
     // Land in the Lead Vocal lane so the new design surfaces are visible.
     app.compose.selected_lane = crate::compose::SelectedLane::Instrument(VOCAL_TRACK_ID);
+    crate::update::compose::ensure_vocal_bulk_lyrics_for_selection(app);
 
     // Pre-generate the vocal melody so the staff shows real notes on
     // first boot instead of the synthetic contour fallback.
     seed_demo_vocal_melody(app, def_id, placement_id, VOCAL_TRACK_ID, 16);
+
+    // Materialise the project's drum groups into a MIDI clip on the
+    // drum track so the demo plays back something audible on the kit
+    // without an explicit Generate press.
+    crate::update::compose::drum_groups::materialize_drum_clips(app);
+
     let _ = TrackOutput::Master; // silence unused-import warning when feature flags shift
 }
 

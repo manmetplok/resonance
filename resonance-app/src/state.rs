@@ -734,4 +734,20 @@ impl TrackRegistry {
     pub fn with_bus_mut<R>(&mut self, id: BusId, f: impl FnOnce(&mut BusState) -> R) -> Option<R> {
         self.busses.iter_mut().find(|b| b.id == id).map(f)
     }
+
+    /// Allocate a fresh id from `next_sub_track_id`, skipping past any
+    /// id already taken by a track in the registry. Used for sub-tracks
+    /// and for bounce-target tracks that share this counter. Without the
+    /// skip, a collision with an engine-allocated id silently overwrites
+    /// the other track in the engine's hashmap (or no-ops the new one,
+    /// depending on which command ran first).
+    pub fn allocate_sub_track_id(&mut self) -> TrackId {
+        loop {
+            let candidate = self.next_sub_track_id;
+            self.next_sub_track_id += 1;
+            if !self.tracks.iter().any(|t| t.id == candidate) {
+                return candidate;
+            }
+        }
+    }
 }

@@ -3,14 +3,17 @@
 //! One section, many lanes, each lane has an optional generator, the chord
 //! lane is shared harmonic context. Selecting a lane updates this panel.
 
-use iced::widget::{column, container, pick_list, row, scrollable, text, tooltip, Space};
+use iced::widget::{column, container, row, scrollable, text, tooltip, Space};
 use iced::{alignment, Element, Length};
 
+use std::collections::HashMap;
+
+use resonance_audio::types::TrackId;
 use resonance_music_theory::TableRegistry;
 
-use crate::compose::{ComposeMessage, DrumrollViewState, SectionDefinitionState, SelectedLane};
+use crate::compose::{DrumGroup, DrumrollViewState, SectionDefinitionState, SelectedLane};
 use crate::message::*;
-use crate::state::{InstrumentType, TrackState};
+use crate::state::TrackState;
 use crate::theme;
 
 /// Resolve the active selection into a display-ready (label, name) pair so
@@ -117,19 +120,26 @@ pub fn view<'a>(
     selected_lane: &'a SelectedLane,
     tracks: &'a [TrackState],
     drumroll_state: &'a DrumrollViewState,
+    drum_groups: &'a [DrumGroup],
     clip_id_for_drum: Option<u64>,
     table_registry: &'a TableRegistry,
+    vocal_bulk_lyrics: &'a HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
 ) -> Element<'a, Message> {
     // EDITING context header — large, unmistakable. Tells the user whether
     // they're editing the section (lavender) or a track (warm amber) and
     // shows the active lane's name in italic serif.
     let editing_card = editing_header(selected_lane, definition, tracks);
 
-    // Scale block — always at top, section-global.
-    let scale = chord::scale_block(definition);
-
-    // Lane switcher
-    let lane_switcher = lane_switcher_row(selected_lane, tracks);
+    // Scale block — only shown when the chords lane is selected, since
+    // the scale is section-global harmonic context that belongs to the
+    // chord editor, not to per-track generators. Lanes are switched by
+    // clicking their header in the track list, so this rail no longer
+    // carries its own lane picker.
+    let scale: Option<Element<'a, Message>> = if matches!(selected_lane, SelectedLane::Chords) {
+        Some(chord::scale_block(definition))
+    } else {
+        None
+    };
 
     // Body — varies by selected lane
     let body: Element<'a, Message> = match selected_lane {
@@ -137,7 +147,7 @@ pub fn view<'a>(
         SelectedLane::Instrument(track_id) => {
             let track = tracks.iter().find(|t| t.id == *track_id);
             match track {
-                Some(t) => instrument::instrument_body(definition, t),
+                Some(t) => instrument::instrument_body(definition, t, vocal_bulk_lyrics),
                 None => text("Track not found")
                     .size(12)
                     .color(theme::TEXT_DIM)
@@ -147,7 +157,13 @@ pub fn view<'a>(
         SelectedLane::Drums(track_id) => {
             let track = tracks.iter().find(|t| t.id == *track_id);
             match track {
-                Some(t) => drums::drum_body(definition, t, drumroll_state, clip_id_for_drum),
+                Some(t) => drums::drum_body(
+                    definition,
+                    t,
+                    drumroll_state,
+                    drum_groups,
+                    clip_id_for_drum,
+                ),
                 None => text("Track not found")
                     .size(12)
                     .color(theme::TEXT_DIM)
@@ -156,17 +172,11 @@ pub fn view<'a>(
         }
     };
 
-    let inner = column![
-        editing_card,
-        Space::with_height(14),
-        scale,
-        Space::with_height(20),
-        lane_switcher,
-        Space::with_height(20),
-        body,
-    ]
-    .spacing(0)
-    .padding(18);
+    let mut inner = column![editing_card, Space::with_height(14)].spacing(0).padding(18);
+    if let Some(scale) = scale {
+        inner = inner.push(scale).push(Space::with_height(20));
+    }
+    let inner = inner.push(body);
 
     // The vocal generator panel runs ~5 stacked group cards, easily
     // taller than the viewport. Wrapping the rail in a vertical
@@ -191,65 +201,6 @@ pub fn view<'a>(
             ..Default::default()
         })
         .into()
-}
-
-// ===========================================================================
-// Lane switcher
-// ===========================================================================
-
-/// Lane names for the dropdown.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LanePick {
-    lane: SelectedLane,
-    label: String,
-}
-
-impl std::fmt::Display for LanePick {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.label)
-    }
-}
-
-fn lane_switcher_row<'a>(
-    selected: &'a SelectedLane,
-    tracks: &'a [TrackState],
-) -> Element<'a, Message> {
-    let mut options = vec![LanePick {
-        lane: SelectedLane::Chords,
-        label: "Chords".to_string(),
-    }];
-
-    for t in tracks.iter().filter(|t| t.sub_track.is_none()) {
-        let lane = if t.instrument_type == InstrumentType::Drum {
-            SelectedLane::Drums(t.id)
-        } else {
-            SelectedLane::Instrument(t.id)
-        };
-        options.push(LanePick {
-            lane,
-            label: t.name.clone(),
-        });
-    }
-
-    let current = options.iter().find(|o| o.lane == *selected).cloned();
-
-    let picker = pick_list(options, current, |pick| {
-        Message::Compose(ComposeMessage::SelectLane(pick.lane))
-    })
-    .text_size(12)
-    .padding([5, 8])
-    .width(Length::Fill);
-
-    column![
-        text("LANE")
-            .size(10)
-            .font(theme::UI_FONT_SEMIBOLD)
-            .color(theme::TEXT_3),
-        Space::with_height(4),
-        picker,
-    ]
-    .spacing(0)
-    .into()
 }
 
 // ===========================================================================

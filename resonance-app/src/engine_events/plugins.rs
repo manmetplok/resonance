@@ -125,8 +125,7 @@ fn ensure_subtracks(
             .get(port_idx)
             .cloned()
             .unwrap_or_else(|| format!("Port {}", port_idx));
-        let sub_id = r.registry.next_sub_track_id;
-        r.registry.next_sub_track_id += 1;
+        let sub_id = r.registry.allocate_sub_track_id();
         let order = r.registry.next_track_order;
         r.registry.next_track_order += 1;
         let sub_name = format!("{} \u{2192} {}", parent_name, port_label);
