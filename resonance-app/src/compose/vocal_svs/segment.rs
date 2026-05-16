@@ -157,6 +157,15 @@ pub(super) fn build_segment(
         } else {
             &assignment.phonemes
         };
+        // Lexical-stress modulation of this syllable's velocity. The
+        // tension curve later reads `frame_velocity` and pushes
+        // strong-velocity frames toward more compressed / belted
+        // delivery, so multiplying here is enough to make primary-
+        // stress syllables sing louder & brighter than the surrounding
+        // function-word schwas. Stress comes from CMU via
+        // `resolve_draft` and is None for inline phoneme overrides.
+        let stress_factor = assignment.stress.velocity_factor();
+        let stressed_velocity = (n.velocity * stress_factor).clamp(0.0, 1.0);
 
         // Word-boundary SP: when this syllable is the LAST one of its
         // word, reserve a small silence at the end of the singing
@@ -231,7 +240,7 @@ pub(super) fn build_segment(
             if let Some(id) = voicebank_language_id(params.voicebank, ph) {
                 languages.push(id);
             }
-            entry_note_velocity.push(n.velocity);
+            entry_note_velocity.push(stressed_velocity);
             entry_note_total_sec.push(sing_sec);
             entry_note_start_offset.push(offset_in_note);
             offset_in_note += d;
@@ -247,7 +256,7 @@ pub(super) fn build_segment(
             if let Some(id) = voicebank_language_id(params.voicebank, "SP") {
                 languages.push(id);
             }
-            entry_note_velocity.push(n.velocity);
+            entry_note_velocity.push(stressed_velocity);
             entry_note_total_sec.push(sing_sec);
             entry_note_start_offset.push(offset_in_note);
             // No further entries belong to this note after the SP, so

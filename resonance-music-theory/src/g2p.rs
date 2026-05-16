@@ -45,12 +45,55 @@ pub fn is_consonant(ph: &str) -> bool {
     CONSONANTS.contains(&ph)
 }
 
+/// Lexical stress level for a syllable, drawn from the CMU dict's stress
+/// marks on its vowel(s). The SVS pipeline maps this to per-syllable
+/// velocity / tension bumps so primary-stress syllables sing louder &
+/// brighter than the function-word schwas around them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum SyllableStress {
+    /// Unstressed (CMU `0`) — the schwa-y function-word baseline.
+    #[default]
+    None,
+    /// Secondary stress (CMU `2`) — the weaker stressed syllable in
+    /// longer words, e.g. the `un-` in `university`.
+    Secondary,
+    /// Primary stress (CMU `1`) — the loudest syllable in a word.
+    Primary,
+}
+
+impl SyllableStress {
+    /// Multiplier applied to a note's MIDI velocity when this syllable
+    /// is sung. Primary stress boosts ~15 %, secondary ~5 %, none trims
+    /// ~10 %. Multiplicative so a quiet phrase still has stress
+    /// contrast but doesn't blow the velocity past 1.0.
+    pub fn velocity_factor(self) -> f32 {
+        match self {
+            SyllableStress::Primary => 1.15,
+            SyllableStress::Secondary => 1.05,
+            SyllableStress::None => 0.90,
+        }
+    }
+
+    /// Single-character label for compact UI tooltips / debug strings.
+    pub fn glyph(self) -> char {
+        match self {
+            SyllableStress::Primary => '1',
+            SyllableStress::Secondary => '2',
+            SyllableStress::None => '0',
+        }
+    }
+}
+
 /// Transcribe a whole word to ARPAbet-lowercase phonemes. Tries the
 /// CMU dict first; falls back to letter-pattern rules for unknown
 /// words (names, made-up words, typos). Always emits at least one
 /// vowel so the acoustic model has something to sing.
+#[allow(dead_code)]
 fn word_to_phonemes(word: &str) -> Vec<&'static str> {
     word_to_phonemes_variant(word, 1)
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect()
 }
 
 /// Like `word_to_phonemes` but picks CMU pronunciation variant
@@ -59,24 +102,25 @@ fn word_to_phonemes(word: &str) -> Vec<&'static str> {
 /// has /rɛd/ (past) at index 1 and /riːd/ (present) at index 2; `live`
 /// has the adjective /laɪv/ at 1 and the verb /lɪv/ at 2. Out-of-range
 /// indices clamp to the last available variant.
-fn word_to_phonemes_variant(word: &str, variant_idx: usize) -> Vec<&'static str> {
+///
+/// Returns `(phoneme, stress)` pairs. Stress is only meaningful on
+/// vowels — consonants always carry `SyllableStress::None`. Rule-based
+/// fallback never knows stress and returns `None` for everything.
+fn word_to_phonemes_variant(word: &str, variant_idx: usize) -> Vec<(&'static str, SyllableStress)> {
     let cleaned: String = word
         .to_lowercase()
         .chars()
         .filter(|c| c.is_alphabetic() || *c == '\'')
         .collect();
     if cleaned.is_empty() {
-        return vec!["ah"];
+        return vec![("ah", SyllableStress::None)];
     }
 
     if let Some(rules) = dict().get(&cleaned) {
         let pick_idx = variant_idx.saturating_sub(1).min(rules.len().saturating_sub(1));
         if let Some(rule) = rules.get(pick_idx) {
-            let out: Vec<&'static str> = rule
-                .pronunciation()
-                .iter()
-                .map(symbol_to_str)
-                .collect();
+            let out: Vec<(&'static str, SyllableStress)> =
+                rule.pronunciation().iter().map(symbol_to_str).collect();
             if !out.is_empty() {
                 return ensure_vowel(out);
             }
@@ -85,7 +129,11 @@ fn word_to_phonemes_variant(word: &str, variant_idx: usize) -> Vec<&'static str>
 
     // Fallback: letter-pattern rules. Won't match CMU's accuracy but
     // produces something pronounceable for names, made-up words, etc.
-    ensure_vowel(rule_based(&cleaned))
+    let fallback: Vec<(&'static str, SyllableStress)> = rule_based(&cleaned)
+        .into_iter()
+        .map(|p| (p, SyllableStress::None))
+        .collect();
+    ensure_vowel(fallback)
 }
 
 /// How many CMU pronunciation variants the dict has for `word` (≥ 1
@@ -108,77 +156,88 @@ pub fn cmu_variant_count(word: &str) -> usize {
 }
 
 /// Map a CMU `Symbol` to the lowercase ARPAbet phoneme string the
-/// SVS acoustic model expects. Stress digits are mostly dropped (the
-/// model doesn't have stressed/unstressed variants for most vowels),
-/// but unstressed AH is special: in English it's the schwa /ə/, and
-/// our voicebanks all expose a distinct `ax` symbol for it. Emitting
-/// `ax` instead of `ah` for `AH(Stress::None)` makes function words
-/// like "the", "about", "another" sound natural instead of overly
-/// stressed.
-fn symbol_to_str(sym: &Symbol) -> &'static str {
+/// SVS acoustic model expects, plus its lexical stress. Unstressed AH
+/// is special: in English it's the schwa /ə/, and our voicebanks all
+/// expose a distinct `ax` symbol for it. Emitting `ax` instead of `ah`
+/// for `AH(Stress::None)` makes function words like "the", "about",
+/// "another" sound natural instead of overly stressed.
+///
+/// Consonants always carry `SyllableStress::None` — stress is a
+/// property of the vowel nucleus, not the surrounding consonants.
+fn symbol_to_str(sym: &Symbol) -> (&'static str, SyllableStress) {
+    let map_stress = |s: &Stress| -> SyllableStress {
+        match s {
+            Stress::None => SyllableStress::None,
+            Stress::Primary => SyllableStress::Primary,
+            Stress::Secondary => SyllableStress::Secondary,
+        }
+    };
     match sym {
-        Symbol::AA(_) => "aa",
-        Symbol::AE(_) => "ae",
-        Symbol::AH(Stress::None) => "ax",
-        Symbol::AH(_) => "ah",
-        Symbol::AO(_) => "ao",
-        Symbol::AW(_) => "aw",
-        Symbol::AY(_) => "ay",
-        Symbol::B => "b",
-        Symbol::CH => "ch",
-        Symbol::D => "d",
-        Symbol::DH => "dh",
-        Symbol::EH(_) => "eh",
-        Symbol::ER(_) => "er",
-        Symbol::EY(_) => "ey",
-        Symbol::F => "f",
-        Symbol::G => "g",
-        Symbol::HH => "hh",
-        Symbol::IH(_) => "ih",
-        Symbol::IY(_) => "iy",
-        Symbol::JH => "jh",
-        Symbol::K => "k",
-        Symbol::L => "l",
-        Symbol::M => "m",
-        Symbol::N => "n",
-        Symbol::NG => "ng",
-        Symbol::OW(_) => "ow",
-        Symbol::OY(_) => "oy",
-        Symbol::P => "p",
-        Symbol::R => "r",
-        Symbol::S => "s",
-        Symbol::SH => "sh",
-        Symbol::T => "t",
-        Symbol::TH => "th",
-        Symbol::UH(_) => "uh",
-        Symbol::UW(_) => "uw",
-        Symbol::V => "v",
-        Symbol::W => "w",
-        Symbol::Y => "y",
-        Symbol::Z => "z",
-        Symbol::ZH => "zh",
+        Symbol::AA(s) => ("aa", map_stress(s)),
+        Symbol::AE(s) => ("ae", map_stress(s)),
+        Symbol::AH(Stress::None) => ("ax", SyllableStress::None),
+        Symbol::AH(s) => ("ah", map_stress(s)),
+        Symbol::AO(s) => ("ao", map_stress(s)),
+        Symbol::AW(s) => ("aw", map_stress(s)),
+        Symbol::AY(s) => ("ay", map_stress(s)),
+        Symbol::B => ("b", SyllableStress::None),
+        Symbol::CH => ("ch", SyllableStress::None),
+        Symbol::D => ("d", SyllableStress::None),
+        Symbol::DH => ("dh", SyllableStress::None),
+        Symbol::EH(s) => ("eh", map_stress(s)),
+        Symbol::ER(s) => ("er", map_stress(s)),
+        Symbol::EY(s) => ("ey", map_stress(s)),
+        Symbol::F => ("f", SyllableStress::None),
+        Symbol::G => ("g", SyllableStress::None),
+        Symbol::HH => ("hh", SyllableStress::None),
+        Symbol::IH(s) => ("ih", map_stress(s)),
+        Symbol::IY(s) => ("iy", map_stress(s)),
+        Symbol::JH => ("jh", SyllableStress::None),
+        Symbol::K => ("k", SyllableStress::None),
+        Symbol::L => ("l", SyllableStress::None),
+        Symbol::M => ("m", SyllableStress::None),
+        Symbol::N => ("n", SyllableStress::None),
+        Symbol::NG => ("ng", SyllableStress::None),
+        Symbol::OW(s) => ("ow", map_stress(s)),
+        Symbol::OY(s) => ("oy", map_stress(s)),
+        Symbol::P => ("p", SyllableStress::None),
+        Symbol::R => ("r", SyllableStress::None),
+        Symbol::S => ("s", SyllableStress::None),
+        Symbol::SH => ("sh", SyllableStress::None),
+        Symbol::T => ("t", SyllableStress::None),
+        Symbol::TH => ("th", SyllableStress::None),
+        Symbol::UH(s) => ("uh", map_stress(s)),
+        Symbol::UW(s) => ("uw", map_stress(s)),
+        Symbol::V => ("v", SyllableStress::None),
+        Symbol::W => ("w", SyllableStress::None),
+        Symbol::Y => ("y", SyllableStress::None),
+        Symbol::Z => ("z", SyllableStress::None),
+        Symbol::ZH => ("zh", SyllableStress::None),
     }
 }
 
 /// Ensure the output contains at least one vowel — the acoustic model
-/// can't sing a pure-consonant cluster. Inject a schwa before the
-/// final consonant so `"k l"` becomes `"k ah l"` (the way English
-/// speakers actually say "kle").
-fn ensure_vowel(mut out: Vec<&'static str>) -> Vec<&'static str> {
-    if !out.iter().any(|p| !is_consonant(p)) {
+/// can't sing a pure-consonant cluster. Inject an unstressed schwa
+/// before the final consonant so `"k l"` becomes `"k ah l"` (the way
+/// English speakers actually say "kle").
+fn ensure_vowel(
+    mut out: Vec<(&'static str, SyllableStress)>,
+) -> Vec<(&'static str, SyllableStress)> {
+    if !out.iter().any(|(p, _)| !is_consonant(p)) {
         if out.len() >= 2 {
             let insert_at = out.len() - 1;
-            out.insert(insert_at, "ah");
+            out.insert(insert_at, ("ah", SyllableStress::None));
         } else {
-            out.push("ah");
+            out.push(("ah", SyllableStress::None));
         }
     }
     // Dedup consecutive identical phonemes — doubled consonants in
-    // English spelling ("glass", "letter") are single phonemes.
-    let mut deduped: Vec<&'static str> = Vec::with_capacity(out.len());
-    for p in out {
-        if deduped.last().copied() != Some(p) {
-            deduped.push(p);
+    // English spelling ("glass", "letter") are single phonemes. The
+    // dedup keeps the first occurrence's stress.
+    let mut deduped: Vec<(&'static str, SyllableStress)> = Vec::with_capacity(out.len());
+    for entry in out {
+        if deduped.last().map(|(p, _)| *p) != Some(entry.0) {
+            deduped.push(entry);
         }
     }
     deduped
@@ -259,8 +318,12 @@ pub fn cmu_syllable_count(word: &str) -> usize {
     if cleaned.is_empty() {
         return 1;
     }
-    let phonemes = word_to_phonemes(&cleaned);
-    phonemes.iter().filter(|p| !is_consonant(p)).count().max(1)
+    let phonemes = word_to_phonemes_variant(&cleaned, 1);
+    phonemes
+        .iter()
+        .filter(|(p, _)| !is_consonant(p))
+        .count()
+        .max(1)
 }
 
 /// Insert `·` markers into a single word so it has at least
@@ -387,6 +450,8 @@ pub fn auto_syllabify_text(text: &str) -> String {
 enum LyricToken {
     Word { cleaned: String, syl_count: usize, variant_idx: usize },
     /// Pre-segmented phoneme groups, one inner vec per syllable.
+    /// User-typed overrides carry no stress, so the syllable stress
+    /// defaults to `None`.
     PhonemeBlock(Vec<Vec<&'static str>>),
 }
 
@@ -575,31 +640,13 @@ fn canonical_phoneme(sym: &str) -> Option<&'static str> {
 /// overrides. Helpful for proper nouns and foreign-language words
 /// where the CMU dict or rule-based fallback misfire.
 ///
-/// Returns one `Vec<&str>` per output syllable.
+/// Returns one `Vec<&str>` per output syllable. Use `resolve_draft`
+/// when you also need stress / surface-label information.
 pub fn phonemes_for_draft(draft: &[crate::derive::LyricLine]) -> Vec<Vec<&'static str>> {
-    let mut tokens: Vec<LyricToken> = Vec::new();
-    for line in draft {
-        tokens.extend(tokenize_line(&line.text));
-    }
-
-    let mut out: Vec<Vec<&'static str>> = Vec::new();
-    for token in tokens {
-        match token {
-            LyricToken::PhonemeBlock(groups) => out.extend(groups),
-            LyricToken::Word { cleaned, syl_count, variant_idx } => {
-                let phonemes = word_to_phonemes_variant(&cleaned, variant_idx);
-                if syl_count == 1 {
-                    out.push(phonemes);
-                    continue;
-                }
-                let slices = split_into_syllables(&phonemes, syl_count);
-                for slice in slices {
-                    out.push(slice);
-                }
-            }
-        }
-    }
-    out
+    resolve_draft(draft)
+        .into_iter()
+        .map(|s| s.phonemes)
+        .collect()
 }
 
 /// OpenUtau-style slur marker. A note whose lyric equals this (or `-`)
@@ -618,13 +665,15 @@ pub fn is_slur_lyric(s: &str) -> bool {
 
 /// One syllable resolved against the lyric draft. Carries the surface
 /// label (the glyphs you'd write on a score), the phoneme list the
-/// SVS model will sing, and a `is_word_end` flag that drives SP
-/// injection between words.
+/// SVS model will sing, a `is_word_end` flag that drives SP injection
+/// between words, and the syllable's lexical stress (drawn from CMU's
+/// stress marks on its vowel).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSyllable {
     pub label: String,
     pub phonemes: Vec<&'static str>,
     pub is_word_end: bool,
+    pub stress: SyllableStress,
 }
 
 /// One note's assignment after the lyric side-table annotations have
@@ -652,6 +701,11 @@ pub struct AssignedSyllable {
     /// inherit the previous non-slur note's index. Out-of-range when
     /// the draft has fewer syllables than non-slur notes.
     pub syllable_index: usize,
+    /// Lexical stress for this syllable, drawn from CMU. Slur notes
+    /// inherit the held syllable's stress. Drives the SVS pipeline's
+    /// per-syllable velocity / tension bump and the stress overlay
+    /// in the vocal roll.
+    pub stress: SyllableStress,
 }
 
 /// Resolve every syllable in a lyric draft to its (surface, phonemes,
@@ -678,12 +732,14 @@ pub fn resolve_draft(draft: &[crate::derive::LyricLine]) -> Vec<ResolvedSyllable
                         label: format!("[{}]", g.join(" ")),
                         phonemes: g,
                         is_word_end: i == last_idx,
+                        // Bracket overrides carry no stress info.
+                        stress: SyllableStress::None,
                     });
                 }
             }
             LyricToken::Word { cleaned, syl_count, variant_idx } => {
                 let phonemes = word_to_phonemes_variant(&cleaned, variant_idx);
-                let phoneme_groups: Vec<Vec<&'static str>> = if syl_count <= 1 {
+                let phoneme_groups: Vec<Vec<(&'static str, SyllableStress)>> = if syl_count <= 1 {
                     vec![phonemes]
                 } else {
                     split_into_syllables(&phonemes, syl_count)
@@ -703,11 +759,19 @@ pub fn resolve_draft(draft: &[crate::derive::LyricLine]) -> Vec<ResolvedSyllable
                 let last_idx = n.saturating_sub(1);
                 for i in 0..n {
                     let label = labels.get(i).cloned().unwrap_or_default();
-                    let phonemes = phoneme_groups.get(i).cloned().unwrap_or_default();
+                    let group = phoneme_groups.get(i).cloned().unwrap_or_default();
+                    let stress = group
+                        .iter()
+                        .filter(|(p, _)| !is_consonant(p))
+                        .map(|(_, s)| *s)
+                        .max()
+                        .unwrap_or(SyllableStress::None);
+                    let phonemes: Vec<&'static str> = group.into_iter().map(|(p, _)| p).collect();
                     out.push(ResolvedSyllable {
                         label,
                         phonemes,
                         is_word_end: i == last_idx,
+                        stress,
                     });
                 }
             }
@@ -739,6 +803,7 @@ pub fn assign_syllables_to_notes(
     let mut cursor: usize = 0;
     let mut last_syllable_idx: usize = 0;
     let mut last_vowel: Option<&'static str> = None;
+    let mut last_stress: SyllableStress = SyllableStress::None;
     for i in 0..note_count {
         let entry = annotations.get(i).map(|s| s.trim()).unwrap_or("");
         if is_slur_lyric(entry) {
@@ -750,6 +815,7 @@ pub fn assign_syllables_to_notes(
                 is_slur: true,
                 is_word_end: false,
                 syllable_index: last_syllable_idx,
+                stress: last_stress,
             });
             continue;
         }
@@ -763,6 +829,7 @@ pub fn assign_syllables_to_notes(
                 is_slur: false,
                 is_word_end: false,
                 syllable_index: syl_index,
+                stress: SyllableStress::None,
             });
             continue;
         };
@@ -776,6 +843,7 @@ pub fn assign_syllables_to_notes(
             last_vowel = Some(*v);
         }
         last_syllable_idx = syl_index;
+        last_stress = syl.stress;
         let label = if !entry.is_empty() {
             entry.to_string()
         } else {
@@ -787,6 +855,7 @@ pub fn assign_syllables_to_notes(
             is_slur: false,
             is_word_end: syl.is_word_end,
             syllable_index: syl_index,
+            stress: syl.stress,
         });
     }
     out
@@ -799,39 +868,22 @@ pub fn assign_syllables_to_notes(
 pub fn phonemes_for_draft_with_word_boundaries(
     draft: &[crate::derive::LyricLine],
 ) -> (Vec<Vec<&'static str>>, Vec<bool>) {
-    let mut tokens: Vec<LyricToken> = Vec::new();
-    for line in draft {
-        tokens.extend(tokenize_line(&line.text));
-    }
-
-    let mut phon: Vec<Vec<&'static str>> = Vec::new();
-    let mut is_word_end: Vec<bool> = Vec::new();
-    for token in tokens {
-        let groups: Vec<Vec<&'static str>> = match token {
-            LyricToken::PhonemeBlock(groups) => groups,
-            LyricToken::Word { cleaned, syl_count, variant_idx } => {
-                let phonemes = word_to_phonemes_variant(&cleaned, variant_idx);
-                if syl_count == 1 {
-                    vec![phonemes]
-                } else {
-                    split_into_syllables(&phonemes, syl_count)
-                }
-            }
-        };
-        let last = groups.len().saturating_sub(1);
-        for (i, g) in groups.into_iter().enumerate() {
-            phon.push(g);
-            is_word_end.push(i == last);
-        }
-    }
+    let syllables = resolve_draft(draft);
+    let phon: Vec<Vec<&'static str>> = syllables.iter().map(|s| s.phonemes.clone()).collect();
+    let is_word_end: Vec<bool> = syllables.iter().map(|s| s.is_word_end).collect();
     (phon, is_word_end)
 }
 
 /// Split a phoneme list into `n` syllable-shaped chunks. Tries to
 /// give each chunk exactly one vowel; consonants between vowels go
 /// to the chunk *after* (onset of the next syllable) for English-like
-/// resyllabification (`hou·ses` → `hh aw / z ah z`).
-fn split_into_syllables(phonemes: &[&'static str], n: usize) -> Vec<Vec<&'static str>> {
+/// resyllabification (`hou·ses` → `hh aw / z ah z`). Operates on
+/// `(phoneme, stress)` pairs so the stress on each vowel travels with
+/// the chunk it ends up in.
+fn split_into_syllables(
+    phonemes: &[(&'static str, SyllableStress)],
+    n: usize,
+) -> Vec<Vec<(&'static str, SyllableStress)>> {
     if n <= 1 {
         return vec![phonemes.to_vec()];
     }
@@ -839,12 +891,13 @@ fn split_into_syllables(phonemes: &[&'static str], n: usize) -> Vec<Vec<&'static
     let vowels: Vec<usize> = phonemes
         .iter()
         .enumerate()
-        .filter(|(_, p)| !is_consonant(p))
+        .filter(|(_, (p, _))| !is_consonant(p))
         .map(|(i, _)| i)
         .collect();
     if vowels.len() < n {
         // Not enough vowels — emit one chunk per requested syllable
-        // by spreading the phonemes evenly.
+        // by spreading the phonemes evenly. Filler vowels are inserted
+        // unstressed.
         let mut out = Vec::with_capacity(n);
         let chunk_size = phonemes.len().max(1) / n.max(1);
         for k in 0..n {
@@ -854,9 +907,10 @@ fn split_into_syllables(phonemes: &[&'static str], n: usize) -> Vec<Vec<&'static
             } else {
                 (k + 1) * chunk_size
             };
-            let chunk: Vec<&'static str> = phonemes[start..end.min(phonemes.len())].to_vec();
+            let chunk: Vec<(&'static str, SyllableStress)> =
+                phonemes[start..end.min(phonemes.len())].to_vec();
             if chunk.is_empty() {
-                out.push(vec!["ah"]);
+                out.push(vec![("ah", SyllableStress::None)]);
             } else {
                 out.push(chunk);
             }
@@ -869,7 +923,7 @@ fn split_into_syllables(phonemes: &[&'static str], n: usize) -> Vec<Vec<&'static
     // intermediate consonants into the *second* syllable's onset
     // (English bias — "houses" splits as "hou-ses" not "hous-es").
     let chosen_vowels: Vec<usize> = vowels.iter().copied().take(n).collect();
-    let mut out: Vec<Vec<&'static str>> = Vec::with_capacity(n);
+    let mut out: Vec<Vec<(&'static str, SyllableStress)>> = Vec::with_capacity(n);
     for k in 0..n {
         let start = if k == 0 {
             0
@@ -880,7 +934,7 @@ fn split_into_syllables(phonemes: &[&'static str], n: usize) -> Vec<Vec<&'static
             let prev_v = chosen_vowels[k - 1];
             let cur_v = chosen_vowels[k];
             ((prev_v + 1)..cur_v)
-                .find(|&i| is_consonant(phonemes[i]))
+                .find(|&i| is_consonant(phonemes[i].0))
                 .unwrap_or(cur_v)
         };
         let end = if k == n - 1 {
@@ -889,7 +943,7 @@ fn split_into_syllables(phonemes: &[&'static str], n: usize) -> Vec<Vec<&'static
             let cur_v = chosen_vowels[k];
             let next_v = chosen_vowels[k + 1];
             ((cur_v + 1)..next_v)
-                .find(|&i| is_consonant(phonemes[i]))
+                .find(|&i| is_consonant(phonemes[i].0))
                 .unwrap_or(next_v)
         };
         out.push(phonemes[start..end].to_vec());

@@ -4,8 +4,8 @@
 //! sensible per-note chunks.
 
 use resonance_music_theory::g2p::{
-    auto_syllabify_text, cmu_syllable_count, cmu_variant_count, is_consonant, phonemes_for_draft,
-    syllabify_word, CONSONANTS,
+    assign_syllables_to_notes, auto_syllabify_text, cmu_syllable_count, cmu_variant_count,
+    is_consonant, phonemes_for_draft, resolve_draft, syllabify_word, SyllableStress, CONSONANTS,
 };
 use resonance_music_theory::LyricLine;
 
@@ -279,6 +279,66 @@ fn variant_hint_does_not_eat_punctuation_only_paren() {
     // `(` is stripped as punctuation.
     assert!(flat.contains(&"m"));
     assert!(flat.contains(&"ng"));
+}
+
+#[test]
+fn stress_marks_propagate_from_cmu() {
+    // CMU encodes `computer` as K AH0 M P Y UW1 T ER0 — schwa, then
+    // primary on the UW, then unstressed ER. After splitting into 3
+    // syllables (`com·pu·ter`) we expect: None, Primary, None.
+    let syllables = resolve_draft(&[line("com\u{00B7}pu\u{00B7}ter")]);
+    assert_eq!(syllables.len(), 3, "expected 3 syllables for com·pu·ter");
+    assert_eq!(syllables[0].stress, SyllableStress::None);
+    assert_eq!(syllables[1].stress, SyllableStress::Primary);
+    assert_eq!(syllables[2].stress, SyllableStress::None);
+}
+
+#[test]
+fn stress_marks_are_secondary_for_some_words() {
+    // CMU encodes `university` as Y UW2 N IH0 V ER1 S AH0 T IY0 —
+    // secondary on the leading `u`, primary on `ver`, none elsewhere.
+    let syllables = resolve_draft(&[line("u\u{00B7}ni\u{00B7}ver\u{00B7}si\u{00B7}ty")]);
+    assert_eq!(syllables.len(), 5);
+    assert_eq!(syllables[0].stress, SyllableStress::Secondary);
+    assert_eq!(syllables[2].stress, SyllableStress::Primary);
+    assert!(matches!(
+        syllables[1].stress,
+        SyllableStress::None
+    ));
+}
+
+#[test]
+fn stress_is_none_for_inline_phoneme_blocks() {
+    // User-typed override carries no stress.
+    let syllables = resolve_draft(&[line("[hh ah l ow]")]);
+    assert_eq!(syllables.len(), 1);
+    assert_eq!(syllables[0].stress, SyllableStress::None);
+}
+
+#[test]
+fn slur_notes_inherit_previous_syllable_stress() {
+    // Two notes, one syllable + one slur. The slur note's stress
+    // should match the syllable it's holding.
+    let syllables = resolve_draft(&[line("sun")]);
+    let ann = vec![String::new(), "+".to_string()];
+    let assigned = assign_syllables_to_notes(&syllables, &ann, 2);
+    assert_eq!(assigned.len(), 2);
+    assert!(!assigned[0].is_slur);
+    assert!(assigned[1].is_slur);
+    // `sun` (S AH1 N) is primary stress on the AH.
+    assert_eq!(assigned[0].stress, SyllableStress::Primary);
+    assert_eq!(assigned[1].stress, assigned[0].stress);
+}
+
+#[test]
+fn stress_velocity_factor_orders_correctly() {
+    // Primary > Secondary > None — the modulation must keep that order
+    // so primary-stress syllables always sing louder than unstressed
+    // schwas under the same baseline velocity.
+    assert!(
+        SyllableStress::Primary.velocity_factor() > SyllableStress::Secondary.velocity_factor()
+    );
+    assert!(SyllableStress::Secondary.velocity_factor() > SyllableStress::None.velocity_factor());
 }
 
 #[test]

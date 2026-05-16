@@ -615,6 +615,12 @@ impl VocalRollCanvas<'_> {
         // Rendered f0 contour overlay (portamento + vibrato).
         self.draw_pitch_curve(frame, grid_x, grid_w, grid_top, grid_h);
 
+        // Lexical-stress overlay — step curve floating above each note
+        // showing CMU's stress mark for that syllable. Same visual idea
+        // as the pitch curve but in ACCENT so the two can sit on top of
+        // each other without confusion.
+        self.draw_stress_curve(frame, grid_x, grid_w, grid_top, grid_h, &assigned);
+
         // Piano keyboard
         self.draw_keyboard(frame, grid_top, grid_h);
 
@@ -1068,6 +1074,95 @@ impl VocalRollCanvas<'_> {
                 .with_color(Color::from_rgba(1.0, 0.95, 0.78, 0.85))
                 .with_width(1.2),
         );
+    }
+
+    /// Lexical-stress contour overlay. One horizontal step segment per
+    /// note, lifted above the note body by an amount proportional to
+    /// the syllable's CMU stress (primary > secondary > none). Drawn in
+    /// ACCENT so it reads distinctly from the warm-cream pitch curve.
+    /// Slurs inherit their parent syllable's stress, so the overlay
+    /// reads as a single continuous level across a melisma.
+    fn draw_stress_curve(
+        &self,
+        frame: &mut Frame,
+        grid_x: f32,
+        grid_w: f32,
+        grid_top: f32,
+        grid_h: f32,
+        assigned: &[g2p::AssignedSyllable],
+    ) {
+        if self.clip.notes.is_empty() {
+            return;
+        }
+        // Vertical lift per stress level, in pixels above the note top.
+        // Tight band so the overlay never collides with the slur arcs
+        // (which sit ~10 px above the higher of two notes).
+        let stress_lift = |s: g2p::SyllableStress| -> f32 {
+            match s {
+                g2p::SyllableStress::Primary => 8.0,
+                g2p::SyllableStress::Secondary => 4.0,
+                g2p::SyllableStress::None => 1.0,
+            }
+        };
+        let color_for = |s: g2p::SyllableStress| -> Color {
+            match s {
+                g2p::SyllableStress::Primary => Color { a: 0.90, ..theme::ACCENT },
+                g2p::SyllableStress::Secondary => Color { a: 0.65, ..theme::ACCENT_SOFT },
+                g2p::SyllableStress::None => Color { a: 0.30, ..theme::ACCENT_SOFT },
+            }
+        };
+        let mut prev_anchor: Option<(f32, f32, g2p::SyllableStress)> = None;
+        for (i, n) in self.clip.notes.iter().enumerate() {
+            let Some(a) = assigned.get(i) else { break };
+            let Some(y_local) = self.note_to_y(n.note, grid_h) else {
+                prev_anchor = None;
+                continue;
+            };
+            let x0 = grid_x + self.tick_to_x(n.start_tick);
+            let x1 = grid_x + self.tick_to_x(n.start_tick + n.duration_ticks);
+            if x0 > grid_x + grid_w {
+                break;
+            }
+            let y_top = grid_top + y_local;
+            // Clamp the lift so we never draw outside the grid band.
+            let y_seg = (y_top - stress_lift(a.stress)).max(grid_top + 1.0);
+            // Step connector: vertical line from the previous note's
+            // segment to this one's, if they share the same horizontal
+            // tick range (back-to-back). Skips when there's a gap or
+            // we wrapped to a different row.
+            if let Some((px, py, _)) = prev_anchor {
+                if (x0 - px).abs() < 1.5 && (y_seg - py).abs() > 0.5 {
+                    let v = Path::line(Point::new(x0, py), Point::new(x0, y_seg));
+                    frame.stroke(
+                        &v,
+                        Stroke::default()
+                            .with_color(Color { a: 0.40, ..theme::ACCENT_SOFT })
+                            .with_width(1.0),
+                    );
+                }
+            }
+            let seg = Path::line(Point::new(x0, y_seg), Point::new(x1, y_seg));
+            frame.stroke(
+                &seg,
+                Stroke::default().with_color(color_for(a.stress)).with_width(1.4),
+            );
+            // Tick mark at the segment's start so primary-stress notes
+            // get an extra visual punch (matches how scores mark
+            // accented beats with a wedge).
+            if a.stress == g2p::SyllableStress::Primary && !a.is_slur {
+                let tick = Path::line(
+                    Point::new(x0, y_seg - 2.0),
+                    Point::new(x0, y_seg + 2.0),
+                );
+                frame.stroke(
+                    &tick,
+                    Stroke::default()
+                        .with_color(Color { a: 0.95, ..theme::ACCENT })
+                        .with_width(1.2),
+                );
+            }
+            prev_anchor = Some((x1, y_seg, a.stress));
+        }
     }
 
     fn draw_keyboard(&self, frame: &mut Frame, grid_top: f32, grid_h: f32) {
