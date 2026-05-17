@@ -20,7 +20,6 @@ editor = [
     "dep:sha2",
     "dep:base64",
     "dep:rand",
-    "dep:url",
     "dep:dirs",
     "dep:webbrowser",
 ]
@@ -44,7 +43,6 @@ ureq = { version = "2.10", features = ["json", "tls"], optional = true }
 tiny_http = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
 base64 = { version = "0.22", optional = true }
-rand = { version = "0.8", optional = true }
-url = { version = "2.5", optional = true }
+rand = { workspace = true, optional = true }
 dirs = { workspace = true, optional = true }
 webbrowser = { version = "1", optional = true }

@@ -143,7 +143,8 @@ pub(super) fn render_timeline_block(
                                 // are Some.
                                 let mut slots: [std::mem::MaybeUninit<StereoBufMut<'_>>;
                                     MAX_PLUGIN_OUTPUT_PORTS] =
-                                    unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+                                    [const { std::mem::MaybeUninit::uninit() };
+                                        MAX_PLUGIN_OUTPUT_PORTS];
                                 for i in 0..port_count {
                                     slots[i].write(views[i].take().unwrap());
                                 }

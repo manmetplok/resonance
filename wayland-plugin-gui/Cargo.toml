@@ -21,7 +21,7 @@ glow = "0.17"
 # (layouts collapse, text is invisible). egui_glow's default features pull in
 # egui-winit which we don't want, so we disable them and wire glow manually.
 egui.workspace = true
-egui_glow = { version = "0.34", default-features = false }
+egui_glow.workspace = true
 
 # Plugin param types for widget helpers.
 resonance-plugin = { path = "../resonance-plugin" }

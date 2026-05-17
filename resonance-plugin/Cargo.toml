@@ -12,4 +12,4 @@ clack-plugin = { workspace = true }
 clack-extensions = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
-iced = { version = "0.13", optional = true }
+iced = { workspace = true, optional = true }

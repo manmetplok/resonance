@@ -28,7 +28,7 @@ mod scope_view;
 mod theme;
 #[cfg(feature = "editor")]
 mod tone3000_panel;
-mod tuner_view;
+pub mod tuner_view;
 
 use crate::tone3000::worker::WorkerHandle;
 use tone3000_panel::Tone3000PanelState;

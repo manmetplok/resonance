@@ -35,10 +35,8 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, viz: &MasteringViz, targe
         egui::Stroke::new(1.0, theme::GOOD),
     );
 
-    let history = viz.lufs_history.lock();
     let n = crate::viz::LUFS_HISTORY_LEN;
-    let samples: Vec<f32> = history.iter_chrono().collect();
-    drop(history);
+    let samples: Vec<f32> = viz.lufs_history.iter_chrono().collect();
 
     if samples.is_empty() {
         return;

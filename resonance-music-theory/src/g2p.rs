@@ -572,59 +572,71 @@ fn parse_phoneme_block(inner: &str) -> Vec<Vec<&'static str>> {
     groups
 }
 
+/// ARPAbet phoneme inventory the SVS pipeline understands. Keys are the
+/// lowercase canonical forms; the value is the same `&'static str` so we
+/// can hand it back as the canonical form after a case-insensitive
+/// lookup. `phf_set` would be nicer, but `phf::Set::get_key` returns
+/// `&&'static str` which is awkward to thread through callers — a
+/// self-mapping `phf::Map` gives us a clean `Option<&'static str>`.
+static ARPABET_INVENTORY: phf::Map<&'static str, &'static str> = phf::phf_map! {
+    "aa" => "aa",
+    "ae" => "ae",
+    "ah" => "ah",
+    "ax" => "ax",
+    "ao" => "ao",
+    "aw" => "aw",
+    "ay" => "ay",
+    "eh" => "eh",
+    "er" => "er",
+    "ey" => "ey",
+    "ih" => "ih",
+    "iy" => "iy",
+    "ow" => "ow",
+    "oy" => "oy",
+    "uh" => "uh",
+    "uw" => "uw",
+    "b" => "b",
+    "ch" => "ch",
+    "d" => "d",
+    "dh" => "dh",
+    "f" => "f",
+    "g" => "g",
+    "hh" => "hh",
+    "jh" => "jh",
+    "k" => "k",
+    "l" => "l",
+    "m" => "m",
+    "n" => "n",
+    "ng" => "ng",
+    "p" => "p",
+    "r" => "r",
+    "s" => "s",
+    "sh" => "sh",
+    "t" => "t",
+    "th" => "th",
+    "v" => "v",
+    "w" => "w",
+    "y" => "y",
+    "z" => "z",
+    "zh" => "zh",
+};
+
 /// Validate a user-typed phoneme symbol against the ARPAbet inventory
 /// the SVS pipeline understands, returning the canonical `&'static str`
 /// form. Accepts case-insensitive input and the silence markers
 /// (`AP`, `SP`). Returns `None` for unknown symbols so callers can
 /// silently drop typos rather than crash.
 fn canonical_phoneme(sym: &str) -> Option<&'static str> {
-    let lower = sym.to_lowercase();
-    match lower.as_str() {
-        "aa" => Some("aa"),
-        "ae" => Some("ae"),
-        "ah" => Some("ah"),
-        "ax" => Some("ax"),
-        "ao" => Some("ao"),
-        "aw" => Some("aw"),
-        "ay" => Some("ay"),
-        "eh" => Some("eh"),
-        "er" => Some("er"),
-        "ey" => Some("ey"),
-        "ih" => Some("ih"),
-        "iy" => Some("iy"),
-        "ow" => Some("ow"),
-        "oy" => Some("oy"),
-        "uh" => Some("uh"),
-        "uw" => Some("uw"),
-        "b" => Some("b"),
-        "ch" => Some("ch"),
-        "d" => Some("d"),
-        "dh" => Some("dh"),
-        "f" => Some("f"),
-        "g" => Some("g"),
-        "hh" => Some("hh"),
-        "jh" => Some("jh"),
-        "k" => Some("k"),
-        "l" => Some("l"),
-        "m" => Some("m"),
-        "n" => Some("n"),
-        "ng" => Some("ng"),
-        "p" => Some("p"),
-        "r" => Some("r"),
-        "s" => Some("s"),
-        "sh" => Some("sh"),
-        "t" => Some("t"),
-        "th" => Some("th"),
-        "v" => Some("v"),
-        "w" => Some("w"),
-        "y" => Some("y"),
-        "z" => Some("z"),
-        "zh" => Some("zh"),
-        // Silence markers (uppercase by convention).
-        _ if sym == "AP" => Some("AP"),
-        _ if sym == "SP" => Some("SP"),
-        _ => None,
+    // Silence markers are uppercase-only by convention; check the
+    // original input before lowercasing so `"ap"` / `"sp"` don't sneak
+    // through as silence.
+    if sym == "AP" {
+        return Some("AP");
     }
+    if sym == "SP" {
+        return Some("SP");
+    }
+    ARPABET_INVENTORY.get(sym.to_lowercase().as_str()).copied()
 }
 
 /// Resolve a draft into one phoneme list per syllable. For each

@@ -4,7 +4,7 @@
 //! to weighted successor lists. The [`TableRegistry`] holds named tables
 //! that generators look up at generation time.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +15,12 @@ use super::degree::Degree;
 /// Keys are conditioning histories whose length equals [`order`](Self::order);
 /// values are weighted successors. Weights do not need to sum to 1.0 --
 /// sampling normalizes on the fly.
+///
+/// `transitions` is a `BTreeMap` rather than a `HashMap` so iteration
+/// order is deterministic across runs — the seeded-RNG paths in
+/// `markov.rs` walk this map when no exact-length history match is
+/// found and would otherwise produce different progressions across
+/// builds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarkovTable {
     /// Human-readable identifier used to look up the table in a
@@ -26,14 +32,14 @@ pub struct MarkovTable {
     pub order: u8,
     /// Transition map. Key = conditioning history of length `order`,
     /// value = weighted successor degrees.
-    pub transitions: HashMap<Vec<Degree>, Vec<(Degree, f32)>>,
+    pub transitions: BTreeMap<Vec<Degree>, Vec<(Degree, f32)>>,
 }
 
 impl MarkovTable {
     /// All unique degrees that appear in this table (as history keys or
     /// as successor values), sorted for deterministic display order.
     pub fn degrees(&self) -> Vec<Degree> {
-        let mut set = std::collections::HashSet::new();
+        let mut set = BTreeSet::new();
         for (key, transitions) in &self.transitions {
             for d in key {
                 set.insert(*d);
@@ -42,9 +48,7 @@ impl MarkovTable {
                 set.insert(d);
             }
         }
-        let mut v: Vec<Degree> = set.into_iter().collect();
-        v.sort();
-        v
+        set.into_iter().collect()
     }
 }
 
@@ -156,7 +160,7 @@ fn build_order2(
     overrides: Vec<TableRow>,
 ) -> MarkovTable {
     let base_map: HashMap<Degree, Vec<(Degree, f32)>> = base.iter().cloned().collect();
-    let mut transitions = HashMap::new();
+    let mut transitions: BTreeMap<Vec<Degree>, Vec<(Degree, f32)>> = BTreeMap::new();
 
     // Fill every (A, B) pair with B's base distribution.
     for &a in degrees {
@@ -188,7 +192,7 @@ fn build_order2(
 /// gravity, clear dominant/subdominant roles, and a heavy vi weighting
 /// ensure progressions feel "singable" and hook-friendly.
 pub fn builtin_pop() -> MarkovTable {
-    let transitions: HashMap<Vec<Degree>, Vec<(Degree, f32)>> = [
+    let transitions: BTreeMap<Vec<Degree>, Vec<(Degree, f32)>> = [
         t1(
             I,
             &[(IV, 0.30), (V, 0.25), (VI, 0.25), (II, 0.10), (III, 0.10)],
@@ -230,7 +234,7 @@ pub fn builtin_pop() -> MarkovTable {
 /// and film-score writing where you want harmonic interest without
 /// functional gravity.
 pub fn builtin_modal() -> MarkovTable {
-    let transitions: HashMap<Vec<Degree>, Vec<(Degree, f32)>> = [
+    let transitions: BTreeMap<Vec<Degree>, Vec<(Degree, f32)>> = [
         t1(
             I,
             &[
@@ -341,7 +345,7 @@ pub fn builtin_modal() -> MarkovTable {
 /// dreamy quality. Think Explosions in the Sky or Mogwai: long builds
 /// over slowly shifting harmony.
 pub fn builtin_post_rock() -> MarkovTable {
-    let transitions: HashMap<Vec<Degree>, Vec<(Degree, f32)>> = [
+    let transitions: BTreeMap<Vec<Degree>, Vec<(Degree, f32)>> = [
         t1(
             I,
             &[
@@ -440,7 +444,7 @@ pub fn builtin_post_rock() -> MarkovTable {
 /// iv (`IV_MIN`), V (`V`), VI (`VI_MAJ`), VII (`VII_MAJ`). These are
 /// the natural degrees of a minor scale without the `flat` modifier.
 pub fn builtin_metal() -> MarkovTable {
-    let transitions: HashMap<Vec<Degree>, Vec<(Degree, f32)>> = [
+    let transitions: BTreeMap<Vec<Degree>, Vec<(Degree, f32)>> = [
         t1(
             IMIN,
             &[

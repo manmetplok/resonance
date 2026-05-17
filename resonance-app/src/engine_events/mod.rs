@@ -2,13 +2,12 @@
 //!
 //! Each `AudioEvent` variant is routed to a per-domain handler module.
 //! The dispatch itself stays thin so it's easy to find which file owns
-//! a given event. Helpers shared by multiple handlers (`finalize_bounce`,
-//! `apply_preset_to_track`, `finish_preset_save`, `try_finish_save`)
-//! live in this file because they cross domains.
+//! a given event.
 
 mod clips;
 mod midi;
 mod plugins;
+mod presets;
 mod project_io;
 mod tracks;
 mod transport;
@@ -17,8 +16,6 @@ use iced::Task;
 use resonance_audio::types::*;
 
 use crate::message::*;
-use crate::project;
-use crate::state::*;
 use crate::Resonance;
 
 impl Resonance {
@@ -258,6 +255,21 @@ impl Resonance {
                 plugins::master_fx_bypass_changed(self, bypassed)
             }
 
+            // Peak meter snapshot — drive the VU decay+update from the
+            // engine's view of the world. See `update::viewport`.
+            E::PeakSnapshot {
+                track_peaks,
+                bus_peaks,
+                master_peak_l,
+                master_peak_r,
+            } => crate::update::viewport::apply_peak_snapshot(
+                self,
+                track_peaks,
+                bus_peaks,
+                master_peak_l,
+                master_peak_r,
+            ),
+
             // Project save / load — these return a Task<Message>.
             E::ClipsSavedToProjectDir { clip_files } => {
                 return project_io::clips_saved(self, clip_files)
@@ -269,195 +281,4 @@ impl Resonance {
         }
         Task::none()
     }
-}
-
-// ---------------------------------------------------------------------------
-// Cross-domain helpers
-// ---------------------------------------------------------------------------
-
-/// Shared post-bounce wrap-up: mute the source, send the engine the
-/// matching `SetTrackMute`, and reorder the bounce target so it sits
-/// right under the source. Called from both the offline
-/// (`TrackBouncedToAudio`) and realtime (`TrackBounceCompleted`)
-/// completion handlers.
-pub(super) fn finalize_bounce(
-    r: &mut Resonance,
-    source_track_id: TrackId,
-    target_track_id: TrackId,
-) {
-    if let Some(track) = r
-        .registry
-        .tracks
-        .iter_mut()
-        .find(|t| t.id == source_track_id)
-    {
-        track.muted = true;
-    }
-    r.engine.send(AudioCommand::SetTrackMute {
-        track_id: source_track_id,
-        muted: true,
-    });
-    let source_order = r
-        .registry
-        .tracks
-        .iter()
-        .find(|t| t.id == source_track_id)
-        .map(|t| t.order);
-    if let Some(src_order) = source_order {
-        // Bump every track at order > src_order by 1 so we can slot the
-        // new track at src_order + 1.
-        for t in r.registry.tracks.iter_mut() {
-            if t.id != target_track_id && t.order > src_order {
-                t.order += 1;
-            }
-        }
-        if let Some(t) = r
-            .registry
-            .tracks
-            .iter_mut()
-            .find(|t| t.id == target_track_id)
-        {
-            t.order = src_order + 1;
-        }
-        r.registry.next_track_order += 1;
-        // We just rewrote `.order` on multiple tracks; restore the
-        // sorted-by-order invariant the view layer relies on.
-        r.registry.resort_tracks();
-    }
-}
-
-/// Apply a preset's settings and plugin chain to a newly created track.
-/// Called from the `TrackAdded`/`InstrumentTrackAdded` handlers when
-/// `pending_track_preset` was set.
-pub(super) fn apply_preset_to_track(
-    r: &mut Resonance,
-    track: &mut TrackState,
-    preset: &crate::presets::TrackPreset,
-) {
-    track.name = preset.name.clone();
-    track.volume = preset.volume;
-    track.pan = preset.pan;
-    track.mono = preset.mono;
-    track.instrument_type = preset.instrument_type;
-    track.instrument_icon = preset.instrument_icon;
-    track.role = preset.role;
-
-    let track_id = track.id;
-
-    // Push mixer settings to the engine.
-    r.engine.send(AudioCommand::SetTrackVolume {
-        track_id,
-        volume: crate::util::db_to_gain(preset.volume),
-    });
-    r.engine.send(AudioCommand::SetTrackPan {
-        track_id,
-        pan: preset.pan,
-    });
-    r.engine.send(AudioCommand::SetTrackMono {
-        track_id,
-        mono: preset.mono,
-    });
-
-    // Add preset plugins to the track.
-    for pp in &preset.plugins {
-        r.engine.send(AudioCommand::AddPlugin {
-            track_id,
-            clap_file_path: pp.clap_file_path.clone(),
-            clap_plugin_id: pp.clap_plugin_id.clone(),
-            id_hint: None,
-        });
-    }
-
-    // Plugin state loading is deferred: we don't know the instance ids
-    // yet (they're assigned by the engine). The PluginAdded event will
-    // fire for each plugin. We store the preset plugin states so we can
-    // match them up. For now, state loading for preset plugins relies
-    // on the plugin states being sent after the AddPlugin command
-    // returns via PluginAdded — we store them for deferred application.
-    //
-    // We stash the pending states in a simple list keyed by the order
-    // (index) in the preset's plugin chain, so when PluginAdded fires
-    // for this track we can pop the next state and apply it.
-    if preset.plugins.iter().any(|p| p.state.is_some()) {
-        let states: Vec<Option<Vec<u8>>> =
-            preset.plugins.iter().map(|p| p.state.clone()).collect();
-        r.pending_preset_plugin_states = Some((track_id, states));
-    }
-}
-
-/// Complete a "Save track as preset" operation. Builds a `TrackPreset`
-/// from the track's current state and the freshly-captured plugin
-/// state blobs, then writes it to disk.
-pub(super) fn finish_preset_save(r: &mut Resonance, track_id: TrackId) {
-    let track = match r.registry.tracks.iter().find(|t| t.id == track_id) {
-        Some(t) => t,
-        None => return,
-    };
-
-    let plugins: Vec<crate::presets::PresetPlugin> = track
-        .plugins
-        .iter()
-        .map(|p| crate::presets::PresetPlugin {
-            plugin_name: p.plugin_name.clone(),
-            clap_plugin_id: p.clap_plugin_id.clone(),
-            clap_file_path: p.clap_file_path.clone(),
-            state: r.plugin_state_cache.get(&p.instance_id).cloned(),
-        })
-        .collect();
-
-    let preset = crate::presets::TrackPreset {
-        name: track.name.clone(),
-        track_type: match track.track_type {
-            TrackType::Audio => "audio".to_string(),
-            TrackType::Instrument => "instrument".to_string(),
-            TrackType::Vocal => "vocal".to_string(),
-        },
-        volume: track.volume,
-        pan: track.pan,
-        mono: track.mono,
-        instrument_type: track.instrument_type,
-        instrument_icon: track.instrument_icon,
-        role: track.role,
-        plugins,
-    };
-
-    match crate::presets::save_user_preset(&preset) {
-        Ok(_) => {
-            r.user_presets = crate::presets::load_user_presets();
-        }
-        Err(e) => {
-            r.error_message = Some(format!("Save preset: {e}"));
-        }
-    }
-}
-
-pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
-    let both_done = r
-        .io
-        .save_state
-        .as_ref()
-        .map(|s| s.clips_done && s.plugins_done)
-        .unwrap_or(false);
-
-    if !both_done {
-        return Task::none();
-    }
-
-    let save = r.io.save_state.take().unwrap();
-    let project_file = crate::update::build_project_file(r);
-    let path = save.path.clone();
-    let plugin_states = save.plugin_states;
-
-    // Snapshot MIDI clips by id so the async save task can write them
-    // as `.mid` files without touching `Resonance`.
-    let midi_clips: Vec<(ClipId, Vec<MidiNote>)> = r
-        .midi_clips
-        .iter()
-        .map(|mc| (mc.id, mc.notes.clone()))
-        .collect();
-
-    Task::perform(
-        async move { project::save_project(&path, &project_file, &plugin_states, &midi_clips) },
-        |r| Message::ProjectIo(ProjectIoMessage::ProjectSaved(r)),
-    )
 }

@@ -4,17 +4,19 @@
 //! The aggregate scalar snapshot uses [`arc_swap::ArcSwap`] so the audio
 //! thread can publish a consistent copy of every meter in a single swap,
 //! avoiding torn reads across 12 independent atomics. The two history
-//! rings (LUFS-momentary trace and true-peak trace) follow the compressor
-//! pattern — uncontended `parking_lot::Mutex` guarding a `[f32; N]`.
+//! rings (LUFS-momentary trace and true-peak trace) use a wait-free SPSC
+//! pattern — `[AtomicU32; N]` for the f32 samples plus an `AtomicUsize`
+//! write index. The audio thread is the sole producer; the editor reads
+//! at its own cadence and tolerates the one-frame skew inherent in the
+//! unsynchronised hand-off.
 //!
 //! The spectrum curve is fetched directly from the metering crate's
 //! [`SpectrumHandle`], which is itself wait-free.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use parking_lot::Mutex;
 use resonance_metering::{MeterSnapshot, SpectrumHandle};
 
 use crate::assistant::Assistant;
@@ -25,12 +27,14 @@ pub const LUFS_HISTORY_LEN: usize = 512;
 /// How many true-peak hold samples to keep. ~5 s at 17 Hz.
 pub const TP_HISTORY_LEN: usize = 84;
 
-/// Fixed-length ring buffer for scalar history traces. Used by the
-/// editor to draw rolling meter-vs-time plots. Generic over the length
-/// so the LUFS and TP traces share one implementation.
+/// Wait-free SPSC ring of f32 samples. The audio thread writes via
+/// [`push`](Self::push); the editor thread iterates via
+/// [`iter_chrono`](Self::iter_chrono). Each sample is a single aligned
+/// `AtomicU32` load/store so values are never torn; reads may straddle
+/// a single producer update which is acceptable for a meter trace.
 pub struct HistoryRing<const N: usize> {
-    samples: [f32; N],
-    write_pos: usize,
+    samples: [AtomicU32; N],
+    write_pos: AtomicUsize,
 }
 
 impl<const N: usize> HistoryRing<N> {
@@ -38,21 +42,30 @@ impl<const N: usize> HistoryRing<N> {
     /// `-inf` so an empty ring renders as silence; TP traces want the
     /// floor in dBTP (−120 dB) for the same reason.
     pub fn new(initial: f32) -> Self {
+        let bits = initial.to_bits();
         Self {
-            samples: [initial; N],
-            write_pos: 0,
+            samples: std::array::from_fn(|_| AtomicU32::new(bits)),
+            write_pos: AtomicUsize::new(0),
         }
     }
 
-    pub fn push(&mut self, v: f32) {
-        self.samples[self.write_pos] = v;
-        self.write_pos = (self.write_pos + 1) % N;
+    /// Wait-free producer. Audio-thread safe; no allocation, no locks.
+    pub fn push(&self, v: f32) {
+        let pos = self.write_pos.load(Ordering::Relaxed);
+        self.samples[pos].store(v.to_bits(), Ordering::Relaxed);
+        let next = if pos + 1 == N { 0 } else { pos + 1 };
+        // Release so consumer's Acquire on write_pos observes the sample store.
+        self.write_pos.store(next, Ordering::Release);
     }
 
     /// Iterate the ring in chronological order (oldest sample first).
+    /// Wait-free consumer.
     pub fn iter_chrono(&self) -> impl Iterator<Item = f32> + '_ {
-        let start = self.write_pos;
-        (0..N).map(move |i| self.samples[(start + i) % N])
+        let start = self.write_pos.load(Ordering::Acquire);
+        (0..N).map(move |i| {
+            let idx = (start + i) % N;
+            f32::from_bits(self.samples[idx].load(Ordering::Relaxed))
+        })
     }
 }
 
@@ -65,8 +78,8 @@ pub type TpHistoryRing = HistoryRing<TP_HISTORY_LEN>;
 pub struct MasteringViz {
     pub snapshot: ArcSwap<MeterSnapshot>,
     pub spectrum: parking_lot::RwLock<Option<SpectrumHandle>>,
-    pub lufs_history: Mutex<LufsHistoryRing>,
-    pub tp_history: Mutex<TpHistoryRing>,
+    pub lufs_history: LufsHistoryRing,
+    pub tp_history: TpHistoryRing,
     pub assistant: Assistant,
     /// Live gain-reduction in dB for the glue compressor (0 = no
     /// reduction, positive = attenuation). Published once per block
@@ -81,8 +94,8 @@ impl MasteringViz {
         Arc::new(Self {
             snapshot: ArcSwap::from_pointee(MeterSnapshot::default()),
             spectrum: parking_lot::RwLock::new(None),
-            lufs_history: Mutex::new(LufsHistoryRing::new(f32::NEG_INFINITY)),
-            tp_history: Mutex::new(TpHistoryRing::new(-120.0)),
+            lufs_history: LufsHistoryRing::new(f32::NEG_INFINITY),
+            tp_history: TpHistoryRing::new(-120.0),
             // Placeholder sample rate — the plugin's `initialize()`
             // calls `set_sample_rate` before the first audio block.
             assistant: Assistant::new(48_000.0),

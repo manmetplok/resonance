@@ -5,7 +5,7 @@ use iced::Task;
 use crate::message::{Message, ViewportMessage};
 use crate::theme;
 use crate::Resonance;
-use resonance_audio::types::AudioCommand;
+use resonance_audio::types::{AudioCommand, BusId, TrackId};
 
 /// Route a `ViewportMessage` to the appropriate handler.
 pub fn handle(r: &mut Resonance, m: ViewportMessage) -> Task<Message> {
@@ -53,8 +53,12 @@ fn refresh_midi_devices_if_stale(r: &mut Resonance) {
     r.engine.send(AudioCommand::ListMidiOutputDevices);
 }
 
+/// Per-tick VU step: decay current levels and ask the engine for a
+/// fresh peak snapshot. The reply arrives on a later tick as
+/// `AudioEvent::PeakSnapshot` and is folded in by `apply_peak_snapshot`.
+/// Splitting the read across two ticks is fine for a meter; it keeps the
+/// GUI thread from contending on engine RwLocks.
 fn update_vu_meters(r: &mut Resonance) {
-    let (track_peaks, bus_peaks, master_peak_l, master_peak_r) = r.engine.read_and_clear_peaks();
     for track in &mut r.registry.tracks {
         track.level_l *= theme::PEAK_DECAY;
         track.level_r *= theme::PEAK_DECAY;
@@ -63,6 +67,21 @@ fn update_vu_meters(r: &mut Resonance) {
         bus.level_l *= theme::PEAK_DECAY;
         bus.level_r *= theme::PEAK_DECAY;
     }
+    r.master_level_l *= theme::PEAK_DECAY;
+    r.master_level_r *= theme::PEAK_DECAY;
+    r.engine.send(AudioCommand::PollPeaks);
+}
+
+/// Fold a peak snapshot from the engine into the VU state. Each level
+/// rises to the new peak immediately and decays only via the per-tick
+/// pass in `update_vu_meters`.
+pub fn apply_peak_snapshot(
+    r: &mut Resonance,
+    track_peaks: Vec<(TrackId, f32, f32)>,
+    bus_peaks: Vec<(BusId, f32, f32)>,
+    master_peak_l: f32,
+    master_peak_r: f32,
+) {
     for (track_id, pl, pr) in track_peaks {
         r.with_track_mut(track_id, |t| {
             if pl > t.level_l {
@@ -83,8 +102,12 @@ fn update_vu_meters(r: &mut Resonance) {
             }
         });
     }
-    r.master_level_l = (r.master_level_l * theme::PEAK_DECAY).max(master_peak_l);
-    r.master_level_r = (r.master_level_r * theme::PEAK_DECAY).max(master_peak_r);
+    if master_peak_l > r.master_level_l {
+        r.master_level_l = master_peak_l;
+    }
+    if master_peak_r > r.master_level_r {
+        r.master_level_r = master_peak_r;
+    }
 }
 
 /// During playback, update the transport BPM display from the tempo

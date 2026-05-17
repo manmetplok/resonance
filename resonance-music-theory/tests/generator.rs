@@ -1,6 +1,6 @@
 //! Tests for the generator module.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use resonance_music_theory::generator::degree::Degree;
 use resonance_music_theory::generator::table::TableRegistry;
@@ -207,7 +207,7 @@ fn end_unreachable_returns_error() {
     // Requesting end = IV is unreachable.
     let mut reg = TableRegistry::new();
     use resonance_music_theory::generator::table::MarkovTable;
-    let mut transitions = HashMap::new();
+    let mut transitions: BTreeMap<Vec<Degree>, Vec<(Degree, f32)>> = BTreeMap::new();
     transitions.insert(vec![Degree::I], vec![(Degree::I, 1.0)]);
     reg.register(MarkovTable {
         id: "single".to_string(),

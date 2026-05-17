@@ -1,6 +1,6 @@
 use resonance_drums::drum_map::{self, PAD_MAPPINGS};
 use resonance_drums::kit::{LoadedMicBank, LoadedPad, LoadedSample, OutputGroup, VelocityLayer};
-use resonance_drums::sampler::{pick_rr, pick_velocity_layer, DrumSampler, MAX_LAYERS};
+use resonance_drums::dsp::{pick_rr, pick_velocity_layer, DrumSampler, MAX_LAYERS};
 use resonance_drums::voice::VoiceState;
 
 // ---------------------------------------------------------------------------

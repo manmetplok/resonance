@@ -2,13 +2,13 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 
-use svs_poc::pipeline;
-use svs_poc::stages::common::ExecutionProvider;
+use resonance_svs::pipeline;
+use resonance_svs::stages::common::ExecutionProvider;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "svs-poc",
-    about = "Render a DiffSinger .ds file to WAV via ONNX (PoC).",
+    name = "resonance-svs",
+    about = "Render a DiffSinger .ds file to WAV via ONNX.",
     version
 )]
 struct Cli {
@@ -75,7 +75,7 @@ fn main() -> Result<()> {
         depth: cli.depth,
     };
 
-    let summary = pipeline::run(&args).context("running svs-poc pipeline")?;
+    let summary = pipeline::run(&args).context("running resonance-svs pipeline")?;
     tracing::info!(
         "wrote {} samples ({:.2}s @ {} Hz) to {}",
         summary.total_samples,

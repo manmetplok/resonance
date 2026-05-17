@@ -1,17 +1,12 @@
-# svs-poc — implementation notes
+# resonance-svs — implementation notes
 
 ## Reused Resonance types
 
-**None — by design.** The Resonance workspace was surveyed (see inventory
-below) but no Resonance crate type proved a clean fit for the PoC pipeline.
-The PoC therefore declares no Resonance crate as a dependency. This is the
-strictest possible interpretation of the one-way-coupling rule: removing the
-PoC is purely a `rm -rf experiments/svs-poc/` plus one workspace-members
-edit, with zero risk of orphaned references.
-
-A future real integration that wants to share code with this PoC would more
-likely *adapt* Resonance types to ONNX needs than reuse them as-is. The
-candidates I considered, and why each was rejected for this PoC:
+Initially designed as an isolated PoC; the crate now lives at the workspace
+root (`resonance-svs/`) and is consumed by `resonance-app::compose::vocal_svs`.
+Direct reuse of Resonance shared types remains intentionally limited — the
+crate depends only on `resonance-music-theory` (for G2P + phoneme handling).
+The candidates that were considered, and why each was rejected:
 
 | Candidate                           | Why not reused                                                                 |
 |-------------------------------------|--------------------------------------------------------------------------------|
@@ -30,10 +25,10 @@ workspace. Newly introduced to the dependency tree: `ort`, `ndarray`,
 
 ## Inventory of Resonance shared-code touches
 
-**Only one:** `Cargo.toml` workspace `members` list — added
-`"experiments/svs-poc"`. That's an additive change with no semantic effect on
-any other crate's build. No source file in any existing Resonance crate was
-modified. `Cargo.lock` updated automatically by `cargo build`.
+The crate is now a workspace member (`resonance-svs/`) and is consumed by
+`resonance-app::compose::vocal_svs`. It in turn depends on
+`resonance-music-theory` for G2P / phoneme handling. No other Resonance crate
+exposes types directly used in the synthesis pipeline.
 
 ## Pipeline shape
 

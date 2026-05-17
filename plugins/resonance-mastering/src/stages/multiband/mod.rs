@@ -13,8 +13,6 @@
 
 pub mod delay;
 pub mod lowpass;
-#[cfg(test)]
-mod tests;
 
 use crate::stages::glue_compressor::{GlueCompressor, GlueCompressorConfig};
 use delay::DelayLine;

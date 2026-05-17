@@ -5,13 +5,19 @@ use crate::voicing::{nearest_midi_above, nearest_midi_to};
 
 use super::{GeneratedNote, TimedChord};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
+    strum::Display, strum::IntoStaticStr, strum::EnumString,
+)]
 pub enum BassStyle {
     /// One note per chord, held for the chord's full duration.
+    #[strum(serialize = "Root hold")]
     RootHold,
     /// Root on every beat of the chord.
+    #[strum(serialize = "Root pulse")]
     RootPulse,
     /// Root / fifth alternating on each beat.
+    #[strum(serialize = "Root + fifth")]
     RootFifth,
     /// Root / octave alternating on each beat.
     Octave,
@@ -35,35 +41,27 @@ impl BassStyle {
     ];
 
     pub fn as_str(self) -> &'static str {
-        match self {
-            BassStyle::RootHold => "Root hold",
-            BassStyle::RootPulse => "Root pulse",
-            BassStyle::RootFifth => "Root + fifth",
-            BassStyle::Octave => "Octave",
-            BassStyle::Walking => "Walking",
-            BassStyle::Motif => "Motif",
-        }
-    }
-}
-
-impl std::fmt::Display for BassStyle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        self.into()
     }
 }
 
 /// How a `BassStyle::Motif` lane renders the section-shared motif.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default,
+    strum::Display, strum::IntoStaticStr, strum::EnumString,
+)]
 pub enum BassMotifMode {
     /// Same intervals + rhythm, anchored to the chord's bass note in the bass register.
     #[default]
+    #[strum(serialize = "Same intervals")]
     SameIntervals,
     /// Same intervals + rhythm but each note's duration ratio doubled — sits under the melody.
     Augmented,
     /// Use only the motif's rhythm + accents; pitches collapse to the chord's bass note.
+    #[strum(serialize = "Rhythm only")]
     RhythmOnly,
     /// Take only the motif's first note per chord, on the chord's bass note.
+    #[strum(serialize = "First note only")]
     FirstNoteOnly,
 }
 
@@ -76,30 +74,22 @@ impl BassMotifMode {
     ];
 
     pub fn as_str(self) -> &'static str {
-        match self {
-            BassMotifMode::SameIntervals => "Same intervals",
-            BassMotifMode::Augmented => "Augmented",
-            BassMotifMode::RhythmOnly => "Rhythm only",
-            BassMotifMode::FirstNoteOnly => "First note only",
-        }
-    }
-}
-
-impl std::fmt::Display for BassMotifMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        self.into()
     }
 }
 
 
 /// How a `BassStyle::Motif` lane chooses per-phrase transforms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default,
+    strum::Display, strum::IntoStaticStr, strum::EnumString,
+)]
 pub enum BassMotifPhrase {
     /// `Identity` for every phrase — predictable foundation.
     #[default]
     Simple,
     /// Same `Transform` per phrase as the melody picks (shared seed → in lockstep).
+    #[strum(serialize = "Mirror melody")]
     MirrorMelody,
     /// Restricted set: `Identity` or `Augment` only.
     Restricted,
@@ -113,17 +103,7 @@ impl BassMotifPhrase {
     ];
 
     pub fn as_str(self) -> &'static str {
-        match self {
-            BassMotifPhrase::Simple => "Simple",
-            BassMotifPhrase::MirrorMelody => "Mirror melody",
-            BassMotifPhrase::Restricted => "Restricted",
-        }
-    }
-}
-
-impl std::fmt::Display for BassMotifPhrase {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        self.into()
     }
 }
 

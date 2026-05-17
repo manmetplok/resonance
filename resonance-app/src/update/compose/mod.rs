@@ -18,11 +18,14 @@ use crate::message::Message;
 
 mod chord;
 mod chord_inspector;
+mod drum_voices;
 pub(crate) mod drum_groups;
 mod expand;
 mod lane_inspector;
 mod regenerate;
 mod section;
+mod vocal_lyrics;
+mod vocal_render;
 
 pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
     let time_sig_num = r.transport.time_sig_num;
@@ -166,7 +169,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         // Vocal audio render completion (dispatched from the background
         // SVS task that `lane_inspector::handle` queued).
         ComposeMessage::VocalAudioReady(data) => {
-            lane_inspector::handle_vocal_audio_ready(r, *data);
+            vocal_render::handle_vocal_audio_ready(r, *data);
         }
         ComposeMessage::VocalAudioFailed { error } => {
             r.compose.last_error = Some(error);

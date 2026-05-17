@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetch DiffSinger voicebanks + companion vocoders into
-# experiments/svs-poc/models/. Idempotent: skips downloads that already
+# resonance-svs/models/. Idempotent: skips downloads that already
 # exist. SHA256 is verified for any file we download fresh.
 #
 # Models:

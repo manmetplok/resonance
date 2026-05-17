@@ -51,7 +51,7 @@ pub fn build_session(model_path: &Path, ep: ExecutionProvider, device_index: i32
             #[cfg(not(feature = "rocm"))]
             {
                 tracing::warn!(
-                    "ROCm execution provider requested but svs-poc was built without `rocm` \
+                    "ROCm execution provider requested but resonance-svs was built without `rocm` \
                      feature; falling back to CPU. Rebuild with `--features rocm` to enable."
                 );
                 vec![CPUExecutionProvider::default().build()]

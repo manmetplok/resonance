@@ -1,7 +1,7 @@
 use resonance_drums::drum_map::{self, PAD_MAPPINGS};
 use resonance_drums::kit::{LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer};
 use resonance_drums::params::DrumParams;
-use resonance_drums::sampler::{DrumSampler, PortBuffers};
+use resonance_drums::dsp::{DrumSampler, PortBuffers};
 
 const NUM_PORTS: usize = 7;
 const TOMS_PORT: usize = 3;

@@ -13,7 +13,7 @@ pub(crate) const RECORDING_RING_SIZE: usize = 96000 * 2 * 10;
 pub(crate) use crate::limits::MAX_BUSSES;
 
 use indexmap::IndexMap;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64};
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -27,13 +27,22 @@ use crate::mixer;
 use crate::platform::{self, DeviceDirection};
 use crate::types::*;
 
-/// `(track_peaks, bus_peaks, master_peak_l, master_peak_r)` snapshot
-/// returned by `AudioEngine::read_and_clear_peaks`. Track / bus peaks
-/// are stored as `(id, left_peak, right_peak)` per element.
-pub type PeakSnapshot = (Vec<(TrackId, f32, f32)>, Vec<(BusId, f32, f32)>, f32, f32);
-
 mod bounce;
 mod bounce_common;
+
+/// Copy-on-write helper for the `ArcSwap<TempoMap>` shared with the
+/// audio thread. The audio side does wait-free `load()`s; this helper
+/// is the single-writer mutation path used by every engine-thread
+/// site that previously held a `RwLock<TempoMap>::write()`.
+pub(crate) fn rcu_tempo<F: FnOnce(&mut TempoMap)>(
+    map: &arc_swap::ArcSwap<TempoMap>,
+    f: F,
+) {
+    let mut new = (**map.load()).clone();
+    f(&mut new);
+    map.store(Arc::new(new));
+}
+
 mod bounce_realtime;
 mod busses;
 mod clips;
@@ -117,7 +126,13 @@ pub struct AudioEngine {
     midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>>,
     plugins:
         Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
-    tempo_map: Arc<parking_lot::RwLock<TempoMap>>,
+    tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    /// Monitor input ring buffer's producer. Wrapped in `Mutex` solely
+    /// so the same `Arc` can be handed to successive input-stream
+    /// builders across device changes — there is only ever one writer
+    /// thread (the cpal/PipeWire input callback) at a time, the engine
+    /// thread never `.lock()`s, and the callback always uses `try_lock`.
+    /// In steady state the CAS is uncontended.
     monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     sample_rate: u32,
     channels: usize,
@@ -214,8 +229,8 @@ impl AudioEngine {
         let clips_audio = Arc::clone(&clips);
         let midi_clips_audio = Arc::clone(&midi_clips);
 
-        let tempo_map: Arc<parking_lot::RwLock<TempoMap>> =
-            Arc::new(parking_lot::RwLock::new(TempoMap::default()));
+        let tempo_map: Arc<arc_swap::ArcSwap<TempoMap>> =
+            Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default()));
         let tempo_audio = Arc::clone(&tempo_map);
 
         // Plugin instances shared between engine thread and audio callback
@@ -458,27 +473,4 @@ impl AudioEngine {
         self.event_rx.clone()
     }
 
-    /// Read and clear peak levels for all tracks, busses, and master.
-    /// Returns (track_peaks, bus_peaks, master_peak_l, master_peak_r).
-    pub fn read_and_clear_peaks(&self) -> PeakSnapshot {
-        let track_levels = if let Some(guard) = self.tracks.try_read() {
-            guard
-                .values()
-                .map(|t| (t.id, t.swap_peak_l(), t.swap_peak_r()))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let bus_levels = if let Some(guard) = self.busses.try_read() {
-            guard
-                .values()
-                .map(|b| (b.id, b.swap_peak_l(), b.swap_peak_r()))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let ml = f32::from_bits(self.shared.master_peak_l_bits.swap(0, Ordering::Relaxed));
-        let mr = f32::from_bits(self.shared.master_peak_r_bits.swap(0, Ordering::Relaxed));
-        (track_levels, bus_levels, ml, mr)
-    }
 }

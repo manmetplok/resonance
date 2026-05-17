@@ -21,10 +21,11 @@ use crate::clap_host::{ClapBundle, SyncClapInstance};
 use crate::midi_clock::{
     ClockTempoTracker, MidiClockEvent, MidiClockReceiver, MidiClockSender,
 };
-use crate::midi_hardware::{LiveMidiEvent, MidiInputRegistry, MidiOutputRegistry};
+use crate::midi_hardware::LiveMidiEvent;
 use crate::recording::RecordingState;
 use crate::types::*;
 
+use super::midi::MidiHardwareState;
 use super::{
     bounce, bounce_realtime, busses, clips, master, midi, plugins, scan, tracks, transport,
     SharedState,
@@ -41,7 +42,7 @@ pub(crate) struct HandlerCtx<'a> {
     pub clips: &'a Arc<RwLock<Vec<AudioClip>>>,
     pub midi_clips: &'a Arc<RwLock<Vec<MidiClip>>>,
     pub plugins: &'a Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
-    pub tempo_map: &'a Arc<RwLock<TempoMap>>,
+    pub tempo_map: &'a Arc<arc_swap::ArcSwap<TempoMap>>,
     pub monitor_prod: &'a Arc<Mutex<ringbuf::HeapProd<f32>>>,
     pub event_tx: &'a Sender<AudioEvent>,
     pub cmd_tx_retry: &'a Sender<AudioCommand>,
@@ -79,34 +80,15 @@ pub(crate) struct HandlerState {
     /// whenever the app opens, creates, or saves-as a project.
     /// Recording and import refuse to run when this is `None`.
     pub project_dir: Option<PathBuf>,
-    /// Hardware MIDI input registry. Owns one open midir connection
-    /// per track configured for hardware input. The connection's
-    /// callback runs on a midir-spawned thread and feeds
-    /// [`LiveMidiEvent`]s into the engine thread via a bounded channel.
-    pub midi_inputs: MidiInputRegistry,
-    /// Hardware MIDI output registry. Refcounts midir output
-    /// connections across tracks that share the same physical port.
-    pub midi_outputs: MidiOutputRegistry,
+    /// Hardware MIDI state: input/output registries, outbound held
+    /// notes, and the device-list caches. Moved out of `HandlerState`
+    /// so the half-dozen MIDI-only fields don't crowd the rest of the
+    /// engine-thread bookkeeping.
+    pub midi_hw: MidiHardwareState,
     /// Per-track recording state for live MIDI. A fresh entry is
     /// created lazily on the first NoteOn for an armed instrument
     /// track during playback; cleared on transport stop.
     pub midi_recording: HashMap<TrackId, RecordingMidiState>,
-    /// Notes currently sounding on hardware MIDI outputs from
-    /// timeline playback. Keyed by `(track_id, note)`; value carries
-    /// the note's end-sample plus the channel it was sent on (so a
-    /// later channel change doesn't strand the stuck note).
-    pub midi_outbound_held: HashMap<(TrackId, u8), (u64, u8)>,
-    /// Last playhead seen by the timeline → output poll. The next
-    /// poll iterates notes whose start/end fall in
-    /// `(midi_outbound_last_playhead .. current_playhead]` and emits
-    /// NoteOn/NoteOff for them.
-    pub midi_outbound_last_playhead: u64,
-    /// Last MIDI input device list sent to the GUI. Compared against
-    /// the next enumeration so a steady-state poll (no plug events)
-    /// doesn't trigger a redundant `MidiInputDevicesListed` round-trip.
-    pub last_midi_input_devices: Vec<crate::midi_hardware::MidiDeviceInfo>,
-    /// Same idea, output side.
-    pub last_midi_output_devices: Vec<crate::midi_hardware::MidiDeviceInfo>,
     /// MIDI clock master (engine emits clock to a hardware device).
     pub midi_clock_sender: MidiClockSender,
     /// MIDI clock slave (engine receives clock from a hardware device).
@@ -145,7 +127,7 @@ pub(crate) fn engine_thread(
     master_arc: Arc<RwLock<MasterBus>>,
     clips_arc: Arc<RwLock<Vec<AudioClip>>>,
     midi_clips_arc: Arc<RwLock<Vec<MidiClip>>>,
-    tempo_map: Arc<RwLock<TempoMap>>,
+    tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     plugins_arc: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
     monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
     live_midi_tx: Sender<LiveMidiEvent>,
@@ -165,13 +147,8 @@ pub(crate) fn engine_thread(
         bundles: Vec::new(),
         active_imports: Arc::new(AtomicUsize::new(0)),
         project_dir: None,
-        midi_inputs: MidiInputRegistry::new(live_midi_tx),
-        midi_outputs: MidiOutputRegistry::new(),
+        midi_hw: MidiHardwareState::new(live_midi_tx),
         midi_recording: HashMap::new(),
-        midi_outbound_held: HashMap::new(),
-        midi_outbound_last_playhead: 0,
-        last_midi_input_devices: Vec::new(),
-        last_midi_output_devices: Vec::new(),
         midi_clock_sender: MidiClockSender::new(),
         midi_clock_receiver: MidiClockReceiver::new(clock_tx),
         midi_clock_tempo: ClockTempoTracker::default(),
@@ -260,23 +237,18 @@ pub(crate) fn engine_thread(
 
         // Sync the stable `bpm` field from the tempo event table so
         // the mixer (audio thread) always sees the correct tempo for
-        // the current playhead position. Probe under a read lock so
-        // we only escalate to write when the value actually moves —
-        // static-tempo projects skip the write entirely, and even
-        // variable-tempo ones only contend with the audio callback at
-        // tempo-change boundaries.
+        // the current playhead position. Read is wait-free via ArcSwap;
+        // only publish a new snapshot when the bpm actually moves.
         {
             let playhead = ctx
                 .shared
                 .playhead
                 .load(std::sync::atomic::Ordering::Relaxed);
-            let needs_write = ctx
-                .tempo_map
-                .read()
-                .sync_bpm_would_change(playhead, ctx.sample_rate);
-            if needs_write {
-                let mut tm = ctx.tempo_map.write();
-                tm.sync_bpm_at(playhead, ctx.sample_rate);
+            let current = ctx.tempo_map.load();
+            if current.sync_bpm_would_change(playhead, ctx.sample_rate) {
+                let mut new_tm = (**current).clone();
+                new_tm.sync_bpm_at(playhead, ctx.sample_rate);
+                ctx.tempo_map.store(Arc::new(new_tm));
             }
         }
 
@@ -456,18 +428,18 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         AudioCommand::SaveAllPluginStates => plugins::handle_save_all_plugin_states(ctx),
 
         // -- Bounce --
-        AudioCommand::BounceToWav { path } => bounce::to_wav(
+        AudioCommand::BounceToWav { path } => bounce::to_wav_spawn(
             path,
-            ctx.shared,
-            ctx.tracks,
-            ctx.busses,
-            ctx.master,
-            ctx.clips,
-            ctx.midi_clips,
-            ctx.plugins,
-            ctx.tempo_map,
+            Arc::clone(ctx.shared),
+            Arc::clone(ctx.tracks),
+            Arc::clone(ctx.busses),
+            Arc::clone(ctx.master),
+            Arc::clone(ctx.clips),
+            Arc::clone(ctx.midi_clips),
+            Arc::clone(ctx.plugins),
+            Arc::clone(ctx.tempo_map),
             ctx.sample_rate,
-            ctx.event_tx,
+            ctx.event_tx.clone(),
         ),
         AudioCommand::BounceTrackToAudio {
             source_track_id,
@@ -674,5 +646,44 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         AudioCommand::SetMasterFxBypass { bypassed } => {
             master::handle_set_master_fx_bypass(ctx, bypassed)
         }
+        AudioCommand::PollPeaks => handle_poll_peaks(ctx),
     }
+}
+
+/// Snapshot and clear every peak meter (per-track, per-bus, master L/R)
+/// and dispatch a `PeakSnapshot` event. Runs on the engine thread, so the
+/// `try_read` calls compete only with the audio callback's brief
+/// `try_read` — same window as the old direct getter but now off the GUI
+/// thread, and the GUI side reads its result via the regular event queue.
+fn handle_poll_peaks(ctx: &HandlerCtx) {
+    use std::sync::atomic::Ordering;
+
+    let track_peaks = ctx
+        .tracks
+        .try_read()
+        .map(|guard| {
+            guard
+                .values()
+                .map(|t| (t.id, t.swap_peak_l(), t.swap_peak_r()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let bus_peaks = ctx
+        .busses
+        .try_read()
+        .map(|guard| {
+            guard
+                .values()
+                .map(|b| (b.id, b.swap_peak_l(), b.swap_peak_r()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let master_peak_l = f32::from_bits(ctx.shared.master_peak_l_bits.swap(0, Ordering::Relaxed));
+    let master_peak_r = f32::from_bits(ctx.shared.master_peak_r_bits.swap(0, Ordering::Relaxed));
+    let _ = ctx.event_tx.send(AudioEvent::PeakSnapshot {
+        track_peaks,
+        bus_peaks,
+        master_peak_l,
+        master_peak_r,
+    });
 }

@@ -6,6 +6,7 @@ pub mod formatters;
 pub mod gui;
 pub mod param;
 pub mod plugin;
+pub mod presets;
 pub mod range;
 pub mod smoother;
 pub mod state;

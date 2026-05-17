@@ -103,6 +103,7 @@ fn editing_header<'a>(
 }
 
 mod chord;
+mod display_pick;
 mod drums;
 mod instrument;
 mod vocal;

@@ -1,4 +1,4 @@
-//! Bridge between the Compose vocal generator and the `svs-poc` DiffSinger
+//! Bridge between the Compose vocal generator and the `resonance-svs` DiffSinger
 //! pipeline. Given the MIDI notes produced by `derive_vocal` plus the lane's
 //! `VocalParams`, this module builds a one-segment DiffSinger score, runs
 //! the acoustic + vocoder ONNX pipeline, and writes a stereo 32-bit-float
@@ -22,8 +22,8 @@ use std::path::PathBuf;
 
 use resonance_audio::types::MidiNote;
 use resonance_music_theory::VocalParams;
-use svs_poc::pipeline::{self, PipelineArgs};
-use svs_poc::stages::common::ExecutionProvider;
+use resonance_svs::pipeline::{self, PipelineArgs};
+use resonance_svs::stages::common::ExecutionProvider;
 
 mod paths;
 mod post;

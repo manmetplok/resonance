@@ -280,4 +280,14 @@ pub enum AudioEvent {
     MidiClockTempoDetected {
         bpm: f32,
     },
+
+    /// Snapshot of peak meters for VU display, sent in response to
+    /// `AudioCommand::PollPeaks`. Replaces the older `read_and_clear_peaks`
+    /// getter so the GUI never reaches into engine state directly.
+    PeakSnapshot {
+        track_peaks: Vec<(TrackId, f32, f32)>,
+        bus_peaks: Vec<(BusId, f32, f32)>,
+        master_peak_l: f32,
+        master_peak_r: f32,
+    },
 }

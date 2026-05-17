@@ -16,7 +16,7 @@ pub(super) fn clips_saved(
         save.clip_files = clip_files.into_iter().collect();
         save.clips_done = true;
     }
-    super::try_finish_save(r)
+    try_finish_save(r)
 }
 
 pub(super) fn all_plugin_states_saved(
@@ -30,13 +30,51 @@ pub(super) fn all_plugin_states_saved(
     }
     // If a preset save was pending, build and save it now.
     if let Some(track_id) = r.pending_preset_save.take() {
-        super::finish_preset_save(r, track_id);
+        super::presets::finish_preset_save(r, track_id);
     }
     if let Some(ref mut save) = r.io.save_state {
         save.plugin_states = states;
         save.plugins_done = true;
     }
-    super::try_finish_save(r)
+    try_finish_save(r)
+}
+
+/// Emit the project-save `Task` once both the clip-save and plugin-state
+/// branches of the save have reported in. Lives here because the two
+/// `Saved` event handlers above are the only callers.
+pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
+    let both_done = r
+        .io
+        .save_state
+        .as_ref()
+        .map(|s| s.clips_done && s.plugins_done)
+        .unwrap_or(false);
+
+    if !both_done {
+        return Task::none();
+    }
+
+    let save = r
+        .io
+        .save_state
+        .take()
+        .expect("save_state present when both_done");
+    let project_file = crate::update::build_project_file(r);
+    let path = save.path.clone();
+    let plugin_states = save.plugin_states;
+
+    let midi_clips: Vec<(ClipId, Vec<MidiNote>)> = r
+        .midi_clips
+        .iter()
+        .map(|mc| (mc.id, mc.notes.clone()))
+        .collect();
+
+    Task::perform(
+        async move {
+            crate::project::save_project(&path, &project_file, &plugin_states, &midi_clips)
+        },
+        |r| Message::ProjectIo(ProjectIoMessage::ProjectSaved(r)),
+    )
 }
 
 pub(super) fn all_cleared(r: &mut Resonance) {

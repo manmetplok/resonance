@@ -13,10 +13,10 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
-use svs_poc::audio::write_mono_f32_wav;
-use svs_poc::ds::{DsSegment, SampleCurve};
-use svs_poc::pipeline::{self, PipelineArgs};
-use svs_poc::stages::common::ExecutionProvider;
+use resonance_svs::write_mono_f32_wav;
+use resonance_svs::ds::{DsSegment, SampleCurve};
+use resonance_svs::pipeline::{self, PipelineArgs};
+use resonance_svs::stages::common::ExecutionProvider;
 
 use resonance_music_theory::{
     derive_vocal, generate_lyrics, Chord, ChordQuality, PitchClass, TimedChord, VocalParams,
@@ -392,6 +392,7 @@ fn build_segment(
         ph_seq,
         ph_dur,
         ph_num: Vec::new(),
+        languages: Vec::new(),
         note_seq_midi,
         note_dur,
         note_slur: Vec::new(),

@@ -14,7 +14,7 @@ pub(super) fn added(r: &mut Resonance, track_id: TrackId) {
     r.registry.next_track_order += 1;
     let mut track = TrackState::new_audio(track_id, order);
     if let Some(preset) = r.pending_track_preset.take() {
-        super::apply_preset_to_track(r, &mut track, &preset);
+        super::presets::apply_preset_to_track(r, &mut track, &preset);
     }
     r.registry.tracks.push(track);
 }
@@ -27,7 +27,7 @@ pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
     r.registry.next_track_order += 1;
     let mut track = TrackState::new_instrument(track_id, order);
     if let Some(preset) = r.pending_track_preset.take() {
-        super::apply_preset_to_track(r, &mut track, &preset);
+        super::presets::apply_preset_to_track(r, &mut track, &preset);
     }
     r.registry.tracks.push(track);
 }
@@ -40,7 +40,7 @@ pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
     r.registry.next_track_order += 1;
     let mut track = TrackState::new_vocal(track_id, order);
     if let Some(preset) = r.pending_track_preset.take() {
-        super::apply_preset_to_track(r, &mut track, &preset);
+        super::presets::apply_preset_to_track(r, &mut track, &preset);
     }
     r.registry.tracks.push(track);
 }
@@ -122,7 +122,54 @@ pub(super) fn bounce_completed(
             }
         }
     }
-    super::finalize_bounce(r, source_track_id, target_track_id);
+    finalize_bounce(r, source_track_id, target_track_id);
+}
+
+/// Shared post-bounce wrap-up: mute the source, send the engine the
+/// matching `SetTrackMute`, and reorder the bounce target so it sits
+/// right under the source. Called from both the offline
+/// (`TrackBouncedToAudio`) and realtime (`TrackBounceCompleted`)
+/// completion handlers.
+pub(super) fn finalize_bounce(
+    r: &mut Resonance,
+    source_track_id: TrackId,
+    target_track_id: TrackId,
+) {
+    if let Some(track) = r
+        .registry
+        .tracks
+        .iter_mut()
+        .find(|t| t.id == source_track_id)
+    {
+        track.muted = true;
+    }
+    r.engine.send(AudioCommand::SetTrackMute {
+        track_id: source_track_id,
+        muted: true,
+    });
+    let source_order = r
+        .registry
+        .tracks
+        .iter()
+        .find(|t| t.id == source_track_id)
+        .map(|t| t.order);
+    if let Some(src_order) = source_order {
+        for t in r.registry.tracks.iter_mut() {
+            if t.id != target_track_id && t.order > src_order {
+                t.order += 1;
+            }
+        }
+        if let Some(t) = r
+            .registry
+            .tracks
+            .iter_mut()
+            .find(|t| t.id == target_track_id)
+        {
+            t.order = src_order + 1;
+        }
+        r.registry.next_track_order += 1;
+        r.registry.resort_tracks();
+    }
 }
 
 pub(super) fn fx_bypass_changed(r: &mut Resonance, track_id: TrackId, bypassed: bool) {

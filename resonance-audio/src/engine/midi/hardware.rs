@@ -19,9 +19,9 @@ pub(crate) fn handle_list_midi_inputs(ctx: &HandlerCtx, state: &mut HandlerState
     // is cheap and the only way "unplug, replug" recovers without
     // user intervention. The unchanged-list dedupe below only
     // suppresses the GUI round-trip, not the reconnect attempt.
-    state.midi_inputs.reconcile();
-    if devices != state.last_midi_input_devices {
-        state.last_midi_input_devices = devices.clone();
+    state.midi_hw.midi_inputs.reconcile();
+    if devices != state.midi_hw.last_midi_input_devices {
+        state.midi_hw.last_midi_input_devices = devices.clone();
         let _ = ctx
             .event_tx
             .send(AudioEvent::MidiInputDevicesListed { devices });
@@ -30,8 +30,8 @@ pub(crate) fn handle_list_midi_inputs(ctx: &HandlerCtx, state: &mut HandlerState
 
 pub(crate) fn handle_list_midi_outputs(ctx: &HandlerCtx, state: &mut HandlerState) {
     let devices = enumerate_midi_outputs();
-    if devices != state.last_midi_output_devices {
-        state.last_midi_output_devices = devices.clone();
+    if devices != state.midi_hw.last_midi_output_devices {
+        state.midi_hw.last_midi_output_devices = devices.clone();
         let _ = ctx
             .event_tx
             .send(AudioEvent::MidiOutputDevicesListed { devices });
@@ -55,7 +55,11 @@ pub(crate) fn handle_set_track_midi_input(
             t.midi_input_channel = channel;
         }
     }
-    if let Err(e) = state.midi_inputs.set_track_input(track_id, device, channel) {
+    if let Err(e) = state
+        .midi_hw
+        .midi_inputs
+        .set_track_input(track_id, device, channel)
+    {
         let _ = ctx.event_tx.send(AudioEvent::Error(e));
     }
 }
@@ -81,7 +85,7 @@ pub(crate) fn handle_set_track_midi_output(
             t.midi_output_channel = channel;
         }
     }
-    if let Err(e) = state.midi_outputs.set_track_output(track_id, device) {
+    if let Err(e) = state.midi_hw.midi_outputs.set_track_output(track_id, device) {
         let _ = ctx.event_tx.send(AudioEvent::Error(e));
     }
 }

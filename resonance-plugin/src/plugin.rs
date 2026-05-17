@@ -62,7 +62,7 @@ impl NoteEvent {
 #[derive(Debug, Clone)]
 pub struct OutputPortSpec {
     /// Human-readable name shown to the host (e.g. "Out", "Kick", "Snare").
-    pub name: String,
+    pub name: std::borrow::Cow<'static, str>,
     /// Number of audio channels for this port. Only 1 (mono) and 2 (stereo)
     /// are supported right now; everything else is rejected at activation.
     pub channel_count: u32,
@@ -156,7 +156,7 @@ pub trait ResonancePlugin: Send + 'static {
     /// ports conventionally put their primary / mix-down output at index 0.
     fn output_layout(&self) -> Vec<OutputPortSpec> {
         vec![OutputPortSpec {
-            name: "Out".to_string(),
+            name: std::borrow::Cow::Borrowed("Out"),
             channel_count: 2,
         }]
     }

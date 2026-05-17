@@ -243,16 +243,5 @@ fn draw_center(ui: &mut egui::Ui, app: &mut ReverbEditorApp) {
 /// id that matches a key in the preset's `params` object. Missing keys
 /// are ignored so older presets still load after a param is added.
 fn load_preset(params: &ReverbParams, json: &str) {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
-        return;
-    };
-    let Some(map) = value.get("params").and_then(|v| v.as_object()) else {
-        return;
-    };
-    for i in 0..PARAM_COUNT {
-        let p = params.param_at(i);
-        if let Some(v) = map.get(p.id()).and_then(|v| v.as_f64()) {
-            p.set_plain(v);
-        }
-    }
+    resonance_plugin::presets::load(json, PARAM_COUNT, |i| params.param_at(i));
 }

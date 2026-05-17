@@ -141,7 +141,7 @@ pub(super) fn regenerate_lane(
         // `bump_lane_seed`); `roll_vocal_melody` uses the current seed
         // verbatim so we don't double-bump.
         LaneGeneratorKind::Vocal(_) => {
-            return super::lane_inspector::roll_vocal_melody(r, definition_id, track_id);
+            return super::vocal_render::roll_vocal_melody(r, definition_id, track_id);
         }
     };
 

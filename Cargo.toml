@@ -1,16 +1,21 @@
 [workspace]
-members = ["resonance-audio", "resonance-app", "resonance-common", "resonance-dsp", "resonance-metering", "resonance-music-theory", "resonance-plugin", "wayland-plugin-gui", "plugins/resonance-delay", "plugins/resonance-drums", "plugins/resonance-amp", "plugins/resonance-compressor", "plugins/resonance-eq", "plugins/resonance-ir", "plugins/resonance-mastering", "plugins/resonance-reverb", "plugins/resonance-wavetable", "experiments/svs-poc"]
+members = ["resonance-audio", "resonance-app", "resonance-common", "resonance-dsp", "resonance-metering", "resonance-music-theory", "resonance-plugin", "resonance-svs", "wayland-plugin-gui", "plugins/resonance-delay", "plugins/resonance-drums", "plugins/resonance-amp", "plugins/resonance-compressor", "plugins/resonance-eq", "plugins/resonance-ir", "plugins/resonance-mastering", "plugins/resonance-reverb", "plugins/resonance-wavetable"]
 resolver = "2"
 
 [workspace.dependencies]
-clack-plugin = { git = "https://github.com/prokopyl/clack.git" }
-clack-extensions = { git = "https://github.com/prokopyl/clack.git", features = [
+clack-plugin = { git = "https://github.com/prokopyl/clack.git", rev = "4541f03792635dfdc6be9441a01b786e9b4ccf18" }
+clack-extensions = { git = "https://github.com/prokopyl/clack.git", rev = "4541f03792635dfdc6be9441a01b786e9b4ccf18", features = [
     "clack-plugin", "audio-ports", "params", "state", "note-ports", "latency", "gui"
 ] }
+thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 parking_lot = "0.12"
 egui = { version = "0.34", features = ["default_fonts"], default-features = false }
+egui_glow = { version = "0.34", default-features = false }
+iced = { version = "0.13" }
+hound = "3.5"
+rand = "0.8"
 rfd = "0.15"
 rustfft = "6"
 symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "flac", "mp3", "ogg", "vorbis", "aac", "isomp4"] }
@@ -22,3 +27,14 @@ midir = "0.10"
 
 [profile.release]
 lto = "thin"
+# CLAP plugins ship as cdylibs that the host loads via dlopen. Setting
+# codegen-units = 1 lets LLVM inline across the whole crate (per-CGU
+# borders are inlining barriers); the DSP-heavy plugin code benefits
+# noticeably from this. Trade-off: longer release builds.
+codegen-units = 1
+
+# Compile resonance-dsp at -O2 even in debug builds so debug runs of the
+# audio engine don't dropout under realtime load. Other crates stay at
+# the default -O0 so build times and step debugging are unaffected.
+[profile.dev.package.resonance-dsp]
+opt-level = 2

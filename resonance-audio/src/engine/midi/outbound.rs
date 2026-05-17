@@ -84,19 +84,19 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
         // so the synth doesn't sustain. Then snap our cursor to the
         // current playhead so the next Play resumes from there
         // rather than re-firing every note since the last position.
-        if !state.midi_outbound_held.is_empty() {
+        if !state.midi_hw.midi_outbound_held.is_empty() {
             let drained: Vec<((TrackId, u8), (u64, u8))> =
-                state.midi_outbound_held.drain().collect();
+                state.midi_hw.midi_outbound_held.drain().collect();
             for ((tid, note), (_end, channel)) in drained {
-                state.midi_outputs.send_note_off(tid, channel, note);
+                state.midi_hw.midi_outputs.send_note_off(tid, channel, note);
             }
         }
-        state.midi_outbound_last_playhead = ctx.shared.playhead.load(Ordering::Relaxed);
+        state.midi_hw.midi_outbound_last_playhead = ctx.shared.playhead.load(Ordering::Relaxed);
         return;
     }
 
     let curr = ctx.shared.playhead.load(Ordering::Relaxed);
-    let last_raw = state.midi_outbound_last_playhead;
+    let last_raw = state.midi_hw.midi_outbound_last_playhead;
     let looping = ctx.shared.loop_enabled.load(Ordering::Relaxed);
     let lo = ctx.shared.loop_in.load(Ordering::Relaxed);
     let hi = ctx.shared.loop_out.load(Ordering::Relaxed);
@@ -113,14 +113,14 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
             // Drop every held note from the previous segment before
             // emitting (or skipping) the new one.
             let drained: Vec<((TrackId, u8), (u64, u8))> =
-                state.midi_outbound_held.drain().collect();
+                state.midi_hw.midi_outbound_held.drain().collect();
             for ((tid, note), (_end, channel)) in drained {
-                state.midi_outputs.send_note_off(tid, channel, note);
+                state.midi_hw.midi_outputs.send_note_off(tid, channel, note);
             }
             match rewound {
                 Some(loop_in) => loop_in,
                 None => {
-                    state.midi_outbound_last_playhead = curr;
+                    state.midi_hw.midi_outbound_last_playhead = curr;
                     return;
                 }
             }
@@ -146,13 +146,13 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
             .collect()
     };
     if output_tracks.is_empty() {
-        state.midi_outbound_last_playhead = curr;
+        state.midi_hw.midi_outbound_last_playhead = curr;
         return;
     }
 
     // First: NoteOn for any timeline note that starts in (last..curr].
     {
-        let tempo = ctx.tempo_map.read();
+        let tempo = ctx.tempo_map.load();
         let clips = ctx.midi_clips.read();
         for (track_id, channel) in &output_tracks {
             for clip in clips.iter().filter(|c| c.track_id == *track_id) {
@@ -188,7 +188,7 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
                     if note_start >= last && note_start < curr {
                         let velocity_u8 =
                             (note.velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
-                        state.midi_outputs.send_note_on(
+                        state.midi_hw.midi_outputs.send_note_on(
                             *track_id,
                             *channel,
                             note.note,
@@ -201,6 +201,7 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
                         // held pitch as "retrigger", which matches
                         // what the user sees on the timeline.
                         state
+                            .midi_hw
                             .midi_outbound_held
                             .insert((*track_id, note.note), (note_end, *channel));
                     }
@@ -211,15 +212,16 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
 
     // Second: NoteOff for held notes whose end fell in `[last, curr)`.
     let to_off: Vec<((TrackId, u8), (u64, u8))> = state
+        .midi_hw
         .midi_outbound_held
         .iter()
         .filter(|(_, (end, _))| *end >= last && *end < curr)
         .map(|(k, v)| (*k, *v))
         .collect();
     for ((tid, note), (_end, channel)) in to_off {
-        state.midi_outbound_held.remove(&(tid, note));
-        state.midi_outputs.send_note_off(tid, channel, note);
+        state.midi_hw.midi_outbound_held.remove(&(tid, note));
+        state.midi_hw.midi_outputs.send_note_off(tid, channel, note);
     }
 
-    state.midi_outbound_last_playhead = curr;
+    state.midi_hw.midi_outbound_last_playhead = curr;
 }

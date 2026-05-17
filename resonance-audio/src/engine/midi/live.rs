@@ -38,6 +38,7 @@ pub(crate) fn handle_send_note_on(
     };
     let velocity_u8 = (velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
     state
+        .midi_hw
         .midi_outputs
         .send_note_on(track_id, channel, note, velocity_u8);
 }
@@ -65,7 +66,10 @@ pub(crate) fn handle_send_note_off(
         }
         track.midi_output_channel.unwrap_or(0)
     };
-    state.midi_outputs.send_note_off(track_id, channel, note);
+    state
+        .midi_hw
+        .midi_outputs
+        .send_note_off(track_id, channel, note);
 }
 
 /// Dispatch a single drained `LiveMidiEvent`. Routes inbound notes
@@ -145,7 +149,7 @@ pub(crate) fn handle_record_midi_event(
     let elapsed_secs = now.saturating_duration_since(arrival).as_secs_f64();
     let elapsed_samples = (elapsed_secs * ctx.sample_rate as f64) as u64;
     let press_sample = playhead_now.saturating_sub(elapsed_samples);
-    let abs_tick = sample_to_abs_tick(&ctx.tempo_map.read(), press_sample, ctx.sample_rate);
+    let abs_tick = sample_to_abs_tick(&ctx.tempo_map.load(), press_sample, ctx.sample_rate);
 
     if is_note_on {
         // Manual entry-or-insert: the closure form would force a
@@ -288,7 +292,7 @@ pub(crate) fn close_open_recordings(ctx: &HandlerCtx, state: &mut HandlerState) 
         return;
     }
     let playhead = ctx.shared.playhead.load(Ordering::Relaxed);
-    let abs_tick = sample_to_abs_tick(&ctx.tempo_map.read(), playhead, ctx.sample_rate);
+    let abs_tick = sample_to_abs_tick(&ctx.tempo_map.load(), playhead, ctx.sample_rate);
     let mut clips = ctx.midi_clips.write();
     for rec in state.midi_recording.values() {
         let Some(clip) = clips.iter_mut().find(|c| c.id == rec.clip_id) else {
@@ -307,5 +311,5 @@ pub(crate) fn close_open_recordings(ctx: &HandlerCtx, state: &mut HandlerState) 
     state.midi_recording.clear();
     // Send All Notes Off on every output port so a hardware synth
     // doesn't sustain anything we'd lose on the engine side.
-    state.midi_outputs.all_notes_off_everywhere();
+    state.midi_hw.midi_outputs.all_notes_off_everywhere();
 }

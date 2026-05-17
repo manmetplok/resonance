@@ -118,7 +118,7 @@ pub struct VocoderConfig {
 pub fn load_acoustic(path: &Path) -> Result<AcousticConfig> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("reading acoustic config at {}", path.display()))?;
-    let raw: DsAcousticConfigRaw = serde_yaml::from_str(&text)
+    let raw: DsAcousticConfigRaw = serde_yml::from_str(&text)
         .with_context(|| format!("parsing acoustic YAML at {}", path.display()))?;
 
     let dir = path
@@ -166,7 +166,7 @@ pub fn load_acoustic(path: &Path) -> Result<AcousticConfig> {
 pub fn load_vocoder(path: &Path) -> Result<VocoderConfig> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("reading vocoder config at {}", path.display()))?;
-    let raw: DsVocoderConfigRaw = serde_yaml::from_str(&text)
+    let raw: DsVocoderConfigRaw = serde_yml::from_str(&text)
         .with_context(|| format!("parsing vocoder YAML at {}", path.display()))?;
 
     let dir = path

@@ -31,7 +31,7 @@ pub(crate) const BOUNCE_TAIL_SECONDS: u32 = 2;
 /// any MIDI clip on the source track.
 pub(crate) fn midi_render_range(
     midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
-    tempo_map: &Arc<RwLock<TempoMap>>,
+    tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     shared: &Arc<SharedState>,
     source_track_id: TrackId,
     sample_rate: u32,
@@ -48,7 +48,7 @@ pub(crate) fn midi_render_range(
 
     let tail_samples = sample_rate as u64 * BOUNCE_TAIL_SECONDS as u64;
     let midi_guard = midi_clips.read();
-    let tm = tempo_map.read();
+    let tm = tempo_map.load();
     let spt = tm.samples_per_beat(sample_rate) / TICKS_PER_QUARTER_NOTE as f64;
 
     let mut start: Option<u64> = None;

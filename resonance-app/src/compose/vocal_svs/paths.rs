@@ -29,7 +29,7 @@ pub(super) struct VoicebankPaths {
 
 /// Find the on-disk paths for `voicebank`. Resolution order:
 ///   1. `RESONANCE_SVS_MODELS_DIR` env var (workspace override)
-///   2. workspace-root `experiments/svs-poc/models/` (PoC default)
+///   2. workspace-root `resonance-svs/models/` (default)
 ///
 /// Returns `None` when the requested voicebank isn't installed —
 /// callers treat that as "SVS unavailable, skip silently".
@@ -110,12 +110,12 @@ fn try_voicebank(
     }
 }
 
-/// Workspace-relative default — the SVS PoC ships its model dir at
-/// `experiments/svs-poc/models/`. Anchored against the binary's
+/// Workspace-relative default — the SVS crate ships its model dir at
+/// `resonance-svs/models/`. Anchored against the binary's
 /// `CARGO_MANIFEST_DIR` so it resolves from a `cargo run` in any subdir.
 fn default_models_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../experiments/svs-poc/models")
+        .join("../resonance-svs/models")
 }
 
 /// Replace any G2P-emitted phonemes that are missing from the chosen

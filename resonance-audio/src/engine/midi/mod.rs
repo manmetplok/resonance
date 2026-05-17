@@ -15,6 +15,9 @@ mod clock;
 mod hardware;
 mod live;
 mod outbound;
+mod state;
+
+pub(crate) use state::MidiHardwareState;
 
 pub(crate) use clips::{
     handle_add_instrument_track, handle_add_midi_note, handle_add_vocal_track,

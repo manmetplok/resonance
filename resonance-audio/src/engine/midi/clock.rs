@@ -69,7 +69,7 @@ pub(crate) fn poll_midi_clock_send(ctx: &HandlerCtx, state: &mut HandlerState) {
         return;
     }
     let playhead = ctx.shared.playhead.load(Ordering::Relaxed);
-    let clock_tick = sample_to_clock_tick(&ctx.tempo_map.read(), playhead, ctx.sample_rate);
+    let clock_tick = sample_to_clock_tick(&ctx.tempo_map.load(), playhead, ctx.sample_rate);
     state.midi_clock_sender.poll_send_clock(clock_tick);
 }
 
@@ -88,8 +88,9 @@ pub(crate) fn clock_send_continue(
     if !state.midi_clock_sender.is_active() {
         return;
     }
-    let clock_tick = sample_to_clock_tick(&ctx.tempo_map.read(), sample_pos, ctx.sample_rate);
-    let spp = sample_to_spp(&ctx.tempo_map.read(), sample_pos, ctx.sample_rate);
+    let tm = ctx.tempo_map.load();
+    let clock_tick = sample_to_clock_tick(&tm, sample_pos, ctx.sample_rate);
+    let spp = sample_to_spp(&tm, sample_pos, ctx.sample_rate);
     // Send SPP first so the receiver knows where to resume, then
     // Continue. This matches the convention most external gear
     // expects (Reason, Ableton, MPC, etc.).
@@ -109,8 +110,9 @@ pub(crate) fn clock_send_song_position(
     if !state.midi_clock_sender.is_active() {
         return;
     }
-    let clock_tick = sample_to_clock_tick(&ctx.tempo_map.read(), sample_pos, ctx.sample_rate);
-    let spp = sample_to_spp(&ctx.tempo_map.read(), sample_pos, ctx.sample_rate);
+    let tm = ctx.tempo_map.load();
+    let clock_tick = sample_to_clock_tick(&tm, sample_pos, ctx.sample_rate);
+    let spp = sample_to_spp(&tm, sample_pos, ctx.sample_rate);
     state.midi_clock_sender.send_song_position(spp, clock_tick);
 }
 
@@ -160,7 +162,7 @@ pub(crate) fn handle_midi_clock_event(
             if let Some(bpm) = state.midi_clock_tempo.observe(arrival) {
                 if (bpm - state.midi_clock_last_emitted_bpm).abs() > 0.1 {
                     state.midi_clock_last_emitted_bpm = bpm;
-                    ctx.tempo_map.write().bpm = bpm;
+                    super::super::rcu_tempo(ctx.tempo_map, |tm| tm.bpm = bpm);
                     let _ = ctx
                         .event_tx
                         .send(AudioEvent::MidiClockTempoDetected { bpm });
@@ -173,11 +175,10 @@ pub(crate) fn handle_midi_clock_event(
             // stopped, but we accept it during playback too because
             // some hardware sequencers do exactly that.
             let abs_tick = (sixteenths as u64) * (TICKS_PER_QUARTER_NOTE / 4);
-            let sample = ctx.tempo_map.read().tick_to_abs_sample(
-                0,
-                abs_tick,
-                ctx.sample_rate,
-            );
+            let sample = ctx
+                .tempo_map
+                .load()
+                .tick_to_abs_sample(0, abs_tick, ctx.sample_rate);
             ctx.shared.playhead.store(sample, Ordering::SeqCst);
             let _ = ctx.event_tx.send(AudioEvent::PlayheadMoved(sample));
         }

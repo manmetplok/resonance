@@ -14,13 +14,13 @@ use resonance_plugin::*;
 #[cfg(feature = "editor")]
 pub(crate) mod download;
 pub mod drum_map;
+pub mod dsp;
 #[cfg(feature = "editor")]
 mod editor;
 pub mod kit;
-mod kit_loader;
+pub mod kit_loader;
 mod mic_catalog;
 pub mod params;
-pub mod sampler;
 pub mod voice;
 
 #[cfg(feature = "editor")]
@@ -30,12 +30,13 @@ use kit_loader::{KitStatus, PadMicChoices, DEFAULT_OVERHEAD_SETUP};
 use mic_catalog::ManifestMicCatalog;
 use params::{DrumParams, PARAMS_PER_PAD};
 use resonance_plugin::plugin::ExtraStateSaver;
-use sampler::DrumSampler;
+use dsp::DrumSampler;
 
 /// Shared state the loader thread, editor, and audio-thread plugin all need
 /// handles to. Cheap to clone (all Arcs + one channel sender clone).
+#[doc(hidden)]
 #[derive(Clone)]
-pub(crate) struct KitBridge {
+pub struct KitBridge {
     /// Path to the currently loaded (or last-loaded) kit manifest. Set by
     /// the loader on success; persisted in `save_state`.
     pub kit_path: Arc<Mutex<Option<PathBuf>>>,
@@ -77,7 +78,8 @@ pub struct ResonanceDrums {
     /// concurrently from audio + UI.
     params: Arc<DrumParams>,
     sampler: DrumSampler,
-    bridge: KitBridge,
+    #[doc(hidden)]
+    pub bridge: KitBridge,
     /// Download worker for fetching drumkits from the server. Only present
     /// in editor builds.
     #[cfg(feature = "editor")]
@@ -157,7 +159,7 @@ impl ResonancePlugin for ResonanceDrums {
         ]
         .iter()
         .map(|name| resonance_plugin::OutputPortSpec {
-            name: name.to_string(),
+            name: std::borrow::Cow::Borrowed(name),
             channel_count: 2,
         })
         .collect()
@@ -235,33 +237,20 @@ impl ResonancePlugin for ResonanceDrums {
             return;
         }
         let mut out_iter = outputs.iter_mut();
-        let mut port_views: [sampler::PortBuffers<'_>; kit::NUM_OUTPUT_PORTS] =
+        let mut port_views: [dsp::PortBuffers<'_>; kit::NUM_OUTPUT_PORTS] =
             std::array::from_fn(|_| {
                 let out = out_iter.next().expect("checked len above");
-                sampler::PortBuffers {
+                dsp::PortBuffers {
                     left: &mut *out.left,
                     right: &mut *out.right,
                 }
             });
         drop(out_iter);
 
+        // `render_block` zeroes ports, sums voices, and applies master
+        // volume in one pass so this method can stay a thin shim.
         self.sampler
             .render_block(&mut port_views, frames, &self.params);
-
-        // Apply master volume across every port in-place. Work through the
-        // `port_views` we already projected so we don't need a second borrow
-        // of `outputs`.
-        let master_vol = self.params.master_volume.value();
-        if (master_vol - 1.0).abs() > f32::EPSILON {
-            for port in port_views.iter_mut() {
-                for sample in port.left[..frames].iter_mut() {
-                    *sample *= master_vol;
-                }
-                for sample in port.right[..frames].iter_mut() {
-                    *sample *= master_vol;
-                }
-            }
-        }
     }
 
     fn extra_state_saver(&self) -> Option<Arc<dyn ExtraStateSaver>> {
@@ -289,11 +278,12 @@ impl ResonancePlugin for ResonanceDrums {
 /// The saver holds only shared Arcs so the CLAP bridge can call save/load
 /// from the main thread while the plugin is in the audio processor
 /// without touching audio-thread state.
-struct DrumsExtraState {
-    kit_path: Arc<Mutex<Option<PathBuf>>>,
-    overhead_setup_key: Arc<Mutex<String>>,
-    pad_choices: Arc<Mutex<[PadMicChoices; drum_map::NUM_PADS]>>,
-    articulations: Arc<Mutex<[bool; drum_map::NUM_PADS]>>,
+#[doc(hidden)]
+pub struct DrumsExtraState {
+    pub kit_path: Arc<Mutex<Option<PathBuf>>>,
+    pub overhead_setup_key: Arc<Mutex<String>>,
+    pub pad_choices: Arc<Mutex<[PadMicChoices; drum_map::NUM_PADS]>>,
+    pub articulations: Arc<Mutex<[bool; drum_map::NUM_PADS]>>,
 }
 
 impl ExtraStateSaver for DrumsExtraState {
@@ -385,178 +375,3 @@ impl ExtraStateSaver for DrumsExtraState {
 
 resonance_plugin::export_clap!(ResonanceDrums);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// save_state -> load_state round-trip preserves a kit path.
-    /// Exercises the main-thread path where the host calls save_state /
-    /// load_state on the owned plugin instance.
-    #[test]
-    fn state_roundtrip_preserves_kit_path() {
-        let src = ResonanceDrums::new();
-        *src.bridge.kit_path.lock() = Some(PathBuf::from("/some/kit/drum_samples.json"));
-
-        let bytes = src.save_state();
-
-        let mut dst = ResonanceDrums::new();
-        assert!(dst.load_state(&bytes));
-        let restored = dst.bridge.kit_path.lock().clone();
-        assert_eq!(restored, Some(PathBuf::from("/some/kit/drum_samples.json")));
-    }
-
-    /// save_state with no kit followed by load_state clears any prior path.
-    #[test]
-    fn load_state_null_clears_kit_path() {
-        let src = ResonanceDrums::new();
-        let bytes = src.save_state(); // kit_path is None, serializes as null
-
-        let mut dst = ResonanceDrums::new();
-        // Pre-populate a stale path; load_state should clear it.
-        *dst.bridge.kit_path.lock() = Some(PathBuf::from("/stale/path.json"));
-
-        assert!(dst.load_state(&bytes));
-        assert_eq!(*dst.bridge.kit_path.lock(), None);
-    }
-
-    /// Round-trip through the `ExtraStateSaver` interface directly. This
-    /// simulates what the CLAP bridge does when the plugin is in the audio
-    /// processor and the host asks for a state save — the owned plugin
-    /// isn't reachable, so the bridge talks to the cached saver instead.
-    /// This is exactly the path that used to silently drop kit_path at
-    /// project save time before the framework fix.
-    /// Helper: build an empty saver storage bundle used by the saver tests.
-    fn make_saver_bundle(
-        initial_path: Option<PathBuf>,
-    ) -> (
-        Arc<Mutex<Option<PathBuf>>>,
-        Arc<Mutex<String>>,
-        Arc<Mutex<[PadMicChoices; drum_map::NUM_PADS]>>,
-        Arc<Mutex<[bool; drum_map::NUM_PADS]>>,
-        DrumsExtraState,
-    ) {
-        let kit_path = Arc::new(Mutex::new(initial_path));
-        let overhead_setup_key = Arc::new(Mutex::new(DEFAULT_OVERHEAD_SETUP.to_string()));
-        let pad_choices = Arc::new(Mutex::new(std::array::from_fn(|_| {
-            PadMicChoices::default()
-        })));
-        let articulations = Arc::new(Mutex::new([false; drum_map::NUM_PADS]));
-        let saver = DrumsExtraState {
-            kit_path: kit_path.clone(),
-            overhead_setup_key: overhead_setup_key.clone(),
-            pad_choices: pad_choices.clone(),
-            articulations: articulations.clone(),
-        };
-        (
-            kit_path,
-            overhead_setup_key,
-            pad_choices,
-            articulations,
-            saver,
-        )
-    }
-
-    #[test]
-    fn extra_saver_roundtrip_active_path() {
-        // Construct the saver the same way editor_factory / new() would,
-        // holding shared arcs for each persisted field.
-        let (_kp, _oh, _pc, _art, saver) =
-            make_saver_bundle(Some(PathBuf::from("/active/path/drum_samples.json")));
-
-        // Serialize — this is what clap_bridge::save() would do on the
-        // plugin-is-None branch.
-        let mut json = serde_json::json!({ "params": {} });
-        for (k, v) in saver.save() {
-            json.as_object_mut().unwrap().insert(k, v);
-        }
-
-        // New instance with a different shared storage — clear to start.
-        let (restored_path, _, _, _, restored_saver) = make_saver_bundle(None);
-
-        // Load from the serialized state.
-        restored_saver.load(&json);
-
-        assert_eq!(
-            *restored_path.lock(),
-            Some(PathBuf::from("/active/path/drum_samples.json")),
-            "kit_path should round-trip through the saver"
-        );
-    }
-
-    /// A loaded null kit_path through the saver clears previously stored path.
-    #[test]
-    fn extra_saver_null_clears_active_path() {
-        let (kit_path, _, _, _, saver) = make_saver_bundle(Some(PathBuf::from("/stale.json")));
-
-        // State without a kit_path (simulating a save with no kit loaded).
-        let state = serde_json::json!({ "params": {}, "kit_path": serde_json::Value::Null });
-        saver.load(&state);
-        assert_eq!(*kit_path.lock(), None);
-    }
-
-    /// Per-pad close-mic choices and the global overhead setup round-trip
-    /// through the ExtraStateSaver JSON.
-    #[test]
-    fn extra_saver_roundtrips_mic_choices() {
-        let (_, oh_arc, pad_arc, _, saver) = make_saver_bundle(None);
-        // Inject user edits.
-        *oh_arc.lock() = "24_OHsAB_KM184".to_string();
-        {
-            let mut guard = pad_arc.lock();
-            guard[0]
-                .close_setups
-                .insert("KickIn".to_string(), "01_KickIn_e901".to_string());
-            guard[0]
-                .close_setups
-                .insert("KickOut".to_string(), "05_KickOut_D01".to_string());
-            guard[1]
-                .close_setups
-                .insert("SNTop".to_string(), "07_SNTop_e904".to_string());
-        }
-
-        let mut json = serde_json::json!({ "params": {} });
-        for (k, v) in saver.save() {
-            json.as_object_mut().unwrap().insert(k, v);
-        }
-
-        let (_, oh2, pad2, _, restored) = make_saver_bundle(None);
-        restored.load(&json);
-        assert_eq!(*oh2.lock(), "24_OHsAB_KM184");
-        let guard = pad2.lock();
-        assert_eq!(
-            guard[0].close_setups.get("KickIn"),
-            Some(&"01_KickIn_e901".to_string())
-        );
-        assert_eq!(
-            guard[0].close_setups.get("KickOut"),
-            Some(&"05_KickOut_D01".to_string())
-        );
-        assert_eq!(
-            guard[1].close_setups.get("SNTop"),
-            Some(&"07_SNTop_e904".to_string())
-        );
-    }
-
-    /// Articulation toggles round-trip through the ExtraStateSaver JSON.
-    #[test]
-    fn extra_saver_roundtrips_articulations() {
-        let (_, _, _, art_arc, saver) = make_saver_bundle(None);
-        {
-            let mut guard = art_arc.lock();
-            guard[0] = true; // Kick -> ohne Teppich
-            guard[9] = true; // Tom High -> ohne Teppich
-        }
-
-        let mut json = serde_json::json!({ "params": {} });
-        for (k, v) in saver.save() {
-            json.as_object_mut().unwrap().insert(k, v);
-        }
-
-        let (_, _, _, art2, restored) = make_saver_bundle(None);
-        restored.load(&json);
-        let guard = art2.lock();
-        assert!(guard[0], "kick articulation should be true");
-        assert!(guard[9], "tom high articulation should be true");
-        assert!(!guard[1], "snare articulation should be false (default)");
-    }
-}

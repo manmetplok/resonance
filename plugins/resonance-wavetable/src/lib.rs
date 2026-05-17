@@ -15,7 +15,7 @@ mod oscillator;
 mod params;
 pub mod presets;
 mod render;
-mod viz;
+pub mod viz;
 mod voice;
 mod wavetable;
 

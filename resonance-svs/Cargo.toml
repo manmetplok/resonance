@@ -1,27 +1,31 @@
 [package]
-name = "svs-poc"
+name = "resonance-svs"
 version = "0.1.0"
 edition = "2021"
 publish = false
-default-run = "svs-poc"
-description = "Singing-voice-synthesis proof of concept: renders a DiffSinger .ds file to WAV via ONNX. Isolated PoC; not consumed by any other Resonance crate."
+default-run = "resonance-svs"
+description = "Singing-voice-synthesis crate: renders a DiffSinger .ds file to WAV via ONNX. Consumed by the Resonance app's Compose vocal generator."
+
+[lib]
+name = "resonance_svs"
+path = "src/lib.rs"
 
 [[bin]]
-name = "svs-poc"
+name = "resonance-svs"
 path = "src/main.rs"
 
 # Debug helper: prints the I/O signature of an ONNX file.
-[[bin]]
+[[example]]
 name = "probe"
-path = "src/bin/probe.rs"
+path = "examples/probe.rs"
 
 # CLI driver that builds a DiffSinger segment the same way the
 # Resonance app does (lyric → G2P → phoneme durations → f0) and
 # renders it to WAV. Useful for comparing the integration's output
 # against the standalone pipeline without booting the full app.
-[[bin]]
+[[example]]
 name = "render_resonance_vocal"
-path = "src/bin/render_resonance_vocal.rs"
+path = "examples/render_resonance_vocal.rs"
 
 [features]
 default = []
@@ -38,15 +42,15 @@ ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
 ndarray = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
-hound = "3.5.1"
+serde_yml = "0.0.12"
+hound.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1"
-thiserror = "1"
+thiserror.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 regex = "1"
-resonance-music-theory = { path = "../../resonance-music-theory" }
+resonance-music-theory = { path = "../resonance-music-theory" }
 
 [dev-dependencies]
 anyhow = "1"

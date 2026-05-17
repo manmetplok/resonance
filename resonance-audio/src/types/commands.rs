@@ -437,4 +437,10 @@ pub enum AudioCommand {
     SetMasterFxBypass {
         bypassed: bool,
     },
+
+    /// Ask the engine to snapshot and clear every peak meter (per-track,
+    /// per-bus, master L/R) and reply with `AudioEvent::PeakSnapshot`.
+    /// Driven by the GUI's per-frame VU update; replaces the older
+    /// direct getter that contended with the mixer's RwLocks.
+    PollPeaks,
 }

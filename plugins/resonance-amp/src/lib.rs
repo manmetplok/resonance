@@ -12,13 +12,13 @@ pub mod nam;
 pub mod params;
 #[cfg(feature = "editor")]
 pub mod tone3000;
-mod tuner;
+pub mod tuner;
 pub mod viz;
 
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 
-use dsp::DcBlocker;
+use dsp::AmpProcessor;
 use loader::{LoaderDeps, LoaderHandle};
 use nam::NamInference;
 use params::AmpParams;
@@ -29,15 +29,6 @@ use viz::AmpViz;
 fn scan_directory(dir: &Path) -> Vec<String> {
     resonance_common::scan_directory(dir, "nam")
 }
-
-/// Crossfade length in samples (~23 ms at 44.1 kHz). Long enough to
-/// mask any residual transient when a freshly-loaded model takes over
-/// mid-audio, even after the loader thread has primed it.
-const SWAP_FADE_SAMPLES: u32 = 1024;
-/// Precomputed `1.0 / SWAP_FADE_SAMPLES as f32`. LLVM won't fold
-/// float division with a runtime counter, so express the per-sample
-/// fade step as a multiply.
-const SWAP_FADE_STEP: f32 = 1.0 / SWAP_FADE_SAMPLES as f32;
 
 pub struct ResonanceAmp {
     /// Parameters — shared with the editor thread via `Arc` so the UI can
@@ -57,13 +48,10 @@ pub struct ResonanceAmp {
     /// `Option` because it depends on the sample rate (known only at
     /// `initialize` time).
     tuner: Option<Tuner>,
-    /// Output DC blocker (L/R). Strips any residual DC bias the model
-    /// emits at rest — the final layer of the "plop" fix on top of the
-    /// loader-thread priming and the extended crossfade.
-    dc_l: DcBlocker,
-    dc_r: DcBlocker,
+    /// Audio-thread DSP: NAM model fade machinery, DC blockers, gain
+    /// smoothers. All state that touches per-sample audio lives here.
+    processor: AmpProcessor,
 
-    active_model: Option<Box<dyn NamInference>>,
     model_mailbox: Arc<Mutex<Option<Box<dyn NamInference>>>>,
     model_name: Arc<Mutex<String>>,
     /// Last file_select param value we acted on (to detect changes).
@@ -72,17 +60,6 @@ pub struct ResonanceAmp {
     load_request: Arc<AtomicI32>,
     /// Handle to the persistent loader thread.
     loader: Option<LoaderHandle>,
-    /// Model waiting to be swapped in after fade-out completes.
-    pending_model: Option<Box<dyn NamInference>>,
-    /// Samples remaining in fade-out before model swap.
-    fade_out_remaining: u32,
-    /// Samples remaining in fade-in after model swap.
-    fade_in_remaining: u32,
-    /// Plugin-local smoothers for the two gain params. Live here (not on
-    /// `AmpParams`) so that `params` can be `Arc`-shared with the editor
-    /// thread while the smoothers stay audio-thread mutable.
-    input_gain_smoother: Smoother,
-    output_gain_smoother: Smoother,
     /// Scratch buffer used to snapshot the input channel before the
     /// processing loop overwrites it in place. Sized from
     /// `max_buffer_size` in `initialize`.
@@ -165,19 +142,12 @@ impl ResonancePlugin for ResonanceAmp {
             tone3000,
             viz: AmpViz::new(),
             tuner: None,
-            dc_l: DcBlocker::default(),
-            dc_r: DcBlocker::default(),
-            active_model: None,
+            processor: AmpProcessor::new(),
             model_mailbox: Arc::new(Mutex::new(None)),
             model_name: Arc::new(Mutex::new(String::new())),
             last_file_index: -1,
             load_request,
             loader: None,
-            pending_model: None,
-            fade_out_remaining: 0,
-            fade_in_remaining: 0,
-            input_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
-            output_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
             input_scratch: Vec::new(),
         }
     }
@@ -196,16 +166,13 @@ impl ResonancePlugin for ResonanceAmp {
     }
 
     fn initialize(&mut self, sample_rate: f32, max_buffer_size: u32) -> bool {
-        self.input_gain_smoother.set_sample_rate(sample_rate);
-        self.output_gain_smoother.set_sample_rate(sample_rate);
-        self.input_gain_smoother
-            .reset(self.params.input_gain.value());
-        self.output_gain_smoother
-            .reset(self.params.output_gain.value());
+        self.processor.initialize(
+            sample_rate,
+            self.params.input_gain.value(),
+            self.params.output_gain.value(),
+        );
 
         self.tuner = Some(Tuner::new(sample_rate));
-        self.dc_l.reset();
-        self.dc_r.reset();
         self.input_scratch = vec![0.0; max_buffer_size as usize];
 
         let path = self.params.model_path.lock().clone();
@@ -218,7 +185,7 @@ impl ResonancePlugin for ResonanceAmp {
             // `process` call has an active model to run.
             self.load_model_sync(path);
             if let Some(model) = self.model_mailbox.lock().take() {
-                self.active_model = Some(model);
+                self.processor.install_initial_model(model);
             }
         }
 
@@ -237,11 +204,7 @@ impl ResonancePlugin for ResonanceAmp {
     }
 
     fn reset(&mut self) {
-        if let Some(model) = &mut self.active_model {
-            model.reset();
-        }
-        self.dc_l.reset();
-        self.dc_r.reset();
+        self.processor.reset();
     }
 
     fn process(
@@ -269,16 +232,8 @@ impl ResonancePlugin for ResonanceAmp {
         // model is already primed on the loader thread, so the fade only
         // has to mask the handoff itself.
         if let Some(mut guard) = self.model_mailbox.try_lock() {
-            if guard.is_some() {
-                self.pending_model = guard.take();
-                if self.active_model.is_some() {
-                    self.fade_out_remaining = SWAP_FADE_SAMPLES;
-                    self.fade_in_remaining = 0;
-                } else {
-                    // No previous model — swap directly with fade-in.
-                    self.active_model = self.pending_model.take();
-                    self.fade_in_remaining = SWAP_FADE_SAMPLES;
-                }
+            if let Some(model) = guard.take() {
+                self.processor.install_pending_model(model);
             }
         }
 
@@ -290,119 +245,19 @@ impl ResonancePlugin for ResonanceAmp {
                 .store(current_index, std::sync::atomic::Ordering::Release);
         }
 
-        self.input_gain_smoother
-            .set_target(self.params.input_gain.value());
-        self.output_gain_smoother
-            .set_target(self.params.output_gain.value());
+        self.processor.set_gain_targets(
+            self.params.input_gain.value(),
+            self.params.output_gain.value(),
+        );
 
-        // Track block-peak values for the meters. Computed inline with
-        // the DSP loops below to avoid an extra pass over the buffer.
-        let mut in_peak_l = 0.0f32;
-        let mut in_peak_r = 0.0f32;
-        let mut out_peak_l = 0.0f32;
-        let mut out_peak_r = 0.0f32;
-
-        if self.fade_out_remaining == 0 {
-            match self.active_model.as_mut() {
-                Some(model) => {
-                    for i in 0..frames {
-                        let dry_l = left[i];
-                        let dry_r = right[i];
-                        in_peak_l = in_peak_l.max(dry_l.abs());
-                        in_peak_r = in_peak_r.max(dry_r.abs());
-
-                        let input_gain = self.input_gain_smoother.next();
-                        let output_gain = self.output_gain_smoother.next();
-                        let fade_gain = if self.fade_in_remaining > 0 {
-                            self.fade_in_remaining -= 1;
-                            1.0 - self.fade_in_remaining as f32 * SWAP_FADE_STEP
-                        } else {
-                            1.0
-                        };
-                        let input = dry_l * input_gain;
-                        let raw = model.process_sample(input) * output_gain * fade_gain;
-                        let out_l = self.dc_l.process(raw);
-                        let out_r = self.dc_r.process(raw);
-                        left[i] = out_l;
-                        right[i] = out_r;
-                        out_peak_l = out_peak_l.max(out_l.abs());
-                        out_peak_r = out_peak_r.max(out_r.abs());
-                    }
-                }
-                None => {
-                    // No model loaded: only `input_gain * output_gain` is
-                    // applied. `fade_in_remaining` is zero in this arm
-                    // because a fade-in is always paired with a newly
-                    // installed model.
-                    for i in 0..frames {
-                        let dry_l = left[i];
-                        let dry_r = right[i];
-                        in_peak_l = in_peak_l.max(dry_l.abs());
-                        in_peak_r = in_peak_r.max(dry_r.abs());
-
-                        let input_gain = self.input_gain_smoother.next();
-                        let output_gain = self.output_gain_smoother.next();
-                        let gain = input_gain * output_gain;
-                        let out_l = dry_l * gain;
-                        let out_r = dry_r * gain;
-                        left[i] = out_l;
-                        right[i] = out_r;
-                        out_peak_l = out_peak_l.max(out_l.abs());
-                        out_peak_r = out_peak_r.max(out_r.abs());
-                    }
-                }
-            }
-        } else {
-            // Slow path: fade-out in progress, `active_model` will be
-            // replaced mid-block when `fade_out_remaining` hits zero.
-            for i in 0..frames {
-                let dry_l = left[i];
-                let dry_r = right[i];
-                in_peak_l = in_peak_l.max(dry_l.abs());
-                in_peak_r = in_peak_r.max(dry_r.abs());
-
-                let input_gain = self.input_gain_smoother.next();
-                let output_gain = self.output_gain_smoother.next();
-
-                let fade_gain = if self.fade_out_remaining > 0 {
-                    self.fade_out_remaining -= 1;
-                    let g = self.fade_out_remaining as f32 * SWAP_FADE_STEP;
-                    if self.fade_out_remaining == 0 {
-                        self.active_model = self.pending_model.take();
-                        self.fade_in_remaining = SWAP_FADE_SAMPLES;
-                    }
-                    g
-                } else if self.fade_in_remaining > 0 {
-                    self.fade_in_remaining -= 1;
-                    1.0 - self.fade_in_remaining as f32 * SWAP_FADE_STEP
-                } else {
-                    1.0
-                };
-
-                let (out_l, out_r) = match &mut self.active_model {
-                    Some(model) => {
-                        let input = dry_l * input_gain;
-                        let raw = model.process_sample(input) * output_gain * fade_gain;
-                        (self.dc_l.process(raw), self.dc_r.process(raw))
-                    }
-                    None => {
-                        let gain = input_gain * output_gain * fade_gain;
-                        (dry_l * gain, dry_r * gain)
-                    }
-                };
-                left[i] = out_l;
-                right[i] = out_r;
-                out_peak_l = out_peak_l.max(out_l.abs());
-                out_peak_r = out_peak_r.max(out_r.abs());
-            }
-        }
+        let peaks = self.processor.process_block(left, right, frames);
 
         // Publish block-rate viz state.
         self.viz.store_peaks(
-            linear_to_db(in_peak_l),
-            linear_to_db(in_peak_r),
-            linear_to_db(out_peak_l),
-            linear_to_db(out_peak_r),
+            linear_to_db(peaks.in_l),
+            linear_to_db(peaks.in_r),
+            linear_to_db(peaks.out_l),
+            linear_to_db(peaks.out_r),
         );
         {
             let mut scope = self.viz.scope.lock();

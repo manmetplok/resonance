@@ -7,10 +7,16 @@ use super::motif_bass::chord_tones_in_register;
 use super::motif_engine::derive_motif_melody;
 use super::{GeneratedNote, TimedChord};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
+    strum::Display, strum::IntoStaticStr, strum::EnumString,
+)]
 pub enum MelodyStyle {
+    #[strum(serialize = "Arp up")]
     ArpUp,
+    #[strum(serialize = "Arp down")]
     ArpDown,
+    #[strum(serialize = "Arp up/down")]
     ArpUpDown,
     /// Motif-based melodic development with phrase structure,
     /// chord-tone targeting, rhythmic variation, and contour shaping.
@@ -27,24 +33,15 @@ impl MelodyStyle {
     ];
 
     pub fn as_str(self) -> &'static str {
-        match self {
-            MelodyStyle::ArpUp => "Arp up",
-            MelodyStyle::ArpDown => "Arp down",
-            MelodyStyle::ArpUpDown => "Arp up/down",
-            MelodyStyle::Motif => "Motif",
-        }
-    }
-}
-
-impl std::fmt::Display for MelodyStyle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        self.into()
     }
 }
 
 /// Preferred melodic contour shape for motif-based generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default,
+    strum::Display, strum::IntoStaticStr, strum::EnumString,
+)]
 pub enum ContourPreference {
     /// RNG picks per-phrase, weighted by research distributions.
     #[default]
@@ -69,20 +66,7 @@ impl ContourPreference {
     ];
 
     pub fn as_str(self) -> &'static str {
-        match self {
-            ContourPreference::Auto => "Auto",
-            ContourPreference::Arch => "Arch",
-            ContourPreference::Descending => "Descending",
-            ContourPreference::Ascending => "Ascending",
-            ContourPreference::Wave => "Wave",
-        }
-    }
-}
-
-
-impl std::fmt::Display for ContourPreference {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        self.into()
     }
 }
 

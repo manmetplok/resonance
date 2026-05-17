@@ -123,13 +123,7 @@ impl MeteringCore {
         }
         self.samples_since_history = 0;
         let snap = viz.load_snapshot();
-        {
-            let mut h = viz.lufs_history.lock();
-            h.push(snap.momentary_lufs);
-        }
-        {
-            let mut h = viz.tp_history.lock();
-            h.push(snap.true_peak_max_dbtp);
-        }
+        viz.lufs_history.push(snap.momentary_lufs);
+        viz.tp_history.push(snap.true_peak_max_dbtp);
     }
 }

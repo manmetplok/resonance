@@ -64,7 +64,7 @@ pub(crate) fn mix_audio(
     plugins: &parking_lot::RwLock<
         indexmap::IndexMap<PluginInstanceId, parking_lot::Mutex<crate::clap_host::SyncClapInstance>>,
     >,
-    tempo_map: &parking_lot::RwLock<TempoMap>,
+    tempo_map: &arc_swap::ArcSwap<TempoMap>,
     sample_rate: u32,
     track_buf_l: &mut [f32],
     track_buf_r: &mut [f32],
@@ -94,20 +94,20 @@ pub(crate) fn mix_audio(
     // in the rendering path. The read lock is held for one audio buffer
     // (~1 ms) — writers (engine thread) wait only during tempo changes.
     let playhead_now = shared.playhead.load(Ordering::Relaxed);
-    let tempo_guard = tempo_map.try_read();
-    let tempo_snap = tempo_guard.as_ref().map(|tm| TempoSnap {
-        bpm: tm.bpm as f64,
-        num: tm.numerator as u16,
-        den: tm.denominator as u16,
-        metronome: tm.metronome_enabled,
-    });
-    let snap_bpm = tempo_snap.as_ref().map(|s| s.bpm).unwrap_or(120.0);
+    let tempo_guard = tempo_map.load();
+    let tempo_snap = TempoSnap {
+        bpm: tempo_guard.bpm as f64,
+        num: tempo_guard.numerator as u16,
+        den: tempo_guard.denominator as u16,
+        metronome: tempo_guard.metronome_enabled,
+    };
+    let snap_bpm = tempo_snap.bpm;
 
-    let transport_snap: Option<(f64, u16, u16, bool, f64)> = tempo_snap.as_ref().map(|s| {
+    let transport_snap: Option<(f64, u16, u16, bool, f64)> = {
         let playing = shared.playing.load(Ordering::Relaxed);
-        let pos = playhead_now as f64 / sample_rate as f64 * s.bpm / 60.0;
-        (s.bpm, s.num, s.den, playing, pos)
-    });
+        let pos = playhead_now as f64 / sample_rate as f64 * tempo_snap.bpm / 60.0;
+        Some((tempo_snap.bpm, tempo_snap.num, tempo_snap.den, playing, pos))
+    };
 
     // Read monitor input with jitter margin to avoid underflows.
     // Skip stale monitor data to keep latency at ~1 buffer period.
@@ -191,16 +191,14 @@ pub(crate) fn mix_audio(
         // final click in the loop lands at elapsed
         // `(precount_bars * numerator - 1) * spb`, leaving exactly
         // one beat of silence before the punch-in line.
-        if let Some(tm) = tempo_map.try_read() {
-            render_count_in_clicks(
-                data,
-                channels,
-                sample_rate,
-                &tm,
-                elapsed_at_start,
-                click_frames,
-            );
-        }
+        render_count_in_clicks(
+            data,
+            channels,
+            sample_rate,
+            &tempo_guard,
+            elapsed_at_start,
+            click_frames,
+        );
 
         // Master volume + peaks so the count-in audio hits meters the
         // same way normal playback does.
@@ -301,8 +299,7 @@ pub(crate) fn mix_audio(
     let active_busses = busses_guard.len().min(bus_bufs.len());
 
     // Resolve a &TempoMap for tempo-map-aware MIDI tick→sample conversion.
-    let default_tm = TempoMap::default();
-    let tm_ref: &TempoMap = tempo_guard.as_deref().unwrap_or(&default_tm);
+    let tm_ref: &TempoMap = &tempo_guard;
 
     let any_solo = tracks_guard
         .values()
@@ -448,20 +445,18 @@ pub(crate) fn mix_audio(
     // mapping from output frame index to timeline frame changes at the seam:
     // frames before `head_frames` play from `playhead`, frames after play
     // from `loop_in`.
-    if let Some(snap) = tempo_snap.as_ref() {
-        if snap.metronome {
-            render_metronome_clicks(
-                data,
-                channels,
-                sample_rate,
-                tm_ref,
-                snap_bpm,
-                snap.num,
-                output_frames,
-                playhead,
-                seam_split,
-            );
-        }
+    if tempo_snap.metronome {
+        render_metronome_clicks(
+            data,
+            channels,
+            sample_rate,
+            tm_ref,
+            snap_bpm,
+            tempo_snap.num,
+            output_frames,
+            playhead,
+            seam_split,
+        );
     }
 
     // Apply master volume, hard clip, and compute master peak levels

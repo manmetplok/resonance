@@ -6,7 +6,7 @@
 
 use resonance_audio::types::MidiNote;
 use resonance_music_theory::{g2p, VocalParams, VocalTimbre};
-use svs_poc::ds::{DsSegment, SampleCurve};
+use resonance_svs::ds::{DsSegment, SampleCurve};
 
 use super::paths::{
     substitute_phoneme, voicebank_language_id, voicebank_phoneme_name, voicebank_supports_tension,

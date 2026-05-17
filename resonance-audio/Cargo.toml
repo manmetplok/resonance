@@ -14,7 +14,7 @@ libloading = "0.8"
 indexmap = "2"
 resonance-common = { path = "../resonance-common" }
 resonance-dsp = { path = "../resonance-dsp" }
-hound = "3.5"
+hound.workspace = true
 midly = "0.5"
 midir.workspace = true
 arc-swap.workspace = true
@@ -25,4 +25,3 @@ serde.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa-sys = "0.3"
 pipewire = { version = "0.9", features = ["v0_3_44"] }
-libspa = "0.9"

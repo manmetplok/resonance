@@ -3,6 +3,10 @@ use iced::widget::canvas;
 use iced::{mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::message::*;
+use crate::piano_roll::{
+    self, hit_test_note, is_black_key, NoteEdge, NoteStyle, PianoRollLayout, PianoRollViewport,
+    NOTE_COUNT,
+};
 use crate::state::MidiClipState;
 use crate::theme;
 
@@ -12,26 +16,8 @@ use resonance_audio::types::{TrackId, TICKS_PER_QUARTER_NOTE};
 pub const KEYBOARD_WIDTH: f32 = 50.0;
 /// Height of the velocity lane at the bottom of the editor.
 const VELOCITY_LANE_HEIGHT: f32 = 40.0;
-/// Total number of MIDI note rows (0-127).
-const NOTE_COUNT: u8 = 128;
 /// Default velocity for newly created notes.
 const DEFAULT_VELOCITY: f32 = 0.8;
-/// Minimum resize threshold in pixels for the right edge of a note.
-const RESIZE_EDGE_PX: f32 = 6.0;
-
-/// Returns true if the given MIDI note number corresponds to a black key.
-fn is_black_key(note: u8) -> bool {
-    matches!(note % 12, 1 | 3 | 6 | 8 | 10)
-}
-
-/// Returns a human-readable note name (e.g. "C4", "F#3").
-fn note_name(note: u8) -> String {
-    let names = [
-        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-    ];
-    let octave = (note / 12) as i8 - 1;
-    format!("{}{}", names[note as usize % 12], octave)
-}
 
 /// Data passed to the piano roll canvas for rendering.
 #[derive(Debug)]
@@ -109,9 +95,10 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> (canvas::event::Status, Option<Message>) {
-        let grid_x = KEYBOARD_WIDTH;
-        let _grid_w = bounds.width - KEYBOARD_WIDTH;
-        let grid_h = bounds.height - VELOCITY_LANE_HEIGHT;
+        let layout = self.layout(bounds);
+        let viewport = self.viewport();
+        let grid_x = layout.grid_x();
+        let grid_h = layout.grid_h;
 
         match event {
             // --- Scroll ---
@@ -155,7 +142,7 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                 if let Some(pos) = cursor.position_in(bounds) {
                     // Piano keyboard area: preview note
                     if pos.x < grid_x && pos.y < grid_h {
-                        let note = self.y_to_note(pos.y, grid_h);
+                        let note = viewport.y_local_to_note(pos.y);
                         state.previewing_note = Some(note);
                         return (
                             canvas::event::Status::Captured,
@@ -173,40 +160,28 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
 
                     // Note grid area
                     if pos.x >= grid_x {
-                        let click_tick = self.x_to_tick(pos.x - grid_x);
-                        let click_note = self.y_to_note(pos.y, grid_h);
+                        let click_tick = viewport.x_local_to_tick(pos.x - grid_x);
+                        let click_note = viewport.y_local_to_note(pos.y);
 
                         // Check if clicking on an existing note
                         for (i, n) in self.clip.notes.iter().enumerate() {
-                            let nx = self.tick_to_x(n.start_tick);
-                            let nw = self.duration_to_width(n.duration_ticks);
-                            let ny = self.note_to_y(n.note, grid_h);
-                            let nh = self.zoom_y;
-
-                            let rel_x = pos.x - grid_x;
-                            let rel_y = pos.y;
-
-                            if rel_x >= nx && rel_x <= nx + nw && rel_y >= ny && rel_y <= ny + nh {
-                                // Right edge: resize
-                                if (nx + nw) - rel_x < RESIZE_EDGE_PX {
-                                    state.drag = Some(DragMode::ResizeNote {
+                            let rect = self.note_rect(&layout, &viewport, n);
+                            if let Some(edge) = hit_test_note(rect, pos) {
+                                state.drag = Some(match edge {
+                                    NoteEdge::ResizeRight => DragMode::ResizeNote {
                                         note_index: i,
                                         anchor_tick: n.start_tick,
-                                    });
-                                    return (
-                                        canvas::event::Status::Captured,
-                                        Some(Message::MidiEditor(MidiEditorMessage::SelectNote {
-                                            note_index: Some(i),
-                                        })),
-                                    );
-                                }
-                                // Body: move
-                                let tick_offset = n.start_tick as i64 - click_tick as i64;
-                                state.drag = Some(DragMode::MoveNote {
-                                    note_index: i,
-                                    start_tick_offset: tick_offset,
-                                    original_note: n.note,
-                                    original_start_tick: n.start_tick,
+                                    },
+                                    NoteEdge::Body => {
+                                        let tick_offset =
+                                            n.start_tick as i64 - click_tick as i64;
+                                        DragMode::MoveNote {
+                                            note_index: i,
+                                            start_tick_offset: tick_offset,
+                                            original_note: n.note,
+                                            original_start_tick: n.start_tick,
+                                        }
+                                    }
                                 });
                                 return (
                                     canvas::event::Status::Captured,
@@ -237,18 +212,9 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
                 if let Some(pos) = cursor.position_in(bounds) {
                     if pos.x >= grid_x && pos.y < grid_h {
-                        let click_tick = self.x_to_tick(pos.x - grid_x);
-                        let click_note = self.y_to_note(pos.y, grid_h);
-
-                        // Find note under cursor
                         for (i, n) in self.clip.notes.iter().enumerate() {
-                            let nx = self.tick_to_x(n.start_tick);
-                            let nw = self.duration_to_width(n.duration_ticks);
-                            let ny = self.note_to_y(n.note, grid_h);
-                            let nh = self.zoom_y;
-
-                            let rel_x = pos.x - grid_x;
-                            if rel_x >= nx && rel_x <= nx + nw && pos.y >= ny && pos.y <= ny + nh {
+                            let rect = self.note_rect(&layout, &viewport, n);
+                            if hit_test_note(rect, pos).is_some() {
                                 return (
                                     canvas::event::Status::Captured,
                                     Some(Message::MidiEditor(MidiEditorMessage::RemoveNote {
@@ -258,8 +224,6 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                                 );
                             }
                         }
-                        // Right-click on empty space: ignore
-                        let _ = (click_tick, click_note);
                     }
                 }
             }
@@ -273,10 +237,10 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                             start_tick_offset,
                             ..
                         }) if pos.x >= grid_x && pos.y < grid_h => {
-                            let tick = self.x_to_tick(pos.x - grid_x);
+                            let tick = viewport.x_local_to_tick(pos.x - grid_x);
                             let raw_tick = (tick as i64 + start_tick_offset).max(0) as u64;
                             let snapped_tick = self.snap(raw_tick);
-                            let note = self.y_to_note(pos.y, grid_h);
+                            let note = viewport.y_local_to_note(pos.y);
                             return (
                                 canvas::event::Status::Captured,
                                 Some(Message::MidiEditor(MidiEditorMessage::MoveNote {
@@ -291,7 +255,7 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                             note_index,
                             anchor_tick,
                         }) if pos.x >= grid_x => {
-                            let tick = self.x_to_tick(pos.x - grid_x);
+                            let tick = viewport.x_local_to_tick(pos.x - grid_x);
                             let snapped = self.snap(tick);
                             let new_dur =
                                 snapped.saturating_sub(*anchor_tick).max(self.snap_ticks);
@@ -371,6 +335,49 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
 }
 
 impl PianoRollCanvas<'_> {
+    /// Layout for the bottom-panel piano roll: keyboard on the left,
+    /// no toolbar, velocity lane below the grid.
+    fn layout(&self, bounds: Rectangle) -> PianoRollLayout {
+        PianoRollLayout {
+            keyboard_w: KEYBOARD_WIDTH,
+            grid_top: 0.0,
+            grid_h: bounds.height - VELOCITY_LANE_HEIGHT,
+        }
+    }
+
+    fn viewport(&self) -> PianoRollViewport {
+        PianoRollViewport {
+            zoom_x: self.zoom_x,
+            zoom_y: self.zoom_y,
+            scroll_x: self.scroll_x,
+            scroll_y: self.scroll_y,
+        }
+    }
+
+    /// Pixel rectangle for `note`, in canvas-local coordinates.
+    fn note_rect(
+        &self,
+        layout: &PianoRollLayout,
+        viewport: &PianoRollViewport,
+        note: &resonance_audio::types::MidiNote,
+    ) -> Rectangle {
+        Rectangle {
+            x: layout.grid_x() + viewport.tick_to_x_local(note.start_tick),
+            y: layout.grid_top + viewport.note_to_y_local(note.note),
+            width: viewport.duration_to_w(note.duration_ticks),
+            height: viewport.zoom_y,
+        }
+    }
+
+    /// Snap a tick value to the nearest grid position.
+    fn snap(&self, tick: u64) -> u64 {
+        if self.snap_ticks == 0 {
+            return tick;
+        }
+        let half = self.snap_ticks / 2;
+        ((tick + half) / self.snap_ticks) * self.snap_ticks
+    }
+
     /// Hash of the inputs that affect the drawn geometry. Excludes
     /// `bounds.size()` because the cache invalidates on size change
     /// automatically (via `canvas::Cache::draw`), so adding it here
@@ -401,27 +408,29 @@ impl PianoRollCanvas<'_> {
     }
 
     fn draw_into(&self, frame: &mut canvas::Frame, bounds: Rectangle) {
-        let grid_x = KEYBOARD_WIDTH;
-        let grid_w = bounds.width - KEYBOARD_WIDTH;
-        let grid_h = bounds.height - VELOCITY_LANE_HEIGHT;
+        let layout = self.layout(bounds);
+        let viewport = self.viewport();
+        let grid_x = layout.grid_x();
+        let grid_w = bounds.width - grid_x;
+        let grid_h = layout.grid_h;
 
         // --- Background ---
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
 
         // --- Note row backgrounds ---
-        self.draw_note_rows(frame, grid_x, grid_w, grid_h);
+        self.draw_note_rows(frame, &viewport, grid_x, grid_w, grid_h);
 
         // --- Grid lines ---
-        self.draw_grid_lines(frame, grid_x, grid_w, grid_h);
+        self.draw_grid_lines(frame, &viewport, grid_x, grid_w, grid_h);
 
         // --- Notes ---
-        self.draw_notes(frame, grid_x, grid_h);
+        self.draw_notes(frame, &layout, &viewport);
 
         // --- Piano keyboard ---
-        self.draw_keyboard(frame, grid_h);
+        piano_roll::draw_keyboard(frame, &layout, &viewport);
 
         // --- Velocity lane ---
-        self.draw_velocity_lane(frame, grid_x, grid_w, grid_h, bounds.height);
+        self.draw_velocity_lane(frame, &viewport, grid_x, grid_w, grid_h, bounds.height);
 
         // --- Separator lines ---
         // Vertical separator between keyboard and grid
@@ -437,58 +446,16 @@ impl PianoRollCanvas<'_> {
             theme::SEPARATOR,
         );
     }
-}
-
-impl PianoRollCanvas<'_> {
-    // --- Coordinate conversions ---
-
-    /// Convert a tick position to pixel x offset within the grid area.
-    fn tick_to_x(&self, tick: u64) -> f32 {
-        tick as f32 * self.zoom_x - self.scroll_x
-    }
-
-    /// Convert a pixel x offset within the grid area to a tick position.
-    fn x_to_tick(&self, x: f32) -> u64 {
-        let tick = (x + self.scroll_x) / self.zoom_x;
-        if tick < 0.0 {
-            0
-        } else {
-            tick as u64
-        }
-    }
-
-    /// Convert a note duration in ticks to pixel width.
-    fn duration_to_width(&self, ticks: u64) -> f32 {
-        ticks as f32 * self.zoom_x
-    }
-
-    /// Convert a MIDI note number to pixel y position (top of the row).
-    /// Note 127 is at the top, note 0 is at the bottom.
-    fn note_to_y(&self, note: u8, _grid_h: f32) -> f32 {
-        let row = (NOTE_COUNT - 1 - note) as f32;
-        row * self.zoom_y - self.scroll_y
-    }
-
-    /// Convert a pixel y position to a MIDI note number.
-    fn y_to_note(&self, y: f32, _grid_h: f32) -> u8 {
-        let row = ((y + self.scroll_y) / self.zoom_y).floor() as i32;
-        let note = (NOTE_COUNT as i32 - 1) - row;
-        note.clamp(0, 127) as u8
-    }
-
-    /// Snap a tick value to the nearest grid position.
-    fn snap(&self, tick: u64) -> u64 {
-        if self.snap_ticks == 0 {
-            return tick;
-        }
-        let half = self.snap_ticks / 2;
-        ((tick + half) / self.snap_ticks) * self.snap_ticks
-    }
-
-    // --- Drawing helpers ---
 
     /// Draw alternating row backgrounds for each semitone.
-    fn draw_note_rows(&self, frame: &mut canvas::Frame, grid_x: f32, grid_w: f32, grid_h: f32) {
+    fn draw_note_rows(
+        &self,
+        frame: &mut canvas::Frame,
+        viewport: &PianoRollViewport,
+        grid_x: f32,
+        grid_w: f32,
+        grid_h: f32,
+    ) {
         // Backdrop is BG_2; only black-key rows darken to BG_1. White
         // keys reuse the backdrop so the row striping reads softly.
         frame.fill_rectangle(
@@ -497,8 +464,8 @@ impl PianoRollCanvas<'_> {
             theme::BG_2,
         );
         for midi_note in 0..NOTE_COUNT {
-            let y = self.note_to_y(midi_note, grid_h);
-            let h = self.zoom_y;
+            let y = viewport.note_to_y_local(midi_note);
+            let h = viewport.zoom_y;
 
             if y + h < 0.0 || y > grid_h {
                 continue;
@@ -519,14 +486,21 @@ impl PianoRollCanvas<'_> {
     }
 
     /// Draw vertical grid lines at beat and bar boundaries.
-    fn draw_grid_lines(&self, frame: &mut canvas::Frame, grid_x: f32, grid_w: f32, grid_h: f32) {
+    fn draw_grid_lines(
+        &self,
+        frame: &mut canvas::Frame,
+        viewport: &PianoRollViewport,
+        grid_x: f32,
+        grid_w: f32,
+        grid_h: f32,
+    ) {
         let ticks_per_beat = TICKS_PER_QUARTER_NOTE;
         let ticks_per_bar = TICKS_PER_QUARTER_NOTE * self.time_sig_num as u64;
-        let pixels_per_beat = ticks_per_beat as f32 * self.zoom_x;
+        let pixels_per_beat = ticks_per_beat as f32 * viewport.zoom_x;
 
         // Determine visible tick range
-        let start_tick = (self.scroll_x / self.zoom_x).max(0.0) as u64;
-        let end_tick = ((self.scroll_x + grid_w) / self.zoom_x) as u64 + ticks_per_beat;
+        let start_tick = (viewport.scroll_x / viewport.zoom_x).max(0.0) as u64;
+        let end_tick = ((viewport.scroll_x + grid_w) / viewport.zoom_x) as u64 + ticks_per_beat;
 
         // Draw beat lines
         if pixels_per_beat >= 8.0 {
@@ -535,7 +509,7 @@ impl PianoRollCanvas<'_> {
 
             for beat_idx in first_beat..=last_beat {
                 let tick = beat_idx * ticks_per_beat;
-                let x = grid_x + self.tick_to_x(tick);
+                let x = grid_x + viewport.tick_to_x_local(tick);
 
                 if x < grid_x || x > grid_x + grid_w {
                     continue;
@@ -553,7 +527,7 @@ impl PianoRollCanvas<'_> {
         }
 
         // Draw subdivision lines (16th notes) if zoomed in enough
-        let snap_px = self.snap_ticks as f32 * self.zoom_x;
+        let snap_px = self.snap_ticks as f32 * viewport.zoom_x;
         if snap_px >= 8.0 && self.snap_ticks < ticks_per_beat {
             let first = start_tick / self.snap_ticks;
             let last = end_tick / self.snap_ticks + 1;
@@ -562,7 +536,7 @@ impl PianoRollCanvas<'_> {
                 if tick.is_multiple_of(ticks_per_beat) {
                     continue; // already drawn as beat/bar line
                 }
-                let x = grid_x + self.tick_to_x(tick);
+                let x = grid_x + viewport.tick_to_x_local(tick);
                 if x < grid_x || x > grid_x + grid_w {
                     continue;
                 }
@@ -579,95 +553,38 @@ impl PianoRollCanvas<'_> {
     }
 
     /// Draw MIDI note rectangles on the grid.
-    fn draw_notes(&self, frame: &mut canvas::Frame, grid_x: f32, grid_h: f32) {
+    fn draw_notes(
+        &self,
+        frame: &mut canvas::Frame,
+        layout: &PianoRollLayout,
+        viewport: &PianoRollViewport,
+    ) {
+        let grid_x = layout.grid_x();
         for (i, n) in self.clip.notes.iter().enumerate() {
-            let x = grid_x + self.tick_to_x(n.start_tick);
-            let w = self.duration_to_width(n.duration_ticks);
-            let y = self.note_to_y(n.note, grid_h);
-            let h = self.zoom_y;
+            let rect = self.note_rect(layout, viewport, n);
 
-            if x + w < grid_x || x > grid_x + 2000.0 || y + h < 0.0 || y > grid_h {
+            if rect.x + rect.width < grid_x
+                || rect.x > grid_x + 2000.0
+                || rect.y + rect.height < 0.0
+                || rect.y > layout.grid_h
+            {
                 continue;
             }
 
-            // Lavender notes — velocity raises alpha so harder hits
-            // are visually denser without changing hue.
-            let v = n.velocity.clamp(0.0, 1.0);
-            let note_color = Color {
-                a: 0.55 + 0.40 * v,
-                ..theme::ACCENT_SOFT
-            };
-            let body = if w >= 4.0 && h >= 4.0 {
-                canvas::Path::rounded_rectangle(
-                    Point::new(x, y),
-                    Size::new(w, h),
-                    2.0.into(),
-                )
+            let style = if self.selected_note == Some(i) {
+                NoteStyle::selected()
             } else {
-                canvas::Path::rectangle(Point::new(x, y), Size::new(w, h))
+                NoteStyle::plain()
             };
-            frame.fill(&body, note_color);
-
-            let is_selected = self.selected_note == Some(i);
-            let stroke_color = if is_selected { theme::ACCENT } else { theme::ACCENT_LINE };
-            let stroke_w = if is_selected { 1.5 } else { 1.0 };
-            frame.stroke(
-                &body,
-                canvas::Stroke::default()
-                    .with_color(stroke_color)
-                    .with_width(stroke_w),
-            );
+            piano_roll::draw_note(frame, rect, n.velocity, style);
         }
-    }
-
-    /// Draw the piano keyboard on the left side.
-    fn draw_keyboard(&self, frame: &mut canvas::Frame, grid_h: f32) {
-        frame.fill_rectangle(
-            Point::ORIGIN,
-            Size::new(KEYBOARD_WIDTH, grid_h),
-            theme::BG_2,
-        );
-
-        for midi_note in 0..NOTE_COUNT {
-            let y = self.note_to_y(midi_note, grid_h);
-            let h = self.zoom_y;
-
-            if y + h < 0.0 || y > grid_h {
-                continue;
-            }
-
-            let black = is_black_key(midi_note);
-            let key_color = if black { theme::BG_0 } else { theme::BG_3 };
-            let key_w = if black {
-                KEYBOARD_WIDTH * 0.65
-            } else {
-                KEYBOARD_WIDTH - 1.0
-            };
-
-            frame.fill_rectangle(Point::new(0.0, y), Size::new(key_w, h - 1.0), key_color);
-
-            if midi_note % 12 == 0 && h >= 8.0 {
-                frame.fill_text(canvas::Text {
-                    content: note_name(midi_note),
-                    position: Point::new(2.0, y + 1.0),
-                    color: theme::TEXT_3,
-                    size: (h * 0.7).min(10.0).into(),
-                    font: theme::MONO_FONT,
-                    ..canvas::Text::default()
-                });
-            }
-        }
-        frame.fill_rectangle(
-            Point::new(KEYBOARD_WIDTH - 1.0, 0.0),
-            Size::new(1.0, grid_h),
-            theme::LINE_2,
-        );
     }
 
     /// Draw the velocity lane at the bottom.
     fn draw_velocity_lane(
         &self,
         frame: &mut canvas::Frame,
+        viewport: &PianoRollViewport,
         grid_x: f32,
         grid_w: f32,
         grid_h: f32,
@@ -694,8 +611,8 @@ impl PianoRollCanvas<'_> {
 
         // Velocity bars for each note
         for (i, n) in self.clip.notes.iter().enumerate() {
-            let x = grid_x + self.tick_to_x(n.start_tick);
-            let w = self.duration_to_width(n.duration_ticks).clamp(2.0, 6.0);
+            let x = grid_x + viewport.tick_to_x_local(n.start_tick);
+            let w = viewport.duration_to_w(n.duration_ticks).clamp(2.0, 6.0);
 
             if x + w < grid_x || x > grid_x + 2000.0 {
                 continue;

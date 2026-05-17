@@ -1,4 +1,4 @@
-//! Smoke tests for svs-poc.
+//! Smoke tests for resonance-svs.
 //!
 //! Pure-Rust parsing checks always run. The end-to-end render test runs only when the
 //! environment variable `SVS_POC_VOICEBANK_DIR` is set to a directory containing
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 #[test]
 fn note_name_parsing_matches_jobsecond_regex() {
-    use svs_poc::ds::note_name_to_midi;
+    use resonance_svs::ds::note_name_to_midi;
     assert_eq!(note_name_to_midi("C4"), 60);
     assert_eq!(note_name_to_midi("D#4"), 63);
     assert_eq!(note_name_to_midi("Eb4"), 63);
@@ -23,7 +23,7 @@ fn note_name_parsing_matches_jobsecond_regex() {
 
 #[test]
 fn sample_curve_resamples_to_target_length() {
-    use svs_poc::ds::SampleCurve;
+    use resonance_svs::ds::SampleCurve;
     let curve = SampleCurve {
         samples: vec![0.0, 1.0, 2.0, 3.0],
         timestep: 0.01,
@@ -38,8 +38,8 @@ fn sample_curve_resamples_to_target_length() {
 
 #[test]
 fn parses_minimal_openvpi_style_ds_file() {
-    use svs_poc::ds::load_ds_file;
-    let tmp = std::env::temp_dir().join("svs_poc_sample.ds");
+    use resonance_svs::ds::load_ds_file;
+    let tmp = std::env::temp_dir().join("resonance_svs_sample.ds");
     let body = r#"[
         {
             "offset": 0.0,
@@ -77,14 +77,14 @@ fn end_to_end_render() {
     };
     let acoustic_config = voicebank.join("dsconfig.yaml");
     let vocoder_config = voicebank.join("vocoder.yaml");
-    let out = std::env::temp_dir().join("svs_poc_smoke.wav");
+    let out = std::env::temp_dir().join("resonance_svs_smoke.wav");
 
-    let args = svs_poc::pipeline::PipelineArgs {
+    let args = resonance_svs::pipeline::PipelineArgs {
         ds_file,
         acoustic_config,
         vocoder_config,
         out: out.clone(),
-        execution_provider: svs_poc::stages::common::ExecutionProvider::Cpu,
+        execution_provider: resonance_svs::stages::common::ExecutionProvider::Cpu,
         device_index: 0,
         speaker: env::var("SVS_POC_SPEAKER").ok(),
         speedup: env::var("SVS_POC_SPEEDUP")
@@ -93,7 +93,7 @@ fn end_to_end_render() {
             .unwrap_or(20),
         depth: 1000,
     };
-    let summary = svs_poc::pipeline::run(&args).expect("pipeline run failed");
+    let summary = resonance_svs::pipeline::run(&args).expect("pipeline run failed");
     assert!(summary.total_samples > summary.sample_rate as usize / 2);
     assert!(out.exists(), "WAV should have been written");
     let meta = std::fs::metadata(&out).expect("WAV metadata");

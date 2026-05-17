@@ -6,7 +6,7 @@
 //! gaps between them, biasing toward degrees that can reach the next
 //! waypoint as the gap narrows.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -296,8 +296,11 @@ fn weighted_sample(candidates: &[(Degree, f32)], rng: &mut SmallRng) -> Degree {
 /// Build an order-1 view of a table by marginalizing higher-order keys
 /// down to the last element. For an order-1 table, returns the table's
 /// transitions as-is (unwrapping the single-element keys).
-fn marginalize_to_order1(table: &MarkovTable) -> HashMap<Degree, Vec<(Degree, f32)>> {
-    let mut merged: HashMap<Degree, HashMap<Degree, f32>> = HashMap::new();
+///
+/// Uses `BTreeMap` so downstream iteration (e.g. `precompute_reachability`)
+/// is deterministic across runs.
+fn marginalize_to_order1(table: &MarkovTable) -> BTreeMap<Degree, Vec<(Degree, f32)>> {
+    let mut merged: BTreeMap<Degree, BTreeMap<Degree, f32>> = BTreeMap::new();
     for (key, transitions) in &table.transitions {
         if let Some(&last) = key.last() {
             let entry = merged.entry(last).or_default();
@@ -318,7 +321,7 @@ fn marginalize_to_order1(table: &MarkovTable) -> HashMap<Degree, Vec<(Degree, f3
 /// reach `target` in at most `k` transitions. `result[0]` always contains
 /// just the target itself.
 fn precompute_reachability(
-    order1: &HashMap<Degree, Vec<(Degree, f32)>>,
+    order1: &BTreeMap<Degree, Vec<(Degree, f32)>>,
     target: Degree,
     max_steps: usize,
 ) -> Vec<HashSet<Degree>> {

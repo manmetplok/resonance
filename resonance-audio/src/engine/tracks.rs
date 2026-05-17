@@ -151,8 +151,8 @@ pub(crate) fn handle_remove_track(ctx: &HandlerCtx, state: &mut HandlerState, tr
     };
     drop(removed_clips);
     state.rec.buffers.remove(&track_id);
-    state.midi_inputs.remove_track(track_id);
-    state.midi_outputs.remove_track(track_id);
+    state.midi_hw.midi_inputs.remove_track(track_id);
+    state.midi_hw.midi_outputs.remove_track(track_id);
     state.midi_recording.remove(&track_id);
     let _ = ctx.event_tx.send(AudioEvent::TrackRemoved { track_id });
     for sid in removed_sub_ids {
