@@ -82,7 +82,7 @@ The mastering plugin's `chain.rs` + `stages/` + `params/` decomposition is the
 reference. After the earlier P2 splits, the *files* moved but the orchestrator
 mod.rs in several places still owns the work it dispatched.
 
-    - [ ] `plugins/resonance-reverb/src/dsp/mod.rs` (423 LOC). Holds the full
+    - [x] `plugins/resonance-reverb/src/dsp/mod.rs` (423 LOC). Holds the full
       `ReverbDsp` impl: state init + 23 setters/getters + the 350-line process
       hot path. Move the orchestrator to `chain.rs`; promote diffusion/FDN math
       already in submodules to carry the per-stage state too. mod.rs should only
