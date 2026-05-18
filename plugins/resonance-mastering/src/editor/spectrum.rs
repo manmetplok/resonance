@@ -22,10 +22,6 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, handle: Option<&SpectrumH
         return;
     };
     let snapshot = handle.latest();
-    if snapshot.magnitudes_db.len() != NUM_OCTAVE_BINS {
-        draw_placeholder(painter, rect, "spectrum not ready");
-        return;
-    }
 
     let bars = rect.width() / NUM_OCTAVE_BINS as f32;
     let bar_w = (bars - 1.0).max(1.0);

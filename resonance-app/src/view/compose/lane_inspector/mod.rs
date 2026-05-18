@@ -116,6 +116,7 @@ pub const PANEL_WIDTH: f32 = theme::COMPOSE_RAIL_WIDTH as f32;
 // Top-level inspector
 // ===========================================================================
 
+#[allow(clippy::too_many_arguments)]
 pub fn view<'a>(
     definition: &'a SectionDefinitionState,
     selected_lane: &'a SelectedLane,

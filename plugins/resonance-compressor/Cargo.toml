@@ -18,7 +18,6 @@ resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
 serde_json.workspace = true
-parking_lot.workspace = true
 
 wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
 egui = { workspace = true, optional = true }

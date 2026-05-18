@@ -56,6 +56,12 @@ pub(crate) struct Resonance {
     /// continuous resize doesn't reallocate option vecs every frame.
     /// See `view::ui_caches` for the cache and rebuild API.
     pub(crate) view_caches: view::ui_caches::UiViewCaches,
+    /// Lazy-memoised label strings for the transport bar's stat blocks
+    /// (position, time, sig, key, loop). Re-formatted only when the
+    /// underlying inputs change; refreshed once per paint from
+    /// `view::transport::view_transport`. `RefCell` because `view()`
+    /// takes `&self`. See `view::transport_labels`.
+    pub(crate) transport_labels: std::cell::RefCell<view::transport_labels::TransportLabels>,
     pub(crate) error_message: Option<String>,
     pub(crate) master_volume: f32,
     pub(crate) master_level_l: f32,
@@ -380,6 +386,9 @@ impl Resonance {
             midi_clock_recv_device: None,
             available_plugins: Vec::new(),
             view_caches: view::ui_caches::UiViewCaches::default(),
+            transport_labels: std::cell::RefCell::new(
+                view::transport_labels::TransportLabels::default(),
+            ),
             error_message: None,
             master_volume: 0.0, // 0 dB = unity gain
             master_level_l: 0.0,

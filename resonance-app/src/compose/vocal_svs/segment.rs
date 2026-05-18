@@ -43,7 +43,7 @@ pub(super) fn build_segment(
     // each voicebank rewrites a small set of names at the SVS boundary.
     for a in assigned.iter_mut() {
         for p in a.phonemes.iter_mut() {
-            *p = substitute_phoneme(params.voicebank, *p);
+            *p = substitute_phoneme(params.voicebank, p);
         }
     }
     // Optional word-boundary SP injection. Off by default (the
@@ -54,7 +54,7 @@ pub(super) fn build_segment(
     let word_boundary_sp_sec: f64 = std::env::var("RESONANCE_WORD_BOUNDARY_SP_MS")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
-        .map(|ms| (ms / 1000.0).max(0.0).min(0.2))
+        .map(|ms| (ms / 1000.0).clamp(0.0, 0.2))
         .unwrap_or(0.0);
     // Optional stop-closure pre-silence. English stops (B/P/T/D/K/G)
     // have an inherent closure phase the model handles internally;
@@ -65,7 +65,7 @@ pub(super) fn build_segment(
     let stop_closure_sec: f64 = std::env::var("RESONANCE_STOP_CLOSURE_MS")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
-        .map(|ms| (ms / 1000.0).max(0.0).min(0.05))
+        .map(|ms| (ms / 1000.0).clamp(0.0, 0.05))
         .unwrap_or(0.0);
     let consonant_emphasis = params.consonant_emphasis.clamp(0.0, 1.0) as f64;
     // Consonant target duration in seconds. `consonant_emphasis` slides
@@ -500,7 +500,7 @@ pub(super) fn build_segment(
         let mid_hz = (min_hz + max_hz) * 0.5;
         let half_range_hz = ((max_hz - min_hz) * 0.5).max(1.0);
         let mut samples = Vec::with_capacity(curve_len);
-        for i in 0..curve_len {
+        for (i, &pitch) in f0_samples.iter().enumerate().take(curve_len) {
             // Velocity modulation: derive_vocal's neutral velocity is
             // ~0.78 with strong beats around 0.86. Map to roughly
             // [-1, +1] around neutral, then scale by amount and
@@ -513,7 +513,6 @@ pub(super) fn build_segment(
             };
             // Pitch contour modulation: position within section's f0
             // range, mapped to [-1, +1]. Silence frames contribute 0.
-            let pitch = f0_samples[i];
             let in_voiced =
                 frame_note_total_sec.get(i).copied().unwrap_or(0.0) > 0.0 && pitch > 0.0;
             let pitch_mod = if in_voiced {

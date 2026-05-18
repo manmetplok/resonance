@@ -125,9 +125,11 @@ impl Default for ComposeState {
     fn default() -> Self {
         let mut next_id: u64 = 0;
         let drum_groups = default_drum_groups(&mut next_id);
-        let mut drumroll = DrumrollViewState::default();
-        drumroll.selected_group_id = drum_groups.first().map(|g| g.id);
-        drumroll.managing_group_id = drum_groups.first().map(|g| g.id);
+        let drumroll = DrumrollViewState {
+            selected_group_id: drum_groups.first().map(|g| g.id),
+            managing_group_id: drum_groups.first().map(|g| g.id),
+            ..DrumrollViewState::default()
+        };
         Self {
             definitions: Vec::new(),
             placements: Vec::new(),

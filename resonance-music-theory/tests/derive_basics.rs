@@ -4,6 +4,8 @@
 //! `#[cfg(test)] mod tests` block when `derive.rs` was split into a
 //! module.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use resonance_music_theory::{
     derive_bass, derive_melody, derive_melody_fill_vocal, derive_pad, derive_vocal_with_meter,
     generate_lyrics, vocal_phrase_spans, BassParams, BassStyle, ContourPreference, Chord,
@@ -275,7 +277,7 @@ fn motif_strong_beats_are_chord_tones() {
     let tpb = 480u64;
     for n in &notes {
         let beat_in_chord = n.start_tick % (4 * tpb);
-        let is_strong = beat_in_chord % (2 * tpb) == 0;
+        let is_strong = beat_in_chord.is_multiple_of(2 * tpb);
         if is_strong {
             // Find which chord this note belongs to.
             let chord_idx = chords

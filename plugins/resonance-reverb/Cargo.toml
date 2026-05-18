@@ -15,7 +15,6 @@ editor = ["dep:wayland-plugin-gui", "dep:egui"]
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
-parking_lot.workspace = true
 serde_json.workspace = true
 
 wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }

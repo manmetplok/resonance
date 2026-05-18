@@ -470,7 +470,7 @@ fn draw_pad_row(
                 let segment_end = (yy + 3.0).min(bottom);
                 frame.stroke(
                     &Path::line(Point::new(cx, yy), Point::new(cx, segment_end)),
-                    stroke.clone(),
+                    stroke,
                 );
                 yy += 5.0;
             }

@@ -42,7 +42,7 @@ pub struct FftWorker {
     mag_db: Vec<f32>,
 
     /// Peak-hold-with-decay buffer at 1/6-octave resolution.
-    held_db: Vec<f32>,
+    held_db: [f32; NUM_OCTAVE_BINS],
     octave_table: OctaveTable,
 }
 
@@ -66,7 +66,7 @@ impl FftWorker {
             samples_since_fft: 0,
             complex_scratch: vec![Complex::new(0.0, 0.0); FFT_SIZE],
             mag_db: vec![FLOOR_DB; FFT_SIZE / 2],
-            held_db: vec![FLOOR_DB; NUM_OCTAVE_BINS],
+            held_db: [FLOOR_DB; NUM_OCTAVE_BINS],
             octave_table: OctaveTable::new(),
         }
     }
@@ -146,9 +146,12 @@ impl FftWorker {
             *held = decayed.max(new_bands[i]);
         }
 
-        // Publish.
+        // Publish. `magnitudes_db` is a fixed-size array (Copy), so
+        // the `SpectrumSnapshot` is built inline and the only heap
+        // allocation per frame is the `Arc` itself — no separate
+        // `Vec` backing buffer to allocate as we did before.
         self.snapshot.store(Arc::new(SpectrumSnapshot {
-            magnitudes_db: self.held_db.clone(),
+            magnitudes_db: self.held_db,
             sample_rate: self.sample_rate,
         }));
     }

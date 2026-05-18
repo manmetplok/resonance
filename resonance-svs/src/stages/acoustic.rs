@@ -79,7 +79,14 @@ impl AcousticStage {
     /// row-major order (n_frames-first). `depth` may be either an integer step count (older
     /// voicebanks) or a fractional 0–1 value (newer `use_variable_depth` voicebanks); the
     /// model itself decides which it expects via the dtype of its `depth` input.
-    pub fn infer(&mut self, pd: &PreprocessedAcoustic, speedup: i64, depth: f32) -> Result<MelOutput> {
+    ///
+    /// Takes `pd` by `&mut` so each tensor input can be moved out via
+    /// `std::mem::take` and handed to `Array::from_shape_vec` without
+    /// cloning. The previous `&PreprocessedAcoustic` signature meant
+    /// every input field was cloned per segment — for `spk_embed` and
+    /// `breathiness` that's megabytes of avoidable copying. `pd.f0` is
+    /// left intact for the vocoder to read after this call.
+    pub fn infer(&mut self, pd: &mut PreprocessedAcoustic, speedup: i64, depth: f32) -> Result<MelOutput> {
         let n_tokens = pd.tokens.len();
         if pd.durations.len() != n_tokens {
             return Err(anyhow!(
@@ -92,9 +99,9 @@ impl AcousticStage {
 
         let mut inputs: Vec<(String, Value)> = Vec::with_capacity(10);
 
-        let tokens = Array2::<i64>::from_shape_vec((1, n_tokens), pd.tokens.clone())
+        let tokens = Array2::<i64>::from_shape_vec((1, n_tokens), std::mem::take(&mut pd.tokens))
             .context("packing tokens tensor")?;
-        let durations = Array2::<i64>::from_shape_vec((1, n_tokens), pd.durations.clone())
+        let durations = Array2::<i64>::from_shape_vec((1, n_tokens), std::mem::take(&mut pd.durations))
             .context("packing durations tensor")?;
         let f0 = Array2::<f32>::from_shape_vec((1, n_frames), pd.f0.iter().map(|x| *x as f32).collect())
             .context("packing f0 tensor")?;
@@ -103,7 +110,7 @@ impl AcousticStage {
         inputs.push(("tokens".into(), Value::from_array(tokens)?.into()));
         inputs.push(("durations".into(), Value::from_array(durations)?.into()));
         if self.flags.languages {
-            let langs = pd.languages.as_ref().ok_or_else(|| {
+            let langs = std::mem::take(&mut pd.languages).ok_or_else(|| {
                 anyhow!("acoustic model expects `languages` input but none supplied in .ds")
             })?;
             if langs.len() != n_tokens {
@@ -113,7 +120,7 @@ impl AcousticStage {
                     n_tokens
                 ));
             }
-            let arr = Array2::<i64>::from_shape_vec((1, n_tokens), langs.clone())
+            let arr = Array2::<i64>::from_shape_vec((1, n_tokens), langs)
                 .context("packing languages tensor")?;
             inputs.push(("languages".into(), Value::from_array(arr)?.into()));
         }
@@ -143,25 +150,23 @@ impl AcousticStage {
             inputs.push(("voicing".into(), Value::from_array(arr)?.into()));
         }
         if self.flags.tension {
-            let v = pd.tension_or_default(n_frames);
+            let v = std::mem::take(&mut pd.tension).unwrap_or_else(|| vec![0.0; n_frames]);
             let arr = Array2::<f32>::from_shape_vec((1, n_frames), v).context("packing tension")?;
             inputs.push(("tension".into(), Value::from_array(arr)?.into()));
         }
 
         if self.flags.velocity {
-            let v = pd.velocity_or_default(n_frames);
+            let v = std::mem::take(&mut pd.velocity).unwrap_or_else(|| vec![1.0; n_frames]);
             let arr = Array2::<f32>::from_shape_vec((1, n_frames), v).context("packing velocity")?;
             inputs.push(("velocity".into(), Value::from_array(arr)?.into()));
         }
         if self.flags.gender {
-            let v = pd.gender_or_default(n_frames);
+            let v = std::mem::take(&mut pd.gender).unwrap_or_else(|| vec![0.0; n_frames]);
             let arr = Array2::<f32>::from_shape_vec((1, n_frames), v).context("packing gender")?;
             inputs.push(("gender".into(), Value::from_array(arr)?.into()));
         }
         if self.flags.multi_speakers {
-            let emb = pd
-                .spk_embed
-                .as_ref()
+            let emb = std::mem::take(&mut pd.spk_embed)
                 .ok_or_else(|| anyhow!("acoustic model expects spk_embed but none was prepared"))?;
             let frames_check = emb.len() / SPK_EMBED_SIZE;
             if frames_check != n_frames {
@@ -171,24 +176,20 @@ impl AcousticStage {
                     n_frames
                 ));
             }
-            let arr = Array3::<f32>::from_shape_vec((1, n_frames, SPK_EMBED_SIZE), emb.clone())
+            let arr = Array3::<f32>::from_shape_vec((1, n_frames, SPK_EMBED_SIZE), emb)
                 .context("packing spk_embed")?;
             inputs.push(("spk_embed".into(), Value::from_array(arr)?.into()));
         }
         if self.flags.energy {
-            let v = pd
-                .energy
-                .as_ref()
+            let v = std::mem::take(&mut pd.energy)
                 .ok_or_else(|| anyhow!("acoustic model expects energy but none supplied in .ds"))?;
-            let arr = Array2::<f32>::from_shape_vec((1, n_frames), v.clone()).context("packing energy")?;
+            let arr = Array2::<f32>::from_shape_vec((1, n_frames), v).context("packing energy")?;
             inputs.push(("energy".into(), Value::from_array(arr)?.into()));
         }
         if self.flags.breathiness {
-            let v = pd
-                .breathiness
-                .as_ref()
+            let v = std::mem::take(&mut pd.breathiness)
                 .ok_or_else(|| anyhow!("acoustic model expects breathiness but none supplied in .ds"))?;
-            let arr = Array2::<f32>::from_shape_vec((1, n_frames), v.clone())
+            let arr = Array2::<f32>::from_shape_vec((1, n_frames), v)
                 .context("packing breathiness")?;
             inputs.push(("breathiness".into(), Value::from_array(arr)?.into()));
         }
@@ -257,20 +258,6 @@ pub struct PreprocessedAcoustic {
     pub breathiness: Option<Vec<f32>>,
     /// Length `n_frames * SPK_EMBED_SIZE`, row-major over frames.
     pub spk_embed: Option<Vec<f32>>,
-}
-
-impl PreprocessedAcoustic {
-    pub fn velocity_or_default(&self, n_frames: usize) -> Vec<f32> {
-        self.velocity.clone().unwrap_or_else(|| vec![1.0; n_frames])
-    }
-
-    pub fn gender_or_default(&self, n_frames: usize) -> Vec<f32> {
-        self.gender.clone().unwrap_or_else(|| vec![0.0; n_frames])
-    }
-
-    pub fn tension_or_default(&self, n_frames: usize) -> Vec<f32> {
-        self.tension.clone().unwrap_or_else(|| vec![0.0; n_frames])
-    }
 }
 
 #[derive(Debug, Clone)]

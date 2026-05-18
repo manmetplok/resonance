@@ -1,16 +1,14 @@
 //! Shared visualization state between the audio thread and the editor.
 //!
-//! The audio thread writes instantaneous input/output/GR values as atomic
-//! floats (cheap, lock-free) and pushes the per-block gain-reduction value
-//! into a small ring buffer (mutex-guarded) so the editor can render a
-//! rolling history trace. The history ring is sized for ~2 seconds of
-//! history at 60 Hz refresh which is plenty for visually tracking
-//! compression events.
+//! Every cell is bit-punned atomic — instantaneous input/output/GR
+//! values are scalar `AtomicU32`s, and the rolling gain-reduction
+//! history is a fixed-length array of atomic samples plus an atomic
+//! write index. The audio thread never blocks; the UI reader can
+//! tolerate the (very rare) one-sample straddle at frame boundaries
+//! since this is purely a viz trace.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
-
-use parking_lot::Mutex;
 
 /// Number of samples kept in the GR history ring buffer.
 pub const HISTORY_LEN: usize = 256;
@@ -30,19 +28,37 @@ pub struct CompressorViz {
     /// Most recent gain reduction in dB (positive = reducing).
     pub gr_db: AtomicU32,
     /// Rolling history of GR samples, newest at `write_pos`.
-    pub history: Mutex<GrHistory>,
+    pub history: GrHistory,
 }
 
 pub struct GrHistory {
-    pub samples: [f32; HISTORY_LEN],
-    pub write_pos: usize,
+    samples: [AtomicU32; HISTORY_LEN],
+    write_pos: AtomicUsize,
 }
 
 impl GrHistory {
+    fn new() -> Self {
+        Self {
+            samples: std::array::from_fn(|_| AtomicU32::new(0.0f32.to_bits())),
+            write_pos: AtomicUsize::new(0),
+        }
+    }
+
+    /// Push one sample. Called from the audio thread once per
+    /// `HISTORY_STEP_SAMPLES`; wait-free.
+    fn push(&self, v: f32) {
+        let pos = self.write_pos.load(Ordering::Relaxed);
+        self.samples[pos].store(v.to_bits(), Ordering::Relaxed);
+        self.write_pos
+            .store((pos + 1) % HISTORY_LEN, Ordering::Relaxed);
+    }
+
     /// Iterate the ring in chronological order (oldest first).
     pub fn iter_chrono(&self) -> impl Iterator<Item = f32> + '_ {
-        let start = self.write_pos;
-        (0..HISTORY_LEN).map(move |i| self.samples[(start + i) % HISTORY_LEN])
+        let start = self.write_pos.load(Ordering::Relaxed);
+        (0..HISTORY_LEN).map(move |i| {
+            f32::from_bits(self.samples[(start + i) % HISTORY_LEN].load(Ordering::Relaxed))
+        })
     }
 }
 
@@ -52,10 +68,7 @@ impl CompressorViz {
             input_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             output_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             gr_db: AtomicU32::new(0.0f32.to_bits()),
-            history: Mutex::new(GrHistory {
-                samples: [0.0; HISTORY_LEN],
-                write_pos: 0,
-            }),
+            history: GrHistory::new(),
         })
     }
 
@@ -66,10 +79,7 @@ impl CompressorViz {
     }
 
     pub fn push_gr(&self, gr_db: f32) {
-        let mut h = self.history.lock();
-        let pos = h.write_pos;
-        h.samples[pos] = gr_db;
-        h.write_pos = (pos + 1) % HISTORY_LEN;
+        self.history.push(gr_db);
     }
 
     pub fn read_input_db(&self) -> f32 {

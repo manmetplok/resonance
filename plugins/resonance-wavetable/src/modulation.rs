@@ -69,7 +69,12 @@ impl ModDest {
 }
 
 /// Accumulated modulation values for one voice sample.
-#[derive(Default, Clone)]
+///
+/// `Copy` so the per-sample render kernel can stash a control-rate
+/// snapshot on `Voice` and read a cheap by-value copy each sample
+/// without holding an active borrow on the voice (which would conflict
+/// with mutating `voice.unison[u]` in the inner oscillator loop).
+#[derive(Default, Clone, Copy)]
 pub struct ModState {
     pub osc1_position: f32,
     pub osc2_position: f32,

@@ -73,6 +73,18 @@ pub struct Voice {
     // the global control-rate slot wouldn't otherwise tick this sample.
     pub filter_dirty: bool,
 
+    // Same intent as `filter_dirty` but for the modulation matrix
+    // snapshot. The mod matrix is evaluated at control rate (every
+    // `FILTER_COEFF_INTERVAL` samples) and the result cached in
+    // `cached_mods`; this flag forces an immediate re-evaluation on
+    // freshly-triggered voices so the first sample uses fresh values.
+    pub mod_dirty: bool,
+
+    // Control-rate snapshot of the modulation matrix output. Refreshed
+    // every `FILTER_COEFF_INTERVAL` samples (and once on trigger via
+    // `mod_dirty`); read by-value per sample inside the render loop.
+    pub cached_mods: crate::modulation::ModState,
+
     // "Last computed" values cached per-sample during render. Read by the
     // viz state publisher at the end of each audio block. Not part of the
     // DSP itself.
@@ -101,6 +113,8 @@ impl Voice {
             unison: std::array::from_fn(|_| UnisonSubVoice::new()),
             unison_count: 1,
             filter_dirty: true,
+            mod_dirty: true,
+            cached_mods: crate::modulation::ModState::default(),
             last_filter_cutoff: 8000.0,
             last_osc1_pos: 0.0,
             last_osc2_pos: 0.0,
@@ -154,6 +168,7 @@ impl Voice {
         self.filter_l.clear();
         self.filter_r.clear();
         self.filter_dirty = true;
+        self.mod_dirty = true;
 
         // Distribute unison voices
         self.unison_count = unison_count.clamp(1, MAX_UNISON);

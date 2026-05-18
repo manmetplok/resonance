@@ -1,17 +1,15 @@
 //! Lock-free visualization state shared between the audio thread and
 //! the editor thread.
 //!
-//! Per-sample values (input/output peaks, per-FDN-channel energies) are
-//! stored as bit-punned atomic f32s — cheap, wait-free, no tearing for
-//! a single scalar. The rolling tail-RMS trace follows the compressor's
-//! pattern: a short `parking_lot::Mutex` around a fixed-size ring buffer,
-//! written by the audio thread once per block and read once per frame
-//! by the UI.
+//! Every field is bit-punned `AtomicU32` (or `AtomicUsize` for the
+//! ring's write index) — cheap, wait-free, no tearing for a single
+//! scalar. The rolling tail-RMS trace is a fixed-length array of
+//! atomic samples plus an atomic write position: the audio thread
+//! never blocks, and the UI reader can tolerate one straddled sample
+//! at frame boundaries (it's only ever rendering a viz).
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
-
-use parking_lot::Mutex;
 
 /// Length of the rolling wet-RMS history shown behind the analytic
 /// decay polygon. At ~1 push/block (e.g. ~350 Hz at 48 k / 128-frame
@@ -31,29 +29,39 @@ pub const ER_TAPS: usize = 12;
 /// `[(L, R); ER_TAPS]` — one (left, right) pair per tap.
 pub type ErTapsSnapshot = ([(f32, f32); ER_TAPS], [(f32, f32); ER_TAPS]);
 
-/// Fixed-length ring for the wet-RMS history trace.
+/// Fixed-length lock-free ring for the wet-RMS history trace. The
+/// writer pushes one sample per audio block; the reader snapshots the
+/// whole ring in chronological order each viz frame.
 pub struct TailHistory {
-    pub samples: [f32; TAIL_HISTORY_LEN],
-    pub write_pos: usize,
+    samples: [AtomicU32; TAIL_HISTORY_LEN],
+    write_pos: AtomicUsize,
 }
 
 impl TailHistory {
     fn new() -> Self {
         Self {
-            samples: [0.0; TAIL_HISTORY_LEN],
-            write_pos: 0,
+            samples: std::array::from_fn(|_| AtomicU32::new(0.0f32.to_bits())),
+            write_pos: AtomicUsize::new(0),
         }
     }
 
-    pub fn push(&mut self, v: f32) {
-        self.samples[self.write_pos] = v;
-        self.write_pos = (self.write_pos + 1) % TAIL_HISTORY_LEN;
+    /// Push one sample. Called from the audio thread once per block;
+    /// wait-free.
+    pub fn push(&self, v: f32) {
+        let pos = self.write_pos.load(Ordering::Relaxed);
+        self.samples[pos].store(v.to_bits(), Ordering::Relaxed);
+        let next = (pos + 1) % TAIL_HISTORY_LEN;
+        self.write_pos.store(next, Ordering::Relaxed);
     }
 
-    /// Iterate the ring in chronological order (oldest first).
+    /// Snapshot the ring in chronological order (oldest first). Two
+    /// adjacent samples can straddle a writer push; for a viz history
+    /// this is acceptable.
     pub fn iter_chrono(&self) -> impl Iterator<Item = f32> + '_ {
-        let start = self.write_pos;
-        (0..TAIL_HISTORY_LEN).map(move |i| self.samples[(start + i) % TAIL_HISTORY_LEN])
+        let start = self.write_pos.load(Ordering::Relaxed);
+        (0..TAIL_HISTORY_LEN).map(move |i| {
+            f32::from_bits(self.samples[(start + i) % TAIL_HISTORY_LEN].load(Ordering::Relaxed))
+        })
     }
 }
 
@@ -79,7 +87,7 @@ pub struct ReverbViz {
     er_tap_gain_r: [AtomicU32; ER_TAPS],
 
     /// Rolling history of wet RMS samples (one push per audio block).
-    pub tail: Mutex<TailHistory>,
+    pub tail: TailHistory,
 }
 
 impl ReverbViz {
@@ -95,7 +103,7 @@ impl ReverbViz {
             er_tap_ms_r: std::array::from_fn(|_| AtomicU32::new(0.0f32.to_bits())),
             er_tap_gain_l: std::array::from_fn(|_| AtomicU32::new(0.0f32.to_bits())),
             er_tap_gain_r: std::array::from_fn(|_| AtomicU32::new(0.0f32.to_bits())),
-            tail: Mutex::new(TailHistory::new()),
+            tail: TailHistory::new(),
         })
     }
 
@@ -177,6 +185,6 @@ impl ReverbViz {
     }
 
     pub fn push_tail_rms(&self, rms: f32) {
-        self.tail.lock().push(rms);
+        self.tail.push(rms);
     }
 }

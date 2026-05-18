@@ -1,5 +1,7 @@
 //! Tests for the vocal lyric + melody generators.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use resonance_music_theory::{
     derive_vocal, derive_vocal_with_meter, generate_lyrics, vocal_phrase_spans, Chord,
     ChordQuality, LyricLine, PitchClass, TimedChord, VocalContour, VocalMood, VocalParams,
@@ -72,7 +74,7 @@ fn generate_lyrics_respects_abab_rhyme_pattern() {
     p.rhyme = VocalRhymeScheme::Abab;
     p.lines = 4;
     p.draft = Vec::new();
-    let draft = generate_lyrics(&p, 0xC0FFEE_BEEF);
+    let draft = generate_lyrics(&p, 0x00C0_FFEE_BEEF);
     assert_eq!(draft.len(), 4);
     assert_eq!(draft[0].rhyme, 'A');
     assert_eq!(draft[1].rhyme, 'B');

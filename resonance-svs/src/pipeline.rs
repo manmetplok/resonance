@@ -129,7 +129,7 @@ pub fn render_segments(segments: &[DsSegment], args: &PipelineArgs) -> Result<Re
         let t0 = Instant::now();
         let offset_samples = (seg.offset * vocoder_cfg.sample_rate as f64).ceil() as i64;
 
-        let pd = preprocess_acoustic(
+        let mut pd = preprocess_acoustic(
             seg,
             &phoneme_map,
             frame_length,
@@ -139,7 +139,7 @@ pub fn render_segments(segments: &[DsSegment], args: &PipelineArgs) -> Result<Re
             selected_speaker.as_deref(),
         )?;
         let n_frames = pd.f0.len();
-        let mel = acoustic.infer(&pd, speedup as i64, depth)?;
+        let mel = acoustic.infer(&mut pd, speedup as i64, depth)?;
         let mut waveform = vocoder.infer(&mel, &pd.f0)?;
         // Vocoder waveform length is typically n_frames * hop_size, but some vocoders return
         // shorter/longer. Trim very long results to a sensible cap.

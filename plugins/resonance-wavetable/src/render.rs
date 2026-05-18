@@ -352,16 +352,26 @@ impl SynthEngine {
                     continue;
                 }
 
-                // Modulation matrix
-                let mods = modulation::evaluate_mod_matrix(
-                    &snap.mod_slots,
-                    lfo1_val,
-                    lfo2_val,
-                    lfo3_val,
-                    mod_env_val,
-                    voice.velocity,
-                    voice.current_pitch,
-                );
+                // Modulation matrix. The slot evaluation is non-trivial
+                // (11 dests × up to NUM_MOD_SLOTS branches) and its
+                // inputs -- LFO values, the mod envelope, key tracking,
+                // velocity -- are all sub-audio-rate, so we evaluate at
+                // the same control rate as the filter coefficients and
+                // cache on the voice. `mod_dirty` forces an immediate
+                // refresh on freshly-triggered voices.
+                if coeff_tick || voice.mod_dirty {
+                    voice.cached_mods = modulation::evaluate_mod_matrix(
+                        &snap.mod_slots,
+                        lfo1_val,
+                        lfo2_val,
+                        lfo3_val,
+                        mod_env_val,
+                        voice.velocity,
+                        voice.current_pitch,
+                    );
+                    voice.mod_dirty = false;
+                }
+                let mods = voice.cached_mods;
 
                 // Render oscillators with unison
                 let mut osc_l = 0.0f32;

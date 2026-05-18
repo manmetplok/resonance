@@ -127,7 +127,7 @@ mod tests {
         assert_eq!(list[0].last_opened_secs, 99);
         assert_eq!(
             list.iter()
-                .filter(|e| e.path == PathBuf::from("/b"))
+                .filter(|e| e.path == Path::new("/b"))
                 .count(),
             1
         );

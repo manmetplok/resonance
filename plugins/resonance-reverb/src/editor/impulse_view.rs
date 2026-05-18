@@ -295,11 +295,10 @@ fn draw_decay_envelope(
 }
 
 fn draw_live_trace(painter: &egui::Painter, rect: egui::Rect, axis_y: f32, app: &ReverbEditorApp) {
-    // Snapshot the ring buffer.
+    // Snapshot the lock-free ring buffer.
     let samples: [f32; TAIL_HISTORY_LEN] = {
-        let guard = app.viz.tail.lock();
         let mut out = [0.0f32; TAIL_HISTORY_LEN];
-        for (i, v) in guard.iter_chrono().enumerate() {
+        for (i, v) in app.viz.tail.iter_chrono().enumerate() {
             out[i] = v;
         }
         out

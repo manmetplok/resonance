@@ -48,12 +48,11 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, viz: &CompressorViz) {
         }
     }
 
-    // Read the ring under the lock, snapshot into a local array so we
-    // can release the lock immediately and render without contention.
+    // Snapshot the lock-free ring buffer into a local array so the
+    // rest of the draw walks plain stack memory.
     let samples: [f32; HISTORY_LEN] = {
-        let guard = viz.history.lock();
         let mut out = [0.0; HISTORY_LEN];
-        for (i, v) in guard.iter_chrono().enumerate() {
+        for (i, v) in viz.history.iter_chrono().enumerate() {
             out[i] = v;
         }
         out

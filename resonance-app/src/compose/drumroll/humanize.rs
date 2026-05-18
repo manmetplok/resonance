@@ -416,7 +416,7 @@ mod tests {
             let snapped = i as i64 * 120;
             let delta = n.start_tick as i64 - snapped;
             assert!(delta.abs() <= 60, "note {i} shift {delta} out of bounds");
-            assert!((n.start_tick as u64) < p.clip_length_ticks);
+            assert!(n.start_tick < p.clip_length_ticks);
         }
     }
 }

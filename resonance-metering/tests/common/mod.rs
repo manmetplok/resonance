@@ -1,4 +1,8 @@
 //! Shared synthetic signal generators for the integration tests.
+//!
+//! Each integration test compiles `common` as its own module, so helpers
+//! used by only a subset of tests trip `dead_code` warnings in the others.
+#![allow(dead_code)]
 
 use std::f32::consts::TAU;
 

@@ -116,7 +116,7 @@ impl DrumGroup {
         let group_ref_steps_x1000 = (self.cycle as u64) * (base_grid as u64) * 1000 / (self.grid as u64);
         let base_x1000 = (base_cycle as u64) * 1000;
         let lcm = lcm_u64(group_ref_steps_x1000, base_x1000);
-        ((lcm + base_x1000 - 1) / base_x1000) as u32
+        lcm.div_ceil(base_x1000) as u32
     }
 }
 

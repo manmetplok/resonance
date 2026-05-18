@@ -17,6 +17,7 @@ pub(crate) mod startup;
 pub(crate) mod timeline_panel;
 pub(crate) mod track_header;
 pub(crate) mod transport;
+pub(crate) mod transport_labels;
 pub(crate) mod ui_caches;
 
 use crate::message::*;

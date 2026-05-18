@@ -367,6 +367,53 @@ impl RecordingState {
     }
 }
 
+/// Write stereo-interleaved samples to the track's WAV writer and
+/// update the incremental waveform-peak accumulator. Bumps
+/// `frames_written` on success.
+fn write_samples_and_peaks(
+    track_buf: &mut TrackRecordingBuf,
+    samples: &[f32],
+) -> Result<(), String> {
+    let Some(writer) = track_buf.writer.as_mut() else {
+        return Err("writer already closed".into());
+    };
+    if samples.is_empty() {
+        return Ok(());
+    }
+    let frames = samples.len() / 2;
+
+    for f in 0..frames {
+        let l = samples[f * 2];
+        let r = samples[f * 2 + 1];
+        writer
+            .write_sample(l)
+            .map_err(|e| format!("write_sample L: {e}"))?;
+        writer
+            .write_sample(r)
+            .map_err(|e| format!("write_sample R: {e}"))?;
+
+        let mono = (l + r) * 0.5;
+        if mono < track_buf.peak_min {
+            track_buf.peak_min = mono;
+        }
+        if mono > track_buf.peak_max {
+            track_buf.peak_max = mono;
+        }
+        track_buf.peak_frames += 1;
+        if track_buf.peak_frames >= crate::types::WAVEFORM_PEAK_FRAMES {
+            track_buf
+                .peaks
+                .push((track_buf.peak_min, track_buf.peak_max));
+            track_buf.peak_frames = 0;
+            track_buf.peak_min = f32::MAX;
+            track_buf.peak_max = f32::MIN;
+        }
+    }
+
+    track_buf.frames_written += frames as u64;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,51 +516,4 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&project_dir);
     }
-}
-
-/// Write stereo-interleaved samples to the track's WAV writer and
-/// update the incremental waveform-peak accumulator. Bumps
-/// `frames_written` on success.
-fn write_samples_and_peaks(
-    track_buf: &mut TrackRecordingBuf,
-    samples: &[f32],
-) -> Result<(), String> {
-    let Some(writer) = track_buf.writer.as_mut() else {
-        return Err("writer already closed".into());
-    };
-    if samples.is_empty() {
-        return Ok(());
-    }
-    let frames = samples.len() / 2;
-
-    for f in 0..frames {
-        let l = samples[f * 2];
-        let r = samples[f * 2 + 1];
-        writer
-            .write_sample(l)
-            .map_err(|e| format!("write_sample L: {e}"))?;
-        writer
-            .write_sample(r)
-            .map_err(|e| format!("write_sample R: {e}"))?;
-
-        let mono = (l + r) * 0.5;
-        if mono < track_buf.peak_min {
-            track_buf.peak_min = mono;
-        }
-        if mono > track_buf.peak_max {
-            track_buf.peak_max = mono;
-        }
-        track_buf.peak_frames += 1;
-        if track_buf.peak_frames >= crate::types::WAVEFORM_PEAK_FRAMES {
-            track_buf
-                .peaks
-                .push((track_buf.peak_min, track_buf.peak_max));
-            track_buf.peak_frames = 0;
-            track_buf.peak_min = f32::MAX;
-            track_buf.peak_max = f32::MIN;
-        }
-    }
-
-    track_buf.frames_written += frames as u64;
-    Ok(())
 }

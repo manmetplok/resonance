@@ -152,20 +152,12 @@ fn tab_button<'a>(
 // ---------------------------------------------------------------------------
 
 fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
-    let (bar_0, frac) = r
-        .tempo_map
-        .sample_to_bar(r.transport.playhead, r.sample_rate);
-    let num_beats = r.transport.time_sig_num as f64;
-    let beat_frac = frac * num_beats;
-    let beat = beat_frac.floor() as u32 + 1;
-    let beat_subdiv = ((beat_frac.fract()) * 1000.0) as u32;
-    let bar = bar_0 + 1;
-    let position_str = format!("{}.{}.{:03}", bar, beat, beat_subdiv);
-
-    let total_secs = r.transport.playhead as f64 / r.sample_rate as f64;
-    let minutes = (total_secs / 60.0).floor() as u32;
-    let seconds = total_secs - (minutes as f64 * 60.0);
-    let time_str = format!("{:02}:{:06.3}", minutes, seconds);
+    // Refresh the cached stat-block labels (position / time / sig /
+    // key / loop). Each label re-formats only when its inputs change,
+    // so a continuous resize hits the cached strings without touching
+    // the formatter.
+    r.transport_labels.borrow_mut().refresh(r);
+    let labels = r.transport_labels.borrow();
 
     let any_armed = r.registry.tracks.iter().any(|t| t.record_armed);
 
@@ -198,14 +190,14 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
     .align_y(alignment::Vertical::Center);
 
     // Stat groups (POSITION | TIME | BPM | SIG | KEY | LOOP).
-    let pos_value = text(position_str)
+    let pos_value = text(labels.position.clone())
         .size(13)
         .font(theme::MONO_FONT)
         .color(theme::ACCENT_SOFT)
         .line_height(LineHeight::Relative(1.0));
     let position_block = stat_block("POSITION", pos_value, 88).align_x(alignment::Horizontal::Center);
 
-    let time_value = text(time_str)
+    let time_value = text(labels.time.clone())
         .size(13)
         .font(theme::MONO_FONT)
         .color(theme::TEXT_1)
@@ -223,9 +215,8 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
         .style(theme::borderless_text_input_style);
     let bpm_block = stat_block("BPM", bpm_input, 64);
 
-    let sig_text = format!("{}/{}", r.transport.time_sig_num, r.transport.time_sig_den);
     let sig_value = mouse_area(
-        text(sig_text)
+        text(labels.sig.clone())
             .size(13)
             .font(theme::MONO_FONT)
             .color(theme::TEXT_1)
@@ -234,16 +225,14 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
     .on_press(Message::Transport(TransportMessage::CycleTimeSignature));
     let sig_block = stat_block("SIG", sig_value, 56);
 
-    let key_str = compose_key_label(r);
-    let key_value = text(key_str)
+    let key_value = text(labels.key.clone())
         .size(13)
         .font(theme::UI_FONT_MEDIUM)
         .color(theme::TEXT_1)
         .line_height(LineHeight::Relative(1.0));
     let key_block = stat_block("KEY", key_value, 64);
 
-    let loop_label = format_loop_length(r);
-    let loop_value = text(loop_label)
+    let loop_value = text(labels.loop_text.clone())
         .size(13)
         .font(theme::MONO_FONT)
         .color(if r.transport.loop_enabled {
@@ -455,57 +444,6 @@ fn stat_block<'a>(
     container(body)
         .width(Length::Fixed(width as f32))
         .padding([4, 12])
-}
-
-fn compose_key_label(r: &Resonance) -> String {
-    let scale = r
-        .compose
-        .definitions
-        .iter()
-        .find_map(|d| d.scale.as_ref());
-    let Some(scale) = scale else {
-        return "—".to_string();
-    };
-    let mode_label = match scale.mode {
-        resonance_music_theory::Mode::Major => "maj",
-        resonance_music_theory::Mode::Minor => "min",
-        resonance_music_theory::Mode::Dorian => "dor",
-        resonance_music_theory::Mode::Phrygian => "phr",
-        resonance_music_theory::Mode::Lydian => "lyd",
-        resonance_music_theory::Mode::Mixolydian => "mix",
-        resonance_music_theory::Mode::Locrian => "loc",
-        resonance_music_theory::Mode::HarmonicMinor => "hmin",
-        resonance_music_theory::Mode::MelodicMinor => "mmin",
-    };
-    format!("{} {}", scale.root, mode_label)
-}
-
-fn format_loop_length(r: &Resonance) -> String {
-    if !r.transport.loop_enabled {
-        return "off".to_string();
-    }
-    let len_samples = r.transport.loop_out.saturating_sub(r.transport.loop_in);
-    if len_samples == 0 {
-        return "—".to_string();
-    }
-    let len_secs = len_samples as f64 / r.sample_rate as f64;
-    let secs_per_beat = 60.0 / r.transport.bpm as f64;
-    let secs_per_bar = secs_per_beat * r.transport.time_sig_num as f64;
-    let bars = (len_secs / secs_per_bar).round() as i64;
-    if bars >= 1 {
-        if bars == 1 {
-            "1 bar".to_string()
-        } else {
-            format!("{} bars", bars)
-        }
-    } else {
-        let beats = (len_secs / secs_per_beat).round() as i64;
-        if beats == 1 {
-            "1 beat".to_string()
-        } else {
-            format!("{} beats", beats)
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

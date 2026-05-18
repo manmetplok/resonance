@@ -303,7 +303,7 @@ pub fn generate_group_pattern(g: &mut DrumGroup) {
     let mut allocs: Vec<usize> = g
         .pads
         .iter()
-        .map(|p| ((p.weight * base_hits as u32) / total_weight).max(0) as usize)
+        .map(|p| ((p.weight * base_hits as u32) / total_weight) as usize)
         .collect();
     let assigned: usize = allocs.iter().sum();
     let mut leftover = base_hits.saturating_sub(assigned);

@@ -4997,7 +4997,6 @@ name = "resonance-compressor"
 version = "0.1.0"
 dependencies = [
  "egui",
- "parking_lot 0.12.5",
  "resonance-common",
  "resonance-dsp",
  "resonance-plugin",
@@ -5124,7 +5123,6 @@ name = "resonance-reverb"
 version = "0.1.0"
 dependencies = [
  "egui",
- "parking_lot 0.12.5",
  "resonance-common",
  "resonance-dsp",
  "resonance-plugin",

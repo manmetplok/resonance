@@ -16,9 +16,9 @@ fn detects_inter_sample_peak_above_discrete_samples() {
     let phase = std::f32::consts::PI / 6.0;
     let n = 8192;
     let mut l = vec![0.0_f32; n];
-    for i in 0..n {
+    for (i, v) in l.iter_mut().enumerate() {
         let t = i as f32 / SR;
-        l[i] = (phase + TAU * freq * t).cos();
+        *v = (phase + TAU * freq * t).cos();
     }
     let r = l.clone();
     let discrete_peak = l.iter().copied().map(f32::abs).fold(0.0_f32, f32::max);

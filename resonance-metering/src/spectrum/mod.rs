@@ -28,10 +28,16 @@ pub const HOP_SIZE: usize = FFT_SIZE / 2;
 pub const RING_CAPACITY: usize = 32_768;
 
 /// Snapshot of the analyzer's held peak-with-decay 1/6-octave bars.
+///
+/// `magnitudes_db` is a fixed-size array, not a `Vec`, so each
+/// `Arc::new(SpectrumSnapshot { … })` is a single heap allocation —
+/// the 60×f32 band data lives inline next to the `Arc` refcount,
+/// avoiding the separate `Vec` backing buffer that the previous
+/// `Vec<f32>` field caused us to allocate on every published frame.
 #[derive(Clone)]
 pub struct SpectrumSnapshot {
-    /// dB values, one per 1/6-octave band (`NUM_OCTAVE_BINS` entries).
-    pub magnitudes_db: Vec<f32>,
+    /// dB values, one per 1/6-octave band.
+    pub magnitudes_db: [f32; NUM_OCTAVE_BINS],
     /// Sample rate the snapshot was computed at.
     pub sample_rate: f32,
 }
@@ -39,7 +45,7 @@ pub struct SpectrumSnapshot {
 impl SpectrumSnapshot {
     pub fn silent(sample_rate: f32) -> Self {
         Self {
-            magnitudes_db: vec![fft_worker::FLOOR_DB; NUM_OCTAVE_BINS],
+            magnitudes_db: [fft_worker::FLOOR_DB; NUM_OCTAVE_BINS],
             sample_rate,
         }
     }

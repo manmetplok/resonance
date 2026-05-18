@@ -74,6 +74,10 @@ pub struct DsVocoderConfigRaw {
 }
 
 /// Resolved acoustic config with absolute paths and defaults applied.
+///
+/// Many of these fields mirror the on-disk schema for future use; only a
+/// subset is read by the current pipeline.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AcousticConfig {
     pub phonemes_path: PathBuf,
@@ -106,6 +110,7 @@ pub struct AcousticConfig {
     pub variance_model: Option<PathBuf>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct VocoderConfig {
     pub name: String,
@@ -189,11 +194,11 @@ pub fn load_vocoder(path: &Path) -> Result<VocoderConfig> {
 
 /// Read a phoneme dictionary into a `name -> token-id` map. Auto-detects
 /// the on-disk format from the file extension:
-///   - `*.txt`  — one phoneme per line, line index = token id (TIGER /
-///                older OpenVPI exports)
-///   - `*.json` — top-level array of strings *or* object whose keys are
-///                phoneme names with explicit integer ids in the values
-///                (newer voicebanks like LIEE Lilia and Gahata Meiji)
+/// - `*.txt`  — one phoneme per line, line index = token id (TIGER /
+///   older OpenVPI exports)
+/// - `*.json` — top-level array of strings *or* object whose keys are
+///   phoneme names with explicit integer ids in the values
+///   (newer voicebanks like LIEE Lilia and Gahata Meiji)
 pub fn load_phoneme_dict(path: &Path) -> Result<std::collections::HashMap<String, i64>> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("reading phoneme dict at {}", path.display()))?;
