@@ -105,15 +105,6 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
         TrackMessage::CancelRemoveTrack => {
             r.confirm_delete_track = None;
         }
-        TrackMessage::RemoveTrack(id) => {
-            if r.interaction.selected_track == Some(id) {
-                r.interaction.selected_track = None;
-            }
-            if r.compose.expanded_track_id == Some(id) {
-                r.compose.expanded_track_id = None;
-            }
-            r.engine.send(AudioCommand::RemoveTrack { track_id: id });
-        }
         TrackMessage::SetTrackVolume(id, vol_db) => {
             r.engine.send(AudioCommand::SetTrackVolume {
                 track_id: id,
@@ -192,15 +183,6 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
         }
         TrackMessage::SetTrackName(track_id, name) => {
             r.with_track_mut(track_id, |t| t.name = name);
-        }
-        TrackMessage::SetInstrumentType(track_id, ty) => {
-            r.with_track_mut(track_id, |t| {
-                t.instrument_type = ty;
-                t.instrument_icon = crate::state::InstrumentIcon::default_for(ty);
-            });
-        }
-        TrackMessage::SetInstrumentIcon(track_id, icon) => {
-            r.with_track_mut(track_id, |t| t.instrument_icon = icon);
         }
         TrackMessage::ToggleTrackFxBypass(id) => {
             let new_bypass = r.with_track_mut(id, |t| {

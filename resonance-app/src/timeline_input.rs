@@ -9,10 +9,10 @@ use std::time::Instant;
 use iced::widget::canvas;
 use iced::{keyboard, mouse, Point, Rectangle};
 
-use resonance_audio::types::{bpm_at_bar, ClipId, TrackId};
+use resonance_audio::types::{bpm_at_bar, TrackId};
 
 use crate::message::*;
-use crate::state::{self, ClipEdge, TrackState};
+use crate::state::{self, TrackState};
 use crate::theme;
 use crate::timeline::{TimelineCanvas, TimelineState};
 use crate::timeline::hit_test::{self, track_index, HitKind};
@@ -22,14 +22,17 @@ use crate::timeline_snap::snap_sample_to_grid_tempo;
 /// Maximum interval between two clicks to count as a double-click.
 pub(super) const DOUBLE_CLICK_MS: u128 = 400;
 
-/// Which part of a clip is being dragged.
+/// Which part of a clip is being dragged. The drag state itself lives in
+/// the per-clip `*DragState` / `*TrimState` structs on `Resonance`; this
+/// enum exists only to remember which of those is currently active so the
+/// pointer-move and pointer-release handlers dispatch to the right end-drag
+/// message.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(super) enum ClipInteraction {
-    Move { clip_id: ClipId, grab_offset_x: f32 },
-    Trim { clip_id: ClipId, edge: ClipEdge },
-    MidiMove { clip_id: ClipId, grab_offset_x: f32 },
-    MidiTrim { clip_id: ClipId, edge: ClipEdge },
+    Move,
+    Trim,
+    MidiMove,
+    MidiTrim,
 }
 
 /// Active drag on a tempo event point.
@@ -284,10 +287,7 @@ impl TimelineCanvas<'_> {
 
             return match hit {
                 HitKind::Trim(edge) => {
-                    state.clip_interaction = Some(ClipInteraction::MidiTrim {
-                        clip_id: clip.id,
-                        edge,
-                    });
+                    state.clip_interaction = Some(ClipInteraction::MidiTrim);
                     captured(Message::MidiClip(MidiClipMessage::StartMidiClipTrim {
                         clip_id: clip.id,
                         edge,
@@ -295,10 +295,7 @@ impl TimelineCanvas<'_> {
                     }))
                 }
                 HitKind::Move { grab_offset_x } => {
-                    state.clip_interaction = Some(ClipInteraction::MidiMove {
-                        clip_id: clip.id,
-                        grab_offset_x,
-                    });
+                    state.clip_interaction = Some(ClipInteraction::MidiMove);
                     captured(Message::MidiClip(MidiClipMessage::StartMidiClipDrag {
                         clip_id: clip.id,
                         grab_offset_x,
@@ -324,10 +321,7 @@ impl TimelineCanvas<'_> {
 
             return match hit {
                 HitKind::Trim(edge) => {
-                    state.clip_interaction = Some(ClipInteraction::Trim {
-                        clip_id: clip.id,
-                        edge,
-                    });
+                    state.clip_interaction = Some(ClipInteraction::Trim);
                     captured(Message::Clip(ClipMessage::StartClipTrim {
                         clip_id: clip.id,
                         edge,
@@ -335,10 +329,7 @@ impl TimelineCanvas<'_> {
                     }))
                 }
                 HitKind::Move { grab_offset_x } => {
-                    state.clip_interaction = Some(ClipInteraction::Move {
-                        clip_id: clip.id,
-                        grab_offset_x,
-                    });
+                    state.clip_interaction = Some(ClipInteraction::Move);
                     captured(Message::Clip(ClipMessage::StartClipDrag {
                         clip_id: clip.id,
                         grab_offset_x,
@@ -405,16 +396,16 @@ impl TimelineCanvas<'_> {
             }));
         }
         match &state.clip_interaction {
-            Some(ClipInteraction::Move { .. }) => {
+            Some(ClipInteraction::Move) => {
                 captured(Message::Clip(ClipMessage::UpdateClipDrag(pos.x, pos.y)))
             }
-            Some(ClipInteraction::Trim { .. }) => {
+            Some(ClipInteraction::Trim) => {
                 captured(Message::Clip(ClipMessage::UpdateClipTrim(pos.x)))
             }
-            Some(ClipInteraction::MidiMove { .. }) => captured(Message::MidiClip(
+            Some(ClipInteraction::MidiMove) => captured(Message::MidiClip(
                 MidiClipMessage::UpdateMidiClipDrag(pos.x, pos.y),
             )),
-            Some(ClipInteraction::MidiTrim { .. }) => captured(Message::MidiClip(
+            Some(ClipInteraction::MidiTrim) => captured(Message::MidiClip(
                 MidiClipMessage::UpdateMidiClipTrim(pos.x),
             )),
             None => (canvas::event::Status::Ignored, None),
@@ -437,12 +428,12 @@ impl TimelineCanvas<'_> {
         }
         if let Some(interaction) = state.clip_interaction.take() {
             return match interaction {
-                ClipInteraction::Move { .. } => captured(Message::Clip(ClipMessage::EndClipDrag)),
-                ClipInteraction::Trim { .. } => captured(Message::Clip(ClipMessage::EndClipTrim)),
-                ClipInteraction::MidiMove { .. } => {
+                ClipInteraction::Move => captured(Message::Clip(ClipMessage::EndClipDrag)),
+                ClipInteraction::Trim => captured(Message::Clip(ClipMessage::EndClipTrim)),
+                ClipInteraction::MidiMove => {
                     captured(Message::MidiClip(MidiClipMessage::EndMidiClipDrag))
                 }
-                ClipInteraction::MidiTrim { .. } => {
+                ClipInteraction::MidiTrim => {
                     captured(Message::MidiClip(MidiClipMessage::EndMidiClipTrim))
                 }
             };

@@ -12,7 +12,6 @@ pub fn handle(r: &mut Resonance, m: ViewportMessage) -> Task<Message> {
     match m {
         ViewportMessage::ZoomIn => zoom_in(r),
         ViewportMessage::ZoomOut => zoom_out(r),
-        ViewportMessage::ScrollX(delta) => scroll_x_delta(r, delta),
         ViewportMessage::ScrollY(delta) => scroll_y_delta(r, delta),
         ViewportMessage::ScrollToX(x) => scroll_to_x(r, x),
         ViewportMessage::ScrollToY(y) => scroll_to_y(r, y),
@@ -147,11 +146,6 @@ fn auto_follow_playhead(r: &mut Resonance) {
         r.viewport.scroll_offset =
             (playhead_seconds as f32 * r.viewport.zoom - visible_width * 0.2).max(0.0);
     }
-}
-
-pub fn scroll_x_delta(r: &mut Resonance, delta: f32) {
-    let max_x = (r.viewport.timeline_content_width - r.viewport.viewport_width).max(0.0);
-    r.viewport.scroll_offset = (r.viewport.scroll_offset + delta).clamp(0.0, max_x);
 }
 
 pub fn scroll_y_delta(r: &mut Resonance, delta: f32) {

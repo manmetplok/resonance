@@ -83,11 +83,6 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
         MidiEditorMessage::StopPreview(track_id, note) => {
             r.engine.send(AudioCommand::SendNoteOff { track_id, note });
         }
-        MidiEditorMessage::ScrollX(delta) => {
-            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
-                editor.scroll_x = (editor.scroll_x + delta).max(0.0);
-            }
-        }
         MidiEditorMessage::ScrollY(delta) => {
             if let Some(ref mut editor) = r.interaction.editing_midi_clip {
                 editor.scroll_y = (editor.scroll_y + delta).max(0.0);

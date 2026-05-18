@@ -383,7 +383,6 @@ pub enum UndoAction {
 
 /// Decide how an incoming message should interact with the undo history.
 pub fn classify(message: &crate::message::Message) -> UndoAction {
-    use crate::compose::drumroll::DrumrollMessage;
     use crate::compose::ComposeMessage;
     use crate::message::*;
 
@@ -420,7 +419,6 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | TransportMessage::SetBpmText(_) => UndoAction::Skip,
             TransportMessage::CommitBpm
             | TransportMessage::ToggleMetronome
-            | TransportMessage::CyclePrecountBars
             | TransportMessage::CycleTimeSignature
             | TransportMessage::ToggleLoop => UndoAction::Record,
         },
@@ -502,7 +500,6 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MidiEditorMessage::SelectNote { .. }
             | MidiEditorMessage::PreviewNote(_, _)
             | MidiEditorMessage::StopPreview(_, _)
-            | MidiEditorMessage::ScrollX(_)
             | MidiEditorMessage::ScrollY(_) => UndoAction::Skip,
         },
 
@@ -525,16 +522,6 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | ComposeMessage::ExpandedScrollX(_)
             | ComposeMessage::ExpandedScrollY(_)
             | ComposeMessage::ExpandedZoomY(_) => UndoAction::Skip,
-
-            // Drumroll: skip the view-state configuration messages,
-            // record the ones that actually mutate notes in the clip.
-            ComposeMessage::Drumroll(d) => match d {
-                DrumrollMessage::ToggleStep { .. }
-                | DrumrollMessage::GenerateEuclideanPad { .. }
-                | DrumrollMessage::ClearPad { .. }
-                | DrumrollMessage::ApplyHumanize { .. } => UndoAction::Record,
-                _ => UndoAction::Skip,
-            },
 
             // Everything else in Compose mutates project state.
             _ => UndoAction::Record,

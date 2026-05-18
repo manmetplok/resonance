@@ -86,10 +86,6 @@ enum DragMode {
     MoveNote {
         note_index: usize,
         start_tick_offset: i64,
-        #[allow(dead_code)]
-        original_note: u8,
-        #[allow(dead_code)]
-        original_start_tick: u64,
         clip_id: u64,
     },
     ResizeNote {
@@ -448,8 +444,6 @@ impl<'a> ExpandedEditorCanvas<'a> {
                             DragMode::MoveNote {
                                 note_index: i,
                                 start_tick_offset: tick_offset,
-                                original_note: n.note,
-                                original_start_tick: n.start_tick,
                                 clip_id: clip.id,
                             }
                         }

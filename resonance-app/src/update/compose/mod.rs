@@ -18,7 +18,6 @@ use crate::message::Message;
 
 mod chord;
 mod chord_inspector;
-mod drum_voices;
 pub(crate) mod drum_groups;
 mod expand;
 mod lane_inspector;
@@ -31,7 +30,6 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
     let time_sig_num = r.transport.time_sig_num;
 
     match msg {
-        ComposeMessage::Drumroll(m) => crate::update::drumroll::handle(r, m),
         ComposeMessage::DrumGroups(m) => return drum_groups::handle(r, m),
 
         ComposeMessage::CreateMidiClipInSection {
@@ -158,13 +156,6 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             track_id,
             msg,
         } => return lane_inspector::handle(r, definition_id, track_id, msg),
-
-        // Track role (arrangement metadata)
-        ComposeMessage::SetTrackRole { track_id, role } => {
-            if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
-                track.role = role;
-            }
-        }
 
         // Vocal audio render completion (dispatched from the background
         // SVS task that `lane_inspector::handle` queued).

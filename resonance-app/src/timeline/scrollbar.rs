@@ -1,10 +1,6 @@
-//! Scrollbar rect + drag-grab math shared between the horizontal and
-//! vertical scrollbars on the timeline canvas.
-//!
-//! The canvas draws both bars inside the same `Rectangle` bounds, so these
-//! helpers take raw bounds + content size and return rendered rects. The
-//! drag-grab helpers are axis-agnostic so press and move handlers on both
-//! axes share the same clamp + ratio math.
+//! Scrollbar rect + drag-grab math for the timeline canvas's vertical
+//! scrollbar. (Horizontal scroll is handled by the outer `Scrollable`
+//! that wraps the canvas.)
 
 use iced::Rectangle;
 
@@ -21,51 +17,6 @@ pub struct ScrollbarRects {
     pub thumb: Rectangle,
     pub travel: f32,
     pub max_scroll: f32,
-}
-
-/// Horizontal scrollbar rects. Returns `None` when the content fits the
-/// viewport (no scrollbar needed).
-#[allow(dead_code)]
-pub fn h_rects(
-    bounds: Rectangle,
-    content_width: f32,
-    scroll_offset: f32,
-    show_v_bar: bool,
-) -> Option<ScrollbarRects> {
-    if content_width <= bounds.width + 0.5 {
-        return None;
-    }
-    let track_width = if show_v_bar {
-        (bounds.width - THICKNESS).max(0.0)
-    } else {
-        bounds.width
-    };
-    if track_width <= 0.0 {
-        return None;
-    }
-    let track = Rectangle {
-        x: 0.0,
-        y: bounds.height - THICKNESS,
-        width: track_width,
-        height: THICKNESS,
-    };
-    let ratio_visible = (bounds.width / content_width).clamp(0.0, 1.0);
-    let thumb_w = (track_width * ratio_visible).max(MIN_THUMB);
-    let max_scroll = (content_width - bounds.width).max(1.0);
-    let travel = (track_width - thumb_w).max(0.0);
-    let thumb_x = (scroll_offset / max_scroll).clamp(0.0, 1.0) * travel;
-    let thumb = Rectangle {
-        x: thumb_x,
-        y: track.y,
-        width: thumb_w,
-        height: THICKNESS,
-    };
-    Some(ScrollbarRects {
-        track,
-        thumb,
-        travel,
-        max_scroll,
-    })
 }
 
 /// Vertical scrollbar rects (track area only, excludes the ruler at the top).

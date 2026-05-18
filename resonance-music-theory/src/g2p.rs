@@ -84,20 +84,9 @@ impl SyllableStress {
     }
 }
 
-/// Transcribe a whole word to ARPAbet-lowercase phonemes. Tries the
-/// CMU dict first; falls back to letter-pattern rules for unknown
-/// words (names, made-up words, typos). Always emits at least one
-/// vowel so the acoustic model has something to sing.
-#[allow(dead_code)]
-fn word_to_phonemes(word: &str) -> Vec<&'static str> {
-    word_to_phonemes_variant(word, 1)
-        .into_iter()
-        .map(|(p, _)| p)
-        .collect()
-}
-
-/// Like `word_to_phonemes` but picks CMU pronunciation variant
-/// `variant_idx` (1-indexed: 1 = first / default, 2 = second, ...).
+/// Transcribe a whole word to ARPAbet-lowercase phonemes, picking CMU
+/// pronunciation variant `variant_idx` (1-indexed: 1 = first / default,
+/// 2 = second, ...).
 /// CMU lists multiple pronunciations for ambiguous words: e.g. `read`
 /// has /rɛd/ (past) at index 1 and /riːd/ (present) at index 2; `live`
 /// has the adjective /laɪv/ at 1 and the verb /lɪv/ at 2. Out-of-range

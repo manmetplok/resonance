@@ -45,9 +45,6 @@ pub enum InstrumentType {
 }
 
 impl InstrumentType {
-    #[allow(dead_code)]
-    pub const ALL: [InstrumentType; 2] = [InstrumentType::Synth, InstrumentType::Drum];
-
     pub fn as_str(self) -> &'static str {
         match self {
             InstrumentType::Synth => "Synth",
@@ -74,9 +71,6 @@ pub enum TrackRole {
 }
 
 impl TrackRole {
-    #[allow(dead_code)]
-    pub const ALL: [TrackRole; 3] = [TrackRole::Pad, TrackRole::Bass, TrackRole::Lead];
-
     pub fn as_str(self) -> &'static str {
         match self {
             TrackRole::Pad => "Pad",
@@ -108,17 +102,6 @@ pub enum InstrumentIcon {
 }
 
 impl InstrumentIcon {
-    #[allow(dead_code)]
-    pub const ALL: [InstrumentIcon; 7] = [
-        InstrumentIcon::Music,
-        InstrumentIcon::Drum,
-        InstrumentIcon::Guitar,
-        InstrumentIcon::Microphone,
-        InstrumentIcon::WaveSquare,
-        InstrumentIcon::CompactDisc,
-        InstrumentIcon::Sliders,
-    ];
-
     pub fn glyph(self) -> char {
         use crate::theme::fa;
         match self {
@@ -143,14 +126,6 @@ impl InstrumentIcon {
             InstrumentIcon::Sliders => "Sliders",
         }
     }
-
-    /// Default icon for the given instrument type.
-    pub fn default_for(ty: InstrumentType) -> Self {
-        match ty {
-            InstrumentType::Synth => InstrumentIcon::Music,
-            InstrumentType::Drum => InstrumentIcon::Drum,
-        }
-    }
 }
 
 impl std::fmt::Display for InstrumentIcon {
@@ -160,11 +135,9 @@ impl std::fmt::Display for InstrumentIcon {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ClipDragState {
     pub clip_id: ClipId,
     pub grab_offset_x: f32,
-    pub original_start_sample: SamplePos,
     pub original_track_id: TrackId,
     pub current_x: f32,
     pub current_y: f32,
@@ -521,7 +494,6 @@ pub enum LoopDragTarget {
 pub struct MidiEditorState {
     pub clip_id: ClipId,
     pub track_id: TrackId,
-    pub scroll_x: f32,
     pub scroll_y: f32,
     pub zoom_x: f32,
     pub zoom_y: f32,

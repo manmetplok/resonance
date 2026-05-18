@@ -86,14 +86,6 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
             }
             r.transport.bpm_input = format!("{:.1}", r.transport.bpm);
         }
-        TransportMessage::CyclePrecountBars => {
-            r.transport.precount_bars = match r.transport.precount_bars {
-                0 => 1,
-                1 => 2,
-                2 => 4,
-                _ => 0,
-            };
-        }
         TransportMessage::ToggleMetronome => {
             r.transport.metronome_enabled = !r.transport.metronome_enabled;
             r.engine.send(AudioCommand::SetMetronomeEnabled {

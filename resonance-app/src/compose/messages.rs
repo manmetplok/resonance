@@ -6,16 +6,10 @@ use resonance_music_theory::{
     VoiceType,
 };
 
-use crate::compose::drumroll::DrumrollMessage;
-use crate::compose::{DrumVoiceMode, LaneGeneratorKindTag, SelectedLane};
-use crate::state::TrackRole;
+use crate::compose::{LaneGeneratorKindTag, SelectedLane};
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Drumroll(...) is retained for projects that load the old flat-pad model.
 pub enum ComposeMessage {
-    /// Drumroll view messages (toggle hit, generate euclidean, etc.).
-    Drumroll(DrumrollMessage),
-
     /// Drum-groups messages — project-scoped group management plus the
     /// per-group generator knobs surfaced in the right rail.
     DrumGroups(DrumGroupsMessage),
@@ -146,13 +140,6 @@ pub enum ComposeMessage {
         msg: LaneInspectorMsg,
     },
 
-    /// Set or clear a track's arrangement role.
-    #[allow(dead_code)]
-    SetTrackRole {
-        track_id: TrackId,
-        role: Option<TrackRole>,
-    },
-
     /// SVS rendering completed off-thread — install the WAV as an audio
     /// clip on every placement the renderer was launched for. Boxed
     /// because the payload is large (samples vec).
@@ -205,9 +192,6 @@ pub enum ChordInspectorMsg {
     SetStartDegree(Option<Degree>),
     /// Set the end-degree constraint (None = any).
     SetEndDegree(Option<Degree>),
-    /// Toggle the lock on a chord at the given index in generated_material.
-    #[allow(dead_code)]
-    ToggleLock(usize),
     /// First-time generation: create a GeneratorSpec from current controls.
     Generate,
     /// Bump seed and regenerate (respecting locks).
@@ -361,30 +345,6 @@ pub enum LaneInspectorMsg {
     /// pipeline. Use this when the user wants to audition their own
     /// edits without losing them to a re-roll.
     RerenderVocalAudio,
-
-    // Drum euclidean (per-voice) — legacy flat-pad path. Kept around so the
-    // update handler stays compilable; the new grouped UI uses
-    // `DrumGroupsMessage` instead.
-    #[allow(dead_code)]
-    SetDrumVoiceMode {
-        pad_index: usize,
-        mode: DrumVoiceMode,
-    },
-    #[allow(dead_code)]
-    SetDrumEuclidSteps {
-        pad_index: usize,
-        steps: u32,
-    },
-    #[allow(dead_code)]
-    SetDrumEuclidHits {
-        pad_index: usize,
-        hits: u32,
-    },
-    #[allow(dead_code)]
-    SetDrumEuclidRotation {
-        pad_index: usize,
-        rotation: i32,
-    },
 
     /// Regenerate this lane from its generator spec + section chords.
     Regenerate,

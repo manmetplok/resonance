@@ -21,7 +21,4 @@ pub mod tracks;
 pub mod vocal_lane;
 pub mod vocal_roll;
 
-// Re-export the shared layout primitives so the existing call sites keep
-// working (`super::workspace_width`, `super::section_total_beats`, etc.).
-#[allow(unused_imports)]
-pub use layout::{section_total_beats, workspace_width, BEAT_PX_COMPOSE};
+pub use layout::{section_total_beats, workspace_width};

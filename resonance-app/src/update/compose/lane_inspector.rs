@@ -429,40 +429,6 @@ pub(super) fn handle(
             return super::vocal_render::rerender_vocal_audio(r, definition_id, track_id);
         }
 
-        // Drum voice mode
-        LaneInspectorMsg::SetDrumVoiceMode { pad_index, mode } => {
-            ensure_drum_config(r, definition_id, track_id);
-            update_lane_gen(r, definition_id, track_id, |kind| {
-                if let LaneGeneratorKind::Drum(dc) = kind {
-                    dc.voices.insert(pad_index, mode);
-                }
-            });
-        }
-        LaneInspectorMsg::SetDrumEuclidSteps { pad_index, steps } => {
-            super::drum_voices::update_drum_voice(r, definition_id, track_id, pad_index, |mode| {
-                if let crate::compose::DrumVoiceMode::Euclidean { steps: s, .. } = mode {
-                    *s = steps.max(1);
-                }
-            });
-        }
-        LaneInspectorMsg::SetDrumEuclidHits { pad_index, hits } => {
-            super::drum_voices::update_drum_voice(r, definition_id, track_id, pad_index, |mode| {
-                if let crate::compose::DrumVoiceMode::Euclidean { hits: h, steps, .. } = mode {
-                    *h = hits.min(*steps);
-                }
-            });
-        }
-        LaneInspectorMsg::SetDrumEuclidRotation {
-            pad_index,
-            rotation,
-        } => {
-            super::drum_voices::update_drum_voice(r, definition_id, track_id, pad_index, |mode| {
-                if let crate::compose::DrumVoiceMode::Euclidean { rotation: rot, .. } = mode {
-                    *rot = rotation;
-                }
-            });
-        }
-
         LaneInspectorMsg::Regenerate => {
             // Bump the lane's own seed and re-derive only this lane. For Motif
             // lanes this varies the per-lane surface (phrase contours, rest
@@ -504,18 +470,6 @@ fn update_lane_gen(
             f(&mut cfg.kind);
         }
         r.compose.last_error = None;
-    }
-}
-
-/// Ensure a drum lane config exists for the given track.
-fn ensure_drum_config(r: &mut crate::Resonance, definition_id: u64, track_id: TrackId) {
-    if let Some(def) = r.compose.find_definition_mut(definition_id) {
-        def.lane_generators
-            .entry(track_id)
-            .or_insert_with(|| LaneGeneratorConfig {
-                kind: LaneGeneratorKind::Drum(crate::compose::DrumLaneConfig::default()),
-                seed: 0,
-            });
     }
 }
 

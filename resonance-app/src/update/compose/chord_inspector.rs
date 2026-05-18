@@ -101,17 +101,6 @@ pub(super) fn handle(
             }
         }
 
-        ChordInspectorMsg::ToggleLock(index) => {
-            if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                if let Some(ref mut material) = def.generated_material {
-                    if let Some(chord) = material.chords.get_mut(index) {
-                        chord.locked = !chord.locked;
-                    }
-                }
-                r.compose.last_error = None;
-            }
-        }
-
         ChordInspectorMsg::Generate => {
             generate_chord_lane(r, definition_id, false);
         }

@@ -35,14 +35,11 @@ pub struct PianoRollCanvas<'a> {
 
 /// Interaction mode being tracked during a drag operation.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 enum DragMode {
-    /// Moving a note: (note_index, tick_offset_from_cursor, note_offset_from_cursor)
+    /// Moving a note: (note_index, tick_offset_from_cursor).
     MoveNote {
         note_index: usize,
         start_tick_offset: i64,
-        original_note: u8,
-        original_start_tick: u64,
     },
     /// Resizing a note from its right edge.
     ResizeNote { note_index: usize, anchor_tick: u64 },
@@ -178,8 +175,6 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                                         DragMode::MoveNote {
                                             note_index: i,
                                             start_tick_offset: tick_offset,
-                                            original_note: n.note,
-                                            original_start_tick: n.start_tick,
                                         }
                                     }
                                 });

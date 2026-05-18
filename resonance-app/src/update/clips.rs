@@ -64,7 +64,6 @@ pub fn start_clip_drag(
         r.interaction.clip_drag = Some(ClipDragState {
             clip_id,
             grab_offset_x,
-            original_start_sample: clip.start_sample,
             original_track_id: clip.track_id,
             current_x: start_x,
             current_y: start_y,
@@ -420,7 +419,6 @@ pub fn open_midi_editor(r: &mut Resonance, clip_id: ClipId) {
         r.interaction.editing_midi_clip = Some(MidiEditorState {
             clip_id,
             track_id: clip.track_id,
-            scroll_x: 0.0,
             scroll_y,
             zoom_x: 0.5,
             zoom_y: 12.0,

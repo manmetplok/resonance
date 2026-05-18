@@ -17,8 +17,6 @@ pub struct CorrelationMeter {
     sum_ll: f64,
     sum_rr: f64,
     sum_lr: f64,
-
-    sample_rate: f32,
 }
 
 impl CorrelationMeter {
@@ -33,7 +31,6 @@ impl CorrelationMeter {
             sum_ll: 0.0,
             sum_rr: 0.0,
             sum_lr: 0.0,
-            sample_rate,
         }
     }
 
@@ -92,11 +89,6 @@ impl CorrelationMeter {
     /// unnecessary.
     pub fn correlation(&self) -> f32 {
         compute_correlation(self.sum_ll, self.sum_rr, self.sum_lr)
-    }
-
-    #[allow(dead_code)]
-    pub fn sample_rate(&self) -> f32 {
-        self.sample_rate
     }
 }
 

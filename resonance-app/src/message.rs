@@ -6,9 +6,7 @@
 use crate::compose::ComposeMessage;
 use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
-use crate::state::{
-    ClipEdge, InstrumentIcon, InstrumentType, LoopDragTarget, SelectedGlobalEvent, ViewMode,
-};
+use crate::state::{ClipEdge, LoopDragTarget, SelectedGlobalEvent, ViewMode};
 use resonance_audio::types::{
     BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
 };
@@ -52,12 +50,6 @@ pub(crate) enum TransportMessage {
     SetBpmText(String),
     CommitBpm,
     ToggleMetronome,
-    /// Cycle the recorder precount through 0/1/2/4 bars. The redesigned
-    /// transport bar doesn't surface this yet — the variant + handler
-    /// stay so the feature is one wiring change away when we add a
-    /// click-and-hold or right-click affordance to the metronome.
-    #[allow(dead_code)]
-    CyclePrecountBars,
     CycleTimeSignature,
     ToggleLoop,
     StartLoopDrag(LoopDragTarget),
@@ -70,11 +62,6 @@ pub(crate) enum TrackMessage {
     AddTrack,
     AddInstrumentTrack,
     AddVocalTrack,
-    /// Direct removal — kept as a handler target for the engine command.
-    /// All user-facing delete buttons go through `RequestRemoveTrack`
-    /// which may show a confirmation dialog first.
-    #[allow(dead_code)]
-    RemoveTrack(TrackId),
     /// User clicked delete on a track — may require confirmation if it
     /// has content.
     RequestRemoveTrack(TrackId),
@@ -93,12 +80,6 @@ pub(crate) enum TrackMessage {
     ToggleTrackFxBypass(TrackId),
     /// Rename a track (edited from the Compose instrument details panel).
     SetTrackName(TrackId, String),
-    /// Change an instrument track's sub-type (synth vs drum).
-    #[allow(dead_code)]
-    SetInstrumentType(TrackId, InstrumentType),
-    /// Change an instrument track's display icon.
-    #[allow(dead_code)]
-    SetInstrumentIcon(TrackId, InstrumentIcon),
     SetTrackInputDevice(TrackId, Option<String>),
     SetTrackInputPort(TrackId, u16),
     /// Pick the hardware MIDI input device for an instrument track.
@@ -244,13 +225,6 @@ pub(crate) enum MidiEditorMessage {
     },
     PreviewNote(TrackId, u8),
     StopPreview(TrackId, u8),
-    /// Horizontal scroll is now driven by the outer `Scrollable` that
-    /// wraps the piano roll canvas, so this variant is currently
-    /// unconstructed. Kept around so a future keyboard-shortcut path
-    /// (or a re-introduced canvas wheel-X handler) can drive it
-    /// without rewiring the undo classifier.
-    #[allow(dead_code)]
-    ScrollX(f32),
     ScrollY(f32),
     /// Vocal-roll only: toggle the OpenUtau slur marker on the i-th
     /// note of `clip_id`. `+` continuation ↔ the auto-syllabified
@@ -279,18 +253,9 @@ pub(crate) enum PluginMessage {
 pub(crate) enum ViewportMessage {
     ZoomIn,
     ZoomOut,
-    /// Horizontal scroll is now driven by the outer `Scrollable` that
-    /// wraps the timeline canvas; the canvas-side wheel-X handler
-    /// returns `Ignored` so this variant is currently unconstructed.
-    /// Kept around so a keyboard-shortcut path (or a future
-    /// timeline-relative dispatcher) can drive it without re-plumbing
-    /// the undo classifier.
-    #[allow(dead_code)]
-    ScrollX(f32),
     ScrollY(f32),
-    /// Same status as `ScrollX` — horizontal scroll-to is now owned by
-    /// the `Scrollable`; the canvas no longer emits this.
-    #[allow(dead_code)]
+    /// Horizontal scroll-to, dispatched when the canvas-side trim/drag
+    /// helpers auto-scroll the timeline as the cursor approaches an edge.
     ScrollToX(f32),
     ScrollToY(f32),
     ViewportWidth(f32),

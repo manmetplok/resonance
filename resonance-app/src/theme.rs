@@ -168,11 +168,6 @@ pub const BG_1: Color = rgb(0x15, 0x16, 0x1b);
 pub const BG_2: Color = rgb(0x1b, 0x1d, 0x23);
 /// Hover state, raised controls.
 pub const BG_3: Color = rgb(0x23, 0x26, 0x2e);
-/// Fader caps, knob highlights. Reserved for the custom fader chrome —
-/// Iced's vertical_slider doesn't expose enough of its track to use it,
-/// but the token is part of the design surface so it stays available.
-#[allow(dead_code)]
-pub const BG_4: Color = rgb(0x2c, 0x2f, 0x38);
 
 // ---------------------------------------------------------------------------
 // Borders / hairlines.
@@ -211,10 +206,6 @@ pub const ACCENT_LINE: Color = rgba(0x8b, 0x6d, 0xff, 0.34);
 
 /// Warm amber — audio clips, busses, playhead.
 pub const WARM: Color = rgb(0xe8, 0xc4, 0x7b);
-/// Warm wash — bus strip background tint. Reserved for a future bus-row
-/// background; currently strips paint a `BG_2` fill with the warm border.
-#[allow(dead_code)]
-pub const WARM_DIM: Color = rgba(0xe8, 0xc4, 0x7b, 0.14);
 /// Warm border — bus strip outlines.
 pub const WARM_LINE: Color = rgba(0xe8, 0xc4, 0x7b, 0.34);
 
@@ -277,9 +268,8 @@ pub const GLOBAL_TRACK_BG: Color = BG_2;
 pub const TRACK_HEIGHT: f32 = 96.0;
 /// Timeline ruler height.
 pub const RULER_HEIGHT: f32 = 28.0;
-/// Section band sitting under the ruler. Reserved for the section-pill
-/// strip; not yet rendered on the Arrange canvas.
-#[allow(dead_code)]
+/// Section band sitting under the ruler — the section-pill strip on the
+/// arrange canvas.
 pub const SECTION_BAND_HEIGHT: f32 = 22.0;
 /// Height of each global track row (tempo, time signature) in the
 /// collapsible area between the ruler and the regular tracks.
@@ -488,50 +478,6 @@ pub fn editing_header_card_warm_style(_theme: &Theme) -> container::Style {
             color: WARM_LINE,
             width: 1.0,
             radius: RADIUS_LG.into(),
-        },
-        ..Default::default()
-    }
-}
-
-/// Button style for a section placement in the Compose tab strip. Fills the
-/// button with the section's configured color (dimmed when inactive) and
-/// highlights it with an accent border when it is the current selection.
-#[allow(dead_code)]
-pub fn section_button_style(active: bool, color: [u8; 3], status: button::Status) -> button::Style {
-    let base = Color::from_rgb(
-        color[0] as f32 / 255.0,
-        color[1] as f32 / 255.0,
-        color[2] as f32 / 255.0,
-    );
-    let panel = BG_2;
-    let inactive = Color::from_rgb(
-        panel.r * 0.78 + base.r * 0.22,
-        panel.g * 0.78 + base.g * 0.22,
-        panel.b * 0.78 + base.b * 0.22,
-    );
-    let active_bg = Color::from_rgb(
-        panel.r * 0.55 + base.r * 0.45,
-        panel.g * 0.55 + base.g * 0.45,
-        panel.b * 0.55 + base.b * 0.45,
-    );
-    let bg = match status {
-        button::Status::Hovered => active_bg,
-        button::Status::Pressed => base,
-        _ => {
-            if active {
-                active_bg
-            } else {
-                inactive
-            }
-        }
-    };
-    button::Style {
-        background: Some(iced::Background::Color(bg)),
-        text_color: TEXT_1,
-        border: iced::Border {
-            color: if active { ACCENT } else { LINE },
-            width: if active { 1.5 } else { 1.0 },
-            radius: RADIUS_SM.into(),
         },
         ..Default::default()
     }

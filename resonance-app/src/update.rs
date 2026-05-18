@@ -6,7 +6,6 @@ use iced::{keyboard, Subscription, Task};
 pub mod bus;
 pub mod clips;
 pub mod compose;
-pub mod drumroll;
 pub mod global_track;
 pub mod master;
 pub mod midi_clip;

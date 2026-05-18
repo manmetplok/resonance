@@ -6,7 +6,26 @@
 use resonance_audio::types::{AudioCommand, MidiNote, TrackId, TICKS_PER_QUARTER_NOTE};
 
 use crate::compose::{generate, DeriveKind, DrumVoiceMode, LaneGeneratorKind};
-use crate::update::drumroll::euclid_edits_for;
+use crate::state::MidiClipState;
+
+/// Replace every note on `pad_note` in `clip` with `new_notes`. Returns
+/// `(removals, adds)` to feed into the engine command stream — removals
+/// are sorted descending so callers can apply them without invalidating
+/// later indices.
+fn euclid_edits_for(
+    clip: &MidiClipState,
+    pad_note: u8,
+    new_notes: Vec<MidiNote>,
+) -> (Vec<usize>, Vec<MidiNote>) {
+    let mut removals: Vec<usize> = clip
+        .notes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| (n.note == pad_note).then_some(i))
+        .collect();
+    removals.sort_unstable_by(|a, b| b.cmp(a));
+    (removals, new_notes)
+}
 
 /// When the section's shared motif changes, re-derive every Motif-style
 /// lane in the section. Other lanes (RootHold, Walking, ArpUp, etc.) are
