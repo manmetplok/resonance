@@ -87,7 +87,7 @@ mod.rs in several places still owns the work it dispatched.
       hot path. Move the orchestrator to `chain.rs`; promote diffusion/FDN math
       already in submodules to carry the per-stage state too. mod.rs should only
       re-export.
-    - [ ] `plugins/resonance-amp/src/nam/wavenet/mod.rs` (507 LOC). The
+    - [x] `plugins/resonance-amp/src/nam/wavenet/mod.rs` (507 LOC). The
       `WaveNetModel` impl (incl. 120-line `from_config_and_weights`) belongs in
       a sibling `model.rs` alongside `conv_layer.rs`, `head.rs`, `ring.rs`.
     - [ ] `plugins/resonance-amp/src/editor/mod.rs` (237 LOC),
