@@ -3,7 +3,7 @@
 ##Architecture / code health (from code review)
 
     - Full engine replay on undo is expensive for large projects
-      (`resonance-app/src/undo.rs` — `replay_loaded_project`).
+      (`resonance-app/src/update/project_io/replay.rs` — `replay_loaded_project`).
       Every undo/redo tears down all engine state and re-instantiates plugins.
       Short-term: diff old and new snapshots and only replay changed tracks/plugins.
       Long-term: consider command-based undo with inverse operations.
@@ -12,10 +12,12 @@
 
 ### Deeper merges / splits (P2 leftovers)
 
-    - [ ] `resonance-app` 9 remaining inline tests (in `main.rs` binary crate)
-      need a library target before they can become integration tests. Either
-      promote `Resonance` + helpers to a `resonance-app` library crate, or
-      accept the inline tests as a documented exception.
+    - [ ] `resonance-app` 24 remaining inline tests (spread across binary-crate
+      submodules: `recent.rs` 2, `undo.rs` 6, `compose/invariants.rs` 5,
+      `compose/tests.rs` 8, `update/project_io/replay.rs` 3) need a library
+      target before they can become integration tests. Either promote
+      `Resonance` + helpers to a `resonance-app` library crate, or accept the
+      inline tests as a documented exception.
     - [ ] `resonance-audio/src/recording.rs` inline test exposes private
       `RecordingState`/`TrackRecordingBuf` types; would need to expand public
       surface to migrate.
@@ -44,12 +46,12 @@
 
 ###P5 — smaller wins
 
-    - [ ] Replace `super::super::chord::Chord` at
-      `resonance-music-theory/src/derive/vocal.rs:482` with `crate::chord::Chord`.
+    - [ ] Replace `super::super::super::chord::Chord` at
+      `resonance-music-theory/src/derive/vocal/style/mod.rs:89` with `crate::chord::Chord`.
     - [ ] Build `HashMap<PluginInstanceId, PluginLocator>` side-index in `Resonance` to replace
-      the linear scan in `with_plugin_mut` (`resonance-app/src/main.rs:297-330`).
+      the linear scan in `with_plugin_mut` (`resonance-app/src/main.rs:305`).
     - [ ] Group `vocal_audio_clips`/`vocal_clip_lyrics`/`vocal_render_epoch` into a
-      `VocalAudioRegistry` struct in `resonance-app/src/compose/state.rs:68-112`.
+      `VocalAudioRegistry` struct in `resonance-app/src/compose/state.rs:77-112`.
     - [ ] Drop `pub(super)` on internals of `resonance-music-theory/src/derive/motif_engine.rs`
       once it becomes a directory (most should be private).
     - [ ] Replace `#[allow(clippy::too_many_arguments)]` on `apply_motif_pitches`,
@@ -65,11 +67,11 @@
 
 ### Separation-of-concerns violations
 
-    - [ ] `resonance-audio/src/recording.rs:108-160` — `create_track_buf()`
+    - [x] `resonance-audio/src/recording.rs:108-160` — `create_track_buf()`
       mixes `TrackRecordingBuf` struct construction with `std::fs::create_dir_all`
       and `WavWriter::create`. Split: a pure constructor returning the buf, plus
       a separate `open_track_wav_file(path)` I/O helper.
-    - [ ] `resonance-audio/src/recording.rs:247-320` — `finalize_recording()`
+    - [x] `resonance-audio/src/recording.rs:247-320` — `finalize_recording()`
       interleaves writer finalization with `std::fs::remove_file`. Extract
       `finalize_wav_file(path)` so the state mutation is testable without the
       filesystem.

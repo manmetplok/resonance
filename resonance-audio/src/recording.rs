@@ -105,6 +105,11 @@ impl RecordingState {
     /// the clip id, opens a WAV writer at `{project_dir}/audio/clip_{id}.wav`
     /// (creating the audio dir on demand), and sets up a streaming
     /// resampler if the input device doesn't match the engine rate.
+    ///
+    /// The filesystem work (creating the audio dir and opening the
+    /// WAV writer) is delegated to [`open_track_wav_file`], so this
+    /// function's remaining responsibility is the pure struct
+    /// assembly: resampler decision plus default-value initialisation.
     pub fn create_track_buf(
         project_dir: &Path,
         track_id: TrackId,
@@ -115,18 +120,7 @@ impl RecordingState {
         mono: bool,
     ) -> Result<TrackRecordingBuf, String> {
         let audio_dir = project_dir.join("audio");
-        std::fs::create_dir_all(&audio_dir)
-            .map_err(|e| format!("create audio dir {}: {e}", audio_dir.display()))?;
-        let path = audio_dir.join(format!("clip_{clip_id}.wav"));
-
-        let spec = WavSpec {
-            channels: 2,
-            sample_rate: engine_sample_rate,
-            bits_per_sample: 32,
-            sample_format: SampleFormat::Float,
-        };
-        let writer = WavWriter::create(&path, spec)
-            .map_err(|e| format!("create wav {}: {e}", path.display()))?;
+        let (path, writer) = open_track_wav_file(&audio_dir, clip_id, engine_sample_rate)?;
 
         let resampler = if input_sample_rate != engine_sample_rate {
             Some(StreamingLinearResampler::new(
@@ -254,43 +248,12 @@ impl RecordingState {
         let mut clips_emitted = 0usize;
 
         for (track_id, mut track_buf) in self.buffers.drain() {
-            // Flush any trailing resampled frame.
-            if let Some(r) = track_buf.resampler.as_mut() {
-                track_buf.resample_scratch.clear();
-                r.flush(&mut track_buf.resample_scratch);
-                if !track_buf.resample_scratch.is_empty() {
-                    let tail: Vec<f32> = std::mem::take(&mut track_buf.resample_scratch);
-                    if let Err(e) = write_samples_and_peaks(&mut track_buf, &tail) {
-                        eprintln!(
-                            "recording: flush failed for {}: {e}",
-                            track_buf.path.display()
-                        );
-                    }
-                }
-            }
-            // Close out any trailing peak accumulator so a short
-            // recording still gets its final bucket.
-            if track_buf.peak_frames > 0 {
-                track_buf
-                    .peaks
-                    .push((track_buf.peak_min, track_buf.peak_max));
-                track_buf.peak_frames = 0;
-                track_buf.peak_min = f32::MAX;
-                track_buf.peak_max = f32::MIN;
-            }
-
-            // Close the writer so the WAV header carries the correct
-            // data chunk size. If this fails the file is unusable.
-            if let Some(writer) = track_buf.writer.take() {
-                if let Err(e) = writer.finalize() {
-                    eprintln!(
-                        "recording: finalize wav {} failed: {e}",
-                        track_buf.path.display()
-                    );
-                    continue;
-                }
-            } else {
-                // Writer was dropped earlier due to a write error.
+            // Hand off the writer-flush / peak-close / WavWriter::finalize
+            // work to a single helper so the rest of this loop is pure
+            // state-mutation (clip emission, event broadcast, file removal
+            // for empty or out-of-range takes).
+            if let Err(e) = finalize_wav_file(&mut track_buf) {
+                eprintln!("recording: {e}");
                 continue;
             }
 
@@ -365,6 +328,77 @@ impl RecordingState {
         self.ring_consumer = None;
         clips_emitted
     }
+}
+
+/// Open a streaming WAV writer for one recording take. Creates
+/// `audio_dir` on demand and returns the final path alongside the
+/// writer. Pulled out of [`RecordingState::create_track_buf`] so the
+/// struct-assembly half of that function stays filesystem-free.
+fn open_track_wav_file(
+    audio_dir: &Path,
+    clip_id: ClipId,
+    engine_sample_rate: u32,
+) -> Result<(PathBuf, WavWriter<BufWriter<File>>), String> {
+    std::fs::create_dir_all(audio_dir)
+        .map_err(|e| format!("create audio dir {}: {e}", audio_dir.display()))?;
+    let path = audio_dir.join(format!("clip_{clip_id}.wav"));
+
+    let spec = WavSpec {
+        channels: 2,
+        sample_rate: engine_sample_rate,
+        bits_per_sample: 32,
+        sample_format: SampleFormat::Float,
+    };
+    let writer = WavWriter::create(&path, spec)
+        .map_err(|e| format!("create wav {}: {e}", path.display()))?;
+    Ok((path, writer))
+}
+
+/// Close out one track's WAV: flush any trailing resampled frame,
+/// commit the in-progress peak bucket, and finalize the `WavWriter`
+/// so its header carries the correct data-chunk size.
+///
+/// Pulled out of [`RecordingState::finalize_recording`] so the
+/// state-mutation half (clip emission, event broadcast, file removal
+/// on empty / out-of-range takes) operates on a `TrackRecordingBuf`
+/// whose writer is already closed. A return value of `Ok(())` means
+/// `track_buf.writer` is now `None` and the on-disk file is valid;
+/// `Err(_)` means the file should be considered corrupt.
+fn finalize_wav_file(track_buf: &mut TrackRecordingBuf) -> Result<(), String> {
+    // Flush any trailing resampled frame.
+    if let Some(r) = track_buf.resampler.as_mut() {
+        track_buf.resample_scratch.clear();
+        r.flush(&mut track_buf.resample_scratch);
+        if !track_buf.resample_scratch.is_empty() {
+            let tail: Vec<f32> = std::mem::take(&mut track_buf.resample_scratch);
+            if let Err(e) = write_samples_and_peaks(track_buf, &tail) {
+                eprintln!(
+                    "recording: flush failed for {}: {e}",
+                    track_buf.path.display()
+                );
+            }
+        }
+    }
+    // Close out any trailing peak accumulator so a short
+    // recording still gets its final bucket.
+    if track_buf.peak_frames > 0 {
+        track_buf
+            .peaks
+            .push((track_buf.peak_min, track_buf.peak_max));
+        track_buf.peak_frames = 0;
+        track_buf.peak_min = f32::MAX;
+        track_buf.peak_max = f32::MIN;
+    }
+
+    // Close the writer so the WAV header carries the correct
+    // data chunk size. If this fails the file is unusable.
+    let Some(writer) = track_buf.writer.take() else {
+        // Writer was dropped earlier due to a write error.
+        return Err("writer already closed".into());
+    };
+    writer
+        .finalize()
+        .map_err(|e| format!("finalize wav {}: {e}", track_buf.path.display()))
 }
 
 /// Write stereo-interleaved samples to the track's WAV writer and
