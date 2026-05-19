@@ -57,6 +57,13 @@
 
     - [ ] Major-version upgrades: `ureq 2 → 3`, `rand 0.8 → 0.10`, `dirs 5 → 6`,
       `iced 0.13 → 0.14`, `cpal 0.15 → 0.17`, `ringbuf 0.4 → 0.5`, `symphonia 0.5 → 0.6`.
+        - [ ] `dirs 5 → 6`
+        - [ ] `rand 0.8 → 0.10`
+        - [ ] `ringbuf 0.4 → 0.5`
+        - [ ] `symphonia 0.5 → 0.6`
+        - [ ] `ureq 2 → 3`
+        - [ ] `cpal 0.15 → 0.17`
+        - [ ] `iced 0.13 → 0.14`
 
 ###P5 — smaller wins
 
