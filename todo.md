@@ -40,6 +40,23 @@
       each lane label (currently Font-Awesome substitutes
       `music / wave-square / sliders`).
 
+    - [ ] ! Global tracks: editing tempo and time-signature events has
+      flaky UI — values don't update reliably, drag/click hit-testing
+      feels inconsistent, and the on-canvas markers can lag or stale
+      after a change. Likely related to the new `GlobalShelf` rewrite
+      (new lane Y offsets in `timeline_input::handle_press`, new
+      heights `GLOBAL_TRACK_TEMPO_HEIGHT` / `GLOBAL_TRACK_SIG_HEIGHT`).
+      Audit the tempo / signature edit path end-to-end: hit-test math
+      in `timeline_input`, the engine round-trip, and the
+      tempo/signature lane redraw in `timeline_draw::draw_global_tracks`.
+      Add `iced_test` coverage for an edit cycle so regressions land
+      on goldens next time. (Reported 2026-05-19.)
+
+    - [ ] Fix compile warnings across the workspace. Run `cargo build`
+      / `cargo clippy --workspace --all-targets` and clean up the
+      accumulated dead-code, unused-import, unused-variable, and
+      deprecation warnings so the build comes back to clean.
+
     - [ ] Mixer: when expanding a parent track that has sub-tracks, the
       sub-tracks are interleaved with unrelated tracks in the strip row
       instead of being grouped immediately next to their parent.
