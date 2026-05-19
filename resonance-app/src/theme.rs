@@ -271,9 +271,24 @@ pub const RULER_HEIGHT: f32 = 28.0;
 /// Section band sitting under the ruler — the section-pill strip on the
 /// arrange canvas.
 pub const SECTION_BAND_HEIGHT: f32 = 22.0;
-/// Height of each global track row (tempo, time signature) in the
-/// collapsible area between the ruler and the regular tracks.
-pub const GLOBAL_TRACK_ROW_HEIGHT: f32 = 40.0;
+/// Height of the always-visible "GLOBAL" shelf header strip — the
+/// one-line summary bar (`6/8 · 90 BPM · B min · N chords`) that hosts
+/// the caret-toggle and stays present even when the shelf is collapsed.
+pub const GLOBAL_SHELF_HEADER_HEIGHT: f32 = 32.0;
+/// Chord lane height inside the expanded global shelf — section tabs
+/// stack above chord blocks so the row reads two lines tall.
+pub const GLOBAL_TRACK_CHORD_HEIGHT: f32 = 56.0;
+/// Tempo automation lane height inside the expanded global shelf.
+pub const GLOBAL_TRACK_TEMPO_HEIGHT: f32 = 40.0;
+/// Time-signature lane height inside the expanded global shelf — a
+/// single-line strip of pills + downbeat ticks.
+pub const GLOBAL_TRACK_SIG_HEIGHT: f32 = 28.0;
+/// Legacy alias retained for any straggler call sites. Prefer the
+/// per-lane constants above.
+pub const GLOBAL_TRACK_ROW_HEIGHT: f32 = GLOBAL_TRACK_TEMPO_HEIGHT;
+/// Width of the small glyph tile shown next to each global-track label
+/// in the shelf's left column.
+pub const GLOBAL_TRACK_GLYPH_SIZE: f32 = 22.0;
 /// Track-list column width on the Arrange view.
 pub const TRACK_HEADER_WIDTH: f32 = 260.0;
 /// Standard channel strip width on the Mixer.

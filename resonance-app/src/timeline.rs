@@ -61,14 +61,33 @@ pub struct TimelineCanvas<'a> {
 }
 
 impl TimelineCanvas<'_> {
-    /// Height of the global tracks area (tempo + time signature rows).
-    /// Returns 0.0 when collapsed.
-    pub(crate) fn global_tracks_height(&self) -> f32 {
+    /// Height of the always-visible global-shelf header strip (the
+    /// "GLOBAL · 6/8 · 90 BPM · …" summary bar). Present regardless of
+    /// the expanded state — the chat brief made the shelf "collapsable
+    /// above the regular tab", so the summary line is always there.
+    pub(crate) fn global_shelf_header_height(&self) -> f32 {
+        theme::GLOBAL_SHELF_HEADER_HEIGHT
+    }
+
+    /// Height of the *expanded* global-tracks lane area — three rows
+    /// stacked (chords + tempo + signature). Returns 0.0 when the
+    /// shelf is collapsed so the lane area drops to zero and only the
+    /// header strip stays.
+    pub(crate) fn global_tracks_lanes_height(&self) -> f32 {
         if self.global_tracks_expanded {
-            2.0 * theme::GLOBAL_TRACK_ROW_HEIGHT
+            theme::GLOBAL_TRACK_CHORD_HEIGHT
+                + theme::GLOBAL_TRACK_TEMPO_HEIGHT
+                + theme::GLOBAL_TRACK_SIG_HEIGHT
         } else {
             0.0
         }
+    }
+
+    /// Total height of the global-tracks region (header strip + lanes).
+    /// Used by `fixed_header_height` and the track-header column to
+    /// keep their Y offsets in sync.
+    pub(crate) fn global_tracks_height(&self) -> f32 {
+        self.global_shelf_header_height() + self.global_tracks_lanes_height()
     }
 
     /// Height of the section-pill band sitting under the ruler. Returns
@@ -229,6 +248,11 @@ pub struct TimelineFingerprint {
     pub section_placements_len: usize,
     pub section_definitions_len: usize,
     pub selected_placement_id: Option<u64>,
+    /// Sum of every section definition's chord count. Drives the
+    /// chord-lane redraw inside the global shelf — without this the
+    /// canvas cache would hold a stale chord layout after a chord is
+    /// added / removed / re-rolled inside Compose.
+    pub section_chord_total: usize,
 }
 
 impl<'a> TimelineCanvas<'a> {
@@ -255,6 +279,11 @@ impl<'a> TimelineCanvas<'a> {
             section_placements_len: self.section_placements.len(),
             section_definitions_len: self.section_definitions.len(),
             selected_placement_id: self.selected_placement_id,
+            section_chord_total: self
+                .section_definitions
+                .iter()
+                .map(|d| d.chords.len())
+                .sum(),
         }
     }
 }

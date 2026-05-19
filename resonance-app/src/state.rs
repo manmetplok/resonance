@@ -592,14 +592,14 @@ impl Default for ArrangeViewport {
 }
 
 /// Which global track lane an event belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GlobalTrackKind {
     Tempo,
     Signature,
 }
 
 /// A selected event on a global track.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SelectedGlobalEvent {
     pub kind: GlobalTrackKind,
     /// Index into the corresponding events vec.

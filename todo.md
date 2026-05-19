@@ -1,6 +1,6 @@
 #TODO
 
-    - [ ] Implement the new design for the global tracks (tempo, time
+    - [x] Implement the new design for the global tracks (tempo, time
       signature, sections, **chord track**, etc.) using the design update
       here: https://api.anthropic.com/v1/design/h/KuEbfCOuhRVlYI14XTJ6sA?open_file=Resonance.html
       Fetch the design bundle, read its README for context + intent, and
@@ -9,6 +9,57 @@
       through the `ux-design` agent (theme constants, spacing, hover/active
       states) and have `e2e-tester` rebaseline `iced_test` snapshots once
       the visuals are final.
+      **What changed:** rebuilt the global-tracks shelf to match the
+      bundle's `GlobalShelf` design from `arrange.jsx`. The shelf is
+      now a two-part strip: an always-visible 32 px header
+      (`GLOBAL_SHELF_HEADER_HEIGHT`) with caret toggle + `GLOBAL` tag +
+      count badge + one-line summary `{N}/{D} · {BPM} BPM · {root}
+      {mode} · {chord-total} chords`, and (when expanded) three
+      stacked lanes — **Chords** (56 px, new) flattened from
+      `compose.placements`+`compose.definitions` with section tabs
+      and chord blocks tinted by quality (Min* → lavender, Dom7 →
+      warm, other → neutral); **Tempo** (40 px, kept) automation
+      curve; **Signature** (28 px, kept) pill markers with a
+      `compound · N eighths` hint for compound meters. New theme
+      constants `GLOBAL_SHELF_HEADER_HEIGHT`, `GLOBAL_TRACK_CHORD_HEIGHT`,
+      `GLOBAL_TRACK_TEMPO_HEIGHT`, `GLOBAL_TRACK_SIG_HEIGHT`. The
+      canvas's `fixed_header_height` and `draw_global_tracks` plus
+      the column-side `view::track_header` got rewritten so the
+      shelf paints + clicks line up row-for-row across both sides;
+      `timeline_input::handle_press` now routes shelf-header clicks
+      to `ToggleGlobalTracks` and lane clicks to the per-event
+      handler with the new Y offsets. Rebaselined all four existing
+      goldens (`track_header_alignment_scroll_*`,
+      `timeline_lane_clip_globals_expanded_scrolled`) and added two
+      new ones (`global_tracks_shelf_collapsed`,
+      `global_tracks_shelf_expanded`) so the shelf chrome itself
+      is locked in. Future-work in the bundle's design that wasn't
+      landed: gradient `bg-1 → #131419` backdrop on the header
+      strip, the right-side `Detect / From MIDI / +` action chips
+      (no message handlers exist yet), and SVG-based glyphs for
+      each lane label (currently Font-Awesome substitutes
+      `music / wave-square / sliders`).
+
+    - [ ] Mixer: when expanding a parent track that has sub-tracks, the
+      sub-tracks are interleaved with unrelated tracks in the strip row
+      instead of being grouped immediately next to their parent.
+      Sub-tracks should render contiguously beside the parent strip, and
+      ideally use a distinct strip color / accent so the parent → child
+      relationship reads at a glance. While doing this pass, cross-check
+      the mixer against the new design bundle
+      (https://api.anthropic.com/v1/design/h/KuEbfCOuhRVlYI14XTJ6sA?open_file=Resonance.html)
+      and align the strip layout / spacing / colors with what's specified
+      there. Route the visual work through `ux-design` and rebaseline
+      mixer snapshots via `e2e-tester` after the changes land.
+
+    - [ ] ! Track header still bleeds through the transport bar when
+      scrolling vertically in the arrange view. The earlier fix wrapped
+      the `TimelineCanvas` lane paints in `frame.with_clip(...)`, but the
+      **track-header column** (left-side track strips) is a separate
+      widget tree and still paints over / through the transport bar at
+      the top. Likely the track-header scrollable lacks an opaque
+      background above its content rect, or its parent column doesn't
+      clip to the area below the transport bar. (Reported 2026-05-19.)
 
     - [x] ! Adding a track is a bit flaky — possibly clashing IDs? Investigate
       the track-ID allocator (and any places where a new track's ID is derived

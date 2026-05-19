@@ -118,50 +118,119 @@ impl TimelineCanvas<'_> {
         }
     }
 
-    /// Draw the global tracks area (tempo + time signature) between the
-    /// ruler and the regular track lanes. The tempo row shows a line
-    /// graph (like Logic Pro) with draggable points connected by lines;
-    /// the signature row keeps the block-marker style.
+    /// Draw the global-tracks shelf — a collapsible strip sitting between
+    /// the ruler/section-band and the regular track lanes. The shelf has
+    /// three parts:
+    ///
+    /// 1. **Header strip** (`GLOBAL_SHELF_HEADER_HEIGHT`, always visible)
+    ///    — backdrop + one-line summary `6/8 · 90 BPM · B min · N chords`.
+    ///    The caret-toggle + `GLOBAL` tag live on the track-header
+    ///    column side (see `view::track_header`); the canvas only paints
+    ///    the summary text on the right of the header strip.
+    /// 2. **Chord lane** (`GLOBAL_TRACK_CHORD_HEIGHT`) — flattened view of
+    ///    every section's chord progression, rendered as section tabs
+    ///    with chord blocks underneath. Only painted when the shelf is
+    ///    expanded.
+    /// 3. **Tempo lane** (`GLOBAL_TRACK_TEMPO_HEIGHT`) — automation curve
+    ///    with anchor points + BPM labels. Only painted when expanded.
+    /// 4. **Signature lane** (`GLOBAL_TRACK_SIG_HEIGHT`) — pill markers
+    ///    for time-signature changes + downbeat ticks. Only when expanded.
     pub(super) fn draw_global_tracks(
         &self,
         frame: &mut canvas::Frame,
         width: f32,
         ruler_height: f32,
     ) {
+        let shelf_top = ruler_height;
+        let header_h = theme::GLOBAL_SHELF_HEADER_HEIGHT;
+
+        // ---- Header strip (always visible) ----
+        // Slightly elevated backdrop so the shelf reads as a distinct
+        // sub-section between the ruler and the lanes. Matches the
+        // design's `linear-gradient(--bg-1 0%, #131419 100%)` by tinting
+        // the lower edge a notch darker than the ruler.
+        frame.fill_rectangle(
+            Point::new(0.0, shelf_top),
+            Size::new(width, header_h),
+            theme::BG_1,
+        );
+        // Bottom hairline of the header strip.
+        frame.fill_rectangle(
+            Point::new(0.0, shelf_top + header_h - 1.0),
+            Size::new(width, 1.0),
+            theme::LINE_2,
+        );
+
+        // Right-side summary line: `6/8 · 90 BPM · B min · N chords`.
+        // The text sits on the canvas side of the shelf header — the
+        // caret + GLOBAL tag live in the track-header column. Padding
+        // on the left so the text aligns with the lane content below.
+        let summary = self.global_shelf_summary();
+        let summary_y = shelf_top + (header_h - 12.0) * 0.5;
+        frame.fill_text(canvas::Text {
+            content: summary,
+            position: Point::new(12.0, summary_y),
+            color: theme::TEXT_2,
+            size: 11.5.into(),
+            font: theme::UI_FONT_MEDIUM,
+            ..canvas::Text::default()
+        });
+
         if !self.global_tracks_expanded {
             return;
         }
-        let row_h = theme::GLOBAL_TRACK_ROW_HEIGHT;
 
-        // ---- Tempo row background ----
-        let tempo_y = ruler_height;
+        let chord_h = theme::GLOBAL_TRACK_CHORD_HEIGHT;
+        let tempo_h = theme::GLOBAL_TRACK_TEMPO_HEIGHT;
+        let sig_h = theme::GLOBAL_TRACK_SIG_HEIGHT;
+
+        let chord_y = shelf_top + header_h;
+        let tempo_y = chord_y + chord_h;
+        let sig_y = tempo_y + tempo_h;
+
+        // ---- Chord lane background ----
         frame.fill_rectangle(
-            Point::new(0.0, tempo_y),
-            Size::new(width, row_h),
+            Point::new(0.0, chord_y),
+            Size::new(width, chord_h),
             theme::GLOBAL_TRACK_BG,
         );
-        // Separator
         frame.fill_rectangle(
-            Point::new(0.0, tempo_y + row_h - 1.0),
+            Point::new(0.0, chord_y + chord_h - 1.0),
             Size::new(width, 1.0),
-            theme::SEPARATOR,
+            theme::LINE_2,
+        );
+
+        // ---- Tempo row background ----
+        frame.fill_rectangle(
+            Point::new(0.0, tempo_y),
+            Size::new(width, tempo_h),
+            theme::GLOBAL_TRACK_BG,
+        );
+        frame.fill_rectangle(
+            Point::new(0.0, tempo_y + tempo_h - 1.0),
+            Size::new(width, 1.0),
+            theme::LINE_2,
         );
 
         // ---- Time signature row background ----
-        let sig_y = ruler_height + row_h;
         frame.fill_rectangle(
             Point::new(0.0, sig_y),
-            Size::new(width, row_h),
+            Size::new(width, sig_h),
             theme::GLOBAL_TRACK_BG,
         );
-        // Bottom separator
         frame.fill_rectangle(
-            Point::new(0.0, sig_y + row_h - 1.0),
+            Point::new(0.0, sig_y + sig_h - 1.0),
             Size::new(width, 1.0),
             theme::SEPARATOR,
         );
 
+        // ---- Chord blocks per section ----
+        self.draw_chord_lane(frame, width, chord_y, chord_h);
+
         // ---- Draw tempo line graph ----
+        // (Geometry repurposed from the previous implementation; only the
+        // row height shrank from 40 → 40, so the math is unchanged.)
+        let row_h = tempo_h;
         if !self.tempo_map.tempo_points.is_empty() {
             // Determine BPM range for vertical mapping.
             let mut min_bpm = f32::MAX;
@@ -351,7 +420,7 @@ impl TimelineCanvas<'_> {
             };
             frame.fill_rectangle(
                 Point::new(x.max(0.0), sig_y + 1.0),
-                Size::new(block_w, row_h - 2.0),
+                Size::new(block_w, sig_h - 2.0),
                 block_color,
             );
 
@@ -361,22 +430,269 @@ impl TimelineCanvas<'_> {
                 } else {
                     theme::TEXT_DIM
                 };
-                frame.fill_rectangle(Point::new(x, sig_y), Size::new(1.0, row_h), marker_color);
+                frame.fill_rectangle(Point::new(x, sig_y), Size::new(1.0, sig_h), marker_color);
             }
 
-            let label_x = x.max(2.0) + 3.0;
+            // Pill-style label `{n}/{d}`.
+            let label_x = x.max(2.0) + 5.0;
             if label_x < width - 10.0 {
+                let label = format!("{}/{}", event.numerator, event.denominator);
+                let label_y = sig_y + (sig_h - 11.0) * 0.5;
                 frame.fill_text(canvas::Text {
-                    content: format!("{}/{}", event.numerator, event.denominator),
-                    position: Point::new(label_x, sig_y + 5.0),
+                    content: label.clone(),
+                    position: Point::new(label_x, label_y),
                     color: if is_selected {
                         theme::ACCENT
                     } else {
-                        theme::TEXT_DIM
+                        theme::TEXT_1
                     },
-                    size: 10.0.into(),
+                    size: 10.5.into(),
+                    font: theme::MONO_FONT,
                     ..canvas::Text::default()
                 });
+
+                // Optional "compound · N eighths" hint for compound meters
+                // (numerator divisible by 3 and >= 6, e.g. 6/8, 9/8, 12/8).
+                if !is_selected
+                    && event.numerator >= 6
+                    && event.numerator % 3 == 0
+                    && event.denominator == 8
+                {
+                    let hint_x = label_x + (label.len() as f32) * 6.5 + 10.0;
+                    if hint_x < width - 60.0 {
+                        frame.fill_text(canvas::Text {
+                            content: format!(
+                                "compound · {} eighths",
+                                event.numerator
+                            ),
+                            position: Point::new(hint_x, label_y + 1.0),
+                            color: theme::TEXT_3,
+                            size: 9.5.into(),
+                            font: theme::MONO_FONT,
+                            ..canvas::Text::default()
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    /// Build the one-line "GLOBAL" summary text shown in the always-visible
+    /// shelf header strip: `6/8 · 90 BPM · B min · N chords`.
+    fn global_shelf_summary(&self) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        let num = self.tempo_map.numerator;
+        let den = self.tempo_map.denominator;
+        let _ = write!(out, "{}/{}", num, den);
+
+        let bpm = self.tempo_map.bpm;
+        let _ = write!(out, "  ·  {} BPM", bpm.round() as u32);
+
+        // Key signature: read from the first section that has a scale.
+        if let Some(scale) = self
+            .section_definitions
+            .iter()
+            .find_map(|d| d.scale.as_ref())
+        {
+            let mode_label = match scale.mode {
+                resonance_music_theory::Mode::Major => "maj".to_string(),
+                resonance_music_theory::Mode::Minor => "min".to_string(),
+                other => other.to_string(),
+            };
+            let _ = write!(out, "  ·  {} {}", scale.root, mode_label);
+        }
+
+        // Chord count: sum of every section's progression.
+        let chord_total: usize = self
+            .section_definitions
+            .iter()
+            .map(|d| d.chords.len())
+            .sum();
+        let _ = write!(out, "  ·  {} chords", chord_total);
+        out
+    }
+
+    /// Draw the chord lane: for each placed section, render a small
+    /// section tab at the top + chord blocks beneath, sized to the
+    /// section's footprint on the timeline. Chord blocks are tinted by
+    /// quality (minor = lavender, dom = warm, major = neutral) so the
+    /// progression reads at a glance.
+    fn draw_chord_lane(
+        &self,
+        frame: &mut canvas::Frame,
+        width: f32,
+        chord_y: f32,
+        chord_h: f32,
+    ) {
+        // Top sub-strip holds the section name tab; the chord blocks
+        // fill the remaining vertical space.
+        let tab_h = 14.0;
+        let blocks_y = chord_y + tab_h;
+        let blocks_h = chord_h - tab_h - 4.0;
+
+        for placement in self.section_placements {
+            let Some(definition) = self
+                .section_definitions
+                .iter()
+                .find(|d| d.id == placement.definition_id)
+            else {
+                continue;
+            };
+
+            let section_start_sample =
+                self.tempo_map.bar_to_sample(placement.start_bar);
+            let section_end_sample = self
+                .tempo_map
+                .bar_to_sample(placement.start_bar + definition.length_bars);
+            let section_x = self.sample_to_x(section_start_sample);
+            let section_end_x = self.sample_to_x(section_end_sample);
+            if section_end_x < 0.0 || section_x > width {
+                continue;
+            }
+
+            // Section dot + name tab — same color identity as the
+            // section-pill band so the chord lane links back visually.
+            let dot_color = Color::from_rgb(
+                definition.color[0] as f32 / 255.0,
+                definition.color[1] as f32 / 255.0,
+                definition.color[2] as f32 / 255.0,
+            );
+            let tab_x = section_x.max(0.0) + 4.0;
+            let dot_size = 5.0;
+            if tab_x + dot_size < width {
+                frame.fill_rectangle(
+                    Point::new(tab_x, chord_y + (tab_h - dot_size) * 0.5),
+                    Size::new(dot_size, dot_size),
+                    dot_color,
+                );
+                frame.fill_text(canvas::Text {
+                    content: definition.name.to_uppercase(),
+                    position: Point::new(tab_x + dot_size + 5.0, chord_y + 2.0),
+                    color: theme::TEXT_3,
+                    size: 9.0.into(),
+                    font: theme::UI_FONT_SEMIBOLD,
+                    ..canvas::Text::default()
+                });
+            }
+
+            // Chord blocks — laid out in the bottom sub-strip of the lane.
+            // Each chord occupies its `start_beat..start_beat+duration_beats`
+            // window within the section. Convert beat positions to bar
+            // fractions, then to samples + screen-x.
+            let beats_per_bar = self.tempo_map.numerator.max(1) as f32;
+            let section_bars = definition.length_bars as f32;
+            let section_pixel_width = section_end_x - section_x;
+            for chord in &definition.chords {
+                let chord_start_bars =
+                    chord.start_beat as f32 / beats_per_bar;
+                let chord_end_bars = (chord.start_beat + chord.duration_beats)
+                    as f32
+                    / beats_per_bar;
+                if chord_start_bars >= section_bars {
+                    continue;
+                }
+                let chord_end_bars = chord_end_bars.min(section_bars);
+
+                let block_left = section_x
+                    + (chord_start_bars / section_bars) * section_pixel_width;
+                let block_right = section_x
+                    + (chord_end_bars / section_bars) * section_pixel_width;
+                let block_w = (block_right - block_left - 3.0).max(0.0);
+                if block_w <= 0.0 || block_right < 0.0 || block_left > width {
+                    continue;
+                }
+
+                // Tint by quality — minor uses the lavender accent, dom
+                // uses warm/amber, every other quality reads as neutral.
+                use resonance_music_theory::ChordQuality;
+                let (body_color, border_color, text_color) = match chord
+                    .chord
+                    .quality
+                {
+                    ChordQuality::Min
+                    | ChordQuality::Min7
+                    | ChordQuality::Min6
+                    | ChordQuality::MinMaj7
+                    | ChordQuality::HalfDim7 => (
+                        Color { a: 0.10, ..theme::ACCENT },
+                        Color { a: 0.30, ..theme::ACCENT },
+                        theme::ACCENT_SOFT,
+                    ),
+                    ChordQuality::Dom7 => (
+                        Color { a: 0.10, ..theme::WARM },
+                        Color { a: 0.32, ..theme::WARM },
+                        theme::WARM,
+                    ),
+                    _ => (
+                        Color { a: 0.04, ..theme::TEXT_1 },
+                        Color { a: 0.10, ..theme::TEXT_1 },
+                        theme::TEXT_1,
+                    ),
+                };
+
+                let visible_x = block_left.max(0.0);
+                let visible_w =
+                    (block_left + block_w).min(width) - visible_x;
+                if visible_w <= 0.0 {
+                    continue;
+                }
+                let body = canvas::Path::rounded_rectangle(
+                    Point::new(visible_x, blocks_y),
+                    Size::new(visible_w, blocks_h),
+                    6.0.into(),
+                );
+                frame.fill(&body, body_color);
+                frame.stroke(
+                    &body,
+                    canvas::Stroke::default()
+                        .with_color(border_color)
+                        .with_width(1.0),
+                );
+
+                // Chord symbol: render root + quality suffix on one line.
+                // Tiny — fits in the chord block height of ~38 px.
+                if visible_w > 14.0 {
+                    let root_label = chord.chord.root.as_str();
+                    let suffix = chord.chord.quality.suffix();
+                    frame.fill_text(canvas::Text {
+                        content: format!("{}{}", root_label, suffix),
+                        position: Point::new(
+                            visible_x + 6.0,
+                            blocks_y + 4.0,
+                        ),
+                        color: text_color,
+                        size: 12.0.into(),
+                        font: theme::UI_FONT_MEDIUM,
+                        ..canvas::Text::default()
+                    });
+                }
+                // Duration label "{N}b" in the bottom-right corner of the
+                // block — mono, dim, so it doesn't compete with the chord
+                // symbol but the user can still scan progression timing.
+                if visible_w > 36.0 {
+                    let beats_per_bar = self.tempo_map.numerator.max(1) as u32;
+                    let dur_bars = chord.duration_beats / beats_per_bar.max(1);
+                    let dur_label = if dur_bars > 0
+                        && chord.duration_beats % beats_per_bar == 0
+                    {
+                        format!("{}b", dur_bars)
+                    } else {
+                        format!("{}·", chord.duration_beats)
+                    };
+                    let label_x = visible_x + visible_w - 22.0;
+                    frame.fill_text(canvas::Text {
+                        content: dur_label,
+                        position: Point::new(
+                            label_x.max(visible_x + 4.0),
+                            blocks_y + blocks_h - 13.0,
+                        ),
+                        color: theme::TEXT_3,
+                        size: 8.5.into(),
+                        font: theme::MONO_FONT,
+                        ..canvas::Text::default()
+                    });
+                }
             }
         }
     }

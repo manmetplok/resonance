@@ -52,8 +52,10 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
     // of the column, so it must invalidate the lazy cache.
     (!r.compose.placements.is_empty()).hash(&mut h);
     r.interaction.selected_track.hash(&mut h);
+    r.interaction.selected_global_event.hash(&mut h);
     r.transport.time_sig_num.hash(&mut h);
     r.transport.time_sig_den.hash(&mut h);
+    r.transport.bpm.to_bits().hash(&mut h);
     // tempo / signature event positions affect the global-tracks header
     // row when expanded; cheap to hash because the lists are small.
     r.tempo_events.len().hash(&mut h);
@@ -67,6 +69,16 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
         ev.numerator.hash(&mut h);
         ev.denominator.hash(&mut h);
     }
+    // Chord-lane sub-line shows the total chord count across sections —
+    // hash so the column-side label refreshes when chords are added or
+    // re-rolled in Compose.
+    let chord_total: usize = r
+        .compose
+        .definitions
+        .iter()
+        .map(|d| d.chords.len())
+        .sum();
+    chord_total.hash(&mut h);
     for t in &r.registry.tracks {
         if t.sub_track.is_some() {
             continue;
@@ -91,63 +103,30 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
 fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
     let mut headers = column![].spacing(0);
 
-    // Header row matching the timeline ruler height — global tracks
-    // toggle + add-track button. Designed as a tiny "Tracks" label row
-    // with a dashed `+` button on the right (per design).
-    let expanded = r.viewport.global_tracks_expanded;
-    let caret = if expanded {
-        fa::CARET_DOWN
-    } else {
-        fa::CARET_RIGHT
-    };
-    let toggle_btn = button(theme::icon(caret).size(10).color(theme::TEXT_3))
-        .on_press(Message::Ui(UiMessage::ToggleGlobalTracks))
-        .style(|_theme, status| theme::small_button_style(status))
-        .padding([2, 4]);
-
-    let add_btn = button(text("+").size(13).color(theme::TEXT_3))
-        .on_press(Message::Ui(UiMessage::OpenAddTrackMenu))
-        .style(|_theme, status| theme::ghost_button_style(status))
-        .padding([0, 6])
-        .width(22)
-        .height(22);
-
-    let header_row = row![
-        Space::new().width(10),
-        toggle_btn,
-        Space::new().width(4),
-        text("TRACKS")
-            .size(10)
-            .font(theme::UI_FONT_SEMIBOLD)
-            .color(theme::TEXT_3),
-        Space::new().width(Length::Fill),
-        add_btn,
-        Space::new().width(8),
-    ]
-    .align_y(alignment::Vertical::Center)
-    .height(theme::RULER_HEIGHT);
+    // ---- Ruler row ----
+    // The track-header column's first row mirrors the timeline ruler so
+    // the global-shelf header strip below it aligns one-for-one with
+    // the canvas. This row is intentionally minimal — the design moves
+    // the "TRACKS" label + add-track button below the entire global
+    // shelf area so the shelf reads as a coherent unit on top.
     headers = headers.push(
-        container(header_row)
+        container(Space::new().width(Length::Fill))
             .width(Length::Fill)
             .height(theme::RULER_HEIGHT)
             .style(|_theme| container::Style {
                 background: Some(iced::Background::Color(theme::BG_1)),
-                border: iced::Border {
-                    color: theme::LINE_2,
-                    width: 0.0,
-                    radius: 0.0.into(),
-                },
                 ..Default::default()
             }),
     );
 
-    // Section-band placeholder — the timeline canvas reserves
-    // `SECTION_BAND_HEIGHT` under the ruler when at least one compose
-    // section is placed (see `TimelineCanvas::section_band_height`).
-    // The header column has no section pills of its own, so we render
-    // a blank strip of the same height to keep the lane area's Y
-    // origin synced with the canvas. Without this, every track header
-    // drifts up by 22 px from its lane whenever sections exist.
+    // ---- Section-band placeholder ----
+    // The timeline canvas reserves `SECTION_BAND_HEIGHT` under the
+    // ruler when at least one compose section is placed (see
+    // `TimelineCanvas::section_band_height`). The header column has
+    // no section pills of its own, so we render a blank strip of the
+    // same height to keep the lane area's Y origin synced with the
+    // canvas. Without this, every track header drifts up by 22 px
+    // from its lane whenever sections exist.
     if !r.compose.placements.is_empty() {
         headers = headers.push(
             container(Space::new().width(Length::Fill))
@@ -160,39 +139,20 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
         );
     }
 
-    // Global tracks area (tempo + time signature) — visible when expanded
+    // ---- Global shelf ----
+    // Always-visible 32 px header strip + (when expanded) per-lane
+    // label rows for Chords / Tempo / Signature. The header strip is
+    // the click target that toggles the shelf open/closed.
+    let expanded = r.viewport.global_tracks_expanded;
+    headers = headers.push(build_global_shelf_header(expanded));
+
     if expanded {
-        let row_h = theme::GLOBAL_TRACK_ROW_HEIGHT;
-        let gt_style = |_theme: &iced::Theme| container::Style {
-            background: Some(iced::Background::Color(theme::GLOBAL_TRACK_BG)),
-            border: iced::Border {
-                color: theme::LINE_2,
-                width: 0.0,
-                radius: 0.0.into(),
-            },
-            ..Default::default()
-        };
-
-        let tempo_row = container(
-            row![
-                Space::new().width(10),
-                text("Tempo").size(11).color(theme::TEXT_2),
-            ]
-            .align_y(alignment::Vertical::Center)
-            .height(row_h),
-        )
-        .width(Length::Fill)
-        .height(row_h)
-        .style(gt_style);
-        headers = headers.push(tempo_row);
-
-        let sig_row = view_signature_header(r, row_h);
-        headers = headers.push(
-            container(sig_row)
-                .width(Length::Fill)
-                .height(row_h)
-                .style(gt_style),
-        );
+        // Chord lane label.
+        headers = headers.push(view_chord_lane_header(r));
+        // Tempo lane label.
+        headers = headers.push(view_tempo_lane_header(r));
+        // Signature lane label.
+        headers = headers.push(view_signature_lane_header(r));
     }
 
     let sorted_tracks: Vec<&TrackState> = r
@@ -476,10 +436,233 @@ impl std::fmt::Display for Denominator {
     }
 }
 
-/// Render the Time Sig header row. When a signature event is selected,
-/// show inline pick_lists for editing numerator and denominator.
-fn view_signature_header(r: &Resonance, row_h: f32) -> Element<'static, Message> {
-    let label = text("Time Sig").size(11).color(theme::TEXT_2);
+/// Build the always-visible 32 px global-shelf header strip on the
+/// column side. Contains the caret toggle, `GLOBAL` tag, and a small
+/// count badge ("3" = chords + tempo + sig). Clicking anywhere on the
+/// strip toggles the shelf open / closed.
+fn build_global_shelf_header(expanded: bool) -> Element<'static, Message> {
+    let caret = if expanded {
+        fa::CARET_DOWN
+    } else {
+        fa::CARET_RIGHT
+    };
+    let caret_el = container(theme::icon(caret).size(9).color(theme::TEXT_3))
+        .width(12)
+        .height(12)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill);
+
+    let global_tag = text("GLOBAL")
+        .size(10)
+        .font(theme::UI_FONT_SEMIBOLD)
+        .color(theme::TEXT_2);
+
+    // Small `3` count pill — mirrors the design's `gsTagCount`.
+    let count_pill = container(
+        text("3")
+            .size(9)
+            .font(theme::MONO_FONT)
+            .color(theme::TEXT_3),
+    )
+    .padding(iced::Padding {
+        top: 1.0,
+        right: 5.0,
+        bottom: 1.0,
+        left: 5.0,
+    })
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::BG_2)),
+        border: iced::Border {
+            color: theme::LINE_2,
+            width: 1.0,
+            radius: 3.0.into(),
+        },
+        ..Default::default()
+    });
+
+    // Right-side: small `+` button — adds a new instrument/audio track.
+    // Lives here (in the column-side shelf header) so it's reachable
+    // regardless of whether the shelf is expanded. Replaces the previous
+    // standalone "TRACKS · +" row that used to sit between the ruler and
+    // the lane area before this redesign.
+    let add_btn = button(text("+").size(13).color(theme::TEXT_3))
+        .on_press(Message::Ui(UiMessage::OpenAddTrackMenu))
+        .style(|_theme, status| theme::ghost_button_style(status))
+        .padding(iced::Padding {
+            top: 0.0,
+            right: 6.0,
+            bottom: 2.0,
+            left: 6.0,
+        })
+        .width(22)
+        .height(22);
+
+    let inner = row![
+        Space::new().width(10),
+        caret_el,
+        Space::new().width(6),
+        global_tag,
+        Space::new().width(6),
+        count_pill,
+        Space::new().width(Length::Fill),
+        add_btn,
+        Space::new().width(8),
+    ]
+    .align_y(alignment::Vertical::Center)
+    .height(theme::GLOBAL_SHELF_HEADER_HEIGHT);
+
+    let strip = container(inner)
+        .width(Length::Fill)
+        .height(theme::GLOBAL_SHELF_HEADER_HEIGHT)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_1)),
+            border: iced::Border {
+                color: theme::LINE_2,
+                width: 0.0,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        });
+
+    mouse_area(strip)
+        .on_press(Message::Ui(UiMessage::ToggleGlobalTracks))
+        .into()
+}
+
+/// Common chrome for a single global-shelf lane label. Renders a
+/// 22 px rounded-square glyph + name (12 px Medium, TEXT_1) + sub-line
+/// (10 px Mono, TEXT_3), with optional warm tint on the glyph for the
+/// tempo lane (matching the canvas-side automation curve color).
+fn build_global_lane_label(
+    glyph: char,
+    name: &'static str,
+    sub: String,
+    height: f32,
+    warm: bool,
+) -> Element<'static, Message> {
+    let glyph_color = if warm { theme::WARM } else { theme::TEXT_2 };
+    let glyph_box = container(theme::icon(glyph).size(11).color(glyph_color))
+        .width(theme::GLOBAL_TRACK_GLYPH_SIZE)
+        .height(theme::GLOBAL_TRACK_GLYPH_SIZE)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_2)),
+            border: iced::Border {
+                color: theme::LINE_2,
+                width: 0.0,
+                radius: 5.0.into(),
+            },
+            ..Default::default()
+        });
+
+    let name_el = text(name)
+        .size(12)
+        .font(theme::UI_FONT_MEDIUM)
+        .color(theme::TEXT_1);
+    let sub_el = text(sub).size(10).font(theme::MONO_FONT).color(theme::TEXT_3);
+    let name_col = column![name_el, sub_el].spacing(1);
+
+    // Mini M / Lock control cluster — placeholders for parity with the
+    // design. Wired to no-ops via a `small_button_style` ghost.
+    let m_btn = button(
+        text("M")
+            .size(9)
+            .font(theme::MONO_FONT)
+            .color(theme::TEXT_4),
+    )
+    .style(|_theme, status| theme::small_button_style(status))
+    .padding([0, 3])
+    .width(16)
+    .height(16);
+    let lock_btn = button(
+        text("L")
+            .size(9)
+            .font(theme::MONO_FONT)
+            .color(theme::TEXT_4),
+    )
+    .style(|_theme, status| theme::small_button_style(status))
+    .padding([0, 3])
+    .width(16)
+    .height(16);
+    let controls = row![m_btn, Space::new().width(2), lock_btn].spacing(0);
+
+    let inner = row![
+        Space::new().width(14),
+        glyph_box,
+        Space::new().width(9),
+        name_col,
+        Space::new().width(Length::Fill),
+        controls,
+        Space::new().width(8),
+    ]
+    .align_y(alignment::Vertical::Center)
+    .height(height);
+
+    container(inner)
+        .width(Length::Fill)
+        .height(height)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::GLOBAL_TRACK_BG)),
+            border: iced::Border {
+                color: theme::LINE_2,
+                width: 0.0,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
+/// Chord lane label — name "Chords", sub "from sections · N chords".
+fn view_chord_lane_header(r: &Resonance) -> Element<'static, Message> {
+    let total: usize = r
+        .compose
+        .definitions
+        .iter()
+        .map(|d| d.chords.len())
+        .sum();
+    let sub = if total == 0 {
+        "from sections".to_string()
+    } else if total == 1 {
+        "from sections · 1 chord".to_string()
+    } else {
+        format!("from sections · {} chords", total)
+    };
+    build_global_lane_label(
+        fa::MUSIC,
+        "Chords",
+        sub,
+        theme::GLOBAL_TRACK_CHORD_HEIGHT,
+        false,
+    )
+}
+
+/// Tempo lane label — name "Tempo", sub "{BPM} BPM · automated" when
+/// >1 tempo event, else "{BPM} BPM".
+fn view_tempo_lane_header(r: &Resonance) -> Element<'static, Message> {
+    let bpm = r.transport.bpm;
+    let sub = if r.tempo_events.len() > 1 {
+        format!("{:.1} BPM · automated", bpm)
+    } else {
+        format!("{:.1} BPM", bpm)
+    };
+    build_global_lane_label(
+        fa::WAVE_SQUARE,
+        "Tempo",
+        sub,
+        theme::GLOBAL_TRACK_TEMPO_HEIGHT,
+        true,
+    )
+}
+
+/// Signature lane label — name "Signature", sub "{n}/{d}" (or
+/// "Mixed" when multiple distinct signatures exist in the project).
+/// When a signature event is selected, surfaces inline pick_lists so
+/// the user can edit numerator and denominator without leaving the
+/// shelf — keeps the pre-redesign editing affordance intact.
+fn view_signature_lane_header(r: &Resonance) -> Element<'static, Message> {
+    let row_h = theme::GLOBAL_TRACK_SIG_HEIGHT;
 
     let selected = r.interaction.selected_global_event.and_then(|sel| {
         if sel.kind == state::GlobalTrackKind::Signature {
@@ -489,13 +672,37 @@ fn view_signature_header(r: &Resonance, row_h: f32) -> Element<'static, Message>
         }
     });
 
-    if let Some((idx, event)) = selected {
+    // Header: glyph + "Signature" + sub-line OR inline pickers.
+    let glyph_box = container(
+        theme::icon(fa::SLIDERS)
+            .size(11)
+            .color(theme::TEXT_2),
+    )
+    .width(theme::GLOBAL_TRACK_GLYPH_SIZE)
+    .height(theme::GLOBAL_TRACK_GLYPH_SIZE)
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::BG_2)),
+        border: iced::Border {
+            color: theme::LINE_2,
+            width: 0.0,
+            radius: 5.0.into(),
+        },
+        ..Default::default()
+    });
+
+    let name_el = text("Signature")
+        .size(12)
+        .font(theme::UI_FONT_MEDIUM)
+        .color(theme::TEXT_1);
+
+    let inner: Element<'static, Message> = if let Some((idx, event)) = selected {
         let num = event.numerator;
         let den = event.denominator;
-
         let nums: Vec<Numerator> = (1..=16).map(Numerator).collect();
-        let dens: Vec<Denominator> = [2, 4, 8, 16].iter().copied().map(Denominator).collect();
-
+        let dens: Vec<Denominator> =
+            [2, 4, 8, 16].iter().copied().map(Denominator).collect();
         let num_picker = pick_list(nums, Some(Numerator(num)), move |n: Numerator| {
             Message::GlobalTrack(GlobalTrackMessage::UpdateSignatureEvent {
                 index: idx,
@@ -503,37 +710,69 @@ fn view_signature_header(r: &Resonance, row_h: f32) -> Element<'static, Message>
                 denominator: den,
             })
         })
-        .text_size(11)
-        .width(42);
-
-        let den_picker = pick_list(dens, Some(Denominator(den)), move |d: Denominator| {
-            Message::GlobalTrack(GlobalTrackMessage::UpdateSignatureEvent {
-                index: idx,
-                numerator: num,
-                denominator: d.0,
+        .text_size(10)
+        .width(38);
+        let den_picker =
+            pick_list(dens, Some(Denominator(den)), move |d: Denominator| {
+                Message::GlobalTrack(GlobalTrackMessage::UpdateSignatureEvent {
+                    index: idx,
+                    numerator: num,
+                    denominator: d.0,
+                })
             })
-        })
-        .text_size(11)
-        .width(42);
-
-        let slash = text("/").size(12).color(theme::TEXT_3);
-
+            .text_size(10)
+            .width(38);
+        let slash = text("/").size(11).color(theme::TEXT_3);
         row![
-            Space::new().width(10),
-            label,
+            Space::new().width(14),
+            glyph_box,
+            Space::new().width(9),
+            name_el,
             Space::new().width(8),
             num_picker,
             slash,
             den_picker,
+            Space::new().width(Length::Fill),
+            Space::new().width(8),
         ]
         .spacing(2)
         .align_y(alignment::Vertical::Center)
         .height(row_h)
         .into()
     } else {
-        row![Space::new().width(10), label,]
-            .align_y(alignment::Vertical::Center)
-            .height(row_h)
-            .into()
-    }
+        let sub_text = format!(
+            "{}/{}",
+            r.transport.time_sig_num, r.transport.time_sig_den
+        );
+        let sub_el = text(sub_text)
+            .size(10)
+            .font(theme::MONO_FONT)
+            .color(theme::TEXT_3);
+        let name_col = column![name_el, sub_el].spacing(1);
+        row![
+            Space::new().width(14),
+            glyph_box,
+            Space::new().width(9),
+            name_col,
+            Space::new().width(Length::Fill),
+            Space::new().width(8),
+        ]
+        .align_y(alignment::Vertical::Center)
+        .height(row_h)
+        .into()
+    };
+
+    container(inner)
+        .width(Length::Fill)
+        .height(row_h)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::GLOBAL_TRACK_BG)),
+            border: iced::Border {
+                color: theme::LINE_2,
+                width: 0.0,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
 }

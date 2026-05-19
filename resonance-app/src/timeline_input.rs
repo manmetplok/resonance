@@ -243,8 +243,25 @@ impl TimelineCanvas<'_> {
             return captured(Message::Transport(TransportMessage::SeekToSample(snapped)));
         }
 
-        // Clicks in the global tracks area (between ruler and track lanes).
-        if pos.y >= ruler_height && pos.y < header_height && self.global_tracks_expanded {
+        // Clicks in the global-shelf area (between the section band and the
+        // track lanes). The shelf is split into:
+        //   - section band (`SECTION_BAND_HEIGHT` when sections exist)
+        //   - shelf header strip (`GLOBAL_SHELF_HEADER_HEIGHT`, always)
+        //   - lanes: chord / tempo / signature (only when expanded)
+        // A click in the header strip always toggles the shelf;
+        // a click in the lanes routes to the per-lane handler.
+        let band_h = self.section_band_height();
+        let shelf_top = ruler_height + band_h;
+        let shelf_header_bottom =
+            shelf_top + theme::GLOBAL_SHELF_HEADER_HEIGHT;
+
+        if pos.y >= shelf_top && pos.y < shelf_header_bottom {
+            return captured(Message::Ui(UiMessage::ToggleGlobalTracks));
+        }
+        if pos.y >= shelf_header_bottom
+            && pos.y < header_height
+            && self.global_tracks_expanded
+        {
             return self.handle_global_track_click(state, pos, bounds);
         }
 
@@ -466,8 +483,11 @@ impl TimelineCanvas<'_> {
         }
     }
 
-    /// Handle a click in the global tracks area. Single click on a tempo
-    /// point starts a drag; double-click on empty space adds a new event.
+    /// Handle a click in the global-tracks lane area (below the shelf
+    /// header). Single click on a tempo point starts a drag; double-click
+    /// on empty space in the tempo lane adds a new event. Clicks in the
+    /// chord lane are passive for now (the chord lane is read-only,
+    /// driven by the compose sections).
     fn handle_global_track_click(
         &self,
         state: &mut TimelineState,
@@ -475,9 +495,23 @@ impl TimelineCanvas<'_> {
         _bounds: Rectangle,
     ) -> UpdateResult {
         let ruler_height = theme::RULER_HEIGHT;
-        let row_h = theme::GLOBAL_TRACK_ROW_HEIGHT;
-        let in_tempo = pos.y >= ruler_height && pos.y < ruler_height + row_h;
-        let in_sig = pos.y >= ruler_height + row_h && pos.y < ruler_height + 2.0 * row_h;
+        let band_h = self.section_band_height();
+        let shelf_header_h = theme::GLOBAL_SHELF_HEADER_HEIGHT;
+        let chord_h = theme::GLOBAL_TRACK_CHORD_HEIGHT;
+        let tempo_h = theme::GLOBAL_TRACK_TEMPO_HEIGHT;
+        let sig_h = theme::GLOBAL_TRACK_SIG_HEIGHT;
+
+        let chord_top = ruler_height + band_h + shelf_header_h;
+        let tempo_top = chord_top + chord_h;
+        let sig_top = tempo_top + tempo_h;
+
+        // Maintained for the rest of the function: `row_h` is the tempo
+        // row height (BPM mapping math assumes that's the live lane).
+        let row_h = tempo_h;
+
+        let in_tempo = pos.y >= tempo_top && pos.y < tempo_top + tempo_h;
+        let in_sig = pos.y >= sig_top && pos.y < sig_top + sig_h;
+        let _in_chord = pos.y >= chord_top && pos.y < chord_top + chord_h;
 
         let bar = self.x_to_bar(pos.x);
 
@@ -486,8 +520,8 @@ impl TimelineCanvas<'_> {
         // y-distance so both points are individually draggable.
         if in_tempo {
             let (lo, hi) = self.tempo_bpm_range();
-            let graph_top = ruler_height + 3.0;
-            let graph_bot = ruler_height + row_h - 3.0;
+            let graph_top = tempo_top + 3.0;
+            let graph_bot = tempo_top + row_h - 3.0;
             let graph_h = graph_bot - graph_top;
 
             let mut best: Option<(usize, f32)> = None; // (index, distance²)
