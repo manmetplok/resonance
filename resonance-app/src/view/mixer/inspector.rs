@@ -442,12 +442,44 @@ fn midi_output_block(
 
 fn output_block(r: &crate::Resonance, track: &TrackState) -> Element<'static, Message> {
     let track_id = track.id;
-    let choices = r.view_caches.output_choices.clone();
-    let selected = choices
-        .iter()
-        .find(|c| c.output == track.output)
-        .cloned()
-        .unwrap_or_else(|| choices[0].clone());
+    let cached = r.view_caches.output_choices.clone();
+    // `cached` is normally seeded with at least a Master entry, but
+    // defend against any future code path that clears it (or a window
+    // between project-load and `rebuild_output`) and against a track
+    // routed to a bus that's not in the cached list (e.g. mid-replay).
+    // The previous `choices[0]` fallback panicked when the cache was
+    // empty (`index out of bounds: the len is 0 but the index is 0`)
+    // on a fresh project where `rebuild_output` had never fired.
+    let (choices, selected) = match cached.iter().find(|c| c.output == track.output).cloned() {
+        Some(c) => (ChoiceList::Cached(cached), c),
+        None => {
+            // Track's output not in the cached list (or list is empty).
+            // Synthesize a label and append/prepend it to a one-shot
+            // owned list so the picker shows the track's actual routing
+            // without panicking.
+            use crate::theme::fa;
+            let label = match track.output {
+                TrackOutput::Master => format!("{} Master", fa::ARROW_RIGHT),
+                TrackOutput::Bus(bus_id) => {
+                    let name = r
+                        .registry
+                        .busses
+                        .iter()
+                        .find(|b| b.id == bus_id)
+                        .map(|b| b.name.clone())
+                        .unwrap_or_else(|| format!("Bus {}", bus_id));
+                    format!("{} {}", fa::ARROW_RIGHT, name)
+                }
+            };
+            let fallback = OutputChoice { label, output: track.output };
+            let mut owned: Vec<OutputChoice> = cached.iter().cloned().collect();
+            // Insert the fallback so the picker has something selectable;
+            // put it first so it's the obvious entry if the cache really
+            // is empty.
+            owned.insert(0, fallback.clone());
+            (ChoiceList::Owned(owned), fallback)
+        }
+    };
 
     let picker = pick_list(choices, Some(selected), move |choice: OutputChoice| {
         Message::Track(TrackMessage::SetTrackOutput(track_id, choice.output))

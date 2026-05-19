@@ -351,3 +351,30 @@ fn seed_demo_vocal_melody(
         .derived_clips
         .insert((def_id, placement_id, track_id), clip_id);
 }
+
+/// Minimal seed for the "fresh-project + one track + open Mixer"
+/// regression. Mirrors what the app looks like the instant after the
+/// user adds their first track (e.g. the preset Drums track) to a
+/// brand-new empty project: a single instrument track in the registry,
+/// it selected in the inspector, no busses, and crucially *no*
+/// `view_caches.rebuild_output` call — so `output_choices` stays at
+/// the default the constructor produced. Used by
+/// `tests/mixer_inspector_empty_project.rs` to lock in the fix for
+/// the panic at `view/mixer/inspector.rs:450`
+/// (`index out of bounds: the len is 0 but the index is 0`).
+pub fn seed_minimal_drum_track_no_busses(app: &mut Resonance) {
+    app.io.has_active_project = true;
+
+    let mut drums = TrackState::new_instrument(1, 0);
+    drums.name = "Drums".to_string();
+    drums.instrument_type = state::InstrumentType::Drum;
+    drums.instrument_icon = state::InstrumentIcon::Drum;
+    drums.output = TrackOutput::Master;
+
+    app.registry.tracks = vec![drums];
+    app.registry.next_track_order = 1;
+    app.interaction.selected_track = Some(1);
+
+    // Intentionally no busses and no `view_caches.rebuild_output` —
+    // this is the state that used to panic when the Mixer tab opened.
+}

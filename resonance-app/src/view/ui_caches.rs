@@ -58,7 +58,15 @@ impl Default for UiViewCaches {
         Self {
             midi_input_choices: Rc::from(Vec::<MidiPickerChoice>::new()),
             midi_output_choices: Rc::from(Vec::<MidiPickerChoice>::new()),
-            output_choices: Rc::from(Vec::<OutputChoice>::new()),
+            // Always seed with the Master entry so the inspector's
+            // output picker has at least one choice on a fresh project
+            // (no busses, no project load, no demo seed). Without this
+            // seed, opening the Mixer tab right after adding a track to
+            // a brand-new project panics on `choices[0]` in
+            // `inspector::output_block`. `output_choices_for(&[])`
+            // returns exactly `[Master]`, matching what the first
+            // `rebuild_output(&[])` would produce.
+            output_choices: Rc::from(output_choices_for(&[])),
             input_channel_choices: Rc::from(input_channel_choices()),
             output_channel_choices: Rc::from(output_channel_choices()),
             fx_plugins: Rc::from(Vec::<ScannedPlugin>::new()),

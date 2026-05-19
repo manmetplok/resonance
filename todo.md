@@ -1,5 +1,15 @@
 #TODO
 
+    - [ ] Implement the new design for the global tracks (tempo, time
+      signature, sections, **chord track**, etc.) using the design update
+      here: https://api.anthropic.com/v1/design/h/KuEbfCOuhRVlYI14XTJ6sA?open_file=Resonance.html
+      Fetch the design bundle, read its README for context + intent, and
+      land the relevant aspects in `resonance-app/src/timeline*.rs`,
+      `timeline_draw.rs`, and the global-tracks header. Route the UI work
+      through the `ux-design` agent (theme constants, spacing, hover/active
+      states) and have `e2e-tester` rebaseline `iced_test` snapshots once
+      the visuals are final.
+
     - [x] ! Adding a track is a bit flaky — possibly clashing IDs? Investigate
       the track-ID allocator (and any places where a new track's ID is derived
       from `len()` or similar) to see if concurrent / rapid adds can collide.
@@ -17,12 +27,28 @@
       drop guard, and widens replay's `next_sub_track_id` bump to include
       every saved track id (not just sub-tracks).
 
-    - [ ] ! Mixer panic after adding preset drum track. Reproduce: add the
+    - [x] ! Mixer panic after adding preset drum track. Reproduce: add the
       preset drum track to a project, then navigate to the Mixer tab — app
       panics at `resonance-app/src/view/mixer/inspector.rs:450:28` with
       `index out of bounds: the len is 0 but the index is 0`. Likely an
       unguarded `[0]` access on an empty pads/sends/slots vec for the newly
       added drum track. (Reported 2026-05-19.)
+      **Root cause:** not the drum preset specifically — any track added
+      to a brand-new project triggered it. `UiViewCaches::default()`
+      seeded `output_choices` as an empty `Vec`, and
+      `view::mixer::inspector::output_block` fell back to
+      `choices[0].clone()` when the track's `output` (Master) wasn't in
+      that empty list. `view_caches.rebuild_output` is only called on
+      bus add/remove, project replay, or demo seed — a fresh project
+      that just added its first track never invoked it, so the empty
+      default propagated to the first inspector render. **Fix:** seed
+      the default `output_choices` with `output_choices_for(&[])` so
+      it's never empty, and replace the unguarded `[0]` with a
+      synthesized `OutputChoice` matching the track's actual output
+      (covers the empty-cache case *and* a track routed to a bus that's
+      not in the cached list, e.g. mid-replay). A new `iced_test`
+      regression at `tests/mixer_inspector_empty_project.rs` reproduces
+      the exact panic before the fix.
 
     - [x] Arrange view: when scrolling vertically, tracks at the top of the
       scrollable area are visible through / bleed into the header + transport
