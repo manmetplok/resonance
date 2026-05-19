@@ -116,6 +116,18 @@ impl ClipSource {
     pub fn open_wav(path: &Path) -> Result<Self, String> {
         let file =
             std::fs::File::open(path).map_err(|e| format!("open wav {}: {e}", path.display()))?;
+        // SAFETY: `Mmap::map` is unsafe because the kernel can serve a
+        // shared mapping whose backing file is truncated or written by
+        // another process while we hold a `&[u8]` over it — a UB hazard
+        // in general. We control the lifecycle here: vocal WAVs come from
+        // our own renderer, sample-imported WAVs are user-owned read-only
+        // files, and the `unlink` paths in `vocal_render::tear_down_old_*`
+        // run only after the mixer has dropped the `Mapped` ClipSource
+        // referring to them. There is no writer to this file while the
+        // mapping is live. Outside that contract — e.g. another process
+        // truncating an imported file — the worst case is the mixer
+        // reading a SIGBUS-poisoned page; that's a failure mode we accept
+        // in exchange for zero-copy audio streaming.
         let mmap = unsafe { memmap2::Mmap::map(&file) }
             .map_err(|e| format!("mmap {}: {e}", path.display()))?;
 

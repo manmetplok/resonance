@@ -43,11 +43,24 @@ impl EglContext {
         logical_size: (u32, u32),
         scale: i32,
     ) -> Result<Self, EditorError> {
+        // SAFETY: `Egl::load_required` calls `dlopen("libEGL.so.1")` and
+        // exposes the resolved entry points. Unsafe because Rust can't
+        // verify the resolved symbols actually match the EGL 1.5 ABI we
+        // claim — if the host has a buggy or wrong libEGL the resulting
+        // function pointers would be unsound. We accept this: a missing
+        // or ABI-incompatible libEGL means the plugin GUI cannot run at
+        // all, which is the same failure mode as link-time EGL.
         let egl = unsafe { Egl::load_required().map_err(|e| EditorError::EglInit(e.to_string()))? };
 
         // Raw wl_display pointer for EGL — from wayland-backend.
         let display_ptr = conn.backend().display_ptr() as *mut c_void;
 
+        // SAFETY: `get_platform_display` takes a raw `*mut c_void` it
+        // assumes is a live `wl_display`. We sourced `display_ptr` from
+        // the `Connection`'s own backend, so it points at a `wl_display`
+        // owned by `conn` and remains valid for at least as long as
+        // `conn` outlives this `EglContext`. The Wayland platform attrib
+        // list is terminated with `ATTRIB_NONE` as the spec requires.
         let display = unsafe {
             egl.get_platform_display(EGL_PLATFORM_WAYLAND_KHR, display_ptr, &[egl::ATTRIB_NONE])
                 .map_err(|e| EditorError::EglInit(format!("get_platform_display: {e}")))?
@@ -114,6 +127,15 @@ impl EglContext {
         let wl_egl_surface = WlEglSurface::new(wl_surface.id(), phys_w, phys_h)
             .map_err(|e| EditorError::EglSurface(e.to_string()))?;
 
+        // SAFETY: `create_window_surface` takes a `NativeWindowType` raw
+        // pointer it treats as a native window handle. On Wayland the
+        // platform-specific native window is a `wl_egl_window*`, which
+        // `wl_egl_surface.ptr()` returns from a `WlEglSurface` whose
+        // lifetime is tied to `self.wl_egl_surface` below. The EGL
+        // surface borrows that handle for its lifetime, and `Drop` for
+        // `EglContext` destroys the surface before `wl_egl_surface`
+        // itself is dropped (field declaration order: `surface` before
+        // `wl_egl_surface`, and drop runs in declaration order).
         let surface = unsafe {
             egl.create_window_surface(
                 display,

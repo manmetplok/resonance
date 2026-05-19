@@ -72,7 +72,7 @@
       `shape_velocity`, `realize_phrase` with config structs.
     - [x] Add `VocalParams::validate(&self) -> Result<()>` and call it at the app boundary
       (108 LOC of pub fields with hidden invariants).
-    - [ ] Add `// SAFETY:` comments at:
+    - [x] Add `// SAFETY:` comments at:
       `resonance-audio/src/types/clip.rs:119` (Mmap::map),
       `wayland-plugin-gui/src/egl_context.rs:46,51,117`,
       `resonance-common/src/denormal.rs:30-35` (FTZ/DAZ asm).
