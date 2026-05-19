@@ -1,5 +1,38 @@
 #TODO
 
+    - [x] ! Recurring `Audio stream error: Buffer underrun/overrun occurred.`
+      messages are spamming the log during normal use — audio output
+      glitches even with no plugins / minimal session. Investigate the
+      cpal stream callback path in `resonance-audio` (engine thread
+      cadence vs. device buffer size, any blocking work in the audio
+      callback, sample-rate / buffer-size negotiation after the cpal
+      0.15 → 0.17 upgrade). Could be related to the recent cpal bump
+      (commit `6ed365b`) — diff the audio thread setup vs. the
+      pre-upgrade version. (Reported 2026-05-19.)
+      **Root cause:** cosmetic regression from the cpal 0.15 → 0.17
+      upgrade, not a new audio glitch. cpal 0.17 added
+      `StreamError::BufferUnderrun` and now reports ALSA/JACK xruns
+      through the application's `err_fn` callback — previously cpal
+      printed them to stderr itself, and ALSA's `PCM.try_recover` is
+      now `silent=true` so the engine thread no longer sees those
+      lines either. Same audio event (occasional xrun under desktop
+      load), now surfaced through our handler which blindly
+      `eprintln!`-ed every variant. **Fix:** match on
+      `cpal::StreamError::BufferUnderrun` in the output `err_fn`
+      (`engine::AudioEngine::new`) and the input `err_fn`
+      (`platform::build_input_stream_cpal`), route through a new
+      `stream_errors::UnderrunRateLimiter` that emits the first
+      occurrence immediately and then coalesces into one summary per
+      10s (`UNDERRUN_REPORT_INTERVAL`) carrying the count + lifetime
+      total. Other `StreamError` variants
+      (`DeviceNotAvailable`, `StreamInvalidated`, `BackendSpecific`)
+      are rare and load-bearing — still go through `eprintln!`
+      unchanged. New `tests/underrun_rate_limiter.rs` (8 tests) pins
+      the rate-limit behaviour, singular/plural formatting, lifetime
+      counter monotonicity, and the interval constant. Pure
+      engine/data-layer change — no UI surface touched, so no
+      `iced_test` rebaseline.
+
     - [x] Implement the new design for the global tracks (tempo, time
       signature, sections, **chord track**, etc.) using the design update
       here: https://api.anthropic.com/v1/design/h/KuEbfCOuhRVlYI14XTJ6sA?open_file=Resonance.html

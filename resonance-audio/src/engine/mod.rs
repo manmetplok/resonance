@@ -25,6 +25,7 @@ use crate::midi_clock::MidiClockEvent;
 use crate::midi_hardware::LiveMidiEvent;
 use crate::mixer;
 use crate::platform::{self, DeviceDirection};
+use crate::stream_errors::{format_underrun_line, UnderrunRateLimiter};
 use crate::types::*;
 
 mod bounce;
@@ -249,6 +250,13 @@ impl AudioEngine {
 
         let audio_buf_frames = buf_frames;
         let audio_quantum = quantum;
+        // Rate-limited counter for `StreamError::BufferUnderrun` events.
+        // cpal 0.17 surfaces ALSA/JACK underruns through `err_fn`
+        // (previously they went to cpal-internal stderr). On a busy
+        // desktop with PipeWire that can fire many times a second
+        // under normal UI load, so we coalesce into one summary line
+        // per `UNDERRUN_REPORT_INTERVAL` instead of spamming.
+        let underrun_limiter = Arc::new(UnderrunRateLimiter::new());
         let build_stream = |config: &cpal::StreamConfig| {
             // Clone captures that the closure needs to own
             let shared_audio = Arc::clone(&shared_audio);
@@ -259,6 +267,7 @@ impl AudioEngine {
             let midi_clips_audio = Arc::clone(&midi_clips_audio);
             let plugins_audio = Arc::clone(&plugins_audio);
             let tempo_audio = Arc::clone(&tempo_audio);
+            let underrun_limiter = Arc::clone(&underrun_limiter);
             let mut track_buf_l = vec![0.0f32; audio_buf_frames];
             let mut track_buf_r = vec![0.0f32; audio_buf_frames];
             // Pre-allocate MAX_BUSSES stereo buffers so adding a bus at
@@ -320,8 +329,17 @@ impl AudioEngine {
                         audio_quantum,
                     );
                 },
-                |err| {
-                    eprintln!("Audio stream error: {}", err);
+                move |err| match err {
+                    cpal::StreamError::BufferUnderrun => {
+                        if let Some(report) =
+                            underrun_limiter.record(std::time::Instant::now())
+                        {
+                            eprintln!("{}", format_underrun_line("output", &report));
+                        }
+                    }
+                    other => {
+                        eprintln!("Audio stream error: {}", other);
+                    }
                 },
                 None,
             );

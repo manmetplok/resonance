@@ -21,6 +21,7 @@ pub mod midi_io;
 mod mixer;
 mod platform;
 mod recording;
+pub(crate) mod stream_errors;
 pub mod types;
 
 pub use decode::{linear_resample, StreamingLinearResampler};
@@ -36,6 +37,9 @@ pub use types::*;
 pub mod __test_support {
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
     pub use crate::midi_hardware::{parse_live_event_for_test, LiveMidiEvent};
+    pub use crate::stream_errors::{
+        format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
+    };
 }
 
 /// Test surface for the hardware-MIDI loop-wrap rewind logic. Exposed

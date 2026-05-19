@@ -6,6 +6,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::traits::Producer;
 
 use crate::engine::SharedState;
+use crate::stream_errors::{format_underrun_line, UnderrunRateLimiter};
 use crate::types::*;
 
 use std::sync::atomic::Ordering;
@@ -442,6 +443,10 @@ fn build_input_stream_cpal(
         }
     };
 
+    // Rate-limited counter for `StreamError::BufferUnderrun` on the
+    // input stream. See `stream_errors.rs` for the rationale — same
+    // story as the output stream in `engine::AudioEngine::new`.
+    let underrun_limiter = Arc::new(UnderrunRateLimiter::new());
     let attempt = |channels: u16,
                    shared: Arc<SharedState>,
                    mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
@@ -450,11 +455,21 @@ fn build_input_stream_cpal(
         cfg.sample_rate = sample_rate;
         cfg.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
         cfg.channels = channels;
+        let underrun_limiter = Arc::clone(&underrun_limiter);
         device.build_input_stream(
             &cfg,
             make_callback(shared, mon_producer, rec_producer),
-            |err| {
-                eprintln!("Input stream error: {}", err);
+            move |err| match err {
+                cpal::StreamError::BufferUnderrun => {
+                    if let Some(report) =
+                        underrun_limiter.record(std::time::Instant::now())
+                    {
+                        eprintln!("{}", format_underrun_line("input", &report));
+                    }
+                }
+                other => {
+                    eprintln!("Input stream error: {}", other);
+                }
             },
             None,
         )
