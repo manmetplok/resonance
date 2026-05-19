@@ -86,7 +86,7 @@ pub(super) fn snap_to_pentatonic(note: u8, scale: Option<Scale>, lo: u8, hi: u8)
 /// Pick the chord tone in `range` closest to `target`. Returns `None`
 /// when the chord has no tones in the requested range.
 pub(super) fn chord_tone_nearest(
-    chord: super::super::super::chord::Chord,
+    chord: crate::chord::Chord,
     range: (u8, u8),
     target: u8,
 ) -> Option<u8> {
