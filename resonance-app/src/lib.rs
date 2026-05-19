@@ -300,6 +300,36 @@ impl Resonance {
         self.interaction.selected_global_event
     }
 
+    /// Test-only: borrow the track registry to walk `sorted_tracks()` /
+    /// inspect sub-track links from an integration test (which doesn't
+    /// see `pub(crate)` fields). Used by
+    /// `tests/mixer_sub_track_grouping.rs` to assert the displayed
+    /// strip order without parsing the rendered widget tree.
+    #[doc(hidden)]
+    pub fn test_registry(&self) -> &state::TrackRegistry {
+        &self.registry
+    }
+
+    /// Test-only: read the mixer-side expanded-sub-track-parents set,
+    /// also driven from `tests/mixer_sub_track_grouping.rs`.
+    #[doc(hidden)]
+    pub fn test_expanded_sub_track_parents(
+        &self,
+    ) -> &std::collections::HashSet<resonance_audio::types::TrackId> {
+        &self.mixer.expanded_sub_track_parents
+    }
+
+    /// Test-only: forcibly clear an expanded-sub-track-parent flag so
+    /// the test can flip between expanded / collapsed without dragging
+    /// in the full `Message` plumbing.
+    #[doc(hidden)]
+    pub fn test_collapse_sub_track_parent(
+        &mut self,
+        parent_id: resonance_audio::types::TrackId,
+    ) {
+        self.mixer.expanded_sub_track_parents.remove(&parent_id);
+    }
+
     pub(crate) fn sorted_tracks(&self) -> Vec<&TrackState> {
         self.registry.sorted_tracks()
     }

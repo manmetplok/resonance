@@ -1,5 +1,40 @@
 #TODO
 
+    - [ ] Implement the new drum editor from the design bundle
+      (https://api.anthropic.com/v1/design/h/KuEbfCOuhRVlYI14XTJ6sA?open_file=Resonance.html),
+      supporting **multiple drum patterns per section** (pattern bank
+      / picker + per-section pattern assignment, not just a single
+      grid per section as today). Fetch the bundle, read its README,
+      and mirror the drum-editor spec in `view/compose/drumroll/**`
+      and the underlying drum-pattern state in `state.rs` /
+      `update/**`. While here, sweep the rest of the **compose**
+      view designs in the same bundle and pick up other improvements
+      (lane inspectors, chord lane, melody/bass lanes, vocal lane,
+      expanded editor chrome) where they're a clean lift. Route the
+      visual work through `ux-design` and have `e2e-tester` rebaseline
+      / add snapshot coverage for the drum editor + any other compose
+      surfaces that change.
+
+    - [ ] ! App crashes with segfault on exit (closing the main window).
+      Repro: `cargo run -p resonance-app --release`, then close the
+      window. Tail of stderr:
+      ```
+      audio: device="Default Audio Device" sample_rate=48000
+        (cpal_default=44100) quantum=256 (probed=Some(256))
+        max_quantum=2048 (probed=Some(2048)) buf_frames=2048
+        fixed_buffer=true
+      WARNING: radv is not a conformant Vulkan implementation, testing use only.
+      [1]    2406228 segmentation fault (core dumped)  cargo run -p resonance-app --release
+      ```
+      Likely candidates: audio thread / cpal stream tear-down racing
+      app shutdown (cpal 0.15 → 0.17 changed lifecycle semantics —
+      see commit `6ed365b`), iced 0.14 / wgpu surface drop ordering
+      (the radv warning hints at the GPU path), or a plugin host
+      tear-down (CLAP bridge dropping while the host still holds a
+      pointer). Run with `RUST_BACKTRACE=1` + a debug build to get a
+      frame for the offending thread before guessing further.
+      (Reported 2026-05-19.)
+
     - [x] ! Recurring `Audio stream error: Buffer underrun/overrun occurred.`
       messages are spamming the log during normal use — audio output
       glitches even with no plugins / minimal session. Investigate the
@@ -153,7 +188,7 @@
       `mixer_inspector_renders_without_busses`, plus the 38 library
       doctests) all still pass.
 
-    - [ ] Mixer: when expanding a parent track that has sub-tracks, the
+    - [x] Mixer: when expanding a parent track that has sub-tracks, the
       sub-tracks are interleaved with unrelated tracks in the strip row
       instead of being grouped immediately next to their parent.
       Sub-tracks should render contiguously beside the parent strip, and
@@ -164,6 +199,44 @@
       and align the strip layout / spacing / colors with what's specified
       there. Route the visual work through `ux-design` and rebaseline
       mixer snapshots via `e2e-tester` after the changes land.
+      **What changed:** `view_mixer` no longer walks `sorted_tracks()`
+      linearly. The new pass emits each top-level track followed by
+      its sub-tracks (sorted by `output_port_index`, the stable
+      engine-side fan-out order) wrapped in a tight
+      `row![…].spacing(0)` cluster, then the next unrelated track
+      follows with the normal 2 px gap. Sub-tracks no longer render
+      through the polymorphic `view_channel_strip` `is_sub` branch —
+      they have a dedicated `view_sub_channel_strip` renderer that
+      uses the new `MIXER_SUB_STRIP_WIDTH` (88 px, narrower than the
+      132 px parent), `MIXER_SUB_STRIP_BG` (= `BG_1`, one shade
+      darker than the parent strip's `BG_2` so the cluster reads as
+      recessed), and a 2 px lavender left-edge rail
+      (`MIXER_SUB_STRIP_RAIL` → `MIXER_SUB_STRIP_RAIL_SELECTED` when
+      selected) to telegraph the parent → child relationship at a
+      glance. The sub-strip's control set drops record-arm /
+      monitor / FX-list / instrument-pill since none of those apply
+      to a plugin-fed sub-track — keeps M / S / FX-bypass, pan, and
+      the fader (`MIXER_STRIP_HEIGHT` reused so faders line up across
+      the cluster). New `seed_demo_with_drum_subtracks` fixture in
+      `demo.rs` builds the worst-case shape (drum parent at
+      `order=0`, unrelated tracks at `order=1..=3`, sub-tracks at
+      `order=4..=7`) so the grouping is proven against the same
+      interleave the engine produces in practice. Three new tests in
+      `tests/mixer_sub_track_grouping.rs` lock in the visuals
+      (`mixer_sub_tracks_expanded` / `mixer_sub_tracks_collapsed`
+      snapshots) and the structural ordering guarantee
+      (`mixer_sub_track_render_order_groups_with_parent` —
+      Drums(1), Kick(10), Snare(11), HH(12), Tom(13), Bass(2),
+      Pad(3), Lead(4)). Added `test_registry`,
+      `test_expanded_sub_track_parents`, and
+      `test_collapse_sub_track_parent` accessors on `Resonance` so
+      the integration test can drive state through the public API.
+      The design-bundle URL was not reachable in this environment
+      (gated service), so the visual treatment was derived from the
+      existing `ux-guidelines.md` palette + established mixer strip
+      conventions; future work if a later task reaches the bundle: a
+      parent-strip header chip with the sub-track count, and a
+      consistent gradient backing across the cluster.
 
     - [ ] ! Track header still bleeds through the transport bar when
       scrolling vertically in the arrange view. The earlier fix wrapped

@@ -26,21 +26,68 @@ impl crate::Resonance {
         let available_plugins = &self.available_plugins;
 
         // -- Top row: track strips + master strip on the right. --
-        // Skip sub-tracks whose parent is currently collapsed in the
-        // mixer UI. The collapse state is app-side only (not persisted).
+        // Sub-tracks render as their own strips next to the parent. The
+        // previous pass walked `sorted_tracks` linearly, which placed
+        // sub-tracks at their `.order` position — wherever they happened
+        // to be allocated, often after several unrelated tracks. That
+        // broke the parent → child relationship at a glance.
+        //
+        // New pass: for every top-level track, emit the parent strip
+        // and immediately follow it with its sub-tracks (in
+        // `output_port_index` order — the same order the engine fans
+        // them out). Sub-tracks are skipped in the outer iteration so
+        // they only appear right after their parent. Each parent + its
+        // sub-tracks is wrapped in a tight inner row (0 px spacing) so
+        // the cluster visually attaches; the outer row keeps 2 px
+        // between unrelated tracks.
         let mut track_strip_row = row![].spacing(2);
         for track in &sorted_tracks {
-            if let Some(link) = track.sub_track {
-                if !self
-                    .mixer
-                    .expanded_sub_track_parents
-                    .contains(&link.parent_track_id)
-                {
-                    continue;
-                }
+            if track.sub_track.is_some() {
+                // Already emitted by its parent's cluster (or skipped
+                // because its parent was collapsed).
+                continue;
             }
-            track_strip_row =
-                track_strip_row.push(self.view_channel_strip(track, available_plugins));
+
+            let parent_strip = self.view_channel_strip(track, available_plugins);
+
+            let parent_expanded = self.mixer.expanded_sub_track_parents.contains(&track.id);
+            let mut subs: Vec<&TrackState> = if parent_expanded {
+                sorted_tracks
+                    .iter()
+                    .copied()
+                    .filter(|t| {
+                        matches!(t.sub_track, Some(link) if link.parent_track_id == track.id)
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            // Sort sub-strips by their plugin output port index, not by
+            // `.order`. The port index is stable across project
+            // load/save; `.order` is the allocation-time counter and
+            // can interleave with unrelated tracks. With a stable port
+            // sort, "Kick / Snare / HH / Tom" always renders in the
+            // same left-to-right order regardless of when each
+            // sub-track was created.
+            subs.sort_by_key(|t| {
+                t.sub_track
+                    .map(|l| l.output_port_index)
+                    .unwrap_or(0)
+            });
+
+            if subs.is_empty() {
+                track_strip_row = track_strip_row.push(parent_strip);
+            } else {
+                // Cluster: parent + sub-strips with no internal gap, so
+                // the recessed sub-strip backgrounds visually butt up
+                // against the parent strip.
+                let mut cluster = row![parent_strip].spacing(0);
+                for sub in subs {
+                    cluster =
+                        cluster.push(self.view_sub_channel_strip(sub, available_plugins));
+                }
+                track_strip_row = track_strip_row.push(cluster);
+            }
         }
         // Construct the scrollable with its horizontal direction up
         // front. `scrollable(content)` would default to Vertical and run

@@ -400,6 +400,183 @@ impl crate::Resonance {
         }
     }
 
+    /// Dedicated narrow strip for an expanded sub-track. Mixer-mod.rs
+    /// emits one of these immediately after the parent strip for each
+    /// sub-track of an expanded parent, so the cluster (parent + its
+    /// sub-strips) reads as a coherent group.
+    ///
+    /// Visual contract:
+    /// - `MIXER_SUB_STRIP_WIDTH`-wide (narrower than the parent strip)
+    ///   and `MIXER_STRIP_HEIGHT` tall (same as parent — fader bottoms
+    ///   line up).
+    /// - Background = `MIXER_SUB_STRIP_BG` (one step darker than the
+    ///   parent strip's `BG_2`) so the recessed shade signals "child".
+    /// - 2 px lavender left-edge rail (`MIXER_SUB_STRIP_RAIL`,
+    ///   saturating to `_SELECTED` when the sub-track is the
+    ///   selected track) — the at-a-glance parent → child cue.
+    /// - Slimmer control set: M / S / Mute-mono, Pan, fader. No
+    ///   record-arm or monitor (sub-tracks are fed from the parent
+    ///   plugin's fan-out, never from a hardware input), no FX list,
+    ///   no instrument pill, no bounce.
+    pub(super) fn view_sub_channel_strip(
+        &self,
+        track: &TrackState,
+        _available_plugins: &[ScannedPlugin],
+    ) -> Element<'_, Message> {
+        debug_assert!(
+            track.sub_track.is_some(),
+            "view_sub_channel_strip called with a non-sub-track"
+        );
+
+        // Show the port label (after "→") rather than the full name —
+        // "Drums → Kick" becomes "Kick", which fits comfortably inside
+        // the narrower strip.
+        let short_name = track.name.split(" \u{2192} ").nth(1).unwrap_or(&track.name);
+        let display_name = if short_name.chars().count() > 10 {
+            let mut s: String = short_name.chars().take(9).collect();
+            s.push('…');
+            s
+        } else {
+            short_name.to_string()
+        };
+        let name_text = container(
+            text(display_name)
+                .size(11)
+                .font(theme::UI_FONT_MEDIUM)
+                .color(theme::TEXT_2)
+                .wrapping(iced::widget::text::Wrapping::None),
+        )
+        .width(Length::Fill)
+        .clip(true);
+
+        let head_row = row![name_text]
+            .spacing(0)
+            .align_y(alignment::Vertical::Center)
+            .height(28);
+        let head: Element<'_, Message> = container(head_row)
+            .width(Length::Fill)
+            .padding([6, 8])
+            .into();
+
+        // M / S / FX-bypass — the three controls that actually apply to
+        // a plugin-fed sub-track. Record-arm and monitor are intentionally
+        // omitted: sub-tracks have no input.
+        let button_row = container(
+            row![
+                mute_button(
+                    track.muted,
+                    Message::Track(TrackMessage::ToggleMute(track.id)),
+                    11
+                ),
+                solo_button(
+                    track.soloed,
+                    Message::Track(TrackMessage::ToggleSolo(track.id)),
+                    11
+                ),
+                fx_bypass_button(
+                    track.fx_bypassed,
+                    Message::Track(TrackMessage::ToggleTrackFxBypass(track.id)),
+                    11,
+                ),
+            ]
+            .spacing(2)
+            .align_y(alignment::Vertical::Center),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill);
+
+        let id = track.id;
+        let pan_ctrl = pan_knob(track.pan, move |v| {
+            Message::Track(TrackMessage::SetTrackPan(id, v))
+        });
+        let pan_label = text(crate::util::format_pan(track.pan))
+            .size(9)
+            .font(Font::MONOSPACE)
+            .color(theme::TEXT_DIM);
+        let pan_block = column![
+            container(pan_ctrl).width(Length::Fill).center_x(Length::Fill),
+            container(pan_label).width(Length::Fill).center_x(Length::Fill),
+        ]
+        .spacing(2)
+        .align_x(alignment::Horizontal::Center);
+
+        let track_id_for_fader = track.id;
+        let fader_block = fader_section(track.level_l, track.level_r, track.volume, move |v| {
+            Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
+        });
+
+        let is_selected = self.interaction.selected_track == Some(track.id);
+
+        // Left-edge accent rail. A thin colored column the full strip
+        // height — sits flush against the left edge so the eye reads a
+        // visual tie to the parent strip on its left. Saturates to the
+        // full lavender when the sub-track is selected.
+        let rail_color = if is_selected {
+            theme::MIXER_SUB_STRIP_RAIL_SELECTED
+        } else {
+            theme::MIXER_SUB_STRIP_RAIL
+        };
+        let rail = container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fixed(theme::MIXER_SUB_STRIP_RAIL_WIDTH))
+            .height(Length::Fill)
+            .style(move |_theme| container::Style {
+                background: Some(iced::Background::Color(rail_color)),
+                ..Default::default()
+            });
+
+        // Body content sits to the right of the rail. Spacer pads the
+        // top a bit so the head label aligns roughly with the parent
+        // strip's name row.
+        let body = column![
+            head,
+            Space::new().height(6),
+            button_row,
+            Space::new().height(8),
+            pan_block,
+            Space::new().height(Length::Fill),
+            fader_block,
+            Space::new().height(6),
+        ]
+        .spacing(0)
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+        let border_color = if is_selected {
+            theme::ACCENT_LINE
+        } else {
+            theme::LINE_2
+        };
+        let border_w = if is_selected { 1.0 } else { 0.5 };
+        let strip_style = move |_theme: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(theme::MIXER_SUB_STRIP_BG)),
+            border: iced::Border {
+                color: border_color,
+                width: border_w,
+                // Slightly tighter corner radius than the parent strip
+                // so the recessed shape reads as nested rather than as
+                // a peer card.
+                radius: theme::RADIUS_LG.into(),
+            },
+            ..Default::default()
+        };
+
+        let inner = row![rail, body]
+            .spacing(0)
+            .height(Length::Fill)
+            .width(Length::Fill);
+
+        let track_id_for_select = track.id;
+        let strip_height = Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32);
+        mouse_area(
+            container(inner)
+                .width(Length::Fixed(theme::MIXER_SUB_STRIP_WIDTH))
+                .height(strip_height)
+                .style(strip_style),
+        )
+        .on_press(Message::Ui(UiMessage::SelectTrack(Some(track_id_for_select))))
+        .into()
+    }
+
     /// Compact subtrack meters shown in the right half of a collapsed
     /// parent strip. Each subtrack gets a name label and stereo meter bars.
     fn view_collapsed_subtrack_meters(&self, parent_id: TrackId) -> Element<'_, Message> {

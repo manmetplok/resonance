@@ -352,6 +352,127 @@ fn seed_demo_vocal_melody(
         .insert((def_id, placement_id, track_id), clip_id);
 }
 
+/// Seed for the **Mixer sub-track grouping** regression. Builds a
+/// project where a parent `Drums` track has four sub-tracks but the
+/// `.order` field on those sub-tracks deliberately lands them *after*
+/// several unrelated tracks — the same shape the engine produces in
+/// practice, because `next_track_order` keeps climbing as the user
+/// works. Used by `tests/mixer_sub_track_grouping.rs` to verify the
+/// mixer renders the sub-strips grouped with their parent regardless
+/// of `.order`, and to lock in the visual treatment (recessed strip
+/// background + lavender left-rail).
+pub fn seed_demo_with_drum_subtracks(app: &mut Resonance) {
+    use resonance_audio::types::TrackOutput;
+
+    app.io.has_active_project = true;
+    app.transport.bpm = 120.0;
+    app.transport.bpm_input = "120.0".to_string();
+    app.transport.time_sig_num = 4;
+    app.transport.time_sig_den = 4;
+    app.tempo_events = vec![state::TempoEvent { bar: 0, bpm: 120.0 }];
+    app.signature_events = vec![state::SignatureEvent {
+        bar: 0,
+        numerator: 4,
+        denominator: 4,
+    }];
+    app.rebuild_tempo_map();
+
+    // Parent drum track at order 0. The plugin slot gives it the
+    // instrument pill the strip renders.
+    let mut drums =
+        TrackState::new_instrument(1, 0);
+    drums.name = "Drums".to_string();
+    drums.instrument_type = state::InstrumentType::Drum;
+    drums.instrument_icon = state::InstrumentIcon::Drum;
+    drums.plugins.push(PluginSlotState::new(
+        100,
+        "Resonance Drums".to_string(),
+        String::new(),
+        String::new(),
+        Vec::new(),
+        false,
+    ));
+    drums.level_l = 0.55;
+    drums.level_r = 0.50;
+    drums.output = TrackOutput::Master;
+
+    // Three unrelated tracks at orders 1..=3. With the old linear
+    // render walk these would render between the parent strip and its
+    // sub-strips; the new grouping pass must keep them after the
+    // entire `Drums + sub-tracks` cluster.
+    let mut bass = TrackState::new_instrument(2, 1);
+    bass.name = "Synth Bass".to_string();
+    bass.instrument_icon = state::InstrumentIcon::Music;
+    bass.plugins.push(PluginSlotState::new(
+        200,
+        "Resonance Wave".to_string(),
+        String::new(),
+        String::new(),
+        Vec::new(),
+        false,
+    ));
+    bass.level_l = 0.48;
+    bass.level_r = 0.42;
+
+    let mut pad = TrackState::new_instrument(3, 2);
+    pad.name = "Synth Pad".to_string();
+    pad.instrument_icon = state::InstrumentIcon::WaveSquare;
+    pad.plugins.push(PluginSlotState::new(
+        300,
+        "Resonance Wave".to_string(),
+        String::new(),
+        String::new(),
+        Vec::new(),
+        false,
+    ));
+    pad.level_l = 0.30;
+    pad.level_r = 0.28;
+
+    let mut lead = TrackState::new_instrument(4, 3);
+    lead.name = "Lead".to_string();
+    lead.instrument_icon = state::InstrumentIcon::Music;
+    lead.plugins.push(PluginSlotState::new(
+        400,
+        "Resonance Wave".to_string(),
+        String::new(),
+        String::new(),
+        Vec::new(),
+        false,
+    ));
+    lead.level_l = 0.40;
+    lead.level_r = 0.36;
+
+    // Four sub-tracks of `Drums` allocated *after* the unrelated
+    // tracks — orders 4..=7. This is exactly the layout the engine
+    // produces in practice (sub-tracks are pushed onto the end of the
+    // registry when the drum plugin reports its output ports).
+    let mut kick = TrackState::new_sub_track(10, 4, "Drums \u{2192} Kick".to_string(), 1, 1);
+    kick.level_l = 0.62;
+    kick.level_r = 0.58;
+    let mut snare = TrackState::new_sub_track(11, 5, "Drums \u{2192} Snare".to_string(), 1, 2);
+    snare.level_l = 0.50;
+    snare.level_r = 0.46;
+    let mut hh = TrackState::new_sub_track(12, 6, "Drums \u{2192} HH".to_string(), 1, 3);
+    hh.level_l = 0.35;
+    hh.level_r = 0.32;
+    let mut tom = TrackState::new_sub_track(13, 7, "Drums \u{2192} Tom".to_string(), 1, 4);
+    tom.level_l = 0.28;
+    tom.level_r = 0.26;
+
+    app.registry.tracks = vec![drums, bass, pad, lead, kick, snare, hh, tom];
+    app.registry.next_track_order = 8;
+    app.registry.next_sub_track_id = 14;
+    app.interaction.selected_track = Some(1);
+
+    // Expand the drum parent so the mixer renders its sub-strips —
+    // the whole point of the visual is verified in that state.
+    app.mixer.expanded_sub_track_parents.insert(1);
+
+    // Demo seed bypasses engine-event handlers that normally refresh
+    // these caches, so do it by hand.
+    app.view_caches.rebuild_output(&app.registry.busses);
+}
+
 /// Minimal seed for the "fresh-project + one track + open Mixer"
 /// regression. Mirrors what the app looks like the instant after the
 /// user adds their first track (e.g. the preset Drums track) to a

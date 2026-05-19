@@ -246,6 +246,19 @@ pub const RECORD_RED: Color = BAD;
 pub const PANEL_ARMED: Color = rgb(0x24, 0x1a, 0x1f);
 /// Selected track lane / header background tint.
 pub const PANEL_SELECTED: Color = BG_2;
+/// Sub-track strip background on the Mixer. One step darker than the
+/// normal strip so a parent and its expanded sub-tracks read as a
+/// cluster — the recessed shade groups them visually even before the
+/// left-edge accent rail kicks in.
+pub const MIXER_SUB_STRIP_BG: Color = BG_1;
+/// Left-edge accent rail color on a sub-track strip. Subtle lavender
+/// so the parent → child relationship reads at a glance without
+/// competing with the selection outline.
+pub const MIXER_SUB_STRIP_RAIL: Color = ACCENT_LINE;
+/// Left-edge accent rail color on a *selected* sub-track strip.
+/// Saturates from the dim border tint to the full lavender so the
+/// selected sub-track stands out from its siblings.
+pub const MIXER_SUB_STRIP_RAIL_SELECTED: Color = ACCENT;
 /// VU meter background.
 pub const METER_BG: Color = BG_1;
 /// Bar line in the timeline ruler / lane.
@@ -293,6 +306,17 @@ pub const GLOBAL_TRACK_GLYPH_SIZE: f32 = 22.0;
 pub const TRACK_HEADER_WIDTH: f32 = 260.0;
 /// Standard channel strip width on the Mixer.
 pub const MIXER_STRIP_WIDTH: f32 = 132.0;
+/// Sub-track strip width on the Mixer. Sub-tracks are fed from one
+/// non-main output of their parent's instrument plugin — they have no
+/// FX chain, no input, and no record arm, so the strip is narrower than
+/// a normal channel strip. The narrower width also creates a visual
+/// rhythm that telegraphs "this is a child of the strip on its left".
+pub const MIXER_SUB_STRIP_WIDTH: f32 = 88.0;
+/// Width of the lavender-tinted left-edge accent rail on a sub-track
+/// strip. Sits flush against the left edge of the strip card so the eye
+/// reads a parent → child relationship even before reading the strip's
+/// dimmed name.
+pub const MIXER_SUB_STRIP_RAIL_WIDTH: f32 = 2.0;
 /// Master strip width.
 pub const MASTER_STRIP_WIDTH: f32 = 156.0;
 /// Inspector column width on the Mixer.
