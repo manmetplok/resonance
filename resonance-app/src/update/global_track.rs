@@ -5,6 +5,67 @@ use crate::message::{GlobalTrackMessage, Message};
 use crate::state;
 use crate::Resonance;
 
+impl Resonance {
+    /// Rebuild the GUI-side tempo map from the current events and send the
+    /// events to the audio engine. Call whenever `tempo_events` or
+    /// `signature_events` are modified.
+    pub(crate) fn rebuild_and_send_tempo(&mut self) {
+        self.rebuild_tempo_map();
+        self.engine.send(AudioCommand::SetTempoEvents {
+            tempo: self.tempo_events.clone(),
+            signature: self.signature_events.clone(),
+        });
+    }
+
+    /// Rebuild only the GUI-side tempo map (no engine send). Used when
+    /// only UI display needs updating, e.g. during tempo drags.
+    pub(crate) fn rebuild_tempo_map(&mut self) {
+        self.tempo_map.tempo_points = self.tempo_events.clone();
+        self.tempo_map.signature_points = self.signature_events.clone();
+        self.tempo_map.bpm = self.transport.bpm;
+        self.tempo_map.numerator = self.transport.time_sig_num;
+        self.tempo_map.denominator = self.transport.time_sig_den;
+        self.tempo_map.rebuild_bar_table(self.sample_rate);
+    }
+
+    /// Update the transport BPM display from the current tempo map.
+    pub(crate) fn sync_tempo_display(&mut self) {
+        let (bpm, _, _) = self
+            .tempo_map
+            .tempo_at_sample(self.transport.playhead, self.sample_rate);
+        self.transport.bpm = bpm;
+        self.transport.bpm_input = format!("{:.1}", bpm);
+    }
+
+    /// Remove a tempo event by index (must be > 0 to protect the initial
+    /// event), rebuild the tempo map, and sync the BPM display.
+    pub(crate) fn remove_tempo_event(&mut self, index: usize) {
+        if index > 0 && index < self.tempo_events.len() {
+            self.tempo_events.remove(index);
+            self.rebuild_and_send_tempo();
+            self.sync_tempo_display();
+        }
+    }
+
+    /// Remove a signature event by index (must be > 0 to protect the initial
+    /// event), rebuild the tempo map, and sync the time-signature display.
+    pub(crate) fn remove_signature_event(&mut self, index: usize) {
+        if index > 0 && index < self.signature_events.len() {
+            self.signature_events.remove(index);
+            self.rebuild_and_send_tempo();
+            let (_, num, den) = self
+                .tempo_map
+                .tempo_at_sample(self.transport.playhead, self.sample_rate);
+            self.transport.time_sig_num = num;
+            self.transport.time_sig_den = den;
+            self.engine.send(AudioCommand::SetTimeSignature {
+                numerator: num,
+                denominator: den,
+            });
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
     match m {
         GlobalTrackMessage::AddTempoEvent { bar, bpm } => {
