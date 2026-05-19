@@ -560,6 +560,9 @@ fn migrate_auto_name(name: &str, is_instrument: bool, order: usize) -> String {
     name.to_string()
 }
 
+// Inline tests: `resonance-app` is a binary crate with no `lib.rs`, so the
+// private `migrate_auto_name` helper isn't reachable from a `tests/` file.
+// See ARCHITECTURE.md → Test Layout → Binary-crate exception.
 #[cfg(test)]
 mod tests {
     use super::migrate_auto_name;

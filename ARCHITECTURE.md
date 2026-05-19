@@ -117,6 +117,25 @@ Tests live in `<crate>/tests/`, not in `#[cfg(test)] mod tests` blocks inside so
 
 When a file would otherwise need a test module, add a sibling `tests/<feature>.rs` integration test instead.
 
+### Binary-crate exception
+
+`resonance-app` is a binary crate (`main.rs`, no `lib.rs`). Integration tests
+under `tests/` cannot see any of its types — they are inaccessible from outside
+the binary. A handful of inline `#[cfg(test)] mod tests` blocks therefore remain
+in `resonance-app/src/`:
+
+- `recent.rs` — exercises private `insert_pure`, `derive_display_name`, and `MAX_RECENT`.
+- `undo.rs` — exercises private fields (`UndoHistory::capacity`, `undo`, `redo`) for coalescing/capacity invariants.
+- `compose/invariants.rs`, `compose/tests.rs` — section/chord state round-trips that read crate-internal types.
+- `update/project_io/replay.rs` — exercises the private `migrate_auto_name` helper.
+
+These are the documented exception, not the rule. Do not add new inline tests
+elsewhere in the workspace. If you need to test a private helper outside
+`resonance-app`, make the helper `pub(crate)` and write a `tests/<feature>.rs`
+integration test in that crate instead. Promoting `resonance-app` to a library
+crate purely to migrate these tests is **not** worth the visibility audit and
+re-export churn it would entail.
+
 ## Anti-Patterns to Avoid
 
 Things that have caused pain and that future code should not repeat:

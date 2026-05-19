@@ -12,12 +12,15 @@
 
 ### Deeper merges / splits (P2 leftovers)
 
-    - [ ] `resonance-app` 24 remaining inline tests (spread across binary-crate
+    - [x] `resonance-app` 24 remaining inline tests (spread across binary-crate
       submodules: `recent.rs` 2, `undo.rs` 6, `compose/invariants.rs` 5,
       `compose/tests.rs` 8, `update/project_io/replay.rs` 3) need a library
       target before they can become integration tests. Either promote
       `Resonance` + helpers to a `resonance-app` library crate, or accept the
-      inline tests as a documented exception.
+      inline tests as a documented exception. **Resolution**: accepted as a
+      documented exception (ARCHITECTURE.md → Test Layout → Binary-crate
+      exception). Per-module rationale comments added in front of each
+      `#[cfg(test)] mod tests` block.
     - [ ] `resonance-audio/src/recording.rs` inline test exposes private
       `RecordingState`/`TrackRecordingBuf` types; would need to expand public
       surface to migrate.

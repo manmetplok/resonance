@@ -11,6 +11,9 @@ mod lane_generator;
 mod section;
 mod state;
 
+// Inline tests: `resonance-app` is a binary crate with no `lib.rs`, so an
+// integration test under `tests/` can't construct or load `ComposeState`.
+// See ARCHITECTURE.md → Test Layout → Binary-crate exception.
 #[cfg(test)]
 mod tests;
 

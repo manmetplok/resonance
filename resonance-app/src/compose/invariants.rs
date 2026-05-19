@@ -59,6 +59,10 @@ pub fn chord_fits_in_section(
     duration_beats >= 1 && start_beat + duration_beats <= section_beats
 }
 
+// Inline tests: `resonance-app` is a binary crate with no `lib.rs`, so an
+// integration test can't construct `SectionDefinitionState` /
+// `SectionPlacementState` / `ChordState`. See ARCHITECTURE.md → Test Layout →
+// Binary-crate exception.
 #[cfg(test)]
 mod tests {
     use super::*;

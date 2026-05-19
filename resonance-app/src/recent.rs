@@ -107,6 +107,10 @@ pub fn add(list: &mut Vec<RecentEntry>, path: &Path) {
     persist(list);
 }
 
+// Inline tests: `resonance-app` is a binary crate with no `lib.rs`, so an
+// integration test under `tests/` can't reach `insert_pure`, `MAX_RECENT`,
+// or `derive_display_name`. See ARCHITECTURE.md → Test Layout → Binary-crate
+// exception.
 #[cfg(test)]
 mod tests {
     use super::*;

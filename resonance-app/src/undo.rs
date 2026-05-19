@@ -541,6 +541,11 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
     }
 }
 
+// Inline tests: `resonance-app` is a binary crate with no `lib.rs`. These
+// tests poke private fields (`UndoHistory::capacity`, `undo`, `redo`) to
+// verify capacity trimming and coalesce-key behaviour without exposing
+// internals through the public API. See ARCHITECTURE.md → Test Layout →
+// Binary-crate exception.
 #[cfg(test)]
 mod tests {
     use super::*;
