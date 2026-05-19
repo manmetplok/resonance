@@ -627,9 +627,12 @@ impl TimelineCanvas<'_> {
         None
     }
 
-    /// Emit `ViewportWidth` / `TimelineContentSize` messages when either
-    /// value has moved enough to be worth pushing upstream. Called at the
-    /// tail of every event the canvas sees.
+    /// Emit `ViewportWidth` / `ViewportHeight` / `TimelineContentSize`
+    /// messages when any value has moved enough to be worth pushing
+    /// upstream. Called at the tail of every event the canvas sees.
+    /// Width takes priority over height takes priority over content
+    /// size; `report_viewport` returns at most one message per call,
+    /// and the canvas calls it repeatedly until quiescent.
     pub(super) fn report_viewport(
         &self,
         state: &mut TimelineState,
@@ -639,6 +642,12 @@ impl TimelineCanvas<'_> {
             state.last_reported_width = bounds.width;
             return Some(Message::Viewport(ViewportMessage::ViewportWidth(
                 bounds.width,
+            )));
+        }
+        if (bounds.height - state.last_reported_height).abs() > 1.0 {
+            state.last_reported_height = bounds.height;
+            return Some(Message::Viewport(ViewportMessage::ViewportHeight(
+                bounds.height,
             )));
         }
         let cw = self.content_width_px(bounds.width);

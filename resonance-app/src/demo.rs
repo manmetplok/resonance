@@ -499,3 +499,19 @@ pub fn seed_minimal_drum_track_no_busses(app: &mut Resonance) {
     // Intentionally no busses and no `view_caches.rebuild_output` —
     // this is the state that used to panic when the Mixer tab opened.
 }
+
+/// Seed `n` synth-instrument tracks named `"VirtTrack 1..=n"` for the
+/// track-header column virtualization tests. Each track gets its own
+/// id and order so `sorted_tracks` ordering matches the seed order.
+/// Bypasses the audio engine — the virtualization logic under test
+/// reads `r.registry.tracks` and `r.viewport` only.
+pub fn seed_many_synth_tracks(app: &mut Resonance, n: usize) {
+    app.io.has_active_project = true;
+    app.registry.tracks.clear();
+    for i in 0..n {
+        let mut t = TrackState::new_instrument(1_000 + i as u64, i);
+        t.name = format!("VirtTrack {}", i + 1);
+        app.registry.tracks.push(t);
+    }
+    app.registry.next_track_order = n;
+}

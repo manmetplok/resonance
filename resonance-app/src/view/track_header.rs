@@ -14,6 +14,10 @@
 //!   spacer followed by the lane area. The lane area applies
 //!   `scroll_offset_y` as a negative top padding so the partial top
 //!   row scrolls smoothly instead of snapping to row boundaries.
+//!   Manual virtualization drops tracks above `scroll_offset_y` AND
+//!   below `scroll_offset_y + viewport_lane_h` from the widget tree,
+//!   so a 200-track session only allocates a handful of
+//!   `view_track_header` subtrees.
 //! - **Chrome subtree** (top layer): ruler + section-band placeholder
 //!   (when sections exist) + always-visible 32 px global-shelf header +
 //!   per-lane labels (chords / tempo / signature) when expanded, then
@@ -60,6 +64,11 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     r.viewport.global_tracks_expanded.hash(&mut h);
     r.viewport.scroll_offset_y.to_bits().hash(&mut h);
+    // Manual track-list virtualization (`build_track_headers`) drops
+    // tracks below `scroll_offset_y + viewport_height` from the widget
+    // tree; the cache must invalidate on window resize so previously-
+    // off-screen rows materialize when the viewport grows.
+    r.viewport.viewport_height.to_bits().hash(&mut h);
     // Whether the section band exists changes the fixed-header height
     // of the column, so it must invalidate the lazy cache.
     (!r.compose.placements.is_empty()).hash(&mut h);
@@ -196,11 +205,36 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
     let first_visible = (scroll_y / theme::TRACK_HEIGHT).floor() as usize;
     let frac_offset = scroll_y - first_visible as f32 * theme::TRACK_HEIGHT;
 
+    // Bottom-side virtualization: drop tracks that sit entirely below
+    // the on-screen viewport. The lane area's drawn height is the full
+    // canvas viewport height minus the chrome (ruler + section band +
+    // global shelf + lane labels), so we cap `last_visible` by the
+    // number of rows that fit inside `viewport_lane_h` plus one
+    // overscan row to cover the partial bottom edge on sub-pixel
+    // scroll. When the canvas hasn't reported a viewport size yet
+    // (`viewport_height == 0`), fall back to "show everything from
+    // `first_visible` onward" so the initial paint isn't blank.
+    //
+    // The chrome subtree paints opaque backgrounds on its own
+    // (non-empty) Z-layer above the lane subtree — virtualizing the
+    // lane column doesn't affect that masking invariant. See the
+    // module doc-comment and `track_header_no_bleed_into_chrome_*`.
+    let viewport_lane_h = (r.viewport.viewport_height - chrome_h).max(0.0);
+    let last_visible = if r.viewport.viewport_height > 0.0 {
+        let rows_visible = (viewport_lane_h / theme::TRACK_HEIGHT).ceil() as usize + 1;
+        first_visible.saturating_add(rows_visible)
+    } else {
+        sorted_tracks.len()
+    };
+
     let mut lane_col = column![].spacing(0);
     let selected_track = r.interaction.selected_track;
     for (i, track) in sorted_tracks.iter().enumerate() {
         if i < first_visible {
             continue;
+        }
+        if i >= last_visible {
+            break;
         }
         let is_selected = selected_track == Some(track.id);
         lane_col = lane_col.push(view_track_header(r, track, is_selected));

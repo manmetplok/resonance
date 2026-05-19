@@ -191,6 +191,7 @@ pub struct TimelineState {
     pub(super) dragging_loop: bool,
     pub(super) clip_interaction: Option<ClipInteraction>,
     pub(super) last_reported_width: f32,
+    pub(super) last_reported_height: f32,
     pub(super) last_reported_content_width: f32,
     pub(super) last_reported_content_height: f32,
     /// Tracks the most recent click on a MIDI clip for double-click detection.
