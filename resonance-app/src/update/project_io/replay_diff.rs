@@ -27,6 +27,7 @@ use std::collections::HashMap;
 
 use resonance_audio::types::*;
 
+#[cfg(test)]
 use crate::compose::DrumGroup;
 use crate::project::{
     LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin,
