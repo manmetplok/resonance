@@ -55,15 +55,34 @@
 
 ###P4 — dependencies
 
-    - [ ] Major-version upgrades: `ureq 2 → 3`, `rand 0.8 → 0.10`, `dirs 5 → 6`,
+    - [~] Major-version upgrades: `ureq 2 → 3`, `rand 0.8 → 0.10`, `dirs 5 → 6`,
       `iced 0.13 → 0.14`, `cpal 0.15 → 0.17`, `ringbuf 0.4 → 0.5`, `symphonia 0.5 → 0.6`.
+      6 of 7 landed; iced is blocked (see sub-bullet for the widget-rewrite
+      scope).
         - [x] `dirs 5 → 6`
         - [x] `rand 0.8 → 0.10`
         - [x] `ringbuf 0.4 → 0.5`
         - [x] `symphonia 0.5 → 0.6`
         - [x] `ureq 2 → 3`
-        - [ ] `cpal 0.15 → 0.17`
-        - [ ] `iced 0.13 → 0.14`
+        - [x] `cpal 0.15 → 0.17`
+        - [ ] `iced 0.13 → 0.14`. **Blocked**: too large a widget rewrite for
+          a dependency bump. iced 0.14 changes `canvas::Program::update`
+          from `fn(state, event: canvas::Event, bounds, cursor) -> (Status,
+          Option<Message>)` to `fn(state, event: &iced::Event, bounds, cursor)
+          -> Option<canvas::Action<Message>>` — that's a signature *and*
+          return-type change touching all 16 `canvas::Program` impls in
+          `resonance-app`. On top of that: `canvas::event::Status` /
+          `canvas::event::Event` are made private (so the Captured/Ignored
+          enum has to be re-expressed via `Action::capture()` /
+          `Action::publish()`), `Space::with_width(_)`/`with_height(_)` lose
+          the constructor (~330 mechanical call sites need
+          `Space::new().width(_)`), `Length: From<u16>` is gone (10+ literal
+          numeric lengths need `Length::Fixed`), `Pixels: From<u16>` is gone
+          (3 sites), `Application::run_with` is removed, and
+          `keyboard::on_key_press` was renamed. Estimated cost is several
+          hours of mostly-mechanical edits with a handful of judgement
+          calls around the Canvas action plumbing — feasible but not in
+          scope of a dependency-sweep task.
 
 ###P5 — smaller wins
 
