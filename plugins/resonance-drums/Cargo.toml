@@ -37,6 +37,6 @@ rfd = { workspace = true, optional = true }
 
 # Drumkit download — gated behind the `editor` feature so headless builds
 # stay lean.
-ureq = { version = "2.10", features = ["json"], optional = true }
+ureq = { version = "3", features = ["json"], optional = true }
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 dirs = { workspace = true, optional = true }

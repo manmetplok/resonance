@@ -60,7 +60,7 @@
         - [x] `dirs 5 → 6`
         - [x] `rand 0.8 → 0.10`
         - [x] `ringbuf 0.4 → 0.5`
-        - [ ] `symphonia 0.5 → 0.6`
+        - [x] `symphonia 0.5 → 0.6`
         - [ ] `ureq 2 → 3`
         - [ ] `cpal 0.15 → 0.17`
         - [ ] `iced 0.13 → 0.14`

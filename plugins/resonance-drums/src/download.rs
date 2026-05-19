@@ -162,10 +162,11 @@ pub fn spawn() -> WorkerHandle {
 // ---------------------------------------------------------------------------
 
 fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>) {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(10))
+    let config = ureq::Agent::config_builder()
+        .timeout_connect(Some(std::time::Duration::from_secs(10)))
         // No global read timeout — large downloads need more time.
         .build();
+    let agent: ureq::Agent = config.into();
 
     loop {
         let cmd = match rx.recv() {
@@ -223,11 +224,14 @@ fn set_error(state: &Arc<Mutex<State>>, msg: &str) {
 // ---------------------------------------------------------------------------
 
 fn fetch_index(agent: &ureq::Agent) -> Result<ServerIndex, String> {
-    let resp = agent
+    let mut resp = agent
         .get(INDEX_URL)
         .call()
         .map_err(|e| format!("fetch index: {e}"))?;
-    let index: ServerIndex = resp.into_json().map_err(|e| format!("parse index: {e}"))?;
+    let index: ServerIndex = resp
+        .body_mut()
+        .read_json()
+        .map_err(|e| format!("parse index: {e}"))?;
     Ok(index)
 }
 
@@ -250,7 +254,9 @@ fn download_and_extract(
         .map_err(|e| format!("download {}: {e}", kit.name))?;
 
     let total: u64 = resp
-        .header("Content-Length")
+        .headers()
+        .get("Content-Length")
+        .and_then(|s| s.to_str().ok())
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
@@ -263,7 +269,7 @@ fn download_and_extract(
         std::fs::File::create(&tmp_path).map_err(|e| format!("create temp file: {e}"))?;
 
     // Read in 256 KiB chunks, updating progress.
-    let mut reader = resp.into_reader();
+    let mut reader = resp.into_body().into_reader();
     let mut buf = vec![0u8; 256 * 1024];
     let mut downloaded: u64 = 0;
 

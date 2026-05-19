@@ -20,10 +20,16 @@ impl Default for Tone3000Client {
 
 impl Tone3000Client {
     pub fn new() -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(30))
+        // ureq 3 routes HTTP status errors through Error::StatusCode
+        // by default, discarding the response body. We turn that off
+        // so we can read the body for the 401 special-case and for
+        // descriptive error messages.
+        let config = ureq::Agent::config_builder()
+            .timeout_connect(Some(std::time::Duration::from_secs(10)))
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .http_status_as_error(false)
             .build();
+        let agent: ureq::Agent = config.into();
         Self { agent }
     }
 
@@ -35,10 +41,10 @@ impl Tone3000Client {
         page: u32,
     ) -> Result<Vec<Tone>, ClientError> {
         let url = format!("{API_BASE}/api/v1/tones/search");
-        let resp = self
+        let mut resp = self
             .agent
             .get(&url)
-            .set("Authorization", &format!("Bearer {token}"))
+            .header("Authorization", format!("Bearer {token}"))
             .query("query", query)
             .query("sort", sort)
             // Underscore-separated multi-value filter per the tone3000
@@ -46,28 +52,30 @@ impl Tone3000Client {
             // show up alongside bare amp profiles.
             .query("gears", "amp_full-rig")
             .query("platform", "nam")
-            .query("page", &page.to_string())
+            .query("page", page.to_string())
             .query("page_size", "25")
-            .call()
-            .map_err(ClientError::from)?;
+            .call()?;
+        check_status(&mut resp)?;
         let page: PaginatedResponse<Tone> = resp
-            .into_json()
+            .body_mut()
+            .read_json()
             .map_err(|e| ClientError::Parse(e.to_string()))?;
         Ok(page.data)
     }
 
     pub fn list_models(&self, token: &str, tone_id: i64) -> Result<Vec<Model>, ClientError> {
         let url = format!("{API_BASE}/api/v1/models");
-        let resp = self
+        let mut resp = self
             .agent
             .get(&url)
-            .set("Authorization", &format!("Bearer {token}"))
-            .query("tone_id", &tone_id.to_string())
+            .header("Authorization", format!("Bearer {token}"))
+            .query("tone_id", tone_id.to_string())
             .query("page_size", "100")
-            .call()
-            .map_err(ClientError::from)?;
+            .call()?;
+        check_status(&mut resp)?;
         let page: PaginatedResponse<Model> = resp
-            .into_json()
+            .body_mut()
+            .read_json()
             .map_err(|e| ClientError::Parse(e.to_string()))?;
         Ok(page.data)
     }
@@ -77,15 +85,17 @@ impl Tone3000Client {
     /// allocation. Streaming to disk would be nicer but adds a pile of
     /// state machine for negligible benefit at these sizes.
     pub fn download_model(&self, token: &str, model_url: &str) -> Result<Vec<u8>, ClientError> {
-        let resp = self
+        let mut resp = self
             .agent
             .get(model_url)
-            .set("Authorization", &format!("Bearer {token}"))
-            .call()
-            .map_err(ClientError::from)?;
+            .header("Authorization", format!("Bearer {token}"))
+            .call()?;
+        check_status(&mut resp)?;
 
         let len_hint: usize = resp
-            .header("Content-Length")
+            .headers()
+            .get("Content-Length")
+            .and_then(|s| s.to_str().ok())
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
 
@@ -93,12 +103,25 @@ impl Tone3000Client {
         // runaway Content-Length turning into an OOM.
         const MAX_BYTES: usize = 200 * 1024 * 1024;
         let mut buf = Vec::with_capacity(len_hint.min(MAX_BYTES));
-        resp.into_reader()
+        resp.into_body()
+            .into_reader()
             .take(MAX_BYTES as u64)
             .read_to_end(&mut buf)
             .map_err(|e| ClientError::Parse(e.to_string()))?;
         Ok(buf)
     }
+}
+
+fn check_status(resp: &mut ureq::http::Response<ureq::Body>) -> Result<(), ClientError> {
+    let code = resp.status().as_u16();
+    if code == 401 {
+        return Err(ClientError::Unauthorized);
+    }
+    if !(200..300).contains(&code) {
+        let msg = resp.body_mut().read_to_string().unwrap_or_default();
+        return Err(ClientError::Http(format!("HTTP {code}: {msg}")));
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -115,12 +138,8 @@ pub enum ClientError {
 impl From<ureq::Error> for ClientError {
     fn from(e: ureq::Error) -> Self {
         match e {
-            ureq::Error::Status(401, _) => ClientError::Unauthorized,
-            ureq::Error::Status(code, resp) => {
-                let msg = resp.into_string().unwrap_or_default();
-                ClientError::Http(format!("HTTP {code}: {msg}"))
-            }
-            ureq::Error::Transport(t) => ClientError::Http(t.to_string()),
+            ureq::Error::StatusCode(401) => ClientError::Unauthorized,
+            other => ClientError::Http(other.to_string()),
         }
     }
 }

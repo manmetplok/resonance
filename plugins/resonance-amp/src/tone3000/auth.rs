@@ -267,22 +267,30 @@ fn exchange_code_for_token(
     // `send_form` sets Content-Type itself; don't pre-set it or ureq
     // may double up the header. Error body is explicitly surfaced so
     // a 400 from the server tells us *why* instead of just the status.
-    let result = ureq::post(&format!("{API_BASE}/api/v1/oauth/token")).send_form(&[
-        ("grant_type", "authorization_code"),
-        ("code", code),
-        ("code_verifier", verifier),
-        ("redirect_uri", redirect_uri),
-        ("client_id", TONE3000_CLIENT_ID),
-    ]);
+    let agent = oauth_agent();
+    let result = agent
+        .post(format!("{API_BASE}/api/v1/oauth/token"))
+        .send_form([
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("code_verifier", verifier),
+            ("redirect_uri", redirect_uri),
+            ("client_id", TONE3000_CLIENT_ID),
+        ]);
     match result {
-        Ok(resp) => {
-            let body = resp.into_string().unwrap_or_default();
+        Ok(mut resp) => {
+            let code = resp.status().as_u16();
+            let body = resp.body_mut().read_to_string().unwrap_or_default();
             debug_log(&format!("token response body: {body}\n"));
+            if !(200..300).contains(&code) {
+                let trimmed: String = body.chars().take(400).collect();
+                return Err(format!("HTTP {code}: {trimmed}"));
+            }
             serde_json::from_str::<TokenResponse>(&body)
                 .map_err(|e| format!("token parse: {e} / body: {body}"))
         }
         Err(e) => {
-            let msg = describe_ureq_error(e);
+            let msg = format!("transport: {e}");
             debug_log(&format!("token exchange error: {msg}\n"));
             Err(msg)
         }
@@ -290,36 +298,39 @@ fn exchange_code_for_token(
 }
 
 pub fn refresh_tokens(refresh_token: &str) -> Result<StoredTokens, String> {
-    let resp = ureq::post(&format!("{API_BASE}/api/v1/oauth/token"))
-        .send_form(&[
+    let agent = oauth_agent();
+    let mut resp = agent
+        .post(format!("{API_BASE}/api/v1/oauth/token"))
+        .send_form([
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
             ("client_id", TONE3000_CLIENT_ID),
         ])
-        .map_err(describe_ureq_error)?;
+        .map_err(|e| format!("transport: {e}"))?;
+    let code = resp.status().as_u16();
+    if !(200..300).contains(&code) {
+        let body = resp.body_mut().read_to_string().unwrap_or_default();
+        let trimmed: String = body.chars().take(400).collect();
+        return Err(format!("HTTP {code}: {trimmed}"));
+    }
     let token: TokenResponse = resp
-        .into_json()
+        .body_mut()
+        .read_json()
         .map_err(|e| format!("refresh parse: {e}"))?;
     let stored = StoredTokens::from_response(token);
     save_tokens(&stored)?;
     Ok(stored)
 }
 
-/// Unpack a `ureq::Error` into a human-readable string that *includes
-/// the server's response body* when it's an HTTP status error. Without
-/// this, a 400 from `/oauth/token` shows up in the UI as just "HTTP
-/// 400" with no explanation, which is useless for debugging.
-fn describe_ureq_error(e: ureq::Error) -> String {
-    match e {
-        ureq::Error::Status(code, resp) => {
-            let body = resp.into_string().unwrap_or_default();
-            // Cap the body at a sane length so a runaway HTML error
-            // page doesn't blow up our status pill.
-            let trimmed: String = body.chars().take(400).collect();
-            format!("HTTP {code}: {trimmed}")
-        }
-        ureq::Error::Transport(t) => format!("transport: {t}"),
-    }
+/// Build a ureq Agent that surfaces HTTP status codes through the
+/// response (rather than as errors) so callers can read the server's
+/// error body — needed for OAuth where a 400 from `/oauth/token`
+/// otherwise becomes a useless "HTTP 400" with no explanation.
+fn oauth_agent() -> ureq::Agent {
+    let config = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build();
+    config.into()
 }
 
 /// Write helper used by the worker to tee the downloaded model into a
