@@ -1,5 +1,58 @@
 #TODO
 
+    - [x] Implement the new drum editor from the design bundle
+      (https://api.anthropic.com/v1/design/h/KuEbfCOuhRVlYI14XTJ6sA?open_file=Resonance.html),
+      supporting **multiple drum patterns per section** (pattern bank
+      / picker + per-section pattern assignment, not just a single
+      grid per section as today). Fetch the bundle, read its README,
+      and mirror the drum-editor spec in `view/compose/drumroll/**`
+      and the underlying drum-pattern state in `state.rs` /
+      `update/**`. While here, sweep the rest of the **compose**
+      view designs in the same bundle and pick up other improvements
+      (lane inspectors, chord lane, melody/bass lanes, vocal lane,
+      expanded editor chrome) where they're a clean lift. Route the
+      visual work through `ux-design` and have `e2e-tester` rebaseline
+      / add snapshot coverage for the drum editor + any other compose
+      surfaces that change.
+
+      **What changed:**
+      - Promoted the flat project-scoped `drum_groups: Vec<DrumGroup>`
+        into a `drum_patterns: Vec<DrumPattern>` bank, with each
+        `SectionDefinitionState` carrying `drum_pattern_id: Option<u64>`.
+        New `DrumPattern` type lives in
+        `resonance-app/src/compose/drumroll/pattern.rs`.
+      - `update/compose/drum_groups.rs` rewritten to operate on the
+        *managing* pattern's groups. Added `SelectPattern`,
+        `AssignPattern`, `AddPattern`, `DuplicatePattern`,
+        `DeletePattern`, `RenamePattern`, `SetPatternColor`, and the
+        inline-rename trio. `materialize_drum_clips` now resolves
+        groups per-section so a single drum track plays different
+        rhythms across sections.
+      - New `view/compose/drumroll/pattern_picker.rs` renders a chip
+        row above the drum lane: chip per pattern, warm-tint border
+        on the assigned one, trailing Rename / Duplicate / Delete /
+        + Add buttons (uses `ghost_button_style`, theme tokens, no
+        ad-hoc colours).
+      - Drum Groups Manager modal grew a "PATTERNS" column listing
+        the bank; the kit picker scopes pad assignment to the
+        active pattern.
+      - Persistence: `ProjectFile` carries both `drum_groups`
+        (legacy) and `drum_patterns` (current). Loader promotes a
+        legacy flat list into a single "Main" entry so older
+        projects round-trip cleanly; undo/diff replay mirrors that.
+      - Snapshot tests under `resonance-app/tests/
+        compose_drum_pattern_picker.rs` lock in four states
+        (default, assigned-B-section, renaming, manager modal) with
+        goldens under `tests/snapshots/`.
+      - **Deferred / future work** (design bundle URL returned
+        HTTP 404 from this sandbox, so the visual treatment was
+        derived from `ux-guidelines.md` and existing compose-view
+        conventions): the other compose-surface sweeps (chord
+        inspector polish, vocal lane chrome, melody/bass lane
+        treatments, expanded editor chrome) — pick up once the
+        bundle becomes reachable, then layer onto the picker /
+        pattern bank that's now in place.
+
     - [ ] ! Adding a track is a bit flaky — possibly clashing IDs? Investigate
       the track-ID allocator (and any places where a new track's ID is derived
       from `len()` or similar) to see if concurrent / rapid adds can collide.
