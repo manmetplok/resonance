@@ -35,6 +35,7 @@ pub use types::*;
 /// without forcing the parent module public.
 #[doc(hidden)]
 pub mod __test_support {
+    pub use crate::clap_host::{ClapBundle, SyncClapInstance};
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
     pub use crate::midi_hardware::{parse_live_event_for_test, LiveMidiEvent};
     pub use crate::stream_errors::{

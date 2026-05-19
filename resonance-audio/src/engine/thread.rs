@@ -267,6 +267,33 @@ pub(crate) fn engine_thread(
             let _ = ctx.event_tx.send(AudioEvent::PlayheadMoved(pos));
         }
     }
+
+    // Shutdown ordering: drop every live CLAP plugin instance BEFORE
+    // `state` falls out of scope and `state.bundles` (`Vec<ClapBundle>`)
+    // dlclose's each `.clap` shared library. `plugins_arc` is shared
+    // with the main thread (`Resonance.engine.plugins`) and with the
+    // cpal output-stream callback closure — both keep the `Arc` alive
+    // past this thread's exit, so the `ClapInstance` values inside
+    // wouldn't otherwise drop here. Without this step:
+    //   - the audio callback (still running until `_stream` is dropped
+    //     during the main thread's `Resonance` teardown) iterates the
+    //     map and calls `(*plugin).process` against a now-unloaded
+    //     library — segfault on the `cpal_alsa_out` thread; and
+    //   - when `Resonance` finally drops, the `Arc` hits refcount 0
+    //     on the main thread, every `ClapInstance::drop` runs
+    //     `close_gui` / `stop_processing` / `deactivate` / `destroy`
+    //     against freed function pointers — segfault on exit.
+    // Clearing the map here runs each `ClapInstance::drop` while the
+    // libraries are still mapped in. The IndexMap is then empty when
+    // bundles unload during `state` drop a few lines down.
+    //
+    // Pattern mirrors `engine::plugins::handle_remove_plugin`: swap
+    // the contents out under the write lock, then drop the swapped-
+    // out IndexMap with the lock released so the audio callback's
+    // `try_read` isn't held off any longer than the swap itself.
+    let drained_plugins: IndexMap<PluginInstanceId, Mutex<SyncClapInstance>> =
+        std::mem::take(&mut *plugins_arc.write());
+    drop(drained_plugins);
 }
 
 fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {

@@ -15,7 +15,7 @@
       / add snapshot coverage for the drum editor + any other compose
       surfaces that change.
 
-    - [ ] ! App crashes with segfault on exit (closing the main window).
+    - [x] ! App crashes with segfault on exit (closing the main window).
       Repro: `cargo run -p resonance-app --release`, then close the
       window. Tail of stderr:
       ```
@@ -26,14 +26,64 @@
       WARNING: radv is not a conformant Vulkan implementation, testing use only.
       [1]    2406228 segmentation fault (core dumped)  cargo run -p resonance-app --release
       ```
-      Likely candidates: audio thread / cpal stream tear-down racing
-      app shutdown (cpal 0.15 → 0.17 changed lifecycle semantics —
-      see commit `6ed365b`), iced 0.14 / wgpu surface drop ordering
-      (the radv warning hints at the GPU path), or a plugin host
-      tear-down (CLAP bridge dropping while the host still holds a
-      pointer). Run with `RUST_BACKTRACE=1` + a debug build to get a
-      frame for the offending thread before guessing further.
-      (Reported 2026-05-19.)
+      **Root cause:** not cpal 0.15 → 0.17 or wgpu drop ordering — a
+      pre-existing CLAP host teardown bug that the user finally
+      tripped on. Engine-thread `HandlerState` owns
+      `bundles: Vec<ClapBundle>` (one per loaded `.clap` shared
+      library). On `AudioCommand::ShutDown`, the thread broke out of
+      its loop and `state` fell out of scope, which dropped
+      `bundles` first → `libloading::Library::drop` →
+      `dlclose`-ing every plugin library. But `plugins_arc:
+      Arc<RwLock<IndexMap<_, Mutex<SyncClapInstance>>>>` is shared
+      with both the main thread (`Resonance.engine.plugins`) and
+      with the cpal output-stream callback closure (`_stream`), so
+      the live `ClapInstance` values inside *didn't* drop on the
+      engine thread — they lived on with function pointers
+      (`process`, `destroy`, `deactivate`, `stop_processing`,
+      `close_gui`) into now-freed memory. Two crashes followed:
+        * the cpal output callback — still running until `_stream`
+          is dropped at the main thread's `Resonance` teardown —
+          iterates the map and calls `(*plugin).process` against
+          unloaded code; the kernel log pinned this on the
+          `cpal_alsa_out` thread (PID 2408474, `error 14` =
+          instruction fetch from invalid address);
+        * later, when `Resonance` finally drops, the plugins Arc
+          hits refcount 0 on the main thread and every
+          `ClapInstance::drop` (`close_gui` → `stop_processing` →
+          `deactivate` → `destroy`) jumps into freed pointers. The
+          coredump for PID 2386426 showed exactly this stack:
+          `core::ptr::drop_in_place::<ClapInstance>` →
+          `Arc<RwLock<IndexMap<…, Mutex<SyncClapInstance>>>>::drop_slow`
+          → `core::ptr::drop_in_place::<Resonance>` →
+          `iced_winit::run_instance` → `resonance_app::main`.
+      The bug had been latent since CLAP support landed; it only
+      surfaced now because the latest plugin set + project autoload
+      reliably winds up with live instances in the map at exit
+      time. cpal 0.17 is a red herring (the lifecycle handshake on
+      that side was unchanged — only the `BufferUnderrun` event
+      surface moved, fixed in commit `0d2db44`).
+      **Fix:** explicit cleanup at the end of `engine_thread` in
+      `resonance-audio/src/engine/thread.rs`. After the recv loop
+      breaks, swap the plugins IndexMap out under the write lock
+      (`let drained = std::mem::take(&mut *plugins_arc.write());`)
+      and drop the swapped-out map before `state` (and therefore
+      `state.bundles`) falls out of scope. Every `ClapInstance`
+      now runs its `Drop` against still-mapped-in libraries; the
+      IndexMap is empty when `bundles` unload a few lines later.
+      Lock pattern mirrors `handle_remove_plugin`: take write,
+      swap out, release lock, then drop the swapped-out container
+      so the audio callback's `try_read` isn't blocked longer than
+      the swap itself. New regression suite
+      `resonance-audio/tests/clap_plugin_drop_order.rs` loads a
+      real bundled `.clap` (`target/bundled/resonance-amp.clap`)
+      and exercises the exact "drop instance via map clear, then
+      drop bundle" pattern with both a single-instance and a
+      two-instance setup; skips cleanly when the workspace hasn't
+      been built yet. Exposed `ClapBundle` + `SyncClapInstance`
+      through the existing `__test_support` module so the test
+      can drive the host without making the `clap_host` module
+      public. No UI surface touched — pure engine/data-layer
+      change, so no `iced_test` rebaseline. (Reported 2026-05-19.)
 
     - [x] ! Recurring `Audio stream error: Buffer underrun/overrun occurred.`
       messages are spamming the log during normal use — audio output
