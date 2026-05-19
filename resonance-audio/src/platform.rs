@@ -72,7 +72,7 @@ pub(crate) fn pick_sample_rate(
     default_config: &cpal::SupportedStreamConfig,
     direction: DeviceDirection,
 ) -> u32 {
-    let default_rate = default_config.sample_rate().0;
+    let default_rate = default_config.sample_rate();
 
     // Try pw-metadata first (authoritative graph rate), then pactl as fallback.
     let candidates = [pipewire_graph_rate(), default_sink_sample_rate()];
@@ -80,14 +80,10 @@ pub(crate) fn pick_sample_rate(
     for candidate in candidates.into_iter().flatten() {
         let supported = match direction {
             DeviceDirection::Output => device.supported_output_configs().ok().map(|mut configs| {
-                configs.any(|c| {
-                    c.min_sample_rate().0 <= candidate && candidate <= c.max_sample_rate().0
-                })
+                configs.any(|c| c.min_sample_rate() <= candidate && candidate <= c.max_sample_rate())
             }),
             DeviceDirection::Input => device.supported_input_configs().ok().map(|mut configs| {
-                configs.any(|c| {
-                    c.min_sample_rate().0 <= candidate && candidate <= c.max_sample_rate().0
-                })
+                configs.any(|c| c.min_sample_rate() <= candidate && candidate <= c.max_sample_rate())
             }),
         };
         if supported == Some(true) {
@@ -385,18 +381,23 @@ fn build_input_stream_cpal(
     //
     // Order: pactl source-name match (works on any host), then
     // `pipewire` PCM, then ALSA `default`.
-    let pipewire_pcm =
-        || host.input_devices().ok().and_then(|mut devs| {
-            devs.find(|d| d.name().map(|n| n == "pipewire").unwrap_or(false))
-        });
+    let pipewire_pcm = || {
+        host.input_devices().ok().and_then(|mut devs| {
+            devs.find(|d| {
+                d.description()
+                    .map(|desc| desc.name() == "pipewire")
+                    .unwrap_or(false)
+            })
+        })
+    };
     let device = source_name
         .and_then(|name| {
             let target = name.to_ascii_lowercase();
             host.input_devices().ok().and_then(|mut devs| {
                 devs.find(|d| {
-                    d.name()
-                        .map(|n| {
-                            let n = n.to_ascii_lowercase();
+                    d.description()
+                        .map(|desc| {
+                            let n = desc.name().to_ascii_lowercase();
                             n == target || n.contains(&target) || target.contains(&n)
                         })
                         .unwrap_or(false)
@@ -446,7 +447,7 @@ fn build_input_stream_cpal(
                    mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
                    rec_producer: Option<ringbuf::HeapProd<f32>>| {
         let mut cfg = base_config.clone();
-        cfg.sample_rate = cpal::SampleRate(sample_rate);
+        cfg.sample_rate = sample_rate;
         cfg.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
         cfg.channels = channels;
         device.build_input_stream(

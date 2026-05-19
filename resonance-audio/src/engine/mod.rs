@@ -157,14 +157,17 @@ impl AudioEngine {
             .default_output_device()
             .ok_or_else(|| "No audio output device found".to_string())?;
 
-        let device_name = device.name().unwrap_or_else(|_| "<unnamed>".to_string());
+        let device_name = device
+            .description()
+            .map(|d| d.name().to_string())
+            .unwrap_or_else(|_| "<unnamed>".to_string());
 
         let config = device
             .default_output_config()
             .map_err(|e| format!("Failed to get default output config: {}", e))?;
 
         let channels = config.channels() as usize;
-        let default_rate = config.sample_rate().0;
+        let default_rate = config.sample_rate();
 
         // Prefer the PipeWire graph sample rate to avoid resampling.
         // cpal's default_output_config often returns 44100 via ALSA compat, but the
@@ -240,7 +243,7 @@ impl AudioEngine {
         let plugins_audio = Arc::clone(&plugins);
 
         let mut stream_config: cpal::StreamConfig = config.into();
-        stream_config.sample_rate = cpal::SampleRate(sample_rate);
+        stream_config.sample_rate = sample_rate;
         stream_config.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
         let audio_sample_rate = sample_rate;
 
