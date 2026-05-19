@@ -129,4 +129,10 @@ pub enum GenerateError {
     /// last position.
     #[error("end degree conflicts with locked chord at last position")]
     EndConflictsWithLock,
+    /// The requested Markov table has no transitions at all (or only
+    /// transitions whose targets aren't reachable from the current
+    /// history with any back-off). A user-registered empty table would
+    /// otherwise panic in `weighted_sample`.
+    #[error("Markov table '{0}' has no usable transitions")]
+    EmptyTable(String),
 }

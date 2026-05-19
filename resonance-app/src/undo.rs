@@ -18,7 +18,7 @@ use resonance_audio::types::{AudioCommand, ClipId, MidiNote, PluginInstanceId};
 use crate::project::{LoadedProject, ProjectFile};
 use resonance_audio::types::TrackId;
 
-pub use resonance_audio::limits::DEFAULT_HISTORY_CAPACITY;
+pub use resonance_audio::DEFAULT_HISTORY_CAPACITY;
 
 /// Runtime-only compose state that isn't captured in `ProjectFile` and
 /// therefore can't be rebuilt by `replay_loaded_project` alone. Applied

@@ -124,9 +124,20 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         //
         // This runs after `params_dirty` was handled above, so a newly
         // loaded state is not immediately clobbered.
+        //
+        // We compare-then-store rather than store-always so the audio
+        // thread doesn't ping the cache line that the editor thread is
+        // reading every block when nothing changed. For a plugin with
+        // 50 params at 750 Hz block rate that's 37k spurious stores a
+        // second; load-then-conditional-store is essentially free on
+        // x86 when the value is unchanged.
         for i in 0..self.plugin.param_count() {
             if i < self.shared.param_values.len() {
-                self.shared.set_value(i, self.plugin.param(i).get_plain());
+                let plugin_v = self.plugin.param(i).get_plain();
+                let shared_v = self.shared.get_value(i);
+                if shared_v.to_bits() != plugin_v.to_bits() {
+                    self.shared.set_value(i, plugin_v);
+                }
             }
         }
 

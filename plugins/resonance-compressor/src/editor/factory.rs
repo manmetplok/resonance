@@ -44,6 +44,7 @@ impl EditorFactory for CompressorEditorFactory {
             app,
             EditorOptions {
                 title: "Resonance Compressor".to_string(),
+                app_id: "com.resonance.compressor".to_string(),
                 initial_size: (960, 540),
                 min_size: (680, 400),
                 resizable: true,

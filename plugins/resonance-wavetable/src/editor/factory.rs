@@ -53,6 +53,7 @@ impl EditorFactory for WavetableEditorFactory {
             app,
             EditorOptions {
                 title: "Resonance Wavetable".to_string(),
+                app_id: "com.resonance.wavetable".to_string(),
                 initial_size: (960, 560),
                 min_size: (720, 480),
                 resizable: true,

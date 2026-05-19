@@ -25,7 +25,7 @@ use crate::view::ui_caches::ChoiceList;
 fn midi_choices_with_override(
     cached: &std::rc::Rc<[MidiPickerChoice]>,
     configured: Option<&str>,
-    available: &[resonance_audio::midi_hardware::MidiDeviceInfo],
+    available: &[resonance_audio::MidiDeviceInfo],
 ) -> ChoiceList<MidiPickerChoice> {
     match configured.filter(|name| !available.iter().any(|d| d.name == *name)) {
         Some(stale) => {
@@ -305,7 +305,10 @@ fn audio_input_block(
     let device_channels = selected_device.as_ref().map(|d| d.channels).unwrap_or(0);
 
     let device_picker = pick_list(
-        r.input_devices.clone(),
+        // Cached `Rc<[InputDeviceInfo]>` — clones are cheap (refcount).
+        // Rebuilt by `engine_events::transport::input_devices_listed`
+        // only when the engine re-enumerates devices.
+        r.view_caches.input_devices.clone(),
         selected_device,
         move |device: InputDeviceInfo| {
             Message::Track(TrackMessage::SetTrackInputDevice(track_id, Some(device.name)))

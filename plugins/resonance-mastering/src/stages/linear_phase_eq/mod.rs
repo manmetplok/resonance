@@ -70,11 +70,12 @@ impl LinearPhaseEq {
     ) {
         if *bands != self.cached_bands {
             self.cached_bands = *bands;
-            let enabled: Vec<BandConfig> = bands.iter().copied().filter(|b| b.enabled).collect();
-            // Split the borrow so the designer result (which borrows
-            // from `self.designer`) can coexist with mutable borrows
-            // of the two convolver fields.
-            let h = self.designer.design(&enabled, self.sample_rate);
+            // `FirDesigner::design` already iterates `bands` and skips
+            // disabled entries, so we can pass the whole fixed array
+            // directly. Previously we filter+collected into a fresh
+            // `Vec<BandConfig>` on every band-parameter change — fine
+            // for a one-off but allocates on the audio thread.
+            let h = self.designer.design(bands.as_slice(), self.sample_rate);
             self.left.set_impulse_response(h);
             self.right.set_impulse_response(h);
         }

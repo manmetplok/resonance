@@ -297,23 +297,56 @@ Never use `iced::Color::from_rgb(...)` inline for anything that belongs to the a
 - `CLIP_BODY`, `CLIP_HEADER`, `CLIP_SELECTED_BORDER` — clip rendering
 - `RULER_BG` — timeline ruler background
 
-### 10. Verifying your changes — screenshot loop
+### 10. Verifying your changes — `iced_test` snapshots (preferred)
 
 After any UI work, you must **visually verify** the result, not just
-type-check it. The app supports a `--demo` flag that boots into a fully
-seeded project (tracks, busses, clips, compose section) so views render
-with realistic content without a real audio engine, and `--tab
-arrange|mixer|compose` selects which view opens first. Combine those
-with `spectacle` (KDE's window grabber, already installed) and
-ImageMagick `magick` to capture a screenshot you can read with the Read
-tool.
+type-check it. The preferred path is `iced_test` integration snapshots
+under `resonance-app/tests/`: deterministic, runs in CI, and exercises
+the real `view()` / `update()` paths. Tests build the app state via
+`resonance_app::demo::seed_demo_content(&mut app)` — the same fixture
+that the (now-removed) `--demo` CLI flag used to invoke at runtime.
 
-**Canonical recipe** — adapt the `--tab` value and crop region to the
-view you changed:
+**Canonical recipe** — a snapshot test file under `tests/`:
+
+```rust
+// resonance-app/tests/mixer_snapshot.rs
+use iced::Size;
+use iced_test::simulator::Simulator;
+use resonance_app::{demo, theme, Resonance};
+
+#[test]
+fn mixer_inspector_renders() {
+    let (mut app, _) = Resonance::new();
+    demo::seed_demo_content(&mut app);
+    // (drive scroll / selection messages via app.update(...) here)
+
+    let mut ui = Simulator::with_size(
+        Default::default(),
+        Size::new(1440.0, 900.0),
+        app.view(),
+    );
+    let snap = ui.snapshot(&theme::resonance_theme()).expect("snapshot");
+    assert!(snap
+        .matches_image("tests/snapshots/mixer_inspector.png")
+        .unwrap());
+}
+```
+
+`matches_image()` writes the golden PNG on first run and diffs on
+subsequent runs — commit the goldens under
+`resonance-app/tests/snapshots/`. Run with
+`cargo test -p resonance-app --test <name>`. **Read each golden with the
+Read tool** so you visually confirm what the test is locking in.
+
+**Fallback: live window via `spectacle`.** Only when you need to verify
+the production wgpu/Wayland renderer (font hinting, HiDPI, GPU pipeline)
+— `iced_test` uses an offscreen software path. The app no longer has a
+`--demo` runtime flag; for live inspection you boot an empty project
+and either click through the startup modal or load a real project file.
 
 ```bash
 mkdir -p /tmp/resonance-shots
-./target/debug/resonance-app --tab mixer --demo >/dev/null 2>&1 &
+./target/debug/resonance-app --tab mixer >/dev/null 2>&1 &
 APP_PID=$!
 sleep 4                                # let wgpu/init settle before grabbing
 spectacle --activewindow --background \
@@ -325,41 +358,16 @@ magick /tmp/resonance-shots/mixer.png -resize 1500 \
   /tmp/resonance-shots/mixer-display.png
 ```
 
-Then **read the PNG with the Read tool** — Claude Code renders the image
-inline so you can inspect alignment, spacing, color, and overlap with
-your own eyes. Don't skip this step; type-checking alone has no opinion
-on whether a strip is the right height or whether two elements overlap.
-
-**Cropping for detail.** When a small region matters (a single mixer
-strip, the transport bar, a track header), follow the screenshot with a
-crop so the detail isn't lost in the resize:
-
-```bash
-magick /tmp/resonance-shots/mixer.png -crop 800x500+200+200 \
-  /tmp/resonance-shots/strip-detail.png
-```
-
-The geometry is `WIDTHxHEIGHT+X+Y` in source-image pixels (before
-resize). Skip the `-resize` step on detail crops so you see the native
-resolution.
-
-**Multi-tab checks.** If a change touches shared chrome (toolbar,
-transport, theme), capture all three tabs in the same loop — replace
-`mixer` with `arrange` / `compose` and rerun. Each tab is a separate
-process invocation; don't try to switch tabs inside a single run.
-
-After the screenshot pass:
+After the snapshot pass:
 
 1. `cargo build -p resonance-app` — must be warning-free for code you touched.
-2. Screenshot the affected view(s) per the recipe above and read the
-   image. Confirm alignment, spacing, hover/pressed/disabled states
-   (use `--tab` plus the demo seed to land on a state that exercises
-   them — e.g. armed tracks are pre-seeded), and behaviour when the
-   underlying state is empty.
-3. If you added/changed an icon glyph, re-verify the glyph bounds match
-   the y=192 project center (see §2) — and screenshot the row that uses
+2. `cargo test -p resonance-app --test <your snapshot file>` — must pass.
+3. Read the golden PNG(s) with the Read tool and confirm alignment,
+   spacing, and hover/pressed/disabled states.
+4. If you added/changed an icon glyph, re-verify the glyph bounds match
+   the y=192 project center (see §2) — and snapshot the row that uses
    it to confirm vertical alignment with neighbouring text.
-4. If you added a scrollable/scrollbarred area, confirm the scrollbar
+5. If you added a scrollable/scrollbarred area, confirm the scrollbar
    hides when content fits and that wheel/drag both work.
 
 ## Best Practices Summary
@@ -376,7 +384,7 @@ After the screenshot pass:
 - **New custom glyphs**: center on y=192, counter-clockwise winding, match ~448-unit vertical span, rename never — only `tools/add_metronome_glyph.py`-style scripts touch the font.
 - **Disabled controls**: drop `.on_press(...)` and dim the text color. No popups asking "please do X first".
 - **Don't duplicate master controls across tabs**: the mixer owns the master fader; the transport must not. Analogous: zoom lives on the timeline, not the transport.
-- **Always screenshot-verify**: never report UI work complete on a `cargo check` alone — boot with `--demo --tab <view>`, grab with `spectacle --activewindow`, read the PNG. See §10.
+- **Always snapshot-verify**: never report UI work complete on a `cargo check` alone — write an `iced_test` snapshot under `resonance-app/tests/` that seeds `demo::seed_demo_content`, runs the view, and commits a golden PNG. Read the golden with the Read tool. See §10.
 - **Per-frame allocations are the silent perf killer**: iced rebuilds the entire widget tree every frame. See §11 for the rules — cached pick-list options on `view_caches`, fixed-height strips, canvas-cached meters, and `iced::widget::lazy` for non-live regions.
 
 ## 11. View performance — what to do (and not do) inside `view()`

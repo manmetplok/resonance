@@ -127,12 +127,17 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             let p = temp.param(i);
             let clap_id = p.clap_id();
 
-            // Check for hash collisions
+            // Check for hash collisions. Panicking across the C FFI
+            // boundary into a CLAP host is undefined behaviour
+            // (`extern "C"`, not `"C-unwind"`); print a diagnostic
+            // and return a PluginError instead so the host reports
+            // a clean load failure.
             if let Some(&existing_slot) = clap_id_to_slot.get(&clap_id) {
-                panic!(
-                    "CLAP param ID collision: params '{}' (slot {}) and '{}' (slot {}) both hash to {}",
+                eprintln!(
+                    "resonance-plugin: CLAP param ID collision — params '{}' (slot {}) and '{}' (slot {}) both hash to {}",
                     param_metas[existing_slot].str_id, existing_slot, p.id(), i, clap_id
                 );
+                return Err(PluginError::Message("CLAP param ID hash collision (see stderr)"));
             }
 
             param_metas.push(ParamMeta {
@@ -149,9 +154,19 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             clap_id_to_slot.insert(clap_id, i);
         }
 
+        // Pre-compute the indices of non-hidden params so `get_info`
+        // doesn't have to filter+collect on every host query.
+        let visible_indices: Vec<usize> = param_metas
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| !m.is_hidden)
+            .map(|(i, _)| i)
+            .collect();
+
         Ok(ClapShared {
             host,
             param_metas,
+            visible_indices,
             param_values,
             clap_id_to_slot,
             input_channels: P::INPUT_CHANNELS,

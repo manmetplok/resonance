@@ -4,7 +4,7 @@
 use iced::widget::{button, column, container, mouse_area, opaque, pick_list, row, stack, text, Space};
 use iced::{alignment, Element, Length};
 
-use resonance_audio::midi_hardware::MidiDeviceInfo;
+use resonance_audio::MidiDeviceInfo;
 
 use crate::message::*;
 use crate::theme::{self, fa};

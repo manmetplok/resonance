@@ -3,7 +3,7 @@
 //! shape to render without leaking the underlying enum representation
 //! into the UI.
 
-use resonance_audio::midi_hardware::MidiDeviceInfo;
+use resonance_audio::MidiDeviceInfo;
 use resonance_audio::types::*;
 
 /// Which container a plugin slot belongs to. Used so `view_plugin_slot_row`

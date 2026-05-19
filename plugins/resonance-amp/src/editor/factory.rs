@@ -82,6 +82,7 @@ impl EditorFactory for AmpEditorFactory {
             app,
             EditorOptions {
                 title: "Resonance Amp".to_string(),
+                app_id: "com.resonance.amp".to_string(),
                 initial_size: INITIAL_SIZE,
                 min_size: MIN_SIZE,
                 resizable: true,

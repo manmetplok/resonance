@@ -5,8 +5,19 @@
 //!
 //! Mono toggle, FX bypass, and bounce-in-place stay on the mixer strip
 //! where channel-strip controls live; the Arrange header is for arranging.
+//!
+//! The header column mirrors the timeline canvas's vertical layout
+//! row-for-row so each header stays glued to its lane during vertical
+//! scrolling:
+//!
+//! - ruler row (`RULER_HEIGHT`)
+//! - section-band placeholder (`SECTION_BAND_HEIGHT` when sections exist)
+//! - global tracks area (`2 * GLOBAL_TRACK_ROW_HEIGHT` when expanded)
+//! - lane area: clipped, with `scroll_offset_y` applied as a negative
+//!   top inset so the partial top row scrolls smoothly instead of
+//!   snapping to row boundaries.
 use iced::widget::{button, column, container, mouse_area, pick_list, row, text, Space};
-use iced::{alignment, Color, Element, Length};
+use iced::{alignment, Color, Element, Length, Padding};
 
 use crate::message::*;
 use crate::state::{self, TrackState};
@@ -37,6 +48,9 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     r.viewport.global_tracks_expanded.hash(&mut h);
     r.viewport.scroll_offset_y.to_bits().hash(&mut h);
+    // Whether the section band exists changes the fixed-header height
+    // of the column, so it must invalidate the lazy cache.
+    (!r.compose.placements.is_empty()).hash(&mut h);
     r.interaction.selected_track.hash(&mut h);
     r.transport.time_sig_num.hash(&mut h);
     r.transport.time_sig_den.hash(&mut h);
@@ -127,6 +141,25 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
             }),
     );
 
+    // Section-band placeholder — the timeline canvas reserves
+    // `SECTION_BAND_HEIGHT` under the ruler when at least one compose
+    // section is placed (see `TimelineCanvas::section_band_height`).
+    // The header column has no section pills of its own, so we render
+    // a blank strip of the same height to keep the lane area's Y
+    // origin synced with the canvas. Without this, every track header
+    // drifts up by 22 px from its lane whenever sections exist.
+    if !r.compose.placements.is_empty() {
+        headers = headers.push(
+            container(Space::new().width(Length::Fill))
+                .width(Length::Fill)
+                .height(theme::SECTION_BAND_HEIGHT)
+                .style(|_theme| container::Style {
+                    background: Some(iced::Background::Color(theme::BG_1)),
+                    ..Default::default()
+                }),
+        );
+    }
+
     // Global tracks area (tempo + time signature) — visible when expanded
     if expanded {
         let row_h = theme::GLOBAL_TRACK_ROW_HEIGHT;
@@ -168,23 +201,40 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
         .filter(|t| t.sub_track.is_none())
         .collect();
 
-    let visible_start = r.viewport.scroll_offset_y / theme::TRACK_HEIGHT;
-    let first_visible = visible_start.floor() as usize;
-    let top_pad = first_visible as f32 * theme::TRACK_HEIGHT - r.viewport.scroll_offset_y;
-    if first_visible > 0 {
-        headers = headers.push(Space::new().width(Length::Fill).height((first_visible as f32 * theme::TRACK_HEIGHT - r.viewport.scroll_offset_y).max(0.0)));
-    } else if r.viewport.scroll_offset_y > 0.0 {
-        headers = headers.push(Space::new().width(Length::Fill).height(top_pad.max(0.0)));
-    }
+    // Build the lane area as its own clipped sub-container. The canvas
+    // applies `scroll_offset_y` as a fractional pixel offset to track
+    // lanes; the column has to do the same or rows snap to integer
+    // multiples of `TRACK_HEIGHT` and drift on sub-row scroll.
+    //
+    // Strategy: skip tracks fully above the viewport (perf), then
+    // shift the remaining column up by the sub-row remainder using a
+    // negative top padding. The outer container's `clip(true)` hides
+    // the partial row that bleeds above the lane origin.
+    let scroll_y = r.viewport.scroll_offset_y.max(0.0);
+    let first_visible = (scroll_y / theme::TRACK_HEIGHT).floor() as usize;
+    let frac_offset = scroll_y - first_visible as f32 * theme::TRACK_HEIGHT;
 
+    let mut lane_col = column![].spacing(0);
     let selected_track = r.interaction.selected_track;
     for (i, track) in sorted_tracks.iter().enumerate() {
         if i < first_visible {
             continue;
         }
         let is_selected = selected_track == Some(track.id);
-        headers = headers.push(view_track_header(r, track, is_selected));
+        lane_col = lane_col.push(view_track_header(r, track, is_selected));
     }
+
+    let lane_area = container(lane_col)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .clip(true)
+        .padding(Padding {
+            top: -frac_offset,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        });
+    headers = headers.push(lane_area);
 
     container(headers)
         .width(theme::TRACK_HEADER_WIDTH)
@@ -334,7 +384,11 @@ fn view_track_header(
             ..Default::default()
         });
 
-    let cell = row![stripe, body_with_bg].height(theme::TRACK_HEIGHT);
+    // The cell is `TRACK_HEIGHT - 1` so that `cell + hairline` together
+    // sum to exactly `TRACK_HEIGHT` — matching the canvas's per-row
+    // pitch. Without this trim, every column row was 1 px taller than
+    // the canvas row and headers drifted down 1 px per track.
+    let cell = row![stripe, body_with_bg].height(theme::TRACK_HEIGHT - 1.0);
 
     // 1px hairline below each cell so rows separate without a heavy border.
     let hairline = container(Space::new().width(Length::Fill))

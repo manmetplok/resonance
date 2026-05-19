@@ -1,4 +1,4 @@
-use resonance_audio::decode::{linear_resample, StreamingLinearResampler};
+use resonance_audio::{linear_resample, StreamingLinearResampler};
 
 fn sine_44_1k(frames: usize) -> Vec<f32> {
     let mut v = Vec::with_capacity(frames * 2);

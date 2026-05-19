@@ -74,7 +74,8 @@ pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
         .and_then(|name| r.input_devices.iter().find(|d| &d.name == name))
         .cloned();
     let device_picker = pick_list(
-        r.input_devices.clone(),
+        // Cached refcounted slice — see inspector.rs comment.
+        r.view_caches.input_devices.clone(),
         selected_device.clone(),
         |device: InputDeviceInfo| {
             Message::Track(TrackMessage::Bounce(BounceMessage::PickDevice(Some(device.name))))

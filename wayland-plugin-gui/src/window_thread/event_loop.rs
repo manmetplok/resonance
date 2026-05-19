@@ -73,7 +73,7 @@ impl EditorThread {
         let surface = compositor.create_surface(&qh);
         let window = xdg_shell.create_window(surface, WindowDecorations::ServerDefault, &qh);
         window.set_title(&options.title);
-        window.set_app_id("com.resonance.wavetable");
+        window.set_app_id(&options.app_id);
         window.set_min_size(Some(options.min_size));
         window.commit();
 

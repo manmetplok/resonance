@@ -79,6 +79,7 @@ impl EditorFactory for IrEditorFactory {
             app,
             EditorOptions {
                 title: "Resonance IR".to_string(),
+                app_id: "com.resonance.ir".to_string(),
                 initial_size: INITIAL_SIZE,
                 min_size: MIN_SIZE,
                 resizable: true,

@@ -92,8 +92,17 @@ pub(crate) fn to_wav(
 
     let mut pos = render_start;
     let mut write_error = false;
+    let mut cancelled = false;
     let everything = |_: TrackId| true;
     while pos < render_end && !write_error {
+        // Cooperative cancel — `AudioCommand::CancelBounce` flips this
+        // flag from the engine thread. Checked once per chunk so the
+        // UI's modal Cancel button releases the bounce promptly
+        // (chunks are ~tens of ms each).
+        if shared.bounce_cancel.load(Ordering::Relaxed) {
+            cancelled = true;
+            break;
+        }
         let frames = ((render_end - pos) as usize).min(BOUNCE_CHUNK);
         render_chunk(&ctx, &mut scratch, pos, frames, &everything, true, true);
 
@@ -108,7 +117,15 @@ pub(crate) fn to_wav(
         pos += frames as u64;
     }
 
-    if !write_error {
+    if cancelled {
+        // Drop the partial WAV — we don't want a half-rendered file
+        // sitting next to its expected output. Reset the cancel flag
+        // so the next bounce starts fresh.
+        drop(writer);
+        let _ = std::fs::remove_file(&path);
+        shared.bounce_cancel.store(false, Ordering::Relaxed);
+        let _ = event_tx.send(AudioEvent::BounceError("Bounce cancelled".into()));
+    } else if !write_error {
         match writer.finalize() {
             Ok(()) => {
                 let _ = event_tx.send(AudioEvent::BounceComplete { path });

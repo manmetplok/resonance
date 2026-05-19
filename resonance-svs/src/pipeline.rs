@@ -92,8 +92,16 @@ pub fn render_segments(segments: &[DsSegment], args: &PipelineArgs) -> Result<Re
             if depth >= 1.0 {
                 depth = acoustic_cfg.max_depth;
             }
-        } else if depth > acoustic_cfg.max_depth {
-            depth = acoustic_cfg.max_depth;
+        } else {
+            // Cap at max_depth, then quantise to a multiple of `speedup`
+            // so the PNDM step count comes out as an integer. The
+            // quantisation MUST run regardless of whether `depth >
+            // max_depth` — otherwise a request like `--depth 350
+            // --speedup 100` with `max_depth = 1000` leaves depth at
+            // 350, violating the documented `depth % speedup == 0`
+            // invariant and producing the wrong PNDM step count for
+            // older voicebanks.
+            depth = depth.min(acoustic_cfg.max_depth);
             depth = (depth / speedup as f32).floor() * speedup as f32;
         }
     }
@@ -318,9 +326,28 @@ fn preprocess_acoustic(
 }
 
 fn phonemes_to_tokens(map: &HashMap<String, i64>, phonemes: &[String]) -> Vec<i64> {
+    // Unknown phonemes fall back to token 0 (typically `<PAD>` / `AP`),
+    // which silently corrupts the rendered segment if the caller's g2p
+    // emits a symbol the voicebank doesn't have. Log the first few
+    // unknowns per call so the issue isn't completely silent — once
+    // per phoneme is enough to identify a missing mapping without
+    // flooding the logs.
+    let mut warned: std::collections::HashSet<&str> = std::collections::HashSet::new();
     phonemes
         .iter()
-        .map(|ph| *map.get(ph).unwrap_or(&0))
+        .map(|ph| {
+            if let Some(&tok) = map.get(ph) {
+                tok
+            } else {
+                if warned.insert(ph.as_str()) {
+                    eprintln!(
+                        "resonance-svs: phoneme {:?} not in voicebank dictionary — substituting token 0",
+                        ph
+                    );
+                }
+                0
+            }
+        })
         .collect()
 }
 

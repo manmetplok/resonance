@@ -38,6 +38,21 @@ use master::{apply_master_fx_chain, apply_master_volume_and_peaks};
 use monitor::process_monitor_track;
 use track_block::render_timeline_block;
 
+/// One-shot warning when cpal requests a buffer larger than our
+/// pre-allocated scratch. Latches via `AtomicBool` so the audio thread
+/// doesn't flood stderr; subsequent oversize buffers are silently
+/// clamped (audio plays slower than real-time, but does not desync).
+fn log_oversize_buffer(requested: usize, scratch: usize) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        eprintln!(
+            "audio: cpal requested buf={} frames but scratch is {} — clamping; audio will run slow",
+            requested, scratch
+        );
+    }
+}
+
 /// Snapshot of the tempo map taken once per audio buffer. Held while
 /// the buffer renders so the bar/beat table stays stable across the
 /// per-track render and the metronome pass.
@@ -86,8 +101,18 @@ pub(crate) fn mix_audio(
     // Zero the output buffer
     data.fill(0.0);
 
-    let output_frames = data.len() / channels;
-    let frames = output_frames.min(buf_frames);
+    let raw_output_frames = data.len() / channels;
+    let frames = raw_output_frames.min(buf_frames);
+    // If cpal hands us a buffer larger than our scratch can hold (only
+    // possible under the BufferSize::Default fallback path), clamp every
+    // downstream calculation to what we can actually render. Advancing
+    // by `raw_output_frames` while only rendering `frames` would race
+    // the playhead past the audio and silently miss loop seams. The
+    // OS-side tail of the buffer stays at zero from `data.fill(0.0)`.
+    if raw_output_frames > buf_frames {
+        log_oversize_buffer(raw_output_frames, buf_frames);
+    }
+    let output_frames = frames;
 
     // Snapshot tempo once per block. Hold the read guard so the bar
     // table is available for tempo-map-aware MIDI tick→sample conversion

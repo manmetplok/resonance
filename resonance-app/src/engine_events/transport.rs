@@ -1,6 +1,6 @@
 //! Transport / device / clock events from the engine.
 
-use resonance_audio::midi_hardware::MidiDeviceInfo;
+use resonance_audio::MidiDeviceInfo;
 use resonance_audio::types::*;
 
 use crate::Resonance;
@@ -25,6 +25,10 @@ pub(super) fn input_devices_listed(
 ) {
     r.input_devices = devices;
     r.default_input_device_name = default_name;
+    // Refresh the cached `Rc<[InputDeviceInfo]>` used by the mixer
+    // inspector and bounce-dialog pickers so they stop cloning the
+    // full Vec every frame.
+    r.view_caches.rebuild_input_devices(&r.input_devices);
 }
 
 pub(super) fn recording_started(r: &mut Resonance, start_sample: SamplePos) {

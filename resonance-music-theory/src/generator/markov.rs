@@ -82,6 +82,14 @@ pub fn generate(
     let order1 = marginalize_to_order1(table);
     let all_degrees = collect_all_degrees(table);
 
+    // A user-registered table with no transitions would otherwise drive
+    // `weighted_sample` past its assertions and panic in release. The
+    // registry is open (third parties register via `register`), so this
+    // is reachable through the public API.
+    if all_degrees.is_empty() {
+        return Err(GenerateError::EmptyTable(table_id.to_string()));
+    }
+
     // Use the spec's order as the effective conditioning length, which
     // may be shorter than the table's order (forcing back-off) or longer
     // (extra history is simply ignored).

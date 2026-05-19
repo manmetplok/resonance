@@ -27,7 +27,7 @@ use iced::widget::{button, column, container, row, stack, text, Space};
 use iced::{alignment, Element, Length};
 
 impl crate::Resonance {
-    pub(crate) fn view(&self) -> Element<'_, Message> {
+    pub fn view(&self) -> Element<'_, Message> {
         let transport = transport::view_transport(self);
         let main_area = match self.view_mode {
             ViewMode::Arrange => self.view_main_area(),

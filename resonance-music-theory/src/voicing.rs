@@ -10,13 +10,15 @@ use crate::chord::Chord;
 use crate::pitch::PitchClass;
 
 /// Smallest MIDI note `>= floor` whose pitch class matches `pc`. The
-/// result is always in `[floor, floor + 11]` so chord voicings stay
-/// tight against their floor.
+/// result is always in `[floor, floor + 11]` and is clamped to a
+/// legal MIDI key (≤ 127) so callers that feed the result straight
+/// into `GeneratedNote::note` (e.g. `derive_bass`, `motif_bass`,
+/// `bass`) can never emit an illegal note.
 pub fn nearest_midi_above(pc: PitchClass, floor: u8) -> u8 {
     let floor_pc = floor % 12;
     let pc_val = pc.to_semitone();
     let diff = (pc_val + 12 - floor_pc) % 12;
-    floor.saturating_add(diff)
+    floor.saturating_add(diff).min(127)
 }
 
 /// The MIDI note closest to `target` (in either direction) whose pitch
@@ -137,19 +139,68 @@ pub fn voice_lead(prev: &[u8], next_pcs: &[PitchClass], register: (u8, u8)) -> V
 }
 
 /// Fallback used when the brute-force search space is too big. Assigns
-/// each voice its own nearest pitch class greedily. Doesn't guarantee
-/// optimality but always terminates.
-fn greedy_voice_lead(prev: &[u8], candidates: &[Vec<u8>], _n_pcs: usize) -> Vec<u8> {
-    let mut voicing: Vec<u8> = prev
+/// each voice its own nearest pitch class greedily, then patches the
+/// result so every chord tone appears at least once whenever we have
+/// at least as many voices as pitch classes — the same `need_all_pcs`
+/// invariant the brute-force path enforces.
+fn greedy_voice_lead(prev: &[u8], candidates: &[Vec<u8>], n_pcs: usize) -> Vec<u8> {
+    // 1. Per-voice greedy pick (and remember which PC index was chosen).
+    let mut picks: Vec<(usize, u8)> = prev
         .iter()
         .enumerate()
         .map(|(v, &p)| {
-            *candidates[v]
+            let row = &candidates[v];
+            let (pc_idx, &midi) = row
                 .iter()
-                .min_by_key(|&&c| (c as i32 - p as i32).abs())
-                .unwrap()
+                .enumerate()
+                .min_by_key(|(_, &c)| (c as i32 - p as i32).abs())
+                .expect("candidates row is non-empty");
+            (pc_idx, midi)
         })
         .collect();
+
+    // 2. If we have enough voices to cover every PC, substitute one of
+    // the doubled voices with each missing PC. We pick the voice whose
+    // greedy choice is cheapest to swap (smallest cost delta vs.
+    // dropping its duplicate role) so the patch barely perturbs the
+    // optimum the greedy pass found.
+    if prev.len() >= n_pcs {
+        let mut used = vec![false; n_pcs];
+        for &(pc_idx, _) in &picks {
+            if pc_idx < n_pcs {
+                used[pc_idx] = true;
+            }
+        }
+        for missing in (0..n_pcs).filter(|&i| !used[i]) {
+            // Find the voice that has a duplicate role (its pc_idx is
+            // also held by another voice) and whose row even has the
+            // missing PC option. Among those, pick the one with the
+            // smallest distance increase.
+            let mut best: Option<(usize, i32)> = None;
+            for (v, &(pc_idx, midi)) in picks.iter().enumerate() {
+                let duplicate = picks
+                    .iter()
+                    .enumerate()
+                    .any(|(o, &(opc, _))| o != v && opc == pc_idx);
+                if !duplicate {
+                    continue;
+                }
+                if let Some(&alt) = candidates[v].get(missing) {
+                    let delta = (alt as i32 - prev[v] as i32).abs()
+                        - (midi as i32 - prev[v] as i32).abs();
+                    if best.map_or(true, |(_, d)| delta < d) {
+                        best = Some((v, delta));
+                    }
+                }
+            }
+            if let Some((v, _)) = best {
+                let alt = candidates[v][missing];
+                picks[v] = (missing, alt);
+            }
+        }
+    }
+
+    let mut voicing: Vec<u8> = picks.into_iter().map(|(_, m)| m).collect();
     voicing.sort_unstable();
     voicing
 }

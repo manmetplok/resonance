@@ -443,4 +443,10 @@ pub enum AudioCommand {
     /// Driven by the GUI's per-frame VU update; replaces the older
     /// direct getter that contended with the mixer's RwLocks.
     PollPeaks,
+    /// Break the engine-thread loop and let the thread exit cleanly.
+    /// Required because the engine thread holds its own `Sender` clone
+    /// (`cmd_tx_retry`) for the retry path, which prevents the channel
+    /// from ever returning `Disconnected` even after every external
+    /// sender has dropped. Sent by `AudioEngine::shutdown` / `Drop`.
+    ShutDown,
 }

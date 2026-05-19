@@ -41,6 +41,11 @@ pub struct DrumSampler {
     /// sender; when the sampler drops, the janitor's channel disconnects
     /// and the janitor thread exits cleanly.
     janitor_sender: Sender<Vec<LoadedPad>>,
+    /// Last block's master volume snapshot. Used to interpolate from
+    /// the previous block's value to the current one across the block
+    /// so automation tweaks don't click. Initialized to 1.0 so the
+    /// first block starts at unity gain.
+    prev_master_volume: f32,
 }
 
 impl DrumSampler {
@@ -55,6 +60,7 @@ impl DrumSampler {
             last_rr: None,
             kit_receiver,
             janitor_sender,
+            prev_master_volume: 1.0,
         }
     }
 
@@ -369,21 +375,36 @@ impl DrumSampler {
             }
         }
 
-        // Apply master volume in-place over every port. Folded into the
-        // sampler so `lib.rs` stays a thin plugin shim; the gain is a
-        // single snapshot per block (no per-sample smoothing) which is
-        // fine for a drum bus output.
+        // Apply master volume in-place over every port. Linearly
+        // interpolate from the previous block's value to the current
+        // one across the block so automation tweaks and user fader
+        // moves don't click. With small block sizes (≤512 frames at
+        // typical SR) per-sample lerp is essentially free.
         let master_vol = params.master_volume.value();
-        if (master_vol - 1.0).abs() > f32::EPSILON {
+        let prev = self.prev_master_volume;
+        if (prev - 1.0).abs() > f32::EPSILON
+            || (master_vol - 1.0).abs() > f32::EPSILON
+            || (master_vol - prev).abs() > f32::EPSILON
+        {
+            let step = if frames > 0 {
+                (master_vol - prev) / frames as f32
+            } else {
+                0.0
+            };
             for port in outputs.iter_mut() {
+                let mut g = prev;
                 for s in port.left[..frames].iter_mut() {
-                    *s *= master_vol;
+                    *s *= g;
+                    g += step;
                 }
+                let mut g = prev;
                 for s in port.right[..frames].iter_mut() {
-                    *s *= master_vol;
+                    *s *= g;
+                    g += step;
                 }
             }
         }
+        self.prev_master_volume = master_vol;
     }
 
     /// Kill all active voices immediately.

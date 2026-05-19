@@ -16,3 +16,6 @@ serde_json.workspace = true
 dirs.workspace = true
 bytemuck.workspace = true
 printpdf = "0.9"
+
+[dev-dependencies]
+iced_test = "0.14"

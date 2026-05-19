@@ -1,20 +1,42 @@
-pub mod clap_host;
-pub mod decode;
+// Per ARCHITECTURE.md the only public surface is `AudioEngine` +
+// `AudioCommand` / `AudioEvent` (and the value types those carry).
+// Modules that were previously `pub` are now `pub(crate)`. The handful
+// of items the app legitimately needs are re-exported below:
+// - `MidiDeviceInfo`            (replaces `pub use midi_hardware::*`)
+// - `DEFAULT_HISTORY_CAPACITY`  (replaces `pub use limits::*`)
+// - `linear_resample` / `StreamingLinearResampler`  (decode tools used
+//   by the app's vocal-SVS post-processing path)
+// - `midi_io` stays public — it's a small, stable utility surface for
+//   reading/writing .mid files used by project save/load.
+pub(crate) mod clap_host;
+pub(crate) mod decode;
 mod engine;
 mod input_handle;
 #[cfg(target_os = "linux")]
 mod input_pipewire;
-pub mod limits;
-pub mod midi_clock;
-pub mod midi_hardware;
+mod limits;
+pub(crate) mod midi_clock;
+mod midi_hardware;
 pub mod midi_io;
 mod mixer;
 mod platform;
 mod recording;
 pub mod types;
 
+pub use decode::{linear_resample, StreamingLinearResampler};
 pub use engine::{transcode_to_wav, AudioEngine};
+pub use limits::DEFAULT_HISTORY_CAPACITY;
+pub use midi_hardware::MidiDeviceInfo;
 pub use types::*;
+
+/// Test surfaces for engine internals. Re-exported under a
+/// `__test_support` module so integration tests can probe internals
+/// without forcing the parent module public.
+#[doc(hidden)]
+pub mod __test_support {
+    pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
+    pub use crate::midi_hardware::{parse_live_event_for_test, LiveMidiEvent};
+}
 
 /// Test surface for the hardware-MIDI loop-wrap rewind logic. Exposed
 /// so integration tests can verify the discontinuity classification

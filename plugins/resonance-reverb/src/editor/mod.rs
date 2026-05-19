@@ -58,6 +58,7 @@ impl EditorFactory for ReverbEditorFactory {
             app,
             EditorOptions {
                 title: "Resonance Reverb".to_string(),
+                app_id: "com.resonance.reverb".to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
                 min_size: (720, 560),
                 resizable: true,

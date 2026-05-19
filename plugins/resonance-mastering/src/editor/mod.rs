@@ -59,6 +59,7 @@ impl EditorFactory for MasteringEditorFactory {
             app,
             EditorOptions {
                 title: "Resonance Mastering".to_string(),
+                app_id: "com.resonance.mastering".to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
                 min_size: (1000, 620),
                 resizable: true,

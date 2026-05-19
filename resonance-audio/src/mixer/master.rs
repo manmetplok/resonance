@@ -78,6 +78,14 @@ pub(super) fn apply_master_fx_chain(
     }
 }
 
+/// Replace non-finite samples (NaN, ±Inf) with 0.0 before hard-clipping.
+/// Keeps a misbehaving plugin's output from poisoning cpal and the
+/// bit-punned peak meters.
+#[inline(always)]
+fn sanitize_sample(v: f32) -> f32 {
+    if v.is_finite() { v.clamp(-1.0, 1.0) } else { 0.0 }
+}
+
 /// Apply master volume, hard clip at [-1.0, 1.0], and update master peak level atomics.
 #[inline]
 pub(super) fn apply_master_volume_and_peaks(data: &mut [f32], channels: usize, shared: &SharedState) {
@@ -91,19 +99,28 @@ pub(super) fn apply_master_volume_and_peaks(data: &mut [f32], channels: usize, s
     // ~1024 frames per callback this is a noticeable win on the
     // master pass because the optimiser can now SIMD the multiply +
     // clamp + abs.
+    //
+    // NaN/Inf guard: a misbehaving plugin upstream can emit a
+    // non-finite sample. `f32::clamp(NaN)` returns NaN; without this
+    // guard the value would be written straight to cpal (audible pop
+    // / silenced output) and would also corrupt the peak-meter
+    // bit-punning invariant that requires non-negative non-NaN.
     if channels >= 2 {
         for f in 0..output_frames {
             let idx = f * channels;
-            data[idx] = (data[idx] * master_vol).clamp(-1.0, 1.0);
-            data[idx + 1] = (data[idx + 1] * master_vol).clamp(-1.0, 1.0);
-            master_peak_l = master_peak_l.max(data[idx].abs());
-            master_peak_r = master_peak_r.max(data[idx + 1].abs());
+            let l = sanitize_sample(data[idx] * master_vol);
+            let r = sanitize_sample(data[idx + 1] * master_vol);
+            data[idx] = l;
+            data[idx + 1] = r;
+            master_peak_l = master_peak_l.max(l.abs());
+            master_peak_r = master_peak_r.max(r.abs());
         }
     } else {
         for f in 0..output_frames {
             let idx = f * channels;
-            data[idx] = (data[idx] * master_vol).clamp(-1.0, 1.0);
-            master_peak_l = master_peak_l.max(data[idx].abs());
+            let s = sanitize_sample(data[idx] * master_vol);
+            data[idx] = s;
+            master_peak_l = master_peak_l.max(s.abs());
         }
         master_peak_r = master_peak_l;
     }

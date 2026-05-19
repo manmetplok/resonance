@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use resonance_audio::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
+use resonance_audio::__test_support::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
 
 #[test]
 fn parses_clock_pulse() {

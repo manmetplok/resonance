@@ -47,6 +47,7 @@ impl EditorFactory for EqEditorFactory {
             app,
             EditorOptions {
                 title: "Resonance EQ".to_string(),
+                app_id: "com.resonance.eq".to_string(),
                 initial_size: (960, 540),
                 min_size: (720, 420),
                 resizable: true,

@@ -105,8 +105,7 @@ pub(super) fn resample_to(
     engine_sample_rate: u32,
 ) -> (Vec<f32>, u32) {
     if model_sr != engine_sample_rate {
-        let resampled =
-            resonance_audio::decode::linear_resample(&stereo, model_sr, engine_sample_rate);
+        let resampled = resonance_audio::linear_resample(&stereo, model_sr, engine_sample_rate);
         (resampled, engine_sample_rate)
     } else {
         (stereo, model_sr)

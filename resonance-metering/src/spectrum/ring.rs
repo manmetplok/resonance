@@ -65,9 +65,15 @@ impl SpscRing {
             return false;
         }
         // Safety: producer is the only thread writing to the buffer.
+        // We use raw pointer arithmetic instead of constructing a
+        // `&mut [f32]`, because the consumer may simultaneously hold a
+        // `&[f32]` to a *different* index in the same allocation. Even
+        // though the indices don't overlap, materialising both `&` and
+        // `&mut` to the same allocation through `UnsafeCell::get()` is
+        // a Stacked/Tree Borrows violation that Miri flags.
         unsafe {
-            let buf = &mut *self.buffer.get();
-            buf[tail & self.mask] = sample;
+            let ptr = (*self.buffer.get()).as_mut_ptr();
+            ptr.add(tail & self.mask).write(sample);
         }
         self.tail.store(tail.wrapping_add(1), Ordering::Release);
         true
@@ -98,10 +104,15 @@ impl SpscRing {
             return 0;
         }
         // Safety: consumer is the only thread reading from the buffer.
+        // Raw pointer reads here mirror the producer's raw-pointer write
+        // path — see the SAFETY note in `push`. The producer may
+        // concurrently write a disjoint index in the same allocation;
+        // constructing a `&[f32]` here would alias an exclusive write
+        // borrow through Tree Borrows.
         unsafe {
-            let buf = &*self.buffer.get();
+            let ptr = (*self.buffer.get()).as_ptr();
             for i in 0..n {
-                dst[i] = buf[head.wrapping_add(i) & self.mask];
+                dst[i] = ptr.add(head.wrapping_add(i) & self.mask).read();
             }
         }
         self.head.store(head.wrapping_add(n), Ordering::Release);

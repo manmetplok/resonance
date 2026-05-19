@@ -254,8 +254,14 @@ impl ClapInstance {
     }
 
     /// Queue note-off for all 128 MIDI notes (to clear stuck notes).
+    /// Honors `MAX_PENDING_NOTES` so this can't reallocate `pending_notes`
+    /// when called from the audio thread (e.g. loop-seam panic during a
+    /// live MIDI burst). Drops trailing note-offs if the queue is already
+    /// near capacity; the next block's queue drain will pick them up.
     pub fn all_notes_off(&mut self) {
-        for key in 0..128u8 {
+        let remaining = crate::limits::MAX_PENDING_NOTES.saturating_sub(self.pending_notes.len());
+        let count = remaining.min(128);
+        for key in 0..count as u8 {
             self.pending_notes.push((false, key, 0.0, 0));
         }
     }

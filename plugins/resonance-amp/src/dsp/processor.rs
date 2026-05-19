@@ -136,7 +136,14 @@ impl AmpProcessor {
                         } else {
                             1.0
                         };
-                        let input = dry_l * input_gain;
+                        // The NAM model is mono-by-design: a single
+                        // tube/amp captured at one mic position. Sum
+                        // L+R into mono before driving it so a stereo
+                        // input contributes both channels; previously
+                        // we dropped R entirely (and read it only for
+                        // peak metering), making the plugin act as
+                        // an L-only effect for stereo signals.
+                        let input = 0.5 * (dry_l + dry_r) * input_gain;
                         let raw = model.process_sample(input) * output_gain * fade_gain;
                         let out_l = self.dc_l.process(raw);
                         let out_r = self.dc_r.process(raw);
@@ -198,7 +205,8 @@ impl AmpProcessor {
 
                 let (out_l, out_r) = match &mut self.active_model {
                     Some(model) => {
-                        let input = dry_l * input_gain;
+                        // L+R sum into mono — see fast path above.
+                        let input = 0.5 * (dry_l + dry_r) * input_gain;
                         let raw = model.process_sample(input) * output_gain * fade_gain;
                         (self.dc_l.process(raw), self.dc_r.process(raw))
                     }

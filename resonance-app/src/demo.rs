@@ -1,6 +1,11 @@
-//! Demo-content seeding. Invoked by `--demo` at startup; populates the
-//! GUI-side state with tracks, busses, clips, and a Compose section so
-//! the views render for screenshots without needing a live engine.
+//! Demo-content fixture. Originally invoked by a `--demo` CLI flag for
+//! screenshot capture; now exposed as a public test fixture so that
+//! integration tests (`iced_test`-driven snapshots) can populate the
+//! GUI-side state with tracks, busses, clips, and a Compose section
+//! without booting the audio engine.
+//!
+//! The runtime never calls this — it lives in the library crate purely
+//! so `resonance-app/tests/*.rs` can call it via `resonance_app::demo`.
 
 use resonance_audio::types::{MidiNote, TrackId, TrackOutput};
 
@@ -8,10 +13,10 @@ use crate::state::{self, BusState, ClipState, MidiClipState, PluginSlotState, Tr
 use crate::Resonance;
 
 /// Populate the GUI-side state with a small set of tracks, busses, clips,
-/// and a Compose section so the views render with content for screenshots.
+/// and a Compose section so the views render with content for snapshots.
 /// Bypasses the audio engine entirely — these objects exist only in the
 /// app's `registry` / `compose` / `clips` collections and won't make sound.
-pub(crate) fn seed_demo_content(app: &mut Resonance) {
+pub fn seed_demo_content(app: &mut Resonance) {
     use resonance_audio::types::{MidiNote, SamplePos};
     use resonance_music_theory::{Chord, ChordQuality, Mode, MotifSource, PitchClass, Scale};
 

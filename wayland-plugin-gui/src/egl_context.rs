@@ -198,6 +198,13 @@ impl Drop for EglContext {
         let _ = self.egl.make_current(self.display, None, None, None);
         let _ = self.egl.destroy_surface(self.display, self.surface);
         let _ = self.egl.destroy_context(self.display, self.context);
-        let _ = self.egl.terminate(self.display);
+        // Intentionally do NOT call `eglTerminate` here. The EGL display
+        // is process-wide shared state: the same display handle is
+        // returned by `get_platform_display` for any subsequent editor
+        // (and possibly by the host's own EGL/GLES code). `eglTerminate`
+        // tears down that shared state regardless of who else still
+        // depends on it, which can crash a second plugin editor or any
+        // other GL surface in the host. Letting the display live until
+        // process exit is the conventional workaround.
     }
 }

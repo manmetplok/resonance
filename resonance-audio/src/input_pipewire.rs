@@ -298,7 +298,15 @@ fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
         if len == 0 {
             return;
         }
-        let samples: &[f32] = bytemuck::cast_slice(&bytes[..len * std::mem::size_of::<f32>()]);
+        // PipeWire SHM buffers are normally 4-byte aligned, but a
+        // misaligned buffer would cause `bytemuck::cast_slice` to panic
+        // — which on the RT thread would tear down the input stream.
+        // Use `try_cast_slice` and bail silently on misalignment; the
+        // next callback will retry.
+        let Ok(samples) = bytemuck::try_cast_slice::<u8, f32>(&bytes[..len * std::mem::size_of::<f32>()])
+        else {
+            return;
+        };
         push_to_ringbufs(user_data, samples);
     } else {
         // Planar path (DSP / pro-audio): each chunk is a separate
@@ -327,7 +335,13 @@ fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
             }
             min_frames = min_frames.min(frames_here);
             let take_bytes = frames_here * std::mem::size_of::<f32>();
-            planes[ch] = Some(bytemuck::cast_slice(&bytes[..take_bytes]));
+            // Misaligned planar chunks: silently drop this callback —
+            // see the interleaved-path comment above. Panicking on the
+            // RT thread would kill the stream.
+            let Ok(plane) = bytemuck::try_cast_slice::<u8, f32>(&bytes[..take_bytes]) else {
+                return;
+            };
+            planes[ch] = Some(plane);
         }
         let frames = min_frames;
         if frames == 0 || used == 0 {

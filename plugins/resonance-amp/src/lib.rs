@@ -259,8 +259,12 @@ impl ResonancePlugin for ResonanceAmp {
             linear_to_db(peaks.out_l),
             linear_to_db(peaks.out_r),
         );
-        {
-            let mut scope = self.viz.scope.lock();
+        // `try_lock` so the audio thread never blocks waiting on the
+        // editor's per-frame `iter_chrono` scan. Dropping a single
+        // block under contention costs at most ~43 ms of scope trace
+        // (one full ring) and only happens while the UI is mid-read;
+        // a blocking lock under the same scenario would stall audio.
+        if let Some(mut scope) = self.viz.scope.try_lock() {
             scope.push_slice(&self.input_scratch[..copy_n], &left[..copy_n]);
         }
 

@@ -5,10 +5,14 @@
 //!
 //! 1. Accumulate short-term blocks every 1 s (3 s window, 2 s overlap).
 //! 2. Absolute-gate at -70 LUFS.
-//! 3. Relative-gate at the 95th percentile minus 20 LU of the absolute-
-//!    gated set (the EBU 3342 variant uses -20 LU rather than the -10 LU
-//!    used by integrated).
-//! 4. Report LRA = p95 - p10 of the remaining set.
+//! 3. Compute the *integrated loudness* of the absolute-gated set —
+//!    i.e. `block_mean_square_to_lufs(mean(mean-squares))`, NOT a
+//!    percentile of the per-block LUFS values. This is the same
+//!    energetic mean used to seed the relative gate of the integrated
+//!    loudness calculation, just with a -20 LU offset (EBU 3342) rather
+//!    than -10 LU.
+//! 4. Relative-gate at `integrated_abs - 20 LU`.
+//! 5. Report LRA = p95 - p10 of the remaining set.
 //!
 //! We capture a new block roughly every 1 s via the supplied hook. The
 //! percentile step is performed on demand from `lra_lu()` so the audio
@@ -58,25 +62,25 @@ impl LraMeter {
         if self.blocks.is_empty() {
             return 0.0;
         }
-        // Absolute gate.
-        let abs_gated: Vec<f64> = self
-            .blocks
-            .iter()
-            .copied()
-            .filter(|&ms| block_mean_square_to_lufs(ms) >= ABSOLUTE_GATE_LUFS)
-            .collect();
-        if abs_gated.is_empty() {
+        // Absolute gate + accumulate energetic mean for the relative-gate
+        // reference. Per EBU 3342 the relative gate threshold is
+        // `integrated_loudness(abs_gated) - 20 LU`, where the integrated
+        // loudness is the LUFS of the *mean of mean-squares* — not a
+        // percentile of the per-block LUFS values.
+        let mut abs_sum_ms = 0.0_f64;
+        let mut abs_lufs: Vec<f64> = Vec::with_capacity(self.blocks.len());
+        for &ms in &self.blocks {
+            let l = block_mean_square_to_lufs(ms);
+            if l >= ABSOLUTE_GATE_LUFS {
+                abs_sum_ms += ms;
+                abs_lufs.push(l);
+            }
+        }
+        if abs_lufs.is_empty() {
             return 0.0;
         }
-        // Compute the p95 reference from the absolute-gated set, then
-        // relative-gate at `p95 + LRA_RELATIVE_GATE_LU`.
-        let mut abs_lufs: Vec<f64> = abs_gated
-            .iter()
-            .map(|&ms| block_mean_square_to_lufs(ms))
-            .collect();
-        abs_lufs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let p95 = percentile(&abs_lufs, 0.95);
-        let threshold = p95 + LRA_RELATIVE_GATE_LU;
+        let reference_lufs = block_mean_square_to_lufs(abs_sum_ms / abs_lufs.len() as f64);
+        let threshold = reference_lufs + LRA_RELATIVE_GATE_LU;
 
         let mut gated: Vec<f64> = abs_lufs.into_iter().filter(|&l| l >= threshold).collect();
         if gated.is_empty() {

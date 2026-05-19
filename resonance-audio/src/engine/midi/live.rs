@@ -30,8 +30,21 @@ pub(crate) fn handle_send_note_on(
         if let Some(&inst_id) = track.plugin_ids.first() {
             let plugins_guard = ctx.plugins.read();
             if let Some(mutex) = plugins_guard.get(&inst_id) {
-                let mut inst = mutex.lock();
-                inst.0.queue_note_on(note, velocity, 0);
+                // `try_lock` so a slow plugin process() doesn't stall
+                // every other engine command queued behind us
+                // (transport, peaks, recording drain, MIDI clock).
+                // If contended, retry by reposting the command — the
+                // plugin will be free again within an audio block.
+                if let Some(mut inst) = mutex.try_lock() {
+                    inst.0.queue_note_on(note, velocity, 0);
+                } else {
+                    let _ = ctx.cmd_tx_retry.send(AudioCommand::SendNoteOn {
+                        track_id,
+                        note,
+                        velocity,
+                    });
+                    return;
+                }
             }
         }
         track.midi_output_channel.unwrap_or(0)
@@ -60,8 +73,15 @@ pub(crate) fn handle_send_note_off(
         if let Some(&inst_id) = track.plugin_ids.first() {
             let plugins_guard = ctx.plugins.read();
             if let Some(mutex) = plugins_guard.get(&inst_id) {
-                let mut inst = mutex.lock();
-                inst.0.queue_note_off(note, 0);
+                // `try_lock` — see comment in `handle_send_note_on`.
+                if let Some(mut inst) = mutex.try_lock() {
+                    inst.0.queue_note_off(note, 0);
+                } else {
+                    let _ = ctx
+                        .cmd_tx_retry
+                        .send(AudioCommand::SendNoteOff { track_id, note });
+                    return;
+                }
             }
         }
         track.midi_output_channel.unwrap_or(0)

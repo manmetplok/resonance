@@ -205,12 +205,16 @@ pub struct TimelineFingerprint {
     pub clips_len: usize,
     pub midi_clips_len: usize,
     pub tracks_len: usize,
-    pub playhead: u64,
+    // NOTE: playhead and recording_start_sample are intentionally NOT
+    // in the fingerprint. They change continuously during playback /
+    // recording and would invalidate the cache every frame, defeating
+    // the whole purpose. The playhead overlay (line + tab) and the
+    // recording overlay are drawn as a separate uncached Geometry in
+    // `Program::draw` below.
     pub zoom_bits: u32,
     pub scroll_x_bits: u32,
     pub scroll_y_bits: u32,
     pub recording_count: usize,
-    pub recording_start_sample: u64,
     pub loop_enabled: bool,
     pub loop_in: u64,
     pub loop_out: u64,
@@ -233,12 +237,10 @@ impl<'a> TimelineCanvas<'a> {
             clips_len: self.clips.len(),
             midi_clips_len: self.midi_clips.len(),
             tracks_len: self.tracks.len(),
-            playhead: self.playhead,
             zoom_bits: self.zoom.to_bits(),
             scroll_x_bits: self.scroll_offset.to_bits(),
             scroll_y_bits: self.scroll_offset_y.to_bits(),
             recording_count: self.recording_tracks.len(),
-            recording_start_sample: self.recording_start_sample,
             loop_enabled: self.loop_enabled,
             loop_in: self.loop_in,
             loop_out: self.loop_out,
@@ -304,15 +306,22 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
     ) -> Vec<canvas::Geometry> {
         // Cache invalidation: re-runs the body only when our fingerprint
         // changes. Pure hover/sibling redraws hit the cached geometry.
+        // `playhead` and `recording_start_sample` are intentionally
+        // excluded from the fingerprint — the playhead line + tab and
+        // the per-track recording overlay are drawn in a second
+        // uncached pass below so they update every frame without
+        // invalidating the rest of the timeline.
         let fp = self.fingerprint();
         if state.cache_fingerprint.get() != fp {
             state.cache.clear();
             state.cache_fingerprint.set(fp);
         }
-        let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
+        let cached = state.cache.draw(renderer, bounds.size(), |frame| {
             self.draw_into(frame, bounds);
         });
-        vec![geometry]
+        let mut overlay = canvas::Frame::new(renderer, bounds.size());
+        self.draw_overlay_into(&mut overlay, bounds);
+        vec![cached, overlay.into_geometry()]
     }
 }
 
@@ -371,25 +380,9 @@ impl<'a> TimelineCanvas<'a> {
                 bg,
             );
 
-            // Recording overlay on armed tracks
-            if self.recording_tracks.contains(&track.id) {
-                let (overlay_start, overlay_end) = if self.loop_enabled {
-                    (self.loop_in, self.playhead.min(self.loop_out))
-                } else {
-                    (self.recording_start_sample, self.playhead)
-                };
-                let start_x = self.sample_to_x(overlay_start);
-                let end_x = self.sample_to_x(overlay_end);
-                let overlay_x = start_x.max(0.0);
-                let overlay_w = (end_x - overlay_x).max(0.0).min(bounds.width - overlay_x);
-                if overlay_w > 0.0 {
-                    frame.fill_rectangle(
-                        Point::new(overlay_x, y),
-                        Size::new(overlay_w, theme::TRACK_HEIGHT),
-                        Color::from_rgba(0.8, 0.2, 0.2, 0.08),
-                    );
-                }
-            }
+            // Recording overlay is drawn in the uncached overlay pass
+            // — see `draw_overlay_into`. It grows with `playhead`,
+            // which would otherwise invalidate the cache every frame.
 
             // Track separator line
             frame.fill_rectangle(
@@ -506,31 +499,9 @@ impl<'a> TimelineCanvas<'a> {
             }
         }
 
-        // Draw playhead — warm 1px line + a rounded tab at the top so it
-        // reads against the ruler. Matches the redesign spec: warm line,
-        // 11×11 tab with bottom-rounded corners.
-        let playhead_seconds = (self.playhead as f64 / self.sample_rate as f64) as f32;
-        let playhead_x = playhead_seconds * self.zoom - self.scroll_offset;
-        if playhead_x >= 0.0 && playhead_x <= bounds.width {
-            let total_height = (header_height + track_area_height - y_off).max(bounds.height);
-
-            // Vertical line spans the whole canvas.
-            frame.fill_rectangle(
-                Point::new(playhead_x - 0.5, 0.0),
-                Size::new(1.0, total_height),
-                theme::WARM,
-            );
-
-            // Tab at the top — wider rectangle with rounded bottom corners.
-            let tab_w = 11.0;
-            let tab_h = 11.0;
-            let tab = canvas::Path::rounded_rectangle(
-                Point::new(playhead_x - tab_w / 2.0, 0.0),
-                Size::new(tab_w, tab_h),
-                iced::border::radius(0.0).bottom(6.0),
-            );
-            frame.fill(&tab, theme::WARM);
-        }
+        // Playhead is drawn in the uncached overlay pass — see
+        // `draw_overlay_into`. Keeping it out of the cached path lets
+        // the rest of the timeline geometry stay cached during playback.
 
         // Smart scrollbars — drawn last so they sit above clips + playhead.
         let (h_rects, v_rects) = self.scrollbar_rects(bounds);
@@ -563,5 +534,72 @@ impl<'a> TimelineCanvas<'a> {
             );
         }
 
+    }
+
+    /// Draw the parts of the timeline that change every frame during
+    /// playback / recording: the playhead line + tab, and the per-track
+    /// recording overlay. Called from `Program::draw` on a fresh
+    /// uncached `Frame` so these don't trigger cache invalidation.
+    fn draw_overlay_into(&self, frame: &mut canvas::Frame, bounds: Rectangle) {
+        let ruler_height = theme::RULER_HEIGHT;
+        let header_height = self.fixed_header_height();
+        let y_off = self.scroll_offset_y;
+        let sorted_tracks = self.visible_tracks_sorted();
+        let track_area_height = sorted_tracks.len() as f32 * theme::TRACK_HEIGHT;
+
+        // Per-track recording overlay (one shaded strip per armed
+        // track that spans from record-start to playhead, wrapping
+        // around loop bounds when looping is active).
+        if !self.recording_tracks.is_empty() {
+            for (i, track) in sorted_tracks.iter().enumerate() {
+                if !self.recording_tracks.contains(&track.id) {
+                    continue;
+                }
+                let y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
+                if y + theme::TRACK_HEIGHT < header_height || y > bounds.height {
+                    continue;
+                }
+                let (overlay_start, overlay_end) = if self.loop_enabled {
+                    (self.loop_in, self.playhead.min(self.loop_out))
+                } else {
+                    (self.recording_start_sample, self.playhead)
+                };
+                let start_x = self.sample_to_x(overlay_start);
+                let end_x = self.sample_to_x(overlay_end);
+                let overlay_x = start_x.max(0.0);
+                let overlay_w = (end_x - overlay_x).max(0.0).min(bounds.width - overlay_x);
+                if overlay_w > 0.0 {
+                    frame.fill_rectangle(
+                        Point::new(overlay_x, y),
+                        Size::new(overlay_w, theme::TRACK_HEIGHT),
+                        Color::from_rgba(0.8, 0.2, 0.2, 0.08),
+                    );
+                }
+            }
+        }
+
+        // Playhead — warm 1px line + a rounded tab at the top.
+        let playhead_seconds = (self.playhead as f64 / self.sample_rate as f64) as f32;
+        let playhead_x = playhead_seconds * self.zoom - self.scroll_offset;
+        if playhead_x >= 0.0 && playhead_x <= bounds.width {
+            let total_height = (header_height + track_area_height - y_off).max(bounds.height);
+            frame.fill_rectangle(
+                Point::new(playhead_x - 0.5, 0.0),
+                Size::new(1.0, total_height),
+                theme::WARM,
+            );
+            let tab_w = 11.0;
+            let tab_h = 11.0;
+            let tab = canvas::Path::rounded_rectangle(
+                Point::new(playhead_x - tab_w / 2.0, 0.0),
+                Size::new(tab_w, tab_h),
+                iced::border::radius(0.0).bottom(6.0),
+            );
+            frame.fill(&tab, theme::WARM);
+        }
+        // The ruler-height local is unused if neither overlay fires;
+        // keep it so future overlay additions (e.g. selection brushes)
+        // can use it without reintroducing the variable.
+        let _ = ruler_height;
     }
 }

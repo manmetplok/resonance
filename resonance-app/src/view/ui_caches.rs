@@ -15,8 +15,8 @@
 use std::borrow::Borrow;
 use std::rc::Rc;
 
-use resonance_audio::midi_hardware::MidiDeviceInfo;
-use resonance_audio::types::ScannedPlugin;
+use resonance_audio::MidiDeviceInfo;
+use resonance_audio::types::{InputDeviceInfo, ScannedPlugin};
 
 use crate::state::BusState;
 use crate::view::mixer::picks::{
@@ -47,6 +47,10 @@ pub(crate) struct UiViewCaches {
     /// `available_plugins` filtered to instruments. Used by the
     /// `+ Instrument` picker on instrument tracks with no plugin yet.
     pub instrument_plugins: Rc<[ScannedPlugin]>,
+    /// Audio input devices enumerated by the engine. Cached so
+    /// per-track input-device pickers in the mixer inspector and the
+    /// bounce-dialog don't clone the full Vec every frame.
+    pub input_devices: Rc<[InputDeviceInfo]>,
 }
 
 impl Default for UiViewCaches {
@@ -59,6 +63,7 @@ impl Default for UiViewCaches {
             output_channel_choices: Rc::from(output_channel_choices()),
             fx_plugins: Rc::from(Vec::<ScannedPlugin>::new()),
             instrument_plugins: Rc::from(Vec::<ScannedPlugin>::new()),
+            input_devices: Rc::from(Vec::<InputDeviceInfo>::new()),
         }
     }
 }
@@ -98,6 +103,12 @@ impl UiViewCaches {
             .collect();
         self.fx_plugins = Rc::from(fx);
         self.instrument_plugins = Rc::from(inst);
+    }
+
+    /// Rebuild the audio-input-device list cache. Call after the engine
+    /// re-enumerates devices.
+    pub fn rebuild_input_devices(&mut self, devices: &[InputDeviceInfo]) {
+        self.input_devices = Rc::from(devices.to_vec());
     }
 }
 

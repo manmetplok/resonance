@@ -49,6 +49,7 @@ impl EditorFactory for DelayEditorFactory {
             app,
             EditorOptions {
                 title: "Resonance Delay".to_string(),
+                app_id: "com.resonance.delay".to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
                 min_size: (900, 480),
                 resizable: true,

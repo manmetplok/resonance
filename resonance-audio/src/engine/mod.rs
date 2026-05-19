@@ -117,6 +117,11 @@ pub struct AudioEngine {
     cmd_tx: Sender<AudioCommand>,
     event_rx: Receiver<AudioEvent>,
     _stream: Option<cpal::Stream>,
+    /// Join handle for the engine control thread. `Drop` sends a
+    /// `ShutDown` command (which breaks the thread's loop, since the
+    /// thread's own `cmd_tx_retry` keeps the channel from ever
+    /// returning `Disconnected`) and then joins.
+    engine_thread: Option<std::thread::JoinHandle<()>>,
     // Shared state for live stream rebuilding (e.g. buffer size changes)
     shared: Arc<SharedState>,
     tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>>,
@@ -138,11 +143,6 @@ pub struct AudioEngine {
     channels: usize,
     quantum: usize,
 }
-
-// Safety: cpal::Stream is !Send on some platforms, but `_stream` is stored as
-// `Option<cpal::Stream>` and is never accessed after construction — it is held
-// solely to keep the stream alive via Drop. All other fields are Send.
-unsafe impl Send for AudioEngine {}
 
 impl AudioEngine {
     /// Create and start the audio engine. Returns the engine handle.
@@ -385,7 +385,7 @@ impl AudioEngine {
         let plugins_ctrl = Arc::clone(&plugins);
 
         let cmd_tx_retry = cmd_tx.clone();
-        std::thread::Builder::new()
+        let engine_thread = std::thread::Builder::new()
             .name("resonance-engine".into())
             .spawn(move || {
                 thread::engine_thread(
@@ -416,6 +416,7 @@ impl AudioEngine {
             cmd_tx,
             event_rx,
             _stream: Some(stream),
+            engine_thread: Some(engine_thread),
             shared,
             tracks,
             busses,
@@ -431,32 +432,78 @@ impl AudioEngine {
         })
     }
 
-    /// Send a command to the audio engine.
+    /// Send a command to the audio engine. Silently drops the command
+    /// if the engine thread has disconnected (post-shutdown or panic);
+    /// the first time that happens, an eprintln warning is emitted so
+    /// the situation isn't completely invisible. Callers that need to
+    /// observe disconnect should use `try_send`.
     pub fn send(&self, cmd: AudioCommand) {
-        let _ = self.cmd_tx.send(cmd);
+        if let Err(e) = self.cmd_tx.send(cmd) {
+            self.report_send_failure(&e.0);
+        }
+    }
+
+    /// Send a command and surface a disconnect to the caller. Returned
+    /// `Err` carries the original command so the caller can retry or
+    /// surface a fatal error.
+    pub fn try_send(&self, cmd: AudioCommand) -> Result<(), AudioCommand> {
+        self.cmd_tx.send(cmd).map_err(|e| e.0)
+    }
+
+    /// Emit a one-shot eprintln when the command channel disconnects.
+    /// Uses an atomic latch so a stuck app doesn't flood stderr.
+    fn report_send_failure(&self, _cmd: &AudioCommand) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "audio: engine command channel disconnected — subsequent commands will be dropped silently"
+            );
+        }
     }
 
     /// Best-effort synchronous shutdown handshake.
     ///
     /// Sends `Stop` (which silences every CLAP instrument and emits
-    /// `All Notes Off` on every connected hardware MIDI output) and
-    /// blocks until the engine acknowledges with `AudioEvent::Stopped`,
-    /// or until `timeout` elapses. Other events that arrive in the
+    /// `All Notes Off` on every connected hardware MIDI output), waits
+    /// for the engine to ack with `AudioEvent::Stopped`, then sends
+    /// `ShutDown` and joins the engine thread. Returns once the thread
+    /// has exited or `timeout` elapses. Other events that arrive in the
     /// meantime are drained and discarded — the caller is shutting
     /// down anyway.
     ///
     /// Call this before dropping `AudioEngine` (or before closing the
     /// app window) so a hardware synth doesn't sustain notes that were
-    /// playing at quit time.
-    pub fn shutdown(&self, timeout: std::time::Duration) {
+    /// playing at quit time. `Drop` calls this with a short timeout if
+    /// the user didn't.
+    pub fn shutdown(&mut self, timeout: std::time::Duration) {
         let _ = self.cmd_tx.send(AudioCommand::Stop);
         let deadline = std::time::Instant::now() + timeout;
-        while std::time::Instant::now() < deadline {
-            let remaining = deadline - std::time::Instant::now();
-            match self.event_rx.recv_timeout(remaining) {
-                Ok(AudioEvent::Stopped) => return,
+        loop {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            match self.event_rx.recv_timeout(deadline - now) {
+                Ok(AudioEvent::Stopped) => break,
                 Ok(_) => continue,
-                Err(_) => return,
+                Err(_) => break,
+            }
+        }
+        let _ = self.cmd_tx.send(AudioCommand::ShutDown);
+        if let Some(handle) = self.engine_thread.take() {
+            // Spawn a watchdog thread to enforce the deadline since
+            // std::thread::JoinHandle has no timed join. The handle
+            // itself is moved into the watchdog so this function
+            // returns promptly even if the engine thread is wedged.
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let watchdog = std::thread::spawn(move || {
+                let _ = handle.join();
+            });
+            // Best effort: poll the watchdog until the deadline.
+            let poll_until = std::time::Instant::now() + remaining;
+            while !watchdog.is_finished() && std::time::Instant::now() < poll_until {
+                std::thread::sleep(std::time::Duration::from_millis(5));
             }
         }
     }
@@ -476,4 +523,15 @@ impl AudioEngine {
         self.event_rx.clone()
     }
 
+}
+
+impl Drop for AudioEngine {
+    fn drop(&mut self) {
+        // If `shutdown` was already called the JoinHandle is `None` and
+        // this is a no-op. Otherwise send `ShutDown` and let the thread
+        // exit; the cpal stream drops afterward as the struct unwinds.
+        if self.engine_thread.is_some() {
+            self.shutdown(std::time::Duration::from_millis(500));
+        }
+    }
 }

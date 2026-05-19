@@ -131,10 +131,12 @@ pub(crate) fn handle_move_midi_clip(
     new_track_id: TrackId,
 ) {
     let mut guard = ctx.midi_clips.write();
-    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
-        clip.start_sample = new_start_sample;
-        clip.track_id = new_track_id;
-    }
+    let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) else {
+        return;
+    };
+    clip.start_sample = new_start_sample;
+    clip.track_id = new_track_id;
+    drop(guard);
     let _ = ctx.event_tx.send(AudioEvent::MidiClipMoved {
         clip_id,
         new_start_sample,
@@ -150,11 +152,13 @@ pub(crate) fn handle_trim_midi_clip(
     trim_end_ticks: u64,
 ) {
     let mut guard = ctx.midi_clips.write();
-    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
-        clip.start_sample = new_start_sample;
-        clip.trim_start_ticks = trim_start_ticks;
-        clip.trim_end_ticks = trim_end_ticks;
-    }
+    let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) else {
+        return;
+    };
+    clip.start_sample = new_start_sample;
+    clip.trim_start_ticks = trim_start_ticks;
+    clip.trim_end_ticks = trim_end_ticks;
+    drop(guard);
     let _ = ctx.event_tx.send(AudioEvent::MidiClipTrimmed {
         clip_id,
         new_start_sample,

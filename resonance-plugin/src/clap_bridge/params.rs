@@ -20,38 +20,29 @@ use crate::plugin::ResonancePlugin;
 
 impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
     fn count(&mut self) -> u32 {
-        self.shared
-            .param_metas
-            .iter()
-            .filter(|m| !m.is_hidden)
-            .count() as u32
+        self.shared.visible_indices.len() as u32
     }
 
     fn get_info(&mut self, param_index: u32, info: &mut ParamInfoWriter) {
-        let visible: Vec<_> = self
-            .shared
-            .param_metas
-            .iter()
-            .filter(|m| !m.is_hidden)
-            .collect();
-
-        if let Some(meta) = visible.get(param_index as usize) {
-            let mut flags = ParamInfoFlags::IS_AUTOMATABLE;
-            if meta.is_stepped {
-                flags |= ParamInfoFlags::IS_STEPPED;
-            }
-
-            info.set(&ParamInfo {
-                id: ClapId::new(meta.clap_id),
-                name: meta.name.as_bytes(),
-                module: b"",
-                default_value: meta.default,
-                min_value: meta.min,
-                max_value: meta.max,
-                flags,
-                cookie: Default::default(),
-            });
+        let Some(&meta_idx) = self.shared.visible_indices.get(param_index as usize) else {
+            return;
+        };
+        let meta = &self.shared.param_metas[meta_idx];
+        let mut flags = ParamInfoFlags::IS_AUTOMATABLE;
+        if meta.is_stepped {
+            flags |= ParamInfoFlags::IS_STEPPED;
         }
+
+        info.set(&ParamInfo {
+            id: ClapId::new(meta.clap_id),
+            name: meta.name.as_bytes(),
+            module: b"",
+            default_value: meta.default,
+            min_value: meta.min,
+            max_value: meta.max,
+            flags,
+            cookie: Default::default(),
+        });
     }
 
     fn get_value(&mut self, param_id: ClapId) -> Option<f64> {

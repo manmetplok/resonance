@@ -34,6 +34,11 @@ pub struct ClapShared<'a> {
     #[allow(dead_code)]
     pub(super) host: HostSharedHandle<'a>,
     pub(crate) param_metas: Vec<ParamMeta>,
+    /// Indices into `param_metas` of non-hidden params, computed once
+    /// at construction. The CLAP host iterates `get_info` for each
+    /// visible param every reload; without this cache, every call
+    /// would `Vec::collect` a filtered list of references.
+    pub(crate) visible_indices: Vec<usize>,
     /// Atomic param values (f64 bit-punned to u64), indexed by param slot.
     pub(crate) param_values: Vec<AtomicU64>,
     /// Map from CLAP param ID to slot index.

@@ -146,7 +146,12 @@ impl Param for FloatParam {
         if !v.is_finite() {
             return;
         }
-        self.set_value(v as f32);
+        // Clamp to the declared range so a misbehaving host or a
+        // corrupt preset can't push the value beyond what the DSP code
+        // is built to handle (e.g. a filter cutoff outside Nyquist
+        // turning every block into NaN that propagates downstream).
+        let clamped = v.clamp(self.min_plain(), self.max_plain());
+        self.set_value(clamped as f32);
     }
     fn default_plain(&self) -> f64 {
         self.default as f64
@@ -234,7 +239,15 @@ impl Param for IntParam {
         self.value() as f64
     }
     fn set_plain(&self, v: f64) {
-        self.set_value(v.round() as i32);
+        // Non-finite inputs are silently ignored; finite values get
+        // clamped to the declared range before truncation. Mirrors the
+        // FloatParam clamp so a buggy host can't shove an int param
+        // far outside its bounds either.
+        if !v.is_finite() {
+            return;
+        }
+        let clamped = v.clamp(self.min_plain(), self.max_plain());
+        self.set_value(clamped.round() as i32);
     }
     fn default_plain(&self) -> f64 {
         self.default as f64

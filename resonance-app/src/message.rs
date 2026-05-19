@@ -12,7 +12,7 @@ use resonance_audio::types::{
 };
 
 #[derive(Debug, Clone)]
-pub(crate) enum Message {
+pub enum Message {
     Compose(ComposeMessage),
     GlobalTrack(GlobalTrackMessage),
     Transport(TransportMessage),
@@ -38,7 +38,7 @@ pub(crate) enum Message {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum TransportMessage {
+pub enum TransportMessage {
     Play,
     Record,
     Pause,
@@ -58,7 +58,7 @@ pub(crate) enum TransportMessage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum TrackMessage {
+pub enum TrackMessage {
     AddTrack,
     AddInstrumentTrack,
     AddVocalTrack,
@@ -114,7 +114,7 @@ pub(crate) enum TrackMessage {
 /// `PickDevice` / `PickPort` → `Confirm` (kicks off the realtime bounce)
 /// or `Cancel` (closes without side effects).
 #[derive(Debug, Clone)]
-pub(crate) enum BounceMessage {
+pub enum BounceMessage {
     /// User picked an audio input device.
     PickDevice(Option<String>),
     /// User picked the starting input channel. In stereo mode the right
@@ -134,7 +134,7 @@ pub(crate) enum BounceMessage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum BusMessage {
+pub enum BusMessage {
     AddBus,
     RemoveBus(BusId),
     SetBusVolume(BusId, f32),
@@ -146,14 +146,14 @@ pub(crate) enum BusMessage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum MasterMessage {
+pub enum MasterMessage {
     ToggleMasterFxBypass,
     AddPluginToMaster(ScannedPlugin),
     RemovePluginFromMaster(PluginInstanceId),
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum ClipMessage {
+pub enum ClipMessage {
     DeleteClip(ClipId),
     StartClipDrag {
         clip_id: ClipId,
@@ -173,7 +173,7 @@ pub(crate) enum ClipMessage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum MidiClipMessage {
+pub enum MidiClipMessage {
     DeleteMidiClip(ClipId),
     StartMidiClipDrag {
         clip_id: ClipId,
@@ -193,7 +193,7 @@ pub(crate) enum MidiClipMessage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum MidiEditorMessage {
+pub enum MidiEditorMessage {
     OpenMidiEditor(ClipId),
     /// Open the currently selected MIDI clip (if any) in the piano roll editor.
     OpenSelectedMidiClip,
@@ -238,7 +238,7 @@ pub(crate) enum MidiEditorMessage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum PluginMessage {
+pub enum PluginMessage {
     AddPluginToTrack(TrackId, ScannedPlugin),
     RemovePluginFromTrack(TrackId, PluginInstanceId),
     TogglePluginPanel(PluginInstanceId),
@@ -250,7 +250,7 @@ pub(crate) enum PluginMessage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum ViewportMessage {
+pub enum ViewportMessage {
     ZoomIn,
     ZoomOut,
     ScrollY(f32),
@@ -263,7 +263,7 @@ pub(crate) enum ViewportMessage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum ProjectIoMessage {
+pub enum ProjectIoMessage {
     BounceToWav,
     BouncePathSelected(Option<String>),
     SaveProject,
@@ -280,7 +280,7 @@ pub(crate) enum ProjectIoMessage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum UiMessage {
+pub enum UiMessage {
     SwitchView(ViewMode),
     OpenSettings,
     CloseSettings,
@@ -310,7 +310,7 @@ pub(crate) enum UiMessage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum GlobalTrackMessage {
+pub enum GlobalTrackMessage {
     /// Add a tempo change event at the given bar with the given BPM.
     AddTempoEvent { bar: u32, bpm: f32 },
     /// Update an existing tempo event in-place (drag interaction).

@@ -55,6 +55,7 @@ fn main() {
         app,
         EditorOptions {
             title: "wayland-plugin-gui :: hello".to_string(),
+            app_id: "com.resonance.wayland-plugin-gui.hello".to_string(),
             initial_size: (640, 480),
             min_size: (320, 240),
             resizable: true,

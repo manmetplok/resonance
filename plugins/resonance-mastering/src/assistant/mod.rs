@@ -59,8 +59,17 @@ impl Assistant {
     }
 
     /// Audio-thread hot path: append a stereo block to the capture ring.
+    ///
+    /// Uses `try_lock` to guarantee the audio thread never blocks waiting
+    /// on the UI's `snapshot_chrono` (which clones two ~480 k-sample
+    /// vecs and can take milliseconds — longer than one audio block).
+    /// When the lock is held by the UI, the block is dropped; the ring
+    /// loses at most a few hundred milliseconds across a snapshot call,
+    /// which is acceptable for a 10-second offline-analysis window.
     pub fn feed(&self, left: &[f32], right: &[f32]) {
-        self.capture.lock().push(left, right);
+        if let Some(mut cap) = self.capture.try_lock() {
+            cap.push(left, right);
+        }
     }
 
     /// How much of the capture ring currently holds real audio,

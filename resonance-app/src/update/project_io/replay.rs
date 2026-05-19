@@ -16,6 +16,14 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     let project = &loaded.file;
     r.io.project_path = None; // Will be set by the caller (OpenPathSelected)
 
+    // Wipe runtime-only vocal side-tables (clip_lyrics, render_epoch)
+    // before re-installing entries from the project. Without this,
+    // loading a project on top of an existing one keeps stale lyrics
+    // for clips that no longer exist, and stale render epochs that
+    // make the next Generate Vocal think a section is already up to
+    // date.
+    r.compose.vocal_audio.clear();
+
     // Point the engine at the loaded project's directory so that
     // subsequent imports and recordings stream into it.
     r.engine
@@ -51,7 +59,11 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
         // Bump the compose id counter past every saved group id so the
         // manager's "+ New group" doesn't collide.
         if let Some(max_group_id) = r.compose.drum_groups.iter().map(|g| g.id).max() {
-            r.compose.next_id = r.compose.next_id.max(max_group_id);
+            // `next_id` is the *next* id to hand out, so it must exceed
+            // every used id by at least 1. Using `.max(max_group_id)`
+            // alone would let the next allocation collide with the
+            // highest saved id.
+            r.compose.next_id = r.compose.next_id.max(max_group_id + 1);
         }
         // Refresh the right-rail selection to point at a real group.
         r.compose.drumroll.selected_group_id =

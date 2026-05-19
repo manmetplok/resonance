@@ -103,7 +103,7 @@ impl crate::Resonance {
     /// off to `dispatch` with the undo-history bookkeeping wrapped
     /// around the dispatch — recording atomic entries before mutations
     /// and committing gesture transactions after.
-    pub(crate) fn update(&mut self, message: Message) -> Task<Message> {
+    pub fn update(&mut self, message: Message) -> Task<Message> {
         if !self.io.has_active_project && is_gated_message(&message) {
             return Task::none();
         }
@@ -207,7 +207,7 @@ impl crate::Resonance {
         }
     }
 
-    pub(crate) fn subscription(&self) -> Subscription<Message> {
+    pub fn subscription(&self) -> Subscription<Message> {
         let tick = iced::time::every(std::time::Duration::from_millis(theme::TICK_INTERVAL_MS))
             .map(|_| Message::Tick);
         let keys = keyboard::listen().filter_map(|event| match event {

@@ -347,8 +347,14 @@ fn apply_tracks(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     for tb in &b.tracks {
         let ta = a_by_id
             .get(&tb.id)
-            .copied()
-            .expect("structural check ensured id presence");
+            .copied();
+        let Some(ta) = ta else {
+            // Defence in depth: `structurally_compatible` should have
+            // gated us here, but if it ever drifts we'd rather skip an
+            // unmatched id than crash on undo. The caller may detect
+            // a stale slot and fall back to a full replay.
+            continue;
+        };
         apply_track(r, ta, tb);
     }
 }
@@ -483,8 +489,14 @@ fn apply_busses(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     for bb in &b.busses {
         let ba = a_by_id
             .get(&bb.id)
-            .copied()
-            .expect("structural check ensured id presence");
+            .copied();
+        let Some(ba) = ba else {
+            // Defence in depth: `structurally_compatible` should have
+            // gated us here, but if it ever drifts we'd rather skip an
+            // unmatched id than crash on undo. The caller may detect
+            // a stale slot and fall back to a full replay.
+            continue;
+        };
         apply_bus(r, ba, bb);
     }
 }
@@ -581,8 +593,14 @@ fn apply_audio_clips(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     for cb in &b.clips {
         let ca = a_by_id
             .get(&cb.id)
-            .copied()
-            .expect("structural check ensured id presence");
+            .copied();
+        let Some(ca) = ca else {
+            // Defence in depth: `structurally_compatible` should have
+            // gated us here, but if it ever drifts we'd rather skip an
+            // unmatched id than crash on undo. The caller may detect
+            // a stale slot and fall back to a full replay.
+            continue;
+        };
         let trim_changed = ca.trim_start_frames != cb.trim_start_frames
             || ca.trim_end_frames != cb.trim_end_frames;
         let moved = ca.start_sample != cb.start_sample || ca.track_id != cb.track_id;
@@ -632,8 +650,14 @@ fn apply_midi_clips(
     for cb in &b.midi_clips {
         let ca = a_by_id
             .get(&cb.id)
-            .copied()
-            .expect("structural check ensured id presence");
+            .copied();
+        let Some(ca) = ca else {
+            // Defence in depth: `structurally_compatible` should have
+            // gated us here, but if it ever drifts we'd rather skip an
+            // unmatched id than crash on undo. The caller may detect
+            // a stale slot and fall back to a full replay.
+            continue;
+        };
         let target_for_clip = target_notes.get(&cb.id).cloned().unwrap_or_default();
         let current_for_clip = current_notes.get(&cb.id).cloned().unwrap_or_default();
         let notes_changed = !midi_notes_equal(&target_for_clip, &current_for_clip);

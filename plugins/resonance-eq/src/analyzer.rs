@@ -173,7 +173,14 @@ impl AnalyzerChannel {
     }
 
     fn publish(&self, shared: &Mutex<SpectrumSnapshot>) {
-        let mut guard = shared.lock();
+        // `try_lock` so the audio thread never blocks on the editor's
+        // ~60 Hz read. Skipping a single FFT publish costs at most one
+        // frame of visual update (~22 ms at HOP_SIZE/48 kHz) — acceptable
+        // for an analyzer overlay. Blocking the audio thread on a 1024-
+        // float copy under contention is not.
+        let Some(mut guard) = shared.try_lock() else {
+            return;
+        };
         guard.sample_rate = self.sample_rate;
         if guard.magnitudes_db.len() != NUM_BINS {
             guard.magnitudes_db.resize(NUM_BINS, FLOOR_DB);

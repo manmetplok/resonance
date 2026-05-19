@@ -5,8 +5,6 @@
 //! tap: the plugin's `process()` passes audio through unchanged and calls
 //! [`MeteringCore::feed`] once per block to update the meters.
 
-use std::sync::Arc;
-
 use resonance_metering::{
     CorrelationMeter, CrestMeter, LraMeter, LufsMeter, MeterSnapshot, PlrMeter, SpectrumAnalyzer,
     TruePeakMeter,
@@ -113,7 +111,7 @@ impl MeteringCore {
             psr_db: plr.psr_db,
             lra_lu: self.lra.lra_lu(),
         };
-        viz.snapshot.store(Arc::new(snap));
+        viz.snapshot.store(&snap);
     }
 
     fn tick_history(&mut self, frames: usize, viz: &MasteringViz) {

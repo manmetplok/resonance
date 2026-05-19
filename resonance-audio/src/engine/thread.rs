@@ -191,6 +191,7 @@ pub(crate) fn engine_thread(
 
     loop {
         match cmd_rx.recv_timeout(std::time::Duration::from_millis(16)) {
+            Ok(AudioCommand::ShutDown) => break,
             Ok(cmd) => dispatch(&ctx, &mut state, cmd),
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
@@ -647,6 +648,10 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             master::handle_set_master_fx_bypass(ctx, bypassed)
         }
         AudioCommand::PollPeaks => handle_poll_peaks(ctx),
+        AudioCommand::ShutDown => {
+            // Handled in the engine_thread loop directly; this arm is
+            // unreachable in practice but keeps the match exhaustive.
+        }
     }
 }
 
