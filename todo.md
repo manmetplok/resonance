@@ -288,7 +288,7 @@
       parent-strip header chip with the sub-track count, and a
       consistent gradient backing across the cluster.
 
-    - [ ] ! Track header still bleeds through the transport bar when
+    - [x] ! Track header still bleeds through the transport bar when
       scrolling vertically in the arrange view. The earlier fix wrapped
       the `TimelineCanvas` lane paints in `frame.with_clip(...)`, but the
       **track-header column** (left-side track strips) is a separate
@@ -296,6 +296,41 @@
       the top. Likely the track-header scrollable lacks an opaque
       background above its content rect, or its parent column doesn't
       clip to the area below the transport bar. (Reported 2026-05-19.)
+      **Root cause:** `view::track_header::build_track_headers`
+      composed the column as `column![ruler, section_band?, global_shelf,
+      lane_labels?, lane_area]` where `lane_area` used negative top
+      padding (`-frac_offset`) to drive sub-row fractional scroll. In
+      iced 0.14, `container.clip(true)` only narrows the `viewport`
+      passed to children's `draw()` — it does **not** clip child
+      `fill_quad` background paints, so a negatively-padded
+      `view_track_header` rendered its background and selection stripe
+      over the global-shelf strip / section band / ruler above the
+      lane area. The user described it as "bleeding through the
+      transport bar"; in practice the column's outer `clip(true)`
+      protected the transport bar one level higher but the bleed was
+      plainly visible *inside* the header column above the lane area
+      (e.g. with the shelf expanded + `scroll_y = 100` you'd see Synth
+      Bass's glyph + name printed inside the Signature row, and with
+      the shelf collapsed + `scroll_y = 50` the drums track's mute /
+      monitor / arm / eye buttons printed inside the `GLOBAL` strip).
+      **Fix:** restructure `build_track_headers` into a two-layer
+      `stack![lane_subtree, chrome_subtree]`. The chrome subtree is a
+      column of `[ruler, section_band?, global_shelf, lane_labels?,
+      Space::Fill]` with opaque BG_1 / GLOBAL_TRACK_BG backgrounds; the
+      lane subtree is `[Space::height(chrome_h), lane_area]` so the
+      lane area's Y origin still lines up with the canvas's first lane
+      row. Stack layering paints the chrome ON TOP of the lane subtree
+      → its opaque backgrounds mask any upward overflow from the
+      negative-padded lane content. `Space::new()` is fully click-
+      passthrough (no `on_event` / `mouse_interaction`), so events
+      below the chrome rows fall through to the lane subtree's
+      `view_track_header` `mouse_area` unchanged. Three existing
+      goldens (`track_header_alignment_scroll_50`, `_140`,
+      `timeline_lane_clip_globals_expanded_scrolled`) all silently
+      embedded the bleed and were rebaselined. New snapshot test
+      `track_header_no_bleed_into_chrome_expanded` (`scroll_y = 100`,
+      shelf expanded) explicitly pins the worst-case scenario.
+      Module doc-comment updated to record the layering invariant.
 
     - [x] ! Adding a track is a bit flaky — possibly clashing IDs? Investigate
       the track-ID allocator (and any places where a new track's ID is derived

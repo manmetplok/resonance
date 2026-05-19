@@ -139,3 +139,39 @@ fn timeline_lane_clip_globals_expanded_scrolled() {
         "tests/snapshots/timeline_lane_clip_globals_expanded_scrolled.png",
     );
 }
+
+/// Regression for the **column-side** bleed: the track-header column
+/// is a separate widget tree from `TimelineCanvas` and its lane area
+/// uses negative-padding fractional scroll. In iced 0.14,
+/// `container.clip(true)` only narrows the viewport passed to children's
+/// `draw()`; it does not clip child `fill_quad` background paints, so
+/// negatively-offset track-header backgrounds would render over the
+/// ruler / section band / global-shelf strip above. The fix layers the
+/// chrome on top of the lane area via `stack![lane_subtree, chrome]`
+/// inside `build_track_headers`, so the opaque chrome backgrounds mask
+/// any upward overflow. This golden captures the worst case (global
+/// shelf expanded + scrolled into a partial top row, where the first
+/// track's full button row used to render inside the Signature lane).
+#[test]
+fn track_header_no_bleed_into_chrome_expanded() {
+    let _ = STARTUP_TAB.set(ViewMode::Arrange);
+    let (mut app, _task) = Resonance::new();
+    demo::seed_demo_content(&mut app);
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
+        WINDOW.0 - theme::TRACK_HEADER_WIDTH,
+    )));
+    let _ = app.update(Message::Viewport(ViewportMessage::TimelineContentSize(
+        2000.0,
+        WINDOW.1 * 4.0,
+    )));
+    let _ = app.update(Message::Ui(UiMessage::ToggleGlobalTracks));
+    // Picks a partial-row offset (4 px into row 1) so the first
+    // visible-tracks slice carries a meaningful negative top padding —
+    // historically the case where the bleed was most obvious.
+    let _ = app.update(Message::Viewport(ViewportMessage::ScrollToY(100.0)));
+
+    snapshot_to(
+        &app,
+        "tests/snapshots/track_header_no_bleed_into_chrome_expanded.png",
+    );
+}

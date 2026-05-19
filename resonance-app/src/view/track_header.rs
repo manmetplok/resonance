@@ -8,15 +8,27 @@
 //!
 //! The header column mirrors the timeline canvas's vertical layout
 //! row-for-row so each header stays glued to its lane during vertical
-//! scrolling:
+//! scrolling. Internally it's a two-layer `stack`:
 //!
-//! - ruler row (`RULER_HEIGHT`)
-//! - section-band placeholder (`SECTION_BAND_HEIGHT` when sections exist)
-//! - global tracks area (`2 * GLOBAL_TRACK_ROW_HEIGHT` when expanded)
-//! - lane area: clipped, with `scroll_offset_y` applied as a negative
-//!   top inset so the partial top row scrolls smoothly instead of
-//!   snapping to row boundaries.
-use iced::widget::{button, column, container, mouse_area, pick_list, row, text, Space};
+//! - **Lane subtree** (base layer): a `chrome_h`-tall transparent
+//!   spacer followed by the lane area. The lane area applies
+//!   `scroll_offset_y` as a negative top padding so the partial top
+//!   row scrolls smoothly instead of snapping to row boundaries.
+//! - **Chrome subtree** (top layer): ruler + section-band placeholder
+//!   (when sections exist) + always-visible 32 px global-shelf header +
+//!   per-lane labels (chords / tempo / signature) when expanded, then
+//!   `Space::Fill` for the remainder. The chrome rows all paint opaque
+//!   backgrounds, so they mask any track-row bleed coming from the
+//!   negatively-padded lane subtree below.
+//!
+//! Layering matters: iced 0.14's `container.clip(true)` narrows the
+//! `viewport` passed to child `draw()` calls, but does **not** clip
+//! child `fill_quad` backgrounds. A negatively-padded `view_track_header`
+//! would otherwise paint its background and clip body over the ruler /
+//! section band / global shelf at sub-row scroll positions. See
+//! `tests/track_header_alignment.rs::track_header_no_bleed_into_chrome_expanded`
+//! for the regression that locks this in.
+use iced::widget::{button, column, container, mouse_area, pick_list, row, stack, text, Space};
 use iced::{alignment, Color, Element, Length, Padding};
 
 use crate::message::*;
@@ -101,15 +113,46 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
 }
 
 fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
-    let mut headers = column![].spacing(0);
+    // ---- Chrome heights ----
+    // The "chrome" is everything above the track-lane area: the ruler,
+    // the section band (when any sections are placed), the always-visible
+    // global-shelf header strip, and — when expanded — the three lane
+    // labels (chords / tempo / signature). These mirror the timeline
+    // canvas's `fixed_header_height` so the lane origin lines up
+    // row-for-row with the canvas's first track lane.
+    let has_section_band = !r.compose.placements.is_empty();
+    let expanded = r.viewport.global_tracks_expanded;
+    let section_band_h = if has_section_band {
+        theme::SECTION_BAND_HEIGHT
+    } else {
+        0.0
+    };
+    let lane_labels_h = if expanded {
+        theme::GLOBAL_TRACK_CHORD_HEIGHT
+            + theme::GLOBAL_TRACK_TEMPO_HEIGHT
+            + theme::GLOBAL_TRACK_SIG_HEIGHT
+    } else {
+        0.0
+    };
+    let chrome_h = theme::RULER_HEIGHT
+        + section_band_h
+        + theme::GLOBAL_SHELF_HEADER_HEIGHT
+        + lane_labels_h;
 
-    // ---- Ruler row ----
-    // The track-header column's first row mirrors the timeline ruler so
-    // the global-shelf header strip below it aligns one-for-one with
-    // the canvas. This row is intentionally minimal — the design moves
-    // the "TRACKS" label + add-track button below the entire global
-    // shelf area so the shelf reads as a coherent unit on top.
-    headers = headers.push(
+    // ---- Chrome subtree ----
+    // The chrome lives on the TOP layer of a `stack` so its opaque
+    // backgrounds mask any track-lane content that bleeds upward through
+    // negative-padding scroll offsets (iced 0.14 `container.clip(true)`
+    // only narrows the viewport passed to children — it does not clip
+    // child `fill_quad` backgrounds, so without this stack layering the
+    // lane area's first row paints over the ruler / section band /
+    // global shelf at sub-row scroll positions).
+    //
+    // A trailing `Space::new().height(Length::Fill)` sits below the
+    // chrome rows. `Space` has no `mouse_area` / `on_press`, so events
+    // dropped onto it fall through the stack down to the lane subtree.
+    let mut chrome = column![].spacing(0);
+    chrome = chrome.push(
         container(Space::new().width(Length::Fill))
             .width(Length::Fill)
             .height(theme::RULER_HEIGHT)
@@ -118,17 +161,8 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
                 ..Default::default()
             }),
     );
-
-    // ---- Section-band placeholder ----
-    // The timeline canvas reserves `SECTION_BAND_HEIGHT` under the
-    // ruler when at least one compose section is placed (see
-    // `TimelineCanvas::section_band_height`). The header column has
-    // no section pills of its own, so we render a blank strip of the
-    // same height to keep the lane area's Y origin synced with the
-    // canvas. Without this, every track header drifts up by 22 px
-    // from its lane whenever sections exist.
-    if !r.compose.placements.is_empty() {
-        headers = headers.push(
+    if has_section_band {
+        chrome = chrome.push(
             container(Space::new().width(Length::Fill))
                 .width(Length::Fill)
                 .height(theme::SECTION_BAND_HEIGHT)
@@ -138,38 +172,26 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
                 }),
         );
     }
-
-    // ---- Global shelf ----
-    // Always-visible 32 px header strip + (when expanded) per-lane
-    // label rows for Chords / Tempo / Signature. The header strip is
-    // the click target that toggles the shelf open/closed.
-    let expanded = r.viewport.global_tracks_expanded;
-    headers = headers.push(build_global_shelf_header(expanded));
-
+    chrome = chrome.push(build_global_shelf_header(expanded));
     if expanded {
-        // Chord lane label.
-        headers = headers.push(view_chord_lane_header(r));
-        // Tempo lane label.
-        headers = headers.push(view_tempo_lane_header(r));
-        // Signature lane label.
-        headers = headers.push(view_signature_lane_header(r));
+        chrome = chrome.push(view_chord_lane_header(r));
+        chrome = chrome.push(view_tempo_lane_header(r));
+        chrome = chrome.push(view_signature_lane_header(r));
     }
+    chrome = chrome.push(Space::new().height(Length::Fill));
 
+    // ---- Lane subtree ----
+    // The lane subtree starts with an opaque `chrome_h`-tall spacer (so
+    // the lane area's Y origin lines up under the chrome layer) and
+    // then renders the same negative-padding fractional-scroll lane
+    // area as before. The chrome on the top layer masks anything that
+    // overflows above the lane area's natural top edge.
     let sorted_tracks: Vec<&TrackState> = r
         .sorted_tracks()
         .into_iter()
         .filter(|t| t.sub_track.is_none())
         .collect();
 
-    // Build the lane area as its own clipped sub-container. The canvas
-    // applies `scroll_offset_y` as a fractional pixel offset to track
-    // lanes; the column has to do the same or rows snap to integer
-    // multiples of `TRACK_HEIGHT` and drift on sub-row scroll.
-    //
-    // Strategy: skip tracks fully above the viewport (perf), then
-    // shift the remaining column up by the sub-row remainder using a
-    // negative top padding. The outer container's `clip(true)` hides
-    // the partial row that bleeds above the lane origin.
     let scroll_y = r.viewport.scroll_offset_y.max(0.0);
     let first_visible = (scroll_y / theme::TRACK_HEIGHT).floor() as usize;
     let frac_offset = scroll_y - first_visible as f32 * theme::TRACK_HEIGHT;
@@ -194,9 +216,21 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
             bottom: 0.0,
             left: 0.0,
         });
-    headers = headers.push(lane_area);
 
-    container(headers)
+    let lane_subtree = column![
+        Space::new().height(chrome_h).width(Length::Fill),
+        lane_area,
+    ]
+    .spacing(0);
+
+    // Stack chrome above the lane subtree. `stack`'s base layer
+    // determines the intrinsic size — set both layers to fill the outer
+    // container so they share the same bounds.
+    let layered = stack![lane_subtree, chrome]
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+    container(layered)
         .width(theme::TRACK_HEADER_WIDTH)
         .height(Length::Fill)
         .clip(true)
