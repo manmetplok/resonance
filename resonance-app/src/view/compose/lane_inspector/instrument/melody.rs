@@ -14,7 +14,7 @@ use crate::theme;
 use crate::view::compose::lane_inspector::label_with_info;
 use crate::view::compose::lane_inspector::vocal::toggle_row;
 
-use super::{NotePick, NoteValuePick, PhraseLenPick};
+use super::{register_high_options, register_low_options, NotePick, NoteValuePick, PhraseLenPick};
 
 pub(super) fn melody_controls<'a>(
     definition_id: u64,
@@ -36,14 +36,8 @@ pub(super) fn melody_controls<'a>(
     .padding([4, 6])
     .width(Length::Fill);
 
-    let reg_lo_options: Vec<u8> = (36..=84).collect();
-    let reg_hi_options: Vec<u8> = (36..=96).collect();
-
     let reg_lo_picker = pick_list(
-        reg_lo_options
-            .iter()
-            .map(|n| NotePick(*n))
-            .collect::<Vec<_>>(),
+        register_low_options(),
         Some(NotePick(params.register.0)),
         move |pick| {
             Message::Compose(ComposeMessage::LaneInspector {
@@ -58,10 +52,7 @@ pub(super) fn melody_controls<'a>(
     .width(Length::Fill);
 
     let reg_hi_picker = pick_list(
-        reg_hi_options
-            .iter()
-            .map(|n| NotePick(*n))
-            .collect::<Vec<_>>(),
+        register_high_options(),
         Some(NotePick(params.register.1)),
         move |pick| {
             Message::Compose(ComposeMessage::LaneInspector {

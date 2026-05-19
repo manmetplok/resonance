@@ -73,6 +73,34 @@ impl std::fmt::Display for NotePick {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Cached `NotePick` option vectors for the register/range dropdowns.
+//
+// `pick_list` takes its options by value, so building `(36..=84).map(NotePick)`
+// every frame allocates a fresh `Vec<NotePick>` per dropdown per repaint
+// (and the pad/melody panels show two register pickers each). These
+// statics are populated on first access and reused thereafter. See
+// view-layer performance memory.
+// ---------------------------------------------------------------------------
+
+/// Pad/melody "register low" range: C2..=C6 (MIDI 36..=84).
+pub(super) fn register_low_options() -> &'static [NotePick] {
+    static V: std::sync::OnceLock<Vec<NotePick>> = std::sync::OnceLock::new();
+    V.get_or_init(|| (36..=84).map(NotePick).collect())
+}
+
+/// Pad/melody "register high" range: C2..=C7 (MIDI 36..=96).
+pub(super) fn register_high_options() -> &'static [NotePick] {
+    static V: std::sync::OnceLock<Vec<NotePick>> = std::sync::OnceLock::new();
+    V.get_or_init(|| (36..=96).map(NotePick).collect())
+}
+
+/// Bass "base note" range: C1..=E3 (MIDI 16..=52).
+pub(super) fn bass_base_note_options() -> &'static [NotePick] {
+    static V: std::sync::OnceLock<Vec<NotePick>> = std::sync::OnceLock::new();
+    V.get_or_init(|| (16..=52).map(NotePick).collect())
+}
+
 /// Note value pick for melody note duration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NoteValuePick(pub(super) u32, pub(super) &'static str);

@@ -11,21 +11,15 @@ use crate::message::*;
 
 use crate::view::compose::lane_inspector::label_with_info;
 
-use super::NotePick;
+use super::{register_high_options, register_low_options, NotePick};
 
 pub(super) fn pad_controls<'a>(
     definition_id: u64,
     track_id: TrackId,
     params: &'a resonance_music_theory::PadParams,
 ) -> Element<'a, Message> {
-    let reg_lo_options: Vec<u8> = (36..=84).collect();
-    let reg_hi_options: Vec<u8> = (36..=96).collect();
-
     let reg_lo_picker = pick_list(
-        reg_lo_options
-            .iter()
-            .map(|n| NotePick(*n))
-            .collect::<Vec<_>>(),
+        register_low_options(),
         Some(NotePick(params.register.0)),
         move |pick| {
             Message::Compose(ComposeMessage::LaneInspector {
@@ -40,10 +34,7 @@ pub(super) fn pad_controls<'a>(
     .width(Length::Fill);
 
     let reg_hi_picker = pick_list(
-        reg_hi_options
-            .iter()
-            .map(|n| NotePick(*n))
-            .collect::<Vec<_>>(),
+        register_high_options(),
         Some(NotePick(params.register.1)),
         move |pick| {
             Message::Compose(ComposeMessage::LaneInspector {

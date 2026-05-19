@@ -417,11 +417,22 @@ inline fix pass tackled. Each is documented enough to pick up later.
   the top-skip pad but no bottom-side break; tracks below the viewport still
   allocate widget trees inside `view_track_header`. With 50+ tracks the cost
   shows; with 200+ it dominates.
-- [ ] `view/track_header.rs:442`, `view/compose/lane_inspector/chord/body.rs:
+- [x] `view/track_header.rs:442`, `view/compose/lane_inspector/chord/body.rs:
   44,55,85`, `lane_inspector/instrument/{pad,melody,bass}.rs:21-22` — static
   `Vec<u8>` option lists (`(1..=16).collect()`, `(36..=84).collect()`, etc.)
   rebuilt every frame. Use `OnceLock<&'static [T]>` or the `display_pick!`
   macro pattern.
+  What changed: added six `OnceLock<Vec<…>>`-backed accessor functions
+  returning `&'static [T]` slices that `pick_list` borrows directly —
+  `numerator_options` / `denominator_options` in `view/track_header.rs`,
+  `count_options` / `beats_options` in `chord/body.rs`, and
+  `register_low_options` / `register_high_options` / `bass_base_note_options`
+  in `instrument/mod.rs` (the three vecs are pre-mapped to `NotePick`, so
+  pad/melody/bass no longer do `iter().map(NotePick).collect()` either).
+  Matches the existing pattern in `vocal/common.rs`. Pure perf — option
+  contents and dropdown order are byte-identical, no pixel shift. Workspace
+  `cargo build` + `cargo clippy --workspace --all-targets` stay at zero
+  warnings.
 - [ ] `main.rs:223-403` — god-object methods on `Resonance` (tempo/signature
   mutators, plugin-index trio, `track_id_at_arrange_y`). ARCHITECTURE.md
   flags this. Split into `state/plugin_index.rs`, move tempo mutators into

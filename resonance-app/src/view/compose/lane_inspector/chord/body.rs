@@ -41,8 +41,7 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
         Some(resonance_music_theory::GeneratorSpec::MarkovProgression { length, .. }) => *length,
         None => definition.generate_params.chord_count as u8,
     };
-    let count_options: Vec<u8> = (1..=16).collect();
-    let count_picker = pick_list(count_options, Some(current_length), move |n| {
+    let count_picker = pick_list(count_options(), Some(current_length), move |n| {
         Message::Compose(ComposeMessage::ChordInspector {
             definition_id,
             msg: ChordInspectorMsg::SetLength(n),
@@ -52,8 +51,7 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
     .padding([5, 8])
     .width(Length::Fill);
 
-    let beats_options: Vec<u32> = vec![1, 2, 4, 8, 16];
-    let beats_picker = pick_list(beats_options, Some(definition.beats_per_chord), move |n| {
+    let beats_picker = pick_list(beats_options(), Some(definition.beats_per_chord), move |n| {
         Message::Compose(ComposeMessage::ChordInspector {
             definition_id,
             msg: ChordInspectorMsg::SetBeatsPerChord(n),
@@ -254,4 +252,25 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
     ]
     .spacing(0)
     .into()
+}
+
+// ---------------------------------------------------------------------------
+// Cached pick_list option vectors.
+//
+// `pick_list` takes its options by value (a `Borrow<[T]>` slice), so a
+// fresh `Vec<u8>`/`Vec<u32>` would be allocated on every repaint while
+// this inspector body is visible. These statics are populated on first
+// access and reused thereafter. See view-layer performance memory.
+// ---------------------------------------------------------------------------
+
+/// Chord-count options (1..=16), cached as a static slice.
+fn count_options() -> &'static [u8] {
+    static V: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    V.get_or_init(|| (1..=16).collect())
+}
+
+/// Beats-per-chord options (1, 2, 4, 8, 16), cached as a static slice.
+fn beats_options() -> &'static [u32] {
+    static V: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
+    V.get_or_init(|| vec![1, 2, 4, 8, 16])
 }

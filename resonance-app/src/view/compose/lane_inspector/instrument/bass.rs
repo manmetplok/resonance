@@ -13,7 +13,7 @@ use crate::theme;
 
 use crate::view::compose::lane_inspector::label_with_info;
 
-use super::NotePick;
+use super::{bass_base_note_options, NotePick};
 
 pub(super) fn bass_controls<'a>(
     definition_id: u64,
@@ -31,12 +31,8 @@ pub(super) fn bass_controls<'a>(
     .padding([4, 6])
     .width(Length::Fill);
 
-    let base_note_options: Vec<u8> = (16..=52).collect(); // C1 to E3
     let base_note_picker = pick_list(
-        base_note_options
-            .iter()
-            .map(|n| NotePick(*n))
-            .collect::<Vec<_>>(),
+        bass_base_note_options(),
         Some(NotePick(params.base_note)),
         move |pick| {
             Message::Compose(ComposeMessage::LaneInspector {

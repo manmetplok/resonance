@@ -470,6 +470,22 @@ impl std::fmt::Display for Denominator {
     }
 }
 
+/// Time-signature numerator options (1..=16) cached as a static slice.
+/// `pick_list` takes its options by value (a `Borrow<[T]>`), so building
+/// `(1..=16).map(Numerator).collect()` every frame allocates a fresh
+/// `Vec<Numerator>` per repaint while the signature row is visible.
+fn numerator_options() -> &'static [Numerator] {
+    static V: std::sync::OnceLock<Vec<Numerator>> = std::sync::OnceLock::new();
+    V.get_or_init(|| (1..=16).map(Numerator).collect())
+}
+
+/// Time-signature denominator options (powers of two from 2 to 16),
+/// cached as a static slice. See `numerator_options` for the rationale.
+fn denominator_options() -> &'static [Denominator] {
+    static V: std::sync::OnceLock<Vec<Denominator>> = std::sync::OnceLock::new();
+    V.get_or_init(|| [2, 4, 8, 16].into_iter().map(Denominator).collect())
+}
+
 /// Build the always-visible 32 px global-shelf header strip on the
 /// column side. Contains the caret toggle, `GLOBAL` tag, and a small
 /// count badge ("3" = chords + tempo + sig). Clicking anywhere on the
@@ -734,10 +750,7 @@ fn view_signature_lane_header(r: &Resonance) -> Element<'static, Message> {
     let inner: Element<'static, Message> = if let Some((idx, event)) = selected {
         let num = event.numerator;
         let den = event.denominator;
-        let nums: Vec<Numerator> = (1..=16).map(Numerator).collect();
-        let dens: Vec<Denominator> =
-            [2, 4, 8, 16].iter().copied().map(Denominator).collect();
-        let num_picker = pick_list(nums, Some(Numerator(num)), move |n: Numerator| {
+        let num_picker = pick_list(numerator_options(), Some(Numerator(num)), move |n: Numerator| {
             Message::GlobalTrack(GlobalTrackMessage::UpdateSignatureEvent {
                 index: idx,
                 numerator: n.0,
@@ -747,7 +760,7 @@ fn view_signature_lane_header(r: &Resonance) -> Element<'static, Message> {
         .text_size(10)
         .width(38);
         let den_picker =
-            pick_list(dens, Some(Denominator(den)), move |d: Denominator| {
+            pick_list(denominator_options(), Some(Denominator(den)), move |d: Denominator| {
                 Message::GlobalTrack(GlobalTrackMessage::UpdateSignatureEvent {
                     index: idx,
                     numerator: num,
