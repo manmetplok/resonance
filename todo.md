@@ -90,7 +90,7 @@ mod.rs in several places still owns the work it dispatched.
     - [x] `plugins/resonance-amp/src/nam/wavenet/mod.rs` (507 LOC). The
       `WaveNetModel` impl (incl. 120-line `from_config_and_weights`) belongs in
       a sibling `model.rs` alongside `conv_layer.rs`, `head.rs`, `ring.rs`.
-    - [ ] `plugins/resonance-amp/src/editor/mod.rs` (237 LOC),
+    - [x] `plugins/resonance-amp/src/editor/mod.rs` (237 LOC),
       `plugins/resonance-delay/src/editor/mod.rs` (226 LOC),
       `plugins/resonance-ir/src/editor/mod.rs` (220 LOC),
       `plugins/resonance-drums/src/editor/mod.rs` (256 LOC). Each houses
