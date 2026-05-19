@@ -100,7 +100,7 @@ mod.rs in several places still owns the work it dispatched.
 
 ### Oversized source files worth a split
 
-    - [ ] `resonance-app/src/compose/vocal_svs/segment.rs` (571 LOC) is one
+    - [x] `resonance-app/src/compose/vocal_svs/segment.rs` (571 LOC) is one
       537-line `build_segment()`. Suggested split: `duration.rs` (phoneme
       durations), `f0.rs` (pitch curve + portamento/vibrato), `tension.rs`.
     - [ ] `resonance-app/src/update/compose/lane_inspector.rs` is still a giant
