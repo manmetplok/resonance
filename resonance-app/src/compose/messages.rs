@@ -167,7 +167,7 @@ pub struct VocalAudioReadyData {
     pub trim_start_frames: u64,
     /// Trailing frames to skip on playback, mirroring `trim_start`.
     pub trim_end_frames: u64,
-    /// Snapshot of `compose.vocal_render_epoch[(def, track)]` taken
+    /// Snapshot of `compose.vocal_audio.render_epoch[(def, track)]` taken
     /// when the render was queued. The completion handler compares
     /// this to the current epoch and drops stale renders so the user
     /// doesn't end up with two audio clips stacked on the same lane.

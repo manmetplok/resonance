@@ -64,7 +64,7 @@ pub(super) fn clip_deleted(r: &mut Resonance, clip_id: ClipId) {
     // Drop the lyric side-table entry — keeping it would only leak
     // memory and risk collisions if a future clip is allocated the
     // same id.
-    r.compose.vocal_clip_lyrics.remove(&clip_id);
+    r.compose.vocal_audio.clip_lyrics.remove(&clip_id);
 }
 
 pub(super) fn note_added(r: &mut Resonance, clip_id: ClipId, note: MidiNote) {
@@ -80,7 +80,7 @@ pub(super) fn note_added(r: &mut Resonance, clip_id: ClipId, note: MidiNote) {
         // edit), pad with empty strings up to `pos` first so the
         // newly inserted entry lands at the correct position and the
         // post-insert length matches `clip.notes.len()`.
-        if let Some(lyrics) = r.compose.vocal_clip_lyrics.get_mut(&clip_id) {
+        if let Some(lyrics) = r.compose.vocal_audio.clip_lyrics.get_mut(&clip_id) {
             if lyrics.len() < pos {
                 lyrics.resize(pos, String::new());
             }
@@ -95,7 +95,7 @@ pub(super) fn note_removed(r: &mut Resonance, clip_id: ClipId, note_index: usize
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         if note_index < clip.notes.len() {
             clip.notes.remove(note_index);
-            if let Some(lyrics) = r.compose.vocal_clip_lyrics.get_mut(&clip_id) {
+            if let Some(lyrics) = r.compose.vocal_audio.clip_lyrics.get_mut(&clip_id) {
                 if note_index < lyrics.len() {
                     lyrics.remove(note_index);
                 }
@@ -122,7 +122,7 @@ pub(super) fn note_moved(
             let pre: Vec<(u64, u8)> =
                 clip.notes.iter().map(|n| (n.start_tick, n.note)).collect();
             clip.notes.sort_by_key(|n| n.start_tick);
-            if let Some(lyrics) = r.compose.vocal_clip_lyrics.get_mut(&clip_id) {
+            if let Some(lyrics) = r.compose.vocal_audio.clip_lyrics.get_mut(&clip_id) {
                 if lyrics.len() == pre.len() {
                     let mut perm: Vec<usize> = (0..pre.len()).collect();
                     perm.sort_by_key(|&i| pre[i].0);

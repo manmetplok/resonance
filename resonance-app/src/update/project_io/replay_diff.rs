@@ -700,7 +700,7 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile, extras: &UndoExtras) {
     }
     r.compose.derived_clips = extras.compose_derived_clips.clone();
     r.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
-    r.compose.vocal_clip_lyrics = extras.vocal_clip_lyrics.clone();
+    r.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics.clone();
 }
 
 /// `MidiNote` is a plain bag of `u8/f32/u64` fields but does not derive

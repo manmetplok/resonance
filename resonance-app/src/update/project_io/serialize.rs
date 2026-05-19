@@ -111,7 +111,8 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             // load.
             let mut vocal_lyrics: Vec<String> = r
                 .compose
-                .vocal_clip_lyrics
+                .vocal_audio
+                .clip_lyrics
                 .get(&mc.id)
                 .cloned()
                 .unwrap_or_default();

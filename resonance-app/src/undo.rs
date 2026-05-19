@@ -233,7 +233,7 @@ impl crate::Resonance {
         let extras = UndoExtras {
             compose_derived_clips: self.compose.derived_clips.clone(),
             compose_next_derived_clip_id: self.compose.next_derived_clip_id,
-            vocal_clip_lyrics: self.compose.vocal_clip_lyrics.clone(),
+            vocal_clip_lyrics: self.compose.vocal_audio.clip_lyrics.clone(),
         };
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
@@ -334,7 +334,7 @@ impl crate::Resonance {
     pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
         self.compose.derived_clips = extras.compose_derived_clips;
         self.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
-        self.compose.vocal_clip_lyrics = extras.vocal_clip_lyrics;
+        self.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics;
     }
 
     /// Attempt to undo. No-ops (returning false) if the history is empty

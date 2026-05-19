@@ -173,7 +173,8 @@ fn enqueue_vocal_render(
 
     let epoch_entry = r
         .compose
-        .vocal_render_epoch
+        .vocal_audio
+        .render_epoch
         .entry((definition_id, track_id))
         .or_insert(0);
     *epoch_entry = epoch_entry.wrapping_add(1);
@@ -274,7 +275,8 @@ pub(super) fn rerender_vocal_audio(
     };
     let lyrics = r
         .compose
-        .vocal_clip_lyrics
+        .vocal_audio
+        .clip_lyrics
         .get(&clip_id)
         .cloned()
         .unwrap_or_else(|| vec![String::new(); midi_notes.len()]);
@@ -321,7 +323,8 @@ pub(super) fn handle_vocal_audio_ready(
 
     let current_epoch = r
         .compose
-        .vocal_render_epoch
+        .vocal_audio
+        .render_epoch
         .get(&(definition_id, track_id))
         .copied()
         .unwrap_or(0);
@@ -333,7 +336,8 @@ pub(super) fn handle_vocal_audio_ready(
     for (placement_id, start_sample) in placements {
         if let Some((old_id, old_path)) = r
             .compose
-            .vocal_audio_clips
+            .vocal_audio
+            .clips
             .remove(&(definition_id, placement_id, track_id))
         {
             r.engine
@@ -351,7 +355,7 @@ pub(super) fn handle_vocal_audio_ready(
             trim_start_frames,
             trim_end_frames,
         });
-        r.compose.vocal_audio_clips.insert(
+        r.compose.vocal_audio.clips.insert(
             (definition_id, placement_id, track_id),
             (audio_clip_id, wav_path.clone()),
         );
@@ -383,7 +387,7 @@ impl VocalMidiInstall<'_> {
             {
                 r.engine
                     .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
-                r.compose.vocal_clip_lyrics.remove(&old_id);
+                r.compose.vocal_audio.clip_lyrics.remove(&old_id);
             }
             let clip_id = r.compose.fresh_derived_clip_id();
             r.engine.send(AudioCommand::LoadMidiClipDirect {
@@ -401,7 +405,7 @@ impl VocalMidiInstall<'_> {
                 .insert((self.definition_id, placement_id, self.track_id), clip_id);
             let mut padded: Vec<String> = self.lyrics.to_vec();
             padded.resize(self.midi_notes.len(), String::new());
-            r.compose.vocal_clip_lyrics.insert(clip_id, padded);
+            r.compose.vocal_audio.clip_lyrics.insert(clip_id, padded);
         }
     }
 }
@@ -423,7 +427,8 @@ fn tear_down_old_vocal_audio(
     type VocalAudioEntry = (ClipId, std::path::PathBuf);
     let stale: Vec<(VocalAudioKey, VocalAudioEntry)> = r
         .compose
-        .vocal_audio_clips
+        .vocal_audio
+        .clips
         .iter()
         .filter(|((d, _p, t), _)| *d == definition_id && *t == track_id)
         .map(|(k, v)| (*k, v.clone()))
@@ -431,7 +436,7 @@ fn tear_down_old_vocal_audio(
     for (key, (clip_id, path)) in stale {
         r.engine.send(AudioCommand::DeleteClip { clip_id });
         unlink_if_exists(&path);
-        r.compose.vocal_audio_clips.remove(&key);
+        r.compose.vocal_audio.clips.remove(&key);
     }
 }
 

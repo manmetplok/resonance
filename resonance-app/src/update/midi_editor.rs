@@ -119,7 +119,8 @@ fn toggle_slur(
 
     let entry = r
         .compose
-        .vocal_clip_lyrics
+        .vocal_audio
+        .clip_lyrics
         .entry(clip_id)
         .or_default();
     if entry.len() < note_count {

@@ -112,7 +112,7 @@ pub struct VocalRollCanvas<'a> {
     pub bpm: f32,
     /// Voice name shown in the top-left meta corner.
     pub voice_label: &'a str,
-    /// Per-note lyrics from `compose.vocal_clip_lyrics`. Index i aligns
+    /// Per-note lyrics from `compose.vocal_audio.clip_lyrics`. Index i aligns
     /// with the i-th `MidiNote`. Slurs are identified by the lyric
     /// being equal to [`resonance_music_theory::g2p::SLUR_MARKER`]
     /// (`"+"`).
@@ -138,7 +138,8 @@ pub fn build_canvas<'a>(
     static EMPTY_LYRICS: Vec<String> = Vec::new();
     let lyrics = app
         .compose
-        .vocal_clip_lyrics
+        .vocal_audio
+        .clip_lyrics
         .get(&clip.id)
         .map(|v| v.as_slice())
         .unwrap_or(EMPTY_LYRICS.as_slice());

@@ -64,7 +64,7 @@
       `resonance-music-theory/src/derive/vocal/style/mod.rs:89` with `crate::chord::Chord`.
     - [x] Build `HashMap<PluginInstanceId, PluginLocator>` side-index in `Resonance` to replace
       the linear scan in `with_plugin_mut` (`resonance-app/src/main.rs:305`).
-    - [ ] Group `vocal_audio_clips`/`vocal_clip_lyrics`/`vocal_render_epoch` into a
+    - [x] Group `vocal_audio_clips`/`vocal_clip_lyrics`/`vocal_render_epoch` into a
       `VocalAudioRegistry` struct in `resonance-app/src/compose/state.rs:77-112`.
     - [ ] Drop `pub(super)` on internals of `resonance-music-theory/src/derive/motif_engine.rs`
       once it becomes a directory (most should be private).

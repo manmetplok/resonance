@@ -235,7 +235,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
         if !pmc.vocal_lyrics.is_empty() {
             let mut lyrics = pmc.vocal_lyrics.clone();
             lyrics.resize(note_count, String::new());
-            r.compose.vocal_clip_lyrics.insert(pmc.id, lyrics);
+            r.compose.vocal_audio.clip_lyrics.insert(pmc.id, lyrics);
         }
     }
 
