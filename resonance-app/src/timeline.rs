@@ -358,102 +358,132 @@ impl<'a> TimelineCanvas<'a> {
         let sorted_tracks = self.visible_tracks_sorted();
         let track_area_height = sorted_tracks.len() as f32 * theme::TRACK_HEIGHT;
 
-        for (i, track) in sorted_tracks.iter().enumerate() {
-            let y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
+        // Everything inside the lane region — track rows, grid lines,
+        // clips, and the loop in/out dim overlays — is clipped to the
+        // area below the fixed header. Without this, a track straddling
+        // the header_height boundary (sub-row vertical scroll, or a
+        // partial top row when scrolled mid-row) paints its background
+        // and clip body over the ruler / section-pill band / global
+        // tracks above. Ruler labels and loop / playhead markers stay
+        // outside the clip on purpose so their handles can sit on top
+        // of the ruler.
+        let lane_clip = Rectangle {
+            x: 0.0,
+            y: header_height,
+            width: bounds.width,
+            height: (bounds.height - header_height).max(0.0),
+        };
+        let loop_dim_color = Color::from_rgba(0.0, 0.0, 0.0, 0.15);
+        let loop_total_height_below_header =
+            (track_area_height - y_off).max(bounds.height - header_height);
+        let loop_dim_height = loop_total_height_below_header.max(0.0);
+        frame.with_clip(lane_clip, |frame| {
+            for (i, track) in sorted_tracks.iter().enumerate() {
+                let y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
 
-            // Skip tracks entirely above or below the visible area
-            if y + theme::TRACK_HEIGHT < header_height || y > bounds.height {
-                continue;
+                // Skip tracks entirely above or below the visible area
+                if y + theme::TRACK_HEIGHT < header_height || y > bounds.height {
+                    continue;
+                }
+
+                let is_selected = self.selected_track == Some(track.id);
+                let bg = if is_selected {
+                    theme::PANEL_SELECTED
+                } else if i % 2 == 0 {
+                    theme::BG
+                } else {
+                    theme::PANEL_DARK
+                };
+                frame.fill_rectangle(
+                    Point::new(0.0, y),
+                    Size::new(bounds.width, theme::TRACK_HEIGHT),
+                    bg,
+                );
+
+                // Recording overlay is drawn in the uncached overlay pass
+                // — see `draw_overlay_into`. It grows with `playhead`,
+                // which would otherwise invalidate the cache every frame.
+
+                // Track separator line
+                frame.fill_rectangle(
+                    Point::new(0.0, y + theme::TRACK_HEIGHT - 1.0),
+                    Size::new(bounds.width, 1.0),
+                    theme::TRACK_LINE,
+                );
             }
 
-            let is_selected = self.selected_track == Some(track.id);
-            let bg = if is_selected {
-                theme::PANEL_SELECTED
-            } else if i % 2 == 0 {
-                theme::BG
-            } else {
-                theme::PANEL_DARK
-            };
-            frame.fill_rectangle(
-                Point::new(0.0, y),
-                Size::new(bounds.width, theme::TRACK_HEIGHT),
-                bg,
+            // Draw bar/beat grid lines through track area
+            self.draw_grid_lines(
+                frame,
+                bounds.width,
+                header_height,
+                track_area_height,
+                y_off,
             );
 
-            // Recording overlay is drawn in the uncached overlay pass
-            // — see `draw_overlay_into`. It grows with `playhead`,
-            // which would otherwise invalidate the cache every frame.
+            // Draw audio clips
+            for clip in self.clips {
+                self.draw_clip(
+                    frame,
+                    clip,
+                    &sorted_tracks,
+                    header_height,
+                    y_off,
+                    bounds.height,
+                );
+            }
 
-            // Track separator line
-            frame.fill_rectangle(
-                Point::new(0.0, y + theme::TRACK_HEIGHT - 1.0),
-                Size::new(bounds.width, 1.0),
-                theme::TRACK_LINE,
-            );
-        }
+            // Draw MIDI clips
+            for clip in self.midi_clips {
+                self.draw_midi_clip(
+                    frame,
+                    clip,
+                    &sorted_tracks,
+                    header_height,
+                    y_off,
+                    bounds.height,
+                );
+            }
 
-        // Draw bar/beat grid lines through track area
-        self.draw_grid_lines(
-            frame,
-            bounds.width,
-            header_height,
-            track_area_height,
-            y_off,
-        );
+            // Lane-area portion of the loop in/out markers — the dim
+            // overlays. The vertical loop lines, amber range fill, and
+            // triangle handles are drawn below in the unclipped pass so
+            // they cross over the ruler.
+            if self.loop_enabled {
+                let loop_in_x = self.sample_to_x(self.loop_in);
+                let loop_out_x = self.sample_to_x(self.loop_out);
 
-        // Draw bar/beat ruler
+                if loop_in_x > 0.0 {
+                    frame.fill_rectangle(
+                        Point::new(0.0, header_height),
+                        Size::new(loop_in_x.min(bounds.width), loop_dim_height),
+                        loop_dim_color,
+                    );
+                }
+                if loop_out_x < bounds.width {
+                    let right_start = loop_out_x.max(0.0);
+                    frame.fill_rectangle(
+                        Point::new(right_start, header_height),
+                        Size::new((bounds.width - right_start).max(0.0), loop_dim_height),
+                        loop_dim_color,
+                    );
+                }
+            }
+        });
+
+        // Draw bar/beat ruler (after the clipped lane pass so the ruler
+        // labels always sit on top of the fixed-header backdrop).
         self.draw_ruler(frame, bounds.width, ruler_height);
 
-        // Draw audio clips
-        for clip in self.clips {
-            self.draw_clip(
-                frame,
-                clip,
-                &sorted_tracks,
-                header_height,
-                y_off,
-                bounds.height,
-            );
-        }
-
-        // Draw MIDI clips
-        for clip in self.midi_clips {
-            self.draw_midi_clip(
-                frame,
-                clip,
-                &sorted_tracks,
-                header_height,
-                y_off,
-                bounds.height,
-            );
-        }
-
-        // Draw loop in/out markers
+        // Draw the unclipped portions of the loop markers — the ruler
+        // amber fill, the vertical loop lines, and the triangle handles.
+        // These intentionally cross the ruler / section band so the
+        // handles read as draggable from above the lanes.
         if self.loop_enabled {
             let loop_in_x = self.sample_to_x(self.loop_in);
             let loop_out_x = self.sample_to_x(self.loop_out);
             let total_height = (header_height + track_area_height - y_off).max(bounds.height);
             let loop_color = theme::LOOP_MARKER;
-
-            // Dim overlay outside loop range (over track area only)
-            if loop_in_x > 0.0 {
-                frame.fill_rectangle(
-                    Point::new(0.0, header_height),
-                    Size::new(loop_in_x.min(bounds.width), total_height - header_height),
-                    Color::from_rgba(0.0, 0.0, 0.0, 0.15),
-                );
-            }
-            if loop_out_x < bounds.width {
-                let right_start = loop_out_x.max(0.0);
-                frame.fill_rectangle(
-                    Point::new(right_start, header_height),
-                    Size::new(
-                        (bounds.width - right_start).max(0.0),
-                        total_height - header_height,
-                    ),
-                    Color::from_rgba(0.0, 0.0, 0.0, 0.15),
-                );
-            }
 
             // Amber range fill in ruler area
             let range_x = loop_in_x.max(0.0);
@@ -549,33 +579,45 @@ impl<'a> TimelineCanvas<'a> {
 
         // Per-track recording overlay (one shaded strip per armed
         // track that spans from record-start to playhead, wrapping
-        // around loop bounds when looping is active).
+        // around loop bounds when looping is active). Same clipping
+        // discipline as `draw_into`: the strip is clipped to the lane
+        // area so a partially-scrolled top row doesn't bleed its red
+        // wash into the ruler / section band / global tracks header.
         if !self.recording_tracks.is_empty() {
-            for (i, track) in sorted_tracks.iter().enumerate() {
-                if !self.recording_tracks.contains(&track.id) {
-                    continue;
+            let lane_clip = Rectangle {
+                x: 0.0,
+                y: header_height,
+                width: bounds.width,
+                height: (bounds.height - header_height).max(0.0),
+            };
+            frame.with_clip(lane_clip, |frame| {
+                for (i, track) in sorted_tracks.iter().enumerate() {
+                    if !self.recording_tracks.contains(&track.id) {
+                        continue;
+                    }
+                    let y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
+                    if y + theme::TRACK_HEIGHT < header_height || y > bounds.height {
+                        continue;
+                    }
+                    let (overlay_start, overlay_end) = if self.loop_enabled {
+                        (self.loop_in, self.playhead.min(self.loop_out))
+                    } else {
+                        (self.recording_start_sample, self.playhead)
+                    };
+                    let start_x = self.sample_to_x(overlay_start);
+                    let end_x = self.sample_to_x(overlay_end);
+                    let overlay_x = start_x.max(0.0);
+                    let overlay_w =
+                        (end_x - overlay_x).max(0.0).min(bounds.width - overlay_x);
+                    if overlay_w > 0.0 {
+                        frame.fill_rectangle(
+                            Point::new(overlay_x, y),
+                            Size::new(overlay_w, theme::TRACK_HEIGHT),
+                            Color::from_rgba(0.8, 0.2, 0.2, 0.08),
+                        );
+                    }
                 }
-                let y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
-                if y + theme::TRACK_HEIGHT < header_height || y > bounds.height {
-                    continue;
-                }
-                let (overlay_start, overlay_end) = if self.loop_enabled {
-                    (self.loop_in, self.playhead.min(self.loop_out))
-                } else {
-                    (self.recording_start_sample, self.playhead)
-                };
-                let start_x = self.sample_to_x(overlay_start);
-                let end_x = self.sample_to_x(overlay_end);
-                let overlay_x = start_x.max(0.0);
-                let overlay_w = (end_x - overlay_x).max(0.0).min(bounds.width - overlay_x);
-                if overlay_w > 0.0 {
-                    frame.fill_rectangle(
-                        Point::new(overlay_x, y),
-                        Size::new(overlay_w, theme::TRACK_HEIGHT),
-                        Color::from_rgba(0.8, 0.2, 0.2, 0.08),
-                    );
-                }
-            }
+            });
         }
 
         // Playhead — warm 1px line + a rounded tab at the top.

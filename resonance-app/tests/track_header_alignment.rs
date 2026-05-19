@@ -20,7 +20,7 @@
 
 use iced::Size;
 use iced_test::simulator::Simulator;
-use resonance_app::message::{Message, ViewportMessage};
+use resonance_app::message::{Message, UiMessage, ViewportMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::{demo, theme, Resonance, STARTUP_TAB};
 
@@ -109,5 +109,33 @@ fn track_header_alignment_scroll_140() {
     snapshot_to(
         &app,
         "tests/snapshots/track_header_alignment_scroll_140.png",
+    );
+}
+
+/// Regression for the "tracks bleed into the canvas header" bug: with
+/// the global tracks area expanded *and* a partial-row vertical scroll,
+/// the partially-scrolled top track used to paint its background and
+/// clip body over the ruler + section band + global tracks area. The
+/// lane-area clip in `TimelineCanvas::draw_into` confines those paints
+/// to below `fixed_header_height()`. A golden taken with this state
+/// holds the fix in place.
+#[test]
+fn timeline_lane_clip_globals_expanded_scrolled() {
+    let _ = STARTUP_TAB.set(ViewMode::Arrange);
+    let (mut app, _task) = Resonance::new();
+    demo::seed_demo_content(&mut app);
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
+        WINDOW.0 - theme::TRACK_HEADER_WIDTH,
+    )));
+    let _ = app.update(Message::Viewport(ViewportMessage::TimelineContentSize(
+        2000.0,
+        WINDOW.1 * 4.0,
+    )));
+    let _ = app.update(Message::Ui(UiMessage::ToggleGlobalTracks));
+    let _ = app.update(Message::Viewport(ViewportMessage::ScrollToY(50.0)));
+
+    snapshot_to(
+        &app,
+        "tests/snapshots/timeline_lane_clip_globals_expanded_scrolled.png",
     );
 }

@@ -17,11 +17,34 @@
       drop guard, and widens replay's `next_sub_track_id` bump to include
       every saved track id (not just sub-tracks).
 
-    - [ ] Arrange view: when scrolling vertically, tracks at the top of the
+    - [ ] ! Mixer panic after adding preset drum track. Reproduce: add the
+      preset drum track to a project, then navigate to the Mixer tab — app
+      panics at `resonance-app/src/view/mixer/inspector.rs:450:28` with
+      `index out of bounds: the len is 0 but the index is 0`. Likely an
+      unguarded `[0]` access on an empty pads/sends/slots vec for the newly
+      added drum track. (Reported 2026-05-19.)
+
+    - [x] Arrange view: when scrolling vertically, tracks at the top of the
       scrollable area are visible through / bleed into the header + transport
       bar (z-order or clipping issue — the timeline scrollable likely paints
       over its parent's bounds, or the header isn't rendered on top of /
       doesn't have an opaque background above the scrollable's content rect).
+      **Root cause:** `TimelineCanvas::draw_into` painted track row
+      backgrounds, audio clips, MIDI clips, and the loop dim overlays
+      *without* clipping them to the lane area. The "skip if fully
+      above" guard only drops tracks entirely above `header_height`; a
+      row straddling `fixed_header_height()` (any partial-row vertical
+      scroll) still drew its full background and clip body, painting
+      over the ruler + section-pill band + global-tracks header. The
+      recording overlay in `draw_overlay_into` had the same gap. **Fix:**
+      wrap the lane-region paints in `frame.with_clip(lane_rect, ...)`
+      so they're clipped to `Rectangle { y: header_height, height:
+      bounds.height - header_height, ... }`. Ruler labels, loop in/out
+      vertical lines + handles, and the playhead tab stay outside the
+      clip on purpose — they intentionally cross the ruler so the
+      handles read as draggable from above the lanes. Snapshot tests
+      rebaselined and a new `timeline_lane_clip_globals_expanded_scrolled`
+      golden added to catch the regression when the globals row is expanded.
 
     - [ ] Wrap the lane_inspector body in `iced::widget::lazy` fingerprinted on
       `(selected_lane, definition.id, version_counter)`. **Blocked**: iced 0.14
