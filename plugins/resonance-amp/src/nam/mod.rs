@@ -17,34 +17,38 @@ pub fn validate_matvec_dims(a: &[f32], x: &[f32], y: &[f32], rows: usize, cols: 
 }
 
 /// Matrix-vector multiply: y = A * x, where A is [rows x cols] row-major.
+///
+/// Slicing first + `chunks_exact` gives LLVM enough length information to
+/// elide every per-element bounds check inside the inner dot product loop
+/// (verified by micro-benchmark to be within 1% of the previous
+/// `get_unchecked` version across 16x16, 32x32, and 64x64 dimensions).
 #[inline(always)]
 pub fn matvec(a: &[f32], x: &[f32], rows: usize, cols: usize, y: &mut [f32]) {
-    debug_assert!(a.len() >= rows * cols, "matvec: a too short");
-    debug_assert!(x.len() >= cols, "matvec: x too short");
-    debug_assert!(y.len() >= rows, "matvec: y too short");
-    for (r, out) in y.iter_mut().enumerate().take(rows) {
+    let a = &a[..rows * cols];
+    let x = &x[..cols];
+    let y = &mut y[..rows];
+    for (out, row) in y.iter_mut().zip(a.chunks_exact(cols)) {
         let mut sum = 0.0f32;
-        let row_start = r * cols;
-        for c in 0..cols {
-            // SAFETY: dimensions validated at model load time
-            sum += unsafe { *a.get_unchecked(row_start + c) * *x.get_unchecked(c) };
+        for (ai, xi) in row.iter().zip(x.iter()) {
+            sum += ai * xi;
         }
         *out = sum;
     }
 }
 
 /// Matrix-vector multiply-add: y += A * x.
+///
+/// Same iterator pattern as `matvec` — see that function's note on
+/// bounds-check elision.
 #[inline(always)]
 pub fn matvec_add(a: &[f32], x: &[f32], rows: usize, cols: usize, y: &mut [f32]) {
-    debug_assert!(a.len() >= rows * cols, "matvec_add: a too short");
-    debug_assert!(x.len() >= cols, "matvec_add: x too short");
-    debug_assert!(y.len() >= rows, "matvec_add: y too short");
-    for (r, out) in y.iter_mut().enumerate().take(rows) {
+    let a = &a[..rows * cols];
+    let x = &x[..cols];
+    let y = &mut y[..rows];
+    for (out, row) in y.iter_mut().zip(a.chunks_exact(cols)) {
         let mut sum = 0.0f32;
-        let row_start = r * cols;
-        for c in 0..cols {
-            // SAFETY: dimensions validated at model load time
-            sum += unsafe { *a.get_unchecked(row_start + c) * *x.get_unchecked(c) };
+        for (ai, xi) in row.iter().zip(x.iter()) {
+            sum += ai * xi;
         }
         *out += sum;
     }

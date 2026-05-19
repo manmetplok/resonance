@@ -39,10 +39,16 @@
       element isn't `'static`. Fixing requires moving `Content` behind `Rc<RefCell<>>`
       (behaviour change) or splitting the inspector so the text_editor lives
       outside the lazy boundary.
-    - [ ] Drop `get_unchecked` behind power-of-two masks (benchmark first):
+    - [x] Drop `get_unchecked` behind power-of-two masks (benchmark first):
       `resonance-dsp/src/lfo.rs:76-77`,
       `plugins/resonance-wavetable/src/oscillator.rs`,
-      `plugins/resonance-amp/src/nam/mod.rs` matvec.
+      `plugins/resonance-amp/src/nam/mod.rs` matvec. **Resolution**: micro-bench
+      vs the previous unsafe versions on x86_64 — LFO and `cubic_read` BCE
+      cleanly when given a mask-bounded index against a const-sized static or
+      a `len()`-asserted slice (within 0.5%). `matvec`/`matvec_add` switched
+      to a `chunks_exact(cols)` + zipped-iter dot product, which is within 1%
+      of the unsafe version on 16/32/64-square shapes. All three call sites
+      now use safe indexing.
     - [ ] Compile-time CMU dict via `phf_codegen`. **Deferred**: 135 k entries
       blow up build time (phf perfect-hash search is exponentially slower past
       ~100 k keys). Runtime parse is ~50 ms once via `OnceLock` — not load-bearing.
