@@ -27,3 +27,10 @@ pub use engine::midi::{outbound_step_start, OutboundStep};
 /// without spinning up a CLAP plugin or the engine thread.
 #[doc(hidden)]
 pub use mixer::collect_midi_events_bounce;
+
+/// Test surface for the streaming recording drain path. Exposed so
+/// integration tests can verify that `TrackRecordingBuf` never
+/// accumulates audio in RAM as a take grows. Not part of the public
+/// API — the engine owns `RecordingState` internally.
+#[doc(hidden)]
+pub use recording::{PrecountState, RecordingState, TrackRecordingBuf};

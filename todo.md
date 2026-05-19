@@ -21,9 +21,14 @@
       documented exception (ARCHITECTURE.md → Test Layout → Binary-crate
       exception). Per-module rationale comments added in front of each
       `#[cfg(test)] mod tests` block.
-    - [ ] `resonance-audio/src/recording.rs` inline test exposes private
+    - [x] `resonance-audio/src/recording.rs` inline test exposes private
       `RecordingState`/`TrackRecordingBuf` types; would need to expand public
-      surface to migrate.
+      surface to migrate. **Resolution**: promoted `RecordingState`,
+      `TrackRecordingBuf`, and `PrecountState` from `pub(crate)` to `pub` and
+      re-exported them from `lib.rs` via `#[doc(hidden)] pub use` (following
+      the existing pattern for `collect_midi_events_bounce` and
+      `outbound_step_start`). Migrated `drain_streams_to_disk_without_growing_memory`
+      to `tests/recording_drain.rs`.
 
 ###P3 — library / idiom
 
