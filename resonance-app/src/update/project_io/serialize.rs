@@ -170,6 +170,11 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         midi_clock_send_device: r.midi_clock_send_device.clone(),
         midi_clock_recv_enabled: r.midi_clock_recv_enabled,
         midi_clock_recv_device: r.midi_clock_recv_device.clone(),
-        drum_groups: r.compose.drum_groups.clone(),
+        // Legacy field — current code persists the full pattern bank
+        // below. Kept empty here so projects authored by this build skip
+        // straight to the new shape, and the legacy loader only kicks in
+        // for files written by older builds.
+        drum_groups: Vec::new(),
+        drum_patterns: r.compose.drum_patterns.clone(),
     }
 }

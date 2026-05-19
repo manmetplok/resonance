@@ -85,6 +85,7 @@ mod tests {
             beats_per_chord: 4,
             seventh_chords: false,
             motif_source: resonance_music_theory::MotifSource::default(),
+            drum_pattern_id: None,
         }
     }
 

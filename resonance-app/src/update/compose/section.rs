@@ -269,6 +269,7 @@ pub(super) fn handle_create(
                 ..resonance_music_theory::MotifParams::default()
             },
         ),
+        drum_pattern_id: None,
     });
     let start_bar = first_free_bar(&r.compose, length_bars);
     let placement_id = r.compose.fresh_id();

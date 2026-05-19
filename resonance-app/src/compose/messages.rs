@@ -354,15 +354,55 @@ pub enum LaneInspectorMsg {
 // Drum groups
 // ---------------------------------------------------------------------------
 
-/// Messages targeting the project-scoped drum groups. Group definitions
-/// (id, name, color, pads, grid, cycle, phase) live on
-/// [`crate::compose::ComposeState::drum_groups`]. The manager modal and
-/// the right-rail Drum generator both route through these.
+/// Messages targeting the project-scoped drum pattern bank. Patterns
+/// (id, name, color, groups) live on
+/// [`crate::compose::ComposeState::drum_patterns`]; group definitions
+/// (id, name, color, pads, grid, cycle, phase) live on each
+/// [`crate::compose::DrumPattern::groups`]. The manager modal, the
+/// drum-lane pattern picker, and the right-rail generator all route
+/// through these.
 #[derive(Debug, Clone)]
 pub enum DrumGroupsMessage {
     /// Mark a group as the active selection for the right-rail generator
     /// and the lane's highlight stripe.
     SelectGroup { group_id: u64 },
+
+    // ---- Pattern bank ----
+    /// Switch which pattern the manager modal is currently editing.
+    /// Doesn't change the assignment on any section — that's
+    /// [`AssignPattern`].
+    SelectPattern { pattern_id: u64 },
+    /// Assign a pattern to a section. `pattern_id: None` reverts the
+    /// section to "use the project default" (resolved via
+    /// `ComposeState::pattern_for_definition`).
+    AssignPattern {
+        definition_id: u64,
+        pattern_id: Option<u64>,
+    },
+    /// Append a fresh empty pattern to the bank and focus it in the
+    /// manager modal.
+    AddPattern,
+    /// Clone an existing pattern (groups + per-pad patterns) into a new
+    /// bank entry. Each group inside the duplicate gets a fresh id so
+    /// future toggles don't affect both.
+    DuplicatePattern { pattern_id: u64 },
+    /// Remove a pattern from the bank. Sections that pointed at the
+    /// deleted pattern fall back to the project default. Refuses to
+    /// remove the last remaining pattern.
+    DeletePattern { pattern_id: u64 },
+    /// Replace a pattern's display name.
+    RenamePattern { pattern_id: u64, name: String },
+    /// Update a pattern's accent color.
+    SetPatternColor { pattern_id: u64, color: [u8; 3] },
+    /// Open the inline rename input on the lane's pattern picker chip.
+    BeginRenamePattern { pattern_id: u64 },
+    /// Update the in-progress rename text. Keyed off
+    /// `drumroll.renaming_pattern_id`.
+    UpdateRenamePatternText(String),
+    /// Apply the rename input and clear the in-progress state.
+    CommitRenamePattern,
+    /// Discard the rename input without applying.
+    CancelRenamePattern,
 
     // ---- Manager modal ----
     /// Show the modal in "manage groups" mode.

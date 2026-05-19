@@ -1,4 +1,5 @@
 pub mod canvas;
+pub mod pattern_picker;
 
 use iced::widget::{column, container, Canvas, Space};
 use iced::{Element, Length};
@@ -11,17 +12,20 @@ use crate::state::InstrumentType;
 use crate::Resonance;
 
 pub use canvas::{drum_lane_height, sorted_drum_tracks, ComposeDrumCanvas};
+pub use pattern_picker::pattern_picker;
 
 /// Build the drumroll block. Returns an empty 0-height container when the
 /// project has no drum tracks so synth-only projects pay no visual cost.
 ///
-/// Each drum track gets its own grouped canvas; the project-scoped drum
-/// groups are shared so kick/snare/hat/toms/perc read consistently across
-/// tracks.
+/// Each drum track gets its own grouped canvas. The groups themselves are
+/// resolved per-section via [`crate::compose::ComposeState::pattern_for_definition`],
+/// so different sections can run different patterns. A pattern picker
+/// chip row sits above the lane so the user can switch the section's
+/// pattern in place without opening the manager modal.
 pub fn view<'a>(
     app: &'a Resonance,
-    _placement: &'a SectionPlacementState,
-    _definition: &'a SectionDefinitionState,
+    placement: &'a SectionPlacementState,
+    definition: &'a SectionDefinitionState,
 ) -> Element<'a, Message> {
     let drum_tracks = sorted_drum_tracks(&app.registry.tracks);
 
@@ -31,11 +35,12 @@ pub fn view<'a>(
 
     let width = super::workspace_width(
         &app.tempo_map,
-        _placement.start_bar,
-        _definition.length_bars,
+        placement.start_bar,
+        definition.length_bars,
     );
 
-    let total_height = drum_lane_height(&app.compose.drum_groups);
+    let section_groups = app.compose.groups_for_definition(definition);
+    let total_height = drum_lane_height(section_groups);
     let track_selected = matches!(
         app.compose.selected_lane,
         crate::compose::SelectedLane::Drums(_)
@@ -45,11 +50,14 @@ pub fn view<'a>(
         _ => None,
     };
 
-    let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(drum_tracks.len());
+    let picker = pattern_picker(app, definition, width);
+
+    let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(drum_tracks.len() + 1);
+    rows.push(picker);
     for track in &drum_tracks {
         let canvas_prog = ComposeDrumCanvas {
             track,
-            groups: &app.compose.drum_groups,
+            groups: section_groups,
             selected_group_id: app.compose.drumroll.selected_group_id,
             track_selected: track_selected && selected_track_id == Some(track.id),
         };

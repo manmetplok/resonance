@@ -36,6 +36,7 @@ fn state_with_chords_and_scale() -> ComposeState {
         beats_per_chord: 4,
         seventh_chords: false,
         motif_source: MotifSource::default(),
+        drum_pattern_id: None,
     });
     let placement_id = state.fresh_id();
     state.placements.push(SectionPlacementState {
@@ -213,6 +214,7 @@ fn migration_lifts_legacy_melody_motif_knobs_onto_section() {
         beats_per_chord: 4,
         seventh_chords: false,
         motif_source: MotifSource::default(),
+        drum_pattern_id: None,
     });
 
     let custom_melody = MelodyParams {
@@ -268,6 +270,7 @@ fn migration_skips_when_motif_already_customized() {
             motif_len: 2,
             leap_chance: 0.05,
         }),
+        drum_pattern_id: None,
     });
 
     let custom_melody = MelodyParams {

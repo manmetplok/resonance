@@ -62,9 +62,18 @@ pub(super) fn kit_picker_column<'a>(r: &'a Resonance) -> Element<'a, Message> {
         by_cat.entry(&pad.category).or_default().push(pad);
     }
 
-    // pad note -> group id
+    // pad note -> group id. Looks up assignment *inside the managing
+    // pattern only* — pads can be assigned independently in different
+    // patterns, so a hat that belongs to "Closed" in pattern A and
+    // "Loose" in pattern B should appear as unassigned (in this view)
+    // when the user is editing pattern A and switches to pattern B.
+    let pattern_groups: &[DrumGroup] = r
+        .compose
+        .managing_pattern()
+        .map(|p| p.groups.as_slice())
+        .unwrap_or(&[]);
     let mut owner: std::collections::HashMap<u8, u64> = std::collections::HashMap::new();
-    for g in &r.compose.drum_groups {
+    for g in pattern_groups {
         for p in &g.pads {
             owner.insert(p.note, g.id);
         }
@@ -78,7 +87,7 @@ pub(super) fn kit_picker_column<'a>(r: &'a Resonance) -> Element<'a, Message> {
             .color(theme::TEXT_4);
         content.push(container(head).padding([8, 4]).into());
         for p in pads {
-            content.push(pad_row(p, active, &owner, &r.compose.drum_groups));
+            content.push(pad_row(p, active, &owner, pattern_groups));
         }
     }
     let pad_list = container(
