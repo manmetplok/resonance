@@ -261,6 +261,45 @@ impl Resonance {
         }
     }
 
+    // ---- Public read-only accessors for integration tests ----
+    //
+    // These exist so `tests/*.rs` files (which are external compile
+    // units and see only public API) can verify reducer-driven state
+    // changes without poking at private fields. They're `#[doc(hidden)]`
+    // because they aren't part of the library's user-facing surface —
+    // application code inside the crate still goes through the
+    // `pub(crate)` fields directly.
+
+    #[doc(hidden)]
+    pub fn test_tempo_map(&self) -> &resonance_audio::types::TempoMap {
+        &self.tempo_map
+    }
+
+    #[doc(hidden)]
+    pub fn test_tempo_events(&self) -> &[state::TempoEvent] {
+        &self.tempo_events
+    }
+
+    #[doc(hidden)]
+    pub fn test_signature_events(&self) -> &[state::SignatureEvent] {
+        &self.signature_events
+    }
+
+    #[doc(hidden)]
+    pub fn test_transport_bpm(&self) -> f32 {
+        self.transport.bpm
+    }
+
+    #[doc(hidden)]
+    pub fn test_transport_time_sig(&self) -> (u8, u8) {
+        (self.transport.time_sig_num, self.transport.time_sig_den)
+    }
+
+    #[doc(hidden)]
+    pub fn test_selected_global_event(&self) -> Option<state::SelectedGlobalEvent> {
+        self.interaction.selected_global_event
+    }
+
     pub(crate) fn sorted_tracks(&self) -> Vec<&TrackState> {
         self.registry.sorted_tracks()
     }

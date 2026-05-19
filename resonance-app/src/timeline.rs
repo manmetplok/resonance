@@ -243,6 +243,19 @@ pub struct TimelineFingerprint {
     pub global_tracks_expanded: bool,
     pub tempo_points: usize,
     pub signature_points: usize,
+    /// Hash of every tempo event's `(bar, bpm)` so the cache invalidates
+    /// when an *existing* event's value changes (drag, transport-side
+    /// BPM commit, pick_list edit). Just tracking `tempo_points.len()`
+    /// would miss in-place edits and leave the canvas curve stale.
+    pub tempo_events_hash: u64,
+    /// Same idea for signature events: their `(bar, numerator,
+    /// denominator)` so pill markers + label text redraw on edit.
+    pub signature_events_hash: u64,
+    /// Currently selected tempo/signature event. The draw routine
+    /// recolors the selected dot / pill marker with the accent so this
+    /// has to enter the fingerprint, otherwise a fresh click "lands"
+    /// in state but doesn't repaint until something else does.
+    pub selected_global_event: Option<state::SelectedGlobalEvent>,
     pub bpm_bits: u32,
     pub time_sig_num: u8,
     pub section_placements_len: usize,
@@ -257,6 +270,25 @@ pub struct TimelineFingerprint {
 
 impl<'a> TimelineCanvas<'a> {
     fn fingerprint(&self) -> TimelineFingerprint {
+        // Hash the full tempo + signature event content so any
+        // *in-place* edit (drag, pick_list change, transport-bar
+        // commit) invalidates the cache and the curve / pill markers
+        // redraw on the next frame.
+        use std::hash::{Hash, Hasher};
+        let mut th = std::collections::hash_map::DefaultHasher::new();
+        for e in &self.tempo_map.tempo_points {
+            e.bar.hash(&mut th);
+            e.bpm.to_bits().hash(&mut th);
+        }
+        let tempo_events_hash = th.finish();
+        let mut sh = std::collections::hash_map::DefaultHasher::new();
+        for e in &self.tempo_map.signature_points {
+            e.bar.hash(&mut sh);
+            e.numerator.hash(&mut sh);
+            e.denominator.hash(&mut sh);
+        }
+        let signature_events_hash = sh.finish();
+
         TimelineFingerprint {
             clips_len: self.clips.len(),
             midi_clips_len: self.midi_clips.len(),
@@ -274,6 +306,9 @@ impl<'a> TimelineCanvas<'a> {
             global_tracks_expanded: self.global_tracks_expanded,
             tempo_points: self.tempo_map.tempo_points.len(),
             signature_points: self.tempo_map.signature_points.len(),
+            tempo_events_hash,
+            signature_events_hash,
+            selected_global_event: self.selected_global_event,
             bpm_bits: self.bpm.to_bits(),
             time_sig_num: self.time_sig_num,
             section_placements_len: self.section_placements.len(),

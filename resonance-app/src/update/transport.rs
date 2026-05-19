@@ -113,6 +113,13 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
                     first.denominator = den;
                 }
             }
+            // Rebuild the GUI-side tempo map so the signature lane's
+            // pill marker text + the bar table reflect the new
+            // numerator/denominator, and resend the full event list to
+            // the engine. Without this the canvas keeps showing the
+            // pre-cycle signature on the global-tracks shelf even
+            // though the transport bar updated.
+            r.rebuild_and_send_tempo();
         }
         TransportMessage::ToggleLoop => {
             r.transport.loop_enabled = !r.transport.loop_enabled;
