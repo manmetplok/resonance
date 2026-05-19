@@ -111,8 +111,8 @@ impl SpscRing {
         // borrow through Tree Borrows.
         unsafe {
             let ptr = (*self.buffer.get()).as_ptr();
-            for i in 0..n {
-                dst[i] = ptr.add(head.wrapping_add(i) & self.mask).read();
+            for (i, slot) in dst.iter_mut().enumerate().take(n) {
+                *slot = ptr.add(head.wrapping_add(i) & self.mask).read();
             }
         }
         self.head.store(head.wrapping_add(n), Ordering::Release);

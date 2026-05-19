@@ -188,7 +188,7 @@ fn greedy_voice_lead(prev: &[u8], candidates: &[Vec<u8>], n_pcs: usize) -> Vec<u
                 if let Some(&alt) = candidates[v].get(missing) {
                     let delta = (alt as i32 - prev[v] as i32).abs()
                         - (midi as i32 - prev[v] as i32).abs();
-                    if best.map_or(true, |(_, d)| delta < d) {
+                    if best.is_none_or(|(_, d)| delta < d) {
                         best = Some((v, delta));
                     }
                 }

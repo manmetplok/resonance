@@ -192,9 +192,7 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
         if let iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
-            let Some(pos) = cursor.position_in(bounds) else {
-                return None;
-            };
+            let pos = cursor.position_in(bounds)?;
 
             // Side panel: open the drum lane in the inspector.
             if pos.x < NAME_COLUMN_WIDTH {

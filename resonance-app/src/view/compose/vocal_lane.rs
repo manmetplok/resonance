@@ -189,13 +189,9 @@ impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
         if let iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
-            let Some(pos) = cursor.position_in(bounds) else {
-                return None;
-            };
+            let pos = cursor.position_in(bounds)?;
             let idx = (pos.y / VOCAL_LANE_HEIGHT) as usize;
-            let Some((track_id, _)) = self.vocal_tracks.get(idx) else {
-                return None;
-            };
+            let (track_id, _) = self.vocal_tracks.get(idx)?;
 
             // Double-click anywhere on the row opens the derived MIDI
             // clip in the vocal roll editor. Fall back to the lane

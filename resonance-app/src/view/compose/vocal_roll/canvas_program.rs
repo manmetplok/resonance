@@ -31,9 +31,7 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
 
         match event {
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                if cursor.position_in(bounds).is_none() {
-                    return None;
-                }
+                cursor.position_in(bounds)?;
                 match delta {
                     mouse::ScrollDelta::Lines { x, y } => {
                         if x.abs() > f32::EPSILON {
@@ -74,9 +72,7 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
                         let rel_x = pos.x - grid_x;
                         let rel_y = pos.y - grid_top;
                         let click_tick = self.x_to_tick(rel_x);
-                        let Some(click_note) = self.y_to_note(rel_y, grid_h) else {
-                            return None;
-                        };
+                        let click_note = self.y_to_note(rel_y, grid_h)?;
 
                         for (i, n) in self.clip.notes.iter().enumerate() {
                             let nx = self.tick_to_x(n.start_tick);
@@ -156,9 +152,7 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
                             let tick = self.x_to_tick(rel_x);
                             let raw_tick = (tick as i64 + start_tick_offset).max(0) as u64;
                             let snapped_tick = self.snap(raw_tick);
-                            let Some(note) = self.y_to_note(rel_y, grid_h) else {
-                                return None;
-                            };
+                            let note = self.y_to_note(rel_y, grid_h)?;
                             return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::MoveNote {
                                     clip_id: self.clip.id,
                                     note_index: *note_index,

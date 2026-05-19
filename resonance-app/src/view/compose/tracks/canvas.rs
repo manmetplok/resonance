@@ -146,9 +146,7 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
         if let iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
-            let Some(pos) = cursor.position_in(bounds) else {
-                return None;
-            };
+            let pos = cursor.position_in(bounds)?;
 
             // Determine which track row was clicked.
             let clicked_track = self.hit_test_track(pos, bounds);

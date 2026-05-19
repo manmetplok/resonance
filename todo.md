@@ -40,7 +40,7 @@
       each lane label (currently Font-Awesome substitutes
       `music / wave-square / sliders`).
 
-    - [ ] ! Global tracks: editing tempo and time-signature events has
+    - [x] ! Global tracks: editing tempo and time-signature events has
       flaky UI — values don't update reliably, drag/click hit-testing
       feels inconsistent, and the on-canvas markers can lag or stale
       after a change. Likely related to the new `GlobalShelf` rewrite
@@ -51,11 +51,74 @@
       tempo/signature lane redraw in `timeline_draw::draw_global_tracks`.
       Add `iced_test` coverage for an edit cycle so regressions land
       on goldens next time. (Reported 2026-05-19.)
+      **Root cause:** three independent staleness bugs piled on top
+      of each other. (1) `TimelineFingerprint` only tracked
+      `tempo_points.len()` / `signature_points.len()`, so editing an
+      *existing* point's value (drag, pick_list, transport-bar
+      commit) mutated the data but never invalidated `canvas::Cache`
+      — the curve / pill markers kept showing the old values until
+      some unrelated state change (zoom, scroll, clip move) triggered
+      a fingerprint mismatch. `selected_global_event` was also
+      absent from the fingerprint, so a fresh click on a tempo dot
+      updated state but didn't repaint the dot in the accent color.
+      (2) `TransportMessage::CycleTimeSignature` mutated
+      `signature_events[0]` but never called `rebuild_and_send_tempo`,
+      leaving the GUI-side `tempo_map.signature_points` (the array
+      the draw routine actually reads) and the bar table stale; the
+      shelf kept showing the pre-cycle numerator/denominator.
+      **Fix:** added `tempo_events_hash` + `signature_events_hash` +
+      `selected_global_event` to `TimelineFingerprint` so any
+      in-place edit or selection click forces a redraw, and added
+      the missing `rebuild_and_send_tempo` call to
+      `CycleTimeSignature`. Hit-test math in
+      `timeline_input::handle_global_track_click` audited and found
+      correct end-to-end — the perceived "inconsistency" was the
+      stale cache hiding successful clicks. New regression suite
+      `tests/global_tracks_edit_cycle.rs` covers the edit cycle:
+      four data-level tests (cycle signature, update signature via
+      pick_list, update tempo via drag, select / deselect) and two
+      snapshot tests (`shelf_after_cycle_time_signature`,
+      `shelf_after_update_tempo`) lock the post-edit visuals.
+      Added `#[doc(hidden)]` `test_*` accessors on `Resonance` so the
+      data-level tests can read state through the public API.
 
-    - [ ] Fix compile warnings across the workspace. Run `cargo build`
+    - [x] Fix compile warnings across the workspace. Run `cargo build`
       / `cargo clippy --workspace --all-targets` and clean up the
       accumulated dead-code, unused-import, unused-variable, and
       deprecation warnings so the build comes back to clean.
+      **What changed:** workspace went from 44 clippy warnings (2 also
+      visible under `cargo build`) to 0 across `cargo build` and
+      `cargo clippy --workspace --all-targets`. Breakdown:
+      `resonance-app` had 24 `clippy::question_mark` warnings — every
+      one was a `canvas::Program::update` returning
+      `Option<canvas::Action<…>>` that used `if cursor.position_in(bounds)
+      .is_none() { return None; }` / `let Some(x) = … else { return None; };`
+      / `match … { Some(c) => c, None => return None };` patterns
+      where `?` is semantically identical; rewrote across
+      `midi_editor.rs`, `timeline_input.rs`, `view/knob.rs`, and the
+      compose-view canvases (`chord_lane`, `drumroll/canvas`,
+      `expanded_editor`, `manual_motif_canvas`, `tracks/canvas`,
+      `vocal_lane`, `vocal_roll/canvas_program`). No behaviour
+      change — `?` desugars to the same early-return-None on the same
+      `Option`. `resonance-music-theory` tests
+      (`tests/vocal_params_validate.rs`, 7
+      `clippy::field_reassign_with_default`) converted to struct-update
+      `VocalParams { field: …, ..VocalParams::default() }` syntax; all
+      8 tests still pass. `resonance-music-theory/src/voicing.rs`:
+      `Option::map_or(true, …)` → `is_none_or(…)`.
+      `resonance-metering/src/spectrum/ring.rs`:
+      `clippy::needless_range_loop` → `.iter_mut().enumerate().take(n)`
+      (preserving the `unsafe { … }` raw-pointer body).
+      `resonance-audio` had two `dead_code` methods (`ClapInstance::
+      is_gui_open` and `MidiOutputRegistry::has_output`) — both are
+      public probes that look load-bearing for future hosting / engine
+      thread call-sites, so suppressed locally with
+      `#[allow(dead_code)]` + a one-line justification rather than
+      deleting. Existing snapshot tests
+      (`global_tracks_shelf_*`, `track_header_alignment_*`,
+      `timeline_lane_clip_globals_expanded_scrolled`,
+      `mixer_inspector_renders_without_busses`, plus the 38 library
+      doctests) all still pass.
 
     - [ ] Mixer: when expanding a parent track that has sub-tracks, the
       sub-tracks are interleaved with unrelated tracks in the strip row

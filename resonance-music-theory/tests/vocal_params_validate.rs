@@ -7,16 +7,20 @@ fn default_validates() {
 
 #[test]
 fn lines_must_be_at_least_one() {
-    let mut p = VocalParams::default();
-    p.lines = 0;
+    let p = VocalParams {
+        lines: 0,
+        ..VocalParams::default()
+    };
     assert_eq!(p.validate(), Err(VocalParamsError::LinesTooLow(0)));
 }
 
 #[test]
 fn syllables_min_must_not_exceed_max() {
-    let mut p = VocalParams::default();
-    p.syllables_min = 10;
-    p.syllables_max = 5;
+    let p = VocalParams {
+        syllables_min: 10,
+        syllables_max: 5,
+        ..VocalParams::default()
+    };
     assert_eq!(
         p.validate(),
         Err(VocalParamsError::SyllablesRange { min: 10, max: 5 })
@@ -25,9 +29,11 @@ fn syllables_min_must_not_exceed_max() {
 
 #[test]
 fn syllables_min_must_be_positive() {
-    let mut p = VocalParams::default();
-    p.syllables_min = 0;
-    p.syllables_max = 5;
+    let p = VocalParams {
+        syllables_min: 0,
+        syllables_max: 5,
+        ..VocalParams::default()
+    };
     assert_eq!(
         p.validate(),
         Err(VocalParamsError::SyllablesRange { min: 0, max: 5 })
@@ -36,8 +42,10 @@ fn syllables_min_must_be_positive() {
 
 #[test]
 fn range_lo_must_be_below_hi() {
-    let mut p = VocalParams::default();
-    p.range = (60, 60);
+    let p = VocalParams {
+        range: (60, 60),
+        ..VocalParams::default()
+    };
     assert_eq!(
         p.validate(),
         Err(VocalParamsError::BadRange { lo: 60, hi: 60 })
@@ -46,8 +54,10 @@ fn range_lo_must_be_below_hi() {
 
 #[test]
 fn out_of_range_unit_slider_is_rejected() {
-    let mut p = VocalParams::default();
-    p.breath = 1.5;
+    let p = VocalParams {
+        breath: 1.5,
+        ..VocalParams::default()
+    };
     match p.validate() {
         Err(VocalParamsError::OutOfRange { field, value, lo, hi }) => {
             assert_eq!(field, "breath");
@@ -61,8 +71,10 @@ fn out_of_range_unit_slider_is_rejected() {
 
 #[test]
 fn tension_accepts_negative() {
-    let mut p = VocalParams::default();
-    p.tension = -0.5;
+    let mut p = VocalParams {
+        tension: -0.5,
+        ..VocalParams::default()
+    };
     assert!(p.validate().is_ok());
     p.tension = -1.5;
     assert!(matches!(
@@ -73,8 +85,10 @@ fn tension_accepts_negative() {
 
 #[test]
 fn vibrato_rate_lower_bound() {
-    let mut p = VocalParams::default();
-    p.vibrato_rate = 0.5;
+    let p = VocalParams {
+        vibrato_rate: 0.5,
+        ..VocalParams::default()
+    };
     assert!(matches!(
         p.validate(),
         Err(VocalParamsError::OutOfRange { field: "vibrato_rate", .. })

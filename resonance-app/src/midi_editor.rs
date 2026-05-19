@@ -103,9 +103,7 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                 // Only handle wheel events when the cursor is actually over the
                 // piano roll — otherwise scrolling the arrangement would also
                 // scroll this editor.
-                if cursor.position_in(bounds).is_none() {
-                    return None;
-                }
+                cursor.position_in(bounds)?;
                 // Horizontal scroll is handled by the outer `Scrollable`
                 // that wraps this canvas now (see `view_midi_editor_panel`).
                 // Returning `Ignored` lets the event bubble up. Vertical

@@ -347,9 +347,7 @@ impl<'a> ChordLaneCanvas<'a> {
 
         match event {
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                let Some(pos) = cursor.position_in(bounds) else {
-                    return None;
-                };
+                let pos = cursor.position_in(bounds)?;
 
                 // Click on the name column: select the chords lane.
                 if pos.x < NAME_COLUMN_WIDTH {
@@ -417,12 +415,8 @@ impl<'a> ChordLaneCanvas<'a> {
             }
 
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                let Some(pos) = cursor.position_in(bounds) else {
-                    return None;
-                };
-                let Some(drag) = state.drag.as_mut() else {
-                    return None;
-                };
+                let pos = cursor.position_in(bounds)?;
+                let drag = state.drag.as_mut()?;
                 let rel_x = (pos.x - grid_x).max(0.0);
                 let beat_f = (rel_x / beat_width).max(0.0);
                 let beat = (beat_f as u32).min(total_beats.saturating_sub(1));
@@ -432,11 +426,11 @@ impl<'a> ChordLaneCanvas<'a> {
                         grab_beat,
                         pending_start_beat,
                     } => {
-                        let chord = match self.definition.chords.iter().find(|c| c.id == *chord_id)
-                        {
-                            Some(c) => c,
-                            None => return None,
-                        };
+                        let chord = self
+                            .definition
+                            .chords
+                            .iter()
+                            .find(|c| c.id == *chord_id)?;
                         let new_start = beat.saturating_sub(*grab_beat);
                         let max_start = total_beats.saturating_sub(chord.duration_beats);
                         *pending_start_beat = new_start.min(max_start);
@@ -446,11 +440,11 @@ impl<'a> ChordLaneCanvas<'a> {
                         chord_id,
                         pending_duration_beats,
                     } => {
-                        let chord = match self.definition.chords.iter().find(|c| c.id == *chord_id)
-                        {
-                            Some(c) => c,
-                            None => return None,
-                        };
+                        let chord = self
+                            .definition
+                            .chords
+                            .iter()
+                            .find(|c| c.id == *chord_id)?;
                         let end_beat = ((rel_x / beat_width).ceil() as u32).min(total_beats);
                         let new_dur = end_beat.saturating_sub(chord.start_beat).max(1);
                         *pending_duration_beats = new_dur;
@@ -506,9 +500,7 @@ impl<'a> ChordLaneCanvas<'a> {
             }
 
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
-                let Some(pos) = cursor.position_in(bounds) else {
-                    return None;
-                };
+                let pos = cursor.position_in(bounds)?;
                 if pos.x < NAME_COLUMN_WIDTH || pos.y < RULER_HEIGHT {
                     return None;
                 }

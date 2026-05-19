@@ -95,9 +95,7 @@ impl TimelineCanvas<'_> {
         // Only handle wheel events when the cursor is actually over the
         // timeline — otherwise scrolling the piano roll would also scroll
         // the arrangement behind it.
-        if cursor.position_in(bounds).is_none() {
-            return None;
-        }
+        cursor.position_in(bounds)?;
         // Horizontal scroll is owned by the outer `Scrollable` that
         // wraps the timeline canvas — returning `Ignored` for any
         // wheel-X delta lets the event bubble up so the scrollable can
@@ -160,9 +158,7 @@ impl TimelineCanvas<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> UpdateResult {
-        let Some(pos) = cursor.position_in(bounds) else {
-            return None;
-        };
+        let pos = cursor.position_in(bounds)?;
         let ruler_height = theme::RULER_HEIGHT;
         let header_height = self.fixed_header_height();
         let (h_rects, v_rects) = self.scrollbar_rects(bounds);
@@ -375,9 +371,7 @@ impl TimelineCanvas<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> UpdateResult {
-        let Some(pos) = cursor.position_in(bounds) else {
-            return None;
-        };
+        let pos = cursor.position_in(bounds)?;
 
         // Horizontal scrollbar drag.
         if let Some(grab) = state.h_scrollbar_grab {

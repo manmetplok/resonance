@@ -213,9 +213,7 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
         match event {
             // -- Scroll --
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                if cursor.position_in(bounds).is_none() {
-                    return None;
-                }
+                cursor.position_in(bounds)?;
                 let (dx, dy) = match delta {
                     mouse::ScrollDelta::Lines { x, y } => (-x * 30.0, -y * 30.0),
                     mouse::ScrollDelta::Pixels { x, y } => (-x, -y),

@@ -52,9 +52,7 @@ impl<'a> canvas::Program<Message> for ManualMotifCanvas<'a> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        let Some(pos) = cursor.position_in(bounds) else {
-            return None;
-        };
+        let pos = cursor.position_in(bounds)?;
 
         match event {
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
@@ -79,9 +77,7 @@ impl<'a> canvas::Program<Message> for ManualMotifCanvas<'a> {
                     Some(CellHit::Note { beat_16, .. }) | Some(CellHit::Rest { beat_16 }) => beat_16,
                     None => return None,
                 };
-                let Some(idx) = self.note_index_starting_at(beat_16) else {
-                    return None;
-                };
+                let idx = self.note_index_starting_at(beat_16)?;
                 // Right-click on a rest is a no-op — rests have no accent.
                 if self.notes.get(idx).is_some_and(|n| n.is_rest) {
                     return Some(canvas::Action::capture());
@@ -104,9 +100,7 @@ impl<'a> canvas::Program<Message> for ManualMotifCanvas<'a> {
                     Some(CellHit::Note { beat_16, .. }) | Some(CellHit::Rest { beat_16 }) => beat_16,
                     None => return None,
                 };
-                let Some(idx) = self.note_index_covering(beat_16) else {
-                    return None;
-                };
+                let idx = self.note_index_covering(beat_16)?;
                 Some(canvas::Action::publish(Message::Compose(ComposeMessage::ChordInspector {
                         definition_id: self.definition_id,
                         msg: ChordInspectorMsg::CycleManualMotifNoteDuration { index: idx },

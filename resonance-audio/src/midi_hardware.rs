@@ -444,6 +444,7 @@ impl MidiOutputRegistry {
     /// True if the track has a configured output device. Used by the
     /// engine thread to decide whether to forward inbound or
     /// timeline notes onto the hardware.
+    #[allow(dead_code)] // public probe; callers gate hardware forwarding on this
     pub fn has_output(&self, track_id: TrackId) -> bool {
         self.track_assignments.contains_key(&track_id)
     }

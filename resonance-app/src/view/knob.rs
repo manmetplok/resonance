@@ -160,9 +160,7 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
     ) -> Option<canvas::Action<Message>> {
         match event {
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                let Some(pos) = cursor.position_in(bounds) else {
-                    return None;
-                };
+                let pos = cursor.position_in(bounds)?;
                 if !hit_circle(pos, bounds) {
                     return None;
                 }
@@ -186,12 +184,8 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
                 None
             }
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                let Some(anchor_y) = state.drag_anchor_y else {
-                    return None;
-                };
-                let Some(pos) = cursor.position_in(bounds) else {
-                    return None;
-                };
+                let anchor_y = state.drag_anchor_y?;
+                let pos = cursor.position_in(bounds)?;
                 // Drag up = increase (pan right). Drag range is DRAG_RANGE_PX
                 // for the full -1..=1 span.
                 let dy = anchor_y - pos.y;
