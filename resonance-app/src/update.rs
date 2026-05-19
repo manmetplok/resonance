@@ -17,7 +17,7 @@ pub mod transport;
 pub mod ui;
 pub mod viewport;
 
-pub(crate) use project_io::{build_project_file, replay_loaded_project};
+pub(crate) use project_io::{build_project_file, replay_loaded_project, try_diff_replay};
 
 /// While the startup modal is up (no active project), swallow
 /// messages that would mutate project state. Engine events don't

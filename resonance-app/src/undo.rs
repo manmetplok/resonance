@@ -291,11 +291,15 @@ impl crate::Resonance {
             && !self.undo.has_pending()
     }
 
-    /// Drive the engine and GUI back to `snapshot` using the same
-    /// ClearAll → AllCleared → `replay_loaded_project` pipeline that
-    /// `ProjectLoaded(Ok)` uses. Playback is stopped and stays stopped
-    /// (per v1 policy). Extras are stashed on `io.pending_undo_extras`
-    /// so the `AllCleared` handler can re-apply them after replay.
+    /// Drive the engine and GUI back to `snapshot`. Tries a structure-
+    /// preserving diff replay first — when the snapshot has the same set
+    /// of tracks, busses, plugins, and clips as the current state, only
+    /// the changed scalars (volumes, mutes, BPM, plugin state blobs,
+    /// MIDI notes, etc.) are pushed to the engine, keeping every plugin
+    /// instance alive. When the structural shape differs, falls back to
+    /// the full `ClearAll → AllCleared → replay_loaded_project` pipeline
+    /// that `ProjectLoaded(Ok)` uses. Playback is stopped either way
+    /// (per v1 policy).
     pub(crate) fn begin_restore_from_snapshot(&mut self, snapshot: UndoSnapshot) {
         // Pause playback and stop recording. Recording should already be
         // blocked by `can_undo_redo_now`, but belt-and-braces.
@@ -305,9 +309,17 @@ impl crate::Resonance {
 
         let (loaded, extras) = snapshot.split();
 
-        // Stash both halves. `replay_loaded_project` clears project_path
-        // as part of its normal flow, so re-establish it from the
-        // snapshot's project_dir in the `AllCleared` handler below.
+        // Fast path: structure-identical undo (the common case for
+        // fader/knob/transport edits). Drives the engine surgically
+        // without tearing down plugin instances.
+        if crate::update::try_diff_replay(self, &loaded, &extras) {
+            return;
+        }
+
+        // Slow path: structural change. Stash both halves so the
+        // `AllCleared` handler can run the full replay. The handler
+        // re-establishes `project_path` from the snapshot's project_dir
+        // because `replay_loaded_project` clears it on entry.
         self.io.loading = true;
         self.io.pending_load = Some(Box::new(loaded));
         self.io.pending_undo_extras = Some(extras);

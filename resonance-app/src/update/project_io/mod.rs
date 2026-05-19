@@ -5,6 +5,7 @@
 
 mod dialogs;
 mod replay;
+mod replay_diff;
 mod serialize;
 
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ use crate::Resonance;
 
 pub use dialogs::save_project_as_dialog;
 pub use replay::replay_loaded_project;
+pub use replay_diff::try_diff_replay;
 pub use serialize::build_project_file;
 
 /// Route a `ProjectIoMessage` to the appropriate handler.

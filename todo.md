@@ -2,7 +2,7 @@
 
 ##Architecture / code health (from code review)
 
-    - Full engine replay on undo is expensive for large projects
+    - [x] Full engine replay on undo is expensive for large projects
       (`resonance-app/src/update/project_io/replay.rs` — `replay_loaded_project`).
       Every undo/redo tears down all engine state and re-instantiates plugins.
       Short-term: diff old and new snapshots and only replay changed tracks/plugins.
