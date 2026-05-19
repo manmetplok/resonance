@@ -62,7 +62,7 @@
 
     - [x] Replace `super::super::super::chord::Chord` at
       `resonance-music-theory/src/derive/vocal/style/mod.rs:89` with `crate::chord::Chord`.
-    - [ ] Build `HashMap<PluginInstanceId, PluginLocator>` side-index in `Resonance` to replace
+    - [x] Build `HashMap<PluginInstanceId, PluginLocator>` side-index in `Resonance` to replace
       the linear scan in `with_plugin_mut` (`resonance-app/src/main.rs:305`).
     - [ ] Group `vocal_audio_clips`/`vocal_clip_lyrics`/`vocal_render_epoch` into a
       `VocalAudioRegistry` struct in `resonance-app/src/compose/state.rs:77-112`.
