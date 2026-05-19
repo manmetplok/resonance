@@ -169,38 +169,44 @@ fn contour_offset(contour: Contour, position: f32, register_span: u8) -> i8 {
     offset as i8
 }
 
+/// Section-wide inputs the per-phrase realizer needs. Held together so
+/// the realizer signature stays small and so the caller can build the
+/// context once and reuse it across every phrase in the section.
+pub(super) struct PhraseRenderCtx<'a> {
+    pub(super) chords: &'a [TimedChord],
+    pub(super) scale: Option<Scale>,
+    pub(super) register: (u8, u8),
+    pub(super) articulation: f32,
+    pub(super) velocity_base: f32,
+    pub(super) tpb: u64,
+}
+
 /// Realize a single phrase from the motif and its transformation,
 /// anchored to the chords and shaped by contour. The Transform is supplied
 /// externally so that lanes which want to share transform plans (bass
 /// `MirrorMelody` mode) can compute them up-front from a fresh RNG.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn realize_phrase(
     motif: &[MotifNote],
     transform: Transform,
     phrase: &PhrasePlan,
-    chords: &[TimedChord],
-    scale: Option<Scale>,
-    register: (u8, u8),
-    articulation: f32,
-    velocity_base: f32,
-    tpb: u64,
+    ctx: &PhraseRenderCtx<'_>,
 ) -> Vec<GeneratedNote> {
     let transformed = transform_motif(motif, transform);
     if transformed.is_empty() {
         return Vec::new();
     }
 
-    let phrase_chords = &chords[phrase.chord_range.0..phrase.chord_range.1];
-    let register_span = register.1.saturating_sub(register.0);
-    let register_mid = (register.0 as u16 + register.1 as u16) / 2;
+    let phrase_chords = &ctx.chords[phrase.chord_range.0..phrase.chord_range.1];
+    let register_span = ctx.register.1.saturating_sub(ctx.register.0);
+    let register_mid = (ctx.register.0 as u16 + ctx.register.1 as u16) / 2;
 
     let mut out = Vec::new();
-    let sounding_ratio = 1.0 - articulation * 0.55;
-    let min_duration = (tpb / 8).max(1);
+    let sounding_ratio = 1.0 - ctx.articulation * 0.55;
+    let min_duration = (ctx.tpb / 8).max(1);
 
     for (ci, tc) in phrase_chords.iter().enumerate() {
-        let chord_start = tc.start_beat as u64 * tpb;
-        let chord_ticks = tc.duration_beats as u64 * tpb;
+        let chord_start = tc.start_beat as u64 * ctx.tpb;
+        let chord_ticks = tc.duration_beats as u64 * ctx.tpb;
         if chord_ticks == 0 {
             continue;
         }
@@ -214,11 +220,12 @@ pub(super) fn realize_phrase(
         let c_offset = contour_offset(phrase.contour, phrase_position, register_span);
 
         // Choose anchor: a chord tone near the contour target.
-        let tones = chord_tones_in_register(tc.chord, register);
+        let tones = chord_tones_in_register(tc.chord, ctx.register);
         if tones.is_empty() {
             continue;
         }
-        let target = (register_mid as i16 + c_offset as i16).clamp(register.0 as i16, register.1 as i16) as u8;
+        let target = (register_mid as i16 + c_offset as i16)
+            .clamp(ctx.register.0 as i16, ctx.register.1 as i16) as u8;
         let anchor = nearest_in_set(target, &tones);
 
         // Scale the motif's duration ratios to fill this chord's time.
@@ -245,18 +252,24 @@ pub(super) fn realize_phrase(
 
             if !mn.silent {
                 let raw_midi = (anchor as i16 + mn.interval as i16).clamp(0, 127) as u8;
-                let raw_clamped = raw_midi.clamp(register.0, register.1);
+                let raw_clamped = raw_midi.clamp(ctx.register.0, ctx.register.1);
 
                 let beat_pos = tick_cursor - chord_start;
-                let aligned =
-                    align_to_harmony(raw_clamped, beat_pos, tpb, tc.chord, scale, register);
+                let aligned = align_to_harmony(
+                    raw_clamped,
+                    beat_pos,
+                    ctx.tpb,
+                    tc.chord,
+                    ctx.scale,
+                    ctx.register,
+                );
 
                 let sounding =
                     ((actual_ticks as f64 * sounding_ratio as f64) as u64).max(min_duration);
                 let vel = if mn.accent {
-                    (velocity_base + 0.05).min(1.0)
+                    (ctx.velocity_base + 0.05).min(1.0)
                 } else {
-                    velocity_base
+                    ctx.velocity_base
                 };
 
                 out.push(GeneratedNote {
@@ -275,7 +288,7 @@ pub(super) fn realize_phrase(
     // Consequent phrases resolve: snap the last note to the chord root.
     if phrase.is_consequent && !out.is_empty() {
         let last_chord = phrase_chords.last().unwrap();
-        let root_tones = chord_tones_in_register(last_chord.chord, register);
+        let root_tones = chord_tones_in_register(last_chord.chord, ctx.register);
         if let Some(root) = root_tones.first() {
             // Find the chord root (lowest chord tone = root in close position).
             let last = out.last_mut().unwrap();

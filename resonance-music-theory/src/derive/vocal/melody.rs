@@ -82,30 +82,36 @@ pub(super) fn total_beats(chords: &[TimedChord]) -> u32 {
 }
 
 /// Replace each note's pitch with a motif-derived pitch (chord root in
-/// the lane register + signed motif interval, snapped to scale and
-/// clamped within an octave of the previous pitch). The terminal note
-/// of every line keeps its style cadence landing so phrases still
-/// resolve.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn apply_motif_pitches(
-    notes: &mut [GeneratedNote],
-    motif_intervals: &[i8],
-    line_syllables: &[u32],
-    chords: &[TimedChord],
-    section_beats: u32,
-    scale: Option<Scale>,
-    range: (u8, u8),
-    tpb: u64,
-) {
-    if motif_intervals.is_empty() || notes.is_empty() {
+/// Bundle of immutable inputs to [`apply_motif_pitches`]. Carries the
+/// motif's interval pattern, the section's per-line syllable counts,
+/// and the harmonic + register context the pitch picker needs. Held
+/// together so callers can fan out a single `VocalContext` into one
+/// `MotifPitchContext` rather than threading seven parallel args.
+pub(super) struct MotifPitchContext<'a> {
+    pub(super) motif_intervals: &'a [i8],
+    pub(super) line_syllables: &'a [u32],
+    pub(super) chords: &'a [TimedChord],
+    pub(super) section_beats: u32,
+    pub(super) scale: Option<Scale>,
+    pub(super) range: (u8, u8),
+    pub(super) tpb: u64,
+}
+
+/// Re-skin a vocal phrase's pitches with a motif interval pattern.
+/// Non-terminal syllables follow the motif's relative-interval contour
+/// (anchored on the chord root nearest the previous pitch and clamped
+/// to the lane register, snapped to scale). The terminal note of every
+/// line keeps its style cadence landing so phrases still resolve.
+pub(super) fn apply_motif_pitches(notes: &mut [GeneratedNote], ctx: &MotifPitchContext<'_>) {
+    if ctx.motif_intervals.is_empty() || notes.is_empty() {
         return;
     }
-    let (lo, hi) = range;
+    let (lo, hi) = ctx.range;
     let centre = ((lo as u16 + hi as u16) / 2) as u8;
-    let mut prev_pitch = snap_to_scale(centre, scale, lo, hi);
+    let mut prev_pitch = snap_to_scale(centre, ctx.scale, lo, hi);
     let mut note_idx = 0usize;
 
-    for (line_idx, &line_syl) in line_syllables.iter().enumerate() {
+    for (line_idx, &line_syl) in ctx.line_syllables.iter().enumerate() {
         if line_syl == 0 {
             continue;
         }
@@ -115,22 +121,22 @@ pub(super) fn apply_motif_pitches(
         }
         for s in 0..line_note_count {
             let n = &mut notes[note_idx + s];
-            let beat = (n.start_tick / tpb) as u32;
-            let beat_clamped = beat.min(section_beats.saturating_sub(1));
-            let chord = chord_at_beat(chords, beat_clamped);
+            let beat = (n.start_tick / ctx.tpb) as u32;
+            let beat_clamped = beat.min(ctx.section_beats.saturating_sub(1));
+            let chord = chord_at_beat(ctx.chords, beat_clamped);
             let is_final = s + 1 == line_note_count;
 
             let raw = if is_final {
-                cadence_pitch(phrase_role(line_idx), chord, scale, prev_pitch, range)
+                cadence_pitch(phrase_role(line_idx), chord, ctx.scale, prev_pitch, ctx.range)
                     .unwrap_or_else(|| {
-                        let interval = motif_intervals[s % motif_intervals.len()];
-                        motif_pitch(interval, chord, lo, hi, prev_pitch, scale)
+                        let interval = ctx.motif_intervals[s % ctx.motif_intervals.len()];
+                        motif_pitch(interval, chord, lo, hi, prev_pitch, ctx.scale)
                     })
             } else {
-                let interval = motif_intervals[s % motif_intervals.len()];
-                motif_pitch(interval, chord, lo, hi, prev_pitch, scale)
+                let interval = ctx.motif_intervals[s % ctx.motif_intervals.len()];
+                motif_pitch(interval, chord, lo, hi, prev_pitch, ctx.scale)
             };
-            let pitch = cap_interval(prev_pitch, raw, lo, hi, scale);
+            let pitch = cap_interval(prev_pitch, raw, lo, hi, ctx.scale);
             n.note = pitch;
             prev_pitch = pitch;
         }

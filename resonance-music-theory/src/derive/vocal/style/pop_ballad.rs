@@ -10,7 +10,7 @@ use super::super::melody::{contour_height, snap_to_scale};
 use super::super::VocalContext;
 use super::{
     beat_strength, cadence_pitch, chord_tone_nearest, phrase_role, rhythm_trim, shape_velocity,
-    terminal_dur_beats, LineState, StepInputs, VocalStyleProfile,
+    terminal_dur_beats, LineState, StepInputs, VelocityShape, VocalStyleProfile,
 };
 
 pub(super) struct PopBalladProfile;
@@ -130,13 +130,15 @@ impl VocalStyleProfile for PopBalladProfile {
     ) -> f32 {
         shape_velocity(
             rng,
-            0.74,
+            &VelocityShape {
+                base: 0.74,
+                arch: 0.9,
+                accent: 0.7,
+                jitter: 0.08,
+            },
             inp.progress_in_line,
-            0.9,
             inp.beat_round,
             beats_per_bar,
-            0.7,
-            0.08,
         )
     }
 }

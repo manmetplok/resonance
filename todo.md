@@ -68,7 +68,7 @@
       `VocalAudioRegistry` struct in `resonance-app/src/compose/state.rs:77-112`.
     - [x] Drop `pub(super)` on internals of `resonance-music-theory/src/derive/motif_engine.rs`
       once it becomes a directory (most should be private).
-    - [ ] Replace `#[allow(clippy::too_many_arguments)]` on `apply_motif_pitches`,
+    - [x] Replace `#[allow(clippy::too_many_arguments)]` on `apply_motif_pitches`,
       `shape_velocity`, `realize_phrase` with config structs.
     - [ ] Add `VocalParams::validate(&self) -> Result<()>` and call it at the app boundary
       (108 LOC of pub fields with hidden invariants).

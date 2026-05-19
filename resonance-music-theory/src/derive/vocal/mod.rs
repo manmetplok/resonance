@@ -27,7 +27,7 @@ pub use params::{
 use crate::scale::Scale;
 
 use super::{GeneratedNote, TimedChord};
-use melody::{apply_motif_pitches, enforce_no_overlap, scale_from_chords, total_beats};
+use melody::{apply_motif_pitches, enforce_no_overlap, scale_from_chords, total_beats, MotifPitchContext};
 use style::derive_with_profile;
 
 /// Derive MIDI notes for a vocal line. Dispatches to the per-style
@@ -92,13 +92,15 @@ pub fn derive_vocal_with_motif(
             if !intervals.is_empty() {
                 apply_motif_pitches(
                     &mut notes,
-                    intervals,
-                    &ctx.line_syllables,
-                    ctx.chords,
-                    ctx.section_beats,
-                    ctx.scale,
-                    (ctx.lo, ctx.hi),
-                    ctx.tpb,
+                    &MotifPitchContext {
+                        motif_intervals: intervals,
+                        line_syllables: &ctx.line_syllables,
+                        chords: ctx.chords,
+                        section_beats: ctx.section_beats,
+                        scale: ctx.scale,
+                        range: (ctx.lo, ctx.hi),
+                        tpb: ctx.tpb,
+                    },
                 );
             }
         }

@@ -334,27 +334,37 @@ pub(super) fn phrase_start_offset(rng: &mut XorShift, beats_per_bar: u32) -> f32
     }
 }
 
+/// Style-specific weights for the velocity-shape formula. Each profile
+/// picks one fixed `VelocityShape` and the walker passes it to
+/// [`shape_velocity`] alongside the per-syllable inputs.
+pub(super) struct VelocityShape {
+    /// Resting velocity around which the shape oscillates.
+    pub(super) base: f32,
+    /// Weight of the phrase-arch contribution (0 = flat,
+    /// 1 = full ±0.18 envelope swing).
+    pub(super) arch: f32,
+    /// Weight of the beat-strength accent contribution.
+    pub(super) accent: f32,
+    /// Per-syllable random half-width (jitter amplitude).
+    pub(super) jitter: f32,
+}
+
 /// Combined velocity formula: base + phrase-arch contribution +
 /// beat-of-bar accent + per-syllable jitter, clamped to [0.4, 1.0].
-/// `arch_amount` controls the phrase-shape contribution (0 = flat,
-/// 1 = full ±0.18 envelope swing); `accent_amount` weights the beat
-/// strength contribution; `jitter` is the per-syllable random
-/// half-width.
-#[allow(clippy::too_many_arguments)]
+///
+/// `shape` carries the style-level weights; the remaining arguments are
+/// the per-syllable inputs the walker computes once per step.
 pub(super) fn shape_velocity(
     rng: &mut XorShift,
-    base: f32,
+    shape: &VelocityShape,
     progress_in_line: f32,
-    arch_amount: f32,
     beat: u32,
     beats_per_bar: u32,
-    accent_amount: f32,
-    jitter: f32,
 ) -> f32 {
     let arch = phrase_arch(progress_in_line) - 0.5; // -0.5..+0.5
     let accent = beat_strength(beat, beats_per_bar) - 0.5; // -0.5..+0.5
-    let noise = (rng.next_f32() - 0.5) * 2.0 * jitter;
-    (base + arch_amount * 0.36 * arch + accent_amount * 0.20 * accent + noise).clamp(0.4, 1.0)
+    let noise = (rng.next_f32() - 0.5) * 2.0 * shape.jitter;
+    (shape.base + shape.arch * 0.36 * arch + shape.accent * 0.20 * accent + noise).clamp(0.4, 1.0)
 }
 
 /// Subtle per-syllable timing wobble — micro-rubato, ±`max_beats`

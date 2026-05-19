@@ -12,7 +12,7 @@ use super::super::params::VocalParams;
 use super::super::VocalContext;
 use super::{
     beat_strength, cadence_pitch, chord_tone_nearest, phrase_role, rhythm_trim, shape_velocity,
-    LineState, StepInputs, VocalStyleProfile,
+    LineState, StepInputs, VelocityShape, VocalStyleProfile,
 };
 
 pub(super) struct ChantProfile;
@@ -179,13 +179,15 @@ impl VocalStyleProfile for ChantProfile {
         // scratchpad; drain it here.
         let mut v = shape_velocity(
             rng,
-            0.65,
+            &VelocityShape {
+                base: 0.65,
+                arch: 0.4,
+                accent: 1.0,
+                jitter: 0.10,
+            },
             inp.progress_in_line,
-            0.4,
             inp.beat_round,
             beats_per_bar,
-            1.0,
-            0.10,
         );
         if line.extras.spit_flag.replace(false) {
             v = (v + 0.12).clamp(0.4, 1.0);

@@ -11,7 +11,8 @@ use super::super::params::VocalParams;
 use super::super::VocalContext;
 use super::{
     beat_strength, cadence_pitch, chord_tone_nearest, phrase_role, rhythm_trim, shape_velocity,
-    snap_to_pentatonic, terminal_dur_beats, LineState, StepInputs, VocalStyleProfile,
+    snap_to_pentatonic, terminal_dur_beats, LineState, StepInputs, VelocityShape,
+    VocalStyleProfile,
 };
 
 #[derive(Default)]
@@ -179,13 +180,15 @@ impl VocalStyleProfile for FolkProfile {
     ) -> f32 {
         shape_velocity(
             rng,
-            0.70,
+            &VelocityShape {
+                base: 0.70,
+                arch: 0.7,
+                accent: 0.85,
+                jitter: 0.10,
+            },
             inp.progress_in_line,
-            0.7,
             inp.beat_round,
             beats_per_bar,
-            0.85,
-            0.10,
         )
     }
 

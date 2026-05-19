@@ -12,7 +12,7 @@ use super::super::melody::snap_to_scale;
 use super::super::VocalContext;
 use super::{
     beat_strength, cadence_pitch, chord_tone_nearest, phrase_role, rhythm_trim, shape_velocity,
-    terminal_dur_beats, LineState, StepInputs, VocalStyleProfile,
+    terminal_dur_beats, LineState, StepInputs, VelocityShape, VocalStyleProfile,
 };
 
 pub(super) struct ConversationalProfile;
@@ -132,13 +132,15 @@ impl VocalStyleProfile for ConversationalProfile {
     ) -> f32 {
         shape_velocity(
             rng,
-            0.62,
+            &VelocityShape {
+                base: 0.62,
+                arch: 0.6,
+                accent: 0.5,
+                jitter: 0.06,
+            },
             inp.progress_in_line,
-            0.6,
             inp.beat_round,
             beats_per_bar,
-            0.5,
-            0.06,
         )
     }
 }

@@ -14,7 +14,7 @@ use super::super::params::VocalParams;
 use super::super::VocalContext;
 use super::{
     cadence_pitch, chord_tone_nearest, phrase_role, rhythm_trim, shape_velocity, LineState,
-    StepInputs, VocalStyleProfile,
+    StepInputs, VelocityShape, VocalStyleProfile,
 };
 
 pub(super) struct AnthemicProfile;
@@ -134,13 +134,15 @@ impl VocalStyleProfile for AnthemicProfile {
     ) -> f32 {
         let mut v = shape_velocity(
             rng,
-            0.80,
+            &VelocityShape {
+                base: 0.80,
+                arch: 1.0,
+                accent: 0.8,
+                jitter: 0.07,
+            },
             inp.progress_in_line,
-            1.0,
             inp.beat_round,
             beats_per_bar,
-            0.8,
-            0.07,
         );
         let is_climax = inp.s == line.extras.climax_idx && line.extras.has_climax;
         if is_climax {

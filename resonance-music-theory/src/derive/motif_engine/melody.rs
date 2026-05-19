@@ -10,7 +10,7 @@ use super::super::motif_source::{manual_motif_to_motif_notes, MotifParams, Motif
 use super::super::{GeneratedNote, TimedChord};
 use super::build::build_motif;
 use super::harmony::apply_gap_fill;
-use super::phrase::{plan_motif_transforms, plan_phrases, realize_phrase};
+use super::phrase::{plan_motif_transforms, plan_phrases, realize_phrase, PhraseRenderCtx};
 
 /// Extract the motif's signed semitone intervals (relative to its
 /// anchor pitch), skipping rests. Used by lanes that don't render the
@@ -133,18 +133,17 @@ pub fn derive_motif_melody_with_section(
     let mut all_notes = Vec::new();
     let rest_gap = (tpb as f64 * (0.5 + params.rest_density as f64)) as u64;
 
+    let render_ctx = PhraseRenderCtx {
+        chords,
+        scale,
+        register: params.register,
+        articulation: params.articulation,
+        velocity_base: params.velocity,
+        tpb,
+    };
+
     for (pi, phrase) in phrases.iter().enumerate() {
-        let mut phrase_notes = realize_phrase(
-            &motif,
-            transforms[pi],
-            phrase,
-            chords,
-            scale,
-            params.register,
-            params.articulation,
-            params.velocity,
-            tpb,
-        );
+        let mut phrase_notes = realize_phrase(&motif, transforms[pi], phrase, &render_ctx);
 
         if let Some(scale) = scale {
             apply_gap_fill(&mut phrase_notes, &scale, params.register);

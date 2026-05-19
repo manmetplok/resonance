@@ -13,7 +13,8 @@ use super::super::melody::snap_to_scale;
 use super::super::params::VocalParams;
 use super::super::VocalContext;
 use super::{
-    cadence_pitch, phrase_role, shape_velocity, LineState, StepInputs, VocalStyleProfile,
+    cadence_pitch, phrase_role, shape_velocity, LineState, StepInputs, VelocityShape,
+    VocalStyleProfile,
 };
 
 pub(super) struct HymnalProfile;
@@ -109,13 +110,15 @@ impl VocalStyleProfile for HymnalProfile {
     ) -> f32 {
         shape_velocity(
             rng,
-            0.72,
+            &VelocityShape {
+                base: 0.72,
+                arch: 0.45,
+                accent: 0.4,
+                jitter: 0.05,
+            },
             inp.progress_in_line,
-            0.45,
             inp.beat_round,
             beats_per_bar,
-            0.4,
-            0.05,
         )
     }
 }
