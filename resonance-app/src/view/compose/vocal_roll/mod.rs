@@ -23,16 +23,21 @@
 //! Edits go through the same `MidiEditorMessage::{Add,Remove,Move,Resize}`
 //! the piano roll uses; the engine command path is shared.
 //!
-//! The canvas's three concerns are split across files:
+//! The canvas's concerns are split across files:
 //!
 //! - this file: [`VocalRollCanvas`] struct, small helpers, the
 //!   `build_canvas` entry function, shared constants, and the
 //!   [`VocalRollState`] / [`VocalRollFingerprint`] persistent state types.
-//! - [`canvas`]: the [`canvas::Program`] impl that orchestrates
+//! - [`canvas_program`]: the [`canvas::Program`] impl that orchestrates
 //!   per-event dispatch and per-frame drawing.
-//! - [`draw`]: pure-draw routines on [`VocalRollCanvas`] (note rows,
-//!   grid lines, notes, slurs, pitch curve, etc.) and the small
-//!   tick/y coordinate helpers shared with the event handlers.
+//! - [`draw`]: the per-frame orchestrator (`draw_into`), the cache
+//!   `fingerprint`, and the small tick/y coordinate helpers shared with
+//!   the event handlers.
+//! - [`grid`]: structural backdrop — note-row stripes, bar/beat lines,
+//!   chord strip, phoneme strip.
+//! - [`notes`]: note overlays — note rectangles, slur arcs, pitch
+//!   curve, stress contour, and the velocity lane.
+//! - [`keyboard`]: piano keyboard column on the left edge.
 
 use iced::widget::canvas;
 
@@ -44,6 +49,9 @@ use crate::state::MidiClipState;
 
 mod canvas_program;
 mod draw;
+mod grid;
+mod keyboard;
+mod notes;
 
 /// Width of the piano keyboard column.
 pub const VR_KEYBOARD_WIDTH: f32 = 56.0;

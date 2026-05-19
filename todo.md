@@ -107,6 +107,6 @@ mod.rs in several places still owns the work it dispatched.
       match across Bass/Melody/Pad/Drum/Vocal parameter updates. Split per
       generator: `bass_params.rs`, `melody_params.rs`, `pad_params.rs`,
       `vocal_params.rs` under `update/compose/lane_inspector/`.
-    - [ ] `resonance-app/src/view/compose/vocal_roll/draw.rs` (893 LOC). Split
+    - [x] `resonance-app/src/view/compose/vocal_roll/draw.rs` (893 LOC). Split
       into `keyboard.rs`, `notes.rs`, `grid.rs` — each section already paints
       a disjoint region of the canvas.
