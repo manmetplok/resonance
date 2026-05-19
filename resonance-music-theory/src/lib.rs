@@ -18,7 +18,7 @@ pub use derive::{
     BassMotifMode, BassMotifPhrase,
     BassParams, BassStyle, ContourPreference, GeneratedNote, LyricLine, ManualMotifCell,
     ManualMotifNote, MelodyParams, MelodyStyle, MotifParams, MotifSource, PadParams, RhythmHit,
-    SyllableMode, TimedChord, VocalContour, VocalMood, VocalParams, VocalPov,
+    SyllableMode, TimedChord, VocalContour, VocalMood, VocalParams, VocalParamsError, VocalPov,
     VocalRhymeScheme, VocalSinger, VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank,
     VoiceType,
 };

@@ -63,6 +63,10 @@ pub(super) fn roll_vocal_melody(
     let LaneGeneratorKind::Vocal(params) = cfg.kind else {
         return Task::none();
     };
+    if let Err(e) = params.validate() {
+        r.compose.last_error = Some(format!("Vocal params invalid: {e}"));
+        return Task::none();
+    }
     if def.chords.is_empty() || params.draft.is_empty() {
         return Task::none();
     }

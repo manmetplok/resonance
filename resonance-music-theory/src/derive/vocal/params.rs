@@ -2,6 +2,7 @@
 //! `#[serde(default)]` helper fns. Pure data; no rng, no melody logic.
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use super::lyrics::LyricLine;
 
@@ -580,6 +581,110 @@ impl Default for VocalParams {
             singer_meiji: default_singer_meiji(),
             voicebank: default_voicebank(),
         }
+    }
+}
+
+/// Things that can be wrong with a [`VocalParams`] at the app boundary.
+/// Each variant points at the offending field so the UI can surface a
+/// targeted error.
+#[derive(Debug, Error, PartialEq)]
+pub enum VocalParamsError {
+    #[error("lines must be >= 1 (got {0})")]
+    LinesTooLow(u8),
+    #[error("syllables_min ({min}) must be <= syllables_max ({max}) and >= 1")]
+    SyllablesRange { min: u8, max: u8 },
+    #[error("range {lo}..{hi} must satisfy lo < hi and both within MIDI 0..=127")]
+    BadRange { lo: u8, hi: u8 },
+    #[error("phrase_length_bars must be >= 1 (got {0})")]
+    PhraseLengthZero(u8),
+    #[error("{field} must be within [{lo}, {hi}] (got {value})")]
+    OutOfRange {
+        field: &'static str,
+        value: f32,
+        lo: f32,
+        hi: f32,
+    },
+}
+
+impl VocalParams {
+    /// Bounds-check the implicit invariants on each field. Run at the
+    /// app boundary before handing params to the engine so a malformed
+    /// project file or a UI state-machine bug surfaces as a clean
+    /// error rather than a panic deep in `derive_vocal` or the SVS
+    /// pipeline.
+    pub fn validate(&self) -> Result<(), VocalParamsError> {
+        if self.lines < 1 {
+            return Err(VocalParamsError::LinesTooLow(self.lines));
+        }
+        if self.syllables_min < 1 || self.syllables_min > self.syllables_max {
+            return Err(VocalParamsError::SyllablesRange {
+                min: self.syllables_min,
+                max: self.syllables_max,
+            });
+        }
+        let (lo, hi) = self.range;
+        if lo >= hi || hi > 127 {
+            return Err(VocalParamsError::BadRange { lo, hi });
+        }
+        if self.phrase_length_bars < 1 {
+            return Err(VocalParamsError::PhraseLengthZero(self.phrase_length_bars));
+        }
+
+        // f32 [0, 1] sliders.
+        for (field, value) in [
+            ("chord_tone_anchor", self.chord_tone_anchor),
+            ("leap_range", self.leap_range),
+            ("breath", self.breath),
+            ("vibrato", self.vibrato),
+            ("articulation", self.articulation),
+            ("consonant_emphasis", self.consonant_emphasis),
+            ("tension_velocity_amount", self.tension_velocity_amount),
+            ("tension_contour_amount", self.tension_contour_amount),
+        ] {
+            if !(0.0..=1.0).contains(&value) {
+                return Err(VocalParamsError::OutOfRange {
+                    field,
+                    value,
+                    lo: 0.0,
+                    hi: 1.0,
+                });
+            }
+        }
+
+        // Bipolar tension: real singers swing both ways around neutral.
+        if !(-1.0..=1.0).contains(&self.tension) {
+            return Err(VocalParamsError::OutOfRange {
+                field: "tension",
+                value: self.tension,
+                lo: -1.0,
+                hi: 1.0,
+            });
+        }
+
+        // Vibrato rate: classical / pop singers run 4-7 Hz; we accept
+        // the broader 1-20 Hz band so users can dial extreme settings
+        // without tripping the bound.
+        if !(1.0..=20.0).contains(&self.vibrato_rate) {
+            return Err(VocalParamsError::OutOfRange {
+                field: "vibrato_rate",
+                value: self.vibrato_rate,
+                lo: 1.0,
+                hi: 20.0,
+            });
+        }
+
+        // Portamento: SVS pipeline applies it as a linear ramp; a zero
+        // or negative value would invert the ramp direction.
+        if !(0.0..=500.0).contains(&self.portamento_ms) {
+            return Err(VocalParamsError::OutOfRange {
+                field: "portamento_ms",
+                value: self.portamento_ms,
+                lo: 0.0,
+                hi: 500.0,
+            });
+        }
+
+        Ok(())
     }
 }
 

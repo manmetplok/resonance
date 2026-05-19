@@ -20,8 +20,9 @@ mod style;
 pub use lyrics::{generate_lyrics, LyricLine};
 pub use melody::{count_syllables, vocal_phrase_spans};
 pub use params::{
-    SyllableMode, VocalContour, VocalMood, VocalParams, VocalPov, VocalRhymeScheme, VocalSinger,
-    VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank, VoiceType,
+    SyllableMode, VocalContour, VocalMood, VocalParams, VocalParamsError, VocalPov,
+    VocalRhymeScheme, VocalSinger, VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank,
+    VoiceType,
 };
 
 use crate::scale::Scale;

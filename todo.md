@@ -70,7 +70,7 @@
       once it becomes a directory (most should be private).
     - [x] Replace `#[allow(clippy::too_many_arguments)]` on `apply_motif_pitches`,
       `shape_velocity`, `realize_phrase` with config structs.
-    - [ ] Add `VocalParams::validate(&self) -> Result<()>` and call it at the app boundary
+    - [x] Add `VocalParams::validate(&self) -> Result<()>` and call it at the app boundary
       (108 LOC of pub fields with hidden invariants).
     - [ ] Add `// SAFETY:` comments at:
       `resonance-audio/src/types/clip.rs:119` (Mmap::map),

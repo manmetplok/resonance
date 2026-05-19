@@ -31,8 +31,8 @@ pub use pad::{derive_pad, PadParams};
 pub use vocal::{
     count_syllables, derive_vocal, derive_vocal_with_meter, derive_vocal_with_motif,
     generate_lyrics, vocal_phrase_spans, LyricLine, SyllableMode, VocalContour, VocalMood,
-    VocalParams, VocalPov, VocalRhymeScheme, VocalSinger, VocalSingerMeiji, VocalStyle,
-    VocalTimbre, VocalVoicebank, VoiceType,
+    VocalParams, VocalParamsError, VocalPov, VocalRhymeScheme, VocalSinger, VocalSingerMeiji,
+    VocalStyle, VocalTimbre, VocalVoicebank, VoiceType,
 };
 
 /// A chord positioned on the section's beat grid. Mirrors the app's
