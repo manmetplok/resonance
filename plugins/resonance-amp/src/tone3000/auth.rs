@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use base64::Engine as _;
-use rand::Rng;
+use rand::RngExt;
 use sha2::{Digest, Sha256};
 
 use super::types::{StoredTokens, TokenResponse};
@@ -54,7 +54,7 @@ pub fn clear_tokens() {
 /// random URL-safe bytes (well above the RFC 7636 minimum of 43).
 fn pkce_pair() -> (String, String) {
     let mut bytes = [0u8; 64];
-    rand::thread_rng().fill(&mut bytes[..]);
+    rand::rng().fill(&mut bytes[..]);
     let verifier = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
     let digest = Sha256::digest(verifier.as_bytes());
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
@@ -63,7 +63,7 @@ fn pkce_pair() -> (String, String) {
 
 fn random_state() -> String {
     let mut bytes = [0u8; 16];
-    rand::thread_rng().fill(&mut bytes[..]);
+    rand::rng().fill(&mut bytes[..]);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 

@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 use super::degree::Degree;
 use super::table::MarkovTable;
@@ -282,7 +282,7 @@ fn weighted_sample(candidates: &[(Degree, f32)], rng: &mut SmallRng) -> Degree {
     if total <= 0.0 {
         return candidates[0].0;
     }
-    let r: f32 = rng.gen::<f32>() * total;
+    let r: f32 = rng.random::<f32>() * total;
     let mut acc = 0.0;
     for &(deg, w) in candidates {
         acc += w;

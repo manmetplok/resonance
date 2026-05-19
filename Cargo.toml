@@ -15,7 +15,7 @@ egui = { version = "0.34", features = ["default_fonts"], default-features = fals
 egui_glow = { version = "0.34", default-features = false }
 iced = { version = "0.13" }
 hound = "3.5"
-rand = "0.8"
+rand = "0.10"
 rfd = "0.15"
 rustfft = "6"
 symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "flac", "mp3", "ogg", "vorbis", "aac", "isomp4"] }
