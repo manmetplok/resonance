@@ -1,11 +1,10 @@
 /// Audio file decoding using symphonia.
 use std::path::Path;
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::DecoderOptions;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::codecs::audio::AudioDecoderOptions;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 
 /// Decode an audio file to stereo interleaved f32 samples at the target sample rate.
 pub fn decode_file(path: &str, target_sample_rate: u32) -> Result<(Vec<f32>, String), String> {
@@ -24,43 +23,45 @@ pub fn decode_file(path: &str, target_sample_rate: u32) -> Result<(Vec<f32>, Str
         hint.with_extension(ext);
     }
 
-    let probed = symphonia::default::get_probe()
-        .format(
+    let mut format = symphonia::default::get_probe()
+        .probe(
             &hint,
             mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+            FormatOptions::default(),
+            MetadataOptions::default(),
         )
         .map_err(|e| format!("Failed to probe format: {}", e))?;
 
-    let mut format = probed.format;
-
     let track = format
-        .default_track()
-        .ok_or_else(|| "No default track found".to_string())?;
+        .default_track(TrackType::Audio)
+        .ok_or_else(|| "No default audio track found".to_string())?;
 
-    let source_sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
-    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2);
+    let audio_params = track
+        .codec_params
+        .as_ref()
+        .and_then(|p| p.audio())
+        .ok_or_else(|| "Track has no audio codec parameters".to_string())?
+        .clone();
+
+    let source_sample_rate = audio_params.sample_rate.unwrap_or(44100);
+    let channels = audio_params
+        .channels
+        .as_ref()
+        .map(|c| c.count())
+        .unwrap_or(2);
     let track_id = track.id;
 
     let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+        .make_audio_decoder(&audio_params, &AudioDecoderOptions::default())
         .map_err(|e| format!("Failed to create decoder: {}", e))?;
 
     let mut raw_samples: Vec<f32> = Vec::new();
 
-    loop {
-        let packet = match format.next_packet() {
-            Ok(packet) => packet,
-            Err(symphonia::core::errors::Error::IoError(ref e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                break;
-            }
-            Err(_) => break,
-        };
-
-        if packet.track_id() != track_id {
+    while let Some(packet) = format
+        .next_packet()
+        .map_err(|e| format!("Failed to read packet: {}", e))?
+    {
+        if packet.track_id != track_id {
             continue;
         }
 
@@ -69,11 +70,7 @@ pub fn decode_file(path: &str, target_sample_rate: u32) -> Result<(Vec<f32>, Str
             Err(_) => continue,
         };
 
-        let spec = *decoded.spec();
-        let num_frames = decoded.frames();
-        let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
-        sample_buf.copy_interleaved_ref(decoded);
-        raw_samples.extend_from_slice(sample_buf.samples());
+        decoded.copy_to_vec_interleaved(&mut raw_samples);
     }
 
     // Convert to stereo interleaved
@@ -276,4 +273,3 @@ impl StreamingLinearResampler {
         [chunk[local * 2], chunk[local * 2 + 1]]
     }
 }
-

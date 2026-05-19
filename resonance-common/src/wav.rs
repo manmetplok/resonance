@@ -10,13 +10,12 @@
 
 use std::io::Cursor;
 
-use symphonia::core::audio::{AudioBufferRef, SampleBuffer};
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 
 /// Decoded WAV data split into separate channels.
 pub struct WavChannels {
@@ -100,44 +99,51 @@ fn decode_to_interleaved(data: &[u8]) -> Result<Decoded, String> {
     let mut hint = Hint::new();
     hint.with_extension("wav");
 
-    let probed = symphonia::default::get_probe()
-        .format(
+    let mut format = symphonia::default::get_probe()
+        .probe(
             &hint,
             mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+            FormatOptions::default(),
+            MetadataOptions::default(),
         )
         .map_err(|e| format!("WAV probe error: {e}"))?;
 
-    let mut format = probed.format;
     let track = format
-        .tracks()
-        .iter()
-        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .first_track_known_codec(TrackType::Audio)
         .ok_or_else(|| "WAV has no decodable track".to_string())?;
     let track_id = track.id;
-    let codec_params = track.codec_params.clone();
+    let audio_params = track
+        .codec_params
+        .as_ref()
+        .and_then(|p| p.audio())
+        .ok_or_else(|| "WAV track missing audio codec parameters".to_string())?
+        .clone();
 
-    let sample_rate = codec_params
+    let sample_rate = audio_params
         .sample_rate
         .map(|sr| sr as f32)
         .ok_or_else(|| "WAV missing sample rate".to_string())?;
-    let channels = codec_params.channels.map(|c| c.count()).unwrap_or(1).max(1);
+    let channels = audio_params
+        .channels
+        .as_ref()
+        .map(|c| c.count())
+        .unwrap_or(1)
+        .max(1);
 
     let mut decoder = symphonia::default::get_codecs()
-        .make(&codec_params, &DecoderOptions::default())
+        .make_audio_decoder(&audio_params, &AudioDecoderOptions::default())
         .map_err(|e| format!("WAV decoder error: {e}"))?;
 
     let mut samples: Vec<f32> = Vec::new();
-    let mut sample_buf: Option<SampleBuffer<f32>> = None;
 
     loop {
         let packet = match format.next_packet() {
-            Ok(p) => p,
+            Ok(Some(p)) => p,
+            Ok(None) => break,
             Err(SymphoniaError::IoError(_)) => break,
             Err(e) => return Err(format!("WAV read packet: {e}")),
         };
-        if packet.track_id() != track_id {
+        if packet.track_id != track_id {
             continue;
         }
         let decoded = match decoder.decode(&packet) {
@@ -146,13 +152,7 @@ fn decode_to_interleaved(data: &[u8]) -> Result<Decoded, String> {
             Err(SymphoniaError::IoError(_)) => break,
             Err(e) => return Err(format!("WAV decode: {e}")),
         };
-        if sample_buf.is_none() {
-            let duration = decoded.capacity() as u64;
-            let spec = *decoded.spec();
-            sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
-        }
-        let buf = sample_buf.as_mut().unwrap();
-        append_interleaved(&decoded, buf, &mut samples);
+        decoded.copy_to_vec_interleaved(&mut samples);
     }
 
     if samples.is_empty() {
@@ -164,15 +164,6 @@ fn decode_to_interleaved(data: &[u8]) -> Result<Decoded, String> {
         sample_rate,
         channels,
     })
-}
-
-fn append_interleaved(
-    decoded: &AudioBufferRef,
-    sample_buf: &mut SampleBuffer<f32>,
-    out: &mut Vec<f32>,
-) {
-    sample_buf.copy_interleaved_ref(decoded.clone());
-    out.extend_from_slice(sample_buf.samples());
 }
 
 fn to_stereo_interleaved(samples: &[f32], channels: usize) -> Vec<f32> {
