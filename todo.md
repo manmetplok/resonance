@@ -103,7 +103,7 @@ mod.rs in several places still owns the work it dispatched.
     - [x] `resonance-app/src/compose/vocal_svs/segment.rs` (571 LOC) is one
       537-line `build_segment()`. Suggested split: `duration.rs` (phoneme
       durations), `f0.rs` (pitch curve + portamento/vibrato), `tension.rs`.
-    - [ ] `resonance-app/src/update/compose/lane_inspector.rs` is still a giant
+    - [x] `resonance-app/src/update/compose/lane_inspector.rs` is still a giant
       match across Bass/Melody/Pad/Drum/Vocal parameter updates. Split per
       generator: `bass_params.rs`, `melody_params.rs`, `pad_params.rs`,
       `vocal_params.rs` under `update/compose/lane_inspector/`.
