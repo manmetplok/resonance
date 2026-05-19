@@ -66,13 +66,13 @@ pub(super) fn bass_controls<'a>(
             "Bass voicing pattern.\n\u{2022} Root hold: one note per chord, full duration\n\u{2022} Root pulse: root on every beat\n\u{2022} Root + fifth: alternating root/fifth per beat\n\u{2022} Octave: root and root+12 alternating\n\u{2022} Walking: stepwise scale line into next chord (needs a scale)\n\u{2022} Motif: render the section’s shared motif in the bass register"
         ),
         style_picker,
-        Space::with_height(4),
+        Space::new().height(4),
         label_with_info(
             "Base note",
             "MIDI floor for bass roots. Each chord’s root is moved to the nearest pitch at or above this note."
         ),
         base_note_picker,
-        Space::with_height(4),
+        Space::new().height(4),
         label_with_info(
             format!("Velocity: {:.2}", params.velocity),
             "MIDI velocity (0–1) for emitted notes. Accented motif notes get a small +0.05 boost on top."
@@ -113,19 +113,19 @@ pub(super) fn bass_controls<'a>(
         .width(Length::Fill);
 
         col = col
-            .push(Space::with_height(8))
+            .push(Space::new().height(8))
             .push(label_with_info(
                 "Motif mode",
                 "How the bass renders the section motif.\n\u{2022} Same intervals: literal motif at the bass anchor\n\u{2022} Augmented: same intervals, each note 2× longer (slow line under the melody)\n\u{2022} Rhythm only: motif rhythm + accents, pitch is the chord root\n\u{2022} First note only: one note per chord on the chord root"
             ))
             .push(mode_picker)
-            .push(Space::with_height(4))
+            .push(Space::new().height(4))
             .push(label_with_info(
                 "Phrase development",
                 "How per-phrase Transforms are picked.\n\u{2022} Simple: Identity every phrase — predictable foundation\n\u{2022} Mirror melody: same Transform per phrase as the melody motif lane (locked together)\n\u{2022} Restricted: random Identity/Augment per phrase, independent of melody"
             ))
             .push(phrase_picker)
-            .push(Space::with_height(4))
+            .push(Space::new().height(4))
             .push(
                 text("Motif knobs live in the Chords lane.")
                     .size(10)

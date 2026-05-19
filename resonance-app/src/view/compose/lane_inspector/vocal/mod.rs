@@ -37,7 +37,7 @@ pub(in crate::view::compose::lane_inspector) fn toggle_row<'a>(
     track_id: TrackId,
 ) -> Element<'a, Message> {
     let dot_color = if on { theme::WARM } else { theme::TEXT_4 };
-    let dot = container(Space::new(Length::Fixed(6.0), Length::Fixed(6.0))).style(move |_| {
+    let dot = container(Space::new().width(Length::Fixed(6.0)).height(Length::Fixed(6.0))).style(move |_| {
         container::Style {
             background: Some(Background::Color(dot_color)),
             border: Border {
@@ -104,13 +104,13 @@ pub(in crate::view::compose::lane_inspector) fn vocal_controls<'a>(
 
     column![
         lyrics_group,
-        Space::with_height(10),
+        Space::new().height(10),
         draft_group,
-        Space::with_height(10),
+        Space::new().height(10),
         melody_group,
-        Space::with_height(10),
+        Space::new().height(10),
         voice_group,
-        Space::with_height(10),
+        Space::new().height(10),
         generate_group,
     ]
     .spacing(0)

@@ -13,7 +13,7 @@ use crate::recent::RecentEntry;
 use crate::theme::{self, fa};
 use crate::Resonance;
 
-const DIALOG_WIDTH: u16 = 560;
+const DIALOG_WIDTH: f32 = 560.0;
 const MAX_RECENT_SHOWN: usize = 5;
 
 pub(crate) fn view_startup_overlay(r: &Resonance) -> Element<'_, Message> {
@@ -21,7 +21,7 @@ pub(crate) fn view_startup_overlay(r: &Resonance) -> Element<'_, Message> {
     // the dimmed area fall into the void, which is exactly what we
     // want for a non-dismissible modal.
     let backdrop = mouse_area(
-        container(Space::new(Length::Fill, Length::Fill))
+        container(Space::new().width(Length::Fill).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_theme| container::Style {
@@ -37,7 +37,7 @@ pub(crate) fn view_startup_overlay(r: &Resonance) -> Element<'_, Message> {
     let brand_dot = text("\u{25cf}").size(13).color(theme::ACCENT);
     let brand = row![
         brand_dot,
-        Space::with_width(8),
+        Space::new().width(8),
         text("Resonance")
             .size(14)
             .font(theme::UI_FONT_MEDIUM)
@@ -85,17 +85,17 @@ pub(crate) fn view_startup_overlay(r: &Resonance) -> Element<'_, Message> {
 
     let dialog_content = column![
         brand,
-        Space::with_height(20),
+        Space::new().height(20),
         title,
-        Space::with_height(2),
+        Space::new().height(2),
         subtitle,
-        Space::with_height(24),
+        Space::new().height(24),
         new_btn,
         open_btn,
         template_btn,
-        Space::with_height(24),
+        Space::new().height(24),
         recent_label,
-        Space::with_height(8),
+        Space::new().height(8),
         recent_section,
     ]
     .spacing(6)
@@ -129,7 +129,7 @@ fn primary_action<'a>(
     let btn = button(
         row![
             theme::icon(icon).size(14).color(theme::BG_0),
-            Space::with_width(10),
+            Space::new().width(10),
             text(label)
                 .size(13)
                 .font(theme::UI_FONT_SEMIBOLD)
@@ -159,7 +159,7 @@ fn ghost_action<'a>(
     let btn = button(
         row![
             theme::icon(icon).size(13).color(label_color),
-            Space::with_width(10),
+            Space::new().width(10),
             text(label).size(13).color(label_color),
         ]
         .align_y(alignment::Vertical::Center),
@@ -190,7 +190,7 @@ fn recent_row(entry: &RecentEntry) -> Element<'_, Message> {
     button(
         row![
             theme::icon(fa::FOLDER_OPEN).size(12).color(theme::TEXT_3),
-            Space::with_width(10),
+            Space::new().width(10),
             label,
         ]
         .align_y(alignment::Vertical::Center),

@@ -30,7 +30,7 @@ pub(super) fn articulation_mix_panel<'a>(group: &'a DrumGroup) -> Element<'a, Me
         // Build a colored segment.
         let alpha = 0.40 + (i as f32 * 0.16).clamp(0.0, 0.55);
         let seg_color = Color { a: alpha, ..color };
-        let seg = container(Space::with_height(Length::Fixed(10.0)))
+        let seg = container(Space::new().height(Length::Fixed(10.0)))
             .width(Length::FillPortion((pct * 1000.0) as u16))
             .height(Length::Fixed(10.0))
             .style(move |_theme| container::Style {
@@ -89,9 +89,9 @@ pub(super) fn articulation_mix_panel<'a>(group: &'a DrumGroup) -> Element<'a, Me
     rail_card(
         column![
             title,
-            Space::with_height(8),
+            Space::new().height(8),
             stack_bar,
-            Space::with_height(8),
+            Space::new().height(8),
             column(rows).spacing(8),
         ]
         .spacing(0)

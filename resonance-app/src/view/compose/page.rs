@@ -39,7 +39,7 @@ impl crate::Resonance {
                 ..Default::default()
             })
             .into(),
-            None => container(Space::with_height(0)).width(Length::Fill).into(),
+            None => container(Space::new().height(0)).width(Length::Fill).into(),
         };
 
         let body: Element<'_, Message> = match selected {
@@ -49,7 +49,7 @@ impl crate::Resonance {
                 // track name labels, so the chord lane is padded the same
                 // amount to keep bar 1 aligned in both.
                 let global_tracks_row = row![
-                    Space::with_width(Length::Fixed(tracks::NAME_COLUMN_WIDTH)),
+                    Space::new().width(Length::Fixed(tracks::NAME_COLUMN_WIDTH)),
                     global_tracks::view(
                         &self.tempo_map,
                         placement.start_bar,
@@ -84,7 +84,7 @@ impl crate::Resonance {
                     Some(chord_id) if definition.chords.iter().any(|c| c.id == chord_id) => {
                         popover::view(definition, chord_id)
                     }
-                    _ => container(Space::with_height(0))
+                    _ => container(Space::new().height(0))
                         .width(Length::Fixed(ws_width))
                         .into(),
                 };

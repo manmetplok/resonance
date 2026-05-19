@@ -34,14 +34,14 @@ pub(super) fn groups_list_column<'a>(r: &'a Resonance) -> Element<'a, Message> {
     .height(Length::Fill);
 
     column_panel(
-        column![head, separator_below(), Space::with_height(8), list_scroll].spacing(0).into(),
+        column![head, separator_below(), Space::new().height(8), list_scroll].spacing(0).into(),
         Length::Fixed(240.0),
     )
 }
 
 fn group_tile<'a>(g: &'a DrumGroup, active: bool) -> Element<'a, Message> {
     let color = u8_color(g.color);
-    let dot = container(Space::new(Length::Fixed(8.0), Length::Fixed(8.0)))
+    let dot = container(Space::new().width(Length::Fixed(8.0)).height(Length::Fixed(8.0)))
         .style(move |_theme| container::Style {
             background: Some(iced::Background::Color(color)),
             border: iced::Border {
@@ -62,7 +62,7 @@ fn group_tile<'a>(g: &'a DrumGroup, active: bool) -> Element<'a, Message> {
         .font(theme::MONO_FONT)
         .color(theme::TEXT_3);
 
-    let inner = row![dot, name, Space::with_width(Length::Fill), count]
+    let inner = row![dot, name, Space::new().width(Length::Fill), count]
         .spacing(8)
         .align_y(alignment::Vertical::Center);
 

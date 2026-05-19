@@ -73,10 +73,10 @@ pub(super) fn lyrics_group<'a>(
     .padding([4, 6])
     .width(Length::Fill);
 
-    let mood_col = column![dim_label("Mood"), Space::with_height(2), mood_picker].spacing(0);
+    let mood_col = column![dim_label("Mood"), Space::new().height(2), mood_picker].spacing(0);
     let pov_col = column![
         dim_label("Voice / POV"),
-        Space::with_height(2),
+        Space::new().height(2),
         pov_picker
     ]
     .spacing(0);
@@ -140,13 +140,13 @@ pub(super) fn lyrics_group<'a>(
     .padding([4, 6])
     .width(Length::Fill);
 
-    let lines_col = column![dim_label("Lines"), Space::with_height(2), lines_picker].spacing(0);
+    let lines_col = column![dim_label("Lines"), Space::new().height(2), lines_picker].spacing(0);
     let syl_col = column![
         dim_label(format!(
             "Syllables / line · {}\u{2013}{}",
             params.syllables_min, params.syllables_max
         )),
-        Space::with_height(2),
+        Space::new().height(2),
         row![syl_min_picker, syl_max_picker].spacing(6),
     ]
     .spacing(0);
@@ -170,23 +170,23 @@ pub(super) fn lyrics_group<'a>(
 
     let body = column![
         title,
-        Space::with_height(8),
+        Space::new().height(8),
         theme_label,
-        Space::with_height(2),
+        Space::new().height(2),
         theme_input,
-        Space::with_height(2),
-        row![Space::with_width(Length::Fill), theme_meta],
-        Space::with_height(8),
+        Space::new().height(2),
+        row![Space::new().width(Length::Fill), theme_meta],
+        Space::new().height(8),
         mood_pov_row,
-        Space::with_height(8),
+        Space::new().height(8),
         dim_label("Rhyme scheme"),
-        Space::with_height(2),
+        Space::new().height(2),
         rhyme_row,
-        Space::with_height(8),
+        Space::new().height(8),
         counts_row,
-        Space::with_height(8),
+        Space::new().height(8),
         match_toggle,
-        Space::with_height(4),
+        Space::new().height(4),
         cliche_toggle,
     ]
     .spacing(0);

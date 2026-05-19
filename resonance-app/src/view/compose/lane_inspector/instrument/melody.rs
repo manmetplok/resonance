@@ -124,7 +124,7 @@ pub(super) fn melody_controls<'a>(
             "Melodic generator.\n\u{2022} Arp up / down / up-down: cycle through chord tones\n\u{2022} Motif: develop a short cell across phrases (uses the section motif knobs)"
         ),
         style_picker,
-        Space::with_height(4),
+        Space::new().height(4),
         label_with_info(
             "Register low",
             "Lowest MIDI note this melody is allowed to play."
@@ -135,7 +135,7 @@ pub(super) fn melody_controls<'a>(
             "Highest MIDI note this melody is allowed to play."
         ),
         reg_hi_picker,
-        Space::with_height(4),
+        Space::new().height(4),
     ]
     .spacing(2);
 
@@ -150,7 +150,7 @@ pub(super) fn melody_controls<'a>(
     }
 
     col = col
-        .push(Space::with_height(4))
+        .push(Space::new().height(4))
         .push(label_with_info(
             format!("Rest density: {:.2}", params.rest_density),
             "Probability that any given slot is silent. 0 = no rests. Higher values produce sparser, more breathing melodies."
@@ -161,7 +161,7 @@ pub(super) fn melody_controls<'a>(
             "Base MIDI velocity (0–1). Motif accents add a small +0.05 boost on top."
         ))
         .push(vel_slider)
-        .push(Space::with_height(4))
+        .push(Space::new().height(4))
         .push(toggle_row(
             "Fill in vocal gaps",
             params.fill_vocal_gaps,
@@ -220,13 +220,13 @@ pub(super) fn melody_controls<'a>(
         .width(Length::Fill);
 
         col = col
-            .push(Space::with_height(4))
+            .push(Space::new().height(4))
             .push(label_with_info(
                 format!("Articulation: {:.2}", params.articulation),
                 "How short each note sounds relative to its rhythmic slot. 0 = legato (full slot), 1 = staccato (about 45% of the slot)."
             ))
             .push(articulation_slider)
-            .push(Space::with_height(4))
+            .push(Space::new().height(4))
             .push(label_with_info(
                 "Contour",
                 "Preferred melodic shape per phrase. Auto picks one per phrase from research-weighted distributions; the others pin every phrase to the chosen shape."
@@ -237,7 +237,7 @@ pub(super) fn melody_controls<'a>(
                 "How many chords belong to one phrase. Each phrase gets its own contour and Transform."
             ))
             .push(phrase_len_picker)
-            .push(Space::with_height(4))
+            .push(Space::new().height(4))
             .push(
                 text("Motif knobs live in the Chords lane.")
                     .size(10)

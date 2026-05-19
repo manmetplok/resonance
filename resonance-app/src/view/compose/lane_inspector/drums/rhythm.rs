@@ -74,17 +74,17 @@ pub(super) fn rhythm_panel<'a>(group: &'a DrumGroup) -> Element<'a, Message> {
     rail_card(
         column![
             title,
-            Space::with_height(8),
+            Space::new().height(8),
             field("Density", group.density, density),
-            Space::with_height(6),
+            Space::new().height(6),
             field("Swing", group.swing, swing),
-            Space::with_height(6),
+            Space::new().height(6),
             field("Accent", group.accent, accent),
-            Space::with_height(6),
+            Space::new().height(6),
             field("Humanize", group.humanize, humanize),
-            Space::with_height(6),
+            Space::new().height(6),
             field("Fills (last bar)", group.fills, fills),
-            Space::with_height(6),
+            Space::new().height(6),
             text(group.style.clone()).size(10).color(theme::TEXT_4),
         ]
         .spacing(0)

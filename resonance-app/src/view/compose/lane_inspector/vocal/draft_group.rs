@@ -31,7 +31,7 @@ pub(super) fn draft_group<'a>(
         .color(theme::TEXT_4);
     let title = row![
         title_left,
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         title_right
     ]
     .align_y(alignment::Vertical::Center);
@@ -64,13 +64,13 @@ pub(super) fn draft_group<'a>(
 
     let body = column![
         title,
-        Space::with_height(8),
+        Space::new().height(8),
         bulk_block,
-        Space::with_height(10),
+        Space::new().height(10),
         dim_label("Per-line preview"),
-        Space::with_height(4),
+        Space::new().height(4),
         lines_col,
-        Space::with_height(8),
+        Space::new().height(8),
         actions,
     ]
     .spacing(0);
@@ -116,7 +116,7 @@ fn bulk_lyrics_block<'a>(
         .into(),
     };
 
-    column![dim_label("All lyrics"), Space::with_height(4), editor].spacing(0).into()
+    column![dim_label("All lyrics"), Space::new().height(4), editor].spacing(0).into()
 }
 
 fn lyric_line_row<'a>(

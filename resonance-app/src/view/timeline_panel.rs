@@ -97,8 +97,8 @@ impl crate::Resonance {
 
         let overlay = container(
             column![
-                Space::with_height(Length::Fill),
-                row![Space::with_width(Length::Fill), zoom_group],
+                Space::new().height(Length::Fill),
+                row![Space::new().width(Length::Fill), zoom_group],
             ]
             .spacing(0),
         )

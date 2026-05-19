@@ -253,9 +253,9 @@ impl crate::Resonance {
         let pan_label = format_pan(track.pan);
         let pan_row = row![
             text("Pan").size(9).color(theme::TEXT_DIM),
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             pan_ctrl,
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             text(pan_label)
                 .size(9)
                 .font(Font::MONOSPACE)
@@ -313,7 +313,7 @@ impl crate::Resonance {
         if let Some(inst) = instrument_section {
             plugin_column = plugin_column.push(inst);
             plugin_column = plugin_column
-                .push(container(Space::new(Length::Fill, 1)).style(theme::separator_bg));
+                .push(container(Space::new().width(Length::Fill).height(1)).style(theme::separator_bg));
         }
         plugin_column = plugin_column.push(fx_scroll);
 
@@ -344,8 +344,8 @@ impl crate::Resonance {
                 .tracks
                 .iter()
                 .filter(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id))
-                .count() as u16;
-            let right_col_w: u16 = (subtrack_count.max(1) * 30) + 8;
+                .count() as u32;
+            let right_col_w: f32 = ((subtrack_count.max(1) * 30) + 8) as f32;
 
             let left_col = column![
                 track_name,
@@ -355,20 +355,20 @@ impl crate::Resonance {
                 fader_block,
             ]
             .spacing(4)
-            .width(theme::MIXER_STRIP_WIDTH - 12)
+            .width(theme::MIXER_STRIP_WIDTH - 12.0)
             .height(Length::Fill);
 
-            let v_sep = container(Space::new(1, Length::Fill)).style(theme::separator_bg);
+            let v_sep = container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
 
             let right_col = container(self.view_collapsed_subtrack_meters(track.id))
-                .width(Length::Fixed(right_col_w as f32))
+                .width(Length::Fixed(right_col_w))
                 .height(Length::Fill)
                 .padding([0, 4]);
 
             let strip_content = row![left_col, v_sep, right_col]
                 .height(Length::Fill)
                 .padding(6)
-                .width(theme::MIXER_STRIP_WIDTH + right_col_w + 12);
+                .width(theme::MIXER_STRIP_WIDTH + right_col_w + 12.0);
 
             mouse_area(
                 container(strip_content)
@@ -455,9 +455,9 @@ impl crate::Resonance {
         // band so both columns end on the same baseline.
         column![
             title,
-            Space::with_height(Length::Fill),
+            Space::new().height(Length::Fill),
             meters_row,
-            Space::with_height(20),
+            Space::new().height(20),
         ]
         .spacing(2)
         .width(Length::Fill)

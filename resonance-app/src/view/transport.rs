@@ -34,7 +34,7 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
             .size(11)
             .color(theme::ACCENT)
             .line_height(LineHeight::Relative(1.0)),
-        Space::with_width(7),
+        Space::new().width(7),
         text("Resonance")
             .size(13)
             .font(theme::UI_FONT_MEDIUM)
@@ -68,11 +68,11 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
 
     let left = row![
         brand,
-        Space::with_width(16),
+        Space::new().width(16),
         separator,
-        Space::with_width(8),
+        Space::new().width(8),
         title,
-        Space::with_width(8),
+        Space::new().width(8),
         dirty_label,
     ]
     .align_y(alignment::Vertical::Center);
@@ -104,13 +104,13 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         .style(|_theme, status| theme::ghost_button_style(status));
 
     let chrome_row = row![
-        Space::with_width(14),
+        Space::new().width(14),
         left,
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         tabs,
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         settings_btn,
-        Space::with_width(14),
+        Space::new().width(14),
     ]
     .spacing(8)
     .align_y(alignment::Vertical::Center)
@@ -180,9 +180,9 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
         play_pause,
         rec_btn,
         next_btn,
-        Space::with_width(8),
+        Space::new().width(8),
         vertical_divider(),
-        Space::with_width(8),
+        Space::new().width(8),
         loop_btn,
         metronome_btn,
     ]
@@ -271,18 +271,18 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
         .color(theme::TEXT_3)
         .line_height(LineHeight::Relative(1.0));
 
-    let right = row![meter, Space::with_width(14), cpu_text]
+    let right = row![meter, Space::new().width(14), cpu_text]
         .spacing(0)
         .align_y(alignment::Vertical::Center);
 
     let row = row![
-        Space::with_width(14),
+        Space::new().width(14),
         left,
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         center,
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         right,
-        Space::with_width(14),
+        Space::new().width(14),
     ]
     .spacing(0)
     .align_y(alignment::Vertical::Center)
@@ -314,12 +314,12 @@ fn centered_icon<'a>(
 ) -> iced::widget::Container<'a, Message> {
     container(
         theme::icon(glyph)
-            .size(icon_size)
+            .size(f32::from(icon_size))
             .color(color)
             .line_height(LineHeight::Relative(1.0)),
     )
-    .width(cell)
-    .height(cell)
+    .width(f32::from(cell))
+    .height(f32::from(cell))
     .center_x(Length::Fill)
     .center_y(Length::Fill)
 }
@@ -401,7 +401,7 @@ fn metronome_toggle_button(r: &Resonance) -> Element<'_, Message> {
 }
 
 fn vertical_divider<'a>() -> iced::widget::Container<'a, Message> {
-    container(Space::with_height(18))
+    container(Space::new().height(18))
         .width(1)
         .style(|_theme| container::Style {
             background: Some(iced::Background::Color(theme::LINE)),
@@ -410,7 +410,7 @@ fn vertical_divider<'a>() -> iced::widget::Container<'a, Message> {
 }
 
 fn stat_separator<'a>() -> iced::widget::Container<'a, Message> {
-    container(Space::with_height(28))
+    container(Space::new().height(28))
         .width(1)
         .style(|_theme| container::Style {
             background: Some(iced::Background::Color(theme::LINE_2)),
@@ -434,7 +434,7 @@ fn stat_block<'a>(
             .width(Length::Fill)
             .align_x(alignment::Horizontal::Center)
             .align_y(alignment::Vertical::Center),
-        Space::with_height(3),
+        Space::new().height(3),
         container(label)
             .width(Length::Fill)
             .align_x(alignment::Horizontal::Center),

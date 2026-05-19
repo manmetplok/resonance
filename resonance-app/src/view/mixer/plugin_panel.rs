@@ -56,7 +56,7 @@ impl crate::Resonance {
             text(plugin.plugin_name.clone())
                 .size(12)
                 .color(theme::ACCENT),
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
         ]
         .spacing(8)
         .align_y(alignment::Vertical::Center);

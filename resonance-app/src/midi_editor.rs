@@ -88,10 +88,10 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
     fn update(
         &self,
         state: &mut Self::State,
-        event: canvas::Event,
+        event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
+    ) -> Option<canvas::Action<Message>> {
         let layout = self.layout(bounds);
         let viewport = self.viewport();
         let grid_x = layout.grid_x();
@@ -99,12 +99,12 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
 
         match event {
             // --- Scroll ---
-            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 // Only handle wheel events when the cursor is actually over the
                 // piano roll — otherwise scrolling the arrangement would also
                 // scroll this editor.
                 if cursor.position_in(bounds).is_none() {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 }
                 // Horizontal scroll is handled by the outer `Scrollable`
                 // that wraps this canvas now (see `view_midi_editor_panel`).
@@ -115,44 +115,35 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                 match delta {
                     mouse::ScrollDelta::Lines { x, y } => {
                         if x.abs() > f32::EPSILON {
-                            return (canvas::event::Status::Ignored, None);
+                            return None;
                         }
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::MidiEditor(MidiEditorMessage::ScrollY(-y * 30.0))),
-                        );
+                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::ScrollY(-y * 30.0))).and_capture());
                     }
                     mouse::ScrollDelta::Pixels { x, y } => {
                         if x.abs() > f32::EPSILON {
-                            return (canvas::event::Status::Ignored, None);
+                            return None;
                         }
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::MidiEditor(MidiEditorMessage::ScrollY(-y))),
-                        );
+                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::ScrollY(-y))).and_capture());
                     }
                 }
             }
 
             // --- Mouse press ---
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(pos) = cursor.position_in(bounds) {
                     // Piano keyboard area: preview note
                     if pos.x < grid_x && pos.y < grid_h {
                         let note = viewport.y_local_to_note(pos.y);
                         state.previewing_note = Some(note);
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::MidiEditor(MidiEditorMessage::PreviewNote(
+                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::PreviewNote(
                                 self.track_id,
                                 note,
-                            ))),
-                        );
+                            ))).and_capture());
                     }
 
                     // Velocity lane: not interactive for now (future: drag velocity bars)
                     if pos.y >= grid_h {
-                        return (canvas::event::Status::Ignored, None);
+                        return None;
                     }
 
                     // Note grid area
@@ -178,45 +169,36 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                                         }
                                     }
                                 });
-                                return (
-                                    canvas::event::Status::Captured,
-                                    Some(Message::MidiEditor(MidiEditorMessage::SelectNote {
+                                return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::SelectNote {
                                         note_index: Some(i),
-                                    })),
-                                );
+                                    })).and_capture());
                             }
                         }
 
                         // Clicked empty space: create a new note
                         let snapped = self.snap(click_tick);
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::MidiEditor(MidiEditorMessage::AddNote {
+                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::AddNote {
                                 clip_id: self.clip.id,
                                 note: click_note,
                                 start_tick: snapped,
                                 duration_ticks: self.snap_ticks,
                                 velocity: DEFAULT_VELOCITY,
-                            })),
-                        );
+                            })).and_capture());
                     }
                 }
             }
 
             // --- Right-click: remove selected note ---
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
                 if let Some(pos) = cursor.position_in(bounds) {
                     if pos.x >= grid_x && pos.y < grid_h {
                         for (i, n) in self.clip.notes.iter().enumerate() {
                             let rect = self.note_rect(&layout, &viewport, n);
                             if hit_test_note(rect, pos).is_some() {
-                                return (
-                                    canvas::event::Status::Captured,
-                                    Some(Message::MidiEditor(MidiEditorMessage::RemoveNote {
+                                return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::RemoveNote {
                                         clip_id: self.clip.id,
                                         note_index: i,
-                                    })),
-                                );
+                                    })).and_capture());
                             }
                         }
                     }
@@ -224,7 +206,7 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
             }
 
             // --- Mouse move (drag) ---
-            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 if let Some(pos) = cursor.position_in(bounds) {
                     match &state.drag {
                         Some(DragMode::MoveNote {
@@ -236,15 +218,12 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                             let raw_tick = (tick as i64 + start_tick_offset).max(0) as u64;
                             let snapped_tick = self.snap(raw_tick);
                             let note = viewport.y_local_to_note(pos.y);
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::MidiEditor(MidiEditorMessage::MoveNote {
+                            return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::MoveNote {
                                     clip_id: self.clip.id,
                                     note_index: *note_index,
                                     new_start_tick: snapped_tick,
                                     new_note: note,
-                                })),
-                            );
+                                })).and_capture());
                         }
                         Some(DragMode::ResizeNote {
                             note_index,
@@ -254,14 +233,11 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                             let snapped = self.snap(tick);
                             let new_dur =
                                 snapped.saturating_sub(*anchor_tick).max(self.snap_ticks);
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::MidiEditor(MidiEditorMessage::ResizeNote {
+                            return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::ResizeNote {
                                     clip_id: self.clip.id,
                                     note_index: *note_index,
                                     new_duration_ticks: new_dur,
-                                })),
-                            );
+                                })).and_capture());
                         }
                         Some(_) | None => {}
                     }
@@ -269,44 +245,38 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
             }
 
             // --- Mouse release ---
-            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 state.drag = None;
                 if let Some(note) = state.previewing_note.take() {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::MidiEditor(MidiEditorMessage::StopPreview(
+                    return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::StopPreview(
                             self.track_id,
                             note,
-                        ))),
-                    );
+                        ))).and_capture());
                 }
             }
 
             // --- Delete key: remove selected note ---
-            canvas::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete),
                 ..
             })
-            | canvas::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            | iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Backspace),
                 ..
             }) => {
                 if let Some(idx) = self.selected_note {
                     if idx < self.clip.notes.len() {
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::MidiEditor(MidiEditorMessage::RemoveNote {
+                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::RemoveNote {
                                 clip_id: self.clip.id,
                                 note_index: idx,
-                            })),
-                        );
+                            })).and_capture());
                     }
                 }
             }
 
             _ => {}
         }
-        (canvas::event::Status::Ignored, None)
+        None
     }
 
     fn draw(

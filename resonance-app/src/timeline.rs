@@ -263,38 +263,35 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
     fn update(
         &self,
         state: &mut Self::State,
-        event: canvas::Event,
+        event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
+    ) -> Option<canvas::Action<Message>> {
         let result = match event {
-            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                self.handle_wheel(delta, bounds, cursor)
+            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                self.handle_wheel(*delta, bounds, cursor)
             }
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 self.handle_press(state, bounds, cursor)
             }
-            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 self.handle_move(state, bounds, cursor)
             }
-            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 self.handle_release(state)
             }
-            canvas::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
-                self.handle_key(&key)
+            iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
+                self.handle_key(key)
             }
-            _ => (canvas::event::Status::Ignored, None),
+            _ => None,
         };
-        if let (_, Some(_)) = result {
-            return result;
-        }
-        if result.0 == canvas::event::Status::Captured {
+        if result.is_some() {
             return result;
         }
         if let Some(msg) = self.report_viewport(state, bounds) {
-            return (canvas::event::Status::Ignored, Some(msg));
+            return Some(canvas::Action::publish(msg));
         }
-        (canvas::event::Status::Ignored, None)
+        None
     }
 
     fn draw(

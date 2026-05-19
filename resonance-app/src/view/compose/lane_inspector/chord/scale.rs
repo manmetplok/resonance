@@ -68,17 +68,17 @@ pub(in crate::view::compose::lane_inspector) fn scale_block<'a>(
 
     column![
         section_header("Scale"),
-        Space::with_height(8),
+        Space::new().height(8),
         current_label,
-        Space::with_height(8),
+        Space::new().height(8),
         field_label("ROOT"),
-        Space::with_height(4),
+        Space::new().height(4),
         root_picker,
-        Space::with_height(8),
+        Space::new().height(8),
         field_label("MODE"),
-        Space::with_height(4),
+        Space::new().height(4),
         mode_picker,
-        Space::with_height(8),
+        Space::new().height(8),
         clear_btn,
     ]
     .spacing(0)

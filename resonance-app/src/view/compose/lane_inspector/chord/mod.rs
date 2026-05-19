@@ -91,8 +91,8 @@ pub(super) fn section_header<'a>(title: &'static str) -> Element<'a, Message> {
             .size(13)
             .font(theme::UI_FONT_MEDIUM)
             .color(theme::TEXT_1),
-        Space::with_height(6),
-        Space::with_height(1)
+        Space::new().height(6),
+        Space::new().height(1)
             .width(Length::Fill),
         crate::view::compose::lane_inspector::separator(),
     ]
@@ -115,7 +115,7 @@ pub(super) fn toggle_row<'a>(label: &'a str, on: bool, msg: Message) -> Element<
     let track_color = if on { theme::ACCENT } else { theme::BG_3 };
     let knob_x = if on { 14.0 } else { 1.0 };
 
-    let knob = iced::widget::container(Space::with_width(0))
+    let knob = iced::widget::container(Space::new().width(0))
         .width(12)
         .height(12)
         .style(|_theme| iced::widget::container::Style {
@@ -128,7 +128,7 @@ pub(super) fn toggle_row<'a>(label: &'a str, on: bool, msg: Message) -> Element<
         });
 
     let track = iced::widget::container(
-        row![Space::with_width(knob_x), knob]
+        row![Space::new().width(knob_x), knob]
             .align_y(alignment::Vertical::Center),
     )
     .width(28)
@@ -147,7 +147,7 @@ pub(super) fn toggle_row<'a>(label: &'a str, on: bool, msg: Message) -> Element<
     let mouse = iced::widget::mouse_area(
         row![
             text(label).size(12).color(theme::TEXT_1),
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             track,
         ]
         .align_y(alignment::Vertical::Center),

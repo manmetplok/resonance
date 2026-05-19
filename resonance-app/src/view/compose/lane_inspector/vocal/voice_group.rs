@@ -79,7 +79,7 @@ pub(super) fn voice_group<'a>(
                 .collect();
             let row = iced::widget::Row::with_children(chips).spacing(4).wrap();
             Some(
-                column![dim_label("Singer"), Space::with_height(2), row]
+                column![dim_label("Singer"), Space::new().height(2), row]
                     .spacing(0)
                     .into(),
             )
@@ -103,7 +103,7 @@ pub(super) fn voice_group<'a>(
                 .collect();
             let row = iced::widget::Row::with_children(chips).spacing(4).wrap();
             Some(
-                column![dim_label("Mode"), Space::with_height(2), row]
+                column![dim_label("Mode"), Space::new().height(2), row]
                     .spacing(0)
                     .into(),
             )
@@ -246,7 +246,7 @@ pub(super) fn voice_group<'a>(
             .size(9)
             .font(theme::SERIF_ITALIC_FONT)
             .color(theme::TEXT_4),
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         text("staccato \u{00B7}")
             .size(9)
             .font(theme::SERIF_ITALIC_FONT)
@@ -255,53 +255,53 @@ pub(super) fn voice_group<'a>(
 
     let mut body = column![
         title,
-        Space::with_height(8),
+        Space::new().height(8),
         dim_label("Timbre"),
-        Space::with_height(2),
+        Space::new().height(2),
         timbre_row,
-        Space::with_height(8),
+        Space::new().height(8),
         dim_label("Voicebank"),
-        Space::with_height(2),
+        Space::new().height(2),
         voicebank_row,
     ]
     .spacing(0);
     if let Some(singer) = singer_block {
-        body = body.push(Space::with_height(8)).push(singer);
+        body = body.push(Space::new().height(8)).push(singer);
     }
     let body = body
-        .push(Space::with_height(8))
+        .push(Space::new().height(8))
         .push(vibrato_label)
-        .push(Space::with_height(2))
+        .push(Space::new().height(2))
         .push(vibrato_slider)
-        .push(Space::with_height(4))
+        .push(Space::new().height(4))
         .push(vibrato_rate_label)
-        .push(Space::with_height(2))
+        .push(Space::new().height(2))
         .push(vibrato_rate_slider)
-        .push(Space::with_height(6))
+        .push(Space::new().height(6))
         .push(tension_label)
-        .push(Space::with_height(2))
+        .push(Space::new().height(2))
         .push(tension_slider)
-        .push(Space::with_height(4))
+        .push(Space::new().height(4))
         .push(tension_vel_label)
-        .push(Space::with_height(2))
+        .push(Space::new().height(2))
         .push(tension_vel_slider)
-        .push(Space::with_height(4))
+        .push(Space::new().height(4))
         .push(tension_contour_label)
-        .push(Space::with_height(2))
+        .push(Space::new().height(2))
         .push(tension_contour_slider)
-        .push(Space::with_height(4))
+        .push(Space::new().height(4))
         .push(portamento_label)
-        .push(Space::with_height(2))
+        .push(Space::new().height(2))
         .push(portamento_slider)
-        .push(Space::with_height(6))
+        .push(Space::new().height(6))
         .push(articulation_label)
-        .push(Space::with_height(2))
+        .push(Space::new().height(2))
         .push(articulation_slider)
-        .push(Space::with_height(2))
+        .push(Space::new().height(2))
         .push(stacc_legato_hint)
-        .push(Space::with_height(6))
+        .push(Space::new().height(6))
         .push(consonant_label)
-        .push(Space::with_height(2))
+        .push(Space::new().height(2))
         .push(consonant_slider);
 
     group_card(body.into())

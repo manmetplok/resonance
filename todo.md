@@ -33,9 +33,10 @@
 ###P3 — library / idiom
 
     - [ ] Wrap the lane_inspector body in `iced::widget::lazy` fingerprinted on
-      `(selected_lane, definition.id, version_counter)`. **Blocked**: iced 0.13
-      `lazy` requires `View: Into<Element<'static, ...>>`. The vocal lyrics block
-      uses `text_editor(&Content)` whose widget keeps a borrow alive, so the
+      `(selected_lane, definition.id, version_counter)`. **Blocked**: iced 0.14
+      `lazy` still requires `View: Into<Element<'static, ...>>` (re-verified
+      after the 0.13 → 0.14 upgrade). The vocal lyrics block uses
+      `text_editor(&Content)` whose widget keeps a borrow alive, so the
       element isn't `'static`. Fixing requires moving `Content` behind `Rc<RefCell<>>`
       (behaviour change) or splitting the inspector so the text_editor lives
       outside the lazy boundary.
@@ -55,34 +56,32 @@
 
 ###P4 — dependencies
 
-    - [~] Major-version upgrades: `ureq 2 → 3`, `rand 0.8 → 0.10`, `dirs 5 → 6`,
+    - [x] Major-version upgrades: `ureq 2 → 3`, `rand 0.8 → 0.10`, `dirs 5 → 6`,
       `iced 0.13 → 0.14`, `cpal 0.15 → 0.17`, `ringbuf 0.4 → 0.5`, `symphonia 0.5 → 0.6`.
-      6 of 7 landed; iced is blocked (see sub-bullet for the widget-rewrite
-      scope).
         - [x] `dirs 5 → 6`
         - [x] `rand 0.8 → 0.10`
         - [x] `ringbuf 0.4 → 0.5`
         - [x] `symphonia 0.5 → 0.6`
         - [x] `ureq 2 → 3`
         - [x] `cpal 0.15 → 0.17`
-        - [ ] `iced 0.13 → 0.14`. **Blocked**: too large a widget rewrite for
-          a dependency bump. iced 0.14 changes `canvas::Program::update`
-          from `fn(state, event: canvas::Event, bounds, cursor) -> (Status,
-          Option<Message>)` to `fn(state, event: &iced::Event, bounds, cursor)
-          -> Option<canvas::Action<Message>>` — that's a signature *and*
-          return-type change touching all 16 `canvas::Program` impls in
-          `resonance-app`. On top of that: `canvas::event::Status` /
-          `canvas::event::Event` are made private (so the Captured/Ignored
-          enum has to be re-expressed via `Action::capture()` /
-          `Action::publish()`), `Space::with_width(_)`/`with_height(_)` lose
-          the constructor (~330 mechanical call sites need
-          `Space::new().width(_)`), `Length: From<u16>` is gone (10+ literal
-          numeric lengths need `Length::Fixed`), `Pixels: From<u16>` is gone
-          (3 sites), `Application::run_with` is removed, and
-          `keyboard::on_key_press` was renamed. Estimated cost is several
-          hours of mostly-mechanical edits with a handful of judgement
-          calls around the Canvas action plumbing — feasible but not in
-          scope of a dependency-sweep task.
+        - [x] `iced 0.13 → 0.14`. `canvas::Program::update` rewritten across
+          all 12 impls (timeline, midi editor, knob, transport, mixer
+          controls, compose lanes/canvases) to take `&iced::Event` and
+          return `Option<canvas::Action<Message>>`, with the old
+          `(Status, Some(msg))` returns translated into
+          `Action::publish(msg).and_capture()` / `Action::capture()`.
+          `Space::with_width/with_height` and the two-arg `Space::new(w,h)`
+          collapsed onto the new `Space::new().width(_).height(_)` builder
+          via a parser-aware codemod (333 sites). `Length`/`Pixels` no
+          longer `From<u16>` — width/size constants in `theme.rs` and
+          local-scope dialog widths switched to `f32`, and `size: u16`
+          icon params get wrapped with `f32::from(_)` at call sites.
+          `Application::run_with(boot)` → `iced::application(boot, …).run()`
+          with the title moved to the `.title(_)` builder. The fixed
+          `theme(|_| …)` closure traded for passing the `Theme` directly
+          (sidesteps an iced HRTB inference failure). `keyboard::on_key_press`
+          → `keyboard::listen().filter_map(|event| …)` with the
+          `KeyPressed { key, modifiers, .. }` arm matched explicitly.
 
 ###P5 — smaller wins
 

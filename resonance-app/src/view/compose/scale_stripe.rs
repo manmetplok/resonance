@@ -55,9 +55,9 @@ fn render_with_scale<'a>(scale: &Scale) -> Element<'a, Message> {
 
     let left = row![
         label,
-        Space::with_width(10),
+        Space::new().width(10),
         name,
-        Space::with_width(10),
+        Space::new().width(10),
         meta,
     ]
     .align_y(alignment::Vertical::Bottom)
@@ -67,7 +67,7 @@ fn render_with_scale<'a>(scale: &Scale) -> Element<'a, Message> {
 
     row![
         left,
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         pills,
     ]
     .align_y(alignment::Vertical::Center)
@@ -85,7 +85,7 @@ fn render_no_scale<'a>() -> Element<'a, Message> {
         .font(theme::SERIF_ITALIC_FONT)
         .color(theme::TEXT_3);
 
-    row![label, Space::with_width(10), name,]
+    row![label, Space::new().width(10), name,]
         .align_y(alignment::Vertical::Bottom)
         .spacing(0)
         .into()

@@ -113,11 +113,11 @@ fn chips_row(state: &ComposeState) -> Element<'_, Message> {
 
     row![
         sections_tag,
-        Space::with_width(8),
+        Space::new().width(8),
         chips,
-        Space::with_width(6),
+        Space::new().width(6),
         add_btn,
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         tools,
     ]
     .spacing(0)
@@ -167,10 +167,10 @@ fn section_chip<'a>(
         .style(theme::editing_pill_style)
         .into()
     } else {
-        Space::with_width(0).into()
+        Space::new().width(0).into()
     };
 
-    let top_row = row![number_text, Space::with_width(Length::Fill), editing_pill]
+    let top_row = row![number_text, Space::new().width(Length::Fill), editing_pill]
         .align_y(alignment::Vertical::Center)
         .spacing(6);
 
@@ -179,7 +179,7 @@ fn section_chip<'a>(
         definition.color[1] as f32 / 255.0,
         definition.color[2] as f32 / 255.0,
     );
-    let color_dot = container(Space::new(Length::Fixed(6.0), Length::Fixed(6.0)))
+    let color_dot = container(Space::new().width(Length::Fixed(6.0)).height(Length::Fixed(6.0)))
         .style(move |_theme| container::Style {
             background: Some(iced::Background::Color(dot_color)),
             border: iced::Border {
@@ -259,13 +259,13 @@ fn create_form_row(form: &NewSectionForm) -> Element<'_, Message> {
             .size(10)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::ACCENT_SOFT),
-        Space::with_width(12),
+        Space::new().width(12),
         name_input,
         text("bars:").size(11).color(theme::TEXT_DIM),
         length_input,
         confirm_btn,
         cancel_btn,
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
     ]
     .spacing(8)
     .height(Length::Fill)
@@ -337,7 +337,7 @@ fn edit_form_row(
             .size(10)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::ACCENT_SOFT),
-        Space::with_width(12),
+        Space::new().width(12),
         name_input,
         text("bars:").size(11).color(theme::TEXT_DIM),
         length_input,
@@ -347,7 +347,7 @@ fn edit_form_row(
         delete_definition_btn,
         save_btn,
         cancel_btn,
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
     ]
     .spacing(6)
     .height(Length::Fill)

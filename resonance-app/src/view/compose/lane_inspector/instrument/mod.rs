@@ -195,19 +195,19 @@ pub(in crate::view::compose::lane_inspector) fn instrument_body<'a>(
     let mut col = column![
         text("Name").size(11).color(theme::TEXT_DIM),
         name_input,
-        Space::with_height(8),
+        Space::new().height(8),
         text("Generator").size(11).color(theme::TEXT_DIM),
         gen_picker,
-        Space::with_height(8),
+        Space::new().height(8),
         gen_controls,
     ]
     .spacing(2);
 
     if has_generator {
         col = col
-            .push(Space::with_height(8))
+            .push(Space::new().height(8))
             .push(regen_btn)
-            .push(Space::with_height(4))
+            .push(Space::new().height(4))
             .push(text(seed_text).size(10).color(theme::TEXT_DIM));
 
         if !has_chords {

@@ -12,7 +12,7 @@ use crate::Resonance;
 
 pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     let backdrop = mouse_area(
-        container(Space::new(Length::Fill, Length::Fill))
+        container(Space::new().width(Length::Fill).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_theme| container::Style {
@@ -89,22 +89,22 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
 
     let dialog_content = column![
         title,
-        Space::with_height(16),
+        Space::new().height(16),
         section("Project"),
-        Space::with_height(6),
+        Space::new().height(6),
         open_btn,
         save_btn,
         save_as_btn,
-        Space::with_height(20),
+        Space::new().height(20),
         section("MIDI Clock"),
-        Space::with_height(6),
+        Space::new().height(6),
         send_toggle,
         send_picker,
-        Space::with_height(8),
+        Space::new().height(8),
         recv_toggle,
         recv_picker,
-        Space::with_height(20),
-        row![Space::with_width(Length::Fill), close_btn,],
+        Space::new().height(20),
+        row![Space::new().width(Length::Fill), close_btn,],
     ]
     .spacing(6)
     .padding(24)
@@ -137,7 +137,7 @@ fn wide_button<'a>(
     button(
         row![
             theme::icon(icon).size(13).color(theme::TEXT_2),
-            Space::with_width(10),
+            Space::new().width(10),
             text(label).size(13).color(theme::TEXT_1),
         ]
         .align_y(alignment::Vertical::Center),
@@ -168,7 +168,7 @@ fn toggle_button<'a>(
     button(
         row![
             theme::icon(icon).size(13).color(icon_color),
-            Space::with_width(10),
+            Space::new().width(10),
             text(label).size(13).color(theme::TEXT_1),
         ]
         .align_y(alignment::Vertical::Center),

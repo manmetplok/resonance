@@ -20,55 +20,46 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
     fn update(
         &self,
         state: &mut Self::State,
-        event: canvas::Event,
+        event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
+    ) -> Option<canvas::Action<Message>> {
         let grid_x = VR_KEYBOARD_WIDTH;
         let grid_top = HEADER_TOTAL_HEIGHT;
         let grid_h = bounds.height - HEADER_TOTAL_HEIGHT - VR_VELOCITY_LANE_HEIGHT;
         let grid_bottom = grid_top + grid_h;
 
         match event {
-            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 if cursor.position_in(bounds).is_none() {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 }
                 match delta {
                     mouse::ScrollDelta::Lines { x, y } => {
                         if x.abs() > f32::EPSILON {
-                            return (canvas::event::Status::Ignored, None);
+                            return None;
                         }
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::MidiEditor(MidiEditorMessage::ScrollY(-y * 30.0))),
-                        );
+                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::ScrollY(-y * 30.0))).and_capture());
                     }
                     mouse::ScrollDelta::Pixels { x, y } => {
                         if x.abs() > f32::EPSILON {
-                            return (canvas::event::Status::Ignored, None);
+                            return None;
                         }
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::MidiEditor(MidiEditorMessage::ScrollY(-y))),
-                        );
+                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::ScrollY(-y))).and_capture());
                     }
                 }
             }
 
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(pos) = cursor.position_in(bounds) {
                     // Piano keyboard preview — only in the grid band.
                     if pos.x < grid_x && pos.y >= grid_top && pos.y < grid_bottom {
                         if let Some(note) = self.y_to_note(pos.y - grid_top, grid_h) {
                             state.previewing_note = Some(note);
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::MidiEditor(MidiEditorMessage::PreviewNote(
+                            return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::PreviewNote(
                                     self.track_id,
                                     note,
-                                ))),
-                            );
+                                ))).and_capture());
                         }
                     }
 
@@ -76,7 +67,7 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
                         // Velocity lane / chord strip / lyric strip are
                         // read-only for now — clicks just select the
                         // editor (no message).
-                        return (canvas::event::Status::Ignored, None);
+                        return None;
                     }
 
                     if pos.x >= grid_x {
@@ -84,7 +75,7 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
                         let rel_y = pos.y - grid_top;
                         let click_tick = self.x_to_tick(rel_x);
                         let Some(click_note) = self.y_to_note(rel_y, grid_h) else {
-                            return (canvas::event::Status::Ignored, None);
+                            return None;
                         };
 
                         for (i, n) in self.clip.notes.iter().enumerate() {
@@ -101,43 +92,34 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
                                         note_index: i,
                                         anchor_tick: n.start_tick,
                                     });
-                                    return (
-                                        canvas::event::Status::Captured,
-                                        Some(Message::MidiEditor(MidiEditorMessage::SelectNote {
+                                    return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::SelectNote {
                                             note_index: Some(i),
-                                        })),
-                                    );
+                                        })).and_capture());
                                 }
                                 let tick_offset = n.start_tick as i64 - click_tick as i64;
                                 state.drag = Some(DragMode::MoveNote {
                                     note_index: i,
                                     start_tick_offset: tick_offset,
                                 });
-                                return (
-                                    canvas::event::Status::Captured,
-                                    Some(Message::MidiEditor(MidiEditorMessage::SelectNote {
+                                return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::SelectNote {
                                         note_index: Some(i),
-                                    })),
-                                );
+                                    })).and_capture());
                             }
                         }
 
                         let snapped = self.snap(click_tick);
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::MidiEditor(MidiEditorMessage::AddNote {
+                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::AddNote {
                                 clip_id: self.clip.id,
                                 note: click_note,
                                 start_tick: snapped,
                                 duration_ticks: self.snap_ticks.max(TICKS_PER_QUARTER_NOTE / 4),
                                 velocity: DEFAULT_VELOCITY,
-                            })),
-                        );
+                            })).and_capture());
                     }
                 }
             }
 
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
                 if let Some(pos) = cursor.position_in(bounds) {
                     if pos.x >= grid_x && pos.y >= grid_top && pos.y < grid_bottom {
                         let rel_x = pos.x - grid_x;
@@ -151,20 +133,17 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
                             let nh = self.zoom_y;
                             if rel_x >= nx && rel_x <= nx + nw && rel_y >= ny && rel_y <= ny + nh
                             {
-                                return (
-                                    canvas::event::Status::Captured,
-                                    Some(Message::MidiEditor(MidiEditorMessage::RemoveNote {
+                                return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::RemoveNote {
                                         clip_id: self.clip.id,
                                         note_index: i,
-                                    })),
-                                );
+                                    })).and_capture());
                             }
                         }
                     }
                 }
             }
 
-            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 if let Some(pos) = cursor.position_in(bounds) {
                     let rel_x = pos.x - grid_x;
                     let rel_y = pos.y - grid_top;
@@ -178,17 +157,14 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
                             let raw_tick = (tick as i64 + start_tick_offset).max(0) as u64;
                             let snapped_tick = self.snap(raw_tick);
                             let Some(note) = self.y_to_note(rel_y, grid_h) else {
-                                return (canvas::event::Status::Ignored, None);
+                                return None;
                             };
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::MidiEditor(MidiEditorMessage::MoveNote {
+                            return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::MoveNote {
                                     clip_id: self.clip.id,
                                     note_index: *note_index,
                                     new_start_tick: snapped_tick,
                                     new_note: note,
-                                })),
-                            );
+                                })).and_capture());
                         }
                         Some(DragMode::ResizeNote {
                             note_index,
@@ -198,50 +174,41 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
                             let snapped = self.snap(tick);
                             let new_dur =
                                 snapped.saturating_sub(*anchor_tick).max(self.snap_ticks);
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::MidiEditor(MidiEditorMessage::ResizeNote {
+                            return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::ResizeNote {
                                     clip_id: self.clip.id,
                                     note_index: *note_index,
                                     new_duration_ticks: new_dur,
-                                })),
-                            );
+                                })).and_capture());
                         }
                         Some(_) | None => {}
                     }
                 }
             }
 
-            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 state.drag = None;
                 if let Some(note) = state.previewing_note.take() {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::MidiEditor(MidiEditorMessage::StopPreview(
+                    return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::StopPreview(
                             self.track_id,
                             note,
-                        ))),
-                    );
+                        ))).and_capture());
                 }
             }
 
-            canvas::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete),
                 ..
             })
-            | canvas::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            | iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Backspace),
                 ..
             }) => {
                 if let Some(idx) = self.selected_note {
                     if idx < self.clip.notes.len() {
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::MidiEditor(MidiEditorMessage::RemoveNote {
+                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::RemoveNote {
                                 clip_id: self.clip.id,
                                 note_index: idx,
-                            })),
-                        );
+                            })).and_capture());
                     }
                 }
             }
@@ -251,19 +218,16 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
             // and the auto-syllabified surface form. Mirrors the
             // shortcut users coming from OpenUtau / Vocaloid editors
             // expect.
-            canvas::Event::Keyboard(iced::keyboard::Event::KeyPressed { ref text, .. }) => {
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { ref text, .. }) => {
                 if let Some(idx) = self.selected_note {
                     if idx < self.clip.notes.len() {
                         if let Some(t) = text.as_deref() {
                             let key = t.trim();
                             if key.eq_ignore_ascii_case("s") || key == "+" {
-                                return (
-                                    canvas::event::Status::Captured,
-                                    Some(Message::MidiEditor(MidiEditorMessage::ToggleSlur {
+                                return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::ToggleSlur {
                                         clip_id: self.clip.id,
                                         note_index: idx,
-                                    })),
-                                );
+                                    })).and_capture());
                             }
                         }
                     }
@@ -272,7 +236,7 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
 
             _ => {}
         }
-        (canvas::event::Status::Ignored, None)
+        None
     }
 
     fn draw(

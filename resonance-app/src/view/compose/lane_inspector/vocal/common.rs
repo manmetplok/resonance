@@ -63,7 +63,7 @@ display_pick!(VoiceTypePick, VoiceType, as_str, voice_type_pick_options);
 // ===========================================================================
 
 pub(super) fn rail_dot_warm<'a>() -> Element<'a, Message> {
-    container(Space::new(Length::Fixed(6.0), Length::Fixed(6.0)))
+    container(Space::new().width(Length::Fixed(6.0)).height(Length::Fixed(6.0)))
         .style(|_| container::Style {
             background: Some(Background::Color(theme::WARM)),
             border: Border {

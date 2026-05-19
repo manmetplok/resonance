@@ -81,7 +81,7 @@ pub fn view_generic_params<'a>(params: &[UiParam]) -> Element<'a, PluginUiEvent>
         let param_row = column![
             row![
                 param_label,
-                iced::widget::Space::with_width(Length::Fill),
+                iced::widget::Space::new().width(Length::Fill),
                 param_value_text
             ]
             .spacing(2),

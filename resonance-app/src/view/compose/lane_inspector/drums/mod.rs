@@ -49,13 +49,13 @@ pub(super) fn drum_body<'a>(
 
     column![
         group_selector(drum_groups, selected_group_id),
-        Space::with_height(12),
+        Space::new().height(12),
         meter_panel(group, base_grid, base_cycle),
-        Space::with_height(12),
+        Space::new().height(12),
         articulation_mix_panel(group),
-        Space::with_height(12),
+        Space::new().height(12),
         rhythm_panel(group),
-        Space::with_height(12),
+        Space::new().height(12),
         generate_panel(group),
     ]
     .spacing(0)
@@ -73,7 +73,7 @@ fn group_selector<'a>(
     let title = row![
         rail_dot(theme::WARM),
         text("Drum group").size(12).color(theme::TEXT_1),
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         button(text("+ Manage").size(11).color(theme::TEXT_2))
             .padding([4, 9])
             .style(|_theme, status| theme::ghost_button_style(status))
@@ -88,7 +88,7 @@ fn group_selector<'a>(
     for g in groups {
         let on = Some(g.id) == selected;
         let color = u8_color(g.color);
-        let dot = container(Space::new(Length::Fixed(5.0), Length::Fixed(5.0)))
+        let dot = container(Space::new().width(Length::Fixed(5.0)).height(Length::Fixed(5.0)))
             .style(move |_theme| container::Style {
                 background: Some(iced::Background::Color(color)),
                 border: iced::Border {
@@ -130,9 +130,9 @@ fn group_selector<'a>(
     rail_card(
         column![
             title,
-            Space::with_height(8),
+            Space::new().height(8),
             tab_row,
-            Space::with_height(6),
+            Space::new().height(6),
             hint,
         ]
         .spacing(0)

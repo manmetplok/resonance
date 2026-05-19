@@ -167,7 +167,7 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
         b.into()
     };
 
-    let action_row = row![gen_btn, Space::with_width(8), regen_btn]
+    let action_row = row![gen_btn, Space::new().width(8), regen_btn]
         .spacing(0)
         .align_y(alignment::Vertical::Center);
 
@@ -194,7 +194,7 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
             .color(theme::TEXT_3)
             .into()
     } else {
-        Space::with_height(0).into()
+        Space::new().height(0).into()
     };
 
     let seed_label = text(format!("seed · 0x{:016X}", definition.generator_seed))
@@ -205,7 +205,7 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
     let two_cols = |left: Element<'a, Message>, right: Element<'a, Message>| {
         row![
             column![left].width(Length::FillPortion(1)),
-            Space::with_width(10),
+            Space::new().width(10),
             column![right].width(Length::FillPortion(1)),
         ]
         .spacing(0)
@@ -213,43 +213,43 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
 
     let chords_count_block = column![
         field_label("CHORDS"),
-        Space::with_height(4),
+        Space::new().height(4),
         count_picker,
     ];
     let beats_block = column![
         field_label("BEATS / CHORD"),
-        Space::with_height(4),
+        Space::new().height(4),
         beats_picker,
     ];
     let start_block = column![
         field_label("START °"),
-        Space::with_height(4),
+        Space::new().height(4),
         start_picker,
     ];
-    let end_block = column![field_label("END °"), Space::with_height(4), end_picker,];
+    let end_block = column![field_label("END °"), Space::new().height(4), end_picker,];
 
     let motif_block = motif_section_block(definition);
 
     column![
         section_header("Chord generator"),
-        Space::with_height(10),
+        Space::new().height(10),
         field_label("STYLE"),
-        Space::with_height(4),
+        Space::new().height(4),
         table_picker,
-        Space::with_height(10),
+        Space::new().height(10),
         two_cols(chords_count_block.into(), beats_block.into()),
-        Space::with_height(10),
+        Space::new().height(10),
         two_cols(start_block.into(), end_block.into()),
-        Space::with_height(10),
+        Space::new().height(10),
         sevenths,
-        Space::with_height(12),
+        Space::new().height(12),
         action_row,
-        Space::with_height(8),
+        Space::new().height(8),
         seed_label,
-        Space::with_height(6),
+        Space::new().height(6),
         lock_label,
         scale_helper,
-        Space::with_height(20),
+        Space::new().height(20),
         motif_block,
     ]
     .spacing(0)

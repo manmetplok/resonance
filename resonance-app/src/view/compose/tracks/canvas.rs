@@ -141,13 +141,13 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
     fn update(
         &self,
         state: &mut Self::State,
-        event: canvas::Event,
+        event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
-        if let canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
+    ) -> Option<canvas::Action<Message>> {
+        if let iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
             let Some(pos) = cursor.position_in(bounds) else {
-                return (canvas::event::Status::Ignored, None);
+                return None;
             };
 
             // Determine which track row was clicked.
@@ -161,10 +161,7 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
                         && now.duration_since(prev_time).as_millis() < DOUBLE_CLICK_MS as u128
                     {
                         state.last_click = None;
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::Compose(ComposeMessage::ExpandTrack { track_id })),
-                        );
+                        return Some(canvas::Action::publish(Message::Compose(ComposeMessage::ExpandTrack { track_id })).and_capture());
                     }
                 }
                 state.last_click = Some((now, track_id));
@@ -175,15 +172,12 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
             if self.expanded_track_id.is_some() {
                 if pos.x < NAME_COLUMN_WIDTH {
                     if let Some(track_id) = clicked_track {
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::Compose(ComposeMessage::SelectLane(
+                        return Some(canvas::Action::publish(Message::Compose(ComposeMessage::SelectLane(
                                 crate::compose::SelectedLane::Instrument(track_id),
-                            ))),
-                        );
+                            ))).and_capture());
                     }
                 }
-                return (canvas::event::Status::Ignored, None);
+                return None;
             }
 
             // Normal (non-expanded) behaviour below.
@@ -192,31 +186,25 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
             // on the right side of the Compose tab.
             if pos.x < NAME_COLUMN_WIDTH {
                 if let Some(track_id) = self.hit_test_name_column(pos, bounds) {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::Compose(ComposeMessage::SelectLane(
+                    return Some(canvas::Action::publish(Message::Compose(ComposeMessage::SelectLane(
                             crate::compose::SelectedLane::Instrument(track_id),
-                        ))),
-                    );
+                        ))).and_capture());
                 }
-                return (canvas::event::Status::Ignored, None);
+                return None;
             }
 
             // "+" hint button first — only hits rows with no clip
             if let Some(track_id) = self.hit_test_add_button(pos, bounds) {
-                return (
-                    canvas::event::Status::Captured,
-                    Some(Message::Compose(ComposeMessage::CreateMidiClipInSection {
+                return Some(canvas::Action::publish(Message::Compose(ComposeMessage::CreateMidiClipInSection {
                         track_id,
                         start_sample: self.section_start,
                         length_bars: self.section_length_bars,
-                    })),
-                );
+                    })).and_capture());
             }
             if let Some(msg) = self.hit_test_note_edit(pos, bounds) {
-                return (canvas::event::Status::Captured, Some(msg));
+                return Some(canvas::Action::publish(msg).and_capture());
             }
         }
-        (canvas::event::Status::Ignored, None)
+        None
     }
 }

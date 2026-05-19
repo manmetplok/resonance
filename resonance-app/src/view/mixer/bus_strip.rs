@@ -43,7 +43,7 @@ impl crate::Resonance {
                 Message::Bus(BusMessage::ToggleBusFxBypass(bus_id)),
                 12,
             ),
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             bus_remove_button(bus_id, 12),
         ]
         .spacing(2)
@@ -93,9 +93,9 @@ impl crate::Resonance {
         let pan_label = format_pan(bus.pan);
         let pan_row = row![
             text("Pan").size(9).color(theme::TEXT_DIM),
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             pan_ctrl,
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             text(pan_label)
                 .size(9)
                 .font(Font::MONOSPACE)

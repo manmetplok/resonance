@@ -32,7 +32,7 @@ pub(super) fn motif_preview_card<'a>(
             .size(10)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::TEXT_3),
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         text(format!("{note_count} notes"))
             .size(10)
             .font(theme::MONO_FONT)
@@ -49,7 +49,7 @@ pub(super) fn motif_preview_card<'a>(
     .width(Length::Fill)
     .height(Length::Fixed(56.0));
 
-    iced::widget::container(column![header, Space::with_height(6), preview_canvas].spacing(0))
+    iced::widget::container(column![header, Space::new().height(6), preview_canvas].spacing(0))
         .padding([10, 12])
         .width(Length::Fill)
         .style(|_theme| iced::widget::container::Style {

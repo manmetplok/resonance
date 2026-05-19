@@ -15,7 +15,7 @@ pub(crate) fn view_confirm_delete_track_overlay<'a>(
     // Backdrop swallows pointer input so the DAW behind is inert while
     // the dialog is up. Clicking the dimmed area cancels deletion.
     let backdrop = mouse_area(
-        container(Space::new(Length::Fill, Length::Fill))
+        container(Space::new().width(Length::Fill).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_theme| container::Style {
@@ -61,15 +61,15 @@ pub(crate) fn view_confirm_delete_track_overlay<'a>(
     .padding([8, 18])
     .style(|_theme, status| theme::destructive_button_style(status));
 
-    let button_row = row![Space::with_width(Length::Fill), cancel_btn, delete_btn]
+    let button_row = row![Space::new().width(Length::Fill), cancel_btn, delete_btn]
         .spacing(8)
         .align_y(alignment::Vertical::Center);
 
     let dialog_content = column![
         title,
-        Space::with_height(10),
+        Space::new().height(10),
         explanation,
-        Space::with_height(20),
+        Space::new().height(20),
         button_row,
     ]
     .spacing(4)

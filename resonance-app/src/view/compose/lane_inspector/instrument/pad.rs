@@ -78,7 +78,7 @@ pub(super) fn pad_controls<'a>(
             "Highest MIDI note the pad voicings can reach. Voices that rise above this drop an octave."
         ),
         reg_hi_picker,
-        Space::with_height(4),
+        Space::new().height(4),
         label_with_info(
             format!("Velocity: {:.2}", params.velocity),
             "MIDI velocity (0–1) for every emitted pad voice."

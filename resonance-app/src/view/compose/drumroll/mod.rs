@@ -26,7 +26,7 @@ pub fn view<'a>(
     let drum_tracks = sorted_drum_tracks(&app.registry.tracks);
 
     if drum_tracks.is_empty() {
-        return container(Space::with_height(0)).width(Length::Fill).into();
+        return container(Space::new().height(0)).width(Length::Fill).into();
     }
 
     let width = super::workspace_width(

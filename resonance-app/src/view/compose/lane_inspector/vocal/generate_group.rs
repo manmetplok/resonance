@@ -168,13 +168,13 @@ pub(super) fn generate_group<'a>(
 
     column![
         primary,
-        Space::with_height(6),
+        Space::new().height(6),
         rerender_audio,
-        Space::with_height(4),
+        Space::new().height(4),
         edit_hint,
-        Space::with_height(8),
+        Space::new().height(8),
         secondary_row,
-        Space::with_height(8),
+        Space::new().height(8),
         seed_line,
     ]
     .spacing(0)

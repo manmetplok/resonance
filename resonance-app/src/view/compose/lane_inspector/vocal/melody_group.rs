@@ -62,7 +62,7 @@ pub(super) fn melody_group<'a>(
 
     let voice_col = column![
         dim_label("Voice type"),
-        Space::with_height(2),
+        Space::new().height(2),
         voice_picker
     ]
     .spacing(0);
@@ -72,7 +72,7 @@ pub(super) fn melody_group<'a>(
             midi_to_name(params.range.0),
             midi_to_name(params.range.1)
         )),
-        Space::with_height(2),
+        Space::new().height(2),
         row![range_low, range_high].spacing(6),
     ]
     .spacing(0);
@@ -165,10 +165,10 @@ pub(super) fn melody_group<'a>(
     .text_size(12)
     .padding([4, 6])
     .width(Length::Fill);
-    let leap_col = column![leap_label, Space::with_height(2), leap_slider].spacing(0);
+    let leap_col = column![leap_label, Space::new().height(2), leap_slider].spacing(0);
     let phrase_col = column![
         dim_label("Phrase length · bars"),
-        Space::with_height(2),
+        Space::new().height(2),
         phrase_picker
     ]
     .spacing(0);
@@ -210,35 +210,35 @@ pub(super) fn melody_group<'a>(
 
     let body = column![
         title,
-        Space::with_height(8),
+        Space::new().height(8),
         voice_range_row,
-        Space::with_height(8),
+        Space::new().height(8),
         dim_label("Style"),
-        Space::with_height(2),
+        Space::new().height(2),
         style_row,
-        Space::with_height(8),
+        Space::new().height(8),
         dim_label("Phrase contour"),
-        Space::with_height(2),
+        Space::new().height(2),
         contour_row,
-        Space::with_height(8),
+        Space::new().height(8),
         dim_label("Note \u{2192} syllable"),
-        Space::with_height(2),
+        Space::new().height(2),
         syllable_row,
-        Space::with_height(8),
+        Space::new().height(8),
         anchor_label,
-        Space::with_height(2),
+        Space::new().height(2),
         anchor_slider,
-        Space::with_height(8),
+        Space::new().height(8),
         leap_phrase_row,
-        Space::with_height(8),
+        Space::new().height(8),
         breath_label,
-        Space::with_height(2),
+        Space::new().height(2),
         breath_slider,
-        Space::with_height(8),
+        Space::new().height(8),
         stay_in_scale_toggle,
-        Space::with_height(4),
+        Space::new().height(4),
         avoid_clash_toggle,
-        Space::with_height(4),
+        Space::new().height(4),
         use_motif_toggle,
     ]
     .spacing(0);

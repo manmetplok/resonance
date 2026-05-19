@@ -52,19 +52,19 @@ pub(super) fn motif_section_block<'a>(
 
     let mut col = column![
         section_header("Section motif"),
-        Space::with_height(10),
+        Space::new().height(10),
         field_label("SOURCE"),
-        Space::with_height(4),
+        Space::new().height(4),
         source_picker,
-        Space::with_height(10),
+        Space::new().height(10),
         field_label(format!("COMPLEXITY · {:.2}", params.complexity)),
-        Space::with_height(6),
+        Space::new().height(6),
         complexity_slider,
     ]
     .spacing(0);
 
     // Motif preview card mirroring the design's MOTIF stats + dashes.
-    col = col.push(Space::with_height(10));
+    col = col.push(Space::new().height(10));
     col = col.push(motif_preview_card(definition));
 
     match &definition.motif_source {
@@ -115,22 +115,22 @@ pub(super) fn motif_section_block<'a>(
                 .color(theme::TEXT_3);
 
             col = col
-                .push(Space::with_height(10))
+                .push(Space::new().height(10))
                 .push(field_label(format!(
                     "LEAP CHANCE · {:.2}",
                     params.leap_chance
                 )))
-                .push(Space::with_height(6))
+                .push(Space::new().height(6))
                 .push(leap_slider)
-                .push(Space::with_height(10))
+                .push(Space::new().height(10))
                 .push(field_label("MOTIF LENGTH"))
-                .push(Space::with_height(4))
+                .push(Space::new().height(4))
                 .push(motif_len_picker)
-                .push(Space::with_height(10))
+                .push(Space::new().height(10))
                 .push(regen_btn)
-                .push(Space::with_height(6))
+                .push(Space::new().height(6))
                 .push(seed_label)
-                .push(Space::with_height(8))
+                .push(Space::new().height(8))
                 .push(
                     text("Click a cell to add a note. Right-click to toggle accent. Scroll a note to cycle duration.")
                         .size(10)
@@ -149,15 +149,15 @@ pub(super) fn motif_section_block<'a>(
                 }));
 
             col = col
-                .push(Space::with_height(8))
+                .push(Space::new().height(8))
                 .push(canvas_widget)
-                .push(Space::with_height(8))
+                .push(Space::new().height(8))
                 .push(
                     text("Click empty cell to add a note. Click the bottom row to insert a rest. Click the start of a note/rest to remove it. Right-click to toggle accent. Scroll on a note to cycle its duration.")
                         .size(10)
                         .color(theme::TEXT_3),
                 )
-                .push(Space::with_height(8))
+                .push(Space::new().height(8))
                 .push(clear_btn);
         }
     }

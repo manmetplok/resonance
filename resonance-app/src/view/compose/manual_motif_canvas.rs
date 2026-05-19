@@ -48,84 +48,72 @@ impl<'a> canvas::Program<Message> for ManualMotifCanvas<'a> {
     fn update(
         &self,
         _state: &mut Self::State,
-        event: canvas::Event,
+        event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
+    ) -> Option<canvas::Action<Message>> {
         let Some(pos) = cursor.position_in(bounds) else {
-            return (canvas::event::Status::Ignored, None);
+            return None;
         };
 
         match event {
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 match self.cell_at(pos) {
-                    Some(CellHit::Note { scale_step, beat_16 }) => (
-                        canvas::event::Status::Captured,
-                        Some(Message::Compose(ComposeMessage::ChordInspector {
+                    Some(CellHit::Note { scale_step, beat_16 }) => Some(canvas::Action::publish(Message::Compose(ComposeMessage::ChordInspector {
                             definition_id: self.definition_id,
                             msg: ChordInspectorMsg::ToggleManualMotifCell {
                                 scale_step,
                                 beat_16,
                             },
-                        })),
-                    ),
-                    Some(CellHit::Rest { beat_16 }) => (
-                        canvas::event::Status::Captured,
-                        Some(Message::Compose(ComposeMessage::ChordInspector {
+                        })).and_capture()),
+                    Some(CellHit::Rest { beat_16 }) => Some(canvas::Action::publish(Message::Compose(ComposeMessage::ChordInspector {
                             definition_id: self.definition_id,
                             msg: ChordInspectorMsg::ToggleManualMotifRest { beat_16 },
-                        })),
-                    ),
-                    None => (canvas::event::Status::Ignored, None),
+                        })).and_capture()),
+                    None => None,
                 }
             }
 
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
                 let beat_16 = match self.cell_at(pos) {
                     Some(CellHit::Note { beat_16, .. }) | Some(CellHit::Rest { beat_16 }) => beat_16,
-                    None => return (canvas::event::Status::Ignored, None),
+                    None => return None,
                 };
                 let Some(idx) = self.note_index_starting_at(beat_16) else {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 };
                 // Right-click on a rest is a no-op — rests have no accent.
                 if self.notes.get(idx).is_some_and(|n| n.is_rest) {
-                    return (canvas::event::Status::Captured, None);
+                    return Some(canvas::Action::capture());
                 }
-                (
-                    canvas::event::Status::Captured,
-                    Some(Message::Compose(ComposeMessage::ChordInspector {
+                Some(canvas::Action::publish(Message::Compose(ComposeMessage::ChordInspector {
                         definition_id: self.definition_id,
                         msg: ChordInspectorMsg::ToggleManualMotifAccent { index: idx },
-                    })),
-                )
+                    })).and_capture())
             }
 
-            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 let dy = match delta {
                     mouse::ScrollDelta::Lines { y, .. } => y,
                     mouse::ScrollDelta::Pixels { y, .. } => y,
                 };
                 if dy.abs() < f32::EPSILON {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 }
                 let beat_16 = match self.cell_at(pos) {
                     Some(CellHit::Note { beat_16, .. }) | Some(CellHit::Rest { beat_16 }) => beat_16,
-                    None => return (canvas::event::Status::Ignored, None),
+                    None => return None,
                 };
                 let Some(idx) = self.note_index_covering(beat_16) else {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 };
-                (
-                    canvas::event::Status::Captured,
-                    Some(Message::Compose(ComposeMessage::ChordInspector {
+                Some(canvas::Action::publish(Message::Compose(ComposeMessage::ChordInspector {
                         definition_id: self.definition_id,
                         msg: ChordInspectorMsg::CycleManualMotifNoteDuration { index: idx },
-                    })),
-                )
+                    })).and_capture())
             }
 
-            _ => (canvas::event::Status::Ignored, None),
+            _ => None,
         }
     }
 

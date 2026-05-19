@@ -130,9 +130,9 @@ impl crate::Resonance {
         let editor_toolbar = container(
             row![
                 editor_label,
-                Space::with_width(Length::Fixed(12.0)),
+                Space::new().width(Length::Fixed(12.0)),
                 note_count,
-                Space::with_width(Length::Fill),
+                Space::new().width(Length::Fill),
                 close_btn,
             ]
             .spacing(8)

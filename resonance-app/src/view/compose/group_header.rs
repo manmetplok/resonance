@@ -44,7 +44,7 @@ pub(super) fn group_header<'a>(
     count: impl Into<String>,
     kind: GroupKind,
 ) -> Element<'a, Message> {
-    let dot = container(Space::new(Length::Fixed(6.0), Length::Fixed(6.0))).style(
+    let dot = container(Space::new().width(Length::Fixed(6.0)).height(Length::Fixed(6.0))).style(
         move |_theme| container::Style {
             background: Some(iced::Background::Color(kind.dot())),
             border: iced::Border {
@@ -65,7 +65,7 @@ pub(super) fn group_header<'a>(
         .align_y(alignment::Vertical::Center);
     let count_str = count.into();
     if !count_str.is_empty() {
-        head = head.push(Space::with_width(Length::Fill));
+        head = head.push(Space::new().width(Length::Fill));
         head = head.push(
             text(count_str)
                 .size(10)

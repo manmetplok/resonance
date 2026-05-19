@@ -25,7 +25,7 @@ pub(super) fn rail_card<'a>(content: Element<'a, Message>) -> Element<'a, Messag
 }
 
 pub(super) fn rail_dot(color: Color) -> Element<'static, Message> {
-    container(Space::new(Length::Fixed(6.0), Length::Fixed(6.0)))
+    container(Space::new().width(Length::Fixed(6.0)).height(Length::Fixed(6.0)))
         .style(move |_theme| container::Style {
             background: Some(iced::Background::Color(color)),
             border: iced::Border {
@@ -44,7 +44,7 @@ pub(super) fn section_head<'a>(title: &str, hint: &str) -> Element<'a, Message> 
             .size(10)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::TEXT_3),
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         text(hint.to_string()).size(10).color(theme::TEXT_4),
     ]
     .align_y(alignment::Vertical::Center)
@@ -55,13 +55,13 @@ pub(super) fn field<'a>(label: &str, value: f32, slider_el: iced::widget::Slider
     column![
         row![
             text(label.to_string()).size(10).color(theme::TEXT_3),
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             text(format!("{:.2}", value))
                 .size(10)
                 .font(theme::MONO_FONT)
                 .color(theme::TEXT_2),
         ],
-        Space::with_height(4),
+        Space::new().height(4),
         slider_el,
     ]
     .spacing(0)

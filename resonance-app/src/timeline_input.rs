@@ -46,10 +46,10 @@ pub(super) struct TempoDrag {
     pub anchor_y: f32,
 }
 
-pub(super) type UpdateResult = (canvas::event::Status, Option<Message>);
+pub(super) type UpdateResult = Option<canvas::Action<Message>>;
 
 pub(super) fn captured(msg: Message) -> UpdateResult {
-    (canvas::event::Status::Captured, Some(msg))
+    Some(canvas::Action::publish(msg).and_capture())
 }
 
 /// Is `pos` inside `rect`?
@@ -96,7 +96,7 @@ impl TimelineCanvas<'_> {
         // timeline — otherwise scrolling the piano roll would also scroll
         // the arrangement behind it.
         if cursor.position_in(bounds).is_none() {
-            return (canvas::event::Status::Ignored, None);
+            return None;
         }
         // Horizontal scroll is owned by the outer `Scrollable` that
         // wraps the timeline canvas — returning `Ignored` for any
@@ -108,13 +108,13 @@ impl TimelineCanvas<'_> {
         match delta {
             mouse::ScrollDelta::Lines { x, y } => {
                 if x.abs() > f32::EPSILON {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 }
                 captured(Message::Viewport(ViewportMessage::ScrollY(-y * 30.0)))
             }
             mouse::ScrollDelta::Pixels { x, y } => {
                 if x.abs() > f32::EPSILON {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 }
                 captured(Message::Viewport(ViewportMessage::ScrollY(-y)))
             }
@@ -161,7 +161,7 @@ impl TimelineCanvas<'_> {
         cursor: mouse::Cursor,
     ) -> UpdateResult {
         let Some(pos) = cursor.position_in(bounds) else {
-            return (canvas::event::Status::Ignored, None);
+            return None;
         };
         let ruler_height = theme::RULER_HEIGHT;
         let header_height = self.fixed_header_height();
@@ -182,7 +182,7 @@ impl TimelineCanvas<'_> {
                     state.h_scrollbar_grab = Some(sb.thumb.width / 2.0);
                     return captured(Message::Viewport(ViewportMessage::ScrollToX(new_scroll)));
                 }
-                return (canvas::event::Status::Captured, None);
+                return Some(canvas::Action::capture());
             }
         }
 
@@ -200,7 +200,7 @@ impl TimelineCanvas<'_> {
                     state.v_scrollbar_grab = Some(sb.thumb.height / 2.0);
                     return captured(Message::Viewport(ViewportMessage::ScrollToY(new_scroll)));
                 }
-                return (canvas::event::Status::Captured, None);
+                return Some(canvas::Action::capture());
             }
         }
 
@@ -359,7 +359,7 @@ impl TimelineCanvas<'_> {
         cursor: mouse::Cursor,
     ) -> UpdateResult {
         let Some(pos) = cursor.position_in(bounds) else {
-            return (canvas::event::Status::Ignored, None);
+            return None;
         };
 
         // Horizontal scrollbar drag.
@@ -408,16 +408,16 @@ impl TimelineCanvas<'_> {
             Some(ClipInteraction::MidiTrim) => captured(Message::MidiClip(
                 MidiClipMessage::UpdateMidiClipTrim(pos.x),
             )),
-            None => (canvas::event::Status::Ignored, None),
+            None => None,
         }
     }
 
     pub(super) fn handle_release(&self, state: &mut TimelineState) -> UpdateResult {
         if state.h_scrollbar_grab.take().is_some() {
-            return (canvas::event::Status::Captured, None);
+            return Some(canvas::Action::capture());
         }
         if state.v_scrollbar_grab.take().is_some() {
-            return (canvas::event::Status::Captured, None);
+            return Some(canvas::Action::capture());
         }
         if state.dragging_loop {
             state.dragging_loop = false;
@@ -438,7 +438,7 @@ impl TimelineCanvas<'_> {
                 }
             };
         }
-        (canvas::event::Status::Ignored, None)
+        None
     }
 
     /// Compute BPM range for the tempo row graph (matches draw code).
@@ -572,7 +572,7 @@ impl TimelineCanvas<'_> {
             return captured(Message::GlobalTrack(GlobalTrackMessage::SelectEvent(None)));
         }
 
-        (canvas::event::Status::Captured, None)
+        Some(canvas::Action::capture())
     }
 
     pub(super) fn handle_key(&self, key: &keyboard::Key) -> UpdateResult {
@@ -582,7 +582,7 @@ impl TimelineCanvas<'_> {
             keyboard::Key::Named(Named::Delete) | keyboard::Key::Named(Named::Backspace)
         );
         if !is_delete {
-            return (canvas::event::Status::Ignored, None);
+            return None;
         }
         // Delete selected global track event.
         if self.selected_global_event.is_some() {
@@ -596,7 +596,7 @@ impl TimelineCanvas<'_> {
         if let Some(clip_id) = self.selected_clip {
             return captured(Message::Clip(ClipMessage::DeleteClip(clip_id)));
         }
-        (canvas::event::Status::Ignored, None)
+        None
     }
 
     /// Emit `ViewportWidth` / `TimelineContentSize` messages when either

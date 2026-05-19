@@ -99,16 +99,16 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
         .height(22);
 
     let header_row = row![
-        Space::with_width(10),
+        Space::new().width(10),
         toggle_btn,
-        Space::with_width(4),
+        Space::new().width(4),
         text("TRACKS")
             .size(10)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::TEXT_3),
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         add_btn,
-        Space::with_width(8),
+        Space::new().width(8),
     ]
     .align_y(alignment::Vertical::Center)
     .height(theme::RULER_HEIGHT);
@@ -142,7 +142,7 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
 
         let tempo_row = container(
             row![
-                Space::with_width(10),
+                Space::new().width(10),
                 text("Tempo").size(11).color(theme::TEXT_2),
             ]
             .align_y(alignment::Vertical::Center)
@@ -172,12 +172,9 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
     let first_visible = visible_start.floor() as usize;
     let top_pad = first_visible as f32 * theme::TRACK_HEIGHT - r.viewport.scroll_offset_y;
     if first_visible > 0 {
-        headers = headers.push(Space::new(
-            Length::Fill,
-            (first_visible as f32 * theme::TRACK_HEIGHT - r.viewport.scroll_offset_y).max(0.0),
-        ));
+        headers = headers.push(Space::new().width(Length::Fill).height((first_visible as f32 * theme::TRACK_HEIGHT - r.viewport.scroll_offset_y).max(0.0)));
     } else if r.viewport.scroll_offset_y > 0.0 {
-        headers = headers.push(Space::new(Length::Fill, top_pad.max(0.0)));
+        headers = headers.push(Space::new().width(Length::Fill).height(top_pad.max(0.0)));
     }
 
     let selected_track = r.interaction.selected_track;
@@ -278,9 +275,9 @@ fn view_track_header(
     // Top of the cell: name + kind, with delete in the corner.
     let top_row = row![
         glyph,
-        Space::with_width(10),
+        Space::new().width(10),
         name_col,
-        Space::with_width(6),
+        Space::new().width(6),
         del,
     ]
     .spacing(0)
@@ -288,10 +285,10 @@ fn view_track_header(
 
     // Bottom of the cell: 4-button row, right-aligned to keep the glyph +
     // name visually the dominant element.
-    let button_row = row![Space::with_width(Length::Fill), buttons]
+    let button_row = row![Space::new().width(Length::Fill), buttons]
         .align_y(alignment::Vertical::Center);
 
-    let body_col = column![top_row, Space::with_height(8), button_row,]
+    let body_col = column![top_row, Space::new().height(8), button_row,]
         .spacing(0)
         .height(Length::Fill);
 
@@ -329,7 +326,7 @@ fn view_track_header(
             ..Default::default()
         });
 
-    let stripe = container(Space::with_height(Length::Fill))
+    let stripe = container(Space::new().height(Length::Fill))
         .width(2)
         .height(Length::Fill)
         .style(move |_theme| container::Style {
@@ -340,7 +337,7 @@ fn view_track_header(
     let cell = row![stripe, body_with_bg].height(theme::TRACK_HEIGHT);
 
     // 1px hairline below each cell so rows separate without a heavy border.
-    let hairline = container(Space::with_width(Length::Fill))
+    let hairline = container(Space::new().width(Length::Fill))
         .height(1)
         .style(theme::separator_bg);
 
@@ -468,9 +465,9 @@ fn view_signature_header(r: &Resonance, row_h: f32) -> Element<'static, Message>
         let slash = text("/").size(12).color(theme::TEXT_3);
 
         row![
-            Space::with_width(10),
+            Space::new().width(10),
             label,
-            Space::with_width(8),
+            Space::new().width(8),
             num_picker,
             slash,
             den_picker,
@@ -480,7 +477,7 @@ fn view_signature_header(r: &Resonance, row_h: f32) -> Element<'static, Message>
         .height(row_h)
         .into()
     } else {
-        row![Space::with_width(10), label,]
+        row![Space::new().width(10), label,]
             .align_y(alignment::Vertical::Center)
             .height(row_h)
             .into()

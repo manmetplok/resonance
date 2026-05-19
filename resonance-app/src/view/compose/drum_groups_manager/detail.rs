@@ -36,7 +36,7 @@ pub(super) fn group_detail_column<'a>(r: &'a Resonance) -> Element<'a, Message> 
     let head = col_head("GROUP", meta);
 
     column_panel(
-        column![head, separator_below(), Space::with_height(8), body]
+        column![head, separator_below(), Space::new().height(8), body]
             .spacing(0)
             .into(),
         Length::Fill,
@@ -47,7 +47,7 @@ fn detail_body<'a>(group: &'a DrumGroup) -> Element<'a, Message> {
     let color = u8_color(group.color);
     let id = group.id;
 
-    let swatch = container(Space::new(Length::Fixed(22.0), Length::Fixed(22.0)))
+    let swatch = container(Space::new().width(Length::Fixed(22.0)).height(Length::Fixed(22.0)))
         .style(move |_theme| container::Style {
             background: Some(iced::Background::Color(color)),
             border: iced::Border {
@@ -86,7 +86,7 @@ fn detail_body<'a>(group: &'a DrumGroup) -> Element<'a, Message> {
     for &c in GROUP_PALETTE {
         let color = u8_color(c);
         let is_active = c == group.color;
-        let btn = button(Space::new(Length::Fixed(14.0), Length::Fixed(14.0)))
+        let btn = button(Space::new().width(Length::Fixed(14.0)).height(Length::Fixed(14.0)))
             .padding(0)
             .style(move |_theme, status| {
                 let _ = status;
@@ -197,15 +197,15 @@ fn detail_body<'a>(group: &'a DrumGroup) -> Element<'a, Message> {
             DrumGroupsMessage::DeleteGroup { group_id: id },
         )));
 
-    let footer = row![Space::with_width(Length::Fill), clear_btn, delete_btn].spacing(6);
+    let footer = row![Space::new().width(Length::Fill), clear_btn, delete_btn].spacing(6);
 
     let body = column![
         head_row,
-        Space::with_height(14),
+        Space::new().height(14),
         assigned_title,
-        Space::with_height(8),
+        Space::new().height(8),
         assigned_list,
-        Space::with_height(14),
+        Space::new().height(14),
         footer,
     ]
     .spacing(0);

@@ -210,37 +210,44 @@ impl crate::Resonance {
     pub(crate) fn subscription(&self) -> Subscription<Message> {
         let tick = iced::time::every(std::time::Duration::from_millis(theme::TICK_INTERVAL_MS))
             .map(|_| Message::Tick);
-        let keys = keyboard::on_key_press(|key, modifiers| {
-            if modifiers.command() {
-                match key {
-                    keyboard::Key::Character(ref c) if c.as_str() == "s" => {
-                        if modifiers.shift() {
-                            Some(Message::ProjectIo(ProjectIoMessage::SaveProjectAs))
-                        } else {
-                            Some(Message::ProjectIo(ProjectIoMessage::SaveProject))
+        let keys = keyboard::listen().filter_map(|event| match event {
+            keyboard::Event::KeyPressed {
+                key, modifiers, ..
+            } => {
+                if modifiers.command() {
+                    match key {
+                        keyboard::Key::Character(ref c) if c.as_str() == "s" => {
+                            if modifiers.shift() {
+                                Some(Message::ProjectIo(ProjectIoMessage::SaveProjectAs))
+                            } else {
+                                Some(Message::ProjectIo(ProjectIoMessage::SaveProject))
+                            }
                         }
-                    }
-                    keyboard::Key::Character(ref c) if c.as_str() == "o" => {
-                        Some(Message::ProjectIo(ProjectIoMessage::OpenProject))
-                    }
-                    keyboard::Key::Character(ref c) if c.as_str() == "z" => {
-                        if modifiers.shift() {
+                        keyboard::Key::Character(ref c) if c.as_str() == "o" => {
+                            Some(Message::ProjectIo(ProjectIoMessage::OpenProject))
+                        }
+                        keyboard::Key::Character(ref c) if c.as_str() == "z" => {
+                            if modifiers.shift() {
+                                Some(Message::Redo)
+                            } else {
+                                Some(Message::Undo)
+                            }
+                        }
+                        keyboard::Key::Character(ref c) if c.as_str() == "y" => {
                             Some(Message::Redo)
-                        } else {
-                            Some(Message::Undo)
                         }
+                        _ => None,
                     }
-                    keyboard::Key::Character(ref c) if c.as_str() == "y" => Some(Message::Redo),
-                    _ => None,
-                }
-            } else {
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                        Some(Message::MidiEditor(MidiEditorMessage::OpenSelectedMidiClip))
+                } else {
+                    match key {
+                        keyboard::Key::Named(keyboard::key::Named::Enter) => Some(
+                            Message::MidiEditor(MidiEditorMessage::OpenSelectedMidiClip),
+                        ),
+                        _ => None,
                     }
-                    _ => None,
                 }
             }
+            _ => None,
         });
         let close_requests = iced::window::close_requests().map(Message::WindowCloseRequested);
         Subscription::batch([tick, keys, close_requests])

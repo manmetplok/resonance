@@ -33,15 +33,15 @@ pub(super) fn meter_panel<'a>(group: &'a DrumGroup, base_grid: u8, base_cycle: u
                     .size(9)
                     .font(theme::UI_FONT_SEMIBOLD)
                     .color(theme::TEXT_3),
-                Space::with_width(Length::Fill),
+                Space::new().width(Length::Fill),
                 text("SECTION BASE")
                     .size(9)
                     .font(theme::UI_FONT_SEMIBOLD)
                     .color(theme::TEXT_4),
             ],
-            Space::with_height(4),
+            Space::new().height(4),
             text(ref_label).size(11).font(theme::MONO_FONT).color(theme::TEXT_1),
-            Space::with_height(2),
+            Space::new().height(2),
             text("Ratios below set this group's relationship to the section's felt pulse.")
                 .size(10)
                 .color(theme::TEXT_3),
@@ -95,19 +95,19 @@ pub(super) fn meter_panel<'a>(group: &'a DrumGroup, base_grid: u8, base_cycle: u
         text("GRID")
             .size(10)
             .color(theme::TEXT_3),
-        Space::with_height(4),
+        Space::new().height(4),
         grid_pick,
     ];
     let cycle_field = column![
         row![
             text("CYCLE").size(10).color(theme::TEXT_3),
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             text(format!("{}", group.cycle))
                 .size(10)
                 .font(theme::MONO_FONT)
                 .color(theme::TEXT_2),
         ],
-        Space::with_height(4),
+        Space::new().height(4),
         cycle_slider,
     ];
 
@@ -132,7 +132,7 @@ pub(super) fn meter_panel<'a>(group: &'a DrumGroup, base_grid: u8, base_cycle: u
                 .size(10)
                 .color(theme::TEXT_3),
         ],
-        Space::with_height(4),
+        Space::new().height(4),
         phase_slider,
     ];
 
@@ -155,7 +155,7 @@ pub(super) fn meter_panel<'a>(group: &'a DrumGroup, base_grid: u8, base_cycle: u
                 .size(9)
                 .font(theme::UI_FONT_SEMIBOLD)
                 .color(theme::TEXT_3),
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             text(realign_text).size(11).font(theme::MONO_FONT).color(color),
         ]
         .align_y(alignment::Vertical::Center),
@@ -178,21 +178,21 @@ pub(super) fn meter_panel<'a>(group: &'a DrumGroup, base_grid: u8, base_cycle: u
     rail_card(
         column![
             title,
-            Space::with_height(8),
+            Space::new().height(8),
             ref_banner,
-            Space::with_height(10),
-            row![grid_field, Space::with_width(10), cycle_field].spacing(0),
-            Space::with_height(8),
+            Space::new().height(10),
+            row![grid_field, Space::new().width(10), cycle_field].spacing(0),
+            Space::new().height(8),
             phase_field,
-            Space::with_height(10),
+            Space::new().height(10),
             section_head("POLYRHYTHM", "different subdivision, same bar"),
-            Space::with_height(6),
+            Space::new().height(6),
             polyrhythm_chips,
-            Space::with_height(10),
+            Space::new().height(10),
             section_head("POLYMETER", "same subdivision, different cycle"),
-            Space::with_height(6),
+            Space::new().height(6),
             polymeter_chips,
-            Space::with_height(10),
+            Space::new().height(10),
             realign_banner,
         ]
         .spacing(0)

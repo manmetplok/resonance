@@ -275,13 +275,13 @@ pub const SECTION_BAND_HEIGHT: f32 = 22.0;
 /// collapsible area between the ruler and the regular tracks.
 pub const GLOBAL_TRACK_ROW_HEIGHT: f32 = 40.0;
 /// Track-list column width on the Arrange view.
-pub const TRACK_HEADER_WIDTH: u16 = 260;
+pub const TRACK_HEADER_WIDTH: f32 = 260.0;
 /// Standard channel strip width on the Mixer.
-pub const MIXER_STRIP_WIDTH: u16 = 132;
+pub const MIXER_STRIP_WIDTH: f32 = 132.0;
 /// Master strip width.
-pub const MASTER_STRIP_WIDTH: u16 = 156;
+pub const MASTER_STRIP_WIDTH: f32 = 156.0;
 /// Inspector column width on the Mixer.
-pub const INSPECTOR_WIDTH: u16 = 320;
+pub const INSPECTOR_WIDTH: f32 = 320.0;
 /// Right-rail column width on the Compose view.
 pub const COMPOSE_RAIL_WIDTH: u16 = 280;
 

@@ -199,14 +199,15 @@ fn main() -> iced::Result {
     }
     let _ = DEMO_MODE.set(parse_demo_flag());
 
-    let mut app = iced::application("Resonance", Resonance::update, Resonance::view)
+    let mut app = iced::application(Resonance::new, Resonance::update, Resonance::view)
+        .title("Resonance")
         .font(theme::ICON_FONT_BYTES);
     for face in theme::UI_FONT_FACES {
         app = app.font(*face);
     }
     app.default_font(theme::UI_FONT)
         .subscription(Resonance::subscription)
-        .theme(|_| theme::resonance_theme())
+        .theme(theme::resonance_theme())
         .window_size(Size::new(1280.0, 720.0))
         .exit_on_close_request(false)
         // MSAA is expensive on Linux/Wayland with wgpu — every redraw
@@ -216,7 +217,7 @@ fn main() -> iced::Result {
         // resize visibly smoother. Tested on radv (Vulkan) where the AA
         // pass was the dominant per-frame cost.
         .antialiasing(false)
-        .run_with(Resonance::new)
+        .run()
 }
 
 impl Resonance {

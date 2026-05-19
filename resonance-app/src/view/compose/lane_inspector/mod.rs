@@ -75,7 +75,7 @@ fn editing_header<'a>(
 
     let top_row = row![
         editing_label,
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         scope_chip,
     ]
     .align_y(alignment::Vertical::Center);
@@ -90,7 +90,7 @@ fn editing_header<'a>(
         .align_y(alignment::Vertical::Center)
         .spacing(8);
 
-    let content = column![top_row, Space::with_height(4), body_row]
+    let content = column![top_row, Space::new().height(4), body_row]
         .spacing(0)
         .width(Length::Fill);
 
@@ -174,9 +174,9 @@ pub fn view<'a>(
         }
     };
 
-    let mut inner = column![editing_card, Space::with_height(14)].spacing(0).padding(18);
+    let mut inner = column![editing_card, Space::new().height(14)].spacing(0).padding(18);
     if let Some(scale) = scale {
-        inner = inner.push(scale).push(Space::with_height(20));
+        inner = inner.push(scale).push(Space::new().height(20));
     }
     let inner = inner.push(body);
 
@@ -235,13 +235,13 @@ pub(super) fn info_icon<'a>(info: &'static str) -> Element<'a, Message> {
 /// the option deserves a one-sentence explanation.
 pub(super) fn label_with_info<'a>(label: impl Into<String>, info: &'static str) -> Element<'a, Message> {
     let label_text = text(label.into()).size(11).color(theme::TEXT_DIM);
-    row![label_text, Space::with_width(4), info_icon(info)]
+    row![label_text, Space::new().width(4), info_icon(info)]
         .align_y(alignment::Vertical::Center)
         .into()
 }
 
 pub(super) fn separator<'a>() -> Element<'a, Message> {
-    container(Space::with_height(1))
+    container(Space::new().height(1))
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
         .style(|_theme| container::Style {

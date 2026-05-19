@@ -77,7 +77,7 @@ pub fn view<'a>(
         .collect();
 
     if vocal_tracks.is_empty() {
-        return container(iced::widget::Space::with_height(0))
+        return container(iced::widget::Space::new().height(0))
             .width(Length::Fill)
             .into();
     }
@@ -184,17 +184,17 @@ impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
     fn update(
         &self,
         state: &mut Self::State,
-        event: canvas::Event,
+        event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
-        if let canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
+    ) -> Option<canvas::Action<Message>> {
+        if let iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
             let Some(pos) = cursor.position_in(bounds) else {
-                return (canvas::event::Status::Ignored, None);
+                return None;
             };
             let idx = (pos.y / VOCAL_LANE_HEIGHT) as usize;
             let Some((track_id, _)) = self.vocal_tracks.get(idx) else {
-                return (canvas::event::Status::Ignored, None);
+                return None;
             };
 
             // Double-click anywhere on the row opens the derived MIDI
@@ -211,25 +211,19 @@ impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
             if is_double_click {
                 state.last_click = None;
                 if let Some(clip_id) = self.derived_clip_ids.get(track_id).copied() {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::MidiEditor(MidiEditorMessage::OpenMidiEditor(
+                    return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::OpenMidiEditor(
                             clip_id,
-                        ))),
-                    );
+                        ))).and_capture());
                 }
                 // Fallback: even without a derived clip, still focus the
                 // lane so the user sees the right rail. Avoids a dead
                 // double-click before the first regenerate.
             }
-            return (
-                canvas::event::Status::Captured,
-                Some(Message::Compose(ComposeMessage::SelectLane(
+            return Some(canvas::Action::publish(Message::Compose(ComposeMessage::SelectLane(
                     SelectedLane::Instrument(*track_id),
-                ))),
-            );
+                ))).and_capture());
         }
-        (canvas::event::Status::Ignored, None)
+        None
     }
 }
 

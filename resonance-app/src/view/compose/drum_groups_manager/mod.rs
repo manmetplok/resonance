@@ -26,11 +26,11 @@ use kit_picker::kit_picker_column;
 
 pub fn view<'a>(r: &'a Resonance) -> Element<'a, Message> {
     if !r.compose.drumroll.manager_open {
-        return container(Space::with_height(0)).into();
+        return container(Space::new().height(0)).into();
     }
 
     let backdrop = mouse_area(
-        container(Space::new(Length::Fill, Length::Fill))
+        container(Space::new().width(Length::Fill).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_theme| container::Style {
@@ -136,7 +136,7 @@ fn modal_header<'a>() -> Element<'a, Message> {
     )));
 
     container(
-        row![title, Space::with_width(Length::Fill), cancel, done]
+        row![title, Space::new().width(Length::Fill), cancel, done]
             .spacing(8)
             .align_y(alignment::Vertical::Top),
     )
@@ -176,7 +176,7 @@ pub(super) fn col_head<'a>(title: &str, meta: String) -> Element<'a, Message> {
                 .size(10)
                 .font(theme::UI_FONT_SEMIBOLD)
                 .color(theme::TEXT_3),
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             text(meta).size(10).font(theme::MONO_FONT).color(theme::TEXT_3),
         ]
         .align_y(alignment::Vertical::Center),
@@ -196,7 +196,7 @@ pub(super) fn col_head<'a>(title: &str, meta: String) -> Element<'a, Message> {
 }
 
 pub(super) fn separator_below<'a>() -> Element<'a, Message> {
-    container(Space::with_height(1))
+    container(Space::new().height(1))
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
         .style(|_theme| container::Style {

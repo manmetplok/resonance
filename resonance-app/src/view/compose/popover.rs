@@ -92,14 +92,14 @@ pub fn view<'a>(definition: &'a SectionDefinitionState, chord_id: u64) -> Elemen
     container(
         row![
             preview,
-            Space::with_width(12),
+            Space::new().width(12),
             text("Root").size(11).color(theme::TEXT_DIM),
             root_picker,
             text("Quality").size(11).color(theme::TEXT_DIM),
             quality_picker,
             text("Bass").size(11).color(theme::TEXT_DIM),
             bass_picker,
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             delete_btn,
             close_btn,
         ]
@@ -122,7 +122,7 @@ pub fn view<'a>(definition: &'a SectionDefinitionState, chord_id: u64) -> Elemen
 }
 
 fn empty<'a>() -> Element<'a, Message> {
-    container(Space::with_height(0)).width(Length::Fill).into()
+    container(Space::new().height(0)).width(Length::Fill).into()
 }
 
 /// Wrapper so `pick_list` can render "(none)" as an option alongside the

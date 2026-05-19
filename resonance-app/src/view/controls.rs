@@ -27,7 +27,7 @@ fn icon_button<'a>(
     let cell = (size + 8) as f32;
     container(
         theme::icon(glyph)
-            .size(size)
+            .size(f32::from(size))
             .color(color)
             .line_height(LineHeight::Relative(1.0)),
     )
@@ -128,7 +128,7 @@ pub fn fx_bypass_button<'a>(
     let cell = (size + 8) as f32;
     let label = container(
         text("FX")
-            .size(size - 1)
+            .size(f32::from(size - 1))
             .font(theme::UI_FONT_SEMIBOLD)
             .color(color)
             .line_height(LineHeight::Relative(1.0)),

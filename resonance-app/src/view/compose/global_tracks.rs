@@ -136,12 +136,12 @@ impl<'a> canvas::Program<Message> for ComposeGlobalTracksCanvas<'a> {
     fn update(
         &self,
         _state: &mut Self::State,
-        _event: canvas::Event,
+        _event: &iced::Event,
         _bounds: Rectangle,
         _cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
+    ) -> Option<canvas::Action<Message>> {
         // Read-only: no interaction in the compose view.
-        (canvas::event::Status::Ignored, None)
+        None
     }
 }
 

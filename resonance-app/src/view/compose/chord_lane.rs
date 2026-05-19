@@ -126,10 +126,10 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
     fn update(
         &self,
         state: &mut Self::State,
-        event: canvas::Event,
+        event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
+    ) -> Option<canvas::Action<Message>> {
         self.update_inner(state, event, bounds, cursor)
     }
 }
@@ -333,41 +333,38 @@ impl<'a> ChordLaneCanvas<'a> {
     fn update_inner(
         &self,
         state: &mut ChordLaneState,
-        event: canvas::Event,
+        event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
+    ) -> Option<canvas::Action<Message>> {
         let grid_x = NAME_COLUMN_WIDTH;
         let grid_w = (bounds.width - NAME_COLUMN_WIDTH).max(0.0);
         let total_beats = self.total_beats();
         if total_beats == 0 || grid_w <= 0.0 {
-            return (canvas::event::Status::Ignored, None);
+            return None;
         }
         let beat_width = grid_w / total_beats as f32;
 
         match event {
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let Some(pos) = cursor.position_in(bounds) else {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 };
 
                 // Click on the name column: select the chords lane.
                 if pos.x < NAME_COLUMN_WIDTH {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::Compose(ComposeMessage::SelectLane(
+                    return Some(canvas::Action::publish(Message::Compose(ComposeMessage::SelectLane(
                             SelectedLane::Chords,
-                        ))),
-                    );
+                        ))).and_capture());
                 }
 
                 if pos.y < RULER_HEIGHT {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 }
                 let rel_x = pos.x - grid_x;
                 let beat = (rel_x / beat_width) as u32;
                 if beat >= total_beats {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 }
 
                 // Hit-test existing chords: right edge => resize, body => move.
@@ -388,12 +385,9 @@ impl<'a> ChordLaneCanvas<'a> {
                                 pending_start_beat: chord.start_beat,
                             });
                         }
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::Compose(ComposeMessage::SelectChord {
+                        return Some(canvas::Action::publish(Message::Compose(ComposeMessage::SelectChord {
                                 chord_id: chord.id,
-                            })),
-                        );
+                            })).and_capture());
                     }
                 }
 
@@ -411,26 +405,23 @@ impl<'a> ChordLaneCanvas<'a> {
                     }
                 }
                 if duration == 0 {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 }
-                (
-                    canvas::event::Status::Captured,
-                    Some(Message::Compose(ComposeMessage::AddChord {
+                Some(canvas::Action::publish(Message::Compose(ComposeMessage::AddChord {
                         definition_id: self.definition.id,
                         start_beat: beat,
                         duration_beats: duration,
                         root: PitchClass::C,
                         quality: ChordQuality::Maj,
-                    })),
-                )
+                    })).and_capture())
             }
 
-            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let Some(pos) = cursor.position_in(bounds) else {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 };
                 let Some(drag) = state.drag.as_mut() else {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 };
                 let rel_x = (pos.x - grid_x).max(0.0);
                 let beat_f = (rel_x / beat_width).max(0.0);
@@ -444,12 +435,12 @@ impl<'a> ChordLaneCanvas<'a> {
                         let chord = match self.definition.chords.iter().find(|c| c.id == *chord_id)
                         {
                             Some(c) => c,
-                            None => return (canvas::event::Status::Ignored, None),
+                            None => return None,
                         };
                         let new_start = beat.saturating_sub(*grab_beat);
                         let max_start = total_beats.saturating_sub(chord.duration_beats);
                         *pending_start_beat = new_start.min(max_start);
-                        (canvas::event::Status::Captured, None)
+                        Some(canvas::Action::capture())
                     }
                     ChordDrag::Resize {
                         chord_id,
@@ -458,17 +449,17 @@ impl<'a> ChordLaneCanvas<'a> {
                         let chord = match self.definition.chords.iter().find(|c| c.id == *chord_id)
                         {
                             Some(c) => c,
-                            None => return (canvas::event::Status::Ignored, None),
+                            None => return None,
                         };
                         let end_beat = ((rel_x / beat_width).ceil() as u32).min(total_beats);
                         let new_dur = end_beat.saturating_sub(chord.start_beat).max(1);
                         *pending_duration_beats = new_dur;
-                        (canvas::event::Status::Captured, None)
+                        Some(canvas::Action::capture())
                     }
                 }
             }
 
-            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 let drag = state.drag.take();
                 match drag {
                     Some(ChordDrag::Move {
@@ -483,16 +474,13 @@ impl<'a> ChordLaneCanvas<'a> {
                             .find(|c| c.id == chord_id)
                             .map(|c| c.start_beat);
                         if current == Some(pending_start_beat) {
-                            return (canvas::event::Status::Captured, None);
+                            return Some(canvas::Action::capture());
                         }
-                        (
-                            canvas::event::Status::Captured,
-                            Some(Message::Compose(ComposeMessage::MoveChord {
+                        Some(canvas::Action::publish(Message::Compose(ComposeMessage::MoveChord {
                                 definition_id: self.definition.id,
                                 chord_id,
                                 start_beat: pending_start_beat,
-                            })),
-                        )
+                            })).and_capture())
                     }
                     Some(ChordDrag::Resize {
                         chord_id,
@@ -505,46 +493,40 @@ impl<'a> ChordLaneCanvas<'a> {
                             .find(|c| c.id == chord_id)
                             .map(|c| c.duration_beats);
                         if current == Some(pending_duration_beats) {
-                            return (canvas::event::Status::Captured, None);
+                            return Some(canvas::Action::capture());
                         }
-                        (
-                            canvas::event::Status::Captured,
-                            Some(Message::Compose(ComposeMessage::ResizeChord {
+                        Some(canvas::Action::publish(Message::Compose(ComposeMessage::ResizeChord {
                                 definition_id: self.definition.id,
                                 chord_id,
                                 duration_beats: pending_duration_beats,
-                            })),
-                        )
+                            })).and_capture())
                     }
-                    None => (canvas::event::Status::Ignored, None),
+                    None => None,
                 }
             }
 
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
                 let Some(pos) = cursor.position_in(bounds) else {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 };
                 if pos.x < NAME_COLUMN_WIDTH || pos.y < RULER_HEIGHT {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 }
                 let rel_x = pos.x - grid_x;
                 let beat = (rel_x / beat_width) as u32;
                 for chord in &self.definition.chords {
                     let end = chord.start_beat + chord.duration_beats;
                     if beat >= chord.start_beat && beat < end {
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::Compose(ComposeMessage::DeleteChord {
+                        return Some(canvas::Action::publish(Message::Compose(ComposeMessage::DeleteChord {
                                 definition_id: self.definition.id,
                                 chord_id: chord.id,
-                            })),
-                        );
+                            })).and_capture());
                     }
                 }
-                (canvas::event::Status::Ignored, None)
+                None
             }
 
-            _ => (canvas::event::Status::Ignored, None),
+            _ => None,
         }
     }
 }

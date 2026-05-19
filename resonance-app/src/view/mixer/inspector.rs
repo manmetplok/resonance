@@ -53,7 +53,7 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
     });
 
     container(body)
-        .width(Length::Fixed(theme::INSPECTOR_WIDTH as f32))
+        .width(Length::Fixed(theme::INSPECTOR_WIDTH))
         .height(Length::Fill)
         .padding(18)
         .style(|_theme| container::Style {
@@ -132,7 +132,7 @@ fn render_track_inner(r: &crate::Resonance, track: &TrackState) -> Element<'stat
             .size(10)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::TEXT_3),
-        Space::with_height(2),
+        Space::new().height(2),
         text(track.name.clone())
             .size(17)
             .font(theme::UI_FONT_MEDIUM)
@@ -143,11 +143,11 @@ fn render_track_inner(r: &crate::Resonance, track: &TrackState) -> Element<'stat
     let scroll = iced::widget::scrollable(
         column![
             header,
-            Space::with_height(16),
+            Space::new().height(16),
             signal_group(track),
-            Space::with_height(16),
+            Space::new().height(16),
             routing_group(r, track),
-            Space::with_height(16),
+            Space::new().height(16),
             chain_group(r, track),
         ]
         .spacing(0),
@@ -163,7 +163,7 @@ fn render_empty() -> Element<'static, Message> {
             .size(10)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::TEXT_3),
-        Space::with_height(8),
+        Space::new().height(8),
         text("Select a track or bus to view its routing and signal.")
             .size(12)
             .color(theme::TEXT_3),
@@ -194,22 +194,22 @@ fn signal_group(track: &TrackState) -> Element<'static, Message> {
 
     let row1 = row![
         stat_tile("PEAK", peak_db),
-        Space::with_width(10),
+        Space::new().width(10),
         stat_tile("RMS", rms),
     ]
     .align_y(alignment::Vertical::Center);
     let row2 = row![
         stat_tile("PAN", pan),
-        Space::with_width(10),
+        Space::new().width(10),
         stat_tile("OUT", out),
     ]
     .align_y(alignment::Vertical::Center);
 
     column![
         group_title("SIGNAL"),
-        Space::with_height(8),
+        Space::new().height(8),
         row1,
-        Space::with_height(10),
+        Space::new().height(10),
         row2,
     ]
     .spacing(0)
@@ -223,7 +223,7 @@ fn stat_tile(label: &'static str, value: String) -> Element<'static, Message> {
                 .size(9)
                 .font(theme::UI_FONT_SEMIBOLD)
                 .color(theme::TEXT_3),
-            Space::with_height(3),
+            Space::new().height(3),
             text(value)
                 .size(13)
                 .font(theme::MONO_FONT)
@@ -259,18 +259,18 @@ fn routing_group(r: &crate::Resonance, track: &TrackState) -> Element<'static, M
         if track.track_type.accepts_midi() && track.sub_track.is_none() {
             midi_output_block(r, track)
         } else {
-            Space::with_height(0).into()
+            Space::new().height(0).into()
         };
 
     column![
         group_title("ROUTING"),
-        Space::with_height(10),
+        Space::new().height(10),
         input_block,
-        Space::with_height(8),
+        Space::new().height(8),
         output_block,
-        Space::with_height(8),
+        Space::new().height(8),
         midi_out_block,
-        Space::with_height(4),
+        Space::new().height(4),
         routing_row("Send A", "(none)", true),
         routing_row("Send B", "(none)", true),
     ]
@@ -285,7 +285,7 @@ fn field(label: &'static str, picker: Element<'static, Message>) -> Element<'sta
             .size(9)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::TEXT_3),
-        Space::with_height(4),
+        Space::new().height(4),
         picker,
     ]
     .spacing(0)
@@ -348,7 +348,7 @@ fn audio_input_block(
             .padding([5, 8])
             .width(Length::Fill);
             col = col
-                .push(Space::with_height(8))
+                .push(Space::new().height(8))
                 .push(field("INPUT CHANNEL", port_picker.into()));
         }
     }
@@ -391,7 +391,7 @@ fn midi_input_block(
         .padding([5, 8])
         .width(Length::Fill);
         col = col
-            .push(Space::with_height(8))
+            .push(Space::new().height(8))
             .push(field("MIDI IN CHANNEL", in_ch_picker.into()));
     }
     col.into()
@@ -431,7 +431,7 @@ fn midi_output_block(
         .padding([5, 8])
         .width(Length::Fill);
         col = col
-            .push(Space::with_height(8))
+            .push(Space::new().height(8))
             .push(field("MIDI OUT CHANNEL", out_ch_picker.into()));
     }
     col.into()
@@ -462,7 +462,7 @@ fn routing_row(label: &'static str, value: &'static str, muted: bool) -> Element
     let value_color = if muted { theme::TEXT_4 } else { theme::TEXT_1 };
     let r_row = row![
         text(label).size(11).color(theme::TEXT_3),
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         text(value).size(12).font(theme::MONO_FONT).color(value_color),
     ]
     .align_y(alignment::Vertical::Center)
@@ -470,7 +470,7 @@ fn routing_row(label: &'static str, value: &'static str, muted: bool) -> Element
 
     column![
         r_row,
-        container(Space::with_width(Length::Fill))
+        container(Space::new().width(Length::Fill))
             .height(1)
             .style(|_theme| container::Style {
                 background: Some(iced::Background::Color(theme::LINE_2)),
@@ -486,7 +486,7 @@ fn routing_row(label: &'static str, value: &'static str, muted: bool) -> Element
 // ---------------------------------------------------------------------------
 
 fn chain_group(r: &crate::Resonance, track: &TrackState) -> Element<'static, Message> {
-    let mut col = column![group_title("CHAIN"), Space::with_height(8)].spacing(6);
+    let mut col = column![group_title("CHAIN"), Space::new().height(8)].spacing(6);
 
     // Instrument tracks render the instrument slot (plugin index 0) plus
     // any FX rows after it. Audio tracks render every plugin as an FX
@@ -556,7 +556,7 @@ fn chain_row(name: &str, is_instrument_slot: bool) -> Element<'static, Message> 
     } else {
         theme::ACCENT
     };
-    let bullet = container(Space::with_width(0))
+    let bullet = container(Space::new().width(0))
         .width(6)
         .height(6)
         .style(move |_theme| container::Style {
@@ -575,9 +575,9 @@ fn chain_row(name: &str, is_instrument_slot: bool) -> Element<'static, Message> 
     container(
         row![
             bullet,
-            Space::with_width(8),
+            Space::new().width(8),
             text(name.to_string()).size(12).color(label_color),
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             text("BYP")
                 .size(9)
                 .font(theme::UI_FONT_SEMIBOLD)
@@ -609,8 +609,8 @@ fn group_title(title: &'static str) -> Element<'static, Message> {
             .size(10)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::TEXT_3),
-        Space::with_height(4),
-        container(Space::with_width(Length::Fill))
+        Space::new().height(4),
+        container(Space::new().width(Length::Fill))
             .height(1)
             .style(|_theme| container::Style {
                 background: Some(iced::Background::Color(theme::LINE_2)),

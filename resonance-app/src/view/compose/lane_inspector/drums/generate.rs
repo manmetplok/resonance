@@ -80,10 +80,10 @@ pub(super) fn generate_panel<'a>(group: &'a DrumGroup) -> Element<'a, Message> {
 
     rail_card(
         column![
-            row![generate_btn, Space::with_width(8), reroll].spacing(0),
-            Space::with_height(8),
+            row![generate_btn, Space::new().width(8), reroll].spacing(0),
+            Space::new().height(8),
             regen_all,
-            Space::with_height(4),
+            Space::new().height(4),
             seed_line,
         ]
         .spacing(0)

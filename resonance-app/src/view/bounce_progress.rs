@@ -17,14 +17,14 @@ use crate::Resonance;
 
 pub(crate) fn view_bounce_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, Message> {
     let Some(state) = r.bounce_in_progress.as_ref() else {
-        return Space::new(Length::Fixed(0.0), Length::Fixed(0.0)).into();
+        return Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(0.0)).into();
     };
 
     // Backdrop: an opaque mouse_area that swallows clicks so nothing
     // behind it can be interacted with. No on_press — clicking the
     // backdrop must NOT close the modal (cancel is intentional).
     let backdrop = mouse_area(
-        container(Space::new(Length::Fill, Length::Fill))
+        container(Space::new().width(Length::Fill).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_theme| container::Style {
@@ -52,7 +52,7 @@ pub(crate) fn view_bounce_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, 
     };
 
     let pct = (state.fraction * 100.0).round() as u32;
-    let bar = progress_bar(0.0..=1.0, state.fraction).height(Length::Fixed(14.0));
+    let bar = progress_bar(0.0..=1.0, state.fraction).girth(Length::Fixed(14.0));
 
     let cancel = button(text("Cancel").size(13).color(theme::TEXT_1))
         .on_press(Message::Track(TrackMessage::Bounce(
@@ -63,17 +63,17 @@ pub(crate) fn view_bounce_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, 
 
     let dialog_content = column![
         title,
-        Space::with_height(8),
+        Space::new().height(8),
         text(detail).size(13).color(theme::TEXT_2),
-        Space::with_height(16),
+        Space::new().height(16),
         bar,
-        Space::with_height(6),
+        Space::new().height(6),
         text(format!("{pct}%"))
             .size(12)
             .font(theme::MONO_FONT)
             .color(theme::TEXT_3),
-        Space::with_height(20),
-        row![Space::with_width(Length::Fill), cancel]
+        Space::new().height(20),
+        row![Space::new().width(Length::Fill), cancel]
             .align_y(alignment::Vertical::Center),
     ]
     .padding(24)

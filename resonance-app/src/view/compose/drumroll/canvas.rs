@@ -187,23 +187,20 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
     fn update(
         &self,
         _state: &mut Self::State,
-        event: canvas::Event,
+        event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
-        if let canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
+    ) -> Option<canvas::Action<Message>> {
+        if let iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
             let Some(pos) = cursor.position_in(bounds) else {
-                return (canvas::event::Status::Ignored, None);
+                return None;
             };
 
             // Side panel: open the drum lane in the inspector.
             if pos.x < NAME_COLUMN_WIDTH {
-                return (
-                    canvas::event::Status::Captured,
-                    Some(Message::Compose(ComposeMessage::SelectLane(
+                return Some(canvas::Action::publish(Message::Compose(ComposeMessage::SelectLane(
                         crate::compose::SelectedLane::Drums(self.track.id),
-                    ))),
-                );
+                    ))).and_capture());
             }
 
             // Step area geometry — mirrors `draw` so cell hit-tests
@@ -236,31 +233,25 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
                         let cell_w = step_area_width / cell_count as f32;
                         let step = ((pos.x - step_area_x) / cell_w) as usize;
                         if step < cells.len() {
-                            return (
-                                canvas::event::Status::Captured,
-                                Some(Message::Compose(ComposeMessage::DrumGroups(
+                            return Some(canvas::Action::publish(Message::Compose(ComposeMessage::DrumGroups(
                                     DrumGroupsMessage::TogglePadStep {
                                         group_id: group.id,
                                         pad_index,
                                         step,
                                     },
-                                ))),
-                            );
+                                ))).and_capture());
                         }
                     }
                 }
 
                 // Header row click or click past the last step — focus
                 // the group instead.
-                return (
-                    canvas::event::Status::Captured,
-                    Some(Message::Compose(ComposeMessage::DrumGroups(
+                return Some(canvas::Action::publish(Message::Compose(ComposeMessage::DrumGroups(
                         DrumGroupsMessage::SelectGroup { group_id: group.id },
-                    ))),
-                );
+                    ))).and_capture());
             }
         }
-        (canvas::event::Status::Ignored, None)
+        None
     }
 }
 

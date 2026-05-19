@@ -33,11 +33,11 @@ pub struct BounceDialogState {
 
 pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Message> {
     let Some(dialog) = r.bounce_dialog.as_ref() else {
-        return Space::new(Length::Fixed(0.0), Length::Fixed(0.0)).into();
+        return Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(0.0)).into();
     };
 
     let backdrop = mouse_area(
-        container(Space::new(Length::Fill, Length::Fill))
+        container(Space::new().width(Length::Fill).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_theme| container::Style {
@@ -159,7 +159,7 @@ pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
         row![
             text("Channel").size(13).color(theme::TEXT_DIM),
             pick,
-            Space::with_width(8),
+            Space::new().width(8),
             stereo_btn,
             mono_btn,
         ]
@@ -198,23 +198,23 @@ pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
         confirm_btn = confirm_btn.on_press(Message::Track(TrackMessage::Bounce(BounceMessage::Confirm)));
     }
 
-    let button_row = row![Space::with_width(Length::Fill), cancel_btn, confirm_btn]
+    let button_row = row![Space::new().width(Length::Fill), cancel_btn, confirm_btn]
         .spacing(8)
         .align_y(alignment::Vertical::Center);
 
     let dialog_content = column![
         title,
-        Space::with_height(10),
+        Space::new().height(10),
         explanation,
-        Space::with_height(16),
+        Space::new().height(16),
         text("AUDIO INPUT")
             .size(10)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::TEXT_3),
         device_picker,
-        Space::with_height(8),
+        Space::new().height(8),
         port_section,
-        Space::with_height(20),
+        Space::new().height(20),
         button_row,
     ]
     .spacing(4)

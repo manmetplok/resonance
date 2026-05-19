@@ -201,10 +201,10 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
     fn update(
         &self,
         state: &mut Self::State,
-        event: canvas::Event,
+        event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
+    ) -> Option<canvas::Action<Message>> {
         let layout = self.layout(bounds);
         let viewport = self.viewport(&layout, bounds);
         let grid_x = layout.grid_x();
@@ -212,35 +212,26 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
 
         match event {
             // -- Scroll --
-            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 if cursor.position_in(bounds).is_none() {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 }
                 let (dx, dy) = match delta {
                     mouse::ScrollDelta::Lines { x, y } => (-x * 30.0, -y * 30.0),
                     mouse::ScrollDelta::Pixels { x, y } => (-x, -y),
                 };
                 if dx.abs() > f32::EPSILON {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::Compose(ComposeMessage::ExpandedScrollX(dx))),
-                    );
+                    return Some(canvas::Action::publish(Message::Compose(ComposeMessage::ExpandedScrollX(dx))).and_capture());
                 }
-                return (
-                    canvas::event::Status::Captured,
-                    Some(Message::Compose(ComposeMessage::ExpandedScrollY(dy))),
-                );
+                return Some(canvas::Action::publish(Message::Compose(ComposeMessage::ExpandedScrollY(dy))).and_capture());
             }
 
             // -- Left click --
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(pos) = cursor.position_in(bounds) {
                     // Toolbar click: collapse
                     if pos.y < TOOLBAR_HEIGHT {
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::Compose(ComposeMessage::CollapseTrack)),
-                        );
+                        return Some(canvas::Action::publish(Message::Compose(ComposeMessage::CollapseTrack)).and_capture());
                     }
 
                     let gy = pos.y - TOOLBAR_HEIGHT;
@@ -249,13 +240,10 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
                     if pos.x < grid_x && gy < grid_h {
                         let note = viewport.y_local_to_note(gy);
                         state.previewing_note = Some(note);
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::MidiEditor(MidiEditorMessage::PreviewNote(
+                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::PreviewNote(
                                 self.track_id,
                                 note,
-                            ))),
-                        );
+                            ))).and_capture());
                     }
 
                     // Grid area
@@ -266,7 +254,7 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
             }
 
             // -- Right-click: remove note --
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
                 if let Some(pos) = cursor.position_in(bounds) {
                     if pos.y > TOOLBAR_HEIGHT && pos.x >= grid_x {
                         return self.handle_right_click(&layout, &viewport, pos);
@@ -275,62 +263,50 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
             }
 
             // -- Mouse move (drag) --
-            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 if let Some(pos) = cursor.position_in(bounds) {
                     if let Some(msg) = self.handle_drag(state, &viewport, pos, grid_x) {
-                        return (canvas::event::Status::Captured, Some(msg));
+                        return Some(canvas::Action::publish(msg).and_capture());
                     }
                 }
             }
 
             // -- Mouse release --
-            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 state.drag = None;
                 if let Some(note) = state.previewing_note.take() {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::MidiEditor(MidiEditorMessage::StopPreview(
+                    return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::StopPreview(
                             self.track_id,
                             note,
-                        ))),
-                    );
+                        ))).and_capture());
                 }
             }
 
             // -- Keyboard shortcuts --
-            canvas::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key: iced::keyboard::Key::Character(ref ch),
                 ..
             }) if cursor.position_in(bounds).is_some() => {
                 let s = ch.as_str();
                 if s == "+" || s == "=" {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::Compose(ComposeMessage::ExpandedZoomY(2.0))),
-                    );
+                    return Some(canvas::Action::publish(Message::Compose(ComposeMessage::ExpandedZoomY(2.0))).and_capture());
                 }
                 if s == "-" {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::Compose(ComposeMessage::ExpandedZoomY(-2.0))),
-                    );
+                    return Some(canvas::Action::publish(Message::Compose(ComposeMessage::ExpandedZoomY(-2.0))).and_capture());
                 }
             }
 
-            canvas::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
                 ..
             }) => {
-                return (
-                    canvas::event::Status::Captured,
-                    Some(Message::Compose(ComposeMessage::CollapseTrack)),
-                );
+                return Some(canvas::Action::publish(Message::Compose(ComposeMessage::CollapseTrack)).and_capture());
             }
 
             _ => {}
         }
 
-        (canvas::event::Status::Ignored, None)
+        None
     }
 }
 
@@ -416,7 +392,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
         viewport: &PianoRollViewport,
         pos: Point,
         gy: f32,
-    ) -> (canvas::event::Status, Option<Message>) {
+    ) -> Option<canvas::Action<Message>> {
         let grid_x = layout.grid_x();
         let click_note = viewport.y_local_to_note(gy);
 
@@ -448,7 +424,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
                             }
                         }
                     });
-                    return (canvas::event::Status::Captured, None);
+                    return Some(canvas::Action::capture());
                 }
             }
         }
@@ -464,20 +440,17 @@ impl<'a> ExpandedEditorCanvas<'a> {
         {
             let clip_end = self.midi_clip_end_sample(clip);
             if self.section_start >= clip.start_sample && self.section_start < clip_end {
-                return (
-                    canvas::event::Status::Captured,
-                    Some(Message::MidiEditor(MidiEditorMessage::AddNote {
+                return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::AddNote {
                         clip_id: clip.id,
                         note: click_note,
                         start_tick: snapped,
                         duration_ticks: SNAP_TICKS,
                         velocity: DEFAULT_VELOCITY,
-                    })),
-                );
+                    })).and_capture());
             }
         }
 
-        (canvas::event::Status::Captured, None)
+        Some(canvas::Action::capture())
     }
 
     fn handle_right_click(
@@ -485,7 +458,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
         layout: &PianoRollLayout,
         viewport: &PianoRollViewport,
         pos: Point,
-    ) -> (canvas::event::Status, Option<Message>) {
+    ) -> Option<canvas::Action<Message>> {
         for clip in self
             .midi_clips
             .iter()
@@ -497,17 +470,14 @@ impl<'a> ExpandedEditorCanvas<'a> {
             for (i, n) in clip.notes.iter().enumerate() {
                 let rect = self.note_rect(layout, viewport, n);
                 if hit_test_note(rect, pos).is_some() {
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(Message::MidiEditor(MidiEditorMessage::RemoveNote {
+                    return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::RemoveNote {
                             clip_id: clip.id,
                             note_index: i,
-                        })),
-                    );
+                        })).and_capture());
                 }
             }
         }
-        (canvas::event::Status::Ignored, None)
+        None
     }
 
     fn handle_drag(

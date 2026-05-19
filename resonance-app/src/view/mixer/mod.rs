@@ -54,7 +54,7 @@ impl crate::Resonance {
         )
         .width(Length::Fill);
         let master_strip = self.view_master_strip(available_plugins);
-        let v_separator_tracks = container(Space::new(1, Length::Fill)).style(theme::separator_bg);
+        let v_separator_tracks = container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
         let tracks_area = row![scrollable_tracks, v_separator_tracks, master_strip]
             .height(Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32));
 
@@ -69,11 +69,11 @@ impl crate::Resonance {
         )
         .width(Length::Fill);
         let add_bus_strip = self.view_add_bus_strip();
-        let v_separator_busses = container(Space::new(1, Length::Fill)).style(theme::separator_bg);
+        let v_separator_busses = container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
         let busses_area = row![scrollable_busses, v_separator_busses, add_bus_strip]
             .height(Length::Fixed(theme::BUS_STRIP_HEIGHT as f32));
 
-        let h_sep_mid = container(Space::new(Length::Fill, 1)).style(theme::separator_bg);
+        let h_sep_mid = container(Space::new().width(Length::Fill).height(1)).style(theme::separator_bg);
 
         let mut mixer_col = column![].spacing(0);
         mixer_col = mixer_col.push(tracks_area);
@@ -81,7 +81,7 @@ impl crate::Resonance {
         mixer_col = mixer_col.push(busses_area);
 
         if let Some(panel) = self.view_plugin_panel() {
-            let h_sep = container(Space::new(Length::Fill, 1)).style(theme::separator_bg);
+            let h_sep = container(Space::new().width(Length::Fill).height(1)).style(theme::separator_bg);
             mixer_col = mixer_col.push(h_sep);
             mixer_col = mixer_col.push(panel);
         }
@@ -90,7 +90,7 @@ impl crate::Resonance {
         // it from the strips column.
         let inspector_panel = inspector::view(self);
         let v_sep_inspector =
-            container(Space::new(1, Length::Fill)).style(theme::separator_bg);
+            container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
 
         let body = row![
             container(mixer_col).width(Length::Fill).height(Length::Fill),
@@ -125,7 +125,7 @@ impl crate::Resonance {
             container(add_btn)
                 .width(Length::Fill)
                 .center_x(Length::Fill),
-            Space::with_height(Length::Fill),
+            Space::new().height(Length::Fill),
         ]
         .spacing(4)
         .padding(8)
@@ -184,7 +184,7 @@ impl crate::Resonance {
             };
             let pill = row![
                 text("\u{25C6}").size(8).color(theme::ACCENT_SOFT),
-                Space::with_width(6),
+                Space::new().width(6),
                 text(pname).size(10).color(label_color),
             ]
             .align_y(alignment::Vertical::Center);

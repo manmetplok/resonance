@@ -20,7 +20,7 @@ fn preset_button(preset: &TrackPreset, is_user: bool) -> Element<'_, Message> {
 
     let mut btn_row = row![
         theme::icon(icon_char).size(12).color(icon_color),
-        Space::with_width(6),
+        Space::new().width(6),
         text(&preset.name).size(12).color(theme::TEXT),
     ]
     .align_y(alignment::Vertical::Center);
@@ -32,7 +32,7 @@ fn preset_button(preset: &TrackPreset, is_user: bool) -> Element<'_, Message> {
             .on_press(Message::Track(TrackMessage::DeleteUserPreset(name)))
             .style(|_theme, status| theme::small_button_style(status))
             .padding([0, 3]);
-        btn_row = btn_row.push(Space::with_width(Length::Fill)).push(del);
+        btn_row = btn_row.push(Space::new().width(Length::Fill)).push(del);
     }
 
     let preset_clone = preset.clone();
@@ -48,7 +48,7 @@ fn preset_button(preset: &TrackPreset, is_user: bool) -> Element<'_, Message> {
 
 pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
     let backdrop = mouse_area(
-        container(Space::new(Length::Fill, Length::Fill))
+        container(Space::new().width(Length::Fill).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_theme| container::Style {
@@ -63,7 +63,7 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
     let audio_btn = button(
         row![
             theme::icon(fa::MICROPHONE).size(14).color(theme::TEXT),
-            Space::with_width(8),
+            Space::new().width(8),
             text("Audio").size(13).color(theme::TEXT),
         ]
         .align_y(alignment::Vertical::Center),
@@ -78,7 +78,7 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
             theme::icon(fa::MUSIC)
                 .size(14)
                 .color(Color::from_rgb(0.3, 0.75, 0.8)),
-            Space::with_width(8),
+            Space::new().width(8),
             text("Instrument")
                 .size(13)
                 .color(Color::from_rgb(0.3, 0.75, 0.8)),
@@ -95,7 +95,7 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
     let vocal_btn = button(
         row![
             theme::icon(fa::MICROPHONE).size(14).color(theme::WARM),
-            Space::with_width(8),
+            Space::new().width(8),
             text("Vocal").size(13).color(theme::WARM),
         ]
         .align_y(alignment::Vertical::Center),
@@ -107,7 +107,7 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
 
     let mut menu = column![
         text("Add Track").size(11).color(theme::TEXT_DIM),
-        Space::with_height(4),
+        Space::new().height(4),
         audio_btn,
         inst_btn,
         vocal_btn,
@@ -117,9 +117,9 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
     // Default presets section.
     if !r.default_presets.is_empty() {
         menu = menu
-            .push(Space::with_height(4))
-            .push(container(Space::new(Length::Fill, 1)).style(theme::separator_bg))
-            .push(Space::with_height(4))
+            .push(Space::new().height(4))
+            .push(container(Space::new().width(Length::Fill).height(1)).style(theme::separator_bg))
+            .push(Space::new().height(4))
             .push(text("Presets").size(10).color(theme::TEXT_DIM));
         for preset in &r.default_presets {
             menu = menu.push(preset_button(preset, false));
@@ -129,9 +129,9 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
     // User presets section.
     if !r.user_presets.is_empty() {
         menu = menu
-            .push(Space::with_height(4))
-            .push(container(Space::new(Length::Fill, 1)).style(theme::separator_bg))
-            .push(Space::with_height(4))
+            .push(Space::new().height(4))
+            .push(container(Space::new().width(Length::Fill).height(1)).style(theme::separator_bg))
+            .push(Space::new().height(4))
             .push(text("User Presets").size(10).color(theme::TEXT_DIM));
         for preset in &r.user_presets {
             menu = menu.push(preset_button(preset, true));

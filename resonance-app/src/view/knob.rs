@@ -154,17 +154,17 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
     fn update(
         &self,
         state: &mut Self::State,
-        event: canvas::Event,
+        event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<Message>) {
+    ) -> Option<canvas::Action<Message>> {
         match event {
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let Some(pos) = cursor.position_in(bounds) else {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 };
                 if !hit_circle(pos, bounds) {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 }
                 // Double-click to reset to center.
                 let now = Instant::now();
@@ -175,22 +175,22 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
                 state.last_click = Some(now);
                 if is_double {
                     state.drag_anchor_y = None;
-                    return (canvas::event::Status::Captured, Some((self.on_change)(0.0)));
+                    return Some(canvas::Action::publish((self.on_change)(0.0)).and_capture());
                 }
                 state.drag_anchor_y = Some(pos.y);
                 state.drag_anchor_value = self.value;
-                (canvas::event::Status::Captured, None)
+                Some(canvas::Action::capture())
             }
-            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 state.drag_anchor_y = None;
-                (canvas::event::Status::Ignored, None)
+                None
             }
-            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let Some(anchor_y) = state.drag_anchor_y else {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 };
                 let Some(pos) = cursor.position_in(bounds) else {
-                    return (canvas::event::Status::Ignored, None);
+                    return None;
                 };
                 // Drag up = increase (pan right). Drag range is DRAG_RANGE_PX
                 // for the full -1..=1 span.
@@ -198,11 +198,11 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
                 let new = state.drag_anchor_value + dy * (2.0 / DRAG_RANGE_PX);
                 let new = new.clamp(-1.0, 1.0);
                 if (new - self.value).abs() < f32::EPSILON {
-                    return (canvas::event::Status::Captured, None);
+                    return Some(canvas::Action::capture());
                 }
-                (canvas::event::Status::Captured, Some((self.on_change)(new)))
+                Some(canvas::Action::publish((self.on_change)(new)).and_capture())
             }
-            _ => (canvas::event::Status::Ignored, None),
+            _ => None,
         }
     }
 }

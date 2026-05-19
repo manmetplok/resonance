@@ -98,9 +98,9 @@ pub(super) fn kit_picker_column<'a>(r: &'a Resonance) -> Element<'a, Message> {
         column![
             head,
             separator_below(),
-            Space::with_height(8),
+            Space::new().height(8),
             search,
-            Space::with_height(6),
+            Space::new().height(6),
             pad_list,
             container(hint).padding([8, 4]),
         ]
@@ -140,7 +140,7 @@ fn pad_row<'a>(
     if let Some(g) = owner_group {
         if !in_active {
             let owner_color = u8_color(g.color);
-            let dot = container(Space::new(Length::Fixed(5.0), Length::Fixed(5.0)))
+            let dot = container(Space::new().width(Length::Fixed(5.0)).height(Length::Fixed(5.0)))
                 .style(move |_theme| container::Style {
                     background: Some(iced::Background::Color(owner_color)),
                     border: iced::Border {

@@ -39,7 +39,7 @@ impl crate::Resonance {
             let error_bar = container(
                 row![
                     text(err).size(13).color(iced::Color::WHITE),
-                    Space::with_width(Length::Fill),
+                    Space::new().width(Length::Fill),
                     button(text("\u{00d7}").size(14).color(iced::Color::WHITE))
                         .on_press(Message::Ui(UiMessage::DismissError))
                         .style(|_theme, _status| iced::widget::button::Style {
