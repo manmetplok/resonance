@@ -366,7 +366,14 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             parent_track_id,
             output_port_index,
             name,
-        } => tracks::handle_create_sub_track(ctx, sub_id, parent_track_id, output_port_index, name),
+        } => tracks::handle_create_sub_track(
+            ctx,
+            state,
+            sub_id,
+            parent_track_id,
+            output_port_index,
+            name,
+        ),
         AudioCommand::RemoveTrack { track_id } => tracks::handle_remove_track(ctx, state, track_id),
         AudioCommand::SetTrackRecordArm { track_id, armed } => {
             tracks::handle_set_track_record_arm(ctx, track_id, armed)

@@ -5,9 +5,30 @@ use resonance_audio::types::*;
 use crate::state::*;
 use crate::Resonance;
 
+/// Handle the silent-drop case (`TrackAdded` for an id already present in
+/// the registry). Project load replays saved tracks app-side first, then
+/// hands them to the engine which echoes `TrackAdded` back — that path
+/// legitimately hits the guard. But if the engine's id allocator hands
+/// out a colliding id (historical bug: `handle_create_sub_track` not
+/// bumping `next_track_id`), we'd silently drop a user `+` click *and*
+/// leave `pending_track_preset` armed for the next add to inherit. Clear
+/// the slot here so a recovery click doesn't apply the wrong preset.
+fn drop_duplicate_track_added(r: &mut Resonance, track_id: TrackId) {
+    if r.pending_track_preset.is_some() {
+        eprintln!(
+            "engine_events::tracks: dropped TrackAdded for id {} — id already in registry; \
+             clearing pending preset to avoid leaking to next add",
+            track_id
+        );
+        r.pending_track_preset = None;
+        r.pending_preset_plugin_states = None;
+    }
+}
+
 pub(super) fn added(r: &mut Resonance, track_id: TrackId) {
     // Idempotent: skip if the track already exists (created by project load).
     if r.registry.tracks.iter().any(|t| t.id == track_id) {
+        drop_duplicate_track_added(r, track_id);
         return;
     }
     let order = r.registry.next_track_order;
@@ -21,6 +42,7 @@ pub(super) fn added(r: &mut Resonance, track_id: TrackId) {
 
 pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
     if r.registry.tracks.iter().any(|t| t.id == track_id) {
+        drop_duplicate_track_added(r, track_id);
         return;
     }
     let order = r.registry.next_track_order;
@@ -34,6 +56,7 @@ pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
 
 pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
     if r.registry.tracks.iter().any(|t| t.id == track_id) {
+        drop_duplicate_track_added(r, track_id);
         return;
     }
     let order = r.registry.next_track_order;

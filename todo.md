@@ -1,8 +1,27 @@
 #TODO
 
-    - [ ] ! Adding a track is a bit flaky — possibly clashing IDs? Investigate
+    - [x] ! Adding a track is a bit flaky — possibly clashing IDs? Investigate
       the track-ID allocator (and any places where a new track's ID is derived
       from `len()` or similar) to see if concurrent / rapid adds can collide.
+      **Root cause:** `handle_create_sub_track` inserted at a caller-picked
+      `sub_id` but never bumped the engine's `next_track_id`. After loading a
+      project whose sub-track ids fell above the highest non-sub-track id
+      (e.g. `forreal.rproj`: parent instr `1000000013` + sub-tracks
+      `1000000014–19`), the engine's counter stopped at `1000000014`. The
+      next user `+` allocated `1000000014`, the engine's `tracks.insert`
+      silently overwrote the existing sub-track, the app-side `TrackAdded`
+      handler hit the "already in registry" guard and returned, *and* it
+      left `pending_track_preset = Some(…)` so a later successful add would
+      inherit the dropped preset. Fix bumps `next_track_id` in
+      `handle_create_sub_track`, clears the pending preset on the silent-
+      drop guard, and widens replay's `next_sub_track_id` bump to include
+      every saved track id (not just sub-tracks).
+
+    - [ ] Arrange view: when scrolling vertically, tracks at the top of the
+      scrollable area are visible through / bleed into the header + transport
+      bar (z-order or clipping issue — the timeline scrollable likely paints
+      over its parent's bounds, or the header isn't rendered on top of /
+      doesn't have an opaque background above the scrollable's content rect).
 
     - [ ] Wrap the lane_inspector body in `iced::widget::lazy` fingerprinted on
       `(selected_lane, definition.id, version_counter)`. **Blocked**: iced 0.14

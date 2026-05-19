@@ -140,9 +140,13 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 
     // Bump the app-side sub-track id counter past any persisted ids so
     // new sub-tracks allocated after this load don't collide with
-    // restored ones.
+    // restored ones. Saved projects from buggier prior versions may have
+    // *non-sub-track* ids that fell into the sub-track range (engine's
+    // monotonic counter ran past 1_000_000_000 after a long session);
+    // include every id, not just `sub_track.is_some()`, so the next
+    // `allocate_sub_track_id` skip loop has fewer iterations to do.
     for pt in &project.tracks {
-        if pt.sub_track.is_some() && pt.id >= r.registry.next_sub_track_id {
+        if pt.id >= r.registry.next_sub_track_id {
             r.registry.next_sub_track_id = pt.id + 1;
         }
     }

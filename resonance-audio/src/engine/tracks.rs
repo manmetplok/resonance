@@ -76,13 +76,27 @@ pub(crate) fn handle_add_track(
 /// stores them as regular `Track`s with `sub_track_of` set; the mixer
 /// reads this field during mixdown to route output ports to the
 /// sub-track's own fader/pan/bus chain.
+///
+/// Bumping `next_track_id` past `sub_id` is critical: the caller picks
+/// `sub_id` from an app-side counter that doesn't know about the
+/// engine's `next_track_id`. If we don't bump, a later
+/// `AddTrack { id_hint: None }` can allocate an id that already exists
+/// — the `insert` call here silently overwrites the sub-track (or vice
+/// versa) and the GUI's `TrackAdded` handler discards the event as a
+/// duplicate, leaving the user with nothing happening on their `+`
+/// click. This is the same shape as the `id_hint` branch in
+/// `handle_add_track`.
 pub(crate) fn handle_create_sub_track(
     ctx: &HandlerCtx,
+    state: &mut HandlerState,
     sub_id: TrackId,
     parent_track_id: TrackId,
     output_port_index: u32,
     name: String,
 ) {
+    // Bump `next_track_id` past `sub_id` even on the no-op path so an
+    // idempotent replay still leaves the counter in the right place.
+    state.next_track_id = state.next_track_id.max(sub_id + 1);
     // Idempotent: skip if this sub-track already exists. Project load
     // replays saved sub-tracks, then PluginAdded re-fires the
     // auto-create path; the second hit should be a no-op.
