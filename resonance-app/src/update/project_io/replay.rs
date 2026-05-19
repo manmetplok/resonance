@@ -124,6 +124,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.midi_clips.clear();
     r.registry.next_track_order = 0;
     r.registry.next_bus_order = 0;
+    r.plugin_index.clear();
 
     // Bump the app-side sub-track id counter past any persisted ids so
     // new sub-tracks allocated after this load don't collide with
@@ -268,6 +269,12 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     );
 
     r.transport.loop_range_set = r.transport.loop_enabled;
+
+    // Re-populate the `with_plugin_mut` side-index from the wholesale
+    // replay we just performed. Per-slot inserts would also work but
+    // a single rebuild is simpler and keeps `replay_track` / `_bus` /
+    // `_master` focused on their own concern.
+    r.rebuild_plugin_index();
 }
 
 fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {

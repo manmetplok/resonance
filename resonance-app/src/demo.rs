@@ -291,6 +291,12 @@ pub(crate) fn seed_demo_content(app: &mut Resonance) {
     crate::update::compose::drum_groups::materialize_drum_clips(app);
 
     let _ = TrackOutput::Master; // silence unused-import warning when feature flags shift
+
+    // Demo seed bypasses the engine event handlers that maintain
+    // `plugin_index`; rebuild it once from the freshly-seeded state so
+    // `with_plugin_mut` can locate demo plugins without falling back to
+    // a linear scan.
+    app.rebuild_plugin_index();
 }
 
 /// Pre-bake a vocal MIDI clip for the demo content. Walks the section's

@@ -22,6 +22,7 @@ pub(super) fn track_added(
 ) {
     // Idempotent: if the plugin slot already exists (created by project load),
     // just update its params and has_gui. Otherwise push a new slot.
+    let mut inserted = false;
     if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
         if let Some(slot) = track
             .plugins
@@ -39,7 +40,11 @@ pub(super) fn track_added(
                 params,
                 has_gui,
             ));
+            inserted = true;
         }
+    }
+    if inserted {
+        r.insert_plugin_index(instance_id, PluginLocator::Track(track_id));
     }
 
     // If this plugin was added as part of a preset, load the saved
@@ -161,6 +166,7 @@ pub(super) fn track_removed(
         track.plugins.retain(|p| p.instance_id != instance_id);
     }
     r.plugin_state_cache.remove(&instance_id);
+    r.remove_plugin_index(instance_id);
 }
 
 pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
@@ -190,6 +196,7 @@ pub(super) fn bus_added(
     params: Vec<ParamInfo>,
     has_gui: bool,
 ) {
+    let mut inserted = false;
     if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
         if let Some(slot) = bus
             .plugins
@@ -207,7 +214,11 @@ pub(super) fn bus_added(
                 params,
                 has_gui,
             ));
+            inserted = true;
         }
+    }
+    if inserted {
+        r.insert_plugin_index(instance_id, PluginLocator::Bus(bus_id));
     }
     r.engine
         .send(AudioCommand::SavePluginState { instance_id });
@@ -225,6 +236,7 @@ pub(super) fn bus_removed(
         r.mixer.selected_plugin = None;
     }
     r.plugin_state_cache.remove(&instance_id);
+    r.remove_plugin_index(instance_id);
 }
 
 pub(super) fn master_added(
@@ -252,6 +264,7 @@ pub(super) fn master_added(
             params,
             has_gui,
         ));
+        r.insert_plugin_index(instance_id, PluginLocator::Master);
     }
     r.engine
         .send(AudioCommand::SavePluginState { instance_id });
@@ -263,6 +276,7 @@ pub(super) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
         r.mixer.selected_plugin = None;
     }
     r.plugin_state_cache.remove(&instance_id);
+    r.remove_plugin_index(instance_id);
 }
 
 pub(super) fn master_fx_bypass_changed(r: &mut Resonance, bypassed: bool) {

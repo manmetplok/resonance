@@ -440,6 +440,16 @@ pub enum PluginCustomState {
     Generic,
 }
 
+/// Where a `PluginSlotState` currently lives in the GUI's state tree.
+/// Used by `Resonance::plugin_index` to skip the linear scan over
+/// tracks → busses → master in `with_plugin_mut`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginLocator {
+    Track(TrackId),
+    Bus(BusId),
+    Master,
+}
+
 /// GUI-side clip state.
 #[derive(Debug, Clone)]
 pub struct ClipState {

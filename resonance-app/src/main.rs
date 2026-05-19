@@ -130,6 +130,18 @@ pub(crate) struct Resonance {
     pub(crate) plugin_state_cache:
         std::collections::HashMap<resonance_audio::types::PluginInstanceId, Vec<u8>>,
 
+    /// Side-index mapping every live plugin instance to the slot that
+    /// owns it (a track, a bus, or master). Kept in sync with
+    /// `registry.tracks[*].plugins`, `registry.busses[*].plugins`, and
+    /// `master_plugins` by `insert_plugin_index` / `remove_plugin_index`
+    /// at each add/remove site, and wholesale via `rebuild_plugin_index`
+    /// after seed / replay. Replaces the O(tracks × plugins) scan that
+    /// `with_plugin_mut` did pre-index.
+    pub(crate) plugin_index: std::collections::HashMap<
+        resonance_audio::types::PluginInstanceId,
+        crate::state::PluginLocator,
+    >,
+
     // ---- Track presets ----
     /// Built-in default track presets (baked into the binary).
     pub(crate) default_presets: Vec<presets::TrackPreset>,
@@ -301,8 +313,48 @@ impl Resonance {
     }
 
     /// Locate a plugin slot on any track, bus, or master by instance id
-    /// and run `f` on it. Iterates tracks first, then busses, then master.
+    /// and run `f` on it. Uses the `plugin_index` side-table to jump
+    /// directly to the owning container; falls back to a full scan on
+    /// index miss so a desynced index degrades to the old O(n) path
+    /// instead of returning `None` (the debug_assert flags the bug).
     pub(crate) fn with_plugin_mut<R>(
+        &mut self,
+        instance_id: PluginInstanceId,
+        f: impl FnOnce(&mut PluginSlotState) -> R,
+    ) -> Option<R> {
+        let result = match self.plugin_index.get(&instance_id).copied() {
+            Some(crate::state::PluginLocator::Track(track_id)) => self
+                .registry
+                .tracks
+                .iter_mut()
+                .find(|t| t.id == track_id)
+                .and_then(|t| t.plugins.iter_mut().find(|p| p.instance_id == instance_id))
+                .map(f),
+            Some(crate::state::PluginLocator::Bus(bus_id)) => self
+                .registry
+                .busses
+                .iter_mut()
+                .find(|b| b.id == bus_id)
+                .and_then(|b| b.plugins.iter_mut().find(|p| p.instance_id == instance_id))
+                .map(f),
+            Some(crate::state::PluginLocator::Master) => self
+                .master_plugins
+                .iter_mut()
+                .find(|p| p.instance_id == instance_id)
+                .map(f),
+            None => self.with_plugin_mut_linear(instance_id, f),
+        };
+        debug_assert!(
+            result.is_some(),
+            "with_plugin_mut: no plugin with id {instance_id:?}"
+        );
+        result
+    }
+
+    /// Linear-scan fallback used when the side-index has no entry for
+    /// `instance_id`. Kept as a safety net so a missing index entry only
+    /// costs a scan, not a silent miss.
+    fn with_plugin_mut_linear<R>(
         &mut self,
         instance_id: PluginInstanceId,
         f: impl FnOnce(&mut PluginSlotState) -> R,
@@ -325,16 +377,52 @@ impl Resonance {
                 return Some(f(p));
             }
         }
-        let result = self
-            .master_plugins
+        self.master_plugins
             .iter_mut()
             .find(|p| p.instance_id == instance_id)
-            .map(f);
-        debug_assert!(
-            result.is_some(),
-            "with_plugin_mut: no plugin with id {instance_id:?}"
-        );
-        result
+            .map(f)
+    }
+
+    /// Record `instance_id`'s owning container in the side-index. Call
+    /// after pushing a `PluginSlotState` into a track / bus / master
+    /// chain.
+    pub(crate) fn insert_plugin_index(
+        &mut self,
+        instance_id: PluginInstanceId,
+        locator: crate::state::PluginLocator,
+    ) {
+        self.plugin_index.insert(instance_id, locator);
+    }
+
+    /// Drop `instance_id`'s side-index entry. Call after removing a
+    /// slot, or for every instance under a track/bus that is being
+    /// removed wholesale.
+    pub(crate) fn remove_plugin_index(&mut self, instance_id: PluginInstanceId) {
+        self.plugin_index.remove(&instance_id);
+    }
+
+    /// Recompute the entire `plugin_index` from `registry.tracks`,
+    /// `registry.busses`, and `master_plugins`. Used after a full
+    /// project replay or demo seed where the state is repopulated
+    /// wholesale.
+    pub(crate) fn rebuild_plugin_index(&mut self) {
+        self.plugin_index.clear();
+        for track in &self.registry.tracks {
+            for p in &track.plugins {
+                self.plugin_index
+                    .insert(p.instance_id, crate::state::PluginLocator::Track(track.id));
+            }
+        }
+        for bus in &self.registry.busses {
+            for p in &bus.plugins {
+                self.plugin_index
+                    .insert(p.instance_id, crate::state::PluginLocator::Bus(bus.id));
+            }
+        }
+        for p in &self.master_plugins {
+            self.plugin_index
+                .insert(p.instance_id, crate::state::PluginLocator::Master);
+        }
     }
 
     /// Find the index in `self.registry.tracks` of the visible track at the
@@ -423,6 +511,7 @@ impl Resonance {
             },
             undo: UndoHistory::new(),
             plugin_state_cache: std::collections::HashMap::new(),
+            plugin_index: std::collections::HashMap::new(),
             confirm_delete_track: None,
             bounce_dialog: None,
             bounce_in_progress: None,

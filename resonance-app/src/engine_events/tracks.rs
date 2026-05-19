@@ -64,6 +64,23 @@ pub(super) fn removed(r: &mut Resonance, track_id: TrackId) {
             r.mixer.selected_plugin = None;
         }
     }
+    // Drop side-index entries for every plugin on the removed track
+    // and on any sub-track that's about to be removed too. Collect ids
+    // first to avoid a borrow-collision between `registry.tracks` and
+    // `plugin_index` (both fields of `r`).
+    let removed_plugin_ids: Vec<resonance_audio::types::PluginInstanceId> = r
+        .registry
+        .tracks
+        .iter()
+        .filter(|t| {
+            t.id == track_id
+                || t.sub_track.map(|l| l.parent_track_id == track_id).unwrap_or(false)
+        })
+        .flat_map(|t| t.plugins.iter().map(|p| p.instance_id))
+        .collect();
+    for id in removed_plugin_ids {
+        r.plugin_index.remove(&id);
+    }
     r.registry.tracks.retain(|t| t.id != track_id);
     r.clips.retain(|c| c.track_id != track_id);
     // Also drop any sub-tracks whose parent just went away.
@@ -198,6 +215,16 @@ pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
         {
             r.mixer.selected_plugin = None;
         }
+    }
+    let removed_plugin_ids: Vec<resonance_audio::types::PluginInstanceId> = r
+        .registry
+        .busses
+        .iter()
+        .find(|b| b.id == bus_id)
+        .map(|b| b.plugins.iter().map(|p| p.instance_id).collect())
+        .unwrap_or_default();
+    for id in removed_plugin_ids {
+        r.plugin_index.remove(&id);
     }
     r.registry.busses.retain(|b| b.id != bus_id);
     // Any track that was routed to the removed bus falls back to Master
