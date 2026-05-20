@@ -16,6 +16,7 @@ pub fn handle(r: &mut Resonance, m: ViewportMessage) -> Task<Message> {
         ViewportMessage::ScrollToX(x) => scroll_to_x(r, x),
         ViewportMessage::ScrollToY(y) => scroll_to_y(r, y),
         ViewportMessage::ViewportWidth(w) => viewport_width(r, w),
+        ViewportMessage::ViewportHeight(h) => viewport_height(r, h),
         ViewportMessage::TimelineContentSize(w, h) => timeline_content_size(r, w, h),
     }
     Task::none()
@@ -167,6 +168,10 @@ pub fn scroll_to_y(r: &mut Resonance, y: f32) {
 
 pub fn viewport_width(r: &mut Resonance, w: f32) {
     r.viewport.viewport_width = w;
+}
+
+pub fn viewport_height(r: &mut Resonance, h: f32) {
+    r.viewport.viewport_height = h;
 }
 
 pub fn timeline_content_size(r: &mut Resonance, w: f32, h: f32) {

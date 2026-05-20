@@ -259,6 +259,12 @@ pub enum ViewportMessage {
     ScrollToX(f32),
     ScrollToY(f32),
     ViewportWidth(f32),
+    /// Total available height the timeline canvas + track-header column
+    /// see for content. Reported by `TimelineCanvas::report_viewport`
+    /// whenever `bounds.height` moves more than 1 px. The track-header
+    /// column uses this to drop tracks below the viewport during manual
+    /// virtualization (see `view/track_header.rs`).
+    ViewportHeight(f32),
     TimelineContentSize(f32, f32),
 }
 

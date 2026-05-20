@@ -578,6 +578,12 @@ pub struct ArrangeViewport {
     pub scroll_offset: f32,
     pub scroll_offset_y: f32,
     pub viewport_width: f32,
+    /// On-screen height (in pixels) of the timeline canvas viewport.
+    /// Reported by `TimelineCanvas::report_viewport`; used by the
+    /// track-header column to bottom-side virtualize the manual lane
+    /// list (rows below `scroll_offset_y + viewport_height` are skipped
+    /// during `view_track_headers`).
+    pub viewport_height: f32,
     pub timeline_content_width: f32,
     pub timeline_content_height: f32,
     /// Whether the global tracks area (tempo, time signature) is expanded.
@@ -591,6 +597,7 @@ impl Default for ArrangeViewport {
             scroll_offset: 0.0,
             scroll_offset_y: 0.0,
             viewport_width: 1000.0,
+            viewport_height: 0.0,
             timeline_content_width: 1000.0,
             timeline_content_height: 0.0,
             global_tracks_expanded: false,

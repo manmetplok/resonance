@@ -14,6 +14,14 @@
 //!    multi-row skipping plus fractional translation both have to
 //!    cooperate.
 //!
+//! Manual virtualization regressions also live here. With 100 tracks
+//! seeded into the registry, `track_header_virtualization_*` use
+//! `iced_test::Simulator::find` to verify that tracks outside the
+//! visible viewport are dropped from the widget tree entirely (not
+//! just clipped offscreen). The matching snapshot
+//! `track_header_virtualizes_100_tracks_scroll_0` locks in the visual
+//! result.
+//!
 //! Window size is the app's 1440×900 minimum (per `ux-guidelines.md`).
 //! On first run `matches_image()` writes the goldens under
 //! `tests/snapshots/`; subsequent runs diff against the committed PNGs.
@@ -64,6 +72,14 @@ fn build_app_scrolled(scroll_y: f32) -> Resonance {
     // clamp can pin the offset to zero on the first scroll.
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
         WINDOW.0 - theme::TRACK_HEADER_WIDTH,
+    )));
+    // The track-header column's bottom-side virtualization
+    // (`view::track_header::build_track_headers`) relies on the canvas
+    // having reported its rendered height. Without this, the test would
+    // exercise the `viewport_height == 0` fallback path that disables
+    // virtualization entirely.
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportHeight(
+        WINDOW.1,
     )));
     let _ = app.update(Message::Viewport(ViewportMessage::TimelineContentSize(
         2000.0,
@@ -127,6 +143,9 @@ fn timeline_lane_clip_globals_expanded_scrolled() {
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
         WINDOW.0 - theme::TRACK_HEADER_WIDTH,
     )));
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportHeight(
+        WINDOW.1,
+    )));
     let _ = app.update(Message::Viewport(ViewportMessage::TimelineContentSize(
         2000.0,
         WINDOW.1 * 4.0,
@@ -160,6 +179,9 @@ fn track_header_no_bleed_into_chrome_expanded() {
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
         WINDOW.0 - theme::TRACK_HEADER_WIDTH,
     )));
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportHeight(
+        WINDOW.1,
+    )));
     let _ = app.update(Message::Viewport(ViewportMessage::TimelineContentSize(
         2000.0,
         WINDOW.1 * 4.0,
@@ -173,5 +195,128 @@ fn track_header_no_bleed_into_chrome_expanded() {
     snapshot_to(
         &app,
         "tests/snapshots/track_header_no_bleed_into_chrome_expanded.png",
+    );
+}
+
+/// Build a 100-track Arrange view scrolled to the top with no global
+/// shelf expansion. With the manual virtualization in place, only the
+/// rows that intersect the 900 px viewport's lane area should appear
+/// in the widget tree — far fewer than 100. The golden locks in that
+/// the column visually shows the expected window of tracks (rows 1..9
+/// or so at the default chrome height) and nothing else.
+#[test]
+fn track_header_virtualizes_100_tracks_scroll_0() {
+    let _ = STARTUP_TAB.set(ViewMode::Arrange);
+    let (mut app, _task) = Resonance::new();
+    demo::seed_many_synth_tracks(&mut app, 100);
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
+        WINDOW.0 - theme::TRACK_HEADER_WIDTH,
+    )));
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportHeight(
+        WINDOW.1,
+    )));
+    let _ = app.update(Message::Viewport(ViewportMessage::TimelineContentSize(
+        2000.0,
+        100.0 * theme::TRACK_HEIGHT + 200.0,
+    )));
+
+    snapshot_to(
+        &app,
+        "tests/snapshots/track_header_virtualizes_100_tracks_scroll_0.png",
+    );
+}
+
+/// Structural proof that tracks below the viewport are dropped from
+/// the widget tree entirely (not just visually clipped). With a 900 px
+/// window the lane area fits roughly 9 tracks at `TRACK_HEIGHT = 96`,
+/// plus one overscan row, so `VirtTrack 1` must be findable but
+/// `VirtTrack 50` and `VirtTrack 100` must not. This is the
+/// performance regression test that locks in the optimization — a
+/// future refactor that re-adds every track to the column would still
+/// pass the snapshot (off-screen rows would just be clipped) but fail
+/// this test because the off-screen text widgets would re-appear in
+/// the widget tree.
+#[test]
+fn track_header_virtualization_drops_offscreen_tracks() {
+    let _ = STARTUP_TAB.set(ViewMode::Arrange);
+    let (mut app, _task) = Resonance::new();
+    demo::seed_many_synth_tracks(&mut app, 100);
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
+        WINDOW.0 - theme::TRACK_HEADER_WIDTH,
+    )));
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportHeight(
+        WINDOW.1,
+    )));
+    let _ = app.update(Message::Viewport(ViewportMessage::TimelineContentSize(
+        2000.0,
+        100.0 * theme::TRACK_HEIGHT + 200.0,
+    )));
+
+    let mut ui =
+        Simulator::with_size(sim_settings(), Size::new(WINDOW.0, WINDOW.1), app.view());
+
+    // First on-screen row must be in the widget tree.
+    ui.find("VirtTrack 1").expect(
+        "first track must be in the widget tree when scrolled to the top",
+    );
+
+    // The lane area is roughly `WINDOW.1 - chrome_h` ≈ 868 px tall,
+    // fitting `ceil(868 / 96) + 1 = 11` tracks. Anything beyond
+    // ~track 11 must have been dropped from the column entirely.
+    let offscreen_only_names = ["VirtTrack 30", "VirtTrack 60", "VirtTrack 100"];
+    for name in offscreen_only_names {
+        assert!(
+            ui.find(name).is_err(),
+            "expected off-screen `{name}` to be virtualised out of the \
+             widget tree (manual track-list virtualization in \
+             view::track_header::build_track_headers)"
+        );
+    }
+}
+
+/// Scroll the same 100-track session deep into the list and check
+/// that the window of tracks rendered moves with the scroll position —
+/// tracks well above the new scroll point should drop from the tree,
+/// tracks around `scroll / TRACK_HEIGHT` should appear, and tracks
+/// past the bottom edge should still be virtualised out.
+#[test]
+fn track_header_virtualization_window_follows_scroll() {
+    let _ = STARTUP_TAB.set(ViewMode::Arrange);
+    let (mut app, _task) = Resonance::new();
+    demo::seed_many_synth_tracks(&mut app, 100);
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
+        WINDOW.0 - theme::TRACK_HEADER_WIDTH,
+    )));
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportHeight(
+        WINDOW.1,
+    )));
+    let _ = app.update(Message::Viewport(ViewportMessage::TimelineContentSize(
+        2000.0,
+        100.0 * theme::TRACK_HEIGHT + 200.0,
+    )));
+    // Scroll past the first 30 rows so the column should now be
+    // showing roughly tracks 30..42.
+    let _ = app.update(Message::Viewport(ViewportMessage::ScrollToY(
+        30.0 * theme::TRACK_HEIGHT,
+    )));
+
+    let mut ui =
+        Simulator::with_size(sim_settings(), Size::new(WINDOW.0, WINDOW.1), app.view());
+
+    ui.find("VirtTrack 31").expect(
+        "track at the top of a scrolled-down viewport must be in the tree",
+    );
+
+    // Above the scroll point: dropped by top-skip.
+    assert!(
+        ui.find("VirtTrack 1").is_err(),
+        "top track must be virtualised out when scrolled past 30 rows"
+    );
+
+    // Far below the scrolled-into viewport: dropped by the new
+    // bottom-skip we just added.
+    assert!(
+        ui.find("VirtTrack 90").is_err(),
+        "track 90 must be virtualised out when scrolled to row 30"
     );
 }

@@ -450,10 +450,28 @@ inline fix pass tackled. Each is documented enough to pick up later.
 
 ### resonance-app — view-layer perf / architecture
 
-- [ ] `view/track_header.rs:174-187` — manual track-list virtualization has
+- [x] `view/track_header.rs:174-187` — manual track-list virtualization has
   the top-skip pad but no bottom-side break; tracks below the viewport still
   allocate widget trees inside `view_track_header`. With 50+ tracks the cost
   shows; with 200+ it dominates.
+  **What changed:** added `ArrangeViewport::viewport_height` (state.rs) and a
+  new `ViewportMessage::ViewportHeight(f32)` reported by
+  `TimelineCanvas::report_viewport` whenever `bounds.height` shifts more than
+  1 px. `view::track_header::build_track_headers` now computes
+  `viewport_lane_h = viewport_height - chrome_h` and breaks the lane-column
+  push loop at `first_visible + ceil(viewport_lane_h / TRACK_HEIGHT) + 1`,
+  so a 100-track session only allocates ~10–11 `view_track_header` subtrees.
+  Fingerprint includes `viewport_height` so the lazy cache invalidates on
+  resize. The two-layer `stack![lane_subtree, chrome]` invariant from
+  `fa0f0ef` is preserved — virtualizing the lane column doesn't change the
+  chrome's draw order, so the opaque-chrome bleed-mask still works.
+  Existing goldens (`track_header_alignment_*`, `*_no_bleed_into_chrome_*`,
+  `timeline_lane_clip_globals_*`) re-ran byte-identical; three new tests
+  (`track_header_virtualizes_100_tracks_scroll_0` snapshot,
+  `track_header_virtualization_drops_offscreen_tracks` structural,
+  `track_header_virtualization_window_follows_scroll` structural) lock the
+  optimization in by `find()`-ing for off-screen track names and asserting
+  they're absent from the widget tree.
 - [x] `view/track_header.rs:442`, `view/compose/lane_inspector/chord/body.rs:
   44,55,85`, `lane_inspector/instrument/{pad,melody,bass}.rs:21-22` — static
   `Vec<u8>` option lists (`(1..=16).collect()`, `(36..=84).collect()`, etc.)
@@ -663,9 +681,15 @@ inline fix pass tackled. Each is documented enough to pick up later.
 ### resonance-app
 - [ ] `main.rs:300,313,350` — `debug_assert!(result.is_some(), …)` after
   `with_track_mut`. If truly an invariant, use `.expect()` so release fails too.
-- [ ] `view/track_header.rs:174-187` — bottom-side break missing in the
+- [x] `view/track_header.rs:174-187` — bottom-side break missing in the
   manually-virtualised track list; non-visible tracks still allocate widget
   trees.
+  **What changed:** folded into the High-severity entry above — added a
+  `viewport_height` field + `ViewportHeight` message reported by the canvas,
+  and a `last_visible` cap to the lane-column push loop in
+  `view::track_header::build_track_headers` so off-screen rows never
+  materialise. Verified by three new tests in
+  `tests/track_header_alignment.rs`.
 
 ### resonance-music-theory
 - [ ] `fretboard.rs:81` — search caps at `start..=7u8`; voicings above fret 11
