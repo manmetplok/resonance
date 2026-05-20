@@ -294,18 +294,19 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             r.with_track_mut(track_id, |t| t.output = output);
         }
         TrackMessage::AddTrackFromPreset(preset) => {
-            r.pending_track_preset = Some(*preset.clone());
-            if preset.track_type == "instrument" {
-                r.engine.send(AudioCommand::AddInstrumentTrack {
+            let cmd = if preset.track_type == "instrument" {
+                AudioCommand::AddInstrumentTrack {
                     id_hint: None,
                     name: Some(preset.name.clone()),
-                });
+                }
             } else {
-                r.engine.send(AudioCommand::AddTrack {
+                AudioCommand::AddTrack {
                     id_hint: None,
                     name: Some(preset.name.clone()),
-                });
-            }
+                }
+            };
+            r.engine.send(cmd);
+            r.pending_track_preset = Some(*preset);
             r.mixer.add_track_menu_open = false;
         }
         TrackMessage::DeleteUserPreset(name) => {

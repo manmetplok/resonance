@@ -129,10 +129,14 @@ pub(super) fn apply_master_volume_and_peaks(data: &mut [f32], channels: usize, s
     // correct here because peak values are always >= 0 (.abs() is
     // applied before this point). Negative or NaN values would break
     // the ordering invariant.
+    //
+    // `AcqRel` synchronises with the engine-thread `swap` reader in
+    // `handle_poll_peaks` so the reader observes the max published by
+    // this audio-callback rather than racing the in-progress block.
     shared
         .master_peak_l_bits
-        .fetch_max(master_peak_l.to_bits(), Ordering::Relaxed);
+        .fetch_max(master_peak_l.to_bits(), Ordering::AcqRel);
     shared
         .master_peak_r_bits
-        .fetch_max(master_peak_r.to_bits(), Ordering::Relaxed);
+        .fetch_max(master_peak_r.to_bits(), Ordering::AcqRel);
 }

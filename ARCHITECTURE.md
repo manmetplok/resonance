@@ -128,6 +128,10 @@ in `resonance-app/src/`:
 - `undo.rs` — exercises private fields (`UndoHistory::capacity`, `undo`, `redo`) for coalescing/capacity invariants.
 - `compose/invariants.rs`, `compose/tests.rs` — section/chord state round-trips that read crate-internal types.
 - `update/project_io/replay.rs` — exercises the private `migrate_auto_name` helper.
+- `update/project_io/replay_diff.rs` — exercises private `structurally_compatible`,
+  `id_set_eq`, and `midi_notes_equal` helpers used by the project-diff
+  fast-path. Promoting these to `pub` would leak diff implementation
+  details into the crate's public API.
 
 These are the documented exception, not the rule. Do not add new inline tests
 elsewhere in the workspace. If you need to test a private helper outside

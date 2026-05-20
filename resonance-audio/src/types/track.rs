@@ -219,24 +219,28 @@ impl Track {
     /// Uses `fetch_max` on bit-punned `AtomicU32`. This works because `v`
     /// is always non-negative (`.abs()` applied at call sites), and IEEE 754
     /// binary32 bit ordering matches u32 ordering for non-negative values.
+    ///
+    /// `AcqRel` synchronises with the engine-thread `swap` reader so the
+    /// reader observes a coherent peak value rather than racing against
+    /// concurrent block updates from the audio callback.
     pub fn update_peak_l(&self, v: f32) {
-        self.peak_l_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
+        self.peak_l_bits.fetch_max(v.to_bits(), Ordering::AcqRel);
     }
 
     /// Atomically update peak R to the max of the current and new value.
     /// See [`update_peak_l`](Self::update_peak_l) for the non-negative invariant.
     pub fn update_peak_r(&self, v: f32) {
-        self.peak_r_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
+        self.peak_r_bits.fetch_max(v.to_bits(), Ordering::AcqRel);
     }
 
     /// Read and clear peak L, returning the peak since last call.
     pub fn swap_peak_l(&self) -> f32 {
-        f32::from_bits(self.peak_l_bits.swap(0, Ordering::Relaxed))
+        f32::from_bits(self.peak_l_bits.swap(0, Ordering::AcqRel))
     }
 
     /// Read and clear peak R, returning the peak since last call.
     pub fn swap_peak_r(&self) -> f32 {
-        f32::from_bits(self.peak_r_bits.swap(0, Ordering::Relaxed))
+        f32::from_bits(self.peak_r_bits.swap(0, Ordering::AcqRel))
     }
 }
 
@@ -307,22 +311,23 @@ impl Bus {
         self.fx_bypassed.store(v, Ordering::Relaxed);
     }
 
-    /// See [`Track::update_peak_l`] for the non-negative invariant.
+    /// See [`Track::update_peak_l`] for the non-negative invariant and the
+    /// `AcqRel` ordering rationale.
     pub fn update_peak_l(&self, v: f32) {
-        self.peak_l_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
+        self.peak_l_bits.fetch_max(v.to_bits(), Ordering::AcqRel);
     }
 
     /// See [`Track::update_peak_l`] for the non-negative invariant.
     pub fn update_peak_r(&self, v: f32) {
-        self.peak_r_bits.fetch_max(v.to_bits(), Ordering::Relaxed);
+        self.peak_r_bits.fetch_max(v.to_bits(), Ordering::AcqRel);
     }
 
     pub fn swap_peak_l(&self) -> f32 {
-        f32::from_bits(self.peak_l_bits.swap(0, Ordering::Relaxed))
+        f32::from_bits(self.peak_l_bits.swap(0, Ordering::AcqRel))
     }
 
     pub fn swap_peak_r(&self) -> f32 {
-        f32::from_bits(self.peak_r_bits.swap(0, Ordering::Relaxed))
+        f32::from_bits(self.peak_r_bits.swap(0, Ordering::AcqRel))
     }
 }
 

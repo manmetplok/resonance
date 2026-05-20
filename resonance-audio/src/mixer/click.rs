@@ -16,6 +16,12 @@ const CLICK_FREQ_UPBEAT: f32 = 1000.0;
 const CLICK_AMPLITUDE: f32 = 0.3;
 const CLICK_DECAY_RATE: f32 = 200.0;
 
+/// Floor BPM used when the tempo map or project hand the click renderer
+/// a zero / non-finite tempo. Without this, `samples_per_beat` returns
+/// `Infinity`, the beat index collapses to 0, and downstream `f64 → u64`
+/// casts produce undefined indices.
+const CLICK_MIN_BPM: f64 = 1.0;
+
 use crate::limits::MAX_METRONOME_BEATS_PER_BUFFER;
 use crate::types::TempoMap;
 
@@ -47,7 +53,12 @@ pub(super) fn render_count_in_clicks(
     elapsed_at_start: u64,
     click_frames: usize,
 ) {
-    let spb = tempo_map.samples_per_beat(sample_rate);
+    let raw_spb = tempo_map.samples_per_beat(sample_rate);
+    let spb = if raw_spb.is_finite() && raw_spb > 0.0 {
+        raw_spb
+    } else {
+        sample_rate as f64 * 60.0 / CLICK_MIN_BPM
+    };
     let numerator = tempo_map.numerator as u64;
     let click_duration_samples = (sample_rate as f32 * CLICK_DURATION_SECS) as u64;
     for frame_offset in 0..click_frames {
@@ -147,8 +158,14 @@ pub(super) fn render_metronome_clicks(
             }
         }
     } else {
-        // No bar table — flat BPM beat positions.
-        let spb = sample_rate as f64 * 60.0 / flat_bpm;
+        // No bar table — flat BPM beat positions. Clamp the divisor so a
+        // zero / non-finite project BPM doesn't blow up into Inf/NaN spb.
+        let safe_bpm = if flat_bpm.is_finite() && flat_bpm >= CLICK_MIN_BPM {
+            flat_bpm
+        } else {
+            CLICK_MIN_BPM
+        };
+        let spb = sample_rate as f64 * 60.0 / safe_bpm;
         let numerator = flat_numerator as u64;
         for &(r_start, r_end) in ranges.iter().take(n_ranges) {
             let search_start = r_start.saturating_sub(click_duration_samples);
