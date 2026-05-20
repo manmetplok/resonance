@@ -509,10 +509,22 @@ inline fix pass tackled. Each is documented enough to pick up later.
   accessors untouched, `tests/global_tracks_edit_cycle.rs` and every
   other workspace test still pass; `cargo clippy --workspace
   --all-targets` stays at 0 warnings.
-- [ ] `view/compose/expanded_editor.rs:717`, `chord_lane.rs:611`,
+- [x] `view/compose/expanded_editor.rs:717`, `chord_lane.rs:611`,
   `vocal_lane.rs:561`, `drumroll/canvas.rs:501`, `tracks/draw.rs:472`,
   `vocal_roll/notes.rs:442` — view files past the ~500-line ceiling. Split
   per the `timeline.rs` / `timeline_draw.rs` / `timeline_input.rs` model.
+  What changed: split `expanded_editor.rs` → `expanded_editor/{mod,draw,input}.rs`,
+  `chord_lane.rs` → `chord_lane/{mod,draw,input}.rs`, and
+  `vocal_lane.rs` → `vocal_lane/{mod,draw}.rs` (no `input.rs` — vocal_lane's
+  event handling is small and stayed inline in the `Program::update` impl).
+  Pure verbatim move; only edits were adding `pub(super)` visibility on items
+  shared across siblings, dropping imports that moved out, and adding the
+  module-level `mod draw; mod input;` declarations. `drumroll/canvas.rs` (499),
+  `tracks/draw.rs` (472), and `vocal_roll/notes.rs` (442) were left alone as
+  borderline — all sit just under the 500-line ceiling. Verified
+  `cargo build -p resonance-app` clean, `cargo clippy --workspace --all-targets`
+  warning count unchanged at 35 (no new lints), and `cargo test -p resonance-app`
+  green including the 3 wgpu snapshot goldens.
 - [ ] `update/project_io/replay_diff.rs:743` — inline tests outside the
   ARCHITECTURE.md exception list. Either add this file to the exception
   list or move tests to `tests/<feature>.rs`.
