@@ -15,6 +15,41 @@ pub const ACCENT_GLOW: egui::Color32 =
     egui::Color32::from_rgba_premultiplied(0x5a, 0xc8, 0xfa, 0x40);
 pub const DANGER: egui::Color32 = egui::Color32::from_rgb(0xff, 0x6a, 0x6a);
 
+// --- Typography / spacing tokens -------------------------------------------
+//
+// The editor uses three text sizes consistently. Pulling them into named
+// constants keeps section headers (`SECTION_LABEL_SIZE`) in lock-step
+// across `kit_browser`, `pad_inspector`, and any future per-section UI.
+
+/// Big title text — the "RESONANCE DRUMS" header banner.
+pub const TITLE_SIZE: f32 = 14.0;
+/// All-caps section sub-labels — "PADS", "CLOSE MICS", "ARTICULATION".
+pub const SECTION_LABEL_SIZE: f32 = 10.0;
+/// Body / dropdown / hint text. Matches the standard egui body size in
+/// the rest of the editor (was a mix of 11/12 before; consolidated to 11).
+pub const BODY_SIZE: f32 = 11.0;
+/// Vertical breathing room between sections in the pad inspector.
+pub const SECTION_GAP: f32 = 10.0;
+
+/// Build an all-caps section sub-label used to head a control group
+/// (e.g. "CLOSE MICS", "OVERHEAD BLEND", "ARTICULATION"). Centralised so
+/// every group reads with the same weight + color + size — the previous
+/// code repeated the same `RichText::new(...).size(10.0).strong().color(TEXT_DIM)`
+/// three times inside `pad_inspector::draw`.
+pub fn section_label(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .size(SECTION_LABEL_SIZE)
+        .strong()
+        .color(TEXT_DIM)
+}
+
+/// Build a body-text hint with the standard dim color.
+pub fn hint_text(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text.into())
+        .size(BODY_SIZE)
+        .color(TEXT_DIM)
+}
+
 pub fn apply(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
     visuals.window_fill = PANEL;

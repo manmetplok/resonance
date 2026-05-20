@@ -71,14 +71,19 @@ impl EditorApp for DrumsEditorApp {
         header::draw(ui, &self.params);
 
         kit_browser::draw_loader_row(ui, &self.bridge, &mut self.download_panel);
-        kit_browser::draw_installed_picker(ui, &self.bridge, &self.installed_kits);
 
         // Snapshot the catalog once per frame so we don't re-lock on every
         // dropdown. The `.clone()` is cheap compared to the UI work.
         let catalog = self.bridge.catalog.lock().clone();
 
-        kit_browser::draw_overhead_picker(ui, &self.bridge, &catalog);
+        kit_browser::draw_installed_and_overhead_pickers(
+            ui,
+            &self.bridge,
+            &self.installed_kits,
+            &catalog,
+        );
 
+        ui.add_space(2.0);
         ui.separator();
 
         // Two-column layout: pad list on the left, selected-pad detail on the right.

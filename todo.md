@@ -1,6 +1,6 @@
 #TODO
 
-    - [ ] Drum CLAP plugin: implement the new design from the design bundle
+    - [x] Drum CLAP plugin: implement the new design from the design bundle
       (https://api.anthropic.com/v1/design/h/FYbDo_boPFREv9MfhjU0eg?open_file=Resonance+Drums.html).
       Fetch the bundle, read its README for context + intent, and land the
       relevant aspects of the design in `plugins/resonance-drums/src/editor/**`
@@ -22,6 +22,32 @@
       get mapped to the parent track's sub-tracks) are the likely
       suspects. Add a regression test that loads a non-built-in kit and
       asserts a sub-track produces non-silent output for a triggered pad.
+
+      _Resolved 2026-05-20_. Root cause was **not** the sub-track refactor
+      but a regression in `resonance-common/src/wav.rs`: the symphonia
+      decode loop called `decoded.copy_to_vec_interleaved(&mut samples)`,
+      which **resizes** the destination to the current packet's sample
+      count rather than appending. Multi-packet WAVs (Drummica's 24-bit
+      44.1 kHz samples decode in ~256-frame packets) silently kept only
+      the last packet's audio — a few hundred frames out of hundreds of
+      thousands. Built-in fallback samples are tiny single-packet WAVs
+      so they survived; "non-built-in" Drummica samples became
+      sub-millisecond clicks. Fix: decode into a per-packet scratch and
+      `extend_from_slice` into `samples`. Regression tests:
+      `resonance-common/tests/wav.rs::decode_long_wav_keeps_all_packets`
+      (1 s of synthetic audio in multi-packet form) and
+      `plugins/resonance-drums/tests/drummica_routing.rs` (loads Drummica,
+      asserts every pad class produces non-silent audio on the expected
+      output port, including the cymbal → Overhead-only route).
+
+      Design bundle URL returned 404 on every probed path so the editor
+      redesign turned into a focused polish pass: typography/spacing
+      tokens in `plugins/resonance-drums/src/editor/theme.rs`,
+      `section_label`/`hint_text` helpers used consistently across the
+      pad inspector, installed-kit + overhead combo collapsed onto one
+      row to claw back vertical space, selected pad now reads with
+      accent-colored bold text. No iced surfaces touched — the drum
+      editor is egui-only, so no `iced_test` snapshots need rebaselining.
 
     - [ ] Wrap the lane_inspector body in `iced::widget::lazy` fingerprinted on
       `(selected_lane, definition.id, version_counter)`. **Blocked**: iced 0.14

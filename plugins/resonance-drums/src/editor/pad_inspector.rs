@@ -27,13 +27,13 @@ pub fn draw(
     let mapping = &PAD_MAPPINGS[pad_idx];
     ui.label(
         egui::RichText::new(mapping.name)
-            .size(14.0)
+            .size(theme::TITLE_SIZE)
             .strong()
             .color(theme::ACCENT),
     );
     ui.label(
         egui::RichText::new(format!("MIDI note {}", mapping.note))
-            .size(10.0)
+            .size(theme::SECTION_LABEL_SIZE)
             .color(theme::TEXT_DIM),
     );
     ui.add_space(6.0);
@@ -66,14 +66,9 @@ pub fn draw(
 
     // Articulation toggle (mit/ohne Teppich) — only for pads that have one.
     if mapping.has_articulation {
-        ui.add_space(8.0);
+        ui.add_space(theme::SECTION_GAP);
         ui.separator();
-        ui.label(
-            egui::RichText::new("ARTICULATION")
-                .size(10.0)
-                .strong()
-                .color(theme::TEXT_DIM),
-        );
+        ui.label(theme::section_label("ARTICULATION"));
         let current_art = bridge.articulations.lock()[pad_idx];
         let label = if current_art {
             "ohne Teppich (snare wires off)"
@@ -89,23 +84,16 @@ pub fn draw(
         }
     }
 
-    ui.add_space(8.0);
+    ui.add_space(theme::SECTION_GAP);
     ui.separator();
-    ui.label(
-        egui::RichText::new("CLOSE MICS")
-            .size(10.0)
-            .strong()
-            .color(theme::TEXT_DIM),
-    );
+    ui.label(theme::section_label("CLOSE MICS"));
 
     // Close-mic dropdowns — one per position this pad type uses.
     // Cymbal-class pads have no positions and render a hint instead.
     if mapping.close_mic_positions.is_empty() {
-        ui.label(
-            egui::RichText::new("No close mic for this drum (overhead only)")
-                .size(11.0)
-                .color(theme::TEXT_DIM),
-        );
+        ui.label(theme::hint_text(
+            "No close mic for this drum (overhead only)",
+        ));
     } else {
         let mut choices_to_apply: Vec<(String, String)> = Vec::new();
         for position in mapping.close_mic_positions {
@@ -119,19 +107,12 @@ pub fn draw(
                 .unwrap_or_else(|| "(none)".to_string());
 
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(*position)
-                        .size(11.0)
-                        .color(theme::TEXT_DIM),
-                );
+                ui.label(theme::hint_text(*position));
                 egui::ComboBox::from_id_salt(format!("pad_{}_mic_{}", pad_idx, position))
                     .selected_text(current.clone())
                     .show_ui(ui, |ui| {
                         if available.is_empty() {
-                            ui.label(
-                                egui::RichText::new("(load a kit first)")
-                                    .color(theme::TEXT_DIM),
-                            );
+                            ui.label(theme::hint_text("(load a kit first)"));
                         }
                         for key in &available {
                             if ui.selectable_label(*key == current, key.as_str()).clicked() {
@@ -175,14 +156,9 @@ pub fn draw(
         }
     }
 
-    ui.add_space(8.0);
+    ui.add_space(theme::SECTION_GAP);
     ui.separator();
-    ui.label(
-        egui::RichText::new("OVERHEAD BLEND")
-            .size(10.0)
-            .strong()
-            .color(theme::TEXT_DIM),
-    );
+    ui.label(theme::section_label("OVERHEAD BLEND"));
 
     let mut oh = pad.oh_blend.value();
     if ui
@@ -200,7 +176,7 @@ pub fn draw(
             "Scales this pad's contribution to the Overhead output port. \
              Set to 0 to keep the hit out of the overhead bus entirely.",
         )
-        .size(10.0)
+        .size(theme::SECTION_LABEL_SIZE)
         .color(theme::TEXT_DIM),
     );
 }

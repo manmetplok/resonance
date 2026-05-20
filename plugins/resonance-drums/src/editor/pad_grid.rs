@@ -32,12 +32,7 @@ pub fn draw(ui: &mut egui::Ui, bridge: &KitBridge, selected_pad: &mut usize) {
         .default_size(150.0)
         .resizable(false)
         .show_inside(ui, |ui| {
-            ui.label(
-                egui::RichText::new("PADS")
-                    .size(10.0)
-                    .strong()
-                    .color(theme::TEXT_DIM),
-            );
+            ui.label(theme::section_label("PADS"));
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for (i, mapping) in PAD_MAPPINGS.iter().enumerate().take(NUM_PADS) {
                     let name = mapping.name;
@@ -45,7 +40,22 @@ pub fn draw(ui: &mut egui::Ui, bridge: &KitBridge, selected_pad: &mut usize) {
                         unpack_rr_display(bridge.last_rr[i].load(Ordering::Relaxed));
                     let selected = *selected_pad == i;
                     ui.horizontal(|ui| {
-                        if ui.selectable_label(selected, name).clicked() {
+                        // Use a colored RichText for the selected pad so
+                        // it stands out clearly against the default
+                        // selectable_label highlight. The accent stroke
+                        // already lands on selected rows from the
+                        // theme's `selection.stroke`, but bumping the
+                        // label color too makes the active row
+                        // unambiguous at a glance — important when 30
+                        // pads are visible.
+                        let label = if selected {
+                            egui::RichText::new(name)
+                                .color(theme::ACCENT)
+                                .strong()
+                        } else {
+                            egui::RichText::new(name).color(theme::TEXT)
+                        };
+                        if ui.selectable_label(selected, label).clicked() {
                             *selected_pad = i;
                         }
                         if let Some((idx, total)) = rr_label {
@@ -54,7 +64,7 @@ pub fn draw(ui: &mut egui::Ui, bridge: &KitBridge, selected_pad: &mut usize) {
                                 |ui| {
                                     ui.label(
                                         egui::RichText::new(format!("{}/{}", idx + 1, total))
-                                            .size(9.0)
+                                            .size(theme::SECTION_LABEL_SIZE - 1.0)
                                             .color(theme::TEXT_DIM),
                                     );
                                 },

@@ -135,6 +135,13 @@ fn decode_to_interleaved(data: &[u8]) -> Result<Decoded, String> {
         .map_err(|e| format!("WAV decoder error: {e}"))?;
 
     let mut samples: Vec<f32> = Vec::new();
+    // Per-packet scratch. `copy_to_vec_interleaved` *resizes* its
+    // destination to the current packet's sample count rather than
+    // appending — using `samples` directly would clobber every prior
+    // packet, leaving only the last one (a few hundred frames for a
+    // multi-second WAV decoded packet-by-packet). Decode into the
+    // scratch and `extend` `samples` from it instead.
+    let mut packet_buf: Vec<f32> = Vec::new();
 
     loop {
         let packet = match format.next_packet() {
@@ -152,7 +159,8 @@ fn decode_to_interleaved(data: &[u8]) -> Result<Decoded, String> {
             Err(SymphoniaError::IoError(_)) => break,
             Err(e) => return Err(format!("WAV decode: {e}")),
         };
-        decoded.copy_to_vec_interleaved(&mut samples);
+        decoded.copy_to_vec_interleaved(&mut packet_buf);
+        samples.extend_from_slice(&packet_buf);
     }
 
     if samples.is_empty() {

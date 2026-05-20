@@ -136,27 +136,36 @@ pub fn draw_loader_row(
             egui::RichText::new("Download Kits")
                 .color(egui::Color32::BLACK)
                 .strong()
-                .size(12.0),
+                .size(theme::BODY_SIZE + 1.0),
         )
         .fill(theme::ACCENT);
         if ui.add(dl_btn).clicked() {
             download_panel.open = true;
         }
+        ui.add_space(4.0);
         let status = bridge.kit_status.lock().clone();
-        ui.label(egui::RichText::new(format_kit_status(&status)).color(theme::TEXT_DIM));
+        ui.label(
+            egui::RichText::new(format_kit_status(&status))
+                .color(theme::TEXT_DIM)
+                .size(theme::BODY_SIZE),
+        );
     });
 }
 
-/// Render the installed-kits combo box. No-op if the list is empty.
-pub fn draw_installed_picker(
+/// Render the installed-kits + overhead pickers as a single row.
+///
+/// Putting both pickers on one line keeps the header band compact —
+/// the editor is only 440 px tall by default, so every saved row of
+/// vertical real estate means more space for the pad inspector below.
+/// If the installed list is empty the function still renders the
+/// overhead picker, so the user always has access to the global
+/// overhead-mic selector after loading a kit via "Load Kit".
+pub fn draw_installed_and_overhead_pickers(
     ui: &mut egui::Ui,
     bridge: &KitBridge,
     installed_kits: &[InstalledItem],
+    catalog: &ManifestMicCatalog,
 ) {
-    if installed_kits.is_empty() {
-        return;
-    }
-
     let mut kit_to_load: Option<InstalledItem> = None;
 
     // Derive the "currently loaded" kit name from kit_status so the
@@ -175,61 +184,39 @@ pub fn draw_installed_picker(
     };
 
     ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new("Installed:")
-                .color(theme::TEXT_DIM)
-                .size(11.0),
-        );
-        let selected_text = if current_kit_name.is_empty() {
-            "(select a kit)".to_string()
-        } else {
-            current_kit_name.clone()
-        };
-        egui::ComboBox::from_id_salt("installed_kits")
-            .selected_text(selected_text)
-            .show_ui(ui, |ui| {
-                for item in installed_kits {
-                    if ui
-                        .selectable_label(item.name == current_kit_name, &item.name)
-                        .clicked()
-                    {
-                        kit_to_load = Some(item.clone());
+        if !installed_kits.is_empty() {
+            ui.label(theme::hint_text("Installed:"));
+            let selected_text = if current_kit_name.is_empty() {
+                "(select a kit)".to_string()
+            } else {
+                current_kit_name.clone()
+            };
+            egui::ComboBox::from_id_salt("installed_kits")
+                .selected_text(selected_text)
+                .show_ui(ui, |ui| {
+                    for item in installed_kits {
+                        if ui
+                            .selectable_label(item.name == current_kit_name, &item.name)
+                            .clicked()
+                        {
+                            kit_to_load = Some(item.clone());
+                        }
                     }
-                }
-            });
-    });
+                });
+            ui.add_space(12.0);
+        }
 
-    if let Some(item) = kit_to_load {
-        load_installed_kit(bridge, &item);
-    }
-}
-
-/// Render the global overhead mic selector dropdown.
-pub fn draw_overhead_picker(
-    ui: &mut egui::Ui,
-    bridge: &KitBridge,
-    catalog: &ManifestMicCatalog,
-) {
-    let overhead_setups = catalog.overhead_setups();
-
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new("Overhead:")
-                .color(theme::TEXT_DIM)
-                .size(11.0),
-        );
+        // Overhead picker — always shown so it's discoverable.
+        let overhead_setups = catalog.overhead_setups();
+        ui.label(theme::hint_text("Overhead:"));
         let current_overhead = bridge.overhead_setup_key.lock().clone();
-        // The dropdown label is the currently-selected overhead
-        // setup regardless of whether the menu has any other
-        // entries available (it's just the user-facing display
-        // text on the closed combo box).
         let label = current_overhead.clone();
         let mut new_choice: Option<String> = None;
         egui::ComboBox::from_id_salt("overhead_setup")
             .selected_text(label)
             .show_ui(ui, |ui| {
                 if overhead_setups.is_empty() {
-                    ui.label(egui::RichText::new("(load a kit first)").color(theme::TEXT_DIM));
+                    ui.label(theme::hint_text("(load a kit first)"));
                 }
                 for key in &overhead_setups {
                     if ui
@@ -245,6 +232,10 @@ pub fn draw_overhead_picker(
             reload_kit(bridge);
         }
     });
+
+    if let Some(item) = kit_to_load {
+        load_installed_kit(bridge, &item);
+    }
 }
 
 /// Refresh the installed-kits cache from the registry.

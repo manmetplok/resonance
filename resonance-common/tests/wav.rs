@@ -65,6 +65,48 @@ fn decode_channels_splits_lr() {
     assert!((wc.right[0] - (-1_000.0 / 32_768.0)).abs() < 1e-4);
 }
 
+/// Regression: long WAVs decoded in multiple symphonia packets must
+/// not lose all but the last packet's audio. `copy_to_vec_interleaved`
+/// *resizes* its destination to the current packet's sample count
+/// rather than appending, so the previous decoder implementation
+/// silently kept only the trailing few hundred frames of any multi-
+/// packet WAV. Surfaced in the drum-kit loader as "non-built-in kits
+/// produce truncated clicks (or silence) on triggered pads".
+#[test]
+fn decode_long_wav_keeps_all_packets() {
+    let sr = 48_000u32;
+    let total_frames = sr as usize; // 1 second of audio
+    // Build a deterministic sweep so we can spot-check the tail —
+    // truncation would leave only zeros (the silent intro) or the
+    // last packet's values, neither matching the sweep.
+    let frames: Vec<(i16, i16)> = (0..total_frames)
+        .map(|i| {
+            let v = ((i as f32 / total_frames as f32) * 8_000.0) as i16;
+            (v, -v)
+        })
+        .collect();
+    let wav = build_wav_16_stereo(&frames, sr);
+    let out = decode_wav_stereo(&wav, sr as f32).expect("decode");
+    // Output must cover every input frame, not just the trailing
+    // packet. Allow a few frame slack for decoder framing quirks.
+    assert!(
+        out.len() >= total_frames * 2 - 32,
+        "expected ~{} samples, got {}",
+        total_frames * 2,
+        out.len()
+    );
+    // Spot-check the head, middle, and tail are non-trivially
+    // populated — truncation would leave the head at zero.
+    let head_energy: f32 = out[..1024].iter().map(|s| s.abs()).sum();
+    let mid_idx = out.len() / 2;
+    let mid_energy: f32 = out[mid_idx..mid_idx + 1024].iter().map(|s| s.abs()).sum();
+    let tail_start = out.len().saturating_sub(1024);
+    let tail_energy: f32 = out[tail_start..].iter().map(|s| s.abs()).sum();
+    assert!(head_energy < mid_energy, "head should ramp up to mid");
+    assert!(mid_energy > 0.0, "mid section should not be silent");
+    assert!(tail_energy > mid_energy, "tail should be the loudest sweep peak");
+}
+
 #[test]
 fn resample_length_scales_with_ratio() {
     let input = vec![0.0_f32; 4_800]; // 100 ms at 48 kHz
