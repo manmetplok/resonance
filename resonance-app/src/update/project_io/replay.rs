@@ -50,27 +50,59 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.compose
         .load_from_project(&project.section_definitions, &project.section_placements);
 
-    // Restore the project's drum groups (or seed the default kit/snare/
-    // hat layout for legacy projects that predate the grouped model). The
-    // group ids carry through so a freshly-loaded project keeps the same
-    // (group_id × placement) mapping the user authored.
-    if !project.drum_groups.is_empty() {
-        r.compose.drum_groups = project.drum_groups.clone();
-        // Bump the compose id counter past every saved group id so the
-        // manager's "+ New group" doesn't collide.
-        if let Some(max_group_id) = r.compose.drum_groups.iter().map(|g| g.id).max() {
-            // `next_id` is the *next* id to hand out, so it must exceed
-            // every used id by at least 1. Using `.max(max_group_id)`
-            // alone would let the next allocation collide with the
-            // highest saved id.
-            r.compose.next_id = r.compose.next_id.max(max_group_id + 1);
+    // Restore the project's drum pattern bank. Three legacy paths:
+    //
+    // 1. Modern project: `drum_patterns` populated → use it directly.
+    // 2. Legacy v2 project: `drum_groups` populated (single flat list) →
+    //    promote into a one-entry pattern bank named "Main" so the
+    //    section selector has something to point at.
+    // 3. Pre-grouped legacy: both fields empty → the default seeded by
+    //    `ComposeState::default()` stays in place.
+    //
+    // After the bank is hydrated we bump `next_id` past every saved id
+    // (patterns + groups + pads) so the in-memory allocator never
+    // collides with the project's reserved ids.
+    if !project.drum_patterns.is_empty() {
+        r.compose.drum_patterns = project.drum_patterns.clone();
+    } else if !project.drum_groups.is_empty() {
+        let (patterns, _id) = crate::compose::drumroll::legacy_groups_to_pattern(
+            project.drum_groups.clone(),
+            &mut r.compose.next_id,
+        );
+        r.compose.drum_patterns = patterns;
+        // Point any pre-existing definition that has no pattern id at
+        // the freshly-promoted "Main" pattern so the lane resolves
+        // identically to how the legacy project rendered.
+        let main_id = r.compose.drum_patterns.first().map(|p| p.id);
+        for def in &mut r.compose.definitions {
+            if def.drum_pattern_id.is_none() {
+                def.drum_pattern_id = main_id;
+            }
         }
-        // Refresh the right-rail selection to point at a real group.
-        r.compose.drumroll.selected_group_id =
-            r.compose.drum_groups.first().map(|g| g.id);
-        r.compose.drumroll.managing_group_id =
-            r.compose.drum_groups.first().map(|g| g.id);
     }
+
+    // Refresh the project default pattern id and the right-rail / modal
+    // focus to land on a pattern that actually exists.
+    r.compose.default_drum_pattern_id = r.compose.drum_patterns.first().map(|p| p.id);
+    // Bump `next_id` past every saved pattern and group id so the
+    // manager's "+ New" actions never collide with reserved ids.
+    let max_id = r
+        .compose
+        .drum_patterns
+        .iter()
+        .flat_map(|p| std::iter::once(p.id).chain(p.groups.iter().map(|g| g.id)))
+        .max();
+    if let Some(m) = max_id {
+        r.compose.next_id = r.compose.next_id.max(m + 1);
+    }
+    let first_group_id = r
+        .compose
+        .drum_patterns
+        .first()
+        .and_then(|p| p.groups.first().map(|g| g.id));
+    r.compose.drumroll.selected_group_id = first_group_id;
+    r.compose.drumroll.managing_group_id = first_group_id;
+    r.compose.drumroll.managing_pattern_id = r.compose.default_drum_pattern_id;
 
     // Restore tempo/signature events. If the project has none (legacy),
     // create a single event at bar 0 from the global BPM/sig.

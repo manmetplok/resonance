@@ -9,7 +9,10 @@ use resonance_music_theory::{MelodyParams, MotifParams, MotifSource};
 
 use crate::project::{ProjectSectionChord, ProjectSectionDefinition, ProjectSectionPlacement};
 
-use super::drumroll::{default_drum_groups, default_kit_pads, DrumGroup, DrumrollViewState, KitPadInfo};
+use super::drumroll::{
+    default_drum_patterns, default_kit_pads, DrumGroup, DrumPattern, DrumrollViewState,
+    KitPadInfo,
+};
 use super::lane_generator::{LaneGeneratorConfig, LaneGeneratorKind};
 use super::section::{
     ChordState, EditSectionForm, NewSectionForm, SectionDefinitionState, SectionPlacementState,
@@ -130,11 +133,18 @@ pub struct ComposeState {
     /// Lazily populated from the lane's current `params.draft` on first
     /// use, and re-synced when per-line edits or re-rolls happen.
     pub vocal_bulk_lyrics: HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
-    /// Project-scoped drum groups — one set, shared by every drum track
-    /// across every section. Each group owns its own grid/cycle/phase and
-    /// articulation patterns so different groups can run polymetric or
-    /// polyrhythmic patterns against the song's base meter.
-    pub drum_groups: Vec<DrumGroup>,
+    /// Project-scoped drum pattern bank. Each pattern bundles its own
+    /// [`DrumGroup`] list, so a project can carry multiple kit/snare/hat
+    /// arrangements and the section picker assigns one pattern per
+    /// section. Patterns share the same articulation library
+    /// ([`kit_pads`]) so duplicating a pattern only forks the rhythm,
+    /// not the kit definition.
+    pub drum_patterns: Vec<DrumPattern>,
+    /// Fallback pattern id used when a section definition hasn't picked
+    /// one yet. Always points at a pattern in [`drum_patterns`]; updated
+    /// when patterns are added or removed so the lane never resolves to
+    /// `None`.
+    pub default_drum_pattern_id: Option<u64>,
     /// Full kit pad library shown by the Drum Groups Manager modal as the
     /// picker source. Loaded once on construction; mutations come via the
     /// manager only.
@@ -144,10 +154,15 @@ pub struct ComposeState {
 impl Default for ComposeState {
     fn default() -> Self {
         let mut next_id: u64 = 0;
-        let drum_groups = default_drum_groups(&mut next_id);
+        let drum_patterns = default_drum_patterns(&mut next_id);
+        let default_pattern_id = drum_patterns.first().map(|p| p.id);
+        let first_group_id = drum_patterns
+            .first()
+            .and_then(|p| p.groups.first().map(|g| g.id));
         let drumroll = DrumrollViewState {
-            selected_group_id: drum_groups.first().map(|g| g.id),
-            managing_group_id: drum_groups.first().map(|g| g.id),
+            selected_group_id: first_group_id,
+            managing_group_id: first_group_id,
+            managing_pattern_id: default_pattern_id,
             ..DrumrollViewState::default()
         };
         Self {
@@ -170,7 +185,8 @@ impl Default for ComposeState {
             vocal_audio: VocalAudioRegistry::default(),
             next_derived_clip_id: DERIVED_CLIP_ID_BASE,
             vocal_bulk_lyrics: HashMap::new(),
-            drum_groups,
+            drum_patterns,
+            default_drum_pattern_id: default_pattern_id,
             kit_pads: default_kit_pads(),
         }
     }
@@ -211,6 +227,85 @@ impl ComposeState {
         self.placements.iter().find(|p| p.id == id)
     }
 
+    /// Resolve which drum pattern a section uses. Falls back through the
+    /// section's explicit choice → the project default → the first
+    /// pattern in the bank. Returns `None` only if the bank is empty.
+    pub fn pattern_for_definition(&self, def: &SectionDefinitionState) -> Option<&DrumPattern> {
+        def.drum_pattern_id
+            .and_then(|id| self.drum_patterns.iter().find(|p| p.id == id))
+            .or_else(|| {
+                self.default_drum_pattern_id
+                    .and_then(|id| self.drum_patterns.iter().find(|p| p.id == id))
+            })
+            .or_else(|| self.drum_patterns.first())
+    }
+
+    /// Mutable counterpart of [`pattern_for_definition`].
+    pub fn pattern_for_definition_mut(
+        &mut self,
+        def_id: u64,
+    ) -> Option<&mut DrumPattern> {
+        let def = self.definitions.iter().find(|d| d.id == def_id)?;
+        let id = def
+            .drum_pattern_id
+            .or(self.default_drum_pattern_id)
+            .or_else(|| self.drum_patterns.first().map(|p| p.id))?;
+        self.drum_patterns.iter_mut().find(|p| p.id == id)
+    }
+
+    /// Look up a pattern by id.
+    pub fn find_pattern(&self, pattern_id: u64) -> Option<&DrumPattern> {
+        self.drum_patterns.iter().find(|p| p.id == pattern_id)
+    }
+
+    /// Look up a pattern by id (mutable).
+    pub fn find_pattern_mut(&mut self, pattern_id: u64) -> Option<&mut DrumPattern> {
+        self.drum_patterns.iter_mut().find(|p| p.id == pattern_id)
+    }
+
+    /// Active groups for the inspector / right-rail. Resolves the section
+    /// the user has focused → its pattern → that pattern's group list.
+    /// Returns the empty slice if no section is selected or the bank is
+    /// empty, so callers don't have to thread `Option` everywhere.
+    pub fn active_groups(&self) -> &[DrumGroup] {
+        let Some(def) = self
+            .selected_placement()
+            .and_then(|p| self.find_definition(p.definition_id))
+        else {
+            return &[];
+        };
+        match self.pattern_for_definition(def) {
+            Some(p) => &p.groups,
+            None => &[],
+        }
+    }
+
+    /// Active groups for a specific section. Used by `materialize_drum_clips`
+    /// and the drum lane canvas — both need pattern-by-section resolution
+    /// rather than the focused-section helper above.
+    pub fn groups_for_definition<'a>(
+        &'a self,
+        def: &'a SectionDefinitionState,
+    ) -> &'a [DrumGroup] {
+        match self.pattern_for_definition(def) {
+            Some(p) => &p.groups,
+            None => &[],
+        }
+    }
+
+    /// Which pattern the manager modal is editing. Falls back to the
+    /// project default so the modal always lands on a real pattern.
+    pub fn managing_pattern(&self) -> Option<&DrumPattern> {
+        self.drumroll
+            .managing_pattern_id
+            .and_then(|id| self.find_pattern(id))
+            .or_else(|| {
+                self.default_drum_pattern_id
+                    .and_then(|id| self.find_pattern(id))
+            })
+            .or_else(|| self.drum_patterns.first())
+    }
+
     pub fn selected_placement(&self) -> Option<&SectionPlacementState> {
         self.selected_placement_id
             .and_then(|id| self.find_placement(id))
@@ -245,6 +340,7 @@ impl ComposeState {
                 beats_per_chord: d.beats_per_chord,
                 seventh_chords: d.seventh_chords,
                 motif_source: d.motif_source.clone(),
+                drum_pattern_id: d.drum_pattern_id,
             })
             .collect()
     }
@@ -293,6 +389,7 @@ impl ComposeState {
                 beats_per_chord: d.beats_per_chord,
                 seventh_chords: d.seventh_chords,
                 motif_source: d.motif_source.clone(),
+                drum_pattern_id: d.drum_pattern_id,
             })
             .collect();
         // Runtime-only state: start each load with an empty derived-clip

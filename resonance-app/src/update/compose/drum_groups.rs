@@ -1,13 +1,16 @@
-//! Handlers for the project-scoped drum-groups state.
+//! Handlers for the project-scoped drum-pattern bank.
 //!
-//! Owns the modal lifecycle, group-list CRUD, articulation-pad
-//! assignment, and the right-rail generator knobs.
+//! Each pattern owns a `Vec<DrumGroup>`; sections pick a pattern via
+//! `SectionDefinitionState::drum_pattern_id`. The manager modal targets
+//! one *pattern* (`drumroll.managing_pattern_id`) and edits the groups
+//! inside it. Section assignment, pattern CRUD (add / rename / delete /
+//! duplicate) and the per-group generator knobs all live here.
 
 use iced::Task;
 
 use resonance_audio::types::{AudioCommand, MidiNote, TrackId, TrackType, TICKS_PER_QUARTER_NOTE};
 
-use crate::compose::drumroll::{groups, DrumGroup, DrumGroupPad, GROUP_PALETTE};
+use crate::compose::drumroll::{groups, DrumGroup, DrumGroupPad, DrumPattern, GROUP_PALETTE};
 use crate::compose::messages::DrumGroupsMessage;
 use crate::message::Message;
 use crate::state::InstrumentType;
@@ -23,13 +26,19 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
         DrumGroupsMessage::OpenManager => {
             // Default the manager focus to whatever the right rail has
             // selected so the user opens the modal with the same group
-            // pre-highlighted.
+            // pre-highlighted. The pattern focus follows the section
+            // selection so the modal lands on the same pattern the lane
+            // is currently rendering.
+            let section_pattern_id = section_pattern_id_for_focus(r);
+            r.compose.drumroll.managing_pattern_id =
+                section_pattern_id.or(r.compose.default_drum_pattern_id);
+            let active = active_groups_for_manager(r);
             let focus = r
                 .compose
                 .drumroll
                 .selected_group_id
-                .filter(|id| r.compose.drum_groups.iter().any(|g| g.id == *id))
-                .or_else(|| r.compose.drum_groups.first().map(|g| g.id));
+                .filter(|id| active.iter().any(|g| g.id == *id))
+                .or_else(|| active.first().map(|g| g.id));
             r.compose.drumroll.manager_open = true;
             r.compose.drumroll.managing_group_id = focus;
             r.compose.drumroll.manager_filter.clear();
@@ -39,7 +48,7 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
             r.compose.drumroll.manager_filter.clear();
         }
         DrumGroupsMessage::ManagerSelectGroup { group_id } => {
-            if r.compose.drum_groups.iter().any(|g| g.id == group_id) {
+            if active_groups_for_manager(r).iter().any(|g| g.id == group_id) {
                 r.compose.drumroll.managing_group_id = Some(group_id);
             }
         }
@@ -47,11 +56,17 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
             r.compose.drumroll.manager_filter = s;
         }
         DrumGroupsMessage::AddGroup => {
+            let Some(pattern_id) = resolve_managing_pattern_id(r) else {
+                return Task::none();
+            };
             let id = {
                 r.compose.next_id += 1;
                 r.compose.next_id
             };
-            let idx = r.compose.drum_groups.len();
+            let Some(pattern) = r.compose.find_pattern_mut(pattern_id) else {
+                return Task::none();
+            };
+            let idx = pattern.groups.len();
             let color = GROUP_PALETTE[idx % GROUP_PALETTE.len()];
             let group = DrumGroup {
                 id,
@@ -69,36 +84,206 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
                 style: "Custom".to_string(),
                 seed: id.wrapping_mul(0x9E3779B97F4A7C15),
             };
-            r.compose.drum_groups.push(group);
+            // Re-borrow because the `next_id` bump above borrowed
+            // `r.compose` mutably already; pattern lookup needs a fresh
+            // borrow.
+            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+                pattern.groups.push(group);
+            }
             r.compose.drumroll.managing_group_id = Some(id);
             r.compose.drumroll.selected_group_id = Some(id);
         }
         DrumGroupsMessage::DeleteGroup { group_id } => {
-            r.compose.drum_groups.retain(|g| g.id != group_id);
+            let Some(pattern_id) = resolve_managing_pattern_id(r) else {
+                return Task::none();
+            };
+            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+                pattern.groups.retain(|g| g.id != group_id);
+            }
+            let fallback = r
+                .compose
+                .find_pattern(pattern_id)
+                .and_then(|p| p.groups.first().map(|g| g.id));
             if r.compose.drumroll.managing_group_id == Some(group_id) {
-                r.compose.drumroll.managing_group_id = r.compose.drum_groups.first().map(|g| g.id);
+                r.compose.drumroll.managing_group_id = fallback;
             }
             if r.compose.drumroll.selected_group_id == Some(group_id) {
-                r.compose.drumroll.selected_group_id = r.compose.drum_groups.first().map(|g| g.id);
+                r.compose.drumroll.selected_group_id = fallback;
             }
         }
         DrumGroupsMessage::RenameGroup { group_id, name } => {
-            if let Some(g) = r.compose.drum_groups.iter_mut().find(|g| g.id == group_id) {
-                g.name = name;
+            let Some(pattern_id) = resolve_managing_pattern_id(r) else {
+                return Task::none();
+            };
+            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+                if let Some(g) = pattern.groups.iter_mut().find(|g| g.id == group_id) {
+                    g.name = name;
+                }
             }
         }
         DrumGroupsMessage::SetGroupColor { group_id, color } => {
-            if let Some(g) = r.compose.drum_groups.iter_mut().find(|g| g.id == group_id) {
-                g.color = color;
+            let Some(pattern_id) = resolve_managing_pattern_id(r) else {
+                return Task::none();
+            };
+            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+                if let Some(g) = pattern.groups.iter_mut().find(|g| g.id == group_id) {
+                    g.color = color;
+                }
             }
         }
         DrumGroupsMessage::TogglePadAssignment { group_id, note } => {
-            toggle_pad(&mut r.compose.drum_groups, group_id, note);
+            let Some(pattern_id) = resolve_managing_pattern_id(r) else {
+                return Task::none();
+            };
+            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+                toggle_pad(&mut pattern.groups, group_id, note);
+            }
         }
         DrumGroupsMessage::ClearGroupPads { group_id } => {
-            if let Some(g) = r.compose.drum_groups.iter_mut().find(|g| g.id == group_id) {
-                g.pads.clear();
+            let Some(pattern_id) = resolve_managing_pattern_id(r) else {
+                return Task::none();
+            };
+            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+                if let Some(g) = pattern.groups.iter_mut().find(|g| g.id == group_id) {
+                    g.pads.clear();
+                }
             }
+        }
+
+        // ---- Pattern-bank CRUD ----
+        DrumGroupsMessage::SelectPattern { pattern_id } => {
+            if r.compose.find_pattern(pattern_id).is_some() {
+                r.compose.drumroll.managing_pattern_id = Some(pattern_id);
+                r.compose.drumroll.selected_group_id = r
+                    .compose
+                    .find_pattern(pattern_id)
+                    .and_then(|p| p.groups.first().map(|g| g.id));
+                r.compose.drumroll.managing_group_id = r.compose.drumroll.selected_group_id;
+            }
+        }
+        DrumGroupsMessage::AssignPattern {
+            definition_id,
+            pattern_id,
+        } => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                def.drum_pattern_id = pattern_id;
+            }
+            materialize_drum_clips(r);
+        }
+        DrumGroupsMessage::AddPattern => {
+            let id = r.compose.fresh_id();
+            let idx = r.compose.drum_patterns.len();
+            let color = GROUP_PALETTE[idx % GROUP_PALETTE.len()];
+            r.compose.drum_patterns.push(DrumPattern {
+                id,
+                name: format!("Pattern {}", idx + 1),
+                color,
+                groups: Vec::new(),
+            });
+            if r.compose.default_drum_pattern_id.is_none() {
+                r.compose.default_drum_pattern_id = Some(id);
+            }
+            r.compose.drumroll.managing_pattern_id = Some(id);
+            r.compose.drumroll.managing_group_id = None;
+            r.compose.drumroll.selected_group_id = None;
+        }
+        DrumGroupsMessage::DuplicatePattern { pattern_id } => {
+            let Some(src) = r.compose.find_pattern(pattern_id).cloned() else {
+                return Task::none();
+            };
+            // Clone the groups but reassign every group id so the
+            // duplicate doesn't share ids with the source — otherwise
+            // toggling a step in the duplicate would also toggle the
+            // source.
+            let new_pattern_id = r.compose.fresh_id();
+            let mut new_groups = src.groups.clone();
+            for g in new_groups.iter_mut() {
+                g.id = r.compose.fresh_id();
+            }
+            let copy = DrumPattern {
+                id: new_pattern_id,
+                name: format!("{} copy", src.name),
+                color: src.color,
+                groups: new_groups,
+            };
+            r.compose.drum_patterns.push(copy);
+            r.compose.drumroll.managing_pattern_id = Some(new_pattern_id);
+            r.compose.drumroll.managing_group_id = r
+                .compose
+                .find_pattern(new_pattern_id)
+                .and_then(|p| p.groups.first().map(|g| g.id));
+            r.compose.drumroll.selected_group_id = r.compose.drumroll.managing_group_id;
+        }
+        DrumGroupsMessage::DeletePattern { pattern_id } => {
+            // Refuse to delete the last pattern — the lane needs at
+            // least one to render.
+            if r.compose.drum_patterns.len() <= 1 {
+                r.compose.last_error =
+                    Some("Cannot delete the last drum pattern".into());
+                return Task::none();
+            }
+            r.compose.drum_patterns.retain(|p| p.id != pattern_id);
+            // Re-point any section that referenced the deleted pattern
+            // back at "use the default" so the lane keeps rendering.
+            for def in &mut r.compose.definitions {
+                if def.drum_pattern_id == Some(pattern_id) {
+                    def.drum_pattern_id = None;
+                }
+            }
+            if r.compose.default_drum_pattern_id == Some(pattern_id) {
+                r.compose.default_drum_pattern_id =
+                    r.compose.drum_patterns.first().map(|p| p.id);
+            }
+            if r.compose.drumroll.managing_pattern_id == Some(pattern_id) {
+                r.compose.drumroll.managing_pattern_id =
+                    r.compose.default_drum_pattern_id;
+            }
+            r.compose.drumroll.selected_group_id = r
+                .compose
+                .drumroll
+                .managing_pattern_id
+                .and_then(|id| r.compose.find_pattern(id))
+                .and_then(|p| p.groups.first().map(|g| g.id));
+            r.compose.drumroll.managing_group_id = r.compose.drumroll.selected_group_id;
+            materialize_drum_clips(r);
+        }
+        DrumGroupsMessage::RenamePattern { pattern_id, name } => {
+            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+                pattern.name = name;
+            }
+        }
+        DrumGroupsMessage::SetPatternColor { pattern_id, color } => {
+            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+                pattern.color = color;
+            }
+        }
+        DrumGroupsMessage::BeginRenamePattern { pattern_id } => {
+            let initial = r
+                .compose
+                .find_pattern(pattern_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            r.compose.drumroll.renaming_pattern_id = Some(pattern_id);
+            r.compose.drumroll.renaming_pattern_text = initial;
+        }
+        DrumGroupsMessage::UpdateRenamePatternText(text) => {
+            r.compose.drumroll.renaming_pattern_text = text;
+        }
+        DrumGroupsMessage::CommitRenamePattern => {
+            if let Some(pattern_id) = r.compose.drumroll.renaming_pattern_id.take() {
+                let text =
+                    std::mem::take(&mut r.compose.drumroll.renaming_pattern_text);
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+                        pattern.name = trimmed.to_string();
+                    }
+                }
+            }
+        }
+        DrumGroupsMessage::CancelRenamePattern => {
+            r.compose.drumroll.renaming_pattern_id = None;
+            r.compose.drumroll.renaming_pattern_text.clear();
         }
 
         // ---- Generator knobs ----
@@ -165,16 +350,21 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
             });
         }
         DrumGroupsMessage::GenerateGroup { group_id } => {
-            if let Some(g) = r.compose.drum_groups.iter_mut().find(|g| g.id == group_id) {
+            if let Some(g) = find_group_mut(r, group_id) {
                 g.seed = g.seed.wrapping_add(1).wrapping_mul(0x9E3779B97F4A7C15);
                 generate_group_pattern(g);
             }
             materialize_drum_clips(r);
         }
         DrumGroupsMessage::GenerateAllGroups => {
-            for g in &mut r.compose.drum_groups {
-                g.seed = g.seed.wrapping_add(1).wrapping_mul(0x9E3779B97F4A7C15);
-                generate_group_pattern(g);
+            // Re-roll every group in every pattern. The user reaches
+            // this via the lane's "Regenerate all" button so it should
+            // refresh the whole bank, not just the focused pattern.
+            for pattern in &mut r.compose.drum_patterns {
+                for g in &mut pattern.groups {
+                    g.seed = g.seed.wrapping_add(1).wrapping_mul(0x9E3779B97F4A7C15);
+                    generate_group_pattern(g);
+                }
             }
             materialize_drum_clips(r);
         }
@@ -183,7 +373,7 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
             pad_index,
             step,
         } => {
-            if let Some(g) = r.compose.drum_groups.iter_mut().find(|g| g.id == group_id) {
+            if let Some(g) = find_group_mut(r, group_id) {
                 let cycle = g.cycle as usize;
                 if cycle == 0 {
                     return Task::none();
@@ -202,10 +392,53 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
     Task::none()
 }
 
-/// Mutate one group, looking it up by id. Centralised so callers don't
-/// repeat the `iter_mut().find(...)` dance.
+/// Resolve which pattern the manager is currently editing. Falls back
+/// through the explicit pick → the project default → the first pattern
+/// in the bank.
+fn resolve_managing_pattern_id(r: &crate::Resonance) -> Option<u64> {
+    r.compose
+        .drumroll
+        .managing_pattern_id
+        .filter(|id| r.compose.drum_patterns.iter().any(|p| p.id == *id))
+        .or(r.compose.default_drum_pattern_id)
+        .or_else(|| r.compose.drum_patterns.first().map(|p| p.id))
+}
+
+/// Pattern that the section selection points at. Used to open the
+/// manager so it lands on the same pattern the lane is currently
+/// rendering.
+fn section_pattern_id_for_focus(r: &crate::Resonance) -> Option<u64> {
+    let def = r
+        .compose
+        .selected_placement()
+        .and_then(|p| r.compose.find_definition(p.definition_id))?;
+    r.compose.pattern_for_definition(def).map(|p| p.id)
+}
+
+/// Slice of groups visible inside the manager modal — the groups owned
+/// by the pattern resolved via [`resolve_managing_pattern_id`].
+fn active_groups_for_manager(r: &crate::Resonance) -> &[DrumGroup] {
+    let Some(id) = resolve_managing_pattern_id(r) else {
+        return &[];
+    };
+    r.compose.find_pattern(id).map(|p| p.groups.as_slice()).unwrap_or(&[])
+}
+
+/// Find a group across every pattern in the bank. Group ids are unique
+/// project-wide so this is unambiguous.
+fn find_group_mut(r: &mut crate::Resonance, group_id: u64) -> Option<&mut DrumGroup> {
+    for pattern in &mut r.compose.drum_patterns {
+        if let Some(g) = pattern.groups.iter_mut().find(|g| g.id == group_id) {
+            return Some(g);
+        }
+    }
+    None
+}
+
+/// Mutate one group, looking it up by id across the full pattern bank.
+/// Centralised so callers don't repeat the `iter_mut().find(...)` dance.
 fn mutate_group(r: &mut crate::Resonance, group_id: u64, f: impl FnOnce(&mut DrumGroup)) {
-    if let Some(g) = r.compose.drum_groups.iter_mut().find(|g| g.id == group_id) {
+    if let Some(g) = find_group_mut(r, group_id) {
         f(g);
     }
 }
@@ -373,18 +606,24 @@ pub fn materialize_drum_clips(r: &mut crate::Resonance) {
     let time_sig_num = r.transport.time_sig_num.max(1);
     let samples_per_bar = compose_samples_per_bar(r.sample_rate, r.transport.bpm, time_sig_num);
 
-    let placements: Vec<(u64, u64, u32, u32, String)> = r
+    // Snapshot one tuple per placement so we don't reborrow `r.compose`
+    // inside the engine-send loop. Resolves each section to the groups
+    // of its assigned drum pattern up front — sections with different
+    // patterns produce different note sequences.
+    let placements: Vec<(u64, u64, u32, u32, String, Vec<DrumGroup>)> = r
         .compose
         .placements
         .iter()
         .filter_map(|p| {
             let def = r.compose.find_definition(p.definition_id)?;
+            let groups = r.compose.groups_for_definition(def).to_vec();
             Some((
                 p.definition_id,
                 p.id,
                 p.start_bar,
                 def.length_bars,
                 def.name.clone(),
+                groups,
             ))
         })
         .collect();
@@ -392,12 +631,12 @@ pub fn materialize_drum_clips(r: &mut crate::Resonance) {
         return;
     }
 
-    let groups_snapshot = r.compose.drum_groups.clone();
-
-    for (definition_id, placement_id, start_bar, length_bars, def_name) in placements {
+    for (definition_id, placement_id, start_bar, length_bars, def_name, section_groups)
+        in placements
+    {
         let start_sample = start_bar as u64 * samples_per_bar;
         let duration_ticks = length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
-        let notes = build_drum_notes(&groups_snapshot, length_bars, time_sig_num);
+        let notes = build_drum_notes(&section_groups, length_bars, time_sig_num);
 
         for &track_id in &drum_track_ids {
             // Tear down any prior derived clip on this triple so we don't

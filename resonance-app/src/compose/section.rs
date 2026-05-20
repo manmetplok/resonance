@@ -64,6 +64,10 @@ pub struct SectionDefinitionState {
     /// reads from this so they share the underlying motif identity
     /// (intervals + rhythm + accents).
     pub motif_source: MotifSource,
+    /// Which drum pattern this section plays. `None` means "use the
+    /// project default" — resolved via
+    /// [`crate::compose::ComposeState::pattern_for_definition`].
+    pub drum_pattern_id: Option<u64>,
 }
 
 #[derive(Debug, Clone)]

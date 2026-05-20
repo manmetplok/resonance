@@ -17,7 +17,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-pub use drumroll::{DrumGroup, DrumrollViewState};
+pub use drumroll::{DrumGroup, DrumPattern, DrumrollViewState};
 pub use generate::{DeriveKind, GenerateParams};
 pub use lane_generator::{
     DrumVoiceMode, LaneGeneratorConfig, LaneGeneratorKind, LaneGeneratorKindTag,

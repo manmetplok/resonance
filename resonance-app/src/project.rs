@@ -86,8 +86,19 @@ pub struct ProjectFile {
     /// the drum track's MIDI clip on every section placement. Empty on
     /// legacy projects (which then get the built-in default kit/snare/hat
     /// layout the first time a new session opens).
+    ///
+    /// **Legacy field.** New projects persist the
+    /// [`drum_patterns`](Self::drum_patterns) bank instead and leave this
+    /// empty. On load we promote a non-empty legacy list into a single
+    /// "Main" entry in the bank so projects round-trip cleanly.
     #[serde(default)]
     pub drum_groups: Vec<crate::compose::DrumGroup>,
+    /// Project-scoped drum pattern bank. Each pattern owns its own set
+    /// of [`DrumGroup`]s; section definitions reference patterns by id
+    /// via `drum_pattern_id`. Empty on legacy projects (the loader then
+    /// builds a single-pattern bank from `drum_groups`).
+    #[serde(default)]
+    pub drum_patterns: Vec<crate::compose::DrumPattern>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

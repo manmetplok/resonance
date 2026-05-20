@@ -27,6 +27,7 @@ use std::collections::HashMap;
 
 use resonance_audio::types::*;
 
+#[cfg(test)]
 use crate::compose::DrumGroup;
 use crate::project::{
     LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin,
@@ -173,6 +174,12 @@ fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     if !id_set_eq(
         a.drum_groups.iter().map(|g| g.id),
         b.drum_groups.iter().map(|g| g.id),
+    ) {
+        return false;
+    }
+    if !id_set_eq(
+        a.drum_patterns.iter().map(|p| p.id),
+        b.drum_patterns.iter().map(|p| p.id),
     ) {
         return false;
     }
@@ -714,13 +721,30 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile, extras: &UndoExtras) {
     // captured at snapshot time.
     r.compose
         .load_from_project(&b.section_definitions, &b.section_placements);
-    if !b.drum_groups.is_empty() {
-        r.compose.drum_groups = b.drum_groups.clone();
-        if let Some(max_group_id) = r.compose.drum_groups.iter().map(|g: &DrumGroup| g.id).max() {
-            r.compose.next_id = r.compose.next_id.max(max_group_id);
-        }
+    // Restore the drum pattern bank. Modern snapshots persist
+    // `drum_patterns`; older snapshots still in the undo stack only have
+    // the legacy `drum_groups` field, so promote it the same way the
+    // project loader does.
+    if !b.drum_patterns.is_empty() {
+        r.compose.drum_patterns = b.drum_patterns.clone();
+    } else if !b.drum_groups.is_empty() {
+        let (patterns, _id) = crate::compose::drumroll::legacy_groups_to_pattern(
+            b.drum_groups.clone(),
+            &mut r.compose.next_id,
+        );
+        r.compose.drum_patterns = patterns;
     } else {
-        r.compose.drum_groups.clear();
+        r.compose.drum_patterns.clear();
+    }
+    r.compose.default_drum_pattern_id = r.compose.drum_patterns.first().map(|p| p.id);
+    let max_id = r
+        .compose
+        .drum_patterns
+        .iter()
+        .flat_map(|p| std::iter::once(p.id).chain(p.groups.iter().map(|g| g.id)))
+        .max();
+    if let Some(m) = max_id {
+        r.compose.next_id = r.compose.next_id.max(m);
     }
     r.compose.derived_clips = extras.compose_derived_clips.clone();
     r.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
@@ -797,6 +821,7 @@ mod tests {
             midi_clock_recv_enabled: false,
             midi_clock_recv_device: None,
             drum_groups: Vec::new(),
+            drum_patterns: Vec::new(),
         }
     }
 

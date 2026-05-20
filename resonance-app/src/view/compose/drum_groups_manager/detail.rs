@@ -14,7 +14,11 @@ use crate::Resonance;
 use super::{col_head, column_panel, empty_hint, separator_below, u8_color};
 
 pub(super) fn group_detail_column<'a>(r: &'a Resonance) -> Element<'a, Message> {
-    let groups = &r.compose.drum_groups;
+    let groups: &[DrumGroup] = r
+        .compose
+        .managing_pattern()
+        .map(|p| p.groups.as_slice())
+        .unwrap_or(&[]);
     let active = r
         .compose
         .drumroll

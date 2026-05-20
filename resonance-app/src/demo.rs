@@ -269,6 +269,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
         beats_per_chord: 4,
         seventh_chords: false,
         motif_source: MotifSource::default(),
+        drum_pattern_id: None,
     });
 
     let placement_id = app.compose.fresh_id();

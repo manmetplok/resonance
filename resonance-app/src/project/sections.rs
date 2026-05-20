@@ -53,6 +53,10 @@ pub struct ProjectSectionDefinition {
         deserialize_with = "deserialize_motif_source_compat"
     )]
     pub motif_source: MotifSource,
+    /// Which entry in the project's drum-pattern bank this section uses.
+    /// `None` on legacy projects (loads as "use the project default").
+    #[serde(default)]
+    pub drum_pattern_id: Option<u64>,
 }
 
 /// Accept both the historical `motif: { seed, complexity, motif_len,

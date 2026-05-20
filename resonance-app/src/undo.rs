@@ -583,6 +583,7 @@ mod tests {
                 midi_clock_recv_enabled: false,
                 midi_clock_recv_device: None,
                 drum_groups: Vec::new(),
+                drum_patterns: Vec::new(),
             },
             project_dir: PathBuf::new(),
             midi_notes: HashMap::new(),

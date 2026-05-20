@@ -201,6 +201,20 @@ pub fn parse_startup_tab() -> Option<ViewMode> {
 }
 
 impl Resonance {
+    /// Read-only view onto the Compose tab's runtime state. Surfaced
+    /// so integration tests (`tests/*.rs`) can interrogate section /
+    /// pattern state without depending on the engine I/O paths.
+    pub fn compose_state(&self) -> &compose::ComposeState {
+        &self.compose
+    }
+
+    /// Read-only view onto the track registry. Surfaced for integration
+    /// tests that need to look up the demo's drum track id without
+    /// hard-coding it.
+    pub fn track_registry(&self) -> &state::TrackRegistry {
+        &self.registry
+    }
+
     /// Rebuild the GUI-side tempo map from the current events and send the
     /// events to the audio engine. Call whenever `tempo_events` or
     /// `signature_events` are modified.

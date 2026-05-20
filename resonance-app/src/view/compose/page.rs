@@ -174,12 +174,13 @@ impl crate::Resonance {
                     _ => None,
                 };
 
+                let section_drum_groups = self.compose.groups_for_definition(definition);
                 let right_panel = lane_inspector::view(
                     definition,
                     &self.compose.selected_lane,
                     &self.registry.tracks,
                     &self.compose.drumroll,
-                    &self.compose.drum_groups,
+                    section_drum_groups,
                     clip_id_for_drum,
                     &self.table_registry,
                     &self.compose.vocal_bulk_lyrics,
