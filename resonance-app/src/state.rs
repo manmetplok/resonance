@@ -2,6 +2,13 @@
 use resonance_audio::types::*;
 use serde::{Deserialize, Serialize};
 
+// Inherent-impl extensions on `Resonance` that operate on state held in
+// this module. Split out so `state.rs` stays focused on data types and
+// the matching behaviour lives next to it instead of piling onto the
+// top-level `impl Resonance` block in `lib.rs`.
+pub mod arrange;
+pub mod plugin_index;
+
 /// Whether an in-flight bounce is rendering offline (CLAP synth) or
 /// recording in real time from an audio input. Drives the progress
 /// modal's wording and gates which features the cancel button enables.

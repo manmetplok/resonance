@@ -470,10 +470,27 @@ inline fix pass tackled. Each is documented enough to pick up later.
   contents and dropdown order are byte-identical, no pixel shift. Workspace
   `cargo build` + `cargo clippy --workspace --all-targets` stay at zero
   warnings.
-- [ ] `main.rs:223-403` — god-object methods on `Resonance` (tempo/signature
+- [x] `main.rs:223-403` — god-object methods on `Resonance` (tempo/signature
   mutators, plugin-index trio, `track_id_at_arrange_y`). ARCHITECTURE.md
   flags this. Split into `state/plugin_index.rs`, move tempo mutators into
   `update/global_track.rs`.
+
+  What changed: moved the four `impl Resonance` clusters that were piled
+  onto `lib.rs` into the modules that already own their concern.
+  Plugin-index trio (`with_plugin_mut`, `with_plugin_mut_linear`,
+  `insert_plugin_index`, `remove_plugin_index`, `rebuild_plugin_index`)
+  now lives in `state/plugin_index.rs`. Tempo / signature helpers
+  (`rebuild_and_send_tempo`, `rebuild_tempo_map`, `sync_tempo_display`,
+  `remove_tempo_event`, `remove_signature_event`) joined the
+  `GlobalTrackMessage` handler in `update/global_track.rs`.
+  `track_id_at_arrange_y` moved to a new `state/arrange.rs` — it reads
+  across `registry.tracks` plus the arrange-view scroll offset, so it
+  belongs next to the rest of the arrange geometry. All callers stay on
+  the same `Resonance::method(...)` form (inherent impls split across
+  files); no signatures, no behaviour changes. `Resonance::test_*`
+  accessors untouched, `tests/global_tracks_edit_cycle.rs` and every
+  other workspace test still pass; `cargo clippy --workspace
+  --all-targets` stays at 0 warnings.
 - [ ] `view/compose/expanded_editor.rs:717`, `chord_lane.rs:611`,
   `vocal_lane.rs:561`, `drumroll/canvas.rs:501`, `tracks/draw.rs:472`,
   `vocal_roll/notes.rs:442` — view files past the ~500-line ceiling. Split
