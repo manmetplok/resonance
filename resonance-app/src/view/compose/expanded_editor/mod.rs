@@ -7,6 +7,16 @@
 /// `midi_editor.rs` via `crate::piano_roll`; this canvas keeps the
 /// section-specific bits inline: per-bar beat grid, scale row highlight,
 /// toolbar, and the multi-clip note loop.
+///
+/// The canvas's concerns are split across files:
+///
+/// - this file: [`ExpandedEditorCanvas`] struct, the `view` entry function,
+///   small coordinate helpers, and the [`canvas::Program`] impl that
+///   orchestrates per-event dispatch and per-frame drawing.
+/// - [`draw`]: pure-draw helpers ([`draw_note_rows`], [`draw_beat_grid`],
+///   [`draw_notes`]).
+/// - [`input`]: pointer interaction helpers ([`handle_grid_click`],
+///   [`handle_right_click`], [`handle_drag`]).
 use iced::widget::canvas::{self, Frame, Geometry};
 use iced::widget::{container, Canvas};
 use iced::{mouse, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
@@ -17,21 +27,23 @@ use resonance_music_theory::Scale;
 use crate::compose::{ComposeMessage, SectionDefinitionState, SectionPlacementState};
 use crate::message::*;
 use crate::piano_roll::{
-    self, hit_test_note, is_black_key, note_name, snap_tick, NoteEdge, NoteStyle, PianoRollLayout,
-    PianoRollViewport, NOTE_COUNT,
+    self, note_name, PianoRollLayout, PianoRollViewport,
 };
 use crate::state::MidiClipState;
 use crate::theme;
 use crate::Resonance;
 
+mod draw;
+mod input;
+
 /// Width of the piano keyboard column on the left.
 const KEYBOARD_WIDTH: f32 = 52.0;
 /// Default velocity for newly added notes.
-const DEFAULT_VELOCITY: f32 = 0.8;
+pub(super) const DEFAULT_VELOCITY: f32 = 0.8;
 /// Height reserved for the collapse button bar at the top of the expanded editor.
-const TOOLBAR_HEIGHT: f32 = 24.0;
+pub(super) const TOOLBAR_HEIGHT: f32 = 24.0;
 /// Default snap resolution: quarter notes.
-const SNAP_TICKS: u64 = TICKS_PER_QUARTER_NOTE;
+pub(super) const SNAP_TICKS: u64 = TICKS_PER_QUARTER_NOTE;
 
 pub fn view<'a>(
     app: &'a Resonance,
@@ -82,7 +94,7 @@ pub struct ExpandedEditorCanvas<'a> {
 
 /// Local drag state for the expanded editor canvas.
 #[derive(Debug, Clone)]
-enum DragMode {
+pub(super) enum DragMode {
     MoveNote {
         note_index: usize,
         start_tick_offset: i64,
@@ -97,8 +109,8 @@ enum DragMode {
 
 #[derive(Debug, Default)]
 pub struct ExpandedEditorState {
-    drag: Option<DragMode>,
-    previewing_note: Option<u8>,
+    pub(super) drag: Option<DragMode>,
+    pub(super) previewing_note: Option<u8>,
 }
 
 impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
@@ -316,7 +328,7 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
 
 impl<'a> ExpandedEditorCanvas<'a> {
     /// Section duration in ticks, summing per-bar numerators.
-    fn section_ticks(&self) -> u64 {
+    pub(super) fn section_ticks(&self) -> u64 {
         (0..self.section_length_bars)
             .map(|b| {
                 self.tempo_map.numerator_at_bar(self.start_bar + b) as u64
@@ -325,7 +337,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
             .sum()
     }
 
-    fn layout(&self, bounds: Rectangle) -> PianoRollLayout {
+    pub(super) fn layout(&self, bounds: Rectangle) -> PianoRollLayout {
         PianoRollLayout {
             keyboard_w: KEYBOARD_WIDTH,
             grid_top: TOOLBAR_HEIGHT,
@@ -333,7 +345,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
         }
     }
 
-    fn viewport(&self, layout: &PianoRollLayout, bounds: Rectangle) -> PianoRollViewport {
+    pub(super) fn viewport(&self, layout: &PianoRollLayout, bounds: Rectangle) -> PianoRollViewport {
         let grid_w = bounds.width - layout.grid_x();
         PianoRollViewport {
             zoom_x: self.compute_zoom_x(grid_w),
@@ -353,7 +365,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
     }
 
     /// Pixel rectangle for `note`, in canvas-local coordinates.
-    fn note_rect(
+    pub(super) fn note_rect(
         &self,
         layout: &PianoRollLayout,
         viewport: &PianoRollViewport,
@@ -369,349 +381,13 @@ impl<'a> ExpandedEditorCanvas<'a> {
         }
     }
 
-    fn midi_clip_end_sample(&self, clip: &MidiClipState) -> u64 {
+    pub(super) fn midi_clip_end_sample(&self, clip: &MidiClipState) -> u64 {
         self.tempo_map
             .tick_to_abs_sample(clip.start_sample, clip.duration_ticks, self.sample_rate)
     }
 
-    fn clip_intersects_section(&self, clip: &MidiClipState) -> bool {
+    pub(super) fn clip_intersects_section(&self, clip: &MidiClipState) -> bool {
         let clip_end = self.midi_clip_end_sample(clip);
         !(clip_end <= self.section_start || clip.start_sample >= self.section_end)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Interaction helpers
-// ---------------------------------------------------------------------------
-
-impl<'a> ExpandedEditorCanvas<'a> {
-    fn handle_grid_click(
-        &self,
-        state: &mut ExpandedEditorState,
-        layout: &PianoRollLayout,
-        viewport: &PianoRollViewport,
-        pos: Point,
-        gy: f32,
-    ) -> Option<canvas::Action<Message>> {
-        let grid_x = layout.grid_x();
-        let click_note = viewport.y_local_to_note(gy);
-
-        // Check existing notes for move / resize
-        for clip in self
-            .midi_clips
-            .iter()
-            .filter(|c| c.track_id == self.track_id)
-        {
-            if !self.clip_intersects_section(clip) {
-                continue;
-            }
-            for (i, n) in clip.notes.iter().enumerate() {
-                let rect = self.note_rect(layout, viewport, n);
-                if let Some(edge) = hit_test_note(rect, pos) {
-                    state.drag = Some(match edge {
-                        NoteEdge::ResizeRight => DragMode::ResizeNote {
-                            note_index: i,
-                            anchor_tick: n.start_tick,
-                            clip_id: clip.id,
-                        },
-                        NoteEdge::Body => {
-                            let click_tick = viewport.x_local_to_tick(pos.x - grid_x);
-                            let tick_offset = n.start_tick as i64 - click_tick as i64;
-                            DragMode::MoveNote {
-                                note_index: i,
-                                start_tick_offset: tick_offset,
-                                clip_id: clip.id,
-                            }
-                        }
-                    });
-                    return Some(canvas::Action::capture());
-                }
-            }
-        }
-
-        // Empty space: add note
-        let click_tick = viewport.x_local_to_tick(pos.x - grid_x);
-        let snapped = snap_tick(click_tick, SNAP_TICKS);
-
-        for clip in self
-            .midi_clips
-            .iter()
-            .filter(|c| c.track_id == self.track_id)
-        {
-            let clip_end = self.midi_clip_end_sample(clip);
-            if self.section_start >= clip.start_sample && self.section_start < clip_end {
-                return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::AddNote {
-                        clip_id: clip.id,
-                        note: click_note,
-                        start_tick: snapped,
-                        duration_ticks: SNAP_TICKS,
-                        velocity: DEFAULT_VELOCITY,
-                    })).and_capture());
-            }
-        }
-
-        Some(canvas::Action::capture())
-    }
-
-    fn handle_right_click(
-        &self,
-        layout: &PianoRollLayout,
-        viewport: &PianoRollViewport,
-        pos: Point,
-    ) -> Option<canvas::Action<Message>> {
-        for clip in self
-            .midi_clips
-            .iter()
-            .filter(|c| c.track_id == self.track_id)
-        {
-            if !self.clip_intersects_section(clip) {
-                continue;
-            }
-            for (i, n) in clip.notes.iter().enumerate() {
-                let rect = self.note_rect(layout, viewport, n);
-                if hit_test_note(rect, pos).is_some() {
-                    return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::RemoveNote {
-                            clip_id: clip.id,
-                            note_index: i,
-                        })).and_capture());
-                }
-            }
-        }
-        None
-    }
-
-    fn handle_drag(
-        &self,
-        state: &mut ExpandedEditorState,
-        viewport: &PianoRollViewport,
-        pos: Point,
-        grid_x: f32,
-    ) -> Option<Message> {
-        match &state.drag {
-            Some(DragMode::MoveNote {
-                note_index,
-                start_tick_offset,
-                clip_id,
-                ..
-            }) => {
-                if pos.x >= grid_x && pos.y > TOOLBAR_HEIGHT {
-                    let gy = pos.y - TOOLBAR_HEIGHT;
-                    let tick = viewport.x_local_to_tick(pos.x - grid_x);
-                    let raw = (tick as i64 + start_tick_offset).max(0) as u64;
-                    let snapped = snap_tick(raw, SNAP_TICKS);
-                    let note = viewport.y_local_to_note(gy);
-                    return Some(Message::MidiEditor(MidiEditorMessage::MoveNote {
-                        clip_id: *clip_id,
-                        note_index: *note_index,
-                        new_start_tick: snapped,
-                        new_note: note,
-                    }));
-                }
-                None
-            }
-            Some(DragMode::ResizeNote {
-                note_index,
-                anchor_tick,
-                clip_id,
-            }) => {
-                if pos.x >= grid_x {
-                    let tick = viewport.x_local_to_tick(pos.x - grid_x);
-                    let snapped = snap_tick(tick, SNAP_TICKS);
-                    let new_dur = snapped.saturating_sub(*anchor_tick).max(SNAP_TICKS);
-                    return Some(Message::MidiEditor(MidiEditorMessage::ResizeNote {
-                        clip_id: *clip_id,
-                        note_index: *note_index,
-                        new_duration_ticks: new_dur,
-                    }));
-                }
-                None
-            }
-            None => None,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Drawing helpers
-// ---------------------------------------------------------------------------
-
-impl<'a> ExpandedEditorCanvas<'a> {
-    fn draw_note_rows(
-        &self,
-        frame: &mut Frame,
-        layout: &PianoRollLayout,
-        viewport: &PianoRollViewport,
-        grid_w: f32,
-    ) {
-        let grid_x = layout.grid_x();
-        for midi_note in 0..NOTE_COUNT {
-            let y = layout.grid_top + viewport.note_to_y_local(midi_note);
-            let h = viewport.zoom_y;
-
-            if y + h < layout.grid_top || y > layout.grid_top + layout.grid_h {
-                continue;
-            }
-
-            let is_black = is_black_key(midi_note);
-            let in_scale = self.scale.map(|s| s.contains(midi_note)).unwrap_or(true);
-
-            // Black-key rows render darker against the BG_2 backdrop;
-            // out-of-scale rows get a subtle warm tint. White-key rows
-            // skip the fill entirely so the BG_2 backdrop shows through.
-            let color = if !in_scale {
-                Some(Color {
-                    a: 0.06,
-                    ..theme::WARM
-                })
-            } else if is_black {
-                Some(theme::BG_1)
-            } else {
-                None
-            };
-            if let Some(color) = color {
-                frame.fill_rectangle(Point::new(grid_x, y), Size::new(grid_w, h), color);
-            }
-
-            if midi_note % 12 == 0 {
-                frame.fill_rectangle(
-                    Point::new(grid_x, y + h - 1.0),
-                    Size::new(grid_w, 1.0),
-                    theme::LINE_2,
-                );
-            }
-        }
-    }
-
-    fn draw_beat_grid(
-        &self,
-        frame: &mut Frame,
-        layout: &PianoRollLayout,
-        viewport: &PianoRollViewport,
-        grid_w: f32,
-    ) {
-        if self.section_length_bars == 0 {
-            return;
-        }
-        let grid_x = layout.grid_x();
-        let grid_h = layout.grid_h;
-        let tpb = TICKS_PER_QUARTER_NOTE;
-        let total_ticks = self.section_ticks();
-
-        // Walk bars for correct placement with varying time signatures.
-        let mut tick_pos: u64 = 0;
-        for bar_offset in 0..self.section_length_bars {
-            let bar = self.start_bar + bar_offset;
-            let num = self.tempo_map.numerator_at_bar(bar) as u64;
-            let bar_ticks = num * tpb;
-
-            // Bar line — LINE, 1px hairline like the rest of the redesign.
-            let x = grid_x + viewport.tick_to_x_local(tick_pos);
-            if x >= grid_x && x <= grid_x + grid_w {
-                frame.fill_rectangle(
-                    Point::new(x, TOOLBAR_HEIGHT),
-                    Size::new(1.0, grid_h),
-                    theme::LINE,
-                );
-                if tick_pos < total_ticks {
-                    frame.fill_text(canvas::Text {
-                        content: format!("{}", bar_offset + 1),
-                        position: Point::new(x + 3.0, TOOLBAR_HEIGHT + 2.0),
-                        color: theme::TEXT_3,
-                        size: 9.0.into(),
-                        font: theme::MONO_FONT,
-                        ..canvas::Text::default()
-                    });
-                }
-            }
-
-            // Beat lines — LINE_2 hairlines.
-            for beat in 1..num {
-                let beat_tick = tick_pos + beat * tpb;
-                let bx = grid_x + viewport.tick_to_x_local(beat_tick);
-                if bx >= grid_x && bx <= grid_x + grid_w {
-                    frame.fill_rectangle(
-                        Point::new(bx, TOOLBAR_HEIGHT),
-                        Size::new(1.0, grid_h),
-                        theme::LINE_2,
-                    );
-                }
-            }
-
-            tick_pos += bar_ticks;
-        }
-        // Final bar line at section end
-        let x = grid_x + viewport.tick_to_x_local(tick_pos);
-        if x >= grid_x && x <= grid_x + grid_w {
-            frame.fill_rectangle(
-                Point::new(x, TOOLBAR_HEIGHT),
-                Size::new(1.0, grid_h),
-                theme::LINE,
-            );
-        }
-
-        // Subdivision lines (16th notes) when zoomed in enough — even
-        // softer than beat lines so they don't compete.
-        let sub = tpb / 4;
-        let sub_px = sub as f32 * viewport.zoom_x;
-        if sub_px >= 6.0 {
-            let sub_color = Color {
-                a: 0.5,
-                ..theme::LINE_2
-            };
-            for idx in 0..=(total_ticks / sub) {
-                let tick = idx * sub;
-                if tick.is_multiple_of(tpb) {
-                    continue;
-                }
-                let x = grid_x + viewport.tick_to_x_local(tick);
-                if x < grid_x || x > grid_x + grid_w {
-                    continue;
-                }
-                frame.fill_rectangle(
-                    Point::new(x, TOOLBAR_HEIGHT),
-                    Size::new(1.0, grid_h),
-                    sub_color,
-                );
-            }
-        }
-    }
-
-    fn draw_notes(
-        &self,
-        frame: &mut Frame,
-        layout: &PianoRollLayout,
-        viewport: &PianoRollViewport,
-    ) {
-        let grid_x = layout.grid_x();
-        for clip in self
-            .midi_clips
-            .iter()
-            .filter(|c| c.track_id == self.track_id)
-        {
-            if !self.clip_intersects_section(clip) {
-                continue;
-            }
-
-            for n in &clip.notes {
-                let rect = self.note_rect(layout, viewport, n);
-
-                if rect.x + rect.width < grid_x
-                    || rect.y + rect.height < layout.grid_top
-                    || rect.y > layout.grid_top + layout.grid_h
-                {
-                    continue;
-                }
-
-                // Always paint with the brighter ACCENT stroke (no
-                // selection state in this canvas); labels render inside
-                // notes large enough to be readable.
-                let style = NoteStyle {
-                    stroke: theme::ACCENT,
-                    stroke_width: 1.0,
-                    label: Some(note_name(n.note)),
-                };
-                piano_roll::draw_note(frame, rect, n.velocity, style);
-            }
-        }
     }
 }
