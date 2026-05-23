@@ -1,6 +1,16 @@
 //! Instrument-track creation and MIDI clip / note CRUD. All handlers
 //! mutate the engine-side clip table and emit a matching `AudioEvent`
 //! so the app can mirror the change.
+//!
+//! Move/trim handlers fold mutation and event emission into a single
+//! `if let Some(clip) = ...` branch so a missing clip lookup never
+//! emits a ghost event. The pure inner helpers (`move_midi_clip_in_place`,
+//! `trim_midi_clip_in_place`) are re-exported under `__test_support` so
+//! the regression test in `tests/midi_clip_handlers.rs` can drive them
+//! without bringing up the engine thread.
+
+use crossbeam_channel::Sender;
+use parking_lot::RwLock;
 
 use crate::types::*;
 
@@ -130,18 +140,13 @@ pub(crate) fn handle_move_midi_clip(
     new_start_sample: u64,
     new_track_id: TrackId,
 ) {
-    let mut guard = ctx.midi_clips.write();
-    let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) else {
-        return;
-    };
-    clip.start_sample = new_start_sample;
-    clip.track_id = new_track_id;
-    drop(guard);
-    let _ = ctx.event_tx.send(AudioEvent::MidiClipMoved {
+    move_midi_clip_in_place(
+        ctx.midi_clips,
+        ctx.event_tx,
         clip_id,
         new_start_sample,
         new_track_id,
-    });
+    );
 }
 
 pub(crate) fn handle_trim_midi_clip(
@@ -151,20 +156,69 @@ pub(crate) fn handle_trim_midi_clip(
     trim_start_ticks: u64,
     trim_end_ticks: u64,
 ) {
-    let mut guard = ctx.midi_clips.write();
-    let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) else {
-        return;
-    };
-    clip.start_sample = new_start_sample;
-    clip.trim_start_ticks = trim_start_ticks;
-    clip.trim_end_ticks = trim_end_ticks;
-    drop(guard);
-    let _ = ctx.event_tx.send(AudioEvent::MidiClipTrimmed {
+    trim_midi_clip_in_place(
+        ctx.midi_clips,
+        ctx.event_tx,
         clip_id,
         new_start_sample,
         trim_start_ticks,
         trim_end_ticks,
-    });
+    );
+}
+
+/// Apply a move to the MIDI clip with `clip_id` and emit `MidiClipMoved`.
+///
+/// Both the mutation and the event live inside the `if let Some(clip)`
+/// branch, so when the clip lookup misses no event is emitted — mirroring
+/// the audio-clip move handler in [`super::super::clips::handle_move_clip`].
+/// Previously the handler used a `let-else` with early `return`, which was
+/// also correct but obscured the invariant; the canonical pattern keeps
+/// "mutated state and event are inseparable" syntactically obvious.
+pub fn move_midi_clip_in_place(
+    midi_clips: &RwLock<Vec<MidiClip>>,
+    event_tx: &Sender<AudioEvent>,
+    clip_id: ClipId,
+    new_start_sample: u64,
+    new_track_id: TrackId,
+) {
+    let mut guard = midi_clips.write();
+    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+        clip.start_sample = new_start_sample;
+        clip.track_id = new_track_id;
+        let _ = event_tx.send(AudioEvent::MidiClipMoved {
+            clip_id,
+            new_start_sample,
+            new_track_id,
+        });
+    }
+}
+
+/// Apply a trim to the MIDI clip with `clip_id` and emit `MidiClipTrimmed`.
+///
+/// Same invariant as [`move_midi_clip_in_place`]: mutation and event both
+/// live inside the `if let Some` branch so a missing-clip lookup never
+/// emits a ghost event. Mirrors
+/// [`super::super::clips::handle_trim_clip`].
+pub fn trim_midi_clip_in_place(
+    midi_clips: &RwLock<Vec<MidiClip>>,
+    event_tx: &Sender<AudioEvent>,
+    clip_id: ClipId,
+    new_start_sample: u64,
+    trim_start_ticks: u64,
+    trim_end_ticks: u64,
+) {
+    let mut guard = midi_clips.write();
+    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+        clip.start_sample = new_start_sample;
+        clip.trim_start_ticks = trim_start_ticks;
+        clip.trim_end_ticks = trim_end_ticks;
+        let _ = event_tx.send(AudioEvent::MidiClipTrimmed {
+            clip_id,
+            new_start_sample,
+            trim_start_ticks,
+            trim_end_ticks,
+        });
+    }
 }
 
 pub(crate) fn handle_delete_midi_clip(ctx: &HandlerCtx, clip_id: ClipId) {

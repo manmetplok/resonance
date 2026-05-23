@@ -25,6 +25,12 @@ pub(crate) use clips::{
     handle_move_midi_clip, handle_move_midi_note, handle_remove_midi_note, handle_resize_midi_note,
     handle_set_midi_note_velocity, handle_trim_midi_clip,
 };
+
+/// Test surface for the MIDI clip move/trim handlers. Exposed under
+/// `__test_support` (via `lib.rs`) so the regression test in
+/// `tests/midi_clip_handlers.rs` can drive both code paths — missing-clip
+/// no-op and happy-path — without bringing up the engine thread.
+pub use clips::{move_midi_clip_in_place, trim_midi_clip_in_place};
 pub(crate) use clock::{
     clock_send_continue, clock_send_song_position, clock_send_start, clock_send_stop,
     handle_midi_clock_event, handle_set_midi_clock_input, handle_set_midi_clock_output,

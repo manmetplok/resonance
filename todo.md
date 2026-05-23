@@ -86,7 +86,7 @@ inline fix pass tackled. Each is documented enough to pick up later.
   tracks write lock while audio thread reads. ArcSwap the chain.
 - [x] `engine/clips.rs:67,184` — `compute_waveform_peaks` blocks engine thread
   while pushing into `clips_arc.write()`.
-- [ ] `engine/midi/clips.rs:127-164` — `MidiClipMoved`/`MidiClipTrimmed` events
+- [x] `engine/midi/clips.rs:127-164` — `MidiClipMoved`/`MidiClipTrimmed` events
   fire even when the clip wasn't found. Move event emission inside the `Some`
   branch (already correct for audio clips).
 - [ ] `platform.rs:359-368,495-500` — env-var manipulation racy with anything

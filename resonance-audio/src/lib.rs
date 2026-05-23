@@ -51,6 +51,12 @@ pub mod __test_support {
 #[doc(hidden)]
 pub use engine::midi::{outbound_step_start, OutboundStep};
 
+/// Test surface for the MIDI clip move/trim handlers. Exposed so the
+/// regression test in `tests/midi_clip_handlers.rs` can drive the
+/// missing-clip no-op branch without spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::midi::{move_midi_clip_in_place, trim_midi_clip_in_place};
+
 /// Test surface for the bounce path's MIDI event collection. Exposed so
 /// integration tests can drive the chunk-by-chunk note-event walk
 /// without spinning up a CLAP plugin or the engine thread.
