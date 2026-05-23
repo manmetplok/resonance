@@ -33,6 +33,7 @@ mod render;
 mod wav;
 
 pub use clip::to_audio_clip;
+pub use render::try_lock_with_backoff;
 pub(crate) use wav::to_wav;
 
 /// Spawn the bounce on a dedicated worker thread so the engine

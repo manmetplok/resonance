@@ -29,6 +29,7 @@ use crate::stream_errors::{format_underrun_line, UnderrunRateLimiter};
 use crate::types::*;
 
 mod bounce;
+pub use bounce::try_lock_with_backoff;
 mod bounce_common;
 
 /// Copy-on-write helper for the `ArcSwap<TempoMap>` shared with the

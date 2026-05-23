@@ -7,9 +7,10 @@
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex, MutexGuard, RwLock};
 
 use crate::clap_host::{StereoBufMut, SyncClapInstance};
 use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
@@ -19,6 +20,74 @@ use crate::types::*;
 use super::super::{SharedState, MAX_BUSSES};
 
 pub(super) const BOUNCE_CHUNK: usize = 1024;
+
+/// How many `try_lock` spins before falling back to sleeping. A spin is
+/// a `std::hint::spin_loop` + immediate retry — cheap and only useful
+/// for the rare case where the audio thread is on the verge of
+/// releasing the lock. Anything beyond that wastes CPU.
+const PLUGIN_LOCK_SPIN_ITERS: u32 = 8;
+/// Initial sleep duration after spin-wait fails. Audio callbacks at
+/// typical buffer sizes (256–1024 frames @ 48 kHz = ~5–21 ms) hold any
+/// given plugin's mutex only for the slice of process() spent on that
+/// plugin, so 100 µs is enough to clear most contention windows
+/// without yielding the bounce thread for an entire callback.
+const PLUGIN_LOCK_INITIAL_SLEEP: Duration = Duration::from_micros(100);
+/// Cap on the exponential back-off — at 2 ms we're already comfortably
+/// past a single audio quantum at 48 kHz / 96 frames, so doubling
+/// further just delays the bounce without helping the audio thread.
+const PLUGIN_LOCK_MAX_SLEEP: Duration = Duration::from_micros(2000);
+
+/// Take a plugin's mutex without blocking the audio thread. The audio
+/// callback uses `try_lock` everywhere (see `engine/plugins.rs`,
+/// `mixer/track_block.rs`, etc.) and silently drops out for the
+/// current block if the lock is held — so a blocking `lock()` from the
+/// bounce thread would force the audio thread's `try_lock` to fail,
+/// glitching live playback for the duration of the bounce thread's
+/// process() call.
+///
+/// Instead we spin briefly, then back off with progressively longer
+/// sleeps. Lock holders on either side run a single plugin's process()
+/// (sub-millisecond for cheap plugins, a few ms for heavy ones), so
+/// the back-off catches the audio thread on its release without
+/// burning CPU.
+#[inline]
+pub(super) fn lock_plugin_for_bounce(
+    mutex: &Mutex<SyncClapInstance>,
+) -> MutexGuard<'_, SyncClapInstance> {
+    try_lock_with_backoff(mutex)
+}
+
+/// Generic backbone for [`lock_plugin_for_bounce`]. Lives separately so
+/// integration tests can hammer it against a plain `Mutex<u32>` without
+/// having to materialise a real CLAP plugin. Exposed via the
+/// `__test_support` module in `lib.rs`.
+#[inline]
+pub fn try_lock_with_backoff<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    // Fast path: no contention.
+    if let Some(g) = mutex.try_lock() {
+        return g;
+    }
+    // Brief spin — covers the case where the audio thread is one or
+    // two instructions away from releasing.
+    for _ in 0..PLUGIN_LOCK_SPIN_ITERS {
+        std::hint::spin_loop();
+        if let Some(g) = mutex.try_lock() {
+            return g;
+        }
+    }
+    // Back off with sleeps capped by `PLUGIN_LOCK_MAX_SLEEP`. We don't
+    // poll any cancel flag inside the loop because contention windows
+    // are sub-millisecond and the per-chunk cancel check in the bounce
+    // loops above is plenty responsive.
+    let mut sleep = PLUGIN_LOCK_INITIAL_SLEEP;
+    loop {
+        std::thread::sleep(sleep);
+        if let Some(g) = mutex.try_lock() {
+            return g;
+        }
+        sleep = (sleep * 2).min(PLUGIN_LOCK_MAX_SLEEP);
+    }
+}
 
 /// Mutable scratch buffers reused across chunks. Allocated once by the
 /// caller and lent to [`render_chunk`].
@@ -77,7 +146,7 @@ pub(super) fn reset_plugins(
 ) {
     let plugins_guard = plugins.read();
     for mutex in plugins_guard.values() {
-        let mut inst = mutex.lock();
+        let mut inst = lock_plugin_for_bounce(mutex);
         inst.0.reset_processing();
     }
 }
@@ -166,7 +235,7 @@ pub(super) fn render_chunk(
             let mut plugin_iter = track.plugin_ids.iter();
             if let Some(&inst_id) = plugin_iter.next() {
                 if let Some(mutex) = plugins_guard.get(&inst_id) {
-                    let mut inst = mutex.lock();
+                    let mut inst = lock_plugin_for_bounce(mutex);
                     for ev in scratch.note_buf.iter() {
                         if ev.is_note_on {
                             inst.0.queue_note_on(ev.note, ev.velocity, ev.sample_offset);
@@ -233,7 +302,7 @@ pub(super) fn render_chunk(
             if !track.fx_bypassed() {
                 for &plugin_id in plugin_iter {
                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                        let mut inst = mutex.lock();
+                        let mut inst = lock_plugin_for_bounce(mutex);
                         inst.0.process(
                             &mut scratch.track_buf_l[..frames],
                             &mut scratch.track_buf_r[..frames],
@@ -275,7 +344,7 @@ pub(super) fn render_chunk(
             if !track.plugin_ids.is_empty() && !track.fx_bypassed() {
                 for &plugin_id in &track.plugin_ids {
                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                        let mut inst = mutex.lock();
+                        let mut inst = lock_plugin_for_bounce(mutex);
                         inst.0.process(
                             &mut scratch.track_buf_l[..frames],
                             &mut scratch.track_buf_r[..frames],
@@ -353,7 +422,7 @@ pub(super) fn render_chunk(
                     let (pl, pr) = &mut scratch.port_scratch[port_idx];
                     for &plugin_id in &sub_track.plugin_ids {
                         if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                            let mut inst = mutex.lock();
+                            let mut inst = lock_plugin_for_bounce(mutex);
                             inst.0.process(&mut pl[..frames], &mut pr[..frames], frames);
                         }
                     }
@@ -398,7 +467,7 @@ pub(super) fn render_chunk(
         if !bus.fx_bypassed() {
             for &plugin_id in &bus.plugin_ids {
                 if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                    let mut inst = mutex.lock();
+                    let mut inst = lock_plugin_for_bounce(mutex);
                     inst.0.process(&mut bl[..frames], &mut br[..frames], frames);
                 }
             }
@@ -425,7 +494,7 @@ pub(super) fn render_chunk(
             }
             for &plugin_id in &master_guard.plugin_ids {
                 if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                    let mut inst = mutex.lock();
+                    let mut inst = lock_plugin_for_bounce(mutex);
                     inst.0.process(
                         &mut scratch.track_buf_l[..frames],
                         &mut scratch.track_buf_r[..frames],

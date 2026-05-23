@@ -68,7 +68,7 @@ inline fix pass tackled. Each is documented enough to pick up later.
 
 ### resonance-audio — engine
 
-- [ ] `engine/bounce/render.rs:78-82,169,236,278,356,401,428` — bounce thread
+- [x] `engine/bounce/render.rs:78-82,169,236,278,356,401,428` — bounce thread
   takes blocking plugin locks per chunk, glitching live playback. Use
   `try_lock` + retry, or freeze a snapshot.
 - [ ] `types/track.rs:57` — `plugin_ids: Vec<PluginInstanceId>` mutated under
@@ -77,7 +77,7 @@ inline fix pass tackled. Each is documented enough to pick up later.
 ## Code review 2026-05-19 — Medium
 
 ### resonance-audio
-- [ ] `engine/bounce/render.rs:78-82,169,236,278,356,401,428` — bounce thread takes
+- [x] `engine/bounce/render.rs:78-82,169,236,278,356,401,428` — bounce thread takes
   blocking `mutex.lock()` per plugin per chunk, glitching live playback. Use
   `try_lock` + retry, or freeze a snapshot.
 - [ ] `engine/mod.rs:435-437` — `AudioEngine::send` silently drops commands.
