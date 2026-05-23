@@ -1,8 +1,9 @@
 //! Engine-side Track and Bus, with atomic hot-path accessors for the
 //! audio callback.
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use arc_swap::ArcSwapOption;
+use arc_swap::{ArcSwap, ArcSwapOption, Guard};
 
 use super::{BusId, PluginInstanceId, TrackId, TrackOutput, TrackType};
 
@@ -53,8 +54,18 @@ pub struct Track {
     /// used as R. Defaults to 0 (first channel pair).
     input_port_bits: AtomicU32,
     /// Ordered list of plugin instance IDs forming the insert chain.
-    /// For instrument tracks, the first plugin is the instrument; the rest are effects.
-    pub plugin_ids: Vec<PluginInstanceId>,
+    /// For instrument tracks, the first plugin is the instrument; the
+    /// rest are effects.
+    ///
+    /// Wrapped in `ArcSwap` so the audio thread can load the chain
+    /// without ever blocking on a `tracks.write()` guard the UI is
+    /// holding to add/remove/reorder plugins. Mutations build a new
+    /// `Vec` and publish it with a single atomic store; readers see
+    /// either the pre-edit or post-edit chain, never a torn one.
+    /// Access via `plugins()` / `push_plugin()` / `retain_plugins()` /
+    /// `clear_plugins()` / `set_plugin_chain()`; the field is private
+    /// so the `&mut Vec` mutation pattern can no longer compile.
+    plugin_chain: ArcSwap<Vec<PluginInstanceId>>,
     /// When set, this track is a sub-track fed by a non-main output port
     /// of `parent_track_id`'s instrument plugin. Sub-tracks never run
     /// their own plugin chain or receive MIDI events — the mixer drives
@@ -102,7 +113,7 @@ impl Track {
             output_bus_bits: AtomicU64::new(TRACK_OUTPUT_MASTER),
             input_device_name: ArcSwapOption::const_empty(),
             input_port_bits: AtomicU32::new(0),
-            plugin_ids: Vec::new(),
+            plugin_chain: ArcSwap::from_pointee(Vec::new()),
             sub_track_of: None,
             midi_input_device: None,
             midi_input_channel: None,
@@ -212,6 +223,56 @@ impl Track {
 
     pub fn set_mono(&self, v: bool) {
         self.mono.store(v, Ordering::Relaxed);
+    }
+
+    /// Borrow the current plugin chain. The returned [`Guard`] derefs to
+    /// `&Vec<PluginInstanceId>`, so call sites can `for &id in track.plugins().iter()`.
+    /// Holding the guard does not block writers — `ArcSwap` snapshots
+    /// the chain via a single atomic load, so a concurrent mutation
+    /// just publishes a new chain that future loads will see.
+    pub fn plugins(&self) -> Guard<Arc<Vec<PluginInstanceId>>> {
+        self.plugin_chain.load()
+    }
+
+    /// Cheap `Arc` clone of the current plugin chain. Useful when the
+    /// caller wants to hand the chain off to another scope (e.g. the
+    /// engine-thread "collect plugin ids before draining" pattern) and
+    /// outlive any borrow of `&self`.
+    pub fn plugin_chain_snapshot(&self) -> Arc<Vec<PluginInstanceId>> {
+        self.plugin_chain.load_full()
+    }
+
+    /// Append `id` to the chain. Copy-on-write: clones the current
+    /// chain, pushes, and publishes the new chain. Concurrent readers
+    /// keep using the pre-push chain until they reload.
+    pub fn push_plugin(&self, id: PluginInstanceId) {
+        let current = self.plugin_chain.load_full();
+        let mut next = (*current).clone();
+        next.push(id);
+        self.plugin_chain.store(Arc::new(next));
+    }
+
+    /// Drop every plugin id where `pred` returns false. Copy-on-write
+    /// like [`push_plugin`](Self::push_plugin).
+    pub fn retain_plugins(&self, mut pred: impl FnMut(&PluginInstanceId) -> bool) {
+        let current = self.plugin_chain.load_full();
+        let mut next = (*current).clone();
+        next.retain(|id| pred(id));
+        self.plugin_chain.store(Arc::new(next));
+    }
+
+    /// Replace the chain wholesale with `ids`. Used by project-load
+    /// replay and by the plugin-scan path that clears every track's
+    /// chain before re-instantiating the saved instances.
+    pub fn set_plugin_chain(&self, ids: Vec<PluginInstanceId>) {
+        self.plugin_chain.store(Arc::new(ids));
+    }
+
+    /// Empty the chain. Convenience wrapper over
+    /// [`set_plugin_chain`](Self::set_plugin_chain) for the common
+    /// "wipe all FX" path.
+    pub fn clear_plugins(&self) {
+        self.plugin_chain.store(Arc::new(Vec::new()));
     }
 
     /// Atomically update peak L to the max of the current and new value.

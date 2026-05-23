@@ -332,7 +332,7 @@ fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
     let mut silent_r = [0.0f32; 64];
     for track in tracks_guard.values() {
         if track.track_type.accepts_midi() {
-            if let Some(&inst_id) = track.plugin_ids.first() {
+            if let Some(&inst_id) = track.plugins().first() {
                 if let Some(mutex) = plugins_guard.get(&inst_id) {
                     if let Some(mut inst) = mutex.try_lock() {
                         inst.0.all_notes_off();

@@ -61,7 +61,8 @@ pub(super) fn process_monitor_track(
 
     // Process through plugin chain (skipped when FX are bypassed).
     if !track.fx_bypassed() {
-        for &plugin_id in &track.plugin_ids {
+        let plugins = track.plugins();
+        for &plugin_id in plugins.iter() {
             if let Some(si) = plugins_guard.get(&plugin_id) {
                 if let Some(mut inst) = si.try_lock() {
                     latch_transport(&mut inst, transport_snap);

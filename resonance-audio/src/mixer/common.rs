@@ -113,7 +113,7 @@ pub(super) fn panic_instrument_tracks(
         if !track.track_type.accepts_midi() {
             continue;
         }
-        let Some(&inst_id) = track.plugin_ids.first() else {
+        let Some(inst_id) = track.plugins().first().copied() else {
             continue;
         };
         let Some(mutex) = plugins_guard.get(&inst_id) else {

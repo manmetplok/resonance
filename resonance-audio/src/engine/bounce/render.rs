@@ -232,7 +232,8 @@ pub(super) fn render_chunk(
                 ctx.sample_rate,
                 &mut scratch.note_buf,
             );
-            let mut plugin_iter = track.plugin_ids.iter();
+            let track_plugins = track.plugins();
+            let mut plugin_iter = track_plugins.iter();
             if let Some(&inst_id) = plugin_iter.next() {
                 if let Some(mutex) = plugins_guard.get(&inst_id) {
                     let mut inst = lock_plugin_for_bounce(mutex);
@@ -341,8 +342,9 @@ pub(super) fn render_chunk(
             }
 
             // Process through plugin chain (skipped when bypassed).
-            if !track.plugin_ids.is_empty() && !track.fx_bypassed() {
-                for &plugin_id in &track.plugin_ids {
+            let track_plugins = track.plugins();
+            if !track_plugins.is_empty() && !track.fx_bypassed() {
+                for &plugin_id in track_plugins.iter() {
                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
                         let mut inst = lock_plugin_for_bounce(mutex);
                         inst.0.process(
@@ -420,7 +422,8 @@ pub(super) fn render_chunk(
                 // Sub-track effect chain runs in place on its port buffer.
                 if !sub_track.fx_bypassed() {
                     let (pl, pr) = &mut scratch.port_scratch[port_idx];
-                    for &plugin_id in &sub_track.plugin_ids {
+                    let sub_plugins = sub_track.plugins();
+                    for &plugin_id in sub_plugins.iter() {
                         if let Some(mutex) = plugins_guard.get(&plugin_id) {
                             let mut inst = lock_plugin_for_bounce(mutex);
                             inst.0.process(&mut pl[..frames], &mut pr[..frames], frames);

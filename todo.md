@@ -71,7 +71,7 @@ inline fix pass tackled. Each is documented enough to pick up later.
 - [x] `engine/bounce/render.rs:78-82,169,236,278,356,401,428` — bounce thread
   takes blocking plugin locks per chunk, glitching live playback. Use
   `try_lock` + retry, or freeze a snapshot.
-- [ ] `types/track.rs:57` — `plugin_ids: Vec<PluginInstanceId>` mutated under
+- [x] `types/track.rs:57` — `plugin_ids: Vec<PluginInstanceId>` mutated under
   tracks write lock while audio reads. ArcSwap the chain.
 
 ## Code review 2026-05-19 — Medium
@@ -82,7 +82,7 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `try_lock` + retry, or freeze a snapshot.
 - [ ] `engine/mod.rs:435-437` — `AudioEngine::send` silently drops commands.
   Return `Result` or emit an `EngineDisconnected` event.
-- [ ] `types/track.rs:57` — `plugin_ids: Vec<PluginInstanceId>` mutated under
+- [x] `types/track.rs:57` — `plugin_ids: Vec<PluginInstanceId>` mutated under
   tracks write lock while audio thread reads. ArcSwap the chain.
 - [ ] `engine/clips.rs:67,184` — `compute_waveform_peaks` blocks engine thread
   while pushing into `clips_arc.write()`.

@@ -27,7 +27,7 @@ pub(crate) fn handle_send_note_on(
         if !track.track_type.accepts_midi() {
             return;
         }
-        if let Some(&inst_id) = track.plugin_ids.first() {
+        if let Some(&inst_id) = track.plugins().first() {
             let plugins_guard = ctx.plugins.read();
             if let Some(mutex) = plugins_guard.get(&inst_id) {
                 // `try_lock` so a slow plugin process() doesn't stall
@@ -70,7 +70,7 @@ pub(crate) fn handle_send_note_off(
         if !track.track_type.accepts_midi() {
             return;
         }
-        if let Some(&inst_id) = track.plugin_ids.first() {
+        if let Some(&inst_id) = track.plugins().first() {
             let plugins_guard = ctx.plugins.read();
             if let Some(mutex) = plugins_guard.get(&inst_id) {
                 // `try_lock` — see comment in `handle_send_note_on`.

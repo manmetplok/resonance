@@ -101,7 +101,8 @@ pub(super) fn render_timeline_block(
 
             // Process: first plugin is the instrument (receives note events),
             // remaining plugins are effects (audio-only).
-            let mut plugin_iter = track.plugin_ids.iter();
+            let track_plugins = track.plugins();
+            let mut plugin_iter = track_plugins.iter();
             if let Some(&instrument_id) = plugin_iter.next() {
                 if let Some(mutex) = plugins_guard.get(&instrument_id) {
                     if let Some(mut inst) = mutex.try_lock() {
@@ -256,8 +257,9 @@ pub(super) fn render_timeline_block(
             }
 
             // Process through plugin chain (skipped when FX are bypassed).
-            if !track.plugin_ids.is_empty() && !track.fx_bypassed() {
-                for &plugin_id in &track.plugin_ids {
+            let track_plugins = track.plugins();
+            if !track_plugins.is_empty() && !track.fx_bypassed() {
+                for &plugin_id in track_plugins.iter() {
                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
                         if let Some(mut inst) = mutex.try_lock() {
                             latch_transport(&mut inst, transport_snap);
@@ -341,11 +343,12 @@ pub(super) fn render_timeline_block(
                 // Run the sub-track's own effect chain in place on its
                 // port buffer, before peak metering and bus/master routing.
                 // Sub-tracks never host an instrument, so every entry in
-                // `plugin_ids` is treated as an audio effect and is
+                // the plugin chain is treated as an audio effect and is
                 // subject to the sub-track's own FX-bypass flag.
                 if !sub_track.fx_bypassed() {
                     let (pl, pr) = &mut port_scratch[port_idx];
-                    for &plugin_id in &sub_track.plugin_ids {
+                    let sub_plugins = sub_track.plugins();
+                    for &plugin_id in sub_plugins.iter() {
                         if let Some(mutex) = plugins_guard.get(&plugin_id) {
                             if let Some(mut inst) = mutex.try_lock() {
                                 latch_transport(&mut inst, transport_snap);

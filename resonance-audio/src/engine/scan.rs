@@ -32,8 +32,12 @@ pub(crate) fn scan_plugins(
         drop(plugins_guard);
         drop(removed);
     }
-    for track in tracks.write().values_mut() {
-        track.plugin_ids.clear();
+    // `clear_plugins` publishes a new empty chain via `ArcSwap::store`,
+    // so a read guard on the tracks map is enough — write-locking it
+    // here used to silence the audio callback for whatever block
+    // straddled the scan.
+    for track in tracks.read().values() {
+        track.clear_plugins();
     }
     // Clear previous scan results to avoid duplicates.
     bundles.clear();

@@ -62,8 +62,11 @@ pub(crate) fn handle_add_plugin(
                 parking_lot::Mutex::new(SyncClapInstance(instance)),
             );
 
-            if let Some(track) = ctx.tracks.write().get_mut(&track_id) {
-                track.plugin_ids.push(instance_id);
+            // `push_plugin` publishes the new chain via `ArcSwap::store`,
+            // so we only need a read guard — the audio thread is not
+            // blocked while the chain edit happens.
+            if let Some(track) = ctx.tracks.read().get(&track_id) {
+                track.push_plugin(instance_id);
             }
 
             let _ = ctx.event_tx.send(AudioEvent::PluginAdded {
@@ -92,8 +95,11 @@ pub(crate) fn handle_remove_plugin(
     track_id: TrackId,
     instance_id: PluginInstanceId,
 ) {
-    if let Some(track) = ctx.tracks.write().get_mut(&track_id) {
-        track.plugin_ids.retain(|&id| id != instance_id);
+    // `retain_plugins` publishes a new chain via `ArcSwap::store`, so
+    // we only need a read guard on the tracks map — the audio thread
+    // is never blocked on the chain edit.
+    if let Some(track) = ctx.tracks.read().get(&track_id) {
+        track.retain_plugins(|&id| id != instance_id);
     }
     // Remove from map then drop outside the write lock so the audio
     // callback isn't blocked during plugin deactivation.

@@ -122,7 +122,7 @@ pub(crate) fn handle_remove_track(ctx: &HandlerCtx, state: &mut HandlerState, tr
             .tracks
             .read()
             .get(&track_id)
-            .map(|t| t.plugin_ids.clone());
+            .map(|t| t.plugin_chain_snapshot());
         if let Some(ids) = plugin_ids {
             let mut plugins_guard = ctx.plugins.write();
             ids.iter()
