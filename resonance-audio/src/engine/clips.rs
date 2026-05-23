@@ -171,41 +171,84 @@ pub(crate) fn handle_load_clip_from_wav(
     trim_start_frames: u64,
     trim_end_frames: u64,
 ) {
-    let source = match ClipSource::open_wav(&path) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = ctx
-                .event_tx
-                .send(AudioEvent::Error(format!("Failed to load clip WAV: {e}")));
-            return;
-        }
-    };
-
-    let total_frames = source.frame_count();
-    let waveform_peaks = compute_waveform_peaks(source.as_frames());
-    let duration_samples = total_frames
-        .saturating_sub(trim_start_frames)
-        .saturating_sub(trim_end_frames);
-
-    let clip = AudioClip {
-        id: clip_id,
-        track_id,
-        start_sample,
-        source,
-        name: name.clone(),
-        trim_start_frames,
-        trim_end_frames,
-    };
-    ctx.clips.write().push(clip);
+    // Bump the engine-thread-local id counter immediately so that any
+    // subsequent `ImportClip` command issued before the worker thread
+    // completes still allocates a unique id. The worker captures
+    // `clip_id` by move, so this update only affects future allocations.
     state.next_clip_id = state.next_clip_id.max(clip_id + 1);
-    let _ = ctx.event_tx.send(AudioEvent::ClipImported {
-        clip_id,
-        track_id,
-        start_sample,
-        duration_samples,
-        name,
-        waveform_peaks,
-    });
+
+    // The heavy work — `ClipSource::open_wav` (which pre-touches every
+    // page of the mmap), `compute_waveform_peaks` (an O(n) decimation
+    // across the whole sample buffer), and the brief `clips.write()` to
+    // publish — used to run synchronously on the engine thread. Project
+    // load fires one `LoadClipFromWav` per audio clip, so on a project
+    // with many large clips the engine command queue stalled for
+    // hundreds of milliseconds while the audio thread's `clips.try_read`
+    // periodically lost the race and emitted silence. Spawning a
+    // short-lived worker keeps the engine thread free for the next
+    // command and pushes the write lock contention down to the
+    // unavoidable single-element-`push` step. Concurrency is bounded by
+    // `MAX_CONCURRENT_IMPORTS` (shared with the import path).
+    if state.active_imports.load(Ordering::Relaxed) >= MAX_CONCURRENT_IMPORTS {
+        eprintln!(
+            "Warning: too many concurrent clip loads ({MAX_CONCURRENT_IMPORTS}), skipping load of {:?}",
+            path
+        );
+        let _ = ctx.event_tx.send(AudioEvent::Error(
+            "Too many concurrent clip loads, please wait for current loads to finish.".to_string(),
+        ));
+        return;
+    }
+
+    let clips_arc = Arc::clone(ctx.clips);
+    let thread_event_tx = ctx.event_tx.clone();
+    let imports_counter = Arc::clone(&state.active_imports);
+    imports_counter.fetch_add(1, Ordering::Relaxed);
+
+    let spawn_result = std::thread::Builder::new()
+        .name("resonance-clip-load".into())
+        .spawn(move || {
+            match ClipSource::open_wav(&path) {
+                Ok(source) => {
+                    let total_frames = source.frame_count();
+                    let waveform_peaks = compute_waveform_peaks(source.as_frames());
+                    let duration_samples = total_frames
+                        .saturating_sub(trim_start_frames)
+                        .saturating_sub(trim_end_frames);
+
+                    let clip = AudioClip {
+                        id: clip_id,
+                        track_id,
+                        start_sample,
+                        source,
+                        name: name.clone(),
+                        trim_start_frames,
+                        trim_end_frames,
+                    };
+                    clips_arc.write().push(clip);
+                    let _ = thread_event_tx.send(AudioEvent::ClipImported {
+                        clip_id,
+                        track_id,
+                        start_sample,
+                        duration_samples,
+                        name,
+                        waveform_peaks,
+                    });
+                }
+                Err(e) => {
+                    let _ = thread_event_tx
+                        .send(AudioEvent::Error(format!("Failed to load clip WAV: {e}")));
+                }
+            }
+            imports_counter.fetch_sub(1, Ordering::Relaxed);
+        });
+    if let Err(e) = spawn_result {
+        state.active_imports.fetch_sub(1, Ordering::Relaxed);
+        let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+            "Failed to spawn clip-load thread: {}",
+            e
+        )));
+    }
 }
 
 /// Guarantee that every in-engine audio clip has a WAV file on disk

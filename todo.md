@@ -84,7 +84,7 @@ inline fix pass tackled. Each is documented enough to pick up later.
   Return `Result` or emit an `EngineDisconnected` event.
 - [x] `types/track.rs:57` — `plugin_ids: Vec<PluginInstanceId>` mutated under
   tracks write lock while audio thread reads. ArcSwap the chain.
-- [ ] `engine/clips.rs:67,184` — `compute_waveform_peaks` blocks engine thread
+- [x] `engine/clips.rs:67,184` — `compute_waveform_peaks` blocks engine thread
   while pushing into `clips_arc.write()`.
 - [ ] `engine/midi/clips.rs:127-164` — `MidiClipMoved`/`MidiClipTrimmed` events
   fire even when the clip wasn't found. Move event emission inside the `Some`
