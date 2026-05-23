@@ -80,7 +80,7 @@ inline fix pass tackled. Each is documented enough to pick up later.
 - [x] `engine/bounce/render.rs:78-82,169,236,278,356,401,428` — bounce thread takes
   blocking `mutex.lock()` per plugin per chunk, glitching live playback. Use
   `try_lock` + retry, or freeze a snapshot.
-- [ ] `engine/mod.rs:435-437` — `AudioEngine::send` silently drops commands.
+- [x] `engine/mod.rs:435-437` — `AudioEngine::send` silently drops commands.
   Return `Result` or emit an `EngineDisconnected` event.
 - [x] `types/track.rs:57` — `plugin_ids: Vec<PluginInstanceId>` mutated under
   tracks write lock while audio thread reads. ArcSwap the chain.

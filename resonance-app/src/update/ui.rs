@@ -52,28 +52,28 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::ToggleMidiClockSend => {
             r.midi_clock_send_enabled = !r.midi_clock_send_enabled;
-            r.engine.send(AudioCommand::SetMidiClockOutput {
+            let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
                 device: r.midi_clock_send_device.clone(),
                 enabled: r.midi_clock_send_enabled,
             });
         }
         UiMessage::SetMidiClockSendDevice(device) => {
             r.midi_clock_send_device = device.clone();
-            r.engine.send(AudioCommand::SetMidiClockOutput {
+            let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
                 device,
                 enabled: r.midi_clock_send_enabled,
             });
         }
         UiMessage::ToggleMidiClockRecv => {
             r.midi_clock_recv_enabled = !r.midi_clock_recv_enabled;
-            r.engine.send(AudioCommand::SetMidiClockInput {
+            let _ = r.engine.send(AudioCommand::SetMidiClockInput {
                 device: r.midi_clock_recv_device.clone(),
                 enabled: r.midi_clock_recv_enabled,
             });
         }
         UiMessage::SetMidiClockRecvDevice(device) => {
             r.midi_clock_recv_device = device.clone();
-            r.engine.send(AudioCommand::SetMidiClockInput {
+            let _ = r.engine.send(AudioCommand::SetMidiClockInput {
                 device,
                 enabled: r.midi_clock_recv_enabled,
             });

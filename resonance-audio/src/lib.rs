@@ -25,7 +25,7 @@ pub(crate) mod stream_errors;
 pub mod types;
 
 pub use decode::{linear_resample, StreamingLinearResampler};
-pub use engine::{transcode_to_wav, AudioEngine};
+pub use engine::{transcode_to_wav, AudioEngine, EngineSendError};
 pub use limits::DEFAULT_HISTORY_CAPACITY;
 pub use midi_hardware::MidiDeviceInfo;
 pub use types::*;
@@ -37,6 +37,7 @@ pub use types::*;
 pub mod __test_support {
     pub use crate::clap_host::{ClapBundle, SyncClapInstance};
     pub use crate::engine::try_lock_with_backoff;
+    pub use crate::engine::__reset_engine_disconnect_latch_for_test;
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
     pub use crate::midi_hardware::{parse_live_event_for_test, LiveMidiEvent};
     pub use crate::stream_errors::{

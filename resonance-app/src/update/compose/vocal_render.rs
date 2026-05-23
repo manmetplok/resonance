@@ -344,13 +344,13 @@ pub(super) fn handle_vocal_audio_ready(
             .clips
             .remove(&(definition_id, placement_id, track_id))
         {
-            r.engine
+            let _ = r.engine
                 .send(AudioCommand::DeleteClip { clip_id: old_id });
             unlink_if_exists(&old_path);
         }
 
         let audio_clip_id = r.compose.fresh_derived_clip_id();
-        r.engine.send(AudioCommand::LoadClipFromWav {
+        let _ = r.engine.send(AudioCommand::LoadClipFromWav {
             clip_id: audio_clip_id,
             track_id,
             start_sample,
@@ -389,12 +389,12 @@ impl VocalMidiInstall<'_> {
                     .derived_clips
                     .remove(&(self.definition_id, placement_id, self.track_id))
             {
-                r.engine
+                let _ = r.engine
                     .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
                 r.compose.vocal_audio.clip_lyrics.remove(&old_id);
             }
             let clip_id = r.compose.fresh_derived_clip_id();
-            r.engine.send(AudioCommand::LoadMidiClipDirect {
+            let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
                 clip_id,
                 track_id: self.track_id,
                 start_sample,
@@ -438,7 +438,7 @@ fn tear_down_old_vocal_audio(
         .map(|(k, v)| (*k, v.clone()))
         .collect();
     for (key, (clip_id, path)) in stale {
-        r.engine.send(AudioCommand::DeleteClip { clip_id });
+        let _ = r.engine.send(AudioCommand::DeleteClip { clip_id });
         unlink_if_exists(&path);
         r.compose.vocal_audio.clips.remove(&key);
     }

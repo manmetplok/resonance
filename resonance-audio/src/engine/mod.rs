@@ -113,6 +113,56 @@ pub(crate) struct SharedState {
     pub bounce_cancel: AtomicBool,
 }
 
+/// Error returned by [`AudioEngine::send`] when the engine thread's
+/// command channel has been dropped. Wraps the original command so the
+/// caller can retry, log, or surface a "engine disconnected" message
+/// to the user.
+///
+/// In practice this happens after `AudioEngine::shutdown` (or `Drop`)
+/// has joined the engine thread, or — in pathological cases — if the
+/// engine thread panicked. Either way the command will not be acted
+/// on and the caller should treat it as a fatal-ish state.
+#[derive(Debug)]
+pub struct EngineSendError(pub AudioCommand);
+
+impl std::fmt::Display for EngineSendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "audio engine command channel disconnected; dropped command: {:?}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for EngineSendError {}
+
+/// One-shot eprintln when the command channel first disconnects, as a
+/// safety net for call sites that intentionally `let _ =` the
+/// `EngineSendError` returned by `AudioEngine::send`. Uses an atomic
+/// latch so a stuck app doesn't flood stderr. Lives at module scope
+/// so the test-only `for_test_disconnected` path can reset it (see
+/// `__test_support::__reset_engine_disconnect_latch_for_test`).
+fn report_engine_disconnect_once() {
+    use std::sync::atomic::Ordering;
+    if !ENGINE_DISCONNECT_REPORTED.swap(true, Ordering::Relaxed) {
+        eprintln!(
+            "audio: engine command channel disconnected — subsequent send() calls will return EngineSendError"
+        );
+    }
+}
+
+static ENGINE_DISCONNECT_REPORTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Test-only hook: clear the one-shot disconnect-reported latch so a
+/// regression test can drive `send` through the disconnect branch
+/// without depending on prior test ordering.
+#[doc(hidden)]
+pub fn __reset_engine_disconnect_latch_for_test() {
+    ENGINE_DISCONNECT_REPORTED.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The audio engine.
 #[allow(dead_code)]
 pub struct AudioEngine {
@@ -451,33 +501,23 @@ impl AudioEngine {
         })
     }
 
-    /// Send a command to the audio engine. Silently drops the command
-    /// if the engine thread has disconnected (post-shutdown or panic);
-    /// the first time that happens, an eprintln warning is emitted so
-    /// the situation isn't completely invisible. Callers that need to
-    /// observe disconnect should use `try_send`.
-    pub fn send(&self, cmd: AudioCommand) {
-        if let Err(e) = self.cmd_tx.send(cmd) {
-            self.report_send_failure(&e.0);
-        }
-    }
-
-    /// Send a command and surface a disconnect to the caller. Returned
-    /// `Err` carries the original command so the caller can retry or
-    /// surface a fatal error.
-    pub fn try_send(&self, cmd: AudioCommand) -> Result<(), AudioCommand> {
-        self.cmd_tx.send(cmd).map_err(|e| e.0)
-    }
-
-    /// Emit a one-shot eprintln when the command channel disconnects.
-    /// Uses an atomic latch so a stuck app doesn't flood stderr.
-    fn report_send_failure(&self, _cmd: &AudioCommand) {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        if !REPORTED.swap(true, Ordering::Relaxed) {
-            eprintln!(
-                "audio: engine command channel disconnected — subsequent commands will be dropped silently"
-            );
+    /// Send a command to the audio engine.
+    ///
+    /// Returns `Err(EngineSendError)` if the engine thread's command
+    /// channel has been dropped (post-shutdown or panic). The returned
+    /// error carries the original command so the caller can choose to
+    /// retry, surface a UI message, or log and move on. The first
+    /// disconnect of the process lifetime is also reported once on
+    /// stderr so call sites that ignore the result (via `let _ =`)
+    /// don't fail completely silently.
+    #[must_use = "ignoring an engine send failure swallows a user-visible command (Play, SetVolume, …); use `let _ = …` only after deciding the loss is acceptable"]
+    pub fn send(&self, cmd: AudioCommand) -> Result<(), EngineSendError> {
+        match self.cmd_tx.send(cmd) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                report_engine_disconnect_once();
+                Err(EngineSendError(e.0))
+            }
         }
     }
 
@@ -542,6 +582,66 @@ impl AudioEngine {
         self.event_rx.clone()
     }
 
+    /// Test-only constructor that builds an `AudioEngine` with no spawned
+    /// engine thread, no cpal stream, and a command channel whose receiver
+    /// has already been dropped. Calling [`AudioEngine::send`] on the
+    /// returned handle therefore always exercises the disconnect branch
+    /// and returns `Err(EngineSendError)`.
+    ///
+    /// Exposed via `__test_support` so the disconnect regression test in
+    /// `tests/` can run without bringing up a real audio device.
+    #[doc(hidden)]
+    pub fn for_test_disconnected() -> Self {
+        // Build a command channel and immediately drop the receiver so
+        // every send hits `SendError`.
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<AudioCommand>();
+        drop(cmd_rx);
+        let (_event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
+
+        let shared = Arc::new(SharedState {
+            playhead: AtomicU64::new(0),
+            playing: AtomicBool::new(false),
+            recording: AtomicBool::new(false),
+            monitoring: AtomicBool::new(false),
+            master_volume_bits: AtomicU32::new(1.0f32.to_bits()),
+            master_peak_l_bits: AtomicU32::new(0),
+            master_peak_r_bits: AtomicU32::new(0),
+            master_fx_bypassed: AtomicBool::new(false),
+            recording_overflow: AtomicBool::new(false),
+            input_channels: AtomicU16::new(0),
+            loop_enabled: AtomicBool::new(false),
+            loop_in: AtomicU64::new(0),
+            loop_out: AtomicU64::new(0),
+            count_in_active: AtomicBool::new(false),
+            count_in_remaining: AtomicU64::new(0),
+            count_in_total: AtomicU64::new(0),
+            bounce_cancel: AtomicBool::new(false),
+        });
+
+        // A zero-capacity ringbuf is fine — the test never drives audio
+        // through it.
+        let monitor_ring = ringbuf::HeapRb::<f32>::new(1);
+        let (prod, _cons) = monitor_ring.split();
+
+        Self {
+            cmd_tx,
+            event_rx,
+            _stream: None,
+            engine_thread: None,
+            shared,
+            tracks: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
+            busses: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
+            master: Arc::new(parking_lot::RwLock::new(MasterBus::new())),
+            clips: Arc::new(parking_lot::RwLock::new(Vec::new())),
+            midi_clips: Arc::new(parking_lot::RwLock::new(Vec::new())),
+            plugins: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
+            tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
+            monitor_prod: Arc::new(parking_lot::Mutex::new(prod)),
+            sample_rate: 48_000,
+            channels: 2,
+            quantum: 128,
+        }
+    }
 }
 
 impl Drop for AudioEngine {

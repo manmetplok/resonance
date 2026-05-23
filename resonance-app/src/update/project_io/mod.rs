@@ -30,7 +30,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
         ProjectIoMessage::BouncePathSelected(Some(path)) => {
             r.io.bouncing = true;
-            r.engine.send(AudioCommand::BounceToWav { path });
+            let _ = r.engine.send(AudioCommand::BounceToWav { path });
         }
         ProjectIoMessage::BouncePathSelected(None) => {}
         ProjectIoMessage::SaveProject => {
@@ -59,13 +59,13 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         ProjectIoMessage::OpenPathSelected(Some(path)) => {
             let path = std::path::PathBuf::from(path);
             r.io.project_path = Some(path.clone());
-            r.engine.send(AudioCommand::SetProjectDir(path.clone()));
+            let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
             return dialogs::load_project_task(path);
         }
         ProjectIoMessage::OpenPathSelected(None) => {}
         ProjectIoMessage::OpenRecent(path) => {
             r.io.project_path = Some(path.clone());
-            r.engine.send(AudioCommand::SetProjectDir(path.clone()));
+            let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
             return dialogs::load_project_task(path);
         }
         ProjectIoMessage::ProjectSaved(Ok(())) => {
@@ -86,7 +86,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.error_message = Some(format!("Save failed: {e}"));
         }
         ProjectIoMessage::ProjectLoaded(Ok(loaded)) => {
-            r.engine.send(AudioCommand::Stop);
+            let _ = r.engine.send(AudioCommand::Stop);
             r.transport.playing = false;
             r.transport.recording = false;
             r.io.loading = true;
@@ -94,7 +94,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.undo.clear();
             r.plugin_state_cache.clear();
             r.dirty = false;
-            r.engine.send(AudioCommand::ClearAll);
+            let _ = r.engine.send(AudioCommand::ClearAll);
             r.io.has_active_project = true;
             if let Some(ref path) = r.io.project_path {
                 crate::recent::add(&mut r.io.recent_projects, path);
@@ -141,7 +141,7 @@ pub fn start_save(r: &mut Resonance) -> Task<Message> {
         return Task::none();
     }
 
-    r.engine.send(AudioCommand::SetProjectDir(path.clone()));
+    let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
     r.io.save_state = Some(SaveCollector {
         path,
         clip_files: HashMap::new(),
@@ -149,7 +149,7 @@ pub fn start_save(r: &mut Resonance) -> Task<Message> {
         clips_done: false,
         plugins_done: false,
     });
-    r.engine.send(AudioCommand::SaveClipsToProjectDir);
-    r.engine.send(AudioCommand::SaveAllPluginStates);
+    let _ = r.engine.send(AudioCommand::SaveClipsToProjectDir);
+    let _ = r.engine.send(AudioCommand::SaveAllPluginStates);
     Task::none()
 }

@@ -75,7 +75,7 @@ pub(super) fn handle_create_midi_clip(
     time_sig_num: u8,
 ) {
     let duration_ticks = length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
-    r.engine.send(AudioCommand::CreateMidiClip {
+    let _ = r.engine.send(AudioCommand::CreateMidiClip {
         track_id,
         start_sample,
         duration_ticks,

@@ -25,7 +25,7 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
             duration_ticks,
             velocity,
         } => {
-            r.engine.send(AudioCommand::AddMidiNote {
+            let _ = r.engine.send(AudioCommand::AddMidiNote {
                 clip_id,
                 note: MidiNote {
                     note,
@@ -39,7 +39,7 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
             clip_id,
             note_index,
         } => {
-            r.engine.send(AudioCommand::RemoveMidiNote {
+            let _ = r.engine.send(AudioCommand::RemoveMidiNote {
                 clip_id,
                 note_index,
             });
@@ -50,7 +50,7 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
             new_start_tick,
             new_note,
         } => {
-            r.engine.send(AudioCommand::MoveMidiNote {
+            let _ = r.engine.send(AudioCommand::MoveMidiNote {
                 clip_id,
                 note_index,
                 new_start_tick,
@@ -62,7 +62,7 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
             note_index,
             new_duration_ticks,
         } => {
-            r.engine.send(AudioCommand::ResizeMidiNote {
+            let _ = r.engine.send(AudioCommand::ResizeMidiNote {
                 clip_id,
                 note_index,
                 new_duration_ticks,
@@ -74,14 +74,14 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
             }
         }
         MidiEditorMessage::PreviewNote(track_id, note) => {
-            r.engine.send(AudioCommand::SendNoteOn {
+            let _ = r.engine.send(AudioCommand::SendNoteOn {
                 track_id,
                 note,
                 velocity: 0.8,
             });
         }
         MidiEditorMessage::StopPreview(track_id, note) => {
-            r.engine.send(AudioCommand::SendNoteOff { track_id, note });
+            let _ = r.engine.send(AudioCommand::SendNoteOff { track_id, note });
         }
         MidiEditorMessage::ScrollY(delta) => {
             if let Some(ref mut editor) = r.interaction.editing_midi_clip {

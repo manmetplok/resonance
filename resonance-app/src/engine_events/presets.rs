@@ -25,21 +25,21 @@ pub(super) fn apply_preset_to_track(
 
     let track_id = track.id;
 
-    r.engine.send(AudioCommand::SetTrackVolume {
+    let _ = r.engine.send(AudioCommand::SetTrackVolume {
         track_id,
         volume: crate::util::db_to_gain(preset.volume),
     });
-    r.engine.send(AudioCommand::SetTrackPan {
+    let _ = r.engine.send(AudioCommand::SetTrackPan {
         track_id,
         pan: preset.pan,
     });
-    r.engine.send(AudioCommand::SetTrackMono {
+    let _ = r.engine.send(AudioCommand::SetTrackMono {
         track_id,
         mono: preset.mono,
     });
 
     for pp in &preset.plugins {
-        r.engine.send(AudioCommand::AddPlugin {
+        let _ = r.engine.send(AudioCommand::AddPlugin {
             track_id,
             clap_file_path: pp.clap_file_path.clone(),
             clap_plugin_id: pp.clap_plugin_id.clone(),

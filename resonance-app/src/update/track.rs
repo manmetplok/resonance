@@ -56,21 +56,21 @@ pub fn classify_bounce(
 pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
     match m {
         TrackMessage::AddTrack => {
-            r.engine.send(AudioCommand::AddTrack {
+            let _ = r.engine.send(AudioCommand::AddTrack {
                 id_hint: None,
                 name: None,
             });
             r.mixer.add_track_menu_open = false;
         }
         TrackMessage::AddInstrumentTrack => {
-            r.engine.send(AudioCommand::AddInstrumentTrack {
+            let _ = r.engine.send(AudioCommand::AddInstrumentTrack {
                 id_hint: None,
                 name: None,
             });
             r.mixer.add_track_menu_open = false;
         }
         TrackMessage::AddVocalTrack => {
-            r.engine.send(AudioCommand::AddVocalTrack {
+            let _ = r.engine.send(AudioCommand::AddVocalTrack {
                 id_hint: None,
                 name: None,
             });
@@ -88,7 +88,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 if r.compose.expanded_track_id == Some(id) {
                     r.compose.expanded_track_id = None;
                 }
-                r.engine.send(AudioCommand::RemoveTrack { track_id: id });
+                let _ = r.engine.send(AudioCommand::RemoveTrack { track_id: id });
             }
         }
         TrackMessage::ConfirmRemoveTrack => {
@@ -99,26 +99,26 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 if r.compose.expanded_track_id == Some(id) {
                     r.compose.expanded_track_id = None;
                 }
-                r.engine.send(AudioCommand::RemoveTrack { track_id: id });
+                let _ = r.engine.send(AudioCommand::RemoveTrack { track_id: id });
             }
         }
         TrackMessage::CancelRemoveTrack => {
             r.confirm_delete_track = None;
         }
         TrackMessage::SetTrackVolume(id, vol_db) => {
-            r.engine.send(AudioCommand::SetTrackVolume {
+            let _ = r.engine.send(AudioCommand::SetTrackVolume {
                 track_id: id,
                 volume: db_to_gain(vol_db),
             });
             r.with_track_mut(id, |t| t.volume = vol_db);
         }
         TrackMessage::SetTrackPan(id, pan) => {
-            r.engine
+            let _ = r.engine
                 .send(AudioCommand::SetTrackPan { track_id: id, pan });
             r.with_track_mut(id, |t| t.pan = pan);
         }
         TrackMessage::SetMasterVolume(vol_db) => {
-            r.engine.send(AudioCommand::SetMasterVolume {
+            let _ = r.engine.send(AudioCommand::SetMasterVolume {
                 volume: db_to_gain(vol_db),
             });
             r.master_volume = vol_db;
@@ -129,7 +129,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.muted
             });
             if let Some(muted) = new_muted {
-                r.engine.send(AudioCommand::SetTrackMute {
+                let _ = r.engine.send(AudioCommand::SetTrackMute {
                     track_id: id,
                     muted,
                 });
@@ -141,7 +141,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.soloed
             });
             if let Some(soloed) = new_soloed {
-                r.engine.send(AudioCommand::SetTrackSolo {
+                let _ = r.engine.send(AudioCommand::SetTrackSolo {
                     track_id: id,
                     soloed,
                 });
@@ -158,12 +158,12 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             });
             if let Some((armed, device)) = auto_device {
                 if armed && device.is_some() {
-                    r.engine.send(AudioCommand::SetTrackInputDevice {
+                    let _ = r.engine.send(AudioCommand::SetTrackInputDevice {
                         track_id: id,
                         device_name: device,
                     });
                 }
-                r.engine.send(AudioCommand::SetTrackRecordArm {
+                let _ = r.engine.send(AudioCommand::SetTrackRecordArm {
                     track_id: id,
                     armed,
                 });
@@ -175,7 +175,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.monitor_enabled
             });
             if let Some(enabled) = new_enabled {
-                r.engine.send(AudioCommand::SetTrackMonitor {
+                let _ = r.engine.send(AudioCommand::SetTrackMonitor {
                     track_id: id,
                     enabled,
                 });
@@ -190,7 +190,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.fx_bypassed
             });
             if let Some(bypassed) = new_bypass {
-                r.engine.send(AudioCommand::SetTrackFxBypass {
+                let _ = r.engine.send(AudioCommand::SetTrackFxBypass {
                     track_id: id,
                     bypassed,
                 });
@@ -202,7 +202,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.mono
             });
             if let Some(mono) = new_mono {
-                r.engine
+                let _ = r.engine
                     .send(AudioCommand::SetTrackMono { track_id: id, mono });
             }
         }
@@ -212,11 +212,11 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.input_port_index = 0;
             });
             if updated.is_some() {
-                r.engine.send(AudioCommand::SetTrackInputDevice {
+                let _ = r.engine.send(AudioCommand::SetTrackInputDevice {
                     track_id: id,
                     device_name,
                 });
-                r.engine.send(AudioCommand::SetTrackInputPort {
+                let _ = r.engine.send(AudioCommand::SetTrackInputPort {
                     track_id: id,
                     port_index: 0,
                 });
@@ -225,7 +225,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
         TrackMessage::SetTrackInputPort(id, port_index) => {
             let updated = r.with_track_mut(id, |t| t.input_port_index = port_index);
             if updated.is_some() {
-                r.engine.send(AudioCommand::SetTrackInputPort {
+                let _ = r.engine.send(AudioCommand::SetTrackInputPort {
                     track_id: id,
                     port_index,
                 });
@@ -237,7 +237,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.midi_input_channel
             });
             if let Some(channel) = updated {
-                r.engine.send(AudioCommand::SetTrackMidiInput {
+                let _ = r.engine.send(AudioCommand::SetTrackMidiInput {
                     track_id: id,
                     device,
                     channel,
@@ -250,7 +250,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.midi_output_channel
             });
             if let Some(channel) = updated {
-                r.engine.send(AudioCommand::SetTrackMidiOutput {
+                let _ = r.engine.send(AudioCommand::SetTrackMidiOutput {
                     track_id: id,
                     device,
                     channel,
@@ -263,7 +263,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.midi_input_device.clone()
             });
             if let Some(device) = device {
-                r.engine.send(AudioCommand::SetTrackMidiInput {
+                let _ = r.engine.send(AudioCommand::SetTrackMidiInput {
                     track_id: id,
                     device,
                     channel,
@@ -276,7 +276,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.midi_output_device.clone()
             });
             if let Some(device) = device {
-                r.engine.send(AudioCommand::SetTrackMidiOutput {
+                let _ = r.engine.send(AudioCommand::SetTrackMidiOutput {
                     track_id: id,
                     device,
                     channel,
@@ -289,7 +289,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             }
         }
         TrackMessage::SetTrackOutput(track_id, output) => {
-            r.engine
+            let _ = r.engine
                 .send(AudioCommand::SetTrackOutput { track_id, output });
             r.with_track_mut(track_id, |t| t.output = output);
         }
@@ -305,7 +305,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                     name: Some(preset.name.clone()),
                 }
             };
-            r.engine.send(cmd);
+            let _ = r.engine.send(cmd);
             r.pending_track_preset = Some(*preset);
             r.mixer.add_track_menu_open = false;
         }
@@ -348,7 +348,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             // `TrackBounceCancelled`; don't drop it locally so the
             // modal stays up while the engine teardown runs (offline
             // is fast; realtime needs the audio thread to settle).
-            r.engine.send(AudioCommand::CancelBounce);
+            let _ = r.engine.send(AudioCommand::CancelBounce);
         }
         TrackMessage::Bounce(BounceMessage::Confirm) => {
             handle_bounce_dialog_confirm(r);
@@ -381,11 +381,11 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
     let target_track_id = r.registry.allocate_sub_track_id();
     let track_name = format!("{source_name} bounce");
 
-    r.engine.send(AudioCommand::AddTrack {
+    let _ = r.engine.send(AudioCommand::AddTrack {
         id_hint: Some(target_track_id),
         name: Some(track_name),
     });
-    r.engine.send(AudioCommand::BounceTrackRealtimeToAudio {
+    let _ = r.engine.send(AudioCommand::BounceTrackRealtimeToAudio {
         source_track_id: dialog.source_track_id,
         target_track_id,
         input_device_name: device,
@@ -428,7 +428,7 @@ fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::T
                 mono: false,
             });
             // Make sure the input device list is fresh for the dialog.
-            r.engine.send(AudioCommand::ListInputDevices);
+            let _ = r.engine.send(AudioCommand::ListInputDevices);
         }
         BounceMode::Internal => {
             internal_bounce_dispatch(r, track_id);
@@ -458,11 +458,11 @@ fn internal_bounce_dispatch(r: &mut Resonance, track_id: resonance_audio::types:
         fraction: 0.0,
     });
 
-    r.engine.send(AudioCommand::AddTrack {
+    let _ = r.engine.send(AudioCommand::AddTrack {
         id_hint: Some(target_track_id),
         name: Some(track_name),
     });
-    r.engine.send(AudioCommand::BounceTrackToAudio {
+    let _ = r.engine.send(AudioCommand::BounceTrackToAudio {
         source_track_id: track_id,
         target_track_id,
         target_clip_id,

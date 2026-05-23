@@ -57,7 +57,7 @@ pub(super) fn track_added(
             } else {
                 Some(states.remove(0))
             } {
-                r.engine
+                let _ = r.engine
                     .send(AudioCommand::LoadPluginState { instance_id, data });
             }
         }
@@ -75,7 +75,7 @@ pub(super) fn track_added(
     // state. Snapshots taken before the user interacts with the plugin
     // will have the default blob to restore to, avoiding "undo resets
     // the plugin to uninitialised garbage" UX.
-    r.engine
+    let _ = r.engine
         .send(AudioCommand::SavePluginState { instance_id });
 
     ensure_subtracks(r, track_id, output_port_count, &output_port_names);
@@ -138,7 +138,7 @@ fn ensure_subtracks(
         // mute / bus routing atomics live alongside the parent track and
         // the mixer's existing SetTrackVolume / SetTrackOutput / ...
         // commands work unchanged.
-        r.engine.send(AudioCommand::CreateSubTrack {
+        let _ = r.engine.send(AudioCommand::CreateSubTrack {
             sub_id,
             parent_track_id,
             output_port_index: port_idx as u32,
@@ -220,7 +220,7 @@ pub(super) fn bus_added(
     if inserted {
         r.insert_plugin_index(instance_id, PluginLocator::Bus(bus_id));
     }
-    r.engine
+    let _ = r.engine
         .send(AudioCommand::SavePluginState { instance_id });
 }
 
@@ -266,7 +266,7 @@ pub(super) fn master_added(
         ));
         r.insert_plugin_index(instance_id, PluginLocator::Master);
     }
-    r.engine
+    let _ = r.engine
         .send(AudioCommand::SavePluginState { instance_id });
 }
 

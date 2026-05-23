@@ -183,7 +183,7 @@ pub(super) fn finalize_bounce(
     {
         track.muted = true;
     }
-    r.engine.send(AudioCommand::SetTrackMute {
+    let _ = r.engine.send(AudioCommand::SetTrackMute {
         track_id: source_track_id,
         muted: true,
     });

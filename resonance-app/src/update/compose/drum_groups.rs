@@ -647,7 +647,7 @@ pub fn materialize_drum_clips(r: &mut crate::Resonance) {
                 .derived_clips
                 .remove(&(definition_id, placement_id, track_id))
             {
-                r.engine
+                let _ = r.engine
                     .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
             }
             let track_name = r
@@ -659,7 +659,7 @@ pub fn materialize_drum_clips(r: &mut crate::Resonance) {
                 .unwrap_or_else(|| "Drums".to_string());
             let name = format!("{} · {}", def_name, track_name);
             let clip_id = r.compose.fresh_derived_clip_id();
-            r.engine.send(AudioCommand::LoadMidiClipDirect {
+            let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
                 clip_id,
                 track_id,
                 start_sample,

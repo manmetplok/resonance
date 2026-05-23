@@ -352,10 +352,10 @@ impl Resonance {
         };
 
         // Request input device list and plugin scan on startup
-        engine.send(AudioCommand::ListInputDevices);
-        engine.send(AudioCommand::ListMidiInputDevices);
-        engine.send(AudioCommand::ListMidiOutputDevices);
-        engine.send(AudioCommand::ScanPlugins);
+        let _ = engine.send(AudioCommand::ListInputDevices);
+        let _ = engine.send(AudioCommand::ListMidiInputDevices);
+        let _ = engine.send(AudioCommand::ListMidiOutputDevices);
+        let _ = engine.send(AudioCommand::ScanPlugins);
 
         let recent_projects = recent::load();
 

@@ -7,7 +7,7 @@ use crate::Resonance;
 pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
     match m {
         PluginMessage::AddPluginToTrack(track_id, plugin) => {
-            r.engine.send(AudioCommand::AddPlugin {
+            let _ = r.engine.send(AudioCommand::AddPlugin {
                 track_id,
                 clap_file_path: plugin.clap_file_path,
                 clap_plugin_id: plugin.clap_plugin_id,
@@ -15,7 +15,7 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             });
         }
         PluginMessage::RemovePluginFromTrack(track_id, instance_id) => {
-            r.engine.send(AudioCommand::RemovePlugin {
+            let _ = r.engine.send(AudioCommand::RemovePlugin {
                 track_id,
                 instance_id,
             });
@@ -28,7 +28,7 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             }
         }
         PluginMessage::SetPluginParam(instance_id, param_id, value) => {
-            r.engine.send(AudioCommand::SetPluginParam {
+            let _ = r.engine.send(AudioCommand::SetPluginParam {
                 instance_id,
                 param_id,
                 value,
@@ -40,15 +40,15 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             });
         }
         PluginMessage::OpenPluginEditor(instance_id) => {
-            r.engine
+            let _ = r.engine
                 .send(AudioCommand::OpenPluginEditor { instance_id });
             r.with_plugin_mut(instance_id, |p| p.editor_open = true);
         }
         PluginMessage::ClosePluginEditor(instance_id) => {
-            r.engine
+            let _ = r.engine
                 .send(AudioCommand::ClosePluginEditor { instance_id });
             r.with_plugin_mut(instance_id, |p| p.editor_open = false);
-            r.engine.send(AudioCommand::SavePluginState { instance_id });
+            let _ = r.engine.send(AudioCommand::SavePluginState { instance_id });
         }
     }
     Task::none()

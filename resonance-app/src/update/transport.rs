@@ -23,49 +23,49 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
                     r.transport.loop_out = loop_out;
                     r.transport.loop_enabled = true;
                     r.transport.loop_range_set = true;
-                    r.engine.send(AudioCommand::SetLoopRange {
+                    let _ = r.engine.send(AudioCommand::SetLoopRange {
                         enabled: true,
                         loop_in,
                         loop_out,
                     });
-                    r.engine.send(AudioCommand::SeekTo(loop_in));
+                    let _ = r.engine.send(AudioCommand::SeekTo(loop_in));
                     r.transport.playhead = loop_in;
                 }
             }
-            r.engine.send(AudioCommand::Play);
+            let _ = r.engine.send(AudioCommand::Play);
             r.transport.playing = true;
         }
         TransportMessage::Record => {
             if r.registry.tracks.iter().any(|t| t.record_armed) {
-                r.engine.send(AudioCommand::Record {
+                let _ = r.engine.send(AudioCommand::Record {
                     precount_bars: r.transport.precount_bars,
                 });
                 r.transport.playing = true;
             }
         }
         TransportMessage::Pause => {
-            r.engine.send(AudioCommand::Pause);
+            let _ = r.engine.send(AudioCommand::Pause);
             r.transport.playing = false;
         }
         TransportMessage::Stop => {
-            r.engine.send(AudioCommand::Stop);
+            let _ = r.engine.send(AudioCommand::Stop);
             r.transport.playing = false;
             r.transport.playhead = 0;
         }
         TransportMessage::SkipBack => {
             let skip = r.sample_rate as u64 * 5;
             let new_pos = r.transport.playhead.saturating_sub(skip);
-            r.engine.send(AudioCommand::SeekTo(new_pos));
+            let _ = r.engine.send(AudioCommand::SeekTo(new_pos));
             r.transport.playhead = new_pos;
         }
         TransportMessage::SkipForward => {
             let skip = r.sample_rate as u64 * 5;
             let new_pos = r.transport.playhead + skip;
-            r.engine.send(AudioCommand::SeekTo(new_pos));
+            let _ = r.engine.send(AudioCommand::SeekTo(new_pos));
             r.transport.playhead = new_pos;
         }
         TransportMessage::SeekToSample(pos) => {
-            r.engine.send(AudioCommand::SeekTo(pos));
+            let _ = r.engine.send(AudioCommand::SeekTo(pos));
             r.transport.playhead = pos;
         }
         TransportMessage::SetBpmText(s) => {
@@ -74,7 +74,7 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
         TransportMessage::CommitBpm => {
             if let Ok(parsed) = r.transport.bpm_input.trim().parse::<f32>() {
                 r.transport.bpm = parsed.clamp(20.0, 300.0);
-                r.engine.send(AudioCommand::SetBpm {
+                let _ = r.engine.send(AudioCommand::SetBpm {
                     bpm: r.transport.bpm,
                 });
                 if let Some(first) = r.tempo_events.first_mut() {
@@ -88,7 +88,7 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
         }
         TransportMessage::ToggleMetronome => {
             r.transport.metronome_enabled = !r.transport.metronome_enabled;
-            r.engine.send(AudioCommand::SetMetronomeEnabled {
+            let _ = r.engine.send(AudioCommand::SetMetronomeEnabled {
                 enabled: r.transport.metronome_enabled,
             });
         }
@@ -103,7 +103,7 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
             };
             r.transport.time_sig_num = num;
             r.transport.time_sig_den = den;
-            r.engine.send(AudioCommand::SetTimeSignature {
+            let _ = r.engine.send(AudioCommand::SetTimeSignature {
                 numerator: num,
                 denominator: den,
             });
@@ -130,7 +130,7 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
                 r.transport.loop_out = r.transport.playhead + two_bars;
                 r.transport.loop_range_set = true;
             }
-            r.engine.send(AudioCommand::SetLoopRange {
+            let _ = r.engine.send(AudioCommand::SetLoopRange {
                 enabled: r.transport.loop_enabled,
                 loop_in: r.transport.loop_in,
                 loop_out: r.transport.loop_out,
@@ -161,7 +161,7 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
                     None => {}
                 }
                 if r.transport.loop_enabled {
-                    r.engine.send(AudioCommand::SetLoopRange {
+                    let _ = r.engine.send(AudioCommand::SetLoopRange {
                         enabled: true,
                         loop_in: r.transport.loop_in,
                         loop_out: r.transport.loop_out,
@@ -175,7 +175,7 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
                 std::mem::swap(&mut r.transport.loop_in, &mut r.transport.loop_out);
             }
             if r.transport.loop_enabled {
-                r.engine.send(AudioCommand::SetLoopRange {
+                let _ = r.engine.send(AudioCommand::SetLoopRange {
                     enabled: true,
                     loop_in: r.transport.loop_in,
                     loop_out: r.transport.loop_out,

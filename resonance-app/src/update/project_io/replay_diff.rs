@@ -291,25 +291,25 @@ fn midi_clip_set_matches(a: &[ProjectMidiClip], b: &[ProjectMidiClip]) -> bool {
 fn apply_global(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     if a.bpm != b.bpm {
         r.transport.bpm = b.bpm;
-        r.engine.send(AudioCommand::SetBpm { bpm: b.bpm });
+        let _ = r.engine.send(AudioCommand::SetBpm { bpm: b.bpm });
     }
     if a.time_sig_num != b.time_sig_num || a.time_sig_den != b.time_sig_den {
         r.transport.time_sig_num = b.time_sig_num;
         r.transport.time_sig_den = b.time_sig_den;
-        r.engine.send(AudioCommand::SetTimeSignature {
+        let _ = r.engine.send(AudioCommand::SetTimeSignature {
             numerator: b.time_sig_num,
             denominator: b.time_sig_den,
         });
     }
     if a.metronome_enabled != b.metronome_enabled {
         r.transport.metronome_enabled = b.metronome_enabled;
-        r.engine.send(AudioCommand::SetMetronomeEnabled {
+        let _ = r.engine.send(AudioCommand::SetMetronomeEnabled {
             enabled: b.metronome_enabled,
         });
     }
     if a.master_volume != b.master_volume {
         r.master_volume = b.master_volume;
-        r.engine.send(AudioCommand::SetMasterVolume {
+        let _ = r.engine.send(AudioCommand::SetMasterVolume {
             volume: db_to_gain(b.master_volume),
         });
     }
@@ -321,7 +321,7 @@ fn apply_global(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
         r.transport.loop_in = b.loop_in;
         r.transport.loop_out = b.loop_out;
         r.transport.loop_range_set = b.loop_enabled;
-        r.engine.send(AudioCommand::SetLoopRange {
+        let _ = r.engine.send(AudioCommand::SetLoopRange {
             enabled: b.loop_enabled,
             loop_in: b.loop_in,
             loop_out: b.loop_out,
@@ -332,7 +332,7 @@ fn apply_global(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     {
         r.midi_clock_send_enabled = b.midi_clock_send_enabled;
         r.midi_clock_send_device = b.midi_clock_send_device.clone();
-        r.engine.send(AudioCommand::SetMidiClockOutput {
+        let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
             device: b.midi_clock_send_device.clone(),
             enabled: b.midi_clock_send_enabled,
         });
@@ -342,7 +342,7 @@ fn apply_global(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     {
         r.midi_clock_recv_enabled = b.midi_clock_recv_enabled;
         r.midi_clock_recv_device = b.midi_clock_recv_device.clone();
-        r.engine.send(AudioCommand::SetMidiClockInput {
+        let _ = r.engine.send(AudioCommand::SetMidiClockInput {
             device: b.midi_clock_recv_device.clone(),
             enabled: b.midi_clock_recv_enabled,
         });
@@ -369,69 +369,69 @@ fn apply_tracks(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
 fn apply_track(r: &mut Resonance, a: &ProjectTrack, b: &ProjectTrack) {
     let track_id = b.id;
     if a.volume != b.volume {
-        r.engine.send(AudioCommand::SetTrackVolume {
+        let _ = r.engine.send(AudioCommand::SetTrackVolume {
             track_id,
             volume: db_to_gain(b.volume),
         });
     }
     if a.pan != b.pan {
-        r.engine.send(AudioCommand::SetTrackPan {
+        let _ = r.engine.send(AudioCommand::SetTrackPan {
             track_id,
             pan: b.pan,
         });
     }
     if a.muted != b.muted {
-        r.engine.send(AudioCommand::SetTrackMute {
+        let _ = r.engine.send(AudioCommand::SetTrackMute {
             track_id,
             muted: b.muted,
         });
     }
     if a.soloed != b.soloed {
-        r.engine.send(AudioCommand::SetTrackSolo {
+        let _ = r.engine.send(AudioCommand::SetTrackSolo {
             track_id,
             soloed: b.soloed,
         });
     }
     if a.record_armed != b.record_armed {
-        r.engine.send(AudioCommand::SetTrackRecordArm {
+        let _ = r.engine.send(AudioCommand::SetTrackRecordArm {
             track_id,
             armed: b.record_armed,
         });
     }
     if a.monitor_enabled != b.monitor_enabled {
-        r.engine.send(AudioCommand::SetTrackMonitor {
+        let _ = r.engine.send(AudioCommand::SetTrackMonitor {
             track_id,
             enabled: b.monitor_enabled,
         });
     }
     if a.mono != b.mono {
-        r.engine.send(AudioCommand::SetTrackMono {
+        let _ = r.engine.send(AudioCommand::SetTrackMono {
             track_id,
             mono: b.mono,
         });
     }
     if a.fx_bypassed != b.fx_bypassed {
-        r.engine.send(AudioCommand::SetTrackFxBypass {
+        let _ = r.engine.send(AudioCommand::SetTrackFxBypass {
             track_id,
             bypassed: b.fx_bypassed,
         });
     }
     if a.input_device_name != b.input_device_name {
-        r.engine.send(AudioCommand::SetTrackInputDevice {
+        let _ = r.engine.send(AudioCommand::SetTrackInputDevice {
             track_id,
             device_name: b.input_device_name.clone(),
         });
     }
     if a.input_port_index != b.input_port_index {
         if let Some(port_index) = b.input_port_index {
-            r.engine.send(AudioCommand::SetTrackInputPort {
+            let _ = r.engine.send(AudioCommand::SetTrackInputPort {
                 track_id,
                 port_index,
             });
         }
     }
     if a.midi_input_device != b.midi_input_device || a.midi_input_channel != b.midi_input_channel {
-        r.engine.send(AudioCommand::SetTrackMidiInput {
+        let _ = r.engine.send(AudioCommand::SetTrackMidiInput {
             track_id,
             device: b.midi_input_device.clone(),
             channel: b.midi_input_channel,
@@ -439,7 +439,7 @@ fn apply_track(r: &mut Resonance, a: &ProjectTrack, b: &ProjectTrack) {
     }
     if a.midi_output_device != b.midi_output_device || a.midi_output_channel != b.midi_output_channel
     {
-        r.engine.send(AudioCommand::SetTrackMidiOutput {
+        let _ = r.engine.send(AudioCommand::SetTrackMidiOutput {
             track_id,
             device: b.midi_output_device.clone(),
             channel: b.midi_output_channel,
@@ -450,7 +450,7 @@ fn apply_track(r: &mut Resonance, a: &ProjectTrack, b: &ProjectTrack) {
             .output_bus
             .map(TrackOutput::Bus)
             .unwrap_or(TrackOutput::Master);
-        r.engine.send(AudioCommand::SetTrackOutput {
+        let _ = r.engine.send(AudioCommand::SetTrackOutput {
             track_id,
             output,
         });
@@ -511,28 +511,28 @@ fn apply_busses(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
 fn apply_bus(r: &mut Resonance, a: &ProjectBus, b: &ProjectBus) {
     let bus_id = b.id;
     if a.volume != b.volume {
-        r.engine.send(AudioCommand::SetBusVolume {
+        let _ = r.engine.send(AudioCommand::SetBusVolume {
             bus_id,
             volume: db_to_gain(b.volume),
         });
     }
     if a.pan != b.pan {
-        r.engine.send(AudioCommand::SetBusPan { bus_id, pan: b.pan });
+        let _ = r.engine.send(AudioCommand::SetBusPan { bus_id, pan: b.pan });
     }
     if a.muted != b.muted {
-        r.engine.send(AudioCommand::SetBusMute {
+        let _ = r.engine.send(AudioCommand::SetBusMute {
             bus_id,
             muted: b.muted,
         });
     }
     if a.fx_bypassed != b.fx_bypassed {
-        r.engine.send(AudioCommand::SetBusFxBypass {
+        let _ = r.engine.send(AudioCommand::SetBusFxBypass {
             bus_id,
             bypassed: b.fx_bypassed,
         });
     }
     if a.name != b.name {
-        r.engine.send(AudioCommand::SetBusName {
+        let _ = r.engine.send(AudioCommand::SetBusName {
             bus_id,
             name: b.name.clone(),
         });
@@ -553,7 +553,7 @@ fn apply_bus(r: &mut Resonance, a: &ProjectBus, b: &ProjectBus) {
 fn apply_master(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     if a.master_fx_bypassed != b.master_fx_bypassed {
         r.master_fx_bypassed = b.master_fx_bypassed;
-        r.engine.send(AudioCommand::SetMasterFxBypass {
+        let _ = r.engine.send(AudioCommand::SetMasterFxBypass {
             bypassed: b.master_fx_bypassed,
         });
     }
@@ -568,7 +568,7 @@ fn push_all_plugin_states(r: &mut Resonance, target: &LoadedProject) {
     for pt in &target.file.tracks {
         for pp in &pt.plugins {
             if let Some(blob) = target.plugin_states.get(&pp.instance_id) {
-                r.engine.send(AudioCommand::LoadPluginState {
+                let _ = r.engine.send(AudioCommand::LoadPluginState {
                     instance_id: pp.instance_id,
                     data: blob.clone(),
                 });
@@ -578,7 +578,7 @@ fn push_all_plugin_states(r: &mut Resonance, target: &LoadedProject) {
     for pb in &target.file.busses {
         for pp in &pb.plugins {
             if let Some(blob) = target.plugin_states.get(&pp.instance_id) {
-                r.engine.send(AudioCommand::LoadPluginState {
+                let _ = r.engine.send(AudioCommand::LoadPluginState {
                     instance_id: pp.instance_id,
                     data: blob.clone(),
                 });
@@ -587,7 +587,7 @@ fn push_all_plugin_states(r: &mut Resonance, target: &LoadedProject) {
     }
     for pp in &target.file.master_plugins {
         if let Some(blob) = target.plugin_states.get(&pp.instance_id) {
-            r.engine.send(AudioCommand::LoadPluginState {
+            let _ = r.engine.send(AudioCommand::LoadPluginState {
                 instance_id: pp.instance_id,
                 data: blob.clone(),
             });
@@ -612,14 +612,14 @@ fn apply_audio_clips(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
             || ca.trim_end_frames != cb.trim_end_frames;
         let moved = ca.start_sample != cb.start_sample || ca.track_id != cb.track_id;
         if trim_changed {
-            r.engine.send(AudioCommand::TrimClip {
+            let _ = r.engine.send(AudioCommand::TrimClip {
                 clip_id: cb.id,
                 new_start_sample: cb.start_sample,
                 trim_start_frames: cb.trim_start_frames,
                 trim_end_frames: cb.trim_end_frames,
             });
         } else if moved {
-            r.engine.send(AudioCommand::MoveClip {
+            let _ = r.engine.send(AudioCommand::MoveClip {
                 clip_id: cb.id,
                 new_start_sample: cb.start_sample,
                 new_track_id: cb.track_id,
@@ -677,8 +677,8 @@ fn apply_midi_clips(
             // Delete + reload preserves the clip id, so the rest of the
             // engine state (track binding, derived-clip map keys) stays
             // consistent. Cheaper than a full ClearAll.
-            r.engine.send(AudioCommand::DeleteMidiClip { clip_id: cb.id });
-            r.engine.send(AudioCommand::LoadMidiClipDirect {
+            let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id: cb.id });
+            let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
                 clip_id: cb.id,
                 track_id: cb.track_id,
                 start_sample: cb.start_sample,
@@ -689,14 +689,14 @@ fn apply_midi_clips(
                 trim_end_ticks: cb.trim_end_ticks,
             });
         } else if trim_changed {
-            r.engine.send(AudioCommand::TrimMidiClip {
+            let _ = r.engine.send(AudioCommand::TrimMidiClip {
                 clip_id: cb.id,
                 new_start_sample: cb.start_sample,
                 trim_start_ticks: cb.trim_start_ticks,
                 trim_end_ticks: cb.trim_end_ticks,
             });
         } else if moved {
-            r.engine.send(AudioCommand::MoveMidiClip {
+            let _ = r.engine.send(AudioCommand::MoveMidiClip {
                 clip_id: cb.id,
                 new_start_sample: cb.start_sample,
                 new_track_id: cb.track_id,

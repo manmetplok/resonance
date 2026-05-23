@@ -303,7 +303,7 @@ impl crate::Resonance {
     pub(crate) fn begin_restore_from_snapshot(&mut self, snapshot: UndoSnapshot) {
         // Pause playback and stop recording. Recording should already be
         // blocked by `can_undo_redo_now`, but belt-and-braces.
-        self.engine.send(AudioCommand::Stop);
+        let _ = self.engine.send(AudioCommand::Stop);
         self.transport.playing = false;
         self.transport.recording = false;
 
@@ -324,7 +324,7 @@ impl crate::Resonance {
         self.io.pending_load = Some(Box::new(loaded));
         self.io.pending_undo_extras = Some(extras);
 
-        self.engine.send(AudioCommand::ClearAll);
+        let _ = self.engine.send(AudioCommand::ClearAll);
     }
 
     /// Apply the runtime-only extras captured in the snapshot. Called

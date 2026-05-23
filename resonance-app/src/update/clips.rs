@@ -13,7 +13,7 @@ use crate::Resonance;
 pub fn handle(r: &mut Resonance, m: ClipMessage) -> Task<Message> {
     match m {
         ClipMessage::DeleteClip(id) => {
-            r.engine.send(AudioCommand::DeleteClip { clip_id: id });
+            let _ = r.engine.send(AudioCommand::DeleteClip { clip_id: id });
             if r.interaction.selected_clip == Some(id) {
                 r.interaction.selected_clip = None;
             }
@@ -107,7 +107,7 @@ pub fn update_clip_drag(r: &mut Resonance, x: f32, y: f32) {
 pub fn end_clip_drag(r: &mut Resonance) {
     if let Some(drag) = r.interaction.clip_drag.take() {
         if let Some(clip) = r.clips.iter().find(|c| c.id == drag.clip_id) {
-            r.engine.send(AudioCommand::MoveClip {
+            let _ = r.engine.send(AudioCommand::MoveClip {
                 clip_id: drag.clip_id,
                 new_start_sample: clip.start_sample,
                 new_track_id: clip.track_id,
@@ -212,7 +212,7 @@ pub fn update_clip_trim(r: &mut Resonance, x: f32) {
 pub fn end_clip_trim(r: &mut Resonance) {
     if let Some(trim) = r.interaction.clip_trim.take() {
         if let Some(clip) = r.clips.iter().find(|c| c.id == trim.clip_id) {
-            r.engine.send(AudioCommand::TrimClip {
+            let _ = r.engine.send(AudioCommand::TrimClip {
                 clip_id: trim.clip_id,
                 new_start_sample: clip.start_sample,
                 trim_start_frames: clip.trim_start_frames,
@@ -281,7 +281,7 @@ pub fn update_midi_clip_drag(r: &mut Resonance, x: f32, y: f32) {
 pub fn end_midi_clip_drag(r: &mut Resonance) {
     if let Some(drag) = r.interaction.midi_clip_drag.take() {
         if let Some(clip) = r.midi_clips.iter().find(|c| c.id == drag.clip_id) {
-            r.engine.send(AudioCommand::MoveMidiClip {
+            let _ = r.engine.send(AudioCommand::MoveMidiClip {
                 clip_id: drag.clip_id,
                 new_start_sample: clip.start_sample,
                 new_track_id: clip.track_id,
@@ -390,7 +390,7 @@ pub fn update_midi_clip_trim(r: &mut Resonance, x: f32) {
 pub fn end_midi_clip_trim(r: &mut Resonance) {
     if let Some(trim) = r.interaction.midi_clip_trim.take() {
         if let Some(clip) = r.midi_clips.iter().find(|c| c.id == trim.clip_id) {
-            r.engine.send(AudioCommand::TrimMidiClip {
+            let _ = r.engine.send(AudioCommand::TrimMidiClip {
                 clip_id: trim.clip_id,
                 new_start_sample: clip.start_sample,
                 trim_start_ticks: clip.trim_start_ticks,

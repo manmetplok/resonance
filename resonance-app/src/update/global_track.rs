@@ -11,7 +11,7 @@ impl Resonance {
     /// `signature_events` are modified.
     pub(crate) fn rebuild_and_send_tempo(&mut self) {
         self.rebuild_tempo_map();
-        self.engine.send(AudioCommand::SetTempoEvents {
+        let _ = self.engine.send(AudioCommand::SetTempoEvents {
             tempo: self.tempo_events.clone(),
             signature: self.signature_events.clone(),
         });
@@ -58,7 +58,7 @@ impl Resonance {
                 .tempo_at_sample(self.transport.playhead, self.sample_rate);
             self.transport.time_sig_num = num;
             self.transport.time_sig_den = den;
-            self.engine.send(AudioCommand::SetTimeSignature {
+            let _ = self.engine.send(AudioCommand::SetTimeSignature {
                 numerator: num,
                 denominator: den,
             });
@@ -91,7 +91,7 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
                 event.bpm = bpm;
                 r.rebuild_tempo_map();
                 r.sync_tempo_display();
-                r.engine.send(AudioCommand::SetBpm {
+                let _ = r.engine.send(AudioCommand::SetBpm {
                     bpm: r.transport.bpm,
                 });
             }
@@ -117,7 +117,7 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
             if r.transport.playhead >= event_sample {
                 r.transport.time_sig_num = numerator;
                 r.transport.time_sig_den = denominator;
-                r.engine.send(AudioCommand::SetTimeSignature {
+                let _ = r.engine.send(AudioCommand::SetTimeSignature {
                     numerator,
                     denominator,
                 });
@@ -144,7 +144,7 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
                 if r.transport.playhead >= event_sample {
                     r.transport.time_sig_num = numerator;
                     r.transport.time_sig_den = denominator;
-                    r.engine.send(AudioCommand::SetTimeSignature {
+                    let _ = r.engine.send(AudioCommand::SetTimeSignature {
                         numerator,
                         denominator,
                     });

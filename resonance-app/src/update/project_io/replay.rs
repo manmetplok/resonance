@@ -26,7 +26,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 
     // Point the engine at the loaded project's directory so that
     // subsequent imports and recordings stream into it.
-    r.engine
+    let _ = r.engine
         .send(AudioCommand::SetProjectDir(loaded.project_dir.clone()));
 
     // Restore global settings
@@ -124,18 +124,18 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
         r.signature_events = project.signature_events.clone();
     }
 
-    r.engine.send(AudioCommand::SetBpm {
+    let _ = r.engine.send(AudioCommand::SetBpm {
         bpm: r.transport.bpm,
     });
     r.rebuild_and_send_tempo();
-    r.engine.send(AudioCommand::SetTimeSignature {
+    let _ = r.engine.send(AudioCommand::SetTimeSignature {
         numerator: r.transport.time_sig_num,
         denominator: r.transport.time_sig_den,
     });
-    r.engine.send(AudioCommand::SetMetronomeEnabled {
+    let _ = r.engine.send(AudioCommand::SetMetronomeEnabled {
         enabled: r.transport.metronome_enabled,
     });
-    r.engine.send(AudioCommand::SetMasterVolume {
+    let _ = r.engine.send(AudioCommand::SetMasterVolume {
         volume: db_to_gain(r.master_volume),
     });
 
@@ -145,15 +145,15 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.midi_clock_send_device = project.midi_clock_send_device.clone();
     r.midi_clock_recv_enabled = project.midi_clock_recv_enabled;
     r.midi_clock_recv_device = project.midi_clock_recv_device.clone();
-    r.engine.send(AudioCommand::SetMidiClockOutput {
+    let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
         device: r.midi_clock_send_device.clone(),
         enabled: r.midi_clock_send_enabled,
     });
-    r.engine.send(AudioCommand::SetMidiClockInput {
+    let _ = r.engine.send(AudioCommand::SetMidiClockInput {
         device: r.midi_clock_recv_device.clone(),
         enabled: r.midi_clock_recv_enabled,
     });
-    r.engine.send(AudioCommand::SetLoopRange {
+    let _ = r.engine.send(AudioCommand::SetLoopRange {
         enabled: r.transport.loop_enabled,
         loop_in: r.transport.loop_in,
         loop_out: r.transport.loop_out,
@@ -210,7 +210,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // Now that all busses exist, resolve track → bus routing.
     for pt in &project.tracks {
         if let Some(bus_id) = pt.output_bus {
-            r.engine.send(AudioCommand::SetTrackOutput {
+            let _ = r.engine.send(AudioCommand::SetTrackOutput {
                 track_id: pt.id,
                 output: TrackOutput::Bus(bus_id),
             });
@@ -222,7 +222,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // and let it mmap the file itself.
     for pc in &project.clips {
         let abs_path = loaded.project_dir.join(&pc.audio_file);
-        r.engine.send(AudioCommand::LoadClipFromWav {
+        let _ = r.engine.send(AudioCommand::LoadClipFromWav {
             clip_id: pc.id,
             track_id: pc.track_id,
             start_sample: pc.start_sample,
@@ -253,7 +253,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     for pmc in &project.midi_clips {
         let notes: Vec<MidiNote> = loaded.midi_notes.get(&pmc.id).cloned().unwrap_or_default();
 
-        r.engine.send(AudioCommand::LoadMidiClipDirect {
+        let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
             clip_id: pmc.id,
             track_id: pmc.track_id,
             start_sample: pmc.start_sample,
@@ -346,83 +346,83 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
 
     // Register the track / sub-track / instrument-track with the engine.
     if let Some(link) = pt.sub_track {
-        r.engine.send(AudioCommand::CreateSubTrack {
+        let _ = r.engine.send(AudioCommand::CreateSubTrack {
             sub_id: track_id,
             parent_track_id: link.parent_track_id,
             output_port_index: link.output_port_index,
             name: pt.name.clone(),
         });
     } else if pt.track_type == "instrument" {
-        r.engine.send(AudioCommand::AddInstrumentTrack {
+        let _ = r.engine.send(AudioCommand::AddInstrumentTrack {
             id_hint: Some(track_id),
             name: Some(pt.name.clone()),
         });
     } else if pt.track_type == "vocal" {
-        r.engine.send(AudioCommand::AddVocalTrack {
+        let _ = r.engine.send(AudioCommand::AddVocalTrack {
             id_hint: Some(track_id),
             name: Some(pt.name.clone()),
         });
     } else {
-        r.engine.send(AudioCommand::AddTrack {
+        let _ = r.engine.send(AudioCommand::AddTrack {
             id_hint: Some(track_id),
             name: Some(pt.name.clone()),
         });
     }
 
     // Set track properties
-    r.engine.send(AudioCommand::SetTrackVolume {
+    let _ = r.engine.send(AudioCommand::SetTrackVolume {
         track_id,
         volume: db_to_gain(pt.volume),
     });
-    r.engine.send(AudioCommand::SetTrackPan {
+    let _ = r.engine.send(AudioCommand::SetTrackPan {
         track_id,
         pan: pt.pan,
     });
-    r.engine.send(AudioCommand::SetTrackMute {
+    let _ = r.engine.send(AudioCommand::SetTrackMute {
         track_id,
         muted: pt.muted,
     });
-    r.engine.send(AudioCommand::SetTrackSolo {
+    let _ = r.engine.send(AudioCommand::SetTrackSolo {
         track_id,
         soloed: pt.soloed,
     });
-    r.engine.send(AudioCommand::SetTrackRecordArm {
+    let _ = r.engine.send(AudioCommand::SetTrackRecordArm {
         track_id,
         armed: pt.record_armed,
     });
-    r.engine.send(AudioCommand::SetTrackMonitor {
+    let _ = r.engine.send(AudioCommand::SetTrackMonitor {
         track_id,
         enabled: pt.monitor_enabled,
     });
-    r.engine.send(AudioCommand::SetTrackMono {
+    let _ = r.engine.send(AudioCommand::SetTrackMono {
         track_id,
         mono: pt.mono,
     });
-    r.engine.send(AudioCommand::SetTrackFxBypass {
+    let _ = r.engine.send(AudioCommand::SetTrackFxBypass {
         track_id,
         bypassed: pt.fx_bypassed,
     });
     if let Some(ref device) = pt.input_device_name {
-        r.engine.send(AudioCommand::SetTrackInputDevice {
+        let _ = r.engine.send(AudioCommand::SetTrackInputDevice {
             track_id,
             device_name: Some(device.clone()),
         });
     }
     if let Some(port_index) = pt.input_port_index {
-        r.engine.send(AudioCommand::SetTrackInputPort {
+        let _ = r.engine.send(AudioCommand::SetTrackInputPort {
             track_id,
             port_index,
         });
     }
     if pt.midi_input_device.is_some() {
-        r.engine.send(AudioCommand::SetTrackMidiInput {
+        let _ = r.engine.send(AudioCommand::SetTrackMidiInput {
             track_id,
             device: pt.midi_input_device.clone(),
             channel: pt.midi_input_channel,
         });
     }
     if pt.midi_output_device.is_some() {
-        r.engine.send(AudioCommand::SetTrackMidiOutput {
+        let _ = r.engine.send(AudioCommand::SetTrackMidiOutput {
             track_id,
             device: pt.midi_output_device.clone(),
             channel: pt.midi_output_channel,
@@ -434,14 +434,14 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
     // PluginAdded event arrives from the engine.
     let mut gui_plugins = Vec::new();
     for pp in &pt.plugins {
-        r.engine.send(AudioCommand::AddPlugin {
+        let _ = r.engine.send(AudioCommand::AddPlugin {
             track_id,
             clap_file_path: pp.clap_file_path.clone(),
             clap_plugin_id: pp.clap_plugin_id.clone(),
             id_hint: Some(pp.instance_id),
         });
         if let Some(state_data) = loaded.plugin_states.get(&pp.instance_id) {
-            r.engine.send(AudioCommand::LoadPluginState {
+            let _ = r.engine.send(AudioCommand::LoadPluginState {
                 instance_id: pp.instance_id,
                 data: state_data.clone(),
             });
@@ -511,37 +511,37 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
 }
 
 fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProject) {
-    r.engine.send(AudioCommand::AddBus {
+    let _ = r.engine.send(AudioCommand::AddBus {
         id_hint: Some(pb.id),
         name: Some(pb.name.clone()),
     });
-    r.engine.send(AudioCommand::SetBusVolume {
+    let _ = r.engine.send(AudioCommand::SetBusVolume {
         bus_id: pb.id,
         volume: db_to_gain(pb.volume),
     });
-    r.engine.send(AudioCommand::SetBusPan {
+    let _ = r.engine.send(AudioCommand::SetBusPan {
         bus_id: pb.id,
         pan: pb.pan,
     });
-    r.engine.send(AudioCommand::SetBusMute {
+    let _ = r.engine.send(AudioCommand::SetBusMute {
         bus_id: pb.id,
         muted: pb.muted,
     });
-    r.engine.send(AudioCommand::SetBusFxBypass {
+    let _ = r.engine.send(AudioCommand::SetBusFxBypass {
         bus_id: pb.id,
         bypassed: pb.fx_bypassed,
     });
 
     let mut gui_plugins = Vec::new();
     for pp in &pb.plugins {
-        r.engine.send(AudioCommand::AddPluginToBus {
+        let _ = r.engine.send(AudioCommand::AddPluginToBus {
             bus_id: pb.id,
             clap_file_path: pp.clap_file_path.clone(),
             clap_plugin_id: pp.clap_plugin_id.clone(),
             id_hint: Some(pp.instance_id),
         });
         if let Some(state_data) = loaded.plugin_states.get(&pp.instance_id) {
-            r.engine.send(AudioCommand::LoadPluginState {
+            let _ = r.engine.send(AudioCommand::LoadPluginState {
                 instance_id: pp.instance_id,
                 data: state_data.clone(),
             });
@@ -568,19 +568,19 @@ fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProject) {
 
 fn replay_master(r: &mut Resonance, project: &crate::project::ProjectFile, loaded: &LoadedProject) {
     r.master_fx_bypassed = project.master_fx_bypassed;
-    r.engine.send(AudioCommand::SetMasterFxBypass {
+    let _ = r.engine.send(AudioCommand::SetMasterFxBypass {
         bypassed: project.master_fx_bypassed,
     });
 
     r.master_plugins.clear();
     for pp in &project.master_plugins {
-        r.engine.send(AudioCommand::AddPluginToMaster {
+        let _ = r.engine.send(AudioCommand::AddPluginToMaster {
             clap_file_path: pp.clap_file_path.clone(),
             clap_plugin_id: pp.clap_plugin_id.clone(),
             id_hint: Some(pp.instance_id),
         });
         if let Some(state_data) = loaded.plugin_states.get(&pp.instance_id) {
-            r.engine.send(AudioCommand::LoadPluginState {
+            let _ = r.engine.send(AudioCommand::LoadPluginState {
                 instance_id: pp.instance_id,
                 data: state_data.clone(),
             });

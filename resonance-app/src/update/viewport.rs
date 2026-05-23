@@ -49,8 +49,8 @@ fn refresh_midi_devices_if_stale(r: &mut Resonance) {
         return;
     }
     r.midi_devices_last_refresh = std::time::Instant::now();
-    r.engine.send(AudioCommand::ListMidiInputDevices);
-    r.engine.send(AudioCommand::ListMidiOutputDevices);
+    let _ = r.engine.send(AudioCommand::ListMidiInputDevices);
+    let _ = r.engine.send(AudioCommand::ListMidiOutputDevices);
 }
 
 /// Per-tick VU step: decay current levels and ask the engine for a
@@ -69,7 +69,7 @@ fn update_vu_meters(r: &mut Resonance) {
     }
     r.master_level_l *= theme::PEAK_DECAY;
     r.master_level_r *= theme::PEAK_DECAY;
-    r.engine.send(AudioCommand::PollPeaks);
+    let _ = r.engine.send(AudioCommand::PollPeaks);
 }
 
 /// Fold a peak snapshot from the engine into the VU state. Each level
@@ -127,7 +127,7 @@ fn sync_tempo_at_playhead(r: &mut Resonance) {
     if num != r.transport.time_sig_num || den != r.transport.time_sig_den {
         r.transport.time_sig_num = num;
         r.transport.time_sig_den = den;
-        r.engine.send(AudioCommand::SetTimeSignature {
+        let _ = r.engine.send(AudioCommand::SetTimeSignature {
             numerator: num,
             denominator: den,
         });

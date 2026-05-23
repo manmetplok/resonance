@@ -253,13 +253,13 @@ pub(super) fn regenerate_lane(
                 .derived_clips
                 .remove(&(definition_id, placement_id, track_id))
         {
-            r.engine
+            let _ = r.engine
                 .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
         }
 
         let clip_id = r.compose.fresh_derived_clip_id();
         let start_sample = start_bar as u64 * samples_per_bar;
-        r.engine.send(AudioCommand::LoadMidiClipDirect {
+        let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
             clip_id,
             track_id,
             start_sample,
@@ -430,11 +430,11 @@ fn regenerate_drum_motif_voices(
                     .collect();
                 let (removals, adds) = euclid_edits_for(clip, *pad_note, new_notes);
                 for note_index in removals {
-                    r.engine
+                    let _ = r.engine
                         .send(AudioCommand::RemoveMidiNote { clip_id, note_index });
                 }
                 for note in adds {
-                    r.engine
+                    let _ = r.engine
                         .send(AudioCommand::AddMidiNote { clip_id, note });
                 }
             }
