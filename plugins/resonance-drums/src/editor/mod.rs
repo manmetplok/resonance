@@ -1,21 +1,23 @@
 //! Drums plugin editor: an egui UI hosted in `wayland-plugin-gui`.
 //!
-//! This is the migration from the old iced-based inline UI onto the same
-//! editor infrastructure the wavetable plugin uses. The contents are
-//! intentionally minimal placeholder controls — the real layout will be
-//! designed in a follow-up. The point of this module is to wire up the
-//! `EditorFactory` / `PluginEditor` plumbing so the plugin exposes a
-//! floating CLAP editor window.
+//! Layout: a top chrome bar (traffic-light dots + Resonance / Drums brand)
+//! sits above a tab bar with the module nav (Pads · Mics · Articulations ·
+//! Mod · FX), the KIT preset pill, and the PADS badge. The central body
+//! dispatches per tab — the Pads tab renders the two-column pad list +
+//! pad detail surface with the KIT and GLOBAL cards on a bottom row. A
+//! status bar (sample rate, buffer size, OUT meter) sits along the
+//! bottom edge.
 
 mod app;
+mod chrome;
 mod download_panel;
 mod factory;
-mod header;
 mod kit_browser;
 mod pad_grid;
 mod pad_inspector;
 mod reload;
 mod theme;
+mod widgets;
 
 pub use factory::DrumsEditorFactory;
 
