@@ -354,6 +354,30 @@ impl AudioEngine {
             let mut monitor_temp = vec![0.0f32; audio_buf_frames * MAX_INPUT_CHANNELS];
             let monitor_ring = ringbuf::HeapRb::<f32>::new(audio_quantum * MAX_INPUT_CHANNELS * 4);
             let (prod, mut monitor_cons) = monitor_ring.split();
+
+            // Pre-fault every page of the audio-thread scratch so the cpal
+            // callback isn't the first writer. `vec![0.0f32; N]` and
+            // `HeapRb::new(N)` both come from anonymous mmap / calloc,
+            // which hands back lazy zero-fill pages — the kernel only
+            // commits a physical page on first *write*. Doing those
+            // writes from inside the realtime callback fires minor page
+            // faults under cpal's deadline and cpal 0.17 reports each as
+            // `StreamError::BufferUnderrun`, flooding the log (and
+            // glitching audio) for the first second or two after
+            // `stream.play()`. Same pattern as `DelayLine::new` in
+            // resonance-dsp (commit f0de785); see `prefault.rs`.
+            use crate::prefault::prefault_f32;
+            prefault_f32(&mut track_buf_l);
+            prefault_f32(&mut track_buf_r);
+            for (l, r) in bus_bufs.iter_mut() {
+                prefault_f32(l);
+                prefault_f32(r);
+            }
+            for (l, r) in port_scratch.iter_mut() {
+                prefault_f32(l);
+                prefault_f32(r);
+            }
+            prefault_f32(&mut monitor_temp);
             let result = device.build_output_stream(
                 config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
