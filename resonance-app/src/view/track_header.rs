@@ -197,7 +197,7 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
     // overflows above the lane area's natural top edge.
     let sorted_tracks: Vec<&TrackState> = r
         .sorted_tracks()
-        .into_iter()
+        .iter()
         .filter(|t| t.sub_track.is_none())
         .collect();
 

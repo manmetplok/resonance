@@ -41,7 +41,7 @@ impl crate::Resonance {
         // the cluster visually attaches; the outer row keeps 2 px
         // between unrelated tracks.
         let mut track_strip_row = row![].spacing(2);
-        for track in &sorted_tracks {
+        for track in sorted_tracks {
             if track.sub_track.is_some() {
                 // Already emitted by its parent's cluster (or skipped
                 // because its parent was collapsed).
@@ -54,7 +54,6 @@ impl crate::Resonance {
             let mut subs: Vec<&TrackState> = if parent_expanded {
                 sorted_tracks
                     .iter()
-                    .copied()
                     .filter(|t| {
                         matches!(t.sub_track, Some(link) if link.parent_track_id == track.id)
                     })
@@ -107,7 +106,7 @@ impl crate::Resonance {
 
         // -- Bottom row: bus strips + "+ Bus" button on the right. --
         let mut bus_strip_row = row![].spacing(2);
-        for bus in &sorted_busses {
+        for bus in sorted_busses {
             bus_strip_row = bus_strip_row.push(self.view_bus_strip(bus, available_plugins));
         }
         let scrollable_busses = iced::widget::Scrollable::with_direction(

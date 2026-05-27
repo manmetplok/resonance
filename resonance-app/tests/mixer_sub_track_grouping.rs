@@ -149,7 +149,7 @@ fn mixer_sub_track_render_order_groups_with_parent() {
     // Replicate the grouping logic from `view_mixer` so the assertion
     // is on the *displayed* order, not the raw `.order` order.
     let mut displayed: Vec<u64> = Vec::new();
-    for t in &sorted {
+    for t in sorted {
         if t.sub_track.is_some() {
             continue;
         }
@@ -157,7 +157,6 @@ fn mixer_sub_track_render_order_groups_with_parent() {
         if expanded_set.contains(&t.id) {
             let mut subs: Vec<&resonance_app::state::TrackState> = sorted
                 .iter()
-                .copied()
                 .filter(|s| matches!(s.sub_track, Some(link) if link.parent_track_id == t.id))
                 .collect();
             subs.sort_by_key(|s| s.sub_track.map(|l| l.output_port_index).unwrap_or(0));
@@ -186,7 +185,7 @@ fn mixer_sub_track_render_order_groups_with_parent() {
     let expanded_set = app.test_expanded_sub_track_parents();
     let sorted = registry.sorted_tracks();
     let mut displayed_collapsed: Vec<u64> = Vec::new();
-    for t in &sorted {
+    for t in sorted {
         if t.sub_track.is_some() {
             continue;
         }

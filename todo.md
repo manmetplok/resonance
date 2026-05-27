@@ -106,8 +106,25 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `commit_after` flag). `update()` is now ~10 lines: gate check,
   Undo/Redo meta-shortcut, `record_undo`, dispatch, conditional commit.
   No behaviour change — the existing 6 undo unit tests still pass.
-- [ ] `state.rs:676-690` — `sorted_tracks()` / `sorted_busses()` allocate a Vec
+- [x] `state.rs:676-690` — `sorted_tracks()` / `sorted_busses()` allocate a Vec
   per call despite the invariant. Return `&[T]`.
+
+  _Resolved 2026-05-27_. `TrackRegistry::sorted_tracks` / `sorted_busses`
+  now return `&[TrackState]` / `&[BusState]`, borrowing the backing
+  `Vec` (which is already kept sorted by `.order` — every mutation
+  pushes monotonic `next_track_order` / `next_bus_order`, and the
+  two replay paths call `resort_tracks` / `resort_busses` after their
+  load loops, so the `debug_assert!` in the getter is preserved as the
+  invariant guard). The `Resonance::sorted_tracks` / `sorted_busses`
+  thin wrappers in `lib.rs` were updated to match. Call-site fixes:
+  `view/mixer/mod.rs` dropped `.iter().copied()` (now `.iter()` already
+  yields `&TrackState`) and switched `for track in &sorted_tracks` to
+  `for track in sorted_tracks` so `IntoIterator` resolves on the slice;
+  `view/track_header.rs` swapped `.into_iter()` for `.iter()`; the
+  `mixer_sub_track_grouping` integration test got the same `.copied()`
+  removal + `for t in &sorted` → `for t in sorted` fix. No behaviour
+  change — 38 unit tests + the existing mixer/timeline snapshot tests
+  still pass.
 - [ ] `update/project_io/replay.rs:387-409` — plugin slot reconstruction races
   `PluginAdded` events. Defensive sort by saved order after all replays complete.
 - [ ] `update/clips.rs:316-318` — `samples_per_tick` ignores tempo-map variation

@@ -402,20 +402,24 @@ impl TrackRegistry {
     /// resort per frame. Every mutation that pushes, removes, or changes
     /// `.order` MUST call `resort_tracks` / `resort_busses` afterwards,
     /// or the on-screen ordering will drift from the data model.
-    pub fn sorted_tracks(&self) -> Vec<&TrackState> {
+    ///
+    /// Returns a borrow of the backing storage — no per-call `Vec`
+    /// allocation. The `debug_assert!` here is the only meaningful
+    /// work; in release builds the call compiles to a slice reborrow.
+    pub fn sorted_tracks(&self) -> &[TrackState] {
         debug_assert!(
             self.tracks.windows(2).all(|w| w[0].order <= w[1].order),
             "TrackRegistry.tracks must be sorted by .order — call resort_tracks() after the mutation that ordered last"
         );
-        self.tracks.iter().collect()
+        &self.tracks
     }
 
-    pub fn sorted_busses(&self) -> Vec<&BusState> {
+    pub fn sorted_busses(&self) -> &[BusState] {
         debug_assert!(
             self.busses.windows(2).all(|w| w[0].order <= w[1].order),
             "TrackRegistry.busses must be sorted by .order — call resort_busses() after the mutation that ordered last"
         );
-        self.busses.iter().collect()
+        &self.busses
     }
 
     /// Re-establishes the sorted-by-order invariant on `tracks`. Cheap

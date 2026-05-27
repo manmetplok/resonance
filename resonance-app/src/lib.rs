@@ -291,11 +291,11 @@ impl Resonance {
         self.mixer.expanded_sub_track_parents.remove(&parent_id);
     }
 
-    pub(crate) fn sorted_tracks(&self) -> Vec<&TrackState> {
+    pub(crate) fn sorted_tracks(&self) -> &[TrackState] {
         self.registry.sorted_tracks()
     }
 
-    pub(crate) fn sorted_busses(&self) -> Vec<&BusState> {
+    pub(crate) fn sorted_busses(&self) -> &[BusState] {
         self.registry.sorted_busses()
     }
 
