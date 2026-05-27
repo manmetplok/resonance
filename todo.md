@@ -94,9 +94,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   API change.
 
 ### resonance-app
-- [ ] `update.rs:106-208` — `update()` mixes undo bookkeeping + gate logic +
+- [x] `update.rs:106-208` — `update()` mixes undo bookkeeping + gate logic +
   dispatch. Extract `record_undo` / `gates_message` helpers in `undo.rs` so
   `update()` reads as a 10-line orchestrator.
+
+  _Resolved 2026-05-27_. `is_gated_message` and `bounce_blocks_message`
+  moved verbatim into `resonance-app/src/undo.rs` as private free fns,
+  combined behind a `Resonance::gates_message(&Message) -> bool` method.
+  The classify + dirty-flag + record/begin block became
+  `Resonance::record_undo(&Message) -> bool` (returning the
+  `commit_after` flag). `update()` is now ~10 lines: gate check,
+  Undo/Redo meta-shortcut, `record_undo`, dispatch, conditional commit.
+  No behaviour change — the existing 6 undo unit tests still pass.
 - [ ] `state.rs:676-690` — `sorted_tracks()` / `sorted_busses()` allocate a Vec
   per call despite the invariant. Return `&[T]`.
 - [ ] `update/project_io/replay.rs:387-409` — plugin slot reconstruction races

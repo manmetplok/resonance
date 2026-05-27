@@ -370,6 +370,159 @@ impl crate::Resonance {
 }
 
 // ---------------------------------------------------------------------
+// Gate helpers
+// ---------------------------------------------------------------------
+//
+// `update()` runs two pre-dispatch gates on every message: the startup
+// modal gate (no active project → block project-mutating messages) and
+// the bounce-in-progress gate (offline bounce running → block anything
+// that would disturb the engine). Both are pure functions over message
+// shape plus one piece of `Resonance` state; they live alongside the
+// undo classifier here because all three operate as a "look at the
+// message variant and decide what to do" pre-pass before dispatch.
+
+/// While the startup modal is up (no active project), swallow messages
+/// that would mutate project state. Engine events don't flow through
+/// `update()` (see `engine_events.rs`), so this only needs to think
+/// about user-initiated variants.
+fn is_gated_message(message: &crate::message::Message) -> bool {
+    use crate::message::*;
+    match message {
+        // Interactive user input: block.
+        Message::Compose(_)
+        | Message::Transport(_)
+        | Message::Track(_)
+        | Message::Bus(_)
+        | Message::Master(_)
+        | Message::Clip(_)
+        | Message::MidiClip(_)
+        | Message::MidiEditor(_)
+        | Message::Plugin(_)
+        | Message::Viewport(_)
+        | Message::GlobalTrack(_) => true,
+        // Tab switches / auxiliary overlays: block so they can't
+        // steal focus from the startup modal.
+        Message::Ui(UiMessage::SwitchView(_))
+        | Message::Ui(UiMessage::OpenSettings)
+        | Message::Ui(UiMessage::OpenAddTrackMenu) => true,
+        // Benign UI: allow.
+        Message::Ui(UiMessage::CloseSettings)
+        | Message::Ui(UiMessage::CloseAddTrackMenu)
+        | Message::Ui(UiMessage::DismissError)
+        | Message::Ui(UiMessage::StartNewProject)
+        | Message::Ui(UiMessage::SelectTrack(_))
+        | Message::Ui(UiMessage::ConfirmSaveAndQuit)
+        | Message::Ui(UiMessage::ConfirmDiscardAndQuit)
+        | Message::Ui(UiMessage::CancelQuit)
+        | Message::Ui(UiMessage::ToggleGlobalTracks)
+        | Message::Ui(UiMessage::ToggleMidiClockSend)
+        | Message::Ui(UiMessage::SetMidiClockSendDevice(_))
+        | Message::Ui(UiMessage::ToggleMidiClockRecv)
+        | Message::Ui(UiMessage::SetMidiClockRecvDevice(_)) => false,
+        // Project I/O drives the modal itself: always allow.
+        Message::ProjectIo(_) => false,
+        // Timer tick: harmless, drives VU meters — allow.
+        Message::Tick => false,
+        // Window close request: always allow so the app can exit.
+        Message::WindowCloseRequested(_) => false,
+        // Undo/redo need a project to be meaningful — block otherwise.
+        Message::Undo | Message::Redo => true,
+    }
+}
+
+/// True for every user-initiated message we need to drop while a
+/// bounce-in-place run is rendering. The Cancel button on the progress
+/// modal is the one carve-out: that's how the user actually stops the
+/// engine, so it has to flow through.
+fn bounce_blocks_message(message: &crate::message::Message) -> bool {
+    use crate::message::*;
+    match message {
+        // Whitelist: cancel button on the in-progress modal.
+        Message::Track(TrackMessage::Bounce(BounceMessage::CancelInProgress)) => false,
+        // Engine event traffic, project I/O, and the timer tick all
+        // need to keep flowing — the bounce relies on `BounceProgress`
+        // / `TrackBounceCompleted` events to clear the modal.
+        Message::ProjectIo(_) | Message::Tick | Message::WindowCloseRequested(_) => false,
+        // Everything else: block.
+        Message::Compose(_)
+        | Message::Transport(_)
+        | Message::Track(_)
+        | Message::Bus(_)
+        | Message::Master(_)
+        | Message::Clip(_)
+        | Message::MidiClip(_)
+        | Message::MidiEditor(_)
+        | Message::Plugin(_)
+        | Message::Viewport(_)
+        | Message::GlobalTrack(_)
+        | Message::Ui(_)
+        | Message::Undo
+        | Message::Redo => true,
+    }
+}
+
+impl crate::Resonance {
+    /// Combined pre-dispatch gate. Returns `true` when `message` should
+    /// be dropped — either because the startup modal is up and the
+    /// message would mutate project state, or because an offline bounce
+    /// is in progress and the message would disturb the engine.
+    pub(crate) fn gates_message(&self, message: &crate::message::Message) -> bool {
+        if !self.io.has_active_project && is_gated_message(message) {
+            return true;
+        }
+        if self.bounce_in_progress.is_some() && bounce_blocks_message(message) {
+            return true;
+        }
+        false
+    }
+
+    /// Run the undo-history side effects for a single message dispatch.
+    /// Classifies the message, marks the project dirty when appropriate,
+    /// and captures a pre-dispatch snapshot for the Record / RecordCoalesced
+    /// / Begin actions. Returns `true` when the caller must call
+    /// `self.undo.commit()` after dispatch — i.e. when the message is a
+    /// gesture-end that closes a transaction opened by an earlier `Begin`.
+    pub(crate) fn record_undo(&mut self, message: &crate::message::Message) -> bool {
+        let action = classify(message);
+        let commit_after = matches!(action, UndoAction::Commit);
+
+        // Mark the project dirty on any state-changing action. This
+        // mirrors the undo classification: any action that warrants an
+        // undo entry (Record, RecordCoalesced, Begin, Commit) means the
+        // project has diverged from the last saved version. The dirty
+        // flag is cleared on ProjectSaved(Ok) and on project load.
+        if !matches!(action, UndoAction::Skip) {
+            self.dirty = true;
+        }
+
+        // Skip every history-mutating branch when the app isn't in a
+        // state where a snapshot could be restored (no active project,
+        // no saved path, mid-restore). Commit still runs on gesture end
+        // even if recording was blocked — it'll be a no-op because
+        // `begin` was also blocked, so there's no pending transaction.
+        if self.can_record_undo() {
+            match action {
+                UndoAction::Skip | UndoAction::Commit => {}
+                UndoAction::Record => {
+                    let snap = self.snapshot_for_undo();
+                    self.undo.record(snap);
+                }
+                UndoAction::RecordCoalesced(key) => {
+                    let snap = self.snapshot_for_undo();
+                    self.undo.record_coalesced(snap, key);
+                }
+                UndoAction::Begin => {
+                    let snap = self.snapshot_for_undo();
+                    self.undo.begin(snap);
+                }
+            }
+        }
+
+        commit_after
+    }
+}
+
+// ---------------------------------------------------------------------
 // Message classifier
 // ---------------------------------------------------------------------
 
