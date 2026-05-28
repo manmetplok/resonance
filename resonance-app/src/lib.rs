@@ -291,6 +291,67 @@ impl Resonance {
         self.mixer.expanded_sub_track_parents.remove(&parent_id);
     }
 
+    /// Test-only: read the GUI-side MIDI clip list. Used by reducer
+    /// tests under `tests/` that need to inspect post-drag/trim clip
+    /// geometry without poking at the engine round-trip.
+    #[doc(hidden)]
+    pub fn test_midi_clips(&self) -> &[state::MidiClipState] {
+        &self.midi_clips
+    }
+
+    /// Test-only: push a MIDI clip directly into GUI state, bypassing
+    /// the engine notification round-trip. Returns the clip's id so
+    /// the test can dispatch trim/drag messages against it.
+    #[doc(hidden)]
+    pub fn test_push_midi_clip(&mut self, clip: state::MidiClipState) {
+        self.midi_clips.push(clip);
+    }
+
+    /// Test-only: overwrite the sample rate. Tempo-map projections used
+    /// by the MIDI clip trim reducer depend on `sample_rate`; integration
+    /// tests fix it to a known value so the projection math is
+    /// deterministic.
+    #[doc(hidden)]
+    pub fn test_set_sample_rate(&mut self, sample_rate: u32) {
+        self.sample_rate = sample_rate;
+    }
+
+    /// Test-only: rebuild the GUI-side tempo map from the current
+    /// `tempo_events` / `signature_events`. Mirrors what the global-
+    /// track reducers call after a tempo edit; surfaced so tests can
+    /// seed a custom tempo map without going through the message path.
+    #[doc(hidden)]
+    pub fn test_rebuild_tempo_map(&mut self) {
+        self.rebuild_tempo_map();
+    }
+
+    /// Test-only: push a tempo event so the rebuilt tempo map has the
+    /// requested ramp/step. Caller must follow with
+    /// `test_rebuild_tempo_map` (and usually `test_set_sample_rate`).
+    #[doc(hidden)]
+    pub fn test_push_tempo_event(&mut self, event: state::TempoEvent) {
+        self.tempo_events.push(event);
+    }
+
+    /// Test-only: overwrite the arrange-view zoom (pixels per second).
+    /// MIDI clip trim translates a pointer-pixel delta into samples via
+    /// `delta_px / zoom`, so the reducer test fixes a known zoom value
+    /// to make the delta arithmetic deterministic.
+    #[doc(hidden)]
+    pub fn test_set_arrange_zoom(&mut self, zoom: f32) {
+        self.viewport.zoom = zoom;
+    }
+
+    /// Test-only: flip the project-active flag so the message gate in
+    /// `gates_message` lets reducer-driven `MidiClipMessage` /
+    /// `ClipMessage` traffic through. Demo seeding does this in the
+    /// real app; reducer tests that don't seed the demo flip it
+    /// directly.
+    #[doc(hidden)]
+    pub fn test_set_active_project(&mut self, active: bool) {
+        self.io.has_active_project = active;
+    }
+
     pub(crate) fn sorted_tracks(&self) -> &[TrackState] {
         self.registry.sorted_tracks()
     }

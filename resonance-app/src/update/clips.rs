@@ -313,13 +313,13 @@ pub fn update_midi_clip_trim(r: &mut Resonance, x: f32) {
     };
     let delta_px = x - trim.anchor_x;
     let delta_seconds = delta_px as f64 / r.viewport.zoom as f64;
-    let samples_per_tick =
-        (r.sample_rate as f64 * 60.0 / r.transport.bpm as f64) / TICKS_PER_QUARTER_NOTE as f64;
     let delta_samples_signed = (delta_seconds * r.sample_rate as f64) as i64;
     let total_ticks = trim.original_duration_ticks
         + trim.original_trim_start_ticks
         + trim.original_trim_end_ticks;
     let min_ticks = TICKS_PER_QUARTER_NOTE;
+    let sample_rate = r.sample_rate;
+    let tempo_map = &r.tempo_map;
     // Snap the dragged edge's final sample-space position to the grid,
     // then translate the resulting delta back into ticks. This keeps
     // MIDI clip edges aligned with the arrange-view bar/beat lines
@@ -329,18 +329,26 @@ pub fn update_midi_clip_trim(r: &mut Resonance, x: f32) {
             sample,
             r.transport.bpm,
             r.transport.time_sig_num,
-            r.sample_rate,
+            sample_rate,
             r.viewport.zoom,
         )
     };
-    let original_duration_samples = (trim.original_duration_ticks as f64 * samples_per_tick) as u64;
+    // Convert a sample-space delta against `anchor_sample` into a
+    // signed tick-space delta, integrating tempo changes via the bar
+    // table. A scalar `samples_per_tick` would skew the result whenever
+    // the trim region spans a tempo change.
+    let sample_delta_to_tick_delta = |anchor_sample: u64, new_sample: u64| -> i64 {
+        let anchor_tick = tempo_map.sample_to_abs_tick(anchor_sample, sample_rate) as i64;
+        let new_tick = tempo_map.sample_to_abs_tick(new_sample, sample_rate) as i64;
+        new_tick - anchor_tick
+    };
 
     match trim.edge {
         ClipEdge::Left => {
             let original_edge = trim.original_start_sample;
             let raw_target = (original_edge as i64 + delta_samples_signed).max(0) as u64;
-            let snapped_delta_samples = snap(raw_target) as i64 - original_edge as i64;
-            let snapped_delta_ticks = (snapped_delta_samples as f64 / samples_per_tick) as i64;
+            let snapped_target = snap(raw_target);
+            let snapped_delta_ticks = sample_delta_to_tick_delta(original_edge, snapped_target);
             let max_trim = total_ticks
                 .saturating_sub(trim.original_trim_end_ticks)
                 .saturating_sub(min_ticks);
@@ -350,9 +358,21 @@ pub fn update_midi_clip_trim(r: &mut Resonance, x: f32) {
                 trim.original_trim_start_ticks
                     .saturating_sub((-snapped_delta_ticks) as u64)
             };
-            let trim_delta = new_trim_start as i64 - trim.original_trim_start_ticks as i64;
-            let sample_delta = (trim_delta as f64 * samples_per_tick) as i64;
-            let new_start = (trim.original_start_sample as i64 + sample_delta).max(0) as u64;
+            // Project the clamped `new_trim_start` back into sample
+            // space using the bar table: the new visible start sits at
+            // (original_start tick) + (new_trim_start - original_trim_start)
+            // ticks in absolute tick coordinates. `tick_to_abs_sample`
+            // with a clip_start of 0 is the inverse of `sample_to_abs_tick`,
+            // so this round-trips through the tempo map cleanly.
+            let original_start_abs_tick =
+                tempo_map.sample_to_abs_tick(trim.original_start_sample, sample_rate) as i64;
+            let new_start_abs_tick = original_start_abs_tick + new_trim_start as i64
+                - trim.original_trim_start_ticks as i64;
+            let new_start = if new_start_abs_tick <= 0 {
+                0
+            } else {
+                tempo_map.tick_to_abs_sample(0, new_start_abs_tick as u64, sample_rate)
+            };
             let new_duration = total_ticks
                 .saturating_sub(new_trim_start)
                 .saturating_sub(trim.original_trim_end_ticks);
@@ -363,10 +383,14 @@ pub fn update_midi_clip_trim(r: &mut Resonance, x: f32) {
             }
         }
         ClipEdge::Right => {
-            let original_edge = trim.original_start_sample + original_duration_samples;
+            let original_edge = tempo_map.tick_to_abs_sample(
+                trim.original_start_sample,
+                trim.original_duration_ticks,
+                sample_rate,
+            );
             let raw_target = (original_edge as i64 + delta_samples_signed).max(0) as u64;
-            let snapped_delta_samples = snap(raw_target) as i64 - original_edge as i64;
-            let snapped_delta_ticks = (snapped_delta_samples as f64 / samples_per_tick) as i64;
+            let snapped_target = snap(raw_target);
+            let snapped_delta_ticks = sample_delta_to_tick_delta(original_edge, snapped_target);
             let max_trim = total_ticks
                 .saturating_sub(trim.original_trim_start_ticks)
                 .saturating_sub(min_ticks);

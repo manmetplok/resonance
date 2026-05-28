@@ -143,8 +143,16 @@ inline fix pass tackled. Each is documented enough to pick up later.
   missing saved ids tolerated, empty saved list no-op, single-slot
   no-op. No behaviour change for chains that already arrived in order
   (Rust's adaptive sort is O(n) on a sorted slice).
-- [ ] `update/clips.rs:316-318` — `samples_per_tick` ignores tempo-map variation
+- [x] `update/clips.rs:316-318` — `samples_per_tick` ignores tempo-map variation
   when trimming MIDI clips. Use `tempo_map.tick_to_abs_sample`.
+  _Resolved 2026-05-28_ — `update_midi_clip_trim` now projects the
+  right-edge sample via `TempoMap::tick_to_abs_sample` and converts
+  snapped sample deltas back to tick deltas via `sample_to_abs_tick`
+  (mirroring the audio-clip path). Left-edge `new_start_sample` is
+  re-projected through the tempo map after the trim_start clamp so
+  it stays consistent with the engine's playback projection (see
+  `engine/midi/outbound.rs:180`). Covered by
+  `tests/midi_clip_trim_tempo.rs` (ramp + flat-tempo cases).
 - [ ] `timeline_draw.rs:219-244` — `draw_global_tracks` rasterises a trapezoidal
   fill as hundreds of `fill_rectangle` calls. Use a single `canvas::Path`.
 - [ ] `view/mixer/mod.rs:23-107` — `view_mixer` builds two scrollable rows of
