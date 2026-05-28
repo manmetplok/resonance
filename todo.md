@@ -153,8 +153,33 @@ inline fix pass tackled. Each is documented enough to pick up later.
   it stays consistent with the engine's playback projection (see
   `engine/midi/outbound.rs:180`). Covered by
   `tests/midi_clip_trim_tempo.rs` (ramp + flat-tempo cases).
-- [ ] `timeline_draw.rs:219-244` — `draw_global_tracks` rasterises a trapezoidal
+- [x] `timeline_draw.rs:219-244` — `draw_global_tracks` rasterises a trapezoidal
   fill as hundreds of `fill_rectangle` calls. Use a single `canvas::Path`.
+  _Resolved 2026-05-28_. The trapezoidal fill (and the 2 px polyline on
+  top) was the tempo-lane area-under-graph in `draw_global_tracks`, at
+  the current `timeline_draw.rs:288-339`. Each pair of tempo events
+  spawned up to 400 `fill_rectangle` calls for the fill plus 800 for
+  the line, and the right-edge extension added two more. Replaced with
+  a single polyline: collect every visible tempo `Point` (plus the
+  horizontal extension to the right edge when the last point sits
+  inside the canvas), build one `canvas::Path` that traces the polyline
+  then closes along `graph_bot` back to the starting x, and `frame.fill`
+  it once with the existing `fill_color`. The line itself is a second
+  `canvas::Path` of the same polyline, `frame.stroke`d at 2 px with the
+  existing `line_color` and `LineJoin::Round` (matches the visual of
+  the overlapping 1 px rect stack at sharp corners). No theme constants
+  or colors changed. Five timeline goldens were rebaselined under
+  `tests/snapshots/` because the path-rasterised fill rounds pixel
+  coverage slightly differently than the 1 px rect stack — that's
+  expected drift, the tempo line/fill remain in the same position,
+  height, and color (verified by re-reading the regenerated PNGs).
+  Snapshots rebaselined: `global_tracks_shelf_expanded`,
+  `global_tracks_shelf_after_update_tempo`,
+  `global_tracks_shelf_after_cycle_signature`,
+  `timeline_lane_clip_globals_expanded_scrolled`,
+  `track_header_no_bleed_into_chrome_expanded`. Full
+  `cargo check`/`cargo clippy -p resonance-app --no-deps`/`cargo test
+  -p resonance-app --no-fail-fast` pass.
 - [ ] `view/mixer/mod.rs:23-107` — `view_mixer` builds two scrollable rows of
   strips with no row-level virtualization. Wrap in `lazy` keyed on track ids.
 - [ ] `view/compose/page.rs:104-113` — `track_count` computed via

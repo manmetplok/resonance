@@ -285,57 +285,55 @@ impl TimelineCanvas<'_> {
                 ..theme::WARM
             };
 
-            for pair in points.windows(2) {
-                let (x1, y1, _, _) = pair[0];
-                let (x2, y2, _, _) = pair[1];
-                if x2 < -50.0 || x1 > width + 50.0 {
-                    continue;
-                }
-                // Filled area under the line segment.
-                let steps = ((x2 - x1).abs() as u32).clamp(1, 400);
-                for s in 0..steps {
-                    let t = s as f32 / steps as f32;
-                    let px = x1 + t * (x2 - x1);
-                    let py = y1 + t * (y2 - y1);
-                    if px >= 0.0 && px <= width {
-                        frame.fill_rectangle(
-                            Point::new(px, py),
-                            Size::new(1.0, graph_bot - py),
-                            fill_color,
-                        );
-                    }
-                }
-                // Line itself (2 px wide via two 1 px rects).
-                let steps = ((x2 - x1).abs() as u32).clamp(1, 800);
-                for s in 0..=steps {
-                    let t = s as f32 / steps as f32;
-                    let px = x1 + t * (x2 - x1);
-                    let py = y1 + t * (y2 - y1);
-                    if px >= 0.0 && px <= width {
-                        frame.fill_rectangle(
-                            Point::new(px, py - 0.5),
-                            Size::new(1.0, 2.0),
-                            line_color,
-                        );
-                    }
+            // Build the polyline vertices: every tempo point, plus a
+            // horizontal extension out to the right edge from the last
+            // point so the fill/line reach the end of the canvas.
+            // Previously this geometry was rasterised as hundreds of
+            // 1 px-wide `fill_rectangle` calls per segment; one Path
+            // fill + one Path stroke does the same work in two draw
+            // submissions.
+            let mut polyline: Vec<Point> = points
+                .iter()
+                .map(|&(x, y, _, _)| Point::new(x, y))
+                .collect();
+            if let Some(&last) = polyline.last() {
+                if last.x < width {
+                    polyline.push(Point::new(width, last.y));
                 }
             }
 
-            // Extend the last point to the right edge.
-            if let Some(&(last_x, last_y, _, _)) = points.last() {
-                if last_x < width {
-                    let start = last_x.max(0.0);
-                    frame.fill_rectangle(
-                        Point::new(start, last_y),
-                        Size::new(width - start, graph_bot - last_y),
-                        fill_color,
-                    );
-                    frame.fill_rectangle(
-                        Point::new(start, last_y - 0.5),
-                        Size::new(width - start, 2.0),
-                        line_color,
-                    );
-                }
+            if polyline.len() >= 2 {
+                // Filled trapezoid under the polyline: trace the
+                // polyline left-to-right, then close along the bottom
+                // (graph_bot) back to the starting x.
+                let fill_path = canvas::Path::new(|b| {
+                    let first = polyline[0];
+                    b.move_to(Point::new(first.x, graph_bot));
+                    for p in &polyline {
+                        b.line_to(*p);
+                    }
+                    let last = polyline[polyline.len() - 1];
+                    b.line_to(Point::new(last.x, graph_bot));
+                    b.close();
+                });
+                frame.fill(&fill_path, fill_color);
+
+                // Line itself. Round joins so the 2 px stroke doesn't
+                // spike at sharp tempo changes (the previous overlapping
+                // 1 px rect stack had no visible miter artifacts).
+                let line_path = canvas::Path::new(|b| {
+                    b.move_to(polyline[0]);
+                    for p in &polyline[1..] {
+                        b.line_to(*p);
+                    }
+                });
+                frame.stroke(
+                    &line_path,
+                    canvas::Stroke::default()
+                        .with_width(2.0)
+                        .with_color(line_color)
+                        .with_line_join(canvas::LineJoin::Round),
+                );
             }
 
             // Draw event points (dots) and BPM labels.
