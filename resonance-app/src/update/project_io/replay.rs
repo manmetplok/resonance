@@ -183,6 +183,33 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
         }
     }
 
+    // Stash saved plugin-slot order per track / bus / master so we can
+    // re-apply it after all replays + late `PluginAdded` events have
+    // resolved. `track_added` / `bus_added` / `master_added` push a new
+    // slot at the end whenever they see an `instance_id` that isn't
+    // already in the slot list — a `PluginAdded` event arriving for a
+    // track whose placeholder hasn't been pushed yet (or for a plugin
+    // whose engine-side id differs from the saved hint for any reason)
+    // would silently scramble the saved chain order. The post-replay
+    // sort below restores it.
+    let mut saved_track_plugin_order: std::collections::HashMap<TrackId, Vec<u64>> =
+        std::collections::HashMap::with_capacity(project.tracks.len());
+    let mut saved_bus_plugin_order: std::collections::HashMap<BusId, Vec<u64>> =
+        std::collections::HashMap::with_capacity(project.busses.len());
+    for pt in &project.tracks {
+        saved_track_plugin_order
+            .insert(pt.id, pt.plugins.iter().map(|p| p.instance_id).collect());
+    }
+    for pb in &project.busses {
+        saved_bus_plugin_order
+            .insert(pb.id, pb.plugins.iter().map(|p| p.instance_id).collect());
+    }
+    let saved_master_plugin_order: Vec<u64> = project
+        .master_plugins
+        .iter()
+        .map(|p| p.instance_id)
+        .collect();
+
     for pt in &project.tracks {
         replay_track(r, pt, &loaded);
     }
@@ -318,11 +345,50 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 
     r.transport.loop_range_set = r.transport.loop_enabled;
 
+    // Defensive: re-impose the saved plugin-chain order on every track,
+    // bus, and the master chain. See `saved_*_plugin_order` setup above
+    // for the race this guards against. Sorting in place is cheap
+    // (Rust's sort is adaptive — already-sorted slices are O(n)) and
+    // safely no-ops in the common case where placeholders + events
+    // landed in the expected order.
+    for track in &mut r.registry.tracks {
+        if let Some(saved) = saved_track_plugin_order.get(&track.id) {
+            sort_plugins_by_saved_order(&mut track.plugins, saved);
+        }
+    }
+    for bus in &mut r.registry.busses {
+        if let Some(saved) = saved_bus_plugin_order.get(&bus.id) {
+            sort_plugins_by_saved_order(&mut bus.plugins, saved);
+        }
+    }
+    sort_plugins_by_saved_order(&mut r.master_plugins, &saved_master_plugin_order);
+
     // Re-populate the `with_plugin_mut` side-index from the wholesale
     // replay we just performed. Per-slot inserts would also work but
     // a single rebuild is simpler and keeps `replay_track` / `_bus` /
     // `_master` focused on their own concern.
     r.rebuild_plugin_index();
+}
+
+/// Reorder `plugins` to match the saved instance-id sequence, leaving
+/// any slot whose `instance_id` isn't in `saved` at the end in its
+/// current relative order. Missing entries in `saved` (plugins that
+/// failed to load and therefore have no live slot) are silently
+/// filtered — the absent ids never reach the comparator. Stable, so a
+/// chain already in saved order is unchanged.
+fn sort_plugins_by_saved_order(plugins: &mut [PluginSlotState], saved: &[u64]) {
+    if plugins.len() < 2 || saved.is_empty() {
+        return;
+    }
+    // O(n) index lookup; `saved` is bounded by the per-chain plugin
+    // count (single digits in practice, dozens worst-case).
+    let position = |id: u64| -> usize {
+        saved
+            .iter()
+            .position(|&s| s == id)
+            .unwrap_or(usize::MAX)
+    };
+    plugins.sort_by_key(|p| position(p.instance_id));
 }
 
 fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
@@ -616,11 +682,13 @@ fn migrate_auto_name(name: &str, is_instrument: bool, order: usize) -> String {
 }
 
 // Inline tests: `resonance-app` is a binary crate with no `lib.rs`, so the
-// private `migrate_auto_name` helper isn't reachable from a `tests/` file.
-// See ARCHITECTURE.md → Test Layout → Binary-crate exception.
+// private `migrate_auto_name` / `sort_plugins_by_saved_order` helpers
+// aren't reachable from a `tests/` file. See ARCHITECTURE.md → Test
+// Layout → Binary-crate exception.
 #[cfg(test)]
 mod tests {
-    use super::migrate_auto_name;
+    use super::{migrate_auto_name, sort_plugins_by_saved_order};
+    use crate::state::PluginSlotState;
 
     #[test]
     fn migrates_engine_id_track_name() {
@@ -645,5 +713,68 @@ mod tests {
             migrate_auto_name("Track 1000000006 (vocals)", false, 1),
             "Track 1000000006 (vocals)"
         );
+    }
+
+    /// Helper: build a minimal `PluginSlotState` carrying only the
+    /// `instance_id` we care about for the order assertions.
+    fn slot(id: u64) -> PluginSlotState {
+        PluginSlotState::new(
+            id,
+            format!("plugin_{id}"),
+            String::new(),
+            String::new(),
+            Vec::new(),
+            false,
+        )
+    }
+
+    fn ids(plugins: &[PluginSlotState]) -> Vec<u64> {
+        plugins.iter().map(|p| p.instance_id).collect()
+    }
+
+    #[test]
+    fn restores_saved_order_when_chain_is_scrambled() {
+        let mut plugins = vec![slot(30), slot(10), slot(20)];
+        sort_plugins_by_saved_order(&mut plugins, &[10, 20, 30]);
+        assert_eq!(ids(&plugins), vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn already_sorted_chain_is_unchanged() {
+        let mut plugins = vec![slot(10), slot(20), slot(30)];
+        sort_plugins_by_saved_order(&mut plugins, &[10, 20, 30]);
+        assert_eq!(ids(&plugins), vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn appended_plugins_not_in_saved_go_to_end_in_arrival_order() {
+        // PluginAdded events for ids 40 and 50 raced ahead of replay
+        // and were appended to the chain; saved order is [10, 20, 30].
+        let mut plugins = vec![slot(40), slot(20), slot(10), slot(50), slot(30)];
+        sort_plugins_by_saved_order(&mut plugins, &[10, 20, 30]);
+        assert_eq!(ids(&plugins), vec![10, 20, 30, 40, 50]);
+    }
+
+    #[test]
+    fn saved_ids_missing_from_chain_are_tolerated() {
+        // Plugin 20 failed to load — its placeholder was filtered out.
+        // The remaining [30, 10] should still resort to [10, 30].
+        let mut plugins = vec![slot(30), slot(10)];
+        sort_plugins_by_saved_order(&mut plugins, &[10, 20, 30]);
+        assert_eq!(ids(&plugins), vec![10, 30]);
+    }
+
+    #[test]
+    fn empty_saved_order_is_a_noop() {
+        let mut plugins = vec![slot(30), slot(10), slot(20)];
+        sort_plugins_by_saved_order(&mut plugins, &[]);
+        assert_eq!(ids(&plugins), vec![30, 10, 20]);
+    }
+
+    #[test]
+    fn single_plugin_chain_is_a_noop() {
+        let mut plugins = vec![slot(42)];
+        sort_plugins_by_saved_order(&mut plugins, &[1, 2, 3]);
+        assert_eq!(ids(&plugins), vec![42]);
     }
 }

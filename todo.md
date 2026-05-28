@@ -125,8 +125,24 @@ inline fix pass tackled. Each is documented enough to pick up later.
   removal + `for t in &sorted` → `for t in sorted` fix. No behaviour
   change — 38 unit tests + the existing mixer/timeline snapshot tests
   still pass.
-- [ ] `update/project_io/replay.rs:387-409` — plugin slot reconstruction races
+- [x] `update/project_io/replay.rs:387-409` — plugin slot reconstruction races
   `PluginAdded` events. Defensive sort by saved order after all replays complete.
+
+  _Resolved 2026-05-28_. `replay_loaded_project` now stashes the saved
+  plugin-slot order per track / bus + the master chain into three
+  scratch collections before any `replay_*` runs, then re-applies that
+  order to `track.plugins` / `bus.plugins` / `r.master_plugins` at the
+  very end of replay (just before `rebuild_plugin_index`). A new private
+  helper `sort_plugins_by_saved_order` does a stable
+  `sort_by_key(position)` — slots whose `instance_id` isn't in the saved
+  list get `usize::MAX` and sink to the end (preserving the race-arrival
+  order of any late `PluginAdded` events), and saved ids that never
+  produced a slot (plugin failed to load → filtered placeholder) are
+  silently ignored. Six inline unit tests cover the helper: scrambled
+  chain restored, already-sorted no-op, late appends sink to end,
+  missing saved ids tolerated, empty saved list no-op, single-slot
+  no-op. No behaviour change for chains that already arrived in order
+  (Rust's adaptive sort is O(n) on a sorted slice).
 - [ ] `update/clips.rs:316-318` — `samples_per_tick` ignores tempo-map variation
   when trimming MIDI clips. Use `tempo_map.tick_to_abs_sample`.
 - [ ] `timeline_draw.rs:219-244` — `draw_global_tracks` rasterises a trapezoidal
