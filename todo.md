@@ -379,8 +379,19 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `pushing_past_cap_drops_without_panicking` in
   `tests/lufs_integrated.rs` verifies overflow keeps the reading finite,
   counts drops, and no longer fires a debug assertion.
-- [ ] `resonance-metering/src/crest.rs:66` — full linear scan of 100 ms ring on
+- [x] `resonance-metering/src/crest.rs:66` — full linear scan of 100 ms ring on
   every `crest_db()`. Either monotonic-deque or document UI-rate readout only.
+
+  _Resolved 2026-06-09_ with the monotonic deque — `crest_db()` is not
+  UI-rate-only: the mastering plugin calls it once per audio block from
+  `MasteringDsp::feed` → `publish_snapshot`. The window peak is now a
+  classic sliding-window-maximum deque stored in two fixed rings
+  (`max_idx`/`max_val`, capacity = window length, no allocation in
+  `push_stereo`): amortized O(1) per pushed sample, O(1) front read in
+  `crest_db()`, and the raw-sample `ring` is gone. New tests in
+  `tests/crest.rs`: brute-force-scan equivalence across wrap-straddling
+  block sizes, spike eviction at the 100 ms boundary, and reset clearing
+  deque state.
 - [ ] `resonance-dsp/src/delay.rs:23-26` — `tap()` silently aliases when
   `delay > mask`. Add `debug_assert!(delay <= self.mask)`.
 - [ ] `resonance-dsp/src/lfo.rs:73-86` — `LFO::next` accepts non-finite rate
