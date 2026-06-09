@@ -6,7 +6,7 @@ use wayland_plugin_gui::egui;
 use crate::editor::theme;
 use crate::editor::widgets;
 use crate::editor::WavetableEditorApp;
-use crate::modulation::NUM_MOD_SLOTS;
+use crate::dsp::modulation::NUM_MOD_SLOTS;
 use resonance_plugin::param::Param;
 
 const SOURCE_NAMES: [&str; 9] = [

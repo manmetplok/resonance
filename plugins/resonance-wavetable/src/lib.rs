@@ -5,21 +5,12 @@ use resonance_plugin::*;
 
 #[cfg(feature = "editor")]
 mod editor;
-mod effects;
-mod engine;
-mod envelope;
-mod filter;
-mod lfo;
-mod modulation;
-mod oscillator;
+mod dsp;
 mod params;
 pub mod presets;
-mod render;
 pub mod viz;
-mod voice;
-mod wavetable;
 
-use engine::SynthEngine;
+use dsp::engine::SynthEngine;
 use params::{WavetableParams, PARAM_COUNT};
 use viz::WavetableVizState;
 

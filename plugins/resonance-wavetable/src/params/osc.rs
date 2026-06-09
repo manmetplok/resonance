@@ -1,6 +1,6 @@
 use resonance_plugin::*;
 
-use crate::wavetable::NUM_WAVETABLES;
+use crate::dsp::wavetable::NUM_WAVETABLES;
 
 pub struct OscParams {
     pub wavetable: IntParam,

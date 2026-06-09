@@ -7,7 +7,7 @@
 
 use resonance_plugin::*;
 
-use crate::modulation::NUM_MOD_SLOTS;
+use crate::dsp::modulation::NUM_MOD_SLOTS;
 
 pub mod env;
 pub mod filter;

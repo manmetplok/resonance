@@ -1,7 +1,7 @@
 /// Per-voice state for the wavetable synthesizer.
-use crate::envelope::AdsrEnvelope;
-use crate::filter::StateVariableFilter;
-use crate::lfo::MultiLfo;
+use crate::dsp::envelope::AdsrEnvelope;
+use crate::dsp::filter::StateVariableFilter;
+use crate::dsp::lfo::MultiLfo;
 
 pub const MAX_VOICES: usize = 32;
 pub const MAX_UNISON: usize = 7;
@@ -83,7 +83,7 @@ pub struct Voice {
     // Control-rate snapshot of the modulation matrix output. Refreshed
     // every `FILTER_COEFF_INTERVAL` samples (and once on trigger via
     // `mod_dirty`); read by-value per sample inside the render loop.
-    pub cached_mods: crate::modulation::ModState,
+    pub cached_mods: crate::dsp::modulation::ModState,
 
     // "Last computed" values cached per-sample during render. Read by the
     // viz state publisher at the end of each audio block. Not part of the
@@ -114,7 +114,7 @@ impl Voice {
             unison_count: 1,
             filter_dirty: true,
             mod_dirty: true,
-            cached_mods: crate::modulation::ModState::default(),
+            cached_mods: crate::dsp::modulation::ModState::default(),
             last_filter_cutoff: 8000.0,
             last_osc1_pos: 0.0,
             last_osc2_pos: 0.0,

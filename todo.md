@@ -525,8 +525,16 @@ inline fix pass tackled. Each is documented enough to pick up later.
   every existing `crate::assistant::Assistant` /
   `resonance_mastering::assistant::*` path compiling unchanged. No
   behaviour change — full mastering suite passes as-is.
-- [ ] `resonance-wavetable` — every DSP file lives at crate root
+- [x] `resonance-wavetable` — every DSP file lives at crate root
   (`effects.rs`, `engine.rs`, …). Fold under `dsp/`.
+
+  _Resolved 2026-06-09_. Pure restructure: `effects`, `engine`,
+  `envelope`, `filter`, `lfo`, `modulation`, `oscillator`, `render`,
+  `voice`, `wavetable` moved (`git mv`) under `src/dsp/` with a new
+  `dsp/mod.rs`, matching the resonance-drums layout; all
+  `crate::<mod>` paths became `crate::dsp::<mod>`. Build-time
+  `wavetable_gen.rs` moved along with them — `build.rs`'s `#[path]`
+  include and `rerun-if-changed` updated. No behaviour change.
 - [ ] `resonance-ir/src/convolver.rs` — should be `dsp.rs` (per plugin layout
   convention). Also restructure to consume slices instead of per-sample dispatch
   from `lib.rs:221-271`.

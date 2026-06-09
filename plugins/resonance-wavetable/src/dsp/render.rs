@@ -15,15 +15,15 @@
 use resonance_dsp::constant_power_pan;
 use resonance_plugin::{EventIterator, NoteEvent};
 
-use crate::effects::Distortion;
-use crate::engine::SynthEngine;
-use crate::envelope::EnvCoeffs;
-use crate::filter::FilterType;
-use crate::lfo::LfoShape;
-use crate::modulation::{self, ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
-use crate::oscillator::{self, midi_to_freq, read_wavetable};
+use crate::dsp::effects::Distortion;
+use crate::dsp::engine::SynthEngine;
+use crate::dsp::envelope::EnvCoeffs;
+use crate::dsp::filter::FilterType;
+use crate::dsp::lfo::LfoShape;
+use crate::dsp::modulation::{self, ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
+use crate::dsp::oscillator::{self, midi_to_freq, read_wavetable};
 use crate::params::WavetableParams;
-use crate::voice::VoiceState;
+use crate::dsp::voice::VoiceState;
 
 /// Update filter coefficients every N samples. `tan()` and the three SVF
 /// coefficient divides are the bulk of per-voice filter CPU, and modulation

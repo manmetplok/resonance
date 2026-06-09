@@ -3,7 +3,7 @@
 //! `include_bytes!`, avoiding a multi-second additive-synthesis pass at every
 //! plugin instantiation.
 
-#[path = "src/wavetable_gen.rs"]
+#[path = "src/dsp/wavetable_gen.rs"]
 mod wavetable_gen;
 
 fn main() {
@@ -11,6 +11,6 @@ fn main() {
     let dest = std::path::Path::new(&out_dir).join("wavetables.bin");
     wavetable_gen::write_bundled(44_100.0, &dest);
 
-    println!("cargo:rerun-if-changed=src/wavetable_gen.rs");
+    println!("cargo:rerun-if-changed=src/dsp/wavetable_gen.rs");
     println!("cargo:rerun-if-changed=build.rs");
 }

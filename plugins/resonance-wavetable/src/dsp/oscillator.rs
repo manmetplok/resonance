@@ -1,5 +1,5 @@
 /// Wavetable oscillator with band-limited mip-map selection and cubic Hermite interpolation.
-use crate::wavetable::{Wavetable, NUM_OCTAVES, WAVETABLE_SIZE};
+use crate::dsp::wavetable::{Wavetable, NUM_OCTAVES, WAVETABLE_SIZE};
 
 /// Read a wavetable with anti-aliased mip-map crossfading and frame interpolation.
 ///

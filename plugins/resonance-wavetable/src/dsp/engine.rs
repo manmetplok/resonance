@@ -1,11 +1,11 @@
 /// Synth engine: voice allocation, rendering, portamento, effects.
 use resonance_dsp::SimpleRng;
 
-use crate::effects::{Chorus, StereoDelay};
+use crate::dsp::effects::{Chorus, StereoDelay};
 use crate::params::WavetableParams;
 use crate::viz::{ScopeCollector, WavetableVizState};
-use crate::voice::{Voice, VoiceState, MAX_VOICES};
-use crate::wavetable::Wavetable;
+use crate::dsp::voice::{Voice, VoiceState, MAX_VOICES};
+use crate::dsp::wavetable::Wavetable;
 
 pub struct SynthEngine {
     pub(crate) voices: Vec<Voice>,
@@ -13,9 +13,9 @@ pub struct SynthEngine {
     pub(crate) sample_rate: f32,
 
     // Global LFO phases (used when retrigger=false)
-    pub global_lfo1: crate::lfo::MultiLfo,
-    pub global_lfo2: crate::lfo::MultiLfo,
-    pub global_lfo3: crate::lfo::MultiLfo,
+    pub global_lfo1: crate::dsp::lfo::MultiLfo,
+    pub global_lfo2: crate::dsp::lfo::MultiLfo,
+    pub global_lfo3: crate::dsp::lfo::MultiLfo,
 
     // Wavetable data
     pub wavetables: Vec<Wavetable>,
@@ -41,9 +41,9 @@ impl SynthEngine {
             voices: Vec::new(),
             voice_counter: 0,
             sample_rate: 44100.0,
-            global_lfo1: crate::lfo::MultiLfo::new(),
-            global_lfo2: crate::lfo::MultiLfo::new(),
-            global_lfo3: crate::lfo::MultiLfo::new(),
+            global_lfo1: crate::dsp::lfo::MultiLfo::new(),
+            global_lfo2: crate::dsp::lfo::MultiLfo::new(),
+            global_lfo3: crate::dsp::lfo::MultiLfo::new(),
             wavetables: Vec::new(),
             chorus: Chorus::new(44100.0),
             delay: StereoDelay::new(44100.0),
@@ -69,7 +69,7 @@ impl SynthEngine {
         // happens once at plugin build time (see `build.rs`), not on every
         // `initialize()` — this keeps plugin instantiation fast instead of
         // burning multi-seconds on additive synthesis.
-        self.wavetables = crate::wavetable::load_bundled();
+        self.wavetables = crate::dsp::wavetable::load_bundled();
 
         // Init effects
         self.chorus = Chorus::new(sample_rate);
