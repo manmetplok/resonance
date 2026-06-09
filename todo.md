@@ -624,8 +624,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   CAS fail, the loaded value survives, and the still-set dirty flag
   re-syncs the plugin next block. Full analysis documented at the load
   site in `state.rs`.
-- [ ] `resonance-plugin/src/clap_bridge/ports.rs:67-72` — port-name copy
+- [x] `resonance-plugin/src/clap_bridge/ports.rs:67-72` — port-name copy
   includes trailing NUL. Check `AudioPortInfoWriter::set` semantics.
+
+  _Resolved 2026-06-09_. Checked clack at the pinned rev (`4541f03`):
+  `AudioPortInfoWriter::set` copies `AudioPortInfo::name` with
+  `write_to_array_buf`, which truncates to `CLAP_NAME_SIZE - 1` and
+  writes the NUL terminator itself — the field expects an
+  *unterminated* UTF-8 slice (the doc example and our own `b"Input"` /
+  `b"Note Input"` literals already pass none). The hand-rolled 32-byte
+  zero-terminated buffer (which embedded a NUL into the C string and
+  capped names at 31 bytes for no reason) is gone; the port name is
+  passed as `port.name.as_bytes()` directly.
 - [ ] `wayland-plugin-gui/src/editor.rs:92-100` — `set_size` never updates
   `self.size`. Subsequent `get_size` returns stale data.
 - [ ] `wayland-plugin-gui/src/window_thread/paint.rs:80-93` — EGL sized as

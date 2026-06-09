@@ -61,15 +61,14 @@ impl<'a, P: ResonancePlugin> PluginAudioPortsImpl for ClapMainThread<'a, P> {
         // increase by one per additional output.
         let port_id = ClapId::new(2 + index);
         let is_main = index == 0;
-        // Use a zero-terminated buffer for the name; CLAP names are
-        // limited to CLAP_NAME_SIZE bytes so truncate safely if needed.
-        let mut name_buf = [0u8; 32];
-        let bytes = port.name.as_bytes();
-        let copy_len = bytes.len().min(name_buf.len() - 1);
-        name_buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
         writer.set(&AudioPortInfo {
             id: port_id,
-            name: &name_buf[..=copy_len],
+            // `AudioPortInfo::name` takes an *unterminated* UTF-8 byte
+            // slice: clack's `AudioPortInfoWriter::set` copies it via
+            // `write_to_array_buf`, which truncates to CLAP_NAME_SIZE - 1
+            // and appends the NUL terminator itself (same contract as the
+            // `b"Input"` literal above).
+            name: port.name.as_bytes(),
             channel_count: port.channel_count,
             flags: if is_main {
                 AudioPortFlags::IS_MAIN
