@@ -22,8 +22,8 @@ use crate::dsp::filter::FilterType;
 use crate::dsp::lfo::LfoShape;
 use crate::dsp::modulation::{self, ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
 use crate::dsp::oscillator::{self, midi_to_freq, read_wavetable};
-use crate::params::WavetableParams;
 use crate::dsp::voice::VoiceState;
+use crate::params::WavetableParams;
 
 /// Update filter coefficients every N samples. `tan()` and the three SVF
 /// coefficient divides are the bulk of per-voice filter CPU, and modulation
@@ -227,6 +227,18 @@ impl SynthEngine {
             None
         };
 
+        // An oscillator only contributes when it is enabled AND its
+        // wavetable index resolved. With both inactive the per-voice unison
+        // mixing loop is pure overhead, so the per-sample kernel skips it
+        // wholesale. The skip is deliberately scoped to the oscillator
+        // mixing only: envelopes (which drive the Releasing -> Idle voice
+        // transition), LFO phases, the mod matrix, and the filter's
+        // ring-down of residual state must all keep advancing exactly as
+        // before so voice lifecycle and modulation continuity are
+        // unaffected by toggling the oscillators.
+        let oscs_active =
+            (snap.osc1_enabled && wt1_idx.is_some()) || (snap.osc2_enabled && wt2_idx.is_some());
+
         // Global LFO rates only need to be refreshed when the rate param
         // itself changes, but `set_rate` is a single division -- cheap
         // enough to call once per block unconditionally.
@@ -373,63 +385,69 @@ impl SynthEngine {
                 }
                 let mods = voice.cached_mods;
 
-                // Render oscillators with unison
+                // Render oscillators with unison. Skipped entirely when no
+                // oscillator can contribute (see `oscs_active` above);
+                // `osc_l`/`osc_r` then stay 0.0 and the rest of the voice
+                // path runs unchanged on silence.
                 let mut osc_l = 0.0f32;
                 let mut osc_r = 0.0f32;
 
-                for u in 0..voice.unison_count {
-                    let sub = &mut voice.unison[u];
+                if oscs_active {
+                    for u in 0..voice.unison_count {
+                        let sub = &mut voice.unison[u];
 
-                    if snap.osc1_enabled {
-                        if let Some(idx) = wt1_idx {
-                            let wt = &self.wavetables[idx];
-                            let pitch = voice.current_pitch
-                                + snap.osc1_coarse
-                                + snap.osc1_fine / 100.0
-                                + sub.detune_cents / 100.0
-                                + mods.osc1_pitch;
-                            let freq = midi_to_freq(pitch);
-                            let pos = (snap.osc1_pos + mods.osc1_position).clamp(0.0, 1.0);
-                            let sample = read_wavetable(wt, sub.osc1_phase, pos, freq);
-                            sub.osc1_phase += oscillator::phase_inc(freq, sample_rate);
-                            sub.osc1_phase -= sub.osc1_phase.floor();
+                        if snap.osc1_enabled {
+                            if let Some(idx) = wt1_idx {
+                                let wt = &self.wavetables[idx];
+                                let pitch = voice.current_pitch
+                                    + snap.osc1_coarse
+                                    + snap.osc1_fine / 100.0
+                                    + sub.detune_cents / 100.0
+                                    + mods.osc1_pitch;
+                                let freq = midi_to_freq(pitch);
+                                let pos = (snap.osc1_pos + mods.osc1_position).clamp(0.0, 1.0);
+                                let sample = read_wavetable(wt, sub.osc1_phase, pos, freq);
+                                sub.osc1_phase += oscillator::phase_inc(freq, sample_rate);
+                                sub.osc1_phase -= sub.osc1_phase.floor();
 
-                            let pan =
-                                (snap.osc1_pan + sub.pan_offset + mods.osc1_pan).clamp(-1.0, 1.0);
-                            let (pl, pr) = constant_power_pan(pan);
-                            let level = snap.osc1_level * (1.0 - snap.osc_balance.max(0.0));
-                            osc_l += sample * level * pl;
-                            osc_r += sample * level * pr;
+                                let pan = (snap.osc1_pan + sub.pan_offset + mods.osc1_pan)
+                                    .clamp(-1.0, 1.0);
+                                let (pl, pr) = constant_power_pan(pan);
+                                let level = snap.osc1_level * (1.0 - snap.osc_balance.max(0.0));
+                                osc_l += sample * level * pl;
+                                osc_r += sample * level * pr;
+                            }
+                        }
+
+                        if snap.osc2_enabled {
+                            if let Some(idx) = wt2_idx {
+                                let wt = &self.wavetables[idx];
+                                let pitch = voice.current_pitch
+                                    + snap.osc2_coarse
+                                    + snap.osc2_fine / 100.0
+                                    + sub.detune_cents / 100.0
+                                    + mods.osc2_pitch;
+                                let freq = midi_to_freq(pitch);
+                                let pos = (snap.osc2_pos + mods.osc2_position).clamp(0.0, 1.0);
+                                let sample = read_wavetable(wt, sub.osc2_phase, pos, freq);
+                                sub.osc2_phase += oscillator::phase_inc(freq, sample_rate);
+                                sub.osc2_phase -= sub.osc2_phase.floor();
+
+                                let pan = (snap.osc2_pan + sub.pan_offset + mods.osc2_pan)
+                                    .clamp(-1.0, 1.0);
+                                let (pl, pr) = constant_power_pan(pan);
+                                let level =
+                                    snap.osc2_level * (1.0 - snap.osc_balance.min(0.0).abs());
+                                osc_l += sample * level * pl;
+                                osc_r += sample * level * pr;
+                            }
                         }
                     }
 
-                    if snap.osc2_enabled {
-                        if let Some(idx) = wt2_idx {
-                            let wt = &self.wavetables[idx];
-                            let pitch = voice.current_pitch
-                                + snap.osc2_coarse
-                                + snap.osc2_fine / 100.0
-                                + sub.detune_cents / 100.0
-                                + mods.osc2_pitch;
-                            let freq = midi_to_freq(pitch);
-                            let pos = (snap.osc2_pos + mods.osc2_position).clamp(0.0, 1.0);
-                            let sample = read_wavetable(wt, sub.osc2_phase, pos, freq);
-                            sub.osc2_phase += oscillator::phase_inc(freq, sample_rate);
-                            sub.osc2_phase -= sub.osc2_phase.floor();
-
-                            let pan =
-                                (snap.osc2_pan + sub.pan_offset + mods.osc2_pan).clamp(-1.0, 1.0);
-                            let (pl, pr) = constant_power_pan(pan);
-                            let level = snap.osc2_level * (1.0 - snap.osc_balance.min(0.0).abs());
-                            osc_l += sample * level * pl;
-                            osc_r += sample * level * pr;
-                        }
-                    }
+                    let unison_scale = 1.0 / (voice.unison_count as f32).sqrt();
+                    osc_l *= unison_scale;
+                    osc_r *= unison_scale;
                 }
-
-                let unison_scale = 1.0 / (voice.unison_count as f32).sqrt();
-                osc_l *= unison_scale;
-                osc_r *= unison_scale;
 
                 // Filter. Coefficients are refreshed at control rate or
                 // immediately when a voice was just triggered.

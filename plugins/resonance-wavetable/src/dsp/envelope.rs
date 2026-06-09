@@ -138,3 +138,9 @@ fn exp_coeff(time_s: f32, curve: f32, sample_rate: f32) -> f32 {
     let samples = (time_s * sample_rate * shape).max(1.0);
     1.0 - (-1.0 / samples).exp()
 }
+
+impl Default for AdsrEnvelope {
+    fn default() -> Self {
+        Self::new()
+    }
+}

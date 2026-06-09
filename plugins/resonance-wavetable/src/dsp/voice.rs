@@ -211,3 +211,15 @@ fn distribute_unison(
         u.pan_offset = t * spread;
     }
 }
+
+impl Default for UnisonSubVoice {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for Voice {
+    fn default() -> Self {
+        Self::new()
+    }
+}

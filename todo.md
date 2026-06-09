@@ -987,8 +987,21 @@ inline fix pass tackled. Each is documented enough to pick up later.
   stores). `tests/viz.rs` gains chronological-order pins for both the
   wrapped and the unwrapped ring alongside the existing tearing stress
   test.
-- [ ] `resonance-wavetable/src/render.rs:218-229` — inner sample loop iterates
+- [x] `resonance-wavetable/src/render.rs:218-229` — inner sample loop iterates
   voices even with both oscs disabled. Early-skip.
+
+  _Resolved 2026-06-10_ (file now `src/dsp/render.rs` after the dsp/
+  fold). `render_block` hoists `oscs_active` (enabled AND wavetable
+  index resolved, per osc) once per block and the per-sample kernel
+  skips the whole unison mixing loop when neither osc can contribute.
+  The skip is deliberately scoped to oscillator mixing only — a
+  whole-voice skip would freeze `amp_env` and leave Releasing voices
+  stuck non-idle forever, so envelopes, LFO phases, the mod matrix,
+  and the filter's ring-down keep advancing unchanged. `dsp`/`params`
+  are now `pub` (matching resonance-delay/-drums) and new
+  `tests/render.rs` pins audible output with an osc enabled, exact
+  silence + voices draining to idle with both disabled, and audio
+  resuming on mid-voice re-enable.
 - [ ] `resonance-reverb/src/viz.rs:51-55` — `TailHistory::push` stores
   `write_pos` with `Relaxed`; other plugins use `Release`/`Acquire`. Inconsistent.
 - [ ] `resonance-compressor/src/viz.rs:50-54` — same Relaxed-store pattern.

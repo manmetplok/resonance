@@ -5,8 +5,8 @@ use resonance_plugin::*;
 
 #[cfg(feature = "editor")]
 mod editor;
-mod dsp;
-mod params;
+pub mod dsp;
+pub mod params;
 pub mod presets;
 pub mod viz;
 

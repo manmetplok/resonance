@@ -224,3 +224,9 @@ impl WavetableParams {
         }
     }
 }
+
+impl Default for WavetableParams {
+    fn default() -> Self {
+        Self::new()
+    }
+}

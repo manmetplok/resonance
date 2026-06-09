@@ -116,3 +116,9 @@ impl StateVariableFilter {
 fn soft_clip(x: f32) -> f32 {
     x.tanh()
 }
+
+impl Default for StateVariableFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}

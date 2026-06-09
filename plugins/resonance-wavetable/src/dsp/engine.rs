@@ -213,3 +213,9 @@ impl SynthEngine {
             .unwrap_or(0)
     }
 }
+
+impl Default for SynthEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}

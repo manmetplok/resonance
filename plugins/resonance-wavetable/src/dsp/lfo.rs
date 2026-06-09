@@ -96,3 +96,9 @@ impl MultiLfo {
         out
     }
 }
+
+impl Default for MultiLfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
