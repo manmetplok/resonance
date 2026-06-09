@@ -13,6 +13,14 @@ impl OnePole {
     }
 
     /// Set cutoff frequency (Hz) for given sample rate.
+    ///
+    /// There is no explicit clamp against `sample_rate / 2`: the angular
+    /// frequency `w` is capped at `PI` instead, which is what any cutoff
+    /// at or above Nyquist maps to. At that cap `coeff = e^-PI ≈ 0.043`,
+    /// so the filter degrades to a near-identity passthrough (a few
+    /// percent of one-sample smoothing) rather than going unstable —
+    /// `coeff` always lands in `(0, 1)`, keeping the pole strictly inside
+    /// the unit circle for every finite positive input.
     pub fn set_cutoff(&mut self, freq_hz: f32, sample_rate: f32) {
         let freq_hz = freq_hz.max(1.0);
         let w = (2.0 * std::f32::consts::PI * freq_hz / sample_rate).min(std::f32::consts::PI);

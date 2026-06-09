@@ -953,8 +953,16 @@ inline fix pass tackled. Each is documented enough to pick up later.
   saturate negative/NaN input to 0 and silently read the newest sample.
   `tests/delay.rs` gains should-panic coverage for both the negative
   and NaN cases.
-- [ ] `filter.rs:18` — `OnePole::set_cutoff` doesn't clamp against
+- [x] `filter.rs:18` — `OnePole::set_cutoff` doesn't clamp against
   `sample_rate/2`. Document the near-identity passthrough at Nyquist.
+
+  _Resolved 2026-06-10_. Doc-only — no instability to fix. The angular
+  frequency is already capped at `PI` (what any cutoff ≥ Nyquist maps
+  to), so `coeff = e^-w` lands in `(0, 1)` for every finite positive
+  input and the pole stays strictly inside the unit circle; at the cap
+  the filter is a near-identity passthrough (`coeff ≈ 0.043`). The doc
+  comment now spells this out, and new `tests/one_pole.rs` pins the
+  clamp equivalence and the stable near-identity step response.
 - [ ] `rng.rs:13-18` — xorshift32 with seed=0 relies on `| 1` recovery.
   Assert non-zero in debug.
 
