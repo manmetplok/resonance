@@ -207,25 +207,29 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         }
 
         // Build a transient slice of OutputBuffer views over the scratch.
-        // Uses a stack array (max 8 ports) to avoid heap allocation.
-        let mut port_views_arr: [std::mem::MaybeUninit<OutputBuffer<'_>>; 8] =
-            [const { std::mem::MaybeUninit::uninit() }; 8];
-        let port_count = self.output_scratch.len().min(8);
+        // Uses a stack array to avoid heap allocation on the audio thread.
+        // A plugin declaring more ports than the array holds is a plugin
+        // bug: caught by the debug_assert in debug builds, and by the
+        // array's bounds check (panic, not silent truncation) in release.
+        const MAX_OUTPUT_PORTS: usize = 8;
+        debug_assert!(
+            self.output_scratch.len() <= MAX_OUTPUT_PORTS,
+            "plugin declares {} output ports; the CLAP bridge supports at most {MAX_OUTPUT_PORTS}",
+            self.output_scratch.len(),
+        );
+        let mut port_views_arr: [std::mem::MaybeUninit<OutputBuffer<'_>>; MAX_OUTPUT_PORTS] =
+            [const { std::mem::MaybeUninit::uninit() }; MAX_OUTPUT_PORTS];
         let mut port_views_len = 0;
-        for (l, r) in self.output_scratch.iter_mut().take(port_count) {
+        for (l, r) in self.output_scratch.iter_mut() {
             port_views_arr[port_views_len].write(OutputBuffer {
                 left: &mut l[..frames],
                 right: &mut r[..frames],
             });
             port_views_len += 1;
         }
-        // SAFETY: we just initialized exactly port_views_len elements.
-        let port_views = unsafe {
-            std::slice::from_raw_parts_mut(
-                port_views_arr.as_mut_ptr() as *mut OutputBuffer<'_>,
-                port_views_len,
-            )
-        };
+        // SAFETY: the loop above initialized exactly the first
+        // `port_views_len` elements.
+        let port_views = unsafe { port_views_arr[..port_views_len].assume_init_mut() };
 
         self.plugin
             .process(port_views, frames, &mut event_iter, tempo);

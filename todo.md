@@ -578,9 +578,20 @@ inline fix pass tackled. Each is documented enough to pick up later.
   a monotonic, converging ramp.
 
 ### resonance-plugin / wayland-plugin-gui / resonance-svs
-- [ ] `resonance-plugin/src/clap_bridge/process.rs:212-217` — manual
+- [x] `resonance-plugin/src/clap_bridge/process.rs:212-217` — manual
   `MaybeUninit` slice reinterpretation; also silently truncates >8 output ports.
   Use `MaybeUninit::slice_assume_init_mut` and `debug_assert!`.
+
+  _Resolved 2026-06-09_. The raw `from_raw_parts_mut` + pointer cast is
+  now `port_views_arr[..port_views_len].assume_init_mut()` — the
+  stabilized slice-method form of `MaybeUninit::slice_assume_init_mut`
+  (the associated fn no longer exists on the workspace toolchain,
+  nightly 1.96). The silent `.min(8)` truncation is gone: a
+  `debug_assert!` reports >`MAX_OUTPUT_PORTS` (8) port declarations in
+  debug builds, and in release the array's bounds check panics loudly
+  instead of dropping ports. Largest real layout today is
+  resonance-drums at 7 ports, so no behaviour change for shipping
+  plugins.
 - [ ] `resonance-plugin/src/clap_bridge/process.rs:71-74` — automation
   param-change events bypass any smoother. Document that plugins must drive
   `smoother.set_target` from `set_plain`.
