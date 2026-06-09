@@ -40,8 +40,10 @@ pub(in crate::derive) fn build_motif(
     };
 
     // Pick a rhythm pattern. Higher complexity biases toward later
-    // (more complex) patterns.
-    let max_pattern = (motif.complexity * (RHYTHM_PATTERNS.len() - 1) as f32).ceil() as usize;
+    // (more complex) patterns. `floor` (not `ceil`) so low complexity
+    // genuinely caps the pool at the simple patterns — `ceil` admitted
+    // one pattern past what the complexity knob asked for.
+    let max_pattern = (motif.complexity * (RHYTHM_PATTERNS.len() - 1) as f32).floor() as usize;
     let pattern_idx = rng.next_range(max_pattern.max(1) + 1).min(RHYTHM_PATTERNS.len() - 1);
     let rhythm = RHYTHM_PATTERNS[pattern_idx];
 

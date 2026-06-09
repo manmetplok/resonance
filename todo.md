@@ -277,8 +277,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   empty suffix. Lookups borrow as `&[Degree]`, so the hit path does
   not allocate. Output is byte-identical (cache only memoizes a pure
   function of table + suffix); determinism tests pass unchanged.
-- [ ] `derive/motif_engine/build.rs:44-46` — pattern-index `ceil` should be
+- [x] `derive/motif_engine/build.rs:44-46` — pattern-index `ceil` should be
   `floor` so low `complexity` actually produces simple patterns.
+
+  _Resolved 2026-06-09_. `ceil` → `floor` (deliberate behaviour change:
+  low-complexity motifs now draw only from the pattern pool the knob
+  actually asked for; the `.max(1)` floor keeping a minimum of two
+  patterns is unchanged). No existing test asserted the old pattern
+  pool. New regression test
+  `low_complexity_only_uses_simple_rhythm_patterns` in
+  `tests/motif_rhythm.rs` pins complexity 0.2 / motif_len 3 to the
+  two simplest patterns across 256 seeds — verified it fails under
+  the old `ceil`.
 - [ ] `derive/motif_engine/phrase.rs:289-296` — consequent resolves to "lowest
   chord tone" not "root". Use `nearest_midi_to(chord.root, last.note)`.
 - [ ] `derive/motif_engine/harmony.rs:71` — `apply_gap_fill` uses `Vec::insert`
