@@ -134,8 +134,32 @@ impl Multiband {
     }
 
     /// Process a stereo block in place.
+    ///
+    /// Scratch is sized for `max_buffer` frames, which the plugin's
+    /// `initialize` provides from the host's declared maximum block
+    /// size (the whole chain is rebuilt there, off the audio thread).
+    /// If a host nevertheless delivers a larger block, it is processed
+    /// in `max_buffer`-sized chunks — the filters, delay lines, and
+    /// compressors are all streaming, so chunking is transparent and
+    /// no frame is ever silently dropped. No allocation either way.
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &MultibandConfig) {
-        let frames = left.len().min(right.len()).min(self.max_buffer);
+        let total = left.len().min(right.len());
+        let mut start = 0;
+        while start < total {
+            let frames = (total - start).min(self.max_buffer);
+            self.process_chunk(
+                &mut left[start..start + frames],
+                &mut right[start..start + frames],
+                cfg,
+            );
+            start += frames;
+        }
+    }
+
+    /// Process one chunk of at most `max_buffer` frames in place.
+    fn process_chunk(&mut self, left: &mut [f32], right: &mut [f32], cfg: &MultibandConfig) {
+        let frames = left.len().min(right.len());
+        debug_assert!(frames <= self.max_buffer);
         if frames == 0 {
             return;
         }

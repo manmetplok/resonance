@@ -473,9 +473,25 @@ inline fix pass tackled. Each is documented enough to pick up later.
   old `VecDeque` convolver verbatim and streams >3 hops of noise
   through both in irregular chunk sizes, plus a `reset()`-equals-fresh
   bitwise check.
-- [ ] `resonance-mastering/src/stages/multiband/mod.rs:101-117` — silently caps
+- [x] `resonance-mastering/src/stages/multiband/mod.rs:101-117` — silently caps
   `frames` if the host exceeds the construction-time `max_buffer`. Reallocate
   scratch on `initialize` (off the audio thread) or assert.
+
+  _Resolved 2026-06-09_. The initialize-time reallocation already
+  existed — `MasteringPlugin::initialize` rebuilds the whole `Chain`
+  (and thus the multiband scratch) with the host's declared
+  `max_buffer_size`, off the audio thread. The remaining hole was a
+  host violating its own declared max: the old `min(self.max_buffer)`
+  cap silently left every frame past `max_buffer` unprocessed (raw
+  input, breaking delay alignment). `process_stereo` is now a chunk
+  loop over `max_buffer`-sized slices around the old body (renamed
+  `process_chunk`, with a `debug_assert!(frames <= self.max_buffer)`)
+  — the crossover FIRs, delay lines, and compressors are all
+  streaming, so chunking is transparent, drops nothing, and the audio
+  path stays allocation-free. New tests in `tests/stages_multiband.rs`:
+  oversized block is still a pure delay end-to-end past `max_buffer`
+  (fails under the old cap), and one oversized call is bitwise equal
+  to host-side `max_buffer` chunking with a band compressing.
 - [ ] `resonance-drums/src/dsp/sampler.rs:282-288` — per-pad `volume`, `pan`,
   `oh_blend`, `balance` are snapshotted once per block but applied per sample
   without smoothing. Pad volume jumps still click on automation; master volume
