@@ -739,8 +739,25 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `voicing()` is the `min_start = 0` wrapper with provably identical
   output. `tests/fretboard.rs` covers the open-C regression, the
   fret-5 A barre, a 12th-fret shape above fret 11, and the clamp.
-- [ ] `fretboard.rs:128-129` — `start_fret <= 1 → 0` collapses fret-1 voicings
+- [x] `fretboard.rs:128-129` — `start_fret <= 1 → 0` collapses fret-1 voicings
   to "open" display. Document or distinguish.
+
+  _Resolved 2026-06-09_ (documented the collapse, fixed the real bug it
+  was hiding). The collapse is correct chord-chart convention — open C
+  and E major finger fret 1 yet render at the nut, and `Some(0)` open
+  markers only make sense against a drawn nut — so open vs fret-1 stays
+  distinguished by `frets`, never `start_fret`; documented on the field
+  and at the collapse site. But a probe over all roots × qualities ×
+  tunings × min_starts showed the 5-wide search window let nut-anchored
+  voicings reach fret 5 (e.g. Cdim on Bass 4: x-3-1-5), which the app's
+  4-row diagram silently clipped — and a distinguished `start_fret = 1`
+  would not have fixed that. Narrowed the search window to a new
+  `WINDOW_FRETS = 4` (standard chord-box height and hand span), so
+  every voicing now provably fits a 4-row diagram anchored at
+  `start_fret` (sweep-tested in `tests/fretboard.rs`). Only dim triads
+  change output: they box up the neck when the 4-fret nut window can't
+  sound every string, which the rewritten lowest-position test asserts
+  pays for itself in sounding strings.
 - [ ] `derive/vocal/lyrics.rs:178-184` — locked-line rhyme recovery uses
   exact-text match; editing the locked line silently falls back to slot pattern.
 - [ ] `chord.rs:113-119` — `Chord::pitch_classes` allocates per call. Return

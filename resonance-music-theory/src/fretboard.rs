@@ -63,17 +63,37 @@ impl Tuning {
 #[derive(Debug, Clone)]
 pub struct FretboardVoicing {
     pub frets: Vec<Option<u8>>,
+    /// Display anchor for a chord-diagram renderer, not the literal
+    /// lowest fretted fret: `0` means "render from the nut" and every
+    /// fretted note fits in frets `1..=WINDOW_FRETS`; any other value
+    /// `s` means "render a boxed window" with fretted notes in
+    /// `s..=s + WINDOW_FRETS - 1`.
+    ///
+    /// Voicings whose lowest fretted note is fret 1 are deliberately
+    /// anchored to the nut (`start_fret == 0`) — that is the standard
+    /// chord-chart convention (open C and E major both finger fret 1;
+    /// an F barre is likewise drawn at the nut), and open strings
+    /// (`Some(0)` in [`frets`](Self::frets)) only make sense against a
+    /// drawn nut. Whether fret 1 is fingered or open is distinguished
+    /// by `frets` (`Some(1)` vs `Some(0)`), never by `start_fret`.
     pub start_fret: u8,
 }
 
 // -- Voicing -----------------------------------------------------------------
 
+/// Width of the fret window a voicing may span: every fretted note of
+/// a [`FretboardVoicing`] lies within `WINDOW_FRETS` consecutive frets
+/// anchored at [`FretboardVoicing::start_fret`] (treating the nut
+/// anchor `0` as fret 1). Four frets is the standard chord-box height
+/// and the comfortable hand span; renderers can rely on it.
+pub const WINDOW_FRETS: u8 = 4;
+
 /// Highest window start the voicing search will consider.
 ///
-/// Search windows are 5 frets wide (`start..=start + 4`) and repeat
-/// their pitch-class content every 12 frets, so starts `0..=11` already
+/// Search windows are [`WINDOW_FRETS`] wide and repeat their
+/// pitch-class content every 12 frets, so starts `0..=11` already
 /// cover every distinct chord shape; allowing up to 15 makes those
-/// shapes reachable an octave up (top fret 19 — within the fretted
+/// shapes reachable an octave up (top fret 18 — within the fretted
 /// range of every tuning in [`ALL_TUNINGS`], and the chord-diagram
 /// renderer labels any `start_fret`).
 pub const MAX_START_FRET: u8 = 15;
@@ -120,7 +140,7 @@ pub fn voicing_from(chord: &Chord, tuning: &Tuning, min_start: u8) -> FretboardV
 
             // Frets in window
             let lo = start.max(1);
-            let hi = start + 4;
+            let hi = start + WINDOW_FRETS - 1;
             for fret in lo..=hi {
                 let note_pc = (open + fret) % 12;
                 if pcs.contains(&note_pc) && fret < best_cost {
@@ -151,6 +171,12 @@ pub fn voicing_from(chord: &Chord, tuning: &Tuning, min_start: u8) -> FretboardV
         }
     }
 
+    // Anchor fret-1 voicings at the nut (see `FretboardVoicing::start_fret`
+    // for why this collapse is intentional). It is lossless for a
+    // `WINDOW_FRETS`-tall nut-anchored diagram: the winning window was
+    // either `start = 0` (frets 1..=WINDOW_FRETS - 1 plus opens) or
+    // `start = 1` (frets 1..=WINDOW_FRETS), so every fretted note still
+    // fits frets 1..=WINDOW_FRETS when drawn from the nut.
     let actual_start = best_frets.iter().filter_map(|f| *f).filter(|&f| f > 0).min().unwrap_or(0);
     let start_fret = if actual_start <= 1 { 0 } else { actual_start };
 
