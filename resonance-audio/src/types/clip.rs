@@ -249,6 +249,23 @@ fn locate_wav_float_data(bytes: &[u8]) -> Result<(usize, usize), String> {
     Err("no data chunk found".into())
 }
 
+/// Fault in every page of `bytes` by reading one byte per 4 KiB.
+///
+/// The 4 KiB step is deliberate, including on systems with transparent
+/// huge pages enabled. The THP sysfs knobs
+/// (`/sys/kernel/mm/transparent_hugepage/enabled` / `shmem_enabled`)
+/// govern anonymous and tmpfs/shmem memory; this is a private read-only
+/// *file-backed* mapping, which the page cache populates with base
+/// pages (or filesystem-chosen large folios, independent of those
+/// knobs). Stepping by `hpage_pmd_size` whenever the knob reads
+/// `[always]` would therefore skip 511 of every 512 pages in the common
+/// case where the mapping is in fact 4 KiB-paged — reintroducing major
+/// faults on the realtime mixer thread, the exact failure this function
+/// exists to prevent. When the kernel does back a region with a larger
+/// folio, the surplus reads are one cache-hot load per 4 KiB (no
+/// fault), which is noise next to the mmap + WAV parse around this
+/// call. Discovering the actual folio size would mean parsing
+/// `/proc/self/smaps` per mapping; not worth it for that noise.
 fn pre_touch(bytes: &[u8]) {
     let page = 4096usize;
     let mut i = 0usize;

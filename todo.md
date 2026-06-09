@@ -690,8 +690,20 @@ inline fix pass tackled. Each is documented enough to pick up later.
 ## Code review 2026-05-19 — Low
 
 ### resonance-audio
-- [ ] `types/clip.rs:252-262` — `pre_touch` reads one byte per 4 KiB page; on
+- [x] `types/clip.rs:252-262` — `pre_touch` reads one byte per 4 KiB page; on
   THP-backed mmaps step by the huge-page size.
+
+  _Resolved 2026-06-09_ (documented, 4 KiB stepping kept). The THP sysfs
+  knobs (`enabled`/`shmem_enabled`) govern anonymous and tmpfs memory —
+  this is a private read-only file-backed mapping, which the page cache
+  populates with base pages (or fs-chosen large folios) regardless of
+  those knobs. Stepping by `hpage_pmd_size` keyed on the knob would skip
+  511/512 pages whenever the mapping is actually 4 KiB-paged, putting
+  major faults back on the realtime mixer thread — the failure
+  `pre_touch` exists to prevent. Under genuine huge folios the surplus
+  reads are cache-hot loads, not faults; the honest fix (per-mapping
+  folio size from `/proc/self/smaps`) isn't worth that noise. Rationale
+  documented on `pre_touch`.
 
 ### resonance-app
 - [ ] `main.rs:300,313,350` — `debug_assert!(result.is_some(), …)` after
