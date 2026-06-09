@@ -1026,8 +1026,16 @@ inline fix pass tackled. Each is documented enough to pick up later.
   frame is negligible next to the two linear-interp delay taps, and a
   polynomial sine is only warranted if profiling ever shows it hot.
   No code change.
-- [ ] `resonance-delay/src/lib.rs:170-185` — `fb.powf(n_taps)` per block for 8
+- [x] `resonance-delay/src/lib.rs:170-185` — `fb.powf(n_taps)` per block for 8
   taps; replace with `fb * fb` accumulation.
+
+  _Resolved 2026-06-10_. The echo-tap viz loop now carries a running
+  `fb_gain *= fb` product instead of calling `fb.powf(n)` per tap
+  (8 libm powf calls per block → 8 multiplies). No test pinned exact
+  levels; new `tests/echo_taps.rs` drives the real `process` path
+  (via a new `ResonanceDelay::viz()` accessor) and pins tap n at
+  `fb^n` against the powf reference within 1e-3 dB, plus the
+  constant-dB-decrement property.
 - [ ] `resonance-wavetable/src/dsp/render.rs:518-519` — `master_vol` is
   read once per block (`render.rs:129`) and multiplied per-sample with no
   smoother, violating the `Param::set_plain` smoothing contract; host

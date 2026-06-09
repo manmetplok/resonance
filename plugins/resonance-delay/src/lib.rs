@@ -23,6 +23,13 @@ pub struct ResonanceDelay {
     sample_rate: f32,
 }
 
+impl ResonanceDelay {
+    /// Shared viz state (read by the editor; exposed for tests).
+    pub fn viz(&self) -> &DelayViz {
+        &self.viz
+    }
+}
+
 impl ResonancePlugin for ResonanceDelay {
     const CLAP_ID: &'static str = "com.resonance.delay";
     const NAME: &'static str = "Resonance Delay";
@@ -172,10 +179,14 @@ impl ResonancePlugin for ResonanceDelay {
         let mut echo_times_r = [0.0f32; viz::MAX_ECHO_TAPS];
         let mut echo_levels_r = [f32::NEG_INFINITY; viz::MAX_ECHO_TAPS];
         let fb = self.smoothers.feedback.current().min(1.0);
+        // Running product instead of fb.powf(n) per tap: tap n's level
+        // is fb^n, accumulated multiplicatively across the loop.
+        let mut fb_gain = 1.0f32;
         for tap in 0..viz::MAX_ECHO_TAPS {
             let n_taps = (tap + 1) as f32;
             let t_ms = delay_ms * n_taps;
-            let level = linear_to_db(fb.powf(n_taps));
+            fb_gain *= fb;
+            let level = linear_to_db(fb_gain);
             echo_times_l[tap] = t_ms;
             echo_levels_l[tap] = level;
             echo_times_r[tap] = t_ms;
