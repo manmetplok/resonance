@@ -68,17 +68,43 @@ pub struct FretboardVoicing {
 
 // -- Voicing -----------------------------------------------------------------
 
-/// Compute a playable chord voicing for the given tuning.
+/// Highest window start the voicing search will consider.
+///
+/// Search windows are 5 frets wide (`start..=start + 4`) and repeat
+/// their pitch-class content every 12 frets, so starts `0..=11` already
+/// cover every distinct chord shape; allowing up to 15 makes those
+/// shapes reachable an octave up (top fret 19 — within the fretted
+/// range of every tuning in [`ALL_TUNINGS`], and the chord-diagram
+/// renderer labels any `start_fret`).
+pub const MAX_START_FRET: u8 = 15;
+
+/// Compute a playable chord voicing for the given tuning, preferring
+/// the open position (lowest playable window).
 pub fn voicing(chord: &Chord, tuning: &Tuning) -> FretboardVoicing {
+    voicing_from(chord, tuning, 0)
+}
+
+/// Like [`voicing`], but search no window lower than `min_start`
+/// (clamped to [`MAX_START_FRET`]) — this is how upper-register
+/// variations of a chord are reached, e.g. `min_start = 5` yields the
+/// E-shape A-major barre at fret 5 and `min_start = 12` its
+/// second-octave shapes above fret 11.
+///
+/// When `min_start > 0` the result is fully fretted (barre-style):
+/// open strings are not considered, since a zero-cost open string
+/// would otherwise always beat the fretted note the caller asked to
+/// be voiced up the neck.
+pub fn voicing_from(chord: &Chord, tuning: &Tuning, min_start: u8) -> FretboardVoicing {
     let pcs: Vec<u8> = chord.pitch_classes().iter().map(|pc| pc.to_semitone()).collect();
     let root_pc = chord.bass.unwrap_or(chord.root).to_semitone();
     let n = tuning.string_count();
+    let min_start = min_start.min(MAX_START_FRET);
 
     let mut best_frets = vec![None; n];
-    let mut best_start = 0u8;
+    let mut best_start = min_start;
     let mut best_score = 0i32;
 
-    for start in 0..=7u8 {
+    for start in min_start..=MAX_START_FRET {
         let mut frets = vec![None; n];
         let mut score = 0i32;
 
@@ -86,8 +112,8 @@ pub fn voicing(chord: &Chord, tuning: &Tuning) -> FretboardVoicing {
             let mut best_for_string: Option<u8> = None;
             let mut best_cost = u8::MAX;
 
-            // Open string
-            if pcs.contains(&(open % 12)) {
+            // Open string (only in an open-position search)
+            if min_start == 0 && pcs.contains(&(open % 12)) {
                 best_for_string = Some(0);
                 best_cost = 0;
             }

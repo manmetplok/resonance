@@ -722,8 +722,23 @@ inline fix pass tackled. Each is documented enough to pick up later.
   documented at the definition.
 
 ### resonance-music-theory
-- [ ] `fretboard.rs:81` — search caps at `start..=7u8`; voicings above fret 11
+- [x] `fretboard.rs:81` — search caps at `start..=7u8`; voicings above fret 11
   unreachable for barre-chord variations in the upper register.
+
+  _Resolved 2026-06-09_. Raising the cap alone would have been a no-op:
+  a brute-force probe over all 12 roots × 15 qualities × 4 tunings
+  showed the existing search never picks a window above start 1 (max
+  sounding fret 5), because every chord quality's tone gaps are small
+  enough that a fret-0/1 window sounds all strings, and the tie-break
+  prefers the lowest start — so no higher window can ever strictly win.
+  Upper-register voicings are now reachable through a new
+  `voicing_from(chord, tuning, min_start)` (exported as
+  `fretboard_voicing_from`), which searches `min_start..=MAX_START_FRET`
+  (15; windows repeat mod 12, top fret 19) and skips open strings when
+  `min_start > 0` so barre shapes don't collapse back to open position.
+  `voicing()` is the `min_start = 0` wrapper with provably identical
+  output. `tests/fretboard.rs` covers the open-C regression, the
+  fret-5 A barre, a 12th-fret shape above fret 11, and the clamp.
 - [ ] `fretboard.rs:128-129` — `start_fret <= 1 → 0` collapses fret-1 voicings
   to "open" display. Document or distinguish.
 - [ ] `derive/vocal/lyrics.rs:178-184` — locked-line rhyme recovery uses

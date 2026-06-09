@@ -32,5 +32,8 @@ pub use progression::{
     ProgressionParams, TRANSITIONS,
 };
 pub use scale::{Mode, Scale};
-pub use fretboard::{voicing as fretboard_voicing, FretboardVoicing, Tuning, GUITAR_6, GUITAR_8, BASS_4, BASS_5, ALL_TUNINGS};
+pub use fretboard::{
+    voicing as fretboard_voicing, voicing_from as fretboard_voicing_from, FretboardVoicing,
+    Tuning, ALL_TUNINGS, BASS_4, BASS_5, GUITAR_6, GUITAR_8, MAX_START_FRET,
+};
 pub use voicing::{close_voicing, nearest_midi_above, nearest_midi_to, voice_lead};
