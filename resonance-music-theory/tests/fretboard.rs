@@ -103,7 +103,7 @@ fn default_search_prefers_the_lowest_position_unless_it_drops_strings() {
             // The escape must pay for itself in sounding strings:
             // compare against the per-string reachability of the nut
             // window (open string or frets 1..=WINDOW_FRETS).
-            let pcs: Vec<u8> = chord.pitch_classes().iter().map(|pc| pc.to_semitone()).collect();
+            let pcs: Vec<u8> = chord.pitch_classes().map(|pc| pc.to_semitone()).collect();
             let nut_reachable = GUITAR_6
                 .open
                 .iter()

@@ -281,7 +281,7 @@ fn render_bass_motif_chord(
 /// Every MIDI note inside `register` whose pitch class appears in
 /// `chord`, sorted ascending and deduplicated.
 pub(super) fn chord_tones_in_register(chord: Chord, register: (u8, u8)) -> Vec<u8> {
-    let pcs: Vec<PitchClass> = chord.pitch_classes();
+    let pcs: Vec<PitchClass> = chord.pitch_classes().collect();
     let (lo, hi) = register;
     let mut notes = Vec::new();
     for midi in lo..=hi {

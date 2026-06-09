@@ -349,7 +349,7 @@ fn draw_scale_fretboard(ops: &mut Vec<Op>, y: f32, tuning: &Tuning, scale: &Scal
 // -- Keyboard chord cell -----------------------------------------------------
 
 fn draw_keyboard_cell(ops: &mut Vec<Op>, cell_x: f32, cell_y: f32, chord: &Chord) {
-    let chord_pcs: Vec<u8> = chord.pitch_classes().iter().map(|pc| pc.to_semitone()).collect();
+    let chord_pcs: Vec<u8> = chord.pitch_classes().map(|pc| pc.to_semitone()).collect();
     let root_pc = chord.bass.unwrap_or(chord.root).to_semitone();
 
     let name = chord.to_string();

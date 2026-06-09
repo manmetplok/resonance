@@ -770,8 +770,16 @@ inline fix pass tackled. Each is documented enough to pick up later.
   corpus line falls back to the slot's default key — that residual
   limitation is documented at the code site. Both recovery paths are
   covered in `tests/vocal.rs` across multiple seeds.
-- [ ] `chord.rs:113-119` — `Chord::pitch_classes` allocates per call. Return
+- [x] `chord.rs:113-119` — `Chord::pitch_classes` allocates per call. Return
   `impl Iterator` or `SmallVec`.
+
+  _Resolved 2026-06-09_ (`impl Iterator`, no new dependency). Returns
+  `impl Iterator<Item = PitchClass> + Clone + 'static` mapping over the
+  quality's `&'static` interval table with the root captured by value.
+  Call sites that need a `Vec` (voice-leading input, membership scans)
+  collect explicitly; map-then-collect sites lost their intermediate
+  allocation. Equivalence with the old interval-transposition output is
+  swept over all roots × qualities in `tests/chord.rs`.
 - [ ] `derive/motif_bass.rs:283-296` — `chord_tones_in_register` is
   O(register-span × |pcs|). Use a `[bool; 12]` PC bitmap.
 - [ ] `rng.rs:36-41` — `next_range` has modulo bias; undetectable in practice

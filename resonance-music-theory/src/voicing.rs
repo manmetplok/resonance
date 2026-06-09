@@ -40,8 +40,7 @@ pub fn nearest_midi_to(pc: PitchClass, target: u8) -> u8 {
 pub fn close_voicing(chord: Chord, floor: u8) -> Vec<u8> {
     let mut notes: Vec<u8> = chord
         .pitch_classes()
-        .iter()
-        .map(|&pc| nearest_midi_above(pc, floor))
+        .map(|pc| nearest_midi_above(pc, floor))
         .collect();
     notes.sort_unstable();
     notes

@@ -285,7 +285,7 @@ fn motif_strong_beats_are_chord_tones() {
                 .rposition(|tc| (tc.start_beat as u64 * tpb) <= n.start_tick)
                 .unwrap_or(0);
             let chord = chords[chord_idx].chord;
-            let pcs = chord.pitch_classes();
+            let pcs: Vec<_> = chord.pitch_classes().collect();
             let note_pc = PitchClass::from_semitone(n.note % 12);
             assert!(
                 pcs.contains(&note_pc),
@@ -396,7 +396,7 @@ fn motif_no_scale_falls_back_to_chord_tones() {
             .iter()
             .rposition(|tc| (tc.start_beat as u64 * 480) <= n.start_tick)
             .unwrap_or(0);
-        let pcs = chords[chord_idx].chord.pitch_classes();
+        let pcs: Vec<_> = chords[chord_idx].chord.pitch_classes().collect();
         let note_pc = PitchClass::from_semitone(n.note % 12);
         assert!(
             pcs.contains(&note_pc),

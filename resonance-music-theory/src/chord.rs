@@ -109,13 +109,14 @@ impl Chord {
         self
     }
 
-    /// Pitch classes of the chord tones, including the root and any added extensions.
-    pub fn pitch_classes(&self) -> Vec<PitchClass> {
+    /// Pitch classes of the chord tones, including the root and any added
+    /// extensions. Lazily computed — `collect()` if a `Vec` is needed.
+    pub fn pitch_classes(&self) -> impl Iterator<Item = PitchClass> + Clone + 'static {
+        let root = self.root;
         self.quality
             .intervals()
             .iter()
-            .map(|&iv| self.root.transpose(iv as i32))
-            .collect()
+            .map(move |&iv| root.transpose(iv as i32))
     }
 }
 

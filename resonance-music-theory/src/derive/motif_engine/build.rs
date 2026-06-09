@@ -117,7 +117,6 @@ fn chord_tone_intervals(chord: &Chord) -> Vec<i8> {
     let root = chord.root.to_semitone() as i8;
     chord
         .pitch_classes()
-        .iter()
         .map(|pc| {
             let diff = pc.to_semitone() as i8 - root;
             if diff < 0 { diff + 12 } else { diff }

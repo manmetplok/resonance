@@ -115,7 +115,7 @@ pub fn voicing(chord: &Chord, tuning: &Tuning) -> FretboardVoicing {
 /// would otherwise always beat the fretted note the caller asked to
 /// be voiced up the neck.
 pub fn voicing_from(chord: &Chord, tuning: &Tuning, min_start: u8) -> FretboardVoicing {
-    let pcs: Vec<u8> = chord.pitch_classes().iter().map(|pc| pc.to_semitone()).collect();
+    let pcs: Vec<u8> = chord.pitch_classes().map(|pc| pc.to_semitone()).collect();
     let root_pc = chord.bass.unwrap_or(chord.root).to_semitone();
     let n = tuning.string_count();
     let min_start = min_start.min(MAX_START_FRET);

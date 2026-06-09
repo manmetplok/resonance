@@ -51,7 +51,8 @@ pub fn derive_pad(
 
     for (i, tc) in chords.iter().enumerate() {
         if i > 0 {
-            voicing = voice_lead(&voicing, &tc.chord.pitch_classes(), params.register);
+            let next_pcs: Vec<_> = tc.chord.pitch_classes().collect();
+            voicing = voice_lead(&voicing, &next_pcs, params.register);
         }
         let start_tick = tc.start_beat as u64 * tpb;
         let duration_ticks = tc.duration_beats as u64 * tpb;
