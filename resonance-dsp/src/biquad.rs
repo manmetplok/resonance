@@ -61,6 +61,19 @@ impl Biquad {
         self.a2 = 0.0;
     }
 
+    /// Assign already-normalized coefficients directly (`a0` is the
+    /// implicit 1.0). For callers deriving coefficients outside the RBJ
+    /// cookbook set — e.g. the BS.1770 K-weighting filters in
+    /// `resonance-metering`. Like the `set_*` methods, this leaves the
+    /// delay-line state untouched.
+    pub fn assign_raw(&mut self, b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) {
+        self.b0 = b0;
+        self.b1 = b1;
+        self.b2 = b2;
+        self.a1 = a1;
+        self.a2 = a2;
+    }
+
     /// Process one sample through the biquad (DF1 transposed).
     #[inline]
     pub fn process(&mut self, x: f32) -> f32 {

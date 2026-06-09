@@ -91,11 +91,13 @@ pub fn assign_prefilter(bq: &mut Biquad, sr: f32) {
     let a0 = 1.0 + k_over_q + k_sq;
     let inv_a0 = 1.0 / a0;
 
-    bq.b0 = (vh + vb * k_over_q + k_sq) * inv_a0;
-    bq.b1 = 2.0 * (k_sq - vh) * inv_a0;
-    bq.b2 = (vh - vb * k_over_q + k_sq) * inv_a0;
-    bq.a1 = 2.0 * (k_sq - 1.0) * inv_a0;
-    bq.a2 = (1.0 - k_over_q + k_sq) * inv_a0;
+    bq.assign_raw(
+        (vh + vb * k_over_q + k_sq) * inv_a0,
+        2.0 * (k_sq - vh) * inv_a0,
+        (vh - vb * k_over_q + k_sq) * inv_a0,
+        2.0 * (k_sq - 1.0) * inv_a0,
+        (1.0 - k_over_q + k_sq) * inv_a0,
+    );
 }
 
 /// Compute and assign the RLB high-pass coefficients.
@@ -110,10 +112,12 @@ pub fn assign_rlb(bq: &mut Biquad, sr: f32) {
     let a0 = 1.0 + k_over_q + k_sq;
     let inv_a0 = 1.0 / a0;
 
-    bq.b0 = 1.0;
-    bq.b1 = -2.0;
-    bq.b2 = 1.0;
-    bq.a1 = 2.0 * (k_sq - 1.0) * inv_a0;
-    bq.a2 = (1.0 - k_over_q + k_sq) * inv_a0;
+    bq.assign_raw(
+        1.0,
+        -2.0,
+        1.0,
+        2.0 * (k_sq - 1.0) * inv_a0,
+        (1.0 - k_over_q + k_sq) * inv_a0,
+    );
 }
 

@@ -879,8 +879,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `use` line and deleted the workaround const; the public re-export
   is untouched. `cargo check`/`clippy` confirm zero warnings and
   nothing referenced the dead const.
-- [ ] `k_weighting.rs:84,105` — `assign_prefilter` / `assign_rlb` reach into
+- [x] `k_weighting.rs:84,105` — `assign_prefilter` / `assign_rlb` reach into
   `Biquad`'s `pub` fields. Add an `assign_raw` constructor.
+
+  _Resolved 2026-06-10_. Added `Biquad::assign_raw(b0, b1, b2, a1, a2)`
+  to `resonance-dsp` (sets pre-normalized coefficients, leaves the
+  delay line untouched like the other `set_*` methods) and routed both
+  K-weighting assigners through it. The fields stay `pub`: the eq
+  plugin's `band.rs` copies coefficients between biquads and the
+  `resonance-dsp`/`resonance-metering` tests assert coefficient values
+  directly, so read access is still legitimately needed across crates.
+  New `assign_raw` test in `resonance-dsp/tests/biquad.rs` pins the
+  coefficients and the state-preservation contract.
 - [ ] `spectrum/octave.rs:60-63` — band-fallback path uses `f32::max` (NaN
   propagating), other branches use manual `if v > peak`. Unify.
 

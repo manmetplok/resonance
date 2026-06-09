@@ -110,3 +110,30 @@ fn degenerate_sample_rate_does_not_panic() {
         b.set_low_pass(sr, 10_000.0, 0.707);
     }
 }
+
+#[test]
+fn assign_raw_sets_coefficients_and_preserves_state() {
+    let mut b = Biquad::identity();
+    b.assign_raw(0.5, 0.25, -0.25, -0.1, 0.05);
+    assert_eq!(b.b0, 0.5);
+    assert_eq!(b.b1, 0.25);
+    assert_eq!(b.b2, -0.25);
+    assert_eq!(b.a1, -0.1);
+    assert_eq!(b.a2, 0.05);
+
+    // Re-assigning the same coefficients mid-stream must not disturb the
+    // delay line: the output sequence must match an uninterrupted run.
+    let mut uninterrupted = Biquad::identity();
+    uninterrupted.assign_raw(0.5, 0.25, -0.25, -0.1, 0.05);
+    let mut reassigned = uninterrupted;
+    let mut expect = Vec::new();
+    let mut got = Vec::new();
+    for (i, x) in [1.0f32, -0.5, 0.25, 0.75, -1.0].into_iter().enumerate() {
+        expect.push(uninterrupted.process(x));
+        if i == 2 {
+            reassigned.assign_raw(0.5, 0.25, -0.25, -0.1, 0.05);
+        }
+        got.push(reassigned.process(x));
+    }
+    assert_eq!(expect, got);
+}
