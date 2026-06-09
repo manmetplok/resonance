@@ -4,6 +4,7 @@
 
 use crate::rng::XorShift;
 use crate::scale::Scale;
+use crate::voicing::nearest_midi_to;
 
 use super::super::melody::ContourPreference;
 use super::super::motif_bass::chord_tones_in_register;
@@ -285,15 +286,24 @@ pub(super) fn realize_phrase(
         }
     }
 
-    // Consequent phrases resolve: snap the last note to the chord root.
+    // Consequent phrases resolve: snap the last note to the chord
+    // *root*. The previous "lowest chord tone in register" shortcut
+    // only equals the root when the register floor doesn't cut into
+    // the close voicing — otherwise it resolved to a third or fifth.
     if phrase.is_consequent && !out.is_empty() {
         let last_chord = phrase_chords.last().unwrap();
-        let root_tones = chord_tones_in_register(last_chord.chord, ctx.register);
-        if let Some(root) = root_tones.first() {
-            // Find the chord root (lowest chord tone = root in close position).
-            let last = out.last_mut().unwrap();
-            last.note = nearest_in_set(last.note, &[*root]);
+        let last = out.last_mut().unwrap();
+        let mut root = nearest_midi_to(last_chord.chord.root, last.note);
+        // Pull into register by octaves, preserving the pitch class.
+        while root < ctx.register.0 {
+            root = root.saturating_add(12);
         }
+        while root > ctx.register.1 && root >= 12 {
+            root -= 12;
+        }
+        // Registers narrower than an octave may hold no root at all;
+        // clamp as a last resort.
+        last.note = root.clamp(ctx.register.0, ctx.register.1);
     }
 
     out

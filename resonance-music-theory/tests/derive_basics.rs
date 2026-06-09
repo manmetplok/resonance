@@ -299,6 +299,40 @@ fn motif_strong_beats_are_chord_tones() {
 }
 
 #[test]
+fn motif_consequent_phrase_resolves_to_chord_root() {
+    // Consequent (odd-indexed) phrases snap their last note to the
+    // final chord's *root*, in whatever octave is nearest. Register
+    // (64, 84) is chosen so the lowest in-register A-minor chord tone
+    // is E4 (64), not A — the old "lowest chord tone = root" shortcut
+    // resolved there instead of to the root.
+    //
+    // scale = None keeps gap-fill out of the picture so the resolved
+    // note stays the last element of the output.
+    let chords = vec![
+        tc(Chord::new(C, ChordQuality::Maj), 0, 4),
+        tc(Chord::new(F, ChordQuality::Maj), 4, 4),
+        tc(Chord::new(G, ChordQuality::Maj), 8, 4),
+        tc(Chord::new(A, ChordQuality::Min), 12, 4),
+    ];
+    let p = MelodyParams {
+        style: MelodyStyle::Motif,
+        register: (64, 84),
+        phrase_len: 2, // 4 chords -> 2 phrases; the 2nd is consequent
+        ..MelodyParams::default()
+    };
+    for seed in 0..32u64 {
+        let notes = derive_melody(&chords, None, &p, 480, seed);
+        let last = notes.last().expect("motif melody should not be empty");
+        assert_eq!(
+            last.note % 12,
+            9, // A
+            "seed {seed}: consequent phrase must resolve to the root (A), got note {}",
+            last.note
+        );
+    }
+}
+
+#[test]
 fn motif_seed_deterministic() {
     let chords = standard_chords();
     let scale = Scale::new(C, Mode::Major);

@@ -289,8 +289,20 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `tests/motif_rhythm.rs` pins complexity 0.2 / motif_len 3 to the
   two simplest patterns across 256 seeds — verified it fails under
   the old `ceil`.
-- [ ] `derive/motif_engine/phrase.rs:289-296` — consequent resolves to "lowest
+- [x] `derive/motif_engine/phrase.rs:289-296` — consequent resolves to "lowest
   chord tone" not "root". Use `nearest_midi_to(chord.root, last.note)`.
+
+  _Resolved 2026-06-09_. Deliberate behaviour change: the consequent
+  snap now uses `nearest_midi_to(last_chord.chord.root, last.note)`
+  and then pulls the result into register by octaves (pitch class
+  preserved; clamp only as a last resort for sub-octave registers).
+  Previously it snapped to `chord_tones_in_register(..).first()`,
+  which is the root only when the register floor doesn't cut into the
+  close voicing — e.g. Am over register (64, 84) resolved to E4. No
+  existing test asserted the old endpoint. New test
+  `motif_consequent_phrase_resolves_to_chord_root` in
+  `tests/derive_basics.rs` pins the resolution pitch class across 32
+  seeds — verified it fails under the old code.
 - [ ] `derive/motif_engine/harmony.rs:71` — `apply_gap_fill` uses `Vec::insert`
   in a loop. O(n²) but ~16 notes per phrase; comment the assumption.
 - [ ] `derive/motif_engine/build.rs:130-131` — `snap_to_chord_interval` does
