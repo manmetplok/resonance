@@ -198,8 +198,22 @@ inline fix pass tackled. Each is documented enough to pick up later.
   bound, or splitting meters out of the strips so the static chrome can
   be keyed separately. The strips already follow the cheap-rebuild rules
   (canvas meters, `Rc` pick_list caches from `UiViewCaches`).
-- [ ] `view/compose/page.rs:104-113` — `track_count` computed via
+- [x] `view/compose/page.rs:104-113` — `track_count` computed via
   `iter().filter().count()` every frame. Cache on `ComposeState`.
+
+  _Resolved 2026-06-09_. New `ComposeState.track_count` field + a
+  `refresh_track_count(&[TrackState])` method that re-runs the old
+  filter (top-level Instrument/Vocal, `sub_track.is_none()`). Refresh
+  sites: the three engine track-add handlers + `removed` in
+  `engine_events/tracks.rs`, the full replay path (`replay.rs`, right
+  after `resort_tracks`), the diff-replay fast path (`replay_diff.rs`),
+  and all four demo seed fixtures (which bypass engine events).
+  Sub-track creation in `engine_events/plugins.rs` deliberately does
+  not refresh — sub-tracks always carry `sub_track` and can never
+  change the count. `view_compose` now reads the cached field.
+  Covered by `tests/compose_track_count.rs` (demo seed = 5, drum
+  sub-tracks excluded = 4, 7 synth tracks = 7, each cross-checked
+  against the original filter).
 - [ ] `main.rs:169-194` — `parse_startup_tab()` / `parse_demo_flag()` iterate
   `std::env::args()` twice. Parse once.
 - [ ] `engine_events/mod.rs:21` — `impl Resonance` god-object. ARCHITECTURE.md

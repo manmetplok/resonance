@@ -116,6 +116,9 @@ pub fn seed_demo_content(app: &mut Resonance) {
     app.registry.tracks = vec![drums, bass, pad, lead, audio, vocal];
     app.registry.next_track_order = 6;
     app.interaction.selected_track = Some(2);
+    // Demo seed bypasses the engine-event handlers that normally keep
+    // this cache fresh, so refresh by hand.
+    app.compose.refresh_track_count(&app.registry.tracks);
 
     // ---- Busses ----
     app.registry.busses = vec![
@@ -472,6 +475,7 @@ pub fn seed_demo_with_drum_subtracks(app: &mut Resonance) {
     // Demo seed bypasses engine-event handlers that normally refresh
     // these caches, so do it by hand.
     app.view_caches.rebuild_output(&app.registry.busses);
+    app.compose.refresh_track_count(&app.registry.tracks);
 }
 
 /// Minimal seed for the "fresh-project + one track + open Mixer"
@@ -496,6 +500,7 @@ pub fn seed_minimal_drum_track_no_busses(app: &mut Resonance) {
     app.registry.tracks = vec![drums];
     app.registry.next_track_order = 1;
     app.interaction.selected_track = Some(1);
+    app.compose.refresh_track_count(&app.registry.tracks);
 
     // Intentionally no busses and no `view_caches.rebuild_output` —
     // this is the state that used to panic when the Mixer tab opened.
@@ -515,4 +520,5 @@ pub fn seed_many_synth_tracks(app: &mut Resonance, n: usize) {
         app.registry.tracks.push(t);
     }
     app.registry.next_track_order = n;
+    app.compose.refresh_track_count(&app.registry.tracks);
 }

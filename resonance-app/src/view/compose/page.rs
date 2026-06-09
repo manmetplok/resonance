@@ -101,16 +101,10 @@ impl crate::Resonance {
                 );
                 let section_group =
                     group_header("SECTION", section_sub, "2 lanes", GroupKind::Section);
-                let track_count = self
-                    .registry
-                    .tracks
-                    .iter()
-                    .filter(|t| {
-                        use resonance_audio::types::TrackType;
-                        matches!(t.track_type, TrackType::Instrument | TrackType::Vocal)
-                            && t.sub_track.is_none()
-                    })
-                    .count();
+                // Cached on `ComposeState` (refreshed when track
+                // membership changes) instead of re-filtering the
+                // registry every frame.
+                let track_count = self.compose.track_count;
                 let tracks_sub = format!("{} tracks \u{00b7} monophonic", track_count);
                 let tracks_group =
                     group_header("TRACKS", tracks_sub, "", GroupKind::Tracks);

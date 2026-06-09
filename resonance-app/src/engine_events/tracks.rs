@@ -38,6 +38,7 @@ pub(super) fn added(r: &mut Resonance, track_id: TrackId) {
         super::presets::apply_preset_to_track(r, &mut track, &preset);
     }
     r.registry.tracks.push(track);
+    r.compose.refresh_track_count(&r.registry.tracks);
 }
 
 pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
@@ -52,6 +53,7 @@ pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
         super::presets::apply_preset_to_track(r, &mut track, &preset);
     }
     r.registry.tracks.push(track);
+    r.compose.refresh_track_count(&r.registry.tracks);
 }
 
 pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
@@ -66,6 +68,7 @@ pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
         super::presets::apply_preset_to_track(r, &mut track, &preset);
     }
     r.registry.tracks.push(track);
+    r.compose.refresh_track_count(&r.registry.tracks);
 }
 
 pub(super) fn removed(r: &mut Resonance, track_id: TrackId) {
@@ -112,6 +115,7 @@ pub(super) fn removed(r: &mut Resonance, track_id: TrackId) {
             .map(|l| l.parent_track_id != track_id)
             .unwrap_or(true)
     });
+    r.compose.refresh_track_count(&r.registry.tracks);
 }
 
 pub(super) fn bounce_completed(

@@ -149,6 +149,13 @@ pub struct ComposeState {
     /// picker source. Loaded once on construction; mutations come via the
     /// manager only.
     pub kit_pads: Vec<KitPadInfo>,
+    /// Cached count of top-level (non-sub) Instrument + Vocal tracks,
+    /// shown in the Compose TRACKS group header. Maintained by
+    /// [`ComposeState::refresh_track_count`] at every point where track
+    /// membership changes (engine track add/remove events, project
+    /// replay, demo seeding) so `view_compose` doesn't re-filter the
+    /// registry every frame.
+    pub track_count: usize,
 }
 
 impl Default for ComposeState {
@@ -188,11 +195,28 @@ impl Default for ComposeState {
             drum_patterns,
             default_drum_pattern_id: default_pattern_id,
             kit_pads: default_kit_pads(),
+            track_count: 0,
         }
     }
 }
 
 impl ComposeState {
+    /// Recompute the cached [`Self::track_count`] from the track
+    /// registry. Call this whenever tracks are added to / removed from
+    /// `registry.tracks`. Sub-tracks never count (they always carry
+    /// `sub_track`), so plugin-driven sub-track creation doesn't need
+    /// to refresh.
+    pub fn refresh_track_count(&mut self, tracks: &[crate::state::TrackState]) {
+        use resonance_audio::types::TrackType;
+        self.track_count = tracks
+            .iter()
+            .filter(|t| {
+                matches!(t.track_type, TrackType::Instrument | TrackType::Vocal)
+                    && t.sub_track.is_none()
+            })
+            .count();
+    }
+
     /// Backwards-compatible accessor: returns the TrackId of the currently
     /// selected lane if it's an instrument or drum track.
     pub fn details_track_id(&self) -> Option<TrackId> {

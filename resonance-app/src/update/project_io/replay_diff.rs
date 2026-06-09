@@ -96,6 +96,7 @@ pub fn try_diff_replay(
     r.registry.resort_tracks();
     r.registry.resort_busses();
     r.view_caches.rebuild_output(&r.registry.busses);
+    r.compose.refresh_track_count(&r.registry.tracks);
 
     // Rebuild runtime-only caches that aren't captured in the snapshot.
     // Mirrors the tail end of `replay_loaded_project` so the Compose tab

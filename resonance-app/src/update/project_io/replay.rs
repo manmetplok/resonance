@@ -217,6 +217,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // .order sequence, and replay relies on the registry staying sorted
     // by .order for the view layer's invariant.
     r.registry.resort_tracks();
+    r.compose.refresh_track_count(&r.registry.tracks);
 
     // Migrate old generate_params + track roles to lane_generators for
     // projects predating the unified lane generator system.
