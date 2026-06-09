@@ -53,11 +53,11 @@ pub fn load() -> Vec<RecentEntry> {
         Ok(mut list) => {
             list.sort_by_key(|e| std::cmp::Reverse(e.last_opened_secs));
             list.truncate(MAX_RECENT);
-            let before = list.len();
-            list.retain(|e| e.path.exists());
-            if list.len() != before {
-                persist(&list);
-            }
+            // Deliberately no `path.exists()` sweep here: stat-ing every
+            // entry at startup is slow on NFS / removable media. Missing
+            // paths are detected when the user actually clicks the entry
+            // (see `ProjectIoMessage::OpenRecent`), which drops it via
+            // [`remove`].
             list
         }
         Err(e) => {
@@ -105,6 +105,18 @@ fn insert_pure(list: &mut Vec<RecentEntry>, path: &Path, now: u64) {
 pub fn add(list: &mut Vec<RecentEntry>, path: &Path) {
     insert_pure(list, path, now_secs());
     persist(list);
+}
+
+/// Drop `path` from `list` (no-op if absent) and persist to disk.
+/// Used when opening a recent entry fails because the project has been
+/// deleted or its volume isn't mounted — the existence check happens at
+/// click time, not at load time.
+pub fn remove(list: &mut Vec<RecentEntry>, path: &Path) {
+    let before = list.len();
+    list.retain(|e| e.path != path);
+    if list.len() != before {
+        persist(list);
+    }
 }
 
 // Inline tests: `resonance-app` is a binary crate with no `lib.rs`, so an

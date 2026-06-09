@@ -64,6 +64,19 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
         ProjectIoMessage::OpenPathSelected(None) => {}
         ProjectIoMessage::OpenRecent(path) => {
+            // The recent list is no longer pruned with a stat-per-entry
+            // sweep at startup (slow on NFS / removable media), so a
+            // clicked entry may point at a project that's been deleted
+            // or whose volume isn't mounted. Check here, at the moment
+            // it matters: surface the error and drop the dead entry.
+            if !path.exists() {
+                r.error_message = Some(format!(
+                    "Project not found: {} — removed from recent projects.",
+                    path.display()
+                ));
+                crate::recent::remove(&mut r.io.recent_projects, &path);
+                return Task::none();
+            }
             r.io.project_path = Some(path.clone());
             let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
             return dialogs::load_project_task(path);

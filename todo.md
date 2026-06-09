@@ -240,8 +240,20 @@ inline fix pass tackled. Each is documented enough to pick up later.
   ARCHITECTURE.md's "historical exceptions" parenthetical updated to
   past tense since both named exceptions are now split. No behaviour
   change — full `cargo check` / clippy / test pass.
-- [ ] `recent.rs:54-57` — re-runs `e.path.exists()` for every entry on load.
+- [x] `recent.rs:54-57` — re-runs `e.path.exists()` for every entry on load.
   Slow on NFS/removable media. Defer to user click on "Open".
+
+  _Resolved 2026-06-09_. `recent::load()` no longer stats every entry
+  at startup (the sort + truncate stays; a comment documents why the
+  sweep is gone). The check moved to the moment it matters: the
+  `ProjectIoMessage::OpenRecent` arm in `update/project_io/mod.rs`
+  now does a single `path.exists()` for the clicked entry — on a
+  missing path it sets `r.error_message` ("Project not found: … —
+  removed from recent projects."), drops the entry via the new
+  `recent::remove(list, path)` helper (retain + persist, no-op when
+  absent), and returns without touching `project_path` or the engine.
+  Existing entries that reappear (volume remounted) just open
+  normally since nothing is pruned eagerly anymore.
 
 ### resonance-music-theory
 - [ ] `generator/markov.rs:186` — `history.remove(0)` inside fill loop is O(n²).
