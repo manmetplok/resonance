@@ -224,7 +224,10 @@ fn fill_curve(dst: &mut SampleCurve, samples: Option<&str>, ts: Option<TimestepF
 
 /// "C4", "D#4", "Bb3", "rest" → MIDI. "rest" / unparseable → 0. Mirrors Jobsecond's regex.
 pub fn note_name_to_midi(s: &str) -> i32 {
-    let pattern = Regex::new(r"^\s*([A-Ga-g])([#b!]*)([+-]?\d+)?\s*$").expect("static regex");
+    static PATTERN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let pattern = PATTERN.get_or_init(|| {
+        Regex::new(r"^\s*([A-Ga-g])([#b!]*)([+-]?\d+)?\s*$").expect("static regex")
+    });
     let Some(caps) = pattern.captures(s.trim()) else {
         return 0;
     };

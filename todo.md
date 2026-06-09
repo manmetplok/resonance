@@ -1122,6 +1122,13 @@ inline fix pass tackled. Each is documented enough to pick up later.
   matches usage: both functions public, both externally used
   (`tests/mix_timeline.rs`, `examples/render_resonance_vocal.rs`,
   plus the in-crate pipeline).
-- [ ] `resonance-svs/src/ds.rs:227` — note-name regex compiled per call. Use
+- [x] `resonance-svs/src/ds.rs:227` — note-name regex compiled per call. Use
   `OnceLock<Regex>`.
+
+  _Resolved 2026-06-10_. Function-local `static PATTERN:
+  OnceLock<Regex>` with `get_or_init`, matching the `OnceLock`
+  convention used across the codebase (no `LazyLock` in tree). The
+  existing `tests/smoke.rs::note_name_parsing_matches_jobsecond_regex`
+  already calls the function repeatedly in one process, so it pins
+  correctness through both the init and cached paths.
 
