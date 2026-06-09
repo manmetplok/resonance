@@ -564,8 +564,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `tests/butterworth.rs` asserts -3 dB at cutoff for all slopes ×
   LowCut/HighCut, full-sweep monotonicity (maximally flat), passband
   flatness, and the nominal dB/oct slope an octave into the stopband.
-- [ ] `resonance-eq/src/dsp.rs:84-87` — `db_to_linear(output_gain.next())` per
+- [x] `resonance-eq/src/dsp.rs:84-87` — `db_to_linear(output_gain.next())` per
   sample. Smooth in linear-gain space.
+
+  _Resolved 2026-06-09_. The output-gain smoother now carries *linear*
+  gain: `lib.rs` converts the dB param via `db_to_linear` once at
+  block rate (`reset` on initialize, `set_target` per block) and
+  `EqDsp::process_stereo` multiplies by `output_gain.next()` directly
+  — the per-sample `exp/log` is gone. Steady-state output is exactly
+  `db_to_linear(target)`, same as before; only the (20 ms) ramp
+  trajectory changes shape, now exponential in linear-gain space. New
+  `tests/output_gain.rs` asserts bitwise steady-state equivalence and
+  a monotonic, converging ramp.
 
 ### resonance-plugin / wayland-plugin-gui / resonance-svs
 - [ ] `resonance-plugin/src/clap_bridge/process.rs:212-217` — manual

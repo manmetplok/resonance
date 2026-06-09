@@ -30,6 +30,9 @@ pub struct ResonanceEq {
     /// Per-sample smoother for the output gain knob. Lives on the plugin
     /// struct (not inside the FloatParam) because Smoother::next() needs
     /// &mut self, which would require unsafe reborrowing through the Arc.
+    /// Smooths in *linear-gain* space: the dB param value is converted via
+    /// `db_to_linear` once when retargeting, so the per-sample path never
+    /// pays for a dB→linear conversion.
     output_gain_smoother: Smoother,
     /// Spectrum snapshots published by the audio thread, read by the editor.
     /// Cloned into the editor factory when the host opens the GUI.
@@ -71,7 +74,7 @@ impl ResonancePlugin for ResonanceEq {
     fn initialize(&mut self, sample_rate: f32, max_buffer_size: u32) -> bool {
         self.output_gain_smoother.set_sample_rate(sample_rate);
         self.output_gain_smoother
-            .reset(self.params.output_gain.value());
+            .reset(resonance_dsp::db_to_linear(self.params.output_gain.value()));
         self.dsp = Some(EqDsp::new(sample_rate));
         self.analyzers = Some(StereoAnalyzers::new(sample_rate, max_buffer_size as usize));
         true
@@ -114,9 +117,11 @@ impl ResonancePlugin for ResonanceEq {
         // Refresh coefficients once per block from the live parameter values.
         dsp.update_from_params(&self.params);
 
-        // Drive the output-gain smoother towards its current target.
+        // Drive the output-gain smoother towards its current target. The
+        // dB→linear conversion happens once here at block rate; the smoother
+        // ramps the linear value per sample.
         self.output_gain_smoother
-            .set_target(self.params.output_gain.value());
+            .set_target(resonance_dsp::db_to_linear(self.params.output_gain.value()));
 
         dsp.process_stereo(left, right, &mut self.output_gain_smoother);
 

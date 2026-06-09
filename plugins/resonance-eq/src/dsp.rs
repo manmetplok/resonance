@@ -6,7 +6,7 @@
 //! channels × 8 bands × up-to-4 stages biquad cascade plus a trailing
 //! output gain.
 
-use resonance_dsp::{db_to_linear, Biquad};
+use resonance_dsp::Biquad;
 use resonance_plugin::Smoother;
 
 use crate::band::{configure_stages, MAX_STAGES_PER_BAND};
@@ -62,8 +62,10 @@ impl EqDsp {
         }
     }
 
-    /// Process a stereo block in-place. `output_gain` is a smoother ramped
-    /// per sample to avoid audible zippering when the output knob moves.
+    /// Process a stereo block in-place. `output_gain` is a smoother over the
+    /// *linear* output gain (the caller converts its dB param to linear once
+    /// when retargeting), ramped per sample to avoid audible zippering when
+    /// the output knob moves.
     pub fn process_stereo(
         &mut self,
         left: &mut [f32],
@@ -81,8 +83,7 @@ impl EqDsp {
                     r = self.channels[1][b][s].process(r);
                 }
             }
-            let gain_db = output_gain.next();
-            let gain_lin = db_to_linear(gain_db);
+            let gain_lin = output_gain.next();
             left[i] = l * gain_lin;
             right[i] = r * gain_lin;
         }
