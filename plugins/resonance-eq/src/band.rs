@@ -93,10 +93,23 @@ impl BandSlope {
 
     /// Number of cascaded 2nd-order sections required to realise this slope.
     pub fn num_stages(self) -> usize {
+        self.stage_qs().len()
+    }
+
+    /// Per-stage Q values realising a true Butterworth response for this
+    /// slope. These are the Butterworth pole-pair Qs
+    /// `1 / (2 cos(θ_k))` for the order-2N pole angles, so the cascade is
+    /// maximally flat and sits exactly -3 dB at the cutoff. (A uniform
+    /// Q=0.707 cascade — the old behaviour — sagged to -6 dB at cutoff
+    /// for 24 dB/oct and -12 dB for 48 dB/oct.)
+    pub fn stage_qs(self) -> &'static [f32] {
+        const Q_12: [f32; 1] = [std::f32::consts::FRAC_1_SQRT_2];
+        const Q_24: [f32; 2] = [0.541_20, 1.306_56];
+        const Q_48: [f32; 4] = [0.509_80, 0.601_34, 0.899_98, 2.562_92];
         match self {
-            BandSlope::Db12 => 1,
-            BandSlope::Db24 => 2,
-            BandSlope::Db48 => 4,
+            BandSlope::Db12 => &Q_12,
+            BandSlope::Db24 => &Q_24,
+            BandSlope::Db48 => &Q_48,
         }
     }
 }
@@ -149,31 +162,31 @@ pub fn configure_stages(
             1
         }
         BandKind::LowCut => {
-            let n = snapshot.slope.num_stages();
-            // Butterworth-like cascade: each stage gets Q=0.707. For steeper
-            // orders true Butterworth Qs differ per stage; 0.707 is a good
-            // approximation for an interactive EQ and avoids per-slope tables.
-            let mut coeffs = Biquad::identity();
-            coeffs.set_high_pass(sr, snapshot.freq, 0.707);
-            for stage in stages.iter_mut().take(n) {
+            // True Butterworth cascade: each 2nd-order section gets its own
+            // pole-pair Q so the composite response is maximally flat and
+            // crosses exactly -3 dB at the cutoff frequency.
+            let qs = snapshot.slope.stage_qs();
+            for (stage, &q) in stages.iter_mut().zip(qs.iter()) {
+                let mut coeffs = Biquad::identity();
+                coeffs.set_high_pass(sr, snapshot.freq, q);
                 assign_coeffs(stage, &coeffs);
             }
-            for s in stages.iter_mut().skip(n) {
+            for s in stages.iter_mut().skip(qs.len()) {
                 assign_identity(s);
             }
-            n
+            qs.len()
         }
         BandKind::HighCut => {
-            let n = snapshot.slope.num_stages();
-            let mut coeffs = Biquad::identity();
-            coeffs.set_low_pass(sr, snapshot.freq, 0.707);
-            for stage in stages.iter_mut().take(n) {
+            let qs = snapshot.slope.stage_qs();
+            for (stage, &q) in stages.iter_mut().zip(qs.iter()) {
+                let mut coeffs = Biquad::identity();
+                coeffs.set_low_pass(sr, snapshot.freq, q);
                 assign_coeffs(stage, &coeffs);
             }
-            for s in stages.iter_mut().skip(n) {
+            for s in stages.iter_mut().skip(qs.len()) {
                 assign_identity(s);
             }
-            n
+            qs.len()
         }
     }
 }

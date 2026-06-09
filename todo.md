@@ -551,8 +551,19 @@ inline fix pass tackled. Each is documented enough to pick up later.
   paths — install, fade-in-from-silence, and fade-out→swap→fade-in —
   asserting bitwise-identical output and peaks, plus an exact
   `block_size`-delay bypass check.
-- [ ] `resonance-eq/src/band.rs:151-177` — 24/48 dB cuts use Q=0.707 cascades,
+- [x] `resonance-eq/src/band.rs:151-177` — 24/48 dB cuts use Q=0.707 cascades,
   sagging at cutoff vs. true Butterworth. Use per-stage Q tables.
+
+  _Resolved 2026-06-09_. New `BandSlope::stage_qs()` returns the
+  Butterworth pole-pair Qs per slope (12 dB → [0.70711], 24 dB →
+  [0.54120, 1.30656], 48 dB → [0.50980, 0.60134, 0.89998, 2.56292]);
+  `configure_stages` builds each cut-cascade section with its own Q.
+  Deliberate magnitude-response change: cuts now cross exactly -3 dB
+  at cutoff instead of sagging to -6/-12 dB. The editor curve follows
+  automatically (it renders via `configure_stages`). New
+  `tests/butterworth.rs` asserts -3 dB at cutoff for all slopes ×
+  LowCut/HighCut, full-sweep monotonicity (maximally flat), passband
+  flatness, and the nominal dB/oct slope an octave into the stopband.
 - [ ] `resonance-eq/src/dsp.rs:84-87` — `db_to_linear(output_gain.next())` per
   sample. Smooth in linear-gain space.
 
