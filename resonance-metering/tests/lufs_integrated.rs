@@ -33,6 +33,37 @@ fn reset_clears_all_state() {
 }
 
 #[test]
+fn pushing_past_cap_drops_without_panicking() {
+    // Sessions longer than the 60-minute cap are not bugs: the
+    // accumulator must keep accepting (and counting) pushes without a
+    // debug assertion firing, and the reading must stay finite.
+    let mut acc = IntegratedAccumulator::new();
+    let ms = lufs_to_ms(-20.0);
+    let cap = {
+        // Fill to the cap; len() stops growing exactly there.
+        let mut n = 0usize;
+        while acc.dropped_blocks() == 0 {
+            acc.push_block(ms);
+            n += 1;
+        }
+        n - 1
+    };
+    assert_eq!(acc.len(), cap);
+    for _ in 0..10 {
+        acc.push_block(ms);
+    }
+    assert_eq!(acc.len(), cap);
+    assert_eq!(acc.dropped_blocks(), 11);
+    let got = acc.integrated_lufs();
+    assert!((got - -20.0).abs() < 1e-6, "got {got}");
+
+    // Reset rearms both the accumulator and the drop counter.
+    acc.reset();
+    assert_eq!(acc.dropped_blocks(), 0);
+    assert_eq!(acc.len(), 0);
+}
+
+#[test]
 fn block_ms_round_trip() {
     for lufs in [-70.0, -40.0, -23.0, -14.0, 0.0] {
         let ms = lufs_to_ms(lufs);

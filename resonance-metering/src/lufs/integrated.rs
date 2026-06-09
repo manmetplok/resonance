@@ -6,9 +6,9 @@
 //!
 //! The Vec is pre-grown to the capacity implied by a maximum-session
 //! length so the audio thread never reallocates during normal operation.
-//! Pushing past the cap is a hard error in debug builds and a silently
-//! dropped block in release builds — both are acceptable for the 60-minute
-//! cap we use today.
+//! Pushing past the cap drops the block (counted in `dropped_blocks()`)
+//! and warns once per session — sessions longer than the 60-minute cap
+//! are unusual but not bugs.
 
 use super::block_accumulator::BLOCK_HOP_SECS;
 use super::gating::gated_integrated_lufs;
@@ -45,19 +45,24 @@ impl IntegratedAccumulator {
     }
 
     /// Add one block mean-square. If the cap has been reached, the value
-    /// is dropped and `dropped_blocks()` is incremented.
+    /// is dropped and `dropped_blocks()` is incremented. Long sessions are
+    /// not bugs — the first dropped block warns once (per session /
+    /// [`Self::reset`]), then drops stay silent so the audio thread isn't
+    /// spammed with I/O on every subsequent block.
     #[inline]
     pub fn push_block(&mut self, mean_square: f64) {
         if self.blocks.len() < self.cap {
             self.blocks.push(mean_square);
         } else {
             self.dropped += 1;
-            debug_assert!(
-                false,
-                "IntegratedAccumulator exceeded cap of {} blocks ({:.0} min)",
-                self.cap,
-                MAX_SESSION_SECONDS / 60.0
-            );
+            if self.dropped == 1 {
+                eprintln!(
+                    "resonance-metering: integrated LUFS reached its cap of {} blocks \
+                     ({:.0} min); further blocks no longer contribute to the reading",
+                    self.cap,
+                    MAX_SESSION_SECONDS / 60.0
+                );
+            }
         }
     }
 

@@ -366,8 +366,19 @@ inline fix pass tackled. Each is documented enough to pick up later.
   fs/3 inter-sample-peak tone, per-sample bitwise compare), plus
   block-vs-sample and reset-equals-fresh checks. ITU Annex 2 vectors in
   `tests/true_peak.rs` still pass.
-- [ ] `resonance-metering/src/lufs/integrated.rs:55-60` — `debug_assert!(false,
+- [x] `resonance-metering/src/lufs/integrated.rs:55-60` — `debug_assert!(false,
   …)` on 60-min cap. Replace with `log::warn!`; long sessions are not bugs.
+
+  _Resolved 2026-06-09_. The `debug_assert!(false, …)` is gone; hitting
+  the cap now warns via `eprintln!` (the workspace has no `log`/`tracing`
+  facade outside resonance-svs — `eprintln!` is the established
+  convention in resonance-audio and the other low-level crates) and only
+  on the *first* dropped block per session, so the audio thread isn't
+  spammed with stderr I/O once per 100 ms hop. `reset()` already clears
+  `dropped`, rearming the warning for the next session. New test
+  `pushing_past_cap_drops_without_panicking` in
+  `tests/lufs_integrated.rs` verifies overflow keeps the reading finite,
+  counts drops, and no longer fires a debug assertion.
 - [ ] `resonance-metering/src/crest.rs:66` — full linear scan of 100 ms ring on
   every `crest_db()`. Either monotonic-deque or document UI-rate readout only.
 - [ ] `resonance-dsp/src/delay.rs:23-26` — `tap()` silently aliases when
