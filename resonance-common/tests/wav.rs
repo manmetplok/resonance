@@ -1,4 +1,6 @@
-use resonance_common::{decode_wav_channels, decode_wav_stereo, linear_resample_mono};
+use resonance_common::{
+    decode_wav_channels, decode_wav_stereo, linear_resample_mono, linear_resample_stereo,
+};
 
 /// Build a minimal 16-bit PCM WAV file in memory from f32 samples.
 fn build_wav_16_stereo(samples: &[(i16, i16)], sr: u32) -> Vec<u8> {
@@ -114,4 +116,22 @@ fn resample_length_scales_with_ratio() {
     assert!(down.len() >= 2_300 && down.len() <= 2_500);
     let up = linear_resample_mono(&input, 48_000.0, 96_000.0);
     assert!(up.len() >= 9_500 && up.len() <= 9_700);
+}
+
+#[test]
+fn tiny_input_resamples_to_at_least_one_sample() {
+    // 2 samples downsampled 12:1 used to truncate to a 0-length output,
+    // silently discarding non-empty audio. Non-empty in => non-empty out.
+    let mono = linear_resample_mono(&[0.5, 0.7], 96_000.0, 8_000.0);
+    assert_eq!(mono, vec![0.5]);
+
+    // Same for stereo: one frame in, at least one frame out.
+    let stereo = linear_resample_stereo(&[0.5, -0.5], 96_000.0, 8_000.0);
+    assert_eq!(stereo, vec![0.5, -0.5]);
+
+    // Empty input still yields empty output.
+    assert!(linear_resample_mono(&[], 96_000.0, 8_000.0).is_empty());
+    assert!(linear_resample_stereo(&[], 96_000.0, 8_000.0).is_empty());
+    // A lone sample is not a full stereo frame.
+    assert!(linear_resample_stereo(&[0.5], 96_000.0, 8_000.0).is_empty());
 }

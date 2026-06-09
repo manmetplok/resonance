@@ -904,8 +904,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `tests/spectrum_octave.rs` pins it.
 
 ### resonance-common
-- [ ] `wav.rs:198,221` — `target_len = (input.len() / ratio) as usize`
+- [x] `wav.rs:198,221` — `target_len = (input.len() / ratio) as usize`
   truncates to zero when `input.len() < ratio`. Clamp to 1 when input non-empty.
+
+  _Resolved 2026-06-10_. Both `linear_resample_mono` and
+  `linear_resample_stereo` now `.max(1)` the computed output length, so
+  a heavy downsample of a tiny-but-non-empty input emits at least one
+  sample/frame instead of silently discarding the audio. The stereo
+  path additionally early-returns when `input.len() < 2` (a lone
+  sample is not a full frame — clamping there would have indexed past
+  the buffer). New `tiny_input_resamples_to_at_least_one_sample` test
+  in `tests/wav.rs` covers mono, stereo, empty, and the lone-sample
+  edge.
 - [ ] `scan.rs:2` — `scan_directory` swallows `read_dir` errors. Return
   `io::Result` or log via `tracing`.
 - [ ] `registry.rs:117` — hand-rolled `today_iso` date math. Pull `chrono` from

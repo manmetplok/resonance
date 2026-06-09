@@ -203,7 +203,9 @@ pub fn linear_resample_mono(input: &[f32], source_rate: f32, target_rate: f32) -
         return Vec::new();
     }
     let ratio = source_rate as f64 / target_rate as f64;
-    let target_len = (input.len() as f64 / ratio) as usize;
+    // Clamp to 1: a heavy downsample of a tiny input truncates to zero
+    // samples, silently discarding non-empty audio.
+    let target_len = ((input.len() as f64 / ratio) as usize).max(1);
     let mut output = Vec::with_capacity(target_len);
 
     for i in 0..target_len {
@@ -225,8 +227,14 @@ pub fn linear_resample_stereo(input: &[f32], source_rate: f32, target_rate: f32)
         return Vec::new();
     }
     let source_frames = input.len() / 2;
+    if source_frames == 0 {
+        // A single stray sample is not a full stereo frame.
+        return Vec::new();
+    }
     let ratio = source_rate as f64 / target_rate as f64;
-    let target_frames = (source_frames as f64 / ratio) as usize;
+    // Clamp to 1: a heavy downsample of a tiny input truncates to zero
+    // frames, silently discarding non-empty audio.
+    let target_frames = ((source_frames as f64 / ratio) as usize).max(1);
     let mut output = Vec::with_capacity(target_frames * 2);
 
     for i in 0..target_frames {
