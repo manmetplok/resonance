@@ -7,7 +7,6 @@ description = "Music theory primitives (pitch, chord, scale) for Resonance"
 [dependencies]
 cmudict-fast = "0.8.0"
 phf = { version = "0.11", features = ["macros"] }
-rand = { workspace = true }
 serde.workspace = true
 strum = { version = "0.26", features = ["derive"] }
 thiserror.workspace = true

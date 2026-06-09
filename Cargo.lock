@@ -5062,7 +5062,6 @@ version = "0.1.0"
 dependencies = [
  "cmudict-fast",
  "phf 0.11.3",
- "rand 0.10.1",
  "serde",
  "serde_json",
  "strum",

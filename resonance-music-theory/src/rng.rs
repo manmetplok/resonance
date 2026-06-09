@@ -4,6 +4,12 @@
 //! this crate stays dep-free apart from `serde`. The app crate's drumroll
 //! humanizer uses the same algorithm — picking different impls here would
 //! only confuse readers.
+//!
+//! This is the crate's *single* determinism contract: every seeded
+//! generator (progressions, motifs, vocal styles, Markov sampling)
+//! draws from `XorShift`, so a given seed reproduces the same output
+//! forever — unlike `rand`'s `SmallRng`, whose stream may change
+//! between `rand` versions. Do not reintroduce a second RNG.
 
 pub(crate) struct XorShift {
     state: u64,

@@ -808,8 +808,20 @@ inline fix pass tackled. Each is documented enough to pick up later.
   test (no-inline-tests convention); those determinism suites are the
   coverage. The 1-in-2^64 skew from xorshift64 never emitting 0 is
   inherent to the generator and noted at the code site.
-- [ ] `generator/markov.rs:11-12` — crate uses both `rand::SmallRng` and the
+- [x] `generator/markov.rs:11-12` — crate uses both `rand::SmallRng` and the
   custom `XorShift`. Consolidate to one determinism contract.
+
+  _Resolved 2026-06-10_. Consolidated on the crate's own `XorShift`:
+  `markov::generate` now seeds `XorShift::new(seed)` and
+  `weighted_sample` draws via `next_f32()`. Direction chosen because
+  `SmallRng`'s stream is explicitly not stable across `rand` versions,
+  while `XorShift` is ours forever — and the Markov suite pins
+  determinism/constraints/statistics, not literal sequences, so no
+  test expectations needed updating (seed→output mapping for Markov
+  progressions does change once, deliberately). `rand` is dropped from
+  the crate's dependencies entirely, and `rng.rs` now documents the
+  single determinism contract ("every seeded generator draws from
+  `XorShift`; do not reintroduce a second RNG").
 - [ ] `lib.rs` re-exports — `VocalSinger`, `VocalVoicebank`, `g2p.rs` etc. are
   SVS configuration, not music theory. Consider splitting into a
   `resonance-vocal` crate.

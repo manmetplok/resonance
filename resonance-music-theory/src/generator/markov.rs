@@ -8,8 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use rand::rngs::SmallRng;
-use rand::{RngExt, SeedableRng};
+use crate::rng::XorShift;
 
 use super::degree::Degree;
 use super::table::MarkovTable;
@@ -47,7 +46,7 @@ pub fn generate(
         return Ok(GeneratedMaterial { chords: vec![] });
     }
 
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = XorShift::new(seed);
 
     // --- 1. Place locked chords ----------------------------------------
     let mut output: Vec<Option<GeneratedChord>> = vec![None; len];
@@ -317,13 +316,13 @@ fn sorted_candidates(candidates: &[(Degree, f32)]) -> Vec<(Degree, f32)> {
 }
 
 /// Sample a degree from a weighted candidate list using the provided RNG.
-fn weighted_sample(candidates: &[(Degree, f32)], rng: &mut SmallRng) -> Degree {
+fn weighted_sample(candidates: &[(Degree, f32)], rng: &mut XorShift) -> Degree {
     debug_assert!(!candidates.is_empty());
     let total: f32 = candidates.iter().map(|(_, w)| w).sum();
     if total <= 0.0 {
         return candidates[0].0;
     }
-    let r: f32 = rng.random::<f32>() * total;
+    let r: f32 = rng.next_f32() * total;
     let mut acc = 0.0;
     for &(deg, w) in candidates {
         acc += w;
