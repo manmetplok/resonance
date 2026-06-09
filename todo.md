@@ -314,9 +314,19 @@ inline fix pass tackled. Each is documented enough to pick up later.
   value outside 0..12. Use `i16` defensively.
 
 ### resonance-metering / resonance-dsp / resonance-common
-- [ ] `resonance-metering/src/spectrum/ring.rs:78-88` — `push_slice` issues N
+- [x] `resonance-metering/src/spectrum/ring.rs:78-88` — `push_slice` issues N
   atomic RMW pairs per sample. Add a "reserve + bulk write + commit one Release"
   variant.
+
+  _Resolved 2026-06-09_. `push_slice` now reserves with one Acquire load
+  of `head`, bulk-copies with at most two `ptr::copy_nonoverlapping`
+  segments around the wrap point, and commits with a single Release
+  store of `tail` — two atomics per call instead of two per sample, and
+  the consumer sees the pushed samples all-or-nothing. Semantics match
+  the old loop (excess samples dropped, count returned). New tests in
+  `tests/spectrum_ring.rs`: equivalence against the per-sample `push`
+  path under interleaved partial drains, capacity truncation, wrap
+  straddling, and a cross-thread gapless-stream visibility check.
 - [ ] `resonance-metering/src/spectrum/fft_worker.rs:65-70` — fixed-size buffers
   stored as `Vec<f32>`. Use `Box<[f32; FFT_SIZE]>` for unambiguous BCE.
 - [ ] `resonance-metering/src/spectrum/fft_worker.rs:81` — worker uses

@@ -79,17 +79,39 @@ impl SpscRing {
         true
     }
 
-    /// Push a slice. Stops early if the ring fills up and returns the
-    /// number of samples actually written.
+    /// Push a slice. If the ring fills up the excess samples are dropped;
+    /// returns the number of samples actually written.
+    ///
+    /// Unlike a loop over [`SpscRing::push`], this reserves space with a
+    /// single Acquire load of `head`, bulk-copies (at most two `memcpy`
+    /// segments around the wrap point), and commits with a single Release
+    /// store of `tail` — so the consumer either sees none or all of the
+    /// pushed samples, and the producer pays two atomics per call instead
+    /// of two per sample.
     #[inline]
     pub fn push_slice(&self, samples: &[f32]) -> usize {
-        let mut n = 0;
-        for &s in samples {
-            if !self.push(s) {
-                break;
-            }
-            n += 1;
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
+        let free = self.capacity() - tail.wrapping_sub(head);
+        let n = samples.len().min(free);
+        if n == 0 {
+            return 0;
         }
+        // Safety: producer is the only thread writing to the buffer, and
+        // the `free` computation above guarantees the `n` slots starting
+        // at `tail` are not visible to the consumer until the Release
+        // store below. Raw pointer copies for the same Tree Borrows
+        // reason documented in `push`.
+        unsafe {
+            let ptr = (*self.buffer.get()).as_mut_ptr();
+            let start = tail & self.mask;
+            let first = n.min(self.capacity() - start);
+            std::ptr::copy_nonoverlapping(samples.as_ptr(), ptr.add(start), first);
+            if n > first {
+                std::ptr::copy_nonoverlapping(samples.as_ptr().add(first), ptr, n - first);
+            }
+        }
+        self.tail.store(tail.wrapping_add(n), Ordering::Release);
         n
     }
 
