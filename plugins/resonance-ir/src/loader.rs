@@ -21,7 +21,7 @@ use parking_lot::Mutex;
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
 
-use crate::convolver::StereoConvolver;
+use crate::dsp::StereoConvolver;
 use crate::ir_loader::{self, IrData};
 use crate::params::IrParams;
 use crate::viz::{IrSnapshot, IrViz, RESPONSE_POINTS, WAVEFORM_POINTS};

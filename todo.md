@@ -535,9 +535,22 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `crate::<mod>` paths became `crate::dsp::<mod>`. Build-time
   `wavetable_gen.rs` moved along with them — `build.rs`'s `#[path]`
   include and `rerun-if-changed` updated. No behaviour change.
-- [ ] `resonance-ir/src/convolver.rs` — should be `dsp.rs` (per plugin layout
+- [x] `resonance-ir/src/convolver.rs` — should be `dsp.rs` (per plugin layout
   convention). Also restructure to consume slices instead of per-sample dispatch
   from `lib.rs:221-271`.
+
+  _Resolved 2026-06-09_. `convolver.rs` renamed (`git mv`) to `dsp.rs`;
+  the per-sample loop, swap-crossfade state machine, and bypass delay
+  lines moved out of `lib.rs::process` into a new `dsp::IrEngine` with
+  a slice-consuming `process_block(left, right, &mut Smoother,
+  &mut Smoother) -> BlockPeaks`. `lib.rs` now just polls the mailbox
+  (`begin_swap`), retargets smoothers, and hands the engine block
+  slices. The `tap(block_size - 1)` bypass alignment fix is preserved
+  verbatim. New `tests/dsp_block.rs` reimplements the old `lib.rs`
+  loop as a golden reference and streams irregular chunks through both
+  paths — install, fade-in-from-silence, and fade-out→swap→fade-in —
+  asserting bitwise-identical output and peaks, plus an exact
+  `block_size`-delay bypass check.
 - [ ] `resonance-eq/src/band.rs:151-177` — 24/48 dB cuts use Q=0.707 cascades,
   sagging at cutoff vs. true Butterworth. Use per-stage Q tables.
 - [ ] `resonance-eq/src/dsp.rs:84-87` — `db_to_linear(output_gain.next())` per

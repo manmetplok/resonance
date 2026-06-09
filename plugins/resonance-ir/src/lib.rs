@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
-pub mod convolver;
+pub mod dsp;
 pub mod ir_loader;
 pub mod loader;
 pub mod params;
@@ -15,14 +15,11 @@ pub mod viz;
 #[cfg(feature = "editor")]
 mod editor;
 
-use convolver::StereoConvolver;
+use dsp::{IrEngine, StereoConvolver};
 use loader::{LoaderDeps, LoaderHandle};
 use params::{IrParams, IrSmoothers};
 use state::IrExtraState;
 use viz::IrViz;
-
-/// Crossfade length in samples (~1.5ms at 44.1kHz) to avoid pops on convolver swap.
-const SWAP_FADE_SAMPLES: u32 = 64;
 
 pub struct ResonanceIr {
     /// Parameters — shared with the editor thread via `Arc` so the UI can
@@ -36,27 +33,18 @@ pub struct ResonanceIr {
     /// Lock-free meters + precomputed IR snapshot shared with the editor.
     viz: Arc<IrViz>,
 
-    active_convolver: Option<StereoConvolver>,
+    /// Block-based wet/dry engine: convolvers, bypass delay alignment, and
+    /// the swap-crossfade state machine all live in `dsp::IrEngine`.
+    engine: IrEngine,
     convolver_mailbox: Arc<Mutex<Option<StereoConvolver>>>,
     ir_name: Arc<Mutex<String>>,
     ir_info: Arc<Mutex<String>>,
     last_file_index: i32,
     sample_rate: f32,
-    /// Convolution block size, scaled with sample rate to keep latency ~2.7ms.
-    block_size: usize,
     /// Atomic load request for the persistent loader thread (-1 = no request).
     load_request: Arc<AtomicI32>,
     /// Handle to the persistent loader thread; dropped on plugin drop.
     loader_handle: Option<LoaderHandle>,
-    /// Bypass delay lines to compensate for reported latency when no convolver is active.
-    bypass_delay_l: resonance_dsp::DelayLine,
-    bypass_delay_r: resonance_dsp::DelayLine,
-    /// Convolver waiting to be swapped in after fade-out completes.
-    pending_convolver: Option<StereoConvolver>,
-    /// Samples remaining in fade-out before convolver swap.
-    fade_out_remaining: u32,
-    /// Samples remaining in fade-in after convolver swap.
-    fade_in_remaining: u32,
 }
 
 impl ResonanceIr {
@@ -83,7 +71,7 @@ impl ResonanceIr {
             load_request: self.load_request.clone(),
             viz: self.viz.clone(),
             sample_rate: self.sample_rate,
-            block_size: self.block_size,
+            block_size: self.engine.block_size(),
         }));
     }
 }
@@ -100,25 +88,19 @@ impl ResonancePlugin for ResonanceIr {
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
     fn new() -> Self {
-        let block_size = convolver::block_size_for_sample_rate(44100.0);
+        let block_size = dsp::block_size_for_sample_rate(44100.0);
         Self {
             params: Arc::new(IrParams::default()),
             smoothers: IrSmoothers::new(),
             viz: IrViz::new(),
-            active_convolver: None,
+            engine: IrEngine::new(block_size),
             convolver_mailbox: Arc::new(Mutex::new(None)),
             ir_name: Arc::new(Mutex::new(String::new())),
             ir_info: Arc::new(Mutex::new(String::new())),
             last_file_index: -1,
             sample_rate: 44100.0,
-            block_size,
             load_request: Arc::new(AtomicI32::new(-1)),
             loader_handle: None,
-            bypass_delay_l: resonance_dsp::DelayLine::new(block_size),
-            bypass_delay_r: resonance_dsp::DelayLine::new(block_size),
-            pending_convolver: None,
-            fade_out_remaining: 0,
-            fade_in_remaining: 0,
         }
     }
 
@@ -137,9 +119,8 @@ impl ResonancePlugin for ResonanceIr {
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         self.sample_rate = sample_rate;
-        self.block_size = convolver::block_size_for_sample_rate(sample_rate);
-        self.bypass_delay_l = resonance_dsp::DelayLine::new(self.block_size);
-        self.bypass_delay_r = resonance_dsp::DelayLine::new(self.block_size);
+        self.engine
+            .set_block_size(dsp::block_size_for_sample_rate(sample_rate));
         self.smoothers.prepare(sample_rate, &self.params);
 
         let path = self.params.ir_path.lock().clone();
@@ -152,14 +133,14 @@ impl ResonancePlugin for ResonanceIr {
             loader::load_into(
                 &path,
                 sample_rate,
-                self.block_size,
+                self.engine.block_size(),
                 &self.convolver_mailbox,
                 &self.ir_name,
                 &self.ir_info,
                 &self.viz,
             );
             if let Some(conv) = self.convolver_mailbox.lock().take() {
-                self.active_convolver = Some(conv);
+                self.engine.install(conv);
             }
         }
 
@@ -170,9 +151,7 @@ impl ResonancePlugin for ResonanceIr {
     }
 
     fn reset(&mut self) {
-        if let Some(conv) = &mut self.active_convolver {
-            conv.reset();
-        }
+        self.engine.reset();
     }
 
     fn process(
@@ -191,16 +170,8 @@ impl ResonancePlugin for ResonanceIr {
 
         // Check mailbox for newly loaded convolver — start crossfade.
         if let Some(mut guard) = self.convolver_mailbox.try_lock() {
-            if guard.is_some() {
-                self.pending_convolver = guard.take();
-                if self.active_convolver.is_some() {
-                    self.fade_out_remaining = SWAP_FADE_SAMPLES;
-                    self.fade_in_remaining = 0;
-                } else {
-                    // No previous convolver — swap directly with fade-in.
-                    self.active_convolver = self.pending_convolver.take();
-                    self.fade_in_remaining = SWAP_FADE_SAMPLES;
-                }
+            if let Some(conv) = guard.take() {
+                self.engine.begin_swap(conv);
             }
         }
 
@@ -213,67 +184,12 @@ impl ResonancePlugin for ResonanceIr {
 
         self.smoothers.retarget_from(&self.params);
 
-        let mut in_peak_l = 0.0f32;
-        let mut in_peak_r = 0.0f32;
-        let mut out_peak_l = 0.0f32;
-        let mut out_peak_r = 0.0f32;
-
-        for i in 0..frames {
-            let dry_wet = self.smoothers.dry_wet.next();
-            let output_gain = self.smoothers.output_gain.next();
-
-            // Crossfade envelope: fade out old convolver, swap, fade in new convolver.
-            let fade_gain = if self.fade_out_remaining > 0 {
-                self.fade_out_remaining -= 1;
-                let g = self.fade_out_remaining as f32 / SWAP_FADE_SAMPLES as f32;
-                if self.fade_out_remaining == 0 {
-                    self.active_convolver = self.pending_convolver.take();
-                    self.fade_in_remaining = SWAP_FADE_SAMPLES;
-                }
-                g
-            } else if self.fade_in_remaining > 0 {
-                self.fade_in_remaining -= 1;
-                1.0 - self.fade_in_remaining as f32 / SWAP_FADE_SAMPLES as f32
-            } else {
-                1.0
-            };
-
-            let dry_l = left[i];
-            let dry_r = right[i];
-            in_peak_l = in_peak_l.max(dry_l.abs());
-            in_peak_r = in_peak_r.max(dry_r.abs());
-
-            // Always feed the bypass delay lines so the dry signal stays
-            // time-aligned with the convolver's block_size latency. We
-            // tap *before* pushing the current sample, so a tap of
-            // `block_size - 1` reads the sample from exactly block_size
-            // samples ago. (Tapping `block_size` here aliased to a
-            // 1-sample delay: the buffer is exactly block_size long —
-            // always a power of two — and `tap` wraps modulo its size.)
-            let delayed_l = self.bypass_delay_l.tap(self.block_size - 1);
-            let delayed_r = self.bypass_delay_r.tap(self.block_size - 1);
-            self.bypass_delay_l.push(dry_l);
-            self.bypass_delay_r.push(dry_r);
-
-            match &mut self.active_convolver {
-                Some(conv) => {
-                    let (wet_l, wet_r) = conv.process_sample(dry_l, dry_r);
-
-                    let dry_amount = 1.0 - dry_wet;
-                    left[i] =
-                        (delayed_l * dry_amount + wet_l * dry_wet) * output_gain * fade_gain;
-                    right[i] =
-                        (delayed_r * dry_amount + wet_r * dry_wet) * output_gain * fade_gain;
-                }
-                None => {
-                    left[i] = delayed_l * output_gain * fade_gain;
-                    right[i] = delayed_r * output_gain * fade_gain;
-                }
-            }
-
-            out_peak_l = out_peak_l.max(left[i].abs());
-            out_peak_r = out_peak_r.max(right[i].abs());
-        }
+        let peaks = self.engine.process_block(
+            &mut left[..frames],
+            &mut right[..frames],
+            &mut self.smoothers.dry_wet,
+            &mut self.smoothers.output_gain,
+        );
 
         let to_db = |v: f32| {
             if v <= 1e-6 {
@@ -283,10 +199,10 @@ impl ResonancePlugin for ResonanceIr {
             }
         };
         self.viz.store_peaks(
-            to_db(in_peak_l),
-            to_db(in_peak_r),
-            to_db(out_peak_l),
-            to_db(out_peak_r),
+            to_db(peaks.in_l),
+            to_db(peaks.in_r),
+            to_db(peaks.out_l),
+            to_db(peaks.out_r),
         );
     }
 
@@ -299,7 +215,7 @@ impl ResonancePlugin for ResonanceIr {
     }
 
     fn latency_samples(&self) -> u32 {
-        self.block_size as u32
+        self.engine.block_size() as u32
     }
 
     #[cfg(feature = "editor")]
