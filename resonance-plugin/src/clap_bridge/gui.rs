@@ -55,9 +55,23 @@ impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
     }
 
     fn set_scale(&mut self, _scale: f64) -> Result<(), PluginError> {
-        // Wayland handles scale via the compositor — the runtime reads it
-        // from wl_output events. For other APIs this would matter.
-        Ok(())
+        // Deliberately refused, per the CLAP gui contract: `set_scale`
+        // "can be ignored if the plugin will query the OS directly", and
+        // returning false tells the host exactly that. We are Wayland-only
+        // (see `get_preferred_api`), where the windowing API uses logical
+        // pixels and the compositor is authoritative: the GUI runtime
+        // derives its integer buffer scale from
+        // `CompositorHandler::scale_factor_changed` (wayland-plugin-gui's
+        // `State::buffer_scale` is the single source of truth feeding
+        // `wl_surface.set_buffer_scale`, the EGL buffer size, and egui's
+        // `pixels_per_point`). Applying a host-supplied factor on top
+        // would double-scale; fractional scaling is a planned
+        // wp-fractional-scale-v1 upgrade on the runtime side, not a host
+        // hint. clack maps this `Err` to a plain `false` return at the C
+        // boundary (no host error log).
+        Err(PluginError::Message(
+            "scale is derived from the Wayland compositor",
+        ))
     }
 
     fn get_size(&mut self) -> Option<GuiSize> {

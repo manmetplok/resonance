@@ -1064,8 +1064,19 @@ inline fix pass tackled. Each is documented enough to pick up later.
   module-private struct in `clap_bridge/state.rs`, its only user. It was
   never re-exported from `lib.rs` and a workspace grep found no other
   users, so the `param.rs` public surface just shrinks.
-- [ ] `resonance-plugin/src/clap_bridge/gui.rs:57-61` — `set_scale` silently
+- [x] `resonance-plugin/src/clap_bridge/gui.rs:57-61` — `set_scale` silently
   ignores the host's scale hint.
+
+  _Resolved 2026-06-10_ (documented refusal, not plumbing). `set_scale`
+  now returns `Err` — which clack maps to a plain `false` at the C
+  boundary, the CLAP-specified signal for "ignored; plugin queries the
+  OS directly" — instead of falsely claiming the hint was applied. We
+  are Wayland-only, where scale is compositor-authoritative: the GUI
+  runtime's `State::buffer_scale` (fed by `scale_factor_changed`) is
+  the single source of truth for `set_buffer_scale`, EGL buffer size,
+  and egui `pixels_per_point`; layering a host factor on top would
+  double-scale. Fractional scale remains a wp-fractional-scale-v1
+  runtime upgrade, not a host hint.
 - [ ] `wayland-plugin-gui/src/widgets.rs:218-233` — `draw_arc` allocates a
   `Vec<Pos2>` of 49 points per arc per frame.
 - [ ] `wayland-plugin-gui/src/window_thread/event_loop.rs:176-202` — main loop
