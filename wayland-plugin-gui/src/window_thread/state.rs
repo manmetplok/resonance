@@ -1,5 +1,7 @@
 //! State held by the editor thread, mutated by SCTK dispatch handlers.
 
+use std::time::Instant;
+
 use smithay_client_toolkit::output::OutputState;
 use smithay_client_toolkit::registry::RegistryState;
 use smithay_client_toolkit::seat::SeatState;
@@ -29,6 +31,14 @@ pub(super) struct State {
     pub(super) running: bool,
     pub(super) configured: bool,
     pub(super) needs_redraw: bool,
+    /// `Some(when)` while a `wl_surface.frame()` callback requested at
+    /// `when` is still outstanding. Painting is gated on this being
+    /// `None`: the compositor tells us when it wants the next frame, so
+    /// we never render faster than it presents and render nothing at
+    /// all while it withholds callbacks (occluded surface). The
+    /// timestamp lets the event loop treat a long-overdue callback as
+    /// lost instead of freezing the GUI (see `FRAME_CALLBACK_STALL`).
+    pub(super) frame_callback_pending: Option<Instant>,
     pub(super) close_requested: bool,
     pub(super) input: InputState,
     pub(super) pending_events: Vec<egui::Event>,

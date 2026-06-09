@@ -1088,8 +1088,29 @@ inline fix pass tackled. Each is documented enough to pick up later.
   are now a single `Shape::line` polyline that takes ownership of the
   one exactly-sized Vec. Same 49 sample points, opaque stroke colors;
   the polyline tessellates with proper joins, so arcs render the same.
-- [ ] `wayland-plugin-gui/src/window_thread/event_loop.rs:176-202` — main loop
+- [x] `wayland-plugin-gui/src/window_thread/event_loop.rs:176-202` — main loop
   uses a fixed 16 ms tick; doesn't pace via `wl_surface.frame()` callbacks.
+
+  _Resolved 2026-06-10_. The receiving end already existed
+  (`CompositorHandler::frame` via `delegate_compositor!`) — nothing ever
+  *requested* a callback. Now `paint_frame` requests
+  `wl_surface.frame()` before the committing `eglSwapBuffers`, `State`
+  tracks `frame_callback_pending: Option<Instant>`, and painting is
+  gated on the gate being clear, so the compositor sets the cadence
+  (refresh rate when visible, nothing when occluded). The `frame`
+  handler only clears the gate — it no longer sets `needs_redraw`, which
+  would have looped paints at refresh rate forever. Two safety valves:
+  `eglSwapInterval(0)` (the previous default of 1 let Mesa block inside
+  swap on its own internal frame callback, which could freeze input for
+  an occluded surface — the old loop was implicitly, and dangerously,
+  throttled there), and a 250 ms stall fallback that declares an overdue
+  callback lost so a callback-withholding compositor degrades the GUI to
+  ~4 fps instead of freezing it. Idle parking is 500 ms; input/commands
+  wake calloop via fds so latency is unaffected. Verified live on
+  Hyprland with the `hello` example: `WAYLAND_DEBUG=1` shows
+  frame-request/done pairs pacing each paint and an idle loop that stops
+  painting; first-frame `WPG_DUMP_FRAME` capture is byte-identical to
+  the pre-change build.
 - [ ] `resonance-svs/src/lib.rs:8` — `write_mono_f32_wav` exported but
   `mix_into_timeline` is crate-private. Either expose both or rename.
 - [ ] `resonance-svs/src/ds.rs:227` — note-name regex compiled per call. Use

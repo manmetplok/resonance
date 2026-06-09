@@ -168,6 +168,22 @@ impl EglContext {
             .map_err(|e| EditorError::EglContext(format!("make_current: {e}")))
     }
 
+    /// Disable the driver's implicit swap throttle (`eglSwapInterval(0)`).
+    ///
+    /// With the default interval of 1, Mesa's Wayland backend blocks
+    /// inside `eglSwapBuffers` waiting for its own internal frame
+    /// callback — which stalls the entire editor event loop (input
+    /// included) whenever the compositor withholds frames from an
+    /// occluded surface. The event loop paces frames explicitly via
+    /// `wl_surface.frame()` callbacks instead, so swaps must not block.
+    /// Wayland compositors always present complete frames, so interval 0
+    /// cannot tear here. Must be called while the context is current.
+    pub fn set_swap_interval_zero(&self) -> Result<(), EditorError> {
+        self.egl
+            .swap_interval(self.display, 0)
+            .map_err(|e| EditorError::EglContext(format!("swap_interval: {e}")))
+    }
+
     pub fn swap_buffers(&self) -> Result<(), EditorError> {
         self.egl
             .swap_buffers(self.display, self.surface)

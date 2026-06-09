@@ -131,6 +131,7 @@ impl EditorThread {
             running: true,
             configured: false,
             needs_redraw: true,
+            frame_callback_pending: None,
             close_requested: false,
             input: InputState::new(),
             pending_events: Vec::new(),
@@ -160,6 +161,10 @@ impl EditorThread {
             state.buffer_scale(),
         )?;
         egl_ctx.make_current()?;
+        // Swaps must not block: frame pacing is done explicitly below via
+        // wl_surface.frame() callbacks (see the main loop), not inside the
+        // GL driver where it would stall input handling too.
+        egl_ctx.set_swap_interval_zero()?;
 
         let gl = unsafe { glow::Context::from_loader_function(|s| egl_ctx.get_proc_address(s)) };
         let gl = std::sync::Arc::new(gl);
@@ -173,9 +178,39 @@ impl EditorThread {
         let start_time = Instant::now();
 
         // -------- Main loop --------
-        let frame_budget = Duration::from_millis(16);
+        //
+        // Frame pacing is compositor-driven: every paint requests a
+        // wl_surface.frame() callback (see `paint_frame`) and the next
+        // paint waits for it. The compositor thus sets the cadence (the
+        // monitor's refresh rate for a visible surface, nothing at all
+        // for an occluded one) instead of a fixed 16 ms tick. The
+        // dispatch timeout is only a parking budget — any Wayland event
+        // or editor command wakes calloop immediately via its fds, so
+        // input latency never depends on these numbers.
+
+        // A frame callback this overdue is treated as lost (compositor
+        // restart, unmap race, callback-withholding compositor) and the
+        // gate is forced open, so a stalled compositor degrades the GUI
+        // to ~4 fps instead of freezing it.
+        const FRAME_CALLBACK_STALL: Duration = Duration::from_millis(250);
+        // Parking budget when there's nothing to paint.
+        const IDLE_BUDGET: Duration = Duration::from_millis(500);
+
         while state.running {
-            if let Err(e) = event_loop.dispatch(frame_budget, &mut state) {
+            let timeout = if state.visible && state.needs_redraw {
+                match state.frame_callback_pending {
+                    // Waiting on the compositor: park until the callback
+                    // arrives (wakes dispatch) or the stall deadline.
+                    Some(since) => FRAME_CALLBACK_STALL
+                        .saturating_sub(since.elapsed())
+                        .max(Duration::from_millis(1)),
+                    // Gate open: poll without parking and paint below.
+                    None => Duration::ZERO,
+                }
+            } else {
+                IDLE_BUDGET
+            };
+            if let Err(e) = event_loop.dispatch(timeout, &mut state) {
                 eprintln!("wayland-plugin-gui: dispatch error: {e}");
                 break;
             }
@@ -189,7 +224,14 @@ impl EditorThread {
             // Apply any pending resize from a configure or Command::Resize.
             apply_pending_resize(&mut state, &mut egl_ctx);
 
-            if state.visible && state.needs_redraw {
+            // Declare a long-overdue frame callback lost.
+            if let Some(since) = state.frame_callback_pending {
+                if since.elapsed() >= FRAME_CALLBACK_STALL {
+                    state.frame_callback_pending = None;
+                }
+            }
+
+            if state.visible && state.needs_redraw && state.frame_callback_pending.is_none() {
                 paint_frame(
                     &mut state,
                     app.as_mut(),
@@ -197,6 +239,7 @@ impl EditorThread {
                     &gl,
                     &mut painter,
                     start_time,
+                    &qh,
                 )?;
             }
         }

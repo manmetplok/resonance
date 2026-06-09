@@ -2,6 +2,9 @@
 
 use std::time::{Duration, Instant};
 
+use smithay_client_toolkit::shell::WaylandSurface;
+use wayland_client::QueueHandle;
+
 use crate::app::EditorApp;
 use crate::egl_context::EglContext;
 use crate::error::EditorError;
@@ -38,6 +41,7 @@ pub(super) fn paint_frame(
     gl: &std::sync::Arc<glow::Context>,
     painter: &mut egui_glow::Painter,
     start_time: Instant,
+    qh: &QueueHandle<State>,
 ) -> Result<(), EditorError> {
     state.needs_redraw = false;
 
@@ -121,6 +125,18 @@ pub(super) fn paint_frame(
             let _ = dump_ppm(&path, pw as u32, ph as u32, &buf);
         }
     }
+
+    // Ask the compositor to tell us when it wants the next frame for
+    // this surface. Requested *before* the swap because `eglSwapBuffers`
+    // is what commits the surface, and a frame request only rides on the
+    // commit that follows it. SCTK's `delegate_compositor!` routes the
+    // callback (userdata = the surface) to `CompositorHandler::frame`,
+    // which clears this gate. The swap itself never blocks: the event
+    // loop set eglSwapInterval(0), so pacing happens here, visibly to
+    // input handling, instead of inside the GL driver.
+    let surface = state.window.wl_surface();
+    surface.frame(qh, surface.clone());
+    state.frame_callback_pending = Some(Instant::now());
 
     egl_ctx.swap_buffers()?;
 

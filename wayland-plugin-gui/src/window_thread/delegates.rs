@@ -62,7 +62,13 @@ impl CompositorHandler for State {
         _surface: &WlSurface,
         _time: u32,
     ) {
-        self.needs_redraw = true;
+        // The compositor presented our last commit and is ready for the
+        // next frame. Only clear the gate — deliberately do NOT set
+        // `needs_redraw` here, or every paint (which requests the next
+        // callback) would schedule another paint forever, pinning the
+        // GUI at the refresh rate even when idle. Invalidation comes
+        // from input, commands, configure, and egui's repaint requests.
+        self.frame_callback_pending = None;
     }
 
     fn surface_enter(
