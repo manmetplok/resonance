@@ -859,7 +859,16 @@ inline fix pass tackled. Each is documented enough to pick up later.
   fresh meter reported `0.0` before this change anyway. New
   `tests/correlation.rs` cases pin the gate one sample before/after
   the window fills and re-arming via `reset()`.
-- [ ] `crest.rs:55` — same unused-`samples_pushed` field.
+- [x] `crest.rs:55` — same unused-`samples_pushed` field.
+
+  _Resolved 2026-06-10 — already fixed by intervening work, no code
+  change needed._ The 2026-06-09 monotonic-deque rewrite of
+  `CrestMeter` (commit 46eb938) made `samples_pushed` load-bearing:
+  it drives deque front eviction, indexes new deque entries, and
+  `crest_db()` divides the running square sum by
+  `min(samples_pushed, window)` — which also means the partial-window
+  RMS is already correct during warm-up, so no correlation-style gate
+  is needed here.
 - [ ] `lufs/mod.rs:126-128` — `_LOUDNESS_OFFSET_RE_EXPORT` dead workaround.
 - [ ] `k_weighting.rs:84,105` — `assign_prefilter` / `assign_rlb` reach into
   `Biquad`'s `pub` fields. Add an `assign_raw` constructor.
