@@ -1011,7 +1011,13 @@ inline fix pass tackled. Each is documented enough to pick up later.
   loads it with `Acquire`, so a reader that observes the new position
   also observes the sample it indexes. New `tests/viz.rs` pins the
   chronological round-trip including wraparound.
-- [ ] `resonance-compressor/src/viz.rs:50-54` — same Relaxed-store pattern.
+- [x] `resonance-compressor/src/viz.rs:50-54` — same Relaxed-store pattern.
+
+  _Resolved 2026-06-10_. Same fix as the reverb entry above:
+  `GrHistory::push` publishes `write_pos` with `Release` and
+  `iter_chrono` reads it with `Acquire`, mirroring the mastering
+  `HistoryRing` convention. New `tests/viz.rs` pins the chronological
+  round-trip including wraparound.
 - [ ] `resonance-delay/src/dsp.rs:103-105` — LFO uses `(self.lfo_phase *
   TAU).sin()` per sample. Acceptable; polynomial sine if ever profiled hot.
 - [ ] `resonance-delay/src/lib.rs:170-185` — `fb.powf(n_taps)` per block for 8

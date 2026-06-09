@@ -49,13 +49,14 @@ impl GrHistory {
     fn push(&self, v: f32) {
         let pos = self.write_pos.load(Ordering::Relaxed);
         self.samples[pos].store(v.to_bits(), Ordering::Relaxed);
+        // Release so the consumer's Acquire on write_pos observes the sample store.
         self.write_pos
-            .store((pos + 1) % HISTORY_LEN, Ordering::Relaxed);
+            .store((pos + 1) % HISTORY_LEN, Ordering::Release);
     }
 
     /// Iterate the ring in chronological order (oldest first).
     pub fn iter_chrono(&self) -> impl Iterator<Item = f32> + '_ {
-        let start = self.write_pos.load(Ordering::Relaxed);
+        let start = self.write_pos.load(Ordering::Acquire);
         (0..HISTORY_LEN).map(move |i| {
             f32::from_bits(self.samples[(start + i) % HISTORY_LEN].load(Ordering::Relaxed))
         })
