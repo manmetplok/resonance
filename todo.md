@@ -929,8 +929,19 @@ inline fix pass tackled. Each is documented enough to pick up later.
   silent because a models directory that hasn't been created yet is a
   normal pre-first-download state. Per-entry `e.ok()` skips are still
   silent (transient races, same as before).
-- [ ] `registry.rs:117` — hand-rolled `today_iso` date math. Pull `chrono` from
+- [x] `registry.rs:117` — hand-rolled `today_iso` date math. Pull `chrono` from
   another transitive dep instead.
+
+  _Resolved 2026-06-10_. `chrono` is not in the dependency tree, but
+  `time` 0.3 already is (via resonance-app → printpdf → lopdf), so it
+  became a direct workspace dep of `resonance-common` — no new crates
+  in the lockfile. `today_iso` now delegates to a new
+  `iso_date_from_unix_secs(secs)` helper built on
+  `time::OffsetDateTime::from_unix_timestamp`, which also makes the
+  conversion testable with pinned inputs; the hand-rolled Hinnant
+  algorithm is gone. New test in `tests/registry.rs` pins epoch
+  boundaries, 2024-02-29, the 2000/1900 leap-century split, and a
+  current-era date.
 
 ### resonance-dsp
 - [ ] `delay.rs:29-35` — `tap_linear` casts negative input to `usize` (saturates

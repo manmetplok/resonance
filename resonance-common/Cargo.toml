@@ -9,3 +9,4 @@ symphonia.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
+time.workspace = true

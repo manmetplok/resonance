@@ -4952,6 +4952,7 @@ dependencies = [
  "serde",
  "serde_json",
  "symphonia",
+ "time",
 ]
 
 [[package]]

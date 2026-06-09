@@ -130,3 +130,19 @@ fn today_iso_format() {
     assert_eq!(today.as_bytes()[4], b'-');
     assert_eq!(today.as_bytes()[7], b'-');
 }
+
+#[test]
+fn iso_date_from_unix_secs_pins_known_dates() {
+    // Epoch and same-day end.
+    assert_eq!(iso_date_from_unix_secs(0), "1970-01-01");
+    assert_eq!(iso_date_from_unix_secs(86_399), "1970-01-01");
+    assert_eq!(iso_date_from_unix_secs(86_400), "1970-01-02");
+    // Leap day in a regular leap year.
+    assert_eq!(iso_date_from_unix_secs(1_709_164_800), "2024-02-29");
+    // 2000 was a leap year (divisible by 400)...
+    assert_eq!(iso_date_from_unix_secs(951_782_400), "2000-02-29");
+    // ...but 1900 was not (divisible by 100, not 400).
+    assert_eq!(iso_date_from_unix_secs(-2_203_891_200), "1900-03-01");
+    // A current-era date.
+    assert_eq!(iso_date_from_unix_secs(1_781_049_600), "2026-06-10");
+}
