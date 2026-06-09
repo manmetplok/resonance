@@ -405,8 +405,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   push = block_size samples of latency). New `tests/delay.rs` covers
   tap indexing, `tap_linear` interpolation, the max valid tap, and the
   debug-build assert.
-- [ ] `resonance-dsp/src/lfo.rs:73-86` — `LFO::next` accepts non-finite rate
+- [x] `resonance-dsp/src/lfo.rs:73-86` — `LFO::next` accepts non-finite rate
   and poisons output. Validate in `new`/`set_rate`.
+
+  _Resolved 2026-06-09_. Validation lives at construction/setter time so
+  `next()` stays branch-free: `new`/`set_rate` route through
+  `sanitized_phase_inc`, which maps any non-finite or negative increment
+  (NaN/±inf rate, zero/negative/NaN sample rate) to 0.0 — the LFO
+  freezes at its current phase instead of `phase += NaN` poisoning
+  every subsequent sample. `new` also wraps the initial phase into
+  [0, 1) and zeroes non-finite phases. Tests in `tests/lfo.rs` cover
+  all bad-rate combinations, recovery via a later valid `set_rate`,
+  and phase sanitization.
 - [ ] `resonance-dsp/src/biquad.rs:189-193` — `clamp_params` can panic if
   `sr == 0`. `let nyquist = (sr * 0.5).max(20.0);`.
 - [ ] `resonance-dsp/src/dynamics.rs:60-67` — `Ballistics::from_times` divides

@@ -55,16 +55,38 @@ const fn taylor_sin(x: f64) -> f64 {
     sum
 }
 
+/// Phase increment per sample for the given rate, sanitized so the
+/// hot-path `next()` never has to branch on bad input: a non-finite or
+/// negative increment (NaN/±inf rate, zero/negative/NaN sample rate)
+/// freezes the LFO at its current phase instead of poisoning `phase`
+/// — `phase += NaN` would make every subsequent output NaN forever.
+fn sanitized_phase_inc(rate_hz: f32, sample_rate: f32) -> f32 {
+    let inc = rate_hz / sample_rate;
+    if inc.is_finite() && inc >= 0.0 {
+        inc
+    } else {
+        0.0
+    }
+}
+
 impl Lfo {
     pub fn new(rate_hz: f32, sample_rate: f32, initial_phase: f32) -> Self {
+        // Wrap the phase into [0, 1) and reject non-finite values for
+        // the same reason as the increment: `next()` assumes a sane
+        // phase and must stay branch-free.
+        let phase = if initial_phase.is_finite() {
+            initial_phase - initial_phase.floor()
+        } else {
+            0.0
+        };
         Self {
-            phase: initial_phase,
-            phase_inc: rate_hz / sample_rate,
+            phase,
+            phase_inc: sanitized_phase_inc(rate_hz, sample_rate),
         }
     }
 
     pub fn set_rate(&mut self, rate_hz: f32, sample_rate: f32) {
-        self.phase_inc = rate_hz / sample_rate;
+        self.phase_inc = sanitized_phase_inc(rate_hz, sample_rate);
     }
 
     #[inline]
