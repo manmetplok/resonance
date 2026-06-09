@@ -822,9 +822,29 @@ inline fix pass tackled. Each is documented enough to pick up later.
   the crate's dependencies entirely, and `rng.rs` now documents the
   single determinism contract ("every seeded generator draws from
   `XorShift`; do not reintroduce a second RNG").
-- [ ] `lib.rs` re-exports — `VocalSinger`, `VocalVoicebank`, `g2p.rs` etc. are
+- [x] `lib.rs` re-exports — `VocalSinger`, `VocalVoicebank`, `g2p.rs` etc. are
   SVS configuration, not music theory. Consider splitting into a
   `resonance-vocal` crate.
+
+  _Considered 2026-06-10 — decision documented, no split._ Assessment:
+  what would move is `derive/vocal/` (~2.7k lines: params, lyrics,
+  melody, 7 style modules) plus `g2p.rs` (~950 lines, owns the
+  `cmudict-fast` + `phf` deps) and three test files (`vocal.rs`,
+  `g2p.rs`, `vocal_params_validate.rs`). What blocks it: (a) vocal
+  melody derivation is genuinely music theory — it consumes
+  `Scale`, `GeneratedNote`, `TimedChord` from `derive` and the
+  `pub(crate)` `XorShift` that is the crate's single documented
+  determinism contract, so a `resonance-vocal` crate would force that
+  RNG public or duplicated; (b) `VocalParams` — the one type nearly
+  every consumer touches (50+ files in `resonance-app`) — embeds
+  `VocalSinger`/`VocalVoicebank`, so the "SVS configuration" can't be
+  peeled off without tearing `VocalParams` apart and churning every
+  import site plus serialized project data; (c) `resonance-svs`
+  doesn't even consume these types from this crate (examples only),
+  so the split wouldn't simplify the SVS layer. Recommendation: keep
+  vocal derivation here; if anything ever moves it should be only the
+  voicebank/singer enums + g2p, and only when a second consumer
+  besides `resonance-app` materializes.
 
 ### resonance-metering
 - [ ] `correlation.rs:51-73,72-82` — `samples_pushed` unused; first 99 ms of
