@@ -1111,8 +1111,17 @@ inline fix pass tackled. Each is documented enough to pick up later.
   frame-request/done pairs pacing each paint and an idle loop that stops
   painting; first-frame `WPG_DUMP_FRAME` capture is byte-identical to
   the pre-change build.
-- [ ] `resonance-svs/src/lib.rs:8` — `write_mono_f32_wav` exported but
+- [x] `resonance-svs/src/lib.rs:8` — `write_mono_f32_wav` exported but
   `mix_into_timeline` is crate-private. Either expose both or rename.
+
+  _Resolved 2026-06-10_ (already fixed in passing, no code change).
+  Commit `aeb715d` ("Trim SVS segment audio that starts before the
+  timeline origin", 2026-06-09) exported `mix_into_timeline` alongside
+  `write_mono_f32_wav` and added `tests/mix_timeline.rs` driving it
+  through the public path. A workspace grep confirms the surface now
+  matches usage: both functions public, both externally used
+  (`tests/mix_timeline.rs`, `examples/render_resonance_vocal.rs`,
+  plus the in-crate pipeline).
 - [ ] `resonance-svs/src/ds.rs:227` — note-name regex compiled per call. Use
   `OnceLock<Regex>`.
 
