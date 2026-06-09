@@ -266,8 +266,17 @@ inline fix pass tackled. Each is documented enough to pick up later.
   ever reads the trailing `try_order ≤ effective_order` elements, so
   the front of the history was dead weight — confirmed by the existing
   determinism tests in `tests/generator.rs` passing unchanged.
-- [ ] `generator/markov.rs:244` — order-2 back-off iterates `&table.transitions`
+- [x] `generator/markov.rs:244` — order-2 back-off iterates `&table.transitions`
   per slot. Cache per `suffix`.
+
+  _Resolved 2026-06-09_. `get_candidates` now takes a `&mut SuffixCache`
+  (`HashMap<Vec<Degree>, Vec<(Degree, f32)>>`) created once per
+  `generate` call, so each distinct suffix scans `table.transitions`
+  at most once; empty results are cached too so dead suffixes don't
+  re-scan. The no-history full marginalization is cached under the
+  empty suffix. Lookups borrow as `&[Degree]`, so the hit path does
+  not allocate. Output is byte-identical (cache only memoizes a pure
+  function of table + suffix); determinism tests pass unchanged.
 - [ ] `derive/motif_engine/build.rs:44-46` — pattern-index `ceil` should be
   `floor` so low `complexity` actually produces simple patterns.
 - [ ] `derive/motif_engine/phrase.rs:289-296` — consequent resolves to "lowest

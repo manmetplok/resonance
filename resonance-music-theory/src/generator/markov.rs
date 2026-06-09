@@ -82,6 +82,12 @@ pub fn generate(
     let order1 = marginalize_to_order1(table);
     let all_degrees = collect_all_degrees(table);
 
+    // Memoized back-off results, shared across the whole fill (the
+    // table is immutable for the duration of this call). Without it,
+    // every slot that backs off re-scans all of `table.transitions`
+    // for the same suffix.
+    let mut suffix_cache: SuffixCache = HashMap::new();
+
     // A user-registered table with no transitions would otherwise drive
     // `weighted_sample` past its assertions and panic in release. The
     // registry is open (third parties register via `register`), so this
@@ -146,7 +152,12 @@ pub fn generate(
             // `Vec::remove(0)` shifts all remaining elements, making the
             // fill loop O(n²) in the gap length.
             let window_start = history.len().saturating_sub(effective_order);
-            let mut candidates = get_candidates(table, &history[window_start..], effective_order);
+            let mut candidates = get_candidates(
+                table,
+                &history[window_start..],
+                effective_order,
+                &mut suffix_cache,
+            );
             if candidates.is_empty() {
                 candidates = all_degrees.iter().map(|&d| (d, 1.0)).collect();
             }
@@ -223,6 +234,14 @@ pub fn generate(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// Memoized back-off candidate lists keyed by history suffix. The
+/// back-off path merges every table key whose tail matches the suffix
+/// — an O(|transitions|) scan — so results are cached per suffix for
+/// the duration of one `generate` call. The empty suffix caches the
+/// full-marginalization fallback. An empty cached list means "this
+/// suffix matched nothing"; it is kept so the scan isn't repeated.
+type SuffixCache = HashMap<Vec<Degree>, Vec<(Degree, f32)>>;
+
 /// Get candidate transitions for the current `history` from `table`,
 /// with automatic order back-off. Returns a list of (degree, weight)
 /// pairs sorted by degree for deterministic sampling.
@@ -230,6 +249,7 @@ fn get_candidates(
     table: &MarkovTable,
     history: &[Degree],
     effective_order: usize,
+    cache: &mut SuffixCache,
 ) -> Vec<(Degree, f32)> {
     let table_order = table.order as usize;
 
@@ -248,24 +268,37 @@ fn get_candidates(
     for len in (1..try_order).rev() {
         if history.len() >= len {
             let suffix = &history[history.len() - len..];
+            if let Some(cached) = cache.get(suffix) {
+                if cached.is_empty() {
+                    continue; // known dead suffix — back off further
+                }
+                return cached.clone();
+            }
             let mut merged: Vec<(Degree, f32)> = Vec::new();
             for (key, transitions) in &table.transitions {
                 if key.len() >= len && key[key.len() - len..] == *suffix {
                     merged.extend(transitions.iter().cloned());
                 }
             }
-            if !merged.is_empty() {
-                return sorted_candidates(&merged);
+            let result = sorted_candidates(&merged);
+            cache.insert(suffix.to_vec(), result.clone());
+            if !result.is_empty() {
+                return result;
             }
         }
     }
 
     // No history match: merge all transitions (marginalize completely).
-    let mut all: Vec<(Degree, f32)> = Vec::new();
-    for transitions in table.transitions.values() {
-        all.extend(transitions.iter().cloned());
-    }
-    sorted_candidates(&all)
+    cache
+        .entry(Vec::new())
+        .or_insert_with(|| {
+            let mut all: Vec<(Degree, f32)> = Vec::new();
+            for transitions in table.transitions.values() {
+                all.extend(transitions.iter().cloned());
+            }
+            sorted_candidates(&all)
+        })
+        .clone()
 }
 
 /// Merge duplicate degrees by summing their weights and sort by degree
