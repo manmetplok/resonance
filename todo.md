@@ -975,8 +975,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   covers the zero seed, the equal-half seed, and determinism.
 
 ### plugins/*
-- [ ] `resonance-wavetable/src/viz.rs:218-229` — `ScopeCollector::publish`
+- [x] `resonance-wavetable/src/viz.rs:218-229` — `ScopeCollector::publish`
   builds a fresh 2 KB stack buffer + double-copy per block.
+
+  _Resolved 2026-06-10_. `publish_scope` now takes the collector's ring
+  plus the oldest-sample index and performs the oldest-first rotation
+  during its single store pass into the shared atomics
+  (`head.iter().chain(tail.iter())`), so the intermediate `ordered`
+  stack array and its two `copy_from_slice` passes are gone. Seq-lock
+  orderings are untouched (`Release` seq bumps, `Relaxed` element
+  stores). `tests/viz.rs` gains chronological-order pins for both the
+  wrapped and the unwrapped ring alongside the existing tearing stress
+  test.
 - [ ] `resonance-wavetable/src/render.rs:218-229` — inner sample loop iterates
   voices even with both oscs disabled. Early-skip.
 - [ ] `resonance-reverb/src/viz.rs:51-55` — `TailHistory::push` stores

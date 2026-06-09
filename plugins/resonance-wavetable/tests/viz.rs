@@ -74,3 +74,51 @@ fn viz_bridge_no_tearing() {
         "reader saw zero samples — writer never published"
     );
 }
+
+/// `publish` must present the ring in chronological order (oldest first)
+/// even when the collector's write position has wrapped mid-ring — the
+/// rotation now happens inside `publish_scope`'s store pass instead of via
+/// an intermediate ordered copy, and this pins the equivalence.
+#[test]
+fn publish_orders_wrapped_ring_chronologically() {
+    let viz = WavetableVizState::new();
+    let mut collector = ScopeCollector::new();
+
+    // Push 1.5 rings worth of frames so the write cursor wraps and sits
+    // mid-buffer. Frame i is (L=i, R=-i).
+    let total = SCOPE_FRAMES + SCOPE_FRAMES / 2;
+    for i in 0..total {
+        collector.push(i as f32, -(i as f32));
+    }
+    collector.publish(&viz);
+
+    let snap = viz.read_snapshot();
+    // The ring retains the most recent SCOPE_FRAMES frames:
+    // [total - SCOPE_FRAMES, total).
+    let first = (total - SCOPE_FRAMES) as f32;
+    for (frame, pair) in snap.scope_samples.chunks_exact(2).enumerate() {
+        let expect = first + frame as f32;
+        assert_eq!(pair[0], expect, "left sample out of order at {frame}");
+        assert_eq!(pair[1], -expect, "right sample out of order at {frame}");
+    }
+    assert_eq!(snap.scope_sample_count, total as u32);
+}
+
+/// Publishing with the write cursor at 0 (exactly full ring, no wrap) is
+/// the degenerate rotation: output equals the ring as-is.
+#[test]
+fn publish_with_unwrapped_ring_is_identity() {
+    let viz = WavetableVizState::new();
+    let mut collector = ScopeCollector::new();
+
+    for i in 0..SCOPE_FRAMES {
+        collector.push(i as f32, i as f32 + 0.5);
+    }
+    collector.publish(&viz);
+
+    let snap = viz.read_snapshot();
+    for (frame, pair) in snap.scope_samples.chunks_exact(2).enumerate() {
+        assert_eq!(pair[0], frame as f32);
+        assert_eq!(pair[1], frame as f32 + 0.5);
+    }
+}

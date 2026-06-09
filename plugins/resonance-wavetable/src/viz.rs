@@ -96,14 +96,24 @@ impl WavetableVizState {
         self.active_voice_count.store(n, Ordering::Relaxed);
     }
 
-    /// Publish a full scope frame from interleaved stereo samples.
+    /// Publish a full scope frame from an interleaved stereo ring buffer.
     ///
     /// Audio thread: buffers samples locally into a small ring and calls
     /// this at block end to push the most recent `SCOPE_LEN` values.
-    pub fn publish_scope(&self, samples: &[f32; SCOPE_LEN], added_frames: u32) {
+    /// `oldest` is the ring index of the oldest sample (the writer's
+    /// "after newest" position); the rotation into chronological order
+    /// happens during the store pass itself, so the caller never needs an
+    /// intermediate ordered copy.
+    pub fn publish_scope(&self, ring: &[f32; SCOPE_LEN], oldest: usize, added_frames: u32) {
+        debug_assert!(oldest < SCOPE_LEN);
         // Seq-lock: bump to odd (in progress), write, bump to even (committed).
         self.scope_seq.fetch_add(1, Ordering::Release);
-        for (dst, src) in self.scope_front.iter().zip(samples.iter()) {
+        let (tail, head) = ring.split_at(oldest);
+        for (dst, src) in self
+            .scope_front
+            .iter()
+            .zip(head.iter().chain(tail.iter()))
+        {
             dst.store(src.to_bits(), Ordering::Relaxed);
         }
         self.scope_seq.fetch_add(1, Ordering::Release);
@@ -215,17 +225,15 @@ impl ScopeCollector {
     /// Publish the current ring contents to the shared viz state, flattened
     /// so the reader sees samples in chronological order starting from the
     /// oldest. Call once per audio block.
+    ///
+    /// `self.write` is the "after newest" position, i.e. the index of the
+    /// oldest sample; `publish_scope` rotates during its store pass, so no
+    /// intermediate ordered copy is built here.
     pub fn publish(&mut self, viz: &WavetableVizState) {
         if self.since_publish == 0 {
             return;
         }
-        // Rotate so that `self.write` becomes the "after newest" position,
-        // i.e. samples[0] is the oldest.
-        let mut ordered = [0.0f32; SCOPE_LEN];
-        let (tail, head) = self.buf.split_at(self.write);
-        ordered[..head.len()].copy_from_slice(head);
-        ordered[head.len()..].copy_from_slice(tail);
-        viz.publish_scope(&ordered, self.since_publish);
+        viz.publish_scope(&self.buf, self.write, self.since_publish);
         self.since_publish = 0;
     }
 }
