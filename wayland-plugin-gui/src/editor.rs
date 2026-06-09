@@ -97,12 +97,21 @@ impl Editor {
     }
 
     /// Request the window be resized.
-    pub fn set_size(&self, width: u32, height: u32) -> Result<(), EditorError> {
+    ///
+    /// On success the handle's bookkeeping is updated immediately, so a
+    /// following [`Editor::get_size`] returns the requested size even
+    /// though the editor thread applies the resize asynchronously.
+    pub fn set_size(&mut self, width: u32, height: u32) -> Result<(), EditorError> {
         self.sender
             .send(Command::Resize(width, height))
-            .map_err(|_| EditorError::ChannelClosed)
+            .map_err(|_| EditorError::ChannelClosed)?;
+        self.size = (width, height);
+        Ok(())
     }
 
+    /// The last size requested via [`EditorOptions::initial_size`] or
+    /// [`Editor::set_size`]. Interactive resizes done by the user through
+    /// the compositor are not fed back into this handle.
     pub fn get_size(&self) -> (u32, u32) {
         self.size
     }

@@ -636,8 +636,19 @@ inline fix pass tackled. Each is documented enough to pick up later.
   zero-terminated buffer (which embedded a NUL into the C string and
   capped names at 31 bytes for no reason) is gone; the port name is
   passed as `port.name.as_bytes()` directly.
-- [ ] `wayland-plugin-gui/src/editor.rs:92-100` — `set_size` never updates
+- [x] `wayland-plugin-gui/src/editor.rs:92-100` — `set_size` never updates
   `self.size`. Subsequent `get_size` returns stale data.
+
+  _Resolved 2026-06-09_. `Editor::set_size` now takes `&mut self` and
+  records the requested size on successful command send, so `get_size`
+  tracks it (the plugin editor factories had been masking this with
+  their own duplicate bookkeeping). All nine factory call sites updated
+  to the mutable borrow. `get_size` is documented as "last requested
+  size" — interactive compositor resizes are still not fed back into
+  the handle (would need a back-channel from the editor thread; out of
+  scope here). No headless unit test: `Editor::new` blocks on a live
+  Wayland configure event, so the handle can't be constructed without
+  a compositor.
 - [ ] `wayland-plugin-gui/src/window_thread/paint.rs:80-93` — EGL sized as
   integer `scale`, viewport as float `pixels_per_point`. Either clamp or wire
   `wp-fractional-scale-v1` through.

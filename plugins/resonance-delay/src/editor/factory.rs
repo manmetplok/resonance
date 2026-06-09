@@ -83,7 +83,7 @@ impl PluginEditor for RuntimeEditorHandle {
         self.size
     }
     fn set_size(&mut self, width: u32, height: u32) -> bool {
-        if let Some(r) = &self.runtime {
+        if let Some(r) = &mut self.runtime {
             if r.set_size(width, height).is_ok() {
                 self.size = (width, height);
                 return true;
