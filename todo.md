@@ -182,6 +182,22 @@ inline fix pass tackled. Each is documented enough to pick up later.
   -p resonance-app --no-fail-fast` pass.
 - [ ] `view/mixer/mod.rs:23-107` — `view_mixer` builds two scrollable rows of
   strips with no row-level virtualization. Wrap in `lazy` keyed on track ids.
+  **Blocked** (2026-06-09): same iced 0.14 constraint as the lane_inspector
+  item above — `lazy` requires `View: Into<Element<'static, ...>>` and a
+  `'static` closure, but every strip is built by `&self` methods
+  (`view_channel_strip` / `view_bus_strip`) whose elements borrow
+  `self.view_caches` pick_list options and per-track state. Worse, a
+  track-ids-only fingerprint is *wrong* here, not just hard: each strip
+  embeds a `canvas::Cache`-backed `StereoMeterCanvas` (via `fader_section`
+  / `meter_v`, `view/controls.rs`) driven by `track.level_l/_r`, which
+  update at peak-snapshot rate — a lazy region whose hash omits that live
+  data freezes the VU meters (the exact failure mode called out in
+  `.claude/agents/ux-design.md` §Performance), and folding the levels
+  into the key would rebuild every strip on every snapshot, defeating
+  virtualization. Unblocking needs either iced relaxing the `'static`
+  bound, or splitting meters out of the strips so the static chrome can
+  be keyed separately. The strips already follow the cheap-rebuild rules
+  (canvas meters, `Rc` pick_list caches from `UiViewCaches`).
 - [ ] `view/compose/page.rs:104-113` — `track_count` computed via
   `iter().filter().count()` every frame. Cache on `ComposeState`.
 - [ ] `main.rs:169-194` — `parse_startup_tab()` / `parse_demo_flag()` iterate
