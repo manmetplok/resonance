@@ -87,7 +87,16 @@ impl CorrelationMeter {
     /// Computed from the sliding-window sums; the ~100 ms window already
     /// provides visual smoothing so an additional one-pole filter is
     /// unnecessary.
+    ///
+    /// Until a full window of samples has been pushed the readout is
+    /// gated to `0.0` — the neutral centre of the UI's -1…+1 bar and
+    /// the same value a fresh meter reports. A partial window would
+    /// otherwise show an unsmoothed, jumpy estimate for the first
+    /// ~100 ms after construction or [`reset`](Self::reset).
     pub fn correlation(&self) -> f32 {
+        if self.samples_pushed < self.ring_ll.len() as u64 {
+            return 0.0;
+        }
         compute_correlation(self.sum_ll, self.sum_rr, self.sum_lr)
     }
 }

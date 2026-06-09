@@ -847,8 +847,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   besides `resonance-app` materializes.
 
 ### resonance-metering
-- [ ] `correlation.rs:51-73,72-82` — `samples_pushed` unused; first 99 ms of
+- [x] `correlation.rs:51-73,72-82` — `samples_pushed` unused; first 99 ms of
   output is biased toward 0 from zero-history. Gate readout until full window.
+
+  _Resolved 2026-06-10_. `correlation()` now returns the neutral `0.0`
+  until `samples_pushed` covers one full ring (~100 ms), so the first
+  window after construction/`reset` no longer shows a jumpy partial
+  estimate. `0.0` was chosen over an `Option` because every consumer
+  (the mastering plugin's `MeterSnapshot` and the -1…+1 bar) takes a
+  plain `f32` whose centre already means "nothing to show", and a
+  fresh meter reported `0.0` before this change anyway. New
+  `tests/correlation.rs` cases pin the gate one sample before/after
+  the window fills and re-arming via `reset()`.
 - [ ] `crest.rs:55` — same unused-`samples_pushed` field.
 - [ ] `lufs/mod.rs:126-128` — `_LOUDNESS_OFFSET_RE_EXPORT` dead workaround.
 - [ ] `k_weighting.rs:84,105` — `assign_prefilter` / `assign_rlb` reach into
