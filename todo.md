@@ -1057,8 +1057,13 @@ inline fix pass tackled. Each is documented enough to pick up later.
   settled at the new target within the 5 ms ramp.
 
 ### resonance-plugin / wayland-plugin-gui / resonance-svs
-- [ ] `resonance-plugin/src/param.rs:347-378` — `TempParamOwned` only used by
+- [x] `resonance-plugin/src/param.rs:347-378` — `TempParamOwned` only used by
   `clap_bridge::state`. Move under `clap_bridge`.
+
+  _Resolved 2026-06-10_. Pure code move: `TempParamOwned` now lives as a
+  module-private struct in `clap_bridge/state.rs`, its only user. It was
+  never re-exported from `lib.rs` and a workspace grep found no other
+  users, so the `param.rs` public surface just shrinks.
 - [ ] `resonance-plugin/src/clap_bridge/gui.rs:57-61` — `set_scale` silently
   ignores the host's scale hint.
 - [ ] `wayland-plugin-gui/src/widgets.rs:218-233` — `draw_arc` allocates a

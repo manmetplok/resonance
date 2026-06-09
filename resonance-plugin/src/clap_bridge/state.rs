@@ -11,6 +11,41 @@ use super::shared::ClapMainThread;
 use crate::param::Param;
 use crate::plugin::ResonancePlugin;
 
+/// Temporary param used for serialization when the plugin instance is active
+/// (owned by `ClapAudioProcessor`) and not accessible from the main thread.
+struct TempParamOwned {
+    id: String,
+    value: f64,
+}
+
+impl Param for TempParamOwned {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn name(&self) -> &str {
+        &self.id
+    }
+    fn get_plain(&self) -> f64 {
+        self.value
+    }
+    fn set_plain(&self, _v: f64) {}
+    fn default_plain(&self) -> f64 {
+        self.value
+    }
+    fn min_plain(&self) -> f64 {
+        0.0
+    }
+    fn max_plain(&self) -> f64 {
+        1.0
+    }
+    fn display(&self, value: f64) -> String {
+        format!("{:.4}", value)
+    }
+    fn parse(&self, _text: &str) -> Option<f64> {
+        None
+    }
+}
+
 impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
     fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {
         let data = if let Some(plugin) = &self.plugin {
@@ -23,12 +58,12 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
             // Serialize params from the shared atomics and merge any
             // extra-state saver's output using the same `"extra" ->
             // top-level` shape the plugin would produce.
-            let temp_params: Vec<crate::param::TempParamOwned> = self
+            let temp_params: Vec<TempParamOwned> = self
                 .shared
                 .param_metas
                 .iter()
                 .enumerate()
-                .map(|(i, meta)| crate::param::TempParamOwned {
+                .map(|(i, meta)| TempParamOwned {
                     id: meta.str_id.clone(),
                     value: self.shared.get_value(i),
                 })
