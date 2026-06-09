@@ -41,3 +41,19 @@ fn tap_beyond_capacity_asserts_in_debug() {
     let dl = DelayLine::new(8); // size 8, valid delays 0..=7
     let _ = dl.tap(8); // would silently alias to tap(0)
 }
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "must be finite and non-negative")]
+fn tap_linear_negative_delay_asserts_in_debug() {
+    let dl = DelayLine::new(8);
+    let _ = dl.tap_linear(-0.5); // `as usize` would saturate to 0
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "must be finite and non-negative")]
+fn tap_linear_nan_delay_asserts_in_debug() {
+    let dl = DelayLine::new(8);
+    let _ = dl.tap_linear(f32::NAN);
+}

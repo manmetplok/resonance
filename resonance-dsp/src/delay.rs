@@ -54,7 +54,16 @@ impl DelayLine {
     }
 
     /// Read with linear interpolation for fractional delays (modulation).
+    ///
+    /// `delay_frac` must be finite and non-negative: the `as usize` cast
+    /// saturates negative (and NaN) input to 0, which would silently read
+    /// the newest sample instead of surfacing the caller's bad modulation
+    /// math.
     pub fn tap_linear(&self, delay_frac: f32) -> f32 {
+        debug_assert!(
+            delay_frac.is_finite() && delay_frac >= 0.0,
+            "DelayLine::tap_linear: delay {delay_frac} must be finite and non-negative"
+        );
         let delay_int = delay_frac as usize;
         let frac = delay_frac - delay_int as f32;
         let a = self.tap(delay_int);

@@ -944,8 +944,15 @@ inline fix pass tackled. Each is documented enough to pick up later.
   current-era date.
 
 ### resonance-dsp
-- [ ] `delay.rs:29-35` — `tap_linear` casts negative input to `usize` (saturates
+- [x] `delay.rs:29-35` — `tap_linear` casts negative input to `usize` (saturates
   to 0). `debug_assert!(delay_frac.is_finite() && delay_frac >= 0.0)`.
+
+  _Resolved 2026-06-10_. `tap_linear` now `debug_assert!`s
+  `delay_frac.is_finite() && delay_frac >= 0.0` (release builds stay
+  branch-free) and documents that the `as usize` cast would otherwise
+  saturate negative/NaN input to 0 and silently read the newest sample.
+  `tests/delay.rs` gains should-panic coverage for both the negative
+  and NaN cases.
 - [ ] `filter.rs:18` — `OnePole::set_cutoff` doesn't clamp against
   `sample_rate/2`. Document the near-identity passthrough at Nyquist.
 - [ ] `rng.rs:13-18` — xorshift32 with seed=0 relies on `| 1` recovery.
