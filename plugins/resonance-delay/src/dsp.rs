@@ -100,6 +100,12 @@ impl DelayDsp {
         mod_depth: f32,
         freeze: bool,
     ) -> (f32, f32) {
+        // Per-sample libm sine for the wow/flutter LFO. Deliberate
+        // tradeoff: one `sin` per frame is noise next to the two
+        // linear-interp delay taps below, and the LFO must stay
+        // smooth at arbitrary (automatable) rates. Swap in a
+        // polynomial approximation only if profiling ever shows this
+        // hot — it never has.
         let lfo_val = (self.lfo_phase * std::f32::consts::TAU).sin();
         self.lfo_phase += mod_rate / self.sample_rate;
         self.lfo_phase -= self.lfo_phase.floor();

@@ -1018,8 +1018,14 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `iter_chrono` reads it with `Acquire`, mirroring the mastering
   `HistoryRing` convention. New `tests/viz.rs` pins the chronological
   round-trip including wraparound.
-- [ ] `resonance-delay/src/dsp.rs:103-105` — LFO uses `(self.lfo_phase *
+- [x] `resonance-delay/src/dsp.rs:103-105` — LFO uses `(self.lfo_phase *
   TAU).sin()` per sample. Acceptable; polynomial sine if ever profiled hot.
+
+  _Resolved 2026-06-10_ (comment-only, as the filing itself suggested).
+  The tradeoff is now documented at the call site: one libm `sin` per
+  frame is negligible next to the two linear-interp delay taps, and a
+  polynomial sine is only warranted if profiling ever shows it hot.
+  No code change.
 - [ ] `resonance-delay/src/lib.rs:170-185` — `fb.powf(n_taps)` per block for 8
   taps; replace with `fb * fb` accumulation.
 - [ ] `resonance-wavetable/src/dsp/render.rs:518-519` — `master_vol` is
