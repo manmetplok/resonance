@@ -514,8 +514,17 @@ inline fix pass tackled. Each is documented enough to pick up later.
   successive-sample step beyond one ramp increment (including across
   the block boundary) and settles next block; mute ramps to silence;
   hard-right pan ramps L→0 with R pinned at 1; first block is flat.
-- [ ] `resonance-mastering/src/assistant/mod.rs` (150 lines) — `Assistant` type
+- [x] `resonance-mastering/src/assistant/mod.rs` (150 lines) — `Assistant` type
   + impl in `mod.rs`. Move to `assistant/state.rs`.
+
+  _Resolved 2026-06-09_. Pure code move: the `Assistant` struct, both
+  impl blocks, and `CAPTURE_SECONDS` went verbatim into
+  `assistant/state.rs` (imports rewritten to `super::` paths);
+  `mod.rs` is now the 23-line module doc + declarations + re-export
+  surface, with `pub use state::{Assistant, CAPTURE_SECONDS}` keeping
+  every existing `crate::assistant::Assistant` /
+  `resonance_mastering::assistant::*` path compiling unchanged. No
+  behaviour change — full mastering suite passes as-is.
 - [ ] `resonance-wavetable` — every DSP file lives at crate root
   (`effects.rs`, `engine.rs`, …). Fold under `dsp/`.
 - [ ] `resonance-ir/src/convolver.rs` — should be `dsp.rs` (per plugin layout
