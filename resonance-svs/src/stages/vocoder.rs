@@ -36,7 +36,17 @@ impl VocoderStage {
         Ok(Self { session, n_mel_bins })
     }
 
-    pub fn infer(&mut self, mel: &MelOutput, f0: &[f64]) -> Result<Vec<f32>> {
+    /// Run the vocoder, returning the rendered waveform.
+    ///
+    /// Takes `mel` by `&mut` so the spectrogram data can be moved out via
+    /// `std::mem::take` and handed to `Array3::from_shape_vec` without
+    /// cloning — the same pattern as `AcousticStage::infer`. A mel
+    /// spectrogram is the largest per-segment tensor (n_frames ×
+    /// n_mel_bins floats), so the previous `&MelOutput` signature cloned megabytes
+    /// per segment. `mel.shape` is left intact; `mel.data` is empty after
+    /// this call. `f0` is converted f64 → f32, which allocates the small
+    /// per-frame vector regardless of ownership.
+    pub fn infer(&mut self, mel: &mut MelOutput, f0: &[f64]) -> Result<Vec<f32>> {
         let n_frames = if mel.shape.len() >= 2 {
             mel.shape[mel.shape.len() - 2] as usize
         } else {
@@ -58,8 +68,11 @@ impl VocoderStage {
             ));
         }
 
-        let mel_arr = Array3::<f32>::from_shape_vec((1, n_frames, self.n_mel_bins), mel.data.clone())
-            .context("packing mel for vocoder")?;
+        let mel_arr = Array3::<f32>::from_shape_vec(
+            (1, n_frames, self.n_mel_bins),
+            std::mem::take(&mut mel.data),
+        )
+        .context("packing mel for vocoder")?;
         let f0_arr = Array2::<f32>::from_shape_vec((1, n_frames), f0.iter().map(|x| *x as f32).collect())
             .context("packing f0 for vocoder")?;
 

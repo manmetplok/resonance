@@ -677,8 +677,15 @@ inline fix pass tackled. Each is documented enough to pick up later.
   ending at/before the origin are dropped), keeping every other
   segment's relative timing intact. Covered by
   `resonance-svs/tests/mix_timeline.rs`.
-- [ ] `resonance-svs/src/stages/vocoder.rs:61-63` — `mel.data.clone()` + f0
+- [x] `resonance-svs/src/stages/vocoder.rs:61-63` — `mel.data.clone()` + f0
   collect per segment. Take by value with `mem::take` like the acoustic stage.
+
+  _Resolved 2026-06-09_. `VocoderStage::infer` now takes `&mut MelOutput`
+  and moves the spectrogram out with `std::mem::take`, mirroring
+  `AcousticStage::infer` — the per-segment clone of the largest tensor
+  (n_frames × n_mel_bins f32) is gone. The f0 collect stays: it's an
+  f64 → f32 conversion, so the small per-frame vector must be allocated
+  regardless of ownership.
 
 ## Code review 2026-05-19 — Low
 
