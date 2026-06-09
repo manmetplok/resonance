@@ -338,9 +338,20 @@ inline fix pass tackled. Each is documented enough to pick up later.
   Call sites needing `&[T]` (`fft.process`, `octave_table.aggregate`)
   take explicit `[..]` slices. No behaviour change — full metering suite
   still passes.
-- [ ] `resonance-metering/src/spectrum/fft_worker.rs:81` — worker uses
+- [x] `resonance-metering/src/spectrum/fft_worker.rs:81` — worker uses
   `park_timeout(16ms)`; push side never `unpark()`s. Either unpark on
   HOP_SIZE crossings or document the latency.
+
+  _Resolved 2026-06-09_ by documenting, not unparking. The producer is
+  the real-time audio thread and `Thread::unpark` can issue a futex
+  syscall, so it stays off that path even at hop-boundary frequency.
+  The 16 ms poll is bounded and invisible: one FFT frame spans
+  HOP_SIZE = 4096 samples (~85 ms @ 48 kHz), the UI reads the ArcSwap
+  snapshot at its own ~60 Hz cadence, and the 32 768-sample ring holds
+  ~680 ms so polling cannot overflow it. Rationale now lives at the
+  `park_timeout` site in `FftWorker::run` and on
+  `SpectrumAnalyzer::push_stereo`; `Drop` already unparks for prompt
+  shutdown.
 - [ ] `resonance-metering/src/true_peak/polyphase.rs:64-74` — 48 modulos per
   input sample. Use linear history.
 - [ ] `resonance-metering/src/lufs/integrated.rs:55-60` — `debug_assert!(false,

@@ -80,7 +80,20 @@ impl FftWorker {
         while !self.done.load(Ordering::Acquire) {
             let did_work = self.try_process_one(&mut drain_scratch);
             if !did_work {
-                // Nothing to do yet — yield.
+                // Nothing to do yet — sleep and poll again.
+                //
+                // The producer (the real-time audio thread) deliberately
+                // never `unpark()`s us: `Thread::unpark` can issue a futex
+                // syscall, which we keep off the audio thread even at
+                // hop-boundary frequency. The 16 ms poll bounds the extra
+                // latency instead, and that bound is invisible in
+                // practice: one FFT frame spans HOP_SIZE = 4096 samples
+                // (~85 ms at 48 kHz) and the UI reads the snapshot at its
+                // own ~60 Hz cadence, so a worst-case 16 ms wake-up delay
+                // is under one UI frame on top of a ~170 ms analysis
+                // window. The ring holds ~680 ms of audio at 48 kHz, so
+                // polling can't make it overflow. `Drop` still unparks to
+                // make shutdown prompt.
                 std::thread::park_timeout(Duration::from_millis(16));
             }
         }

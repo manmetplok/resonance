@@ -114,6 +114,11 @@ impl SpectrumAnalyzer {
     }
 
     /// Feed a stereo block. Downmixes to mono and pushes into the ring.
+    ///
+    /// Intentionally does **not** `unpark()` the worker — that could
+    /// syscall on the audio thread. The worker polls the ring every
+    /// 16 ms instead; see the latency rationale in
+    /// [`fft_worker::FftWorker::run`].
     #[inline]
     pub fn push_stereo(&self, left: &[f32], right: &[f32]) {
         let n = left.len().min(right.len());
