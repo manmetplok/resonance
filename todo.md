@@ -392,8 +392,19 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `tests/crest.rs`: brute-force-scan equivalence across wrap-straddling
   block sizes, spike eviction at the 100 ms boundary, and reset clearing
   deque state.
-- [ ] `resonance-dsp/src/delay.rs:23-26` — `tap()` silently aliases when
+- [x] `resonance-dsp/src/delay.rs:23-26` — `tap()` silently aliases when
   `delay > mask`. Add `debug_assert!(delay <= self.mask)`.
+
+  _Resolved 2026-06-09_. `tap()` now `debug_assert!`s `delay <=
+  self.mask` (release builds stay branch-free) and documents the
+  aliasing hazard. The assert immediately caught a real victim:
+  resonance-ir's bypass path tapped `block_size` on a buffer of exactly
+  `block_size` (always a power of two), which aliased to a 1-sample
+  delay and left the dry signal misaligned with the convolver by
+  `block_size - 1` samples. It now taps `block_size - 1` (tap before
+  push = block_size samples of latency). New `tests/delay.rs` covers
+  tap indexing, `tap_linear` interpolation, the max valid tap, and the
+  debug-build assert.
 - [ ] `resonance-dsp/src/lfo.rs:73-86` — `LFO::next` accepts non-finite rate
   and poisons output. Validate in `new`/`set_rate`.
 - [ ] `resonance-dsp/src/biquad.rs:189-193` — `clamp_params` can panic if

@@ -40,7 +40,15 @@ impl DelayLine {
         self.write_pos = (self.write_pos + 1) & self.mask;
     }
 
+    /// Read the sample written `delay + 1` pushes ago. `delay` must not
+    /// exceed the buffer capacity (`mask`), otherwise the read silently
+    /// wraps onto newer samples (e.g. `tap(size)` aliases to `tap(0)`).
     pub fn tap(&self, delay: usize) -> f32 {
+        debug_assert!(
+            delay <= self.mask,
+            "DelayLine::tap: delay {delay} exceeds capacity {} and would alias",
+            self.mask
+        );
         let idx = self.write_pos.wrapping_sub(delay).wrapping_sub(1) & self.mask;
         self.buffer[idx]
     }

@@ -244,9 +244,14 @@ impl ResonancePlugin for ResonanceIr {
             in_peak_r = in_peak_r.max(dry_r.abs());
 
             // Always feed the bypass delay lines so the dry signal stays
-            // time-aligned with the convolver's block_size latency.
-            let delayed_l = self.bypass_delay_l.tap(self.block_size);
-            let delayed_r = self.bypass_delay_r.tap(self.block_size);
+            // time-aligned with the convolver's block_size latency. We
+            // tap *before* pushing the current sample, so a tap of
+            // `block_size - 1` reads the sample from exactly block_size
+            // samples ago. (Tapping `block_size` here aliased to a
+            // 1-sample delay: the buffer is exactly block_size long —
+            // always a power of two — and `tap` wraps modulo its size.)
+            let delayed_l = self.bypass_delay_l.tap(self.block_size - 1);
+            let delayed_r = self.bypass_delay_r.tap(self.block_size - 1);
             self.bypass_delay_l.push(dry_l);
             self.bypass_delay_r.push(dry_r);
 
