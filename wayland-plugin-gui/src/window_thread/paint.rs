@@ -11,15 +11,20 @@ use super::state::State;
 
 /// Apply any pending resize (from a configure or `Command::Resize`) to the
 /// EGL surface. Sets `state.needs_redraw` if the size actually changed.
+///
+/// The EGL surface is unconditionally brought to `state.physical_size()`
+/// (`EglContext::resize` is a no-op when unchanged), so a scale change —
+/// which alters the physical size without touching `pending_size` — also
+/// resizes the buffer before the next paint.
 pub(super) fn apply_pending_resize(state: &mut State, egl_ctx: &mut EglContext) {
     if let Some((w, h)) = state.pending_size.take() {
         if (w, h) != state.size {
             state.size = (w, h);
-            let s = state.scale.max(1.0) as i32;
-            egl_ctx.resize(w as i32 * s, h as i32 * s);
             state.needs_redraw = true;
         }
     }
+    let (pw, ph) = state.physical_size();
+    egl_ctx.resize(pw, ph);
 }
 
 /// Build one egui frame, paint it via `egui_glow`, and swap buffers.
@@ -38,9 +43,12 @@ pub(super) fn paint_frame(
 
     egl_ctx.make_current()?;
 
-    // Build the egui frame.
+    // Build the egui frame. `pixels_per_point` is the same integer buffer
+    // scale the EGL surface and `set_buffer_scale` use (see
+    // `State::buffer_scale`), so the GL viewport below always matches the
+    // buffer exactly.
     let (w, h) = state.size;
-    let pixels_per_point = state.scale;
+    let pixels_per_point = state.buffer_scale() as f32;
 
     // Provide pixels_per_point via the viewport info, not via
     // Context::set_pixels_per_point — the latter only takes effect
@@ -75,10 +83,10 @@ pub(super) fn paint_frame(
         .egui_ctx
         .tessellate(full_output.shapes, pixels_per_point);
 
-    // Clear and paint.
+    // Clear and paint. Same physical size the EGL surface was resized to
+    // in `apply_pending_resize` — one rounding rule, no drift.
     use glow::HasContext;
-    let pw = (w as f32 * pixels_per_point) as i32;
-    let ph = (h as f32 * pixels_per_point) as i32;
+    let (pw, ph) = state.physical_size();
     unsafe {
         gl.viewport(0, 0, pw, ph);
         gl.clear_color(0.08, 0.08, 0.10, 1.0);

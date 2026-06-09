@@ -157,7 +157,7 @@ impl EditorThread {
             &state.conn,
             state.window.wl_surface(),
             state.size,
-            state.scale as i32,
+            state.buffer_scale(),
         )?;
         egl_ctx.make_current()?;
 

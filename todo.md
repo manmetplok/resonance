@@ -649,9 +649,23 @@ inline fix pass tackled. Each is documented enough to pick up later.
   scope here). No headless unit test: `Editor::new` blocks on a live
   Wayland configure event, so the handle can't be constructed without
   a compositor.
-- [ ] `wayland-plugin-gui/src/window_thread/paint.rs:80-93` — EGL sized as
+- [x] `wayland-plugin-gui/src/window_thread/paint.rs:80-93` — EGL sized as
   integer `scale`, viewport as float `pixels_per_point`. Either clamp or wire
   `wp-fractional-scale-v1` through.
+
+  _Resolved 2026-06-09_ (clamp). One integer `State::buffer_scale()`
+  (`scale.max(1).round()`) plus `State::physical_size()` now feed all
+  three consumers — `wl_surface.set_buffer_scale`, the wl_egl_window
+  size, and egui's `pixels_per_point` / GL viewport — so they can no
+  longer disagree under any scale value. The audit also surfaced two
+  live bugs, both fixed: a `scale_factor_changed` after startup never
+  resized the EGL surface (`apply_pending_resize` only reacted to
+  `pending_size`; it now unconditionally clamps to `physical_size()`,
+  idempotent) and never re-sent `set_buffer_scale` (set once in
+  `EglContext::new`; the delegate now re-sends it). Fractional scaling
+  remains unwired: proper support needs `wp-fractional-scale-v1` +
+  `wp_viewport` instead of `set_buffer_scale` — noted on
+  `buffer_scale()` for whoever picks that up.
 - [ ] `resonance-svs/src/audio.rs:29` — negative segment offsets silently
   clamped to 0. Either trim leading samples or document.
 - [ ] `resonance-svs/src/stages/vocoder.rs:61-63` — `mel.data.clone()` + f0

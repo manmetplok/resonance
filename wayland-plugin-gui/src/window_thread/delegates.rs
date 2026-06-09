@@ -31,11 +31,18 @@ impl CompositorHandler for State {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &WlSurface,
+        surface: &WlSurface,
         new_factor: i32,
     ) {
         self.scale = new_factor as f32;
         self.input.set_scale(self.scale);
+        // Keep the committed buffer scale in step with the factor we
+        // render at — `EglContext::new` only sets it once at startup.
+        // Double-buffered state; applied on the next commit, which the
+        // redraw below triggers via `eglSwapBuffers`. The EGL surface
+        // itself is brought to the new physical size by
+        // `apply_pending_resize` before that paint.
+        surface.set_buffer_scale(self.buffer_scale());
         self.needs_redraw = true;
     }
 
