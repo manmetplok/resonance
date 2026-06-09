@@ -706,8 +706,20 @@ inline fix pass tackled. Each is documented enough to pick up later.
   documented on `pre_touch`.
 
 ### resonance-app
-- [ ] `main.rs:300,313,350` — `debug_assert!(result.is_some(), …)` after
+- [x] `main.rs:300,313,350` — `debug_assert!(result.is_some(), …)` after
   `with_track_mut`. If truly an invariant, use `.expect()` so release fails too.
+
+  _Resolved 2026-06-09_ (graceful, not `.expect()`). The asserts had
+  moved into the `with_track_mut`/`with_bus_mut` wrappers in `lib.rs`.
+  Verified it is NOT an invariant: the ids ride inside queued
+  `Message`s, and tracks/busses are removed asynchronously when the
+  engine's `TrackRemoved` event lands (`engine_events/tracks.rs`), so a
+  message emitted just before removal can drain afterwards with a dead
+  id — `.expect()` would crash release builds on a user-reachable race,
+  and the `debug_assert!` already turned it into a dev-build panic.
+  Both wrappers now log the miss via `eprintln!` (the crate's existing
+  warning convention) and no-op, with the reachability argument
+  documented at the definition.
 
 ### resonance-music-theory
 - [ ] `fretboard.rs:81` — search caps at `start..=7u8`; voicings above fret 11

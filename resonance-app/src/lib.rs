@@ -362,25 +362,39 @@ impl Resonance {
 
     /// Run `f` on the track with the given id, returning whatever `f`
     /// returns. `None` if the track doesn't exist.
+    ///
+    /// A miss here is reachable in normal operation, not an invariant
+    /// violation: the ids ride inside queued `Message`s, and tracks are
+    /// removed asynchronously when the engine's `TrackRemoved` event
+    /// lands — so a message emitted just before removal (a slider drag,
+    /// an async task completing) can drain afterwards carrying a dead
+    /// id. Such stragglers must no-op; we log them so a *systematic*
+    /// wrong-id bug still surfaces. (This used to be a `debug_assert!`,
+    /// which turned that benign race into a dev-build panic.)
     pub(crate) fn with_track_mut<R>(
         &mut self,
         id: TrackId,
         f: impl FnOnce(&mut TrackState) -> R,
     ) -> Option<R> {
         let result = self.registry.with_track_mut(id, f);
-        debug_assert!(result.is_some(), "with_track_mut: no track with id {id:?}");
+        if result.is_none() {
+            eprintln!("with_track_mut: no track with id {id:?} (stale message after removal?)");
+        }
         result
     }
 
     /// Run `f` on the bus with the given id, returning whatever `f`
-    /// returns. `None` if the bus doesn't exist.
+    /// returns. `None` if the bus doesn't exist. Misses are a benign
+    /// race, same as [`Self::with_track_mut`].
     pub(crate) fn with_bus_mut<R>(
         &mut self,
         id: BusId,
         f: impl FnOnce(&mut BusState) -> R,
     ) -> Option<R> {
         let result = self.registry.with_bus_mut(id, f);
-        debug_assert!(result.is_some(), "with_bus_mut: no bus with id {id:?}");
+        if result.is_none() {
+            eprintln!("with_bus_mut: no bus with id {id:?} (stale message after removal?)");
+        }
         result
     }
 
