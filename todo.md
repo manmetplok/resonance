@@ -666,8 +666,17 @@ inline fix pass tackled. Each is documented enough to pick up later.
   remains unwired: proper support needs `wp-fractional-scale-v1` +
   `wp_viewport` instead of `set_buffer_scale` — noted on
   `buffer_scale()` for whoever picks that up.
-- [ ] `resonance-svs/src/audio.rs:29` — negative segment offsets silently
+- [x] `resonance-svs/src/audio.rs:29` — negative segment offsets silently
   clamped to 0. Either trim leading samples or document.
+
+  _Resolved 2026-06-09_ (trim). Segment offsets come from `.ds` note
+  onsets, so a leading consonant can legitimately start before the
+  timeline origin; clamping shifted the whole segment late by
+  `|offset|` samples. `mix_into_timeline` now trims the samples that
+  fall before the origin and places the remainder at sample 0 (segments
+  ending at/before the origin are dropped), keeping every other
+  segment's relative timing intact. Covered by
+  `resonance-svs/tests/mix_timeline.rs`.
 - [ ] `resonance-svs/src/stages/vocoder.rs:61-63` — `mel.data.clone()` + f0
   collect per segment. Take by value with `mem::take` like the acoustic stage.
 
