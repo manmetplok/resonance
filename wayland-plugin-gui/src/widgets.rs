@@ -218,6 +218,13 @@ fn draw_arc(
     let segments = 48;
     let span = end - start;
     let step = span / segments as f32;
+    // One owned, exactly-sized Vec per arc per frame is the floor here:
+    // epaint's `PathShape` stores `points: Vec<Pos2>` by value, so a
+    // borrowed/reused buffer would have to be cloned into it anyway.
+    // What we avoid is the old shape per segment — 48 `line_segment`
+    // calls pushed 48 `Shape`s into the paint list per arc; a single
+    // `Shape::line` polyline is one shape, one allocation, and
+    // tessellates with proper joins instead of butt-end overlaps.
     let points: Vec<Pos2> = (0..=segments)
         .map(|i| {
             let angle = start + step * i as f32;
@@ -227,10 +234,7 @@ fn draw_arc(
             )
         })
         .collect();
-
-    for pair in points.windows(2) {
-        painter.line_segment([pair[0], pair[1]], Stroke::new(width, color));
-    }
+    painter.add(egui::Shape::line(points, Stroke::new(width, color)));
 }
 
 // ---------------------------------------------------------------------------

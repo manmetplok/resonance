@@ -1077,8 +1077,17 @@ inline fix pass tackled. Each is documented enough to pick up later.
   and egui `pixels_per_point`; layering a host factor on top would
   double-scale. Fractional scale remains a wp-fractional-scale-v1
   runtime upgrade, not a host hint.
-- [ ] `wayland-plugin-gui/src/widgets.rs:218-233` — `draw_arc` allocates a
+- [x] `wayland-plugin-gui/src/widgets.rs:218-233` — `draw_arc` allocates a
   `Vec<Pos2>` of 49 points per arc per frame.
+
+  _Resolved 2026-06-10_. The Vec itself is the epaint API floor —
+  `PathShape` stores `points: Vec<Pos2>` by value, so a reusable buffer
+  would just be cloned at the boundary (documented in a comment). What
+  was actually wasteful is gone: the 48 per-arc `line_segment` calls
+  (48 `Shape`s pushed into the paint list, with the Vec then discarded)
+  are now a single `Shape::line` polyline that takes ownership of the
+  one exactly-sized Vec. Same 49 sample points, opaque stroke colors;
+  the polyline tessellates with proper joins, so arcs render the same.
 - [ ] `wayland-plugin-gui/src/window_thread/event_loop.rs:176-202` — main loop
   uses a fixed 16 ms tick; doesn't pace via `wl_surface.frame()` callbacks.
 - [ ] `resonance-svs/src/lib.rs:8` — `write_mono_f32_wav` exported but
