@@ -492,11 +492,28 @@ inline fix pass tackled. Each is documented enough to pick up later.
   oversized block is still a pure delay end-to-end past `max_buffer`
   (fails under the old cap), and one oversized call is bitwise equal
   to host-side `max_buffer` chunking with a band compressing.
-- [ ] `resonance-drums/src/dsp/sampler.rs:282-288` — per-pad `volume`, `pan`,
+- [x] `resonance-drums/src/dsp/sampler.rs:282-288` — per-pad `volume`, `pan`,
   `oh_blend`, `balance` are snapshotted once per block but applied per sample
   without smoothing. Pad volume jumps still click on automation; master volume
   is now block-linear-ramped, but the pad params still aren't. Add per-pad
   `prev_*` state and interpolate across the block (NUM_PADS × 4 floats).
+
+  _Resolved 2026-06-09_. `DrumSampler` carries `prev_pad_volume` /
+  `prev_pad_pan` / `prev_pad_oh` / `prev_pad_balance` (`[f32; NUM_PADS]`
+  each) plus a `pad_prev_valid` seed flag so the first block snapshots
+  rather than ramping in from constructor defaults. Each voice computes
+  its gains at both the previous and current snapshot — volume, the
+  balance-side close-mic gain, the OH-blend overhead gain, and the
+  `stereo_balance` pan pair (pan/balance ramp in gain space, which is
+  linear in the knob since `stereo_balance` is piecewise-linear) — and
+  the inner loop steps all four with per-sample increments, exactly the
+  master-ramp convention (start at prev, land one step shy of cur).
+  `mute` folds into the volume snapshot so mute toggles declick too.
+  New `tests/pad_param_smoothing.rs` renders a constant-1.0 sample so
+  output *is* the gain trajectory: volume jump 1.0→0.25 has no
+  successive-sample step beyond one ramp increment (including across
+  the block boundary) and settles next block; mute ramps to silence;
+  hard-right pan ramps L→0 with R pinned at 1; first block is flat.
 - [ ] `resonance-mastering/src/assistant/mod.rs` (150 lines) — `Assistant` type
   + impl in `mod.rs`. Move to `assistant/state.rs`.
 - [ ] `resonance-wavetable` — every DSP file lives at crate root
