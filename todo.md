@@ -1036,12 +1036,25 @@ inline fix pass tackled. Each is documented enough to pick up later.
   (via a new `ResonanceDelay::viz()` accessor) and pins tap n at
   `fb^n` against the powf reference within 1e-3 dB, plus the
   constant-dB-decrement property.
-- [ ] `resonance-wavetable/src/dsp/render.rs:518-519` — `master_vol` is
+- [x] `resonance-wavetable/src/dsp/render.rs:518-519` — `master_vol` is
   read once per block (`render.rs:129`) and multiplied per-sample with no
   smoother, violating the `Param::set_plain` smoothing contract; host
   automation of master volume will zipper. Feed it through a `Smoother`
   like the other FX plugins. (Filed 2026-06-09 while documenting the
   bridge smoothing contract.)
+
+  _Resolved 2026-06-10_. `SynthEngine` now owns a
+  `master_vol_smoother` (`Linear(5.0)`, matching the style declared on
+  the FloatParam; the param is already linear gain so the ramp runs in
+  linear-gain space, same shape as resonance-eq's output-gain
+  smoother). `render_block` retargets it from the block snapshot and
+  the per-sample kernel pulls `next()`; plugin `initialize` resets it
+  to the current param value so fresh instances don't fade in from
+  zero. New `tests/master_vol.rs` renders the same deterministic note
+  through a constant-volume engine and a jump-at-block-boundary
+  engine and pins the gain-ratio trajectory: step-free across the
+  boundary (verified to fail against the old unsmoothed multiply) and
+  settled at the new target within the 5 ms ramp.
 
 ### resonance-plugin / wayland-plugin-gui / resonance-svs
 - [ ] `resonance-plugin/src/param.rs:347-378` — `TempParamOwned` only used by

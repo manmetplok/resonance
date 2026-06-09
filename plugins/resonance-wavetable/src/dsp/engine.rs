@@ -1,5 +1,6 @@
 /// Synth engine: voice allocation, rendering, portamento, effects.
 use resonance_dsp::SimpleRng;
+use resonance_plugin::{Smoother, SmoothingStyle};
 
 use crate::dsp::effects::{Chorus, StereoDelay};
 use crate::params::WavetableParams;
@@ -33,6 +34,14 @@ pub struct SynthEngine {
     // Audio → UI oscilloscope ring. Filled per-sample in `render_block`,
     // published to the shared viz state at the end of each audio block.
     pub(crate) scope_collector: ScopeCollector,
+
+    // Per-sample de-zipper for the master volume. Lives on the engine (not
+    // in the FloatParam) because `Smoother::next()` needs `&mut self` and
+    // params sit behind an `Arc`. Retargeted from the param snapshot once
+    // per block in `render_block`, per the `Param::set_plain` smoothing
+    // contract — host automation lands instantly on the param, and this
+    // ramp removes the step before it reaches the output multiply.
+    pub(crate) master_vol_smoother: Smoother,
 }
 
 impl SynthEngine {
@@ -50,6 +59,10 @@ impl SynthEngine {
             rng: SimpleRng::new(42),
             last_note: None,
             scope_collector: ScopeCollector::new(),
+            // Matches the SmoothingStyle declared on the master_volume
+            // FloatParam; the param is already linear gain, so the ramp
+            // runs in linear-gain space directly.
+            master_vol_smoother: Smoother::new(SmoothingStyle::Linear(5.0)),
         }
     }
 
@@ -74,6 +87,8 @@ impl SynthEngine {
         // Init effects
         self.chorus = Chorus::new(sample_rate);
         self.delay = StereoDelay::new(sample_rate);
+
+        self.master_vol_smoother.set_sample_rate(sample_rate);
     }
 
     pub fn reset(&mut self) {

@@ -56,6 +56,12 @@ impl ResonancePlugin for ResonanceWavetable {
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         self.engine.initialize(sample_rate);
+        // Start the master-volume smoother at the current param value so a
+        // fresh instance doesn't fade in from zero (same pattern as
+        // resonance-eq's output-gain smoother).
+        self.engine
+            .master_vol_smoother
+            .reset(self.params.master_volume.value());
         true
     }
 

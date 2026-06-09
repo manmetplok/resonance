@@ -214,6 +214,11 @@ impl SynthEngine {
     ) {
         let snap = ParamSnapshot::capture(params, self.sample_rate);
 
+        // Retarget the master-volume de-zipper once per block; the
+        // per-sample kernel pulls `next()` so host automation of master
+        // volume ramps (~5 ms) instead of stepping mid-buffer.
+        self.master_vol_smoother.set_target(snap.master_vol);
+
         // Resolve wavetable references once per block. Missing indices fall
         // back to `None` and silently skip oscillator output.
         let wt1_idx = if snap.osc1_wt < self.wavetables.len() {
@@ -533,8 +538,9 @@ impl SynthEngine {
                 mix_r = dr;
             }
 
-            let out_l = mix_l * snap.master_vol;
-            let out_r = mix_r * snap.master_vol;
+            let master_vol = self.master_vol_smoother.next();
+            let out_l = mix_l * master_vol;
+            let out_r = mix_r * master_vol;
 
             left[sample_id] = out_l;
             right[sample_id] = out_r;
