@@ -15,7 +15,7 @@ pub mod integrated;
 
 use crate::k_weighting::KWeightingFilter;
 use block_accumulator::BlockAccumulator;
-use gating::{block_mean_square_to_lufs, LOUDNESS_OFFSET};
+use gating::block_mean_square_to_lufs;
 use integrated::IntegratedAccumulator;
 
 /// Aggregate of LUFS readouts computed by [`LufsMeter::analyze_offline`].
@@ -121,8 +121,3 @@ impl LufsMeter {
 
 /// Reference implementations may need the BS.1770-4 loudness offset.
 pub use gating::LOUDNESS_OFFSET as BS1770_LOUDNESS_OFFSET;
-
-// Silence an unused-import warning when gating's LOUDNESS_OFFSET is re-exported
-// but not referenced from within this module's own code paths.
-#[allow(dead_code)]
-const _LOUDNESS_OFFSET_RE_EXPORT: f64 = LOUDNESS_OFFSET;

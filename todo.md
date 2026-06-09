@@ -869,7 +869,16 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `min(samples_pushed, window)` — which also means the partial-window
   RMS is already correct during warm-up, so no correlation-style gate
   is needed here.
-- [ ] `lufs/mod.rs:126-128` — `_LOUDNESS_OFFSET_RE_EXPORT` dead workaround.
+- [x] `lufs/mod.rs:126-128` — `_LOUDNESS_OFFSET_RE_EXPORT` dead workaround.
+
+  _Resolved 2026-06-10_. Removed. The const existed only to silence
+  the unused-import warning on `use gating::…LOUDNESS_OFFSET` — the
+  module-local import was itself unused, because the public
+  `BS1770_LOUDNESS_OFFSET` re-export names `gating::LOUDNESS_OFFSET`
+  by path. Fixed at the root: dropped `LOUDNESS_OFFSET` from the
+  `use` line and deleted the workaround const; the public re-export
+  is untouched. `cargo check`/`clippy` confirm zero warnings and
+  nothing referenced the dead const.
 - [ ] `k_weighting.rs:84,105` — `assign_prefilter` / `assign_rlb` reach into
   `Biquad`'s `pub` fields. Add an `assign_raw` constructor.
 - [ ] `spectrum/octave.rs:60-63` — band-fallback path uses `f32::max` (NaN
