@@ -6,6 +6,7 @@
 //! shared `State` each frame, lays out egui widgets, and posts `Command`s
 //! back.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use wayland_plugin_gui::egui;
@@ -176,15 +177,19 @@ fn draw_kit_list(
         return;
     }
 
-    // Load the registry once per frame to check installed status.
+    // Load the registry once per frame to check installed status, and
+    // index it by name so each kit row is an O(1) lookup instead of a
+    // linear scan per row.
     let installed = registry::list_installed(&ContentType::Drumkit);
+    let installed_by_name: HashMap<&str, &registry::InstalledItem> =
+        installed.iter().map(|item| (item.name.as_str(), item)).collect();
 
     egui::ScrollArea::vertical()
         .id_salt("download_kits_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for kit in &index.drumkits {
-                draw_kit_row(ui, panel, worker, kit, &installed, status);
+                draw_kit_row(ui, panel, worker, kit, &installed_by_name, status);
             }
         });
 }
@@ -194,10 +199,10 @@ fn draw_kit_row(
     panel: &mut DownloadPanelState,
     worker: &Arc<WorkerHandle>,
     kit: &ServerKit,
-    installed: &[registry::InstalledItem],
+    installed: &HashMap<&str, &registry::InstalledItem>,
     status: &Status,
 ) {
-    let installed_item = installed.iter().find(|item| item.name == kit.name);
+    let installed_item = installed.get(kit.name.as_str()).copied();
     let is_installed = installed_item.is_some();
 
     let frame = egui::Frame::new()

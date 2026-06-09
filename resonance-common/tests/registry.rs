@@ -61,6 +61,67 @@ fn mark_installed_deduplicates() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+fn item(name: &str, content_type: ContentType) -> InstalledItem {
+    InstalledItem {
+        name: name.to_string(),
+        content_type,
+        path: format!("/tmp/{name}"),
+        installed_at: "2026-06-09".to_string(),
+    }
+}
+
+#[test]
+fn batched_queries_against_one_loaded_registry() {
+    let mut reg = InstalledRegistry::default();
+    reg.items.push(item("KitA", ContentType::Drumkit));
+    reg.items.push(item("KitB", ContentType::Drumkit));
+    reg.items.push(item("Amp1", ContentType::AmpModel));
+
+    // Method-based is_installed answers N queries with zero re-reads.
+    assert!(reg.is_installed("KitA", &ContentType::Drumkit));
+    assert!(reg.is_installed("KitB", &ContentType::Drumkit));
+    assert!(reg.is_installed("Amp1", &ContentType::AmpModel));
+    // Name/type must both match.
+    assert!(!reg.is_installed("KitA", &ContentType::AmpModel));
+    assert!(!reg.is_installed("Amp1", &ContentType::Drumkit));
+    assert!(!reg.is_installed("Missing", &ContentType::Drumkit));
+}
+
+#[test]
+fn installed_set_filters_by_type() {
+    let mut reg = InstalledRegistry::default();
+    reg.items.push(item("KitA", ContentType::Drumkit));
+    reg.items.push(item("KitB", ContentType::Drumkit));
+    reg.items.push(item("Amp1", ContentType::AmpModel));
+
+    let kits = reg.installed_set(&ContentType::Drumkit);
+    assert_eq!(kits.len(), 2);
+    assert!(kits.contains("KitA"));
+    assert!(kits.contains("KitB"));
+    assert!(!kits.contains("Amp1"));
+
+    let amps = reg.installed_set(&ContentType::AmpModel);
+    assert_eq!(amps.len(), 1);
+    assert!(amps.contains("Amp1"));
+
+    let empty = InstalledRegistry::default();
+    assert!(empty.installed_set(&ContentType::Drumkit).is_empty());
+}
+
+#[test]
+fn items_of_iterates_matching_items_only() {
+    let mut reg = InstalledRegistry::default();
+    reg.items.push(item("KitA", ContentType::Drumkit));
+    reg.items.push(item("Amp1", ContentType::AmpModel));
+    reg.items.push(item("KitB", ContentType::Drumkit));
+
+    let names: Vec<&str> = reg
+        .items_of(&ContentType::Drumkit)
+        .map(|i| i.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["KitA", "KitB"]);
+}
+
 #[test]
 fn today_iso_format() {
     let today = today_iso();

@@ -439,8 +439,20 @@ inline fix pass tackled. Each is documented enough to pick up later.
   for. New `ballistics_degenerate_sample_rate_stays_finite` test in
   `tests/dynamics.rs` sweeps sr ∈ {0, −48k, NaN} and checks both coefs
   stay finite in [0, 1) and `step_envelope` remains usable.
-- [ ] `resonance-common/src/registry.rs:80-93` — `is_installed` re-reads JSON
+- [x] `resonance-common/src/registry.rs:80-93` — `is_installed` re-reads JSON
   per call. Provide batched API.
+
+  _Resolved 2026-06-09_. `InstalledRegistry` gained query methods so one
+  `load_registry()` answers N queries: `is_installed(name, type)`,
+  `installed_set(type) -> HashSet<&str>`, and `items_of(type)`. The free
+  `is_installed` now delegates and its docs steer batch callers to the
+  methods. The one hot loop in the workspace —
+  `resonance-drums/src/editor/download_panel.rs::draw_kit_list`, which
+  scanned the installed list linearly per kit row per frame — now builds
+  a `HashMap<&str, &InstalledItem>` from the once-per-frame load so each
+  row is an O(1) lookup. New tests in
+  `resonance-common/tests/registry.rs` cover the batched methods (type
+  filtering, name+type matching, empty registry).
 
 ### plugins/*
 - [ ] `resonance-mastering/src/stages/linear_phase_eq/convolver.rs:73-74,109-114,

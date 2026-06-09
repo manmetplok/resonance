@@ -35,6 +35,41 @@ pub struct InstalledRegistry {
     pub items: Vec<InstalledItem>,
 }
 
+impl InstalledRegistry {
+    /// Iterate all installed items of a given type.
+    pub fn items_of<'a>(
+        &'a self,
+        content_type: &'a ContentType,
+    ) -> impl Iterator<Item = &'a InstalledItem> {
+        self.items
+            .iter()
+            .filter(move |item| item.content_type == *content_type)
+    }
+
+    /// Check whether an item with the given name and type is present.
+    pub fn is_installed(&self, name: &str, content_type: &ContentType) -> bool {
+        self.items
+            .iter()
+            .any(|item| item.name == name && item.content_type == *content_type)
+    }
+
+    /// Build a set of installed names for a given type, for answering
+    /// many membership queries against one registry load. Call sites
+    /// that loop over N entries should `load_registry()` once and use
+    /// this (or [`Self::is_installed`]) instead of the free
+    /// [`is_installed`], which re-reads the JSON file per call.
+    pub fn installed_set<'a>(
+        &'a self,
+        content_type: &ContentType,
+    ) -> std::collections::HashSet<&'a str> {
+        self.items
+            .iter()
+            .filter(|item| item.content_type == *content_type)
+            .map(|item| item.name.as_str())
+            .collect()
+    }
+}
+
 /// Return the path to the registry file:
 /// `$XDG_DATA_HOME/resonance/installed.json`.
 pub fn registry_path() -> Option<PathBuf> {
@@ -76,7 +111,9 @@ pub fn save_registry_to(registry: &InstalledRegistry, path: &Path) -> Result<(),
     Ok(())
 }
 
-/// List all installed items of a given type.
+/// List all installed items of a given type. Loads the registry from
+/// disk; callers needing multiple views of the registry should
+/// `load_registry()` once and use the [`InstalledRegistry`] methods.
 pub fn list_installed(content_type: &ContentType) -> Vec<InstalledItem> {
     load_registry()
         .items
@@ -86,11 +123,14 @@ pub fn list_installed(content_type: &ContentType) -> Vec<InstalledItem> {
 }
 
 /// Check whether an item with the given name and type is installed.
+///
+/// Convenience for one-off checks only — this re-reads the JSON file on
+/// every call. To answer N queries (e.g. when looping over a server
+/// index), `load_registry()` once and use
+/// [`InstalledRegistry::is_installed`] or
+/// [`InstalledRegistry::installed_set`].
 pub fn is_installed(name: &str, content_type: &ContentType) -> bool {
-    load_registry()
-        .items
-        .iter()
-        .any(|item| item.name == name && item.content_type == *content_type)
+    load_registry().is_installed(name, content_type)
 }
 
 /// Mark an item as installed. Replaces any existing entry with the same
