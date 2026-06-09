@@ -66,6 +66,25 @@ impl ClapShared<'_> {
     pub fn set_value(&self, slot: usize, value: f64) {
         self.param_values[slot].store(value.to_bits(), Ordering::Relaxed);
     }
+
+    /// Store `new` into the slot only if it still holds `current`.
+    ///
+    /// Used by the audio thread's editor push-back so it cannot clobber a
+    /// value the main thread wrote concurrently (state load): if the CAS
+    /// loses, the main-thread write stays in place and `params_dirty`
+    /// (set by the writer) makes the next block re-sync the plugin from
+    /// shared. Lock-free, no allocation — a single `compare_exchange` on
+    /// the slot's `AtomicU64`.
+    pub fn compare_exchange_value(&self, slot: usize, current: f64, new: f64) -> bool {
+        self.param_values[slot]
+            .compare_exchange(
+                current.to_bits(),
+                new.to_bits(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+    }
 }
 
 // SAFETY: HostSharedHandle wraps CLAP host function pointers which the CLAP spec

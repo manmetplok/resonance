@@ -70,6 +70,24 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
             // Audio-processor path: parse once, load params into shared
             // atomics, and hand the parsed value to the extra-state saver
             // so file paths etc. land in their shared storage.
+            //
+            // Threading: `state::load` is [main-thread] and CLAP allows it
+            // to run while `process` ([audio-thread]) is in flight. The
+            // synchronization is per-param atomics plus the `params_dirty`
+            // flag: values are stored first (Relaxed), then the flag with
+            // Release; the audio thread swaps the flag with Acquire at the
+            // top of each block, so once it observes the flag, every loaded
+            // value is visible and overwrites the plugin's params. Two
+            // in-flight races remain and are benign or handled:
+            //
+            // - A `ParamValue` event in the same block stores into the same
+            //   atomics. Host automation racing a host-initiated load has no
+            //   defined winner; either serialization is acceptable.
+            // - The audio thread's editor push-back could overwrite a slot
+            //   loaded after this block's dirty-check. That path uses
+            //   `compare_exchange_value` (see `process.rs`), so the
+            //   concurrent main-thread write wins and the still-set dirty
+            //   flag re-syncs the plugin next block.
             let state: serde_json::Value = serde_json::from_slice(&data)
                 .map_err(|_| PluginError::Message("Failed to load state"))?;
             if !crate::state::load_params_from_shared_json(

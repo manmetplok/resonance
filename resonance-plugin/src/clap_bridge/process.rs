@@ -137,12 +137,25 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // 50 params at 750 Hz block rate that's 37k spurious stores a
         // second; load-then-conditional-store is essentially free on
         // x86 when the value is unchanged.
+        //
+        // The store is a compare-exchange against the value we just
+        // read, not a plain store. CLAP allows `state::load`
+        // ([main-thread]) to run concurrently with `process`
+        // ([audio-thread]): load writes the shared atomics and then
+        // sets `params_dirty`. If load lands *after* this block's
+        // dirty-flag check above, a plain store here would overwrite
+        // the freshly loaded value with the plugin's stale one — and
+        // since the next block's dirty re-sync reads back from
+        // `shared`, the loaded state would be lost permanently. With
+        // the CAS, a concurrent main-thread write makes the exchange
+        // fail, the loaded value survives, and the still-set dirty
+        // flag re-syncs the plugin from it next block.
         for i in 0..self.plugin.param_count() {
             if i < self.shared.param_values.len() {
                 let plugin_v = self.plugin.param(i).get_plain();
                 let shared_v = self.shared.get_value(i);
                 if shared_v.to_bits() != plugin_v.to_bits() {
-                    self.shared.set_value(i, plugin_v);
+                    let _ = self.shared.compare_exchange_value(i, shared_v, plugin_v);
                 }
             }
         }

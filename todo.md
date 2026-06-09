@@ -607,8 +607,23 @@ inline fix pass tackled. Each is documented enough to pick up later.
   ramps). Survey found one contract violation, filed as follow-up
   below under Low → plugins/*: resonance-wavetable multiplies
   `master_volume` per-sample without smoothing.
-- [ ] `resonance-plugin/src/clap_bridge/state.rs:80-86` — state load races
+- [x] `resonance-plugin/src/clap_bridge/state.rs:80-86` — state load races
   in-flight process-block param events. Verify against CLAP threading rules.
+
+  _Resolved 2026-06-09_. Verified: `state::load` is [main-thread] and may
+  overlap `process` [audio-thread]. The values-then-`params_dirty`
+  (Release/Acquire) handshake makes the load itself sound, and a
+  same-block `ParamValue` event racing a load has no defined winner, so
+  that store stays plain. One real lost-update existed: the audio
+  thread's editor push-back loop could plain-store a stale plugin value
+  over a slot the load had just written (after that block's dirty-check),
+  and the next block's dirty re-sync would then read the clobbered value
+  back — losing the loaded state permanently. The push-back now uses
+  `ClapShared::compare_exchange_value` (single CAS per changed slot,
+  still lock-free/alloc-free): a concurrent main-thread write makes the
+  CAS fail, the loaded value survives, and the still-set dirty flag
+  re-syncs the plugin next block. Full analysis documented at the load
+  site in `state.rs`.
 - [ ] `resonance-plugin/src/clap_bridge/ports.rs:67-72` — port-name copy
   includes trailing NUL. Check `AudioPortInfoWriter::set` semantics.
 - [ ] `wayland-plugin-gui/src/editor.rs:92-100` — `set_size` never updates
