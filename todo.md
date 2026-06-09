@@ -427,8 +427,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   still meaningless — callers pass real rates — but the setters no
   longer panic. New `degenerate_sample_rate_does_not_panic` test in
   `tests/biquad.rs` sweeps all five setters over sr ∈ {0, −48k, NaN}.
-- [ ] `resonance-dsp/src/dynamics.rs:60-67` — `Ballistics::from_times` divides
+- [x] `resonance-dsp/src/dynamics.rs:60-67` — `Ballistics::from_times` divides
   by potential 0 sample rate. Add `sample_rate.max(1.0)`.
+
+  _Resolved 2026-06-09_. Strictly, the existing `.max(1.0)` clamps on
+  `attack_samples`/`release_samples` already prevented the division by
+  zero (`sr == 0` collapsed both counts to 1.0), so no NaN could
+  escape. The explicit `sample_rate.max(1.0)` guard is added anyway —
+  it documents the intent at the source, also absorbs NaN/negative
+  rates before they enter the products, and is what the review asked
+  for. New `ballistics_degenerate_sample_rate_stays_finite` test in
+  `tests/dynamics.rs` sweeps sr ∈ {0, −48k, NaN} and checks both coefs
+  stay finite in [0, 1) and `step_envelope` remains usable.
 - [ ] `resonance-common/src/registry.rs:80-93` — `is_installed` re-reads JSON
   per call. Provide batched API.
 

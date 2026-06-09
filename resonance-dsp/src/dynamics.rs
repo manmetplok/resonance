@@ -55,9 +55,12 @@ pub struct Ballistics {
 
 impl Ballistics {
     /// Build a `Ballistics` pair from attack / release times in
-    /// milliseconds at the given sample rate. Both times are clamped
-    /// to a sensible minimum to avoid division by zero.
+    /// milliseconds at the given sample rate. Both times and the sample
+    /// rate are clamped to sensible minimums to avoid division by zero;
+    /// a zero/negative/NaN sample rate degrades to instant ballistics
+    /// instead of producing non-finite coefficients.
     pub fn from_times(sample_rate: f32, attack_ms: f32, release_ms: f32) -> Self {
+        let sample_rate = sample_rate.max(1.0);
         let attack_samples = (attack_ms.max(0.1) * 0.001 * sample_rate).max(1.0);
         let release_samples = (release_ms.max(1.0) * 0.001 * sample_rate).max(1.0);
         Self {

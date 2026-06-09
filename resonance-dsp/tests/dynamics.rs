@@ -58,3 +58,21 @@ fn envelope_converges_to_target() {
     }
     assert!(cur > 5.9, "cur = {cur}");
 }
+
+#[test]
+fn ballistics_degenerate_sample_rate_stays_finite() {
+    // Zero/negative/NaN sample rates must not produce NaN or infinite
+    // coefficients; the envelope must remain usable.
+    for sr in [0.0_f32, -48_000.0, f32::NAN] {
+        let b = Ballistics::from_times(sr, 10.0, 100.0);
+        assert!(
+            b.attack_coef.is_finite() && b.release_coef.is_finite(),
+            "sr={sr}: coefs {:?}",
+            (b.attack_coef, b.release_coef)
+        );
+        assert!((0.0..1.0).contains(&b.attack_coef), "sr={sr}");
+        assert!((0.0..1.0).contains(&b.release_coef), "sr={sr}");
+        let env = b.step_envelope(0.0, -6.0);
+        assert!(env.is_finite() && env <= 0.0, "sr={sr}: env {env}");
+    }
+}
