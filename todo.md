@@ -327,8 +327,17 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `tests/spectrum_ring.rs`: equivalence against the per-sample `push`
   path under interleaved partial drains, capacity truncation, wrap
   straddling, and a cross-thread gapless-stream visibility check.
-- [ ] `resonance-metering/src/spectrum/fft_worker.rs:65-70` — fixed-size buffers
+- [x] `resonance-metering/src/spectrum/fft_worker.rs:65-70` — fixed-size buffers
   stored as `Vec<f32>`. Use `Box<[f32; FFT_SIZE]>` for unambiguous BCE.
+
+  _Resolved 2026-06-09_. `window`, `history`, `complex_scratch`, and
+  `mag_db` are now `Box<[T; FFT_SIZE]>` / `Box<[f32; FFT_SIZE / 2]>`,
+  built through a `boxed_array` helper (`vec![…].into_boxed_slice()
+  .try_into()`) so the 8192-element arrays never touch the stack. Hot
+  loops index through the compile-time length, making BCE unambiguous.
+  Call sites needing `&[T]` (`fft.process`, `octave_table.aggregate`)
+  take explicit `[..]` slices. No behaviour change — full metering suite
+  still passes.
 - [ ] `resonance-metering/src/spectrum/fft_worker.rs:81` — worker uses
   `park_timeout(16ms)`; push side never `unpark()`s. Either unpark on
   HOP_SIZE crossings or document the latency.

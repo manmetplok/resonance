@@ -30,16 +30,19 @@ pub struct FftWorker {
     done: Arc<AtomicBool>,
 
     fft: Arc<dyn Fft<f32> + Send + Sync>,
-    window: Vec<f32>,
+    // The four fixed-size buffers below are `Box<[T; N]>` rather than
+    // `Vec<T>` so the compile-time length makes bounds-check elimination
+    // in the hot loops unambiguous.
+    window: Box<[f32; FFT_SIZE]>,
     /// Rolling history — always holds the last FFT_SIZE samples after a
     /// run completes, so a 50 % overlap FFT is cheap.
-    history: Vec<f32>,
+    history: Box<[f32; FFT_SIZE]>,
     /// Number of new samples since the last FFT.
     samples_since_fft: usize,
 
     /// Scratch buffers for the FFT (reused across runs to avoid alloc).
-    complex_scratch: Vec<Complex<f32>>,
-    mag_db: Vec<f32>,
+    complex_scratch: Box<[Complex<f32>; FFT_SIZE]>,
+    mag_db: Box<[f32; FFT_SIZE / 2]>,
 
     /// Peak-hold-with-decay buffer at 1/6-octave resolution.
     held_db: [f32; NUM_OCTAVE_BINS],
@@ -61,11 +64,11 @@ impl FftWorker {
             snapshot,
             done,
             fft,
-            window: hann_window(FFT_SIZE),
-            history: vec![0.0; FFT_SIZE],
+            window: hann_window(),
+            history: boxed_array(0.0),
             samples_since_fft: 0,
-            complex_scratch: vec![Complex::new(0.0, 0.0); FFT_SIZE],
-            mag_db: vec![FLOOR_DB; FFT_SIZE / 2],
+            complex_scratch: boxed_array(Complex::new(0.0, 0.0)),
+            mag_db: boxed_array(FLOOR_DB),
             held_db: [FLOOR_DB; NUM_OCTAVE_BINS],
             octave_table: OctaveTable::new(),
         }
@@ -121,7 +124,7 @@ impl FftWorker {
             let w = self.history[i] * self.window[i];
             self.complex_scratch[i] = Complex::new(w, 0.0);
         }
-        self.fft.process(&mut self.complex_scratch);
+        self.fft.process(&mut self.complex_scratch[..]);
 
         // Single-sided magnitude in dB. Hann coherent gain correction:
         // window_sum ≈ FFT_SIZE / 2 → amplitude = 2*|X|/win_sum = 4*|X|/N.
@@ -140,7 +143,7 @@ impl FftWorker {
 
         let mut new_bands = [FLOOR_DB; NUM_OCTAVE_BINS];
         self.octave_table
-            .aggregate(&self.mag_db, self.sample_rate, &mut new_bands, FLOOR_DB);
+            .aggregate(&self.mag_db[..], self.sample_rate, &mut new_bands, FLOOR_DB);
         for (i, held) in self.held_db.iter_mut().enumerate().take(NUM_OCTAVE_BINS) {
             let decayed = (*held - decay_per_frame).max(FLOOR_DB);
             *held = decayed.max(new_bands[i]);
@@ -157,11 +160,20 @@ impl FftWorker {
     }
 }
 
-fn hann_window(len: usize) -> Vec<f32> {
-    (0..len)
-        .map(|i| {
-            let x = i as f32 / (len as f32 - 1.0);
-            0.5 - 0.5 * (std::f32::consts::TAU * x).cos()
-        })
-        .collect()
+fn hann_window() -> Box<[f32; FFT_SIZE]> {
+    let mut window = boxed_array(0.0_f32);
+    for (i, w) in window.iter_mut().enumerate() {
+        let x = i as f32 / (FFT_SIZE as f32 - 1.0);
+        *w = 0.5 - 0.5 * (std::f32::consts::TAU * x).cos();
+    }
+    window
+}
+
+/// Heap-allocate a `[T; N]` filled with `fill` without ever materialising
+/// the array on the stack (FFT_SIZE arrays are too large for that).
+fn boxed_array<T: Clone, const N: usize>(fill: T) -> Box<[T; N]> {
+    vec![fill; N]
+        .into_boxed_slice()
+        .try_into()
+        .unwrap_or_else(|_| unreachable!("length is N by construction"))
 }
