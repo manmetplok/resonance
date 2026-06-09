@@ -8,10 +8,9 @@
 //!
 //! Streaming semantics: audio is pushed in variable-sized chunks; the
 //! convolver accumulates enough samples to fill one overlap-save hop,
-//! runs an FFT iteration, and stashes outputs in a `VecDeque` so the host
-//! can pop any number of samples per block.
+//! runs an FFT iteration, and stashes outputs in a flat ring buffer so
+//! the host can pop any number of samples per block.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 use rustfft::num_complex::Complex;
@@ -31,6 +30,66 @@ pub const HOP_SIZE: usize = FFT_SIZE - FIR_LENGTH + 1;
 /// Group delay of a symmetric FIR of length `FIR_LENGTH`.
 pub const GROUP_DELAY: usize = (FIR_LENGTH - 1) / 2;
 
+/// Capacity of the streaming FIFOs. Must be a power of two (wrap is a
+/// bitmask) and large enough for the worst-case occupancy: the two
+/// FIFOs jointly hold exactly `HOP_SIZE` samples between host samples
+/// (`input_pending + output_pending = HOP_SIZE`), peaking momentarily
+/// at `HOP_SIZE + 1` in the output FIFO right after an FFT iteration.
+const RING_CAPACITY: usize = (2 * HOP_SIZE).next_power_of_two();
+
+/// Flat single-thread FIFO of f32 with two indices — the per-sample
+/// push/pop replacement for `VecDeque`, which routes every access
+/// through its own head/tail arithmetic plus a heap indirection. Fixed
+/// power-of-two capacity; never allocates after construction.
+struct SampleRing {
+    buf: Vec<f32>,
+    /// Index of the oldest sample.
+    read: usize,
+    /// Number of samples currently queued.
+    len: usize,
+}
+
+impl SampleRing {
+    fn new() -> Self {
+        Self {
+            buf: vec![0.0; RING_CAPACITY],
+            read: 0,
+            len: 0,
+        }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    fn push(&mut self, v: f32) {
+        debug_assert!(self.len < RING_CAPACITY, "SampleRing overflow");
+        let write = (self.read + self.len) & (RING_CAPACITY - 1);
+        self.buf[write] = v;
+        self.len += 1;
+    }
+
+    /// Pop the oldest sample, or 0.0 when empty (mirrors the previous
+    /// `pop_front().unwrap_or(0.0)` behaviour).
+    #[inline]
+    fn pop_or_zero(&mut self) -> f32 {
+        if self.len == 0 {
+            return 0.0;
+        }
+        let v = self.buf[self.read];
+        self.read = (self.read + 1) & (RING_CAPACITY - 1);
+        self.len -= 1;
+        v
+    }
+
+    fn clear(&mut self) {
+        self.read = 0;
+        self.len = 0;
+    }
+}
+
 /// A single-channel overlap-save convolver with a stored filter.
 pub struct OverlapSaveConvolver {
     fft_forward: Arc<dyn Fft<f32> + Send + Sync>,
@@ -47,9 +106,9 @@ pub struct OverlapSaveConvolver {
     input_history: Vec<f32>,
 
     /// Incoming samples accumulating toward the next FFT iteration.
-    input_pending: VecDeque<f32>,
+    input_pending: SampleRing,
     /// Convolved samples waiting to be popped by the host.
-    output_pending: VecDeque<f32>,
+    output_pending: SampleRing,
 }
 
 impl OverlapSaveConvolver {
@@ -70,8 +129,8 @@ impl OverlapSaveConvolver {
             filter_response: vec![Complex::new(0.0, 0.0); FFT_SIZE],
             scratch: vec![Complex::new(0.0, 0.0); FFT_SIZE],
             input_history: vec![0.0; FIR_LENGTH - 1],
-            input_pending: VecDeque::with_capacity(HOP_SIZE * 2),
-            output_pending: VecDeque::with_capacity(HOP_SIZE * 2),
+            input_pending: SampleRing::new(),
+            output_pending: SampleRing::new(),
         };
         c.set_impulse_response(&impulse);
         // Pre-fill the output ring with GROUP_DELAY zeros so the reported
@@ -80,7 +139,7 @@ impl OverlapSaveConvolver {
         // latency ends up at GROUP_DELAY + HOP_SIZE samples which the
         // plugin reports through `latency_samples`.
         for _ in 0..HOP_SIZE {
-            c.output_pending.push_back(0.0);
+            c.output_pending.push(0.0);
         }
         c
     }
@@ -109,7 +168,7 @@ impl OverlapSaveConvolver {
         self.input_pending.clear();
         self.output_pending.clear();
         for _ in 0..HOP_SIZE {
-            self.output_pending.push_back(0.0);
+            self.output_pending.push(0.0);
         }
     }
 
@@ -129,12 +188,12 @@ impl OverlapSaveConvolver {
     pub fn process_in_place(&mut self, buffer: &mut [f32]) {
         for sample in buffer.iter_mut() {
             // Stage 1: accept input.
-            self.input_pending.push_back(*sample);
+            self.input_pending.push(*sample);
             if self.input_pending.len() >= HOP_SIZE {
                 self.run_iteration();
             }
             // Stage 2: emit one output.
-            *sample = self.output_pending.pop_front().unwrap_or(0.0);
+            *sample = self.output_pending.pop_or_zero();
         }
     }
 
@@ -146,7 +205,7 @@ impl OverlapSaveConvolver {
             self.scratch[i] = Complex::new(self.input_history[i], 0.0);
         }
         for i in 0..HOP_SIZE {
-            let s = self.input_pending.pop_front().unwrap();
+            let s = self.input_pending.pop_or_zero();
             self.scratch[FIR_LENGTH - 1 + i] = Complex::new(s, 0.0);
         }
 
@@ -171,7 +230,7 @@ impl OverlapSaveConvolver {
         let norm = 1.0 / FFT_SIZE as f32;
         for i in 0..HOP_SIZE {
             let y = self.scratch[FIR_LENGTH - 1 + i].re * norm;
-            self.output_pending.push_back(y);
+            self.output_pending.push(y);
         }
     }
 }

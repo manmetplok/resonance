@@ -455,10 +455,24 @@ inline fix pass tackled. Each is documented enough to pick up later.
   filtering, name+type matching, empty registry).
 
 ### plugins/*
-- [ ] `resonance-mastering/src/stages/linear_phase_eq/convolver.rs:73-74,109-114,
+- [x] `resonance-mastering/src/stages/linear_phase_eq/convolver.rs:73-74,109-114,
   132-137` — uses `VecDeque::push_back`/`pop_front` per sample. Capacities are
   pre-reserved so no reallocation, but the deque indirection adds per-sample
   overhead vs. a flat ring with two indices. Worth profiling.
+
+  _Resolved 2026-06-09_ without profiling first — the flat ring is a
+  strict win and small enough to skip the benchmark. Both streaming
+  FIFOs (`input_pending` / `output_pending`) are now a private
+  `SampleRing`: fixed `Vec<f32>` of `RING_CAPACITY = (2 * HOP_SIZE)
+  .next_power_of_two()` (8192), `read` index + `len`, wrap by bitmask,
+  zero allocation after construction. `pop_or_zero()` mirrors the old
+  `pop_front().unwrap_or(0.0)`. FIFO order and accumulation order are
+  untouched, so output is bitwise identical — pinned by
+  `flat_ring_is_bitwise_identical_to_vecdeque_reference` in
+  `tests/stages_linear_phase_eq_convolver.rs`, which reimplements the
+  old `VecDeque` convolver verbatim and streams >3 hops of noise
+  through both in irregular chunk sizes, plus a `reset()`-equals-fresh
+  bitwise check.
 - [ ] `resonance-mastering/src/stages/multiband/mod.rs:101-117` — silently caps
   `frames` if the host exceeds the construction-time `max_buffer`. Reallocate
   scratch on `initialize` (off the audio thread) or assert.
