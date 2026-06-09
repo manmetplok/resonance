@@ -214,8 +214,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   Covered by `tests/compose_track_count.rs` (demo seed = 5, drum
   sub-tracks excluded = 4, 7 synth tracks = 7, each cross-checked
   against the original filter).
-- [ ] `main.rs:169-194` — `parse_startup_tab()` / `parse_demo_flag()` iterate
+- [x] `main.rs:169-194` — `parse_startup_tab()` / `parse_demo_flag()` iterate
   `std::env::args()` twice. Parse once.
+
+  _Resolved 2026-06-09_ — by intervening work, no code change needed.
+  `parse_demo_flag()` was deleted when `--demo` became a test-only
+  fixture (`demo::seed_demo_content` is now called from
+  `iced_test` integration tests, never from the runtime — see the
+  module doc in `resonance-app/src/demo.rs`). The surviving
+  `parse_startup_tab()` (moved to `lib.rs:180` when `main.rs` became a
+  thin shim over the library crate) makes exactly one pass over
+  `std::env::args()` and returns on the first `--tab` match. Verified
+  there are no other `env::args()` consumers in the crate.
 - [ ] `engine_events/mod.rs:21` — `impl Resonance` god-object. ARCHITECTURE.md
   marks it as a historical exception; convert to a free
   `pub fn handle_engine_event(r, ev)` in `engine_events/dispatch.rs`.
