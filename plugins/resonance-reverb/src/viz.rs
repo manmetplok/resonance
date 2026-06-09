@@ -51,14 +51,15 @@ impl TailHistory {
         let pos = self.write_pos.load(Ordering::Relaxed);
         self.samples[pos].store(v.to_bits(), Ordering::Relaxed);
         let next = (pos + 1) % TAIL_HISTORY_LEN;
-        self.write_pos.store(next, Ordering::Relaxed);
+        // Release so the consumer's Acquire on write_pos observes the sample store.
+        self.write_pos.store(next, Ordering::Release);
     }
 
     /// Snapshot the ring in chronological order (oldest first). Two
     /// adjacent samples can straddle a writer push; for a viz history
     /// this is acceptable.
     pub fn iter_chrono(&self) -> impl Iterator<Item = f32> + '_ {
-        let start = self.write_pos.load(Ordering::Relaxed);
+        let start = self.write_pos.load(Ordering::Acquire);
         (0..TAIL_HISTORY_LEN).map(move |i| {
             f32::from_bits(self.samples[(start + i) % TAIL_HISTORY_LEN].load(Ordering::Relaxed))
         })

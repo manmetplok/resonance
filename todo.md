@@ -1002,8 +1002,15 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `tests/render.rs` pins audible output with an osc enabled, exact
   silence + voices draining to idle with both disabled, and audio
   resuming on mid-voice re-enable.
-- [ ] `resonance-reverb/src/viz.rs:51-55` — `TailHistory::push` stores
+- [x] `resonance-reverb/src/viz.rs:51-55` — `TailHistory::push` stores
   `write_pos` with `Relaxed`; other plugins use `Release`/`Acquire`. Inconsistent.
+
+  _Resolved 2026-06-10_. `TailHistory` now matches the mastering
+  `HistoryRing` convention: `push` publishes `write_pos` with a
+  `Release` store (after the `Relaxed` sample store) and `iter_chrono`
+  loads it with `Acquire`, so a reader that observes the new position
+  also observes the sample it indexes. New `tests/viz.rs` pins the
+  chronological round-trip including wraparound.
 - [ ] `resonance-compressor/src/viz.rs:50-54` — same Relaxed-store pattern.
 - [ ] `resonance-delay/src/dsp.rs:103-105` — LFO uses `(self.lfo_phase *
   TAU).sin()` per sample. Acceptable; polynomial sine if ever profiled hot.
