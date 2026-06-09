@@ -8,9 +8,12 @@ use super::coefficients::{FIR, PHASES, TAPS};
 
 /// Streaming oversampled peak detector for one audio channel.
 pub struct PolyphasePeakDetector {
-    /// History of the last `TAPS` input samples, most recent at
-    /// `write_pos - 1` (mod `TAPS`).
-    history: [f32; TAPS],
+    /// Mirrored history of the last `TAPS` input samples: every sample is
+    /// written at `write_pos` *and* `write_pos + TAPS`, so for any
+    /// `p = write_pos` in `0..TAPS` the slice `history[p + 1..=p + TAPS]`
+    /// holds the last `TAPS` samples in arrival order (most recent last).
+    /// This keeps the convolution loop free of per-tap `%` index math.
+    history: [f32; 2 * TAPS],
     write_pos: usize,
     /// Running max-abs across the oversampled stream since the last
     /// [`Self::reset_peak`] call.
@@ -20,7 +23,7 @@ pub struct PolyphasePeakDetector {
 impl PolyphasePeakDetector {
     pub const fn new() -> Self {
         Self {
-            history: [0.0; TAPS],
+            history: [0.0; 2 * TAPS],
             write_pos: 0,
             peak: 0.0,
         }
@@ -28,7 +31,7 @@ impl PolyphasePeakDetector {
 
     /// Clear the filter's history and reset the held peak.
     pub fn reset(&mut self) {
-        self.history = [0.0; TAPS];
+        self.history = [0.0; 2 * TAPS];
         self.write_pos = 0;
         self.peak = 0.0;
     }
@@ -47,8 +50,12 @@ impl PolyphasePeakDetector {
     /// internally and updates the held peak to the maximum |x| seen.
     #[inline]
     pub fn push_sample(&mut self, sample: f32) {
-        self.history[self.write_pos] = sample;
-        self.write_pos = (self.write_pos + 1) % TAPS;
+        let p = self.write_pos;
+        // Mirror the write so `history[p + 1..=p + TAPS]` is always a
+        // contiguous view of the last TAPS samples, oldest first.
+        self.history[p] = sample;
+        self.history[p + TAPS] = sample;
+        self.write_pos = if p + 1 == TAPS { 0 } else { p + 1 };
 
         // Also account for the input sample itself — at discrete-time
         // indices the original sample IS an oversampled output (at phase 0
@@ -59,13 +66,15 @@ impl PolyphasePeakDetector {
             self.peak = abs_in;
         }
 
-        // Convolve against each polyphase sub-filter. `j = 0` multiplies
-        // the most recent sample, i.e. the one we just wrote.
+        // Convolve against each polyphase sub-filter. `taps[0]` multiplies
+        // the most recent sample (the one we just wrote), so pair the taps
+        // with the linear window walked newest-to-oldest — no modulo in
+        // the inner loop.
+        let window = &self.history[p + 1..p + 1 + TAPS];
         for taps in FIR.iter().take(PHASES) {
             let mut acc = 0.0_f32;
-            for (j, &tap) in taps.iter().enumerate().take(TAPS) {
-                let idx = (self.write_pos + TAPS - 1 - j) % TAPS;
-                acc += tap * self.history[idx];
+            for (&tap, &x) in taps.iter().zip(window.iter().rev()) {
+                acc += tap * x;
             }
             let abs = acc.abs();
             if abs > self.peak {

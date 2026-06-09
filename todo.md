@@ -352,8 +352,20 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `park_timeout` site in `FftWorker::run` and on
   `SpectrumAnalyzer::push_stereo`; `Drop` already unparks for prompt
   shutdown.
-- [ ] `resonance-metering/src/true_peak/polyphase.rs:64-74` — 48 modulos per
+- [x] `resonance-metering/src/true_peak/polyphase.rs:64-74` — 48 modulos per
   input sample. Use linear history.
+
+  _Resolved 2026-06-09_. History is now a mirrored double-length buffer
+  (`[f32; 2 * TAPS]`, each sample written at `p` and `p + TAPS`), so
+  `history[p + 1..=p + TAPS]` is always the last TAPS samples in arrival
+  order and the convolution pairs `taps.iter()` with the reversed linear
+  window — zero `%` in the inner loop (the per-sample write-pos wrap is
+  a branch). Accumulation order is unchanged, so output is bitwise
+  identical; new `tests/true_peak_polyphase.rs` pins that with a verbatim
+  reimplementation of the old modulo-indexed loop as reference (noise +
+  fs/3 inter-sample-peak tone, per-sample bitwise compare), plus
+  block-vs-sample and reset-equals-fresh checks. ITU Annex 2 vectors in
+  `tests/true_peak.rs` still pass.
 - [ ] `resonance-metering/src/lufs/integrated.rs:55-60` — `debug_assert!(false,
   …)` on 60-min cap. Replace with `log::warn!`; long sessions are not bugs.
 - [ ] `resonance-metering/src/crest.rs:66` — full linear scan of 100 ms ring on
