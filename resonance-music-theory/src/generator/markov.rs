@@ -141,7 +141,12 @@ pub fn generate(
             // pos -> pos+1 -> ... -> gap_end is (gap_end - pos) transitions.
             let dist_to_succ = gap_end - pos;
 
-            let mut candidates = get_candidates(table, &history, effective_order);
+            // Condition on a sliding window over the tail of `history`
+            // instead of trimming the front after every push —
+            // `Vec::remove(0)` shifts all remaining elements, making the
+            // fill loop O(n²) in the gap length.
+            let window_start = history.len().saturating_sub(effective_order);
+            let mut candidates = get_candidates(table, &history[window_start..], effective_order);
             if candidates.is_empty() {
                 candidates = all_degrees.iter().map(|&d| (d, 1.0)).collect();
             }
@@ -188,11 +193,6 @@ pub fn generate(
                 locked: false,
             });
             history.push(sampled);
-
-            // Trim history to the effective conditioning length.
-            while history.len() > effective_order {
-                history.remove(0);
-            }
         }
     }
 

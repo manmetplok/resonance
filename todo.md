@@ -256,8 +256,16 @@ inline fix pass tackled. Each is documented enough to pick up later.
   normally since nothing is pruned eagerly anymore.
 
 ### resonance-music-theory
-- [ ] `generator/markov.rs:186` — `history.remove(0)` inside fill loop is O(n²).
+- [x] `generator/markov.rs:186` — `history.remove(0)` inside fill loop is O(n²).
   Use `VecDeque` or sliding-window index.
+
+  _Resolved 2026-06-09_. Went with the sliding-window index: the trim
+  loop is gone and `history` is now append-only; each iteration passes
+  `&history[history.len() - effective_order..]` (saturating) to
+  `get_candidates`. Behaviour-identical because `get_candidates` only
+  ever reads the trailing `try_order ≤ effective_order` elements, so
+  the front of the history was dead weight — confirmed by the existing
+  determinism tests in `tests/generator.rs` passing unchanged.
 - [ ] `generator/markov.rs:244` — order-2 back-off iterates `&table.transitions`
   per slot. Cache per `suffix`.
 - [ ] `derive/motif_engine/build.rs:44-46` — pattern-index `ceil` should be
