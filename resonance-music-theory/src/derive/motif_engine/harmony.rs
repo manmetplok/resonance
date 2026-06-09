@@ -68,6 +68,13 @@ pub(super) fn nearest_in_set(target: u8, set: &[u8]) -> u8 {
 
 /// Post-processing: resolve large leaps (>5 semitones) with stepwise
 /// fill notes in the opposite direction.
+///
+/// Complexity note: the `Vec::insert` calls below are O(n) each,
+/// making the pass O(n²) in the worst case. That's deliberate — it
+/// runs per phrase, and a phrase is ~16 notes (a handful of chords ×
+/// 2-6 motif notes), so a linear rebuild into a second Vec would cost
+/// more in code than it saves in time. Revisit only if phrases ever
+/// grow by orders of magnitude.
 pub(super) fn apply_gap_fill(notes: &mut Vec<GeneratedNote>, scale: &Scale, register: (u8, u8)) {
     let mut i = 0;
     while i + 1 < notes.len() {

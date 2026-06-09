@@ -303,8 +303,12 @@ inline fix pass tackled. Each is documented enough to pick up later.
   `motif_consequent_phrase_resolves_to_chord_root` in
   `tests/derive_basics.rs` pins the resolution pitch class across 32
   seeds — verified it fails under the old code.
-- [ ] `derive/motif_engine/harmony.rs:71` — `apply_gap_fill` uses `Vec::insert`
+- [x] `derive/motif_engine/harmony.rs:71` — `apply_gap_fill` uses `Vec::insert`
   in a loop. O(n²) but ~16 notes per phrase; comment the assumption.
+
+  _Resolved 2026-06-09_. Comment-only, as agreed: the doc comment on
+  `apply_gap_fill` now states the O(n²) worst case, why it's fine
+  (per-phrase input, ~16 notes), and when to revisit. No code change.
 - [ ] `derive/motif_engine/build.rs:130-131` — `snap_to_chord_interval` does
   `i8` subtraction that could overflow if `chord_intervals` ever returned a
   value outside 0..12. Use `i16` defensively.
