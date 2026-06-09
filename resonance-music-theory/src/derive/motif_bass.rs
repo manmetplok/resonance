@@ -3,7 +3,6 @@
 // ---------------------------------------------------------------------------
 
 use crate::chord::Chord;
-use crate::pitch::PitchClass;
 use crate::rng::XorShift;
 use crate::scale::Scale;
 use crate::voicing::nearest_midi_above;
@@ -281,16 +280,14 @@ fn render_bass_motif_chord(
 /// Every MIDI note inside `register` whose pitch class appears in
 /// `chord`, sorted ascending and deduplicated.
 pub(super) fn chord_tones_in_register(chord: Chord, register: (u8, u8)) -> Vec<u8> {
-    let pcs: Vec<PitchClass> = chord.pitch_classes().collect();
-    let (lo, hi) = register;
-    let mut notes = Vec::new();
-    for midi in lo..=hi {
-        let pc = PitchClass::from_semitone(midi % 12);
-        if pcs.contains(&pc) {
-            notes.push(midi);
-        }
+    // Pitch-class bitmap: one O(|pcs|) pass to build, then the register
+    // scan is O(1) per note instead of a linear `contains` probe.
+    let mut is_chord_tone = [false; 12];
+    for pc in chord.pitch_classes() {
+        is_chord_tone[pc.to_semitone() as usize] = true;
     }
-    notes.sort_unstable();
-    notes.dedup();
-    notes
+    let (lo, hi) = register;
+    // `lo..=hi` is ascending with unique values, so the result is
+    // already sorted and deduplicated.
+    (lo..=hi).filter(|midi| is_chord_tone[(midi % 12) as usize]).collect()
 }

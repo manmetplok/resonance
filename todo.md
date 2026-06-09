@@ -780,8 +780,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   collect explicitly; map-then-collect sites lost their intermediate
   allocation. Equivalence with the old interval-transposition output is
   swept over all roots × qualities in `tests/chord.rs`.
-- [ ] `derive/motif_bass.rs:283-296` — `chord_tones_in_register` is
+- [x] `derive/motif_bass.rs:283-296` — `chord_tones_in_register` is
   O(register-span × |pcs|). Use a `[bool; 12]` PC bitmap.
+
+  _Resolved 2026-06-09_. Builds a `[bool; 12]` pitch-class bitmap in one
+  pass over the chord tones, then filters `lo..=hi` with O(1) lookups;
+  the old `sort_unstable` + `dedup` tail is gone too, since an
+  ascending range is already sorted and unique. The function is
+  `pub(super)`, so no direct equivalence test is possible from
+  `tests/` (no-inline-tests convention); equivalence is by construction
+  (bitmap membership ≡ `pcs.contains`) and the existing
+  `tests/bass_motif.rs` determinism/chord-tone suite pins the
+  observable output.
 - [ ] `rng.rs:36-41` — `next_range` has modulo bias; undetectable in practice
   for n ≤ 256 but worth rejection-sampling if "uniform" is ever claimed.
 - [ ] `generator/markov.rs:11-12` — crate uses both `rand::SmallRng` and the
