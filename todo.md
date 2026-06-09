@@ -916,8 +916,19 @@ inline fix pass tackled. Each is documented enough to pick up later.
   the buffer). New `tiny_input_resamples_to_at_least_one_sample` test
   in `tests/wav.rs` covers mono, stereo, empty, and the lone-sample
   edge.
-- [ ] `scan.rs:2` — `scan_directory` swallows `read_dir` errors. Return
+- [x] `scan.rs:2` — `scan_directory` swallows `read_dir` errors. Return
   `io::Result` or log via `tracing`.
+
+  _Resolved 2026-06-10_. Logged at the site rather than returning
+  `io::Result`: all ~8 callers (amp/ir model browsers, rescan paths,
+  the tone3000 worker) treat the result as "list of files, empty if
+  none" and would uniformly log-and-continue, so changing the
+  signature would only spread boilerplate. Errors now go to
+  `eprintln!` — the workspace's established convention (there is no
+  `tracing` dep anywhere in the tree) — except `NotFound`, which stays
+  silent because a models directory that hasn't been created yet is a
+  normal pre-first-download state. Per-entry `e.ok()` skips are still
+  silent (transient races, same as before).
 - [ ] `registry.rs:117` — hand-rolled `today_iso` date math. Pull `chrono` from
   another transitive dep instead.
 
