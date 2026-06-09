@@ -758,8 +758,18 @@ inline fix pass tackled. Each is documented enough to pick up later.
   change output: they box up the neck when the 4-fret nut window can't
   sound every string, which the rewritten lowest-position test asserts
   pays for itself in sounding strings.
-- [ ] `derive/vocal/lyrics.rs:178-184` — locked-line rhyme recovery uses
+- [x] `derive/vocal/lyrics.rs:178-184` — locked-line rhyme recovery uses
   exact-text match; editing the locked line silently falls back to slot pattern.
+
+  _Resolved 2026-06-09_. Corpus lookup is now normalized (lowercase,
+  collapsed whitespace, `·` syllable separators stripped) so re-casing /
+  re-spacing / separator-dropping edits keep the locked line anchored;
+  if the whole line no longer matches, the bucket is recovered from the
+  line's final word (punctuation-trimmed), since the end word alone
+  carries the rhyme. Only a fully custom lyric whose final word ends no
+  corpus line falls back to the slot's default key — that residual
+  limitation is documented at the code site. Both recovery paths are
+  covered in `tests/vocal.rs` across multiple seeds.
 - [ ] `chord.rs:113-119` — `Chord::pitch_classes` allocates per call. Return
   `impl Iterator` or `SmallVec`.
 - [ ] `derive/motif_bass.rs:283-296` — `chord_tones_in_register` is

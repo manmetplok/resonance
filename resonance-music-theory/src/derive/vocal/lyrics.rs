@@ -130,6 +130,34 @@ fn rhyme_pattern(scheme: VocalRhymeScheme) -> &'static [u8] {
     }
 }
 
+/// Normalize lyric text for corpus lookup: syllable separators (`·`)
+/// removed (they join syllables *within* a word), lowercased, and
+/// whitespace collapsed — so a locked line still matches its corpus
+/// origin after the kinds of edits a lyric editor makes (re-casing,
+/// re-spacing, separator loss).
+fn normalize_lyric(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for word in s.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        for c in word.chars().filter(|&c| c != '\u{00B7}') {
+            out.extend(c.to_lowercase());
+        }
+    }
+    out
+}
+
+/// Final word of a lyric line (normalized form), stripped of
+/// punctuation — the part of the line that carries the end rhyme.
+fn final_word(normalized: &str) -> Option<&str> {
+    normalized
+        .split_whitespace()
+        .next_back()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|w| !w.is_empty())
+}
+
 /// Generate (or regenerate) a `params.draft` of lyric lines satisfying
 /// the requested mood, rhyme scheme, line count, and syllable range.
 ///
@@ -173,11 +201,26 @@ pub fn generate_lyrics(params: &VocalParams, seed: u64) -> Vec<LyricLine> {
         for (i, slot) in pattern.iter().enumerate().take(lines) {
             if let Some(line) = params.draft.get(i) {
                 if line.locked {
-                    // Recover the bucket from the locked line's text by
-                    // re-matching it in the corpus.
+                    // Recover the bucket by re-matching the locked line
+                    // in the corpus. Matching is normalized (case,
+                    // whitespace, and `·`-separator insensitive) so a
+                    // lightly edited locked line still anchors its
+                    // rhyme group; if the whole line no longer matches,
+                    // fall back to its final word — the end word alone
+                    // carries the rhyme. Only a locked line whose final
+                    // word ends no corpus line at all (a fully custom
+                    // lyric) keeps the slot's default pattern key.
+                    let normalized = normalize_lyric(&line.text);
                     let bucket = CORPUS
                         .iter()
-                        .find(|c| c.text == line.text)
+                        .find(|c| normalize_lyric(c.text) == normalized)
+                        .or_else(|| {
+                            final_word(&normalized).and_then(|w| {
+                                CORPUS.iter().find(|c| {
+                                    final_word(&normalize_lyric(c.text)) == Some(w)
+                                })
+                            })
+                        })
                         .map(|c| c.rhyme)
                         .unwrap_or(*slot);
                     pattern_keys.insert(*slot, bucket);

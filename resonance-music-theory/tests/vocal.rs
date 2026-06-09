@@ -697,3 +697,71 @@ fn vocal_phrase_spans_phrase_covers_its_own_notes_only() {
     assert_eq!(phrases[0].1, p0_end);
     assert_eq!(phrases[1].0, p1_start);
 }
+
+/// Final word of a lyric line, lowercased with syllable separators and
+/// punctuation stripped — mirrors what carries the end rhyme.
+fn last_word(text: &str) -> String {
+    text.replace('\u{00B7}', "")
+        .split_whitespace()
+        .next_back()
+        .unwrap_or("")
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase()
+}
+
+#[test]
+fn locked_line_rhyme_recovery_survives_case_and_separator_edits() {
+    // "an emp·ty house an emp·ty day" (Yearning, -ay bucket), edited the
+    // way a lyric editor plausibly would: recased, separators dropped,
+    // whitespace doubled. The slot-A anchor must still recover the -ay
+    // bucket, so the second A line (Aabb index 1) rhymes on -ay.
+    let locked = LyricLine {
+        n: 1,
+        rhyme: 'A',
+        syllables: 9,
+        text: "An  EMPTY house an empty day".into(),
+        locked: true,
+    };
+    let mut p = VocalParams::default();
+    p.rhyme = VocalRhymeScheme::Aabb;
+    p.lines = 4;
+    p.draft = vec![locked];
+    for seed in [0xFA11_FA11u64, 0xC0FFEE, 0xBEEF, 1, 2, 3] {
+        let draft = generate_lyrics(&p, seed);
+        let companion = last_word(&draft[1].text);
+        assert!(
+            ["say", "weigh", "day"].contains(&companion.as_str()),
+            "seed {seed:#x}: companion A line should rhyme on -ay, \
+             got {:?} (ends {companion:?})",
+            draft[1].text
+        );
+    }
+}
+
+#[test]
+fn locked_line_rhyme_recovery_falls_back_to_the_final_word() {
+    // A fully rewritten locked line that no longer matches any corpus
+    // text but keeps a corpus end-rhyme word ("day"). The rhyme bucket
+    // must be recovered from that final word, not silently dropped.
+    let locked = LyricLine {
+        n: 1,
+        rhyme: 'A',
+        syllables: 8,
+        text: "my own words for one more day".into(),
+        locked: true,
+    };
+    let mut p = VocalParams::default();
+    p.rhyme = VocalRhymeScheme::Aabb;
+    p.lines = 4;
+    p.draft = vec![locked];
+    for seed in [0xFA11_FA11u64, 0xC0FFEE, 0xBEEF, 1, 2, 3] {
+        let draft = generate_lyrics(&p, seed);
+        let companion = last_word(&draft[1].text);
+        assert!(
+            ["say", "weigh", "day"].contains(&companion.as_str()),
+            "seed {seed:#x}: companion A line should rhyme on -ay, \
+             got {:?} (ends {companion:?})",
+            draft[1].text
+        );
+    }
+}
