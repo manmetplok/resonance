@@ -26,7 +26,7 @@ pub fn handle(r: &mut Resonance, m: ViewportMessage) -> Task<Message> {
 pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
     let mut tasks = Vec::new();
     while let Some(event) = r.engine.try_recv() {
-        let task = r.handle_engine_event(event);
+        let task = crate::engine_events::handle_engine_event(r, event);
         tasks.push(task);
     }
     update_vu_meters(r);

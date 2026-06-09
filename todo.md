@@ -226,9 +226,20 @@ inline fix pass tackled. Each is documented enough to pick up later.
   thin shim over the library crate) makes exactly one pass over
   `std::env::args()` and returns on the first `--tab` match. Verified
   there are no other `env::args()` consumers in the crate.
-- [ ] `engine_events/mod.rs:21` — `impl Resonance` god-object. ARCHITECTURE.md
+- [x] `engine_events/mod.rs:21` — `impl Resonance` god-object. ARCHITECTURE.md
   marks it as a historical exception; convert to a free
   `pub fn handle_engine_event(r, ev)` in `engine_events/dispatch.rs`.
+
+  _Resolved 2026-06-09_. The `match` moved verbatim into a free
+  `pub(crate) fn handle_engine_event(r: &mut Resonance, event:
+  AudioEvent) -> Task<Message>` in `engine_events/dispatch.rs`
+  (`self` → `r`, handler calls unchanged — the per-domain modules were
+  already free fns). `engine_events/mod.rs` is now a 17-line
+  declarations + re-export surface, matching the update-handler
+  pattern. Single caller updated (`update/viewport.rs::handle_tick`).
+  ARCHITECTURE.md's "historical exceptions" parenthetical updated to
+  past tense since both named exceptions are now split. No behaviour
+  change — full `cargo check` / clippy / test pass.
 - [ ] `recent.rs:54-57` — re-runs `e.path.exists()` for every entry on load.
   Slow on NFS/removable media. Defer to user click on "Open".
 

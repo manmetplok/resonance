@@ -92,7 +92,7 @@ resonance-app/src/update/
 
 The Message enum is partitioned by domain (`TransportMessage`, `TrackMessage`, ...), and each top-level variant carries the right sub-message into the right handler. The `Resonance` impl `update()` method is just a dispatch.
 
-This pattern scales. New domains add a file; new messages within a domain add a match arm. **Keep new handlers in this shape** — do not add giant `impl Resonance` blocks with dozens of methods. (`engine_events.rs` and `project_io.rs` are the historical exceptions; they should be split to match.)
+This pattern scales. New domains add a file; new messages within a domain add a match arm. **Keep new handlers in this shape** — do not add giant `impl Resonance` blocks with dozens of methods. (`engine_events.rs` and `project_io.rs` were the historical exceptions; both have since been split to match — engine events route through the free `handle_engine_event` in `engine_events/dispatch.rs`, project I/O through `update/project_io/`.)
 
 ## Audio Engine Public API
 
