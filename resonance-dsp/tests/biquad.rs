@@ -95,3 +95,18 @@ fn stable_at_extremes() {
     b.set_high_pass(SR, 5.0, 0.1);
     assert!(b.b0.is_finite() && b.a1.is_finite() && b.a2.is_finite());
 }
+
+#[test]
+fn degenerate_sample_rate_does_not_panic() {
+    // sr = 0 used to invert clamp_params' range (min 10 > max 0) and
+    // panic inside f32::clamp. Degenerate rates must not panic in any
+    // of the coefficient setters.
+    let mut b = Biquad::identity();
+    for sr in [0.0_f32, -48_000.0, f32::NAN] {
+        b.set_bell(sr, 1_000.0, 1.0, 6.0);
+        b.set_low_shelf(sr, 200.0, 0.707, 3.0);
+        b.set_high_shelf(sr, 8_000.0, 0.707, -3.0);
+        b.set_high_pass(sr, 100.0, 0.707);
+        b.set_low_pass(sr, 10_000.0, 0.707);
+    }
+}

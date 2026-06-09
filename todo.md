@@ -417,8 +417,16 @@ inline fix pass tackled. Each is documented enough to pick up later.
   [0, 1) and zeroes non-finite phases. Tests in `tests/lfo.rs` cover
   all bad-rate combinations, recovery via a later valid `set_rate`,
   and phase sanitization.
-- [ ] `resonance-dsp/src/biquad.rs:189-193` — `clamp_params` can panic if
+- [x] `resonance-dsp/src/biquad.rs:189-193` — `clamp_params` can panic if
   `sr == 0`. `let nyquist = (sr * 0.5).max(20.0);`.
+
+  _Resolved 2026-06-09_ exactly as suggested: `(sr * 0.5).max(20.0)`
+  keeps the `freq.clamp(10.0, nyquist * 0.995)` range valid (and the
+  `.max` also absorbs NaN/negative sample rates, since `f32::max`
+  returns the non-NaN operand). Coefficients for a degenerate rate are
+  still meaningless — callers pass real rates — but the setters no
+  longer panic. New `degenerate_sample_rate_does_not_panic` test in
+  `tests/biquad.rs` sweeps all five setters over sr ∈ {0, −48k, NaN}.
 - [ ] `resonance-dsp/src/dynamics.rs:60-67` — `Ballistics::from_times` divides
   by potential 0 sample rate. Add `sample_rate.max(1.0)`.
 - [ ] `resonance-common/src/registry.rs:80-93` — `is_installed` re-reads JSON

@@ -187,7 +187,10 @@ impl Biquad {
 /// Clamp frequency away from DC and Nyquist, and Q away from zero, to keep
 /// the bilinear transform well-conditioned.
 fn clamp_params(sr: f32, freq: f32, q: f32) -> (f32, f32) {
-    let nyquist = sr * 0.5;
+    // Floor the Nyquist estimate so a zero/negative/NaN sample rate
+    // can't produce an inverted clamp range — `clamp(10.0, x)` panics
+    // when `x < 10.0` (and on NaN bounds).
+    let nyquist = (sr * 0.5).max(20.0);
     let f = freq.clamp(10.0, nyquist * 0.995);
     let q = q.max(0.05);
     (f, q)
