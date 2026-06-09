@@ -69,6 +69,12 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                         if let Some(clap_id) = e.param_id() {
                             let value = e.value();
                             if let Some(slot) = self.shared.find_slot(clap_id.get()) {
+                                // Applied instantly, block-quantized — the
+                                // bridge does not smooth automation. Plugins
+                                // de-zipper by feeding their `Smoother`s from
+                                // param values at the start of `process()`;
+                                // see the smoothing contract on
+                                // `Param::set_plain`.
                                 self.plugin.param(slot).set_plain(value);
                                 self.shared.set_value(slot, value);
                             }

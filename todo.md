@@ -592,9 +592,21 @@ inline fix pass tackled. Each is documented enough to pick up later.
   instead of dropping ports. Largest real layout today is
   resonance-drums at 7 ports, so no behaviour change for shipping
   plugins.
-- [ ] `resonance-plugin/src/clap_bridge/process.rs:71-74` — automation
+- [x] `resonance-plugin/src/clap_bridge/process.rs:71-74` — automation
   param-change events bypass any smoother. Document that plugins must drive
   `smoother.set_target` from `set_plain`.
+
+  _Resolved 2026-06-09_ (documentation). The contract is now spelled out
+  on `Param::set_plain` and at the `ParamValue` event site in the
+  bridge: the bridge applies automation instantly, block-quantized, and
+  never smooths; plugins de-zipper by feeding `Smoother::set_target`
+  from param values at the start of every `process()` (the
+  `ReverbSmoothers::update_targets` block-rate pattern — delay, eq, ir,
+  amp and reverb all follow it) or implicitly via their own
+  envelopes/ramps (compressor's attack/release, mastering's gain
+  ramps). Survey found one contract violation, filed as follow-up
+  below under Low → plugins/*: resonance-wavetable multiplies
+  `master_volume` per-sample without smoothing.
 - [ ] `resonance-plugin/src/clap_bridge/state.rs:80-86` — state load races
   in-flight process-block param events. Verify against CLAP threading rules.
 - [ ] `resonance-plugin/src/clap_bridge/ports.rs:67-72` — port-name copy
@@ -676,6 +688,12 @@ inline fix pass tackled. Each is documented enough to pick up later.
   TAU).sin()` per sample. Acceptable; polynomial sine if ever profiled hot.
 - [ ] `resonance-delay/src/lib.rs:170-185` — `fb.powf(n_taps)` per block for 8
   taps; replace with `fb * fb` accumulation.
+- [ ] `resonance-wavetable/src/dsp/render.rs:518-519` — `master_vol` is
+  read once per block (`render.rs:129`) and multiplied per-sample with no
+  smoother, violating the `Param::set_plain` smoothing contract; host
+  automation of master volume will zipper. Feed it through a `Smoother`
+  like the other FX plugins. (Filed 2026-06-09 while documenting the
+  bridge smoothing contract.)
 
 ### resonance-plugin / wayland-plugin-gui / resonance-svs
 - [ ] `resonance-plugin/src/param.rs:347-378` — `TempParamOwned` only used by

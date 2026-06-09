@@ -27,6 +27,21 @@ pub trait Param: Send + Sync {
     /// Get the current value as a plain (non-normalized) f64.
     fn get_plain(&self) -> f64;
     /// Set the value from a plain (non-normalized) f64.
+    ///
+    /// # Smoothing contract
+    ///
+    /// The CLAP bridge applies host automation (`CLAP_EVENT_PARAM_VALUE`)
+    /// by calling this method directly at the top of each process block —
+    /// the new value lands instantly and the bridge performs **no
+    /// smoothing of its own**. De-zippering is the plugin's job: plugins
+    /// with continuous parameters must feed a [`Smoother`] from the
+    /// current param value at the start of every `process()` call
+    /// (`smoother.set_target(param.value())` — see
+    /// `ReverbSmoothers::update_targets` in resonance-reverb for the
+    /// canonical block-rate pattern), or smooth implicitly through their
+    /// own envelopes/ramps (e.g. a compressor's attack/release stage).
+    /// A plugin that multiplies a raw param value straight into the
+    /// signal will zipper/click under host automation.
     fn set_plain(&self, v: f64);
     /// Default value as plain f64.
     fn default_plain(&self) -> f64;
