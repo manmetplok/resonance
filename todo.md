@@ -963,8 +963,16 @@ inline fix pass tackled. Each is documented enough to pick up later.
   the filter is a near-identity passthrough (`coeff ≈ 0.043`). The doc
   comment now spells this out, and new `tests/one_pole.rs` pins the
   clamp equivalence and the stable near-identity step response.
-- [ ] `rng.rs:13-18` — xorshift32 with seed=0 relies on `| 1` recovery.
+- [x] `rng.rs:13-18` — xorshift32 with seed=0 relies on `| 1` recovery.
   Assert non-zero in debug.
+
+  _Resolved 2026-06-10_. `next_u32` now `debug_assert!`s `state != 0` —
+  that is the spot where a zero state is actually degenerate (it is a
+  fixed point of xorshift, so every later output would be 0), and it
+  guards any future code path that writes `state` directly, not just
+  the constructor. `new` keeps the `| 1` rescue and now documents why
+  (seed 0 and equal-half seeds both XOR to 0). New `tests/rng.rs`
+  covers the zero seed, the equal-half seed, and determinism.
 
 ### plugins/*
 - [ ] `resonance-wavetable/src/viz.rs:218-229` — `ScopeCollector::publish`
