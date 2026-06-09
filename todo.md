@@ -309,9 +309,14 @@ inline fix pass tackled. Each is documented enough to pick up later.
   _Resolved 2026-06-09_. Comment-only, as agreed: the doc comment on
   `apply_gap_fill` now states the O(n²) worst case, why it's fine
   (per-phrase input, ~16 notes), and when to revisit. No code change.
-- [ ] `derive/motif_engine/build.rs:130-131` — `snap_to_chord_interval` does
+- [x] `derive/motif_engine/build.rs:130-131` — `snap_to_chord_interval` does
   `i8` subtraction that could overflow if `chord_intervals` ever returned a
   value outside 0..12. Use `i16` defensively.
+
+  _Resolved 2026-06-10_. Distance math widened to `i16` (the ±12 shifts
+  could overflow `i8`, and `.abs()` panics on `i8::MIN`); result cast
+  back to `i8` after the octave re-add. Behaviour unchanged for the
+  in-range 0..12 inputs `chord_intervals` produces today.
 
 ### resonance-metering / resonance-dsp / resonance-common
 - [x] `resonance-metering/src/spectrum/ring.rs:78-88` — `push_slice` issues N

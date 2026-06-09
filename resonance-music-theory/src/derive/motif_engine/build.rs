@@ -129,18 +129,22 @@ fn snap_to_chord_interval(interval: i8, chord_intervals: &[i8]) -> i8 {
     if chord_intervals.is_empty() {
         return interval;
     }
-    let norm = interval.rem_euclid(12);
-    let octave = interval - norm;
-    let mut best = chord_intervals[0];
-    let mut best_dist = 12i8;
+    // Distance math in i16: chord_intervals should be 0..12, but an
+    // out-of-range value would overflow i8 in the ±12 shifts (and
+    // `.abs()` panics on i8::MIN).
+    let norm = i16::from(interval.rem_euclid(12));
+    let octave = i16::from(interval) - norm;
+    let mut best = i16::from(chord_intervals[0]);
+    let mut best_dist = 12i16;
     for &ci in chord_intervals {
+        let ci = i16::from(ci);
         let dist = ((norm - ci).abs()).min((norm - ci + 12).abs()).min((norm - ci - 12).abs());
         if dist < best_dist {
             best_dist = dist;
             best = ci;
         }
     }
-    octave + best
+    (octave + best) as i8
 }
 
 /// Apply a transformation to a motif, returning a new motif.
