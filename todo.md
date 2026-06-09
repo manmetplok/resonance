@@ -792,8 +792,22 @@ inline fix pass tackled. Each is documented enough to pick up later.
   (bitmap membership ≡ `pcs.contains`) and the existing
   `tests/bass_motif.rs` determinism/chord-tone suite pins the
   observable output.
-- [ ] `rng.rs:36-41` — `next_range` has modulo bias; undetectable in practice
+- [x] `rng.rs:36-41` — `next_range` has modulo bias; undetectable in practice
   for n ≤ 256 but worth rejection-sampling if "uniform" is ever claimed.
+
+  _Resolved 2026-06-09_ (rejection sampling — uniformity was claimed).
+  The doc comment read "Uniform integer in `[0, n)`", so documenting
+  the bias would have meant weakening a stated contract instead of
+  honoring it. The fix uses simple-retry rejection (redraw when the raw
+  `u64` lands in the top `2^64 mod n` values) rather than Lemire,
+  because the accepted path keeps the historical `x % n` mapping: with
+  the crate's small `n`, the rejection probability is ~`n/2^64` per
+  draw, so every deterministic sequence feeding the generators is
+  preserved in practice — the crate's seed-pinned vocal/motif tests
+  pass unchanged. `XorShift` is `pub(crate)`, so no direct external
+  test (no-inline-tests convention); those determinism suites are the
+  coverage. The 1-in-2^64 skew from xorshift64 never emitting 0 is
+  inherent to the generator and noted at the code site.
 - [ ] `generator/markov.rs:11-12` — crate uses both `rand::SmallRng` and the
   custom `XorShift`. Consolidate to one determinism contract.
 - [ ] `lib.rs` re-exports — `VocalSinger`, `VocalVoicebank`, `g2p.rs` etc. are
