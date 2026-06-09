@@ -891,8 +891,17 @@ inline fix pass tackled. Each is documented enough to pick up later.
   directly, so read access is still legitimately needed across crates.
   New `assign_raw` test in `resonance-dsp/tests/biquad.rs` pins the
   coefficients and the state-preservation contract.
-- [ ] `spectrum/octave.rs:60-63` — band-fallback path uses `f32::max` (NaN
+- [x] `spectrum/octave.rs:60-63` — band-fallback path uses `f32::max` (NaN
   propagating), other branches use manual `if v > peak`. Unify.
+
+  _Resolved 2026-06-10_. Unified on `f32::max`, which is NaN-*ignoring*
+  (it returns the non-NaN operand), the same outcome the manual
+  `if v > peak` loop already had — the two idioms were behaviourally
+  equivalent here but read as if they differed. The multi-bin scan now
+  uses `peak.max(v)` and a comment above the loop documents the policy
+  for both branches: a NaN FFT bin can never poison a band; `floor_db`
+  always wins. New `nan_bins_are_ignored_never_propagated` test in
+  `tests/spectrum_octave.rs` pins it.
 
 ### resonance-common
 - [ ] `wav.rs:198,221` — `target_len = (input.len() / ratio) as usize`

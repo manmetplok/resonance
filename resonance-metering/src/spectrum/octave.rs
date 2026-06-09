@@ -49,6 +49,9 @@ impl OctaveTable {
         let bin_hz = sample_rate / fft_size as f32;
         let max_k = mag_db.len();
 
+        // NaN policy (both branches below): `f32::max` returns the
+        // non-NaN operand, so a NaN FFT bin is ignored rather than
+        // propagated, and `floor_db` always wins over garbage input.
         for (band, slot) in out.iter_mut().enumerate().take(NUM_OCTAVE_BINS) {
             let f_low = self.edges[band];
             let f_high = self.edges[band + 1];
@@ -64,9 +67,7 @@ impl OctaveTable {
             }
             let mut peak = floor_db;
             for &v in &mag_db[k_low..k_high_excl] {
-                if v > peak {
-                    peak = v;
-                }
+                peak = peak.max(v);
             }
             *slot = peak;
         }
