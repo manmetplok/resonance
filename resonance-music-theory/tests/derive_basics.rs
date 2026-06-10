@@ -269,30 +269,52 @@ fn motif_stays_in_register() {
 }
 
 #[test]
-fn motif_strong_beats_are_chord_tones() {
+fn motif_strong_beats_are_chord_tones_or_resolved_dissonances() {
+    // The strong-beat contract, post-embellishment: a strong-beat note
+    // is either a chord tone (the `align_to_harmony` skeleton) or a
+    // dissonance that *resolves by step* (1-2 semitones) on the very
+    // next note — the appoggiatura/suspension shape the decoration
+    // pass introduces (always downward to a chord tone) and the shape
+    // the leap-grammar repairs preserve. Swept across seeds so the
+    // decoration pass gets real chances to place strong-beat
+    // dissonances.
     let chords = standard_chords();
     let scale = Scale::new(C, Mode::Major);
     let p = motif_params();
-    let notes = derive_melody(&chords, Some(scale), &p, 480, 42);
     let tpb = 480u64;
-    for n in &notes {
-        let beat_in_chord = n.start_tick % (4 * tpb);
-        let is_strong = beat_in_chord.is_multiple_of(2 * tpb);
-        if is_strong {
-            // Find which chord this note belongs to.
-            let chord_idx = chords
-                .iter()
-                .rposition(|tc| (tc.start_beat as u64 * tpb) <= n.start_tick)
-                .unwrap_or(0);
-            let chord = chords[chord_idx].chord;
-            let pcs: Vec<_> = chord.pitch_classes().collect();
-            let note_pc = PitchClass::from_semitone(n.note % 12);
+    let is_chord_tone = |chords: &[TimedChord], tick: u64, note: u8| {
+        let chord_idx = chords
+            .iter()
+            .rposition(|tc| (tc.start_beat as u64 * tpb) <= tick)
+            .unwrap_or(0);
+        let pcs: Vec<_> = chords[chord_idx].chord.pitch_classes().collect();
+        pcs.contains(&PitchClass::from_semitone(note % 12))
+    };
+    for seed in 0..60 {
+        let notes = derive_melody(&chords, Some(scale), &p, 480, seed);
+        for (i, n) in notes.iter().enumerate() {
+            let beat_in_chord = n.start_tick % (4 * tpb);
+            if !beat_in_chord.is_multiple_of(2 * tpb) {
+                continue;
+            }
+            if is_chord_tone(&chords, n.start_tick, n.note) {
+                continue;
+            }
+            // Strong-beat dissonance: must resolve by step.
+            let next = notes.get(i + 1).unwrap_or_else(|| {
+                panic!(
+                    "strong-beat dissonance {} at tick {} has no resolution (seed {seed})",
+                    n.note, n.start_tick
+                )
+            });
+            let resolution = (n.note as i16 - next.note as i16).abs();
             assert!(
-                pcs.contains(&note_pc),
-                "strong-beat note {} (pc {:?}) not a chord tone of {:?}",
+                (1..=2).contains(&resolution),
+                "strong-beat dissonance {} at tick {} does not resolve by step \
+                 (next {}, seed {seed})",
                 n.note,
-                note_pc,
-                chord
+                n.start_tick,
+                next.note
             );
         }
     }

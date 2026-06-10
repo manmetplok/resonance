@@ -11,8 +11,10 @@ use super::super::motif_source::{manual_motif_to_motif_notes, MotifParams, Motif
 use super::super::{GeneratedNote, TimedChord};
 use super::build::build_motif;
 use super::cadence::apply_cadence_formula;
-use super::harmony::apply_leap_recovery;
+use super::embellish::{apply_embellishments, resolve_embellishment_style};
+use super::harmony::{apply_leap_recovery, HarmonyGrid};
 use super::phrase::{plan_motif_transforms, plan_phrases, realize_phrase, PhraseRenderCtx};
+use super::types::PhraseGrammarRole;
 
 /// Extract the motif's signed semitone intervals (relative to its
 /// anchor pitch), skipping rests. Used by lanes that don't render the
@@ -150,11 +152,22 @@ pub fn derive_motif_melody_with_section(
         tpb,
     };
 
+    // Embellishment flavor: resolved once per section from the motif
+    // seed (when the lane asks for Auto) so every lane decorates with
+    // the same vocabulary weighting.
+    let emb_style = resolve_embellishment_style(params.embellishment, motif_params.seed);
+    // A period's consequent reuses its antecedent's decoration stream
+    // (same RNG seed): the consequent restates the antecedent's
+    // opening — including its surface decorations — and only the
+    // cadence ending differs.
+    let mut last_antecedent_pi: Option<usize> = None;
+
     for (pi, phrase) in phrases.iter().enumerate() {
         let mut phrase_notes = realize_phrase(&motif, transforms[pi], phrase, &render_ctx);
 
         if let Some(scale) = scale {
-            apply_leap_recovery(&mut phrase_notes, &scale, params.register);
+            let grid = HarmonyGrid { chords, tpb };
+            apply_leap_recovery(&mut phrase_notes, &scale, params.register, &grid);
             // Single-climax rule: one highest note per phrase, in its
             // second half, never the final note. Climax demotion and
             // the leap grammar alternate to a fixpoint: demotion only
@@ -177,16 +190,17 @@ pub fn derive_motif_melody_with_section(
                 ) {
                     break;
                 }
-                apply_leap_recovery(&mut phrase_notes, &scale, params.register);
+                apply_leap_recovery(&mut phrase_notes, &scale, params.register, &grid);
             }
             // Goal-cadence targeting: rewrite the phrase's final two
             // notes to the planned HC/IAC/PAC (or deceptive) formula.
             // The overlay validates every candidate against the leap
-            // grammar, the single-climax rule, and the strong-beat
-            // chord-tone contract, so it composes with the passes
-            // above instead of needing another fixpoint round.
-            // Sentence presentation/continuation phrases plan no goal
-            // (`cadence: None`) — they prolong without cadencing.
+            // grammar, the single-climax rule, the dissonance
+            // discipline, and the strong-beat chord-tone skeleton, so
+            // it composes with the passes above instead of needing
+            // another fixpoint round. Sentence presentation/
+            // continuation phrases plan no goal (`cadence: None`) —
+            // they prolong without cadencing.
             if let Some(goal) = phrase.cadence {
                 apply_cadence_formula(
                     &mut phrase_notes,
@@ -197,6 +211,36 @@ pub fn derive_motif_melody_with_section(
                     tpb,
                 );
             }
+            // Embellishing-tone decoration: re-classify the surface
+            // from the OMT table (passing/neighbor on weak beats,
+            // appoggiatura/suspension on strong beats, escape tone,
+            // anticipation) with style-weighted probabilities. Runs
+            // last and validates every candidate against the whole
+            // phrase, protecting the cadence tail. Seeded lane-locally
+            // per phrase: decoration is surface variation, so a
+            // Regenerate press refreshes it while the motif identity
+            // stays put. Consequents share their antecedent's stream
+            // so the period's restated opening keeps its decorations.
+            let dec_pi = match phrase.role {
+                PhraseGrammarRole::Antecedent => {
+                    last_antecedent_pi = Some(pi);
+                    pi
+                }
+                PhraseGrammarRole::Consequent => last_antecedent_pi.unwrap_or(pi),
+                _ => pi,
+            };
+            let mut dec_rng = XorShift::new(
+                lane_seed ^ (dec_pi as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            );
+            apply_embellishments(
+                &mut phrase_notes,
+                &grid,
+                &scale,
+                params.register,
+                emb_style,
+                params.complexity,
+                &mut dec_rng,
+            );
         }
 
         if pi > 0 && rest_gap > 0 {

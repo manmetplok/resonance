@@ -2,12 +2,15 @@
 // Motif-based melody engine
 //
 // Submodule layout:
-//   - `types`   : shared `MotifNote`, `Transform`, `PhrasePlan`, `Contour`
-//   - `build`   : construct a motif cell and apply transformations to it
-//   - `phrase`  : phrase planning + the per-phrase realizer
-//   - `harmony` : align raw motif pitches to chord/scale + leap recovery
-//   - `cadence` : validated goal-cadence overlay on phrase endings
-//   - `melody`  : top-level entry points for the melody lane
+//   - `types`     : shared `MotifNote`, `Transform`, `PhrasePlan`, `Contour`
+//   - `build`     : construct a motif cell and apply transformations to it
+//   - `phrase`    : phrase planning + the per-phrase realizer
+//   - `harmony`   : chord-tone skeleton alignment, leap recovery, and the
+//                   shared pure validators (grammar/climax/dissonance/
+//                   strong-beat contracts)
+//   - `cadence`   : validated goal-cadence overlay on phrase endings
+//   - `embellish` : style-weighted embellishing-tone decoration pass
+//   - `melody`    : top-level entry points for the melody lane
 //
 // Only the items re-exported below are visible to other `derive::*`
 // modules and (for the two `pub` re-exports) outside the crate. Anything
@@ -16,6 +19,7 @@
 
 mod build;
 mod cadence;
+mod embellish;
 mod harmony;
 mod melody;
 mod phrase;

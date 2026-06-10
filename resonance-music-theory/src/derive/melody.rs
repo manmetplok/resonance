@@ -70,6 +70,44 @@ impl ContourPreference {
     }
 }
 
+/// Embellishing-tone vocabulary weighting for the motif engine's
+/// decoration pass (Open Music Theory v2, embellishing tones). Each
+/// named style weights the table differently; the pass itself always
+/// honors the dissonance discipline (never leap both into and out of
+/// a dissonance; strong-beat dissonances resolve down by step).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default,
+    strum::Display, strum::IntoStaticStr, strum::EnumString,
+)]
+pub enum EmbellishmentStyle {
+    /// Pick one of the named styles per section from the motif seed,
+    /// so every lane in a section decorates with the same flavor.
+    #[default]
+    Auto,
+    /// Passing and neighbor tones only — stepwise, consonant surface.
+    Folk,
+    /// Suspensions and appoggiaturas: expressive strong-beat
+    /// dissonances resolving down by step.
+    #[strum(serialize = "Pop ballad")]
+    PopBallad,
+    /// Anticipations and escape tones: forward-leaning, syncopated
+    /// dissonance treatment.
+    Jazz,
+}
+
+impl EmbellishmentStyle {
+    pub const ALL: [EmbellishmentStyle; 4] = [
+        EmbellishmentStyle::Auto,
+        EmbellishmentStyle::Folk,
+        EmbellishmentStyle::PopBallad,
+        EmbellishmentStyle::Jazz,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MelodyParams {
     pub style: MelodyStyle,
@@ -103,6 +141,10 @@ pub struct MelodyParams {
     /// Only used by the Motif style.
     #[serde(default = "default_leap_chance")]
     pub leap_chance: f32,
+    /// Embellishing-tone style for the decoration pass. Only used by
+    /// the Motif style.
+    #[serde(default)]
+    pub embellishment: EmbellishmentStyle,
     /// When true the lane only sounds where the section's vocal lane is
     /// silent — a "fill" between vocal phrases (call-and-response). The
     /// vocal occupancy mask is collected by the call site and applied
@@ -139,6 +181,7 @@ impl Default for MelodyParams {
             phrase_len: default_phrase_len(),
             motif_len: 0,
             leap_chance: default_leap_chance(),
+            embellishment: EmbellishmentStyle::default(),
             fill_vocal_gaps: false,
         }
     }

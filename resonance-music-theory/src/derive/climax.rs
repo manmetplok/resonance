@@ -52,6 +52,13 @@ fn step_down(note: u8, scale: Option<Scale>) -> u8 {
 /// leap-approach deepening leaves strong-beat predecessors alone.
 /// The vocal generator passes `None` — its chord-tone anchoring is
 /// probabilistic, not a contract.
+///
+/// Climax enforcement runs *before* the embellishment pass, so the
+/// strict pre-decoration form of the strong-beat contract (strong
+/// beats are chord tones, full stop) holds here. The embellishment
+/// pass later relaxes it to "strong-beat dissonances resolve down by
+/// step", validating its candidates against the climax rule so the
+/// single climax survives decoration.
 pub(in crate::derive) struct ClimaxHarmony<'a> {
     pub(in crate::derive) chords: &'a [TimedChord],
     pub(in crate::derive) tpb: u64,

@@ -21,7 +21,8 @@ mod vocal;
 
 pub use bass::{derive_bass, BassMotifMode, BassMotifPhrase, BassParams, BassStyle};
 pub use melody::{
-    derive_melody, derive_melody_fill_vocal, ContourPreference, MelodyParams, MelodyStyle,
+    derive_melody, derive_melody_fill_vocal, ContourPreference, EmbellishmentStyle, MelodyParams,
+    MelodyStyle,
 };
 pub use motif_bass::derive_bass_motif;
 pub use motif_engine::{
