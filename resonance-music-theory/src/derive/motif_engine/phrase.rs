@@ -6,6 +6,7 @@ use crate::rng::XorShift;
 use crate::scale::Scale;
 use crate::voicing::nearest_midi_to;
 
+use super::super::cadence::plan_cadence_goal;
 use super::super::melody::ContourPreference;
 use super::super::motif_bass::chord_tones_in_register;
 use super::super::{GeneratedNote, TimedChord};
@@ -77,10 +78,12 @@ pub(in crate::derive) fn plan_phrases(
         let end = (i + plen).min(chords.len());
         let is_consequent = phrase_index % 2 == 1;
         let contour = pick_contour(contour_pref, is_consequent, rng);
+        let cadence = plan_cadence_goal(is_consequent, rng);
         plans.push(PhrasePlan {
             chord_range: (i, end),
             contour,
             is_consequent,
+            cadence,
         });
         i = end;
         phrase_index += 1;
@@ -290,6 +293,11 @@ pub(super) fn realize_phrase(
     // *root*. The previous "lowest chord tone in register" shortcut
     // only equals the root when the register floor doesn't cut into
     // the close voicing — otherwise it resolved to a third or fifth.
+    // With a scale present this is only the baseline: the goal-cadence
+    // overlay (`cadence::apply_cadence_formula`) usually retargets the
+    // final two notes to a proper formula afterwards, and falls back
+    // to this snap when no formula candidate validates. Without a
+    // scale (no degree vocabulary) the snap is the final word.
     if phrase.is_consequent && !out.is_empty() {
         let last_chord = phrase_chords.last().unwrap();
         let last = out.last_mut().unwrap();

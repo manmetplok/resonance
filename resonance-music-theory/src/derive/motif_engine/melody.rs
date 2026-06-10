@@ -10,6 +10,7 @@ use super::super::melody::MelodyParams;
 use super::super::motif_source::{manual_motif_to_motif_notes, MotifParams, MotifSource};
 use super::super::{GeneratedNote, TimedChord};
 use super::build::build_motif;
+use super::cadence::apply_cadence_formula;
 use super::harmony::apply_leap_recovery;
 use super::phrase::{plan_motif_transforms, plan_phrases, realize_phrase, PhraseRenderCtx};
 
@@ -172,6 +173,20 @@ pub fn derive_motif_melody_with_section(
                 }
                 apply_leap_recovery(&mut phrase_notes, &scale, params.register);
             }
+            // Goal-cadence targeting: rewrite the phrase's final two
+            // notes to the planned HC/IAC/PAC (or deceptive) formula.
+            // The overlay validates every candidate against the leap
+            // grammar, the single-climax rule, and the strong-beat
+            // chord-tone contract, so it composes with the passes
+            // above instead of needing another fixpoint round.
+            apply_cadence_formula(
+                &mut phrase_notes,
+                phrase.cadence,
+                &chords[phrase.chord_range.0..phrase.chord_range.1],
+                &scale,
+                params.register,
+                tpb,
+            );
         }
 
         if pi > 0 && rest_gap > 0 {

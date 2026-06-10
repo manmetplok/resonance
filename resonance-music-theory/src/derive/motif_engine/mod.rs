@@ -5,7 +5,8 @@
 //   - `types`   : shared `MotifNote`, `Transform`, `PhrasePlan`, `Contour`
 //   - `build`   : construct a motif cell and apply transformations to it
 //   - `phrase`  : phrase planning + the per-phrase realizer
-//   - `harmony` : align raw motif pitches to chord/scale + gap-fill
+//   - `harmony` : align raw motif pitches to chord/scale + leap recovery
+//   - `cadence` : validated goal-cadence overlay on phrase endings
 //   - `melody`  : top-level entry points for the melody lane
 //
 // Only the items re-exported below are visible to other `derive::*`
@@ -14,6 +15,7 @@
 // ---------------------------------------------------------------------------
 
 mod build;
+mod cadence;
 mod harmony;
 mod melody;
 mod phrase;

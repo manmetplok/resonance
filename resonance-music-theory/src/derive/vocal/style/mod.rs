@@ -19,6 +19,9 @@ mod pop_ballad;
 use crate::rng::XorShift;
 use crate::scale::Scale;
 
+use super::super::cadence::{
+    final_degree_fits_chord, scale_degree_of, scale_degree_pc, tendency_resolution, CadenceGoal,
+};
 use super::super::motif_bass::chord_tones_in_register;
 use super::super::{GeneratedNote, TimedChord};
 use super::melody::{chord_at_beat, snap_to_scale};
@@ -220,16 +223,25 @@ pub(super) fn phrase_role(line_idx: usize) -> PhraseRole {
     }
 }
 
-/// Pick a "good" cadence pitch for the final syllable of a line.
-/// Lands on chord-tone scale degrees per `phrase_role`:
-///   - Consequent → root / 3rd / 5th of the active chord (closed
-///     feel) with a strong root preference.
-///   - Antecedent → 2nd / 4th / 7th of the section's scale (open
-///     feel — asks the next line to resolve).
+/// Pick a "good" cadence pitch for the final syllable of a line,
+/// using the cadence formula table (`derive::cadence`) instead of the
+/// old fixed degree sets:
+///   - Consequent → PAC finals (the tonic), falling back through IAC
+///     (3rd / 5th) to HC when the active chord contains no compatible
+///     degree (closed feel).
+///   - Antecedent → HC finals (7th / 2nd), falling back through IAC
+///     to PAC (open feel — asks the next line to resolve).
 ///
-/// Falls back to the nearest chord tone if no scale-degree match is
-/// reachable in range. The picked pitch is also clamped within an
-/// octave of `prev_pitch` so the cadence doesn't leap.
+/// Tendency tones resolve: when `prev_pitch` (the penult) sits on
+/// degree 7, 4, or 2, the final degree that resolves it (7→1, 4→3,
+/// 2→1) is preferred over a nearer landing. The ~10% deceptive swap
+/// happens in the post-line formula pass
+/// (`melody::apply_line_cadence_formulas`), which also rewrites the
+/// penult to complete the two-note formula.
+///
+/// Falls back to the legacy chord-tone landing (root preference) when
+/// no scale is available or nothing is reachable; the picked pitch
+/// stays within an octave of `prev_pitch` so the cadence doesn't leap.
 pub(super) fn cadence_pitch(
     role: PhraseRole,
     chord: Option<&TimedChord>,
@@ -237,19 +249,33 @@ pub(super) fn cadence_pitch(
     prev_pitch: u8,
     range: (u8, u8),
 ) -> Option<u8> {
-    use crate::scale::Mode;
     let (lo, hi) = range;
     let chord = chord?;
+    if let Some(scale) = scale {
+        let chain: &[CadenceGoal] = match role {
+            PhraseRole::Consequent => CadenceGoal::Pac.chain(),
+            PhraseRole::Antecedent => CadenceGoal::Hc.chain(),
+        };
+        // Tier 1: formula finals compatible with the active chord.
+        // Tier 2: the primary goal's finals regardless of the chord —
+        // keeps antecedents "open" over chords (e.g. IV) that contain
+        // none of the formula degrees, mirroring the old behavior of
+        // landing on 2/4/7 colors.
+        if let Some(p) = formula_final(chain, true, &scale, chord.chord, prev_pitch, lo, hi)
+            .or_else(|| formula_final(&chain[..1], false, &scale, chord.chord, prev_pitch, lo, hi))
+        {
+            return Some(p);
+        }
+    }
     match role {
         PhraseRole::Consequent => {
-            // Closed: prefer root, then 3rd, then 5th.
+            // Legacy closed landing: nearest chord tone with a strong
+            // root preference.
             let tones = chord_tones_in_register(chord.chord, (lo, hi));
             if tones.is_empty() {
                 return None;
             }
             let root_pc = chord.chord.root.to_semitone();
-            // Find note within an octave of prev_pitch that's closest
-            // to the chord root (priority for the strongest landing).
             let candidate = tones
                 .iter()
                 .filter(|t| (**t as i16 - prev_pitch as i16).abs() <= 12)
@@ -262,41 +288,52 @@ pub(super) fn cadence_pitch(
                 });
             candidate.copied().or_else(|| tones.iter().min_by_key(|t| (**t as i16 - prev_pitch as i16).abs()).copied())
         }
-        PhraseRole::Antecedent => {
-            // Open: prefer 2nd / 4th / 7th of the active scale.
-            let scale = scale?;
-            let mode_intervals = scale.mode.intervals();
-            let root_pc = scale.root.to_semitone();
-            let open_degrees: &[u8] = match scale.mode {
-                Mode::Minor | Mode::Phrygian | Mode::Locrian | Mode::HarmonicMinor => {
-                    // Minor-ish: 2nd (degree 2), 4th (5), b7 (10) in semitone offsets
-                    &[2, 5, 10]
-                }
-                _ => &[2, 5, 11], // Major: 2nd (2), 4th (5), 7th (11)
-            };
-            let mut best: Option<u8> = None;
-            let mut best_dist = i16::MAX;
+        PhraseRole::Antecedent => None,
+    }
+}
+
+/// Best in-range realization of a formula *final* degree from the
+/// first goal in `goals` that yields one. Scans the goal's formulas in
+/// table order, requires chord compatibility when `require_fit`, keeps
+/// candidates within an octave of `prev_pitch`, and prefers (a) the
+/// degree that resolves `prev_pitch`'s tendency tone, then (b) the
+/// nearest landing.
+fn formula_final(
+    goals: &[CadenceGoal],
+    require_fit: bool,
+    scale: &Scale,
+    chord: crate::chord::Chord,
+    prev_pitch: u8,
+    lo: u8,
+    hi: u8,
+) -> Option<u8> {
+    let prev_resolution = scale_degree_of(scale, prev_pitch).and_then(tendency_resolution);
+    for goal in goals {
+        let mut best: Option<(i32, u8)> = None;
+        for &(_, f_deg) in goal.formulas() {
+            if require_fit && !final_degree_fits_chord(scale, f_deg, chord) {
+                continue;
+            }
+            let pc = scale_degree_pc(scale, f_deg);
             for midi in lo..=hi {
-                let pc = midi % 12;
-                let degree = (pc + 12 - root_pc) % 12;
-                if !open_degrees.contains(&degree) {
-                    continue;
-                }
-                if !mode_intervals.contains(&degree) {
+                if midi % 12 != pc {
                     continue;
                 }
                 let dist = (midi as i16 - prev_pitch as i16).abs();
                 if dist > 12 {
                     continue; // stay within an octave of prev
                 }
-                if dist < best_dist {
-                    best_dist = dist;
-                    best = Some(midi);
+                let score = if prev_resolution == Some(f_deg) { 0 } else { 1000 } + dist as i32;
+                if best.is_none_or(|(b, _)| score < b) {
+                    best = Some((score, midi));
                 }
             }
-            best
+        }
+        if let Some((_, m)) = best {
+            return Some(m);
         }
     }
+    None
 }
 
 /// Pick a per-line phrase-start offset in beats, relative to the

@@ -1,5 +1,7 @@
 // Shared motif-engine types: motif cells, transformations, and phrase plans.
 
+use super::super::cadence::CadenceGoal;
+
 /// A single note in a motif, stored as a relative interval from an anchor
 /// pitch so that transposition and inversion are simple arithmetic.
 #[derive(Debug, Clone, Copy)]
@@ -42,4 +44,8 @@ pub(in crate::derive) struct PhrasePlan {
     pub(in crate::derive) chord_range: (usize, usize),
     pub(super) contour: Contour,
     pub(super) is_consequent: bool,
+    /// Goal cadence for the phrase ending (weak for antecedents,
+    /// strong for consequents with a ~10% deceptive swap). Realized by
+    /// `cadence::apply_cadence_formula` on the rendered notes.
+    pub(super) cadence: CadenceGoal,
 }

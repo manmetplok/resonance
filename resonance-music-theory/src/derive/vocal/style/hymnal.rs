@@ -87,7 +87,26 @@ impl VocalStyleProfile for HymnalProfile {
             }
         }
 
-        snap_to_scale(candidate, ctx.scale, line.band_lo, line.band_hi)
+        let snapped = snap_to_scale(candidate, ctx.scale, line.band_lo, line.band_hi);
+
+        // Stepwise contract: Hymnal never moves more than a major
+        // third between syllables. The cadence override above can land
+        // a formula degree further away than that; pull it back to the
+        // nearest scale tone inside the prev ± 4 window (the post-line
+        // cadence pass retargets the ending under the same cap when a
+        // formula realization fits).
+        if inp.is_final && (snapped as i16 - inp.prev_pitch as i16).abs() > 4 {
+            let w_lo = (inp.prev_pitch as i16 - 4).max(line.band_lo as i16) as u8;
+            let w_hi = (inp.prev_pitch as i16 + 4).min(line.band_hi as i16) as u8;
+            let in_scale = |p: u8| ctx.scale.map(|s| s.contains(p)).unwrap_or(true);
+            if let Some(pulled) = (w_lo..=w_hi)
+                .filter(|&p| in_scale(p))
+                .min_by_key(|&p| (p as i16 - snapped as i16).abs())
+            {
+                return pulled;
+            }
+        }
+        snapped
     }
 
     fn dur_beats(

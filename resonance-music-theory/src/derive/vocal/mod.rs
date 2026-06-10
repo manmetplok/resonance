@@ -29,7 +29,10 @@ use crate::scale::Scale;
 
 use super::climax::enforce_single_climax;
 use super::{GeneratedNote, TimedChord};
-use melody::{apply_motif_pitches, enforce_no_overlap, scale_from_chords, total_beats, MotifPitchContext};
+use melody::{
+    apply_line_cadence_formulas, apply_motif_pitches, enforce_no_overlap, scale_from_chords,
+    total_beats, MotifPitchContext,
+};
 use style::derive_with_profile;
 
 /// Derive MIDI notes for a vocal line. Dispatches to the per-style
@@ -135,6 +138,26 @@ pub fn derive_vocal_with_motif(
             );
             note_idx += n;
         }
+        // Goal-cadence formula targeting per line: rewrite each line's
+        // final two syllables to a HC/IAC/PAC formula (≈10% deceptive
+        // on consequent lines) compatible with the chord under the
+        // cadence. Runs after the climax pass and validates every
+        // candidate against the line-climax rule and the SVS adjacency
+        // cap, so neither invariant regresses. Chant shares the climax
+        // exemption: recitation lines are cadenced by the final-note
+        // pick (`cadence_pitch`) alone, and forcing a two-note formula
+        // would smear its narrow speaking band.
+        apply_line_cadence_formulas(
+            &mut notes,
+            &ctx.line_syllables,
+            ctx.chords,
+            ctx.section_beats,
+            ctx.scale,
+            (ctx.lo, ctx.hi),
+            params.style,
+            ctx.tpb,
+            seed,
+        );
     }
     enforce_no_overlap(&mut notes, ctx.tpb);
     notes

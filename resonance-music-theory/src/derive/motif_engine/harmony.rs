@@ -84,7 +84,8 @@ fn move_between(a: &GeneratedNote, b: &GeneratedNote) -> i16 {
 
 /// Do three pitches all belong to a single major or minor triad? Used
 /// to permit same-direction leap pairs that arpeggiate one harmony.
-fn outlines_one_triad(a: u8, b: u8, c: u8) -> bool {
+/// Shared with the cadence overlay's pure grammar validator.
+pub(super) fn outlines_one_triad(a: u8, b: u8, c: u8) -> bool {
     const TRIADS: [[u8; 3]; 2] = [[0, 4, 7], [0, 3, 7]]; // major, minor
     let pcs = [a % 12, b % 12, c % 12];
     for root in 0..12u8 {
