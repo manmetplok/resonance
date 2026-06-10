@@ -41,6 +41,10 @@ pub struct DrumSampler {
     /// sender; when the sampler drops, the janitor's channel disconnects
     /// and the janitor thread exits cleanly.
     janitor_sender: Sender<Vec<LoadedPad>>,
+    /// The previous kit's pads, kept alive while voices that were still
+    /// sounding at swap time fade out against them. Shipped to the
+    /// janitor once the last retired voice ends.
+    retired_pads: Option<Vec<LoadedPad>>,
     /// Last block's master volume snapshot. Used to interpolate from
     /// the previous block's value to the current one across the block
     /// so automation tweaks don't click. Initialized to 1.0 so the
@@ -72,6 +76,7 @@ impl DrumSampler {
             last_rr: None,
             kit_receiver,
             janitor_sender,
+            retired_pads: None,
             prev_master_volume: 1.0,
             prev_pad_volume: [1.0; NUM_PADS],
             prev_pad_pan: [0.0; NUM_PADS],
@@ -128,20 +133,46 @@ impl DrumSampler {
     }
 
     /// Audio-thread: check for a freshly loaded kit and swap it in if one is
-    /// waiting. Called once per `process()` call from `lib.rs`. Silences all
-    /// active voices so no read references the old pad data, then hands the
-    /// old `Vec<LoadedPad>` to the janitor thread so the heap free happens
-    /// off-audio.
+    /// waiting. Called once per `process()` call from `lib.rs`. Voices that
+    /// are still sounding get the standard `RELEASE_SAMPLES` fade instead of
+    /// a hard cut; the old `Vec<LoadedPad>` is parked in `retired_pads` so
+    /// those voices keep reading valid sample data until the fade ends,
+    /// after which `render_block` hands it to the janitor thread so the
+    /// heap free happens off-audio.
     pub fn try_swap_kit(&mut self) {
         while let Ok(new_pads) = self.kit_receiver.try_recv() {
+            // A second swap while the previous kit's voices are still
+            // fading: those voices lose their sample data now, so cut
+            // them and retire that kit immediately.
+            if let Some(prev_retired) = self.retired_pads.take() {
+                for voice in &mut self.voices {
+                    if voice.retired {
+                        voice.active = false;
+                    }
+                }
+                self.ship_to_janitor(prev_retired);
+            }
+            let mut any_fading = false;
             for voice in &mut self.voices {
-                voice.active = false;
+                if voice.active {
+                    voice.retired = true;
+                    voice.trigger_release();
+                    any_fading = true;
+                }
             }
             self.rr_counters = [[0; MAX_LAYERS]; NUM_PADS];
             let old_pads = std::mem::replace(&mut self.pads, new_pads);
-            if let Err(err) = self.janitor_sender.try_send(old_pads) {
-                drop(err.into_inner());
+            if any_fading {
+                self.retired_pads = Some(old_pads);
+            } else {
+                self.ship_to_janitor(old_pads);
             }
+        }
+    }
+
+    fn ship_to_janitor(&self, pads: Vec<LoadedPad>) {
+        if let Err(err) = self.janitor_sender.try_send(pads) {
+            drop(err.into_inner());
         }
     }
 
@@ -254,6 +285,7 @@ impl DrumSampler {
             voice.rr_index = rr_index;
             voice.position = 0;
             voice.choke_group = choke_group;
+            voice.retired = false;
             voice.state = VoiceState::Playing;
             voice.release_pos = 0;
             voice.age = shared_age;
@@ -289,7 +321,7 @@ impl DrumSampler {
             port.right[..frames].fill(0.0);
         }
 
-        if self.pads.is_empty() {
+        if self.pads.is_empty() && self.retired_pads.is_none() {
             return;
         }
 
@@ -331,7 +363,17 @@ impl DrumSampler {
                 continue;
             }
             let pad_index = voice.pad_index;
-            let pad = &self.pads[pad_index];
+            // Voices that predate a kit swap fade out against the
+            // retired kit's data; everything else reads the current one.
+            let pad_source = if voice.retired {
+                self.retired_pads.as_deref()
+            } else {
+                Some(self.pads.as_slice())
+            };
+            let Some(pad) = pad_source.and_then(|pads| pads.get(pad_index)) else {
+                voice.active = false;
+                continue;
+            };
 
             // Resolve the voice's source bank from its destination tag.
             let bank: Option<&LoadedMicBank> = match voice.destination {
@@ -439,6 +481,14 @@ impl DrumSampler {
                 if voice.state == VoiceState::Releasing {
                     voice.release_pos += 1;
                 }
+            }
+        }
+
+        // Once the last fading pre-swap voice has ended, the retired
+        // kit's samples are unreferenced: hand them to the janitor.
+        if self.retired_pads.is_some() && !self.voices.iter().any(|v| v.active && v.retired) {
+            if let Some(retired) = self.retired_pads.take() {
+                self.ship_to_janitor(retired);
             }
         }
 

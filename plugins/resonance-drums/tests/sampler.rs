@@ -172,7 +172,7 @@ fn active_rr_indices(sampler: &DrumSampler, pad_index: usize) -> Vec<usize> {
     sampler
         .voices
         .iter()
-        .filter(|v| v.active && v.pad_index == pad_index)
+        .filter(|v| v.active && !v.retired && v.pad_index == pad_index)
         .map(|v| v.rr_index)
         .collect()
 }

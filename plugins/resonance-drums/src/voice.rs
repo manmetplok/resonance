@@ -60,6 +60,10 @@ pub struct Voice {
     /// Current read position in the sample (in stereo frames).
     pub position: usize,
     pub choke_group: Option<u8>,
+    /// True when this voice predates a kit swap and is fading out
+    /// against the retired kit's sample data instead of the current
+    /// `pads`.
+    pub retired: bool,
     pub state: VoiceState,
     /// The gain at the moment release was triggered (for fade-out).
     pub release_gain: f32,
@@ -91,6 +95,7 @@ impl Voice {
             rr_index: 0,
             position: 0,
             choke_group: None,
+            retired: false,
             state: VoiceState::Playing,
             release_gain: 0.0,
             release_pos: 0,
