@@ -5,7 +5,7 @@
 /// Convolution splits the IR into fixed-size segments, FFTs each one, then
 /// for each input block: FFT input -> complex multiply with each IR
 /// segment -> IFFT -> overlap-add.
-use resonance_dsp::DelayLine;
+use resonance_dsp::{DelayLine, SwapFader};
 use resonance_plugin::Smoother;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
@@ -276,13 +276,8 @@ pub struct BlockPeaks {
 /// convolver's `block_size` latency, and the swap-crossfade state machine.
 /// `lib.rs` hands it block slices; the per-sample loop lives here.
 pub struct IrEngine {
-    active: Option<StereoConvolver>,
-    /// Convolver waiting to be swapped in after fade-out completes.
-    pending: Option<StereoConvolver>,
-    /// Samples remaining in fade-out before convolver swap.
-    fade_out_remaining: u32,
-    /// Samples remaining in fade-in after convolver swap.
-    fade_in_remaining: u32,
+    /// Active/pending convolver pair plus the swap crossfade envelope.
+    fader: SwapFader<StereoConvolver>,
     /// Bypass delay lines to compensate for reported latency when no convolver is active.
     bypass_delay_l: DelayLine,
     bypass_delay_r: DelayLine,
@@ -293,10 +288,7 @@ pub struct IrEngine {
 impl IrEngine {
     pub fn new(block_size: usize) -> Self {
         Self {
-            active: None,
-            pending: None,
-            fade_out_remaining: 0,
-            fade_in_remaining: 0,
+            fader: SwapFader::new(SWAP_FADE_SAMPLES),
             bypass_delay_l: DelayLine::new(block_size),
             bypass_delay_r: DelayLine::new(block_size),
             block_size,
@@ -318,26 +310,19 @@ impl IrEngine {
     /// Install a convolver directly, without a crossfade. Initialize-time
     /// path, before any audio has been processed.
     pub fn install(&mut self, conv: StereoConvolver) {
-        self.active = Some(conv);
+        self.fader.install(conv);
     }
 
     /// Hand over a freshly loaded convolver — starts the swap crossfade.
     /// If a convolver is already active it fades out first; otherwise the
     /// new one is swapped in directly and fades in.
     pub fn begin_swap(&mut self, conv: StereoConvolver) {
-        self.pending = Some(conv);
-        if self.active.is_some() {
-            self.fade_out_remaining = SWAP_FADE_SAMPLES;
-            self.fade_in_remaining = 0;
-        } else {
-            self.active = self.pending.take();
-            self.fade_in_remaining = SWAP_FADE_SAMPLES;
-        }
+        self.fader.begin_swap(conv);
     }
 
     /// Reset the active convolver's internal state (FDL, overlap, buffers).
     pub fn reset(&mut self) {
-        if let Some(conv) = &mut self.active {
+        if let Some(conv) = self.fader.active_mut() {
             conv.reset();
         }
     }
@@ -361,20 +346,7 @@ impl IrEngine {
             let output_gain = output_gain.next();
 
             // Crossfade envelope: fade out old convolver, swap, fade in new convolver.
-            let fade_gain = if self.fade_out_remaining > 0 {
-                self.fade_out_remaining -= 1;
-                let g = self.fade_out_remaining as f32 / SWAP_FADE_SAMPLES as f32;
-                if self.fade_out_remaining == 0 {
-                    self.active = self.pending.take();
-                    self.fade_in_remaining = SWAP_FADE_SAMPLES;
-                }
-                g
-            } else if self.fade_in_remaining > 0 {
-                self.fade_in_remaining -= 1;
-                1.0 - self.fade_in_remaining as f32 / SWAP_FADE_SAMPLES as f32
-            } else {
-                1.0
-            };
+            let (fade_gain, conv) = self.fader.next();
 
             let dry_l = left[i];
             let dry_r = right[i];
@@ -393,7 +365,7 @@ impl IrEngine {
             self.bypass_delay_l.push(dry_l);
             self.bypass_delay_r.push(dry_r);
 
-            match &mut self.active {
+            match conv {
                 Some(conv) => {
                     let (wet_l, wet_r) = conv.process_sample(dry_l, dry_r);
 

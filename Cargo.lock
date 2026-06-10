@@ -5077,6 +5077,8 @@ dependencies = [
  "clack-extensions",
  "clack-plugin",
  "iced",
+ "parking_lot",
+ "resonance-common",
  "serde",
  "serde_json",
  "wayland-plugin-gui",

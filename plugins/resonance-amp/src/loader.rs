@@ -9,8 +9,8 @@
 //!      buffers settle to steady state (kills the model-swap "plop").
 //!   4. Sample the model's nonlinear transfer curve for the editor
 //!      visualisation.
-//!   5. Publish the result through a `Mutex<Option<...>>` mailbox and
-//!      update `viz`/`model_name` so the UI can pick it up.
+//!   5. Publish the result through a [`Mailbox`] and update
+//!      `viz`/`model_name` so the UI can pick it up.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use parking_lot::Mutex;
+use resonance_plugin::Mailbox;
 
 use crate::nam::{self, NamInference};
 use crate::params::AmpParams;
@@ -53,7 +54,7 @@ impl Drop for LoaderHandle {
 
 pub struct LoaderDeps {
     pub params: Arc<AmpParams>,
-    pub mailbox: Arc<Mutex<Option<Box<dyn NamInference>>>>,
+    pub mailbox: Mailbox<Box<dyn NamInference>>,
     pub model_name: Arc<Mutex<String>>,
     pub load_request: Arc<AtomicI32>,
     pub viz: Arc<AmpViz>,
@@ -125,7 +126,7 @@ fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 *deps.model_name.lock() = name;
-                *deps.mailbox.lock() = Some(model);
+                deps.mailbox.post(model);
             }
             Err(e) => {
                 eprintln!("Failed to load NAM model: {e}");

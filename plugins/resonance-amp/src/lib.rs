@@ -25,11 +25,6 @@ use params::AmpParams;
 use tuner::Tuner;
 use viz::AmpViz;
 
-/// Scan a directory for .nam files, returning sorted paths.
-fn scan_directory(dir: &Path) -> Vec<String> {
-    resonance_common::scan_directory(dir, "nam")
-}
-
 pub struct ResonanceAmp {
     /// Parameters — shared with the editor thread via `Arc` so the UI can
     /// read and write from a separate thread. The `FloatParam` / `IntParam`
@@ -52,7 +47,7 @@ pub struct ResonanceAmp {
     /// smoothers. All state that touches per-sample audio lives here.
     processor: AmpProcessor,
 
-    model_mailbox: Arc<Mutex<Option<Box<dyn NamInference>>>>,
+    model_mailbox: Mailbox<Box<dyn NamInference>>,
     model_name: Arc<Mutex<String>>,
     /// Last file_select param value we acted on (to detect changes).
     last_file_index: i32,
@@ -67,19 +62,6 @@ pub struct ResonanceAmp {
 }
 
 impl ResonanceAmp {
-    /// Scan the directory of the given file and update the file list.
-    /// Returns the index of `path` in the new list, or 0.
-    fn rescan_directory(&self, path: &str) -> usize {
-        if let Some(dir) = Path::new(path).parent() {
-            let files = scan_directory(dir);
-            let idx = files.iter().position(|f| f == path).unwrap_or(0);
-            *self.params.file_list.lock() = files;
-            idx
-        } else {
-            0
-        }
-    }
-
     /// Synchronously load a model, prime it, sample its transfer curve,
     /// and place it in the mailbox. Used only from `initialize` so the
     /// first model is available before `process` runs.
@@ -100,7 +82,7 @@ impl ResonanceAmp {
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 *self.model_name.lock() = name;
-                *self.model_mailbox.lock() = Some(model);
+                self.model_mailbox.post(model);
             }
             Err(e) => {
                 eprintln!("Failed to load NAM model: {e}");
@@ -145,7 +127,7 @@ impl ResonancePlugin for ResonanceAmp {
             viz: AmpViz::new(),
             tuner: None,
             processor: AmpProcessor::new(),
-            model_mailbox: Arc::new(Mutex::new(None)),
+            model_mailbox: Mailbox::new(),
             model_name: Arc::new(Mutex::new(String::new())),
             last_file_index: -1,
             load_request,
@@ -180,14 +162,14 @@ impl ResonancePlugin for ResonanceAmp {
 
         let path = self.params.model_path.lock().clone();
         if !path.is_empty() {
-            let idx = self.rescan_directory(&path);
+            let idx = rescan_directory(&path, "nam", &self.params.file_list);
             self.last_file_index = idx as i32;
             self.params.file_select.set_value(idx as i32);
 
             // Block on loading the model during init so the first
             // `process` call has an active model to run.
             self.load_model_sync(path);
-            if let Some(model) = self.model_mailbox.lock().take() {
+            if let Some(model) = self.model_mailbox.take() {
                 self.processor.install_initial_model(model);
             }
         }
@@ -234,10 +216,8 @@ impl ResonancePlugin for ResonanceAmp {
         // Check mailbox for newly loaded model — start crossfade. The
         // model is already primed on the loader thread, so the fade only
         // has to mask the handoff itself.
-        if let Some(mut guard) = self.model_mailbox.try_lock() {
-            if let Some(model) = guard.take() {
-                self.processor.install_pending_model(model);
-            }
+        if let Some(model) = self.model_mailbox.try_take() {
+            self.processor.install_pending_model(model);
         }
 
         // Detect file_select param change from host/DAW.

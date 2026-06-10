@@ -9,8 +9,8 @@
 //!   3. Build a `StereoConvolver` from the IR samples.
 //!   4. Precompute a waveform envelope and a log-spaced magnitude
 //!      response for the editor visualisation.
-//!   5. Publish the convolver through a `Mutex<Option<...>>` mailbox
-//!      and push the visualisation snapshot into `IrViz`.
+//!   5. Publish the convolver through a [`Mailbox`] and push the
+//!      visualisation snapshot into `IrViz`.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use parking_lot::Mutex;
+use resonance_plugin::Mailbox;
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
 
@@ -60,7 +61,7 @@ impl Drop for LoaderHandle {
 
 pub struct LoaderDeps {
     pub params: Arc<IrParams>,
-    pub mailbox: Arc<Mutex<Option<StereoConvolver>>>,
+    pub mailbox: Mailbox<StereoConvolver>,
     pub ir_name: Arc<Mutex<String>>,
     pub ir_info: Arc<Mutex<String>>,
     pub load_request: Arc<AtomicI32>,
@@ -126,7 +127,7 @@ pub fn load_into(
     path: &str,
     sample_rate: f32,
     block_size: usize,
-    mailbox: &Mutex<Option<StereoConvolver>>,
+    mailbox: &Mailbox<StereoConvolver>,
     ir_name: &Mutex<String>,
     ir_info: &Mutex<String>,
     viz: &IrViz,
@@ -159,7 +160,7 @@ pub fn load_into(
             *ir_name.lock() = name;
             *ir_info.lock() = info;
             viz.store_snapshot(snapshot);
-            *mailbox.lock() = Some(conv);
+            mailbox.post(conv);
         }
         Err(e) => {
             eprintln!("Failed to load IR: {e}");

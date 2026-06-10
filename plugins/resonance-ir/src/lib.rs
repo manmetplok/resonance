@@ -1,7 +1,6 @@
 use parking_lot::Mutex;
 /// Resonance IR - An impulse response convolution CLAP plugin for cab and room emulation.
 use resonance_plugin::*;
-use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
@@ -36,7 +35,7 @@ pub struct ResonanceIr {
     /// Block-based wet/dry engine: convolvers, bypass delay alignment, and
     /// the swap-crossfade state machine all live in `dsp::IrEngine`.
     engine: IrEngine,
-    convolver_mailbox: Arc<Mutex<Option<StereoConvolver>>>,
+    convolver_mailbox: Mailbox<StereoConvolver>,
     ir_name: Arc<Mutex<String>>,
     ir_info: Arc<Mutex<String>>,
     last_file_index: i32,
@@ -48,17 +47,6 @@ pub struct ResonanceIr {
 }
 
 impl ResonanceIr {
-    fn rescan_directory(&self, path: &str) -> usize {
-        if let Some(dir) = Path::new(path).parent() {
-            let files = resonance_common::scan_directory(dir, "wav");
-            let idx = files.iter().position(|f| f == path).unwrap_or(0);
-            *self.params.file_list.lock() = files;
-            idx
-        } else {
-            0
-        }
-    }
-
     fn start_loader_thread(&mut self) {
         // Drop the old handle first so its thread joins before we
         // spawn a replacement.
@@ -94,7 +82,7 @@ impl ResonancePlugin for ResonanceIr {
             smoothers: IrSmoothers::new(),
             viz: IrViz::new(),
             engine: IrEngine::new(block_size),
-            convolver_mailbox: Arc::new(Mutex::new(None)),
+            convolver_mailbox: Mailbox::new(),
             ir_name: Arc::new(Mutex::new(String::new())),
             ir_info: Arc::new(Mutex::new(String::new())),
             last_file_index: -1,
@@ -125,7 +113,7 @@ impl ResonancePlugin for ResonanceIr {
 
         let path = self.params.ir_path.lock().clone();
         if !path.is_empty() {
-            let idx = self.rescan_directory(&path);
+            let idx = rescan_directory(&path, "wav", &self.params.file_list);
             self.last_file_index = idx as i32;
             self.params.file_select.set_value(idx as i32);
 
@@ -139,7 +127,7 @@ impl ResonancePlugin for ResonanceIr {
                 &self.ir_info,
                 &self.viz,
             );
-            if let Some(conv) = self.convolver_mailbox.lock().take() {
+            if let Some(conv) = self.convolver_mailbox.take() {
                 self.engine.install(conv);
             }
         }
@@ -169,10 +157,8 @@ impl ResonancePlugin for ResonanceIr {
         resonance_common::flush_denormals();
 
         // Check mailbox for newly loaded convolver — start crossfade.
-        if let Some(mut guard) = self.convolver_mailbox.try_lock() {
-            if let Some(conv) = guard.take() {
-                self.engine.begin_swap(conv);
-            }
+        if let Some(conv) = self.convolver_mailbox.try_take() {
+            self.engine.begin_swap(conv);
         }
 
         // Detect file_select param change from host/DAW.

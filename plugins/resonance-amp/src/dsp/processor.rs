@@ -5,7 +5,7 @@
 //! shared/mailbox state and is responsible for handing newly-loaded models
 //! to the processor via [`AmpProcessor::install_pending_model`].
 
-use resonance_dsp::DcBlocker;
+use resonance_dsp::{DcBlocker, SwapFader};
 use resonance_plugin::{Smoother, SmoothingStyle};
 
 use crate::nam::NamInference;
@@ -14,10 +14,6 @@ use crate::nam::NamInference;
 /// mask any residual transient when a freshly-loaded model takes over
 /// mid-audio, even after the loader thread has primed it.
 pub(crate) const SWAP_FADE_SAMPLES: u32 = 1024;
-/// Precomputed `1.0 / SWAP_FADE_SAMPLES as f32`. LLVM won't fold
-/// float division with a runtime counter, so express the per-sample
-/// fade step as a multiply.
-pub(crate) const SWAP_FADE_STEP: f32 = 1.0 / SWAP_FADE_SAMPLES as f32;
 
 /// In/out peak amplitudes captured across a block, in linear units.
 #[derive(Default, Clone, Copy)]
@@ -31,10 +27,7 @@ pub struct BlockPeaks {
 /// Audio-thread NAM model runner: fades between models, smooths gain
 /// parameters, applies DC blocking, and reports input/output peaks.
 pub struct AmpProcessor {
-    active_model: Option<Box<dyn NamInference>>,
-    pending_model: Option<Box<dyn NamInference>>,
-    fade_out_remaining: u32,
-    fade_in_remaining: u32,
+    models: SwapFader<Box<dyn NamInference>>,
     dc_l: DcBlocker,
     dc_r: DcBlocker,
     input_gain_smoother: Smoother,
@@ -44,10 +37,7 @@ pub struct AmpProcessor {
 impl AmpProcessor {
     pub fn new() -> Self {
         Self {
-            active_model: None,
-            pending_model: None,
-            fade_out_remaining: 0,
-            fade_in_remaining: 0,
+            models: SwapFader::new(SWAP_FADE_SAMPLES),
             dc_l: DcBlocker::default(),
             dc_r: DcBlocker::default(),
             input_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
@@ -69,7 +59,7 @@ impl AmpProcessor {
     /// Reset DC blockers and the active model (used by the host's
     /// `reset()` hook).
     pub fn reset(&mut self) {
-        if let Some(model) = &mut self.active_model {
+        if let Some(model) = self.models.active_mut() {
             model.reset();
         }
         self.dc_l.reset();
@@ -80,25 +70,14 @@ impl AmpProcessor {
     /// is already active, kicks off a fade-out so the swap happens
     /// transparently mid-block.
     pub fn install_pending_model(&mut self, model: Box<dyn NamInference>) {
-        self.pending_model = Some(model);
-        if self.active_model.is_some() {
-            self.fade_out_remaining = SWAP_FADE_SAMPLES;
-            self.fade_in_remaining = 0;
-        } else {
-            // No previous model — swap directly with fade-in.
-            self.active_model = self.pending_model.take();
-            self.fade_in_remaining = SWAP_FADE_SAMPLES;
-        }
+        self.models.begin_swap(model);
     }
 
     /// Install the very first model synchronously, with no crossfade and
     /// no fade-in. Used during plugin initialization before `process()`
     /// has had a chance to run.
     pub fn install_initial_model(&mut self, model: Box<dyn NamInference>) {
-        self.active_model = Some(model);
-        self.pending_model = None;
-        self.fade_out_remaining = 0;
-        self.fade_in_remaining = 0;
+        self.models.install(model);
     }
 
     /// Set smoother targets for the upcoming block.
@@ -118,66 +97,10 @@ impl AmpProcessor {
     ) -> BlockPeaks {
         let mut peaks = BlockPeaks::default();
 
-        if self.fade_out_remaining == 0 {
-            match self.active_model.as_mut() {
-                Some(model) => {
-                    for i in 0..frames {
-                        let dry_l = left[i];
-                        let dry_r = right[i];
-                        peaks.in_l = peaks.in_l.max(dry_l.abs());
-                        peaks.in_r = peaks.in_r.max(dry_r.abs());
-
-                        let input_gain = self.input_gain_smoother.next();
-                        let output_gain = self.output_gain_smoother.next();
-                        let fade_gain = if self.fade_in_remaining > 0 {
-                            self.fade_in_remaining -= 1;
-                            1.0 - self.fade_in_remaining as f32 * SWAP_FADE_STEP
-                        } else {
-                            1.0
-                        };
-                        // The NAM model is mono-by-design: a single
-                        // tube/amp captured at one mic position. Sum
-                        // L+R into mono before driving it so a stereo
-                        // input contributes both channels; previously
-                        // we dropped R entirely (and read it only for
-                        // peak metering), making the plugin act as
-                        // an L-only effect for stereo signals.
-                        let input = 0.5 * (dry_l + dry_r) * input_gain;
-                        let raw = model.process_sample(input) * output_gain * fade_gain;
-                        let out_l = self.dc_l.process(raw);
-                        let out_r = self.dc_r.process(raw);
-                        left[i] = out_l;
-                        right[i] = out_r;
-                        peaks.out_l = peaks.out_l.max(out_l.abs());
-                        peaks.out_r = peaks.out_r.max(out_r.abs());
-                    }
-                }
-                None => {
-                    // No model loaded: only `input_gain * output_gain` is
-                    // applied. `fade_in_remaining` is zero in this arm
-                    // because a fade-in is always paired with a newly
-                    // installed model.
-                    for i in 0..frames {
-                        let dry_l = left[i];
-                        let dry_r = right[i];
-                        peaks.in_l = peaks.in_l.max(dry_l.abs());
-                        peaks.in_r = peaks.in_r.max(dry_r.abs());
-
-                        let input_gain = self.input_gain_smoother.next();
-                        let output_gain = self.output_gain_smoother.next();
-                        let gain = input_gain * output_gain;
-                        let out_l = dry_l * gain;
-                        let out_r = dry_r * gain;
-                        left[i] = out_l;
-                        right[i] = out_r;
-                        peaks.out_l = peaks.out_l.max(out_l.abs());
-                        peaks.out_r = peaks.out_r.max(out_r.abs());
-                    }
-                }
-            }
-        } else {
-            // Slow path: fade-out in progress, `active_model` will be
-            // replaced mid-block when `fade_out_remaining` hits zero.
+        if self.models.active().is_none() && !self.models.is_fading_out() {
+            // No model loaded: only `input_gain * output_gain` is
+            // applied. The fader is idle here — a fade-in is always
+            // paired with a newly installed model.
             for i in 0..frames {
                 let dry_l = left[i];
                 let dry_r = right[i];
@@ -186,39 +109,51 @@ impl AmpProcessor {
 
                 let input_gain = self.input_gain_smoother.next();
                 let output_gain = self.output_gain_smoother.next();
-
-                let fade_gain = if self.fade_out_remaining > 0 {
-                    self.fade_out_remaining -= 1;
-                    let g = self.fade_out_remaining as f32 * SWAP_FADE_STEP;
-                    if self.fade_out_remaining == 0 {
-                        self.active_model = self.pending_model.take();
-                        self.fade_in_remaining = SWAP_FADE_SAMPLES;
-                    }
-                    g
-                } else if self.fade_in_remaining > 0 {
-                    self.fade_in_remaining -= 1;
-                    1.0 - self.fade_in_remaining as f32 * SWAP_FADE_STEP
-                } else {
-                    1.0
-                };
-
-                let (out_l, out_r) = match &mut self.active_model {
-                    Some(model) => {
-                        // L+R sum into mono — see fast path above.
-                        let input = 0.5 * (dry_l + dry_r) * input_gain;
-                        let raw = model.process_sample(input) * output_gain * fade_gain;
-                        (self.dc_l.process(raw), self.dc_r.process(raw))
-                    }
-                    None => {
-                        let gain = input_gain * output_gain * fade_gain;
-                        (dry_l * gain, dry_r * gain)
-                    }
-                };
+                let gain = input_gain * output_gain;
+                let out_l = dry_l * gain;
+                let out_r = dry_r * gain;
                 left[i] = out_l;
                 right[i] = out_r;
                 peaks.out_l = peaks.out_l.max(out_l.abs());
                 peaks.out_r = peaks.out_r.max(out_r.abs());
             }
+            return peaks;
+        }
+
+        for i in 0..frames {
+            let dry_l = left[i];
+            let dry_r = right[i];
+            peaks.in_l = peaks.in_l.max(dry_l.abs());
+            peaks.in_r = peaks.in_r.max(dry_r.abs());
+
+            let input_gain = self.input_gain_smoother.next();
+            let output_gain = self.output_gain_smoother.next();
+            // Ticks the swap crossfade; replaces the model mid-block
+            // when a pending one finishes fading out.
+            let (fade_gain, model) = self.models.next();
+
+            let (out_l, out_r) = match model {
+                Some(model) => {
+                    // The NAM model is mono-by-design: a single
+                    // tube/amp captured at one mic position. Sum
+                    // L+R into mono before driving it so a stereo
+                    // input contributes both channels; previously
+                    // we dropped R entirely (and read it only for
+                    // peak metering), making the plugin act as
+                    // an L-only effect for stereo signals.
+                    let input = 0.5 * (dry_l + dry_r) * input_gain;
+                    let raw = model.process_sample(input) * output_gain * fade_gain;
+                    (self.dc_l.process(raw), self.dc_r.process(raw))
+                }
+                None => {
+                    let gain = input_gain * output_gain * fade_gain;
+                    (dry_l * gain, dry_r * gain)
+                }
+            };
+            left[i] = out_l;
+            right[i] = out_r;
+            peaks.out_l = peaks.out_l.max(out_l.abs());
+            peaks.out_r = peaks.out_r.max(out_r.abs());
         }
 
         peaks

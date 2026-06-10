@@ -4,6 +4,7 @@
 pub mod clap_bridge;
 pub mod formatters;
 pub mod gui;
+pub mod loader;
 pub mod param;
 pub mod plugin;
 pub mod presets;
@@ -20,6 +21,7 @@ pub mod ui;
 // Re-export core types for convenient use
 pub use clap_bridge::ClapBridge;
 pub use formatters::*;
+pub use loader::{rescan_directory, Mailbox};
 pub use param::{BoolParam, FloatParam, IntParam, Param};
 pub use plugin::{
     EventIterator, ExtraStateSaver, NoteEvent, OutputBuffer, OutputPortSpec, ResonancePlugin,

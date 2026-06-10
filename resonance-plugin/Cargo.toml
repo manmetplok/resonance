@@ -13,6 +13,8 @@ editor-widgets = ["dep:wayland-plugin-gui"]
 [dependencies]
 clack-plugin = { workspace = true }
 clack-extensions = { workspace = true }
+resonance-common = { path = "../resonance-common" }
+parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 iced = { workspace = true, optional = true }
