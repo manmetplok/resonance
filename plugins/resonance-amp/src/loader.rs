@@ -98,7 +98,9 @@ fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
         };
 
         match nam::parse::load_model_from_file(&path) {
-            Ok(mut model) => {
+            Ok(loaded) => {
+                let mut model = loaded.model;
+                note_model_sample_rate(&deps.viz, loaded.sample_rate);
                 // Reset + prime so the audio thread gets a model that's
                 // already at steady state. This is the core "plop" fix —
                 // WaveNet and LSTM profiles both emit a small transient
@@ -130,6 +132,19 @@ fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
                 *deps.model_name.lock() = format!("Error: {e}");
             }
         }
+    }
+}
+
+/// Record the model's native sample rate for the editor's mismatch
+/// warning, and log if it differs from the engine rate (which shifts the
+/// amp's frequency response — NAM models have no built-in resampling).
+pub fn note_model_sample_rate(viz: &AmpViz, model_rate: f32) {
+    viz.store_model_sample_rate(model_rate);
+    let (_, engine_rate) = viz.read_sample_rates();
+    if engine_rate > 0.0 && (model_rate - engine_rate).abs() > 0.5 {
+        eprintln!(
+            "Warning: NAM model sample rate {model_rate} Hz differs from engine rate {engine_rate} Hz; the amp's frequency response will be shifted"
+        );
     }
 }
 

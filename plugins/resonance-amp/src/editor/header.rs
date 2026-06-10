@@ -103,7 +103,38 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
                 .size(11.0)
                 .color(theme::TEXT_DIM),
         );
+
+        // Sample-rate mismatch warning: a NAM profile runs sample-for-sample
+        // at the engine rate, so a rate mismatch shifts its frequency
+        // response.
+        let (model_hz, engine_hz) = app.viz.read_sample_rates();
+        if model_hz > 0.0 && engine_hz > 0.0 && (model_hz - engine_hz).abs() > 0.5 {
+            ui.add_space(12.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "⚠ model {} / host {}",
+                    format_khz(model_hz),
+                    format_khz(engine_hz)
+                ))
+                .size(11.0)
+                .color(theme::WARN),
+            )
+            .on_hover_text(
+                "This NAM profile was captured at a different sample rate than \
+                 the host is running at, so the amp's frequency response is \
+                 shifted. Run the session at the model's rate for an accurate tone.",
+            );
+        }
     });
+}
+
+fn format_khz(hz: f32) -> String {
+    let khz = hz / 1000.0;
+    if (khz - khz.round()).abs() < 0.05 {
+        format!("{:.0} kHz", khz)
+    } else {
+        format!("{:.1} kHz", khz)
+    }
 }
 
 fn load_model_clicked(app: &AmpEditorApp) {

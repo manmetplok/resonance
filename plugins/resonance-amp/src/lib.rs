@@ -85,7 +85,9 @@ impl ResonanceAmp {
     /// first model is available before `process` runs.
     fn load_model_sync(&self, path: String) {
         match nam::parse::load_model_from_file(&path) {
-            Ok(mut model) => {
+            Ok(loaded) => {
+                let mut model = loaded.model;
+                loader::note_model_sample_rate(&self.viz, loaded.sample_rate);
                 model.reset();
                 loader::prime_model(&mut *model, 2048);
                 let curve = loader::sample_transfer_curve(&mut *model);
@@ -174,6 +176,7 @@ impl ResonancePlugin for ResonanceAmp {
 
         self.tuner = Some(Tuner::new(sample_rate));
         self.input_scratch = vec![0.0; max_buffer_size as usize];
+        self.viz.store_engine_sample_rate(sample_rate);
 
         let path = self.params.model_path.lock().clone();
         if !path.is_empty() {

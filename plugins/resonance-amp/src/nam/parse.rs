@@ -13,6 +13,32 @@ struct NamFile {
     architecture: String,
     config: serde_json::Value,
     weights: Vec<f32>,
+    /// Rate the profile was captured/trained at. Kept as a raw JSON value
+    /// because exporters write it as int, float, or (rarely) a string.
+    #[serde(default)]
+    sample_rate: Option<serde_json::Value>,
+}
+
+/// Sample rate assumed when a .nam file omits the `sample_rate` field.
+/// Older NAM exporters didn't write it; the NAM convention is that such
+/// profiles were captured at 48 kHz.
+pub const DEFAULT_SAMPLE_RATE: f32 = 48_000.0;
+
+/// A parsed NAM model plus the sample rate it expects to run at.
+pub struct LoadedModel {
+    pub model: Box<dyn NamInference>,
+    pub sample_rate: f32,
+}
+
+fn parse_sample_rate(value: Option<&serde_json::Value>) -> f32 {
+    value
+        .and_then(|v| {
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+        })
+        .map(|r| r as f32)
+        .filter(|r| *r > 0.0)
+        .unwrap_or(DEFAULT_SAMPLE_RATE)
 }
 
 /// Internal WaveNet config used by the inference engine.
@@ -272,16 +298,17 @@ impl<'a> WeightReader<'a> {
 }
 
 /// Load a NAM model from a .nam file path.
-pub fn load_model_from_file(path: &str) -> Result<Box<dyn NamInference>, String> {
+pub fn load_model_from_file(path: &str) -> Result<LoadedModel, String> {
     let data = std::fs::read_to_string(Path::new(path))
         .map_err(|e| format!("Failed to read file: {e}"))?;
 
     let nam_file: NamFile =
         serde_json::from_str(&data).map_err(|e| format!("Failed to parse JSON: {e}"))?;
 
+    let sample_rate = parse_sample_rate(nam_file.sample_rate.as_ref());
     let mut reader = WeightReader::new(&nam_file.weights);
 
-    match nam_file.architecture.as_str() {
+    let model: Box<dyn NamInference> = match nam_file.architecture.as_str() {
         "WaveNet" => {
             let config = parse_wavenet_config(nam_file.config)?;
             let model = WaveNetModel::from_config_and_weights(config, &mut reader)?;
@@ -291,7 +318,7 @@ pub fn load_model_from_file(path: &str) -> Result<Box<dyn NamInference>, String>
                     reader.remaining()
                 );
             }
-            Ok(Box::new(model))
+            Box::new(model)
         }
         "LSTM" => {
             let config: LstmConfig = serde_json::from_value(nam_file.config)
@@ -303,8 +330,10 @@ pub fn load_model_from_file(path: &str) -> Result<Box<dyn NamInference>, String>
                     reader.remaining()
                 );
             }
-            Ok(Box::new(model))
+            Box::new(model)
         }
-        other => Err(format!("Unsupported architecture: {other}")),
-    }
+        other => return Err(format!("Unsupported architecture: {other}")),
+    };
+
+    Ok(LoadedModel { model, sample_rate })
 }

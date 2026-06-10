@@ -99,6 +99,11 @@ pub struct AmpViz {
     /// 0.0..1.0 confidence.
     tuner_confidence: AtomicU32,
 
+    /// Native sample rate of the loaded NAM model in Hz; 0.0 = unknown.
+    model_sample_rate: AtomicU32,
+    /// Engine sample rate in Hz (set at `initialize`); 0.0 = unknown.
+    engine_sample_rate: AtomicU32,
+
     /// Rolling per-block scope history (both traces).
     pub scope: Mutex<ScopeHistory>,
 
@@ -117,6 +122,8 @@ impl AmpViz {
             out_r_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             tuner_hz: AtomicU32::new(0.0f32.to_bits()),
             tuner_confidence: AtomicU32::new(0.0f32.to_bits()),
+            model_sample_rate: AtomicU32::new(0.0f32.to_bits()),
+            engine_sample_rate: AtomicU32::new(0.0f32.to_bits()),
             scope: Mutex::new(ScopeHistory::new()),
             transfer_curve: Mutex::new(None),
         })
@@ -161,6 +168,23 @@ impl AmpViz {
         (
             f32::from_bits(self.tuner_hz.load(Ordering::Relaxed)),
             f32::from_bits(self.tuner_confidence.load(Ordering::Relaxed)),
+        )
+    }
+
+    pub fn store_model_sample_rate(&self, hz: f32) {
+        self.model_sample_rate.store(hz.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn store_engine_sample_rate(&self, hz: f32) {
+        self.engine_sample_rate
+            .store(hz.to_bits(), Ordering::Relaxed);
+    }
+
+    /// `(model_hz, engine_hz)`; 0.0 means unknown/not set yet.
+    pub fn read_sample_rates(&self) -> (f32, f32) {
+        (
+            f32::from_bits(self.model_sample_rate.load(Ordering::Relaxed)),
+            f32::from_bits(self.engine_sample_rate.load(Ordering::Relaxed)),
         )
     }
 
