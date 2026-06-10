@@ -213,6 +213,28 @@ impl UndoHistory {
             self.undo.pop_front();
         }
     }
+
+    // ---- Test-only accessors for integration tests -------------------
+    //
+    // `tests/undo_history.rs` verifies capacity trimming and coalesce-key
+    // behaviour, which requires poking the private `capacity` / `undo`
+    // fields. Same `#[doc(hidden)]` convention as the `test_*` accessors
+    // on `Resonance` in `lib.rs`: not part of the user-facing surface,
+    // crate-internal code keeps using the private fields directly.
+
+    /// Test-only: override the history capacity so trimming is testable
+    /// without recording `DEFAULT_HISTORY_CAPACITY` snapshots.
+    #[doc(hidden)]
+    pub fn test_set_capacity(&mut self, capacity: usize) {
+        self.capacity = capacity;
+    }
+
+    /// Test-only: read the undo stack (oldest first) so tests can assert
+    /// entry counts and inspect retained snapshots.
+    #[doc(hidden)]
+    pub fn test_undo_entries(&self) -> &VecDeque<UndoSnapshot> {
+        &self.undo
+    }
 }
 
 impl crate::Resonance {
@@ -369,113 +391,7 @@ impl crate::Resonance {
     }
 }
 
-// ---------------------------------------------------------------------
-// Gate helpers
-// ---------------------------------------------------------------------
-//
-// `update()` runs two pre-dispatch gates on every message: the startup
-// modal gate (no active project → block project-mutating messages) and
-// the bounce-in-progress gate (offline bounce running → block anything
-// that would disturb the engine). Both are pure functions over message
-// shape plus one piece of `Resonance` state; they live alongside the
-// undo classifier here because all three operate as a "look at the
-// message variant and decide what to do" pre-pass before dispatch.
-
-/// While the startup modal is up (no active project), swallow messages
-/// that would mutate project state. Engine events don't flow through
-/// `update()` (see `engine_events.rs`), so this only needs to think
-/// about user-initiated variants.
-fn is_gated_message(message: &crate::message::Message) -> bool {
-    use crate::message::*;
-    match message {
-        // Interactive user input: block.
-        Message::Compose(_)
-        | Message::Transport(_)
-        | Message::Track(_)
-        | Message::Bus(_)
-        | Message::Master(_)
-        | Message::Clip(_)
-        | Message::MidiClip(_)
-        | Message::MidiEditor(_)
-        | Message::Plugin(_)
-        | Message::Viewport(_)
-        | Message::GlobalTrack(_) => true,
-        // Tab switches / auxiliary overlays: block so they can't
-        // steal focus from the startup modal.
-        Message::Ui(UiMessage::SwitchView(_))
-        | Message::Ui(UiMessage::OpenSettings)
-        | Message::Ui(UiMessage::OpenAddTrackMenu) => true,
-        // Benign UI: allow.
-        Message::Ui(UiMessage::CloseSettings)
-        | Message::Ui(UiMessage::CloseAddTrackMenu)
-        | Message::Ui(UiMessage::DismissError)
-        | Message::Ui(UiMessage::StartNewProject)
-        | Message::Ui(UiMessage::SelectTrack(_))
-        | Message::Ui(UiMessage::ConfirmSaveAndQuit)
-        | Message::Ui(UiMessage::ConfirmDiscardAndQuit)
-        | Message::Ui(UiMessage::CancelQuit)
-        | Message::Ui(UiMessage::ToggleGlobalTracks)
-        | Message::Ui(UiMessage::ToggleMidiClockSend)
-        | Message::Ui(UiMessage::SetMidiClockSendDevice(_))
-        | Message::Ui(UiMessage::ToggleMidiClockRecv)
-        | Message::Ui(UiMessage::SetMidiClockRecvDevice(_)) => false,
-        // Project I/O drives the modal itself: always allow.
-        Message::ProjectIo(_) => false,
-        // Timer tick: harmless, drives VU meters — allow.
-        Message::Tick => false,
-        // Window close request: always allow so the app can exit.
-        Message::WindowCloseRequested(_) => false,
-        // Undo/redo need a project to be meaningful — block otherwise.
-        Message::Undo | Message::Redo => true,
-    }
-}
-
-/// True for every user-initiated message we need to drop while a
-/// bounce-in-place run is rendering. The Cancel button on the progress
-/// modal is the one carve-out: that's how the user actually stops the
-/// engine, so it has to flow through.
-fn bounce_blocks_message(message: &crate::message::Message) -> bool {
-    use crate::message::*;
-    match message {
-        // Whitelist: cancel button on the in-progress modal.
-        Message::Track(TrackMessage::Bounce(BounceMessage::CancelInProgress)) => false,
-        // Engine event traffic, project I/O, and the timer tick all
-        // need to keep flowing — the bounce relies on `BounceProgress`
-        // / `TrackBounceCompleted` events to clear the modal.
-        Message::ProjectIo(_) | Message::Tick | Message::WindowCloseRequested(_) => false,
-        // Everything else: block.
-        Message::Compose(_)
-        | Message::Transport(_)
-        | Message::Track(_)
-        | Message::Bus(_)
-        | Message::Master(_)
-        | Message::Clip(_)
-        | Message::MidiClip(_)
-        | Message::MidiEditor(_)
-        | Message::Plugin(_)
-        | Message::Viewport(_)
-        | Message::GlobalTrack(_)
-        | Message::Ui(_)
-        | Message::Undo
-        | Message::Redo => true,
-    }
-}
-
 impl crate::Resonance {
-    /// Combined pre-dispatch gate. Returns `true` when `message` should
-    /// be dropped — either because the startup modal is up and the
-    /// message would mutate project state, or because an offline bounce
-    /// is in progress and the message would disturb the engine.
-    pub(crate) fn gates_message(&self, message: &crate::message::Message) -> bool {
-        if !self.io.has_active_project && is_gated_message(message) {
-            return true;
-        }
-        if self.bounce_in_progress.is_some() && bounce_blocks_message(message) {
-            return true;
-        }
-        false
-    }
-
     /// Run the undo-history side effects for a single message dispatch.
     /// Classifies the message, marks the project dirty when appropriate,
     /// and captures a pre-dispatch snapshot for the Record / RecordCoalesced
@@ -691,147 +607,5 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             // Everything else in Compose mutates project state.
             _ => UndoAction::Record,
         },
-    }
-}
-
-// Inline tests: `resonance-app` is a binary crate with no `lib.rs`. These
-// tests poke private fields (`UndoHistory::capacity`, `undo`, `redo`) to
-// verify capacity trimming and coalesce-key behaviour without exposing
-// internals through the public API. See ARCHITECTURE.md → Test Layout →
-// Binary-crate exception.
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::project::PROJECT_FORMAT_VERSION;
-
-    /// Produce a snapshot that carries `id` in its `file.bpm` field so
-    /// tests can distinguish snapshots on the history stack. `bpm` is
-    /// abused purely as a numeric discriminator here; the rest of the
-    /// snapshot is a valid default.
-    fn dummy_snapshot(id: f32) -> UndoSnapshot {
-        UndoSnapshot {
-            file: ProjectFile {
-                version: PROJECT_FORMAT_VERSION,
-                sample_rate: 44100,
-                bpm: id,
-                time_sig_num: 4,
-                time_sig_den: 4,
-                metronome_enabled: false,
-                master_volume: 0.0,
-                master_plugins: Vec::new(),
-                master_fx_bypassed: false,
-                loop_enabled: false,
-                loop_in: 0,
-                loop_out: 0,
-                tracks: Vec::new(),
-                clips: Vec::new(),
-                midi_clips: Vec::new(),
-                busses: Vec::new(),
-                section_definitions: Vec::new(),
-                section_placements: Vec::new(),
-                tempo_events: Vec::new(),
-                signature_events: Vec::new(),
-                midi_clock_send_enabled: false,
-                midi_clock_send_device: None,
-                midi_clock_recv_enabled: false,
-                midi_clock_recv_device: None,
-                drum_groups: Vec::new(),
-                drum_patterns: Vec::new(),
-            },
-            project_dir: PathBuf::new(),
-            midi_notes: HashMap::new(),
-            plugin_states: HashMap::new(),
-            extras: UndoExtras::default(),
-        }
-    }
-
-    #[test]
-    fn record_clears_redo() {
-        let mut h = UndoHistory::new();
-        h.record(dummy_snapshot(1.0));
-        // Simulate an undo: redo now has one entry.
-        let popped = h.pop_undo().unwrap();
-        h.push_redo(popped);
-        assert!(h.can_redo());
-        // Recording a new action must wipe redo.
-        h.record(dummy_snapshot(2.0));
-        assert!(!h.can_redo());
-    }
-
-    #[test]
-    fn capacity_trims_oldest() {
-        let mut h = UndoHistory::new();
-        h.capacity = 3;
-        h.record(dummy_snapshot(1.0));
-        h.record(dummy_snapshot(2.0));
-        h.record(dummy_snapshot(3.0));
-        h.record(dummy_snapshot(4.0));
-        assert_eq!(h.undo.len(), 3);
-        // The oldest (1.0) should have been trimmed; top of stack is 4.0.
-        assert_eq!(h.pop_undo().unwrap().file.bpm, 4.0);
-        assert_eq!(h.pop_undo().unwrap().file.bpm, 3.0);
-        assert_eq!(h.pop_undo().unwrap().file.bpm, 2.0);
-        assert!(h.pop_undo().is_none());
-    }
-
-    #[test]
-    fn commit_records_pending_transaction() {
-        let mut h = UndoHistory::new();
-        h.begin(dummy_snapshot(1.0));
-        assert!(h.has_pending());
-        h.commit();
-        assert!(!h.has_pending());
-        assert!(h.can_undo());
-        assert_eq!(h.undo[0].file.bpm, 1.0);
-    }
-
-    #[test]
-    fn coalesces_same_key_and_breaks_on_intervening_action() {
-        let mut h = UndoHistory::new();
-        let key = CoalesceKey::TrackVolume(7);
-
-        // First entry under `key` pushes normally.
-        h.record_coalesced(dummy_snapshot(1.0), key.clone());
-        assert_eq!(h.undo.len(), 1);
-        // Subsequent entries under the same key do not push.
-        h.record_coalesced(dummy_snapshot(2.0), key.clone());
-        h.record_coalesced(dummy_snapshot(3.0), key.clone());
-        assert_eq!(h.undo.len(), 1);
-        // The retained entry is the original (pre-burst) snapshot.
-        assert_eq!(h.undo[0].file.bpm, 1.0);
-
-        // A different coalesce key breaks the run and pushes a new entry.
-        h.record_coalesced(dummy_snapshot(10.0), CoalesceKey::TrackPan(7));
-        assert_eq!(h.undo.len(), 2);
-
-        // An atomic record also breaks any subsequent coalesce run.
-        h.record(dummy_snapshot(20.0));
-        h.record_coalesced(dummy_snapshot(4.0), key);
-        assert_eq!(h.undo.len(), 4);
-    }
-
-    #[test]
-    fn coalesce_run_is_broken_by_pop() {
-        let mut h = UndoHistory::new();
-        let key = CoalesceKey::MasterVolume;
-        h.record_coalesced(dummy_snapshot(1.0), key.clone());
-        h.pop_undo();
-        // After popping, the next coalesced record must push fresh.
-        h.record_coalesced(dummy_snapshot(2.0), key);
-        assert_eq!(h.undo.len(), 1);
-        assert_eq!(h.undo[0].file.bpm, 2.0);
-    }
-
-    #[test]
-    fn clear_empties_everything() {
-        let mut h = UndoHistory::new();
-        h.record(dummy_snapshot(1.0));
-        h.begin(dummy_snapshot(2.0));
-        let snap = h.pop_undo().unwrap();
-        h.push_redo(snap);
-        h.clear();
-        assert!(!h.can_undo());
-        assert!(!h.can_redo());
-        assert!(!h.has_pending());
     }
 }
