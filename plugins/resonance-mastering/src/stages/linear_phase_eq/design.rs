@@ -15,6 +15,7 @@
 //!    in the middle of the FIR.
 //! 5. Truncate to `FIR_LENGTH` taps, Hann-window to taper the edges.
 
+use resonance_dsp::Biquad;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
@@ -33,6 +34,9 @@ pub struct FirDesigner {
     /// Reusable impulse-response buffer. Returned as a borrow from
     /// [`design`], avoiding a fresh heap allocation on every call.
     h: Vec<f32>,
+    /// Reusable per-band biquad buffer so each band is designed once
+    /// per redesign instead of once per frequency bin.
+    biquads: Vec<Biquad>,
 }
 
 impl FirDesigner {
@@ -46,6 +50,7 @@ impl FirDesigner {
             scratch: vec![Complex::new(0.0, 0.0); FFT_SIZE],
             hann,
             h: vec![0.0; FIR_LENGTH],
+            biquads: Vec::new(),
         }
     }
 
@@ -57,16 +62,22 @@ impl FirDesigner {
         let half = FFT_SIZE / 2;
         let bin_hz = sample_rate / FFT_SIZE as f32;
 
+        // Design each enabled band's biquad once up front; the per-bin
+        // loop below only evaluates magnitudes.
+        self.biquads.clear();
+        self.biquads.extend(
+            bands
+                .iter()
+                .filter(|b| b.enabled)
+                .map(|b| b.to_biquad(sample_rate)),
+        );
+
         // Compute composite magnitude response at each positive-frequency
         // bin. The biquad chain is cascaded by multiplying magnitudes.
         for k in 0..=half {
             let f = k as f32 * bin_hz;
             let mut mag = 1.0_f32;
-            for band in bands {
-                if !band.enabled {
-                    continue;
-                }
-                let bq = band.to_biquad(sample_rate);
+            for bq in &self.biquads {
                 mag *= bq.magnitude(f, sample_rate);
             }
             self.scratch[k] = Complex::new(mag, 0.0);
