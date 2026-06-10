@@ -23,6 +23,7 @@ pub mod presets;
 pub mod project;
 pub mod recent;
 pub mod state;
+mod test_support;
 pub mod theme;
 pub mod undo;
 pub mod update;
@@ -216,135 +217,8 @@ impl Resonance {
     // `state/plugin_index.rs`; `track_id_at_arrange_y` lives in
     // `state/arrange.rs`.
 
-    // ---- Public read-only accessors for integration tests ----
-    //
-    // These exist so `tests/*.rs` files (which are external compile
-    // units and see only public API) can verify reducer-driven state
-    // changes without poking at private fields. They're `#[doc(hidden)]`
-    // because they aren't part of the library's user-facing surface —
-    // application code inside the crate still goes through the
-    // `pub(crate)` fields directly.
-
-    #[doc(hidden)]
-    pub fn test_tempo_map(&self) -> &resonance_audio::types::TempoMap {
-        &self.tempo_map
-    }
-
-    #[doc(hidden)]
-    pub fn test_tempo_events(&self) -> &[state::TempoEvent] {
-        &self.tempo_events
-    }
-
-    #[doc(hidden)]
-    pub fn test_signature_events(&self) -> &[state::SignatureEvent] {
-        &self.signature_events
-    }
-
-    #[doc(hidden)]
-    pub fn test_transport_bpm(&self) -> f32 {
-        self.transport.bpm
-    }
-
-    #[doc(hidden)]
-    pub fn test_transport_time_sig(&self) -> (u8, u8) {
-        (self.transport.time_sig_num, self.transport.time_sig_den)
-    }
-
-    #[doc(hidden)]
-    pub fn test_selected_global_event(&self) -> Option<state::SelectedGlobalEvent> {
-        self.interaction.selected_global_event
-    }
-
-    /// Test-only: borrow the track registry to walk `sorted_tracks()` /
-    /// inspect sub-track links from an integration test (which doesn't
-    /// see `pub(crate)` fields). Used by
-    /// `tests/mixer_sub_track_grouping.rs` to assert the displayed
-    /// strip order without parsing the rendered widget tree.
-    #[doc(hidden)]
-    pub fn test_registry(&self) -> &state::TrackRegistry {
-        &self.registry
-    }
-
-    /// Test-only: read the mixer-side expanded-sub-track-parents set,
-    /// also driven from `tests/mixer_sub_track_grouping.rs`.
-    #[doc(hidden)]
-    pub fn test_expanded_sub_track_parents(
-        &self,
-    ) -> &std::collections::HashSet<resonance_audio::types::TrackId> {
-        &self.mixer.expanded_sub_track_parents
-    }
-
-    /// Test-only: forcibly clear an expanded-sub-track-parent flag so
-    /// the test can flip between expanded / collapsed without dragging
-    /// in the full `Message` plumbing.
-    #[doc(hidden)]
-    pub fn test_collapse_sub_track_parent(
-        &mut self,
-        parent_id: resonance_audio::types::TrackId,
-    ) {
-        self.mixer.expanded_sub_track_parents.remove(&parent_id);
-    }
-
-    /// Test-only: read the GUI-side MIDI clip list. Used by reducer
-    /// tests under `tests/` that need to inspect post-drag/trim clip
-    /// geometry without poking at the engine round-trip.
-    #[doc(hidden)]
-    pub fn test_midi_clips(&self) -> &[state::MidiClipState] {
-        &self.midi_clips
-    }
-
-    /// Test-only: push a MIDI clip directly into GUI state, bypassing
-    /// the engine notification round-trip. Returns the clip's id so
-    /// the test can dispatch trim/drag messages against it.
-    #[doc(hidden)]
-    pub fn test_push_midi_clip(&mut self, clip: state::MidiClipState) {
-        self.midi_clips.push(clip);
-    }
-
-    /// Test-only: overwrite the sample rate. Tempo-map projections used
-    /// by the MIDI clip trim reducer depend on `sample_rate`; integration
-    /// tests fix it to a known value so the projection math is
-    /// deterministic.
-    #[doc(hidden)]
-    pub fn test_set_sample_rate(&mut self, sample_rate: u32) {
-        self.sample_rate = sample_rate;
-    }
-
-    /// Test-only: rebuild the GUI-side tempo map from the current
-    /// `tempo_events` / `signature_events`. Mirrors what the global-
-    /// track reducers call after a tempo edit; surfaced so tests can
-    /// seed a custom tempo map without going through the message path.
-    #[doc(hidden)]
-    pub fn test_rebuild_tempo_map(&mut self) {
-        self.rebuild_tempo_map();
-    }
-
-    /// Test-only: push a tempo event so the rebuilt tempo map has the
-    /// requested ramp/step. Caller must follow with
-    /// `test_rebuild_tempo_map` (and usually `test_set_sample_rate`).
-    #[doc(hidden)]
-    pub fn test_push_tempo_event(&mut self, event: state::TempoEvent) {
-        self.tempo_events.push(event);
-    }
-
-    /// Test-only: overwrite the arrange-view zoom (pixels per second).
-    /// MIDI clip trim translates a pointer-pixel delta into samples via
-    /// `delta_px / zoom`, so the reducer test fixes a known zoom value
-    /// to make the delta arithmetic deterministic.
-    #[doc(hidden)]
-    pub fn test_set_arrange_zoom(&mut self, zoom: f32) {
-        self.viewport.zoom = zoom;
-    }
-
-    /// Test-only: flip the project-active flag so the message gate in
-    /// `gates_message` lets reducer-driven `MidiClipMessage` /
-    /// `ClipMessage` traffic through. Demo seeding does this in the
-    /// real app; reducer tests that don't seed the demo flip it
-    /// directly.
-    #[doc(hidden)]
-    pub fn test_set_active_project(&mut self, active: bool) {
-        self.io.has_active_project = active;
-    }
+    // Public `#[doc(hidden)]` `test_*` accessors / mutators for the
+    // integration tests under `tests/` live in `test_support.rs`.
 
     pub(crate) fn sorted_tracks(&self) -> &[TrackState] {
         self.registry.sorted_tracks()
