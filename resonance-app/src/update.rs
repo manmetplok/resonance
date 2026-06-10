@@ -1,7 +1,9 @@
 /// Update logic and subscription for the Resonance application.
 use crate::message::*;
-use crate::theme;
 use iced::{keyboard, Subscription, Task};
+
+/// Tick interval (ms) for the subscription timer that drains engine events.
+pub const TICK_INTERVAL_MS: u64 = 16;
 
 pub mod bus;
 pub mod clips;
@@ -84,7 +86,7 @@ impl crate::Resonance {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let tick = iced::time::every(std::time::Duration::from_millis(theme::TICK_INTERVAL_MS))
+        let tick = iced::time::every(std::time::Duration::from_millis(TICK_INTERVAL_MS))
             .map(|_| Message::Tick);
         let keys = keyboard::listen().filter_map(|event| match event {
             keyboard::Event::KeyPressed {

@@ -335,10 +335,6 @@ pub const MIXER_STRIP_HEIGHT: u16 = 460;
 pub const BUS_STRIP_HEIGHT: u16 = 380;
 /// Pixel radius around a clip's left/right edge that starts a trim (not move).
 pub const CLIP_EDGE_THRESHOLD: f32 = 6.0;
-/// VU-meter peak decay factor applied per frame tick.
-pub const PEAK_DECAY: f32 = 0.85;
-/// Tick interval (ms) for the subscription timer that drains engine events.
-pub const TICK_INTERVAL_MS: u64 = 16;
 
 // ---------------------------------------------------------------------------
 // Radius scale.

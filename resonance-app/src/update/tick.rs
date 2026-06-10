@@ -4,9 +4,11 @@
 use iced::Task;
 
 use crate::message::Message;
-use crate::theme;
 use crate::Resonance;
 use resonance_audio::types::{AudioCommand, BusId, TrackId};
+
+/// VU-meter peak decay factor applied per frame tick.
+pub const PEAK_DECAY: f32 = 0.85;
 
 /// Handle the per-frame subscription tick.
 pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
@@ -46,15 +48,15 @@ fn refresh_midi_devices_if_stale(r: &mut Resonance) {
 /// GUI thread from contending on engine RwLocks.
 fn update_vu_meters(r: &mut Resonance) {
     for track in &mut r.registry.tracks {
-        track.level_l *= theme::PEAK_DECAY;
-        track.level_r *= theme::PEAK_DECAY;
+        track.level_l *= PEAK_DECAY;
+        track.level_r *= PEAK_DECAY;
     }
     for bus in &mut r.registry.busses {
-        bus.level_l *= theme::PEAK_DECAY;
-        bus.level_r *= theme::PEAK_DECAY;
+        bus.level_l *= PEAK_DECAY;
+        bus.level_r *= PEAK_DECAY;
     }
-    r.master_level_l *= theme::PEAK_DECAY;
-    r.master_level_r *= theme::PEAK_DECAY;
+    r.master_level_l *= PEAK_DECAY;
+    r.master_level_r *= PEAK_DECAY;
     let _ = r.engine.send(AudioCommand::PollPeaks);
 }
 
