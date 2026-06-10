@@ -53,6 +53,7 @@ pub struct ReverbDsp {
     decay_gain: f32,
     mod_depth_samples: f32,
     room_size_ms: f32,
+    frozen: bool,
 
     /// Running sum-of-squares for wet RMS (reset by `take_wet_rms`).
     wet_sumsq: f64,
@@ -98,6 +99,7 @@ impl ReverbDsp {
             decay_gain: 0.85,
             mod_depth_samples: 0.0,
             room_size_ms: 150.0,
+            frozen: false,
             wet_sumsq: 0.0,
             wet_count: 0,
         }
@@ -187,9 +189,12 @@ impl ReverbDsp {
         }
     }
 
-    /// Set or unset freeze mode. When frozen, decay_gain is 1.0 (infinite tail).
+    /// Set or unset freeze mode. When frozen, decay_gain is 1.0 (infinite
+    /// tail) and the tank input is muted so the energy-preserving loop
+    /// doesn't accumulate fresh input without bound.
     /// When unfreezing, recalculate decay_gain from current room size and a default RT60.
     pub fn set_freeze(&mut self, freeze: bool) {
+        self.frozen = freeze;
         if freeze {
             self.decay_gain = 1.0;
         } else if self.decay_gain >= 1.0 {
@@ -254,10 +259,18 @@ impl ReverbDsp {
         }
 
         // Run the diffused input through the FDN feedback loop and get
-        // back the per-channel tail samples.
+        // back the per-channel tail samples. While frozen the tank input
+        // is muted (same hard gate as resonance-delay's freeze): the
+        // Householder loop at decay 1.0 preserves energy, so any fresh
+        // input summed in would grow the tail without bound.
+        let tank_input = if self.frozen {
+            [0.0f32; CHANNELS]
+        } else {
+            diffused
+        };
         let fdn_output = self
             .fdn
-            .process(&diffused, self.mod_depth_samples, self.decay_gain);
+            .process(&tank_input, self.mod_depth_samples, self.decay_gain);
 
         // The per-channel wet signal is `diffused + fdn_output`: the
         // immediate diffused signal (early reflections from the
