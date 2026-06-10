@@ -87,6 +87,10 @@ pub struct Multiband {
     /// Scratch buffers for the delayed input path (stereo).
     xd_l: Vec<f32>,
     xd_r: Vec<f32>,
+
+    /// `cfg.enabled` of the previous chunk, used to detect the enable
+    /// edge so the idled crossover filters can be restarted cleanly.
+    was_enabled: bool,
 }
 
 impl Multiband {
@@ -114,6 +118,7 @@ impl Multiband {
             y3_r: vec![0.0; max_buffer],
             xd_l: vec![0.0; max_buffer],
             xd_r: vec![0.0; max_buffer],
+            was_enabled: false,
         }
     }
 
@@ -126,6 +131,7 @@ impl Multiband {
         }
         self.delay_left.reset();
         self.delay_right.reset();
+        self.was_enabled = false;
     }
 
     /// Stage latency in samples (identical to one linear-phase lowpass).
@@ -164,21 +170,41 @@ impl Multiband {
             return;
         }
 
+        let just_enabled = cfg.enabled && !self.was_enabled;
+        self.was_enabled = cfg.enabled;
+
+        if !cfg.enabled {
+            // Bypass path: output = delayed input. The crossovers' only
+            // contribution here would be their group delay, which the
+            // input delay line reproduces exactly, so skip the three FIR
+            // convolutions and run only the delay. Latency stays at
+            // `latency()` either way, which the chain's latency model
+            // and whole-plugin bypass delay depend on.
+            for i in 0..frames {
+                left[i] = self.delay_left.push(left[i]);
+                right[i] = self.delay_right.push(right[i]);
+            }
+            return;
+        }
+
+        if just_enabled {
+            // The crossovers idled during bypass, so their streaming
+            // state is stale. Restart them from silence: the subtraction
+            // topology sums the four bands to the delayed input for any
+            // filter state, so the output stays continuous — the band
+            // boundaries just settle over one FIR length instead of
+            // leaking pre-bypass audio into the compressors.
+            self.xo1.reset();
+            self.xo2.reset();
+            self.xo3.reset();
+        }
+
         // Keep the crossover filters in sync with the current config.
         self.xo1.set_cutoff(cfg.crossover_hz[0]);
         self.xo2.set_cutoff(cfg.crossover_hz[1]);
         self.xo3.set_cutoff(cfg.crossover_hz[2]);
 
         self.run_crossover_network(left, right, frames);
-
-        if !cfg.enabled {
-            // Bypass path: output = delayed input. Preserves latency so
-            // the host doesn't see a latency change when toggling.
-            left[..frames].copy_from_slice(&self.xd_l[..frames]);
-            right[..frames].copy_from_slice(&self.xd_r[..frames]);
-            return;
-        }
-
         self.build_band_signals(frames);
         self.compress_bands(cfg, frames);
         self.sum_bands(left, right, frames);

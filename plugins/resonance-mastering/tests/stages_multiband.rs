@@ -13,6 +13,9 @@ fn sine_stereo(sr: f32, freq: f32, amp: f32, n: usize) -> (Vec<f32>, Vec<f32>) {
 
 #[test]
 fn disabled_is_pure_delay() {
+    // The bypass path is a plain delay line (the crossovers don't run),
+    // so the output must be bit-exactly the input delayed by the
+    // reported latency, zero-padded at the start.
     let sr = 48_000.0_f32;
     let latency = Multiband::latency();
     let n = latency + 2048;
@@ -23,11 +26,59 @@ fn disabled_is_pure_delay() {
     let mut r = l.clone();
     mb.process_stereo(&mut l, &mut r, &MultibandConfig::default());
 
+    for i in 0..n {
+        let expected = if i < latency {
+            0.0
+        } else {
+            input_l[i - latency]
+        };
+        assert!(
+            l[i].to_bits() == expected.to_bits() && r[i].to_bits() == expected.to_bits(),
+            "bypass output differs from delayed input at frame {i}"
+        );
+    }
+}
+
+#[test]
+fn toggling_enable_stays_continuous() {
+    // Disabled → enabled → disabled with all band compressors off. The
+    // crossovers restart from silence on the enable edge, but the
+    // subtraction topology sums the bands to the delayed input for any
+    // filter state, so the output must track the delayed input across
+    // both toggles (and through the filters' warm-up) without a glitch.
+    let sr = 48_000.0_f32;
+    let latency = Multiband::latency();
+    let block = 512;
+    let seg = latency + 2048;
+    let n = 3 * seg;
+    let mut mb = Multiband::new(sr, block);
+
+    let off = MultibandConfig::default();
+    let on = MultibandConfig {
+        enabled: true,
+        ..MultibandConfig::default()
+    };
+
+    let (input_l, _input_r) = sine_stereo(sr, 440.0, 0.5, n);
+    let mut l = input_l.clone();
+    let mut r = l.clone();
+    let mut start = 0;
+    while start < n {
+        let end = (start + block).min(n);
+        let cfg = if start < seg || start >= 2 * seg {
+            &off
+        } else {
+            &on
+        };
+        mb.process_stereo(&mut l[start..end], &mut r[start..end], cfg);
+        start = end;
+    }
+
     let mut max_err = 0.0_f32;
     for i in latency..n {
         max_err = max_err.max((l[i] - input_l[i - latency]).abs());
     }
-    assert!(max_err < 5e-3, "bypass delay error = {max_err}");
+    assert!(max_err < 2e-2, "toggle continuity error = {max_err}");
 }
 
 #[test]
