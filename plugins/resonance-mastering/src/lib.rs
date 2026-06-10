@@ -104,9 +104,10 @@ impl ResonancePlugin for ResonanceMastering {
         resonance_common::flush_denormals();
 
         if self.params.bypass.value() {
-            // Keep metering active even when bypassed so the UI stays live.
+            // Latency-matched dry path: keeps the bypassed output
+            // aligned with `latency_samples()` and the meters live.
             if let Some(chain) = &mut self.chain {
-                chain.meters.feed(left, right, &self.viz);
+                chain.process_bypassed(left, right, &self.viz);
             }
             return;
         }

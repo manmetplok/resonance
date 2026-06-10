@@ -9,7 +9,7 @@
 //! Later phases will add stereo imaging, the true-peak limiter, and
 //! dither between the multiband and the meter.
 
-use resonance_dsp::db_to_linear;
+use resonance_dsp::{db_to_linear, DelayLine};
 
 use crate::dsp::MeteringCore;
 use crate::params::MasteringParams;
@@ -31,7 +31,13 @@ pub struct Chain {
     imager: Imager,
     limiter: Limiter,
     dither: Dither,
-    pub(crate) meters: MeteringCore,
+    meters: MeteringCore,
+    /// Latency-matched dry delay for whole-plugin bypass, mirroring the
+    /// per-stage bypasses (multiband, limiter). Fed with the raw input
+    /// on every block — bypassed or not — so toggling bypass switches
+    /// to an already-warm delayed signal instead of zeros.
+    bypass_delay_l: DelayLine,
+    bypass_delay_r: DelayLine,
     /// Smoothed input-trim gain (linear). Ramped toward the param's
     /// current value across each block so pushing the trim slider
     /// doesn't click.
@@ -40,16 +46,25 @@ pub struct Chain {
 
 impl Chain {
     pub fn new(sample_rate: f32, max_buffer: usize, viz: &MasteringViz) -> Self {
+        let corrective_eq = LinearPhaseEq::new(sample_rate);
+        let tonal_eq = LinearPhaseEq::new(sample_rate);
+        let limiter = Limiter::new(sample_rate);
+        let max_latency = corrective_eq.latency()
+            + tonal_eq.latency()
+            + Multiband::latency()
+            + limiter.latency();
         Self {
-            corrective_eq: LinearPhaseEq::new(sample_rate),
+            corrective_eq,
             glue_compressor: GlueCompressor::new(sample_rate),
             saturator: Saturator::new(sample_rate),
-            tonal_eq: LinearPhaseEq::new(sample_rate),
+            tonal_eq,
             multiband: Multiband::new(sample_rate, max_buffer),
             imager: Imager::new(sample_rate),
-            limiter: Limiter::new(sample_rate),
+            limiter,
             dither: Dither::new(),
             meters: MeteringCore::new(sample_rate, viz),
+            bypass_delay_l: DelayLine::new(max_latency + 1),
+            bypass_delay_r: DelayLine::new(max_latency + 1),
             input_trim_lin: 1.0,
         }
     }
@@ -64,6 +79,8 @@ impl Chain {
         self.limiter.reset();
         self.dither.reset();
         self.meters.reset();
+        self.bypass_delay_l.clear();
+        self.bypass_delay_r.clear();
         self.input_trim_lin = 1.0;
     }
 
@@ -79,6 +96,23 @@ impl Chain {
             + self.limiter.latency()) as u32
     }
 
+    /// Whole-plugin bypass path: output = raw input delayed by exactly
+    /// [`Chain::latency`] samples so host delay compensation and A/B
+    /// comparisons stay aligned, same as the per-stage bypasses. The
+    /// metering tap still runs (on the delayed signal the listener
+    /// actually hears) so the UI stays live.
+    pub fn process_bypassed(&mut self, left: &mut [f32], right: &mut [f32], viz: &MasteringViz) {
+        let frames = left.len().min(right.len());
+        let delay = self.latency() as usize;
+        for i in 0..frames {
+            self.bypass_delay_l.push(left[i]);
+            self.bypass_delay_r.push(right[i]);
+            left[i] = self.bypass_delay_l.tap(delay);
+            right[i] = self.bypass_delay_r.tap(delay);
+        }
+        self.meters.feed(left, right, viz);
+    }
+
     /// Run the chain on a stereo block. Audio is modified in place;
     /// the metering tap runs last so the meters reflect the final
     /// post-chain output.
@@ -89,12 +123,20 @@ impl Chain {
         params: &MasteringParams,
         viz: &MasteringViz,
     ) {
+        let frames = left.len().min(right.len());
+
+        // Keep the bypass delay warm with the pre-trim input so
+        // engaging bypass doesn't switch onto a cold (zeroed) line.
+        for i in 0..frames {
+            self.bypass_delay_l.push(left[i]);
+            self.bypass_delay_r.push(right[i]);
+        }
+
         // Input trim: linearly ramp from the last applied gain to the
         // current param value across the block so parameter changes
         // don't click. Runs on every block — identity trim is a
         // multiply by 1.0 and is cheap.
         let target_trim = db_to_linear(params.input_trim_db.value());
-        let frames = left.len().min(right.len());
         if frames > 0 {
             let step = (target_trim - self.input_trim_lin) / frames as f32;
             let mut g = self.input_trim_lin;

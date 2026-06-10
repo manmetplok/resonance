@@ -127,6 +127,47 @@ fn default_chain_is_pure_delay() {
 }
 
 #[test]
+fn bypass_output_is_input_delayed_by_latency() {
+    // With the plugin bypassed the output must still be delayed by
+    // exactly `latency_samples()` so host delay compensation and A/B
+    // comparisons stay aligned with the processed path.
+    let mut plugin = ResonanceMastering::new();
+    plugin.initialize(48_000.0, 4096);
+    plugin.params().bypass.set_value(true);
+    let latency = plugin.latency_samples() as usize;
+    assert!(latency > 0, "chain should report nonzero latency");
+    let total = latency + 4096;
+
+    let (out_l, out_r) = stream_sine(&mut plugin, 440.0, 0.5, total, 512);
+
+    // Regenerate the input exactly as `stream_sine` does (accumulated
+    // phase) so the delayed copy can be compared bit-exactly.
+    let sr = 48_000.0_f32;
+    let step = 440.0 * std::f32::consts::TAU / sr;
+    let mut phase = 0.0_f32;
+    let input: Vec<f32> = (0..total)
+        .map(|_| {
+            let s = phase.sin() * 0.5;
+            phase += step;
+            s
+        })
+        .collect();
+
+    // Pre-latency output must be the delay line's zero fill.
+    for i in 0..latency {
+        assert_eq!(out_l[i], 0.0, "expected silence at sample {i}");
+        assert_eq!(out_r[i], 0.0, "expected silence at sample {i}");
+    }
+    // After that, an exact delayed copy of the input.
+    let mut max_err = 0.0_f32;
+    for i in latency..total {
+        max_err = max_err.max((out_l[i] - input[i - latency]).abs());
+        max_err = max_err.max((out_r[i] - input[i - latency]).abs());
+    }
+    assert_eq!(max_err, 0.0, "bypass should be a bit-exact delayed copy");
+}
+
+#[test]
 fn bell_cut_propagates_through_chain() {
     // Enable a -12 dB bell band on the corrective EQ at 1 kHz.
     // A 1 kHz sine through the plugin should emerge ~4× quieter.
