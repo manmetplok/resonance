@@ -10,7 +10,7 @@ use super::lyrics::LyricLine;
 /// chord-mood pairing.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString,
+    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
 )]
 pub enum VocalMood {
     Yearning,
@@ -22,14 +22,7 @@ pub enum VocalMood {
 }
 
 impl VocalMood {
-    pub const ALL: [VocalMood; 6] = [
-        VocalMood::Yearning,
-        VocalMood::Defiant,
-        VocalMood::Hopeful,
-        VocalMood::Reflective,
-        VocalMood::Joyful,
-        VocalMood::Melancholy,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn as_str(self) -> &'static str {
         self.into()
@@ -39,7 +32,7 @@ impl VocalMood {
 /// Lyrical point of view.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString,
+    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
 )]
 pub enum VocalPov {
     #[strum(serialize = "1st singular")]
@@ -54,13 +47,7 @@ pub enum VocalPov {
 }
 
 impl VocalPov {
-    pub const ALL: [VocalPov; 5] = [
-        VocalPov::FirstSingular,
-        VocalPov::FirstPlural,
-        VocalPov::SecondPerson,
-        VocalPov::ThirdPerson,
-        VocalPov::Narrator,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn as_str(self) -> &'static str {
         self.into()
@@ -70,7 +57,7 @@ impl VocalPov {
 /// End-rhyme scheme applied to the four (or N) generated lines.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString,
+    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
 )]
 pub enum VocalRhymeScheme {
     #[strum(serialize = "AABB")]
@@ -85,13 +72,7 @@ pub enum VocalRhymeScheme {
 }
 
 impl VocalRhymeScheme {
-    pub const ALL: [VocalRhymeScheme; 5] = [
-        VocalRhymeScheme::Aabb,
-        VocalRhymeScheme::Abab,
-        VocalRhymeScheme::Abcb,
-        VocalRhymeScheme::Abba,
-        VocalRhymeScheme::Free,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn as_str(self) -> &'static str {
         self.into()
@@ -101,7 +82,7 @@ impl VocalRhymeScheme {
 /// Voice type / tessitura preset.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString,
+    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
 )]
 pub enum VoiceType {
     Soprano,
@@ -114,14 +95,7 @@ pub enum VoiceType {
 }
 
 impl VoiceType {
-    pub const ALL: [VoiceType; 6] = [
-        VoiceType::Soprano,
-        VoiceType::MezzoSoprano,
-        VoiceType::Alto,
-        VoiceType::Tenor,
-        VoiceType::Baritone,
-        VoiceType::Bass,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn as_str(self) -> &'static str {
         self.into()
@@ -158,7 +132,7 @@ impl VoiceType {
 /// Note → syllable mapping mode.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString,
+    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
 )]
 pub enum SyllableMode {
     /// One note per syllable.
@@ -170,11 +144,7 @@ pub enum SyllableMode {
 }
 
 impl SyllableMode {
-    pub const ALL: [SyllableMode; 3] = [
-        SyllableMode::Syllabic,
-        SyllableMode::Mixed,
-        SyllableMode::Melismatic,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn as_str(self) -> &'static str {
         self.into()
@@ -186,7 +156,7 @@ impl SyllableMode {
 /// fall, wave, flat) without polluting the instrument-melody enum.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString,
+    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
 )]
 pub enum VocalContour {
     Arch,
@@ -197,13 +167,7 @@ pub enum VocalContour {
 }
 
 impl VocalContour {
-    pub const ALL: [VocalContour; 5] = [
-        VocalContour::Arch,
-        VocalContour::Rise,
-        VocalContour::Fall,
-        VocalContour::Wave,
-        VocalContour::Flat,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn as_str(self) -> &'static str {
         self.into()
@@ -221,7 +185,7 @@ impl VocalContour {
 /// `Chant` ignores the contour because it sits on one pitch.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString,
+    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
 )]
 pub enum VocalStyle {
     /// Stepwise, breath-driven, contour-shaped — Sting / Adele / Sade.
@@ -246,14 +210,7 @@ pub enum VocalStyle {
 }
 
 impl VocalStyle {
-    pub const ALL: [VocalStyle; 6] = [
-        VocalStyle::PopBallad,
-        VocalStyle::Conversational,
-        VocalStyle::Hymnal,
-        VocalStyle::Folk,
-        VocalStyle::Anthemic,
-        VocalStyle::Chant,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn as_str(self) -> &'static str {
         self.into()
@@ -267,7 +224,7 @@ impl VocalStyle {
 /// per-voicebank inner pick.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString,
+    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
 )]
 pub enum VocalVoicebank {
     /// TIGER (English DiffSinger v106) — 7 community speakers, the
@@ -286,11 +243,7 @@ pub enum VocalVoicebank {
 }
 
 impl VocalVoicebank {
-    pub const ALL: [VocalVoicebank; 3] = [
-        VocalVoicebank::Tiger,
-        VocalVoicebank::Lilia,
-        VocalVoicebank::Meiji,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn as_str(self) -> &'static str {
         self.into()
@@ -307,7 +260,7 @@ impl VocalVoicebank {
 /// is hidden when Lilia is selected.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString,
+    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
 )]
 pub enum VocalSinger {
     Glam,
@@ -320,15 +273,7 @@ pub enum VocalSinger {
 }
 
 impl VocalSinger {
-    pub const ALL: [VocalSinger; 7] = [
-        VocalSinger::Glam,
-        VocalSinger::Fresh,
-        VocalSinger::Disco,
-        VocalSinger::Royal,
-        VocalSinger::Electric,
-        VocalSinger::Mystic,
-        VocalSinger::Vinyl,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn as_str(self) -> &'static str {
         self.into()
@@ -357,7 +302,7 @@ impl VocalSinger {
 /// neutral, Hunter is strong, Lilith is mature, Phantom is whisper).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString,
+    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
 )]
 pub enum VocalSingerMeiji {
     Standard,
@@ -367,12 +312,7 @@ pub enum VocalSingerMeiji {
 }
 
 impl VocalSingerMeiji {
-    pub const ALL: [VocalSingerMeiji; 4] = [
-        VocalSingerMeiji::Standard,
-        VocalSingerMeiji::Hunter,
-        VocalSingerMeiji::Lilith,
-        VocalSingerMeiji::Phantom,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn as_str(self) -> &'static str {
         self.into()
@@ -395,7 +335,7 @@ impl VocalSingerMeiji {
 /// Vocal-line timbre preset.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString,
+    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
 )]
 pub enum VocalTimbre {
     Airy,
@@ -405,12 +345,7 @@ pub enum VocalTimbre {
 }
 
 impl VocalTimbre {
-    pub const ALL: [VocalTimbre; 4] = [
-        VocalTimbre::Airy,
-        VocalTimbre::Warm,
-        VocalTimbre::Edged,
-        VocalTimbre::Bright,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn as_str(self) -> &'static str {
         self.into()
