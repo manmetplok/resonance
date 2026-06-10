@@ -1,16 +1,14 @@
-//! Handlers for every `LaneInspectorMsg::*Vocal*` arm — lyrics knobs,
-//! melody knobs, voice & delivery knobs, plus the generate / re-render
-//! actions. Each parameter setter is a one-line wrapper around
-//! `update_vocal`; the generate actions also bump the lane seed and may
-//! return a long-running `Task<Message>` for the SVS pipeline.
+//! Handlers for the `LaneInspectorMsg::*Vocal*` arms that carry real
+//! logic — clamping, coupled fields, draft-line edits with side effects,
+//! plus the generate / re-render actions (which bump the lane seed and
+//! may return a long-running `Task<Message>` for the SVS pipeline).
+//! Plain field assignments and toggles are inlined in the dispatcher
+//! (`lane_inspector::handle`) as direct `update_vocal` calls.
 
 use iced::Task;
 
 use resonance_audio::types::TrackId;
-use resonance_music_theory::{
-    SyllableMode, VocalContour, VocalMood, VocalPov, VocalRhymeScheme, VocalSinger,
-    VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank, VoiceType,
-};
+use resonance_music_theory::VoiceType;
 
 use super::common::{bump_lane_seed, update_vocal};
 use crate::message::Message;
@@ -29,33 +27,6 @@ pub(super) fn set_theme(
         // Mirror the prototype's 240-char cap.
         p.theme = text.chars().take(240).collect();
     });
-}
-
-pub(super) fn set_mood(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-    m: VocalMood,
-) {
-    update_vocal(r, definition_id, track_id, |p| p.mood = m);
-}
-
-pub(super) fn set_pov(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-    pov: VocalPov,
-) {
-    update_vocal(r, definition_id, track_id, |p| p.pov = pov);
-}
-
-pub(super) fn set_rhyme(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-    rhyme: VocalRhymeScheme,
-) {
-    update_vocal(r, definition_id, track_id, |p| p.rhyme = rhyme);
 }
 
 pub(super) fn set_lines(
@@ -88,26 +59,6 @@ pub(super) fn set_syllables_max(
 ) {
     update_vocal(r, definition_id, track_id, |p| {
         p.syllables_max = n.clamp(p.syllables_min, 24);
-    });
-}
-
-pub(super) fn toggle_match_syllables(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-) {
-    update_vocal(r, definition_id, track_id, |p| {
-        p.match_syllables_to_melody = !p.match_syllables_to_melody;
-    });
-}
-
-pub(super) fn toggle_avoid_cliches(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-) {
-    update_vocal(r, definition_id, track_id, |p| {
-        p.avoid_cliches = !p.avoid_cliches;
     });
 }
 
@@ -217,33 +168,6 @@ pub(super) fn set_range_high(
     });
 }
 
-pub(super) fn set_style(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-    s: VocalStyle,
-) {
-    update_vocal(r, definition_id, track_id, |p| p.style = s);
-}
-
-pub(super) fn set_contour(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-    c: VocalContour,
-) {
-    update_vocal(r, definition_id, track_id, |p| p.contour = c);
-}
-
-pub(super) fn set_syllable_mode(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-    m: SyllableMode,
-) {
-    update_vocal(r, definition_id, track_id, |p| p.syllable_mode = m);
-}
-
 pub(super) fn set_chord_tone_anchor(
     r: &mut crate::Resonance,
     definition_id: u64,
@@ -288,75 +212,9 @@ pub(super) fn set_breath(
     });
 }
 
-pub(super) fn toggle_stay_in_scale(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-) {
-    update_vocal(r, definition_id, track_id, |p| {
-        p.stay_in_scale = !p.stay_in_scale;
-    });
-}
-
-pub(super) fn toggle_avoid_clashes(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-) {
-    update_vocal(r, definition_id, track_id, |p| {
-        p.avoid_clashes = !p.avoid_clashes;
-    });
-}
-
-pub(super) fn toggle_use_section_motif(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-) {
-    update_vocal(r, definition_id, track_id, |p| {
-        p.use_section_motif = !p.use_section_motif;
-    });
-}
-
 // ---------------------------------------------------------------------------
 // Vocal voice & delivery
 // ---------------------------------------------------------------------------
-
-pub(super) fn set_timbre(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-    t: VocalTimbre,
-) {
-    update_vocal(r, definition_id, track_id, |p| p.timbre = t);
-}
-
-pub(super) fn set_voicebank(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-    v: VocalVoicebank,
-) {
-    update_vocal(r, definition_id, track_id, |p| p.voicebank = v);
-}
-
-pub(super) fn set_singer(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-    s: VocalSinger,
-) {
-    update_vocal(r, definition_id, track_id, |p| p.singer = s);
-}
-
-pub(super) fn set_singer_meiji(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-    s: VocalSingerMeiji,
-) {
-    update_vocal(r, definition_id, track_id, |p| p.singer_meiji = s);
-}
 
 pub(super) fn set_vibrato(
     r: &mut crate::Resonance,

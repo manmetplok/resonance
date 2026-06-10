@@ -9,8 +9,9 @@
 //! - [`bass_params`]   — `SetBass*` setters.
 //! - [`melody_params`] — `SetMelody*` / `ToggleMelody*` setters.
 //! - [`pad_params`]    — `SetPad*` setters.
-//! - [`vocal_params`]  — every `*Vocal*` arm (lyrics, melody, voice &
-//!   delivery, generate / re-render actions).
+//! - [`vocal_params`]  — `*Vocal*` arms with real logic (clamping,
+//!   coupled fields, side effects, generate / re-render actions); plain
+//!   field assignments and toggles are inlined here via [`update_vocal`].
 //! - [`common`]        — shared `update_lane_gen` / `update_vocal` /
 //!   `bump_lane_seed` helpers used by every per-generator file.
 //!
@@ -109,13 +110,13 @@ pub(super) fn handle(
             vocal_params::set_theme(r, definition_id, track_id, text)
         }
         LaneInspectorMsg::SetVocalMood(m) => {
-            vocal_params::set_mood(r, definition_id, track_id, m)
+            update_vocal(r, definition_id, track_id, |p| p.mood = m)
         }
         LaneInspectorMsg::SetVocalPov(pov) => {
-            vocal_params::set_pov(r, definition_id, track_id, pov)
+            update_vocal(r, definition_id, track_id, |p| p.pov = pov)
         }
         LaneInspectorMsg::SetVocalRhyme(rhyme) => {
-            vocal_params::set_rhyme(r, definition_id, track_id, rhyme)
+            update_vocal(r, definition_id, track_id, |p| p.rhyme = rhyme)
         }
         LaneInspectorMsg::SetVocalLines(n) => {
             vocal_params::set_lines(r, definition_id, track_id, n)
@@ -127,10 +128,14 @@ pub(super) fn handle(
             vocal_params::set_syllables_max(r, definition_id, track_id, n)
         }
         LaneInspectorMsg::ToggleVocalMatchSyllables => {
-            vocal_params::toggle_match_syllables(r, definition_id, track_id)
+            update_vocal(r, definition_id, track_id, |p| {
+                p.match_syllables_to_melody = !p.match_syllables_to_melody;
+            })
         }
         LaneInspectorMsg::ToggleVocalAvoidCliches => {
-            vocal_params::toggle_avoid_cliches(r, definition_id, track_id)
+            update_vocal(r, definition_id, track_id, |p| {
+                p.avoid_cliches = !p.avoid_cliches;
+            })
         }
         LaneInspectorMsg::ToggleVocalLockLine(n) => {
             vocal_params::toggle_lock_line(r, definition_id, track_id, n)
@@ -159,13 +164,13 @@ pub(super) fn handle(
             vocal_params::set_range_high(r, definition_id, track_id, n)
         }
         LaneInspectorMsg::SetVocalStyle(s) => {
-            vocal_params::set_style(r, definition_id, track_id, s)
+            update_vocal(r, definition_id, track_id, |p| p.style = s)
         }
         LaneInspectorMsg::SetVocalContour(c) => {
-            vocal_params::set_contour(r, definition_id, track_id, c)
+            update_vocal(r, definition_id, track_id, |p| p.contour = c)
         }
         LaneInspectorMsg::SetVocalSyllableMode(m) => {
-            vocal_params::set_syllable_mode(r, definition_id, track_id, m)
+            update_vocal(r, definition_id, track_id, |p| p.syllable_mode = m)
         }
         LaneInspectorMsg::SetVocalChordToneAnchor(v) => {
             vocal_params::set_chord_tone_anchor(r, definition_id, track_id, v)
@@ -180,27 +185,33 @@ pub(super) fn handle(
             vocal_params::set_breath(r, definition_id, track_id, v)
         }
         LaneInspectorMsg::ToggleVocalStayInScale => {
-            vocal_params::toggle_stay_in_scale(r, definition_id, track_id)
+            update_vocal(r, definition_id, track_id, |p| {
+                p.stay_in_scale = !p.stay_in_scale;
+            })
         }
         LaneInspectorMsg::ToggleVocalAvoidClashes => {
-            vocal_params::toggle_avoid_clashes(r, definition_id, track_id)
+            update_vocal(r, definition_id, track_id, |p| {
+                p.avoid_clashes = !p.avoid_clashes;
+            })
         }
         LaneInspectorMsg::ToggleVocalUseSectionMotif => {
-            vocal_params::toggle_use_section_motif(r, definition_id, track_id)
+            update_vocal(r, definition_id, track_id, |p| {
+                p.use_section_motif = !p.use_section_motif;
+            })
         }
 
         // Vocal voice & delivery
         LaneInspectorMsg::SetVocalTimbre(t) => {
-            vocal_params::set_timbre(r, definition_id, track_id, t)
+            update_vocal(r, definition_id, track_id, |p| p.timbre = t)
         }
         LaneInspectorMsg::SetVocalVoicebank(v) => {
-            vocal_params::set_voicebank(r, definition_id, track_id, v)
+            update_vocal(r, definition_id, track_id, |p| p.voicebank = v)
         }
         LaneInspectorMsg::SetVocalSinger(s) => {
-            vocal_params::set_singer(r, definition_id, track_id, s)
+            update_vocal(r, definition_id, track_id, |p| p.singer = s)
         }
         LaneInspectorMsg::SetVocalSingerMeiji(s) => {
-            vocal_params::set_singer_meiji(r, definition_id, track_id, s)
+            update_vocal(r, definition_id, track_id, |p| p.singer_meiji = s)
         }
         LaneInspectorMsg::SetVocalVibrato(v) => {
             vocal_params::set_vibrato(r, definition_id, track_id, v)
