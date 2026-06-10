@@ -9,7 +9,7 @@ use super::super::melody::MelodyParams;
 use super::super::motif_source::{manual_motif_to_motif_notes, MotifParams, MotifSource};
 use super::super::{GeneratedNote, TimedChord};
 use super::build::build_motif;
-use super::harmony::apply_gap_fill;
+use super::harmony::apply_leap_recovery;
 use super::phrase::{plan_motif_transforms, plan_phrases, realize_phrase, PhraseRenderCtx};
 
 /// Extract the motif's signed semitone intervals (relative to its
@@ -146,7 +146,7 @@ pub fn derive_motif_melody_with_section(
         let mut phrase_notes = realize_phrase(&motif, transforms[pi], phrase, &render_ctx);
 
         if let Some(scale) = scale {
-            apply_gap_fill(&mut phrase_notes, &scale, params.register);
+            apply_leap_recovery(&mut phrase_notes, &scale, params.register);
         }
 
         if pi > 0 && rest_gap > 0 {
