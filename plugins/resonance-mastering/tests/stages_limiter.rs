@@ -1,4 +1,5 @@
 use resonance_mastering::stages::limiter::{Limiter, LimiterConfig};
+use resonance_metering::true_peak::polyphase::PolyphasePeakDetector;
 
 #[test]
 fn disabled_is_pure_delay() {
@@ -83,6 +84,42 @@ fn loud_signal_never_exceeds_ceiling() {
     assert!(
         peak <= ceiling_lin * 1.02,
         "output peak {peak} exceeds ceiling {ceiling_lin}"
+    );
+}
+
+#[test]
+fn isolated_intersample_peak_held_to_ceiling() {
+    // fs/4 sine sampled at 45° phase offset: every sample sits at
+    // ±1/√2 but the true (inter-sample) peak reaches the full
+    // amplitude. A short isolated burst of it exercises the detector's
+    // group-delay alignment — if the envelope constraint lands late,
+    // the burst onset leaks past the ceiling by several tenths of a dB.
+    let sr = 48_000.0_f32;
+    let mut lim = Limiter::new(sr);
+    let la = lim.latency();
+    let n = la + 4096;
+    let mut l = vec![0.0_f32; n];
+    let start = 512;
+    for k in 0..256 {
+        l[start + k] =
+            (std::f32::consts::TAU * 0.25 * k as f32 + std::f32::consts::FRAC_PI_4).sin();
+    }
+    let mut r = l.clone();
+    let cfg = LimiterConfig {
+        enabled: true,
+        ceiling_db: -1.0,
+        release_ms: 50.0,
+    };
+    lim.process_stereo(&mut l, &mut r, &cfg);
+    let mut det = PolyphasePeakDetector::new();
+    det.push_block(&l);
+    let peak = det.peak();
+    let ceiling_lin = 10.0_f32.powf(-1.0 / 20.0);
+    let tol = 10.0_f32.powf(0.05 / 20.0); // ≤ 0.05 dB overshoot
+    assert!(
+        peak <= ceiling_lin * tol,
+        "true peak {peak} ({} dBTP) exceeds -1 dBTP ceiling by more than 0.05 dB",
+        20.0 * peak.log10()
     );
 }
 

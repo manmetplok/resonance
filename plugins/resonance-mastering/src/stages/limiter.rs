@@ -6,14 +6,18 @@
 //!    its scheduled gain envelope value, emit `delayed × envelope`.
 //! 2. Measure the true peak of the new incoming sample (4× oversampled
 //!    via the metering crate's ITU-R BS.1770-4 Annex 2 polyphase FIR).
+//!    The FIR has ~6 input samples of group delay, so this reading
+//!    describes the sample written `TP_GROUP_DELAY` iterations ago.
 //! 3. Compute the gain required to keep that peak below the user's
 //!    ceiling (ceiling / peak, clamped ≤ 1.0).
 //! 4. Write the new sample into the delay ring at the same slot we
-//!    just read from, and assign it an envelope value bounded by both
-//!    (a) the release ramp from the previous output gain and (b) the
-//!    required gain computed in step 3.
+//!    just read from, with an envelope bounded by the release ramp
+//!    from the previous position. Apply the required gain from step 3
+//!    at the ring position `TP_GROUP_DELAY` slots earlier — the sample
+//!    the detector actually measured — then forward-propagate the
+//!    release ramp from there up to the just-written position.
 //! 5. Back-propagate the attack ramp: walk the envelope ring backwards
-//!    from the just-written position, lowering any earlier envelope
+//!    from the constrained position, lowering any earlier envelope
 //!    values that would violate the linear attack slope. Because the
 //!    envelope is always ramp-consistent on entry to each iteration,
 //!    the walk short-circuits as soon as an existing value already
@@ -25,12 +29,19 @@
 //! inter-sample peak can exceed the ceiling.
 
 use resonance_dsp::db_to_linear;
+use resonance_metering::true_peak::coefficients::{PHASES, TAPS};
 use resonance_metering::true_peak::polyphase::PolyphasePeakDetector;
 
 /// Fixed lookahead time in milliseconds. 5 ms at 48 kHz = 240 samples,
 /// plenty of runway for a band-music master without excessive added
 /// latency.
 const LOOKAHEAD_MS: f32 = 5.0;
+
+/// Group delay of the true-peak upsampler in input samples: the
+/// `TAPS * PHASES`-tap prototype FIR delays by `(TAPS * PHASES - 1) / 2`
+/// output samples, i.e. just under `TAPS / 2` input samples (rounded up
+/// to 6). Peak readings describe the sample pushed this many calls ago.
+const TP_GROUP_DELAY: usize = (TAPS * PHASES).div_ceil(2 * PHASES);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LimiterConfig {
@@ -73,7 +84,8 @@ pub struct Limiter {
 
 impl Limiter {
     pub fn new(sample_rate: f32) -> Self {
-        let lookahead_samples = ((LOOKAHEAD_MS * 0.001 * sample_rate).ceil() as usize).max(8);
+        let lookahead_samples =
+            ((LOOKAHEAD_MS * 0.001 * sample_rate).ceil() as usize).max(TP_GROUP_DELAY + 2);
         Self {
             sample_rate,
             lookahead_samples,
@@ -136,8 +148,12 @@ impl Limiter {
 
         let ceiling_lin = db_to_linear(cfg.ceiling_db);
         let n_la = self.lookahead_samples;
-        // Linear attack ramp: (N-1) sample steps cover a unit gain drop.
-        let attack_step = 1.0_f32 / (n_la.saturating_sub(1).max(1) as f32);
+        // The constraint lands TP_GROUP_DELAY positions behind the write
+        // head, so only that much runway remains before the constrained
+        // sample reaches the output. The linear attack ramp must cover a
+        // unit gain drop within it.
+        let attack_run = n_la.saturating_sub(1 + TP_GROUP_DELAY).max(1);
+        let attack_step = 1.0_f32 / attack_run as f32;
         // Linear release: full recovery in `release_ms` milliseconds.
         let release_samples = (cfg.release_ms.max(1.0) * 0.001 * self.sample_rate).max(1.0);
         let release_step = 1.0_f32 / release_samples;
@@ -150,49 +166,70 @@ impl Limiter {
             let out_l = self.delay_l[self.write_pos] * out_gain;
             let out_r = self.delay_r[self.write_pos] * out_gain;
 
-            // Step 2: measure true peak of new incoming sample (per
-            // channel, 4× oversampled; reset_peak before each push so
-            // `peak()` reports only this sample's peak, not the held max).
+            // Step 2: measure true peak (per channel, 4× oversampled;
+            // reset_peak before each push so `peak()` reports only this
+            // push's peak, not the held max). Because of the FIR's group
+            // delay, this reading describes the sample written
+            // TP_GROUP_DELAY iterations ago, not `left[i]`.
             self.peak_l.reset_peak();
             self.peak_r.reset_peak();
             self.peak_l.push_sample(left[i]);
             self.peak_r.push_sample(right[i]);
             let peak = self.peak_l.peak().max(self.peak_r.peak());
 
-            // Step 3: required gain for new sample.
+            // Step 3: required gain for the measured sample.
             let required = if peak > ceiling_lin {
                 (ceiling_lin / peak).min(1.0)
             } else {
                 1.0
             };
 
-            // Step 4: write new sample into the delay ring and pick its
-            // envelope value. Release bound is the envelope of the
-            // sample that will be output *just before* the new one —
-            // that's `envelope[prev_pos]` where prev_pos = write_pos - 1.
+            // Step 4: write the new sample into the delay ring with the
+            // release-ramp envelope. Release bound is the envelope of
+            // the sample output *just before* the new one — that's
+            // `envelope[prev_pos]` where prev_pos = write_pos - 1.
             let prev_pos = if self.write_pos == 0 {
                 n_la - 1
             } else {
                 self.write_pos - 1
             };
             let release_bound = (self.envelope[prev_pos] + release_step).min(1.0);
-            let new_env = release_bound.min(required);
 
             self.delay_l[self.write_pos] = left[i];
             self.delay_r[self.write_pos] = right[i];
-            self.envelope[self.write_pos] = new_env;
+            self.envelope[self.write_pos] = release_bound;
 
-            // Step 5: back-propagate the attack ramp. Walks backwards
-            // through the envelope ring, raising the constraint by
-            // attack_step per position. Early-out when an existing
-            // value already satisfies the new constraint — this is
-            // valid because the envelope was ramp-consistent before
-            // this iteration started.
-            if new_env < 1.0 {
-                let mut bound = new_env + attack_step;
-                let mut idx = prev_pos;
+            // Apply the required gain at the ring position the detector
+            // actually measured — TP_GROUP_DELAY slots behind the write
+            // head — then keep the ring ramp-consistent on both sides.
+            let peak_pos = (self.write_pos + n_la - TP_GROUP_DELAY) % n_la;
+            if required < self.envelope[peak_pos] {
+                self.envelope[peak_pos] = required;
+
+                // Forward-propagate the release ramp over the newer
+                // samples (peak_pos+1 ..= write_pos) so the gain
+                // recovers at release_step per sample after the peak.
+                let mut bound = required + release_step;
+                let mut idx = (peak_pos + 1) % n_la;
+                for _ in 0..TP_GROUP_DELAY {
+                    if self.envelope[idx] <= bound {
+                        break;
+                    }
+                    self.envelope[idx] = bound;
+                    bound += release_step;
+                    idx = (idx + 1) % n_la;
+                }
+
+                // Step 5: back-propagate the attack ramp. Walks
+                // backwards through the envelope ring, raising the
+                // constraint by attack_step per position. Early-out
+                // when an existing value already satisfies the new
+                // constraint — this is valid because the envelope was
+                // ramp-consistent before this iteration started.
+                let mut bound = required + attack_step;
+                let mut idx = if peak_pos == 0 { n_la - 1 } else { peak_pos - 1 };
                 let mut steps = 0;
-                while steps < n_la - 1 && bound < 1.0 {
+                while steps < attack_run && bound < 1.0 {
                     if self.envelope[idx] <= bound {
                         break;
                     }
