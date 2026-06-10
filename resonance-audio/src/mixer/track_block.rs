@@ -9,6 +9,7 @@
 use indexmap::IndexMap;
 
 use crate::clap_host::{StereoBufMut, SyncClapInstance};
+use crate::latency::LatencyComp;
 use crate::types::*;
 
 use super::common::{
@@ -56,6 +57,7 @@ pub(super) fn render_timeline_block(
     monitor_frames: usize,
     input_channels: usize,
     transport_snap: Option<(f64, u16, u16, bool, f64)>,
+    latency_comp: &LatencyComp,
 ) {
     // Zero every active bus summing buffer at the start of the sub-block so
     // tracks can accumulate into them.
@@ -294,6 +296,19 @@ pub(super) fn render_timeline_block(
             }
         }
 
+        // Plugin-delay compensation: delay the post-chain signal so
+        // every track reaches master with the same total latency (see
+        // `crate::latency`). Runs even when the track produced no audio
+        // this block so delayed tails keep flushing.
+        if latency_comp.apply(
+            track.id,
+            &mut track_buf_l[..frames],
+            &mut track_buf_r[..frames],
+            playhead,
+        ) {
+            has_audio = true;
+        }
+
         if !has_audio {
             continue;
         }
@@ -375,6 +390,17 @@ pub(super) fn render_timeline_block(
                             }
                         }
                     }
+                }
+
+                // Plugin-delay compensation for the sub-track's chain.
+                {
+                    let (pl, pr) = &mut port_scratch[port_idx];
+                    latency_comp.apply(
+                        sub_track.id,
+                        &mut pl[..frames],
+                        &mut pr[..frames],
+                        playhead,
+                    );
                 }
 
                 // Peak levels for sub-track VU meter.

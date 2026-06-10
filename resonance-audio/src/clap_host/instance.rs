@@ -50,6 +50,12 @@ pub struct ClapInstance {
     /// per-port scratch buffers without re-querying on every block.
     /// Always >= 1 because resonance-plugin rejects empty output layouts.
     pub(super) output_port_count: usize,
+    /// Processing latency in samples, as reported by the plugin's
+    /// `clap.latency` extension right after activation (0 if the
+    /// extension is absent). The host never deactivates/reactivates
+    /// instances and doesn't implement `clap_host_latency.changed`, so
+    /// this value is fixed for the lifetime of the instance.
+    pub(super) latency: u32,
     /// Pending parameter changes to send during next process() call.
     pub(super) pending_params: Vec<(u32, f64)>,
     /// Pre-allocated buffer for CLAP parameter events (reused across process() calls).
@@ -90,6 +96,7 @@ impl ClapInstance {
         audio_ports_ext: Option<*const clap_plugin_audio_ports>,
         gui_ext: Option<*const clap_plugin_gui>,
         output_port_count: usize,
+        latency: u32,
         audio_out_buffers: Vec<clap_audio_buffer>,
         audio_out_ptrs: Vec<[*mut f32; 2]>,
     ) -> Self {
@@ -104,6 +111,7 @@ impl ClapInstance {
             gui_ext,
             gui_open: false,
             output_port_count,
+            latency,
             // Pre-size every event buffer at activation so the first
             // process() call after a fresh plugin add doesn't allocate
             // on the audio thread.
@@ -127,6 +135,13 @@ impl ClapInstance {
     /// buffers and (in the app layer) auto-create sub-tracks. Always >= 1.
     pub fn output_port_count(&self) -> usize {
         self.output_port_count
+    }
+
+    /// Processing latency in samples (`clap.latency` at activation;
+    /// 0 if the plugin doesn't implement the extension). Stable for the
+    /// lifetime of the instance — see the field doc for why.
+    pub fn latency_samples(&self) -> u32 {
+        self.latency
     }
 
     /// Human-readable name of each output port, as reported by the plugin's

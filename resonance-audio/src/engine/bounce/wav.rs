@@ -14,7 +14,9 @@ use crate::clap_host::SyncClapInstance;
 use crate::types::*;
 
 use super::super::SharedState;
-use super::render::{render_chunk, reset_plugins, ChunkCtx, ChunkScratch, BOUNCE_CHUNK};
+use super::render::{
+    build_latency_comp, render_chunk, reset_plugins, ChunkCtx, ChunkScratch, BOUNCE_CHUNK,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn to_wav(
@@ -87,6 +89,14 @@ pub(crate) fn to_wav(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
+    let latency_comp = build_latency_comp(tracks, busses, plugins);
+    // Render `max_latency` extra frames and drop the same number from
+    // the front: plugin-delay compensation shifts every track by the
+    // pipeline latency, so trimming it re-aligns the file with the
+    // timeline (and the extra tail catches the delayed final samples).
+    let comp_latency = latency_comp.max_latency();
+    let render_stop = render_end + comp_latency;
+    let mut skip_frames = comp_latency as usize;
     let ctx = ChunkCtx {
         shared,
         tracks,
@@ -98,6 +108,7 @@ pub(crate) fn to_wav(
         tempo_map: &bounce_tm,
         sample_rate,
         master_vol,
+        latency_comp: &latency_comp,
     };
     let mut scratch = ChunkScratch::new();
 
@@ -105,7 +116,7 @@ pub(crate) fn to_wav(
     let mut write_error = false;
     let mut cancelled = false;
     let everything = |_: TrackId| true;
-    while pos < render_end && !write_error {
+    while pos < render_stop && !write_error {
         // Cooperative cancel — `AudioCommand::CancelBounce` flips this
         // flag from the engine thread. Checked once per chunk so the
         // UI's modal Cancel button releases the bounce promptly
@@ -114,10 +125,12 @@ pub(crate) fn to_wav(
             cancelled = true;
             break;
         }
-        let frames = ((render_end - pos) as usize).min(BOUNCE_CHUNK);
+        let frames = ((render_stop - pos) as usize).min(BOUNCE_CHUNK);
         render_chunk(&ctx, &mut scratch, pos, frames, &everything, true, true);
 
-        for &sample in &scratch.mix_buf[..frames * 2] {
+        let drop_now = skip_frames.min(frames);
+        skip_frames -= drop_now;
+        for &sample in &scratch.mix_buf[drop_now * 2..frames * 2] {
             if let Err(e) = writer.write_sample(sample) {
                 let _ = event_tx.send(AudioEvent::BounceError(format!("WAV write error: {e}")));
                 write_error = true;

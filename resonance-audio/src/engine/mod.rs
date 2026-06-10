@@ -302,6 +302,14 @@ impl AudioEngine {
         > = Arc::new(parking_lot::RwLock::new(IndexMap::new()));
         let plugins_audio = Arc::clone(&plugins);
 
+        // Plugin-delay-compensation table: published by the engine
+        // thread on topology changes, loaded wait-free by the audio
+        // callback. See `crate::latency` for the compensation model.
+        let latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>> = Arc::new(
+            arc_swap::ArcSwap::from_pointee(crate::latency::LatencyComp::empty()),
+        );
+        let latency_comp_audio = Arc::clone(&latency_comp);
+
         let mut stream_config: cpal::StreamConfig = config.into();
         stream_config.sample_rate = sample_rate;
         stream_config.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
@@ -326,6 +334,7 @@ impl AudioEngine {
             let midi_clips_audio = Arc::clone(&midi_clips_audio);
             let plugins_audio = Arc::clone(&plugins_audio);
             let tempo_audio = Arc::clone(&tempo_audio);
+            let latency_comp_audio = Arc::clone(&latency_comp_audio);
             let underrun_limiter = Arc::clone(&underrun_limiter);
             let mut track_buf_l = vec![0.0f32; audio_buf_frames];
             let mut track_buf_r = vec![0.0f32; audio_buf_frames];
@@ -404,6 +413,7 @@ impl AudioEngine {
                         &midi_clips_audio,
                         &plugins_audio,
                         &tempo_audio,
+                        &latency_comp_audio,
                         audio_sample_rate,
                         &mut track_buf_l,
                         &mut track_buf_r,
@@ -489,6 +499,7 @@ impl AudioEngine {
         let midi_clips_ctrl = Arc::clone(&midi_clips);
         let tempo_ctrl = Arc::clone(&tempo_map);
         let plugins_ctrl = Arc::clone(&plugins);
+        let latency_comp_ctrl = Arc::clone(&latency_comp);
 
         let cmd_tx_retry = cmd_tx.clone();
         let engine_thread = std::thread::Builder::new()
@@ -506,6 +517,7 @@ impl AudioEngine {
                     midi_clips_ctrl,
                     tempo_ctrl,
                     plugins_ctrl,
+                    latency_comp_ctrl,
                     monitor_prod_audio,
                     live_midi_tx,
                     live_midi_rx,

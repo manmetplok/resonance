@@ -13,6 +13,7 @@ use indexmap::IndexMap;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
 use crate::clap_host::{StereoBufMut, SyncClapInstance};
+use crate::latency::LatencyComp;
 use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
 use crate::mixer;
 use crate::types::*;
@@ -136,6 +137,33 @@ pub(super) struct ChunkCtx<'a> {
     pub tempo_map: &'a TempoMap,
     pub sample_rate: u32,
     pub master_vol: f32,
+    /// Plugin-delay-compensation table for this bounce run, built once
+    /// by [`build_latency_comp`] so the offline render aligns tracks
+    /// exactly like live playback. The bounce drivers additionally trim
+    /// the leading `max_latency()` frames from the output so the
+    /// rendered audio lands on the timeline with zero net shift.
+    pub latency_comp: &'a LatencyComp,
+}
+
+/// Build a fresh compensation table from the current topology, reading
+/// each plugin's activation-time latency. Runs on the bounce thread —
+/// allocation is fine here.
+pub(super) fn build_latency_comp(
+    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
+    busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
+    plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+) -> LatencyComp {
+    let tracks_guard = tracks.read();
+    let busses_guard = busses.read();
+    let plugins_guard = plugins.read();
+    let chains = crate::latency::chain_latencies(&tracks_guard, &busses_guard, |id| {
+        plugins_guard
+            .get(&id)
+            .map(|m| lock_plugin_for_bounce(m).0.latency_samples() as u64)
+            .unwrap_or(0)
+    });
+    let (max, delays) = crate::latency::compensation_delays(&chains);
+    LatencyComp::new(max, &delays)
 }
 
 /// Reset every plugin so the bounce starts from a clean state. Without
@@ -358,6 +386,18 @@ pub(super) fn render_chunk(
             }
         }
 
+        // Plugin-delay compensation, mirroring the live path: runs even
+        // when the track produced no audio this chunk so delayed tails
+        // keep flushing past the last clip/note.
+        if ctx.latency_comp.apply(
+            track.id,
+            &mut scratch.track_buf_l[..frames],
+            &mut scratch.track_buf_r[..frames],
+            pos,
+        ) {
+            has_audio = true;
+        }
+
         if !has_audio {
             continue;
         }
@@ -429,6 +469,13 @@ pub(super) fn render_chunk(
                             inst.0.process(&mut pl[..frames], &mut pr[..frames], frames);
                         }
                     }
+                }
+
+                // Plugin-delay compensation for the sub-track's chain.
+                {
+                    let (pl, pr) = &mut scratch.port_scratch[port_idx];
+                    ctx.latency_comp
+                        .apply(sub_track.id, &mut pl[..frames], &mut pr[..frames], pos);
                 }
 
                 let sub_volume = sub_track.volume();

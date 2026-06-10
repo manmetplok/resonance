@@ -14,6 +14,7 @@ use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::ext::audio_ports::{clap_plugin_audio_ports, CLAP_EXT_AUDIO_PORTS};
 use clap_sys::ext::gui::{clap_plugin_gui, CLAP_EXT_GUI};
+use clap_sys::ext::latency::{clap_plugin_latency, CLAP_EXT_LATENCY};
 use clap_sys::ext::params::{clap_plugin_params, CLAP_EXT_PARAMS};
 use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
@@ -224,6 +225,19 @@ impl ClapBundle {
             }
         };
 
+        let latency_ext = unsafe {
+            if let Some(get_ext) = (*plugin).get_extension {
+                let ext = get_ext(plugin, CLAP_EXT_LATENCY.as_ptr());
+                if ext.is_null() {
+                    None
+                } else {
+                    Some(ext as *const clap_plugin_latency)
+                }
+            } else {
+                None
+            }
+        };
+
         // Activate
         if let Some(activate) = unsafe { (*plugin).activate } {
             let ok = unsafe { activate(plugin, sample_rate as f64, 32, 8192) };
@@ -234,6 +248,18 @@ impl ClapBundle {
                 return Err("plugin.activate() failed".to_string());
             }
         }
+
+        // Query the latency extension now that the plugin is activated
+        // (the CLAP spec only defines `latency.get()` while active).
+        // The host vtable doesn't implement `clap_host_latency`, so this
+        // activation-time value is the one the engine compensates with
+        // for the lifetime of the instance.
+        let latency = unsafe {
+            match latency_ext.and_then(|ext| (*ext).get) {
+                Some(get_fn) => get_fn(plugin),
+                None => 0,
+            }
+        };
 
         // Start processing
         if let Some(start) = unsafe { (*plugin).start_processing } {
@@ -272,6 +298,7 @@ impl ClapBundle {
             audio_ports_ext,
             gui_ext,
             output_port_count,
+            latency,
             audio_out_buffers,
             audio_out_ptrs,
         ))

@@ -12,6 +12,7 @@ pub(crate) mod clap_host;
 pub(crate) mod decode;
 mod engine;
 mod input_handle;
+pub(crate) mod latency;
 #[cfg(target_os = "linux")]
 mod input_pipewire;
 mod limits;
@@ -38,6 +39,8 @@ pub use types::*;
 pub mod __test_support {
     pub use crate::clap_host::{ClapBundle, SyncClapInstance};
     pub use crate::engine::{to_audio_clip, try_lock_with_backoff, SharedState};
+    pub use crate::latency::{chain_latencies, compensation_delays, LatencyComp};
+    pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
     pub use crate::midi_hardware::{parse_live_event_for_test, LiveMidiEvent};

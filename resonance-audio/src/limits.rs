@@ -49,6 +49,12 @@ pub const MAX_STASHED_INSTRUMENTS: usize = 64;
 /// successful lock — note-offs are never silently lost.
 pub const MAX_STASHED_EVENTS: usize = 256;
 
+/// Maximum per-plugin latency (in samples) honoured by plugin-delay
+/// compensation. ~10 s at 96 kHz. Larger reported values are clamped so
+/// a misbehaving plugin can't make the engine allocate gigabyte-sized
+/// delay lines (the compensation is then merely incomplete, not unsafe).
+pub const MAX_COMP_LATENCY: u64 = 960_000;
+
 /// Maximum number of undo history entries retained. Not
 /// user-configurable yet.
 pub const DEFAULT_HISTORY_CAPACITY: usize = 200;

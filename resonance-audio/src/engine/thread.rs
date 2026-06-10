@@ -43,6 +43,7 @@ pub(crate) struct HandlerCtx<'a> {
     pub midi_clips: &'a Arc<RwLock<Vec<MidiClip>>>,
     pub plugins: &'a Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
     pub tempo_map: &'a Arc<arc_swap::ArcSwap<TempoMap>>,
+    pub latency_comp: &'a Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
     pub monitor_prod: &'a Arc<Mutex<ringbuf::HeapProd<f32>>>,
     pub event_tx: &'a Sender<AudioEvent>,
     pub cmd_tx_retry: &'a Sender<AudioCommand>,
@@ -129,6 +130,7 @@ pub(crate) fn engine_thread(
     midi_clips_arc: Arc<RwLock<Vec<MidiClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     plugins_arc: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
     monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
     live_midi_tx: Sender<LiveMidiEvent>,
     live_midi_rx: Receiver<LiveMidiEvent>,
@@ -165,6 +167,7 @@ pub(crate) fn engine_thread(
         midi_clips: &midi_clips_arc,
         plugins: &plugins_arc,
         tempo_map: &tempo_map,
+        latency_comp: &latency_comp,
         monitor_prod: &monitor_prod,
         event_tx: &event_tx,
         cmd_tx_retry: &cmd_tx_retry,
@@ -192,7 +195,17 @@ pub(crate) fn engine_thread(
     loop {
         match cmd_rx.recv_timeout(std::time::Duration::from_millis(16)) {
             Ok(AudioCommand::ShutDown) => break,
-            Ok(cmd) => dispatch(&ctx, &mut state, cmd),
+            Ok(cmd) => {
+                // Commands that change the track/bus/plugin topology can
+                // change per-chain latency; republish the plugin-delay-
+                // compensation table after they run. Checked before
+                // dispatch because dispatch consumes the command.
+                let refresh_latency = plugins::affects_latency(&cmd);
+                dispatch(&ctx, &mut state, cmd);
+                if refresh_latency {
+                    plugins::refresh_latency_comp(&ctx);
+                }
+            }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
         }

@@ -82,6 +82,7 @@ pub(crate) fn mix_audio(
         indexmap::IndexMap<PluginInstanceId, parking_lot::Mutex<crate::clap_host::SyncClapInstance>>,
     >,
     tempo_map: &arc_swap::ArcSwap<TempoMap>,
+    latency_comp: &arc_swap::ArcSwap<crate::latency::LatencyComp>,
     sample_rate: u32,
     track_buf_l: &mut [f32],
     track_buf_r: &mut [f32],
@@ -329,6 +330,12 @@ pub(crate) fn mix_audio(
     // Resolve a &TempoMap for tempo-map-aware MIDI tick→sample conversion.
     let tm_ref: &TempoMap = &tempo_guard;
 
+    // Snapshot the plugin-delay-compensation table once per buffer.
+    // Wait-free load; the engine thread publishes a new table whenever
+    // the track/bus/plugin topology changes.
+    let comp_guard = latency_comp.load();
+    let comp_ref: &crate::latency::LatencyComp = &comp_guard;
+
     let any_solo = tracks_guard
         .values()
         .filter(|t| t.sub_track_of.is_none())
@@ -389,6 +396,7 @@ pub(crate) fn mix_audio(
             head_monitor_frames,
             input_channels,
             transport_snap,
+            comp_ref,
         );
 
         // Flush instrument voices at the seam.
@@ -423,6 +431,7 @@ pub(crate) fn mix_audio(
             tail_monitor_frames,
             input_channels,
             transport_snap,
+            comp_ref,
         );
 
         loop_in + tail_frames as u64
@@ -451,6 +460,7 @@ pub(crate) fn mix_audio(
             monitor_frames,
             input_channels,
             transport_snap,
+            comp_ref,
         );
         playhead + output_frames as u64
     };

@@ -5,11 +5,60 @@
 //! the audio thread is never blocked.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::clap_host::{ClapBundle, SyncClapInstance};
 use crate::types::*;
 
 use super::thread::{HandlerCtx, HandlerState};
+
+/// True for commands that can change a track's or bus's chain latency
+/// (plugin add/remove, routing, track/bus topology). The engine loop
+/// republishes the plugin-delay-compensation table after these run.
+pub(crate) fn affects_latency(cmd: &AudioCommand) -> bool {
+    matches!(
+        cmd,
+        AudioCommand::AddPlugin { .. }
+            | AudioCommand::RemovePlugin { .. }
+            | AudioCommand::AddPluginToBus { .. }
+            | AudioCommand::RemovePluginFromBus { .. }
+            | AudioCommand::ScanPlugins
+            | AudioCommand::SetTrackOutput { .. }
+            | AudioCommand::AddTrack { .. }
+            | AudioCommand::AddInstrumentTrack { .. }
+            | AudioCommand::AddVocalTrack { .. }
+            | AudioCommand::CreateSubTrack { .. }
+            | AudioCommand::RemoveTrack { .. }
+            | AudioCommand::AddBus { .. }
+            | AudioCommand::RemoveBus { .. }
+            | AudioCommand::ClearAll
+    )
+}
+
+/// Recompute per-track compensation delays from the current topology
+/// and publish a fresh table for the audio callback. Skips the publish
+/// (and thus the delay-line reset) when no delay actually changed.
+/// Runs on the engine thread; delay lines are allocated here, never on
+/// the audio callback.
+pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx) {
+    let chains = {
+        let tracks_guard = ctx.tracks.read();
+        let busses_guard = ctx.busses.read();
+        let plugins_guard = ctx.plugins.read();
+        crate::latency::chain_latencies(&tracks_guard, &busses_guard, |id| {
+            plugins_guard
+                .get(&id)
+                .map(|m| super::try_lock_with_backoff(m).0.latency_samples() as u64)
+                .unwrap_or(0)
+        })
+    };
+    let (max, delays) = crate::latency::compensation_delays(&chains);
+    if ctx.latency_comp.load().delays_match(&delays) {
+        return;
+    }
+    ctx.latency_comp
+        .store(Arc::new(crate::latency::LatencyComp::new(max, &delays)));
+}
 
 pub(crate) fn handle_add_plugin(
     ctx: &HandlerCtx,

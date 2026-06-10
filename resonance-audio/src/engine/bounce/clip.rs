@@ -17,7 +17,9 @@ use crate::types::*;
 
 use super::super::bounce_common::midi_render_range;
 use super::super::SharedState;
-use super::render::{render_chunk, reset_plugins, ChunkCtx, ChunkScratch, BOUNCE_CHUNK};
+use super::render::{
+    build_latency_comp, render_chunk, reset_plugins, ChunkCtx, ChunkScratch, BOUNCE_CHUNK,
+};
 
 /// Bounce one instrument track (and any of its sub-tracks) to a single
 /// in-RAM stereo `AudioClip` on `target_track_id`. Excludes master FX
@@ -118,6 +120,16 @@ pub fn to_audio_clip(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
+    let latency_comp = build_latency_comp(tracks, busses, plugins);
+    // Render `max_latency` extra frames and drop the same number from
+    // the front: plugin-delay compensation shifts every contributing
+    // track by the pipeline latency, so trimming it gives the bounced
+    // clip zero net shift — it plays back (through an empty chain that
+    // then gets the full live compensation delay) exactly where the
+    // source track sounded.
+    let comp_latency = latency_comp.max_latency();
+    let render_stop = render_end + comp_latency;
+    let mut skip_frames = comp_latency as usize;
     let ctx = ChunkCtx {
         shared,
         tracks,
@@ -129,6 +141,7 @@ pub fn to_audio_clip(
         tempo_map: &bounce_tm,
         sample_rate,
         master_vol,
+        latency_comp: &latency_comp,
     };
     let mut scratch = ChunkScratch::new();
 
@@ -143,8 +156,9 @@ pub fn to_audio_clip(
 
     let in_filter = move |id: TrackId| filter_set.contains(&id);
     let mut pos = render_start;
+    let mut written: usize = 0;
     let mut last_emitted_pct: i32 = 0;
-    while pos < render_end {
+    while pos < render_stop {
         if shared.bounce_cancel.load(Ordering::Relaxed) {
             // Cooperative cancel: tear down the half-rendered target
             // track + clip allocation and report back. The clip wasn't
@@ -160,16 +174,19 @@ pub fn to_audio_clip(
             return;
         }
 
-        let frames = ((render_end - pos) as usize).min(BOUNCE_CHUNK);
+        let frames = ((render_stop - pos) as usize).min(BOUNCE_CHUNK);
         render_chunk(&ctx, &mut scratch, pos, frames, &in_filter, false, false);
-        let dst_start = ((pos - render_start) as usize) * 2;
-        let src = &scratch.mix_buf[..frames * 2];
-        output[dst_start..dst_start + frames * 2].copy_from_slice(src);
+        let drop_now = skip_frames.min(frames);
+        skip_frames -= drop_now;
+        let copy = (frames - drop_now).min(total_frames - written);
+        output[written * 2..(written + copy) * 2]
+            .copy_from_slice(&scratch.mix_buf[drop_now * 2..(drop_now + copy) * 2]);
+        written += copy;
         pos += frames as u64;
 
         // Emit progress at most once per integer percent so we don't
         // flood the GUI event channel on a long bounce.
-        let pct = (((pos - render_start) as f32 / (render_end - render_start) as f32) * 100.0)
+        let pct = (((pos - render_start) as f32 / (render_stop - render_start) as f32) * 100.0)
             as i32;
         if pct > last_emitted_pct {
             last_emitted_pct = pct;
