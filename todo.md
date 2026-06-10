@@ -58,11 +58,12 @@ KISS / lines of code. Each item was verified against the code before listing.
 - [x] `BounceDialogState` is app state defined in the view layer (`resonance-app/src/view/bounce_dialog.rs:21`, used from `lib.rs:119`, `update/track.rs:424`); move to `state/` like its sibling `BounceProgressState`.
 - [x] `ARCHITECTURE.md` is stale: the binary-crate-exception rationale (:120-141) is false since `resonance-app` gained `lib.rs` + `tests/`, and the crate diagram (:9-16) omits `resonance-svs` and `wayland-plugin-gui`. Rewrite/extend.
 - [x] Timeline module half-migrated: `timeline.rs`/`timeline_draw.rs`/`timeline_input.rs`/`timeline_snap.rs` at root plus a `timeline/` dir holding only `hit_test.rs`/`scrollbar.rs`, and `piano_roll.rs`/`midi_editor.rs` are views outside `view/`; fold into one canonical `view/timeline/` home.
-- [ ] Behavioral constants in the theme module: `PEAK_DECAY`, `TICK_INTERVAL_MS` (`resonance-app/src/theme.rs:339-341`) belong with the code that owns the behavior.
-- [ ] ~15 `#[doc(hidden)] test_*` accessors/mutators on `Resonance` (`resonance-app/src/lib.rs:234-353`); gate behind a `test-support` feature or collect in `test_support.rs`.
-- [ ] GM drum-note contract duplicated with comment-only sync (`resonance-app/src/compose/drumroll/drum_map.rs` vs `plugins/resonance-drums/src/drum_map.rs`); shared constants belong in `resonance-common`.
-- [ ] `track_header.rs` (859 lines) mixes per-track headers and global-shelf lane headers (:527-770); split per sub-region.
-- [ ] `wayland-plugin-gui` depends on `resonance-plugin` only for param-typed widget helpers (`widgets.rs:294-359`); moving them out makes the windowing crate reusable and cuts a dependency edge.
+- [x] Behavioral constants in the theme module: `PEAK_DECAY`, `TICK_INTERVAL_MS` (`resonance-app/src/theme.rs:339-341`) belong with the code that owns the behavior.
+- [x] ~15 `#[doc(hidden)] test_*` accessors/mutators on `Resonance` (`resonance-app/src/lib.rs:234-353`); gate behind a `test-support` feature or collect in `test_support.rs`.
+- [x] GM drum-note contract duplicated with comment-only sync (`resonance-app/src/compose/drumroll/drum_map.rs` vs `plugins/resonance-drums/src/drum_map.rs`); shared constants belong in `resonance-common`.
+- [ ] `resonance-app/src/compose/drumroll/groups.rs` (`default_kit_pads`) is a third pad table that disagrees substantially with the plugin's (Hi-Hat Loose 26 vs 25, Hi-Hat Pressed 22 vs 26, Trash Open 24 vs 27, Tom High 48 vs 50, Crash 16 Bell 53 vs 28, duplicate notes 44 and 53/59 within itself, plus Shaker/Conga/Tambourine pads the plugin lacks); reconcile against `resonance_common::drum_map::GM_PADS` or document why it differs. (Found during the drum-map dedup, 2026-06-10.)
+- [x] `track_header.rs` (859 lines) mixes per-track headers and global-shelf lane headers (:527-770); split per sub-region.
+- [x] `wayland-plugin-gui` depends on `resonance-plugin` only for param-typed widget helpers (`widgets.rs:294-359`); moving them out makes the windowing crate reusable and cuts a dependency edge.
 - [ ] `transport_labels: RefCell` mutation inside `view()` (`resonance-app/src/view/transport.rs:159`) is the one place the view layer writes state; keep fenced or refresh in the tick handler.
 
 ## KISS / lines of code (~1,200–1,400 LOC removable)
