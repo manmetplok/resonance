@@ -31,6 +31,7 @@ use crate::types::*;
 mod bounce;
 pub use bounce::{to_audio_clip, try_lock_with_backoff};
 mod bounce_common;
+pub use bounce_common::midi_render_range;
 
 /// Copy-on-write helper for the `ArcSwap<TempoMap>` shared with the
 /// audio thread. The audio side does wait-free `load()`s; this helper
@@ -109,8 +110,8 @@ pub struct SharedState {
     /// (`bounce::to_audio_clip`). The renderer polls this between
     /// chunks and aborts when it flips to true. The realtime bounce
     /// path doesn't need it — its cancel goes through `handle_pause`
-    /// directly — but stays in shared state so the offline renderer
-    /// running on the engine thread can be aborted from the same
+    /// directly — but stays in shared state so the offline renderers
+    /// running on their worker threads can be aborted from the same
     /// `CancelBounce` command without threading another channel.
     pub bounce_cancel: AtomicBool,
 }

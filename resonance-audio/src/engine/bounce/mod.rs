@@ -73,3 +73,49 @@ pub(crate) fn to_wav_spawn(
         })
         .expect("spawn bounce-to-wav thread");
 }
+
+/// Spawn the bounce-in-place render on a dedicated worker thread, same
+/// rationale as [`to_wav_spawn`]: a long render previously blocked the
+/// engine dispatch loop, making `CancelBounce` (and every other
+/// command) undeliverable until the clip finished. The worker observes
+/// `shared.bounce_cancel` between chunks and reports back through
+/// `event_tx`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn to_audio_clip_spawn(
+    source_track_id: TrackId,
+    target_track_id: TrackId,
+    target_clip_id: ClipId,
+    name: String,
+    shared: Arc<SharedState>,
+    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
+    busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
+    master: Arc<RwLock<MasterBus>>,
+    clips: Arc<RwLock<Vec<AudioClip>>>,
+    midi_clips: Arc<RwLock<Vec<MidiClip>>>,
+    plugins: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    sample_rate: u32,
+    event_tx: Sender<AudioEvent>,
+) {
+    std::thread::Builder::new()
+        .name("bounce-in-place".into())
+        .spawn(move || {
+            to_audio_clip(
+                source_track_id,
+                target_track_id,
+                target_clip_id,
+                name,
+                &shared,
+                &tracks,
+                &busses,
+                &master,
+                &clips,
+                &midi_clips,
+                &plugins,
+                &tempo_map,
+                sample_rate,
+                &event_tx,
+            );
+        })
+        .expect("spawn bounce-in-place thread");
+}

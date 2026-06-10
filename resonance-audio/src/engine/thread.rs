@@ -494,21 +494,21 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             target_track_id,
             target_clip_id,
             name,
-        } => bounce::to_audio_clip(
+        } => bounce::to_audio_clip_spawn(
             source_track_id,
             target_track_id,
             target_clip_id,
             name,
-            ctx.shared,
-            ctx.tracks,
-            ctx.busses,
-            ctx.master,
-            ctx.clips,
-            ctx.midi_clips,
-            ctx.plugins,
-            ctx.tempo_map,
+            Arc::clone(ctx.shared),
+            Arc::clone(ctx.tracks),
+            Arc::clone(ctx.busses),
+            Arc::clone(ctx.master),
+            Arc::clone(ctx.clips),
+            Arc::clone(ctx.midi_clips),
+            Arc::clone(ctx.plugins),
+            Arc::clone(ctx.tempo_map),
             ctx.sample_rate,
-            ctx.event_tx,
+            ctx.event_tx.clone(),
         ),
         AudioCommand::BounceTrackRealtimeToAudio {
             source_track_id,
@@ -527,12 +527,9 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         ),
         AudioCommand::CancelBounce => {
             // Set the cooperative cancel flag for both bounce paths.
-            // The offline renderer (running on this thread inside the
-            // current dispatch) won't see it because it blocks the
-            // dispatch loop; in practice the offline render is fast
-            // enough that the user's cancel arrives after it finishes.
-            // The realtime path picks it up on the next engine-loop
-            // iteration via `poll_pending_bounce`.
+            // The offline renderers run on worker threads and poll the
+            // flag between chunks; the realtime path picks it up on the
+            // next engine-loop iteration via `poll_pending_bounce`.
             ctx.shared
                 .bounce_cancel
                 .store(true, std::sync::atomic::Ordering::Relaxed);
