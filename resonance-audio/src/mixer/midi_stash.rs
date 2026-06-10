@@ -5,8 +5,9 @@
 //! the next block where the lock succeeds — no stuck or missing notes.
 //!
 //! Fixed capacity, allocation-free after construction (audio-thread
-//! safe; the stash is owned by the cpal callback closure and never
-//! touched by other threads). Overflow behavior:
+//! safe; each stash instance is owned by a single thread — the cpal
+//! callback closure owns the mixer's, and the engine control thread
+//! owns a second instance for live note input). Overflow behavior:
 //! - Slot buffer full + incoming note-on: the note-on is dropped.
 //! - Slot buffer full + incoming note-off: the oldest stashed note-on
 //!   is evicted to make room; if none exists, the slot degrades to a
@@ -107,6 +108,13 @@ impl MidiStash {
                 slot.panic = true;
             }
         }
+    }
+
+    /// Instances that currently hold parked events or a pending panic.
+    /// Used by the engine thread's live-note flush to retry delivery
+    /// even when no further input arrives for a contended plugin.
+    pub fn pending_instances(&self) -> impl Iterator<Item = PluginInstanceId> + '_ {
+        self.slots.iter().filter_map(|s| s.instance)
     }
 
     /// Drop everything parked for `id` without delivering. Used when an

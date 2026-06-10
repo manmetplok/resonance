@@ -22,6 +22,7 @@ use crate::midi_clock::{
     ClockTempoTracker, MidiClockEvent, MidiClockReceiver, MidiClockSender,
 };
 use crate::midi_hardware::LiveMidiEvent;
+use crate::mixer::MidiStash;
 use crate::recording::RecordingState;
 use crate::types::*;
 
@@ -90,6 +91,11 @@ pub(crate) struct HandlerState {
     /// created lazily on the first NoteOn for an armed instrument
     /// track during playback; cleared on transport stop.
     pub midi_recording: HashMap<TrackId, RecordingMidiState>,
+    /// Live note events parked while a plugin's lock was contended.
+    /// Keeps a retried NoteOn ordered ahead of any later NoteOff for
+    /// the same key; flushed every engine-loop iteration and before
+    /// any direct delivery to the same plugin.
+    pub live_note_stash: MidiStash,
     /// MIDI clock master (engine emits clock to a hardware device).
     pub midi_clock_sender: MidiClockSender,
     /// MIDI clock slave (engine receives clock from a hardware device).
@@ -151,6 +157,7 @@ pub(crate) fn engine_thread(
         project_dir: None,
         midi_hw: MidiHardwareState::new(live_midi_tx),
         midi_recording: HashMap::new(),
+        live_note_stash: MidiStash::new(),
         midi_clock_sender: MidiClockSender::new(),
         midi_clock_receiver: MidiClockReceiver::new(clock_tx),
         midi_clock_tempo: ClockTempoTracker::default(),
@@ -217,6 +224,11 @@ pub(crate) fn engine_thread(
         for ev in live_midi_rx.try_iter() {
             midi::handle_live_midi_event(&ctx, &mut state, ev);
         }
+
+        // Retry live note events parked while a plugin lock was
+        // contended, so a stashed NoteOn/NoteOff still drains promptly
+        // even when no further input arrives for that plugin.
+        midi::flush_live_note_stash(&ctx, &mut state);
 
         // Drain incoming MIDI clock messages and apply them to the
         // transport (Start/Stop/Continue/SongPosition) plus the

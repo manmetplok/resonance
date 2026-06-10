@@ -46,7 +46,7 @@ pub mod __test_support {
     pub use crate::midi_hardware::{parse_live_event_for_test, LiveMidiEvent};
     pub use crate::mixer::{
         monitor_catchup_skip, monitor_read_len, ramped_gain, sum_to_output, sum_to_stereo,
-        whole_frame_push_len,
+        transport_pos_beats, whole_frame_push_len,
     };
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
@@ -79,6 +79,14 @@ pub use mixer::collect_midi_events_bounce;
 pub use mixer::{MidiStash, NoteSink};
 #[doc(hidden)]
 pub use limits::{MAX_STASHED_EVENTS, MAX_STASHED_INSTRUMENTS};
+
+/// Test surface for the live-input contention path. Exposed so the
+/// regression test in `tests/live_note_retry_order.rs` can verify that
+/// a NoteOn parked on a contended plugin lock is always delivered
+/// before a later NoteOff for the same key (the test supplies its own
+/// `NoteSink` behind a `parking_lot::Mutex`).
+#[doc(hidden)]
+pub use engine::midi::deliver_or_stash;
 
 /// Test surface for the streaming recording drain path. Exposed so
 /// integration tests can verify that `TrackRecordingBuf` never

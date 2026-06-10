@@ -6,11 +6,66 @@
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
+use parking_lot::Mutex;
+
 use crate::midi_hardware::LiveMidiEvent;
+use crate::mixer::{MidiStash, NoteSink};
 use crate::types::*;
 
 use super::super::thread::{HandlerCtx, HandlerState, RecordingMidiState};
 use super::sample_to_abs_tick;
+
+/// Queue a live note event into the plugin behind `mutex`, preserving
+/// FIFO order with any events parked while the lock was contended.
+///
+/// `try_lock` so a slow plugin process() doesn't stall every other
+/// engine command queued behind us (transport, peaks, recording drain,
+/// MIDI clock). On contention the event is parked in `stash` rather
+/// than reposted to the command queue: a reposted NoteOn could be
+/// delivered after a NoteOff that arrived in the meantime, leaving a
+/// stuck note. On a successful lock, parked events drain first so
+/// on/off ordering always matches arrival order.
+pub fn deliver_or_stash<S: NoteSink>(
+    stash: &mut MidiStash,
+    id: PluginInstanceId,
+    mutex: &Mutex<S>,
+    event: PendingNoteEvent,
+) {
+    if let Some(mut sink) = mutex.try_lock() {
+        stash.deliver(id, &mut *sink);
+        if event.is_note_on {
+            sink.note_on(event.note, event.velocity, event.sample_offset);
+        } else {
+            sink.note_off(event.note, event.sample_offset);
+        }
+    } else {
+        stash.stash(id, &[event]);
+    }
+}
+
+/// Retry delivery of live note events parked while a plugin lock was
+/// contended. Called every engine-loop iteration so a stashed event
+/// still drains promptly even when no further input arrives for that
+/// plugin.
+pub(crate) fn flush_live_note_stash(ctx: &HandlerCtx, state: &mut HandlerState) {
+    let pending: Vec<PluginInstanceId> = state.live_note_stash.pending_instances().collect();
+    if pending.is_empty() {
+        return;
+    }
+    let plugins_guard = ctx.plugins.read();
+    for id in pending {
+        match plugins_guard.get(&id) {
+            Some(mutex) => {
+                if let Some(mut inst) = mutex.try_lock() {
+                    state.live_note_stash.deliver(id, &mut *inst);
+                }
+            }
+            // Plugin removed while events were parked — nothing left
+            // to deliver them to.
+            None => state.live_note_stash.discard(id),
+        }
+    }
+}
 
 pub(crate) fn handle_send_note_on(
     ctx: &HandlerCtx,
@@ -30,21 +85,17 @@ pub(crate) fn handle_send_note_on(
         if let Some(&inst_id) = track.plugins().first() {
             let plugins_guard = ctx.plugins.read();
             if let Some(mutex) = plugins_guard.get(&inst_id) {
-                // `try_lock` so a slow plugin process() doesn't stall
-                // every other engine command queued behind us
-                // (transport, peaks, recording drain, MIDI clock).
-                // If contended, retry by reposting the command — the
-                // plugin will be free again within an audio block.
-                if let Some(mut inst) = mutex.try_lock() {
-                    inst.0.queue_note_on(note, velocity, 0);
-                } else {
-                    let _ = ctx.cmd_tx_retry.send(AudioCommand::SendNoteOn {
-                        track_id,
+                deliver_or_stash(
+                    &mut state.live_note_stash,
+                    inst_id,
+                    mutex,
+                    PendingNoteEvent {
+                        is_note_on: true,
                         note,
                         velocity,
-                    });
-                    return;
-                }
+                        sample_offset: 0,
+                    },
+                );
             }
         }
         track.midi_output_channel.unwrap_or(0)
@@ -73,15 +124,17 @@ pub(crate) fn handle_send_note_off(
         if let Some(&inst_id) = track.plugins().first() {
             let plugins_guard = ctx.plugins.read();
             if let Some(mutex) = plugins_guard.get(&inst_id) {
-                // `try_lock` — see comment in `handle_send_note_on`.
-                if let Some(mut inst) = mutex.try_lock() {
-                    inst.0.queue_note_off(note, 0);
-                } else {
-                    let _ = ctx
-                        .cmd_tx_retry
-                        .send(AudioCommand::SendNoteOff { track_id, note });
-                    return;
-                }
+                deliver_or_stash(
+                    &mut state.live_note_stash,
+                    inst_id,
+                    mutex,
+                    PendingNoteEvent {
+                        is_note_on: false,
+                        note,
+                        velocity: 0.0,
+                        sample_offset: 0,
+                    },
+                );
             }
         }
         track.midi_output_channel.unwrap_or(0)

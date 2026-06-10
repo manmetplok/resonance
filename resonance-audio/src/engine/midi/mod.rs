@@ -41,8 +41,15 @@ pub(crate) use hardware::{
     handle_set_track_midi_output,
 };
 pub(crate) use live::{
-    close_open_recordings, handle_live_midi_event, handle_send_note_off, handle_send_note_on,
+    close_open_recordings, flush_live_note_stash, handle_live_midi_event, handle_send_note_off,
+    handle_send_note_on,
 };
+/// Test surface for the live-note contention path. Exposed under
+/// `__test_support` (via `lib.rs`) so the regression test in
+/// `tests/live_note_retry_order.rs` can verify that a contended-then-
+/// retried NoteOn never lands after its NoteOff, without a live CLAP
+/// plugin.
+pub use live::deliver_or_stash;
 pub use outbound::{outbound_step_start, OutboundStep};
 pub(crate) use outbound::poll_timeline_to_midi_output;
 
