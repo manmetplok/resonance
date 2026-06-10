@@ -23,22 +23,23 @@ impl crate::Resonance {
         track: &TrackState,
         available_plugins: &[ScannedPlugin],
     ) -> Element<'_, Message> {
-        // Sub-tracks get a slimmer strip variant — no FX chain and no
-        // input/arm section, because they're fed entirely from their
-        // parent plugin's output port.
-        let is_sub = track.sub_track.is_some();
-        let name_color = if is_sub { theme::TEXT_DIM } else { theme::TEXT };
+        // Sub-tracks never reach this function — view_mixer skips them
+        // in its outer loop and renders them via view_sub_channel_strip
+        // (the slimmer variant) inside their parent's cluster instead.
+        debug_assert!(
+            track.sub_track.is_none(),
+            "view_channel_strip called with a sub-track; use view_sub_channel_strip"
+        );
 
         // Parent instrument tracks that have at least one sub-track show
         // a small collapse/expand button next to the name. Clicking it
         // toggles `expanded_sub_track_parents`, which view_mixer reads
         // before rendering each sub-track strip.
-        let has_sub_tracks = !is_sub
-            && self
-                .registry
-                .tracks
-                .iter()
-                .any(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id));
+        let has_sub_tracks = self
+            .registry
+            .tracks
+            .iter()
+            .any(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id));
         let is_collapsed =
             has_sub_tracks && !self.mixer.expanded_sub_track_parents.contains(&track.id);
 
@@ -46,55 +47,42 @@ impl crate::Resonance {
         // they don't push onto a second line. Wrapping::None alone isn't
         // enough — Iced still wraps when the parent has finite width.
         // Truncate first, then clip in a width-Fill container.
-        let display_name = if track.name.chars().count() > 14 {
-            let mut s: String = track.name.chars().take(13).collect();
-            s.push('…');
-            s
-        } else {
-            track.name.clone()
-        };
+        let display_name = crate::util::short(&track.name, 14);
         let name_text = container(
             text(display_name)
                 .size(12)
                 .font(theme::UI_FONT_MEDIUM)
-                .color(name_color)
+                .color(theme::TEXT)
                 .wrapping(iced::widget::text::Wrapping::None),
         )
         .width(Length::Fill)
         .clip(true);
 
         // Strip head: 22×22 lavender glyph + name on a bottom-bordered
-        // row. Matches the redesign's `.stripHead` block. Sub-tracks
-        // skip the glyph since they share their parent's icon.
-        let head_glyph: Option<Element<'_, Message>> = if is_sub {
-            None
-        } else {
-            let glyph_char = match track.track_type {
-                TrackType::Audio => fa::MICROPHONE,
-                TrackType::Instrument => track.instrument_icon.glyph(),
-                TrackType::Vocal => fa::MICROPHONE,
-            };
-            Some(
-                container(
-                    theme::icon(glyph_char)
-                        .size(11)
-                        .color(theme::ACCENT_SOFT),
-                )
-                .width(22)
-                .height(22)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
-                .style(|_theme| container::Style {
-                    background: Some(iced::Background::Color(theme::BG_3)),
-                    border: iced::Border {
-                        radius: theme::RADIUS_SM.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
-                .into(),
-            )
+        // row. Matches the redesign's `.stripHead` block.
+        let glyph_char = match track.track_type {
+            TrackType::Audio => fa::MICROPHONE,
+            TrackType::Instrument => track.instrument_icon.glyph(),
+            TrackType::Vocal => fa::MICROPHONE,
         };
+        let head_glyph: Element<'_, Message> = container(
+            theme::icon(glyph_char)
+                .size(11)
+                .color(theme::ACCENT_SOFT),
+        )
+        .width(22)
+        .height(22)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_3)),
+            border: iced::Border {
+                radius: theme::RADIUS_SM.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into();
 
         let mut head_row = row![]
             .spacing(8)
@@ -115,9 +103,7 @@ impl crate::Resonance {
                 .style(|_theme, status| theme::small_button_style(status));
             head_row = head_row.push(toggle);
         }
-        if let Some(g) = head_glyph {
-            head_row = head_row.push(g);
-        }
+        head_row = head_row.push(head_glyph);
         head_row = head_row.push(name_text);
         let track_name: Element<'_, Message> = container(head_row)
             .width(Length::Fill)
@@ -163,7 +149,7 @@ impl crate::Resonance {
         ]
         .spacing(2)
         .align_y(alignment::Vertical::Center);
-        if track.track_type == TrackType::Instrument && track.sub_track.is_none() {
+        if track.track_type == TrackType::Instrument {
             utility_row = utility_row.push(bounce_button(track.id, bounce_enabled, 11));
         }
 
@@ -193,7 +179,7 @@ impl crate::Resonance {
         let is_instrument_track = track.track_type == TrackType::Instrument;
 
         let instrument_section: Option<Element<'_, Message>> =
-            if !is_sub && is_instrument_track {
+            if is_instrument_track {
                 if let Some(plugin) = track.plugins.first() {
                     Some(self.view_plugin_slot_row(
                         PluginOwner::Track(track.id),
@@ -223,11 +209,11 @@ impl crate::Resonance {
             };
 
         // FX list: every plugin except the instrument slot (index 0) on
-        // instrument tracks. Sub-tracks and audio tracks render every
-        // plugin here. Built into its own column so we can wrap it in a
-        // vertical scrollable below.
+        // instrument tracks. Audio tracks render every plugin here.
+        // Built into its own column so we can wrap it in a vertical
+        // scrollable below.
         let mut fx_column = column![].spacing(2).width(Length::Fill);
-        let fx_iter: Box<dyn Iterator<Item = &PluginSlotState>> = if !is_sub && is_instrument_track {
+        let fx_iter: Box<dyn Iterator<Item = &PluginSlotState>> = if is_instrument_track {
             Box::new(track.plugins.iter().skip(1))
         } else {
             Box::new(track.plugins.iter())
@@ -432,13 +418,7 @@ impl crate::Resonance {
         // "Drums → Kick" becomes "Kick", which fits comfortably inside
         // the narrower strip.
         let short_name = track.name.split(" \u{2192} ").nth(1).unwrap_or(&track.name);
-        let display_name = if short_name.chars().count() > 10 {
-            let mut s: String = short_name.chars().take(9).collect();
-            s.push('…');
-            s
-        } else {
-            short_name.to_string()
-        };
+        let display_name = crate::util::short(short_name, 10);
         let name_text = container(
             text(display_name)
                 .size(11)
@@ -597,13 +577,7 @@ impl crate::Resonance {
             // Show the port label (after "→") rather than the full name,
             // so "Instrument 2 → Kick" displays as "Kick" instead of "Inst.".
             let short_name = sub.name.split(" \u{2192} ").nth(1).unwrap_or(&sub.name);
-            let label: String = if short_name.chars().count() > 5 {
-                let mut s: String = short_name.chars().take(4).collect();
-                s.push('…');
-                s
-            } else {
-                short_name.to_string()
-            };
+            let label = crate::util::short(short_name, 5);
             let name_label = text(label)
                 .size(9)
                 .color(theme::TEXT_3)

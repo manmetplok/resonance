@@ -1178,13 +1178,9 @@ impl ClipChrome<'_> {
         content(frame);
 
         // Clip name in the header row, truncated for long names.
-        let display_name: String = if self.name.chars().count() > 20 {
-            let mut truncated: String = self.name.chars().take(17).collect();
-            truncated.push_str("...");
-            truncated
-        } else {
-            self.name.to_owned()
-        };
+        // ASCII "..." suffix (not '…') — keeps the canvas text metrics
+        // identical to the pre-refactor rendering.
+        let display_name = crate::util::short_with(self.name, 20, "...");
         if self.show_name {
             frame.fill_text(canvas::Text {
                 content: display_name,

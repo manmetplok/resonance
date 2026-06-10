@@ -191,13 +191,9 @@ impl crate::Resonance {
         plugin: &PluginSlotState,
         is_instrument_slot: bool,
     ) -> Element<'_, Message> {
-        let pname: String = if plugin.plugin_name.chars().count() > 14 {
-            let mut s: String = plugin.plugin_name.chars().take(12).collect();
-            s.push_str("..");
-            s
-        } else {
-            plugin.plugin_name.clone()
-        };
+        // ASCII ".." suffix (not '…') — this pill's width was tuned
+        // around the narrower two-dot tail.
+        let pname = crate::util::short_with(&plugin.plugin_name, 14, "..");
         let pid = plugin.instance_id;
         // Plugins that expose a floating editor (has_gui) are driven
         // entirely from that window — clicking the name in the strip

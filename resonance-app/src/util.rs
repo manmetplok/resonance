@@ -19,6 +19,27 @@ pub fn format_db(db: f32) -> Cow<'static, str> {
     }
 }
 
+/// Truncate `s` to at most `max` characters, replacing the tail with
+/// `…` when it overflows. Char-counted (not bytes), so multi-byte
+/// names truncate cleanly. The result, including the ellipsis, never
+/// exceeds `max` chars.
+pub fn short(s: &str, max: usize) -> String {
+    short_with(s, max, "\u{2026}")
+}
+
+/// `short` with a caller-chosen ellipsis suffix (e.g. ".." or "...")
+/// for sites whose rendered width was tuned around an ASCII suffix.
+pub fn short_with(s: &str, max: usize, ellipsis: &str) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let keep = max.saturating_sub(ellipsis.chars().count());
+        let mut t: String = s.chars().take(keep).collect();
+        t.push_str(ellipsis);
+        t
+    }
+}
+
 /// Format a pan value for display. Returns "C", "L50", "R50" etc.
 pub fn format_pan(pan: f32) -> Cow<'static, str> {
     if pan.abs() < 0.01 {

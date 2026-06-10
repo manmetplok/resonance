@@ -14,9 +14,8 @@ use crate::theme::{self, fa};
 use crate::view::controls::{
     delete_button, monitor_button, mute_button, record_arm_button, solo_button,
 };
+use crate::util::short;
 use crate::Resonance;
-
-use super::short;
 
 pub(super) fn view_track_header(
     _r: &Resonance,
