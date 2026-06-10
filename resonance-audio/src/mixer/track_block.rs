@@ -69,10 +69,12 @@ pub(super) fn render_timeline_block(
         if track.sub_track_of.is_some() {
             continue;
         }
-        if track.muted() {
-            continue;
-        }
-        if any_solo && !track.soloed() {
+        // Muted / solo-suppressed instrument tracks still run their
+        // instrument plugin below (audio discarded) so NoteOffs keep
+        // flowing and voices don't stick on unmute; other tracks are
+        // skipped outright.
+        let silenced = track.muted() || (any_solo && !track.soloed());
+        if silenced && track.track_type != TrackType::Instrument {
             continue;
         }
 
@@ -182,6 +184,11 @@ pub(super) fn render_timeline_block(
                         }
                     }
                 }
+            }
+            // Silenced track: the instrument ran (voice state stays
+            // consistent) but its output is discarded.
+            if silenced {
+                continue;
             }
             // Effect plugins (skipped when the track's FX are bypassed;
             // the instrument itself still ran above).
