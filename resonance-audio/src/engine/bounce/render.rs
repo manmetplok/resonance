@@ -212,7 +212,7 @@ pub(super) fn render_chunk(
         br[..frames].fill(0.0);
     }
 
-    let any_solo = tracks_guard.values().any(|t| t.soloed());
+    let any_solo = any_top_level_solo(tracks_guard.values());
 
     for track in tracks_guard.values() {
         // Sub-tracks are driven by their parent's plugin fan-out below;

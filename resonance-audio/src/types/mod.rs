@@ -58,4 +58,4 @@ pub use tempo::{
     tick_frac_to_sample_frac, InputDeviceInfo, ParamInfo, PluginDescInfo, ScannedPlugin,
     SignaturePoint, TempoMap, TempoPoint, TICKS_PER_QUARTER_NOTE,
 };
-pub use track::{Bus, MasterBus, Track};
+pub use track::{any_top_level_solo, Bus, MasterBus, Track};

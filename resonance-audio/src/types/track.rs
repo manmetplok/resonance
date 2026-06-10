@@ -328,6 +328,16 @@ impl Track {
     }
 }
 
+/// Whether any top-level track is soloed. Sub-tracks follow their
+/// parent's solo state, so they're excluded from the scan. Shared by
+/// the live mixer and the bounce renderer so solo semantics match.
+pub fn any_top_level_solo<'a>(tracks: impl IntoIterator<Item = &'a Track>) -> bool {
+    tracks
+        .into_iter()
+        .filter(|t| t.sub_track_of.is_none())
+        .any(|t| t.soloed())
+}
+
 /// An audio bus: an intermediate summing point with its own plugin
 /// chain, fader, pan, mute, and meters. Busses live between tracks and
 /// master — tracks can route their post-fader audio to a bus, the bus

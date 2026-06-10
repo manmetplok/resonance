@@ -10,6 +10,14 @@ use crate::clap_host::SyncClapInstance;
 use crate::engine::SharedState;
 use crate::types::*;
 
+/// Beat position for the CLAP transport event, derived through the
+/// tempo map's bar table so tempo-synced plugins stay locked under
+/// tempo ramps (a flat samples-per-beat factor drifts).
+#[inline]
+pub fn transport_pos_beats(map: &TempoMap, sample_pos: u64, sample_rate: u32) -> f64 {
+    map.sample_to_abs_tick(sample_pos, sample_rate) as f64 / TICKS_PER_QUARTER_NOTE as f64
+}
+
 /// Latch a pre-captured transport snapshot onto a plugin instance so the
 /// next `process()` call delivers it through the CLAP transport event.
 #[inline]

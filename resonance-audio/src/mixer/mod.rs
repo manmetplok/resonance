@@ -24,7 +24,7 @@ mod monitor;
 mod track_block;
 
 pub(crate) use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
-pub use common::{ramped_gain, sum_to_output, sum_to_stereo};
+pub use common::{ramped_gain, sum_to_output, sum_to_stereo, transport_pos_beats};
 pub use midi_events::collect_midi_events_bounce;
 pub(crate) use midi_events::MAX_MIDI_EVENTS_PER_BUFFER;
 pub use midi_stash::{MidiStash, NoteSink};
@@ -170,7 +170,7 @@ pub(crate) fn mix_audio(
 
     let transport_snap: Option<(f64, u16, u16, bool, f64)> = {
         let playing = shared.playing.load(Ordering::Relaxed);
-        let pos = playhead_now as f64 / sample_rate as f64 * tempo_snap.bpm / 60.0;
+        let pos = transport_pos_beats(&tempo_guard, playhead_now, sample_rate);
         Some((tempo_snap.bpm, tempo_snap.num, tempo_snap.den, playing, pos))
     };
 
@@ -215,11 +215,11 @@ pub(crate) fn mix_audio(
             if let (Some(tracks_guard), Some(plugins_guard)) =
                 (tracks.try_read(), plugins.try_read())
             {
-                let any_solo = tracks_guard.values().any(|t| t.soloed());
+                let any_solo = any_top_level_solo(tracks_guard.values());
                 let is_audible = |t: &&Track| -> bool {
                     t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed())
                 };
-                if let Some(track) = tracks_guard.values().find(|t| is_audible(t)) {
+                for track in tracks_guard.values().filter(|t| is_audible(t)) {
                     let processed_frames = process_monitor_track(
                         track,
                         monitor_temp,
@@ -297,14 +297,14 @@ pub(crate) fn mix_audio(
             else {
                 return;
             };
-            let any_solo = tracks_guard.values().any(|t| t.soloed());
+            let any_solo = any_top_level_solo(tracks_guard.values());
             let is_audible = |t: &&Track| -> bool {
                 t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed())
             };
             let any_monitor = tracks_guard.values().any(|t| is_audible(&t));
 
             if any_monitor {
-                if let Some(track) = tracks_guard.values().find(|t| is_audible(t)) {
+                for track in tracks_guard.values().filter(|t| is_audible(t)) {
                     let processed_frames = process_monitor_track(
                         track,
                         monitor_temp,
@@ -385,10 +385,7 @@ pub(crate) fn mix_audio(
     let comp_guard = latency_comp.load();
     let comp_ref: &crate::latency::LatencyComp = &comp_guard;
 
-    let any_solo = tracks_guard
-        .values()
-        .filter(|t| t.sub_track_of.is_none())
-        .any(|t| t.soloed());
+    let any_solo = any_top_level_solo(tracks_guard.values());
 
     // Detect a loop seam inside this buffer. When the callback reaches or
     // crosses `loop_out`, we render two sub-blocks: the pre-wrap portion

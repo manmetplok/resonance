@@ -5,9 +5,9 @@
 //! Two callers:
 //! - the timeline render loop (`render_timeline_block`) when a track
 //!   has monitoring enabled and the engine is playing back;
-//! - the no-playback / count-in branches in `mix_audio`, which just
-//!   want the first audible monitored track to keep flowing through
-//!   to the master so the performer can hear themselves.
+//! - the no-playback / count-in branches in `mix_audio`, which keep
+//!   every audible monitored track flowing through to the master so
+//!   the performer can hear themselves.
 
 pub(crate) use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
 
