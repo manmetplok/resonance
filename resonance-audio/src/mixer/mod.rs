@@ -19,12 +19,14 @@ mod click;
 mod common;
 mod master;
 mod midi_events;
+mod midi_stash;
 mod monitor;
 mod track_block;
 
 pub(crate) use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
 pub use midi_events::collect_midi_events_bounce;
 pub(crate) use midi_events::MAX_MIDI_EVENTS_PER_BUFFER;
+pub use midi_stash::{MidiStash, NoteSink};
 
 use ringbuf::traits::{Consumer, Observer};
 use std::sync::atomic::Ordering;
@@ -91,6 +93,7 @@ pub(crate) fn mix_audio(
     // active plugin's declared port count.
     port_scratch: &mut [(Vec<f32>, Vec<f32>)],
     note_event_buf: &mut Vec<PendingNoteEvent>,
+    midi_stash: &mut MidiStash,
     monitor_cons: &mut ringbuf::HeapCons<f32>,
     monitor_temp: &mut [f32],
     buf_frames: usize,
@@ -381,6 +384,7 @@ pub(crate) fn mix_audio(
             bus_bufs,
             port_scratch,
             note_event_buf,
+            midi_stash,
             &monitor_temp[..head_monitor_frames * frame_stride],
             head_monitor_frames,
             input_channels,
@@ -388,7 +392,7 @@ pub(crate) fn mix_audio(
         );
 
         // Flush instrument voices at the seam.
-        panic_instrument_tracks(&tracks_guard, &plugins_guard);
+        panic_instrument_tracks(&tracks_guard, &plugins_guard, midi_stash);
 
         // ---- Post-wrap sub-block (plays from `loop_in`) -------------------
         let tail_monitor_start = head_monitor_frames * frame_stride;
@@ -413,6 +417,7 @@ pub(crate) fn mix_audio(
             bus_bufs,
             port_scratch,
             note_event_buf,
+            midi_stash,
             &monitor_temp
                 [tail_monitor_start..tail_monitor_start + tail_monitor_frames * frame_stride],
             tail_monitor_frames,
@@ -441,6 +446,7 @@ pub(crate) fn mix_audio(
             bus_bufs,
             port_scratch,
             note_event_buf,
+            midi_stash,
             &monitor_temp[..monitor_frames * frame_stride],
             monitor_frames,
             input_channels,

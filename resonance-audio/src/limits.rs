@@ -37,6 +37,18 @@ pub const MAX_PENDING_PARAMS: usize = 128;
 /// a full all_notes_off (128) plus a generous burst of new notes.
 pub const MAX_PENDING_NOTES: usize = 256;
 
+/// Maximum number of instrument plugins with stashed MIDI events at
+/// once (see `mixer::midi_stash`). One slot per instrument whose mutex
+/// was contended; slots free on the next successful lock, so hitting
+/// this requires that many simultaneously contended instruments. When
+/// the pool is exhausted the contended block's events are dropped.
+pub const MAX_STASHED_INSTRUMENTS: usize = 64;
+
+/// Maximum MIDI events stashed per instrument across contended blocks.
+/// On overflow the slot degrades to an all-notes-off on the next
+/// successful lock — note-offs are never silently lost.
+pub const MAX_STASHED_EVENTS: usize = 256;
+
 /// Maximum number of undo history entries retained. Not
 /// user-configurable yet.
 pub const DEFAULT_HISTORY_CAPACITY: usize = 200;

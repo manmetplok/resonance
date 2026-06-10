@@ -15,6 +15,7 @@ use super::common::{
     bus_stereo_gains, latch_transport, sum_to_output, sum_to_stereo, track_stereo_gains,
 };
 use super::midi_events::collect_midi_events;
+use super::midi_stash::MidiStash;
 use super::monitor::MAX_PLUGIN_OUTPUT_PORTS;
 
 /// Render one contiguous timeline sub-block into a slice of the output.
@@ -50,6 +51,7 @@ pub(super) fn render_timeline_block(
     bus_bufs: &mut [(Vec<f32>, Vec<f32>)],
     port_scratch: &mut [(Vec<f32>, Vec<f32>)],
     note_event_buf: &mut Vec<PendingNoteEvent>,
+    midi_stash: &mut MidiStash,
     monitor_temp: &[f32],
     monitor_frames: usize,
     input_channels: usize,
@@ -109,6 +111,9 @@ pub(super) fn render_timeline_block(
                 if let Some(mutex) = plugins_guard.get(&instrument_id) {
                     if let Some(mut inst) = mutex.try_lock() {
                         latch_transport(&mut inst, transport_snap);
+                        // Replay events parked during earlier lock
+                        // contention before this block's events.
+                        midi_stash.deliver(instrument_id, &mut *inst);
                         for event in note_event_buf.iter() {
                             if event.is_note_on {
                                 inst.0.queue_note_on(
@@ -182,6 +187,13 @@ pub(super) fn render_timeline_block(
                             );
                             has_audio = true;
                         }
+                    } else {
+                        // UI thread holds the plugin lock (param drag /
+                        // autosave / reload): park this block's events so
+                        // they replay on the next successful lock instead
+                        // of dropping them. The one-block audio dropout
+                        // is accepted for now (future work: crossfade).
+                        midi_stash.stash(instrument_id, note_event_buf);
                     }
                 }
             }

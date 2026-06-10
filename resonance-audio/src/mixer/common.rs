@@ -104,10 +104,13 @@ pub(super) fn sum_to_output(
 
 /// Fire all-notes-off on every instrument track's primary plugin. Used at
 /// the loop seam to prevent notes started before `loop_out` from hanging
-/// after the playhead snaps back to `loop_in`.
+/// after the playhead snaps back to `loop_in`. If the lock is contended,
+/// the panic is parked in the MIDI stash and fires on the next
+/// successful lock instead of being lost.
 pub(super) fn panic_instrument_tracks(
     tracks_guard: &IndexMap<TrackId, Track>,
     plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
+    midi_stash: &mut super::midi_stash::MidiStash,
 ) {
     for track in tracks_guard.values() {
         if !track.track_type.accepts_midi() {
@@ -121,6 +124,10 @@ pub(super) fn panic_instrument_tracks(
         };
         if let Some(mut inst) = mutex.try_lock() {
             inst.0.all_notes_off();
+            // Stashed pre-seam events are superseded by the panic.
+            midi_stash.discard(inst_id);
+        } else {
+            midi_stash.request_panic(inst_id);
         }
     }
 }
