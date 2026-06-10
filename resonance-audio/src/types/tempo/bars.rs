@@ -59,12 +59,6 @@ impl TempoMap {
         sample_rate as f64 * 60.0 / self.bpm as f64
     }
 
-    /// Samples per beat at a specific sample position (uses tempo events).
-    pub fn samples_per_beat_at(&self, sample_pos: u64, sample_rate: u32) -> f64 {
-        let bpm = self.bpm_at(sample_pos, sample_rate);
-        sample_rate as f64 * 60.0 / bpm as f64
-    }
-
     /// Samples per bar at the given sample rate.
     pub fn samples_per_bar(&self, sample_rate: u32) -> f64 {
         self.samples_per_beat(sample_rate) * self.numerator as f64

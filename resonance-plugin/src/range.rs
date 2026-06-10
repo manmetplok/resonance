@@ -59,22 +59,6 @@ impl FloatRange {
         }
     }
 
-    /// Unnormalize a 0..1 value to the plain range.
-    pub fn unnormalize(&self, normalized: f32) -> f32 {
-        let normalized = normalized.clamp(0.0, 1.0);
-        match self {
-            FloatRange::Linear { min, max } => min + normalized * (max - min),
-            FloatRange::Skewed { min, max, factor } => {
-                let linear = if factor.abs() < f32::EPSILON {
-                    normalized
-                } else {
-                    // Inverse of normalize: linear = normalized^(2^factor)
-                    normalized.powf(2.0_f32.powf(*factor))
-                };
-                min + linear * (max - min)
-            }
-        }
-    }
 
     pub fn min(&self) -> f32 {
         match self {
@@ -107,14 +91,6 @@ impl IntRange {
         }
     }
 
-    pub fn unnormalize(&self, normalized: f64) -> i32 {
-        let normalized = normalized.clamp(0.0, 1.0);
-        match self {
-            IntRange::Linear { min, max } => {
-                ((*min as f64 + normalized * (*max - *min) as f64).round() as i32).clamp(*min, *max)
-            }
-        }
-    }
 
     pub fn min(&self) -> i32 {
         match self {

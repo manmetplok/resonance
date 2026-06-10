@@ -13,11 +13,6 @@ impl ClapInstance {
         self.gui_ext.is_some()
     }
 
-    /// Whether the GUI is currently open (i.e. `gui_create` was called).
-    #[allow(dead_code)] // public probe used by hosting code that toggles editor visibility
-    pub fn is_gui_open(&self) -> bool {
-        self.gui_open
-    }
 
     /// Open the plugin's editor window as a floating Wayland window.
     ///

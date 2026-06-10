@@ -170,8 +170,4 @@ impl Smoother {
         self.current
     }
 
-    /// Whether the smoother is currently ramping.
-    pub fn is_smoothing(&self) -> bool {
-        self.remaining > 0
-    }
 }

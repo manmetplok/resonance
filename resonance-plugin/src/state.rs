@@ -13,20 +13,6 @@ pub fn params_to_json(params: &[&dyn Param]) -> serde_json::Value {
     serde_json::json!({ "params": map })
 }
 
-/// Serialize parameters to bytes.
-pub fn save_params(params: &[&dyn Param]) -> Vec<u8> {
-    let json = params_to_json(params);
-    serde_json::to_vec(&json).unwrap_or_default()
-}
-
-/// Deserialize parameters from bytes.
-pub fn load_params(params: &[&dyn Param], data: &[u8]) -> bool {
-    let Ok(state) = serde_json::from_slice::<serde_json::Value>(data) else {
-        return false;
-    };
-    load_params_from_json(params, &state)
-}
-
 /// Load parameter values from a JSON value.
 pub fn load_params_from_json(params: &[&dyn Param], state: &serde_json::Value) -> bool {
     let Some(param_map) = state.get("params").and_then(|v| v.as_object()) else {

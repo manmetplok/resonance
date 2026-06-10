@@ -862,18 +862,6 @@ pub fn assign_syllables_to_notes(
     out
 }
 
-/// Like `phonemes_for_draft` but also returns a parallel `Vec<bool>`
-/// flagging the last syllable of each word. Lets the SVS pipeline
-/// decide whether to insert a short `SP` (silence) between words for
-/// crisper articulation.
-pub fn phonemes_for_draft_with_word_boundaries(
-    draft: &[crate::derive::LyricLine],
-) -> (Vec<Vec<&'static str>>, Vec<bool>) {
-    let syllables = resolve_draft(draft);
-    let phon: Vec<Vec<&'static str>> = syllables.iter().map(|s| s.phonemes.clone()).collect();
-    let is_word_end: Vec<bool> = syllables.iter().map(|s| s.is_word_end).collect();
-    (phon, is_word_end)
-}
 
 /// Split a phoneme list into `n` syllable-shaped chunks. Tries to
 /// give each chunk exactly one vowel; consonants between vowels go

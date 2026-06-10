@@ -96,10 +96,6 @@ impl<'a> EventIterator<'a> {
         }
     }
 
-    /// Peek at the next event without consuming it.
-    pub fn peek(&self) -> Option<&NoteEvent> {
-        self.events.get(self.pos)
-    }
 
     /// Consume and return the next event.
     pub fn next_event(&mut self) -> Option<NoteEvent> {

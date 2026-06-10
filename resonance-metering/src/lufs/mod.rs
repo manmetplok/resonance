@@ -100,11 +100,6 @@ impl LufsMeter {
         }
     }
 
-    /// Number of integrated-gating blocks currently held. Exposed for
-    /// tests and diagnostics.
-    pub fn integrated_block_count(&self) -> usize {
-        self.integrated.len()
-    }
 
     /// Whether the integrated meter hit its session block cap and started
     /// dropping blocks. Lock-free, safe to poll from a UI thread.

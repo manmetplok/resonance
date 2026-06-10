@@ -627,16 +627,6 @@ impl AudioEngine {
         self.event_rx.try_recv().ok()
     }
 
-    /// Get the command sender for cloning.
-    pub fn command_sender(&self) -> Sender<AudioCommand> {
-        self.cmd_tx.clone()
-    }
-
-    /// Get the event receiver for cloning.
-    pub fn event_receiver(&self) -> Receiver<AudioEvent> {
-        self.event_rx.clone()
-    }
-
     /// Test-only constructor that builds an `AudioEngine` with no spawned
     /// engine thread, no cpal stream, and a command channel whose receiver
     /// has already been dropped. Calling [`AudioEngine::send`] on the
