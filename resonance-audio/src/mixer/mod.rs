@@ -40,11 +40,9 @@ use crate::engine::SharedState;
 use crate::types::*;
 
 use click::{render_count_in_clicks, render_metronome_clicks};
-use common::{
-    advance_playhead_silent, panic_instrument_tracks, ramped_stereo_peaks, track_stereo_gains,
-};
+use common::{advance_playhead_silent, panic_instrument_tracks, TransportSnap};
 use master::{apply_master_fx_chain, apply_master_volume_and_peaks};
-use monitor::process_monitor_track;
+use monitor::mix_monitor_passthrough;
 use track_block::render_timeline_block;
 
 /// One-shot warning when cpal requests a buffer larger than our
@@ -172,11 +170,13 @@ pub(crate) fn mix_audio(
     };
     let snap_bpm = tempo_snap.bpm;
 
-    let transport_snap: Option<(f64, u16, u16, bool, f64)> = {
-        let playing = shared.playing.load(Ordering::Relaxed);
-        let pos = transport_pos_beats(&tempo_guard, playhead_now, sample_rate);
-        Some((tempo_snap.bpm, tempo_snap.num, tempo_snap.den, playing, pos))
-    };
+    let transport_snap = Some(TransportSnap {
+        bpm: tempo_snap.bpm,
+        num: tempo_snap.num,
+        den: tempo_snap.den,
+        playing: shared.playing.load(Ordering::Relaxed),
+        pos_beats: transport_pos_beats(&tempo_guard, playhead_now, sample_rate),
+    });
 
     // Read monitor input with jitter margin to avoid underflows.
     // Skip stale monitor data to keep latency at ~1 buffer period.
@@ -219,46 +219,18 @@ pub(crate) fn mix_audio(
             if let (Some(tracks_guard), Some(plugins_guard)) =
                 (tracks.try_read(), plugins.try_read())
             {
-                let any_solo = any_top_level_solo(tracks_guard.values());
-                let is_audible = |t: &&Track| -> bool {
-                    t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed())
-                };
-                for track in tracks_guard.values().filter(|t| is_audible(t)) {
-                    let processed_frames = process_monitor_track(
-                        track,
-                        monitor_temp,
-                        monitor_frames,
-                        monitor_frames,
-                        input_channels,
-                        track_buf_l,
-                        track_buf_r,
-                        &plugins_guard,
-                        transport_snap,
-                    );
-                    let (target_l, target_r) = track_stereo_gains(track);
-                    let (last_l, last_r) = track.last_gains();
-                    let gain_l = (last_l, target_l);
-                    let gain_r = (last_r, target_r);
-                    let (peak_l, peak_r) = ramped_stereo_peaks(
-                        track_buf_l,
-                        track_buf_r,
-                        processed_frames,
-                        gain_l,
-                        gain_r,
-                    );
-                    track.update_peak_l(peak_l);
-                    track.update_peak_r(peak_r);
-                    sum_to_output(
-                        data,
-                        channels,
-                        processed_frames,
-                        track_buf_l,
-                        track_buf_r,
-                        gain_l,
-                        gain_r,
-                    );
-                    track.set_last_gains(target_l, target_r);
-                }
+                mix_monitor_passthrough(
+                    data,
+                    channels,
+                    &tracks_guard,
+                    &plugins_guard,
+                    monitor_temp,
+                    monitor_frames,
+                    input_channels,
+                    track_buf_l,
+                    track_buf_r,
+                    transport_snap,
+                );
             }
         }
 
@@ -301,54 +273,19 @@ pub(crate) fn mix_audio(
             else {
                 return;
             };
-            let any_solo = any_top_level_solo(tracks_guard.values());
-            let is_audible = |t: &&Track| -> bool {
-                t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed())
-            };
-            let any_monitor = tracks_guard.values().any(|t| is_audible(&t));
-
+            let any_monitor = mix_monitor_passthrough(
+                data,
+                channels,
+                &tracks_guard,
+                &plugins_guard,
+                monitor_temp,
+                monitor_frames,
+                input_channels,
+                track_buf_l,
+                track_buf_r,
+                transport_snap,
+            );
             if any_monitor {
-                for track in tracks_guard.values().filter(|t| is_audible(t)) {
-                    let processed_frames = process_monitor_track(
-                        track,
-                        monitor_temp,
-                        monitor_frames,
-                        monitor_frames,
-                        input_channels,
-                        track_buf_l,
-                        track_buf_r,
-                        &plugins_guard,
-                        transport_snap,
-                    );
-
-                    let (target_l, target_r) = track_stereo_gains(track);
-                    let (last_l, last_r) = track.last_gains();
-                    let gain_l = (last_l, target_l);
-                    let gain_r = (last_r, target_r);
-
-                    // Compute post-fader peak levels for VU meters
-                    let (peak_l, peak_r) = ramped_stereo_peaks(
-                        track_buf_l,
-                        track_buf_r,
-                        processed_frames,
-                        gain_l,
-                        gain_r,
-                    );
-                    track.update_peak_l(peak_l);
-                    track.update_peak_r(peak_r);
-
-                    sum_to_output(
-                        data,
-                        channels,
-                        processed_frames,
-                        track_buf_l,
-                        track_buf_r,
-                        gain_l,
-                        gain_r,
-                    );
-                    track.set_last_gains(target_l, target_r);
-                }
-
                 // Apply master volume and compute master peak levels
                 apply_master_volume_and_peaks(data, channels, shared);
             }

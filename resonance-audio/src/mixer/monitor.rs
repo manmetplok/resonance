@@ -2,19 +2,20 @@
 //! each track's chosen channel(s) into its stereo L/R pair, and run
 //! the track's plugin chain on the result.
 //!
-//! Two callers:
-//! - the timeline render loop (`render_timeline_block`) when a track
-//!   has monitoring enabled and the engine is playing back;
-//! - the no-playback / count-in branches in `mix_audio`, which keep
-//!   every audible monitored track flowing through to the master so
-//!   the performer can hear themselves.
+//! Used by the no-playback / count-in branches in `mix_audio` (via
+//! [`mix_monitor_passthrough`]), which keep every audible monitored
+//! track flowing through to the master so the performer can hear
+//! themselves; the playing-back timeline path mixes monitor input
+//! inside `render_core` instead.
 
 use indexmap::IndexMap;
 
 use crate::clap_host::SyncClapInstance;
 use crate::types::*;
 
-use super::common::latch_transport;
+use super::common::{
+    latch_transport, ramped_stereo_peaks, sum_to_output, track_stereo_gains, TransportSnap,
+};
 
 /// De-interleave monitor input into track buffers and process through plugins.
 /// Returns the number of frames written. `monitor_temp` is interleaved
@@ -23,7 +24,7 @@ use super::common::latch_transport;
 /// track's own `input_port` picks which channel(s) to route into its
 /// stereo L/R pair.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn process_monitor_track(
+fn process_monitor_track(
     track: &Track,
     monitor_temp: &[f32],
     monitor_frames: usize,
@@ -32,7 +33,7 @@ pub(super) fn process_monitor_track(
     track_buf_l: &mut [f32],
     track_buf_r: &mut [f32],
     plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
-    transport_snap: Option<(f64, u16, u16, bool, f64)>,
+    transport_snap: Option<TransportSnap>,
 ) -> usize {
     let is_mono = track.mono();
     let mix_frames = max_frames.min(monitor_frames);
@@ -75,4 +76,62 @@ pub(super) fn process_monitor_track(
     }
 
     mix_frames
+}
+
+/// Monitor pass-through for the count-in and stopped branches of
+/// `mix_audio`: route every audible monitored track through its plugin
+/// chain and sum it straight into the output with ramped gains and VU
+/// peaks. Returns whether any track was mixed.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn mix_monitor_passthrough(
+    data: &mut [f32],
+    channels: usize,
+    tracks_guard: &IndexMap<TrackId, Track>,
+    plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
+    monitor_temp: &[f32],
+    monitor_frames: usize,
+    input_channels: usize,
+    track_buf_l: &mut [f32],
+    track_buf_r: &mut [f32],
+    transport_snap: Option<TransportSnap>,
+) -> bool {
+    let any_solo = any_top_level_solo(tracks_guard.values());
+    let is_audible =
+        |t: &&Track| -> bool { t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed()) };
+    let mut mixed_any = false;
+    for track in tracks_guard.values().filter(|t| is_audible(t)) {
+        mixed_any = true;
+        let processed_frames = process_monitor_track(
+            track,
+            monitor_temp,
+            monitor_frames,
+            monitor_frames,
+            input_channels,
+            track_buf_l,
+            track_buf_r,
+            plugins_guard,
+            transport_snap,
+        );
+        let (target_l, target_r) = track_stereo_gains(track);
+        let (last_l, last_r) = track.last_gains();
+        let gain_l = (last_l, target_l);
+        let gain_r = (last_r, target_r);
+        // Post-fader peak levels for VU meters, with the same ramp the
+        // sum applies.
+        let (peak_l, peak_r) =
+            ramped_stereo_peaks(track_buf_l, track_buf_r, processed_frames, gain_l, gain_r);
+        track.update_peak_l(peak_l);
+        track.update_peak_r(peak_r);
+        sum_to_output(
+            data,
+            channels,
+            processed_frames,
+            track_buf_l,
+            track_buf_r,
+            gain_l,
+            gain_r,
+        );
+        track.set_last_gains(target_l, target_r);
+    }
+    mixed_any
 }

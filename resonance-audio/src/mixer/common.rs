@@ -18,15 +18,24 @@ pub fn transport_pos_beats(map: &TempoMap, sample_pos: u64, sample_rate: u32) ->
     map.sample_to_abs_tick(sample_pos, sample_rate) as f64 / TICKS_PER_QUARTER_NOTE as f64
 }
 
+/// Transport snapshot captured once per audio buffer and latched onto
+/// each plugin before `process()` so every CLAP transport event in the
+/// block agrees on tempo, meter, and position.
+#[derive(Clone, Copy)]
+pub(crate) struct TransportSnap {
+    pub bpm: f64,
+    pub num: u16,
+    pub den: u16,
+    pub playing: bool,
+    pub pos_beats: f64,
+}
+
 /// Latch a pre-captured transport snapshot onto a plugin instance so the
 /// next `process()` call delivers it through the CLAP transport event.
 #[inline]
-pub(super) fn latch_transport(
-    inst: &mut SyncClapInstance,
-    snap: Option<(f64, u16, u16, bool, f64)>,
-) {
-    if let Some((bpm, num, den, playing, pos)) = snap {
-        inst.0.set_transport(bpm, num, den, playing, pos);
+pub(super) fn latch_transport(inst: &mut SyncClapInstance, snap: Option<TransportSnap>) {
+    if let Some(s) = snap {
+        inst.0.set_transport(s.bpm, s.num, s.den, s.playing, s.pos_beats);
     }
 }
 

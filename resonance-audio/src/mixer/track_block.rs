@@ -13,6 +13,7 @@ use crate::clap_host::SyncClapInstance;
 use crate::latency::LatencyComp;
 use crate::types::*;
 
+use super::common::TransportSnap;
 use super::midi_stash::MidiStash;
 use super::render_core::{render_block, RenderStrategy};
 
@@ -53,7 +54,7 @@ pub(super) fn render_timeline_block(
     monitor_temp: &[f32],
     monitor_frames: usize,
     input_channels: usize,
-    transport_snap: Option<(f64, u16, u16, bool, f64)>,
+    transport_snap: Option<TransportSnap>,
     latency_comp: &LatencyComp,
 ) {
     let mut strategy = RenderStrategy::Live {

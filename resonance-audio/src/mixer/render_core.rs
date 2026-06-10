@@ -29,7 +29,7 @@ use crate::types::*;
 
 use super::common::{
     bus_stereo_gains, latch_transport, ramped_stereo_peaks, sum_to_output, sum_to_stereo,
-    track_stereo_gains,
+    track_stereo_gains, TransportSnap,
 };
 use super::midi_events::collect_midi_events;
 use super::midi_stash::MidiStash;
@@ -39,7 +39,7 @@ use super::midi_stash::MidiStash;
 pub(crate) enum RenderStrategy<'a> {
     Live {
         midi_stash: &'a mut MidiStash,
-        transport_snap: Option<(f64, u16, u16, bool, f64)>,
+        transport_snap: Option<TransportSnap>,
         monitor_temp: &'a [f32],
         monitor_frames: usize,
         input_channels: usize,

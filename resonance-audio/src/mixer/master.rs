@@ -11,7 +11,7 @@ use crate::clap_host::SyncClapInstance;
 use crate::engine::SharedState;
 use crate::types::*;
 
-use super::common::latch_transport;
+use super::common::{latch_transport, TransportSnap};
 
 /// Run the master FX insert chain over the interleaved `data` buffer in
 /// place. De-interleaves into the borrowed `scratch_l`/`scratch_r` pair
@@ -27,7 +27,7 @@ pub(super) fn apply_master_fx_chain(
     plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
     scratch_l: &mut [f32],
     scratch_r: &mut [f32],
-    transport_snap: Option<(f64, u16, u16, bool, f64)>,
+    transport_snap: Option<TransportSnap>,
 ) {
     let Some(master_guard) = master.try_read() else {
         return;
