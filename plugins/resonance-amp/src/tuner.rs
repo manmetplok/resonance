@@ -11,9 +11,14 @@
 //! 1. Incoming samples are appended to a ring buffer sized for one full
 //!    analysis frame.
 //! 2. When the ring has filled since the last analysis, `analyze()`
-//!    runs a single YIN pass and reports `(hz, confidence)`.
-//! 3. The audio thread calls `feed()` + `analyze()` once per block, so
-//!    the O(N²) difference function runs at block rate (not per-sample).
+//!    snapshots the frame and starts a YIN pass.
+//! 3. The O(N²) difference function (~750k MACs for a full pass) is
+//!    amortized: each `analyze()` call computes at most
+//!    `LAGS_PER_CALL` lags, so one pass spreads over several blocks
+//!    and no single `process()` call eats the whole cost. The cheap
+//!    closing steps (normalization, threshold pick, interpolation) run
+//!    on the call that finishes the last lag, which then reports
+//!    `(hz, confidence)`.
 
 #[doc(hidden)]
 pub const FRAME_LEN: usize = 2048;
@@ -31,6 +36,12 @@ const PITCH_MAX_HZ: f32 = 1200.0;
 /// periodic; above it, we fall back to the global minimum.
 const YIN_THRESHOLD: f32 = 0.15;
 
+/// Maximum difference-function lags computed per `analyze()` call.
+/// Each lag costs `FRAME_LEN / 2` MACs, so this bounds one call to
+/// ~64k MACs; a full pass (tau_max ≈ 740 at 48 kHz) finishes within
+/// ~12 blocks — a few tens of milliseconds, plenty fast for a tuner.
+const LAGS_PER_CALL: usize = 64;
+
 pub struct Tuner {
     sample_rate: f32,
     /// Ring buffer of the most recent `FRAME_LEN` samples.
@@ -44,6 +55,10 @@ pub struct Tuner {
     /// Inclusive lag bounds derived from `PITCH_MIN/MAX_HZ`.
     tau_min: usize,
     tau_max: usize,
+    /// Snapshot of the ring (chronological) for the pass in flight.
+    frame: Box<[f32; FRAME_LEN]>,
+    /// Next lag to compute for the pass in flight; 0 = no pass running.
+    next_tau: usize,
 }
 
 impl Tuner {
@@ -60,6 +75,8 @@ impl Tuner {
             cmnd: vec![0.0; buf_len],
             tau_min,
             tau_max,
+            frame: Box::new([0.0; FRAME_LEN]),
+            next_tau: 0,
         }
     }
 
@@ -72,41 +89,58 @@ impl Tuner {
         self.fill_since_analyze = (self.fill_since_analyze + samples.len()).min(FRAME_LEN);
     }
 
-    /// Run one YIN pass against the current ring contents and return
-    /// `(hz, confidence)` on success. Returns `None` if the ring hasn't
-    /// filled at least once yet or the signal is too quiet to analyse.
+    /// Advance the YIN pass by a bounded slice of work and return
+    /// `(hz, confidence)` from the call that completes it. Returns
+    /// `None` while a pass is still in flight, if the ring hasn't
+    /// filled since the last pass started, or if the signal is too
+    /// quiet to analyse.
     pub fn analyze(&mut self) -> Option<(f32, f32)> {
-        if self.fill_since_analyze < FRAME_LEN {
-            return None;
+        if self.next_tau == 0 {
+            if self.fill_since_analyze < FRAME_LEN {
+                return None;
+            }
+
+            // Linearised snapshot of the ring in chronological order, so
+            // the pass sees a stable frame while later blocks stream in.
+            let start = self.write_pos;
+            for (i, slot) in self.frame.iter_mut().enumerate() {
+                *slot = self.ring[(start + i) % FRAME_LEN];
+            }
+
+            // Reject blocks that are mostly silent — avoids locking the
+            // tuner onto low-level noise / hum.
+            let rms_sq: f32 =
+                self.frame.iter().map(|x| x * x).sum::<f32>() / FRAME_LEN as f32;
+            if rms_sq < 1e-6 {
+                return None;
+            }
+
+            // Reset the fill counter now so the next pass only starts
+            // after a fresh frame's worth of audio.
+            self.fill_since_analyze = 0;
+            self.diff[0] = 0.0;
+            self.next_tau = 1;
         }
 
-        // Linearised snapshot of the ring in chronological order.
-        let mut frame = [0.0f32; FRAME_LEN];
-        let start = self.write_pos;
-        for (i, slot) in frame.iter_mut().enumerate() {
-            *slot = self.ring[(start + i) % FRAME_LEN];
-        }
-
-        // Reject blocks that are mostly silent — avoids locking the tuner
-        // onto low-level noise / hum.
-        let rms_sq: f32 = frame.iter().map(|x| x * x).sum::<f32>() / FRAME_LEN as f32;
-        if rms_sq < 1e-6 {
-            return None;
-        }
-
-        // Step 1: difference function d(τ) = Σ (x[i] - x[i+τ])² for i in
-        // [0, W-τ), W = FRAME_LEN/2. Using half the frame keeps the
-        // summation balanced across lags.
+        // Step 1 (amortized): difference function d(τ) = Σ (x[i] - x[i+τ])²
+        // for i in [0, W-τ), W = FRAME_LEN/2. Using half the frame keeps
+        // the summation balanced across lags. Only `LAGS_PER_CALL` lags
+        // are computed per call; the pass resumes next block.
         let window = FRAME_LEN / 2;
-        self.diff[0] = 0.0;
-        for tau in 1..=self.tau_max {
+        let last = (self.next_tau + LAGS_PER_CALL - 1).min(self.tau_max);
+        for tau in self.next_tau..=last {
             let mut sum = 0.0f32;
             for i in 0..window {
-                let d = frame[i] - frame[i + tau];
+                let d = self.frame[i] - self.frame[i + tau];
                 sum += d * d;
             }
             self.diff[tau] = sum;
         }
+        if last < self.tau_max {
+            self.next_tau = last + 1;
+            return None;
+        }
+        self.next_tau = 0;
 
         // Step 2: cumulative mean normalized difference function d'(τ).
         self.cmnd[0] = 1.0;
@@ -169,10 +203,6 @@ impl Tuner {
         // Confidence: 1.0 - d'(τ*), clamped. Lower cmnd means a stronger
         // periodic peak, so higher confidence.
         let confidence = (1.0 - self.cmnd[tau_star]).clamp(0.0, 1.0);
-
-        // Reset the fill counter so we only analyse after receiving a
-        // fresh frame's worth of audio.
-        self.fill_since_analyze = 0;
 
         Some((hz, confidence))
     }
