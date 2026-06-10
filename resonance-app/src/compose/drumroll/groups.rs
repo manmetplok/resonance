@@ -7,6 +7,7 @@
 //! per-step pattern and an articulation weight: when the same step fires,
 //! the weights decide which pad's sample triggers.
 
+use resonance_common::drum_map::{self as gm, GM_PADS};
 use serde::{Deserialize, Serialize};
 
 /// One pad inside a drum group. Each pad maps to a MIDI note from the kit
@@ -172,7 +173,7 @@ pub fn default_drum_groups(next_id: &mut u64) -> Vec<DrumGroup> {
             phase: 0,
             pads: vec![DrumGroupPad {
                 name: "Kick".to_string(),
-                note: 36,
+                note: gm::KICK,
                 weight: 100,
                 pattern: vec![
                     1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1,
@@ -196,7 +197,7 @@ pub fn default_drum_groups(next_id: &mut u64) -> Vec<DrumGroup> {
             pads: vec![
                 DrumGroupPad {
                     name: "Snare".to_string(),
-                    note: 38,
+                    note: gm::SNARE,
                     weight: 70,
                     pattern: vec![
                         0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
@@ -204,15 +205,17 @@ pub fn default_drum_groups(next_id: &mut u64) -> Vec<DrumGroup> {
                 },
                 DrumGroupPad {
                     name: "Rim Click".to_string(),
-                    note: 37,
+                    note: gm::RIMSHOT,
                     weight: 15,
                     pattern: vec![
                         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0,
                     ],
                 },
                 DrumGroupPad {
+                    // Note 39 is the plugin's Sidestick pad (repurposed
+                    // from GM Clap); external GM synths play a clap here.
                     name: "Clap".to_string(),
-                    note: 39,
+                    note: gm::SNARE_SIDESTICK,
                     weight: 15,
                     pattern: vec![
                         0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
@@ -237,25 +240,25 @@ pub fn default_drum_groups(next_id: &mut u64) -> Vec<DrumGroup> {
             pads: vec![
                 DrumGroupPad {
                     name: "Closed".to_string(),
-                    note: 42,
+                    note: gm::HIHAT_CLOSED,
                     weight: 60,
                     pattern: vec![1, 1, 0, 1, 1, 1, 0],
                 },
                 DrumGroupPad {
                     name: "Half Open".to_string(),
-                    note: 44,
+                    note: gm::HIHAT_HALF_OPEN,
                     weight: 10,
                     pattern: vec![0, 0, 0, 0, 0, 0, 1],
                 },
                 DrumGroupPad {
                     name: "Open".to_string(),
-                    note: 46,
+                    note: gm::HIHAT_OPEN,
                     weight: 25,
                     pattern: vec![0, 0, 1, 0, 0, 0, 0],
                 },
                 DrumGroupPad {
                     name: "Pedal".to_string(),
-                    note: 44,
+                    note: gm::HIHAT_PEDAL,
                     weight: 5,
                     pattern: vec![0, 0, 0, 0, 0, 0, 0],
                 },
@@ -278,19 +281,19 @@ pub fn default_drum_groups(next_id: &mut u64) -> Vec<DrumGroup> {
             pads: vec![
                 DrumGroupPad {
                     name: "Tom Hi".to_string(),
-                    note: 50,
+                    note: gm::TOM_HIGH,
                     weight: 34,
                     pattern: vec![0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
                 },
                 DrumGroupPad {
                     name: "Tom Mid".to_string(),
-                    note: 47,
+                    note: gm::TOM_MID,
                     weight: 33,
                     pattern: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                 },
                 DrumGroupPad {
                     name: "Tom Lo".to_string(),
-                    note: 45,
+                    note: gm::TOM_LOW,
                     weight: 33,
                     pattern: vec![0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
                 },
@@ -313,7 +316,7 @@ pub fn default_drum_groups(next_id: &mut u64) -> Vec<DrumGroup> {
             pads: vec![
                 DrumGroupPad {
                     name: "Shaker".to_string(),
-                    note: 70,
+                    note: GM_SHAKER,
                     weight: 65,
                     pattern: vec![
                         0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1,
@@ -321,7 +324,7 @@ pub fn default_drum_groups(next_id: &mut u64) -> Vec<DrumGroup> {
                 },
                 DrumGroupPad {
                     name: "Conga".to_string(),
-                    note: 64,
+                    note: GM_CONGA,
                     weight: 20,
                     pattern: vec![
                         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -329,7 +332,7 @@ pub fn default_drum_groups(next_id: &mut u64) -> Vec<DrumGroup> {
                 },
                 DrumGroupPad {
                     name: "Tamb".to_string(),
-                    note: 54,
+                    note: GM_TAMBOURINE,
                     weight: 15,
                     pattern: vec![
                         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -372,43 +375,59 @@ pub struct KitPadInfo {
     pub category: String,
 }
 
-/// The full drum kit pad library shown by the manager. Mirrors the
-/// design's `KIT_PADS` list so all 26 pads are available regardless of
-/// which ones currently belong to a group.
+/// GM percussion notes for instruments the `resonance-drums` plugin has
+/// no pad for. Kept in the kit library so drum groups can still drive an
+/// external General-MIDI synth; the plugin simply ignores these notes
+/// (`pad_index_for_note` returns `None`).
+pub const GM_SHAKER: u8 = 70; // GM: Maracas
+pub const GM_CONGA: u8 = 64; // GM: Low Conga
+pub const GM_TAMBOURINE: u8 = 54; // GM: Tambourine
+
+/// The full drum kit pad library shown by the manager.
+///
+/// Contract: every plugin-backed pad is derived 1:1 from
+/// [`resonance_common::drum_map::GM_PADS`] — the same note table the
+/// `resonance-drums` sampler triggers from — so assigning a pad in the
+/// manager always reaches the matching plugin pad. The remaining "Perc"
+/// pads (cowbell, shaker, conga, tambourine) have no plugin pad and exist
+/// for external GM synths; their notes are GM-standard and never collide
+/// with `GM_PADS`.
 pub fn default_kit_pads() -> Vec<KitPadInfo> {
-    [
-        ("Kick", 36, "Kick"),
-        ("Snare", 38, "Snare"),
-        ("Snare Rim", 40, "Snare"),
-        ("Side Stick", 37, "Snare"),
-        ("Clap", 39, "Snare"),
-        ("Hi-Hat Closed", 42, "Hi-Hat"),
-        ("Hi-Hat Open", 46, "Hi-Hat"),
-        ("Hi-Hat Half Open", 44, "Hi-Hat"),
-        ("Hi-Hat Loose", 26, "Hi-Hat"),
-        ("Hi-Hat Pedal", 44, "Hi-Hat"),
-        ("Hi-Hat Pressed", 22, "Hi-Hat"),
-        ("Hi-Hat Trash Open", 24, "Hi-Hat"),
-        ("Tom High", 48, "Toms"),
-        ("Tom Mid", 47, "Toms"),
-        ("Tom Low", 45, "Toms"),
-        ("Crash 16 Edge", 49, "Cymbals"),
-        ("Crash 16 Bell", 53, "Cymbals"),
-        ("Crash 16 Tip", 55, "Cymbals"),
-        ("Crash 18 Edge", 57, "Cymbals"),
-        ("Crash 18 Bell", 59, "Cymbals"),
-        ("Ride Edge", 51, "Cymbals"),
-        ("Ride Bell", 53, "Cymbals"),
-        ("Ride Tip", 59, "Cymbals"),
-        ("Shaker", 70, "Perc"),
-        ("Conga", 64, "Perc"),
-        ("Tambourine", 54, "Perc"),
-    ]
-    .iter()
-    .map(|(name, note, cat)| KitPadInfo {
-        note: *note,
-        name: (*name).to_string(),
-        category: (*cat).to_string(),
-    })
-    .collect()
+    fn category(note: u8) -> &'static str {
+        match note {
+            gm::KICK => "Kick",
+            gm::SNARE
+            | gm::RIMSHOT
+            | gm::SNARE_SIDESTICK
+            | gm::SNARE_FLAM
+            | gm::SNARE_ROLL
+            | gm::SNARE_HANDTUCH => "Snare",
+            gm::HIHAT_CLOSED
+            | gm::HIHAT_OPEN
+            | gm::HIHAT_HALF_OPEN
+            | gm::HIHAT_LOOSE
+            | gm::HIHAT_PEDAL
+            | gm::HIHAT_PRESSED
+            | gm::HIHAT_TRASH_OPEN => "Hi-Hat",
+            gm::TOM_HIGH | gm::TOM_MID | gm::TOM_LOW => "Toms",
+            gm::COUNT_STICK | gm::COWBELL | GM_SHAKER | GM_CONGA | GM_TAMBOURINE => "Perc",
+            _ => "Cymbals",
+        }
+    }
+
+    GM_PADS
+        .iter()
+        .map(|p| (p.name, p.note))
+        .chain([
+            ("Cowbell", gm::COWBELL),
+            ("Shaker", GM_SHAKER),
+            ("Conga", GM_CONGA),
+            ("Tambourine", GM_TAMBOURINE),
+        ])
+        .map(|(name, note)| KitPadInfo {
+            note,
+            name: name.to_string(),
+            category: category(note).to_string(),
+        })
+        .collect()
 }
