@@ -86,6 +86,9 @@ pub struct AnalyzerChannel {
     window: Vec<f32>,
     /// Scratch for the FFT input/output (rustfft operates in place).
     scratch: Vec<Complex<f32>>,
+    /// Pre-allocated rustfft scratch so `process_with_scratch` never
+    /// allocates on the audio thread.
+    fft_scratch: Vec<Complex<f32>>,
     /// Held magnitudes in dB per bin with peak-and-decay smoothing.
     held_db: Vec<f32>,
     /// Decay applied per FFT frame. Computed from DECAY_DB_PER_SEC and the
@@ -105,6 +108,7 @@ impl AnalyzerChannel {
             samples_since_fft: 0,
             window,
             scratch: vec![Complex::new(0.0, 0.0); FFT_SIZE],
+            fft_scratch: vec![Complex::new(0.0, 0.0); fft.get_inplace_scratch_len()],
             held_db: vec![FLOOR_DB; NUM_BINS],
             decay_db_per_frame: 0.0,
             fft,
@@ -153,7 +157,8 @@ impl AnalyzerChannel {
             let windowed = self.ring[src] * self.window[i];
             self.scratch[i] = Complex::new(windowed, 0.0);
         }
-        self.fft.process(&mut self.scratch);
+        self.fft
+            .process_with_scratch(&mut self.scratch, &mut self.fft_scratch);
 
         // Convert the first NUM_BINS (positive frequencies) to dB and merge
         // into the peak-hold buffer. The normalization factor accounts for

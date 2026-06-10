@@ -26,6 +26,9 @@ use super::convolver::{FFT_SIZE, FIR_LENGTH};
 pub struct FirDesigner {
     ifft: std::sync::Arc<dyn Fft<f32> + Send + Sync>,
     scratch: Vec<Complex<f32>>,
+    /// Pre-allocated rustfft scratch so `process_with_scratch` never
+    /// allocates when a redesign runs inside `process`.
+    fft_scratch: Vec<Complex<f32>>,
     hann: Vec<f32>,
     /// Reusable impulse-response buffer. Returned as a borrow from
     /// [`design`], avoiding a fresh heap allocation on every call.
@@ -38,6 +41,7 @@ impl FirDesigner {
         let ifft = planner.plan_fft_inverse(FFT_SIZE);
         let hann = hann_window(FIR_LENGTH);
         Self {
+            fft_scratch: vec![Complex::new(0.0, 0.0); ifft.get_inplace_scratch_len()],
             ifft,
             scratch: vec![Complex::new(0.0, 0.0); FFT_SIZE],
             hann,
@@ -73,7 +77,8 @@ impl FirDesigner {
         }
 
         // Inverse FFT → real impulse response (imaginary part ≈ 0).
-        self.ifft.process(&mut self.scratch);
+        self.ifft
+            .process_with_scratch(&mut self.scratch, &mut self.fft_scratch);
         let norm = 1.0 / FFT_SIZE as f32;
 
         // The IFFT output is a zero-phase impulse response centred at

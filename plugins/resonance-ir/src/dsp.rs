@@ -50,6 +50,9 @@ pub struct MonoConvolver {
     fft_scratch: Vec<Complex<f32>>,
     accum_scratch: Vec<Complex<f32>>,
     time_scratch: Vec<Complex<f32>>,
+    /// Pre-allocated rustfft work area (sized for both plans) so
+    /// `process_with_scratch` never allocates on the audio thread.
+    rustfft_scratch: Vec<Complex<f32>>,
 
     fft_forward: Arc<dyn Fft<f32> + Send + Sync>,
     fft_inverse: Arc<dyn Fft<f32> + Send + Sync>,
@@ -64,6 +67,11 @@ impl MonoConvolver {
         let mut planner = FftPlanner::new();
         let fft_forward = planner.plan_fft_forward(fft_size);
         let fft_inverse = planner.plan_fft_inverse(fft_size);
+
+        let rustfft_scratch_len = fft_forward
+            .get_inplace_scratch_len()
+            .max(fft_inverse.get_inplace_scratch_len());
+        let mut rustfft_scratch = vec![Complex::new(0.0, 0.0); rustfft_scratch_len];
 
         // Partition IR into segments of block_size and FFT each
         let num_segments = ir.len().div_ceil(block_size);
@@ -80,7 +88,7 @@ impl MonoConvolver {
                 }
             }
 
-            fft_forward.process(&mut buf);
+            fft_forward.process_with_scratch(&mut buf, &mut rustfft_scratch);
             ir_segments.push(buf);
         }
 
@@ -100,6 +108,7 @@ impl MonoConvolver {
             fft_scratch: vec![Complex::new(0.0, 0.0); fft_size],
             accum_scratch: vec![Complex::new(0.0, 0.0); fft_size],
             time_scratch: vec![Complex::new(0.0, 0.0); fft_size],
+            rustfft_scratch,
             fft_forward,
             fft_inverse,
         }
@@ -156,7 +165,8 @@ impl MonoConvolver {
         }
 
         // FFT the input block
-        self.fft_forward.process(&mut self.fft_scratch);
+        self.fft_forward
+            .process_with_scratch(&mut self.fft_scratch, &mut self.rustfft_scratch);
 
         // Store in the FDL (frequency-domain delay line)
         self.input_fdl[self.fdl_pos].copy_from_slice(&self.fft_scratch);
@@ -188,7 +198,8 @@ impl MonoConvolver {
 
         // IFFT
         self.time_scratch.copy_from_slice(accum);
-        self.fft_inverse.process(&mut self.time_scratch);
+        self.fft_inverse
+            .process_with_scratch(&mut self.time_scratch, &mut self.rustfft_scratch);
 
         // Normalize (rustfft doesn't normalize)
         let norm = 1.0 / fft_size as f32;

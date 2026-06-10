@@ -100,6 +100,9 @@ pub struct OverlapSaveConvolver {
 
     /// Scratch buffer for the FFT round-trip.
     scratch: Vec<Complex<f32>>,
+    /// Pre-allocated rustfft scratch (sized for both plans) so
+    /// `process_with_scratch` never allocates on the audio thread.
+    fft_scratch: Vec<Complex<f32>>,
 
     /// Rolling history of the last `FIR_LENGTH - 1` input samples
     /// (prepended to each FFT iteration's new samples).
@@ -123,11 +126,16 @@ impl OverlapSaveConvolver {
         let mut impulse = vec![0.0_f32; FIR_LENGTH];
         impulse[GROUP_DELAY] = 1.0;
 
+        let fft_scratch_len = fft_forward
+            .get_inplace_scratch_len()
+            .max(fft_inverse.get_inplace_scratch_len());
+
         let mut c = Self {
             fft_forward,
             fft_inverse,
             filter_response: vec![Complex::new(0.0, 0.0); FFT_SIZE],
             scratch: vec![Complex::new(0.0, 0.0); FFT_SIZE],
+            fft_scratch: vec![Complex::new(0.0, 0.0); fft_scratch_len],
             input_history: vec![0.0; FIR_LENGTH - 1],
             input_pending: SampleRing::new(),
             output_pending: SampleRing::new(),
@@ -158,7 +166,8 @@ impl OverlapSaveConvolver {
                 *v = Complex::new(0.0, 0.0);
             }
         }
-        self.fft_forward.process(&mut self.scratch);
+        self.fft_forward
+            .process_with_scratch(&mut self.scratch, &mut self.fft_scratch);
         self.filter_response.copy_from_slice(&self.scratch);
     }
 
@@ -217,13 +226,15 @@ impl OverlapSaveConvolver {
         }
 
         // Forward FFT of the input.
-        self.fft_forward.process(&mut self.scratch);
+        self.fft_forward
+            .process_with_scratch(&mut self.scratch, &mut self.fft_scratch);
         // Element-wise multiply by the filter response.
         for i in 0..FFT_SIZE {
             self.scratch[i] *= self.filter_response[i];
         }
         // Inverse FFT.
-        self.fft_inverse.process(&mut self.scratch);
+        self.fft_inverse
+            .process_with_scratch(&mut self.scratch, &mut self.fft_scratch);
 
         // Output is the LAST HOP_SIZE samples of the IFFT (circular
         // artifacts live in the first FIR_LENGTH - 1).
