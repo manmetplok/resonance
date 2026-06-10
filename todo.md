@@ -31,14 +31,14 @@ KISS / lines of code. Each item was verified against the code before listing.
 - [x] **Asymmetric saturator introduces DC with no DC blocker** — `plugins/resonance-mastering/src/stages/saturator.rs:333-341`: asymmetric shaper output has nonzero mean, amplified by the following low shelf. Fix: add a DC blocker after the shaper (see also: move `resonance-amp/src/dsp/dc_blocker.rs` into `resonance-dsp`).
 - [x] **Limiter true-peak group delay not compensated** — `plugins/resonance-mastering/src/stages/limiter.rs:147-153,170-176`: the ~5.5-sample polyphase detector delay misaligns the gain constraint by ~6 samples (~0.2–0.5 dB leak past the ceiling). Fix: write the envelope constraint ~6 ring positions earlier.
 - [x] **NAM model sample rate ignored** — `plugins/resonance-amp/src/nam/parse.rs`: the profile's expected rate is never parsed; running a 48 kHz capture at 44.1/96 kHz shifts the amp's response. Fix: parse the field and resample around the model, or warn in the UI.
-- [ ] **Declared param smoothers are dead → zipper/clicks** — `plugins/resonance-compressor/src/params.rs:164-170` vs `src/dsp.rs:99-110` (makeup/mix read raw per block) and `plugins/resonance-wavetable/src/params/fx.rs:64-99` vs `dsp/render.rs:193-197` + `dsp/effects.rs:127-135` (delay-time jumps the tap). Fix: actually advance the smoothers (as resonance-eq does) or drop the misleading `.with_smoother` declarations.
+- [x] **Declared param smoothers are dead → zipper/clicks** — `plugins/resonance-compressor/src/params.rs:164-170` vs `src/dsp.rs:99-110` (makeup/mix read raw per block) and `plugins/resonance-wavetable/src/params/fx.rs:64-99` vs `dsp/render.rs:193-197` + `dsp/effects.rs:127-135` (delay-time jumps the tap). Fix: actually advance the smoothers (as resonance-eq does) or drop the misleading `.with_smoother` declarations.
 
 ## Low — audio path
 
-- [ ] Bounce vs live solo semantics differ: `bounce/render.rs:187` computes `any_solo` over all tracks; live mixer (`mixer/mod.rs:329-332`) filters to top-level tracks. Use the same predicate.
-- [ ] Stopped/count-in monitoring processes only the first audible monitor track (`mixer/mod.rs:179,259`) while playback processes all. Loop over all audible monitor tracks.
-- [ ] Live NoteOn retry can land after its NoteOff (`resonance-audio/src/engine/midi/live.rs:38-47`); route retries through the same FIFO as live events.
-- [ ] CLAP transport `song_pos_beats` uses flat BPM (`mixer/mod.rs:131-135`); derive beats via `TempoMap::sample_to_abs_tick` so tempo-synced plugins don't drift on ramps.
+- [x] Bounce vs live solo semantics differ: `bounce/render.rs:187` computes `any_solo` over all tracks; live mixer (`mixer/mod.rs:329-332`) filters to top-level tracks. Use the same predicate.
+- [x] Stopped/count-in monitoring processes only the first audible monitor track (`mixer/mod.rs:179,259`) while playback processes all. Loop over all audible monitor tracks.
+- [x] Live NoteOn retry can land after its NoteOff (`resonance-audio/src/engine/midi/live.rs:38-47`); route retries through the same FIFO as live events.
+- [x] CLAP transport `song_pos_beats` uses flat BPM (`mixer/mod.rs:131-135`); derive beats via `TempoMap::sample_to_abs_tick` so tempo-synced plugins don't drift on ramps.
 - [ ] `eprintln!` on the audio thread when the LUFS 60-min block cap hits (`resonance-metering/src/lufs/integrated.rs`, `push_block`); use a flag the UI reports.
 - [ ] Delay tempo-division/sync toggle swaps `delay_samples` discontinuously (`plugins/resonance-delay/src/sync.rs` + `dsp.rs`); smooth the resolved delay-in-samples.
 - [ ] Drum kit swap hard-cuts ringing voices (`plugins/resonance-drums/src/dsp/sampler.rs:118-127`); use the existing 1024-sample `trigger_release` fade.
