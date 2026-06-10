@@ -77,12 +77,12 @@ KISS / lines of code. Each item was verified against the code before listing.
 - [x] **Three hand-rolled streaming FFT convolvers** (~650 LOC combined): `resonance-ir/src/dsp.rs`, `resonance-mastering/.../convolver.rs`, `LinearPhaseLowpass`; one shared streaming convolver in `resonance-dsp`. Also `hann_window` ×3 (`resonance-eq/src/analyzer.rs:192`, mastering `design.rs:99`, `resonance-metering/src/spectrum/fft_worker.rs:176`).
 - [x] Per-plugin replay block copied 3× for track/bus/master (`update/project_io/replay.rs:504-524,603-624,643-663`) and `push_all_plugin_states` is 3 identical loops (`replay_diff.rs:566-597`); extract helpers. ~60 LOC.
 - [x] Legacy drum-pattern promotion + tempo fallback duplicated between `replay.rs:65-97,109-125` and `replay_diff.rs:719-753,771-790`; extract `restore_drum_patterns`/`restore_tempo_events`. ~40 LOC, one source of truth for the migration.
-- [ ] Ten enums hand-roll `ALL` arrays + `as_str()` in `resonance-music-theory/src/derive/vocal/params.rs`; the crate already depends on strum — derive `VariantArray` + use `IntoStaticStr`. ~100 LOC.
-- [ ] Dead `is_sub` branches in `view_channel_strip` (`resonance-app/src/view/mixer/track_strip.rs:29-30,36,69-71,196,230`) — callers filter sub-tracks first; replace with `debug_assert!`. ~25 LOC.
-- [ ] Full 28-field `ProjectFile` literal duplicated in test helpers (`undo.rs:711-746`, `replay_diff.rs:798-827`); add `Default`/`ProjectFile::empty()`. ~50 LOC.
-- [ ] Name-truncation helper reimplemented 7× (`track_strip.rs:49,435,600`, `mixer/mod.rs:194`, `timeline_draw.rs:986,1133`); move `track_header.rs:480`'s `short(s, max)` into `crate::util`. ~30 LOC.
-- [ ] `transport_snap` threaded as an anonymous 5-tuple through six call layers in the mixer; replace with a named `TransportSnap` struct.
-- [ ] Monitor pass-through duplicated between count-in (`mixer/mod.rs:171-230`) and stopped (`:247-298`) branches; fold into one helper.
+- [x] Ten enums hand-roll `ALL` arrays + `as_str()` in `resonance-music-theory/src/derive/vocal/params.rs`; the crate already depends on strum — derive `VariantArray` + use `IntoStaticStr`. ~100 LOC.
+- [x] Dead `is_sub` branches in `view_channel_strip` (`resonance-app/src/view/mixer/track_strip.rs:29-30,36,69-71,196,230`) — callers filter sub-tracks first; replace with `debug_assert!`. ~25 LOC.
+- [x] Full 28-field `ProjectFile` literal duplicated in test helpers (`undo.rs:711-746`, `replay_diff.rs:798-827`); add `Default`/`ProjectFile::empty()`. ~50 LOC.
+- [x] Name-truncation helper reimplemented 7× (`track_strip.rs:49,435,600`, `mixer/mod.rs:194`, `timeline_draw.rs:986,1133`); move `track_header.rs:480`'s `short(s, max)` into `crate::util`. ~30 LOC.
+- [x] `transport_snap` threaded as an anonymous 5-tuple through six call layers in the mixer; replace with a named `TransportSnap` struct.
+- [x] Monitor pass-through duplicated between count-in (`mixer/mod.rs:171-230`) and stopped (`:247-298`) branches; fold into one helper.
 - [ ] Smaller cleanups: `UndoSnapshot` should embed `LoadedProject` instead of mirroring its fields (`undo.rs:42-71`, ~25 LOC); same 7-line "defence in depth" comment pasted 4× in `replay_diff.rs` (:359,:501,:605,:662); zero-use `GLOBAL_TRACK_ROW_HEIGHT` alias + single-use legacy theme aliases (`theme.rs:299-301`); doc-only `request_repaint` (`wayland-plugin-gui/src/editor.rs:124`); inline container-style closures where `theme::base_bg`/`panel_bg` exist (`track_header.rs:168-171,178-181,557-565,601-609`); seven drum-group handlers repeat the resolve→find→return dance (`update/compose/drum_groups.rs:59-150`, add `with_managing_pattern`); golden-ratio seed constant hand-rolled at 10 sites — add a `next_seed(u64)` util.
 
 ## Verified clean (no action)
