@@ -1,6 +1,6 @@
 //! RBJ cookbook biquad filter.
 //!
-//! Direct Form I transposed topology. One `Biquad` filters a single audio
+//! Transposed Direct Form II topology. One `Biquad` filters a single audio
 //! channel; use one per channel for stereo. Coefficients are updated via
 //! the `set_*` methods (cheap per-block); `process` is per-sample.
 //!
@@ -21,7 +21,7 @@ pub struct Biquad {
     // Normalized feedback coefficients (a0 is implicit 1.0 after normalization).
     pub a1: f32,
     pub a2: f32,
-    // State: Direct Form I transposed (two z^-1 registers).
+    // State: transposed Direct Form II (two z^-1 registers).
     z1: f32,
     z2: f32,
 }

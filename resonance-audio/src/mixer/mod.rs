@@ -154,10 +154,10 @@ pub(crate) fn mix_audio(
     }
     let output_frames = frames;
 
-    // Snapshot tempo once per block. Hold the read guard so the bar
+    // Snapshot tempo once per block. Hold the ArcSwap guard so the bar
     // table is available for tempo-map-aware MIDI tick→sample conversion
-    // in the rendering path. The read lock is held for one audio buffer
-    // (~1 ms) — writers (engine thread) wait only during tempo changes.
+    // in the rendering path. The guard pins this block's snapshot; the
+    // engine thread publishes tempo changes wait-free via ArcSwap::store.
     let playhead_now = shared.playhead.load(Ordering::Relaxed);
     let tempo_guard = tempo_map.load();
     let tempo_snap = TempoSnap {
