@@ -7,8 +7,10 @@
 //! The Vec is pre-grown to the capacity implied by a maximum-session
 //! length so the audio thread never reallocates during normal operation.
 //! Pushing past the cap drops the block (counted in `dropped_blocks()`)
-//! and warns once per session — sessions longer than the 60-minute cap
+//! and raises `cap_reached()` — sessions longer than the 60-minute cap
 //! are unusual but not bugs.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::block_accumulator::BLOCK_HOP_SECS;
 use super::gating::gated_integrated_lufs;
@@ -27,6 +29,9 @@ pub struct IntegratedAccumulator {
     /// How many blocks were dropped after the cap was reached. Exposed so
     /// callers can report overflow in the UI / test harness.
     dropped: u64,
+    /// Set (relaxed) when the first block is dropped, so a UI thread can
+    /// poll the condition lock-free instead of the audio thread logging.
+    cap_reached: AtomicBool,
 }
 
 impl IntegratedAccumulator {
@@ -36,19 +41,21 @@ impl IntegratedAccumulator {
             blocks: Vec::with_capacity(cap),
             cap,
             dropped: 0,
+            cap_reached: AtomicBool::new(false),
         }
     }
 
     pub fn reset(&mut self) {
         self.blocks.clear();
         self.dropped = 0;
+        self.cap_reached.store(false, Ordering::Relaxed);
     }
 
     /// Add one block mean-square. If the cap has been reached, the value
-    /// is dropped and `dropped_blocks()` is incremented. Long sessions are
-    /// not bugs — the first dropped block warns once (per session /
-    /// [`Self::reset`]), then drops stay silent so the audio thread isn't
-    /// spammed with I/O on every subsequent block.
+    /// is dropped, `dropped_blocks()` is incremented and `cap_reached()`
+    /// flips to `true` (per session / [`Self::reset`]). Long sessions are
+    /// not bugs, and the audio thread never performs I/O — UI code polls
+    /// the flag instead.
     #[inline]
     pub fn push_block(&mut self, mean_square: f64) {
         if self.blocks.len() < self.cap {
@@ -56,12 +63,7 @@ impl IntegratedAccumulator {
         } else {
             self.dropped += 1;
             if self.dropped == 1 {
-                eprintln!(
-                    "resonance-metering: integrated LUFS reached its cap of {} blocks \
-                     ({:.0} min); further blocks no longer contribute to the reading",
-                    self.cap,
-                    MAX_SESSION_SECONDS / 60.0
-                );
+                self.cap_reached.store(true, Ordering::Relaxed);
             }
         }
     }
@@ -79,6 +81,12 @@ impl IntegratedAccumulator {
     /// Number of blocks dropped after hitting the cap.
     pub fn dropped_blocks(&self) -> u64 {
         self.dropped
+    }
+
+    /// Whether the 60-minute block cap has been hit this session. Lock-free
+    /// (relaxed), safe to poll from a UI thread.
+    pub fn cap_reached(&self) -> bool {
+        self.cap_reached.load(Ordering::Relaxed)
     }
 
     /// Run the two-pass gate and return the integrated LUFS value. Returns

@@ -106,6 +106,12 @@ impl LufsMeter {
         self.integrated.len()
     }
 
+    /// Whether the integrated meter hit its session block cap and started
+    /// dropping blocks. Lock-free, safe to poll from a UI thread.
+    pub fn integrated_cap_reached(&self) -> bool {
+        self.integrated.cap_reached()
+    }
+
     /// One-shot analysis of a stereo buffer. Runs a fresh meter end-to-end
     /// and returns all three LUFS readouts.
     pub fn analyze_offline(sample_rate: f32, left: &[f32], right: &[f32]) -> LufsReadout {

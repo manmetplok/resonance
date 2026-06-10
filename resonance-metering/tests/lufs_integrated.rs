@@ -39,6 +39,7 @@ fn pushing_past_cap_drops_without_panicking() {
     // debug assertion firing, and the reading must stay finite.
     let mut acc = IntegratedAccumulator::new();
     let ms = lufs_to_ms(-20.0);
+    assert!(!acc.cap_reached());
     let cap = {
         // Fill to the cap; len() stops growing exactly there.
         let mut n = 0usize;
@@ -49,18 +50,21 @@ fn pushing_past_cap_drops_without_panicking() {
         n - 1
     };
     assert_eq!(acc.len(), cap);
+    assert!(acc.cap_reached());
     for _ in 0..10 {
         acc.push_block(ms);
     }
     assert_eq!(acc.len(), cap);
     assert_eq!(acc.dropped_blocks(), 11);
+    assert!(acc.cap_reached());
     let got = acc.integrated_lufs();
     assert!((got - -20.0).abs() < 1e-6, "got {got}");
 
-    // Reset rearms both the accumulator and the drop counter.
+    // Reset rearms the accumulator, the drop counter and the cap flag.
     acc.reset();
     assert_eq!(acc.dropped_blocks(), 0);
     assert_eq!(acc.len(), 0);
+    assert!(!acc.cap_reached());
 }
 
 #[test]
