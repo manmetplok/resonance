@@ -190,7 +190,12 @@ fn bass_motif_phrase_simple_is_deterministic() {
 
 #[test]
 fn bass_motif_phrase_modes_produce_different_outputs() {
-    let chords: Vec<TimedChord> = (0..8)
+    // 16 chords / 4 phrases: a full sentence or period group. A
+    // 2-phrase section would be a single antecedent–consequent period,
+    // where the phrase grammar makes MirrorMelody legitimately equal
+    // Simple (the consequent reuses the antecedent's opening, and the
+    // section opener is Identity).
+    let chords: Vec<TimedChord> = (0..16)
         .map(|i| tc(Chord::new(PitchClass::C, ChordQuality::Maj), i * 4, 4))
         .collect();
     let scale = Some(Scale::new(PitchClass::C, Mode::Major));

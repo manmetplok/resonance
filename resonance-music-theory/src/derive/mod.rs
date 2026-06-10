@@ -24,7 +24,9 @@ pub use melody::{
     derive_melody, derive_melody_fill_vocal, ContourPreference, MelodyParams, MelodyStyle,
 };
 pub use motif_bass::derive_bass_motif;
-pub use motif_engine::{derive_motif_melody_with_section, motif_intervals};
+pub use motif_engine::{
+    derive_motif_melody_with_section, motif_intervals, phrase_grammar_roles, PhraseGrammarRole,
+};
 pub use motif_rhythm::{derive_motif_rhythm, RhythmHit};
 pub use motif_source::{
     toggle_manual_motif_cell, ManualMotifCell, ManualMotifNote, MotifParams, MotifSource,

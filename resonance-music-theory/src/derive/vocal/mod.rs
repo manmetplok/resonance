@@ -30,8 +30,8 @@ use crate::scale::Scale;
 use super::climax::enforce_single_climax;
 use super::{GeneratedNote, TimedChord};
 use melody::{
-    apply_line_cadence_formulas, apply_motif_pitches, enforce_no_overlap, scale_from_chords,
-    total_beats, MotifPitchContext,
+    apply_line_cadence_formulas, apply_motif_pitches, apply_srdc_layout, enforce_no_overlap,
+    scale_from_chords, total_beats, MotifPitchContext,
 };
 use style::derive_with_profile;
 
@@ -109,6 +109,27 @@ pub fn derive_vocal_with_motif(
                 );
             }
         }
+    }
+    // Pop srdc section layout (statement–restatement–departure–
+    // conclusion, aaba/aabc): the restatement (and, in aaba groups,
+    // the conclusion) re-sings the statement's contour so 4-line
+    // sections get a real section form instead of four independent
+    // arcs. Applied to the pop-adjacent styles only: Folk keeps its
+    // own two-line echo form, Hymnal's strictly-stepwise contract
+    // (adjacent intervals ≤ a major 3rd) would be violated by the
+    // MAX_INTERVAL-capped copy, and Chant is recitation with no
+    // contour worth restating.
+    if matches!(
+        params.style,
+        VocalStyle::PopBallad | VocalStyle::Anthemic | VocalStyle::Conversational
+    ) {
+        apply_srdc_layout(
+            &mut notes,
+            &ctx.line_syllables,
+            ctx.scale,
+            (ctx.lo, ctx.hi),
+            seed,
+        );
     }
     // Single-climax rule per lyric line (the vocal phrase unit): one
     // highest note, in the line's second half, never the final

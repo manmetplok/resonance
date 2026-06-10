@@ -39,13 +39,67 @@ pub(super) enum Contour {
     Wave,
 }
 
+/// Grammatical role of one phrase inside its form group (Open Music
+/// Theory v2, phrase archetypes). Phrases are planned in groups —
+/// a *sentence* (basic idea, varied repeat, continuation, cadential
+/// continuation) or a *period* (antecedent, consequent) — instead of
+/// drawing each phrase's treatment independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhraseGrammarRole {
+    /// Sentence presentation, first statement of the basic idea.
+    /// Tonic-prolonging; no cadence.
+    BasicIdea,
+    /// Sentence presentation, varied repeat of the basic idea (small
+    /// transposition or exact repeat). No cadence.
+    VariedRepeat,
+    /// Sentence continuation: fragmentation of the idea's head motive
+    /// at doubled surface-rhythm density. No cadence yet — the drive
+    /// continues into the cadential phrase.
+    Continuation,
+    /// Final continuation phrase: keeps the fragmented head + dense
+    /// surface, and carries the sentence's one real (strong) cadence.
+    ContinuationCadence,
+    /// Period opening: ends weak (HC, sometimes IAC).
+    Antecedent,
+    /// Period close: reuses the antecedent's opening (same transform)
+    /// and swaps the ending weak→strong (PAC, ~10% deceptive).
+    Consequent,
+}
+
+impl PhraseGrammarRole {
+    /// Does this phrase close its group (strong cadence + root-snap
+    /// baseline + descending contour bias)?
+    pub fn closes(self) -> bool {
+        matches!(
+            self,
+            PhraseGrammarRole::Consequent | PhraseGrammarRole::ContinuationCadence
+        )
+    }
+
+    /// Is this phrase part of a sentence continuation? Continuations
+    /// tile their fragmented head motive at an accelerated rate — the
+    /// realizer doubles the surface-rhythm density relative to the
+    /// presentation (OMT's "faster surface rhythm" drive toward the
+    /// cadence).
+    pub(super) fn is_continuation(self) -> bool {
+        matches!(
+            self,
+            PhraseGrammarRole::Continuation | PhraseGrammarRole::ContinuationCadence
+        )
+    }
+}
+
 /// Plan for a single melodic phrase.
 pub(in crate::derive) struct PhrasePlan {
     pub(in crate::derive) chord_range: (usize, usize),
     pub(super) contour: Contour,
-    pub(super) is_consequent: bool,
-    /// Goal cadence for the phrase ending (weak for antecedents,
-    /// strong for consequents with a ~10% deceptive swap). Realized by
-    /// `cadence::apply_cadence_formula` on the rendered notes.
-    pub(super) cadence: CadenceGoal,
+    /// Grammatical role within the planned sentence/period group.
+    pub(super) role: PhraseGrammarRole,
+    /// Goal cadence for the phrase ending, realized by
+    /// `cadence::apply_cadence_formula` on the rendered notes. `None`
+    /// for sentence presentation/continuation phrases — they prolong
+    /// without cadencing; only the group's closing phrase (consequent
+    /// or cadential continuation, plus standalone antecedents) carries
+    /// a goal.
+    pub(super) cadence: Option<CadenceGoal>,
 }

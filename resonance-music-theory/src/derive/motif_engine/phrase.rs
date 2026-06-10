@@ -12,26 +12,121 @@ use super::super::motif_bass::chord_tones_in_register;
 use super::super::{GeneratedNote, TimedChord};
 use super::build::transform_motif;
 use super::harmony::{align_to_harmony, nearest_in_set};
-use super::types::{Contour, MotifNote, PhrasePlan, Transform};
+use super::types::{Contour, MotifNote, PhraseGrammarRole, PhrasePlan, Transform};
 
-/// Pre-compute the per-phrase Transform sequence for a motif plan. Uses a
-/// fresh RNG seeded only from `motif.seed` so two callers with the same
-/// `MotifParams` always agree on the sequence — this is what makes
-/// `BassMotifPhrase::MirrorMelody` lock to the melody.
+/// Plan the grammatical roles of `num_phrases` phrases (Open Music
+/// Theory v2 phrase archetypes). Phrases are grouped in fours from the
+/// front; each full group becomes either a *sentence* (basic idea,
+/// varied repeat, continuation, cadential continuation — one cadence
+/// at the very end) or a *period chain* (antecedent/consequent pairs —
+/// weak then strong endings), chosen 50/50 from `seed`. A trailing
+/// pair is a period; a lone trailing phrase stays open (antecedent)
+/// when it is the whole section and closes (consequent) when earlier
+/// groups precede it.
+///
+/// Seeded only from `seed` (the section's motif seed) so every lane in
+/// a section — and `plan_phrases` vs `plan_motif_transforms` — agrees
+/// on the same form plan.
+pub fn phrase_grammar_roles(num_phrases: usize, seed: u64) -> Vec<PhraseGrammarRole> {
+    use PhraseGrammarRole::*;
+    // Splitmix64-style scramble before seeding: the form choice is the
+    // *first* RNG draw, and xorshift64's first output barely changes
+    // across nearby seeds (a low-byte difference doesn't reach the top
+    // bits in one round) — without mixing, sequential section seeds
+    // would all pick the same form.
+    let mut s = seed.wrapping_add(0x5E17_E14C_E0F0_2A7B);
+    s = (s ^ (s >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    s = (s ^ (s >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    s ^= s >> 31;
+    let mut rng = XorShift::new(s);
+    let mut roles = Vec::with_capacity(num_phrases);
+    while roles.len() < num_phrases {
+        let remaining = num_phrases - roles.len();
+        if remaining >= 4 {
+            if rng.next_f32() < 0.5 {
+                roles.extend([BasicIdea, VariedRepeat, Continuation, ContinuationCadence]);
+            } else {
+                roles.extend([Antecedent, Consequent, Antecedent, Consequent]);
+            }
+        } else if remaining >= 2 {
+            roles.extend([Antecedent, Consequent]);
+        } else if roles.is_empty() {
+            roles.push(Antecedent);
+        } else {
+            roles.push(Consequent);
+        }
+    }
+    roles
+}
+
+/// Pre-compute the per-phrase Transform sequence for a motif plan from
+/// the phrase-grammar roles. Uses a fresh RNG seeded only from
+/// `motif.seed` so two callers with the same `MotifParams` always agree
+/// on the sequence — this is what makes `BassMotifPhrase::MirrorMelody`
+/// lock to the melody.
+///
+/// Per role (replacing the old independent per-phrase draws):
+///   - `BasicIdea`: identity — the section states its idea plainly.
+///   - `VariedRepeat`: exact repeat or a small (≤3 st) transposition,
+///     keeping the idea recognizable through the presentation.
+///   - `Continuation` / `ContinuationCadence`: fragmentation of the
+///     idea's *head* motive (`Fragment` keeps the leading notes); the
+///     realizer doubles the tiling rate for these roles.
+///   - `Antecedent`: identity for the section opener, then the full
+///     complexity-weighted repertoire.
+///   - `Consequent`: reuses its antecedent's transform verbatim — the
+///     period's defining "same opening, different ending"; the ending
+///     swap (weak→strong) lives in the cadence goals.
 pub(in crate::derive) fn plan_motif_transforms(
     num_phrases: usize,
     motif_len: usize,
     complexity: f32,
     seed: u64,
 ) -> Vec<Transform> {
+    let roles = phrase_grammar_roles(num_phrases, seed);
     let mut rng = XorShift::new(seed.wrapping_add(0xA1B2C3D4E5F60718));
-    (0..num_phrases)
-        .map(|i| pick_transform(motif_len, i, complexity, &mut rng))
+    let head_len = 2.max(motif_len / 2);
+    let mut last_antecedent = Transform::Identity;
+    roles
+        .iter()
+        .enumerate()
+        .map(|(i, role)| match role {
+            PhraseGrammarRole::BasicIdea => Transform::Identity,
+            PhraseGrammarRole::VariedRepeat => pick_varied_repeat(&mut rng),
+            PhraseGrammarRole::Continuation | PhraseGrammarRole::ContinuationCadence => {
+                Transform::Fragment(head_len)
+            }
+            PhraseGrammarRole::Antecedent => {
+                let t = if i == 0 {
+                    Transform::Identity
+                } else {
+                    pick_transform(motif_len, i, complexity, &mut rng)
+                };
+                last_antecedent = t;
+                t
+            }
+            PhraseGrammarRole::Consequent => last_antecedent,
+        })
         .collect()
 }
 
+/// Variation for the sentence presentation's repeat of the basic idea:
+/// exact repeat or a small transposition — never an operation that
+/// obscures the idea (inversion, retrograde, fragmentation).
+fn pick_varied_repeat(rng: &mut XorShift) -> Transform {
+    let roll = rng.next_f32();
+    let amount = 1 + rng.next_range(3) as i8;
+    if roll < 0.34 {
+        Transform::Identity
+    } else if roll < 0.67 {
+        Transform::TransposeUp(amount)
+    } else {
+        Transform::TransposeDown(amount)
+    }
+}
+
 /// Pick a contour for a phrase from the preference or RNG.
-fn pick_contour(pref: ContourPreference, is_consequent: bool, rng: &mut XorShift) -> Contour {
+fn pick_contour(pref: ContourPreference, closes: bool, rng: &mut XorShift) -> Contour {
     match pref {
         ContourPreference::Arch => Contour::Arch,
         ContourPreference::Descending => Contour::Descending,
@@ -39,9 +134,9 @@ fn pick_contour(pref: ContourPreference, is_consequent: bool, rng: &mut XorShift
         ContourPreference::Wave => Contour::Wave,
         ContourPreference::Auto => {
             // Research-weighted: arch 29%, desc 27%, asc 22%, wave 22%.
-            // Consequent phrases bias toward descending (resolution).
+            // Closing phrases bias toward descending (resolution).
             let roll = rng.next_f32();
-            if is_consequent {
+            if closes {
                 if roll < 0.40 {
                     Contour::Descending
                 } else if roll < 0.75 {
@@ -62,27 +157,45 @@ fn pick_contour(pref: ContourPreference, is_consequent: bool, rng: &mut XorShift
     }
 }
 
-/// Divide chords into phrases and assign contours.
+/// Divide chords into phrases and assign contours, grammar roles, and
+/// cadence goals. `grammar_seed` must be the section's motif seed so
+/// the role plan here matches the one `plan_motif_transforms` derives
+/// for the same phrase count — contours and goal draws still come from
+/// the lane-local `rng`.
 pub(in crate::derive) fn plan_phrases(
     chords: &[TimedChord],
     contour_pref: ContourPreference,
     phrase_len: u8,
+    grammar_seed: u64,
     rng: &mut XorShift,
 ) -> Vec<PhrasePlan> {
     let plen = (phrase_len as usize).max(1);
-    let mut plans = Vec::new();
+    let num_phrases = chords.len().div_ceil(plen);
+    let roles = phrase_grammar_roles(num_phrases, grammar_seed);
+    let mut plans = Vec::with_capacity(num_phrases);
     let mut i = 0;
     let mut phrase_index = 0;
 
     while i < chords.len() {
         let end = (i + plen).min(chords.len());
-        let is_consequent = phrase_index % 2 == 1;
-        let contour = pick_contour(contour_pref, is_consequent, rng);
-        let cadence = plan_cadence_goal(is_consequent, rng);
+        let role = roles[phrase_index];
+        let contour = pick_contour(contour_pref, role.closes(), rng);
+        // Sentence presentation + mid-continuation phrases prolong
+        // without cadencing; the group's one real cadence sits on the
+        // closing phrase. Period phrases keep the weak/strong pairing.
+        let cadence = match role {
+            PhraseGrammarRole::BasicIdea
+            | PhraseGrammarRole::VariedRepeat
+            | PhraseGrammarRole::Continuation => None,
+            PhraseGrammarRole::Antecedent => Some(plan_cadence_goal(false, rng)),
+            PhraseGrammarRole::Consequent | PhraseGrammarRole::ContinuationCadence => {
+                Some(plan_cadence_goal(true, rng))
+            }
+        };
         plans.push(PhrasePlan {
             chord_range: (i, end),
             contour,
-            is_consequent,
+            role,
             cadence,
         });
         i = end;
@@ -207,6 +320,19 @@ pub(super) fn realize_phrase(
     let mut out = Vec::new();
     let sounding_ratio = 1.0 - ctx.articulation * 0.55;
     let min_duration = (ctx.tpb / 8).max(1);
+    // Sentence continuations carry twice the surface-rhythm density of
+    // the presentation: the fragmented head would otherwise stretch to
+    // fill the chord (tiling normalizes durations), so the multiplier
+    // first compensates the fragment's shrinkage (motif/transformed
+    // ratio) and then doubles the rate — per chord the continuation
+    // sounds ~2x the notes of the basic idea. The harmonic rhythm
+    // itself is owned by the chord progression; the melody-side
+    // planner only accelerates the surface.
+    let density: u64 = if phrase.role.is_continuation() {
+        2 * (motif.len().max(1) as u64).div_ceil(transformed.len() as u64)
+    } else {
+        1
+    };
 
     for (ci, tc) in phrase_chords.iter().enumerate() {
         let chord_start = tc.start_beat as u64 * ctx.tpb;
@@ -246,7 +372,8 @@ pub(super) fn realize_phrase(
 
         while tick_cursor < chord_end {
             let mn = &transformed[motif_idx % transformed.len()];
-            let note_ticks = (chord_ticks * mn.duration_ratio as u64 / total_ratio).max(1);
+            let note_ticks =
+                (chord_ticks * mn.duration_ratio as u64 / (total_ratio * density)).max(1);
             let remaining = chord_end - tick_cursor;
             let actual_ticks = note_ticks.min(remaining);
 
@@ -289,16 +416,17 @@ pub(super) fn realize_phrase(
         }
     }
 
-    // Consequent phrases resolve: snap the last note to the chord
-    // *root*. The previous "lowest chord tone in register" shortcut
-    // only equals the root when the register floor doesn't cut into
-    // the close voicing — otherwise it resolved to a third or fifth.
+    // Closing phrases (period consequents and sentence cadential
+    // continuations) resolve: snap the last note to the chord *root*.
+    // The previous "lowest chord tone in register" shortcut only
+    // equals the root when the register floor doesn't cut into the
+    // close voicing — otherwise it resolved to a third or fifth.
     // With a scale present this is only the baseline: the goal-cadence
     // overlay (`cadence::apply_cadence_formula`) usually retargets the
     // final two notes to a proper formula afterwards, and falls back
     // to this snap when no formula candidate validates. Without a
     // scale (no degree vocabulary) the snap is the final word.
-    if phrase.is_consequent && !out.is_empty() {
+    if phrase.role.closes() && !out.is_empty() {
         let last_chord = phrase_chords.last().unwrap();
         let last = out.last_mut().unwrap();
         let mut root = nearest_midi_to(last_chord.chord.root, last.note);

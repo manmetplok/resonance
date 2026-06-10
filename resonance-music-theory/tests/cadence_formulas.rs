@@ -236,6 +236,13 @@ fn c_major_chords() -> Vec<TimedChord> {
     (0..4).map(|i| tc(maj(PitchClass::C), i * 4, 4)).collect()
 }
 
+/// Does this line close its srdc group? The default 4-line draft forms
+/// one statement–restatement–departure–conclusion group, so only the
+/// last line of each group of four is the consequent.
+fn line_closes(li: usize) -> bool {
+    li % 4 == 3
+}
+
 #[test]
 fn vocal_lines_land_on_goal_cadence_degrees() {
     let chords = c_major_chords();
@@ -246,7 +253,7 @@ fn vocal_lines_land_on_goal_cadence_degrees() {
     let mut cons_total = 0usize;
     let mut pairs = 0usize;
     let mut pair_total = 0usize;
-    for seed in 0..60u64 {
+    for seed in 0..120u64 {
         let mut p = VocalParams::default();
         p.draft = generate_lyrics(&p, seed.wrapping_add(3));
         let notes = derive_vocal(&chords, &p, 480, seed);
@@ -258,14 +265,15 @@ fn vocal_lines_land_on_goal_cadence_degrees() {
             }
             let fin = slice[n - 1].note % 12;
             let pen = slice[n - 2].note % 12;
-            if li % 2 == 0 {
-                // Antecedent: open-ish IAC landing over the tonic chord.
+            if !line_closes(li) {
+                // Statement / restatement / departure: open-ish IAC
+                // landing over the tonic chord.
                 ant_total += 1;
                 if [PC_E, PC_G].contains(&fin) {
                     ant_ok += 1;
                 }
             } else {
-                // Consequent: PAC tonic, occasionally deceptive 6.
+                // Conclusion: PAC tonic, occasionally deceptive 6.
                 cons_total += 1;
                 if fin == PC_C {
                     cons_tonic += 1;
@@ -313,7 +321,7 @@ fn vocal_minor_consequents_close_on_the_minor_tonic() {
     let mut cons_total = 0usize;
     let mut ant_ok = 0usize;
     let mut ant_total = 0usize;
-    for seed in 0..40u64 {
+    for seed in 0..80u64 {
         let mut p = VocalParams::default();
         p.draft = generate_lyrics(&p, seed.wrapping_add(11));
         let notes = derive_vocal(&chords, &p, 480, seed);
@@ -323,7 +331,7 @@ fn vocal_minor_consequents_close_on_the_minor_tonic() {
                 continue;
             }
             let fin = slice[n - 1].note % 12;
-            if li % 2 == 1 {
+            if line_closes(li) {
                 cons_total += 1;
                 if fin == 9 {
                     cons_tonic += 1; // A

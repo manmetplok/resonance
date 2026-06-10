@@ -204,22 +204,48 @@ pub(super) fn terminal_dur_beats(beat_step: f32, articulation: f32) -> f32 {
     held.max(normal)
 }
 
+/// Section-level srdc role of one lyric line (Open Music Theory v2,
+/// pop phrase archetypes): lines group in fours as
+/// statement–restatement–departure–conclusion (aaba / aabc). The
+/// restatement re-sings the statement's contour, the departure
+/// contrasts and stays open, and only the conclusion closes. Trailing
+/// groups shrink from the tail: 3 lines = s r c, 2 lines = s c, and a
+/// lone trailing line concludes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::derive::vocal) enum SectionLineRole {
+    Statement,
+    Restatement,
+    Departure,
+    Conclusion,
+}
+
+pub(in crate::derive::vocal) fn line_role(line_idx: usize, total_lines: usize) -> SectionLineRole {
+    let group_start = (line_idx / 4) * 4;
+    let group_len = total_lines.saturating_sub(group_start).min(4);
+    match (group_len, line_idx - group_start) {
+        (4, 0) | (3, 0) | (2, 0) => SectionLineRole::Statement,
+        (4, 1) | (3, 1) => SectionLineRole::Restatement,
+        (4, 2) => SectionLineRole::Departure,
+        _ => SectionLineRole::Conclusion,
+    }
+}
+
 /// Phrase-role classification for one line of lyrics. Antecedent
-/// lines (0 + 2 in a 4-line block) end "open" — on a scale degree
-/// that asks for more (2, 4, or 7). Consequent lines (1 + 3) end
-/// "closed" — on the tonic (1), 3rd, or 5th. Drives where we land
-/// the cadence pitch.
+/// lines end "open" — on a scale degree that asks for more (2, 4,
+/// or 7). Consequent lines end "closed" — on the tonic (1), 3rd, or
+/// 5th. Drives where we land the cadence pitch. Per the srdc layout,
+/// statement / restatement / departure lines stay open and only the
+/// group's conclusion closes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PhraseRole {
     Antecedent,
     Consequent,
 }
 
-pub(super) fn phrase_role(line_idx: usize) -> PhraseRole {
-    if line_idx % 2 == 1 {
-        PhraseRole::Consequent
-    } else {
-        PhraseRole::Antecedent
+pub(super) fn phrase_role(line_idx: usize, total_lines: usize) -> PhraseRole {
+    match line_role(line_idx, total_lines) {
+        SectionLineRole::Conclusion => PhraseRole::Consequent,
+        _ => PhraseRole::Antecedent,
     }
 }
 

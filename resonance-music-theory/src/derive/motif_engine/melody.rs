@@ -103,7 +103,13 @@ pub fn derive_motif_melody_with_section(
     }
 
     let mut lane_rng = XorShift::new(lane_seed);
-    let phrases = plan_phrases(chords, params.contour, params.phrase_len, &mut lane_rng);
+    let phrases = plan_phrases(
+        chords,
+        params.contour,
+        params.phrase_len,
+        motif_params.seed,
+        &mut lane_rng,
+    );
     let transforms = plan_motif_transforms(
         phrases.len(),
         motif.len(),
@@ -179,14 +185,18 @@ pub fn derive_motif_melody_with_section(
             // grammar, the single-climax rule, and the strong-beat
             // chord-tone contract, so it composes with the passes
             // above instead of needing another fixpoint round.
-            apply_cadence_formula(
-                &mut phrase_notes,
-                phrase.cadence,
-                &chords[phrase.chord_range.0..phrase.chord_range.1],
-                &scale,
-                params.register,
-                tpb,
-            );
+            // Sentence presentation/continuation phrases plan no goal
+            // (`cadence: None`) — they prolong without cadencing.
+            if let Some(goal) = phrase.cadence {
+                apply_cadence_formula(
+                    &mut phrase_notes,
+                    goal,
+                    &chords[phrase.chord_range.0..phrase.chord_range.1],
+                    &scale,
+                    params.register,
+                    tpb,
+                );
+            }
         }
 
         if pi > 0 && rest_gap > 0 {

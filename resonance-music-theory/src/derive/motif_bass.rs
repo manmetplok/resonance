@@ -57,7 +57,13 @@ pub fn derive_bass_motif(
     }
 
     let mut lane_rng = XorShift::new(lane_seed);
-    let phrases = plan_phrases(chords, ContourPreference::Auto, 4, &mut lane_rng);
+    let phrases = plan_phrases(
+        chords,
+        ContourPreference::Auto,
+        4,
+        motif_params.seed,
+        &mut lane_rng,
+    );
 
     // Restricted mode picks transforms from the lane RNG so pressing
     // Regenerate produces a fresh per-phrase plan without disturbing the

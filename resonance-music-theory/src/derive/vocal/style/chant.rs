@@ -122,7 +122,7 @@ impl VocalStyleProfile for ChantProfile {
         line.extras.spit_flag.set(spit);
         let pitch_pre = if inp.is_final {
             cadence_pitch(
-                phrase_role(line.line_idx),
+                phrase_role(line.line_idx, ctx.line_syllables.len()),
                 inp.chord,
                 ctx.scale,
                 inp.prev_pitch,
