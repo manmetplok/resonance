@@ -310,7 +310,7 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
 }
 
 /// Send all-notes-off to every instrument plugin's primary instance.
-/// Called from Pause and Stop so a hardware key still held when the
+/// Called from Pause, Stop and Seek so a hardware key still held when the
 /// user pauses doesn't leave the plugin sustaining indefinitely (no
 /// hardware NoteOff will arrive once the user lets go past Pause).
 ///
@@ -345,6 +345,13 @@ fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
 }
 
 pub(crate) fn handle_seek_to(ctx: &HandlerCtx, state: &mut HandlerState, pos: u64) {
+    // Flush sounding notes before the jump, same as Stop and the loop
+    // seam — notes started before the seek would otherwise never see
+    // their NoteOff and sustain forever.
+    if ctx.shared.playing.load(Ordering::Relaxed) {
+        panic_all_instrument_plugins(ctx);
+        state.midi_hw.midi_outputs.all_notes_off_everywhere();
+    }
     ctx.shared.playhead.store(pos, Ordering::SeqCst);
     super::midi::clock_send_song_position(ctx, state, pos);
 }
