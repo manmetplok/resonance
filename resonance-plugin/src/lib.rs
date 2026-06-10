@@ -11,6 +11,9 @@ pub mod range;
 pub mod smoother;
 pub mod state;
 
+#[cfg(feature = "editor-widgets")]
+pub mod editor_widgets;
+
 #[cfg(feature = "ui")]
 pub mod ui;
 

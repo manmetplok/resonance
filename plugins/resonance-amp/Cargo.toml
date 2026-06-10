@@ -13,6 +13,7 @@ crate-type = ["cdylib", "lib"]
 default = ["editor"]
 editor = [
     "dep:wayland-plugin-gui",
+    "resonance-plugin/editor-widgets",
     "dep:egui",
     "dep:rfd",
     "dep:ureq",

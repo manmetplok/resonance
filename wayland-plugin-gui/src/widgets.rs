@@ -1,7 +1,10 @@
 //! Reusable egui widgets for plugin editors.
 //!
-//! Provides a rotary knob, labelled control column, and slider helpers
-//! so plugin UIs share a consistent look and compact layout.
+//! Provides a rotary knob and a labelled control column so plugin UIs
+//! share a consistent look and compact layout. Everything here is pure
+//! egui — helpers that bind these widgets to plugin parameter types
+//! live downstream in `resonance_plugin::editor_widgets`, keeping this
+//! crate free of plugin-framework dependencies.
 //!
 //! Most builders take 8 arguments (label, value, range, step, formatter,
 //! …) because the widgets need to expose every visual + interaction
@@ -282,83 +285,4 @@ pub fn control_column<R>(
         });
     ui.add_space(4.0);
     out.expect("control_column closure always runs")
-}
-
-// ---------------------------------------------------------------------------
-// Float / bool helpers
-// ---------------------------------------------------------------------------
-
-/// Horizontal slider bound to a `FloatParam`.
-pub fn float_slider(
-    ui: &mut egui::Ui,
-    param: &resonance_plugin::FloatParam,
-    range: std::ops::RangeInclusive<f32>,
-    decimals: usize,
-    suffix: &str,
-) {
-    let mut v = param.value();
-    let mut slider = egui::Slider::new(&mut v, range)
-        .fixed_decimals(decimals)
-        .show_value(true);
-    if !suffix.is_empty() {
-        slider = slider.suffix(suffix.to_string());
-    }
-    if ui.add(slider).changed() {
-        param.set_value(v);
-    }
-}
-
-/// Logarithmic horizontal slider bound to a `FloatParam`.
-pub fn float_slider_log(
-    ui: &mut egui::Ui,
-    param: &resonance_plugin::FloatParam,
-    range: std::ops::RangeInclusive<f32>,
-    decimals: usize,
-    suffix: &str,
-) {
-    let mut v = param.value();
-    let mut slider = egui::Slider::new(&mut v, range)
-        .logarithmic(true)
-        .fixed_decimals(decimals)
-        .show_value(true);
-    if !suffix.is_empty() {
-        slider = slider.suffix(suffix.to_string());
-    }
-    if ui.add(slider).changed() {
-        param.set_value(v);
-    }
-}
-
-/// Rotary knob bound to a `FloatParam`.
-pub fn float_knob(
-    ui: &mut egui::Ui,
-    param: &resonance_plugin::FloatParam,
-    range: std::ops::RangeInclusive<f32>,
-    default: f32,
-    label: &str,
-    sub_label: &str,
-    value_text: &str,
-    logarithmic: bool,
-) {
-    let mut v = param.value();
-    if knob(
-        ui,
-        &mut v,
-        range,
-        default,
-        label,
-        sub_label,
-        value_text,
-        logarithmic,
-    ) {
-        param.set_value(v);
-    }
-}
-
-/// Checkbox bound to a `BoolParam`.
-pub fn bool_checkbox(ui: &mut egui::Ui, param: &resonance_plugin::BoolParam, label: &str) {
-    let mut v = param.value();
-    if ui.checkbox(&mut v, label).changed() {
-        param.set_value(v);
-    }
 }

@@ -23,9 +23,6 @@ glow = "0.17"
 egui.workspace = true
 egui_glow.workspace = true
 
-# Plugin param types for widget helpers.
-resonance-plugin = { path = "../resonance-plugin" }
-
 # Misc.
 raw-window-handle = "0.6"
 

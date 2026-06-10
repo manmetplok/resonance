@@ -1,10 +1,10 @@
 //! Stage control widget helpers.
 //!
-//! Re-exports the shared knob / checkbox / slider widgets from
-//! `wayland_plugin_gui::widgets` and keeps `int_combo` locally since
-//! the shared crate doesn't provide it.
+//! Re-exports the shared param-bound knob / checkbox widgets from
+//! `resonance_plugin::editor_widgets` and keeps `int_combo` locally
+//! since the shared crate doesn't provide it.
 
-pub use wayland_plugin_gui::widgets::{bool_checkbox, float_knob};
+pub use resonance_plugin::editor_widgets::{bool_checkbox, float_knob};
 
 use resonance_plugin::{IntParam, Param};
 use wayland_plugin_gui::egui;

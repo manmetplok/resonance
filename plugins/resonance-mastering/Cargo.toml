@@ -9,7 +9,7 @@ crate-type = ["cdylib", "lib"]
 
 [features]
 default = ["editor"]
-editor = ["dep:wayland-plugin-gui", "dep:egui"]
+editor = ["dep:wayland-plugin-gui", "dep:egui", "resonance-plugin/editor-widgets"]
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }

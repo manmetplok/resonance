@@ -11,7 +11,7 @@ crate-type = ["cdylib", "lib"]
 # Editor ships by default so the bundled .clap has a GUI.
 # Turn it off (`--no-default-features`) for a headless DSP build.
 default = ["editor"]
-editor = ["dep:wayland-plugin-gui", "dep:egui"]
+editor = ["dep:wayland-plugin-gui", "dep:egui", "resonance-plugin/editor-widgets"]
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }

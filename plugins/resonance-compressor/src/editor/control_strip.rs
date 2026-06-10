@@ -5,13 +5,13 @@ use wayland_plugin_gui::egui;
 use super::app::CompressorEditorApp;
 
 pub(crate) fn draw_control_strip(ui: &mut egui::Ui, app: &mut CompressorEditorApp) {
-    use wayland_plugin_gui::widgets;
+    use resonance_plugin::editor_widgets;
 
     ui.add_space(4.0);
     // Row 1: core dynamics controls.
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        widgets::float_knob(
+        editor_widgets::float_knob(
             ui,
             &app.params.threshold,
             -60.0..=0.0,
@@ -22,7 +22,7 @@ pub(crate) fn draw_control_strip(ui: &mut egui::Ui, app: &mut CompressorEditorAp
             false,
         );
         ui.add_space(4.0);
-        widgets::float_knob(
+        editor_widgets::float_knob(
             ui,
             &app.params.ratio,
             1.0..=20.0,
@@ -33,7 +33,7 @@ pub(crate) fn draw_control_strip(ui: &mut egui::Ui, app: &mut CompressorEditorAp
             true,
         );
         ui.add_space(4.0);
-        widgets::float_knob(
+        editor_widgets::float_knob(
             ui,
             &app.params.attack,
             0.1..=200.0,
@@ -44,7 +44,7 @@ pub(crate) fn draw_control_strip(ui: &mut egui::Ui, app: &mut CompressorEditorAp
             true,
         );
         ui.add_space(4.0);
-        widgets::float_knob(
+        editor_widgets::float_knob(
             ui,
             &app.params.release,
             5.0..=2000.0,
@@ -55,7 +55,7 @@ pub(crate) fn draw_control_strip(ui: &mut egui::Ui, app: &mut CompressorEditorAp
             true,
         );
         ui.add_space(4.0);
-        widgets::float_knob(
+        editor_widgets::float_knob(
             ui,
             &app.params.knee,
             0.0..=12.0,
@@ -66,7 +66,7 @@ pub(crate) fn draw_control_strip(ui: &mut egui::Ui, app: &mut CompressorEditorAp
             false,
         );
         ui.add_space(4.0);
-        widgets::float_knob(
+        editor_widgets::float_knob(
             ui,
             &app.params.makeup,
             -12.0..=24.0,
@@ -77,7 +77,7 @@ pub(crate) fn draw_control_strip(ui: &mut egui::Ui, app: &mut CompressorEditorAp
             false,
         );
         ui.add_space(4.0);
-        widgets::float_knob(
+        editor_widgets::float_knob(
             ui,
             &app.params.mix,
             0.0..=1.0,
@@ -88,7 +88,7 @@ pub(crate) fn draw_control_strip(ui: &mut egui::Ui, app: &mut CompressorEditorAp
             false,
         );
         ui.add_space(4.0);
-        widgets::float_knob(
+        editor_widgets::float_knob(
             ui,
             &app.params.detector_mix,
             0.0..=1.0,
@@ -99,7 +99,7 @@ pub(crate) fn draw_control_strip(ui: &mut egui::Ui, app: &mut CompressorEditorAp
             false,
         );
         ui.add_space(4.0);
-        widgets::float_knob(
+        editor_widgets::float_knob(
             ui,
             &app.params.sc_hpf_freq,
             20.0..=500.0,
@@ -113,8 +113,8 @@ pub(crate) fn draw_control_strip(ui: &mut egui::Ui, app: &mut CompressorEditorAp
         // Toggles.
         ui.vertical(|ui| {
             ui.add_space(16.0);
-            widgets::bool_checkbox(ui, &app.params.auto_makeup, "Auto Gain");
-            widgets::bool_checkbox(ui, &app.params.sc_hpf_on, "SC HPF On");
+            editor_widgets::bool_checkbox(ui, &app.params.auto_makeup, "Auto Gain");
+            editor_widgets::bool_checkbox(ui, &app.params.sc_hpf_on, "SC HPF On");
         });
     });
 }

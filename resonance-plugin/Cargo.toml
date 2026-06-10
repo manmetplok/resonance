@@ -6,6 +6,9 @@ edition = "2021"
 [features]
 default = []
 ui = ["iced"]
+# egui widget helpers bound to this crate's param types, for plugin editors
+# built on `wayland-plugin-gui`. Off by default so DSP-only consumers stay lean.
+editor-widgets = ["dep:wayland-plugin-gui"]
 
 [dependencies]
 clack-plugin = { workspace = true }
@@ -13,3 +16,4 @@ clack-extensions = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 iced = { workspace = true, optional = true }
+wayland-plugin-gui = { path = "../wayland-plugin-gui", optional = true }

@@ -11,7 +11,7 @@ crate-type = ["cdylib", "lib"]
 # The editor is enabled by default so the bundled .clap ships with a GUI.
 # Turn it off (`--no-default-features`) for headless builds.
 default = ["editor"]
-editor = ["dep:wayland-plugin-gui", "dep:egui", "dep:rfd"]
+editor = ["dep:wayland-plugin-gui", "dep:egui", "dep:rfd", "resonance-plugin/editor-widgets"]
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }

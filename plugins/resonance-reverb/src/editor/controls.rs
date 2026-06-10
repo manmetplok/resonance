@@ -1,8 +1,8 @@
 //! The control strip at the bottom of the reverb editor.
 //! Uses rotary knobs in a grid layout for compact, consistent display.
 
+use resonance_plugin::editor_widgets;
 use wayland_plugin_gui::egui;
-use wayland_plugin_gui::widgets;
 
 use crate::params::ReverbParams;
 
@@ -25,7 +25,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
         // Two rows of 6 knobs each.
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            widgets::float_knob(
+            editor_widgets::float_knob(
                 ui,
                 &params.predelay,
                 0.0..=250.0,
@@ -36,7 +36,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
                 false,
             );
             ui.add_space(4.0);
-            widgets::float_knob(
+            editor_widgets::float_knob(
                 ui,
                 &params.er_level,
                 0.0..=1.0,
@@ -47,7 +47,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
                 false,
             );
             ui.add_space(4.0);
-            widgets::float_knob(
+            editor_widgets::float_knob(
                 ui,
                 &params.er_time,
                 0.0..=1.0,
@@ -58,7 +58,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
                 false,
             );
             ui.add_space(4.0);
-            widgets::float_knob(
+            editor_widgets::float_knob(
                 ui,
                 &params.size,
                 0.0..=1.0,
@@ -69,7 +69,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
                 false,
             );
             ui.add_space(4.0);
-            widgets::float_knob(
+            editor_widgets::float_knob(
                 ui,
                 &params.decay,
                 0.1..=30.0,
@@ -80,7 +80,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
                 true,
             );
             ui.add_space(4.0);
-            widgets::float_knob(
+            editor_widgets::float_knob(
                 ui,
                 &params.damping,
                 200.0..=20000.0,
@@ -96,7 +96,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
 
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            widgets::float_knob(
+            editor_widgets::float_knob(
                 ui,
                 &params.diffusion,
                 0.0..=1.0,
@@ -107,7 +107,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
                 false,
             );
             ui.add_space(4.0);
-            widgets::float_knob(
+            editor_widgets::float_knob(
                 ui,
                 &params.mod_rate,
                 0.0..=5.0,
@@ -118,7 +118,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
                 false,
             );
             ui.add_space(4.0);
-            widgets::float_knob(
+            editor_widgets::float_knob(
                 ui,
                 &params.mod_depth,
                 0.0..=1.0,
@@ -129,7 +129,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
                 false,
             );
             ui.add_space(4.0);
-            widgets::float_knob(
+            editor_widgets::float_knob(
                 ui,
                 &params.width,
                 0.0..=1.0,
@@ -140,7 +140,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
                 false,
             );
             ui.add_space(4.0);
-            widgets::float_knob(
+            editor_widgets::float_knob(
                 ui,
                 &params.mix,
                 0.0..=1.0,
@@ -155,7 +155,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
             // Freeze is a toggle, not a knob — render as a checkbox.
             ui.vertical(|ui| {
                 ui.add_space(16.0);
-                widgets::bool_checkbox(ui, &params.freeze, "Freeze");
+                editor_widgets::bool_checkbox(ui, &params.freeze, "Freeze");
             });
         });
     });
