@@ -101,6 +101,44 @@ pub struct ProjectFile {
     pub drum_patterns: Vec<crate::compose::DrumPattern>,
 }
 
+/// An empty project at the current format version with neutral
+/// defaults (44.1 kHz, 120 BPM, 4/4). Purely a convenience for tests
+/// and `..Default::default()` literals — deserialization is governed
+/// by the per-field `#[serde(default)]` attributes above, not by this
+/// impl.
+impl Default for ProjectFile {
+    fn default() -> Self {
+        Self {
+            version: PROJECT_FORMAT_VERSION,
+            sample_rate: 44100,
+            bpm: 120.0,
+            time_sig_num: 4,
+            time_sig_den: 4,
+            metronome_enabled: false,
+            master_volume: 0.0,
+            master_plugins: Vec::new(),
+            master_fx_bypassed: false,
+            loop_enabled: false,
+            loop_in: 0,
+            loop_out: 0,
+            tracks: Vec::new(),
+            clips: Vec::new(),
+            midi_clips: Vec::new(),
+            busses: Vec::new(),
+            section_definitions: Vec::new(),
+            section_placements: Vec::new(),
+            tempo_events: Vec::new(),
+            signature_events: Vec::new(),
+            midi_clock_send_enabled: false,
+            midi_clock_send_device: None,
+            midi_clock_recv_enabled: false,
+            midi_clock_recv_device: None,
+            drum_groups: Vec::new(),
+            drum_patterns: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectTrack {
     pub id: u64,

@@ -748,38 +748,10 @@ fn apply_tempo(r: &mut Resonance, b: &ProjectFile) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::PROJECT_FORMAT_VERSION;
     use crate::state::{InstrumentIcon, InstrumentType};
 
     fn empty_file() -> ProjectFile {
-        ProjectFile {
-            version: PROJECT_FORMAT_VERSION,
-            sample_rate: 44100,
-            bpm: 120.0,
-            time_sig_num: 4,
-            time_sig_den: 4,
-            metronome_enabled: false,
-            master_volume: 0.0,
-            master_plugins: Vec::new(),
-            master_fx_bypassed: false,
-            loop_enabled: false,
-            loop_in: 0,
-            loop_out: 0,
-            tracks: Vec::new(),
-            clips: Vec::new(),
-            midi_clips: Vec::new(),
-            busses: Vec::new(),
-            section_definitions: Vec::new(),
-            section_placements: Vec::new(),
-            tempo_events: Vec::new(),
-            signature_events: Vec::new(),
-            midi_clock_send_enabled: false,
-            midi_clock_send_device: None,
-            midi_clock_recv_enabled: false,
-            midi_clock_recv_device: None,
-            drum_groups: Vec::new(),
-            drum_patterns: Vec::new(),
-        }
+        ProjectFile::default()
     }
 
     fn track(id: u64, vol: f32) -> ProjectTrack {
