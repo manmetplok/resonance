@@ -114,6 +114,30 @@ impl ClipSource {
     /// Also pre-touches every page to avoid major page faults on
     /// the audio thread the first time the clip is played.
     pub fn open_wav(path: &Path) -> Result<Self, String> {
+        Self::open_wav_inner(path).map(|(source, _)| source)
+    }
+
+    /// Like [`ClipSource::open_wav`], but compares the WAV's fmt-chunk
+    /// sample rate against `engine_sample_rate`. On mismatch (e.g. a
+    /// project recorded under one PipeWire rate opened while the engine
+    /// runs at another) the PCM data is resampled to the engine rate
+    /// and returned as an in-RAM `Memory` source, so the clip plays at
+    /// the correct pitch and speed. The resample happens at load time,
+    /// off the audio thread; the next project save re-encodes the clip
+    /// to disk at the engine rate.
+    pub fn open_wav_at_rate(path: &Path, engine_sample_rate: u32) -> Result<Self, String> {
+        let (source, wav_sample_rate) = Self::open_wav_inner(path)?;
+        if wav_sample_rate == engine_sample_rate {
+            return Ok(source);
+        }
+        Ok(ClipSource::Memory(crate::decode::linear_resample(
+            source.as_frames(),
+            wav_sample_rate,
+            engine_sample_rate,
+        )))
+    }
+
+    fn open_wav_inner(path: &Path) -> Result<(Self, u32), String> {
         let file =
             std::fs::File::open(path).map_err(|e| format!("open wav {}: {e}", path.display()))?;
         // SAFETY: `Mmap::map` is unsafe because the kernel can serve a
@@ -131,7 +155,7 @@ impl ClipSource {
         let mmap = unsafe { memmap2::Mmap::map(&file) }
             .map_err(|e| format!("mmap {}: {e}", path.display()))?;
 
-        let (data_offset_bytes, data_len_bytes) = locate_wav_float_data(&mmap)
+        let (data_offset_bytes, data_len_bytes, sample_rate) = locate_wav_float_data(&mmap)
             .map_err(|e| format!("parse wav {}: {e}", path.display()))?;
         if data_len_bytes % (2 * std::mem::size_of::<f32>()) != 0 {
             return Err(format!(
@@ -147,12 +171,15 @@ impl ClipSource {
         // major page faults on the realtime audio thread.
         pre_touch(&mmap[data_offset_bytes..data_offset_bytes + data_len_bytes]);
 
-        Ok(ClipSource::Mapped {
-            mmap: Arc::new(mmap),
-            data_offset_bytes,
-            frame_count,
-            path: path.to_path_buf(),
-        })
+        Ok((
+            ClipSource::Mapped {
+                mmap: Arc::new(mmap),
+                data_offset_bytes,
+                frame_count,
+                path: path.to_path_buf(),
+            },
+            sample_rate,
+        ))
     }
 
     /// On-disk path backing a `Mapped` source, or `None` for `Memory`.
@@ -165,9 +192,10 @@ impl ClipSource {
 }
 
 /// Parse a minimal RIFF/WAVE header and return the byte offset and
-/// length of the PCM `data` chunk, verifying that the format chunk
-/// declares 32-bit IEEE float stereo. Does not depend on `hound`.
-fn locate_wav_float_data(bytes: &[u8]) -> Result<(usize, usize), String> {
+/// length of the PCM `data` chunk plus the fmt-chunk sample rate,
+/// verifying that the format chunk declares 32-bit IEEE float stereo.
+/// Does not depend on `hound`.
+fn locate_wav_float_data(bytes: &[u8]) -> Result<(usize, usize, u32), String> {
     if bytes.len() < 12 {
         return Err("file too short".into());
     }
@@ -179,7 +207,7 @@ fn locate_wav_float_data(bytes: &[u8]) -> Result<(usize, usize), String> {
     }
 
     let mut cursor = 12usize;
-    let mut fmt_ok = false;
+    let mut fmt_sample_rate: Option<u32> = None;
     while cursor + 8 <= bytes.len() {
         let id = &bytes[cursor..cursor + 4];
         let size = u32::from_le_bytes(bytes[cursor + 4..cursor + 8].try_into().unwrap()) as usize;
@@ -197,6 +225,8 @@ fn locate_wav_float_data(bytes: &[u8]) -> Result<(usize, usize), String> {
                 u16::from_le_bytes(bytes[chunk_start..chunk_start + 2].try_into().unwrap());
             let channels =
                 u16::from_le_bytes(bytes[chunk_start + 2..chunk_start + 4].try_into().unwrap());
+            let sample_rate =
+                u32::from_le_bytes(bytes[chunk_start + 4..chunk_start + 8].try_into().unwrap());
             let bits_per_sample = u16::from_le_bytes(
                 bytes[chunk_start + 14..chunk_start + 16]
                     .try_into()
@@ -235,12 +265,15 @@ fn locate_wav_float_data(bytes: &[u8]) -> Result<(usize, usize), String> {
                     bits_per_sample
                 ));
             }
-            fmt_ok = true;
-        } else if id == b"data" {
-            if !fmt_ok {
-                return Err("data chunk before fmt chunk".into());
+            if sample_rate == 0 {
+                return Err("fmt chunk declares zero sample rate".into());
             }
-            return Ok((chunk_start, size));
+            fmt_sample_rate = Some(sample_rate);
+        } else if id == b"data" {
+            let Some(sample_rate) = fmt_sample_rate else {
+                return Err("data chunk before fmt chunk".into());
+            };
+            return Ok((chunk_start, size, sample_rate));
         }
 
         // RIFF chunks are word-aligned: an odd size is padded.

@@ -202,13 +202,17 @@ pub(crate) fn handle_load_clip_from_wav(
 
     let clips_arc = Arc::clone(ctx.clips);
     let thread_event_tx = ctx.event_tx.clone();
+    let engine_rate = ctx.sample_rate;
     let imports_counter = Arc::clone(&state.active_imports);
     imports_counter.fetch_add(1, Ordering::Relaxed);
 
     let spawn_result = std::thread::Builder::new()
         .name("resonance-clip-load".into())
         .spawn(move || {
-            match ClipSource::open_wav(&path) {
+            // `open_wav_at_rate` resamples to the engine rate when the
+            // project's WAV was written under a different device rate,
+            // so the clip can't play back pitched/sped.
+            match ClipSource::open_wav_at_rate(&path, engine_rate) {
                 Ok(source) => {
                     let total_frames = source.frame_count();
                     let waveform_peaks = compute_waveform_peaks(source.as_frames());
