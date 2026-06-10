@@ -21,6 +21,23 @@ pub struct BounceProgressState {
     pub fraction: f32,
 }
 
+/// Transient state for the dialog. Lives on `Resonance::bounce_dialog`
+/// while the overlay is open; the realtime bounce kicks off when the
+/// user confirms with `selected_device` set.
+#[derive(Debug, Clone)]
+pub struct BounceDialogState {
+    pub source_track_id: resonance_audio::types::TrackId,
+    /// Selected input device name. `None` until the user picks one.
+    pub selected_device: Option<String>,
+    /// Selected starting input channel (0-indexed). Defaults to 0. In
+    /// stereo mode the right channel is `selected_port + 1`.
+    pub selected_port: u16,
+    /// Capture as mono (single channel duplicated to L/R) vs stereo
+    /// (a pair of consecutive channels). Defaults to stereo because
+    /// almost every external instrument returns a stereo pair.
+    pub mono: bool,
+}
+
 /// Project save/load and offline-bounce progress state.
 #[derive(Default)]
 pub struct ProjectIoState {

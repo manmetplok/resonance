@@ -116,7 +116,7 @@ pub struct Resonance {
     /// When set, the "Bounce in place" dialog is shown for an external
     /// MIDI track. Holds the source track id plus the user's current
     /// device/port selection.
-    pub(crate) bounce_dialog: Option<crate::view::bounce_dialog::BounceDialogState>,
+    pub(crate) bounce_dialog: Option<crate::state::BounceDialogState>,
     /// When set, a bounce-in-place run is in flight. Drives the modal
     /// progress overlay and gates transport / mutating UI so the user
     /// can't disturb the render mid-flight. Cleared by

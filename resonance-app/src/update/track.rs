@@ -421,7 +421,7 @@ fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::T
 
     match mode {
         BounceMode::External => {
-            r.bounce_dialog = Some(crate::view::bounce_dialog::BounceDialogState {
+            r.bounce_dialog = Some(crate::state::BounceDialogState {
                 source_track_id: track_id,
                 selected_device: r.default_input_device_name.clone(),
                 selected_port: 0,

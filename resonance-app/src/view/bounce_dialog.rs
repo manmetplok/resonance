@@ -7,29 +7,12 @@
 use iced::widget::{button, column, container, mouse_area, opaque, pick_list, row, stack, text, Space};
 use iced::{alignment, Element, Length};
 
-use resonance_audio::types::{InputDeviceInfo, TrackId};
+use resonance_audio::types::InputDeviceInfo;
 
 use crate::message::*;
 use crate::theme;
 use crate::view::mixer::picks::PortChoice;
 use crate::Resonance;
-
-/// Transient state for the dialog. Lives on `Resonance::bounce_dialog`
-/// while the overlay is open; the realtime bounce kicks off when the
-/// user confirms with `selected_device` set.
-#[derive(Debug, Clone)]
-pub struct BounceDialogState {
-    pub source_track_id: TrackId,
-    /// Selected input device name. `None` until the user picks one.
-    pub selected_device: Option<String>,
-    /// Selected starting input channel (0-indexed). Defaults to 0. In
-    /// stereo mode the right channel is `selected_port + 1`.
-    pub selected_port: u16,
-    /// Capture as mono (single channel duplicated to L/R) vs stereo
-    /// (a pair of consecutive channels). Defaults to stereo because
-    /// almost every external instrument returns a stereo pair.
-    pub mono: bool,
-}
 
 pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Message> {
     let Some(dialog) = r.bounce_dialog.as_ref() else {
