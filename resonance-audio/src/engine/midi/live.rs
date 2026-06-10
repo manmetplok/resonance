@@ -15,6 +15,31 @@ use crate::types::*;
 use super::super::thread::{HandlerCtx, HandlerState, RecordingMidiState};
 use super::sample_to_abs_tick;
 
+/// Convert a live event's wall-clock `arrival` into an intra-block
+/// sample offset for the next audio block, so live input keeps its
+/// relative timing instead of quantizing to the block boundary.
+///
+/// The engine thread has no exact block-start timestamp, so the last
+/// block start is estimated as `now` (delivery time) minus one block
+/// period: an event that arrived a full block ago lands at offset 0,
+/// one that arrived just now lands near the end of the block. Earlier
+/// arrivals always get smaller offsets, preserving on/off ordering.
+/// Clamped to `[0, block_len)`.
+pub fn live_arrival_sample_offset(
+    arrival: std::time::Instant,
+    now: std::time::Instant,
+    sample_rate: u32,
+    block_len: usize,
+) -> u32 {
+    if block_len == 0 {
+        return 0;
+    }
+    let elapsed_secs = now.saturating_duration_since(arrival).as_secs_f64();
+    let elapsed_samples = elapsed_secs * sample_rate as f64;
+    let offset = block_len as f64 - elapsed_samples;
+    offset.clamp(0.0, (block_len - 1) as f64) as u32
+}
+
 /// Queue a live note event into the plugin behind `mutex`, preserving
 /// FIFO order with any events parked while the lock was contended.
 ///
@@ -73,6 +98,7 @@ pub(crate) fn handle_send_note_on(
     track_id: TrackId,
     note: u8,
     velocity: f32,
+    sample_offset: u32,
 ) {
     let channel = {
         let tracks_guard = ctx.tracks.read();
@@ -93,7 +119,7 @@ pub(crate) fn handle_send_note_on(
                         is_note_on: true,
                         note,
                         velocity,
-                        sample_offset: 0,
+                        sample_offset,
                     },
                 );
             }
@@ -112,6 +138,7 @@ pub(crate) fn handle_send_note_off(
     state: &mut HandlerState,
     track_id: TrackId,
     note: u8,
+    sample_offset: u32,
 ) {
     let channel = {
         let tracks_guard = ctx.tracks.read();
@@ -132,7 +159,7 @@ pub(crate) fn handle_send_note_off(
                         is_note_on: false,
                         note,
                         velocity: 0.0,
-                        sample_offset: 0,
+                        sample_offset,
                     },
                 );
             }
@@ -166,7 +193,13 @@ pub(crate) fn handle_live_midi_event(
             // the configured MIDI output (Thru). Record-into-clip
             // happens separately; recording must not also re-emit
             // the note.
-            handle_send_note_on(ctx, state, track_id, note, velocity);
+            let offset = live_arrival_sample_offset(
+                arrival,
+                std::time::Instant::now(),
+                ctx.sample_rate,
+                ctx.quantum,
+            );
+            handle_send_note_on(ctx, state, track_id, note, velocity, offset);
             handle_record_midi_event(ctx, state, track_id, true, note, velocity, arrival);
         }
         LiveMidiEvent::InboundNoteOff {
@@ -174,7 +207,13 @@ pub(crate) fn handle_live_midi_event(
             note,
             arrival,
         } => {
-            handle_send_note_off(ctx, state, track_id, note);
+            let offset = live_arrival_sample_offset(
+                arrival,
+                std::time::Instant::now(),
+                ctx.sample_rate,
+                ctx.quantum,
+            );
+            handle_send_note_off(ctx, state, track_id, note, offset);
             handle_record_midi_event(ctx, state, track_id, false, note, 0.0, arrival);
         }
     }

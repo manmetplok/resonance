@@ -50,6 +50,11 @@ pub(crate) use live::{
 /// retried NoteOn never lands after its NoteOff, without a live CLAP
 /// plugin.
 pub use live::deliver_or_stash;
+/// Test surface for the live-input arrival → intra-block sample offset
+/// conversion. Exposed under `__test_support` (via `lib.rs`) so the
+/// test in `tests/live_arrival_offset.rs` can drive the pure function
+/// without the engine thread.
+pub use live::live_arrival_sample_offset;
 pub use outbound::{outbound_step_start, OutboundStep};
 pub(crate) use outbound::poll_timeline_to_midi_output;
 

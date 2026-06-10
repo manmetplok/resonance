@@ -624,13 +624,15 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             note_index,
             velocity,
         } => midi::handle_set_midi_note_velocity(ctx, clip_id, note_index, velocity),
+        // GUI-originated notes carry no arrival timestamp; offset 0
+        // (start of the next block) is the earliest delivery anyway.
         AudioCommand::SendNoteOn {
             track_id,
             note,
             velocity,
-        } => midi::handle_send_note_on(ctx, state, track_id, note, velocity),
+        } => midi::handle_send_note_on(ctx, state, track_id, note, velocity, 0),
         AudioCommand::SendNoteOff { track_id, note } => {
-            midi::handle_send_note_off(ctx, state, track_id, note)
+            midi::handle_send_note_off(ctx, state, track_id, note, 0)
         }
         AudioCommand::ListMidiInputDevices => midi::handle_list_midi_inputs(ctx, state),
         AudioCommand::ListMidiOutputDevices => midi::handle_list_midi_outputs(ctx, state),

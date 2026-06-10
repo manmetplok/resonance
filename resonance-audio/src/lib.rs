@@ -88,6 +88,12 @@ pub use limits::{MAX_STASHED_EVENTS, MAX_STASHED_INSTRUMENTS};
 #[doc(hidden)]
 pub use engine::midi::deliver_or_stash;
 
+/// Test surface for the live-input arrival → intra-block sample offset
+/// conversion. Exposed so the test in `tests/live_arrival_offset.rs`
+/// can drive the pure function without bringing up the engine thread.
+#[doc(hidden)]
+pub use engine::midi::live_arrival_sample_offset;
+
 /// Test surface for the streaming recording drain path. Exposed so
 /// integration tests can verify that `TrackRecordingBuf` never
 /// accumulates audio in RAM as a take grows. Not part of the public
