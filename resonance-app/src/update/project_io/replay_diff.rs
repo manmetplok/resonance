@@ -37,6 +37,7 @@ use crate::undo::UndoExtras;
 use crate::util::db_to_gain;
 use crate::Resonance;
 
+use super::replay::{restore_drum_patterns, restore_tempo_events};
 use super::serialize::build_project_file;
 
 /// Attempt a structure-preserving replay. Returns `true` when the diff
@@ -567,26 +568,16 @@ fn push_all_plugin_states(r: &mut Resonance, target: &LoadedProject) {
     // Walk every (track, bus, master) plugin in the target snapshot and
     // re-push the cached blob to the engine if one exists.
     for pt in &target.file.tracks {
-        for pp in &pt.plugins {
-            if let Some(blob) = target.plugin_states.get(&pp.instance_id) {
-                let _ = r.engine.send(AudioCommand::LoadPluginState {
-                    instance_id: pp.instance_id,
-                    data: blob.clone(),
-                });
-            }
-        }
+        push_plugin_states(r, target, &pt.plugins);
     }
     for pb in &target.file.busses {
-        for pp in &pb.plugins {
-            if let Some(blob) = target.plugin_states.get(&pp.instance_id) {
-                let _ = r.engine.send(AudioCommand::LoadPluginState {
-                    instance_id: pp.instance_id,
-                    data: blob.clone(),
-                });
-            }
-        }
+        push_plugin_states(r, target, &pb.plugins);
     }
-    for pp in &target.file.master_plugins {
+    push_plugin_states(r, target, &target.file.master_plugins);
+}
+
+fn push_plugin_states(r: &mut Resonance, target: &LoadedProject, plugins: &[ProjectPlugin]) {
+    for pp in plugins {
         if let Some(blob) = target.plugin_states.get(&pp.instance_id) {
             let _ = r.engine.send(AudioCommand::LoadPluginState {
                 instance_id: pp.instance_id,
@@ -725,28 +716,9 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile, extras: &UndoExtras) {
     // Restore the drum pattern bank. Modern snapshots persist
     // `drum_patterns`; older snapshots still in the undo stack only have
     // the legacy `drum_groups` field, so promote it the same way the
-    // project loader does.
-    if !b.drum_patterns.is_empty() {
-        r.compose.drum_patterns = b.drum_patterns.clone();
-    } else if !b.drum_groups.is_empty() {
-        let (patterns, _id) = crate::compose::drumroll::legacy_groups_to_pattern(
-            b.drum_groups.clone(),
-            &mut r.compose.next_id,
-        );
-        r.compose.drum_patterns = patterns;
-    } else {
-        r.compose.drum_patterns.clear();
-    }
-    r.compose.default_drum_pattern_id = r.compose.drum_patterns.first().map(|p| p.id);
-    let max_id = r
-        .compose
-        .drum_patterns
-        .iter()
-        .flat_map(|p| std::iter::once(p.id).chain(p.groups.iter().map(|g| g.id)))
-        .max();
-    if let Some(m) = max_id {
-        r.compose.next_id = r.compose.next_id.max(m);
-    }
+    // project loader does. Unlike the full load, an all-empty snapshot
+    // clears the bank rather than keeping the seeded default.
+    restore_drum_patterns(&mut r.compose, b, true);
     r.compose.derived_clips = extras.compose_derived_clips.clone();
     r.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
     r.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics.clone();
@@ -769,23 +741,7 @@ fn midi_notes_equal(a: &[MidiNote], b: &[MidiNote]) -> bool {
 }
 
 fn apply_tempo(r: &mut Resonance, b: &ProjectFile) {
-    if b.tempo_events.is_empty() {
-        r.tempo_events = vec![crate::state::TempoEvent {
-            bar: 0,
-            bpm: b.bpm,
-        }];
-    } else {
-        r.tempo_events = b.tempo_events.clone();
-    }
-    if b.signature_events.is_empty() {
-        r.signature_events = vec![crate::state::SignatureEvent {
-            bar: 0,
-            numerator: b.time_sig_num,
-            denominator: b.time_sig_den,
-        }];
-    } else {
-        r.signature_events = b.signature_events.clone();
-    }
+    restore_tempo_events(r, b);
     r.rebuild_and_send_tempo();
 }
 
