@@ -500,10 +500,7 @@ fn apply_busses(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
             .get(&bb.id)
             .copied();
         let Some(ba) = ba else {
-            // Defence in depth: `structurally_compatible` should have
-            // gated us here, but if it ever drifts we'd rather skip an
-            // unmatched id than crash on undo. The caller may detect
-            // a stale slot and fall back to a full replay.
+            // Defence in depth — see the note in `apply_tracks`.
             continue;
         };
         apply_bus(r, ba, bb);
@@ -594,10 +591,7 @@ fn apply_audio_clips(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
             .get(&cb.id)
             .copied();
         let Some(ca) = ca else {
-            // Defence in depth: `structurally_compatible` should have
-            // gated us here, but if it ever drifts we'd rather skip an
-            // unmatched id than crash on undo. The caller may detect
-            // a stale slot and fall back to a full replay.
+            // Defence in depth — see the note in `apply_tracks`.
             continue;
         };
         let trim_changed = ca.trim_start_frames != cb.trim_start_frames
@@ -651,10 +645,7 @@ fn apply_midi_clips(
             .get(&cb.id)
             .copied();
         let Some(ca) = ca else {
-            // Defence in depth: `structurally_compatible` should have
-            // gated us here, but if it ever drifts we'd rather skip an
-            // unmatched id than crash on undo. The caller may detect
-            // a stale slot and fall back to a full replay.
+            // Defence in depth — see the note in `apply_tracks`.
             continue;
         };
         let target_for_clip = target_notes.get(&cb.id).cloned().unwrap_or_default();

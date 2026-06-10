@@ -9,6 +9,7 @@ use resonance_audio::types::{AudioCommand, TICKS_PER_QUARTER_NOTE};
 
 use super::handle as dispatch;
 use crate::compose::invariants::{chord_fits_in_section, placement_overlaps};
+use crate::util::seed_from_id;
 use crate::compose::{
     ComposeMessage, ComposeState, EditSectionForm, NewSectionForm, SectionDefinitionState,
     SectionPlacementState,
@@ -255,7 +256,7 @@ pub(super) fn handle_create(
         length_bars,
         chords: Vec::new(),
         scale: None,
-        progression_seed: id.wrapping_mul(0x9E3779B97F4A7C15),
+        progression_seed: seed_from_id(id),
         generate_params: crate::compose::GenerateParams::default(),
         generator_spec: None,
         generator_seed: id.wrapping_mul(0x517CC1B727220A95),

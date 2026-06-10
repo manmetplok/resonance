@@ -7,6 +7,7 @@ use resonance_music_theory::{diatonic_chord, GenContext, Generator, GeneratorSpe
 use super::regenerate::{propagate_chord_change, propagate_motif_change};
 use crate::compose::messages::{ChordInspectorMsg, MotifSourceKind};
 use crate::compose::ChordState;
+use crate::util::{bump_seed, GOLDEN_RATIO_SEED};
 
 pub(super) fn handle(
     r: &mut crate::Resonance,
@@ -107,10 +108,7 @@ pub(super) fn handle(
 
         ChordInspectorMsg::Regenerate => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.generator_seed = def
-                    .generator_seed
-                    .wrapping_add(0x9E3779B97F4A7C15)
-                    .wrapping_add(1);
+                def.generator_seed = bump_seed(def.generator_seed, GOLDEN_RATIO_SEED);
             }
             generate_chord_lane(r, definition_id, true);
         }
@@ -142,10 +140,7 @@ pub(super) fn handle(
         ChordInspectorMsg::RegenerateMotif => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 let params = def.motif_source.params_mut();
-                params.seed = params
-                    .seed
-                    .wrapping_add(0x9E3779B97F4A7C15)
-                    .wrapping_add(1);
+                params.seed = bump_seed(params.seed, GOLDEN_RATIO_SEED);
                 r.compose.last_error = None;
             }
             propagate_motif_change(r, definition_id);

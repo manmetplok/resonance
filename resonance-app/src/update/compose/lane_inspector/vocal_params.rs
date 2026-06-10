@@ -12,6 +12,7 @@ use resonance_music_theory::VoiceType;
 
 use super::common::{bump_lane_seed, update_vocal};
 use crate::message::Message;
+use crate::util::GOLDEN_RATIO_SEED;
 
 // ---------------------------------------------------------------------------
 // Vocal lyrics
@@ -104,7 +105,7 @@ pub(super) fn reroll_unlocked_lyrics(
         r,
         definition_id,
         track_id,
-        0x9E3779B97F4A7C15,
+        GOLDEN_RATIO_SEED,
     );
     super::super::vocal_lyrics::sync_bulk_lyrics_from_draft(r, definition_id, track_id);
 }

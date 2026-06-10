@@ -9,22 +9,24 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use resonance_app::project::ProjectFile;
+use resonance_app::project::{LoadedProject, ProjectFile};
 use resonance_app::undo::{CoalesceKey, UndoExtras, UndoHistory, UndoSnapshot};
 
-/// Produce a snapshot that carries `id` in its `file.bpm` field so
-/// tests can distinguish snapshots on the history stack. `bpm` is
+/// Produce a snapshot that carries `id` in its `project.file.bpm` field
+/// so tests can distinguish snapshots on the history stack. `bpm` is
 /// abused purely as a numeric discriminator here; the rest of the
 /// snapshot is a valid default.
 fn dummy_snapshot(id: f32) -> UndoSnapshot {
     UndoSnapshot {
-        file: ProjectFile {
-            bpm: id,
-            ..ProjectFile::default()
+        project: LoadedProject {
+            file: ProjectFile {
+                bpm: id,
+                ..ProjectFile::default()
+            },
+            project_dir: PathBuf::new(),
+            midi_notes: HashMap::new(),
+            plugin_states: HashMap::new(),
         },
-        project_dir: PathBuf::new(),
-        midi_notes: HashMap::new(),
-        plugin_states: HashMap::new(),
         extras: UndoExtras::default(),
     }
 }
@@ -52,9 +54,9 @@ fn capacity_trims_oldest() {
     h.record(dummy_snapshot(4.0));
     assert_eq!(h.test_undo_entries().len(), 3);
     // The oldest (1.0) should have been trimmed; top of stack is 4.0.
-    assert_eq!(h.pop_undo().unwrap().file.bpm, 4.0);
-    assert_eq!(h.pop_undo().unwrap().file.bpm, 3.0);
-    assert_eq!(h.pop_undo().unwrap().file.bpm, 2.0);
+    assert_eq!(h.pop_undo().unwrap().project.file.bpm, 4.0);
+    assert_eq!(h.pop_undo().unwrap().project.file.bpm, 3.0);
+    assert_eq!(h.pop_undo().unwrap().project.file.bpm, 2.0);
     assert!(h.pop_undo().is_none());
 }
 
@@ -66,7 +68,7 @@ fn commit_records_pending_transaction() {
     h.commit();
     assert!(!h.has_pending());
     assert!(h.can_undo());
-    assert_eq!(h.test_undo_entries()[0].file.bpm, 1.0);
+    assert_eq!(h.test_undo_entries()[0].project.file.bpm, 1.0);
 }
 
 #[test]
@@ -82,7 +84,7 @@ fn coalesces_same_key_and_breaks_on_intervening_action() {
     h.record_coalesced(dummy_snapshot(3.0), key.clone());
     assert_eq!(h.test_undo_entries().len(), 1);
     // The retained entry is the original (pre-burst) snapshot.
-    assert_eq!(h.test_undo_entries()[0].file.bpm, 1.0);
+    assert_eq!(h.test_undo_entries()[0].project.file.bpm, 1.0);
 
     // A different coalesce key breaks the run and pushes a new entry.
     h.record_coalesced(dummy_snapshot(10.0), CoalesceKey::TrackPan(7));
@@ -103,7 +105,7 @@ fn coalesce_run_is_broken_by_pop() {
     // After popping, the next coalesced record must push fresh.
     h.record_coalesced(dummy_snapshot(2.0), key);
     assert_eq!(h.test_undo_entries().len(), 1);
-    assert_eq!(h.test_undo_entries()[0].file.bpm, 2.0);
+    assert_eq!(h.test_undo_entries()[0].project.file.bpm, 2.0);
 }
 
 #[test]

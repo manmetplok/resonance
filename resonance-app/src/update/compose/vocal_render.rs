@@ -32,7 +32,7 @@ pub(super) fn roll_vocal_lyrics(
     let LaneGeneratorKind::Vocal(params) = &mut cfg.kind else {
         return;
     };
-    cfg.seed = cfg.seed.wrapping_add(seed_mix).wrapping_add(1);
+    cfg.seed = crate::util::bump_seed(cfg.seed, seed_mix);
     let seed = cfg.seed;
     params.draft = resonance_music_theory::generate_lyrics(params, seed);
     r.compose.last_error = None;

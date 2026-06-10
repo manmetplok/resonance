@@ -27,6 +27,7 @@ use super::regenerate::regenerate_lane;
 use crate::compose::messages::LaneInspectorMsg;
 use crate::compose::{LaneGeneratorConfig, LaneGeneratorKind, LaneGeneratorKindTag};
 use crate::message::Message;
+use crate::util::{seed_from_id, GOLDEN_RATIO_SEED};
 
 mod bass_params;
 mod common;
@@ -258,7 +259,7 @@ pub(super) fn handle(
             // contours, rest density holes) without touching the
             // section-shared motif — those identity bits only change via
             // the chord inspector's "Regenerate motif" button.
-            common::bump_lane_seed(r, definition_id, track_id, 0x9E3779B97F4A7C15);
+            common::bump_lane_seed(r, definition_id, track_id, GOLDEN_RATIO_SEED);
             return regenerate_lane(r, definition_id, track_id);
         }
     }
@@ -284,7 +285,7 @@ fn set_generator(
                     track_id,
                     LaneGeneratorConfig {
                         kind: LaneGeneratorKind::Bass(BassParams::default()),
-                        seed: definition_id.wrapping_mul(0x9E3779B97F4A7C15),
+                        seed: seed_from_id(definition_id),
                     },
                 );
             }

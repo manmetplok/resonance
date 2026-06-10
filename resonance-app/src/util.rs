@@ -40,6 +40,33 @@ pub fn short_with(s: &str, max: usize, ellipsis: &str) -> String {
     }
 }
 
+/// 2^64 / φ (the splitmix64 increment). Multiplying or adding this
+/// constant spreads small sequential ids across the full u64 range, so
+/// it's the canonical mixer for deriving and stepping the deterministic
+/// generator seeds used by the compose tab.
+pub const GOLDEN_RATIO_SEED: u64 = 0x9E3779B97F4A7C15;
+
+/// Derive a well-mixed initial generator seed from a small id
+/// (definition id, group id, …).
+pub fn seed_from_id(id: u64) -> u64 {
+    id.wrapping_mul(GOLDEN_RATIO_SEED)
+}
+
+/// Step a generator seed to its next value ("re-roll"). The `+ 1`
+/// keeps a zero seed moving; the multiply decorrelates successive
+/// seeds so re-rolls don't produce near-identical output.
+pub fn next_seed(seed: u64) -> u64 {
+    seed.wrapping_add(1).wrapping_mul(GOLDEN_RATIO_SEED)
+}
+
+/// Step a generator seed by an additive mix constant (plus 1 so a zero
+/// mix still moves). Used where several distinct actions step the same
+/// seed and must land on different streams — each action passes its own
+/// mix constant, typically [`GOLDEN_RATIO_SEED`].
+pub fn bump_seed(seed: u64, mix: u64) -> u64 {
+    seed.wrapping_add(mix).wrapping_add(1)
+}
+
 /// Format a pan value for display. Returns "C", "L50", "R50" etc.
 pub fn format_pan(pan: f32) -> Cow<'static, str> {
     if pan.abs() < 0.01 {

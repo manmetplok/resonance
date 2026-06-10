@@ -11,11 +11,10 @@
 //! the restore path are added in later phases.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
 
 use resonance_audio::types::{AudioCommand, ClipId, MidiNote, PluginInstanceId};
 
-use crate::project::{LoadedProject, ProjectFile};
+use crate::project::LoadedProject;
 use resonance_audio::types::TrackId;
 
 pub use resonance_audio::DEFAULT_HISTORY_CAPACITY;
@@ -35,39 +34,20 @@ pub struct UndoExtras {
     pub vocal_clip_lyrics: HashMap<ClipId, Vec<String>>,
 }
 
-/// One point in the undo/redo history. Mostly the same shape as
-/// `LoadedProject` so snapshots can be fed straight into the existing
+/// One point in the undo/redo history. Wraps the `LoadedProject` shape
+/// so snapshots can be fed straight into the existing
 /// `replay_loaded_project` path, plus `extras` for runtime-only state.
 #[derive(Debug, Clone)]
 pub struct UndoSnapshot {
-    pub file: ProjectFile,
-    pub project_dir: PathBuf,
-    pub midi_notes: HashMap<ClipId, Vec<MidiNote>>,
-    /// Opaque CLAP state blobs, keyed by plugin instance id. Populated
-    /// from `Resonance::plugin_state_cache` at snapshot time; missing
-    /// entries cause the restore path to reinstantiate the plugin with
-    /// default internal state and rely on the replayed parameter values.
-    pub plugin_states: HashMap<PluginInstanceId, Vec<u8>>,
+    /// Declarative project state in the exact shape the replay path
+    /// expects. `plugin_states` is populated from
+    /// `Resonance::plugin_state_cache` at snapshot time; missing entries
+    /// cause the restore path to reinstantiate the plugin with default
+    /// internal state and rely on the replayed parameter values.
+    pub project: LoadedProject,
     /// Runtime-only state rebuilt after the replay — currently just the
     /// compose tab's derived-clip cache.
     pub extras: UndoExtras,
-}
-
-impl UndoSnapshot {
-    /// Split into the `LoadedProject` shape the replay path expects plus
-    /// the runtime-only extras, which the caller applies separately after
-    /// replay.
-    pub fn split(self) -> (LoadedProject, UndoExtras) {
-        (
-            LoadedProject {
-                file: self.file,
-                project_dir: self.project_dir,
-                midi_notes: self.midi_notes,
-                plugin_states: self.plugin_states,
-            },
-            self.extras,
-        )
-    }
 }
 
 /// Identifies a continuous-edit source so that a stream of messages
@@ -283,10 +263,12 @@ impl crate::Resonance {
         );
 
         UndoSnapshot {
-            file,
-            project_dir: self.io.project_path.clone().unwrap_or_default(),
-            midi_notes,
-            plugin_states,
+            project: LoadedProject {
+                file,
+                project_dir: self.io.project_path.clone().unwrap_or_default(),
+                midi_notes,
+                plugin_states,
+            },
             extras,
         }
     }
@@ -329,7 +311,10 @@ impl crate::Resonance {
         self.transport.playing = false;
         self.transport.recording = false;
 
-        let (loaded, extras) = snapshot.split();
+        let UndoSnapshot {
+            project: loaded,
+            extras,
+        } = snapshot;
 
         // Fast path: structure-identical undo (the common case for
         // fader/knob/transport edits). Drives the engine surgically

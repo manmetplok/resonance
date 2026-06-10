@@ -14,6 +14,7 @@ use crate::compose::drumroll::{groups, DrumGroup, DrumGroupPad, DrumPattern, GRO
 use crate::compose::messages::DrumGroupsMessage;
 use crate::message::Message;
 use crate::state::InstrumentType;
+use crate::util::{next_seed, seed_from_id};
 
 use super::regenerate::compose_samples_per_bar;
 
@@ -56,54 +57,44 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
             r.compose.drumroll.manager_filter = s;
         }
         DrumGroupsMessage::AddGroup => {
-            let Some(pattern_id) = resolve_managing_pattern_id(r) else {
-                return Task::none();
-            };
             let id = {
                 r.compose.next_id += 1;
                 r.compose.next_id
             };
-            let Some(pattern) = r.compose.find_pattern_mut(pattern_id) else {
-                return Task::none();
-            };
-            let idx = pattern.groups.len();
-            let color = GROUP_PALETTE[idx % GROUP_PALETTE.len()];
-            let group = DrumGroup {
-                id,
-                name: format!("Group {}", idx + 1),
-                color,
-                grid: r.compose.drumroll.base_grid.max(2),
-                cycle: r.compose.drumroll.base_cycle.max(1),
-                phase: 0,
-                pads: Vec::new(),
-                density: 0.35,
-                swing: 0.0,
-                accent: 0.45,
-                humanize: 0.2,
-                fills: 0.0,
-                style: "Custom".to_string(),
-                seed: id.wrapping_mul(0x9E3779B97F4A7C15),
-            };
-            // Re-borrow because the `next_id` bump above borrowed
-            // `r.compose` mutably already; pattern lookup needs a fresh
-            // borrow.
-            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
-                pattern.groups.push(group);
+            // Copy the defaults out first — the closure below holds the
+            // mutable borrow of `r.compose`.
+            let grid = r.compose.drumroll.base_grid.max(2);
+            let cycle = r.compose.drumroll.base_cycle.max(1);
+            let added = with_managing_pattern(r, |pattern| {
+                let idx = pattern.groups.len();
+                pattern.groups.push(DrumGroup {
+                    id,
+                    name: format!("Group {}", idx + 1),
+                    color: GROUP_PALETTE[idx % GROUP_PALETTE.len()],
+                    grid,
+                    cycle,
+                    phase: 0,
+                    pads: Vec::new(),
+                    density: 0.35,
+                    swing: 0.0,
+                    accent: 0.45,
+                    humanize: 0.2,
+                    fills: 0.0,
+                    style: "Custom".to_string(),
+                    seed: seed_from_id(id),
+                });
+            });
+            if added.is_some() {
+                r.compose.drumroll.managing_group_id = Some(id);
+                r.compose.drumroll.selected_group_id = Some(id);
             }
-            r.compose.drumroll.managing_group_id = Some(id);
-            r.compose.drumroll.selected_group_id = Some(id);
         }
         DrumGroupsMessage::DeleteGroup { group_id } => {
-            let Some(pattern_id) = resolve_managing_pattern_id(r) else {
-                return Task::none();
-            };
-            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+            let fallback = with_managing_pattern(r, |pattern| {
                 pattern.groups.retain(|g| g.id != group_id);
-            }
-            let fallback = r
-                .compose
-                .find_pattern(pattern_id)
-                .and_then(|p| p.groups.first().map(|g| g.id));
+                pattern.groups.first().map(|g| g.id)
+            })
+            .flatten();
             if r.compose.drumroll.managing_group_id == Some(group_id) {
                 r.compose.drumroll.managing_group_id = fallback;
             }
@@ -112,42 +103,30 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
             }
         }
         DrumGroupsMessage::RenameGroup { group_id, name } => {
-            let Some(pattern_id) = resolve_managing_pattern_id(r) else {
-                return Task::none();
-            };
-            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+            let _ = with_managing_pattern(r, |pattern| {
                 if let Some(g) = pattern.groups.iter_mut().find(|g| g.id == group_id) {
                     g.name = name;
                 }
-            }
+            });
         }
         DrumGroupsMessage::SetGroupColor { group_id, color } => {
-            let Some(pattern_id) = resolve_managing_pattern_id(r) else {
-                return Task::none();
-            };
-            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+            let _ = with_managing_pattern(r, |pattern| {
                 if let Some(g) = pattern.groups.iter_mut().find(|g| g.id == group_id) {
                     g.color = color;
                 }
-            }
+            });
         }
         DrumGroupsMessage::TogglePadAssignment { group_id, note } => {
-            let Some(pattern_id) = resolve_managing_pattern_id(r) else {
-                return Task::none();
-            };
-            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+            let _ = with_managing_pattern(r, |pattern| {
                 toggle_pad(&mut pattern.groups, group_id, note);
-            }
+            });
         }
         DrumGroupsMessage::ClearGroupPads { group_id } => {
-            let Some(pattern_id) = resolve_managing_pattern_id(r) else {
-                return Task::none();
-            };
-            if let Some(pattern) = r.compose.find_pattern_mut(pattern_id) {
+            let _ = with_managing_pattern(r, |pattern| {
                 if let Some(g) = pattern.groups.iter_mut().find(|g| g.id == group_id) {
                     g.pads.clear();
                 }
-            }
+            });
         }
 
         // ---- Pattern-bank CRUD ----
@@ -351,7 +330,7 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
         }
         DrumGroupsMessage::GenerateGroup { group_id } => {
             if let Some(g) = find_group_mut(r, group_id) {
-                g.seed = g.seed.wrapping_add(1).wrapping_mul(0x9E3779B97F4A7C15);
+                g.seed = next_seed(g.seed);
                 generate_group_pattern(g);
             }
             materialize_drum_clips(r);
@@ -362,7 +341,7 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
             // refresh the whole bank, not just the focused pattern.
             for pattern in &mut r.compose.drum_patterns {
                 for g in &mut pattern.groups {
-                    g.seed = g.seed.wrapping_add(1).wrapping_mul(0x9E3779B97F4A7C15);
+                    g.seed = next_seed(g.seed);
                     generate_group_pattern(g);
                 }
             }
@@ -402,6 +381,20 @@ fn resolve_managing_pattern_id(r: &crate::Resonance) -> Option<u64> {
         .filter(|id| r.compose.drum_patterns.iter().any(|p| p.id == *id))
         .or(r.compose.default_drum_pattern_id)
         .or_else(|| r.compose.drum_patterns.first().map(|p| p.id))
+}
+
+/// Resolve the pattern the manager is editing (via
+/// [`resolve_managing_pattern_id`]) and run `f` against it. Returns
+/// `None` without running `f` when nothing resolves or the resolved id
+/// is stale — the resolve → find → early-return dance every group CRUD
+/// handler would otherwise repeat.
+fn with_managing_pattern<T>(
+    r: &mut crate::Resonance,
+    f: impl FnOnce(&mut DrumPattern) -> T,
+) -> Option<T> {
+    let pattern_id = resolve_managing_pattern_id(r)?;
+    let pattern = r.compose.find_pattern_mut(pattern_id)?;
+    Some(f(pattern))
 }
 
 /// Pattern that the section selection points at. Used to open the

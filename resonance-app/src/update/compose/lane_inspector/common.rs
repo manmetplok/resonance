@@ -7,6 +7,7 @@ use resonance_audio::types::TrackId;
 use resonance_music_theory::VocalParams;
 
 use crate::compose::{LaneGeneratorKind};
+use crate::util::bump_seed;
 
 /// Bump a lane's seed by `seed_mix + 1`. Centralised so the vocal regen
 /// path (which dispatches through `regenerate_lane`) can reuse the same
@@ -19,7 +20,7 @@ pub(super) fn bump_lane_seed(
 ) {
     if let Some(def) = r.compose.find_definition_mut(definition_id) {
         if let Some(cfg) = def.lane_generators.get_mut(&track_id) {
-            cfg.seed = cfg.seed.wrapping_add(seed_mix).wrapping_add(1);
+            cfg.seed = bump_seed(cfg.seed, seed_mix);
         }
     }
 }
