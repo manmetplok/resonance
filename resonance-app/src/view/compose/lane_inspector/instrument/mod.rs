@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 
-use iced::widget::{button, column, pick_list, text, text_input, Space};
-use iced::{Element, Length};
+use iced::widget::{button, column, container, pick_list, row, text, text_input, Space};
+use iced::{alignment, Element, Length};
 
 use resonance_audio::types::{TrackId, TrackType};
 
@@ -125,6 +125,7 @@ pub(in crate::view::compose::lane_inspector) fn instrument_body<'a>(
     definition: &'a SectionDefinitionState,
     track: &'a TrackState,
     vocal_bulk_lyrics: &'a HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
+    collapsed_panels: &std::collections::HashSet<crate::compose::RailPanelKey>,
 ) -> Element<'a, Message> {
     let definition_id = definition.id;
     let track_id = track.id;
@@ -173,12 +174,32 @@ pub(in crate::view::compose::lane_inspector) fn instrument_body<'a>(
     .padding([4, 6])
     .width(Length::Fill);
 
-    // Generator-specific controls
+    // Generator-specific controls. Bass / Melody / Pad parameter panels
+    // are collapsible cards keyed per track; their body isn't even
+    // built while folded. Vocal lanes get per-card collapse inside
+    // `vocal_controls` instead of one big fold here.
+    let gen_collapsed = collapsed_panels
+        .contains(&crate::compose::RailPanelKey::InstrumentGenerator(track_id));
     let gen_controls: Element<'a, Message> = match definition.lane_generators.get(&track_id) {
         Some(cfg) => match &cfg.kind {
-            LaneGeneratorKind::Bass(params) => bass_controls(definition_id, track_id, params),
-            LaneGeneratorKind::Melody(params) => melody_controls(definition_id, track_id, params),
-            LaneGeneratorKind::Pad(params) => pad_controls(definition_id, track_id, params),
+            LaneGeneratorKind::Bass(params) => generator_panel(
+                "Bass generator",
+                track_id,
+                gen_collapsed,
+                (!gen_collapsed).then(|| bass_controls(definition_id, track_id, params)),
+            ),
+            LaneGeneratorKind::Melody(params) => generator_panel(
+                "Melody generator",
+                track_id,
+                gen_collapsed,
+                (!gen_collapsed).then(|| melody_controls(definition_id, track_id, params)),
+            ),
+            LaneGeneratorKind::Pad(params) => generator_panel(
+                "Pad generator",
+                track_id,
+                gen_collapsed,
+                (!gen_collapsed).then(|| pad_controls(definition_id, track_id, params)),
+            ),
             LaneGeneratorKind::Drum(_) => manual_hint(),
             LaneGeneratorKind::Vocal(params) => super::vocal::vocal_controls(
                 definition_id,
@@ -186,6 +207,7 @@ pub(in crate::view::compose::lane_inspector) fn instrument_body<'a>(
                 params,
                 cfg.seed,
                 vocal_bulk_lyrics.get(&(definition_id, track_id)),
+                collapsed_panels,
             ),
         },
         None => manual_hint(),
@@ -255,4 +277,46 @@ fn manual_hint<'a>() -> Element<'a, Message> {
         .size(10)
         .color(theme::TEXT_DIM)
         .into()
+}
+
+/// Collapsible wrapper around the Bass / Melody / Pad parameter panel —
+/// warm dot + title header (matching the vocal rail cards) with the
+/// shared collapse caret. Keyed per track so folding one lane's
+/// generator doesn't fold another's. `body` is `None` when folded.
+fn generator_panel<'a>(
+    title: &'static str,
+    track_id: TrackId,
+    collapsed: bool,
+    body: Option<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let dot = container(Space::new().width(Length::Fixed(6.0)).height(Length::Fixed(6.0)))
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::WARM)),
+            border: iced::Border {
+                color: theme::WARM,
+                width: 0.0,
+                radius: 3.0.into(),
+            },
+            ..Default::default()
+        });
+    let title_left: Element<'a, Message> = row![
+        dot,
+        text(title)
+            .size(12.5)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::WARM),
+    ]
+    .spacing(8)
+    .align_y(alignment::Vertical::Center)
+    .into();
+    let head = crate::view::compose::lane_inspector::rail_panel_header(
+        title_left,
+        None,
+        crate::compose::RailPanelKey::InstrumentGenerator(track_id),
+        collapsed,
+    );
+    match body {
+        Some(body) => column![head, Space::new().height(8), body].spacing(0).into(),
+        None => head,
+    }
 }

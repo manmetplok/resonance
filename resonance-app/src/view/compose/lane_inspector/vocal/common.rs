@@ -76,14 +76,21 @@ pub(super) fn rail_dot_warm<'a>() -> Element<'a, Message> {
         .into()
 }
 
-pub(super) fn group_title<'a>(label: &'static str) -> Element<'a, Message> {
-    row![
+/// Clickable collapsible-card title: warm dot + label on the left, the
+/// shared collapse caret on the right. Clicking the row toggles `key`.
+pub(super) fn group_title<'a>(
+    label: &'static str,
+    key: crate::compose::RailPanelKey,
+    collapsed: bool,
+) -> Element<'a, Message> {
+    let left: Element<'a, Message> = row![
         rail_dot_warm(),
-        text(label).size(11).font(theme::UI_FONT_SEMIBOLD).color(theme::WARM),
+        text(label).size(12.5).font(theme::UI_FONT_SEMIBOLD).color(theme::WARM),
     ]
     .spacing(8)
     .align_y(alignment::Vertical::Center)
-    .into()
+    .into();
+    crate::view::compose::lane_inspector::rail_panel_header(left, None, key, collapsed)
 }
 
 pub(super) fn dim_label<'a>(s: impl Into<String>) -> Element<'a, Message> {
@@ -151,7 +158,7 @@ pub(super) fn chip<'a>(
 
 pub(super) fn group_card<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
     container(content)
-        .padding(12)
+        .padding(16)
         .width(Length::Fill)
         .style(|_| container::Style {
             background: Some(Background::Color(theme::BG_2)),

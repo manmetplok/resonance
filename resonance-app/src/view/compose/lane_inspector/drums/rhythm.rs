@@ -11,13 +11,24 @@ use crate::theme;
 
 use super::common::{field, rail_card, rail_dot};
 
-pub(super) fn rhythm_panel<'a>(group: &'a DrumGroup) -> Element<'a, Message> {
-    let title = row![
+pub(super) fn rhythm_panel<'a>(group: &'a DrumGroup, collapsed: bool) -> Element<'a, Message> {
+    let title_left: Element<'a, Message> = row![
         rail_dot(theme::WARM),
         text("Rhythm").size(12).color(theme::WARM),
     ]
     .spacing(8)
-    .align_y(alignment::Vertical::Center);
+    .align_y(alignment::Vertical::Center)
+    .into();
+    let title = crate::view::compose::lane_inspector::rail_panel_header(
+        title_left,
+        None,
+        crate::compose::RailPanelKey::DrumRhythm(group.id),
+        collapsed,
+    );
+
+    if collapsed {
+        return rail_card(title);
+    }
 
     let id = group.id;
     let density = slider(0.0..=1.0, group.density, move |v| {

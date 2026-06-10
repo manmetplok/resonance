@@ -30,7 +30,9 @@ pub(super) fn drum_body<'a>(
     drumroll_state: &'a DrumrollViewState,
     drum_groups: &'a [DrumGroup],
     _clip_id: Option<u64>,
+    collapsed_panels: &std::collections::HashSet<crate::compose::RailPanelKey>,
 ) -> Element<'a, Message> {
+    use crate::compose::RailPanelKey;
     let selected_group_id = drumroll_state
         .selected_group_id
         .or_else(|| drum_groups.first().map(|g| g.id));
@@ -47,15 +49,30 @@ pub(super) fn drum_body<'a>(
     let base_grid = drumroll_state.base_grid.max(2);
     let base_cycle = drumroll_state.base_cycle.max(1);
 
+    // Per-group collapse keys — folding "Kick · meter" must not fold
+    // "Snare · meter", so each card is keyed by its drum-group id. The
+    // group selector tabs and the Generate action row are navigation /
+    // actions, not content: always visible.
     column![
         group_selector(drum_groups, selected_group_id),
-        Space::new().height(12),
-        meter_panel(group, base_grid, base_cycle),
-        Space::new().height(12),
-        articulation_mix_panel(group),
-        Space::new().height(12),
-        rhythm_panel(group),
-        Space::new().height(12),
+        Space::new().height(18),
+        meter_panel(
+            group,
+            base_grid,
+            base_cycle,
+            collapsed_panels.contains(&RailPanelKey::DrumMeter(group.id)),
+        ),
+        Space::new().height(18),
+        articulation_mix_panel(
+            group,
+            collapsed_panels.contains(&RailPanelKey::DrumArticulation(group.id)),
+        ),
+        Space::new().height(18),
+        rhythm_panel(
+            group,
+            collapsed_panels.contains(&RailPanelKey::DrumRhythm(group.id)),
+        ),
+        Space::new().height(18),
         generate_panel(group),
     ]
     .spacing(0)

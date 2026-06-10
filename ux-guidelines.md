@@ -83,7 +83,8 @@ These are defined in `theme.rs` and must be used consistently. Do not hard-code 
 | `GLOBAL_TRACK_TEMPO_HEIGHT` | 40px | Tempo automation lane inside the expanded shelf |
 | `GLOBAL_TRACK_SIG_HEIGHT` | 28px | Time-signature lane inside the expanded shelf |
 | `GLOBAL_TRACK_GLYPH_SIZE` | 22px | Glyph tile next to each global-lane label |
-| `TRACK_HEADER_WIDTH` | 260px | Left-side track header column |
+| `TRACK_HEADER_WIDTH` | 280px | Left-side track header column |
+| `CLIP_LANE_INSET` | 10px | Vertical inset of clip cards inside a track lane |
 | `CLIP_EDGE_THRESHOLD` | 6px | Pixel radius that starts a trim instead of a move |
 
 A legacy alias `GLOBAL_TRACK_ROW_HEIGHT` resolves to the tempo-lane height for old call sites; prefer the per-lane constants in new code.
@@ -92,18 +93,20 @@ A legacy alias `GLOBAL_TRACK_ROW_HEIGHT` resolves to the tempo-lane height for o
 
 | Constant | Value | Usage |
 |----------|-------|-------|
-| `MIXER_STRIP_WIDTH` | 132px | Track channel strip |
+| `MIXER_STRIP_WIDTH` | 140px | Track channel strip |
 | `MASTER_STRIP_WIDTH` | 156px | Master bus strip |
 | `INSPECTOR_WIDTH` | 320px | Right-side inspector column |
-| `MIXER_STRIP_HEIGHT` | 460px | Fixed track-strip height — pins the fader, scrolls FX list inside |
-| `BUS_STRIP_HEIGHT` | 380px | Fixed bus-strip height (no instrument slot) |
+| `MIXER_STRIP_HEIGHT` | 440px | Fixed track-strip height — pins the fader, scrolls FX list inside |
+| `BUS_STRIP_HEIGHT` | 320px | Fixed bus-strip height (no instrument slot); sized with `MIXER_STRIP_HEIGHT` so both lanes fit the 1440×900 minimum window |
+| `MIXER_STRIP_GAP` | 16px | Gap between unrelated strips in a lane (parent + sub-track clusters stay flush) |
+| `MIXER_LANE_HPAD` | 26px | Horizontal lead-in/lead-out of the strip lanes |
 | `FADER_HEIGHT` | 120px | Vertical fader travel |
 
 ### Compose view
 
 | Constant | Value | Usage |
 |----------|-------|-------|
-| `COMPOSE_RAIL_WIDTH` | 280px | Right-rail column |
+| `COMPOSE_RAIL_WIDTH` | 324px | Right-rail column |
 
 ### Radius scale
 
@@ -154,6 +157,27 @@ The global tracks (tempo, signature, sections, chord progression) live in a **co
 - The caret-toggle hit zone covers the full header strip; clicking anywhere on the strip toggles unless the click lands on the `+` button on the right.
 - Chord-quality tints come from existing tokens (`ACCENT_DIM`, `WARM`, `BG_2` + `LINE`). Do not introduce new per-chord colors.
 - All lane heights are constants — never inline pixel numbers. If a lane needs to grow, change the constant.
+
+## Collapsible Panels
+
+Dense sections fold away behind the **same caret pattern as the global-tracks shelf**: a 12×12 caret tile (`view::controls::collapse_caret`, ▾ open / ▸ closed, 9px glyph in `TEXT_3`). Never draw an ad-hoc chevron.
+
+Collapsible surfaces and their state homes:
+
+- **Arrange — global-tracks shelf** (`viewport.global_tracks_expanded`, `UiMessage::ToggleGlobalTracks`).
+- **Mixer inspector groups** SIGNAL / ROUTING / CHAIN (`MixerUiState::collapsed_inspector_groups`, `UiMessage::ToggleMixerInspectorGroup`). Header row: uppercase title left, caret right, hairline below; the hairline stays when collapsed.
+- **Compose workspace group banners** SECTION / TRACKS (`ComposeState::{section,track}_lanes_collapsed`, `ComposeMessage::ToggleWorkspaceGroup`). The banner itself always stays visible; collapsing hides every lane under it.
+- **Compose right-rail panel cards** (`ComposeState::collapsed_rail_panels`, `ComposeMessage::ToggleRailPanel`, keyed by `RailPanelKey`). When collapsed, only the header row of the card remains; any right-side meta (e.g. "ABAB · 4 LINES" on Lyric draft) stays visible so context isn't lost.
+
+### Rules
+
+- Collapse state is **runtime UI state** — never persisted into project files, never undoable (`UndoAction::Skip`).
+- Everything defaults to **open**; state stores the *collapsed* set so the default is the empty set.
+- Dynamic panels (per drum group, per track) are keyed by stable ids (`RailPanelKey::DrumMeter(group_id)`, …) — never by list index.
+- The whole header row is the click target (not just the caret) and gets a hover state (`small_button_style` or equivalent).
+- Action rows (Generate buttons, group-selector tabs, the editing-context header) are navigation, not content — they don't collapse.
+- The collapsed branch should skip *building* the body, not merely hide it.
+- Performance: a live (audio-tick) readout must never sit inside an `iced::widget::lazy` region whose fingerprint omits it — the mixer inspector keeps SIGNAL outside the lazy ROUTING/CHAIN block, and collapse flags are hashed into the lazy fingerprint.
 
 ## Controls
 

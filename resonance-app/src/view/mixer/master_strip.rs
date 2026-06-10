@@ -40,7 +40,7 @@ impl crate::Resonance {
         .center_x(Length::Fill);
 
         // Plugin chain — every plugin is an effect.
-        let mut plugin_section = column![].spacing(2).width(Length::Fill);
+        let mut plugin_section = column![].spacing(4).width(Length::Fill);
         for plugin in &self.master_plugins {
             plugin_section =
                 plugin_section.push(self.view_plugin_slot_row(PluginOwner::Master, plugin, false));
@@ -116,8 +116,8 @@ impl crate::Resonance {
             fader_block,
             bounce_row,
         ]
-        .spacing(4)
-        .padding(8)
+        .spacing(6)
+        .padding([12, 10])
         .width(theme::MASTER_STRIP_WIDTH)
         .height(Length::Fill);
 

@@ -12,16 +12,30 @@ use crate::theme;
 
 use super::common::{rail_card, rail_dot, u8_color};
 
-pub(super) fn articulation_mix_panel<'a>(group: &'a DrumGroup) -> Element<'a, Message> {
+pub(super) fn articulation_mix_panel<'a>(
+    group: &'a DrumGroup,
+    collapsed: bool,
+) -> Element<'a, Message> {
     let color = u8_color(group.color);
-    let title = row![
+    let title_left: Element<'a, Message> = row![
         rail_dot(color),
         text(format!("{} · articulation mix", group.name))
             .size(12)
             .color(theme::WARM),
     ]
     .spacing(8)
-    .align_y(alignment::Vertical::Center);
+    .align_y(alignment::Vertical::Center)
+    .into();
+    let title = crate::view::compose::lane_inspector::rail_panel_header(
+        title_left,
+        None,
+        crate::compose::RailPanelKey::DrumArticulation(group.id),
+        collapsed,
+    );
+
+    if collapsed {
+        return rail_card(title);
+    }
 
     let total = group.total_weight().max(1) as f32;
     let mut stack = iced::widget::Row::new().spacing(0);

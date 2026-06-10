@@ -153,8 +153,21 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
         ..Default::default()
     });
 
-    // Position the popup just below the "+" button in the track header ruler area.
-    let top_pad = 48.0 + theme::RULER_HEIGHT + 2.0;
+    // Position the popup just below the "+" button, which lives at the
+    // right edge of the global-shelf header strip: window chrome +
+    // transport bar + ruler + (section band, when sections exist) +
+    // shelf header.
+    let section_band_h = if r.compose.placements.is_empty() {
+        0.0
+    } else {
+        theme::SECTION_BAND_HEIGHT
+    };
+    let top_pad = super::transport::CHROME_HEIGHT
+        + super::transport::TRANSPORT_HEIGHT
+        + theme::RULER_HEIGHT
+        + section_band_h
+        + theme::GLOBAL_SHELF_HEADER_HEIGHT
+        + 2.0;
     let positioned = container(menu_container)
         .width(Length::Fill)
         .height(Length::Fill)

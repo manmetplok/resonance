@@ -53,43 +53,53 @@ const DOUBLE_CLICK_MS: u128 = 350;
 pub const VOCAL_LANE_HEIGHT: f32 = 108.0;
 /// Vertical split: top portion shows lyrics, bottom shows the contour.
 pub(super) const LYRIC_BAND_HEIGHT: f32 = 42.0;
+/// Compact height for the placeholder row shown for vocal tracks that
+/// have no `Vocal` lane generator in this section yet. 64px is the
+/// height `lane_side::draw`'s pill/title stack is calibrated for, and
+/// the shorter row visually signals "nothing configured here".
+pub(super) const PLACEHOLDER_ROW_HEIGHT: f32 = 64.0;
 
 /// Build the vocal-lane stack. Returns an empty 0-height element when
-/// the section has no vocal-generator lanes.
+/// the project has no vocal tracks at all.
 ///
 /// Tracks with `TrackType::Vocal` that don't have a `Vocal` lane
-/// generator configured for this section are skipped entirely —
-/// fabricating default `VocalParams` (the previous behaviour) gave
+/// generator configured for this section render as a compact,
+/// selectable placeholder row instead of a full lyric/contour row —
+/// fabricating default `VocalParams` (the pre-40300a4 behaviour) gave
 /// the user visually wrong ranges (e.g. an alto staff for a soprano
-/// track that hadn't been wired up yet) and confused the contour
-/// fallback. A row only renders once the user has actually configured
-/// a vocal generator for the lane.
+/// track that hadn't been wired up yet), but skipping the track
+/// entirely (the 40300a4 behaviour) made it unreachable: with no lane
+/// to click there was no way to fire `SelectLane`, and the right-rail
+/// generator picker — the only place a vocal generator can be
+/// assigned — never opened. The placeholder restores selectability
+/// without inventing params.
 pub fn view<'a>(
     app: &'a Resonance,
     placement: &'a SectionPlacementState,
     definition: &'a SectionDefinitionState,
 ) -> Element<'a, Message> {
-    let vocal_tracks: Vec<(TrackId, &VocalParams)> = app
+    let mut vocal_tracks: Vec<(TrackId, &VocalParams)> = Vec::new();
+    let mut unconfigured: Vec<TrackId> = Vec::new();
+    for t in app
         .registry
         .tracks
         .iter()
         .filter(|t| t.track_type == TrackType::Vocal)
-        .filter_map(|t| {
-            let cfg = definition.lane_generators.get(&t.id)?;
-            let LaneGeneratorKind::Vocal(p) = &cfg.kind else {
-                return None;
-            };
-            Some((t.id, p))
-        })
-        .collect();
+    {
+        match definition.lane_generators.get(&t.id).map(|cfg| &cfg.kind) {
+            Some(LaneGeneratorKind::Vocal(p)) => vocal_tracks.push((t.id, p)),
+            _ => unconfigured.push(t.id),
+        }
+    }
 
-    if vocal_tracks.is_empty() {
+    if vocal_tracks.is_empty() && unconfigured.is_empty() {
         return container(iced::widget::Space::new().height(0))
             .width(Length::Fill)
             .into();
     }
 
-    let total_height = vocal_tracks.len() as f32 * VOCAL_LANE_HEIGHT;
+    let total_height = vocal_tracks.len() as f32 * VOCAL_LANE_HEIGHT
+        + unconfigured.len() as f32 * PLACEHOLDER_ROW_HEIGHT;
     let width = super::workspace_width(
         &app.tempo_map,
         placement.start_bar,
@@ -113,6 +123,7 @@ pub fn view<'a>(
     let canvas_prog = VocalLaneCanvas {
         tracks: &app.registry.tracks,
         vocal_tracks,
+        unconfigured,
         tempo_map: &app.tempo_map,
         start_bar: placement.start_bar,
         length_bars: definition.length_bars,
@@ -134,6 +145,10 @@ pub fn view<'a>(
 pub(super) struct VocalLaneCanvas<'a> {
     pub(super) tracks: &'a [TrackState],
     pub(super) vocal_tracks: Vec<(TrackId, &'a VocalParams)>,
+    /// Vocal tracks with no `Vocal` lane generator in this section.
+    /// Rendered as compact placeholder rows below the configured rows
+    /// so they stay selectable (see the module-level `view` docs).
+    pub(super) unconfigured: Vec<TrackId>,
     pub(super) tempo_map: &'a TempoMap,
     pub(super) start_bar: u32,
     pub(super) length_bars: u32,
@@ -165,12 +180,14 @@ impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
 
-        if bounds.width <= 0.0 || self.vocal_tracks.is_empty() {
+        if bounds.width <= 0.0
+            || (self.vocal_tracks.is_empty() && self.unconfigured.is_empty())
+        {
             return vec![frame.into_geometry()];
         }
 
@@ -185,6 +202,23 @@ impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
             self.draw_row(&mut frame, *track_id, params, row_rect);
         }
 
+        // Placeholder rows for unconfigured vocal tracks, stacked below
+        // the configured rows. Hover feedback comes from the cursor
+        // position — this canvas has no `canvas::Cache`, so the fill
+        // tracks the cursor without staleness.
+        let configured_h = self.vocal_tracks.len() as f32 * VOCAL_LANE_HEIGHT;
+        let cursor_pos = cursor.position_in(bounds);
+        for (idx, track_id) in self.unconfigured.iter().enumerate() {
+            let row_rect = Rectangle {
+                x: 0.0,
+                y: configured_h + idx as f32 * PLACEHOLDER_ROW_HEIGHT,
+                width: bounds.width,
+                height: PLACEHOLDER_ROW_HEIGHT,
+            };
+            let hovered = cursor_pos.is_some_and(|p| row_rect.contains(p));
+            self.draw_placeholder_row(&mut frame, *track_id, row_rect, hovered);
+        }
+
         vec![frame.into_geometry()]
     }
 
@@ -197,6 +231,21 @@ impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
     ) -> Option<canvas::Action<Message>> {
         if let iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
             let pos = cursor.position_in(bounds)?;
+
+            // Clicks below the configured rows land on a placeholder row
+            // (unconfigured vocal track). There is no derived clip and no
+            // params there — the only meaningful action is selecting the
+            // lane so the right-rail generator picker opens.
+            let configured_h = self.vocal_tracks.len() as f32 * VOCAL_LANE_HEIGHT;
+            if pos.y >= configured_h {
+                let idx = ((pos.y - configured_h) / PLACEHOLDER_ROW_HEIGHT) as usize;
+                let track_id = self.unconfigured.get(idx)?;
+                return Some(canvas::Action::publish(Message::Compose(
+                    ComposeMessage::SelectLane(SelectedLane::Instrument(*track_id)),
+                ))
+                .and_capture());
+            }
+
             let idx = (pos.y / VOCAL_LANE_HEIGHT) as usize;
             let (track_id, _) = self.vocal_tracks.get(idx)?;
 

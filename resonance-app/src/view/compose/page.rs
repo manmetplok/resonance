@@ -44,19 +44,6 @@ impl crate::Resonance {
 
         let body: Element<'_, Message> = match selected {
             Some((placement, definition)) => {
-                // The chord lane and the track rows share a beat grid. The
-                // track area reserves `NAME_COLUMN_WIDTH` on its left for the
-                // track name labels, so the chord lane is padded the same
-                // amount to keep bar 1 aligned in both.
-                let global_tracks_row = row![
-                    Space::new().width(Length::Fixed(tracks::NAME_COLUMN_WIDTH)),
-                    global_tracks::view(
-                        &self.tempo_map,
-                        placement.start_bar,
-                        definition.length_bars,
-                    ),
-                ];
-
                 let chords_selected =
                     matches!(self.compose.selected_lane, SelectedLane::Chords);
                 // Fixed workspace width — every lane (chord, tracks, drum,
@@ -69,29 +56,8 @@ impl crate::Resonance {
                     placement.start_bar,
                     definition.length_bars,
                 );
-                let scale_stripe = container(scale_stripe::view(definition))
-                    .width(Length::Fixed(ws_width))
-                    .padding([8, 12]);
-                let chord_lane = chord_lane::view(
-                    definition,
-                    &self.tempo_map,
-                    placement.start_bar,
-                    self.compose.selected_chord_id,
-                    chords_selected,
-                );
-
-                let editor: Element<'_, Message> = match self.compose.selected_chord_id {
-                    Some(chord_id) if definition.chords.iter().any(|c| c.id == chord_id) => {
-                        popover::view(definition, chord_id)
-                    }
-                    _ => container(Space::new().height(0))
-                        .width(Length::Fixed(ws_width))
-                        .into(),
-                };
-
-                let vocal_tracks = vocal_lane::view(self, placement, definition);
-                let synth_tracks = tracks::view(self, placement, definition);
-                let drum_tracks = drumroll::view(self, placement, definition);
+                let section_collapsed = self.compose.section_lanes_collapsed;
+                let tracks_collapsed = self.compose.track_lanes_collapsed;
 
                 let section_sub = format!(
                     "{} \u{00b7} {}\u{2013}{}",
@@ -99,65 +65,102 @@ impl crate::Resonance {
                     placement.start_bar + 1,
                     placement.start_bar + definition.length_bars,
                 );
-                let section_group =
-                    group_header("SECTION", section_sub, "2 lanes", GroupKind::Section);
+                let section_group = group_header(
+                    "SECTION",
+                    section_sub,
+                    "2 lanes",
+                    GroupKind::Section,
+                    !section_collapsed,
+                );
                 // Cached on `ComposeState` (refreshed when track
                 // membership changes) instead of re-filtering the
                 // registry every frame.
                 let track_count = self.compose.track_count;
                 let tracks_sub = format!("{} tracks \u{00b7} monophonic", track_count);
-                let tracks_group =
-                    group_header("TRACKS", tracks_sub, "", GroupKind::Tracks);
+                let tracks_group = group_header(
+                    "TRACKS",
+                    tracks_sub,
+                    "",
+                    GroupKind::Tracks,
+                    !tracks_collapsed,
+                );
 
-                let left_column: Element<'_, Message> = match self.compose.expanded_track_id {
-                    Some(track_id) if self.registry.tracks.iter().any(|t| t.id == track_id) => {
-                        let expanded = expanded_editor::view(self, track_id, placement, definition);
-                        let inner = column![
-                            section_group,
-                            scale_stripe,
-                            global_tracks_row,
-                            chord_lane,
-                            editor,
-                            tracks_group,
-                            vocal_tracks,
-                            synth_tracks,
-                            expanded
-                        ]
-                        .spacing(0)
-                        .width(Length::Fixed(ws_width));
-                        scrollable(inner)
-                            .direction(scrollable::Direction::Both {
-                                vertical: scrollable::Scrollbar::default(),
-                                horizontal: scrollable::Scrollbar::default(),
-                            })
-                            .height(Length::Fill)
-                            .width(Length::Fill)
-                            .into()
+                // Assemble the lane column. A collapsed group banner
+                // stays visible (so the summary keeps context, same as
+                // the Arrange global shelf) but its lanes are folded
+                // away entirely — and not even built that frame.
+                let mut inner = column![section_group].spacing(0).width(Length::Fixed(ws_width));
+                if !section_collapsed {
+                    // The chord lane and the track rows share a beat
+                    // grid. The track area reserves `NAME_COLUMN_WIDTH`
+                    // on its left for the track name labels, so the
+                    // global lanes are padded the same amount to keep
+                    // bar 1 aligned in both.
+                    let global_tracks_row = row![
+                        Space::new().width(Length::Fixed(tracks::NAME_COLUMN_WIDTH)),
+                        global_tracks::view(
+                            &self.tempo_map,
+                            placement.start_bar,
+                            definition.length_bars,
+                        ),
+                    ];
+                    let scale_stripe = container(scale_stripe::view(definition))
+                        .width(Length::Fixed(ws_width))
+                        .padding([8, 12]);
+                    let chord_lane = chord_lane::view(
+                        definition,
+                        &self.tempo_map,
+                        placement.start_bar,
+                        self.compose.selected_chord_id,
+                        chords_selected,
+                    );
+                    let editor: Element<'_, Message> = match self.compose.selected_chord_id {
+                        Some(chord_id)
+                            if definition.chords.iter().any(|c| c.id == chord_id) =>
+                        {
+                            popover::view(definition, chord_id)
+                        }
+                        _ => container(Space::new().height(0))
+                            .width(Length::Fixed(ws_width))
+                            .into(),
+                    };
+                    inner = inner
+                        .push(scale_stripe)
+                        .push(global_tracks_row)
+                        .push(chord_lane)
+                        .push(editor);
+                }
+                inner = inner.push(tracks_group);
+                if !tracks_collapsed {
+                    inner = inner
+                        .push(vocal_lane::view(self, placement, definition))
+                        .push(tracks::view(self, placement, definition));
+                    match self.compose.expanded_track_id {
+                        Some(track_id)
+                            if self.registry.tracks.iter().any(|t| t.id == track_id) =>
+                        {
+                            inner = inner.push(expanded_editor::view(
+                                self, track_id, placement, definition,
+                            ));
+                        }
+                        _ => {
+                            inner = inner.push(drumroll::view(self, placement, definition));
+                        }
                     }
-                    _ => {
-                        let inner = column![
-                            section_group,
-                            scale_stripe,
-                            global_tracks_row,
-                            chord_lane,
-                            editor,
-                            tracks_group,
-                            vocal_tracks,
-                            synth_tracks,
-                            drum_tracks
-                        ]
-                        .spacing(0)
-                        .width(Length::Fixed(ws_width));
-                        scrollable(inner)
-                            .direction(scrollable::Direction::Both {
-                                vertical: scrollable::Scrollbar::default(),
-                                horizontal: scrollable::Scrollbar::default(),
-                            })
-                            .height(Length::Fill)
-                            .width(Length::Fill)
-                            .into()
-                    }
-                };
+                }
+
+                // Workspace breathing room: pad around the fixed-width
+                // lane column (outside it, so the shared beat grid is
+                // shifted uniformly, never resized).
+                let left_column: Element<'_, Message> =
+                    scrollable(container(inner).padding([14, 20]))
+                        .direction(scrollable::Direction::Both {
+                            vertical: scrollable::Scrollbar::default(),
+                            horizontal: scrollable::Scrollbar::default(),
+                        })
+                        .height(Length::Fill)
+                        .width(Length::Fill)
+                        .into();
 
                 // Unified right-hand inspector panel: context-sensitive
                 // based on which lane is selected.
@@ -178,6 +181,7 @@ impl crate::Resonance {
                     clip_id_for_drum,
                     &self.table_registry,
                     &self.compose.vocal_bulk_lyrics,
+                    &self.compose.collapsed_rail_panels,
                 );
 
                 row![left_column, right_panel]

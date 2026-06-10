@@ -17,14 +17,15 @@ use crate::util::format_db;
 
 /// Build a small icon button with the icon centered in a fixed-size
 /// square. `size` is the icon glyph size in px; the button is sized at
-/// `size + 8` so a size=12 icon yields a 20×20 square with the glyph
-/// vertically + horizontally centered.
+/// `size + 10` so a size=12 icon yields a 22×22 square (the whitespace
+/// pass's mini-button cell) with the glyph vertically + horizontally
+/// centered.
 fn icon_button<'a>(
     glyph: char,
     color: iced::Color,
     size: u16,
 ) -> iced::widget::Container<'a, Message> {
-    let cell = (size + 8) as f32;
+    let cell = (size + 10) as f32;
     container(
         theme::icon(glyph)
             .size(f32::from(size))
@@ -125,7 +126,9 @@ pub fn fx_bypass_button<'a>(
     size: u16,
 ) -> iced::widget::Button<'a, Message> {
     let color = if bypassed { theme::ACCENT } else { theme::TEXT_3 };
-    let cell = (size + 8) as f32;
+    // Same `size + 10` cell as `icon_button` so the FX toggle lines up
+    // with its icon-button siblings.
+    let cell = (size + 10) as f32;
     let label = container(
         text("FX")
             .size(f32::from(size - 1))
@@ -173,6 +176,33 @@ pub fn bounce_button<'a>(
 /// Bus remove button — same style as delete, used on bus strips.
 pub fn bus_remove_button<'a>(bus_id: BusId, size: u16) -> iced::widget::Button<'a, Message> {
     delete_button(Message::Bus(BusMessage::RemoveBus(bus_id)), size)
+}
+
+/// Shared collapse caret — the same 12×12 caret tile the Arrange
+/// global-tracks shelf header uses (▾ when expanded, ▸ when collapsed,
+/// `TEXT_3`). Every collapsible header (mixer inspector groups, Compose
+/// workspace group banners, Compose rail panels) renders this so the
+/// fold affordance reads identically everywhere.
+pub fn collapse_caret<'a>(expanded: bool) -> Element<'a, Message> {
+    let caret = if expanded {
+        fa::CARET_DOWN
+    } else {
+        fa::CARET_RIGHT
+    };
+    // NB: fixed 12×12 with centered alignment — `center_x(Length::Fill)`
+    // would *resize* the container to Fill (it sets the width), which
+    // silently stretched the caret tile in earlier header rows.
+    container(
+        theme::icon(caret)
+            .size(9)
+            .color(theme::TEXT_3)
+            .line_height(LineHeight::Relative(1.0)),
+    )
+    .width(12)
+    .height(12)
+    .align_x(alignment::Horizontal::Center)
+    .align_y(alignment::Vertical::Center)
+    .into()
 }
 
 /// Convert linear amplitude to meter bar height (logarithmic/dB scale).

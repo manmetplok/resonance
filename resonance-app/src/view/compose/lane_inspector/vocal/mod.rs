@@ -95,22 +95,48 @@ pub(in crate::view::compose::lane_inspector) fn vocal_controls<'a>(
     params: &'a VocalParams,
     seed: u64,
     bulk_content: Option<&'a text_editor::Content>,
+    collapsed_panels: &std::collections::HashSet<crate::compose::RailPanelKey>,
 ) -> Element<'a, Message> {
-    let lyrics_group = lyrics_group(definition_id, track_id, params);
-    let draft_group = draft_group(definition_id, track_id, params, bulk_content);
-    let melody_group = melody_group(definition_id, track_id, params);
-    let voice_group = voice_group(definition_id, track_id, params);
+    use crate::compose::RailPanelKey;
+
+    // Each card collapses independently, keyed per track. The Generate
+    // group is an action row, not content — always visible.
+    let lyrics_group = lyrics_group(
+        definition_id,
+        track_id,
+        params,
+        collapsed_panels.contains(&RailPanelKey::VocalLyrics(track_id)),
+    );
+    let draft_group = draft_group(
+        definition_id,
+        track_id,
+        params,
+        bulk_content,
+        collapsed_panels.contains(&RailPanelKey::VocalDraft(track_id)),
+    );
+    let melody_group = melody_group(
+        definition_id,
+        track_id,
+        params,
+        collapsed_panels.contains(&RailPanelKey::VocalMelody(track_id)),
+    );
+    let voice_group = voice_group(
+        definition_id,
+        track_id,
+        params,
+        collapsed_panels.contains(&RailPanelKey::VocalVoice(track_id)),
+    );
     let generate_group = generate_group(definition_id, track_id, seed);
 
     column![
         lyrics_group,
-        Space::new().height(10),
+        Space::new().height(18),
         draft_group,
-        Space::new().height(10),
+        Space::new().height(18),
         melody_group,
-        Space::new().height(10),
+        Space::new().height(18),
         voice_group,
-        Space::new().height(10),
+        Space::new().height(18),
         generate_group,
     ]
     .spacing(0)

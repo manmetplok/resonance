@@ -11,15 +11,31 @@ use crate::theme;
 
 use super::common::{rail_card, rail_dot, section_head, u8_color, BEATS_PER_BAR};
 
-pub(super) fn meter_panel<'a>(group: &'a DrumGroup, base_grid: u8, base_cycle: u32) -> Element<'a, Message> {
+pub(super) fn meter_panel<'a>(
+    group: &'a DrumGroup,
+    base_grid: u8,
+    base_cycle: u32,
+    collapsed: bool,
+) -> Element<'a, Message> {
     let color = u8_color(group.color);
 
-    let title = row![
+    let title_left: Element<'a, Message> = row![
         rail_dot(color),
         text(format!("{} · meter", group.name)).size(12).color(theme::WARM),
     ]
     .spacing(8)
-    .align_y(alignment::Vertical::Center);
+    .align_y(alignment::Vertical::Center)
+    .into();
+    let title = crate::view::compose::lane_inspector::rail_panel_header(
+        title_left,
+        None,
+        crate::compose::RailPanelKey::DrumMeter(group.id),
+        collapsed,
+    );
+
+    if collapsed {
+        return rail_card(title);
+    }
 
     // Reference banner.
     let ref_label = format!(

@@ -54,7 +54,7 @@ impl crate::Resonance {
             .padding([2, 4]);
 
         // Plugin chain (all effects — no instrument slot on busses).
-        let mut plugin_section = column![].spacing(2).width(Length::Fill);
+        let mut plugin_section = column![].spacing(4).width(Length::Fill);
         for plugin in &bus.plugins {
             plugin_section = plugin_section.push(self.view_plugin_slot_row(
                 PluginOwner::Bus(bus_id),
@@ -129,8 +129,8 @@ impl crate::Resonance {
         .height(Length::Fill);
 
         let strip_content = column![bus_name, button_row, plugin_fill, fx_pan_block, fader_block,]
-            .spacing(4)
-            .padding(6)
+            .spacing(6)
+            .padding([12, 10])
             .width(theme::MIXER_STRIP_WIDTH)
             .height(Length::Fill);
 

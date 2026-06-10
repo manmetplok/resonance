@@ -6,7 +6,7 @@
 use crate::compose::ComposeMessage;
 use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
-use crate::state::{ClipEdge, LoopDragTarget, SelectedGlobalEvent, ViewMode};
+use crate::state::{ClipEdge, LoopDragTarget, MixerInspectorGroup, SelectedGlobalEvent, ViewMode};
 use resonance_audio::types::{
     BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
 };
@@ -305,6 +305,9 @@ pub enum UiMessage {
     CancelQuit,
     /// Toggle the global tracks area (tempo, time signature) in the arrange view.
     ToggleGlobalTracks,
+    /// Fold / unfold one of the mixer-inspector groups (SIGNAL /
+    /// ROUTING / CHAIN). Runtime UI state only.
+    ToggleMixerInspectorGroup(MixerInspectorGroup),
     /// Toggle MIDI clock send (engine acts as clock master).
     ToggleMidiClockSend,
     /// Pick the hardware port for MIDI clock send. `None` clears.

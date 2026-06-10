@@ -38,9 +38,13 @@ impl crate::Resonance {
         // them out). Sub-tracks are skipped in the outer iteration so
         // they only appear right after their parent. Each parent + its
         // sub-tracks is wrapped in a tight inner row (0 px spacing) so
-        // the cluster visually attaches; the outer row keeps 2 px
-        // between unrelated tracks.
-        let mut track_strip_row = row![].spacing(2);
+        // the cluster visually attaches; the outer row keeps
+        // `MIXER_STRIP_GAP` between unrelated tracks, and the lane gets
+        // a `MIXER_LANE_HPAD` lead-in so the first strip doesn't sit
+        // flush against the window edge.
+        let mut track_strip_row = row![]
+            .spacing(theme::MIXER_STRIP_GAP)
+            .padding([0.0, theme::MIXER_LANE_HPAD]);
         for track in sorted_tracks {
             if track.sub_track.is_some() {
                 // Already emitted by its parent's cluster (or skipped
@@ -105,7 +109,9 @@ impl crate::Resonance {
             .height(Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32));
 
         // -- Bottom row: bus strips + "+ Bus" button on the right. --
-        let mut bus_strip_row = row![].spacing(2);
+        let mut bus_strip_row = row![]
+            .spacing(theme::MIXER_STRIP_GAP)
+            .padding([0.0, theme::MIXER_LANE_HPAD]);
         for bus in sorted_busses {
             bus_strip_row = bus_strip_row.push(self.view_bus_strip(bus, available_plugins));
         }
@@ -256,7 +262,7 @@ impl crate::Resonance {
                         ..Default::default()
                     }
                 })
-                .padding([5, 8])
+                .padding([7, 9])
         } else {
             let label_color = if is_selected {
                 theme::TEXT_1
@@ -288,7 +294,7 @@ impl crate::Resonance {
                         ..Default::default()
                     }
                 })
-                .padding([4, 8])
+                .padding([5, 9])
         };
 
         let remove_msg = match owner {

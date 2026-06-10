@@ -18,9 +18,18 @@ use super::{field_label, section_header, MotifLenPick};
 /// preview card. Matches the design's "Section motif" panel.
 pub(super) fn motif_section_block<'a>(
     definition: &'a SectionDefinitionState,
+    collapsed: bool,
 ) -> Element<'a, Message> {
     let definition_id = definition.id;
     let params = *definition.motif_source.params();
+
+    if collapsed {
+        return section_header(
+            "Section motif",
+            crate::compose::RailPanelKey::SectionMotif,
+            true,
+        );
+    }
 
     let source_kind = if definition.motif_source.is_manual() {
         MotifSourceKind::Manual
@@ -51,7 +60,7 @@ pub(super) fn motif_section_block<'a>(
     .width(Length::Fill);
 
     let mut col = column![
-        section_header("Section motif"),
+        section_header("Section motif", crate::compose::RailPanelKey::SectionMotif, false),
         Space::new().height(10),
         field_label("SOURCE"),
         Space::new().height(4),

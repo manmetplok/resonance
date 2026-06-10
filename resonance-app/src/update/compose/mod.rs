@@ -104,6 +104,22 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             ensure_vocal_bulk_lyrics_for_selection(r);
         }
 
+        // Collapse toggles — runtime UI state, never persisted.
+        ComposeMessage::ToggleRailPanel(key) => {
+            let set = &mut r.compose.collapsed_rail_panels;
+            if !set.remove(&key) {
+                set.insert(key);
+            }
+        }
+        ComposeMessage::ToggleWorkspaceGroup(group) => match group {
+            crate::compose::WorkspaceGroup::Section => {
+                r.compose.section_lanes_collapsed = !r.compose.section_lanes_collapsed;
+            }
+            crate::compose::WorkspaceGroup::Tracks => {
+                r.compose.track_lanes_collapsed = !r.compose.track_lanes_collapsed;
+            }
+        },
+
         // Expanded piano-roll viewport
         ComposeMessage::ExpandTrack { track_id } => expand::handle_expand(r, track_id),
         ComposeMessage::CollapseTrack => expand::handle_collapse(r),

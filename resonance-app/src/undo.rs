@@ -583,6 +583,8 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | ComposeMessage::SelectChord { .. }
             | ComposeMessage::ClearChordSelection
             | ComposeMessage::SelectLane(_)
+            | ComposeMessage::ToggleRailPanel(_)
+            | ComposeMessage::ToggleWorkspaceGroup(_)
             | ComposeMessage::ExpandTrack { .. }
             | ComposeMessage::CollapseTrack
             | ComposeMessage::ExpandedScrollX(_)

@@ -128,6 +128,29 @@ impl Resonance {
         self.viewport.zoom = zoom;
     }
 
+    /// Test-only: push a track straight into the registry, bypassing the
+    /// engine round-trip, and refresh the compose track-count cache the
+    /// engine handlers would normally keep fresh. Used by the vocal
+    /// placeholder snapshot tests to add a `TrackType::Vocal` track that
+    /// has no lane-generator config.
+    #[doc(hidden)]
+    pub fn test_push_track(&mut self, track: state::TrackState) {
+        self.registry.next_track_order = self.registry.next_track_order.max(track.order + 1);
+        self.registry.tracks.push(track);
+        self.compose.refresh_track_count(&self.registry.tracks);
+    }
+
+    /// Test-only: remove a track's lane-generator config from every
+    /// compose section definition, turning a configured compose lane
+    /// back into an unconfigured one (placeholder row in the vocal
+    /// stack).
+    #[doc(hidden)]
+    pub fn test_remove_lane_generator(&mut self, track_id: resonance_audio::types::TrackId) {
+        for def in &mut self.compose.definitions {
+            def.lane_generators.remove(&track_id);
+        }
+    }
+
     /// Test-only: flip the project-active flag so the message gate in
     /// `gates_message` lets reducer-driven `MidiClipMessage` /
     /// `ClipMessage` traffic through. Demo seeding does this in the

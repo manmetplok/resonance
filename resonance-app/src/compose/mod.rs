@@ -22,9 +22,9 @@ pub use generate::{DeriveKind, GenerateParams};
 pub use lane_generator::{
     DrumVoiceMode, LaneGeneratorConfig, LaneGeneratorKind, LaneGeneratorKindTag,
 };
-pub use messages::ComposeMessage;
+pub use messages::{ComposeMessage, WorkspaceGroup};
 pub use section::{
     ChordState, EditSectionForm, NewSectionForm, SectionDefinitionState, SectionPlacementState,
     SelectedLane,
 };
-pub use state::ComposeState;
+pub use state::{ComposeState, RailPanelKey};

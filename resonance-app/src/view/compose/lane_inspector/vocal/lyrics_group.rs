@@ -23,8 +23,13 @@ pub(super) fn lyrics_group<'a>(
     definition_id: u64,
     track_id: TrackId,
     params: &'a VocalParams,
+    collapsed: bool,
 ) -> Element<'a, Message> {
-    let title = group_title("Lyrics");
+    let key = crate::compose::RailPanelKey::VocalLyrics(track_id);
+    let title = group_title("Lyrics", key, collapsed);
+    if collapsed {
+        return group_card(title);
+    }
 
     let theme_label = dim_label("Theme / prompt");
     let theme_input = text_input("e.g. fragile glass houses", &params.theme)

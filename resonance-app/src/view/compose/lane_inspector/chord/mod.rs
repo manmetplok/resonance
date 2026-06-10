@@ -82,18 +82,27 @@ impl std::fmt::Display for MotifLenPick {
 }
 
 // ---------------------------------------------------------------------------
-// Section header — uppercase letterspaced label with a bottom hairline.
+// Section header — clickable collapse row (label left, shared caret
+// right) with a bottom hairline. Clicking anywhere on it folds /
+// unfolds the panel body under it.
 // ---------------------------------------------------------------------------
 
-pub(super) fn section_header<'a>(title: &'static str) -> Element<'a, Message> {
+pub(super) fn section_header<'a>(
+    title: &'static str,
+    key: crate::compose::RailPanelKey,
+    collapsed: bool,
+) -> Element<'a, Message> {
+    let title_el: Element<'a, Message> = text(title)
+        .size(13)
+        .font(theme::UI_FONT_MEDIUM)
+        .color(theme::TEXT_1)
+        .into();
+    let head =
+        crate::view::compose::lane_inspector::rail_panel_header(title_el, None, key, collapsed);
     column![
-        text(title)
-            .size(13)
-            .font(theme::UI_FONT_MEDIUM)
-            .color(theme::TEXT_1),
-        Space::new().height(6),
-        Space::new().height(1)
-            .width(Length::Fill),
+        head,
+        Space::new().height(4),
+        Space::new().height(1).width(Length::Fill),
         crate::view::compose::lane_inspector::separator(),
     ]
     .spacing(0)

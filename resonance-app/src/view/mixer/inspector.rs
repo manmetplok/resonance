@@ -11,9 +11,10 @@ use iced::{alignment, Element, Length};
 use resonance_audio::types::{InputDeviceInfo, ScannedPlugin, TrackOutput, TrackType};
 
 use crate::message::*;
-use crate::state::TrackState;
+use crate::state::{MixerInspectorGroup, TrackState};
 use crate::theme;
 use crate::util::format_pan;
+use crate::view::controls::collapse_caret;
 
 use super::picks::{MidiChannelChoice, MidiPickerChoice, OutputChoice, PortChoice};
 use crate::view::ui_caches::ChoiceList;
@@ -41,21 +42,74 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
     let selected_id = r.interaction.selected_track;
     let selected = selected_id.and_then(|id| r.registry.tracks.iter().find(|t| t.id == id));
 
-    // Fingerprint everything the inspector reads except the volatile
-    // level fields (PEAK readout in SIGNAL stays accurate via the
-    // per-frame `signal_group` outside this lazy block).
-    let fp = inspector_fingerprint(r, selected);
-    let body = iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
-        match selected {
-            Some(track) => render_track_inner(r, track),
-            None => render_empty(),
+    let body: Element<'a, Message> = match selected {
+        Some(track) => {
+            let signal_collapsed = r
+                .mixer
+                .collapsed_inspector_groups
+                .contains(&MixerInspectorGroup::Signal);
+            let routing_collapsed = r
+                .mixer
+                .collapsed_inspector_groups
+                .contains(&MixerInspectorGroup::Routing);
+            let chain_collapsed = r
+                .mixer
+                .collapsed_inspector_groups
+                .contains(&MixerInspectorGroup::Chain);
+
+            let header = column![
+                text("INSPECTOR")
+                    .size(10)
+                    .font(theme::UI_FONT_SEMIBOLD)
+                    .color(theme::TEXT_3),
+                Space::new().height(2),
+                text(track.name.clone())
+                    .size(17)
+                    .font(theme::UI_FONT_MEDIUM)
+                    .color(theme::TEXT_1),
+            ]
+            .spacing(0);
+
+            // SIGNAL stays outside the lazy region: its PEAK tile reads
+            // the per-tick track levels, which the fingerprint below
+            // deliberately omits (see ui-work.md §11.2 — never key a
+            // lazy region without the live data it renders).
+            let signal = signal_group(track, signal_collapsed);
+
+            // ROUTING + CHAIN only change on slow events (device lists,
+            // routing edits, chain edits, collapse toggles) — all hashed
+            // into the fingerprint, so the cached tree is reused across
+            // audio ticks.
+            let fp = inspector_fingerprint(r, track, routing_collapsed, chain_collapsed);
+            let lazy_groups =
+                iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
+                    let mut col = column![routing_group(r, track, routing_collapsed)].spacing(0);
+                    col = col
+                        .push(Space::new().height(18))
+                        .push(chain_group(r, track, chain_collapsed));
+                    col.into()
+                });
+
+            iced::widget::scrollable(
+                column![
+                    header,
+                    Space::new().height(18),
+                    signal,
+                    Space::new().height(18),
+                    lazy_groups,
+                ]
+                .spacing(0),
+            )
+            .height(Length::Fill)
+            .into()
         }
-    });
+        None => render_empty(),
+    };
 
     container(body)
         .width(Length::Fixed(theme::INSPECTOR_WIDTH))
         .height(Length::Fill)
-        .padding(18)
+        .padding(26)
         .style(|_theme| container::Style {
             background: Some(iced::Background::Color(theme::BG_1)),
             border: iced::Border {
@@ -68,38 +122,38 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
         .into()
 }
 
-/// Hash every inspector-visible field except the live levels. The lazy
+/// Hash every field the lazy ROUTING + CHAIN groups read. The lazy
 /// widget compares this across frames — when nothing has changed, the
-/// cached widget tree is reused (which is the resize hot path).
+/// cached widget tree is reused (which is the resize hot path). The
+/// live level fields are intentionally absent: the SIGNAL group renders
+/// them per-frame *outside* the lazy region.
 fn inspector_fingerprint(
     r: &crate::Resonance,
-    selected: Option<&TrackState>,
+    t: &TrackState,
+    routing_collapsed: bool,
+    chain_collapsed: bool,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     use std::rc::Rc;
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    match selected {
-        None => 0u8.hash(&mut h),
-        Some(t) => {
-            1u8.hash(&mut h);
-            t.id.hash(&mut h);
-            t.name.hash(&mut h);
-            t.track_type.hash(&mut h);
-            t.sub_track.hash(&mut h);
-            t.input_device_name.hash(&mut h);
-            t.input_port_index.hash(&mut h);
-            t.mono.hash(&mut h);
-            t.midi_input_device.hash(&mut h);
-            t.midi_input_channel.hash(&mut h);
-            t.midi_output_device.hash(&mut h);
-            t.midi_output_channel.hash(&mut h);
-            t.output.hash(&mut h);
-            t.pan.to_bits().hash(&mut h);
-            for p in &t.plugins {
-                p.instance_id.hash(&mut h);
-                p.plugin_name.hash(&mut h);
-            }
-        }
+    routing_collapsed.hash(&mut h);
+    chain_collapsed.hash(&mut h);
+    t.id.hash(&mut h);
+    t.name.hash(&mut h);
+    t.track_type.hash(&mut h);
+    t.sub_track.hash(&mut h);
+    t.input_device_name.hash(&mut h);
+    t.input_port_index.hash(&mut h);
+    t.mono.hash(&mut h);
+    t.midi_input_device.hash(&mut h);
+    t.midi_input_channel.hash(&mut h);
+    t.midi_output_device.hash(&mut h);
+    t.midi_output_channel.hash(&mut h);
+    t.output.hash(&mut h);
+    t.pan.to_bits().hash(&mut h);
+    for p in &t.plugins {
+        p.instance_id.hash(&mut h);
+        p.plugin_name.hash(&mut h);
     }
     // Cache pointers — when these Rcs are replaced, the inspector
     // needs to redraw with the new options.
@@ -124,39 +178,6 @@ fn inspector_fingerprint(
     h.finish()
 }
 
-/// Build the inspector body assuming a track is selected. Returns a
-/// `'static` element so the lazy widget can cache it across frames.
-fn render_track_inner(r: &crate::Resonance, track: &TrackState) -> Element<'static, Message> {
-    let header = column![
-        text("INSPECTOR")
-            .size(10)
-            .font(theme::UI_FONT_SEMIBOLD)
-            .color(theme::TEXT_3),
-        Space::new().height(2),
-        text(track.name.clone())
-            .size(17)
-            .font(theme::UI_FONT_MEDIUM)
-            .color(theme::TEXT_1),
-    ]
-    .spacing(0);
-
-    let scroll = iced::widget::scrollable(
-        column![
-            header,
-            Space::new().height(16),
-            signal_group(track),
-            Space::new().height(16),
-            routing_group(r, track),
-            Space::new().height(16),
-            chain_group(r, track),
-        ]
-        .spacing(0),
-    )
-    .height(Length::Fill);
-
-    scroll.into()
-}
-
 fn render_empty() -> Element<'static, Message> {
     column![
         text("INSPECTOR")
@@ -176,7 +197,11 @@ fn render_empty() -> Element<'static, Message> {
 // SIGNAL group — 2×2 stat tiles.
 // ---------------------------------------------------------------------------
 
-fn signal_group(track: &TrackState) -> Element<'static, Message> {
+fn signal_group(track: &TrackState, collapsed: bool) -> Element<'static, Message> {
+    if collapsed {
+        return group_header("SIGNAL", MixerInspectorGroup::Signal, true);
+    }
+
     let peak = track.level_l.max(track.level_r);
     let peak_db = if peak < 1e-4 {
         "−∞ dB".to_string()
@@ -206,8 +231,8 @@ fn signal_group(track: &TrackState) -> Element<'static, Message> {
     .align_y(alignment::Vertical::Center);
 
     column![
-        group_title("SIGNAL"),
-        Space::new().height(8),
+        group_header("SIGNAL", MixerInspectorGroup::Signal, false),
+        Space::new().height(10),
         row1,
         Space::new().height(10),
         row2,
@@ -249,7 +274,15 @@ fn stat_tile(label: &'static str, value: String) -> Element<'static, Message> {
 // ROUTING group — functional pickers + read-only send rows.
 // ---------------------------------------------------------------------------
 
-fn routing_group(r: &crate::Resonance, track: &TrackState) -> Element<'static, Message> {
+fn routing_group(
+    r: &crate::Resonance,
+    track: &TrackState,
+    collapsed: bool,
+) -> Element<'static, Message> {
+    if collapsed {
+        return group_header("ROUTING", MixerInspectorGroup::Routing, true);
+    }
+
     let input_block: Element<'static, Message> = match track.track_type {
         TrackType::Audio => audio_input_block(r, track),
         TrackType::Instrument | TrackType::Vocal => midi_input_block(r, track),
@@ -263,7 +296,7 @@ fn routing_group(r: &crate::Resonance, track: &TrackState) -> Element<'static, M
         };
 
     column![
-        group_title("ROUTING"),
+        group_header("ROUTING", MixerInspectorGroup::Routing, false),
         Space::new().height(10),
         input_block,
         Space::new().height(8),
@@ -520,8 +553,18 @@ fn routing_row(label: &'static str, value: &'static str, muted: bool) -> Element
 // CHAIN group — plugin rows + a functional "+ Add to chain" picker.
 // ---------------------------------------------------------------------------
 
-fn chain_group(r: &crate::Resonance, track: &TrackState) -> Element<'static, Message> {
-    let mut col = column![group_title("CHAIN"), Space::new().height(8)].spacing(6);
+fn chain_group(
+    r: &crate::Resonance,
+    track: &TrackState,
+    collapsed: bool,
+) -> Element<'static, Message> {
+    if collapsed {
+        return group_header("CHAIN", MixerInspectorGroup::Chain, true);
+    }
+
+    // 10px column spacing doubles as the title → first-row gap, so no
+    // explicit spacer is needed after the group title.
+    let mut col = column![group_header("CHAIN", MixerInspectorGroup::Chain, false)].spacing(10);
 
     // Instrument tracks render the instrument slot (plugin index 0) plus
     // any FX rows after it. Audio tracks render every plugin as an FX
@@ -635,15 +678,34 @@ fn chain_row(name: &str, is_instrument_slot: bool) -> Element<'static, Message> 
 }
 
 // ---------------------------------------------------------------------------
-// Group title with hairline below.
+// Group header — clickable collapse row (title left, caret right) with a
+// hairline below. Clicking anywhere on the row folds / unfolds the group.
 // ---------------------------------------------------------------------------
 
-fn group_title(title: &'static str) -> Element<'static, Message> {
+fn group_header(
+    title: &'static str,
+    group: MixerInspectorGroup,
+    collapsed: bool,
+) -> Element<'static, Message> {
+    let head = iced::widget::button(
+        row![
+            text(title)
+                .size(10)
+                .font(theme::UI_FONT_SEMIBOLD)
+                .color(theme::TEXT_3),
+            Space::new().width(Length::Fill),
+            collapse_caret(!collapsed),
+        ]
+        .align_y(alignment::Vertical::Center)
+        .width(Length::Fill),
+    )
+    .padding([2, 0])
+    .width(Length::Fill)
+    .style(|_theme, status| theme::small_button_style(status))
+    .on_press(Message::Ui(UiMessage::ToggleMixerInspectorGroup(group)));
+
     column![
-        text(title)
-            .size(10)
-            .font(theme::UI_FONT_SEMIBOLD)
-            .color(theme::TEXT_3),
+        head,
         Space::new().height(4),
         container(Space::new().width(Length::Fill))
             .height(1)

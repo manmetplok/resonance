@@ -1,5 +1,5 @@
-//! Top of the application — the window chrome (48px) and the transport
-//! bar (56px). The chrome carries brand identity, the project title, and
+//! Top of the application — the window chrome (62px) and the transport
+//! bar (74px). The chrome carries brand identity, the project title, and
 //! the segmented view selector. The transport bar carries playback
 //! controls, the BPM / time-sig / position readouts, and the master
 //! stereo meter.
@@ -15,8 +15,10 @@ use crate::state::ViewMode;
 use crate::theme::{self, fa};
 use crate::Resonance;
 
-const CHROME_HEIGHT: f32 = 48.0;
-const TRANSPORT_HEIGHT: f32 = 56.0;
+pub(crate) const CHROME_HEIGHT: f32 = 62.0;
+pub(crate) const TRANSPORT_HEIGHT: f32 = 74.0;
+/// Horizontal lead-in/lead-out padding of both shell rows.
+const SHELL_HPAD: f32 = 30.0;
 
 pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
     column![view_chrome(r), view_playback_bar(r)]
@@ -66,16 +68,11 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         .color(theme::TEXT_3)
         .line_height(LineHeight::Relative(1.0));
 
-    let left = row![
-        brand,
-        Space::new().width(16),
-        separator,
-        Space::new().width(8),
-        title,
-        Space::new().width(8),
-        dirty_label,
-    ]
-    .align_y(alignment::Vertical::Center);
+    // 14px between every element of the title cluster — brand / "/" /
+    // project title / dirty label stay on one line.
+    let left = row![brand, separator, title, dirty_label]
+        .spacing(14)
+        .align_y(alignment::Vertical::Center);
 
     let tabs = container(
         row![
@@ -83,8 +80,8 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
             tab_button("Mixer", ViewMode::Mixer, r.view_mode),
             tab_button("Compose", ViewMode::Compose, r.view_mode),
         ]
-        .spacing(2)
-        .padding(3),
+        .spacing(3)
+        .padding(4),
     )
     .style(|_theme| container::Style {
         background: Some(iced::Background::Color(theme::BG_2)),
@@ -104,15 +101,15 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         .style(|_theme, status| theme::ghost_button_style(status));
 
     let chrome_row = row![
-        Space::new().width(14),
+        Space::new().width(SHELL_HPAD),
         left,
         Space::new().width(Length::Fill),
         tabs,
         Space::new().width(Length::Fill),
         settings_btn,
-        Space::new().width(14),
+        Space::new().width(SHELL_HPAD),
     ]
-    .spacing(8)
+    .spacing(0)
     .align_y(alignment::Vertical::Center)
     .height(CHROME_HEIGHT);
 
@@ -144,7 +141,7 @@ fn tab_button<'a>(
     )
     .on_press(Message::Ui(UiMessage::SwitchView(mode)))
     .style(move |_theme, status| theme::tab_button_style(active, status))
-    .padding([6, 14])
+    .padding([7, 18])
 }
 
 // ---------------------------------------------------------------------------
@@ -179,13 +176,11 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
         play_pause,
         rec_btn,
         next_btn,
-        Space::new().width(8),
         vertical_divider(),
-        Space::new().width(8),
         loop_btn,
         metronome_btn,
     ]
-    .spacing(4)
+    .spacing(8)
     .align_y(alignment::Vertical::Center);
 
     // Stat groups (POSITION | TIME | BPM | SIG | KEY | LOOP).
@@ -194,14 +189,14 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
         .font(theme::MONO_FONT)
         .color(theme::ACCENT_SOFT)
         .line_height(LineHeight::Relative(1.0));
-    let position_block = stat_block("POSITION", pos_value, 88).align_x(alignment::Horizontal::Center);
+    let position_block = stat_block("POSITION", pos_value, 108).align_x(alignment::Horizontal::Center);
 
     let time_value = text(labels.time.as_str())
         .size(13)
         .font(theme::MONO_FONT)
         .color(theme::TEXT_1)
         .line_height(LineHeight::Relative(1.0));
-    let time_block = stat_block("TIME", time_value, 100);
+    let time_block = stat_block("TIME", time_value, 120);
 
     let bpm_input = text_input("120", &r.transport.bpm_input)
         .on_input(|s| Message::Transport(TransportMessage::SetBpmText(s)))
@@ -212,7 +207,7 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
         .align_x(alignment::Horizontal::Center)
         .padding(0)
         .style(theme::borderless_text_input_style);
-    let bpm_block = stat_block("BPM", bpm_input, 64);
+    let bpm_block = stat_block("BPM", bpm_input, 84);
 
     let sig_value = mouse_area(
         text(labels.sig.as_str())
@@ -222,14 +217,14 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
             .line_height(LineHeight::Relative(1.0)),
     )
     .on_press(Message::Transport(TransportMessage::CycleTimeSignature));
-    let sig_block = stat_block("SIG", sig_value, 56);
+    let sig_block = stat_block("SIG", sig_value, 76);
 
     let key_value = text(labels.key.as_str())
         .size(13)
         .font(theme::UI_FONT_MEDIUM)
         .color(theme::TEXT_1)
         .line_height(LineHeight::Relative(1.0));
-    let key_block = stat_block("KEY", key_value, 64);
+    let key_block = stat_block("KEY", key_value, 84);
 
     let loop_value = text(labels.loop_text.as_str())
         .size(13)
@@ -240,7 +235,7 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
             theme::TEXT_3
         })
         .line_height(LineHeight::Relative(1.0));
-    let loop_block = stat_block("LOOP", loop_value, 80);
+    let loop_block = stat_block("LOOP", loop_value, 100);
 
     let center = row![
         position_block,
@@ -270,18 +265,18 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
         .color(theme::TEXT_3)
         .line_height(LineHeight::Relative(1.0));
 
-    let right = row![meter, Space::new().width(14), cpu_text]
+    let right = row![meter, Space::new().width(20), cpu_text]
         .spacing(0)
         .align_y(alignment::Vertical::Center);
 
     let row = row![
-        Space::new().width(14),
+        Space::new().width(SHELL_HPAD),
         left,
         Space::new().width(Length::Fill),
         center,
         Space::new().width(Length::Fill),
         right,
-        Space::new().width(14),
+        Space::new().width(SHELL_HPAD),
     ]
     .spacing(0)
     .align_y(alignment::Vertical::Center)
@@ -442,7 +437,7 @@ fn stat_block<'a>(
 
     container(body)
         .width(Length::Fixed(width as f32))
-        .padding([4, 12])
+        .padding([4, 22])
 }
 
 // ---------------------------------------------------------------------------

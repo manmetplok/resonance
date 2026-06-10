@@ -50,16 +50,7 @@ fn denominator_options() -> &'static [Denominator] {
 /// count badge ("3" = chords + tempo + sig). Clicking anywhere on the
 /// strip toggles the shelf open / closed.
 pub(super) fn build_global_shelf_header(expanded: bool) -> Element<'static, Message> {
-    let caret = if expanded {
-        fa::CARET_DOWN
-    } else {
-        fa::CARET_RIGHT
-    };
-    let caret_el = container(theme::icon(caret).size(9).color(theme::TEXT_3))
-        .width(12)
-        .height(12)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill);
+    let caret_el = crate::view::controls::collapse_caret(expanded);
 
     let global_tag = text("GLOBAL")
         .size(10)

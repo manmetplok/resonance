@@ -20,8 +20,13 @@ pub(super) fn voice_group<'a>(
     definition_id: u64,
     track_id: TrackId,
     params: &'a VocalParams,
+    collapsed: bool,
 ) -> Element<'a, Message> {
-    let title = group_title("Voice & delivery");
+    let key = crate::compose::RailPanelKey::VocalVoice(track_id);
+    let title = group_title("Voice & delivery", key, collapsed);
+    if collapsed {
+        return group_card(title);
+    }
 
     let mut timbre_row = row![].spacing(4);
     for t in VocalTimbre::ALL.iter().copied() {

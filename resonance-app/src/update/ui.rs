@@ -50,6 +50,12 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         UiMessage::ToggleGlobalTracks => {
             r.viewport.global_tracks_expanded = !r.viewport.global_tracks_expanded;
         }
+        UiMessage::ToggleMixerInspectorGroup(group) => {
+            let set = &mut r.mixer.collapsed_inspector_groups;
+            if !set.remove(&group) {
+                set.insert(group);
+            }
+        }
         UiMessage::ToggleMidiClockSend => {
             r.midi_clock_send_enabled = !r.midi_clock_send_enabled;
             let _ = r.engine.send(AudioCommand::SetMidiClockOutput {

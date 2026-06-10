@@ -43,7 +43,7 @@ impl crate::Resonance {
         let is_collapsed =
             has_sub_tracks && !self.mixer.expanded_sub_track_parents.contains(&track.id);
 
-        // Track names that overflow the 132 px strip get an ellipsis so
+        // Track names that overflow the 140 px strip get an ellipsis so
         // they don't push onto a second line. Wrapping::None alone isn't
         // enough — Iced still wraps when the parent has finite width.
         // Truncate first, then clip in a width-Fill container.
@@ -136,7 +136,7 @@ impl crate::Resonance {
             record_arm_button(track.record_armed, track.id, 12),
             monitor_button(track.monitor_enabled, track.id, 12),
         ]
-        .spacing(2)
+        .spacing(5)
         .align_y(alignment::Vertical::Center);
 
         let mut utility_row = row![
@@ -147,7 +147,7 @@ impl crate::Resonance {
                 11,
             ),
         ]
-        .spacing(2)
+        .spacing(5)
         .align_y(alignment::Vertical::Center);
         if track.track_type == TrackType::Instrument {
             utility_row = utility_row.push(bounce_button(track.id, bounce_enabled, 11));
@@ -156,16 +156,16 @@ impl crate::Resonance {
         // Two stacked rows of icon buttons. Iced's column macro collapses
         // when height is unconstrained inside a strip column whose total
         // height is Length::Fill, so we pin a fixed height that fits the
-        // 20+19+spacing block.
+        // 22+21+spacing block.
         let button_row: Element<'_, Message> = container(
             column![
                 container(primary_row).center_x(Length::Fill),
                 container(utility_row).center_x(Length::Fill),
             ]
-            .spacing(2),
+            .spacing(3),
         )
         .width(Length::Fill)
-        .height(Length::Fixed(48.0))
+        .height(Length::Fixed(54.0))
         .padding([2, 0])
         .into();
 
@@ -212,7 +212,7 @@ impl crate::Resonance {
         // instrument tracks. Audio tracks render every plugin here.
         // Built into its own column so we can wrap it in a vertical
         // scrollable below.
-        let mut fx_column = column![].spacing(2).width(Length::Fill);
+        let mut fx_column = column![].spacing(4).width(Length::Fill);
         let fx_iter: Box<dyn Iterator<Item = &PluginSlotState>> = if is_instrument_track {
             Box::new(track.plugins.iter().skip(1))
         } else {
@@ -295,7 +295,7 @@ impl crate::Resonance {
         .width(Length::Fill)
         .height(Length::Fill);
 
-        let mut plugin_column = column![].spacing(2).width(Length::Fill).height(Length::Fill);
+        let mut plugin_column = column![].spacing(4).width(Length::Fill).height(Length::Fill);
         if let Some(inst) = instrument_section {
             plugin_column = plugin_column.push(inst);
             plugin_column = plugin_column
@@ -340,8 +340,8 @@ impl crate::Resonance {
                 fx_pan_block,
                 fader_block,
             ]
-            .spacing(4)
-            .width(theme::MIXER_STRIP_WIDTH - 12.0)
+            .spacing(6)
+            .width(theme::MIXER_STRIP_WIDTH - 20.0)
             .height(Length::Fill);
 
             let v_sep = container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
@@ -353,8 +353,8 @@ impl crate::Resonance {
 
             let strip_content = row![left_col, v_sep, right_col]
                 .height(Length::Fill)
-                .padding(6)
-                .width(theme::MIXER_STRIP_WIDTH + right_col_w + 12.0);
+                .padding([12, 10])
+                .width(theme::MIXER_STRIP_WIDTH + right_col_w + 20.0);
 
             mouse_area(
                 container(strip_content)
@@ -371,8 +371,8 @@ impl crate::Resonance {
                 fx_pan_block,
                 fader_block,
             ]
-            .spacing(4)
-            .padding(6)
+            .spacing(6)
+            .padding([12, 10])
             .width(theme::MIXER_STRIP_WIDTH)
             .height(Length::Fill);
 

@@ -2,7 +2,7 @@
 //! Owns section definitions, placements, the chord lane, the drumroll
 //! editor state, and the table of derived MIDI clips.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use resonance_audio::types::{ClipId, TrackId};
 use resonance_music_theory::{MelodyParams, MotifParams, MotifSource};
@@ -77,6 +77,36 @@ impl VocalAudioRegistry {
     }
 }
 
+/// Stable identity of one collapsible right-rail panel card in the
+/// Compose view. Keys [`ComposeState::collapsed_rail_panels`]. Dynamic
+/// panels (per drum group, per track) carry their owning id so collapse
+/// state survives list reordering — never key these by index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RailPanelKey {
+    /// Section rail — "Scale" card (chords lane selected).
+    Scale,
+    /// Section rail — "Chord generator" card.
+    ChordGenerator,
+    /// Section rail — "Section motif" card.
+    SectionMotif,
+    /// Drum rail — "{group} · meter" card, keyed by drum-group id.
+    DrumMeter(u64),
+    /// Drum rail — "{group} · articulation mix" card, keyed by group id.
+    DrumArticulation(u64),
+    /// Drum rail — "Rhythm" card, keyed by drum-group id.
+    DrumRhythm(u64),
+    /// Instrument rail — "Bass/Melody/Pad generator" card, keyed by track.
+    InstrumentGenerator(TrackId),
+    /// Vocal rail — "Lyrics" card, keyed by track.
+    VocalLyrics(TrackId),
+    /// Vocal rail — "Lyric draft" card, keyed by track.
+    VocalDraft(TrackId),
+    /// Vocal rail — "Melody" card, keyed by track.
+    VocalMelody(TrackId),
+    /// Vocal rail — "Voice & delivery" card, keyed by track.
+    VocalVoice(TrackId),
+}
+
 #[derive(Debug)]
 pub struct ComposeState {
     pub definitions: Vec<SectionDefinitionState>,
@@ -149,6 +179,16 @@ pub struct ComposeState {
     /// picker source. Loaded once on construction; mutations come via the
     /// manager only.
     pub kit_pads: Vec<KitPadInfo>,
+    /// Right-rail panel cards the user has folded shut. Runtime UI
+    /// state — empty by default (every panel open), never persisted.
+    pub collapsed_rail_panels: HashSet<RailPanelKey>,
+    /// Whether the SECTION workspace group banner is collapsed (hides
+    /// the scale stripe, global lanes row, and chord lane). Runtime UI
+    /// state, not persisted.
+    pub section_lanes_collapsed: bool,
+    /// Whether the TRACKS workspace group banner is collapsed (hides
+    /// every vocal / synth / drum lane). Runtime UI state, not persisted.
+    pub track_lanes_collapsed: bool,
     /// Cached count of top-level (non-sub) Instrument + Vocal tracks,
     /// shown in the Compose TRACKS group header. Maintained by
     /// [`ComposeState::refresh_track_count`] at every point where track
@@ -195,6 +235,9 @@ impl Default for ComposeState {
             drum_patterns,
             default_drum_pattern_id: default_pattern_id,
             kit_pads: default_kit_pads(),
+            collapsed_rail_panels: HashSet::new(),
+            section_lanes_collapsed: false,
+            track_lanes_collapsed: false,
             track_count: 0,
         }
     }

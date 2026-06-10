@@ -11,7 +11,12 @@ use std::collections::HashMap;
 use resonance_audio::types::TrackId;
 use resonance_music_theory::TableRegistry;
 
-use crate::compose::{DrumGroup, DrumrollViewState, SectionDefinitionState, SelectedLane};
+use std::collections::HashSet;
+
+use crate::compose::{
+    ComposeMessage, DrumGroup, DrumrollViewState, RailPanelKey, SectionDefinitionState,
+    SelectedLane,
+};
 use crate::message::*;
 use crate::state::TrackState;
 use crate::theme;
@@ -126,6 +131,7 @@ pub fn view<'a>(
     clip_id_for_drum: Option<u64>,
     table_registry: &'a TableRegistry,
     vocal_bulk_lyrics: &'a HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
+    collapsed_panels: &'a HashSet<RailPanelKey>,
 ) -> Element<'a, Message> {
     // EDITING context header — large, unmistakable. Tells the user whether
     // they're editing the section (lavender) or a track (warm amber) and
@@ -138,18 +144,26 @@ pub fn view<'a>(
     // clicking their header in the track list, so this rail no longer
     // carries its own lane picker.
     let scale: Option<Element<'a, Message>> = if matches!(selected_lane, SelectedLane::Chords) {
-        Some(chord::scale_block(definition))
+        Some(chord::scale_block(
+            definition,
+            collapsed_panels.contains(&RailPanelKey::Scale),
+        ))
     } else {
         None
     };
 
     // Body — varies by selected lane
     let body: Element<'a, Message> = match selected_lane {
-        SelectedLane::Chords => chord::chord_body(definition, table_registry),
+        SelectedLane::Chords => chord::chord_body(definition, table_registry, collapsed_panels),
         SelectedLane::Instrument(track_id) => {
             let track = tracks.iter().find(|t| t.id == *track_id);
             match track {
-                Some(t) => instrument::instrument_body(definition, t, vocal_bulk_lyrics),
+                Some(t) => instrument::instrument_body(
+                    definition,
+                    t,
+                    vocal_bulk_lyrics,
+                    collapsed_panels,
+                ),
                 None => text("Track not found")
                     .size(12)
                     .color(theme::TEXT_DIM)
@@ -165,6 +179,7 @@ pub fn view<'a>(
                     drumroll_state,
                     drum_groups,
                     clip_id_for_drum,
+                    collapsed_panels,
                 ),
                 None => text("Track not found")
                     .size(12)
@@ -174,9 +189,9 @@ pub fn view<'a>(
         }
     };
 
-    let mut inner = column![editing_card, Space::new().height(14)].spacing(0).padding(18);
+    let mut inner = column![editing_card, Space::new().height(18)].spacing(0).padding(24);
     if let Some(scale) = scale {
-        inner = inner.push(scale).push(Space::new().height(20));
+        inner = inner.push(scale).push(Space::new().height(18));
     }
     let inner = inner.push(body);
 
@@ -237,6 +252,35 @@ pub(super) fn label_with_info<'a>(label: impl Into<String>, info: &'static str) 
     let label_text = text(label.into()).size(11).color(theme::TEXT_DIM);
     row![label_text, Space::new().width(4), info_icon(info)]
         .align_y(alignment::Vertical::Center)
+        .into()
+}
+
+/// Clickable header row for a collapsible right-rail panel card. Caller
+/// supplies the left cluster (colored dot + title) and an optional
+/// right-side meta element — meta stays visible while collapsed so
+/// context isn't lost (e.g. "ABAB · 4 LINES" on the Lyric draft card).
+/// The shared collapse caret sits at the far right; clicking anywhere
+/// on the row toggles `key`. Same caret pattern as the Arrange
+/// global-tracks shelf.
+pub(super) fn rail_panel_header<'a>(
+    left: Element<'a, Message>,
+    meta: Option<Element<'a, Message>>,
+    key: RailPanelKey,
+    collapsed: bool,
+) -> Element<'a, Message> {
+    let mut head = row![left, Space::new().width(Length::Fill)]
+        .spacing(8)
+        .align_y(alignment::Vertical::Center)
+        .width(Length::Fill);
+    if let Some(meta) = meta {
+        head = head.push(meta);
+    }
+    head = head.push(crate::view::controls::collapse_caret(!collapsed));
+    iced::widget::button(head)
+        .padding([2, 0])
+        .width(Length::Fill)
+        .style(|_theme, status| theme::small_button_style(status))
+        .on_press(Message::Compose(ComposeMessage::ToggleRailPanel(key)))
         .into()
 }
 

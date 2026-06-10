@@ -19,6 +19,11 @@ use crate::view::compose::tracks::NAME_COLUMN_WIDTH;
 
 use super::{contour_value, VocalLaneCanvas, LYRIC_BAND_HEIGHT};
 
+/// Body hint shown on the placeholder row for an unconfigured vocal
+/// track. Tells the user how to wire the lane up without fabricating
+/// any voice/staff/contour info.
+const PLACEHOLDER_HINT: &str = "No vocal generator \u{2014} select to set up";
+
 impl<'a> VocalLaneCanvas<'a> {
     pub(super) fn track_name(&self, track_id: TrackId) -> &str {
         self.tracks
@@ -95,6 +100,97 @@ impl<'a> VocalLaneCanvas<'a> {
         if !self.draw_real_notes(frame, staff_rect, track_id, params) {
             self.draw_melody_contour(frame, staff_rect, params);
         }
+
+        // Bottom separator
+        frame.fill_rectangle(
+            Point::new(row_rect.x, row_rect.y + row_rect.height - 1.0),
+            Size::new(row_rect.width, 1.0),
+            theme::SEPARATOR,
+        );
+    }
+
+    /// Compact placeholder row for a vocal track that has no `Vocal`
+    /// lane generator configured in this section.
+    ///
+    /// Why this exists: commit 40300a4 stopped fabricating default
+    /// `VocalParams` for unconfigured vocal tracks (the fake staff and
+    /// voice meta were misleading), but skipping the row entirely made
+    /// the track an unreachable trap — with no lane to click, the user
+    /// could never fire `SelectLane`, and the right-rail generator
+    /// picker (the only place a vocal generator can be assigned) never
+    /// opened. This row restores selectability while staying neutral:
+    /// name column + dim hint text, no invented params.
+    ///
+    /// Visual conventions match the configured rows: `lane_side::draw`
+    /// for the name column (no meta line — there's nothing configured
+    /// to report), `BG_1` body with the shared bar-line grid, warm 10%
+    /// wash when selected, and the same 1px bottom separator. A faint
+    /// warm hover wash signals the row is clickable.
+    pub(super) fn draw_placeholder_row(
+        &self,
+        frame: &mut Frame,
+        track_id: TrackId,
+        row_rect: Rectangle,
+        hovered: bool,
+    ) {
+        let is_selected = matches!(
+            self.selected_lane,
+            SelectedLane::Instrument(t) if t == track_id
+        );
+
+        // Side panel — track name only, no fabricated meta line.
+        let side_rect = Rectangle {
+            x: row_rect.x,
+            y: row_rect.y,
+            width: NAME_COLUMN_WIDTH,
+            height: row_rect.height,
+        };
+        lane_side::draw(
+            frame,
+            side_rect,
+            LaneKind::Melody,
+            self.track_name(track_id),
+            None,
+            is_selected,
+        );
+
+        let lane_rect = Rectangle {
+            x: row_rect.x + NAME_COLUMN_WIDTH,
+            y: row_rect.y,
+            width: (row_rect.width - NAME_COLUMN_WIDTH).max(0.0),
+            height: row_rect.height,
+        };
+
+        // Background fill — selection wash matches `draw_row`; hover is
+        // a fainter step of the same warm tint.
+        let fill = if is_selected {
+            Color { a: 0.10, ..theme::WARM }
+        } else if hovered {
+            Color { a: 0.04, ..theme::WARM }
+        } else {
+            theme::BG_1
+        };
+        frame.fill_rectangle(
+            Point::new(lane_rect.x, lane_rect.y),
+            Size::new(lane_rect.width, lane_rect.height),
+            fill,
+        );
+
+        // Keep the shared beat grid so the empty lane still aligns with
+        // the chord/synth/drum lanes above and below it.
+        self.draw_bar_lines(frame, lane_rect);
+
+        // Dim hint, vertically centered.
+        frame.fill_text(canvas::Text {
+            content: PLACEHOLDER_HINT.to_string(),
+            position: Point::new(
+                lane_rect.x + 12.0,
+                lane_rect.y + lane_rect.height * 0.5 - 6.0,
+            ),
+            color: theme::TEXT_3,
+            size: 11.5.into(),
+            ..canvas::Text::default()
+        });
 
         // Bottom separator
         frame.fill_rectangle(

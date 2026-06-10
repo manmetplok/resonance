@@ -18,23 +18,32 @@ pub(super) fn draft_group<'a>(
     track_id: TrackId,
     params: &'a VocalParams,
     bulk_content: Option<&'a text_editor::Content>,
+    collapsed: bool,
 ) -> Element<'a, Message> {
-    let title_left = row![
+    let title_left: Element<'a, Message> = row![
         rail_dot_warm(),
         text("Lyric draft").size(11).font(theme::UI_FONT_SEMIBOLD).color(theme::WARM),
     ]
     .spacing(8)
-    .align_y(alignment::Vertical::Center);
-    let title_right = text(format!("{} · {} LINES", params.rhyme.as_str(), params.draft.len()))
-        .size(9)
-        .font(theme::MONO_FONT)
-        .color(theme::TEXT_4);
-    let title = row![
+    .align_y(alignment::Vertical::Center)
+    .into();
+    // Rhyme-scheme + line-count meta rides the header row so it stays
+    // visible while the card is folded — context isn't lost.
+    let title_right: Element<'a, Message> =
+        text(format!("{} · {} LINES", params.rhyme.as_str(), params.draft.len()))
+            .size(9)
+            .font(theme::MONO_FONT)
+            .color(theme::TEXT_4)
+            .into();
+    let title = crate::view::compose::lane_inspector::rail_panel_header(
         title_left,
-        Space::new().width(Length::Fill),
-        title_right
-    ]
-    .align_y(alignment::Vertical::Center);
+        Some(title_right),
+        crate::compose::RailPanelKey::VocalDraft(track_id),
+        collapsed,
+    );
+    if collapsed {
+        return group_card(title);
+    }
 
     let bulk_block = bulk_lyrics_block(definition_id, track_id, params, bulk_content);
 

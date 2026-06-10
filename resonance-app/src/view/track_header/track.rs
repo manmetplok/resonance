@@ -78,7 +78,7 @@ pub(super) fn view_track_header(
         record_arm_button(track.record_armed, track.id, 12),
         monitor_button(track.monitor_enabled, track.id, 12),
     ]
-    .spacing(2)
+    .spacing(5)
     .align_y(alignment::Vertical::Center);
 
     // ---- Top-right delete (tiny, hugs the corner) ----
@@ -90,7 +90,7 @@ pub(super) fn view_track_header(
     // Top of the cell: name + kind, with delete in the corner.
     let top_row = row![
         glyph,
-        Space::new().width(10),
+        Space::new().width(12),
         name_col,
         Space::new().width(6),
         del,
@@ -128,9 +128,9 @@ pub(super) fn view_track_header(
         .height(Length::Fill)
         .padding(iced::Padding {
             top: 10.0,
-            right: 10.0,
+            right: 24.0,
             bottom: 10.0,
-            left: 12.0,
+            left: 24.0,
         });
 
     let body_with_bg = container(body)
@@ -189,9 +189,10 @@ fn kind_label_for_track(track: &TrackState) -> String {
         .first()
         .map(|p| p.plugin_name.clone())
         .unwrap_or_default();
-    // The track-list column is ~140px wide once the glyph + button row
-    // are accounted for, so the kind line cannot exceed ~22 chars at 10px
-    // before it wraps. `short()` enforces an ellipsis well within that.
+    // The track-list column leaves ~160px for the name/kind stack once
+    // the glyph, paddings, and delete button are accounted for, so the
+    // kind line cannot exceed ~22 chars at 10px before it wraps.
+    // `short()` enforces an ellipsis well within that.
     match track.track_type {
         TrackType::Audio => match track.input_device_name.as_deref() {
             Some(dev) if !dev.is_empty() => format!("Audio · {}", short(dev, 14)),

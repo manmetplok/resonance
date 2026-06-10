@@ -10,7 +10,7 @@ use crate::theme;
 
 /// Fixed height of the Compose section bar. Tall enough for a three-line
 /// chip (number / serif name / bar metadata) with breathing room.
-const STRIP_HEIGHT: u16 = 76;
+const STRIP_HEIGHT: u16 = 88;
 
 pub fn view(state: &ComposeState) -> Element<'_, Message> {
     let body: Element<'_, Message> = if let Some(form) = &state.edit_section_form {
@@ -24,7 +24,7 @@ pub fn view(state: &ComposeState) -> Element<'_, Message> {
     container(body)
         .width(Length::Fill)
         .height(Length::Fixed(STRIP_HEIGHT as f32))
-        .padding([8, 14])
+        .padding([14, 28])
         .style(|_theme| container::Style {
             background: Some(iced::Background::Color(theme::BG_1)),
             border: iced::Border {
@@ -113,9 +113,9 @@ fn chips_row(state: &ComposeState) -> Element<'_, Message> {
 
     row![
         sections_tag,
-        Space::new().width(8),
+        Space::new().width(16),
         chips,
-        Space::new().width(6),
+        Space::new().width(10),
         add_btn,
         Space::new().width(Length::Fill),
         tools,
@@ -219,7 +219,7 @@ fn section_chip<'a>(
         .on_press(Message::Compose(ComposeMessage::SelectSectionPlacement {
             placement_id,
         }))
-        .padding([6, 12])
+        .padding([8, 12])
         .width(Length::FillPortion(flex))
         .style(move |_theme, status| theme::section_chip_button_style(active, status))
         .into()

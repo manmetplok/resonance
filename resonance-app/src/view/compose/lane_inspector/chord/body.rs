@@ -20,10 +20,28 @@ use super::{
 pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
     definition: &'a SectionDefinitionState,
     table_registry: &'a TableRegistry,
+    collapsed_panels: &std::collections::HashSet<crate::compose::RailPanelKey>,
 ) -> Element<'a, Message> {
+    use crate::compose::RailPanelKey;
+
     let definition_id = definition.id;
     let has_scale = definition.scale.is_some();
     let current_table = current_table_id(definition);
+
+    let gen_collapsed = collapsed_panels.contains(&RailPanelKey::ChordGenerator);
+    let motif_collapsed = collapsed_panels.contains(&RailPanelKey::SectionMotif);
+    let motif_block = motif_section_block(definition, motif_collapsed);
+
+    // Folded generator: header only, motif panel still follows.
+    if gen_collapsed {
+        return column![
+            section_header("Chord generator", RailPanelKey::ChordGenerator, true),
+            Space::new().height(20),
+            motif_block,
+        ]
+        .spacing(0)
+        .into();
+    }
 
     let tables = table_picks();
     let current_pick = tables.iter().find(|t| t.id == current_table).cloned();
@@ -226,10 +244,8 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
     ];
     let end_block = column![field_label("END °"), Space::new().height(4), end_picker,];
 
-    let motif_block = motif_section_block(definition);
-
     column![
-        section_header("Chord generator"),
+        section_header("Chord generator", RailPanelKey::ChordGenerator, false),
         Space::new().height(10),
         field_label("STYLE"),
         Space::new().height(4),

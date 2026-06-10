@@ -13,9 +13,14 @@ use super::{field_label, section_header};
 
 pub(in crate::view::compose::lane_inspector) fn scale_block<'a>(
     definition: &'a SectionDefinitionState,
+    collapsed: bool,
 ) -> Element<'a, Message> {
     let definition_id = definition.id;
     let current = definition.scale;
+
+    if collapsed {
+        return section_header("Scale", crate::compose::RailPanelKey::Scale, true);
+    }
 
     let current_label: Element<'a, Message> = match current {
         Some(scale) => text(scale.to_string())
@@ -67,7 +72,7 @@ pub(in crate::view::compose::lane_inspector) fn scale_block<'a>(
         .style(|_theme, status| theme::ghost_button_style(status));
 
     column![
-        section_header("Scale"),
+        section_header("Scale", crate::compose::RailPanelKey::Scale, false),
         Space::new().height(8),
         current_label,
         Space::new().height(8),

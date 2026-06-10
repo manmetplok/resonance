@@ -6,7 +6,17 @@ use resonance_music_theory::{
     VoiceType,
 };
 
-use crate::compose::{LaneGeneratorKindTag, SelectedLane};
+use crate::compose::{LaneGeneratorKindTag, RailPanelKey, SelectedLane};
+
+/// The two workspace group banners in the Compose lane column. Carried
+/// by [`ComposeMessage::ToggleWorkspaceGroup`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceGroup {
+    /// SECTION banner — scale stripe, global lanes row, chord lane.
+    Section,
+    /// TRACKS banner — every vocal / synth / drum lane.
+    Tracks,
+}
 
 #[derive(Debug, Clone)]
 pub enum ComposeMessage {
@@ -85,6 +95,12 @@ pub enum ComposeMessage {
     // ---- Lane selection (unified) ----
     /// Select a lane in the Compose view. Updates the right-hand inspector.
     SelectLane(SelectedLane),
+
+    /// Fold / unfold one right-rail panel card. Runtime UI state only.
+    ToggleRailPanel(RailPanelKey),
+    /// Fold / unfold a workspace group banner (SECTION / TRACKS lanes).
+    /// Runtime UI state only.
+    ToggleWorkspaceGroup(WorkspaceGroup),
 
     /// Expand a track into the full-width inline piano-roll editor.
     ExpandTrack {

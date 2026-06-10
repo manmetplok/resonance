@@ -21,8 +21,13 @@ pub(super) fn melody_group<'a>(
     definition_id: u64,
     track_id: TrackId,
     params: &'a VocalParams,
+    collapsed: bool,
 ) -> Element<'a, Message> {
-    let title = group_title("Melody");
+    let key = crate::compose::RailPanelKey::VocalMelody(track_id);
+    let title = group_title("Melody", key, collapsed);
+    if collapsed {
+        return group_card(title);
+    }
 
     let voice_picker = pick_list(
         voice_type_pick_options(),

@@ -256,7 +256,8 @@ pub const GLOBAL_TRACK_BG: Color = BG_2;
 
 // ---------------------------------------------------------------------------
 // Layout constants. Values follow the redesign spec (96px row, 28px ruler,
-// 260px track-list column, 132px mixer strip).
+// 280px track-list column, 140px mixer strip) after the 2026-06 whitespace
+// pass loosened the spacing scale.
 // ---------------------------------------------------------------------------
 
 /// Arrange-view track row height — matches the design's "balanced" density.
@@ -282,15 +283,18 @@ pub const GLOBAL_TRACK_SIG_HEIGHT: f32 = 28.0;
 /// in the shelf's left column.
 pub const GLOBAL_TRACK_GLYPH_SIZE: f32 = 22.0;
 /// Track-list column width on the Arrange view.
-pub const TRACK_HEADER_WIDTH: f32 = 260.0;
+pub const TRACK_HEADER_WIDTH: f32 = 280.0;
+/// Vertical inset of a clip card inside its arrange track lane. The clip
+/// body spans `TRACK_HEIGHT - 2 * CLIP_LANE_INSET`.
+pub const CLIP_LANE_INSET: f32 = 10.0;
 /// Standard channel strip width on the Mixer.
-pub const MIXER_STRIP_WIDTH: f32 = 132.0;
+pub const MIXER_STRIP_WIDTH: f32 = 140.0;
 /// Sub-track strip width on the Mixer. Sub-tracks are fed from one
 /// non-main output of their parent's instrument plugin — they have no
 /// FX chain, no input, and no record arm, so the strip is narrower than
 /// a normal channel strip. The narrower width also creates a visual
 /// rhythm that telegraphs "this is a child of the strip on its left".
-pub const MIXER_SUB_STRIP_WIDTH: f32 = 88.0;
+pub const MIXER_SUB_STRIP_WIDTH: f32 = 92.0;
 /// Width of the lavender-tinted left-edge accent rail on a sub-track
 /// strip. Sits flush against the left edge of the strip card so the eye
 /// reads a parent → child relationship even before reading the strip's
@@ -300,18 +304,28 @@ pub const MIXER_SUB_STRIP_RAIL_WIDTH: f32 = 2.0;
 pub const MASTER_STRIP_WIDTH: f32 = 156.0;
 /// Inspector column width on the Mixer.
 pub const INSPECTOR_WIDTH: f32 = 320.0;
+/// Horizontal gap between unrelated strips in a mixer strip lane.
+/// Parent + sub-track clusters stay flush (0 px) inside this gap.
+pub const MIXER_STRIP_GAP: f32 = 16.0;
+/// Horizontal lead-in/lead-out padding of the mixer strip lanes.
+pub const MIXER_LANE_HPAD: f32 = 26.0;
 /// Right-rail column width on the Compose view.
-pub const COMPOSE_RAIL_WIDTH: u16 = 280;
+pub const COMPOSE_RAIL_WIDTH: u16 = 324;
 
 /// Height of the vertical fader used in mixer strips and master strip.
 pub const FADER_HEIGHT: f32 = 120.0;
 /// Fixed total height for a track/master mixer strip. Pins the fader at
 /// the bottom of the strip and lets the FX list scroll inside instead of
 /// resizing the entire strip — keeps mixer resize cheap.
-pub const MIXER_STRIP_HEIGHT: u16 = 460;
-/// Fixed height for bus strips. Slightly shorter than track strips since
-/// busses have no instrument slot.
-pub const BUS_STRIP_HEIGHT: u16 = 380;
+///
+/// Sized together with `BUS_STRIP_HEIGHT` so both lanes plus the 1px
+/// separator fit the 1440×900 minimum window under the 62px chrome +
+/// 74px transport: 440 + 1 + 320 = 761 ≤ 900 − 136.
+pub const MIXER_STRIP_HEIGHT: u16 = 440;
+/// Fixed height for bus strips. Shorter than track strips since busses
+/// have no instrument slot and no M/S/arm/monitor block — see the
+/// `MIXER_STRIP_HEIGHT` budget note for how the two heights are derived.
+pub const BUS_STRIP_HEIGHT: u16 = 320;
 /// Pixel radius around a clip's left/right edge that starts a trim (not move).
 pub const CLIP_EDGE_THRESHOLD: f32 = 6.0;
 

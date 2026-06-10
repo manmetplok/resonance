@@ -1125,7 +1125,7 @@ impl VisibleBar {
 
 /// Lane-relative rect for a clip on `track_id`: returns `(y, height)`,
 /// or `None` when the track is unknown or the lane is scrolled out of
-/// view. The 8px inset top/bottom matches the design.
+/// view. The `CLIP_LANE_INSET` top/bottom inset matches the design.
 fn clip_lane_rect(
     track_id: TrackId,
     sorted_tracks: &[&TrackState],
@@ -1136,8 +1136,8 @@ fn clip_lane_rect(
     let track_index = sorted_tracks.iter().position(|t| t.id == track_id)?;
 
     let lane_y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT - y_off;
-    let y = lane_y + 8.0;
-    let clip_height = theme::TRACK_HEIGHT - 16.0;
+    let y = lane_y + theme::CLIP_LANE_INSET;
+    let clip_height = theme::TRACK_HEIGHT - 2.0 * theme::CLIP_LANE_INSET;
 
     if y + clip_height < ruler_height || y > visible_height {
         return None;

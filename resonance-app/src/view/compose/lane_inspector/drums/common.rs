@@ -10,7 +10,7 @@ pub(super) const BEATS_PER_BAR: u32 = 4;
 
 pub(super) fn rail_card<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
     container(content)
-        .padding([12, 12])
+        .padding(16)
         .width(Length::Fill)
         .style(|_theme| container::Style {
             background: Some(iced::Background::Color(theme::BG_2)),
