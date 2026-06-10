@@ -55,6 +55,39 @@ fn log_oversize_buffer(requested: usize, scratch: usize) {
     }
 }
 
+/// Largest sample count ≤ both `len` and `vacant` that is a whole
+/// number of `frame_stride`-sample frames. Producers push exactly this
+/// many samples so a full ring can't rotate the channel interleave.
+#[inline]
+pub fn whole_frame_push_len(len: usize, vacant: usize, frame_stride: usize) -> usize {
+    len.min(vacant) / frame_stride * frame_stride
+}
+
+/// Whole-frame catch-up skip for the monitor ring: when `available`
+/// exceeds `needed` plus one quantum of jitter margin, skip down to
+/// that margin (never to exactly `needed`, which would re-overflow on
+/// the next push) in whole frames only.
+#[inline]
+pub fn monitor_catchup_skip(
+    available: usize,
+    needed: usize,
+    quantum: usize,
+    frame_stride: usize,
+) -> usize {
+    let target = needed + quantum * frame_stride;
+    if available > target {
+        (available - target) / frame_stride * frame_stride
+    } else {
+        0
+    }
+}
+
+/// Whole-frame read length for the monitor ring.
+#[inline]
+pub fn monitor_read_len(needed: usize, occupied: usize, frame_stride: usize) -> usize {
+    needed.min(occupied / frame_stride * frame_stride)
+}
+
 /// Snapshot of the tempo map taken once per audio buffer. Held while
 /// the buffer renders so the bar/beat table stays stable across the
 /// per-track render and the metronome pass.
@@ -145,12 +178,15 @@ pub(crate) fn mix_audio(
     // the current input channel count.
     let input_channels = shared.input_channels.load(Ordering::Relaxed) as usize;
     let frame_stride = input_channels.max(1);
+    // Skip and read in whole frames only: a sub-frame skip or read
+    // would permanently rotate the channel interleave.
     let needed = frames * frame_stride;
     let available = monitor_cons.occupied_len();
-    if available > needed + quantum * frame_stride {
-        monitor_cons.skip(available - needed);
+    let catchup = monitor_catchup_skip(available, needed, quantum, frame_stride);
+    if catchup > 0 {
+        monitor_cons.skip(catchup);
     }
-    let to_read = needed.min(monitor_cons.occupied_len());
+    let to_read = monitor_read_len(needed, monitor_cons.occupied_len(), frame_stride);
     let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);
     let monitor_frames = monitor_samples / frame_stride;
 

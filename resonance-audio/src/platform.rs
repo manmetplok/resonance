@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use ringbuf::traits::Producer;
+use ringbuf::traits::{Observer, Producer};
 
 use crate::engine::SharedState;
 use crate::stream_errors::{format_underrun_line, UnderrunRateLimiter};
@@ -423,9 +423,11 @@ fn build_input_stream_cpal(
     // counts (its `supported_input_configs` usually doesn't even
     // enumerate them), but plain ALSA / PulseAudio might not.
     let _ = buf_frames; // unused once the monitor path stopped pre-converting
-    let make_callback = move |shared: Arc<SharedState>,
+    let make_callback = move |channels: u16,
+                              shared: Arc<SharedState>,
                               mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
                               mut rec_producer: Option<ringbuf::HeapProd<f32>>| {
+        let stride = channels.max(1) as usize;
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
             if shared.recording.load(Ordering::Relaxed) {
                 if let Some(ref mut prod) = rec_producer {
@@ -437,7 +439,9 @@ fn build_input_stream_cpal(
             }
             if shared.monitoring.load(Ordering::Relaxed) {
                 if let Some(mut prod) = mon_producer.try_lock() {
-                    let _ = prod.push_slice(data);
+                    let take =
+                        crate::mixer::whole_frame_push_len(data.len(), prod.vacant_len(), stride);
+                    let _ = prod.push_slice(&data[..take]);
                 }
             }
         }
@@ -458,7 +462,7 @@ fn build_input_stream_cpal(
         let underrun_limiter = Arc::clone(&underrun_limiter);
         device.build_input_stream(
             &cfg,
-            make_callback(shared, mon_producer, rec_producer),
+            make_callback(channels, shared, mon_producer, rec_producer),
             move |err| match err {
                 cpal::StreamError::BufferUnderrun => {
                     if let Some(report) =

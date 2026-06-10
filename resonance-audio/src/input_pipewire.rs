@@ -25,7 +25,7 @@ use std::time::Duration;
 use parking_lot::Mutex as PlMutex;
 use pipewire as pw;
 use pipewire::spa;
-use ringbuf::traits::Producer;
+use ringbuf::traits::{Observer, Producer};
 
 use pw::context::ContextRc;
 use pw::core::CoreRc;
@@ -307,7 +307,7 @@ fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
         else {
             return;
         };
-        push_to_ringbufs(user_data, samples);
+        push_to_ringbufs(user_data, samples, channels.max(1));
     } else {
         // Planar path (DSP / pro-audio): each chunk is a separate
         // mono channel. Walk every chunk once to collect (size,
@@ -365,14 +365,14 @@ fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
                     scratch[f * used + c] = plane[i + f];
                 }
             }
-            push_to_ringbufs(user_data, &scratch[..burst * used]);
+            push_to_ringbufs(user_data, &scratch[..burst * used], used);
             i += burst;
         }
     }
 }
 
 #[inline]
-fn push_to_ringbufs(user_data: &mut UserData, samples: &[f32]) {
+fn push_to_ringbufs(user_data: &mut UserData, samples: &[f32], frame_stride: usize) {
     if user_data.shared.recording.load(Ordering::Relaxed) {
         if let Some(prod) = user_data.rec_producer.as_mut() {
             let pushed = prod.push_slice(samples);
@@ -386,7 +386,12 @@ fn push_to_ringbufs(user_data: &mut UserData, samples: &[f32]) {
     }
     if user_data.shared.monitoring.load(Ordering::Relaxed) {
         if let Some(mut prod) = user_data.mon_producer.try_lock() {
-            let _ = prod.push_slice(samples);
+            let take = crate::mixer::whole_frame_push_len(
+                samples.len(),
+                prod.vacant_len(),
+                frame_stride,
+            );
+            let _ = prod.push_slice(&samples[..take]);
         }
     }
 }
