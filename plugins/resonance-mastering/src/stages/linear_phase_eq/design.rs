@@ -43,7 +43,7 @@ impl FirDesigner {
     pub fn new() -> Self {
         let mut planner = FftPlanner::<f32>::new();
         let ifft = planner.plan_fft_inverse(FFT_SIZE);
-        let hann = hann_window(FIR_LENGTH);
+        let hann = resonance_dsp::hann_window(FIR_LENGTH);
         Self {
             fft_scratch: vec![Complex::new(0.0, 0.0); ifft.get_inplace_scratch_len()],
             ifft,
@@ -110,14 +110,5 @@ impl Default for FirDesigner {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn hann_window(len: usize) -> Vec<f32> {
-    (0..len)
-        .map(|i| {
-            let x = i as f32 / (len as f32 - 1.0);
-            0.5 - 0.5 * (std::f32::consts::TAU * x).cos()
-        })
-        .collect()
 }
 

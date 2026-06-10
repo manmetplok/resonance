@@ -175,10 +175,7 @@ impl FftWorker {
 
 fn hann_window() -> Box<[f32; FFT_SIZE]> {
     let mut window = boxed_array(0.0_f32);
-    for (i, w) in window.iter_mut().enumerate() {
-        let x = i as f32 / (FFT_SIZE as f32 - 1.0);
-        *w = 0.5 - 0.5 * (std::f32::consts::TAU * x).cos();
-    }
+    resonance_dsp::fill_hann_window(&mut window[..]);
     window
 }
 

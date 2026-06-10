@@ -101,7 +101,7 @@ pub struct AnalyzerChannel {
 impl AnalyzerChannel {
     pub fn new(planner: &mut FftPlanner<f32>, sample_rate: f32) -> Self {
         let fft = planner.plan_fft_forward(FFT_SIZE);
-        let window = hann_window(FFT_SIZE);
+        let window = resonance_dsp::hann_window(FFT_SIZE);
         let mut s = Self {
             ring: vec![0.0; FFT_SIZE],
             write_pos: 0,
@@ -192,15 +192,6 @@ impl AnalyzerChannel {
         }
         guard.magnitudes_db.copy_from_slice(&self.held_db);
     }
-}
-
-fn hann_window(len: usize) -> Vec<f32> {
-    (0..len)
-        .map(|i| {
-            let x = (i as f32) / (len as f32 - 1.0);
-            0.5 - 0.5 * (std::f32::consts::TAU * x).cos()
-        })
-        .collect()
 }
 
 // ---------------------------------------------------------------------------

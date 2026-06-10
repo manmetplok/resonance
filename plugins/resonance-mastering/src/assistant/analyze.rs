@@ -79,12 +79,7 @@ fn compute_ltas(sample_rate: f32, left: &[f32], right: &[f32]) -> Vec<f32> {
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(LTAS_FFT_SIZE);
 
-    let window: Vec<f32> = (0..LTAS_FFT_SIZE)
-        .map(|i| {
-            let x = i as f32 / (LTAS_FFT_SIZE as f32 - 1.0);
-            0.5 - 0.5 * (std::f32::consts::TAU * x).cos()
-        })
-        .collect();
+    let window = resonance_dsp::hann_window(LTAS_FFT_SIZE);
 
     let mut scratch = vec![Complex::new(0.0, 0.0); LTAS_FFT_SIZE];
     let mut power_sum = vec![0.0_f64; LTAS_FFT_SIZE / 2];
