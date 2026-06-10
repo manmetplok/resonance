@@ -1,7 +1,7 @@
 //! Vocal roll — the piano-roll-style editor that opens when a vocal lane
 //! is double-clicked.
 //!
-//! Mirrors `crate::midi_editor::PianoRollCanvas` but tuned for vocals:
+//! Mirrors `crate::view::midi_editor::PianoRollCanvas` but tuned for vocals:
 //!
 //! * **Warm accent** on note bodies (matches the rest of the vocal UI).
 //! * **Chord context strip** above the grid (read-only) — the singer

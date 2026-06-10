@@ -1,7 +1,7 @@
 //! Canvas event handling for the timeline. These are the impl methods
 //! that take a `&mut TimelineState`, hit-test against the canvas
 //! geometry, and translate pointer / wheel / keyboard events into
-//! `Message`s. Drawing lives in `timeline_draw.rs`; this file is the
+//! `Message`s. Drawing lives in `draw.rs`; this file is the
 //! input counterpart.
 
 use std::time::Instant;
@@ -14,10 +14,10 @@ use resonance_audio::types::{bpm_at_bar, TrackId};
 use crate::message::*;
 use crate::state::{self, TrackState};
 use crate::theme;
-use crate::timeline::{TimelineCanvas, TimelineState};
-use crate::timeline::hit_test::{self, track_index, HitKind};
-use crate::timeline::scrollbar::{scroll_from_thumb_pos, ScrollbarRects};
-use crate::timeline_snap::snap_sample_to_grid_tempo;
+use super::hit_test::{self, track_index, HitKind};
+use super::scrollbar::{scroll_from_thumb_pos, ScrollbarRects};
+use super::snap::snap_sample_to_grid_tempo;
+use super::{TimelineCanvas, TimelineState};
 
 /// Maximum interval between two clicks to count as a double-click.
 pub(super) const DOUBLE_CLICK_MS: u128 = 400;
@@ -28,7 +28,7 @@ pub(super) const DOUBLE_CLICK_MS: u128 = 400;
 /// pointer-move and pointer-release handlers dispatch to the right end-drag
 /// message.
 #[derive(Debug, Clone)]
-pub(super) enum ClipInteraction {
+pub(crate) enum ClipInteraction {
     Move,
     Trim,
     MidiMove,
@@ -37,7 +37,7 @@ pub(super) enum ClipInteraction {
 
 /// Active drag on a tempo event point.
 #[derive(Debug)]
-pub(super) struct TempoDrag {
+pub(crate) struct TempoDrag {
     /// Index into `tempo_events` at drag start.
     pub index: usize,
     /// Original BPM of the dragged event.
@@ -68,7 +68,7 @@ impl TimelineCanvas<'_> {
         &self,
         bounds: Rectangle,
     ) -> (Option<ScrollbarRects>, Option<ScrollbarRects>) {
-        use crate::timeline::scrollbar;
+        use crate::view::timeline::scrollbar;
         // Horizontal scroll is now owned by the outer `Scrollable` that
         // wraps the timeline canvas (see `view_timeline`), so we no
         // longer draw an in-canvas horizontal scrollbar. The vertical

@@ -4,7 +4,7 @@
 /// full-width editor which provides a comfortable piano-roll experience
 /// scoped to the current section. Drawing primitives (keyboard column,
 /// note rectangles, coordinate helpers, hit testing) are shared with
-/// `midi_editor.rs` via `crate::piano_roll`; this canvas keeps the
+/// `view/midi_editor.rs` via `crate::view::piano_roll`; this canvas keeps the
 /// section-specific bits inline: per-bar beat grid, scale row highlight,
 /// toolbar, and the multi-clip note loop.
 ///
@@ -26,7 +26,7 @@ use resonance_music_theory::Scale;
 
 use crate::compose::{ComposeMessage, SectionDefinitionState, SectionPlacementState};
 use crate::message::*;
-use crate::piano_roll::{
+use crate::view::piano_roll::{
     self, note_name, PianoRollLayout, PianoRollViewport,
 };
 use crate::state::MidiClipState;

@@ -7,7 +7,7 @@ use iced::widget::canvas;
 use iced::Point;
 
 use crate::message::*;
-use crate::piano_roll::{hit_test_note, snap_tick, NoteEdge, PianoRollLayout, PianoRollViewport};
+use crate::view::piano_roll::{hit_test_note, snap_tick, NoteEdge, PianoRollLayout, PianoRollViewport};
 
 use super::{
     DragMode, ExpandedEditorCanvas, ExpandedEditorState, DEFAULT_VELOCITY, SNAP_TICKS,

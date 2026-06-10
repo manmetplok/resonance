@@ -95,7 +95,7 @@ pub fn update_clip_drag(r: &mut Resonance, x: f32, y: f32) {
         } else {
             (seconds as f64 * sample_rate as f64) as u64
         };
-        let new_start = crate::timeline::snap_sample_to_grid(raw, bpm, num, sample_rate, zoom);
+        let new_start = crate::view::timeline::snap_sample_to_grid(raw, bpm, num, sample_rate, zoom);
         let clip_id = drag.clip_id;
         if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {
             clip.start_sample = new_start;
@@ -144,7 +144,7 @@ pub fn update_clip_trim(r: &mut Resonance, x: f32) {
     // clip edges land on bar/beat lines instead of wherever the mouse
     // happens to be.
     let snap = |sample: u64| -> u64 {
-        crate::timeline::snap_sample_to_grid(
+        crate::view::timeline::snap_sample_to_grid(
             sample,
             r.transport.bpm,
             r.transport.time_sig_num,
@@ -269,7 +269,7 @@ pub fn update_midi_clip_drag(r: &mut Resonance, x: f32, y: f32) {
         } else {
             (seconds as f64 * sample_rate as f64) as u64
         };
-        let new_start = crate::timeline::snap_sample_to_grid(raw, bpm, num, sample_rate, zoom);
+        let new_start = crate::view::timeline::snap_sample_to_grid(raw, bpm, num, sample_rate, zoom);
         let clip_id = drag.clip_id;
         if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
             clip.start_sample = new_start;
@@ -325,7 +325,7 @@ pub fn update_midi_clip_trim(r: &mut Resonance, x: f32) {
     // MIDI clip edges aligned with the arrange-view bar/beat lines
     // without needing a tick-domain snap.
     let snap = |sample: u64| -> u64 {
-        crate::timeline::snap_sample_to_grid(
+        crate::view::timeline::snap_sample_to_grid(
             sample,
             r.transport.bpm,
             r.transport.time_sig_num,

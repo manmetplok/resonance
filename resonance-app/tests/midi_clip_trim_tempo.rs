@@ -70,7 +70,7 @@ fn snap_like_reducer(app: &Resonance, sample: u64) -> u64 {
     // the flat-BPM `snap_sample_to_grid` (which constructs an empty
     // `TempoMap`), driven from `transport.bpm` and the default
     // numerator.
-    use resonance_app::timeline::snap_sample_to_grid;
+    use resonance_app::view::timeline::snap_sample_to_grid;
     snap_sample_to_grid(
         sample,
         app.test_transport_bpm(),

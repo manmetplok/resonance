@@ -3,7 +3,7 @@ use iced::widget::canvas;
 use iced::{mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::message::*;
-use crate::piano_roll::{
+use crate::view::piano_roll::{
     self, hit_test_note, is_black_key, NoteEdge, NoteStyle, PianoRollLayout, PianoRollViewport,
     NOTE_COUNT,
 };

@@ -6,7 +6,7 @@
 //! variant enum and one match arm.
 
 use crate::message::*;
-use crate::midi_editor::PianoRollCanvas;
+use crate::view::midi_editor::PianoRollCanvas;
 use crate::theme;
 use crate::view::compose::vocal_roll;
 use iced::widget::{button, canvas, column, container, row, text, Space};
@@ -87,7 +87,7 @@ impl crate::Resonance {
                 let extra_ticks: u64 =
                     4 * (self.transport.time_sig_num as u64) * TICKS_PER_QUARTER_NOTE;
                 let content_ticks: u64 = clip.duration_ticks.saturating_add(extra_ticks);
-                let content_w = crate::midi_editor::KEYBOARD_WIDTH
+                let content_w = crate::view::midi_editor::KEYBOARD_WIDTH
                     + content_ticks as f32 * editor_state.zoom_x;
                 let piano_roll = canvas(PianoRollCanvas {
                     clip,

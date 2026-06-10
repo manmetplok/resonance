@@ -4,11 +4,11 @@
 //! - this file: [`TimelineCanvas`] struct, small geometry helpers, and
 //!   the [`canvas::Program`] impl that orchestrates per-event dispatch
 //!   and per-frame drawing.
-//! - [`timeline_input`](crate::timeline_input): pointer / wheel /
+//! - [`input`](crate::view::timeline::input): pointer / wheel /
 //!   keyboard event handling and the [`TimelineState`] drag tracker.
-//! - [`timeline_draw`](crate::timeline_draw): pure-draw routines for
+//! - [`draw`](crate::view::timeline::draw): pure-draw routines for
 //!   the ruler, grid, global tracks, and clips.
-//! - [`timeline_snap`](crate::timeline_snap): the snap-to-grid helpers
+//! - [`snap`](crate::view::timeline::snap): the snap-to-grid helpers
 //!   shared with the clip-drag and seek paths.
 use std::time::Instant;
 
@@ -18,16 +18,19 @@ use iced::{keyboard, mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 use crate::message::*;
 use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
-use crate::timeline_input::{ClipInteraction, TempoDrag};
+use self::input::{ClipInteraction, TempoDrag};
 
 use resonance_audio::types::{ClipId, TempoMap, TrackId};
 
+pub mod draw;
 pub mod hit_test;
+pub mod input;
 pub mod scrollbar;
+pub mod snap;
 
 // Snap helpers are external public API for this canvas — re-export them
 // from the snap submodule so existing call sites keep working.
-pub use crate::timeline_snap::{snap_sample_to_grid, snap_sample_to_grid_tempo};
+pub use self::snap::{snap_sample_to_grid, snap_sample_to_grid_tempo};
 
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug)]

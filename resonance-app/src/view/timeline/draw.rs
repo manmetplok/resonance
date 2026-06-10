@@ -1,13 +1,13 @@
 //! Canvas drawing for the timeline. These are the pure-draw methods
 //! that take a `&mut Frame` and render bar/beat grids, rulers, audio
 //! clips, and MIDI clips. They're in a separate impl block (and file)
-//! so `timeline.rs` can stay focused on canvas event handling and state.
+//! so `mod.rs` can stay focused on canvas event handling and state.
 use iced::widget::canvas;
 use iced::{Color, Point, Size};
 
 use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
-use crate::timeline::TimelineCanvas;
+use super::TimelineCanvas;
 use resonance_audio::types::avg_bpm_for_bar;
 
 impl TimelineCanvas<'_> {

@@ -5,7 +5,7 @@
 
 use crate::message::*;
 use crate::theme;
-use crate::timeline::TimelineCanvas;
+use crate::view::timeline::TimelineCanvas;
 use iced::widget::{button, canvas, column, container, row, stack, Space};
 use iced::{Element, Length};
 use resonance_audio::types::*;

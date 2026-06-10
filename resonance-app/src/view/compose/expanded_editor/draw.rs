@@ -8,7 +8,7 @@ use iced::{Color, Point, Size};
 
 use resonance_audio::types::TICKS_PER_QUARTER_NOTE;
 
-use crate::piano_roll::{
+use crate::view::piano_roll::{
     self, is_black_key, note_name, NoteStyle, PianoRollLayout, PianoRollViewport, NOTE_COUNT,
 };
 use crate::theme;

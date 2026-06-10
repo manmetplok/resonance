@@ -1,7 +1,7 @@
 /// View rendering for the Resonance application. The top-level dispatch
 /// lives here; concrete surfaces are in sibling modules (transport,
 /// mixer, compose, track_header, menus, settings, editor_panel,
-/// timeline_panel).
+/// timeline_panel, timeline, piano_roll, midi_editor).
 pub(crate) mod bounce_dialog;
 pub(crate) mod bounce_progress;
 pub(crate) mod compose;
@@ -11,9 +11,12 @@ pub(crate) mod controls;
 pub(crate) mod editor_panel;
 pub(crate) mod knob;
 pub(crate) mod menus;
+pub mod midi_editor;
 pub(crate) mod mixer;
+pub mod piano_roll;
 pub(crate) mod settings;
 pub(crate) mod startup;
+pub mod timeline;
 pub(crate) mod timeline_panel;
 pub(crate) mod track_header;
 pub(crate) mod transport;
