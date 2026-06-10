@@ -47,6 +47,17 @@ pub fn to_audio_clip(
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
 ) {
+    // Same guard as the realtime bounce path: the offline renderer
+    // shares plugin instances with the live mixer, so rendering while
+    // the transport rolls would interleave process() calls (and the
+    // reset below) with live playback, corrupting both outputs.
+    if shared.playing.load(Ordering::Relaxed) {
+        let _ = event_tx.send(AudioEvent::TrackBounceError(
+            "Stop transport before bouncing".into(),
+        ));
+        return;
+    }
+
     // Resolve source + sub-tracks (multi-output instruments like
     // resonance-drums spawn sibling tracks fed by parent output ports).
     let filter_set: HashSet<TrackId> = {

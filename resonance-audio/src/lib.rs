@@ -37,7 +37,7 @@ pub use types::*;
 #[doc(hidden)]
 pub mod __test_support {
     pub use crate::clap_host::{ClapBundle, SyncClapInstance};
-    pub use crate::engine::try_lock_with_backoff;
+    pub use crate::engine::{to_audio_clip, try_lock_with_backoff, SharedState};
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
     pub use crate::midi_hardware::{parse_live_event_for_test, LiveMidiEvent};
@@ -63,6 +63,15 @@ pub use engine::midi::{move_midi_clip_in_place, trim_midi_clip_in_place};
 /// without spinning up a CLAP plugin or the engine thread.
 #[doc(hidden)]
 pub use mixer::collect_midi_events_bounce;
+
+/// Test surface for the plugin-lock-contention MIDI stash. Exposed so
+/// the regression test in `tests/midi_stash.rs` can drive stash /
+/// overflow / panic / delivery without a live CLAP plugin (the test
+/// supplies its own `NoteSink`).
+#[doc(hidden)]
+pub use mixer::{MidiStash, NoteSink};
+#[doc(hidden)]
+pub use limits::{MAX_STASHED_EVENTS, MAX_STASHED_INSTRUMENTS};
 
 /// Test surface for the streaming recording drain path. Exposed so
 /// integration tests can verify that `TrackRecordingBuf` never

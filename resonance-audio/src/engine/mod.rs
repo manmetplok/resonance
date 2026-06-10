@@ -29,7 +29,7 @@ use crate::stream_errors::{format_underrun_line, UnderrunRateLimiter};
 use crate::types::*;
 
 mod bounce;
-pub use bounce::try_lock_with_backoff;
+pub use bounce::{to_audio_clip, try_lock_with_backoff};
 mod bounce_common;
 
 /// Copy-on-write helper for the `ArcSwap<TempoMap>` shared with the
@@ -58,7 +58,9 @@ mod tracks;
 mod transport;
 
 /// Shared state between the engine control thread and the audio callback.
-pub(crate) struct SharedState {
+/// `pub` (not `pub(crate)`) only so `__test_support` can re-export it for
+/// integration tests; the `engine` module itself stays private.
+pub struct SharedState {
     /// Current playhead position in sample frames.
     pub playhead: AtomicU64,
     /// Whether playback is active.
@@ -111,6 +113,30 @@ pub(crate) struct SharedState {
     /// running on the engine thread can be aborted from the same
     /// `CancelBounce` command without threading another channel.
     pub bounce_cancel: AtomicBool,
+}
+
+impl Default for SharedState {
+    fn default() -> Self {
+        Self {
+            playhead: AtomicU64::new(0),
+            playing: AtomicBool::new(false),
+            recording: AtomicBool::new(false),
+            monitoring: AtomicBool::new(false),
+            master_volume_bits: AtomicU32::new(1.0f32.to_bits()),
+            master_peak_l_bits: AtomicU32::new(0),
+            master_peak_r_bits: AtomicU32::new(0),
+            master_fx_bypassed: AtomicBool::new(false),
+            recording_overflow: AtomicBool::new(false),
+            input_channels: AtomicU16::new(0),
+            loop_enabled: AtomicBool::new(false),
+            loop_in: AtomicU64::new(0),
+            loop_out: AtomicU64::new(0),
+            count_in_active: AtomicBool::new(false),
+            count_in_remaining: AtomicU64::new(0),
+            count_in_total: AtomicU64::new(0),
+            bounce_cancel: AtomicBool::new(false),
+        }
+    }
 }
 
 /// Error returned by [`AudioEngine::send`] when the engine thread's
@@ -245,25 +271,7 @@ impl AudioEngine {
         // input even if the engine thread stalls.
         let (clock_tx, clock_rx) = crossbeam_channel::bounded::<MidiClockEvent>(4096);
 
-        let shared = Arc::new(SharedState {
-            playhead: AtomicU64::new(0),
-            playing: AtomicBool::new(false),
-            recording: AtomicBool::new(false),
-            monitoring: AtomicBool::new(false),
-            master_volume_bits: AtomicU32::new(1.0f32.to_bits()),
-            master_peak_l_bits: AtomicU32::new(0),
-            master_peak_r_bits: AtomicU32::new(0),
-            master_fx_bypassed: AtomicBool::new(false),
-            recording_overflow: AtomicBool::new(false),
-            input_channels: AtomicU16::new(0),
-            loop_enabled: AtomicBool::new(false),
-            loop_in: AtomicU64::new(0),
-            loop_out: AtomicU64::new(0),
-            count_in_active: AtomicBool::new(false),
-            count_in_remaining: AtomicU64::new(0),
-            count_in_total: AtomicU64::new(0),
-            bounce_cancel: AtomicBool::new(false),
-        });
+        let shared = Arc::new(SharedState::default());
 
         let shared_audio = Arc::clone(&shared);
 
@@ -346,6 +354,10 @@ impl AudioEngine {
                 .collect();
             let mut note_event_buf: Vec<PendingNoteEvent> =
                 Vec::with_capacity(mixer::MAX_MIDI_EVENTS_PER_BUFFER);
+            // Pre-sized stash for MIDI events that couldn't be delivered
+            // because the UI thread held a plugin's mutex; replayed on
+            // the next successful lock so notes don't stick or vanish.
+            let mut midi_stash = mixer::MidiStash::new();
             // Monitor scratch + ring are sized for the widest multi-channel
             // interleaved input we're likely to see (e.g. an 18-in audio
             // interface). 32 channels × a few blocks of headroom covers
@@ -398,6 +410,7 @@ impl AudioEngine {
                         &mut bus_bufs,
                         &mut port_scratch,
                         &mut note_event_buf,
+                        &mut midi_stash,
                         &mut monitor_cons,
                         &mut monitor_temp,
                         audio_buf_frames,
@@ -622,25 +635,7 @@ impl AudioEngine {
         drop(cmd_rx);
         let (_event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
 
-        let shared = Arc::new(SharedState {
-            playhead: AtomicU64::new(0),
-            playing: AtomicBool::new(false),
-            recording: AtomicBool::new(false),
-            monitoring: AtomicBool::new(false),
-            master_volume_bits: AtomicU32::new(1.0f32.to_bits()),
-            master_peak_l_bits: AtomicU32::new(0),
-            master_peak_r_bits: AtomicU32::new(0),
-            master_fx_bypassed: AtomicBool::new(false),
-            recording_overflow: AtomicBool::new(false),
-            input_channels: AtomicU16::new(0),
-            loop_enabled: AtomicBool::new(false),
-            loop_in: AtomicU64::new(0),
-            loop_out: AtomicU64::new(0),
-            count_in_active: AtomicBool::new(false),
-            count_in_remaining: AtomicU64::new(0),
-            count_in_total: AtomicU64::new(0),
-            bounce_cancel: AtomicBool::new(false),
-        });
+        let shared = Arc::new(SharedState::default());
 
         // A zero-capacity ringbuf is fine — the test never drives audio
         // through it.

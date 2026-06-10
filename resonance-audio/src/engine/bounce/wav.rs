@@ -30,6 +30,17 @@ pub(crate) fn to_wav(
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
 ) {
+    // Same guard as the realtime bounce path: the offline renderer
+    // shares plugin instances with the live mixer, so rendering while
+    // the transport rolls would interleave process() calls (and the
+    // reset below) with live playback, corrupting both outputs.
+    if shared.playing.load(Ordering::Relaxed) {
+        let _ = event_tx.send(AudioEvent::BounceError(
+            "Stop transport before bouncing".into(),
+        ));
+        return;
+    }
+
     // Compute project range from audio clips + MIDI clips.
     let (render_start, render_end) = {
         let clips_guard = clips.read();
