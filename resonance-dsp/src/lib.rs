@@ -1,6 +1,7 @@
 /// Reusable DSP building blocks for Resonance plugins.
 mod biquad;
 mod db;
+mod dc_blocker;
 mod delay;
 pub mod dynamics;
 pub mod eq;
@@ -11,6 +12,7 @@ mod rng;
 
 pub use biquad::Biquad;
 pub use db::{db_to_linear, linear_to_db, MIN_DB};
+pub use dc_blocker::DcBlocker;
 pub use delay::DelayLine;
 pub use dynamics::{soft_knee_gain_reduction_db, Ballistics};
 pub use eq::BandType;

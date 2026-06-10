@@ -1,10 +1,8 @@
-//! Small DSP helpers used by the amp hot path.
-
 /// One-pole DC-blocking high-pass: `y[n] = x[n] - x[n-1] + R*y[n-1]`.
 ///
 /// With `R = 0.995` the -3 dB cutoff lands near 20 Hz at 44.1 kHz and near
 /// 22 Hz at 48 kHz — inaudible, but enough to strip the static DC bias
-/// that NAM profiles often emit at rest.
+/// that asymmetric waveshapers and NAM profiles introduce.
 #[derive(Default, Clone, Copy)]
 pub struct DcBlocker {
     x1: f32,

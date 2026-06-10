@@ -5,11 +5,10 @@
 //! shared/mailbox state and is responsible for handing newly-loaded models
 //! to the processor via [`AmpProcessor::install_pending_model`].
 
+use resonance_dsp::DcBlocker;
 use resonance_plugin::{Smoother, SmoothingStyle};
 
 use crate::nam::NamInference;
-
-use super::dc_blocker::DcBlocker;
 
 /// Crossfade length in samples (~23 ms at 44.1 kHz). Long enough to
 /// mask any residual transient when a freshly-loaded model takes over

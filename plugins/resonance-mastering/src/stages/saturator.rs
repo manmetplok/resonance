@@ -10,8 +10,8 @@
 //!
 //! Chain per sample:
 //!
-//!   dry → HF shelf cut (tape loss) → waveshaper(drive) → LF shelf
-//!   boost (head bump) → peak-normalize → mix(dry, wet)
+//!   dry → HF shelf cut (tape loss) → waveshaper(drive) → DC blocker
+//!   → LF shelf boost (head bump) → peak-normalize → mix(dry, wet)
 //!
 //! Normalization divides by the shaper's value at full drive, not by
 //! drive itself: that keeps full-scale peaks pinned near unity at any
@@ -23,9 +23,12 @@
 //! against an asymmetric one (DC-offset before the shaper, then the
 //! offset's own shaped value subtracted to pass through the origin),
 //! producing 2nd-harmonic content as the character knob moves toward
-//! tape.
+//! tape. The asymmetric branch leaves the output with a nonzero mean,
+//! so a DC blocker runs right after the shaper — always, not just at
+//! character > 0, so the wet path stays continuous as the knob sweeps —
+//! before the low shelf can amplify the offset.
 
-use resonance_dsp::{db_to_linear, Biquad};
+use resonance_dsp::{db_to_linear, Biquad, DcBlocker};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shaper {
@@ -82,6 +85,8 @@ pub struct Saturator {
     hf_shelf_r: Biquad,
     lf_shelf_l: Biquad,
     lf_shelf_r: Biquad,
+    dc_l: DcBlocker,
+    dc_r: DcBlocker,
 }
 
 impl Saturator {
@@ -92,6 +97,8 @@ impl Saturator {
             hf_shelf_r: Biquad::identity(),
             lf_shelf_l: Biquad::identity(),
             lf_shelf_r: Biquad::identity(),
+            dc_l: DcBlocker::default(),
+            dc_r: DcBlocker::default(),
         };
         s.set_sample_rate(sample_rate);
         s
@@ -116,6 +123,8 @@ impl Saturator {
         self.hf_shelf_r.reset();
         self.lf_shelf_l.reset();
         self.lf_shelf_r.reset();
+        self.dc_l.reset();
+        self.dc_r.reset();
     }
 
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &SaturatorConfig) {
@@ -139,8 +148,8 @@ impl Saturator {
             let l1 = self.hf_shelf_l.process(dry_l);
             let r1 = self.hf_shelf_r.process(dry_r);
 
-            let l2 = waveshape(l1 * drive, character, shaper) * inv_drive;
-            let r2 = waveshape(r1 * drive, character, shaper) * inv_drive;
+            let l2 = self.dc_l.process(waveshape(l1 * drive, character, shaper) * inv_drive);
+            let r2 = self.dc_r.process(waveshape(r1 * drive, character, shaper) * inv_drive);
 
             let l3 = self.lf_shelf_l.process(l2);
             let r3 = self.lf_shelf_r.process(r2);
