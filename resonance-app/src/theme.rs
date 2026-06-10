@@ -232,20 +232,10 @@ pub const SEPARATOR: Color = LINE;
 pub const TEXT: Color = TEXT_1;
 /// Secondary text.
 pub const TEXT_DIM: Color = TEXT_2;
-/// Solo state. The redesign collapses solo/peak/warning into a single warm
-/// amber; the old yellow is preserved for components that still spell it
-/// out explicitly.
-pub const SOLO_YELLOW: Color = WARM;
-/// Ruler background — the timeline strip above the lanes.
-pub const RULER_BG: Color = BG_1;
-/// Track lane separator.
-pub const TRACK_LINE: Color = LINE_2;
 /// Record-armed glow / record button accent.
 pub const RECORD_RED: Color = BAD;
 /// Track lane background while a recording pass is in progress.
 pub const PANEL_ARMED: Color = rgb(0x24, 0x1a, 0x1f);
-/// Selected track lane / header background tint.
-pub const PANEL_SELECTED: Color = BG_2;
 /// Sub-track strip background on the Mixer. One step darker than the
 /// normal strip so a parent and its expanded sub-tracks read as a
 /// cluster — the recessed shade groups them visually even before the
@@ -255,20 +245,12 @@ pub const MIXER_SUB_STRIP_BG: Color = BG_1;
 /// so the parent → child relationship reads at a glance without
 /// competing with the selection outline.
 pub const MIXER_SUB_STRIP_RAIL: Color = ACCENT_LINE;
-/// Left-edge accent rail color on a *selected* sub-track strip.
-/// Saturates from the dim border tint to the full lavender so the
-/// selected sub-track stands out from its siblings.
-pub const MIXER_SUB_STRIP_RAIL_SELECTED: Color = ACCENT;
-/// VU meter background.
-pub const METER_BG: Color = BG_1;
 /// Bar line in the timeline ruler / lane.
 pub const BAR_LINE: Color = LINE;
 /// Beat sub-line in the timeline lane.
 pub const BEAT_LINE: Color = LINE_2;
 /// Metronome enabled colour.
 pub const METRONOME_ON: Color = GOOD;
-/// Loop region marker / playhead-warm colour.
-pub const LOOP_MARKER: Color = WARM;
 /// Background for the global track rows (tempo / signature).
 pub const GLOBAL_TRACK_BG: Color = BG_2;
 
@@ -296,9 +278,6 @@ pub const GLOBAL_TRACK_TEMPO_HEIGHT: f32 = 40.0;
 /// Time-signature lane height inside the expanded global shelf — a
 /// single-line strip of pills + downbeat ticks.
 pub const GLOBAL_TRACK_SIG_HEIGHT: f32 = 28.0;
-/// Legacy alias retained for any straggler call sites. Prefer the
-/// per-lane constants above.
-pub const GLOBAL_TRACK_ROW_HEIGHT: f32 = GLOBAL_TRACK_TEMPO_HEIGHT;
 /// Width of the small glyph tile shown next to each global-track label
 /// in the shelf's left column.
 pub const GLOBAL_TRACK_GLYPH_SIZE: f32 = 22.0;

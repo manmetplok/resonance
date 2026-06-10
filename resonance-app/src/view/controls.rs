@@ -194,7 +194,7 @@ fn level_color(level: f32) -> iced::Color {
     if db > 0.0 {
         theme::RECORD_RED
     } else if db > -6.0 {
-        theme::SOLO_YELLOW
+        theme::WARM
     } else {
         theme::METRONOME_ON
     }
@@ -250,7 +250,7 @@ impl<Message> canvas::Program<Message> for StereoMeterCanvas {
 
 fn draw_v_bar(frame: &mut Frame, x: f32, w: f32, h: f32, level: f32) {
     let bg_rect = Path::rectangle(Point::new(x, 0.0), Size::new(w, h));
-    frame.fill(&bg_rect, theme::METER_BG);
+    frame.fill(&bg_rect, theme::BG_1);
     let bar_h = level_to_bar_height(level, h);
     if bar_h > 0.0 {
         let bar = Path::rectangle(Point::new(x, h - bar_h), Size::new(w, bar_h));

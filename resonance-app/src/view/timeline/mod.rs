@@ -405,7 +405,7 @@ impl<'a> TimelineCanvas<'a> {
         frame.fill_rectangle(
             Point::new(0.0, 0.0),
             Size::new(bounds.width, ruler_height),
-            theme::RULER_BG,
+            theme::BG_1,
         );
 
         // Section-pill band — sits under the ruler when at least one
@@ -456,7 +456,7 @@ impl<'a> TimelineCanvas<'a> {
 
                 let is_selected = self.selected_track == Some(track.id);
                 let bg = if is_selected {
-                    theme::PANEL_SELECTED
+                    theme::BG_2
                 } else if i % 2 == 0 {
                     theme::BG
                 } else {
@@ -476,7 +476,7 @@ impl<'a> TimelineCanvas<'a> {
                 frame.fill_rectangle(
                     Point::new(0.0, y + theme::TRACK_HEIGHT - 1.0),
                     Size::new(bounds.width, 1.0),
-                    theme::TRACK_LINE,
+                    theme::LINE_2,
                 );
             }
 
@@ -551,7 +551,7 @@ impl<'a> TimelineCanvas<'a> {
             let loop_in_x = self.sample_to_x(self.loop_in);
             let loop_out_x = self.sample_to_x(self.loop_out);
             let total_height = (header_height + track_area_height - y_off).max(bounds.height);
-            let loop_color = theme::LOOP_MARKER;
+            let loop_color = theme::WARM;
 
             // Amber range fill in ruler area
             let range_x = loop_in_x.max(0.0);

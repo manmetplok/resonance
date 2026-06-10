@@ -170,20 +170,14 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
         container(Space::new().width(Length::Fill))
             .width(Length::Fill)
             .height(theme::RULER_HEIGHT)
-            .style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::BG_1)),
-                ..Default::default()
-            }),
+            .style(theme::base_bg),
     );
     if has_section_band {
         chrome = chrome.push(
             container(Space::new().width(Length::Fill))
                 .width(Length::Fill)
                 .height(theme::SECTION_BAND_HEIGHT)
-                .style(|_theme| container::Style {
-                    background: Some(iced::Background::Color(theme::BG_1)),
-                    ..Default::default()
-                }),
+                .style(theme::base_bg),
         );
     }
     chrome = chrome.push(shelf::build_global_shelf_header(expanded));

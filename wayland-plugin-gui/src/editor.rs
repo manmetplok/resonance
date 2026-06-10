@@ -120,11 +120,6 @@ impl Editor {
         self.resizable
     }
 
-    /// Request an immediate repaint on the next loop iteration.
-    pub fn request_repaint(&self) {
-        let _ = self.sender.send(Command::Repaint);
-    }
-
     /// Stop the editor thread and destroy the window. Blocks until the thread
     /// joins.
     pub fn destroy(mut self) {

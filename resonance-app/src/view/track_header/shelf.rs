@@ -123,15 +123,7 @@ pub(super) fn build_global_shelf_header(expanded: bool) -> Element<'static, Mess
     let strip = container(inner)
         .width(Length::Fill)
         .height(theme::GLOBAL_SHELF_HEADER_HEIGHT)
-        .style(|_theme| container::Style {
-            background: Some(iced::Background::Color(theme::BG_1)),
-            border: iced::Border {
-                color: theme::LINE_2,
-                width: 0.0,
-                radius: 0.0.into(),
-            },
-            ..Default::default()
-        });
+        .style(theme::base_bg);
 
     mouse_area(strip)
         .on_press(Message::Ui(UiMessage::ToggleGlobalTracks))

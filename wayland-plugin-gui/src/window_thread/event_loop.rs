@@ -30,7 +30,6 @@ pub enum Command {
     Show,
     Hide,
     Resize(u32, u32),
-    Repaint,
     Quit,
 }
 
@@ -98,9 +97,6 @@ impl EditorThread {
                         }
                         Command::Resize(w, h) => {
                             state.pending_size = Some((w, h));
-                            state.needs_redraw = true;
-                        }
-                        Command::Repaint => {
                             state.needs_redraw = true;
                         }
                         Command::Quit => {

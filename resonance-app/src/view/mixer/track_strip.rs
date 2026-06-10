@@ -492,7 +492,7 @@ impl crate::Resonance {
         // visual tie to the parent strip on its left. Saturates to the
         // full lavender when the sub-track is selected.
         let rail_color = if is_selected {
-            theme::MIXER_SUB_STRIP_RAIL_SELECTED
+            theme::ACCENT
         } else {
             theme::MIXER_SUB_STRIP_RAIL
         };
