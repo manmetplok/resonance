@@ -163,10 +163,14 @@ impl RecordingState {
         }
 
         let mut ring_scratch = [0.0f32; DRAIN_SCRATCH_LEN];
+        // Pop whole frames only: a partial frame left in the scratch
+        // tail would be consumed but never written, rotating channel
+        // alignment for the rest of the take.
+        let scratch_len = (DRAIN_SCRATCH_LEN / channels) * channels;
         let deint_scratch = &mut self.deint_scratch;
 
         loop {
-            let count = consumer.pop_slice(&mut ring_scratch);
+            let count = consumer.pop_slice(&mut ring_scratch[..scratch_len]);
             if count == 0 {
                 break;
             }

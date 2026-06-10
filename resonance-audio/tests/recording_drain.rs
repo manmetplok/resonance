@@ -108,3 +108,80 @@ fn drain_streams_to_disk_without_growing_memory() {
 
     let _ = std::fs::remove_dir_all(&project_dir);
 }
+
+#[test]
+fn drain_preserves_channel_alignment_for_six_channel_input() {
+    // 4096 % 6 != 0, so a drain that pops the full scratch buffer
+    // would consume a partial frame and rotate channel alignment
+    // for the rest of the take. Encode each sample as
+    // `frame * channels + channel` so any rotation is detectable.
+    let project_dir = make_tempdir("drain-6ch");
+    let channels = 6usize;
+
+    let mut rec = RecordingState::new(48_000);
+    let ring: HeapRb<f32> = HeapRb::new(48_000 * channels);
+    let (mut prod, cons) = ring.split();
+    rec.ring_consumer = Some(cons);
+    rec.input_channels = channels as u16;
+    rec.input_sample_rate = 48_000;
+    rec.start_sample = 0;
+
+    let buf = RecordingState::create_track_buf(
+        &project_dir,
+        /* track_id */ 7,
+        /* clip_id  */ 1,
+        /* engine   */ 48_000,
+        /* input    */ 48_000,
+        /* port     */ 2,
+        /* mono     */ false,
+    )
+    .unwrap();
+    let wav_path = buf.path.clone();
+    rec.buffers.insert(7, buf);
+
+    let frames_per_chunk = 1000usize;
+    let total_frames = 48_000usize;
+    let chunks = total_frames / frames_per_chunk;
+    let mut sample = vec![0.0f32; frames_per_chunk * channels];
+    for i in 0..chunks {
+        for f in 0..frames_per_chunk {
+            let frame = i * frames_per_chunk + f;
+            for c in 0..channels {
+                sample[f * channels + c] = (frame * channels + c) as f32;
+            }
+        }
+        prod.push_slice(&sample);
+        rec.drain_ring_to_buffers();
+    }
+
+    let track_buf = rec.buffers.get(&7).unwrap();
+    assert_eq!(
+        track_buf.frames_written, total_frames as u64,
+        "wrong number of frames streamed to disk"
+    );
+
+    drop(prod);
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    let clips = parking_lot::RwLock::new(Vec::new());
+    rec.finalize_recording(48_000, &clips, &tx);
+
+    let source = ClipSource::open_wav(&wav_path).expect("mmap finalized wav");
+    assert_eq!(source.frame_count(), total_frames as u64);
+    let frames = source.as_frames();
+    for frame in 0..total_frames {
+        let left = frames[frame * 2];
+        let right = frames[frame * 2 + 1];
+        assert_eq!(
+            left,
+            (frame * channels + 2) as f32,
+            "left channel misaligned at frame {frame}"
+        );
+        assert_eq!(
+            right,
+            (frame * channels + 3) as f32,
+            "right channel misaligned at frame {frame}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
