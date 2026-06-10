@@ -176,7 +176,12 @@ impl Default for DelayParams {
 }
 
 pub struct DelaySmoothers {
-    pub time_ms: Smoother,
+    /// Resolved delay time in *samples*, retargeted once per block from
+    /// the sync/division/time/tempo state (see `lib.rs`). Smoothing in
+    /// samples-space means a sync toggle or division change glides the
+    /// read tap along the delay line instead of relocating it
+    /// discontinuously (a click).
+    pub delay_samples: Smoother,
     pub feedback: Smoother,
     pub mix: Smoother,
     pub stereo_offset: Smoother,
@@ -196,7 +201,7 @@ impl Default for DelaySmoothers {
 impl DelaySmoothers {
     pub fn new() -> Self {
         Self {
-            time_ms: Smoother::new(SmoothingStyle::Linear(100.0)),
+            delay_samples: Smoother::new(SmoothingStyle::Linear(100.0)),
             feedback: Smoother::new(SmoothingStyle::Linear(50.0)),
             mix: Smoother::new(SmoothingStyle::Linear(50.0)),
             stereo_offset: Smoother::new(SmoothingStyle::Linear(50.0)),
@@ -209,7 +214,7 @@ impl DelaySmoothers {
     }
 
     pub fn prepare(&mut self, sample_rate: f32, params: &DelayParams) {
-        self.time_ms.set_sample_rate(sample_rate);
+        self.delay_samples.set_sample_rate(sample_rate);
         self.feedback.set_sample_rate(sample_rate);
         self.mix.set_sample_rate(sample_rate);
         self.stereo_offset.set_sample_rate(sample_rate);
@@ -219,7 +224,16 @@ impl DelaySmoothers {
         self.mod_rate.set_sample_rate(sample_rate);
         self.mod_depth.set_sample_rate(sample_rate);
 
-        self.time_ms.reset(params.time_ms.value());
+        // No tempo at prepare time; the unsynced resolution is the best
+        // starting point and the first block retargets with tempo anyway.
+        self.delay_samples.reset(crate::sync::delay_samples(
+            params.sync.value(),
+            params.division.value() as usize,
+            params.time_ms.value(),
+            None,
+            sample_rate,
+            sample_rate * 4.0 + 256.0,
+        ));
         self.feedback.reset(params.feedback.value());
         self.mix.reset(params.mix.value());
         self.stereo_offset.reset(params.stereo_offset.value());
@@ -230,8 +244,9 @@ impl DelaySmoothers {
         self.mod_depth.reset(params.mod_depth.value());
     }
 
+    /// Retarget all smoothers except `delay_samples`, which needs tempo
+    /// context and is retargeted explicitly in `process`.
     pub fn retarget_from(&mut self, params: &DelayParams) {
-        self.time_ms.set_target(params.time_ms.value());
         self.feedback.set_target(params.feedback.value());
         self.mix.set_target(params.mix.value());
         self.stereo_offset.set_target(params.stereo_offset.value());

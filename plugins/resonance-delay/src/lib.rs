@@ -97,6 +97,20 @@ impl ResonancePlugin for ResonanceDelay {
         let routing = self.params.routing.value();
         let freeze = self.params.freeze.value();
 
+        let max_delay = (self.sample_rate * 4.0) + 256.0;
+
+        // Resolve sync/division/time/tempo into a delay-in-samples target
+        // and smooth that, so a sync toggle or division change glides the
+        // read tap instead of jumping it (a click).
+        self.smoothers.delay_samples.set_target(sync::delay_samples(
+            sync,
+            division,
+            self.params.time_ms.value(),
+            tempo,
+            self.sample_rate,
+            max_delay,
+        ));
+
         // Block-rate smoothers for filter parameters.
         let n = frames as u32;
         self.smoothers.hi_cut.skip(n);
@@ -113,18 +127,8 @@ impl ResonancePlugin for ResonanceDelay {
         let mod_depth = self.smoothers.mod_depth.current();
         let stereo_offset = self.smoothers.stereo_offset.current();
 
-        let max_delay = (self.sample_rate * 4.0) + 256.0;
-
         // Set tone filter coefficients once per block (avoids per-sample trig).
-        let block_delay_samp = sync::delay_samples(
-            sync,
-            division,
-            self.smoothers.time_ms.current(),
-            tempo,
-            self.sample_rate,
-            max_delay,
-        );
-        dsp.set_tone_filters(hi_cut, lo_cut, character, block_delay_samp);
+        dsp.set_tone_filters(hi_cut, lo_cut, character, self.smoothers.delay_samples.current());
 
         // Update viz with current BPM.
         if let Some(t) = tempo {
@@ -144,11 +148,7 @@ impl ResonancePlugin for ResonanceDelay {
                 mod_rate,
                 mod_depth,
                 freeze,
-                sync,
-                division,
-                max_delay_samples: max_delay,
             },
-            tempo,
         );
 
         self.viz.store_peaks(
@@ -157,20 +157,7 @@ impl ResonancePlugin for ResonanceDelay {
             linear_to_db(peaks.out_l),
             linear_to_db(peaks.out_r),
         );
-        let time_ms_current = self.smoothers.time_ms.current();
-        let delay_ms = if sync && tempo.is_some() {
-            sync::delay_samples(
-                sync,
-                division.min(11),
-                time_ms_current,
-                tempo,
-                self.sample_rate,
-                max_delay,
-            ) / self.sample_rate
-                * 1000.0
-        } else {
-            time_ms_current
-        };
+        let delay_ms = self.smoothers.delay_samples.current() / self.sample_rate * 1000.0;
         self.viz.store_delay_time_ms(delay_ms);
 
         // Compute echo tap positions for the viz.

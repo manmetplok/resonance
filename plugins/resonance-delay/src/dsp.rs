@@ -3,8 +3,8 @@ use resonance_dsp::{Biquad, DelayLine, OnePole};
 use crate::params::DelaySmoothers;
 
 /// Block-level parameters that do not change within a process call.
-/// Per-sample smoothed parameters (`time_ms`, `feedback`, `mix`) come
-/// off the `DelaySmoothers` passed alongside.
+/// Per-sample smoothed parameters (`delay_samples`, `feedback`, `mix`)
+/// come off the `DelaySmoothers` passed alongside.
 pub struct BlockParams {
     pub character: i32,
     pub routing: i32,
@@ -13,9 +13,6 @@ pub struct BlockParams {
     pub mod_rate: f32,
     pub mod_depth: f32,
     pub freeze: bool,
-    pub sync: bool,
-    pub division: usize,
-    pub max_delay_samples: f32,
 }
 
 /// In/out peak amplitudes captured across a block, in linear units.
@@ -173,11 +170,12 @@ impl DelayDsp {
         (wet_l, wet_r)
     }
 
-    /// Render one process block. Reads per-sample-smoothed `time_ms`,
-    /// `feedback`, and `mix` off the supplied `smoothers` (so the caller
-    /// only retargets them once per block), runs the inner delay-line
-    /// loop, mixes wet/dry in place into the supplied buffers, and
-    /// returns the in/out peak amplitudes for VU metering.
+    /// Render one process block. Reads per-sample-smoothed
+    /// `delay_samples`, `feedback`, and `mix` off the supplied
+    /// `smoothers` (so the caller only retargets them once per block),
+    /// runs the inner delay-line loop, mixes wet/dry in place into the
+    /// supplied buffers, and returns the in/out peak amplitudes for VU
+    /// metering.
     pub fn process_block(
         &mut self,
         left: &mut [f32],
@@ -185,22 +183,12 @@ impl DelayDsp {
         frames: usize,
         smoothers: &mut DelaySmoothers,
         params: &BlockParams,
-        tempo: Option<resonance_plugin::TempoInfo>,
     ) -> BlockPeaks {
         let mut peaks = BlockPeaks::default();
         for i in 0..frames {
-            let time_ms = smoothers.time_ms.next();
+            let delay_samp = smoothers.delay_samples.next();
             let feedback = smoothers.feedback.next();
             let mix = smoothers.mix.next();
-
-            let delay_samp = crate::sync::delay_samples(
-                params.sync,
-                params.division,
-                time_ms,
-                tempo,
-                self.sample_rate,
-                params.max_delay_samples,
-            );
 
             let dry_l = left[i];
             let dry_r = right[i];
