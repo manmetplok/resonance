@@ -7,6 +7,6 @@ mod wav;
 pub use denormal::flush_denormals;
 pub use scan::scan_directory;
 pub use wav::{
-    decode_wav_channels, decode_wav_stereo, linear_resample_mono, linear_resample_stereo,
-    WavChannels,
+    decode_file, decode_wav_channels, decode_wav_stereo, linear_resample_mono,
+    linear_resample_stereo, StreamingLinearResampler, WavChannels,
 };

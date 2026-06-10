@@ -1,4 +1,4 @@
-use resonance_audio::{linear_resample, StreamingLinearResampler};
+use resonance_common::{linear_resample_stereo, StreamingLinearResampler};
 
 fn sine_44_1k(frames: usize) -> Vec<f32> {
     let mut v = Vec::with_capacity(frames * 2);
@@ -15,7 +15,7 @@ fn sine_44_1k(frames: usize) -> Vec<f32> {
 fn streaming_matches_oneshot_within_f64_phase() {
     // Long enough to exercise many chunk boundaries.
     let input = sine_44_1k(20_000);
-    let oneshot = linear_resample(&input, 44_100, 48_000);
+    let oneshot = linear_resample_stereo(&input, 44_100.0, 48_000.0);
 
     let mut streamed = Vec::new();
     let mut r = StreamingLinearResampler::new(44_100, 48_000);
