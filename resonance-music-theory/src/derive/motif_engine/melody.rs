@@ -5,6 +5,7 @@ use crate::chord::Chord;
 use crate::rng::XorShift;
 use crate::scale::Scale;
 
+use super::super::climax::{enforce_single_climax, ClimaxHarmony};
 use super::super::melody::MelodyParams;
 use super::super::motif_source::{manual_motif_to_motif_notes, MotifParams, MotifSource};
 use super::super::{GeneratedNote, TimedChord};
@@ -147,6 +148,30 @@ pub fn derive_motif_melody_with_section(
 
         if let Some(scale) = scale {
             apply_leap_recovery(&mut phrase_notes, &scale, params.register);
+            // Single-climax rule: one highest note per phrase, in its
+            // second half, never the final note. Climax demotion and
+            // the leap grammar alternate to a fixpoint: demotion only
+            // lowers pitches and the grammar's repairs never lift a
+            // pitch back up to the phrase maximum, so the maximum is
+            // non-increasing and the loop settles; the cap is
+            // belt-and-braces.
+            let harmony = ClimaxHarmony {
+                chords,
+                tpb,
+                register: params.register,
+            };
+            for _ in 0..32 {
+                if !enforce_single_climax(
+                    &mut phrase_notes,
+                    Some(scale),
+                    params.register,
+                    Some(&harmony),
+                    true,
+                ) {
+                    break;
+                }
+                apply_leap_recovery(&mut phrase_notes, &scale, params.register);
+            }
         }
 
         if pi > 0 && rest_gap > 0 {

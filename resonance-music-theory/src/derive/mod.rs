@@ -9,6 +9,7 @@
 use crate::chord::Chord;
 
 mod bass;
+mod climax;
 mod melody;
 mod motif_bass;
 mod motif_engine;

@@ -27,6 +27,7 @@ pub use params::{
 
 use crate::scale::Scale;
 
+use super::climax::enforce_single_climax;
 use super::{GeneratedNote, TimedChord};
 use melody::{apply_motif_pitches, enforce_no_overlap, scale_from_chords, total_beats, MotifPitchContext};
 use style::derive_with_profile;
@@ -104,6 +105,35 @@ pub fn derive_vocal_with_motif(
                     },
                 );
             }
+        }
+    }
+    // Single-climax rule per lyric line (the vocal phrase unit): one
+    // highest note, in the line's second half, never the final
+    // (cadence) syllable. Demote-only, so the styles' walked contours
+    // keep their shape below the peak and the SVS `MAX_INTERVAL`
+    // adjacency cap survives; a cadence note that *is* the line peak
+    // is octave-dropped first so its pitch class survives. Wave
+    // contours previously produced two equal crests per line — this
+    // keeps the later one.
+    //
+    // Chant is exempt: recitation on a speaking tone has no melodic
+    // climax to discipline, and demoting its near-flat lines would
+    // smear pitches below the style's narrow band.
+    if params.style != VocalStyle::Chant {
+        let mut note_idx = 0usize;
+        for &line_syl in &ctx.line_syllables {
+            let n = (line_syl as usize).min(notes.len().saturating_sub(note_idx));
+            if n == 0 {
+                continue;
+            }
+            enforce_single_climax(
+                &mut notes[note_idx..note_idx + n],
+                ctx.scale,
+                (ctx.lo, ctx.hi),
+                None,
+                false,
+            );
+            note_idx += n;
         }
     }
     enforce_no_overlap(&mut notes, ctx.tpb);
