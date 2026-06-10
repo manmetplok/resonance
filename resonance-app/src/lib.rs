@@ -63,10 +63,11 @@ pub struct Resonance {
     pub(crate) view_caches: view::ui_caches::UiViewCaches,
     /// Lazy-memoised label strings for the transport bar's stat blocks
     /// (position, time, sig, key, loop). Re-formatted only when the
-    /// underlying inputs change; refreshed once per paint from
-    /// `view::transport::view_transport`. `RefCell` because `view()`
-    /// takes `&self`. See `view::transport_labels`.
-    pub(crate) transport_labels: std::cell::RefCell<view::transport_labels::TransportLabels>,
+    /// underlying inputs change. Refreshed by `refresh_transport_labels`
+    /// after every `update()` dispatch (plus at construction and after
+    /// demo seeding) so `view()` only ever reads it — the view layer
+    /// never mutates state. See `view::transport_labels`.
+    pub(crate) transport_labels: view::transport_labels::TransportLabels,
     pub(crate) error_message: Option<String>,
     pub(crate) master_volume: f32,
     pub(crate) master_level_l: f32,
@@ -302,7 +303,7 @@ impl Resonance {
 
         let recent_projects = recent::load();
 
-        let app = Self {
+        let mut app = Self {
             engine,
             sample_rate: 44100, // overwritten by SampleRateDetected event
             input_devices: Vec::new(),
@@ -316,9 +317,7 @@ impl Resonance {
             midi_clock_recv_device: None,
             available_plugins: Vec::new(),
             view_caches: view::ui_caches::UiViewCaches::default(),
-            transport_labels: std::cell::RefCell::new(
-                view::transport_labels::TransportLabels::default(),
-            ),
+            transport_labels: view::transport_labels::TransportLabels::default(),
             error_message: None,
             master_volume: 0.0, // 0 dB = unity gain
             master_level_l: 0.0,
@@ -367,7 +366,27 @@ impl Resonance {
             pending_preset_plugin_states: None,
         };
 
+        // Derive the transport label strings once so the very first
+        // frame (rendered before the first `Tick`) shows real values.
+        app.refresh_transport_labels();
+
         (app, iced::Task::none())
+    }
+
+    /// Re-derive the transport stat-block label strings from current
+    /// state. Called after every `update()` dispatch, at construction,
+    /// and at the end of the demo seed functions — never from `view()`,
+    /// which only reads the cache. Cheap when nothing changed (five
+    /// small key comparisons inside `TransportLabels::refresh`).
+    ///
+    /// The `mem::take` round-trip exists because `refresh` needs
+    /// `&Resonance` while the labels live on `Resonance` itself; taking
+    /// the (small, all-owned) struct out for the duration sidesteps the
+    /// double borrow without a `RefCell`.
+    pub(crate) fn refresh_transport_labels(&mut self) {
+        let mut labels = std::mem::take(&mut self.transport_labels);
+        labels.refresh(self);
+        self.transport_labels = labels;
     }
 }
 

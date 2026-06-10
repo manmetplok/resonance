@@ -24,12 +24,27 @@ pub mod viewport;
 pub(crate) use project_io::{build_project_file, replay_loaded_project, try_diff_replay};
 
 impl crate::Resonance {
-    /// Public entry point invoked by Iced on every message. Reads as a
-    /// small orchestrator: pre-dispatch gates, meta-message shortcut,
-    /// undo bookkeeping, dispatch, post-dispatch transaction commit.
-    /// The two side helpers live in `update/gates.rs` (`gates_message`)
-    /// and `undo.rs` (`record_undo`, alongside the message classifier).
+    /// Public entry point invoked by Iced on every message. Wraps the
+    /// real orchestrator so derived view state (the transport label
+    /// cache) is re-synced after *every* dispatch path — including the
+    /// gate and undo/redo early returns — keeping `view()` strictly
+    /// read-only.
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.update_inner(message);
+        // Iced repaints after each update, so refreshing here means the
+        // labels are always exact at paint time (no one-frame staleness)
+        // without the view layer ever writing state. No-op when the
+        // label inputs (playhead, sig, key, loop, bpm) are unchanged.
+        self.refresh_transport_labels();
+        task
+    }
+
+    /// The actual orchestrator: pre-dispatch gates, meta-message
+    /// shortcut, undo bookkeeping, dispatch, post-dispatch transaction
+    /// commit. The two side helpers live in `update/gates.rs`
+    /// (`gates_message`) and `undo.rs` (`record_undo`, alongside the
+    /// message classifier).
+    fn update_inner(&mut self, message: Message) -> Task<Message> {
         if self.gates_message(&message) {
             return Task::none();
         }

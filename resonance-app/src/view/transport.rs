@@ -152,12 +152,11 @@ fn tab_button<'a>(
 // ---------------------------------------------------------------------------
 
 fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
-    // Refresh the cached stat-block labels (position / time / sig /
-    // key / loop). Each label re-formats only when its inputs change,
-    // so a continuous resize hits the cached strings without touching
-    // the formatter.
-    r.transport_labels.borrow_mut().refresh(r);
-    let labels = r.transport_labels.borrow();
+    // Cached stat-block labels (position / time / sig / key / loop).
+    // Refreshed by `Resonance::refresh_transport_labels` after every
+    // update — the view only reads them, so they can be borrowed as
+    // `&str` for the lifetime of the returned Element (no clones).
+    let labels = &r.transport_labels;
 
     let any_armed = r.registry.tracks.iter().any(|t| t.record_armed);
 
@@ -190,14 +189,14 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
     .align_y(alignment::Vertical::Center);
 
     // Stat groups (POSITION | TIME | BPM | SIG | KEY | LOOP).
-    let pos_value = text(labels.position.clone())
+    let pos_value = text(labels.position.as_str())
         .size(13)
         .font(theme::MONO_FONT)
         .color(theme::ACCENT_SOFT)
         .line_height(LineHeight::Relative(1.0));
     let position_block = stat_block("POSITION", pos_value, 88).align_x(alignment::Horizontal::Center);
 
-    let time_value = text(labels.time.clone())
+    let time_value = text(labels.time.as_str())
         .size(13)
         .font(theme::MONO_FONT)
         .color(theme::TEXT_1)
@@ -216,7 +215,7 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
     let bpm_block = stat_block("BPM", bpm_input, 64);
 
     let sig_value = mouse_area(
-        text(labels.sig.clone())
+        text(labels.sig.as_str())
             .size(13)
             .font(theme::MONO_FONT)
             .color(theme::TEXT_1)
@@ -225,14 +224,14 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
     .on_press(Message::Transport(TransportMessage::CycleTimeSignature));
     let sig_block = stat_block("SIG", sig_value, 56);
 
-    let key_value = text(labels.key.clone())
+    let key_value = text(labels.key.as_str())
         .size(13)
         .font(theme::UI_FONT_MEDIUM)
         .color(theme::TEXT_1)
         .line_height(LineHeight::Relative(1.0));
     let key_block = stat_block("KEY", key_value, 64);
 
-    let loop_value = text(labels.loop_text.clone())
+    let loop_value = text(labels.loop_text.as_str())
         .size(13)
         .font(theme::MONO_FONT)
         .color(if r.transport.loop_enabled {

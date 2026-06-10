@@ -4,8 +4,14 @@
 //! (position, time, signature, key, loop length). With a continuous
 //! window resize that's five fresh allocations per frame at 60 Hz —
 //! enough to be visible on a hot resize path. This cache reformats
-//! only when the inputs that feed each label actually change, and
-//! returns a cheap `String` clone otherwise.
+//! only when the inputs that feed each label actually change; the view
+//! borrows the cached strings directly.
+//!
+//! Ownership: the cache lives on `Resonance` as a plain field and is
+//! refreshed by `Resonance::refresh_transport_labels` after every
+//! `update()` dispatch (plus at construction and demo seeding). The
+//! view layer (`view::transport`) only reads it — `refresh` is never
+//! called from `view()`.
 //!
 //! See `.claude/skills/ui-work.md` §11 for the broader view-perf rules.
 

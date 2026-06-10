@@ -306,6 +306,11 @@ pub fn seed_demo_content(app: &mut Resonance) {
     // `with_plugin_mut` can locate demo plugins without falling back to
     // a linear scan.
     app.rebuild_plugin_index();
+
+    // Seeding mutated transport/scale state directly (not via
+    // `update()`), so re-derive the transport label cache by hand —
+    // snapshot tests render `view()` immediately after seeding.
+    app.refresh_transport_labels();
 }
 
 /// Pre-bake a vocal MIDI clip for the demo content. Walks the section's
@@ -476,6 +481,7 @@ pub fn seed_demo_with_drum_subtracks(app: &mut Resonance) {
     // these caches, so do it by hand.
     app.view_caches.rebuild_output(&app.registry.busses);
     app.compose.refresh_track_count(&app.registry.tracks);
+    app.refresh_transport_labels();
 }
 
 /// Minimal seed for the "fresh-project + one track + open Mixer"
@@ -501,6 +507,7 @@ pub fn seed_minimal_drum_track_no_busses(app: &mut Resonance) {
     app.registry.next_track_order = 1;
     app.interaction.selected_track = Some(1);
     app.compose.refresh_track_count(&app.registry.tracks);
+    app.refresh_transport_labels();
 
     // Intentionally no busses and no `view_caches.rebuild_output` —
     // this is the state that used to panic when the Mixer tab opened.
@@ -521,4 +528,5 @@ pub fn seed_many_synth_tracks(app: &mut Resonance, n: usize) {
     }
     app.registry.next_track_order = n;
     app.compose.refresh_track_count(&app.registry.tracks);
+    app.refresh_transport_labels();
 }
