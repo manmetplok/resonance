@@ -9,8 +9,6 @@
 //!   every audible monitored track flowing through to the master so
 //!   the performer can hear themselves.
 
-pub(crate) use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
-
 use indexmap::IndexMap;
 
 use crate::clap_host::SyncClapInstance;

@@ -12,7 +12,7 @@ use std::time::Duration;
 use indexmap::IndexMap;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
-use crate::clap_host::{StereoBufMut, SyncClapInstance};
+use crate::clap_host::SyncClapInstance;
 use crate::latency::LatencyComp;
 use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
 use crate::mixer;
@@ -207,330 +207,41 @@ pub(super) fn render_chunk(
     let plugins_guard = ctx.plugins.read();
 
     let active_busses = busses_guard.len().min(scratch.bus_bufs.len());
-    for (bl, br) in scratch.bus_bufs.iter_mut().take(active_busses) {
-        bl[..frames].fill(0.0);
-        br[..frames].fill(0.0);
-    }
-
     let any_solo = any_top_level_solo(tracks_guard.values());
 
-    for track in tracks_guard.values() {
-        // Sub-tracks are driven by their parent's plugin fan-out below;
-        // skip them here so they don't run as standalone instrument
-        // tracks (they have no MIDI clips of their own and no plugins).
-        if track.sub_track_of.is_some() {
-            continue;
-        }
-        // For `to_wav` we honour the user's mix (muted/non-soloed tracks
-        // drop out). For `to_audio_clip` (bounce-in-place) `in_filter`
-        // already gates to the source + sub-tracks — and the source is
-        // explicitly muted by `finalize_bounce` after every successful
-        // bounce, so respecting `muted` here would silence every
-        // re-bounce of the same track.
-        if respect_mute_solo {
-            if track.muted() {
-                continue;
-            }
-            if any_solo && !track.soloed() {
-                continue;
-            }
-        }
-        if !in_filter(track.id) {
-            continue;
-        }
-
-        scratch.track_buf_l[..frames].fill(0.0);
-        scratch.track_buf_r[..frames].fill(0.0);
-        let mut has_audio = false;
-        // How many extra non-main output ports the source instrument
-        // filled this chunk. Drives the sub-track fan-out below — set
-        // for multi-output plugins (e.g. resonance-drums) and left at
-        // zero for single-output synths.
-        let mut extra_ports_filled: usize = 0;
-
-        if track.track_type == TrackType::Instrument {
-            // Instrument track: collect MIDI events and process.
-            scratch.note_buf.clear();
-            mixer::collect_midi_events_bounce(
-                &midi_guard,
-                track.id,
-                pos,
-                frames,
-                ctx.tempo_map,
-                ctx.sample_rate,
-                &mut scratch.note_buf,
-            );
-            let track_plugins = track.plugins();
-            let mut plugin_iter = track_plugins.iter();
-            if let Some(&inst_id) = plugin_iter.next() {
-                if let Some(mutex) = plugins_guard.get(&inst_id) {
-                    let mut inst = lock_plugin_for_bounce(mutex);
-                    for ev in scratch.note_buf.iter() {
-                        if ev.is_note_on {
-                            inst.0.queue_note_on(ev.note, ev.velocity, ev.sample_offset);
-                        } else {
-                            inst.0.queue_note_off(ev.note, ev.sample_offset);
-                        }
-                    }
-
-                    let port_count = inst.0.output_port_count().min(scratch.port_scratch.len());
-                    if port_count > 1 {
-                        // Multi-output instrument (e.g. drums). Build a
-                        // port_count-element StereoBufMut slice into the
-                        // per-port scratch pool, render via process_multi,
-                        // then copy port 0 into the track buffer for the
-                        // parent's effect chain. Ports 1..N are routed to
-                        // their sub-tracks below.
-                        let mut views: [Option<StereoBufMut<'_>>; MAX_PLUGIN_OUTPUT_PORTS] =
-                            Default::default();
-                        for (i, (pl, pr)) in
-                            scratch.port_scratch.iter_mut().take(port_count).enumerate()
-                        {
-                            pl[..frames].fill(0.0);
-                            pr[..frames].fill(0.0);
-                            views[i] = Some(StereoBufMut {
-                                left: &mut pl[..frames],
-                                right: &mut pr[..frames],
-                            });
-                        }
-                        let mut slots: [std::mem::MaybeUninit<StereoBufMut<'_>>;
-                            MAX_PLUGIN_OUTPUT_PORTS] =
-                            [const { std::mem::MaybeUninit::uninit() };
-                                MAX_PLUGIN_OUTPUT_PORTS];
-                        for i in 0..port_count {
-                            slots[i].write(views[i].take().unwrap());
-                        }
-                        // SAFETY: the first `port_count` slots above are
-                        // initialized; the slice only refers to those.
-                        let slice: &mut [StereoBufMut<'_>] = unsafe {
-                            std::slice::from_raw_parts_mut(
-                                slots.as_mut_ptr() as *mut StereoBufMut<'_>,
-                                port_count,
-                            )
-                        };
-                        inst.0.process_multi(slice, frames);
-                        for slot in slots.iter_mut().take(port_count) {
-                            unsafe { slot.assume_init_drop() };
-                        }
-                        scratch.track_buf_l[..frames]
-                            .copy_from_slice(&scratch.port_scratch[0].0[..frames]);
-                        scratch.track_buf_r[..frames]
-                            .copy_from_slice(&scratch.port_scratch[0].1[..frames]);
-                        extra_ports_filled = port_count;
-                    } else {
-                        // Single-output: render directly into the track buf.
-                        inst.0.process(
-                            &mut scratch.track_buf_l[..frames],
-                            &mut scratch.track_buf_r[..frames],
-                            frames,
-                        );
-                    }
-                    has_audio = true;
-                }
-            }
-            if !track.fx_bypassed() {
-                for &plugin_id in plugin_iter {
-                    if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                        let mut inst = lock_plugin_for_bounce(mutex);
-                        inst.0.process(
-                            &mut scratch.track_buf_l[..frames],
-                            &mut scratch.track_buf_r[..frames],
-                            frames,
-                        );
-                        has_audio = true;
-                    }
-                }
-            }
-        } else {
-            // Audio track: mix clips + plugin chain.
-            for clip in clips_guard.iter() {
-                if clip.track_id != track.id {
-                    continue;
-                }
-                let clip_start = clip.start_sample;
-                let clip_end = clip_start + clip.duration_frames();
-                let buf_end = pos + frames as u64;
-                if buf_end <= clip_start || pos >= clip_end {
-                    continue;
-                }
-                let overlap_start = pos.max(clip_start);
-                let overlap_end = buf_end.min(clip_end);
-                let clip_data = clip.source.as_frames();
-                for timeline_frame in overlap_start..overlap_end {
-                    let frame_offset = (timeline_frame - pos) as usize;
-                    let clip_frame = (timeline_frame - clip_start) as usize
-                        + clip.trim_start_frames as usize;
-                    let clip_idx = clip_frame * 2;
-                    if clip_idx + 1 < clip_data.len() {
-                        scratch.track_buf_l[frame_offset] += clip_data[clip_idx];
-                        scratch.track_buf_r[frame_offset] += clip_data[clip_idx + 1];
-                        has_audio = true;
-                    }
-                }
-            }
-
-            // Process through plugin chain (skipped when bypassed).
-            let track_plugins = track.plugins();
-            if !track_plugins.is_empty() && !track.fx_bypassed() {
-                for &plugin_id in track_plugins.iter() {
-                    if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                        let mut inst = lock_plugin_for_bounce(mutex);
-                        inst.0.process(
-                            &mut scratch.track_buf_l[..frames],
-                            &mut scratch.track_buf_r[..frames],
-                            frames,
-                        );
-                        has_audio = true;
-                    }
-                }
-            }
-        }
-
-        // Plugin-delay compensation, mirroring the live path: runs even
-        // when the track produced no audio this chunk so delayed tails
-        // keep flushing past the last clip/note.
-        if ctx.latency_comp.apply(
-            track.id,
-            &mut scratch.track_buf_l[..frames],
-            &mut scratch.track_buf_r[..frames],
-            pos,
-        ) {
-            has_audio = true;
-        }
-
-        if !has_audio {
-            continue;
-        }
-
-        // Apply track volume + pan, route to master or bus.
-        let volume = track.volume();
-        let (pan_l, pan_r) = resonance_dsp::constant_power_pan(track.pan());
-        let gain_l = volume * pan_l;
-        let gain_r = volume * pan_r;
-
-        let routed_to_bus = match track.output() {
-            TrackOutput::Bus(bus_id) => busses_guard
-                .get_index_of(&bus_id)
-                .filter(|idx| *idx < active_busses)
-                .map(|idx| {
-                    let (bl, br) = &mut scratch.bus_bufs[idx];
-                    for f in 0..frames {
-                        bl[f] += scratch.track_buf_l[f] * gain_l;
-                        br[f] += scratch.track_buf_r[f] * gain_r;
-                    }
-                })
-                .is_some(),
-            TrackOutput::Master => false,
-        };
-        if !routed_to_bus {
-            for f in 0..frames {
-                scratch.mix_buf[f * 2] += scratch.track_buf_l[f] * gain_l;
-                scratch.mix_buf[f * 2 + 1] += scratch.track_buf_r[f] * gain_r;
-            }
-        }
-
-        // Sub-track fan-out: for every non-main output port the source
-        // instrument filled this chunk, look up the matching sub-track
-        // and route its scratch buffer through the sub-track's effect
-        // chain + fader + bus/master. Mirrors `track_block.rs`'s live
-        // path so a multi-output drum kit bounces every kit piece, not
-        // just port 0 (Main).
-        if extra_ports_filled > 1 {
-            for sub_track in tracks_guard.values() {
-                let Some((parent_id, port_idx)) = sub_track.sub_track_of else {
-                    continue;
-                };
-                if parent_id != track.id {
-                    continue;
-                }
-                let port_idx = port_idx as usize;
-                if port_idx == 0 || port_idx >= extra_ports_filled {
-                    continue;
-                }
-                if respect_mute_solo {
-                    if sub_track.muted() {
-                        continue;
-                    }
-                    if any_solo && !sub_track.soloed() {
-                        continue;
-                    }
-                }
-                if !in_filter(sub_track.id) {
-                    continue;
-                }
-
-                // Sub-track effect chain runs in place on its port buffer.
-                if !sub_track.fx_bypassed() {
-                    let (pl, pr) = &mut scratch.port_scratch[port_idx];
-                    let sub_plugins = sub_track.plugins();
-                    for &plugin_id in sub_plugins.iter() {
-                        if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                            let mut inst = lock_plugin_for_bounce(mutex);
-                            inst.0.process(&mut pl[..frames], &mut pr[..frames], frames);
-                        }
-                    }
-                }
-
-                // Plugin-delay compensation for the sub-track's chain.
-                {
-                    let (pl, pr) = &mut scratch.port_scratch[port_idx];
-                    ctx.latency_comp
-                        .apply(sub_track.id, &mut pl[..frames], &mut pr[..frames], pos);
-                }
-
-                let sub_volume = sub_track.volume();
-                let (sub_pan_l, sub_pan_r) = resonance_dsp::constant_power_pan(sub_track.pan());
-                let sub_gain_l = sub_volume * sub_pan_l;
-                let sub_gain_r = sub_volume * sub_pan_r;
-
-                let (pl, pr) = &scratch.port_scratch[port_idx];
-                let routed = match sub_track.output() {
-                    TrackOutput::Bus(bus_id) => busses_guard
-                        .get_index_of(&bus_id)
-                        .filter(|idx| *idx < active_busses)
-                        .map(|idx| {
-                            let (bl, br) = &mut scratch.bus_bufs[idx];
-                            for f in 0..frames {
-                                bl[f] += pl[f] * sub_gain_l;
-                                br[f] += pr[f] * sub_gain_r;
-                            }
-                        })
-                        .is_some(),
-                    TrackOutput::Master => false,
-                };
-                if !routed {
-                    for f in 0..frames {
-                        scratch.mix_buf[f * 2] += pl[f] * sub_gain_l;
-                        scratch.mix_buf[f * 2 + 1] += pr[f] * sub_gain_r;
-                    }
-                }
-            }
-        }
-    }
-
-    // Per-bus plugin chain + volume/pan + sum to master.
-    for (bus_idx, bus) in busses_guard.values().enumerate().take(active_busses) {
-        if bus.muted() {
-            continue;
-        }
-        let (bl, br) = &mut scratch.bus_bufs[bus_idx];
-        if !bus.fx_bypassed() {
-            for &plugin_id in &bus.plugin_ids {
-                if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                    let mut inst = lock_plugin_for_bounce(mutex);
-                    inst.0.process(&mut bl[..frames], &mut br[..frames], frames);
-                }
-            }
-        }
-        let bus_volume = bus.volume();
-        let (bus_pan_l, bus_pan_r) = resonance_dsp::constant_power_pan(bus.pan());
-        let bus_gain_l = bus_volume * bus_pan_l;
-        let bus_gain_r = bus_volume * bus_pan_r;
-        for f in 0..frames {
-            scratch.mix_buf[f * 2] += bl[f] * bus_gain_l;
-            scratch.mix_buf[f * 2 + 1] += br[f] * bus_gain_r;
-        }
-    }
+    // Per-track / sub-track / bus rendering: shared with the live audio
+    // callback (`mixer/render_core.rs`). The Bounce strategy swaps the
+    // live path's non-blocking locks for deterministic blocking ones
+    // (spin + back-off via `lock_plugin_for_bounce`), applies the
+    // `in_filter` / `respect_mute_solo` gating, uses constant gains
+    // instead of per-block ramps, and skips meter / last-gain atomic
+    // writes so a bounce can run concurrently with live playback.
+    let mut strategy = mixer::RenderStrategy::Bounce {
+        in_filter,
+        respect_mute_solo,
+    };
+    mixer::render_block(
+        &mut scratch.mix_buf[..frames * 2],
+        2,
+        &tracks_guard,
+        &busses_guard,
+        &clips_guard,
+        &midi_guard,
+        &plugins_guard,
+        ctx.tempo_map,
+        ctx.sample_rate,
+        any_solo,
+        active_busses,
+        pos,
+        frames,
+        &mut scratch.track_buf_l,
+        &mut scratch.track_buf_r,
+        &mut scratch.bus_bufs,
+        &mut scratch.port_scratch,
+        &mut scratch.note_buf,
+        ctx.latency_comp,
+        &mut strategy,
+    );
 
     // Master FX chain: run over the summed mix in place. Skipped when
     // the caller asked us to leave the raw bus-summed mix alone (so the

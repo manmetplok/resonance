@@ -1,24 +1,20 @@
-//! Per-block timeline rendering: walks every active track + bus,
-//! mixes audio clips, dispatches MIDI events to instrument plugins,
-//! routes per-port multi-output instruments through their sub-tracks,
-//! and sums into the master output (or per-bus summing buffer).
+//! Per-block timeline rendering for the live audio callback: a thin
+//! wrapper over [`render_core::render_block`] with the
+//! [`RenderStrategy::Live`] policy (non-blocking plugin locks with the
+//! MIDI stash fallback, transport latching, monitor-input mixing,
+//! gain ramps, and VU peak metering).
 //!
 //! Called once per buffer in the no-seam path, twice (head + tail)
 //! when a buffer crosses a loop boundary. Allocation-free.
 
 use indexmap::IndexMap;
 
-use crate::clap_host::{StereoBufMut, SyncClapInstance};
+use crate::clap_host::SyncClapInstance;
 use crate::latency::LatencyComp;
 use crate::types::*;
 
-use super::common::{
-    bus_stereo_gains, latch_transport, ramped_stereo_peaks, sum_to_output, sum_to_stereo,
-    track_stereo_gains,
-};
-use super::midi_events::collect_midi_events;
 use super::midi_stash::MidiStash;
-use super::monitor::MAX_PLUGIN_OUTPUT_PORTS;
+use super::render_core::{render_block, RenderStrategy};
 
 /// Render one contiguous timeline sub-block into a slice of the output.
 /// Separated from `mix_audio` so that a buffer which crosses the loop seam
@@ -60,440 +56,33 @@ pub(super) fn render_timeline_block(
     transport_snap: Option<(f64, u16, u16, bool, f64)>,
     latency_comp: &LatencyComp,
 ) {
-    // Zero every active bus summing buffer at the start of the sub-block so
-    // tracks can accumulate into them.
-    for (buf_l, buf_r) in bus_bufs.iter_mut().take(active_busses) {
-        buf_l[..frames].fill(0.0);
-        buf_r[..frames].fill(0.0);
-    }
-
-    // Per-track processing: (clips + monitor input) -> plugins -> volume -> master.
-    // Sub-tracks are skipped here; they're driven by their parent's plugin
-    // fan-out later in the same track pass.
-    for track in tracks_guard.values() {
-        if track.sub_track_of.is_some() {
-            continue;
-        }
-        // Muted / solo-suppressed instrument tracks still run their
-        // instrument plugin below (audio discarded) so NoteOffs keep
-        // flowing and voices don't stick on unmute; other tracks are
-        // skipped outright — except for one extra block after silencing,
-        // which renders normally with a target gain of 0.0 so the mute
-        // ramps out instead of hard-cutting.
-        let silenced = track.muted() || (any_solo && !track.soloed());
-        let (last_gain_l, last_gain_r) = track.last_gains();
-        let faded_out = last_gain_l == 0.0 && last_gain_r == 0.0;
-        if silenced && faded_out && track.track_type != TrackType::Instrument {
-            continue;
-        }
-        let (target_gain_l, target_gain_r) = if silenced {
-            (0.0, 0.0)
-        } else {
-            track_stereo_gains(track)
-        };
-
-        // Zero per-track buffers
-        track_buf_l[..frames].fill(0.0);
-        track_buf_r[..frames].fill(0.0);
-
-        let mut has_audio = false;
-        // Sub-track fan-out book-keeping: how many extra output ports the
-        // instrument plugin filled on this block, so the post-plugin loop
-        // knows how many `port_scratch` entries to route to sub-tracks.
-        let mut extra_ports_filled: usize = 0;
-
-        if track.track_type == TrackType::Instrument {
-            // -- Instrument track: collect MIDI events, send to instrument plugin --
-            note_event_buf.clear();
-            collect_midi_events(
-                midi_clips_guard,
-                track.id,
-                playhead,
-                frames,
-                tempo_map,
-                sample_rate,
-                note_event_buf,
-            );
-
-            // Process: first plugin is the instrument (receives note events),
-            // remaining plugins are effects (audio-only).
-            let track_plugins = track.plugins();
-            let mut plugin_iter = track_plugins.iter();
-            if let Some(&instrument_id) = plugin_iter.next() {
-                if let Some(mutex) = plugins_guard.get(&instrument_id) {
-                    if let Some(mut inst) = mutex.try_lock() {
-                        latch_transport(&mut inst, transport_snap);
-                        // Replay events parked during earlier lock
-                        // contention before this block's events.
-                        midi_stash.deliver(instrument_id, &mut *inst);
-                        for event in note_event_buf.iter() {
-                            if event.is_note_on {
-                                inst.0.queue_note_on(
-                                    event.note,
-                                    event.velocity,
-                                    event.sample_offset,
-                                );
-                            } else {
-                                inst.0.queue_note_off(event.note, event.sample_offset);
-                            }
-                        }
-
-                        let port_count = inst.0.output_port_count().min(port_scratch.len());
-                        if port_count > 1 {
-                            // Multi-output instrument: fan out into the
-                            // per-port scratch pool, then copy port 0 back
-                            // into the track's main buffer so the rest of
-                            // the track chain (effects + fader + bus
-                            // routing) runs unchanged.
-                            {
-                                let mut views: [Option<StereoBufMut<'_>>; MAX_PLUGIN_OUTPUT_PORTS] =
-                                    Default::default();
-                                for (i, (pl, pr)) in
-                                    port_scratch.iter_mut().take(port_count).enumerate()
-                                {
-                                    pl[..frames].fill(0.0);
-                                    pr[..frames].fill(0.0);
-                                    views[i] = Some(StereoBufMut {
-                                        left: &mut pl[..frames],
-                                        right: &mut pr[..frames],
-                                    });
-                                }
-                                // Build a contiguous slice of StereoBufMut
-                                // for the CLAP call. We know ports 0..port_count
-                                // are Some.
-                                let mut slots: [std::mem::MaybeUninit<StereoBufMut<'_>>;
-                                    MAX_PLUGIN_OUTPUT_PORTS] =
-                                    [const { std::mem::MaybeUninit::uninit() };
-                                        MAX_PLUGIN_OUTPUT_PORTS];
-                                for i in 0..port_count {
-                                    slots[i].write(views[i].take().unwrap());
-                                }
-                                // SAFETY: the first `port_count` slots are
-                                // initialized above; the slice only refers
-                                // to those.
-                                let slice: &mut [StereoBufMut<'_>] = unsafe {
-                                    std::slice::from_raw_parts_mut(
-                                        slots.as_mut_ptr() as *mut StereoBufMut<'_>,
-                                        port_count,
-                                    )
-                                };
-                                inst.0.process_multi(slice, frames);
-                                // Drop the initialized entries before the
-                                // MaybeUninit array goes out of scope.
-                                for slot in slots.iter_mut().take(port_count) {
-                                    unsafe { slot.assume_init_drop() };
-                                }
-                            }
-                            // Port 0 → main track buffer for effect chain.
-                            track_buf_l[..frames].copy_from_slice(&port_scratch[0].0[..frames]);
-                            track_buf_r[..frames].copy_from_slice(&port_scratch[0].1[..frames]);
-                            extra_ports_filled = port_count;
-                            has_audio = true;
-                        } else {
-                            // Single-output path (legacy plugins): use the
-                            // thin wrapper that re-targets onto track_buf_l/r.
-                            inst.0.process(
-                                &mut track_buf_l[..frames],
-                                &mut track_buf_r[..frames],
-                                frames,
-                            );
-                            has_audio = true;
-                        }
-                    } else {
-                        // UI thread holds the plugin lock (param drag /
-                        // autosave / reload): park this block's events so
-                        // they replay on the next successful lock instead
-                        // of dropping them. The one-block audio dropout
-                        // is accepted for now (future work: crossfade).
-                        midi_stash.stash(instrument_id, note_event_buf);
-                    }
-                }
-            }
-            // Silenced track: the instrument ran (voice state stays
-            // consistent) but its output is discarded — once the mute
-            // ramp below has finished fading the previous gain to zero.
-            if silenced && faded_out {
-                continue;
-            }
-            // Effect plugins (skipped when the track's FX are bypassed;
-            // the instrument itself still ran above).
-            if !track.fx_bypassed() {
-                for &plugin_id in plugin_iter {
-                    if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                        if let Some(mut inst) = mutex.try_lock() {
-                            latch_transport(&mut inst, transport_snap);
-                            inst.0.process(
-                                &mut track_buf_l[..frames],
-                                &mut track_buf_r[..frames],
-                                frames,
-                            );
-                            has_audio = true;
-                        }
-                    }
-                }
-            }
-        } else {
-            // -- Audio track: mix clips + monitor input + plugin chain --
-
-            // Mix monitor input for all tracks with monitoring enabled.
-            // Each track pulls its own channel(s) from the interleaved
-            // multi-channel monitor buffer based on its input_port.
-            if track.monitor_enabled() && monitor_frames > 0 && input_channels > 0 {
-                let is_mono = track.mono();
-                let mix_frames = frames.min(monitor_frames);
-                let port = (track.input_port() as usize).min(input_channels - 1);
-                let right_port = if is_mono {
-                    port
-                } else {
-                    (port + 1).min(input_channels - 1)
-                };
-                for f in 0..mix_frames {
-                    let base = f * input_channels;
-                    track_buf_l[f] += monitor_temp[base + port];
-                    track_buf_r[f] += monitor_temp[base + right_port];
-                }
-                has_audio = true;
-            }
-
-            // Accumulate all clips for this track into de-interleaved track buffers
-            for clip in clips_guard.iter() {
-                if clip.track_id != track.id {
-                    continue;
-                }
-
-                let clip_frames = clip.duration_frames();
-                let clip_start = clip.start_sample;
-                let clip_end = clip_start + clip_frames;
-                let buf_start = playhead;
-                let buf_end = playhead + frames as u64;
-
-                if buf_end <= clip_start || buf_start >= clip_end {
-                    continue;
-                }
-
-                let overlap_start = buf_start.max(clip_start);
-                let overlap_end = buf_end.min(clip_end);
-
-                let clip_data = clip.source.as_frames();
-                for timeline_frame in overlap_start..overlap_end {
-                    let frame_offset = (timeline_frame - buf_start) as usize;
-                    let clip_frame =
-                        (timeline_frame - clip_start) as usize + clip.trim_start_frames as usize;
-                    let clip_idx = clip_frame * 2;
-                    if clip_idx + 1 < clip_data.len() {
-                        track_buf_l[frame_offset] += clip_data[clip_idx];
-                        track_buf_r[frame_offset] += clip_data[clip_idx + 1];
-                        has_audio = true;
-                    }
-                }
-            }
-
-            // Process through plugin chain (skipped when FX are bypassed).
-            let track_plugins = track.plugins();
-            if !track_plugins.is_empty() && !track.fx_bypassed() {
-                for &plugin_id in track_plugins.iter() {
-                    if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                        if let Some(mut inst) = mutex.try_lock() {
-                            latch_transport(&mut inst, transport_snap);
-                            inst.0.process(
-                                &mut track_buf_l[..frames],
-                                &mut track_buf_r[..frames],
-                                frames,
-                            );
-                            has_audio = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Plugin-delay compensation: delay the post-chain signal so
-        // every track reaches master with the same total latency (see
-        // `crate::latency`). Runs even when the track produced no audio
-        // this block so delayed tails keep flushing.
-        if latency_comp.apply(
-            track.id,
-            &mut track_buf_l[..frames],
-            &mut track_buf_r[..frames],
-            playhead,
-        ) {
-            has_audio = true;
-        }
-
-        if !has_audio {
-            // Nothing to ramp over: snap the remembered gain to the
-            // target so changes made during silence don't ramp later.
-            track.set_last_gains(target_gain_l, target_gain_r);
-            continue;
-        }
-
-        // Apply track volume + pan (ramped from the previous block's
-        // gains) and sum to the track's destination.
-        let gain_l = (last_gain_l, target_gain_l);
-        let gain_r = (last_gain_r, target_gain_r);
-
-        // Compute post-fader peak levels for VU meters
-        let (peak_l, peak_r) = ramped_stereo_peaks(track_buf_l, track_buf_r, frames, gain_l, gain_r);
-        track.update_peak_l(peak_l);
-        track.update_peak_r(peak_r);
-
-        // Route post-fader audio: either directly to the master interleaved
-        // output or into the target bus's summing buffer. If the target bus
-        // no longer exists (e.g. removed mid-block), fall back to master so
-        // the track isn't silenced.
-        let routed_to_bus = match track.output() {
-            TrackOutput::Bus(bus_id) => busses_guard
-                .get_index_of(&bus_id)
-                .filter(|idx| *idx < active_busses)
-                .map(|idx| {
-                    let (bl, br) = &mut bus_bufs[idx];
-                    sum_to_stereo(bl, br, frames, track_buf_l, track_buf_r, gain_l, gain_r);
-                })
-                .is_some(),
-            TrackOutput::Master => false,
-        };
-        if !routed_to_bus {
-            sum_to_output(
-                data,
-                channels,
-                frames,
-                track_buf_l,
-                track_buf_r,
-                gain_l,
-                gain_r,
-            );
-        }
-        track.set_last_gains(target_gain_l, target_gain_r);
-
-        // Sub-track fan-out: for every non-main plugin output port that
-        // was filled by the instrument above, look up the matching
-        // sub-track (if any) and route its scratch buffer through the
-        // sub-track's fader / pan / bus.
-        if extra_ports_filled > 1 {
-            for sub_track in tracks_guard.values() {
-                let Some((parent_id, port_idx)) = sub_track.sub_track_of else {
-                    continue;
-                };
-                if parent_id != track.id {
-                    continue;
-                }
-                let port_idx = port_idx as usize;
-                if port_idx == 0 || port_idx >= extra_ports_filled {
-                    continue;
-                }
-                // A silenced parent fades its sub-tracks out in the same
-                // block; once the parent is fully faded the fan-out stops
-                // running and the subs stay at zero.
-                let sub_silenced = sub_track.muted() || silenced;
-                let (sub_last_l, sub_last_r) = sub_track.last_gains();
-                if sub_silenced && sub_last_l == 0.0 && sub_last_r == 0.0 {
-                    continue;
-                }
-                let (sub_target_l, sub_target_r) = if sub_silenced {
-                    (0.0, 0.0)
-                } else {
-                    track_stereo_gains(sub_track)
-                };
-                let sub_gain_l = (sub_last_l, sub_target_l);
-                let sub_gain_r = (sub_last_r, sub_target_r);
-
-                // Run the sub-track's own effect chain in place on its
-                // port buffer, before peak metering and bus/master routing.
-                // Sub-tracks never host an instrument, so every entry in
-                // the plugin chain is treated as an audio effect and is
-                // subject to the sub-track's own FX-bypass flag.
-                if !sub_track.fx_bypassed() {
-                    let (pl, pr) = &mut port_scratch[port_idx];
-                    let sub_plugins = sub_track.plugins();
-                    for &plugin_id in sub_plugins.iter() {
-                        if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                            if let Some(mut inst) = mutex.try_lock() {
-                                latch_transport(&mut inst, transport_snap);
-                                inst.0.process(&mut pl[..frames], &mut pr[..frames], frames);
-                            }
-                        }
-                    }
-                }
-
-                // Plugin-delay compensation for the sub-track's chain.
-                {
-                    let (pl, pr) = &mut port_scratch[port_idx];
-                    latency_comp.apply(
-                        sub_track.id,
-                        &mut pl[..frames],
-                        &mut pr[..frames],
-                        playhead,
-                    );
-                }
-
-                // Peak levels for sub-track VU meter.
-                let (pl, pr) = &port_scratch[port_idx];
-                let (sub_peak_l, sub_peak_r) =
-                    ramped_stereo_peaks(pl, pr, frames, sub_gain_l, sub_gain_r);
-                sub_track.update_peak_l(sub_peak_l);
-                sub_track.update_peak_r(sub_peak_r);
-
-                // Route post-fader audio to the sub-track's destination.
-                let routed = match sub_track.output() {
-                    TrackOutput::Bus(bus_id) => busses_guard
-                        .get_index_of(&bus_id)
-                        .filter(|idx| *idx < active_busses)
-                        .map(|idx| {
-                            let (bl, br) = &mut bus_bufs[idx];
-                            sum_to_stereo(bl, br, frames, pl, pr, sub_gain_l, sub_gain_r);
-                        })
-                        .is_some(),
-                    TrackOutput::Master => false,
-                };
-                if !routed {
-                    sum_to_output(data, channels, frames, pl, pr, sub_gain_l, sub_gain_r);
-                }
-                sub_track.set_last_gains(sub_target_l, sub_target_r);
-            }
-        }
-    }
-
-    // Per-bus processing: plugin chain, volume/pan, peaks, sum to master.
-    for (bus_idx, bus) in busses_guard.values().enumerate().take(active_busses) {
-        let bus_silenced = bus.muted();
-        let (bus_last_l, bus_last_r) = bus.last_gains();
-        if bus_silenced && bus_last_l == 0.0 && bus_last_r == 0.0 {
-            continue;
-        }
-        let (bus_buf_l, bus_buf_r) = &mut bus_bufs[bus_idx];
-
-        // Process bus plugin chain in place over the accumulated buffer
-        // (skipped when the bus's FX are bypassed).
-        if !bus.fx_bypassed() {
-            for &plugin_id in &bus.plugin_ids {
-                if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                    if let Some(mut inst) = mutex.try_lock() {
-                        latch_transport(&mut inst, transport_snap);
-                        inst.0
-                            .process(&mut bus_buf_l[..frames], &mut bus_buf_r[..frames], frames);
-                    }
-                }
-            }
-        }
-
-        // Apply bus volume + pan (ramped from the previous block's
-        // gains) and compute post-fader peaks.
-        let (bus_target_l, bus_target_r) = if bus_silenced {
-            (0.0, 0.0)
-        } else {
-            bus_stereo_gains(bus)
-        };
-        let bus_gain_l = (bus_last_l, bus_target_l);
-        let bus_gain_r = (bus_last_r, bus_target_r);
-        let (bus_peak_l, bus_peak_r) =
-            ramped_stereo_peaks(bus_buf_l, bus_buf_r, frames, bus_gain_l, bus_gain_r);
-        bus.update_peak_l(bus_peak_l);
-        bus.update_peak_r(bus_peak_r);
-
-        // Sum the bus output into master.
-        sum_to_output(
-            data, channels, frames, bus_buf_l, bus_buf_r, bus_gain_l, bus_gain_r,
-        );
-        bus.set_last_gains(bus_target_l, bus_target_r);
-    }
+    let mut strategy = RenderStrategy::Live {
+        midi_stash,
+        transport_snap,
+        monitor_temp,
+        monitor_frames,
+        input_channels,
+    };
+    render_block(
+        data,
+        channels,
+        tracks_guard,
+        busses_guard,
+        clips_guard,
+        midi_clips_guard,
+        plugins_guard,
+        tempo_map,
+        sample_rate,
+        any_solo,
+        active_busses,
+        playhead,
+        frames,
+        track_buf_l,
+        track_buf_r,
+        bus_bufs,
+        port_scratch,
+        note_event_buf,
+        latency_comp,
+        &mut strategy,
+    );
 }

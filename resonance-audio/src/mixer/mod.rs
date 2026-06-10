@@ -4,7 +4,9 @@
 //! The work is split across submodules by concern:
 //! - [`midi_events`]: per-block MIDI tick→sample collection.
 //! - [`monitor`]: live-input monitoring and per-track de-interleave.
-//! - [`track_block`]: per-track / per-bus / sub-track mix orchestration.
+//! - [`render_core`]: per-track / per-bus / sub-track render core shared
+//!   with the offline bounce path, parameterized by `RenderStrategy`.
+//! - [`track_block`]: live wrapper over `render_core`.
 //! - [`master`]: master FX insert chain + master volume / peaks.
 //! - [`click`]: count-in and timeline metronome click synthesis.
 //! - [`common`]: tiny helpers (pan-law gains, transport latching, the
@@ -21,6 +23,7 @@ mod master;
 mod midi_events;
 mod midi_stash;
 mod monitor;
+mod render_core;
 mod track_block;
 
 pub(crate) use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
@@ -28,6 +31,7 @@ pub use common::{ramped_gain, sum_to_output, sum_to_stereo, transport_pos_beats}
 pub use midi_events::collect_midi_events_bounce;
 pub(crate) use midi_events::MAX_MIDI_EVENTS_PER_BUFFER;
 pub use midi_stash::{MidiStash, NoteSink};
+pub(crate) use render_core::{render_block, RenderStrategy};
 
 use ringbuf::traits::{Consumer, Observer};
 use std::sync::atomic::Ordering;
