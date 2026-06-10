@@ -1,48 +1,18 @@
-/// General MIDI drum map constants and pad configuration.
+/// General MIDI drum map and pad configuration.
+///
+/// The note numbers, pad order, and canonical names are the shared
+/// contract in `resonance_common::drum_map`; this module layers the
+/// DSP-side per-pad configuration (samples, choke groups, routing) on top.
 use crate::kit::OutputGroup;
+use resonance_common::drum_map::GM_PADS;
 
-pub const NUM_PADS: usize = 30;
-
-// ---------------------------------------------------------------------------
-// MIDI note assignments.
-//
-// General MIDI standard (channel 10) where applicable; unused GM notes or
-// notes below/above the standard range for the rest.
-// ---------------------------------------------------------------------------
-
-// --- GM standard notes ---
-pub const KICK: u8 = 36;
-pub const SNARE: u8 = 38;
-pub const RIMSHOT: u8 = 37; // GM: Side Stick / Rimshot
-pub const HIHAT_CLOSED: u8 = 42;
-pub const HIHAT_OPEN: u8 = 46;
-pub const HIHAT_PEDAL: u8 = 44; // GM: Pedal Hi-Hat
-pub const TOM_LOW: u8 = 45; // GM: Low Tom
-pub const TOM_MID: u8 = 47; // GM: Low-Mid Tom
-pub const TOM_HIGH: u8 = 50; // GM: High Tom
-pub const CRASH_16_EDGE: u8 = 49; // GM: Crash Cymbal 1
-pub const CRASH_18_EDGE: u8 = 57; // GM: Crash Cymbal 2
-pub const RIDE_EDGE: u8 = 51; // GM: Ride Cymbal 1
-pub const RIDE_BELL: u8 = 53; // GM: Ride Bell
-pub const CHINA_EDGE: u8 = 52; // GM: Chinese Cymbal
-
-// --- Extended / non-GM notes (using free slots below 35 and above 81) ---
-pub const SNARE_SIDESTICK: u8 = 39; // repurposed from GM Clap
-pub const SNARE_FLAM: u8 = 21;
-pub const SNARE_ROLL: u8 = 22;
-pub const SNARE_HANDTUCH: u8 = 23;
-pub const HIHAT_HALF_OPEN: u8 = 24;
-pub const HIHAT_LOOSE: u8 = 25;
-pub const HIHAT_PRESSED: u8 = 26;
-pub const HIHAT_TRASH_OPEN: u8 = 27;
-pub const CRASH_16_BELL: u8 = 28;
-pub const CRASH_16_TIP: u8 = 29;
-pub const CRASH_18_BELL: u8 = 55;
-pub const CRASH_18_TIP: u8 = 58;
-pub const RIDE_TIP: u8 = 59;
-pub const CHINA_BELL: u8 = 60;
-pub const CHINA_TIP: u8 = 61;
-pub const COUNT_STICK: u8 = 31; // GM: Sticks (31)
+pub use resonance_common::drum_map::{
+    pad_index_for_note, CHINA_BELL, CHINA_EDGE, CHINA_TIP, COUNT_STICK, CRASH_16_BELL,
+    CRASH_16_EDGE, CRASH_16_TIP, CRASH_18_BELL, CRASH_18_EDGE, CRASH_18_TIP, HIHAT_CLOSED,
+    HIHAT_HALF_OPEN, HIHAT_LOOSE, HIHAT_OPEN, HIHAT_PEDAL, HIHAT_PRESSED, HIHAT_TRASH_OPEN, KICK,
+    NUM_PADS, RIDE_BELL, RIDE_EDGE, RIDE_TIP, RIMSHOT, SNARE, SNARE_FLAM, SNARE_HANDTUCH,
+    SNARE_ROLL, SNARE_SIDESTICK, TOM_HIGH, TOM_LOW, TOM_MID,
+};
 
 /// Choke group IDs. Pads in the same choke group silence each other.
 pub const CHOKE_HIHAT: u8 = 1;
@@ -70,8 +40,8 @@ pub struct PadMapping {
 pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     // 0: Kick
     PadMapping {
-        note: KICK,
-        name: "Kick",
+        note: GM_PADS[0].note,
+        name: GM_PADS[0].name,
         default_sample: include_bytes!("../samples/kick.wav"),
         choke_group: None,
         output_group: OutputGroup::Kick,
@@ -80,8 +50,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 1: Snare
     PadMapping {
-        note: SNARE,
-        name: "Snare",
+        note: GM_PADS[1].note,
+        name: GM_PADS[1].name,
         default_sample: include_bytes!("../samples/snare.wav"),
         choke_group: None,
         output_group: OutputGroup::Snare,
@@ -90,8 +60,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 2: Hi-Hat Closed
     PadMapping {
-        note: HIHAT_CLOSED,
-        name: "Hi-Hat Closed",
+        note: GM_PADS[2].note,
+        name: GM_PADS[2].name,
         default_sample: include_bytes!("../samples/hihat_closed.wav"),
         choke_group: Some(CHOKE_HIHAT),
         output_group: OutputGroup::Hats,
@@ -100,8 +70,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 3: Hi-Hat Open
     PadMapping {
-        note: HIHAT_OPEN,
-        name: "Hi-Hat Open",
+        note: GM_PADS[3].note,
+        name: GM_PADS[3].name,
         default_sample: include_bytes!("../samples/hihat_open.wav"),
         choke_group: Some(CHOKE_HIHAT),
         output_group: OutputGroup::Hats,
@@ -110,8 +80,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 4: Hi-Hat Half Open
     PadMapping {
-        note: HIHAT_HALF_OPEN,
-        name: "Hi-Hat Half Open",
+        note: GM_PADS[4].note,
+        name: GM_PADS[4].name,
         default_sample: include_bytes!("../samples/hihat_closed.wav"),
         choke_group: Some(CHOKE_HIHAT),
         output_group: OutputGroup::Hats,
@@ -120,8 +90,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 5: Hi-Hat Loose
     PadMapping {
-        note: HIHAT_LOOSE,
-        name: "Hi-Hat Loose",
+        note: GM_PADS[5].note,
+        name: GM_PADS[5].name,
         default_sample: include_bytes!("../samples/hihat_open.wav"),
         choke_group: Some(CHOKE_HIHAT),
         output_group: OutputGroup::Hats,
@@ -130,8 +100,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 6: Hi-Hat Pedal
     PadMapping {
-        note: HIHAT_PEDAL,
-        name: "Hi-Hat Pedal",
+        note: GM_PADS[6].note,
+        name: GM_PADS[6].name,
         default_sample: include_bytes!("../samples/hihat_closed.wav"),
         choke_group: Some(CHOKE_HIHAT),
         output_group: OutputGroup::Hats,
@@ -140,8 +110,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 7: Hi-Hat Pressed
     PadMapping {
-        note: HIHAT_PRESSED,
-        name: "Hi-Hat Pressed",
+        note: GM_PADS[7].note,
+        name: GM_PADS[7].name,
         default_sample: include_bytes!("../samples/hihat_closed.wav"),
         choke_group: Some(CHOKE_HIHAT),
         output_group: OutputGroup::Hats,
@@ -150,8 +120,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 8: Hi-Hat Trash Open
     PadMapping {
-        note: HIHAT_TRASH_OPEN,
-        name: "Hi-Hat Trash Open",
+        note: GM_PADS[8].note,
+        name: GM_PADS[8].name,
         default_sample: include_bytes!("../samples/hihat_open.wav"),
         choke_group: Some(CHOKE_HIHAT),
         output_group: OutputGroup::Hats,
@@ -160,8 +130,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 9: Tom High
     PadMapping {
-        note: TOM_HIGH,
-        name: "Tom High",
+        note: GM_PADS[9].note,
+        name: GM_PADS[9].name,
         default_sample: include_bytes!("../samples/tom_high.wav"),
         choke_group: None,
         output_group: OutputGroup::Toms,
@@ -170,8 +140,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 10: Tom Mid
     PadMapping {
-        note: TOM_MID,
-        name: "Tom Mid",
+        note: GM_PADS[10].note,
+        name: GM_PADS[10].name,
         default_sample: include_bytes!("../samples/tom_mid.wav"),
         choke_group: None,
         output_group: OutputGroup::Toms,
@@ -180,8 +150,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 11: Tom Low (Floor)
     PadMapping {
-        note: TOM_LOW,
-        name: "Tom Low",
+        note: GM_PADS[11].note,
+        name: GM_PADS[11].name,
         default_sample: include_bytes!("../samples/tom_low.wav"),
         choke_group: None,
         output_group: OutputGroup::Toms,
@@ -190,8 +160,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 12: Crash 16 Edge
     PadMapping {
-        note: CRASH_16_EDGE,
-        name: "Crash 16 Edge",
+        note: GM_PADS[12].note,
+        name: GM_PADS[12].name,
         default_sample: include_bytes!("../samples/crash.wav"),
         choke_group: None,
         output_group: OutputGroup::Cymbals,
@@ -200,8 +170,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 13: Crash 16 Bell
     PadMapping {
-        note: CRASH_16_BELL,
-        name: "Crash 16 Bell",
+        note: GM_PADS[13].note,
+        name: GM_PADS[13].name,
         default_sample: include_bytes!("../samples/crash.wav"),
         choke_group: None,
         output_group: OutputGroup::Cymbals,
@@ -210,8 +180,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 14: Crash 16 Tip
     PadMapping {
-        note: CRASH_16_TIP,
-        name: "Crash 16 Tip",
+        note: GM_PADS[14].note,
+        name: GM_PADS[14].name,
         default_sample: include_bytes!("../samples/crash.wav"),
         choke_group: None,
         output_group: OutputGroup::Cymbals,
@@ -220,8 +190,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 15: Crash 18 Edge
     PadMapping {
-        note: CRASH_18_EDGE,
-        name: "Crash 18 Edge",
+        note: GM_PADS[15].note,
+        name: GM_PADS[15].name,
         default_sample: include_bytes!("../samples/crash.wav"),
         choke_group: None,
         output_group: OutputGroup::Cymbals,
@@ -230,8 +200,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 16: Crash 18 Bell
     PadMapping {
-        note: CRASH_18_BELL,
-        name: "Crash 18 Bell",
+        note: GM_PADS[16].note,
+        name: GM_PADS[16].name,
         default_sample: include_bytes!("../samples/crash.wav"),
         choke_group: None,
         output_group: OutputGroup::Cymbals,
@@ -240,8 +210,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 17: Crash 18 Tip
     PadMapping {
-        note: CRASH_18_TIP,
-        name: "Crash 18 Tip",
+        note: GM_PADS[17].note,
+        name: GM_PADS[17].name,
         default_sample: include_bytes!("../samples/crash.wav"),
         choke_group: None,
         output_group: OutputGroup::Cymbals,
@@ -250,8 +220,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 18: Ride Edge
     PadMapping {
-        note: RIDE_EDGE,
-        name: "Ride Edge",
+        note: GM_PADS[18].note,
+        name: GM_PADS[18].name,
         default_sample: include_bytes!("../samples/ride.wav"),
         choke_group: None,
         output_group: OutputGroup::Cymbals,
@@ -260,8 +230,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 19: Ride Bell
     PadMapping {
-        note: RIDE_BELL,
-        name: "Ride Bell",
+        note: GM_PADS[19].note,
+        name: GM_PADS[19].name,
         default_sample: include_bytes!("../samples/ride.wav"),
         choke_group: None,
         output_group: OutputGroup::Cymbals,
@@ -270,8 +240,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 20: Ride Tip
     PadMapping {
-        note: RIDE_TIP,
-        name: "Ride Tip",
+        note: GM_PADS[20].note,
+        name: GM_PADS[20].name,
         default_sample: include_bytes!("../samples/ride.wav"),
         choke_group: None,
         output_group: OutputGroup::Cymbals,
@@ -280,8 +250,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 21: China Edge
     PadMapping {
-        note: CHINA_EDGE,
-        name: "China Edge",
+        note: GM_PADS[21].note,
+        name: GM_PADS[21].name,
         default_sample: include_bytes!("../samples/crash.wav"),
         choke_group: None,
         output_group: OutputGroup::Cymbals,
@@ -290,8 +260,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 22: China Bell
     PadMapping {
-        note: CHINA_BELL,
-        name: "China Bell",
+        note: GM_PADS[22].note,
+        name: GM_PADS[22].name,
         default_sample: include_bytes!("../samples/crash.wav"),
         choke_group: None,
         output_group: OutputGroup::Cymbals,
@@ -300,8 +270,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 23: China Tip
     PadMapping {
-        note: CHINA_TIP,
-        name: "China Tip",
+        note: GM_PADS[23].note,
+        name: GM_PADS[23].name,
         default_sample: include_bytes!("../samples/crash.wav"),
         choke_group: None,
         output_group: OutputGroup::Cymbals,
@@ -310,8 +280,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 24: Sidestick
     PadMapping {
-        note: SNARE_SIDESTICK,
-        name: "Sidestick",
+        note: GM_PADS[24].note,
+        name: GM_PADS[24].name,
         default_sample: include_bytes!("../samples/rimshot.wav"),
         choke_group: None,
         output_group: OutputGroup::Snare,
@@ -320,8 +290,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 25: Rimshot
     PadMapping {
-        note: RIMSHOT,
-        name: "Rimshot",
+        note: GM_PADS[25].note,
+        name: GM_PADS[25].name,
         default_sample: include_bytes!("../samples/rimshot.wav"),
         choke_group: None,
         output_group: OutputGroup::Snare,
@@ -330,8 +300,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 26: Snare Flam
     PadMapping {
-        note: SNARE_FLAM,
-        name: "Snare Flam",
+        note: GM_PADS[26].note,
+        name: GM_PADS[26].name,
         default_sample: include_bytes!("../samples/snare.wav"),
         choke_group: None,
         output_group: OutputGroup::Snare,
@@ -340,8 +310,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 27: Snare Roll
     PadMapping {
-        note: SNARE_ROLL,
-        name: "Snare Roll",
+        note: GM_PADS[27].note,
+        name: GM_PADS[27].name,
         default_sample: include_bytes!("../samples/snare.wav"),
         choke_group: None,
         output_group: OutputGroup::Snare,
@@ -350,8 +320,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 28: Snare Handtuch
     PadMapping {
-        note: SNARE_HANDTUCH,
-        name: "Snare Handtuch",
+        note: GM_PADS[28].note,
+        name: GM_PADS[28].name,
         default_sample: include_bytes!("../samples/snare.wav"),
         choke_group: None,
         output_group: OutputGroup::Snare,
@@ -360,8 +330,8 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
     },
     // 29: Count Stick
     PadMapping {
-        note: COUNT_STICK,
-        name: "Count Stick",
+        note: GM_PADS[29].note,
+        name: GM_PADS[29].name,
         default_sample: include_bytes!("../samples/rimshot.wav"),
         choke_group: None,
         output_group: OutputGroup::Main,
@@ -369,8 +339,3 @@ pub const PAD_MAPPINGS: [PadMapping; NUM_PADS] = [
         has_articulation: false,
     },
 ];
-
-/// Find the pad index for a given MIDI note, or None if unmapped.
-pub fn pad_index_for_note(note: u8) -> Option<usize> {
-    PAD_MAPPINGS.iter().position(|p| p.note == note)
-}

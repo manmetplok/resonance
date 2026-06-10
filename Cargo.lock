@@ -4910,6 +4910,7 @@ dependencies = [
  "iced_test",
  "printpdf",
  "resonance-audio",
+ "resonance-common",
  "resonance-music-theory",
  "resonance-plugin",
  "resonance-svs",
@@ -5078,6 +5079,7 @@ dependencies = [
  "iced",
  "serde",
  "serde_json",
+ "wayland-plugin-gui",
 ]
 
 [[package]]
@@ -6853,7 +6855,6 @@ dependencies = [
  "khronos-egl",
  "libloading",
  "raw-window-handle",
- "resonance-plugin",
  "smithay-client-toolkit 0.20.0",
  "wayland-client",
  "wayland-egl",

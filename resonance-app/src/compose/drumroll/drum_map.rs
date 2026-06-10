@@ -1,12 +1,15 @@
 //! Drum pad mapping used by the Compose drumroll view.
 //!
-//! Deliberately mirrors the General MIDI layout shipped by the
-//! `resonance-drums` plugin (kick, snare, hats, toms, cymbals, rim/clap/cowbell)
-//! but does not depend on that crate — both sides independently target GM.
+//! Note numbers come from the shared GM contract in
+//! `resonance_common::drum_map`, which the `resonance-drums` plugin also
+//! consumes; this module only picks which pads the drumroll shows and in
+//! what order.
 //!
 //! The map is a runtime value (not a `const`) so a future `load_from_file`
 //! loader can replace the default at a single construction site in
 //! `DrumrollViewState::default`.
+
+use resonance_common::drum_map as gm;
 
 /// One pad in the drumroll grid.
 #[derive(Debug, Clone)]
@@ -25,10 +28,23 @@ impl DrumPadMap {
     /// The built-in 12-pad General MIDI layout.
     pub fn default_map() -> Self {
         Self {
-            pads: [36, 38, 37, 39, 42, 46, 50, 47, 45, 49, 51, 56]
-                .into_iter()
-                .map(|note| DrumPad { note })
-                .collect(),
+            pads: [
+                gm::KICK,
+                gm::SNARE,
+                gm::RIMSHOT,
+                gm::SNARE_SIDESTICK,
+                gm::HIHAT_CLOSED,
+                gm::HIHAT_OPEN,
+                gm::TOM_HIGH,
+                gm::TOM_MID,
+                gm::TOM_LOW,
+                gm::CRASH_16_EDGE,
+                gm::RIDE_EDGE,
+                gm::COWBELL,
+            ]
+            .into_iter()
+            .map(|note| DrumPad { note })
+            .collect(),
         }
     }
 
