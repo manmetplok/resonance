@@ -8,7 +8,7 @@ use iced::{Color, Point, Size};
 use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
 use super::TimelineCanvas;
-use resonance_audio::types::avg_bpm_for_bar;
+use resonance_audio::types::{avg_bpm_for_bar, TrackId};
 
 impl TimelineCanvas<'_> {
     /// Render the compose-section pills above the lanes. Each placement
@@ -695,18 +695,15 @@ impl TimelineCanvas<'_> {
         }
     }
 
-    /// Draw vertical bar and beat grid lines in the track area.
-    /// Iterates bars using per-bar tempo and time-signature values so
-    /// that grid spacing correctly follows tempo changes.
-    pub(super) fn draw_grid_lines(
-        &self,
-        frame: &mut canvas::Frame,
-        width: f32,
-        ruler_height: f32,
-        track_area_height: f32,
-        _y_off: f32,
-    ) {
-        let line_height = track_area_height.max(600.0);
+    /// Walk bars left-to-right across the visible range, calling `f`
+    /// once per bar that should be drawn. Bar positions follow per-bar
+    /// tempo and time-signature values from the tempo map, so spacing
+    /// correctly follows tempo changes.
+    ///
+    /// `min_bar_px` controls decimation at low zoom: when a bar is
+    /// narrower than this, bars are skipped so the surviving lines stay
+    /// at least `min_bar_px` apart (grid uses 20 px, ruler 40 px).
+    fn for_each_visible_bar(&self, width: f32, min_bar_px: f32, mut f: impl FnMut(&VisibleBar)) {
         let sr = self.sample_rate as f64;
 
         // Walk bars from 0, accumulating sample positions with interpolation.
@@ -751,128 +748,104 @@ impl TimelineCanvas<'_> {
             }
 
             // Bar step: skip bars for readability at low zoom.
-            let bar_step = if bar_pixel_width < 20.0 {
-                (20.0 / bar_pixel_width).ceil() as u32
+            let bar_step = if bar_pixel_width < min_bar_px {
+                (min_bar_px / bar_pixel_width).ceil() as u32
             } else {
                 1
             };
             let draw_this = bar_step <= 1 || bar % bar_step == 0;
 
             if draw_this && x >= -1.0 {
-                frame.fill_rectangle(
-                    Point::new(x, ruler_height),
-                    Size::new(1.0, line_height),
-                    theme::BAR_LINE,
-                );
-
-                // Beat lines within this bar.
-                if bar_pixel_width >= 40.0 {
-                    for beat in 1..cur_num {
-                        let beat_sample = sample_pos + beat as f64 * samples_per_beat;
-                        let bx = (beat_sample / sr) as f32 * self.zoom - self.scroll_offset;
-                        if bx >= 0.0 && bx <= width {
-                            frame.fill_rectangle(
-                                Point::new(bx, ruler_height),
-                                Size::new(1.0, line_height),
-                                theme::BEAT_LINE,
-                            );
-                        }
-                    }
-                }
+                f(&VisibleBar {
+                    bar,
+                    x,
+                    pixel_width: bar_pixel_width,
+                    numerator: cur_num,
+                    sample_pos,
+                    samples_per_beat,
+                    sr,
+                    zoom: self.zoom,
+                    scroll_offset: self.scroll_offset,
+                });
             }
 
             sample_pos += samples_per_bar;
         }
     }
 
+    /// Draw vertical bar and beat grid lines in the track area.
+    /// Iterates bars using per-bar tempo and time-signature values so
+    /// that grid spacing correctly follows tempo changes.
+    pub(super) fn draw_grid_lines(
+        &self,
+        frame: &mut canvas::Frame,
+        width: f32,
+        ruler_height: f32,
+        track_area_height: f32,
+        _y_off: f32,
+    ) {
+        let line_height = track_area_height.max(600.0);
+
+        self.for_each_visible_bar(width, 20.0, |bar| {
+            frame.fill_rectangle(
+                Point::new(bar.x, ruler_height),
+                Size::new(1.0, line_height),
+                theme::BAR_LINE,
+            );
+
+            // Beat lines within this bar.
+            if bar.pixel_width >= 40.0 {
+                for beat in 1..bar.numerator {
+                    let bx = bar.beat_x(beat);
+                    if bx >= 0.0 && bx <= width {
+                        frame.fill_rectangle(
+                            Point::new(bx, ruler_height),
+                            Size::new(1.0, line_height),
+                            theme::BEAT_LINE,
+                        );
+                    }
+                }
+            }
+        });
+    }
+
     /// Draw the bar/beat ruler at the top.
     /// Uses per-bar tempo and time-signature values so bar numbers are
     /// positioned correctly when tempo changes.
     pub(super) fn draw_ruler(&self, frame: &mut canvas::Frame, width: f32, ruler_height: f32) {
-        let sr = self.sample_rate as f64;
+        self.for_each_visible_bar(width, 40.0, |bar| {
+            let bar_number = bar.bar as i64 + 1; // 1-based
 
-        let mut sample_pos: f64 = 0.0;
-        let mut cur_num = self
-            .tempo_map
-            .signature_points
-            .first()
-            .map(|e| e.numerator)
-            .unwrap_or(4);
-        let mut si: usize = if self.tempo_map.signature_points.first().map(|e| e.bar) == Some(0) {
-            1
-        } else {
-            0
-        };
+            // Major tick (bar)
+            frame.fill_rectangle(
+                Point::new(bar.x, ruler_height - 12.0),
+                Size::new(1.0, 12.0),
+                theme::TEXT_DIM,
+            );
 
-        for bar in 0u32.. {
-            while let Some(e) = self.tempo_map.signature_points.get(si) {
-                if e.bar == bar {
-                    cur_num = e.numerator;
-                    si += 1;
-                } else {
-                    break;
-                }
-            }
+            // Bar number label
+            frame.fill_text(canvas::Text {
+                content: format!("{}", bar_number),
+                position: Point::new(bar.x + 3.0, ruler_height - 24.0),
+                color: theme::TEXT_DIM,
+                size: 11.0.into(),
+                ..canvas::Text::default()
+            });
 
-            let cur_bpm = avg_bpm_for_bar(bar, &self.tempo_map.tempo_points);
-            let samples_per_beat = sr * 60.0 / cur_bpm;
-            let samples_per_bar = samples_per_beat * cur_num as f64;
-            let bar_seconds = samples_per_bar / sr;
-            let bar_pixel_width = bar_seconds as f32 * self.zoom;
-
-            let x = (sample_pos / sr) as f32 * self.zoom - self.scroll_offset;
-
-            if x > width + 1.0 {
-                break;
-            }
-            if bar > 20_000 {
-                break;
-            }
-
-            let bar_step = if bar_pixel_width < 40.0 {
-                (40.0 / bar_pixel_width).ceil() as u32
-            } else {
-                1
-            };
-            let draw_this = bar_step <= 1 || bar % bar_step == 0;
-
-            if draw_this && x >= -1.0 {
-                let bar_number = bar as i64 + 1; // 1-based
-
-                // Major tick (bar)
-                frame.fill_rectangle(
-                    Point::new(x, ruler_height - 12.0),
-                    Size::new(1.0, 12.0),
-                    theme::TEXT_DIM,
-                );
-
-                // Bar number label
-                frame.fill_text(canvas::Text {
-                    content: format!("{}", bar_number),
-                    position: Point::new(x + 3.0, ruler_height - 24.0),
-                    color: theme::TEXT_DIM,
-                    size: 11.0.into(),
-                    ..canvas::Text::default()
-                });
-
-                // Beat ticks within bar (only if enough space)
-                if bar_pixel_width >= 40.0 {
-                    for beat in 1..cur_num {
-                        let beat_sample = sample_pos + beat as f64 * samples_per_beat;
-                        let bx = (beat_sample / sr) as f32 * self.zoom - self.scroll_offset;
-                        if bx >= 0.0 && bx <= width {
-                            frame.fill_rectangle(
-                                Point::new(bx, ruler_height - 6.0),
-                                Size::new(1.0, 6.0),
-                                Color::from_rgb(0.25, 0.25, 0.25),
-                            );
-                        }
+            // Beat ticks within bar (only if enough space)
+            if bar.pixel_width >= 40.0 {
+                for beat in 1..bar.numerator {
+                    let bx = bar.beat_x(beat);
+                    if bx >= 0.0 && bx <= width {
+                        frame.fill_rectangle(
+                            Point::new(bx, ruler_height - 6.0),
+                            Size::new(1.0, 6.0),
+                            Color::from_rgb(0.25, 0.25, 0.25),
+                        );
                     }
                 }
             }
-
-            sample_pos += samples_per_bar;
-        }
+        });
 
         // Ruler bottom line
         frame.fill_rectangle(
@@ -891,21 +864,15 @@ impl TimelineCanvas<'_> {
         y_off: f32,
         visible_height: f32,
     ) {
-        let track_index = sorted_tracks.iter().position(|t| t.id == clip.track_id);
-
-        let track_index = match track_index {
-            Some(i) => i,
-            None => return,
-        };
-
-        // 8px inset top/bottom matches the design.
-        let lane_y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT - y_off;
-        let y = lane_y + 8.0;
-        let clip_height = theme::TRACK_HEIGHT - 16.0;
-
-        if y + clip_height < ruler_height || y > visible_height {
+        let Some((y, clip_height)) = clip_lane_rect(
+            clip.track_id,
+            sorted_tracks,
+            ruler_height,
+            y_off,
+            visible_height,
+        ) else {
             return;
-        }
+        };
 
         let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
         let duration_seconds = clip.duration_samples as f32 / self.sample_rate as f32;
@@ -916,29 +883,47 @@ impl TimelineCanvas<'_> {
             return;
         }
 
-        // Audio clips: warm/amber wash + tinted border.
+        // Audio clips: warm/amber wash + tinted border. Name text in
+        // WARM so the kind reads at a glance.
         let is_selected = self.selected_clip == Some(clip.id);
-        let body_color = Color {
-            a: 0.10,
-            ..theme::WARM
-        };
-        let border_color = if is_selected {
-            theme::ACCENT
-        } else {
-            Color {
-                a: 0.32,
+        let chrome = ClipChrome {
+            x,
+            y,
+            w,
+            h: clip_height,
+            body_color: Color {
+                a: 0.10,
                 ..theme::WARM
-            }
+            },
+            border_color: if is_selected {
+                theme::ACCENT
+            } else {
+                Color {
+                    a: 0.32,
+                    ..theme::WARM
+                }
+            },
+            is_selected,
+            name: &clip.name,
+            name_color: theme::WARM,
+            show_name: x + 6.0 < x + w,
         };
 
-        let body = canvas::Path::rounded_rectangle(
-            Point::new(x, y),
-            Size::new(w, clip_height),
-            8.0.into(),
-        );
-        frame.fill(&body, body_color);
+        chrome.draw(frame, |frame| {
+            self.draw_clip_waveform(frame, clip, x, y, w, clip_height)
+        });
+    }
 
-        // Waveform — warm-tinted bars on top of the wash.
+    /// Waveform — warm-tinted bars on top of the wash.
+    fn draw_clip_waveform(
+        &self,
+        frame: &mut canvas::Frame,
+        clip: &ClipState,
+        x: f32,
+        y: f32,
+        w: f32,
+        clip_height: f32,
+    ) {
         let header_height = 18.0;
         if !clip.waveform_peaks.is_empty() {
             let wave_y = y + header_height;
@@ -980,39 +965,6 @@ impl TimelineCanvas<'_> {
                 px += pixels_per_peak.max(1.0);
             }
         }
-
-        // Clip name + bar count footer in the header row. Text in WARM
-        // for audio clips so the kind reads at a glance.
-        let display_name: String = if clip.name.chars().count() > 20 {
-            let mut truncated: String = clip.name.chars().take(17).collect();
-            truncated.push_str("...");
-            truncated
-        } else {
-            clip.name.clone()
-        };
-        if x + 6.0 < x + w {
-            frame.fill_text(canvas::Text {
-                content: display_name,
-                position: Point::new(x + 9.0, y + 4.0),
-                color: theme::WARM,
-                size: 10.5.into(),
-                ..canvas::Text::default()
-            });
-        }
-
-        // Border. Selection wins over normal hairline.
-        let border_w = if is_selected { 1.5 } else { 1.0 };
-        let stroke_path = canvas::Path::rounded_rectangle(
-            Point::new(x, y),
-            Size::new(w, clip_height),
-            8.0.into(),
-        );
-        frame.stroke(
-            &stroke_path,
-            canvas::Stroke::default()
-                .with_color(border_color)
-                .with_width(border_w),
-        );
     }
 
     pub(super) fn draw_midi_clip(
@@ -1024,20 +976,15 @@ impl TimelineCanvas<'_> {
         y_off: f32,
         visible_height: f32,
     ) {
-        let track_index = sorted_tracks.iter().position(|t| t.id == clip.track_id);
-
-        let track_index = match track_index {
-            Some(i) => i,
-            None => return,
-        };
-
-        let lane_y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT - y_off;
-        let y = lane_y + 8.0;
-        let clip_height = theme::TRACK_HEIGHT - 16.0;
-
-        if y + clip_height < ruler_height || y > visible_height {
+        let Some((y, clip_height)) = clip_lane_rect(
+            clip.track_id,
+            sorted_tracks,
+            ruler_height,
+            y_off,
+            visible_height,
+        ) else {
             return;
-        }
+        };
 
         let clip_end_sample = self.tempo_map.tick_to_abs_sample(
             clip.start_sample,
@@ -1054,27 +1001,45 @@ impl TimelineCanvas<'_> {
             return;
         }
 
-        // MIDI clips: lavender wash + lavender border.
+        // MIDI clips: lavender wash + lavender border, name in lavender
+        // accent.
         let is_selected = self.selected_midi_clip == Some(clip.id);
-        let body_color = Color {
-            a: 0.10,
-            ..theme::ACCENT
-        };
-        let border_color = if is_selected {
-            theme::ACCENT
-        } else {
-            theme::ACCENT_LINE
+        let chrome = ClipChrome {
+            x,
+            y,
+            w,
+            h: clip_height,
+            body_color: Color {
+                a: 0.10,
+                ..theme::ACCENT
+            },
+            border_color: if is_selected {
+                theme::ACCENT
+            } else {
+                theme::ACCENT_LINE
+            },
+            is_selected,
+            name: &clip.name,
+            name_color: theme::ACCENT_SOFT,
+            show_name: true,
         };
 
-        let body = canvas::Path::rounded_rectangle(
-            Point::new(x, y),
-            Size::new(w, clip_height),
-            8.0.into(),
-        );
-        frame.fill(&body, body_color);
+        chrome.draw(frame, |frame| {
+            self.draw_midi_clip_notes(frame, clip, x, y, w, clip_height)
+        });
+    }
 
-        // Note preview — small lavender rects mapped to the clip's note
-        // range. Drawn dimmed so the wash still reads as lavender.
+    /// Note preview — small lavender rects mapped to the clip's note
+    /// range. Drawn dimmed so the wash still reads as lavender.
+    fn draw_midi_clip_notes(
+        &self,
+        frame: &mut canvas::Frame,
+        clip: &MidiClipState,
+        x: f32,
+        y: f32,
+        w: f32,
+        clip_height: f32,
+    ) {
         let header_height = 18.0;
         let note_area_y = y + header_height;
         let note_area_h = clip_height - header_height - 4.0;
@@ -1128,33 +1093,119 @@ impl TimelineCanvas<'_> {
                 }
             }
         }
+    }
+}
 
-        // Clip name in lavender accent.
-        let display_name: String = if clip.name.chars().count() > 20 {
-            let mut truncated: String = clip.name.chars().take(17).collect();
+/// One bar yielded by [`TimelineCanvas::for_each_visible_bar`]: its
+/// index, on-screen x position, pixel width, and the timing context
+/// needed to place beat subdivisions within the bar.
+struct VisibleBar {
+    /// Zero-based bar index.
+    bar: u32,
+    /// X position of the bar start, in canvas pixels.
+    x: f32,
+    /// Width of this bar in pixels at the current zoom.
+    pixel_width: f32,
+    /// Time-signature numerator (beats per bar) active in this bar.
+    numerator: u8,
+    sample_pos: f64,
+    samples_per_beat: f64,
+    sr: f64,
+    zoom: f32,
+    scroll_offset: f32,
+}
+
+impl VisibleBar {
+    /// X position of `beat` (1-based within the bar), in canvas pixels.
+    fn beat_x(&self, beat: u8) -> f32 {
+        let beat_sample = self.sample_pos + beat as f64 * self.samples_per_beat;
+        (beat_sample / self.sr) as f32 * self.zoom - self.scroll_offset
+    }
+}
+
+/// Lane-relative rect for a clip on `track_id`: returns `(y, height)`,
+/// or `None` when the track is unknown or the lane is scrolled out of
+/// view. The 8px inset top/bottom matches the design.
+fn clip_lane_rect(
+    track_id: TrackId,
+    sorted_tracks: &[&TrackState],
+    ruler_height: f32,
+    y_off: f32,
+    visible_height: f32,
+) -> Option<(f32, f32)> {
+    let track_index = sorted_tracks.iter().position(|t| t.id == track_id)?;
+
+    let lane_y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT - y_off;
+    let y = lane_y + 8.0;
+    let clip_height = theme::TRACK_HEIGHT - 16.0;
+
+    if y + clip_height < ruler_height || y > visible_height {
+        return None;
+    }
+
+    Some((y, clip_height))
+}
+
+/// Shared chrome for audio and MIDI clips on the timeline: rounded
+/// body wash, truncated name label, and selection-aware border. The
+/// kind-specific interior (waveform or note preview) is drawn by the
+/// `content` closure between the body fill and the name/border, so
+/// layering matches the per-kind draw order.
+struct ClipChrome<'a> {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    body_color: Color,
+    border_color: Color,
+    is_selected: bool,
+    name: &'a str,
+    name_color: Color,
+    /// Audio clips gate the label on clip width; MIDI clips always
+    /// draw it.
+    show_name: bool,
+}
+
+impl ClipChrome<'_> {
+    fn draw(self, frame: &mut canvas::Frame, content: impl FnOnce(&mut canvas::Frame)) {
+        let body = canvas::Path::rounded_rectangle(
+            Point::new(self.x, self.y),
+            Size::new(self.w, self.h),
+            8.0.into(),
+        );
+        frame.fill(&body, self.body_color);
+
+        content(frame);
+
+        // Clip name in the header row, truncated for long names.
+        let display_name: String = if self.name.chars().count() > 20 {
+            let mut truncated: String = self.name.chars().take(17).collect();
             truncated.push_str("...");
             truncated
         } else {
-            clip.name.clone()
+            self.name.to_owned()
         };
-        frame.fill_text(canvas::Text {
-            content: display_name,
-            position: Point::new(x + 9.0, y + 4.0),
-            color: theme::ACCENT_SOFT,
-            size: 10.5.into(),
-            ..canvas::Text::default()
-        });
+        if self.show_name {
+            frame.fill_text(canvas::Text {
+                content: display_name,
+                position: Point::new(self.x + 9.0, self.y + 4.0),
+                color: self.name_color,
+                size: 10.5.into(),
+                ..canvas::Text::default()
+            });
+        }
 
-        let border_w = if is_selected { 1.5 } else { 1.0 };
+        // Border. Selection wins over normal hairline.
+        let border_w = if self.is_selected { 1.5 } else { 1.0 };
         let stroke_path = canvas::Path::rounded_rectangle(
-            Point::new(x, y),
-            Size::new(w, clip_height),
+            Point::new(self.x, self.y),
+            Size::new(self.w, self.h),
             8.0.into(),
         );
         frame.stroke(
             &stroke_path,
             canvas::Stroke::default()
-                .with_color(border_color)
+                .with_color(self.border_color)
                 .with_width(border_w),
         );
     }
