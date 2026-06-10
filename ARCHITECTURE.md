@@ -10,9 +10,11 @@ The workspace is a deliberate DAG. Every crate has a single responsibility, and 
 resonance-dsp ──┬─► resonance-metering ──► resonance-mastering plugin
                 ├─► resonance-audio ─────► resonance-app
                 └─► (every FX plugin)
-resonance-music-theory ──► resonance-app  (pure theory, no audio/app deps)
+resonance-music-theory ──┬─► resonance-app  (pure theory, no audio/app deps)
+                         └─► resonance-svs ──► resonance-app  (vocal synthesis)
 resonance-common ──► resonance-audio, every plugin
-resonance-plugin ──► every plugin, resonance-app (UI helpers)
+resonance-plugin ──┬─► every plugin, resonance-app (UI helpers)
+                   └─► wayland-plugin-gui ──► every plugin (editor feature)
 ```
 
 Hard rules — these are load-bearing for build times, testability, and cognitive load:
@@ -20,6 +22,8 @@ Hard rules — these are load-bearing for build times, testability, and cognitiv
 - `resonance-music-theory` **does not depend on audio, app, or plugin code**. It is pure music theory: pitch, scale, chord, progression, voicing, generators. It can be built and tested headless. Keep it that way.
 - `resonance-audio` **does not depend on `resonance-music-theory` or `resonance-app`**. The audio engine doesn't know about chords or about Iced messages. If you find yourself wanting to add a music-theory dep to `resonance-audio`, the work belongs in the app layer instead.
 - `resonance-dsp`, `resonance-metering`, `resonance-common` are framework-agnostic — no Iced, no CLAP, no plugin trait. They're reusable building blocks.
+- `resonance-svs` (singing-voice synthesis) depends only on `resonance-music-theory`. It renders DiffSinger `.ds` segments to audio headless, and ships its own CLI binary so the pipeline can be exercised without booting the app.
+- `wayland-plugin-gui` is the editor runtime — it hosts an egui UI in its own Wayland window/thread. It depends only on `resonance-plugin` and is the optional `editor`-feature dep of every plugin; it knows nothing about any specific plugin or the app.
 - `resonance-app` is allowed to depend on everything; it is the integration layer.
 
 When extending: add new building blocks to the lowest layer they fit, not the most convenient one. A new filter goes in `resonance-dsp`, not in the plugin that needs it first.
@@ -90,7 +94,7 @@ resonance-app/src/update/
 └── ...
 ```
 
-The Message enum is partitioned by domain (`TransportMessage`, `TrackMessage`, ...), and each top-level variant carries the right sub-message into the right handler. The `Resonance` impl `update()` method is just a dispatch.
+The Message enum is partitioned by domain (`TransportMessage`, `TrackMessage`, ...), and each top-level variant carries the right sub-message into the right handler. The `Resonance` impl `update()` method is just a dispatch, plus two non-domain helpers that live alongside the handlers: `update/gates.rs` (the pre-dispatch startup-modal and bounce-in-progress gates run on every message) and `update/tick.rs` (`handle_tick`, the periodic UI tick).
 
 This pattern scales. New domains add a file; new messages within a domain add a match arm. **Keep new handlers in this shape** — do not add giant `impl Resonance` blocks with dozens of methods. (`engine_events.rs` and `project_io.rs` were the historical exceptions; both have since been split to match — engine events route through the free `handle_engine_event` in `engine_events/dispatch.rs`, project I/O through `update/project_io/`.)
 
@@ -104,7 +108,7 @@ When adding engine functionality:
 1. New `AudioCommand` variant for the input.
 2. Handler on the engine thread that mutates engine state and emits...
 3. New `AudioEvent` variant carrying the result.
-4. App-side handler in `engine_events.rs` (or its successor split) that mirrors the change in app state.
+4. App-side handler in `engine_events/` (per-domain file, routed via `dispatch.rs`) that mirrors the change in app state.
 
 Do not add direct getter methods on `AudioEngine` that read engine state — that creates synchronization headaches and undermines the command/event boundary.
 
@@ -117,28 +121,30 @@ Tests live in `<crate>/tests/`, not in `#[cfg(test)] mod tests` blocks inside so
 
 When a file would otherwise need a test module, add a sibling `tests/<feature>.rs` integration test instead.
 
-### Binary-crate exception
+### `resonance-app` private-helper exception
 
-`resonance-app` is a binary crate (`main.rs`, no `lib.rs`). Integration tests
-under `tests/` cannot see any of its types — they are inaccessible from outside
-the binary. A handful of inline `#[cfg(test)] mod tests` blocks therefore remain
-in `resonance-app/src/`:
+`resonance-app` is a library crate with a thin binary shim: the modules live
+under `lib.rs`, and `main.rs` only parses CLI args and wires up the iced
+runtime. That split exists so the integration tests under
+`resonance-app/tests/` can drive the real `view()` / `update()` paths via
+`iced_test` — new app tests belong there. A handful of inline
+`#[cfg(test)] mod tests` blocks nevertheless remain in `resonance-app/src/`,
+because their subjects are private helpers that would leak implementation
+details if promoted to `pub`:
 
 - `recent.rs` — exercises private `insert_pure`, `derive_display_name`, and `MAX_RECENT`.
-- `undo.rs` — exercises private fields (`UndoHistory::capacity`, `undo`, `redo`) for coalescing/capacity invariants.
 - `compose/invariants.rs`, `compose/tests.rs` — section/chord state round-trips that read crate-internal types.
-- `update/project_io/replay.rs` — exercises the private `migrate_auto_name` helper.
+- `update/project_io/replay.rs` — exercises the private `migrate_auto_name` and `sort_plugins_by_saved_order` helpers.
 - `update/project_io/replay_diff.rs` — exercises private `structurally_compatible`,
   `id_set_eq`, and `midi_notes_equal` helpers used by the project-diff
   fast-path. Promoting these to `pub` would leak diff implementation
   details into the crate's public API.
 
 These are the documented exception, not the rule. Do not add new inline tests
-elsewhere in the workspace. If you need to test a private helper outside
-`resonance-app`, make the helper `pub(crate)` and write a `tests/<feature>.rs`
-integration test in that crate instead. Promoting `resonance-app` to a library
-crate purely to migrate these tests is **not** worth the visibility audit and
-re-export churn it would entail.
+elsewhere in the workspace (the `undo.rs` inline tests have already migrated to
+`tests/undo_history.rs`; shrink this list when you can, don't grow it). If you
+need to test a private helper in any other crate, make the helper `pub(crate)`
+and write a `tests/<feature>.rs` integration test in that crate instead.
 
 ## Anti-Patterns to Avoid
 
