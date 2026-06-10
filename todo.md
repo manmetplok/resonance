@@ -44,7 +44,7 @@ KISS / lines of code. Each item was verified against the code before listing.
 - [x] Drum kit swap hard-cuts ringing voices (`plugins/resonance-drums/src/dsp/sampler.rs:118-127`); use the existing 1024-sample `trigger_release` fade.
 - [x] Disabled multiband still runs all three linear-phase crossovers (`plugins/resonance-mastering/src/stages/multiband/mod.rs:283-295`); decide deliberately and document, or cheapen the bypass to a plain delay.
 - [x] Amp tuner runs a ~750 k-MAC YIN burst in one `process()` call (`plugins/resonance-amp/src/tuner.rs:108-118`); amortize across blocks or move to a worker fed by the ring.
-- [ ] EQ analyzer DC bin reads +6 dB high (`plugins/resonance-eq/src/analyzer.rs:170-178`): bin 0 should use `2/FFT_SIZE`, not the one-sided `4/FFT_SIZE`. Display-only.
+- [x] EQ analyzer DC bin reads +6 dB high (`plugins/resonance-eq/src/analyzer.rs:170-178`): bin 0 should use `2/FFT_SIZE`, not the one-sided `4/FFT_SIZE`. Display-only.
 - [x] Live MIDI input quantized to `sample_offset 0` at engine-loop cadence (`resonance-audio/src/engine/thread.rs:204-226`) although `arrival` timestamps exist; convert arrival to an intra-buffer offset if tighter feel is wanted.
 - [x] Doc rot: `mixer/mod.rs:117-120` calls the tempo `ArcSwap` guard a "read lock"; `resonance-dsp/src/biquad.rs:1-12,80` says "Direct Form I transposed" but implements transposed Direct Form II. Fix comments.
 

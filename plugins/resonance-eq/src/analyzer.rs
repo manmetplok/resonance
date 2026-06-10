@@ -165,12 +165,16 @@ impl AnalyzerChannel {
         // the Hann window coherent gain (~0.5) and the FFT length.
         //
         // Hann window sum ≈ FFT_SIZE / 2, so the single-sided amplitude is
-        // `2 * |X[k]| / window_sum` = `4 * |X[k]| / FFT_SIZE`.
+        // `2 * |X[k]| / window_sum` = `4 * |X[k]| / FFT_SIZE`. Bin 0 (DC)
+        // has no negative-frequency mirror, so it skips the one-sided
+        // doubling: `2 / FFT_SIZE`, not `4 / FFT_SIZE`.
         let norm = 4.0 / FFT_SIZE as f32;
+        let dc_norm = 2.0 / FFT_SIZE as f32;
         for i in 0..NUM_BINS {
             let re = self.scratch[i].re;
             let im = self.scratch[i].im;
-            let mag = (re * re + im * im).sqrt() * norm;
+            let bin_norm = if i == 0 { dc_norm } else { norm };
+            let mag = (re * re + im * im).sqrt() * bin_norm;
             let mag_db = 20.0 * mag.max(1e-10).log10();
             let decayed = (self.held_db[i] - self.decay_db_per_frame).max(FLOOR_DB);
             self.held_db[i] = decayed.max(mag_db);
