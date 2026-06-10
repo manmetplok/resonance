@@ -82,8 +82,10 @@ pub(super) fn collect_midi_events(
         }
     }
 
-    // Sort by sample offset for CLAP compliance
-    out.sort_by_key(|e| e.sample_offset);
+    // Sort by sample offset for CLAP compliance. Unstable to avoid the
+    // stable sort's heap allocation on the audio thread; note-offs are
+    // keyed before note-ons so retriggers at the same offset stay paired.
+    out.sort_unstable_by_key(|e| (e.sample_offset, e.is_note_on));
 }
 
 /// Public version of collect_midi_events for the bounce path. Exposed

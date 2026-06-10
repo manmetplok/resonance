@@ -102,6 +102,45 @@ fn four_note_clip_emits_all_note_ons_and_offs_across_chunks() {
 }
 
 #[test]
+fn note_off_sorts_before_note_on_at_same_sample_offset() {
+    // Consecutive quarter notes share boundaries: note i's NoteOff and
+    // note i+1's NoteOn land on the same sample. Collect the whole clip
+    // in one call so all events get sorted together, and verify each
+    // boundary keeps NoteOff before NoteOn — the pairing the engine
+    // relies on for legato retriggers (previously guaranteed by the
+    // stable sort, now by the (offset, is_note_on) key).
+    let tm = flat_tempo_map(120.0);
+    let clip = quarter_note_clip(4, /* clip_start */ 0);
+    let mut events: Vec<PendingNoteEvent> = Vec::new();
+    collect_midi_events_bounce(&[clip], 42, 0, 96_001, &tm, SR, &mut events);
+
+    assert_eq!(events.len(), 8, "4 NoteOns + 4 NoteOffs: {events:?}");
+
+    // Offsets must be non-decreasing.
+    for pair in events.windows(2) {
+        assert!(
+            pair[0].sample_offset <= pair[1].sample_offset,
+            "events not sorted by offset: {events:?}"
+        );
+    }
+
+    // At each shared boundary the NoteOff must precede the NoteOn.
+    for pair in events.windows(2) {
+        if pair[0].sample_offset == pair[1].sample_offset {
+            assert!(
+                !pair[0].is_note_on && pair[1].is_note_on,
+                "NoteOff must precede NoteOn at equal offsets: {events:?}"
+            );
+        }
+    }
+    let boundaries = events
+        .windows(2)
+        .filter(|p| p[0].sample_offset == p[1].sample_offset)
+        .count();
+    assert_eq!(boundaries, 3, "expected 3 shared on/off boundaries: {events:?}");
+}
+
+#[test]
 fn clip_offset_from_zero_still_produces_every_note() {
     // Same 4-note clip, but parked at sample 100_000 — the offline
     // bounce starts rendering at the earliest MIDI clip start, so
