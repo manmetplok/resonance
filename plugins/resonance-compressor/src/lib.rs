@@ -57,7 +57,7 @@ impl ResonancePlugin for ResonanceCompressor {
     }
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
-        self.dsp = Some(CompressorDsp::new(sample_rate));
+        self.dsp = Some(CompressorDsp::new(sample_rate, &self.params));
         true
     }
 

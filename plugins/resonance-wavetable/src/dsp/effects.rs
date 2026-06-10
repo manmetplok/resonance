@@ -91,7 +91,6 @@ pub struct StereoDelay {
     delay_r: DelayLine,
     damping_l: OnePole,
     damping_r: OnePole,
-    sample_rate: f32,
 }
 
 impl StereoDelay {
@@ -108,7 +107,6 @@ impl StereoDelay {
             delay_r: DelayLine::new(max_samples),
             damping_l,
             damping_r,
-            sample_rate,
         }
     }
 
@@ -119,18 +117,18 @@ impl StereoDelay {
         self.damping_r.clear();
     }
 
+    /// Delay times are taken in *samples* (fractional): the engine smooths
+    /// the resolved sample count so an automated time change glides the
+    /// read tap instead of relocating it discontinuously.
     pub fn process(
         &mut self,
         left: f32,
         right: f32,
-        time_l_ms: f32,
-        time_r_ms: f32,
+        delay_l_samp: f32,
+        delay_r_samp: f32,
         feedback: f32,
         mix: f32,
     ) -> (f32, f32) {
-        let delay_l_samp = time_l_ms * 0.001 * self.sample_rate;
-        let delay_r_samp = time_r_ms * 0.001 * self.sample_rate;
-
         let wet_l = self.delay_l.tap_linear(delay_l_samp);
         let wet_r = self.delay_r.tap_linear(delay_r_samp);
 

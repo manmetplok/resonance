@@ -42,6 +42,54 @@ pub struct SynthEngine {
     // contract — host automation lands instantly on the param, and this
     // ramp removes the step before it reaches the output multiply.
     pub(crate) master_vol_smoother: Smoother,
+
+    // Same de-zipper treatment for the FX-chain parameters.
+    pub(crate) fx_smoothers: FxSmoothers,
+}
+
+/// Per-sample smoothers for the continuous FX parameters, retargeted from
+/// the param snapshot once per block in `render_block` (see
+/// `master_vol_smoother` for why these live on the engine and not in the
+/// `FloatParam`s). The delay times are smoothed in *samples* — resolved
+/// from ms at retarget time — so a time jump glides the read tap along the
+/// delay line instead of relocating it discontinuously (a click). Chorus
+/// rate needs no smoother: the LFO phase is already continuous across rate
+/// changes.
+pub(crate) struct FxSmoothers {
+    pub dist_drive: Smoother,
+    pub dist_mix: Smoother,
+    pub chorus_depth: Smoother,
+    pub chorus_mix: Smoother,
+    pub delay_time_l: Smoother,
+    pub delay_time_r: Smoother,
+    pub delay_feedback: Smoother,
+    pub delay_mix: Smoother,
+}
+
+impl FxSmoothers {
+    fn new() -> Self {
+        Self {
+            dist_drive: Smoother::new(SmoothingStyle::Linear(5.0)),
+            dist_mix: Smoother::new(SmoothingStyle::Linear(10.0)),
+            chorus_depth: Smoother::new(SmoothingStyle::Linear(10.0)),
+            chorus_mix: Smoother::new(SmoothingStyle::Linear(10.0)),
+            delay_time_l: Smoother::new(SmoothingStyle::Linear(50.0)),
+            delay_time_r: Smoother::new(SmoothingStyle::Linear(50.0)),
+            delay_feedback: Smoother::new(SmoothingStyle::Linear(10.0)),
+            delay_mix: Smoother::new(SmoothingStyle::Linear(10.0)),
+        }
+    }
+
+    fn set_sample_rate(&mut self, sr: f32) {
+        self.dist_drive.set_sample_rate(sr);
+        self.dist_mix.set_sample_rate(sr);
+        self.chorus_depth.set_sample_rate(sr);
+        self.chorus_mix.set_sample_rate(sr);
+        self.delay_time_l.set_sample_rate(sr);
+        self.delay_time_r.set_sample_rate(sr);
+        self.delay_feedback.set_sample_rate(sr);
+        self.delay_mix.set_sample_rate(sr);
+    }
 }
 
 impl SynthEngine {
@@ -63,6 +111,7 @@ impl SynthEngine {
             // FloatParam; the param is already linear gain, so the ramp
             // runs in linear-gain space directly.
             master_vol_smoother: Smoother::new(SmoothingStyle::Linear(5.0)),
+            fx_smoothers: FxSmoothers::new(),
         }
     }
 
@@ -89,6 +138,7 @@ impl SynthEngine {
         self.delay = StereoDelay::new(sample_rate);
 
         self.master_vol_smoother.set_sample_rate(sample_rate);
+        self.fx_smoothers.set_sample_rate(sample_rate);
     }
 
     pub fn reset(&mut self) {

@@ -219,6 +219,19 @@ impl SynthEngine {
         // volume ramps (~5 ms) instead of stepping mid-buffer.
         self.master_vol_smoother.set_target(snap.master_vol);
 
+        // Same for the FX-chain params. Delay times are resolved from ms
+        // to samples here so the smoother glides the tap position itself.
+        let ms_to_samples = 0.001 * self.sample_rate;
+        let fx = &mut self.fx_smoothers;
+        fx.dist_drive.set_target(snap.dist_drive);
+        fx.dist_mix.set_target(snap.dist_mix);
+        fx.chorus_depth.set_target(snap.chorus_depth);
+        fx.chorus_mix.set_target(snap.chorus_mix);
+        fx.delay_time_l.set_target(snap.delay_time_l * ms_to_samples);
+        fx.delay_time_r.set_target(snap.delay_time_r * ms_to_samples);
+        fx.delay_feedback.set_target(snap.delay_feedback);
+        fx.delay_mix.set_target(snap.delay_mix);
+
         // Resolve wavetable references once per block. Missing indices fall
         // back to `None` and silently skip oscillator output.
         let wt1_idx = if snap.osc1_wt < self.wavetables.len() {
@@ -504,11 +517,16 @@ impl SynthEngine {
                 mix_r += osc_r * amp;
             }
 
-            // Effects chain. Parameter values are already snapshotted; the
-            // enable flags are the same for the whole block so the
-            // `if`-chains predict perfectly.
+            // Effects chain. Continuous FX params come from the per-sample
+            // smoothers; the enable flags are the same for the whole block
+            // so the `if`-chains predict perfectly.
             if snap.dist_enabled {
-                let (dl, dr) = Distortion::process(mix_l, mix_r, snap.dist_drive, snap.dist_mix);
+                let (dl, dr) = Distortion::process(
+                    mix_l,
+                    mix_r,
+                    self.fx_smoothers.dist_drive.next(),
+                    self.fx_smoothers.dist_mix.next(),
+                );
                 mix_l = dl;
                 mix_r = dr;
             }
@@ -518,8 +536,8 @@ impl SynthEngine {
                     mix_l,
                     mix_r,
                     snap.chorus_rate,
-                    snap.chorus_depth,
-                    snap.chorus_mix,
+                    self.fx_smoothers.chorus_depth.next(),
+                    self.fx_smoothers.chorus_mix.next(),
                 );
                 mix_l = cl;
                 mix_r = cr;
@@ -529,10 +547,10 @@ impl SynthEngine {
                 let (dl, dr) = self.delay.process(
                     mix_l,
                     mix_r,
-                    snap.delay_time_l,
-                    snap.delay_time_r,
-                    snap.delay_feedback,
-                    snap.delay_mix,
+                    self.fx_smoothers.delay_time_l.next(),
+                    self.fx_smoothers.delay_time_r.next(),
+                    self.fx_smoothers.delay_feedback.next(),
+                    self.fx_smoothers.delay_mix.next(),
                 );
                 mix_l = dl;
                 mix_r = dr;
@@ -546,6 +564,24 @@ impl SynthEngine {
             right[sample_id] = out_r;
 
             self.scope_collector.push(out_l, out_r);
+        }
+
+        // Disabled effects never consume their smoothers inside the loop;
+        // fast-forward them so re-enabling doesn't replay a stale ramp.
+        let n = frames as u32;
+        if !snap.dist_enabled {
+            self.fx_smoothers.dist_drive.skip(n);
+            self.fx_smoothers.dist_mix.skip(n);
+        }
+        if !snap.chorus_enabled {
+            self.fx_smoothers.chorus_depth.skip(n);
+            self.fx_smoothers.chorus_mix.skip(n);
+        }
+        if !snap.delay_enabled {
+            self.fx_smoothers.delay_time_l.skip(n);
+            self.fx_smoothers.delay_time_r.skip(n);
+            self.fx_smoothers.delay_feedback.skip(n);
+            self.fx_smoothers.delay_mix.skip(n);
         }
     }
 }

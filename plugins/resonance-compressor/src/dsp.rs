@@ -16,6 +16,7 @@
 //! that the soft-knee formula and makeup gain are linear and cheap.
 
 use resonance_dsp::{db_to_linear, linear_to_db, soft_knee_gain_reduction_db, Ballistics, Biquad};
+use resonance_plugin::{Smoother, SmoothingStyle};
 
 use crate::params::CompressorParams;
 use crate::viz::{CompressorViz, HISTORY_STEP_SAMPLES};
@@ -45,10 +46,34 @@ pub struct CompressorDsp {
     in_peak: f32,
     out_peak: f32,
     meter_decay: f32,
+
+    /// De-zippers for the combined makeup gain (manual + auto, in dB) and
+    /// the parallel mix fraction. Host automation lands on the params
+    /// instantly (see `Param::set_plain`); these live here — not in the
+    /// `FloatParam`s — because `Smoother::next()` needs `&mut self` and the
+    /// params sit behind an `Arc`. Retargeted once per block, advanced per
+    /// sample.
+    makeup_smoother: Smoother,
+    mix_smoother: Smoother,
+}
+
+/// Manual makeup plus the optional auto-makeup term. Auto-makeup
+/// compensates about half the maximum possible GR at 0 dBFS input, which
+/// is a good perceptual match for music that rarely hits the full dBFS
+/// ceiling. Smoothing the combined value also glides the auto-makeup
+/// toggle instead of stepping it.
+fn total_makeup_db(params: &CompressorParams) -> f32 {
+    let auto_gain_db = if params.auto_makeup.value() {
+        let ratio = params.ratio.value().max(1.0);
+        -params.threshold.value() * (1.0 - 1.0 / ratio) * 0.5
+    } else {
+        0.0
+    };
+    params.makeup.value() + auto_gain_db
 }
 
 impl CompressorDsp {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f32, params: &CompressorParams) -> Self {
         let mut dsp = Self {
             sample_rate,
             peak_env: 0.0,
@@ -60,8 +85,14 @@ impl CompressorDsp {
             in_peak: 0.0,
             out_peak: 0.0,
             meter_decay: 0.0,
+            makeup_smoother: Smoother::new(SmoothingStyle::Logarithmic(20.0)),
+            mix_smoother: Smoother::new(SmoothingStyle::Linear(20.0)),
         };
         dsp.set_sample_rate(sample_rate);
+        // Seed the smoothers from the current param values so the first
+        // block doesn't ramp in from zero.
+        dsp.makeup_smoother.reset(total_makeup_db(params));
+        dsp.mix_smoother.reset(params.mix.value().clamp(0.0, 1.0));
         dsp
     }
 
@@ -71,6 +102,8 @@ impl CompressorDsp {
         self.rms_coef = (-1.0_f32 / (0.030 * sr)).exp();
         // Meter decay: ~250 ms to drop ~60 dB visually.
         self.meter_decay = (-1.0_f32 / (0.25 * sr)).exp();
+        self.makeup_smoother.set_sample_rate(sr);
+        self.mix_smoother.set_sample_rate(sr);
     }
 
     pub fn reset(&mut self) {
@@ -105,27 +138,21 @@ impl CompressorDsp {
         let attack_ms = params.attack.value().max(0.05);
         let release_ms = params.release.value().max(1.0);
         let detector_mix = params.detector_mix.value().clamp(0.0, 1.0);
-        let makeup_manual_db = params.makeup.value();
-        let mix_target = params.mix.value().clamp(0.0, 1.0);
-        let auto_makeup = params.auto_makeup.value();
         let sc_hpf_on = params.sc_hpf_on.value();
         let sc_hpf_freq = params.sc_hpf_freq.value();
+
+        // Makeup and mix are de-zippered: retarget the smoothers once per
+        // block, then pull per-sample values inside the loop so dragging
+        // (or automating) either knob ramps instead of zippering.
+        self.makeup_smoother.set_target(total_makeup_db(params));
+        self.mix_smoother
+            .set_target(params.mix.value().clamp(0.0, 1.0));
 
         // --- Derived quantities ---
         // Attack/release coefficients: one-pole exponential convergence.
         // `exp(-1 / (time_seconds * sr))` is the fraction kept each sample.
         let ballistics = Ballistics::from_times(self.sample_rate, attack_ms, release_ms);
         let release_coef = ballistics.release_coef;
-
-        // Auto-makeup: compensate about half the maximum possible GR at
-        // 0 dBFS input, which is a good perceptual match for music that
-        // rarely hits the full dBFS ceiling.
-        let auto_gain_db = if auto_makeup {
-            -threshold * (1.0 - 1.0 / ratio) * 0.5
-        } else {
-            0.0
-        };
-        let total_makeup_db = makeup_manual_db + auto_gain_db;
 
         // Update SC HPF coefficients once per block. When the HPF is
         // disabled we bypass by using an identity biquad (same coefficient
@@ -182,16 +209,17 @@ impl CompressorDsp {
             // the attack coefficient; otherwise the slower release.
             self.gr_db = ballistics.step_envelope(self.gr_db, target_gr_db);
 
-            // Apply the gain reduction plus makeup.
-            let apply_db = total_makeup_db - self.gr_db;
+            // Apply the gain reduction plus the smoothed makeup.
+            let apply_db = self.makeup_smoother.next() - self.gr_db;
             let apply_lin = db_to_linear(apply_db);
 
             let wet_l = l * apply_lin;
             let wet_r = r * apply_lin;
 
-            // Parallel mix.
-            let out_l = l * (1.0 - mix_target) + wet_l * mix_target;
-            let out_r = r * (1.0 - mix_target) + wet_r * mix_target;
+            // Parallel mix, also smoothed per sample.
+            let mix = self.mix_smoother.next();
+            let out_l = l * (1.0 - mix) + wet_l * mix;
+            let out_r = r * (1.0 - mix) + wet_r * mix;
 
             left[i] = out_l;
             right[i] = out_r;

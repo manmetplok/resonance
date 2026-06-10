@@ -43,7 +43,6 @@ impl ChorusParams {
                 0.3,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             mix: FloatParam::new(
                 "chorus_mix",
@@ -51,7 +50,6 @@ impl ChorusParams {
                 0.5,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
         }
     }
@@ -71,7 +69,6 @@ impl DelayParams {
                     factor: -1.5,
                 },
             )
-            .with_smoother(SmoothingStyle::Linear(50.0))
             .with_unit(" ms")
             .with_value_to_string(formatters::v2s_f32_rounded(0)),
             time_r: FloatParam::new(
@@ -84,7 +81,6 @@ impl DelayParams {
                     factor: -1.5,
                 },
             )
-            .with_smoother(SmoothingStyle::Linear(50.0))
             .with_unit(" ms")
             .with_value_to_string(formatters::v2s_f32_rounded(0)),
             feedback: FloatParam::new(
@@ -96,7 +92,6 @@ impl DelayParams {
                     max: 0.95,
                 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             mix: FloatParam::new(
                 "delay_mix",
@@ -104,7 +99,6 @@ impl DelayParams {
                 0.25,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
         }
     }
@@ -124,7 +118,6 @@ impl DistortionParams {
                     factor: -1.5,
                 },
             )
-            .with_smoother(SmoothingStyle::Linear(5.0))
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
             mix: FloatParam::new(
                 "dist_mix",
@@ -132,7 +125,6 @@ impl DistortionParams {
                 0.5,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
         }
     }

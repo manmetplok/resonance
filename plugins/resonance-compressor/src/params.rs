@@ -162,12 +162,10 @@ impl Default for CompressorParams {
                     max: 24.0,
                 },
             )
-            .with_smoother(SmoothingStyle::Logarithmic(20.0))
             .with_unit(" dB")
             .with_value_to_string(v2s_f32_db(1)),
 
             mix: FloatParam::new("mix", "Mix", 1.0, FloatRange::Linear { min: 0.0, max: 1.0 })
-                .with_smoother(SmoothingStyle::Linear(20.0))
                 .with_unit("%")
                 .with_value_to_string(v2s_f32_percent(0)),
 
