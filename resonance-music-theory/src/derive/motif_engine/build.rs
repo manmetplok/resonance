@@ -23,6 +23,69 @@ const RHYTHM_PATTERNS: &[&[u8]] = &[
     &[1, 1, 2, 1, 1],     // syncopated center
 ];
 
+// --- Well-formed-line constants (Open Music Theory: melodic line rules) ---
+
+/// Hard per-note interval clamp around the anchor pitch, in semitones.
+const INTERVAL_CLAMP: i8 = 10;
+/// Maximum total span of the motif (highest minus lowest pitch), in
+/// semitones: a major 10th.
+const MAX_RANGE: i16 = 16;
+/// Allowed leap sizes in semitones: no tritone (6) and nothing past a
+/// perfect 5th (7).
+const LEAP_SIZES: [i8; 4] = [3, 4, 5, 7];
+/// Probability that a step continues in the same direction as the
+/// previous melodic move (step inertia).
+const STEP_INERTIA: f32 = 0.62;
+/// How strongly the line is pulled back toward the register center once
+/// it strays past `REGISTER_EDGE` (melodic regression).
+const EDGE_REGRESSION_BIAS: f32 = 0.30;
+/// Distance from the anchor (in semitones) at which regression kicks in.
+const REGISTER_EDGE: i8 = 6;
+/// Maximum run of identical consecutive pitches.
+const MAX_REPEAT_RUN: u8 = 2;
+/// How many candidate draws to attempt before falling back to a
+/// deterministic step toward the register center.
+const CANDIDATE_ATTEMPTS: usize = 8;
+
+/// Pick a melodic direction with step inertia (bias toward continuing
+/// `last_dir`) and melodic regression (bias back toward the anchor when
+/// the line sits near a register edge).
+fn choose_direction(rng: &mut XorShift, last_dir: i8, current: i8) -> i8 {
+    let mut p_up = if last_dir > 0 {
+        STEP_INERTIA
+    } else if last_dir < 0 {
+        1.0 - STEP_INERTIA
+    } else {
+        0.5
+    };
+    if current >= REGISTER_EDGE {
+        p_up = (p_up - EDGE_REGRESSION_BIAS).max(0.05);
+    } else if current <= -REGISTER_EDGE {
+        p_up = (p_up + EDGE_REGRESSION_BIAS).min(0.95);
+    }
+    if rng.next_f32() < p_up {
+        1
+    } else {
+        -1
+    }
+}
+
+/// Line rules for one melodic move: no tritone (6 semitones), no leap
+/// past a perfect 5th (7), at most `MAX_REPEAT_RUN` identical pitches in
+/// a row, and a total motif span of at most `MAX_RANGE` semitones.
+fn is_legal_move(prev: i8, next: i8, repeat_run: u8, min_iv: i8, max_iv: i8) -> bool {
+    let delta = (i16::from(next) - i16::from(prev)).abs();
+    if delta == 6 || delta > 7 {
+        return false;
+    }
+    if delta == 0 && repeat_run >= MAX_REPEAT_RUN {
+        return false;
+    }
+    let new_min = i16::from(min_iv.min(next));
+    let new_max = i16::from(max_iv.max(next));
+    new_max - new_min <= MAX_RANGE
+}
+
 /// Build a motif: a short melodic cell of 2-6 notes with relative intervals
 /// and a rhythmic pattern. Intervals are unbounded by lane register — each
 /// lane clamps to its own register at render time, so two lanes built from
@@ -52,6 +115,13 @@ pub(in crate::derive) fn build_motif(
     let has_scale = scale.is_some();
     let mut notes = Vec::with_capacity(len);
     let mut current_interval: i8 = 0;
+    // Direction of the last non-repeated move (0 = none yet).
+    let mut last_dir: i8 = 0;
+    // Run of identical consecutive pitches ending at the current note.
+    let mut repeat_run: u8 = 1;
+    // Running pitch extremes, for the total-range rule.
+    let mut min_iv: i8 = 0;
+    let mut max_iv: i8 = 0;
 
     for i in 0..len {
         let duration_ratio = rhythm[i % rhythm.len()];
@@ -67,34 +137,62 @@ pub(in crate::derive) fn build_motif(
             continue;
         }
 
-        // Choose: step, leap, or repeat.
-        let roll = rng.next_f32();
-        let repeat_chance = 0.11;
-        let step_chance = 1.0 - motif.leap_chance - repeat_chance;
+        // Choose: step, leap, or repeat. Draw candidates until one obeys
+        // the line rules; the deterministic fallback (a half step toward
+        // the register center) is always legal.
+        let mut chosen: Option<i8> = None;
+        for _ in 0..CANDIDATE_ATTEMPTS {
+            let roll = rng.next_f32();
+            let repeat_chance = 0.11;
+            let step_chance = 1.0 - motif.leap_chance - repeat_chance;
 
-        let new_interval = if roll < repeat_chance {
-            current_interval
-        } else if roll < repeat_chance + step_chance {
-            let step_size = if rng.next_f32() < 0.6 { 1 } else { 2 };
-            let dir: i8 = if rng.next_f32() < 0.5 { 1 } else { -1 };
-            let candidate = current_interval + dir * step_size;
-            if has_scale {
-                candidate
+            let candidate = if roll < repeat_chance {
+                current_interval
+            } else if roll < repeat_chance + step_chance {
+                let step_size = if rng.next_f32() < 0.6 { 1 } else { 2 };
+                let dir = choose_direction(rng, last_dir, current_interval);
+                let candidate = current_interval + dir * step_size;
+                if has_scale {
+                    candidate
+                } else {
+                    snap_to_chord_interval(candidate, &chord_intervals)
+                }
             } else {
-                snap_to_chord_interval(candidate, &chord_intervals)
+                let leap_size = LEAP_SIZES[rng.next_range(LEAP_SIZES.len())];
+                let dir = choose_direction(rng, last_dir, current_interval);
+                let candidate = current_interval + dir * leap_size;
+                if has_scale {
+                    candidate
+                } else {
+                    snap_to_chord_interval(candidate, &chord_intervals)
+                }
+            };
+
+            // Validate the post-snap, post-clamp value: snapping and
+            // clamping can both turn a legal draw into a tritone.
+            let candidate = candidate.clamp(-INTERVAL_CLAMP, INTERVAL_CLAMP);
+            if is_legal_move(current_interval, candidate, repeat_run, min_iv, max_iv) {
+                chosen = Some(candidate);
+                break;
             }
+        }
+        let new_interval = chosen.unwrap_or({
+            if current_interval > 0 {
+                current_interval - 1
+            } else {
+                current_interval + 1
+            }
+        });
+
+        if new_interval == current_interval {
+            repeat_run += 1;
         } else {
-            let leap_size = 3 + (rng.next_f32() * 4.0) as i8;
-            let dir: i8 = if rng.next_f32() < 0.5 { 1 } else { -1 };
-            let candidate = current_interval + dir * leap_size;
-            if has_scale {
-                candidate
-            } else {
-                snap_to_chord_interval(candidate, &chord_intervals)
-            }
-        };
-
-        current_interval = new_interval.clamp(-10, 10);
+            repeat_run = 1;
+            last_dir = if new_interval > current_interval { 1 } else { -1 };
+        }
+        current_interval = new_interval;
+        min_iv = min_iv.min(current_interval);
+        max_iv = max_iv.max(current_interval);
 
         notes.push(MotifNote {
             interval: current_interval,
@@ -104,11 +202,63 @@ pub(in crate::derive) fn build_motif(
         });
     }
 
-    if let Some(last) = notes.last_mut() {
-        last.interval = snap_to_chord_interval(last.interval, &chord_intervals);
-    }
+    snap_last_note_to_chord(&mut notes, &chord_intervals);
 
     notes
+}
+
+/// Snap the motif's final note to a chord tone — but never at the cost of
+/// the line rules. Considers every chord-tone interval in the octave
+/// around the final pitch, keeps only candidates whose closing move stays
+/// legal, and picks the nearest one. If no candidate qualifies, the final
+/// note keeps its (already legal) unsnapped pitch.
+fn snap_last_note_to_chord(notes: &mut [MotifNote], chord_intervals: &[i8]) {
+    let Some(last_idx) = notes.len().checked_sub(1) else {
+        return;
+    };
+    if last_idx == 0 || chord_intervals.is_empty() {
+        return;
+    }
+    let prev = notes[last_idx - 1].interval;
+    // Run of identical consecutive pitches ending at the penultimate note.
+    let mut run: u8 = 1;
+    for w in (1..last_idx).rev() {
+        if notes[w].interval == notes[w - 1].interval {
+            run += 1;
+        } else {
+            break;
+        }
+    }
+    // Pitch extremes of everything except the final note.
+    let mut pre_min = 0i8;
+    let mut pre_max = 0i8;
+    for note in &notes[..last_idx] {
+        pre_min = pre_min.min(note.interval);
+        pre_max = pre_max.max(note.interval);
+    }
+
+    let last = notes[last_idx].interval;
+    let octave_base = i16::from(last) - i16::from(last.rem_euclid(12));
+    let mut best: Option<(i16, i8)> = None;
+    for &ci in chord_intervals {
+        for octave_shift in [-12i16, 0, 12] {
+            let candidate = octave_base + i16::from(ci) + octave_shift;
+            if candidate.abs() > i16::from(INTERVAL_CLAMP) {
+                continue;
+            }
+            let candidate = candidate as i8;
+            if !is_legal_move(prev, candidate, run, pre_min, pre_max) {
+                continue;
+            }
+            let dist = (i16::from(candidate) - i16::from(last)).abs();
+            if best.is_none_or(|(best_dist, _)| dist < best_dist) {
+                best = Some((dist, candidate));
+            }
+        }
+    }
+    if let Some((_, candidate)) = best {
+        notes[last_idx].interval = candidate;
+    }
 }
 
 /// Get the semitone intervals of a chord's pitch classes relative to
