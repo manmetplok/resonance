@@ -1,20 +1,14 @@
-//! Shared palette. Matches the compressor / EQ so all Resonance plugins
-//! feel like one product.
+//! Shared palette — re-exports the classic palette from
+//! `wayland_plugin_gui::theme` so all Resonance plugins feel like one
+//! product. Keeps a local `apply()` that historically sets a reduced set
+//! of visuals (and `ACCENT_DIM` selection); preserved verbatim so the
+//! editor doesn't shift visually.
 
 use wayland_plugin_gui::egui;
 
-pub const BG: egui::Color32 = egui::Color32::from_rgb(0x14, 0x14, 0x18);
-pub const PANEL: egui::Color32 = egui::Color32::from_rgb(0x1b, 0x1b, 0x22);
-pub const PANEL_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x25, 0x25, 0x2e);
-pub const BORDER: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x3e);
-pub const TEXT: egui::Color32 = egui::Color32::from_rgb(0xe0, 0xe0, 0xe0);
-pub const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0x80, 0x80, 0x88);
-pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x5a, 0xc8, 0xfa);
-pub const ACCENT_DIM: egui::Color32 =
-    egui::Color32::from_rgba_premultiplied(0x5a, 0xc8, 0xfa, 0x60);
+pub use wayland_plugin_gui::theme::classic::*;
+
 pub const GOOD: egui::Color32 = egui::Color32::from_rgb(0x6a, 0xe6, 0x8a);
-pub const WARN: egui::Color32 = egui::Color32::from_rgb(0xff, 0xb6, 0x4a);
-pub const DANGER: egui::Color32 = egui::Color32::from_rgb(0xff, 0x6a, 0x6a);
 
 pub fn apply(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();

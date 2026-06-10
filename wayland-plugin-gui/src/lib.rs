@@ -25,6 +25,7 @@ mod editor;
 mod egl_context;
 mod error;
 mod input;
+pub mod theme;
 pub mod widgets;
 mod window_thread;
 
