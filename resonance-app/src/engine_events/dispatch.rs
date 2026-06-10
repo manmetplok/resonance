@@ -249,13 +249,13 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         }
 
         // Peak meter snapshot — drive the VU decay+update from the
-        // engine's view of the world. See `update::viewport`.
+        // engine's view of the world. See `update::tick`.
         E::PeakSnapshot {
             track_peaks,
             bus_peaks,
             master_peak_l,
             master_peak_r,
-        } => crate::update::viewport::apply_peak_snapshot(
+        } => crate::update::tick::apply_peak_snapshot(
             r,
             track_peaks,
             bus_peaks,

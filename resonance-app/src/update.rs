@@ -6,12 +6,14 @@ use iced::{keyboard, Subscription, Task};
 pub mod bus;
 pub mod clips;
 pub mod compose;
+pub mod gates;
 pub mod global_track;
 pub mod master;
 pub mod midi_clip;
 pub mod midi_editor;
 pub mod plugin;
 pub mod project_io;
+pub mod tick;
 pub mod track;
 pub mod transport;
 pub mod ui;
@@ -23,8 +25,8 @@ impl crate::Resonance {
     /// Public entry point invoked by Iced on every message. Reads as a
     /// small orchestrator: pre-dispatch gates, meta-message shortcut,
     /// undo bookkeeping, dispatch, post-dispatch transaction commit.
-    /// The two side helpers (`gates_message`, `record_undo`) live in
-    /// `undo.rs` alongside the message classifier.
+    /// The two side helpers live in `update/gates.rs` (`gates_message`)
+    /// and `undo.rs` (`record_undo`, alongside the message classifier).
     pub fn update(&mut self, message: Message) -> Task<Message> {
         if self.gates_message(&message) {
             return Task::none();
@@ -66,7 +68,7 @@ impl crate::Resonance {
             Message::Viewport(m) => viewport::handle(self, m),
             Message::ProjectIo(m) => project_io::handle(self, m),
             Message::Ui(m) => ui::handle(self, m),
-            Message::Tick => viewport::handle_tick(self),
+            Message::Tick => tick::handle_tick(self),
             Message::WindowCloseRequested(id) => {
                 if self.dirty && self.io.has_active_project {
                     self.confirm_quit = Some(id);
