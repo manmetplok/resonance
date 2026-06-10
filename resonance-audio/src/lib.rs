@@ -44,7 +44,10 @@ pub mod __test_support {
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
     pub use crate::midi_hardware::{parse_live_event_for_test, LiveMidiEvent};
-    pub use crate::mixer::{monitor_catchup_skip, monitor_read_len, whole_frame_push_len};
+    pub use crate::mixer::{
+        monitor_catchup_skip, monitor_read_len, ramped_gain, sum_to_output, sum_to_stereo,
+        whole_frame_push_len,
+    };
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
     };

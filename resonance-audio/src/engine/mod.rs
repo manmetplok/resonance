@@ -72,6 +72,10 @@ pub struct SharedState {
     pub monitoring: AtomicBool,
     /// Master volume as linear gain (AtomicU32 bit-punned f32).
     pub master_volume_bits: AtomicU32,
+    /// Master volume the previous audio block ended on (bit-punned
+    /// f32). Audio thread only; the master pass ramps from this to
+    /// `master_volume_bits` per sample to avoid zipper noise.
+    pub master_last_volume_bits: AtomicU32,
     /// Master peak level L (AtomicU32 bit-punned f32), for VU meters.
     pub master_peak_l_bits: AtomicU32,
     /// Master peak level R (AtomicU32 bit-punned f32), for VU meters.
@@ -124,6 +128,7 @@ impl Default for SharedState {
             recording: AtomicBool::new(false),
             monitoring: AtomicBool::new(false),
             master_volume_bits: AtomicU32::new(1.0f32.to_bits()),
+            master_last_volume_bits: AtomicU32::new(1.0f32.to_bits()),
             master_peak_l_bits: AtomicU32::new(0),
             master_peak_r_bits: AtomicU32::new(0),
             master_fx_bypassed: AtomicBool::new(false),

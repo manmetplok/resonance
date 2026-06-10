@@ -87,10 +87,17 @@ fn sanitize_sample(v: f32) -> f32 {
 }
 
 /// Apply master volume, hard clip at [-1.0, 1.0], and update master peak level atomics.
+/// Volume is ramped per sample from the previous block's value
+/// (`master_last_volume_bits`) so fader drags don't zipper.
 #[inline]
 pub(super) fn apply_master_volume_and_peaks(data: &mut [f32], channels: usize, shared: &SharedState) {
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
+    let last_vol = f32::from_bits(shared.master_last_volume_bits.load(Ordering::Relaxed));
     let output_frames = data.len() / channels;
+    if output_frames == 0 {
+        return;
+    }
+    let vol_step = (master_vol - last_vol) / output_frames as f32;
     let mut master_peak_l = 0.0f32;
     let mut master_peak_r = 0.0f32;
     // The per-frame `if channels >= 2` branch was preventing
@@ -108,8 +115,9 @@ pub(super) fn apply_master_volume_and_peaks(data: &mut [f32], channels: usize, s
     if channels >= 2 {
         for f in 0..output_frames {
             let idx = f * channels;
-            let l = sanitize_sample(data[idx] * master_vol);
-            let r = sanitize_sample(data[idx + 1] * master_vol);
+            let vol = last_vol + vol_step * (f + 1) as f32;
+            let l = sanitize_sample(data[idx] * vol);
+            let r = sanitize_sample(data[idx + 1] * vol);
             data[idx] = l;
             data[idx + 1] = r;
             master_peak_l = master_peak_l.max(l.abs());
@@ -118,12 +126,16 @@ pub(super) fn apply_master_volume_and_peaks(data: &mut [f32], channels: usize, s
     } else {
         for f in 0..output_frames {
             let idx = f * channels;
-            let s = sanitize_sample(data[idx] * master_vol);
+            let vol = last_vol + vol_step * (f + 1) as f32;
+            let s = sanitize_sample(data[idx] * vol);
             data[idx] = s;
             master_peak_l = master_peak_l.max(s.abs());
         }
         master_peak_r = master_peak_l;
     }
+    shared
+        .master_last_volume_bits
+        .store(master_vol.to_bits(), Ordering::Relaxed);
     // SAFETY of fetch_max on bit-punned f32: IEEE 754 binary32 bit
     // ordering matches u32 ordering for non-negative values. This is
     // correct here because peak values are always >= 0 (.abs() is

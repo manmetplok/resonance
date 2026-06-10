@@ -38,6 +38,12 @@ pub struct Track {
     peak_l_bits: AtomicU32,
     /// Post-fader peak level for right channel (for VU meters).
     peak_r_bits: AtomicU32,
+    /// Effective stereo gains applied at the end of the previous audio
+    /// block (0.0 while muted / solo-suppressed). Written only by the
+    /// audio thread; the mixer ramps from these to the current block's
+    /// gains per sample to avoid zipper noise on fader/pan/mute changes.
+    last_gain_l_bits: AtomicU32,
+    last_gain_r_bits: AtomicU32,
     /// Output destination, encoded as `u64::MAX` for `Master` or a bus id.
     /// Stored as an atomic so the audio thread can read the routing
     /// without taking a write lock while the UI edits it.
@@ -110,6 +116,8 @@ impl Track {
             mono: AtomicBool::new(true),
             peak_l_bits: AtomicU32::new(0),
             peak_r_bits: AtomicU32::new(0),
+            last_gain_l_bits: AtomicU32::new(0),
+            last_gain_r_bits: AtomicU32::new(0),
             output_bus_bits: AtomicU64::new(TRACK_OUTPUT_MASTER),
             input_device_name: ArcSwapOption::const_empty(),
             input_port_bits: AtomicU32::new(0),
@@ -303,6 +311,21 @@ impl Track {
     pub fn swap_peak_r(&self) -> f32 {
         f32::from_bits(self.peak_r_bits.swap(0, Ordering::AcqRel))
     }
+
+    /// Effective stereo gains at the end of the previous audio block.
+    pub fn last_gains(&self) -> (f32, f32) {
+        (
+            f32::from_bits(self.last_gain_l_bits.load(Ordering::Relaxed)),
+            f32::from_bits(self.last_gain_r_bits.load(Ordering::Relaxed)),
+        )
+    }
+
+    /// Record the effective stereo gains this block ended on. Audio
+    /// thread only.
+    pub fn set_last_gains(&self, l: f32, r: f32) {
+        self.last_gain_l_bits.store(l.to_bits(), Ordering::Relaxed);
+        self.last_gain_r_bits.store(r.to_bits(), Ordering::Relaxed);
+    }
 }
 
 /// An audio bus: an intermediate summing point with its own plugin
@@ -321,6 +344,10 @@ pub struct Bus {
     pub name: String,
     peak_l_bits: AtomicU32,
     peak_r_bits: AtomicU32,
+    /// See [`Track::last_gains`]: previous block's effective stereo
+    /// gains, used by the mixer's per-sample gain ramp.
+    last_gain_l_bits: AtomicU32,
+    last_gain_r_bits: AtomicU32,
     /// Ordered list of plugin instance IDs forming the insert chain.
     pub plugin_ids: Vec<PluginInstanceId>,
 }
@@ -336,6 +363,8 @@ impl Bus {
             name,
             peak_l_bits: AtomicU32::new(0),
             peak_r_bits: AtomicU32::new(0),
+            last_gain_l_bits: AtomicU32::new(0),
+            last_gain_r_bits: AtomicU32::new(0),
             plugin_ids: Vec::new(),
         }
     }
@@ -389,6 +418,20 @@ impl Bus {
 
     pub fn swap_peak_r(&self) -> f32 {
         f32::from_bits(self.peak_r_bits.swap(0, Ordering::AcqRel))
+    }
+
+    /// See [`Track::last_gains`].
+    pub fn last_gains(&self) -> (f32, f32) {
+        (
+            f32::from_bits(self.last_gain_l_bits.load(Ordering::Relaxed)),
+            f32::from_bits(self.last_gain_r_bits.load(Ordering::Relaxed)),
+        )
+    }
+
+    /// See [`Track::set_last_gains`].
+    pub fn set_last_gains(&self, l: f32, r: f32) {
+        self.last_gain_l_bits.store(l.to_bits(), Ordering::Relaxed);
+        self.last_gain_r_bits.store(r.to_bits(), Ordering::Relaxed);
     }
 }
 

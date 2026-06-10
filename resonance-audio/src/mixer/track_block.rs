@@ -13,7 +13,8 @@ use crate::latency::LatencyComp;
 use crate::types::*;
 
 use super::common::{
-    bus_stereo_gains, latch_transport, sum_to_output, sum_to_stereo, track_stereo_gains,
+    bus_stereo_gains, latch_transport, ramped_stereo_peaks, sum_to_output, sum_to_stereo,
+    track_stereo_gains,
 };
 use super::midi_events::collect_midi_events;
 use super::midi_stash::MidiStash;
@@ -76,11 +77,20 @@ pub(super) fn render_timeline_block(
         // Muted / solo-suppressed instrument tracks still run their
         // instrument plugin below (audio discarded) so NoteOffs keep
         // flowing and voices don't stick on unmute; other tracks are
-        // skipped outright.
+        // skipped outright — except for one extra block after silencing,
+        // which renders normally with a target gain of 0.0 so the mute
+        // ramps out instead of hard-cutting.
         let silenced = track.muted() || (any_solo && !track.soloed());
-        if silenced && track.track_type != TrackType::Instrument {
+        let (last_gain_l, last_gain_r) = track.last_gains();
+        let faded_out = last_gain_l == 0.0 && last_gain_r == 0.0;
+        if silenced && faded_out && track.track_type != TrackType::Instrument {
             continue;
         }
+        let (target_gain_l, target_gain_r) = if silenced {
+            (0.0, 0.0)
+        } else {
+            track_stereo_gains(track)
+        };
 
         // Zero per-track buffers
         track_buf_l[..frames].fill(0.0);
@@ -200,8 +210,9 @@ pub(super) fn render_timeline_block(
                 }
             }
             // Silenced track: the instrument ran (voice state stays
-            // consistent) but its output is discarded.
-            if silenced {
+            // consistent) but its output is discarded — once the mute
+            // ramp below has finished fading the previous gain to zero.
+            if silenced && faded_out {
                 continue;
             }
             // Effect plugins (skipped when the track's FX are bypassed;
@@ -310,19 +321,19 @@ pub(super) fn render_timeline_block(
         }
 
         if !has_audio {
+            // Nothing to ramp over: snap the remembered gain to the
+            // target so changes made during silence don't ramp later.
+            track.set_last_gains(target_gain_l, target_gain_r);
             continue;
         }
 
-        // Apply track volume + pan and sum to the track's destination.
-        let (gain_l, gain_r) = track_stereo_gains(track);
+        // Apply track volume + pan (ramped from the previous block's
+        // gains) and sum to the track's destination.
+        let gain_l = (last_gain_l, target_gain_l);
+        let gain_r = (last_gain_r, target_gain_r);
 
         // Compute post-fader peak levels for VU meters
-        let mut peak_l = 0.0f32;
-        let mut peak_r = 0.0f32;
-        for f in 0..frames {
-            peak_l = peak_l.max((track_buf_l[f] * gain_l).abs());
-            peak_r = peak_r.max((track_buf_r[f] * gain_r).abs());
-        }
+        let (peak_l, peak_r) = ramped_stereo_peaks(track_buf_l, track_buf_r, frames, gain_l, gain_r);
         track.update_peak_l(peak_l);
         track.update_peak_r(peak_r);
 
@@ -352,6 +363,7 @@ pub(super) fn render_timeline_block(
                 gain_r,
             );
         }
+        track.set_last_gains(target_gain_l, target_gain_r);
 
         // Sub-track fan-out: for every non-main plugin output port that
         // was filled by the instrument above, look up the matching
@@ -369,10 +381,21 @@ pub(super) fn render_timeline_block(
                 if port_idx == 0 || port_idx >= extra_ports_filled {
                     continue;
                 }
-                if sub_track.muted() {
+                // A silenced parent fades its sub-tracks out in the same
+                // block; once the parent is fully faded the fan-out stops
+                // running and the subs stay at zero.
+                let sub_silenced = sub_track.muted() || silenced;
+                let (sub_last_l, sub_last_r) = sub_track.last_gains();
+                if sub_silenced && sub_last_l == 0.0 && sub_last_r == 0.0 {
                     continue;
                 }
-                let (sub_gain_l, sub_gain_r) = track_stereo_gains(sub_track);
+                let (sub_target_l, sub_target_r) = if sub_silenced {
+                    (0.0, 0.0)
+                } else {
+                    track_stereo_gains(sub_track)
+                };
+                let sub_gain_l = (sub_last_l, sub_target_l);
+                let sub_gain_r = (sub_last_r, sub_target_r);
 
                 // Run the sub-track's own effect chain in place on its
                 // port buffer, before peak metering and bus/master routing.
@@ -405,12 +428,8 @@ pub(super) fn render_timeline_block(
 
                 // Peak levels for sub-track VU meter.
                 let (pl, pr) = &port_scratch[port_idx];
-                let mut sub_peak_l = 0.0f32;
-                let mut sub_peak_r = 0.0f32;
-                for f in 0..frames {
-                    sub_peak_l = sub_peak_l.max((pl[f] * sub_gain_l).abs());
-                    sub_peak_r = sub_peak_r.max((pr[f] * sub_gain_r).abs());
-                }
+                let (sub_peak_l, sub_peak_r) =
+                    ramped_stereo_peaks(pl, pr, frames, sub_gain_l, sub_gain_r);
                 sub_track.update_peak_l(sub_peak_l);
                 sub_track.update_peak_r(sub_peak_r);
 
@@ -429,13 +448,16 @@ pub(super) fn render_timeline_block(
                 if !routed {
                     sum_to_output(data, channels, frames, pl, pr, sub_gain_l, sub_gain_r);
                 }
+                sub_track.set_last_gains(sub_target_l, sub_target_r);
             }
         }
     }
 
     // Per-bus processing: plugin chain, volume/pan, peaks, sum to master.
     for (bus_idx, bus) in busses_guard.values().enumerate().take(active_busses) {
-        if bus.muted() {
+        let bus_silenced = bus.muted();
+        let (bus_last_l, bus_last_r) = bus.last_gains();
+        if bus_silenced && bus_last_l == 0.0 && bus_last_r == 0.0 {
             continue;
         }
         let (bus_buf_l, bus_buf_r) = &mut bus_bufs[bus_idx];
@@ -454,14 +476,17 @@ pub(super) fn render_timeline_block(
             }
         }
 
-        // Apply bus volume + pan and compute post-fader peaks.
-        let (bus_gain_l, bus_gain_r) = bus_stereo_gains(bus);
-        let mut bus_peak_l = 0.0f32;
-        let mut bus_peak_r = 0.0f32;
-        for f in 0..frames {
-            bus_peak_l = bus_peak_l.max((bus_buf_l[f] * bus_gain_l).abs());
-            bus_peak_r = bus_peak_r.max((bus_buf_r[f] * bus_gain_r).abs());
-        }
+        // Apply bus volume + pan (ramped from the previous block's
+        // gains) and compute post-fader peaks.
+        let (bus_target_l, bus_target_r) = if bus_silenced {
+            (0.0, 0.0)
+        } else {
+            bus_stereo_gains(bus)
+        };
+        let bus_gain_l = (bus_last_l, bus_target_l);
+        let bus_gain_r = (bus_last_r, bus_target_r);
+        let (bus_peak_l, bus_peak_r) =
+            ramped_stereo_peaks(bus_buf_l, bus_buf_r, frames, bus_gain_l, bus_gain_r);
         bus.update_peak_l(bus_peak_l);
         bus.update_peak_r(bus_peak_r);
 
@@ -469,5 +494,6 @@ pub(super) fn render_timeline_block(
         sum_to_output(
             data, channels, frames, bus_buf_l, bus_buf_r, bus_gain_l, bus_gain_r,
         );
+        bus.set_last_gains(bus_target_l, bus_target_r);
     }
 }

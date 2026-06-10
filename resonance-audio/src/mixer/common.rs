@@ -62,44 +62,91 @@ pub(super) fn bus_stereo_gains(bus: &Bus) -> (f32, f32) {
     (volume * pan_l, volume * pan_r)
 }
 
+/// Per-sample linear gain ramp across a block. Frame `f` (0-based) of
+/// `frames` gets `from + (to - from) * (f + 1) / frames`: the previous
+/// block ended exactly on `from`, so the first sample already steps
+/// toward `to` and the last sample lands exactly on it. With
+/// `from == to` this degenerates to the constant gain. `pub` for the
+/// gain-ramp integration tests.
+#[inline(always)]
+pub fn ramped_gain(gain: (f32, f32), inv_frames: f32, f: usize) -> f32 {
+    gain.0 + (gain.1 - gain.0) * ((f + 1) as f32 * inv_frames)
+}
+
 /// Accumulate a source track buffer into a destination stereo pair
-/// (separate L/R Vecs, as used by bus summing buffers).
+/// (separate L/R Vecs, as used by bus summing buffers), ramping each
+/// channel's gain linearly from `gain.0` (previous block) to `gain.1`
+/// (current block) across the block.
 #[inline]
-pub(super) fn sum_to_stereo(
+pub fn sum_to_stereo(
     dst_l: &mut [f32],
     dst_r: &mut [f32],
     frames: usize,
     src_l: &[f32],
     src_r: &[f32],
-    gain_l: f32,
-    gain_r: f32,
+    gain_l: (f32, f32),
+    gain_r: (f32, f32),
 ) {
+    if frames == 0 {
+        return;
+    }
+    let inv_frames = 1.0 / frames as f32;
     for f in 0..frames {
-        dst_l[f] += src_l[f] * gain_l;
-        dst_r[f] += src_r[f] * gain_r;
+        dst_l[f] += src_l[f] * ramped_gain(gain_l, inv_frames, f);
+        dst_r[f] += src_r[f] * ramped_gain(gain_r, inv_frames, f);
     }
 }
 
-/// Sum track buffers into the interleaved output with stereo gains.
+/// Sum track buffers into the interleaved output, ramping each
+/// channel's gain linearly from `gain.0` to `gain.1` across the block.
 #[inline]
-pub(super) fn sum_to_output(
+pub fn sum_to_output(
     data: &mut [f32],
     channels: usize,
     frames: usize,
     track_buf_l: &[f32],
     track_buf_r: &[f32],
-    gain_l: f32,
-    gain_r: f32,
+    gain_l: (f32, f32),
+    gain_r: (f32, f32),
 ) {
+    if frames == 0 {
+        return;
+    }
+    let inv_frames = 1.0 / frames as f32;
     for f in 0..frames {
         let out_idx = f * channels;
+        let gl = ramped_gain(gain_l, inv_frames, f);
+        let gr = ramped_gain(gain_r, inv_frames, f);
         if channels >= 2 {
-            data[out_idx] += track_buf_l[f] * gain_l;
-            data[out_idx + 1] += track_buf_r[f] * gain_r;
+            data[out_idx] += track_buf_l[f] * gl;
+            data[out_idx + 1] += track_buf_r[f] * gr;
         } else {
-            data[out_idx] += track_buf_l[f] * gain_l + track_buf_r[f] * gain_r;
+            data[out_idx] += track_buf_l[f] * gl + track_buf_r[f] * gr;
         }
     }
+}
+
+/// Post-fader stereo peak levels with the same gain ramp the sum
+/// helpers apply, so VU meters match what was actually mixed.
+#[inline]
+pub(super) fn ramped_stereo_peaks(
+    src_l: &[f32],
+    src_r: &[f32],
+    frames: usize,
+    gain_l: (f32, f32),
+    gain_r: (f32, f32),
+) -> (f32, f32) {
+    let mut peak_l = 0.0f32;
+    let mut peak_r = 0.0f32;
+    if frames == 0 {
+        return (peak_l, peak_r);
+    }
+    let inv_frames = 1.0 / frames as f32;
+    for f in 0..frames {
+        peak_l = peak_l.max((src_l[f] * ramped_gain(gain_l, inv_frames, f)).abs());
+        peak_r = peak_r.max((src_r[f] * ramped_gain(gain_r, inv_frames, f)).abs());
+    }
+    (peak_l, peak_r)
 }
 
 /// Fire all-notes-off on every instrument track's primary plugin. Used at

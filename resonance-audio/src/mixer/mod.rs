@@ -24,6 +24,7 @@ mod monitor;
 mod track_block;
 
 pub(crate) use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
+pub use common::{ramped_gain, sum_to_output, sum_to_stereo};
 pub use midi_events::collect_midi_events_bounce;
 pub(crate) use midi_events::MAX_MIDI_EVENTS_PER_BUFFER;
 pub use midi_stash::{MidiStash, NoteSink};
@@ -35,7 +36,9 @@ use crate::engine::SharedState;
 use crate::types::*;
 
 use click::{render_count_in_clicks, render_metronome_clicks};
-use common::{advance_playhead_silent, panic_instrument_tracks, sum_to_output, track_stereo_gains};
+use common::{
+    advance_playhead_silent, panic_instrument_tracks, ramped_stereo_peaks, track_stereo_gains,
+};
 use master::{apply_master_fx_chain, apply_master_volume_and_peaks};
 use monitor::process_monitor_track;
 use track_block::render_timeline_block;
@@ -228,13 +231,17 @@ pub(crate) fn mix_audio(
                         &plugins_guard,
                         transport_snap,
                     );
-                    let (gain_l, gain_r) = track_stereo_gains(track);
-                    let mut peak_l = 0.0f32;
-                    let mut peak_r = 0.0f32;
-                    for f in 0..processed_frames {
-                        peak_l = peak_l.max((track_buf_l[f] * gain_l).abs());
-                        peak_r = peak_r.max((track_buf_r[f] * gain_r).abs());
-                    }
+                    let (target_l, target_r) = track_stereo_gains(track);
+                    let (last_l, last_r) = track.last_gains();
+                    let gain_l = (last_l, target_l);
+                    let gain_r = (last_r, target_r);
+                    let (peak_l, peak_r) = ramped_stereo_peaks(
+                        track_buf_l,
+                        track_buf_r,
+                        processed_frames,
+                        gain_l,
+                        gain_r,
+                    );
                     track.update_peak_l(peak_l);
                     track.update_peak_r(peak_r);
                     sum_to_output(
@@ -246,6 +253,7 @@ pub(crate) fn mix_audio(
                         gain_l,
                         gain_r,
                     );
+                    track.set_last_gains(target_l, target_r);
                 }
             }
         }
@@ -309,15 +317,19 @@ pub(crate) fn mix_audio(
                         transport_snap,
                     );
 
-                    let (gain_l, gain_r) = track_stereo_gains(track);
+                    let (target_l, target_r) = track_stereo_gains(track);
+                    let (last_l, last_r) = track.last_gains();
+                    let gain_l = (last_l, target_l);
+                    let gain_r = (last_r, target_r);
 
                     // Compute post-fader peak levels for VU meters
-                    let mut peak_l = 0.0f32;
-                    let mut peak_r = 0.0f32;
-                    for f in 0..processed_frames {
-                        peak_l = peak_l.max((track_buf_l[f] * gain_l).abs());
-                        peak_r = peak_r.max((track_buf_r[f] * gain_r).abs());
-                    }
+                    let (peak_l, peak_r) = ramped_stereo_peaks(
+                        track_buf_l,
+                        track_buf_r,
+                        processed_frames,
+                        gain_l,
+                        gain_r,
+                    );
                     track.update_peak_l(peak_l);
                     track.update_peak_r(peak_r);
 
@@ -330,6 +342,7 @@ pub(crate) fn mix_audio(
                         gain_l,
                         gain_r,
                     );
+                    track.set_last_gains(target_l, target_r);
                 }
 
                 // Apply master volume and compute master peak levels
