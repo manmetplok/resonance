@@ -75,11 +75,7 @@ pub(super) fn is_black_key(note: u8) -> bool {
 
 /// "C4", "F#3", ...
 pub(super) fn note_name(note: u8) -> String {
-    let names = [
-        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-    ];
-    let octave = (note / 12) as i8 - 1;
-    format!("{}{}", names[note as usize % 12], octave)
+    resonance_music_theory::midi_note_name(note)
 }
 
 /// Format the chord as a short label (e.g. "Bm", "F#7"). Uses the

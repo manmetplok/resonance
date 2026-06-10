@@ -165,11 +165,8 @@ pub(super) fn group_card<'a>(content: Element<'a, Message>) -> Element<'a, Messa
         .into()
 }
 
+/// Unicode-sharp variant (`"F♯3"`) — this inspector's labels use `♯`,
+/// not the ASCII `#` of [`resonance_music_theory::midi_note_name`].
 pub(super) fn midi_to_name(n: u8) -> String {
-    const NAMES: [&str; 12] = [
-        "C", "C\u{266f}", "D", "D\u{266f}", "E", "F", "F\u{266f}", "G", "G\u{266f}", "A",
-        "A\u{266f}", "B",
-    ];
-    let octave = (n as i16 / 12) - 1;
-    format!("{}{}", NAMES[(n % 12) as usize], octave)
+    resonance_music_theory::midi_note_name_unicode(n)
 }

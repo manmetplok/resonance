@@ -32,11 +32,7 @@ pub(crate) fn is_black_key(note: u8) -> bool {
 /// renders as `"C4"` to match the standard convention used by
 /// keyboard plugins and most DAWs.
 pub(crate) fn note_name(note: u8) -> String {
-    let names = [
-        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-    ];
-    let octave = (note / 12) as i8 - 1;
-    format!("{}{}", names[note as usize % 12], octave)
+    resonance_music_theory::midi_note_name(note)
 }
 
 /// Snap a tick value down to the nearest multiple of `snap`. `snap == 0`

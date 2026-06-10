@@ -286,13 +286,8 @@ fn push_rest_entry(track: &mut PhonemeTrack, params: &VocalParams, kind: &str, d
     track.entry_note_start_offset.push(0.0);
 }
 
-/// MIDI note → "C4" / "D#5" / "Bb3" notation accepted by DiffSinger's
+/// MIDI note → "C4" / "D#5" notation accepted by DiffSinger's
 /// `note_seq`. Mirrors `note_name_to_midi`'s inverse semantics.
 fn midi_to_diffsinger_note(midi: u8) -> String {
-    const SHARP: [&str; 12] = [
-        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-    ];
-    let octave = (midi as i32 / 12) - 1;
-    let pc = midi as usize % 12;
-    format!("{}{}", SHARP[pc], octave)
+    resonance_music_theory::midi_note_name(midi)
 }

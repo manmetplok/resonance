@@ -223,6 +223,11 @@ fn fill_curve(dst: &mut SampleCurve, samples: Option<&str>, ts: Option<TimestepF
 }
 
 /// "C4", "D#4", "Bb3", "rest" → MIDI. "rest" / unparseable → 0. Mirrors Jobsecond's regex.
+///
+/// Intentionally not built on `resonance_music_theory::midi_note_name`'s
+/// sharp-only vocabulary: this is the *parsing* direction and must accept
+/// flats, `!` accidentals, lowercase letters, and accidental stacks that
+/// appear in third-party .ds files.
 pub fn note_name_to_midi(s: &str) -> i32 {
     static PATTERN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let pattern = PATTERN.get_or_init(|| {

@@ -71,3 +71,18 @@ impl fmt::Display for PitchClass {
     }
 }
 
+/// Human-readable MIDI note name with ASCII sharps (e.g. `"C4"`,
+/// `"F#3"`). Middle C (MIDI 60) renders as `"C4"`, matching the
+/// convention used by keyboard plugins and most DAWs (note 0 is
+/// `"C-1"`, note 127 is `"G9"`).
+pub fn midi_note_name(note: u8) -> String {
+    let octave = (note / 12) as i8 - 1;
+    format!("{}{}", PitchClass::from_semitone(note).as_str(), octave)
+}
+
+/// Like [`midi_note_name`] but renders sharps with the Unicode sharp
+/// sign (`♯`, U+266F) for UI labels (e.g. `"F♯3"`).
+pub fn midi_note_name_unicode(note: u8) -> String {
+    midi_note_name(note).replace('#', "\u{266f}")
+}
+

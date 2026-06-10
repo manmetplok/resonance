@@ -26,7 +26,7 @@ pub use generator::{
     Degree, GenContext, GenerateError, GeneratedChord, GeneratedMaterial, Generator, GeneratorSpec,
     MarkovTable, TableRegistry,
 };
-pub use pitch::PitchClass;
+pub use pitch::{midi_note_name, midi_note_name_unicode, PitchClass};
 pub use progression::{
     degree_function, diatonic_chord, diatonic_triads, walk_progression, Function,
     ProgressionParams, TRANSITIONS,
