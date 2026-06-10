@@ -48,7 +48,6 @@ pub(crate) fn to_wav(
         let clips_guard = clips.read();
         let midi_guard = midi_clips.read();
         let tm = tempo_map.load();
-        let spt = tm.samples_per_beat(sample_rate) / TICKS_PER_QUARTER_NOTE as f64;
 
         if clips_guard.is_empty() && midi_guard.is_empty() {
             let _ = event_tx.send(AudioEvent::BounceError("No clips to bounce".into()));
@@ -57,7 +56,12 @@ pub(crate) fn to_wav(
         let audio_start = clips_guard.iter().map(|c| c.start_sample).min();
         let audio_end = clips_guard.iter().map(|c| c.end_sample()).max();
         let midi_start = midi_guard.iter().map(|c| c.start_sample).min();
-        let midi_end = midi_guard.iter().map(|c| c.end_sample(spt)).max();
+        // Tempo-aware end to match the renderer's tick_to_abs_sample
+        // note scheduling under tempo changes.
+        let midi_end = midi_guard
+            .iter()
+            .map(|c| tm.tick_to_abs_sample(c.start_sample, c.visible_duration_ticks(), sample_rate))
+            .max();
 
         let start = audio_start.into_iter().chain(midi_start).min().unwrap_or(0);
         let end = audio_end.into_iter().chain(midi_end).max().unwrap_or(0);

@@ -29,7 +29,10 @@ pub(crate) const BOUNCE_TAIL_SECONDS: u32 = 2;
 ///
 /// Returns `Err` if there's nothing to bounce — neither a loop nor
 /// any MIDI clip on the source track.
-pub(crate) fn midi_render_range(
+///
+/// `pub` (not `pub(crate)`) only so `__test_support` can re-export it
+/// for integration tests.
+pub fn midi_render_range(
     midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     shared: &Arc<SharedState>,
@@ -49,13 +52,17 @@ pub(crate) fn midi_render_range(
     let tail_samples = sample_rate as u64 * BOUNCE_TAIL_SECONDS as u64;
     let midi_guard = midi_clips.read();
     let tm = tempo_map.load();
-    let spt = tm.samples_per_beat(sample_rate) / TICKS_PER_QUARTER_NOTE as f64;
 
     let mut start: Option<u64> = None;
     let mut end: Option<u64> = None;
     for c in midi_guard.iter().filter(|c| c.track_id == source_track_id) {
+        // Tempo-aware end: the renderer schedules notes via
+        // tick_to_abs_sample, so a flat samples-per-tick conversion
+        // would mis-size the range under tempo changes.
+        let e =
+            tm.tick_to_abs_sample(c.start_sample, c.visible_duration_ticks(), sample_rate);
         start = Some(start.map_or(c.start_sample, |s| s.min(c.start_sample)));
-        end = Some(end.map_or(c.end_sample(spt), |e| e.max(c.end_sample(spt))));
+        end = Some(end.map_or(e, |prev| prev.max(e)));
     }
     match (start, end) {
         (Some(s), Some(e)) => Ok((s, e + tail_samples)),
