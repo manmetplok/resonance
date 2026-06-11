@@ -17,6 +17,7 @@ implementation sequence; each item is independently testable.
 ## Tier 2 — harmony
 
 - [x] **Pop schema bank as a new generator** — add `GeneratorSpec::Schema` alongside the Markov sampler (`resonance-music-theory/src/generator/`): 12-bar blues, doo-wop I–vi–IV–V, axis I–V–vi–IV (any rotation), hopscotch IV–V–vi–I, lament i–♭VII–♭VI–V, plagal family (I–IV vamp, ♭VII–IV–I, plagal sigh IV–iv–I), modal shuttles (I–♭VII, i–IV, I–II♯), circle of fifths, puff I–iii–IV opener. Variation via rotation and function-preserving substitution (swap chords sharing ≥2 tones).
+- [x] **UI wiring for the schema generator** *(follow-up added after `a89312e`)* — the chord lane inspector can't create or edit a `GeneratorSpec::Schema` yet: add a generator-type selector (Markov table vs. schema), a schema pick_list (`SchemaKind::ALL`/`name()`), and rotation/substitution controls; `ChordInspectorMsg` needs corresponding messages. Files: `resonance-app/src/view/.../chord_inspector.rs`, `lane_inspector/chord/*`. MUST route through the `ux-design` agent first, then `e2e-tester` for snapshot verification.
 - [ ] **Phrase-model overlay on Markov output** — `generator/markov.rs` + `table.rs`: tag degrees with T/PD/D function per table and constrain sampled progressions to one T→PD→D→(T) arc per phrase; accelerate harmonic rhythm into bars 4/8; place cadential dominants on hyper-downbeats of 4-bar groups.
 
 ## Tier 3 — structure & variation depth

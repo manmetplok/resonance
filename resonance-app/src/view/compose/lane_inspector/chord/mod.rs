@@ -7,8 +7,10 @@
 use iced::widget::{column, row, text, Space};
 use iced::{alignment, Element, Length};
 
-use resonance_music_theory::Degree;
+use resonance_music_theory::{Degree, SchemaKind};
 
+use super::display_pick::display_pick;
+use crate::compose::messages::GeneratorKind;
 use crate::compose::SectionDefinitionState;
 use crate::message::*;
 use crate::theme;
@@ -45,6 +47,64 @@ pub(super) fn table_picks() -> Vec<TablePick> {
             label: name.to_string(),
         })
         .collect()
+}
+
+// GENERATOR mode dropdown (Style table / Schema) and SCHEMA dropdown —
+// `Display` newtypes + process-wide cached option slices, so no Vec is
+// allocated per repaint (see view-layer performance rules §11.1).
+display_pick!(GeneratorKindPick, GeneratorKind, as_str, generator_kind_options);
+display_pick!(SchemaPick, SchemaKind, name, schema_pick_options);
+
+/// One entry in the ROTATION dropdown: the rotation amount plus a
+/// preview of the rotated loop ("1 · V–vi–IV–I"). Loops longer than
+/// four chords are elided ("0 · I–IV–vii°–iii…").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RotationPick {
+    pub(super) rotation: u8,
+    label: String,
+}
+
+impl std::fmt::Display for RotationPick {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// Rotation options for `schema` — one per position in its base loop.
+/// All 13 schemas' option vectors are built once and cached; the view
+/// hands `pick_list` a `&'static` slice (no per-frame allocation).
+pub(super) fn rotation_picks(schema: SchemaKind) -> &'static [RotationPick] {
+    static V: std::sync::OnceLock<Vec<Vec<RotationPick>>> = std::sync::OnceLock::new();
+    let all = V.get_or_init(|| {
+        SchemaKind::ALL
+            .iter()
+            .map(|k| {
+                let base = k.base_degrees();
+                (0..base.len())
+                    .map(|r| RotationPick {
+                        rotation: r as u8,
+                        label: rotation_label(base, r),
+                    })
+                    .collect()
+            })
+            .collect()
+    });
+    let idx = SchemaKind::ALL
+        .iter()
+        .position(|k| *k == schema)
+        .expect("SchemaKind::ALL is exhaustive");
+    &all[idx]
+}
+
+/// "{rotation} · {first ≤4 degrees of the rotated loop}", elided with
+/// `…` when the loop is longer than four chords.
+fn rotation_label(base: &[Degree], rotation: usize) -> String {
+    let n = base.len();
+    let shown: Vec<String> = (0..n.min(4))
+        .map(|i| base[(i + rotation) % n].to_string())
+        .collect();
+    let ellipsis = if n > 4 { "…" } else { "" };
+    format!("{rotation} · {}{ellipsis}", shown.join("–"))
 }
 
 pub(super) fn current_table_id(def: &SectionDefinitionState) -> String {

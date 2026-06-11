@@ -1,20 +1,21 @@
 //! Chord generator + section motif body — the main inspector body for
 //! a chord lane.
 
-use iced::widget::{button, column, pick_list, row, text, Space};
+use iced::widget::{button, column, pick_list, row, slider, text, Space};
 use iced::{alignment, Element, Length};
 
-use resonance_music_theory::TableRegistry;
+use resonance_music_theory::{GeneratorSpec, TableRegistry};
 
-use crate::compose::messages::ChordInspectorMsg;
+use crate::compose::messages::{ChordInspectorMsg, GeneratorKind};
 use crate::compose::{ComposeMessage, SectionDefinitionState};
 use crate::message::*;
 use crate::theme;
 
 use super::motif::motif_section_block;
 use super::{
-    current_table_id, degree_picks_from, field_label, section_header, table_picks, toggle_row,
-    DegreePick,
+    current_table_id, degree_picks_from, field_label, generator_kind_options, rotation_picks,
+    schema_pick_options, section_header, table_picks, toggle_row, DegreePick, GeneratorKindPick,
+    SchemaPick,
 };
 
 pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
@@ -43,21 +44,30 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
         .into();
     }
 
-    let tables = table_picks();
-    let current_pick = tables.iter().find(|t| t.id == current_table).cloned();
-    let table_picker = pick_list(tables, current_pick, move |pick| {
-        Message::Compose(ComposeMessage::ChordInspector {
-            definition_id,
-            msg: ChordInspectorMsg::SetTable(pick.id),
-        })
-    })
+    // GENERATOR mode — Style table (Markov) vs. Schema. The dropdown
+    // mirrors the spec's current variant; switching emits
+    // SetGeneratorKind, which carries the length across.
+    let generator_kind = match &definition.generator_spec {
+        Some(GeneratorSpec::Schema { .. }) => GeneratorKind::Schema,
+        _ => GeneratorKind::Markov,
+    };
+    let kind_picker = pick_list(
+        generator_kind_options(),
+        Some(GeneratorKindPick(generator_kind)),
+        move |pick| {
+            Message::Compose(ComposeMessage::ChordInspector {
+                definition_id,
+                msg: ChordInspectorMsg::SetGeneratorKind(pick.0),
+            })
+        },
+    )
     .text_size(12)
     .padding([5, 8])
     .width(Length::Fill);
 
     let current_length = match &definition.generator_spec {
-        Some(resonance_music_theory::GeneratorSpec::MarkovProgression { length, .. })
-        | Some(resonance_music_theory::GeneratorSpec::Schema { length, .. }) => *length,
+        Some(GeneratorSpec::MarkovProgression { length, .. })
+        | Some(GeneratorSpec::Schema { length, .. }) => *length,
         None => definition.generate_params.chord_count as u8,
     };
     let count_picker = pick_list(count_options(), Some(current_length), move |n| {
@@ -74,47 +84,6 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
         Message::Compose(ComposeMessage::ChordInspector {
             definition_id,
             msg: ChordInspectorMsg::SetBeatsPerChord(n),
-        })
-    })
-    .text_size(12)
-    .padding([5, 8])
-    .width(Length::Fill);
-
-    let table_degrees = table_registry
-        .get(&current_table)
-        .map(|t| t.degrees())
-        .unwrap_or_default();
-    let degree_options = degree_picks_from(&table_degrees);
-
-    let current_start = match &definition.generator_spec {
-        Some(resonance_music_theory::GeneratorSpec::MarkovProgression { start, .. }) => {
-            DegreePick(*start)
-        }
-        // Schema specs have no start/end degree constraints.
-        _ => DegreePick(None),
-    };
-    let current_end = match &definition.generator_spec {
-        Some(resonance_music_theory::GeneratorSpec::MarkovProgression { end, .. }) => {
-            DegreePick(*end)
-        }
-        // Schema specs have no start/end degree constraints.
-        _ => DegreePick(None),
-    };
-
-    let start_picker = pick_list(degree_options.clone(), Some(current_start), move |pick| {
-        Message::Compose(ComposeMessage::ChordInspector {
-            definition_id,
-            msg: ChordInspectorMsg::SetStartDegree(pick.0),
-        })
-    })
-    .text_size(12)
-    .padding([5, 8])
-    .width(Length::Fill);
-
-    let end_picker = pick_list(degree_options, Some(current_end), move |pick| {
-        Message::Compose(ComposeMessage::ChordInspector {
-            definition_id,
-            msg: ChordInspectorMsg::SetEndDegree(pick.0),
         })
     })
     .text_size(12)
@@ -240,23 +209,158 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
         Space::new().height(4),
         beats_picker,
     ];
-    let start_block = column![
-        field_label("START °"),
-        Space::new().height(4),
-        start_picker,
-    ];
-    let end_block = column![field_label("END °"), Space::new().height(4), end_picker,];
+
+    // Per-mode controls under the GENERATOR dropdown.
+    let mode_controls: Element<'a, Message> = match generator_kind {
+        GeneratorKind::Markov => {
+            let tables = table_picks();
+            let current_pick = tables.iter().find(|t| t.id == current_table).cloned();
+            let table_picker = pick_list(tables, current_pick, move |pick| {
+                Message::Compose(ComposeMessage::ChordInspector {
+                    definition_id,
+                    msg: ChordInspectorMsg::SetTable(pick.id),
+                })
+            })
+            .text_size(12)
+            .padding([5, 8])
+            .width(Length::Fill);
+
+            let table_degrees = table_registry
+                .get(&current_table)
+                .map(|t| t.degrees())
+                .unwrap_or_default();
+            let degree_options = degree_picks_from(&table_degrees);
+
+            let (current_start, current_end) = match &definition.generator_spec {
+                Some(GeneratorSpec::MarkovProgression { start, end, .. }) => {
+                    (DegreePick(*start), DegreePick(*end))
+                }
+                _ => (DegreePick(None), DegreePick(None)),
+            };
+
+            let start_picker =
+                pick_list(degree_options.clone(), Some(current_start), move |pick| {
+                    Message::Compose(ComposeMessage::ChordInspector {
+                        definition_id,
+                        msg: ChordInspectorMsg::SetStartDegree(pick.0),
+                    })
+                })
+                .text_size(12)
+                .padding([5, 8])
+                .width(Length::Fill);
+
+            let end_picker = pick_list(degree_options, Some(current_end), move |pick| {
+                Message::Compose(ComposeMessage::ChordInspector {
+                    definition_id,
+                    msg: ChordInspectorMsg::SetEndDegree(pick.0),
+                })
+            })
+            .text_size(12)
+            .padding([5, 8])
+            .width(Length::Fill);
+
+            let start_block = column![
+                field_label("START °"),
+                Space::new().height(4),
+                start_picker,
+            ];
+            let end_block = column![field_label("END °"), Space::new().height(4), end_picker,];
+
+            column![
+                field_label("STYLE"),
+                Space::new().height(4),
+                table_picker,
+                Space::new().height(10),
+                two_cols(chords_count_block.into(), beats_block.into()),
+                Space::new().height(10),
+                two_cols(start_block.into(), end_block.into()),
+            ]
+            .spacing(0)
+            .into()
+        }
+
+        GeneratorKind::Schema => {
+            let (current_schema, current_rotation, current_substitution) =
+                match &definition.generator_spec {
+                    Some(GeneratorSpec::Schema {
+                        schema,
+                        rotation,
+                        substitution,
+                        ..
+                    }) => (*schema, *rotation, *substitution),
+                    // Unreachable in practice (generator_kind is Schema
+                    // only when the spec is), but keep a sane fallback.
+                    _ => (resonance_music_theory::SchemaKind::Axis, 0, 0.0),
+                };
+
+            let schema_picker = pick_list(
+                schema_pick_options(),
+                Some(SchemaPick(current_schema)),
+                move |pick| {
+                    Message::Compose(ComposeMessage::ChordInspector {
+                        definition_id,
+                        msg: ChordInspectorMsg::SetSchemaKind(pick.0),
+                    })
+                },
+            )
+            .text_size(12)
+            .padding([5, 8])
+            .width(Length::Fill);
+
+            // Rotation options preview the rotated loop ("1 · V–vi–IV–I"),
+            // so the row gets the full rail width.
+            let rotations = rotation_picks(current_schema);
+            let current_rotation_pick = rotations
+                .iter()
+                .find(|p| p.rotation == current_rotation)
+                .cloned();
+            let rotation_picker = pick_list(rotations, current_rotation_pick, move |pick| {
+                Message::Compose(ComposeMessage::ChordInspector {
+                    definition_id,
+                    msg: ChordInspectorMsg::SetSchemaRotation(pick.rotation),
+                })
+            })
+            .text_size(12)
+            .padding([5, 8])
+            .width(Length::Fill);
+
+            let substitution_slider = slider(0.0..=1.0, current_substitution, move |v| {
+                Message::Compose(ComposeMessage::ChordInspector {
+                    definition_id,
+                    msg: ChordInspectorMsg::SetSchemaSubstitution(v),
+                })
+            })
+            .step(0.01)
+            .width(Length::Fill);
+
+            column![
+                field_label("SCHEMA"),
+                Space::new().height(4),
+                schema_picker,
+                Space::new().height(10),
+                two_cols(chords_count_block.into(), beats_block.into()),
+                Space::new().height(10),
+                field_label("ROTATION"),
+                Space::new().height(4),
+                rotation_picker,
+                Space::new().height(10),
+                field_label(format!("SUBSTITUTION · {current_substitution:.2}")),
+                Space::new().height(6),
+                substitution_slider,
+            ]
+            .spacing(0)
+            .into()
+        }
+    };
 
     column![
         section_header("Chord generator", RailPanelKey::ChordGenerator, false),
         Space::new().height(10),
-        field_label("STYLE"),
+        field_label("GENERATOR"),
         Space::new().height(4),
-        table_picker,
+        kind_picker,
         Space::new().height(10),
-        two_cols(chords_count_block.into(), beats_block.into()),
-        Space::new().height(10),
-        two_cols(start_block.into(), end_block.into()),
+        mode_controls,
         Space::new().height(10),
         sevenths,
         Space::new().height(12),

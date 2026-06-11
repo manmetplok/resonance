@@ -2,10 +2,10 @@
 //! controls (table / chord count / start-end degree / locks / Generate /
 //! Regenerate) plus the section-shared motif knobs.
 
-use resonance_music_theory::{diatonic_chord, GenContext, Generator, GeneratorSpec};
+use resonance_music_theory::{diatonic_chord, GenContext, Generator, GeneratorSpec, SchemaKind};
 
 use super::regenerate::{propagate_chord_change, propagate_motif_change};
-use crate::compose::messages::{ChordInspectorMsg, MotifSourceKind};
+use crate::compose::messages::{ChordInspectorMsg, GeneratorKind, MotifSourceKind};
 use crate::compose::ChordState;
 use crate::util::{bump_seed, GOLDEN_RATIO_SEED};
 
@@ -15,6 +15,97 @@ pub(super) fn handle(
     msg: ChordInspectorMsg,
 ) {
     match msg {
+        ChordInspectorMsg::SetGeneratorKind(kind) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                // Carry the requested chord count across the switch;
+                // everything else takes the target mode's defaults.
+                let length = match &def.generator_spec {
+                    Some(GeneratorSpec::MarkovProgression { length, .. })
+                    | Some(GeneratorSpec::Schema { length, .. }) => *length,
+                    None => def.generate_params.chord_count.max(1) as u8,
+                };
+                match (kind, &def.generator_spec) {
+                    // Already in the requested mode — nothing to do.
+                    (GeneratorKind::Markov, Some(GeneratorSpec::MarkovProgression { .. }))
+                    | (GeneratorKind::Schema, Some(GeneratorSpec::Schema { .. })) => {}
+                    (GeneratorKind::Markov, _) => {
+                        def.generator_spec = Some(GeneratorSpec::MarkovProgression {
+                            length,
+                            table_id: "pop".to_string(),
+                            order: 1,
+                            start: None,
+                            end: None,
+                        });
+                    }
+                    (GeneratorKind::Schema, _) => {
+                        def.generator_spec = Some(GeneratorSpec::Schema {
+                            schema: SchemaKind::Axis,
+                            length,
+                            rotation: 0,
+                            substitution: 0.0,
+                        });
+                    }
+                }
+                def.generate_params.chord_count = length as u32;
+                r.compose.last_error = None;
+            }
+            regenerate_if_materialized(r, definition_id);
+        }
+
+        ChordInspectorMsg::SetSchemaKind(kind) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                let length = kind.default_length();
+                match &mut def.generator_spec {
+                    Some(GeneratorSpec::Schema {
+                        schema,
+                        length: l,
+                        rotation,
+                        ..
+                    }) => {
+                        *schema = kind;
+                        // Snap to the schema's natural loop length and
+                        // drop the rotation — the old offset is
+                        // meaningless against a different loop.
+                        *l = length;
+                        *rotation = 0;
+                    }
+                    // No spec yet, or a Markov spec: picking a schema
+                    // switches to a Schema spec (mirrors SetTable).
+                    _ => {
+                        def.generator_spec = Some(GeneratorSpec::Schema {
+                            schema: kind,
+                            length,
+                            rotation: 0,
+                            substitution: 0.0,
+                        });
+                    }
+                }
+                def.generate_params.chord_count = length as u32;
+                r.compose.last_error = None;
+            }
+            regenerate_if_materialized(r, definition_id);
+        }
+
+        ChordInspectorMsg::SetSchemaRotation(rot) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                if let Some(GeneratorSpec::Schema { rotation, .. }) = &mut def.generator_spec {
+                    *rotation = rot;
+                }
+                r.compose.last_error = None;
+            }
+            regenerate_if_materialized(r, definition_id);
+        }
+
+        ChordInspectorMsg::SetSchemaSubstitution(s) => {
+            if let Some(def) = r.compose.find_definition_mut(definition_id) {
+                if let Some(GeneratorSpec::Schema { substitution, .. }) = &mut def.generator_spec {
+                    *substitution = s.clamp(0.0, 1.0);
+                }
+                r.compose.last_error = None;
+            }
+            regenerate_if_materialized(r, definition_id);
+        }
+
         ChordInspectorMsg::SetTable(table_id) => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 match &mut def.generator_spec {
@@ -234,6 +325,22 @@ pub(super) fn handle(
     }
 }
 
+/// Live-preview hook for the schema controls: once the lane has been
+/// materialized (Generate pressed at least once), schema edits — kind,
+/// rotation, substitution — re-run the generator immediately so the
+/// chord lane tracks the controls. Generation is a pure function of
+/// (spec, seed), so this is deterministic and cheap. Before the first
+/// Generate the spec is just being staged, matching the Markov controls.
+fn regenerate_if_materialized(r: &mut crate::Resonance, definition_id: u64) {
+    let materialized = r
+        .compose
+        .find_definition(definition_id)
+        .is_some_and(|def| def.generated_material.is_some());
+    if materialized {
+        generate_chord_lane(r, definition_id, true);
+    }
+}
+
 /// Borrow the manual-motif note vector on the section identified by
 /// `definition_id`. Returns `None` if the definition doesn't exist or its
 /// motif is currently in `Generated` mode — every manual-motif handler
@@ -247,7 +354,8 @@ fn manual_notes_mut(
         .and_then(|def| def.motif_source.manual_notes_mut())
 }
 
-/// Generate a chord progression using the MarkovProgression generator.
+/// Generate a chord progression from the section's `GeneratorSpec`
+/// (Markov table or pop schema; defaults to the "pop" Markov table).
 fn generate_chord_lane(r: &mut crate::Resonance, definition_id: u64, respect_locks: bool) {
     let time_sig_num = r.transport.time_sig_num;
     let def = match r.compose.find_definition(definition_id) {

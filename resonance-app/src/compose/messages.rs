@@ -1,7 +1,7 @@
 use resonance_audio::types::TrackId;
 use resonance_music_theory::{
     BassMotifMode, BassMotifPhrase, BassStyle, Chord, ChordQuality, ContourPreference, Degree,
-    MelodyStyle, PitchClass, Scale, SyllableMode, VocalContour, VocalMood, VocalPov,
+    MelodyStyle, PitchClass, Scale, SchemaKind, SyllableMode, VocalContour, VocalMood, VocalPov,
     VocalRhymeScheme, VocalSinger, VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank,
     VoiceType,
 };
@@ -196,8 +196,20 @@ pub struct VocalAudioReadyData {
 
 #[derive(Debug, Clone)]
 pub enum ChordInspectorMsg {
+    /// Switch the progression generator between its Markov-table and
+    /// pop-schema modes. Length carries over; everything else takes the
+    /// target mode's defaults (table "pop" / schema Axis).
+    SetGeneratorKind(GeneratorKind),
     /// Select which Markov table to use.
     SetTable(String),
+    /// Select which pop schema to realize. Resets length to the
+    /// schema's natural loop length and rotation to 0.
+    SetSchemaKind(SchemaKind),
+    /// Rotate the schema's base loop by this many positions.
+    SetSchemaRotation(u8),
+    /// Per-position probability (0..=1) of a function-preserving chord
+    /// substitution.
+    SetSchemaSubstitution(f32),
     /// Set the number of chords to generate.
     SetLength(u8),
     /// Set the beat duration of each generated chord.
@@ -258,6 +270,35 @@ impl MotifSourceKind {
 }
 
 impl std::fmt::Display for MotifSourceKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Which progression generator a section's chord lane is using. UI-side
+/// discriminant for [`resonance_music_theory::GeneratorSpec`] — drives
+/// the GENERATOR dropdown in the chord inspector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneratorKind {
+    /// Sample from a Markov style table (Pop / Jazz / ...).
+    Markov,
+    /// Realize a canonical pop schema (axis, doo-wop, 12-bar blues, ...).
+    Schema,
+}
+
+impl GeneratorKind {
+    /// All kinds, in display order (for the cached pick_list options).
+    pub const ALL: [GeneratorKind; 2] = [GeneratorKind::Markov, GeneratorKind::Schema];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GeneratorKind::Markov => "Style table",
+            GeneratorKind::Schema => "Schema",
+        }
+    }
+}
+
+impl std::fmt::Display for GeneratorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
