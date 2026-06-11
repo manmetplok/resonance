@@ -52,7 +52,9 @@ pub(super) fn current_table_id(def: &SectionDefinitionState) -> String {
         Some(resonance_music_theory::GeneratorSpec::MarkovProgression { table_id, .. }) => {
             table_id.clone()
         }
-        None => "pop".to_string(),
+        // No spec yet, or a non-Markov spec (e.g. Schema): the table
+        // picker shows the default it would switch to.
+        _ => "pop".to_string(),
     }
 }
 

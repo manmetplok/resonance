@@ -56,7 +56,8 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
     .width(Length::Fill);
 
     let current_length = match &definition.generator_spec {
-        Some(resonance_music_theory::GeneratorSpec::MarkovProgression { length, .. }) => *length,
+        Some(resonance_music_theory::GeneratorSpec::MarkovProgression { length, .. })
+        | Some(resonance_music_theory::GeneratorSpec::Schema { length, .. }) => *length,
         None => definition.generate_params.chord_count as u8,
     };
     let count_picker = pick_list(count_options(), Some(current_length), move |n| {
@@ -89,13 +90,15 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
         Some(resonance_music_theory::GeneratorSpec::MarkovProgression { start, .. }) => {
             DegreePick(*start)
         }
-        None => DegreePick(None),
+        // Schema specs have no start/end degree constraints.
+        _ => DegreePick(None),
     };
     let current_end = match &definition.generator_spec {
         Some(resonance_music_theory::GeneratorSpec::MarkovProgression { end, .. }) => {
             DegreePick(*end)
         }
-        None => DegreePick(None),
+        // Schema specs have no start/end degree constraints.
+        _ => DegreePick(None),
     };
 
     let start_picker = pick_list(degree_options.clone(), Some(current_start), move |pick| {

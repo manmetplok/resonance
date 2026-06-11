@@ -28,12 +28,14 @@
 
 pub mod degree;
 pub mod markov;
+pub mod schema;
 pub mod table;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use degree::Degree;
+pub use schema::SchemaKind;
 pub use table::{MarkovTable, TableRegistry};
 
 /// Describes how to generate material for a section. Serialized with an
@@ -62,6 +64,26 @@ pub enum GeneratorSpec {
         #[serde(default)]
         end: Option<Degree>,
     },
+    /// Realize a canonical pop/rock/blues schema (12-bar blues, axis,
+    /// doo-wop, ...) with optional rotation and function-preserving
+    /// substitution. See [`schema::SchemaKind`].
+    Schema {
+        /// Which schema to realize.
+        schema: SchemaKind,
+        /// Number of chords to produce. The schema loop is tiled
+        /// cyclically to fill this length (use
+        /// [`SchemaKind::default_length`] for one pass).
+        length: u8,
+        /// Rotate the base loop by this many positions before tiling
+        /// (e.g. axis rotation 1 = V-vi-IV-I). Wraps modulo the loop
+        /// length.
+        #[serde(default)]
+        rotation: u8,
+        /// Per-position probability (0..=1) of swapping the canonical
+        /// chord for a substitute sharing >= 2 pitch classes with it.
+        #[serde(default)]
+        substitution: f32,
+    },
 }
 
 /// Pure generation interface. Implementations must be deterministic:
@@ -81,6 +103,12 @@ impl Generator for GeneratorSpec {
                 start,
                 end,
             } => markov::generate(*length, table_id, *order, *start, *end, seed, ctx),
+            GeneratorSpec::Schema {
+                schema,
+                length,
+                rotation,
+                substitution,
+            } => schema::generate(*schema, *length, *rotation, *substitution, seed, ctx),
         }
     }
 }

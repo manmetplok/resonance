@@ -26,7 +26,7 @@ pub use derive::{
 };
 pub use generator::{
     Degree, GenContext, GenerateError, GeneratedChord, GeneratedMaterial, Generator, GeneratorSpec,
-    MarkovTable, TableRegistry,
+    MarkovTable, SchemaKind, TableRegistry,
 };
 pub use pitch::{midi_note_name, midi_note_name_unicode, PitchClass};
 pub use progression::{

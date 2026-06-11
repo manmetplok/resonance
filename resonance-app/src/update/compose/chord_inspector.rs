@@ -30,7 +30,9 @@ pub(super) fn handle(
                         *start = None;
                         *end = None;
                     }
-                    None => {
+                    // No spec yet, or a non-Markov spec (e.g. Schema):
+                    // picking a table switches to a Markov spec.
+                    _ => {
                         def.generator_spec = Some(GeneratorSpec::MarkovProgression {
                             length: def.generate_params.chord_count as u8,
                             table_id,
@@ -47,7 +49,8 @@ pub(super) fn handle(
         ChordInspectorMsg::SetLength(length) => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 match &mut def.generator_spec {
-                    Some(GeneratorSpec::MarkovProgression { length: l, .. }) => {
+                    Some(GeneratorSpec::MarkovProgression { length: l, .. })
+                    | Some(GeneratorSpec::Schema { length: l, .. }) => {
                         *l = length;
                     }
                     None => {
@@ -269,6 +272,7 @@ fn generate_chord_lane(r: &mut crate::Resonance, definition_id: u64, respect_loc
 
     let length = match &spec {
         GeneratorSpec::MarkovProgression { length, .. } => *length as usize,
+        GeneratorSpec::Schema { length, .. } => *length as usize,
     };
 
     let locked: Vec<Option<resonance_music_theory::Degree>> = if respect_locks {
