@@ -30,6 +30,7 @@ use super::super::cadence::{
     final_degree_fits_chord, formula_candidates, scale_degree_of, scale_degree_pc,
     tendency_resolution, CadenceGoal,
 };
+use super::super::climax::SectionClimaxRule;
 use super::super::{GeneratedNote, TimedChord};
 use super::harmony::{
     climax_ok, dissonance_treatment_ok, leap_grammar_ok, strong_beats_ok, HarmonyGrid,
@@ -40,6 +41,11 @@ use super::harmony::{
 /// of the goal's formulas (walking the compatibility fallback chain)
 /// and applies the cheapest candidate that keeps the whole phrase
 /// valid; leaves the phrase untouched when none survives.
+///
+/// `section` is the phrase's section-climax constraint: secondary
+/// phrases reject candidates that reach the carrier's peak, and the
+/// carrier rejects candidates that would rewrite its peak away.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_cadence_formula(
     notes: &mut [GeneratedNote],
     goal: CadenceGoal,
@@ -47,6 +53,7 @@ pub(super) fn apply_cadence_formula(
     scale: &Scale,
     register: (u8, u8),
     tpb: u64,
+    section: SectionClimaxRule,
 ) {
     let n = notes.len();
     if n < 2 || phrase_chords.is_empty() {
@@ -99,6 +106,7 @@ pub(super) fn apply_cadence_formula(
         modified[n - 1] = cand.fin;
         if !leap_grammar_ok(&modified)
             || !climax_ok(&modified)
+            || !section.allows(&modified)
             || !dissonance_treatment_ok(&modified, notes, &grid)
             || !strong_beats_ok(&modified, notes, &grid)
         {
@@ -150,6 +158,7 @@ pub(super) fn apply_cadence_formula(
                 modified[n - 1] = fin;
                 if !leap_grammar_ok(&modified)
                     || !climax_ok(&modified)
+                    || !section.allows(&modified)
                     || !dissonance_treatment_ok(&modified, notes, &grid)
                     || !strong_beats_ok(&modified, notes, &grid)
                 {

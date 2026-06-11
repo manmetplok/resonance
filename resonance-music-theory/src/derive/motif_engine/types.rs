@@ -108,4 +108,11 @@ pub(in crate::derive) struct PhrasePlan {
     /// or cadential continuation, plus standalone antecedents) carries
     /// a goal.
     pub(super) cadence: Option<CadenceGoal>,
+    /// Contour-amplitude multiplier from the section climax plan: the
+    /// designated climax-carrier phrase (and the consequent paired
+    /// with it) keeps the full contour swing (1.0); secondary phrases
+    /// draw their contours at reduced amplitude so their peaks sit
+    /// naturally below the carrier's and the post-realization section
+    /// pass rarely has to demote.
+    pub(super) peak_scale: f32,
 }

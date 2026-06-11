@@ -45,6 +45,171 @@ fn step_down(note: u8, scale: Option<Scale>) -> u8 {
     }
 }
 
+/// Section-level climax constraint for one phrase (instrumental) or
+/// one lyric line (vocal), produced by the section climax plan and
+/// threaded into the downstream overlay passes (cadence formulas,
+/// embellishments) so their candidate validation cannot reintroduce a
+/// peak the section pass demoted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::derive) enum SectionClimaxRule {
+    /// No section-level constraint: single-phrase sections, chant
+    /// recitation, or a degenerate carrier (flat / on the register
+    /// floor) that gives the section nothing to orchestrate around.
+    Free,
+    /// This phrase/line carries the section climax: its highest pitch
+    /// must not drop below `peak`. Guards the carrier's climax against
+    /// a cadence rewrite of a second-half peak sitting on the penult.
+    Carrier { peak: u8 },
+    /// Secondary phrase/line: every pitch must stay strictly below
+    /// `cap` (the carrier's peak minus the planned margin).
+    Capped { cap: u8 },
+}
+
+impl SectionClimaxRule {
+    /// Does the candidate pitch sequence satisfy this constraint?
+    pub(in crate::derive) fn allows(self, pitches: &[u8]) -> bool {
+        match self {
+            SectionClimaxRule::Free => true,
+            SectionClimaxRule::Carrier { peak } => {
+                pitches.iter().copied().max().is_none_or(|m| m >= peak)
+            }
+            SectionClimaxRule::Capped { cap } => pitches.iter().all(|&p| p < cap),
+        }
+    }
+}
+
+/// Secondary-peak margin (in semitones below the carrier's peak) for
+/// one group of four phrases/lines, drawn deterministically from the
+/// section seed. Per *group* rather than per phrase so paired material
+/// (sentence presentation pairs, srdc statement/restatement echoes)
+/// shares one cap and demotion cannot pull the pair apart; variety
+/// between sections (and between a long section's groups) comes from
+/// the seeded draw.
+pub(in crate::derive) fn section_peak_margin(seed: u64, group: usize) -> u8 {
+    let mut s = seed
+        ^ (group as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ 0x5EC7_C11A_A75E_C0DE;
+    s = (s ^ (s >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    s = (s ^ (s >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    s ^= s >> 31;
+    1 + (s % 3) as u8
+}
+
+/// Post-demotion repair for the strong-beat contract: a legal
+/// strong-beat dissonance (appoggiatura/suspension, resolving by step
+/// on the next note) can be orphaned when a demotion pass lowers its
+/// *resolution* note past the step. Rather than chasing the resolution
+/// around, the dissonance itself is demoted to the highest chord tone
+/// below it — a chord tone needs no resolution, so the contract holds
+/// by construction. Demote-only, like everything else in this module.
+/// Returns whether any note changed.
+pub(in crate::derive) fn restore_strong_beat_contract(
+    notes: &mut [GeneratedNote],
+    harmony: &ClimaxHarmony<'_>,
+) -> bool {
+    let mut changed = false;
+    for i in 0..notes.len() {
+        let (tick, pitch) = (notes[i].start_tick, notes[i].note);
+        if !harmony.is_strong_beat(tick) || harmony.is_chord_tone(tick, pitch) {
+            continue;
+        }
+        let resolves = notes.get(i + 1).is_some_and(|nx| {
+            let step = (nx.note as i16 - pitch as i16).abs();
+            (1..=STEP_MAX).contains(&step)
+        });
+        if resolves {
+            continue;
+        }
+        if let Some(tone) = harmony.chord_tone_below(tick, pitch) {
+            notes[i].note = tone;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Demote every note at or above `cap` (except the index in `skip`) to
+/// below it, sharing the demotion vocabulary of the per-phrase climax
+/// pass: a final note tries a pitch-class-preserving octave drop first
+/// (guarded by `max_adjacent`, the widest interval the caller's style
+/// renders cleanly), strong-beat notes step to the highest chord tone
+/// below `cap` when `harmony` is provided, and everything else walks
+/// down by scale steps. Demote-only — never raises a pitch — so it
+/// composes with `enforce_single_climax` and the leap grammar to a
+/// fixpoint exactly like the per-phrase pass does. Returns whether any
+/// note changed.
+pub(in crate::derive) fn demote_at_or_above(
+    notes: &mut [GeneratedNote],
+    cap: u8,
+    skip: Option<usize>,
+    scale: Option<Scale>,
+    register: (u8, u8),
+    harmony: Option<&ClimaxHarmony<'_>>,
+    max_adjacent: i16,
+) -> bool {
+    let n = notes.len();
+    let lo = register.0;
+    if n == 0 || cap <= lo {
+        return false;
+    }
+    let mut changed = false;
+    for i in 0..n {
+        if Some(i) == skip || notes[i].note < cap {
+            continue;
+        }
+        let original = notes[i].note;
+
+        // The final note is usually a cadence landing (chord root /
+        // formula degree); try an octave drop first so its pitch class
+        // survives the demotion.
+        if i == n - 1 && i > 0 {
+            let dropped = original as i16 - 12;
+            let approach = dropped - notes[i - 1].note as i16;
+            if dropped >= lo as i16 && dropped < cap as i16 && approach.abs() <= max_adjacent {
+                notes[i].note = dropped as u8;
+                changed = true;
+                continue;
+            }
+        }
+
+        // Strong-beat notes must stay chord tones (the motif engine's
+        // `align_to_harmony` contract): demote straight to the highest
+        // chord tone below the cap instead of walking scale steps.
+        if let Some(h) = harmony {
+            if h.is_strong_beat(notes[i].start_tick) {
+                if let Some(tone) = h.chord_tone_below(notes[i].start_tick, cap) {
+                    if tone != original {
+                        notes[i].note = tone;
+                        changed = true;
+                    }
+                    continue;
+                }
+                // No chord tone below the cap: fall through to the
+                // scale-step demotion — the climax discipline outranks
+                // the strong-beat chord-tone preference here.
+            }
+        }
+
+        let mut p = original;
+        for _ in 0..24 {
+            if p < cap || p <= lo {
+                break;
+            }
+            let next = step_down(p, scale);
+            if next >= p {
+                break; // pinned by a scale/register edge
+            }
+            p = next;
+        }
+        let p = p.max(lo);
+        if p < cap && p != original {
+            notes[i].note = p;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// Harmonic context for callers that keep strong-beat notes on chord
 /// tones (`align_to_harmony` in the motif engine). When provided,
 /// demotion of a strong-beat note steps down to the nearest chord
@@ -81,6 +246,15 @@ impl ClimaxHarmony<'_> {
             .iter()
             .rfind(|tc| tc.start_beat as u64 * self.tpb <= tick)
             .or_else(|| self.chords.first())
+    }
+
+    /// Is `note` a tone of the chord sounding at `tick`?
+    fn is_chord_tone(&self, tick: u64, note: u8) -> bool {
+        self.chord_at(tick).is_some_and(|tc| {
+            tc.chord
+                .pitch_classes()
+                .any(|pc| pc.to_semitone() == note % 12)
+        })
     }
 
     /// Highest chord tone strictly below `below` (and at or above the
@@ -126,6 +300,13 @@ fn run_span_ending_at(notes: &[GeneratedNote], end: usize, end_value: u8) -> i16
 /// it off because its style contracts (chant's narrow speaking band,
 /// hymnal's stepwise motion) are worth more than a forced leap.
 ///
+/// `tie_late` controls the tie-break between equal window maxima:
+/// `true` (the per-phrase/per-line passes) prefers the later position
+/// for a longer build-up; `false` (the section-climax repair re-runs)
+/// prefers the earlier one, keeping the climax clear of the penult so
+/// the goal-cadence overlay can still rewrite the final two notes
+/// without orphaning the peak.
+///
 /// Skips (returning `false`) phrases that are too short to host a
 /// non-final second-half climax (< 3 notes), completely flat lines
 /// (chant-like recitation has no contour to discipline), and the
@@ -137,6 +318,7 @@ pub(in crate::derive) fn enforce_single_climax(
     register: (u8, u8),
     harmony: Option<&ClimaxHarmony<'_>>,
     leap_approach: bool,
+    tie_late: bool,
 ) -> bool {
     let n = notes.len();
     if n < 3 {
@@ -162,17 +344,20 @@ pub(in crate::derive) fn enforce_single_climax(
     }
 
     // Choose the climax among the window notes at the window maximum:
-    // prefer one already approached by leap, tie-break toward the
-    // later position (longer build-up).
+    // prefer one already approached by leap, tie-break per `tie_late`.
     let mut best: Option<(bool, usize)> = None;
     for i in w_start..w_end {
         if notes[i].note != wmax {
             continue;
         }
         let approached_by_leap = (wmax as i16 - notes[i - 1].note as i16).abs() >= LEAP_MIN;
-        let key = (approached_by_leap, i);
-        if best.is_none_or(|b| key > b) {
-            best = Some(key);
+        let better = match best {
+            None => true,
+            Some((b_leap, _)) if approached_by_leap != b_leap => approached_by_leap,
+            Some((_, b_i)) => tie_late && i > b_i,
+        };
+        if better {
+            best = Some((approached_by_leap, i));
         }
     }
     let Some((_, climax)) = best else {
@@ -180,61 +365,15 @@ pub(in crate::derive) fn enforce_single_climax(
     };
 
     // Demote every other note at or above the climax pitch.
-    let mut changed = false;
-    for i in 0..n {
-        if i == climax || notes[i].note < wmax {
-            continue;
-        }
-        let original = notes[i].note;
-
-        // The final note is usually a cadence landing (chord root /
-        // formula degree); try an octave drop first so its pitch class
-        // survives the demotion.
-        if i == n - 1 {
-            let dropped = original as i16 - 12;
-            let approach = dropped - notes[i - 1].note as i16;
-            if dropped >= lo as i16 && dropped < wmax as i16 && approach.abs() <= MAX_ADJACENT {
-                notes[i].note = dropped as u8;
-                changed = true;
-                continue;
-            }
-        }
-
-        // Strong-beat notes must stay chord tones (the motif engine's
-        // `align_to_harmony` contract): demote straight to the highest
-        // chord tone below the climax instead of walking scale steps.
-        if let Some(h) = harmony {
-            if h.is_strong_beat(notes[i].start_tick) {
-                if let Some(tone) = h.chord_tone_below(notes[i].start_tick, wmax) {
-                    if tone != original {
-                        notes[i].note = tone;
-                        changed = true;
-                    }
-                    continue;
-                }
-                // No chord tone below the climax: fall through to the
-                // scale-step demotion — a unique climax outranks the
-                // strong-beat chord-tone preference here.
-            }
-        }
-
-        let mut p = original;
-        for _ in 0..24 {
-            if p < wmax || p <= lo {
-                break;
-            }
-            let next = step_down(p, scale);
-            if next >= p {
-                break; // pinned by a scale/register edge
-            }
-            p = next;
-        }
-        let p = p.max(lo);
-        if p < wmax && p != original {
-            notes[i].note = p;
-            changed = true;
-        }
-    }
+    let mut changed = demote_at_or_above(
+        notes,
+        wmax,
+        Some(climax),
+        scale,
+        register,
+        harmony,
+        MAX_ADJACENT,
+    );
 
     // "Ideally approached by leap": when the approach into the climax
     // is a step, deepen the preceding note by scale steps until the

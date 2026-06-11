@@ -231,6 +231,25 @@ pub(in crate::derive::vocal) fn line_role(line_idx: usize, total_lines: usize) -
     }
 }
 
+/// Index of the lyric line designated to carry the *section's* single
+/// climax: the departure line of the last full srdc group (line 3 of
+/// 4 — the group's contrasting, open phrase, Open Music Theory's
+/// natural climax carrier), falling back to the latest restatement
+/// for trailing 3-line groups and to the statement for pairs and
+/// singles. Conclusions never carry the peak — they resolve.
+pub(in crate::derive::vocal) fn section_climax_line(total_lines: usize) -> usize {
+    let role_of = |i: usize| line_role(i, total_lines);
+    (0..total_lines)
+        .rev()
+        .find(|&i| role_of(i) == SectionLineRole::Departure)
+        .or_else(|| {
+            (0..total_lines)
+                .rev()
+                .find(|&i| role_of(i) == SectionLineRole::Restatement)
+        })
+        .unwrap_or(0)
+}
+
 /// Phrase-role classification for one line of lyrics. Antecedent
 /// lines end "open" — on a scale degree that asks for more (2, 4,
 /// or 7). Consequent lines end "closed" — on the tonic (1), 3rd, or

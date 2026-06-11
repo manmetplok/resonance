@@ -28,7 +28,7 @@ mod types;
 // External API consumed outside the `derive` module (re-exported from
 // `derive::mod`).
 pub use melody::{derive_motif_melody_with_section, motif_intervals};
-pub use phrase::phrase_grammar_roles;
+pub use phrase::{phrase_grammar_roles, section_climax_phrase};
 pub use types::PhraseGrammarRole;
 
 // Sibling-module API: visible to `derive::motif_bass`, `derive::motif_rhythm`,

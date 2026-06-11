@@ -59,6 +59,50 @@ pub fn phrase_grammar_roles(num_phrases: usize, seed: u64) -> Vec<PhraseGrammarR
     roles
 }
 
+/// Index of the phrase designated to carry the *section's* single
+/// climax (Open Music Theory v2: one climax per section, not one per
+/// phrase). The natural carrier is the group's energy-building middle:
+/// the continuation of a sentence, or the departure-position second
+/// antecedent of a period chain — phrase 3 of 4 in both archetypes.
+/// Concretely: the latest phrase whose role is `Continuation` or
+/// `Antecedent` (closing phrases — consequents and cadential
+/// continuations — resolve and never carry the peak). Sections with
+/// several groups place the climax in the last group, late in the
+/// section. Falls back to the second-to-last phrase for role lists
+/// without an open phrase (which `phrase_grammar_roles` never emits).
+pub fn section_climax_phrase(roles: &[PhraseGrammarRole]) -> usize {
+    roles
+        .iter()
+        .rposition(|r| {
+            matches!(
+                r,
+                PhraseGrammarRole::Continuation | PhraseGrammarRole::Antecedent
+            )
+        })
+        .unwrap_or(roles.len().saturating_sub(2))
+}
+
+/// For each phrase, the index whose section-climax cap (and octave
+/// displacement) it shares: consequents point at their antecedent —
+/// the period's parallel structure must not be pulled apart by
+/// independent demotion margins or octave rolls — and every other
+/// phrase points at itself.
+pub(super) fn section_cap_sources(roles: &[PhraseGrammarRole]) -> Vec<usize> {
+    let mut last_antecedent: Option<usize> = None;
+    roles
+        .iter()
+        .enumerate()
+        .map(|(i, role)| match role {
+            PhraseGrammarRole::Antecedent => {
+                last_antecedent = Some(i);
+                i
+            }
+            PhraseGrammarRole::Consequent => last_antecedent.unwrap_or(i),
+            _ => i,
+        })
+        .collect()
+}
+
 /// Pre-compute the per-phrase Transform sequence for a motif plan from
 /// the phrase-grammar roles. Uses a fresh RNG seeded only from
 /// `motif.seed` so two callers with the same `MotifParams` always agree
@@ -177,6 +221,12 @@ pub(in crate::derive) fn plan_phrases(
     let plen = (phrase_len as usize).max(1);
     let num_phrases = chords.len().div_ceil(plen);
     let roles = phrase_grammar_roles(num_phrases, grammar_seed);
+    // Section climax plan: the carrier phrase (and the consequent that
+    // restates it) draws its contour at full amplitude; secondary
+    // phrases get a reduced swing so their peaks settle below the
+    // carrier's before the post-realization section pass even runs.
+    let carrier = section_climax_phrase(&roles);
+    let cap_sources = section_cap_sources(&roles);
     let mut plans = Vec::with_capacity(num_phrases);
     let mut i = 0;
     let mut phrase_index = 0;
@@ -184,6 +234,11 @@ pub(in crate::derive) fn plan_phrases(
     while i < chords.len() {
         let end = (i + plen).min(chords.len());
         let role = roles[phrase_index];
+        let peak_scale = if cap_sources[phrase_index] == carrier {
+            1.0
+        } else {
+            0.72
+        };
         let contour = pick_contour(contour_pref, role.closes(), rng);
         // Sentence presentation + mid-continuation phrases prolong
         // without cadencing; the group's one real cadence sits on the
@@ -202,6 +257,7 @@ pub(in crate::derive) fn plan_phrases(
             contour,
             role,
             cadence,
+            peak_scale,
         });
         i = end;
         phrase_index += 1;
@@ -367,7 +423,11 @@ pub(super) fn realize_phrase(
         } else {
             0.5
         };
-        let c_offset = contour_offset(phrase.contour, phrase_position, register_span);
+        // Section climax coordination: secondary phrases trace their
+        // contour at reduced amplitude (see `PhrasePlan::peak_scale`).
+        let c_offset = (contour_offset(phrase.contour, phrase_position, register_span) as f32
+            * phrase.peak_scale)
+            .round() as i8;
 
         // Choose anchor: a chord tone near the contour target.
         let tones = chord_tones_in_register(tc.chord, ctx.register);

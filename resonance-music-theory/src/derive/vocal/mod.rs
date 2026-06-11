@@ -31,8 +31,8 @@ use crate::scale::Scale;
 use super::climax::enforce_single_climax;
 use super::{GeneratedNote, TimedChord};
 use melody::{
-    apply_line_cadence_formulas, apply_motif_pitches, apply_srdc_layout, enforce_no_overlap,
-    scale_from_chords, total_beats, MotifPitchContext,
+    apply_line_cadence_formulas, apply_motif_pitches, apply_section_climax, apply_srdc_layout,
+    enforce_no_overlap, scale_from_chords, total_beats, MotifPitchContext,
 };
 use style::derive_with_profile;
 
@@ -157,9 +157,31 @@ pub fn derive_vocal_with_motif(
                 (ctx.lo, ctx.hi),
                 None,
                 false,
+                true,
             );
             note_idx += n;
         }
+        // Section-level climax orchestration: the srdc departure line
+        // carries the section's one true peak; every other line's
+        // pitches are demoted strictly below it (seeded per-group
+        // margin) so the lines stop arching identically. Demote-only —
+        // run after the per-line climax pass, before the cadence
+        // formulas, which validate against the returned per-line
+        // rules. Hymnal's strictly-stepwise contract caps the demotion
+        // shortcut at a major 3rd; everything else uses the SVS render
+        // cap.
+        let max_adjacent: i16 = match params.style {
+            VocalStyle::Hymnal => 4,
+            _ => 9,
+        };
+        let line_rules = apply_section_climax(
+            &mut notes,
+            &ctx.line_syllables,
+            ctx.scale,
+            (ctx.lo, ctx.hi),
+            max_adjacent,
+            seed,
+        );
         // Goal-cadence formula targeting per line: rewrite each line's
         // final two syllables to a HC/IAC/PAC formula (≈10% deceptive
         // on consequent lines) compatible with the chord under the
@@ -179,6 +201,7 @@ pub fn derive_vocal_with_motif(
             params.style,
             ctx.tpb,
             seed,
+            &line_rules,
         );
     }
     enforce_no_overlap(&mut notes, ctx.tpb);

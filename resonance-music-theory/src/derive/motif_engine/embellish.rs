@@ -42,6 +42,7 @@ use crate::rng::XorShift;
 use crate::scale::Scale;
 
 use super::super::bass::step_scale;
+use super::super::climax::SectionClimaxRule;
 use super::super::melody::EmbellishmentStyle;
 use super::super::GeneratedNote;
 use super::harmony::{
@@ -145,7 +146,11 @@ struct Candidate {
 
 /// Decorate a realized phrase with embellishing tones. `style` must be
 /// concrete (resolve `Auto` with [`resolve_embellishment_style`]);
-/// `complexity` scales the overall decoration density.
+/// `complexity` scales the overall decoration density. `section` is
+/// the phrase's section-climax constraint: secondary phrases reject
+/// decorations that reach the carrier's peak, and the carrier rejects
+/// decorations that would rewrite its peak note downward.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_embellishments(
     notes: &mut [GeneratedNote],
     grid: &HarmonyGrid<'_>,
@@ -154,6 +159,7 @@ pub(super) fn apply_embellishments(
     style: EmbellishmentStyle,
     complexity: f32,
     rng: &mut XorShift,
+    section: SectionClimaxRule,
 ) {
     let n = notes.len();
     // The final two notes carry the cadence formula / root snap.
@@ -191,6 +197,7 @@ pub(super) fn apply_embellishments(
         }
         if leap_grammar_ok(&pitches)
             && climax_ok(&pitches)
+            && section.allows(&pitches)
             && dissonance_treatment_ok(&pitches, notes, grid)
             && strong_beats_ok(&pitches, notes, grid)
         {
