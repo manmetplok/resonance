@@ -39,6 +39,7 @@ const PENALTY_MISSING_CORE_TONE: i64 = 10_000;
 const PENALTY_MISSING_FIFTH: i64 = 50;
 const PENALTY_UNRESOLVED_SEVENTH: i64 = 5_000;
 const PENALTY_UNRESOLVED_SOPRANO_LT: i64 = 5_000;
+const PENALTY_UNRESOLVED_CADENTIAL_64: i64 = 5_000;
 const PENALTY_UPPER_BELOW_BASS: i64 = 200;
 const PENALTY_RISING_AGAINST_4_5_BASS: i64 = 40;
 
@@ -193,6 +194,19 @@ fn instances(pc: PitchClass, lo: u8, hi: u8) -> Vec<u8> {
         n = up;
     }
     out
+}
+
+/// Is `prev → next` a 6/4 resolution over a stationary bass? The
+/// previous chord is a triad voiced over its own fifth (the 6/4
+/// position — most importantly the cadential 6/4, a tonic triad over
+/// the dominant bass) and the next chord is rooted on that same bass
+/// pitch with no slash of its own: I6/4 → V over a held bass 5.
+fn is_cadential_64_resolution(prev: Chord, next: Chord) -> bool {
+    let Some(bass) = prev.bass else { return false };
+    let Some(fifth) = chord_fifth(prev) else {
+        return false;
+    };
+    bass == fifth && next.root == bass && next.bass.unwrap_or(next.root) == bass
 }
 
 /// Did the bass rise from scale degree 4 to scale degree 5?
@@ -487,6 +501,23 @@ fn transition_cost(
                 && n as i64 != p as i64 + 1
             {
                 cost += PENALTY_UNRESOLVED_SOPRANO_LT;
+            }
+        }
+    }
+
+    // Cadential 6/4 resolution: over the stationary dominant bass the
+    // 6th above the bass falls to the 5th and the 4th falls to the 3rd
+    // *in the same voices* — i.e. every upper voice holding the 6/4
+    // chord's root (the 4th over the bass) or its third (the 6th over
+    // the bass) must step down. The bass itself holds (oblique motion),
+    // which `plan_bass` already produces for a repeated pitch class.
+    if is_cadential_64_resolution(prev_chord, next_chord) {
+        let fourth_over_bass = prev_chord.root.to_semitone();
+        let sixth_over_bass = chord_third(prev_chord).to_semitone();
+        for (&p, &n) in pv[1..].iter().zip(nv[1..].iter()) {
+            let pc = p % 12;
+            if (pc == fourth_over_bass || pc == sixth_over_bass) && !(n < p && p - n <= 2) {
+                cost += PENALTY_UNRESOLVED_CADENTIAL_64;
             }
         }
     }

@@ -107,11 +107,26 @@ impl MarkovTable {
 
     /// T/PD/D function of a degree per this table's tagging, falling
     /// back to [`default_function`] for untagged degrees.
+    ///
+    /// Inverted degrees inherit the tag of their root position, with
+    /// one classical exception: the cadential 6/4 (tonic triad over the
+    /// dominant bass) *functions* as a dominant — it embellishes V and
+    /// must resolve to it — so the phrase-model arc classifies it as D
+    /// despite its tonic spelling.
     pub fn function_of(&self, degree: Degree) -> HarmonicFunction {
-        self.functions
-            .get(&degree)
-            .copied()
-            .unwrap_or_else(|| default_function(degree))
+        if let Some(f) = self.functions.get(&degree) {
+            return *f;
+        }
+        if degree.is_cadential_six_four() {
+            return HarmonicFunction::Dominant;
+        }
+        let root_pos = degree.root_position();
+        if root_pos != degree {
+            if let Some(f) = self.functions.get(&root_pos) {
+                return *f;
+            }
+        }
+        default_function(root_pos)
     }
 }
 

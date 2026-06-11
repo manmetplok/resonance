@@ -56,6 +56,7 @@ const II_MAJ: Degree = Degree {
     root: 2,
     flat: false,
     quality: ChordQuality::Maj,
+    inversion: 0,
 };
 
 // Minor-key natural degrees (see `Degree` docs: `flat: false` because a
@@ -71,6 +72,7 @@ const IIDIM: Degree = Degree {
     root: 2,
     flat: false,
     quality: ChordQuality::Dim,
+    inversion: 0,
 };
 
 // ---------------------------------------------------------------------------

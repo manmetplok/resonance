@@ -56,6 +56,7 @@ const II_MAJ: Degree = Degree {
     root: 2,
     flat: false,
     quality: ChordQuality::Maj,
+    inversion: 0,
 };
 
 // ---------------------------------------------------------------------------

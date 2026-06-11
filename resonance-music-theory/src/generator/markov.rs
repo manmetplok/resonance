@@ -168,8 +168,11 @@ pub fn generate(
         let gap_end = i; // exclusive; output[gap_end] is the successor (if in range)
 
         // Successor chord (first fixed position after the gap, if any).
+        // Normalized to root position: a locked chord may carry an
+        // inversion decoration from a previous generation, but the
+        // transition graph only knows root-position degrees.
         let successor = if gap_end < len {
-            output[gap_end].as_ref().map(|c| c.degree)
+            output[gap_end].as_ref().map(|c| c.degree.root_position())
         } else {
             None
         };
@@ -186,7 +189,8 @@ pub fn generate(
             let lookback = effective_order.max(table.order as usize);
             let start_idx = gap_start.saturating_sub(lookback);
             for chord in output[start_idx..gap_start].iter().flatten() {
-                history.push(chord.degree);
+                // Root position for the same reason as `successor`.
+                history.push(chord.degree.root_position());
             }
         }
 
@@ -285,7 +289,7 @@ pub fn generate(
                                 .collect();
                             if !strict_premask.is_empty() {
                                 candidates = strict_premask;
-                            } else if end.is_some() && successor == end {
+                            } else if end.is_some() && successor == end.map(Degree::root_position) {
                                 // The successor IS the end constraint and
                                 // we can't reach it.
                                 return Err(GenerateError::EndUnreachable {
@@ -352,7 +356,7 @@ pub fn generate(
         let window_start = (slot + 1).saturating_sub(effective_order.max(1));
         let history: Vec<Degree> = output[window_start..=slot]
             .iter()
-            .map(|c| c.as_ref().expect("filled").degree)
+            .map(|c| c.as_ref().expect("filled").degree.root_position())
             .collect();
         let mut candidates = get_candidates(table, &history, effective_order, &mut suffix_cache);
 
@@ -393,10 +397,24 @@ pub fn generate(
     }
 
     // --- 7. Assemble output --------------------------------------------
-    let chords = output
+    let mut chords: Vec<GeneratedChord> = output
         .into_iter()
         .map(|o| o.expect("all positions should be filled"))
         .collect();
+
+    // --- 8. Inversion decorations (research §2C) -------------------------
+    // Pre-dominant bass idioms (IV-precedes-ii ordering, ii6 walking the
+    // bass 4→5) and the cadential 6/4 on phrase-final dominants. Sampled
+    // material only — locked and constrained slots carry through
+    // untouched. See `super::inversion`.
+    super::inversion::decorate_inversions(
+        &mut chords,
+        &mut splits,
+        &prefixed,
+        &plans,
+        table,
+        &mut rng,
+    );
 
     Ok(GeneratedMaterial { chords, splits })
 }

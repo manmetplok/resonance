@@ -116,35 +116,59 @@ fn no_mid_phrase_regression() {
 
 /// Every full phrase splits its forced-PD slot (slot 2 of the 4-bar
 /// group — the bar before the cadence) into two distinct predominant
-/// chords, doubling the harmonic rhythm into bars 4/8.
+/// chords, doubling the harmonic rhythm into bars 4/8. Dominant slots
+/// (3, 7) may additionally split into a cadential 6/4 + V.
 #[test]
 fn acceleration_splits_into_bars_4_and_8() {
     let spec = spec("pop", 1, 8);
     let locked = vec![None; 8];
     for seed in 0..50u64 {
         let mat = generate(&spec, seed, &locked).unwrap();
-        let slots: Vec<usize> = mat.splits.iter().map(|s| s.slot as usize).collect();
+        let pd_slots: Vec<usize> = mat
+            .splits
+            .iter()
+            .map(|s| s.slot as usize)
+            .filter(|&s| s % 4 == 2)
+            .collect();
         assert_eq!(
-            slots,
+            pd_slots,
             vec![2, 6],
             "seed {seed}: expected splits on the penultimate slot of each phrase"
         );
         for split in &mat.splits {
-            let front = mat.chords[split.slot as usize].degree;
+            let slot = split.slot as usize;
+            let front = mat.chords[slot].degree;
             assert_ne!(
                 split.degree, front,
                 "seed {seed}: split back half must differ from the front half"
             );
-            assert_eq!(
-                level("pop", split.degree),
-                1,
-                "seed {seed}: split back half must stay predominant"
-            );
+            if slot % 4 == 2 {
+                assert_eq!(
+                    level("pop", split.degree),
+                    1,
+                    "seed {seed}: split back half must stay predominant"
+                );
+            } else {
+                // The only other splits allowed are cadential 6/4
+                // decorations of the phrase-final dominant.
+                assert_eq!(slot % 4, 3, "seed {seed}: unexpected split slot {slot}");
+                assert!(
+                    front.is_cadential_six_four(),
+                    "seed {seed}: dominant-slot split front must be the cadential 6/4"
+                );
+                assert_eq!(
+                    level("pop", split.degree),
+                    2,
+                    "seed {seed}: cadential 6/4 back half must be the dominant"
+                );
+            }
         }
     }
 }
 
-/// Remainder phrases shorter than four slots never split.
+/// Remainder phrases shorter than four slots never accelerate their
+/// predominant. (Cadential 6/4 decorations of the short phrase's final
+/// dominant are allowed — they decorate one slot, not crowd it.)
 #[test]
 fn short_phrases_do_not_split() {
     let spec = spec("pop", 1, 6);
@@ -152,8 +176,11 @@ fn short_phrases_do_not_split() {
     for seed in 0..20u64 {
         let mat = generate(&spec, seed, &locked).unwrap();
         assert!(
-            mat.splits.iter().all(|s| (s.slot as usize) < 4),
-            "seed {seed}: the trailing 2-slot phrase must not split"
+            mat.splits
+                .iter()
+                .all(|s| (s.slot as usize) < 4
+                    || mat.chords[s.slot as usize].degree.is_cadential_six_four()),
+            "seed {seed}: the trailing 2-slot phrase must not accelerate"
         );
     }
 }
@@ -162,9 +189,11 @@ fn short_phrases_do_not_split() {
 // 3. Cadential dominants on hyper-strong positions
 // ---------------------------------------------------------------------------
 
-/// The cadential dominant owns the whole final slot of each 4-slot
-/// group: it starts on that bar's downbeat (no split buries it mid-bar)
-/// and resolves onto the next group's hyper-downbeat tonic.
+/// The cadential dominant owns the final slot of each 4-slot group: it
+/// is dominant-function on that bar's downbeat and resolves onto the
+/// next group's hyper-downbeat tonic. The only split allowed on the
+/// slot is the cadential 6/4 decoration — a dominant-function tonic
+/// 6/4 on the downbeat resolving to V on the weak half.
 #[test]
 fn cadential_dominant_placement() {
     let spec = spec("pop", 1, 16);
@@ -174,10 +203,17 @@ fn cadential_dominant_placement() {
         for (i, chord) in mat.chords.iter().enumerate() {
             if i % 4 == 3 {
                 assert_eq!(level("pop", chord.degree), 2, "seed {seed} slot {i}");
-                assert!(
-                    !mat.splits.iter().any(|s| s.slot as usize == i),
-                    "seed {seed}: the dominant slot {i} itself must never split"
-                );
+                if let Some(split) = mat.splits.iter().find(|s| s.slot as usize == i) {
+                    assert!(
+                        chord.degree.is_cadential_six_four(),
+                        "seed {seed}: a dominant-slot split must be the cadential 6/4"
+                    );
+                    assert_eq!(
+                        level("pop", split.degree),
+                        2,
+                        "seed {seed}: the 6/4 must resolve to the dominant in-slot"
+                    );
+                }
                 if i + 1 < mat.chords.len() {
                     assert_eq!(
                         level("pop", mat.chords[i + 1].degree),
@@ -215,8 +251,14 @@ fn minor_table_uses_minor_mode_mapping() {
                     "seed {seed} slot {i}: predominant (iv or VI), got {d}"
                 ),
                 3 => assert!(
-                    d == Degree::V || d == Degree::VII_MAJ,
-                    "seed {seed} slot {i}: dominant (V or subtonic VII), got {d}"
+                    d == Degree::V
+                        || d == Degree::VII_MAJ
+                        || (d.is_cadential_six_four()
+                            && mat
+                                .splits
+                                .iter()
+                                .any(|s| s.slot as usize == i && s.degree == Degree::V)),
+                    "seed {seed} slot {i}: dominant (V, subtonic VII, or i64+V), got {d}"
                 ),
                 _ => {}
             }

@@ -430,12 +430,17 @@ fn generate_chord_lane(r: &mut crate::Resonance, definition_id: u64, respect_loc
     // interval pattern (degree 1 in B minor → Bm, not B). Borrowed chords
     // (flat=true) use the Degree's explicit quality since they're
     // intentionally non-diatonic.
+    // Inversions ride on top of either projection as a slash bass
+    // (ii6 → Dm/F, cadential 6/4 → C/G); the SATB pass in derive_pad
+    // plans the bass from the slash, so the pre-dominant bass idioms
+    // and the 6/4's stationary dominant bass come out in the voicing.
     let project = |degree: resonance_music_theory::Degree| {
-        if degree.flat {
+        let chord = if degree.flat {
             degree.to_chord(scale)
         } else {
             diatonic_chord(scale, degree.root, def.seventh_chords)
-        }
+        };
+        chord.inverted(degree.inversion)
     };
     // Harmonic-rhythm splits from the phrase-model overlay divide a
     // slot in half (`| IV ii |` before the cadential `V`). Slots stay

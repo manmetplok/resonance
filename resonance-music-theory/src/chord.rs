@@ -109,6 +109,19 @@ impl Chord {
         self
     }
 
+    /// This chord with the given inversion expressed as a slash bass:
+    /// 1 = third in the bass, 2 = fifth, 3 = seventh (when the quality
+    /// has that many tones). Inversion 0 — or one past the quality's
+    /// tone count — returns the chord unchanged.
+    pub fn inverted(self, inversion: u8) -> Self {
+        let intervals = self.quality.intervals();
+        if inversion == 0 || (inversion as usize) >= intervals.len() {
+            return self;
+        }
+        let bass = self.root.transpose(intervals[inversion as usize] as i32);
+        self.with_bass(bass)
+    }
+
     /// Pitch classes of the chord tones, including the root and any added
     /// extensions. Lazily computed — `collect()` if a `Vec` is needed.
     pub fn pitch_classes(&self) -> impl Iterator<Item = PitchClass> + Clone + 'static {

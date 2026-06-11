@@ -27,6 +27,7 @@
 //! 3. Wire the variant into [`Generator`] for [`GeneratorSpec`].
 
 pub mod degree;
+mod inversion;
 pub mod markov;
 pub mod schema;
 pub mod table;
