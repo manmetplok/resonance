@@ -27,7 +27,8 @@ pub use melody::{
 pub use motif_bass::derive_bass_motif;
 pub use motif_engine::{
     derive_motif_melody_with_section, motif_intervals, phrase_grammar_roles, plan_motif_transforms,
-    section_climax_phrase, PhraseGrammarRole, SequenceKind, Transform as MotifTransform,
+    section_climax_phrase, ComposedPair, PhraseGrammarRole, SequenceKind,
+    Transform as MotifTransform,
 };
 pub use motif_rhythm::{derive_motif_rhythm, RhythmHit};
 pub use motif_source::{

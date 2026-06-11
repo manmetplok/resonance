@@ -64,6 +64,56 @@ impl SequenceKind {
     }
 }
 
+/// Curated composed transform pairs: two primitive operations applied
+/// in sequence (first, then second — see `parts`). This widens the
+/// *operator vocabulary* at high complexity without widening the
+/// randomness: the vocabulary is a small fixed set of musically
+/// coherent combinations rather than free composition of arbitrary
+/// transforms (most random pairs — retrograde+diminution, say — read
+/// as noise, not development). Kept as a dedicated enum instead of
+/// `Composed(Box<Transform>, Box<Transform>)` so `Transform` stays
+/// `Copy` — transform plans are copied freely across phrases (the
+/// consequent reuse, the bass `MirrorMelody` lock).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposedPair {
+    /// Fragment the motif's leading `frag_len` notes, then transpose
+    /// the fragment by `semitones` (sign = direction). Distinct from
+    /// `Sequence`, which steps *per copy* — this states the whole
+    /// development at one flat offset, the classic "head motive
+    /// restated in another register" device.
+    FragmentTranspose { frag_len: usize, semitones: i8 },
+    /// Mirror the contour, then double the durations: the idea upside
+    /// down in broadened note values (OMT's inversion + augmentation).
+    InvertAugment,
+    /// Retrograde inversion — the canonical RI form: the idea
+    /// backwards *and* upside down, maximally developed while keeping
+    /// the same interval vocabulary.
+    RetrogradeInvert,
+}
+
+impl ComposedPair {
+    /// The two primitive transforms this pair composes, in application
+    /// order (first, then second). Always returns non-`Composed`
+    /// transforms, so realizing a pair recurses at most one level.
+    pub fn parts(self) -> (Transform, Transform) {
+        match self {
+            ComposedPair::FragmentTranspose {
+                frag_len,
+                semitones,
+            } => (
+                Transform::Fragment(frag_len),
+                if semitones >= 0 {
+                    Transform::TransposeUp(semitones)
+                } else {
+                    Transform::TransposeDown(-semitones)
+                },
+            ),
+            ComposedPair::InvertAugment => (Transform::Invert, Transform::Augment),
+            ComposedPair::RetrogradeInvert => (Transform::Retrograde, Transform::Invert),
+        }
+    }
+}
+
 /// Transformation to apply to a motif when developing it across phrases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transform {
@@ -94,6 +144,10 @@ pub enum Transform {
         /// Length of the model (the motif's head), in notes.
         model_len: usize,
     },
+    /// A curated pair of primitive transforms applied in sequence
+    /// (composable transforms). Drawn only at high complexity, from
+    /// the fixed `ComposedPair` vocabulary.
+    Composed(ComposedPair),
 }
 
 /// Internal contour shape for a phrase.

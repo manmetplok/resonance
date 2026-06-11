@@ -390,6 +390,13 @@ pub(in crate::derive) fn transform_motif(motif: &[MotifNote], transform: Transfo
                 })
                 .collect()
         }
+        Transform::Composed(pair) => {
+            // Sequential application of the pair's primitive parts.
+            // `ComposedPair::parts` never returns a `Composed`, so this
+            // recurses exactly one level.
+            let (first, second) = pair.parts();
+            transform_motif(&transform_motif(motif, first), second)
+        }
     }
 }
 

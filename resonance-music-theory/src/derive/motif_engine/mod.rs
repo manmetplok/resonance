@@ -33,7 +33,7 @@ mod types;
 // rendered notes after the repair passes run.
 pub use melody::{derive_motif_melody_with_section, motif_intervals};
 pub use phrase::{phrase_grammar_roles, plan_motif_transforms, section_climax_phrase};
-pub use types::{PhraseGrammarRole, SequenceKind, Transform};
+pub use types::{ComposedPair, PhraseGrammarRole, SequenceKind, Transform};
 
 // Sibling-module API: visible to `derive::motif_bass`, `derive::motif_rhythm`,
 // `derive::motif_source`, and `derive::melody`. Each item is here because at

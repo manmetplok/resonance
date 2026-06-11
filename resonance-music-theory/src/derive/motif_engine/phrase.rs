@@ -12,7 +12,9 @@ use super::super::motif_bass::chord_tones_in_register;
 use super::super::{GeneratedNote, TimedChord};
 use super::build::transform_motif;
 use super::harmony::{align_to_harmony, nearest_in_set};
-use super::types::{Contour, MotifNote, PhraseGrammarRole, PhrasePlan, SequenceKind, Transform};
+use super::types::{
+    ComposedPair, Contour, MotifNote, PhraseGrammarRole, PhrasePlan, SequenceKind, Transform,
+};
 
 /// Plan the grammatical roles of `num_phrases` phrases (Open Music
 /// Theory v2 phrase archetypes). Phrases are grouped in fours from the
@@ -121,7 +123,9 @@ pub(super) fn section_cap_sources(roles: &[PhraseGrammarRole]) -> Vec<usize> {
 ///     continuation; the cadential continuation reuses it so the
 ///     sentence's drive keeps one device.
 ///   - `Antecedent`: identity for the section opener, then the full
-///     complexity-weighted repertoire (departures may also sequence).
+///     complexity-weighted repertoire (departures may also sequence,
+///     and at high complexity occasionally draw a curated composed
+///     pair — see `ComposedPair`).
 ///   - `Consequent`: reuses its antecedent's transform verbatim — the
 ///     period's defining "same opening, different ending"; the ending
 ///     swap (weak→strong) lives in the cadence goals.
@@ -223,6 +227,31 @@ fn pick_sequence(model_len: usize, rng: &mut XorShift) -> Transform {
         copies,
         model_len,
     }
+}
+
+/// Draw a composed transform pair for a high-complexity departure
+/// phrase. The vocabulary is the small curated `ComposedPair` set —
+/// composition widens the *operators*, not the randomness — weighted
+/// toward fragment+transpose (the most idiomatic two-step development:
+/// the head motive restated at a flat offset). The transposition
+/// distance reuses the repertoire's 1–5 semitone range; direction is a
+/// coin. Inversion-based pairs split the remainder.
+fn pick_composed(motif_len: usize, rng: &mut XorShift) -> Transform {
+    let roll = rng.next_f32();
+    let pair = if roll < 0.40 {
+        let frag_len = 2.max(motif_len / 2);
+        let amount = 1 + rng.next_range(5) as i8;
+        let semitones = if rng.next_f32() < 0.5 { amount } else { -amount };
+        ComposedPair::FragmentTranspose {
+            frag_len,
+            semitones,
+        }
+    } else if roll < 0.70 {
+        ComposedPair::InvertAugment
+    } else {
+        ComposedPair::RetrogradeInvert
+    };
+    Transform::Composed(pair)
 }
 
 /// Pick a contour for a phrase from the preference or RNG.
@@ -362,28 +391,33 @@ fn pick_transform(
             pick_sequence(2.max(motif_len / 2), rng)
         }
     } else {
-        // Complex: full repertoire
-        if roll < 0.08 {
+        // Complex: full repertoire, including a conservative slice of
+        // composed pairs (two primitive operations in sequence — the
+        // only tier where they appear; lower tiers keep the simpler
+        // single-operation vocabulary).
+        if roll < 0.07 {
             Transform::Identity
-        } else if roll < 0.20 {
+        } else if roll < 0.18 {
             Transform::TransposeUp(transpose_amount)
-        } else if roll < 0.32 {
+        } else if roll < 0.29 {
             Transform::TransposeDown(transpose_amount)
-        } else if roll < 0.43 {
+        } else if roll < 0.39 {
             Transform::Invert
-        } else if roll < 0.52 {
+        } else if roll < 0.47 {
             Transform::Retrograde
-        } else if roll < 0.60 {
+        } else if roll < 0.54 {
             Transform::Augment
-        } else if roll < 0.68 {
+        } else if roll < 0.61 {
             Transform::Diminish
-        } else if roll < 0.78 {
+        } else if roll < 0.70 {
             Transform::Syncopate
-        } else if roll < 0.88 {
+        } else if roll < 0.80 {
             let frag_len = 2.max(motif_len / 2);
             Transform::Fragment(frag_len)
-        } else {
+        } else if roll < 0.90 {
             pick_sequence(2.max(motif_len / 2), rng)
+        } else {
+            pick_composed(motif_len, rng)
         }
     }
 }
@@ -467,7 +501,11 @@ pub(super) fn realize_phrase(
         // bury the sequence's transposition shape.
         Transform::Sequence { .. } => 1,
         _ if phrase.role.is_continuation() => 2 * shrink_compensation,
-        Transform::Fragment(_) => shrink_compensation,
+        // A transposed fragment is still a fragment: the same rhythmic
+        // acceleration applies (the compensation factor keeps the
+        // fragment's notes at their original surface values).
+        Transform::Fragment(_)
+        | Transform::Composed(ComposedPair::FragmentTranspose { .. }) => shrink_compensation,
         _ => 1,
     };
 

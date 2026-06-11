@@ -24,4 +24,4 @@ implementation sequence; each item is independently testable.
 
 - [x] **Section-level climax orchestration** — one climax per *section*, placed in a designated phrase (e.g. phrase 3 of 4), other phrases get lower secondary peaks; replaces independent per-phrase/per-line contour draws (fixes every vocal line arching identically).
 - [x] **Sequences as a transform** — add real sequences (model + transposed copies: descending fifths, descending thirds, ascending 5–6) to the transform vocabulary in `plan_motif_transforms`, used in continuations/departures.
-- [ ] **Composable transforms** — allow transform pairs (fragment+transpose, invert+augment) at high complexity in `motif_engine/phrase.rs:92-151`; widen the operator vocabulary rather than the randomness.
+- [x] **Composable transforms** — allow transform pairs (fragment+transpose, invert+augment) at high complexity in `motif_engine/phrase.rs:92-151`; widen the operator vocabulary rather than the randomness.
