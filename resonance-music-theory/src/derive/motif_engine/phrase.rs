@@ -12,7 +12,7 @@ use super::super::motif_bass::chord_tones_in_register;
 use super::super::{GeneratedNote, TimedChord};
 use super::build::transform_motif;
 use super::harmony::{align_to_harmony, nearest_in_set};
-use super::types::{Contour, MotifNote, PhraseGrammarRole, PhrasePlan, Transform};
+use super::types::{Contour, MotifNote, PhraseGrammarRole, PhrasePlan, SequenceKind, Transform};
 
 /// Plan the grammatical roles of `num_phrases` phrases (Open Music
 /// Theory v2 phrase archetypes). Phrases are grouped in fours from the
@@ -113,15 +113,19 @@ pub(super) fn section_cap_sources(roles: &[PhraseGrammarRole]) -> Vec<usize> {
 ///   - `BasicIdea`: identity — the section states its idea plainly.
 ///   - `VariedRepeat`: exact repeat or a small (≤3 st) transposition,
 ///     keeping the idea recognizable through the presentation.
-///   - `Continuation` / `ContinuationCadence`: fragmentation of the
-///     idea's *head* motive (`Fragment` keeps the leading notes); the
-///     realizer doubles the tiling rate for these roles.
+///   - `Continuation` / `ContinuationCadence`: development of the
+///     idea's *head* motive — fragmentation (`Fragment`, tiled at a
+///     doubled rate by the realizer) or a melodic *sequence* built on
+///     the head (`Sequence`: model + 2–3 transposed copies — OMT's
+///     other canonical continuation device). Drawn once on the
+///     continuation; the cadential continuation reuses it so the
+///     sentence's drive keeps one device.
 ///   - `Antecedent`: identity for the section opener, then the full
-///     complexity-weighted repertoire.
+///     complexity-weighted repertoire (departures may also sequence).
 ///   - `Consequent`: reuses its antecedent's transform verbatim — the
 ///     period's defining "same opening, different ending"; the ending
 ///     swap (weak→strong) lives in the cadence goals.
-pub(in crate::derive) fn plan_motif_transforms(
+pub fn plan_motif_transforms(
     num_phrases: usize,
     motif_len: usize,
     complexity: f32,
@@ -131,15 +135,19 @@ pub(in crate::derive) fn plan_motif_transforms(
     let mut rng = XorShift::new(seed.wrapping_add(0xA1B2C3D4E5F60718));
     let head_len = 2.max(motif_len / 2);
     let mut last_antecedent = Transform::Identity;
+    let mut last_continuation = Transform::Fragment(head_len);
     roles
         .iter()
         .enumerate()
         .map(|(i, role)| match role {
             PhraseGrammarRole::BasicIdea => Transform::Identity,
             PhraseGrammarRole::VariedRepeat => pick_varied_repeat(&mut rng),
-            PhraseGrammarRole::Continuation | PhraseGrammarRole::ContinuationCadence => {
-                Transform::Fragment(head_len)
+            PhraseGrammarRole::Continuation => {
+                let t = pick_continuation(head_len, complexity, &mut rng);
+                last_continuation = t;
+                t
             }
+            PhraseGrammarRole::ContinuationCadence => last_continuation,
             PhraseGrammarRole::Antecedent => {
                 let t = if i == 0 {
                     Transform::Identity
@@ -171,6 +179,49 @@ fn pick_varied_repeat(rng: &mut XorShift) -> Transform {
         Transform::TransposeUp(amount)
     } else {
         Transform::TransposeDown(amount)
+    }
+}
+
+/// Probability that a sentence continuation develops its head motive
+/// as a melodic sequence instead of plain fragmentation.
+const CONTINUATION_SEQUENCE_CHANCE: f32 = 0.40;
+
+/// Complexity floor below which no phrase draws a sequence — the
+/// complexity knob is the user's simplicity control, and the simple
+/// tier keeps the original fragment-only continuations (mirrors the
+/// departure repertoire's tiering in `pick_transform`).
+const SEQUENCE_MIN_COMPLEXITY: f32 = 0.3;
+
+/// Development device for a sentence continuation: fragmentation of
+/// the idea's head motive (the existing default), or a melodic
+/// sequence built on that same head — the model restated as 2–3
+/// transposed copies (OMT v2: continuations fragment *and* sequence
+/// their basic idea on the way to the cadence).
+fn pick_continuation(head_len: usize, complexity: f32, rng: &mut XorShift) -> Transform {
+    if complexity >= SEQUENCE_MIN_COMPLEXITY && rng.next_f32() < CONTINUATION_SEQUENCE_CHANCE {
+        pick_sequence(head_len, rng)
+    } else {
+        Transform::Fragment(head_len)
+    }
+}
+
+/// Draw a melodic sequence on a `model_len`-note model: the kind is
+/// weighted toward the rising 5–6 pattern (continuations build), and
+/// the copy count is the OMT-typical 2–3.
+fn pick_sequence(model_len: usize, rng: &mut XorShift) -> Transform {
+    let roll = rng.next_f32();
+    let kind = if roll < 0.40 {
+        SequenceKind::Ascending56
+    } else if roll < 0.70 {
+        SequenceKind::DescendingFifths
+    } else {
+        SequenceKind::DescendingThirds
+    };
+    let copies = 2 + rng.next_range(2) as u8;
+    Transform::Sequence {
+        kind,
+        copies,
+        model_len,
     }
 }
 
@@ -291,42 +342,48 @@ fn pick_transform(
             Transform::TransposeDown(transpose_amount)
         }
     } else if complexity < 0.7 {
-        // Moderate: add inversion, syncopation, and fragmentation
-        if roll < 0.18 {
+        // Moderate: add inversion, syncopation, fragmentation, and
+        // melodic sequences (departure phrases restating the head
+        // motive at successive transpositions).
+        if roll < 0.16 {
             Transform::Identity
-        } else if roll < 0.36 {
+        } else if roll < 0.32 {
             Transform::TransposeUp(transpose_amount)
-        } else if roll < 0.54 {
+        } else if roll < 0.48 {
             Transform::TransposeDown(transpose_amount)
-        } else if roll < 0.68 {
+        } else if roll < 0.61 {
             Transform::Invert
-        } else if roll < 0.84 {
+        } else if roll < 0.75 {
             Transform::Syncopate
-        } else {
+        } else if roll < 0.88 {
             let frag_len = 2.max(motif_len / 2);
             Transform::Fragment(frag_len)
+        } else {
+            pick_sequence(2.max(motif_len / 2), rng)
         }
     } else {
         // Complex: full repertoire
-        if roll < 0.10 {
+        if roll < 0.08 {
             Transform::Identity
-        } else if roll < 0.24 {
+        } else if roll < 0.20 {
             Transform::TransposeUp(transpose_amount)
-        } else if roll < 0.38 {
+        } else if roll < 0.32 {
             Transform::TransposeDown(transpose_amount)
-        } else if roll < 0.50 {
+        } else if roll < 0.43 {
             Transform::Invert
-        } else if roll < 0.60 {
+        } else if roll < 0.52 {
             Transform::Retrograde
-        } else if roll < 0.68 {
+        } else if roll < 0.60 {
             Transform::Augment
-        } else if roll < 0.76 {
+        } else if roll < 0.68 {
             Transform::Diminish
-        } else if roll < 0.88 {
+        } else if roll < 0.78 {
             Transform::Syncopate
-        } else {
+        } else if roll < 0.88 {
             let frag_len = 2.max(motif_len / 2);
             Transform::Fragment(frag_len)
+        } else {
+            pick_sequence(2.max(motif_len / 2), rng)
         }
     }
 }
@@ -402,12 +459,16 @@ pub(super) fn realize_phrase(
     // without it.
     let shrink_compensation =
         (motif.len().max(1) as u64).div_ceil(transformed.len() as u64);
-    let density: u64 = if phrase.role.is_continuation() {
-        2 * shrink_compensation
-    } else if matches!(transform, Transform::Fragment(_)) {
-        shrink_compensation
-    } else {
-        1
+    let density: u64 = match transform {
+        // A sequence cell is already statement-dense: the model plus
+        // its transposed copies span the chord once, accelerating the
+        // surface by the statement count. An extra tiling multiplier
+        // would wash the statements into sub-statement fragments and
+        // bury the sequence's transposition shape.
+        Transform::Sequence { .. } => 1,
+        _ if phrase.role.is_continuation() => 2 * shrink_compensation,
+        Transform::Fragment(_) => shrink_compensation,
+        _ => 1,
     };
 
     for (ci, tc) in phrase_chords.iter().enumerate() {

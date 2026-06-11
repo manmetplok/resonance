@@ -370,6 +370,26 @@ pub(in crate::derive) fn transform_motif(motif: &[MotifNote], transform: Transfo
             .collect(),
         Transform::Fragment(n) => motif[..n.min(motif.len())].to_vec(),
         Transform::Syncopate => syncopate_motif(motif),
+        Transform::Sequence {
+            kind,
+            copies,
+            model_len,
+        } => {
+            // Model + transposed copies, concatenated into one cell.
+            // Offsets are centered on the anchor (see
+            // `SequenceKind::offsets`); the harmony alignment pass
+            // diatonicizes each copy at render time.
+            let model = &motif[..model_len.clamp(1, motif.len())];
+            kind.offsets(copies as usize + 1)
+                .iter()
+                .flat_map(|&offset| {
+                    model.iter().map(move |note| MotifNote {
+                        interval: note.interval.saturating_add(offset),
+                        ..*note
+                    })
+                })
+                .collect()
+        }
     }
 }
 

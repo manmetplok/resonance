@@ -17,9 +17,56 @@ pub(in crate::derive) struct MotifNote {
     pub(in crate::derive) silent: bool,
 }
 
+/// Melodic-sequence pattern (Open Music Theory v2, sequences): a
+/// *model* restated as transposed copies at a fixed interval per copy.
+/// The engine works in semitones relative to a per-chord anchor; the
+/// downstream harmony alignment (`align_to_harmony`) snaps each note to
+/// the chord/scale, which is what realizes the transposition
+/// *diatonically* — the per-copy step here is the chromatic
+/// approximation that alignment then corrects per scale degree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SequenceKind {
+    /// Each copy a fifth below the previous (the descending-fifths
+    /// sequence — model, −5th, −5th…).
+    DescendingFifths,
+    /// Each copy a third below the previous. Encoded as a minor third:
+    /// the diatonic third below most scale degrees is three semitones,
+    /// and alignment re-snaps the rest.
+    DescendingThirds,
+    /// Each copy a step above the previous — the classic rising
+    /// (ascending 5–6) sequence.
+    Ascending56,
+}
+
+impl SequenceKind {
+    /// Per-copy transposition in semitones (diatonicized downstream by
+    /// the harmony alignment).
+    pub fn step_semitones(self) -> i8 {
+        match self {
+            SequenceKind::DescendingFifths => -7,
+            SequenceKind::DescendingThirds => -3,
+            SequenceKind::Ascending56 => 2,
+        }
+    }
+
+    /// Anchor-relative offset of each of `statements` statements
+    /// (model + copies), stepping by `step_semitones` per statement.
+    /// The run is centered on the anchor — a descending-fifths run
+    /// starting *at* the anchor would spend its whole length below it
+    /// and be flattened against the register floor at render time.
+    pub fn offsets(self, statements: usize) -> Vec<i8> {
+        let step = i16::from(self.step_semitones());
+        let n = statements.max(1) as i16;
+        let start = -step * (n - 1) / 2;
+        (0..n)
+            .map(|s| (start + step * s).clamp(-64, 64) as i8)
+            .collect()
+    }
+}
+
 /// Transformation to apply to a motif when developing it across phrases.
-#[derive(Debug, Clone, Copy)]
-pub(in crate::derive) enum Transform {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transform {
     Identity,
     TransposeUp(i8),
     TransposeDown(i8),
@@ -34,6 +81,19 @@ pub(in crate::derive) enum Transform {
     /// Operates at half the pattern's base division — eighth-level for
     /// quarter-based patterns, sixteenth-level for eighth-based ones.
     Syncopate,
+    /// Melodic sequence (OMT v2): the motif's leading `model_len` notes
+    /// form the model, restated as `copies` transposed copies at
+    /// `kind`'s per-copy interval. The realized cell is the
+    /// concatenation model + copies, centered on the anchor, so one
+    /// pass through the cell sounds the whole sequence; harmony
+    /// alignment makes each copy diatonic.
+    Sequence {
+        kind: SequenceKind,
+        /// Transposed copies after the model (2–3 typical).
+        copies: u8,
+        /// Length of the model (the motif's head), in notes.
+        model_len: usize,
+    },
 }
 
 /// Internal contour shape for a phrase.
