@@ -213,6 +213,7 @@ fn end_unreachable_returns_error() {
         id: "single".to_string(),
         order: 1,
         transitions,
+        functions: BTreeMap::new(),
     });
 
     let spec = GeneratorSpec::MarkovProgression {

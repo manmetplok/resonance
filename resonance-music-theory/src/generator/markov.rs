@@ -5,14 +5,37 @@
 //! length. Locked chords act as fixed waypoints: the generator fills the
 //! gaps between them, biasing toward degrees that can reach the next
 //! waypoint as the gap narrows.
+//!
+//! # Phrase-model overlay
+//!
+//! On top of the raw Markov walk, a phrase-model overlay (Open Music
+//! Theory's T→PD→D functional arc) shapes the output:
+//!
+//! - Slots are grouped into phrases of [`PHRASE_SLOTS`] (a 4-bar group
+//!   at the app's default of one chord per bar).
+//! - Within each phrase the walk is masked to traverse the arc exactly
+//!   once: it opens on tonic function, may prolong T or move to
+//!   predominant (never regressing once PD is reached), is forced to PD
+//!   on the penultimate slot, and places the cadential dominant on the
+//!   phrase-final slot — so the dominant starts on the downbeat of the
+//!   group's last bar and resolves onto the next hyper-downbeat (the
+//!   following phrase's tonic opening, or the loop start). Premature
+//!   D→T resolutions and T/PD ping-pong mid-phrase are impossible by
+//!   construction.
+//! - Harmonic rhythm accelerates into the cadence: the forced-PD slot
+//!   of each full phrase is split in half (e.g. `| I | vi | IV ii | V |`),
+//!   recorded as [`SplitChord`]s alongside the slot-aligned chords.
+//! - User constraints always win: locked slots and start/end degrees are
+//!   never masked, and when a phrase ends on a fixed tonic the cadence
+//!   shifts left (`… PD D | T`) instead of fighting the constraint.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::rng::XorShift;
 
 use super::degree::Degree;
-use super::table::MarkovTable;
-use super::{GenContext, GenerateError, GeneratedChord, GeneratedMaterial};
+use super::table::{HarmonicFunction, MarkovTable};
+use super::{GenContext, GenerateError, GeneratedChord, GeneratedMaterial, SplitChord};
 
 /// When within this many transitions of a fixed successor, boost the
 /// probability of degrees that can reach it.
@@ -22,6 +45,22 @@ const BIAS_WINDOW: usize = 3;
 /// window. Larger values make the generator more likely to hit the
 /// target but reduce variety.
 const REACHABILITY_BOOST: f32 = 5.0;
+
+/// Grid slots per phrase for the phrase-model overlay. Four slots is a
+/// 4-bar hypermeasure at the app's default of one chord slot per bar,
+/// and matches the groups-of-four phrase planning used by the melody
+/// side. Progressions whose length is not a multiple of four end with a
+/// short phrase that degrades gracefully (see [`build_phrase_plans`]).
+const PHRASE_SLOTS: usize = 4;
+
+/// Function "levels" for arc monotonicity: T = 0, PD = 1, D = 2.
+fn flevel(f: HarmonicFunction) -> u8 {
+    match f {
+        HarmonicFunction::Tonic => 0,
+        HarmonicFunction::Predominant => 1,
+        HarmonicFunction::Dominant => 2,
+    }
+}
 
 /// Sample a Markov chord progression.
 ///
@@ -43,7 +82,10 @@ pub fn generate(
 
     let len = length as usize;
     if len == 0 {
-        return Ok(GeneratedMaterial { chords: vec![] });
+        return Ok(GeneratedMaterial {
+            chords: vec![],
+            splits: vec![],
+        });
     }
 
     let mut rng = XorShift::new(seed);
@@ -80,6 +122,16 @@ pub fn generate(
     // --- 3. Precompute helpers -----------------------------------------
     let order1 = marginalize_to_order1(table);
     let all_degrees = collect_all_degrees(table);
+
+    // Snapshot of pre-placed degrees (locks + start/end constraints).
+    // The phrase plans are built against these, fixed slots are never
+    // masked, and a fixed slot resets the arc level (a user lock
+    // legitimately restarts the phrase arc).
+    let prefixed: Vec<Option<Degree>> = output
+        .iter()
+        .map(|slot| slot.as_ref().map(|c| c.degree))
+        .collect();
+    let (plans, split_slots) = build_phrase_plans(len, &prefixed, table);
 
     // Memoized back-off results, shared across the whole fill (the
     // table is immutable for the duration of this call). Without it,
@@ -161,6 +213,51 @@ pub fn generate(
                 candidates = all_degrees.iter().map(|&d| (d, 1.0)).collect();
             }
 
+            // --- Phrase-model overlay: mask by harmonic function -------
+            // `premask` is kept so hard constraints (locked successors,
+            // end degree) can still be satisfied when the function mask
+            // and the reachability filter conflict — constraints win
+            // over the overlay.
+            let premask = candidates.clone();
+            {
+                let (plan_min, plan_max) = plans[pos];
+                let min = plan_min.max(phrase_level_before(pos, &output, &prefixed, table));
+                if min <= plan_max {
+                    let masked: Vec<(Degree, f32)> = candidates
+                        .iter()
+                        .filter(|(d, _)| {
+                            let l = flevel(table.function_of(*d));
+                            l >= min && l <= plan_max
+                        })
+                        .cloned()
+                        .collect();
+                    if !masked.is_empty() {
+                        candidates = masked;
+                    } else {
+                        // The transition row has no degree of the
+                        // required function: fall back to the table-wide
+                        // pool of allowed-function degrees so the arc
+                        // survives sparse rows. If the table has no such
+                        // degree at all (e.g. a dominant-less user
+                        // table), drop the constraint for this slot.
+                        let pool: Vec<(Degree, f32)> = all_degrees
+                            .iter()
+                            .filter(|&&d| {
+                                let l = flevel(table.function_of(d));
+                                l >= min && l <= plan_max
+                            })
+                            .map(|&d| (d, 1.0))
+                            .collect();
+                        if !pool.is_empty() {
+                            candidates = pool;
+                        }
+                    }
+                }
+                // min > plan_max happens only when a fixed slot forced
+                // the arc past this slot's ceiling (e.g. a locked V
+                // mid-phrase); the slot is left unconstrained.
+            }
+
             // Apply reachability bias when approaching a fixed successor.
             if let Some(ref reach_levels) = reachable {
                 if dist_to_succ <= BIAS_WINDOW.min(gap_end - gap_start) {
@@ -176,16 +273,29 @@ pub fn generate(
                             .collect();
                         if !strict.is_empty() {
                             candidates = strict;
-                        } else if end.is_some() && successor == end {
-                            // The successor IS the end constraint and we
-                            // can't reach it.
-                            return Err(GenerateError::EndUnreachable {
-                                steps: dist_to_succ,
-                            });
+                        } else {
+                            // The function mask may have excluded every
+                            // degree that reaches the successor; the
+                            // hard constraint outranks the overlay, so
+                            // retry against the unmasked candidates.
+                            let strict_premask: Vec<(Degree, f32)> = premask
+                                .iter()
+                                .filter(|(d, _)| reach_set.contains(d))
+                                .cloned()
+                                .collect();
+                            if !strict_premask.is_empty() {
+                                candidates = strict_premask;
+                            } else if end.is_some() && successor == end {
+                                // The successor IS the end constraint and
+                                // we can't reach it.
+                                return Err(GenerateError::EndUnreachable {
+                                    steps: dist_to_succ,
+                                });
+                            }
+                            // For non-end successors (locked chords in
+                            // the middle), fall through with the masked
+                            // candidates — best effort.
                         }
-                        // For non-end successors (locked chords in the
-                        // middle), fall through with the original
-                        // candidates — best effort.
                     } else {
                         // Boost reachable candidates.
                         for (deg, weight) in &mut candidates {
@@ -220,18 +330,173 @@ pub fn generate(
         }
     }
 
-    // --- 6. Assemble output --------------------------------------------
+    // --- 6. Harmonic-rhythm acceleration into the cadence ---------------
+    // Split the forced-PD slot of each full phrase in half, sampling a
+    // second, different predominant for the back half (e.g. `IV ii`
+    // before the cadential `V`). Doubling the harmonic rhythm right
+    // before the dominant is the hypermeter acceleration of bars 4/8.
+    let mut splits: Vec<SplitChord> = Vec::new();
+    for &slot in &split_slots {
+        // Never split fixed slots: a lock's degree and duration must
+        // carry through regeneration untouched.
+        if prefixed[slot].is_some() {
+            continue;
+        }
+        let first_half = output[slot]
+            .as_ref()
+            .expect("all positions should be filled")
+            .degree;
+
+        // Candidates for the back half, conditioned on the history up
+        // to and including the front half.
+        let window_start = (slot + 1).saturating_sub(effective_order.max(1));
+        let history: Vec<Degree> = output[window_start..=slot]
+            .iter()
+            .map(|c| c.as_ref().expect("filled").degree)
+            .collect();
+        let mut candidates = get_candidates(table, &history, effective_order, &mut suffix_cache);
+
+        // Strictly predominant-function and different from the front
+        // half — a repeated chord would be no acceleration at all. No
+        // pool fallback here: if the row offers no second predominant,
+        // skip the split rather than break the table's voice.
+        candidates.retain(|(d, _)| {
+            *d != first_half && table.function_of(*d) == HarmonicFunction::Predominant
+        });
+        if candidates.is_empty() {
+            continue;
+        }
+
+        // Prefer back halves with a direct path into the next slot's
+        // chord (usually the cadential dominant).
+        if let Some(next) = output.get(slot + 1).and_then(|c| c.as_ref()) {
+            let next_deg = next.degree;
+            let reaching: Vec<(Degree, f32)> = candidates
+                .iter()
+                .filter(|(d, _)| {
+                    order1
+                        .get(d)
+                        .is_some_and(|ts| ts.iter().any(|&(t, w)| t == next_deg && w > 0.0))
+                })
+                .cloned()
+                .collect();
+            if !reaching.is_empty() {
+                candidates = reaching;
+            }
+        }
+
+        let degree = weighted_sample(&candidates, &mut rng);
+        splits.push(SplitChord {
+            slot: slot as u8,
+            degree,
+        });
+    }
+
+    // --- 7. Assemble output --------------------------------------------
     let chords = output
         .into_iter()
         .map(|o| o.expect("all positions should be filled"))
         .collect();
 
-    Ok(GeneratedMaterial { chords })
+    Ok(GeneratedMaterial { chords, splits })
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/// Build per-slot function-level windows `(min, max)` for the
+/// phrase-model overlay, plus the slots eligible for harmonic-rhythm
+/// splitting (one forced-PD slot per full [`PHRASE_SLOTS`] phrase).
+///
+/// Standard plan for an `n`-slot phrase (levels: T = 0, PD = 1, D = 2):
+///
+/// - slot `0`: `(0, 0)` — open on tonic function;
+/// - slots `1..n-2`: `(0, 1)` — prolong T or move to PD, never D early
+///   (the dynamic minimum in the sampler prevents PD→T regression);
+/// - slot `n-2`: `(1, 1)` — forced predominant prepares the cadence;
+/// - slot `n-1`: `(2, 2)` — cadential dominant on the phrase-final
+///   slot, resolving onto the next hyper-downbeat.
+///
+/// When the phrase-final slot is pre-fixed with a tonic-function degree
+/// (an `end: I` constraint or a lock), the cadence shifts left so the
+/// arc still completes inside the phrase: `… (1,1) (2,2) [fixed T]`.
+/// Single-slot phrases are pinned to tonic (they sit on a
+/// hyper-downbeat right after the previous phrase's dominant).
+fn build_phrase_plans(
+    len: usize,
+    prefixed: &[Option<Degree>],
+    table: &MarkovTable,
+) -> (Vec<(u8, u8)>, Vec<usize>) {
+    let mut plans = vec![(0u8, 2u8); len];
+    let mut split_slots = Vec::new();
+
+    let mut start = 0;
+    while start < len {
+        let n = PHRASE_SLOTS.min(len - start);
+        let final_fixed_tonic = n >= 2
+            && prefixed[start + n - 1]
+                .is_some_and(|d| table.function_of(d) == HarmonicFunction::Tonic);
+
+        // Phrase-relative positions of the cadential dominant and the
+        // forced predominant that prepares it.
+        let (d_slot, pd_slot) = if n == 1 {
+            (None, None)
+        } else if final_fixed_tonic {
+            (Some(n - 2), n.checked_sub(3))
+        } else {
+            (Some(n - 1), n.checked_sub(2).filter(|&pd| pd >= 1))
+        };
+
+        for rel in 0..n {
+            plans[start + rel] = if Some(rel) == d_slot {
+                (2, 2)
+            } else if Some(rel) == pd_slot {
+                (1, 1)
+            } else if final_fixed_tonic && rel == n - 1 {
+                (0, 2) // pre-fixed anyway; never masked
+            } else if rel == 0 {
+                (0, 0)
+            } else {
+                (0, 1)
+            };
+        }
+
+        // Only full phrases accelerate — splitting the already-short
+        // remainder phrases would over-crowd them.
+        if n == PHRASE_SLOTS {
+            if let Some(pd) = pd_slot {
+                split_slots.push(start + pd);
+            }
+        }
+        start += n;
+    }
+
+    (plans, split_slots)
+}
+
+/// Highest function level reached so far in `pos`'s phrase, scanning
+/// the (already filled) slots before `pos`. Sampled slots ratchet the
+/// level up (arc monotonicity); pre-fixed slots *reset* it to their own
+/// function, because a user lock or start/end constraint legitimately
+/// restarts the arc.
+fn phrase_level_before(
+    pos: usize,
+    output: &[Option<GeneratedChord>],
+    prefixed: &[Option<Degree>],
+    table: &MarkovTable,
+) -> u8 {
+    let phrase_start = (pos / PHRASE_SLOTS) * PHRASE_SLOTS;
+    let mut level = 0u8;
+    for slot in phrase_start..pos {
+        let Some(chord) = output[slot].as_ref() else {
+            continue;
+        };
+        let l = flevel(table.function_of(chord.degree));
+        level = if prefixed[slot].is_some() { l } else { level.max(l) };
+    }
+    level
+}
 
 /// Memoized back-off candidate lists keyed by history suffix. The
 /// back-off path merges every table key whose tail matches the suffix

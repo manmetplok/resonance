@@ -240,7 +240,10 @@ pub fn generate(
 ) -> Result<GeneratedMaterial, GenerateError> {
     let len = length as usize;
     if len == 0 {
-        return Ok(GeneratedMaterial { chords: vec![] });
+        return Ok(GeneratedMaterial {
+            chords: vec![],
+            splits: vec![],
+        });
     }
 
     let base = kind.base_degrees();
@@ -283,7 +286,10 @@ pub fn generate(
         });
     }
 
-    Ok(GeneratedMaterial { chords })
+    Ok(GeneratedMaterial {
+        chords,
+        splits: vec![],
+    })
 }
 
 // ---------------------------------------------------------------------------

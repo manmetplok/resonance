@@ -36,7 +36,7 @@ use thiserror::Error;
 
 pub use degree::Degree;
 pub use schema::SchemaKind;
-pub use table::{MarkovTable, TableRegistry};
+pub use table::{HarmonicFunction, MarkovTable, TableRegistry};
 
 /// Describes how to generate material for a section. Serialized with an
 /// internally-tagged `"type"` discriminator so new variants extend the
@@ -133,11 +133,31 @@ pub struct GeneratedChord {
     pub locked: bool,
 }
 
+/// A harmonic-rhythm split produced by the phrase-model overlay: the
+/// grid slot `slot` is divided in half, with the slot's main chord
+/// (`GeneratedMaterial::chords[slot]`) taking the first half and
+/// `degree` the second. Used to accelerate harmonic rhythm into the
+/// cadence (e.g. `| I | vi | IV ii | V |`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SplitChord {
+    /// Index into `GeneratedMaterial::chords` of the slot being split.
+    pub slot: u8,
+    /// The chord occupying the second half of the slot.
+    pub degree: Degree,
+}
+
 /// The materialized output of a generator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GeneratedMaterial {
-    /// One chord per requested position.
+    /// One chord per requested position (grid slot). Locking and
+    /// regeneration are slot-positional over this list.
     pub chords: Vec<GeneratedChord>,
+    /// Harmonic-rhythm splits layered on top of `chords` by the
+    /// phrase-model overlay. Kept out of `chords` so slot-positional
+    /// semantics (and material persisted before this field existed)
+    /// stay intact.
+    #[serde(default)]
+    pub splits: Vec<SplitChord>,
 }
 
 /// Errors that can occur during generation.

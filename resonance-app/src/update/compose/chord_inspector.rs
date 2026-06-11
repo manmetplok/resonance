@@ -430,20 +430,48 @@ fn generate_chord_lane(r: &mut crate::Resonance, definition_id: u64, respect_loc
     // interval pattern (degree 1 in B minor → Bm, not B). Borrowed chords
     // (flat=true) use the Degree's explicit quality since they're
     // intentionally non-diatonic.
-    let mut new_chords = Vec::with_capacity(material.chords.len());
-    for (i, gc) in material.chords.iter().enumerate() {
-        let id = r.compose.fresh_id();
-        let chord = if gc.degree.flat {
-            gc.degree.to_chord(scale)
+    let project = |degree: resonance_music_theory::Degree| {
+        if degree.flat {
+            degree.to_chord(scale)
         } else {
-            diatonic_chord(scale, gc.degree.root, def.seventh_chords)
-        };
-        new_chords.push(ChordState {
-            id,
-            start_beat: i as u32 * beats_per_chord,
-            duration_beats: beats_per_chord,
-            chord,
-        });
+            diatonic_chord(scale, degree.root, def.seventh_chords)
+        }
+    };
+    // Harmonic-rhythm splits from the phrase-model overlay divide a
+    // slot in half (`| IV ii |` before the cadential `V`). Slots stay
+    // `beats_per_chord` wide; only the chords within them subdivide.
+    // Slots too narrow to halve render the front-half chord only.
+    let mut new_chords = Vec::with_capacity(material.chords.len() + material.splits.len());
+    for (i, gc) in material.chords.iter().enumerate() {
+        let slot_start = i as u32 * beats_per_chord;
+        let split = material
+            .splits
+            .iter()
+            .find(|s| s.slot as usize == i)
+            .filter(|_| beats_per_chord >= 2);
+        match split {
+            Some(s) => {
+                let front = beats_per_chord - beats_per_chord / 2;
+                new_chords.push(ChordState {
+                    id: r.compose.fresh_id(),
+                    start_beat: slot_start,
+                    duration_beats: front,
+                    chord: project(gc.degree),
+                });
+                new_chords.push(ChordState {
+                    id: r.compose.fresh_id(),
+                    start_beat: slot_start + front,
+                    duration_beats: beats_per_chord / 2,
+                    chord: project(s.degree),
+                });
+            }
+            None => new_chords.push(ChordState {
+                id: r.compose.fresh_id(),
+                start_beat: slot_start,
+                duration_beats: beats_per_chord,
+                chord: project(gc.degree),
+            }),
+        }
     }
 
     if let Some(def) = r.compose.find_definition_mut(definition_id) {

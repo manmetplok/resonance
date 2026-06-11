@@ -10,6 +10,51 @@ use serde::{Deserialize, Serialize};
 
 use super::degree::Degree;
 
+/// Harmonic function of a degree within a key: the tonic / predominant /
+/// dominant roles of functional harmony (Open Music Theory naming; the
+/// legacy [`crate::progression::Function`] calls the middle bucket
+/// "Subdominant" and only classifies natural degree numbers).
+///
+/// The variant order follows the phrase arc T → PD → D, and the derived
+/// `Ord` is what the phrase-model overlay in [`super::markov`] uses to
+/// enforce arc monotonicity.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub enum HarmonicFunction {
+    /// Stability / home: I and its substitutes (iii, vi, bIII).
+    Tonic,
+    /// Motion away from home, preparing the dominant: ii, IV, bVI, bII.
+    Predominant,
+    /// Tension demanding resolution: V, vii°, and the bVII / subtonic
+    /// dominant substitutes of modal and minor-key practice.
+    Dominant,
+}
+
+/// Default T/PD/D classification by scale-degree root, used for degrees
+/// a table does not tag explicitly (e.g. user-registered tables).
+///
+/// Natural degrees: 1/3/6 = T, 2/4 = PD, 5/7 = D. Flat (borrowed)
+/// degrees get the standard pop/modal readings: bVII is a dominant
+/// substitute (mixolydian cadence), bIII a tonic substitute, and the
+/// rest (bVI, bII Neapolitan, ...) predominants.
+pub fn default_function(degree: Degree) -> HarmonicFunction {
+    use HarmonicFunction::*;
+    if degree.flat {
+        match (degree.root.saturating_sub(1) % 7) + 1 {
+            7 => Dominant,
+            3 => Tonic,
+            _ => Predominant,
+        }
+    } else {
+        match (degree.root.saturating_sub(1) % 7) + 1 {
+            1 | 3 | 6 => Tonic,
+            2 | 4 => Predominant,
+            _ => Dominant,
+        }
+    }
+}
+
 /// A Markov transition table over scale degrees.
 ///
 /// Keys are conditioning histories whose length equals [`order`](Self::order);
@@ -33,6 +78,15 @@ pub struct MarkovTable {
     /// Transition map. Key = conditioning history of length `order`,
     /// value = weighted successor degrees.
     pub transitions: BTreeMap<Vec<Degree>, Vec<(Degree, f32)>>,
+    /// Explicit T/PD/D tags for this table's degrees. Degrees absent
+    /// from the map fall back to [`default_function`], so tables
+    /// persisted before this field existed (and terse user-registered
+    /// tables) keep working. Minor-mode tables (e.g. the metal builtin)
+    /// need their own tags because the natural-minor VI/VII degrees
+    /// function as PD/D there, not as the tonic-substitute/leading-tone
+    /// the major-key heuristic assumes.
+    #[serde(default)]
+    pub functions: BTreeMap<Degree, HarmonicFunction>,
 }
 
 impl MarkovTable {
@@ -49,6 +103,15 @@ impl MarkovTable {
             }
         }
         set.into_iter().collect()
+    }
+
+    /// T/PD/D function of a degree per this table's tagging, falling
+    /// back to [`default_function`] for untagged degrees.
+    pub fn function_of(&self, degree: Degree) -> HarmonicFunction {
+        self.functions
+            .get(&degree)
+            .copied()
+            .unwrap_or_else(|| default_function(degree))
     }
 }
 
@@ -149,6 +212,14 @@ fn t2(a: Degree, b: Degree, to: &[(Degree, f32)]) -> TableRow {
 /// weighted successors.
 type TableRow = (Vec<Degree>, Vec<(Degree, f32)>);
 
+/// Build a function-tag map from a slice of pairs.
+fn tag(pairs: &[(Degree, HarmonicFunction)]) -> BTreeMap<Degree, HarmonicFunction> {
+    pairs.iter().copied().collect()
+}
+
+// Shorthand for the tag tables below.
+use HarmonicFunction::{Dominant as D, Predominant as PD, Tonic as T};
+
 /// Build a complete order-2 table by starting with a base order-1
 /// distribution for each degree, expanding it to all pairs (using the
 /// last element's base distribution as the default), then applying
@@ -158,6 +229,7 @@ fn build_order2(
     degrees: &[Degree],
     base: &[(Degree, Vec<(Degree, f32)>)],
     overrides: Vec<TableRow>,
+    functions: BTreeMap<Degree, HarmonicFunction>,
 ) -> MarkovTable {
     let base_map: HashMap<Degree, Vec<(Degree, f32)>> = base.iter().cloned().collect();
     let mut transitions: BTreeMap<Vec<Degree>, Vec<(Degree, f32)>> = BTreeMap::new();
@@ -180,6 +252,7 @@ fn build_order2(
         id: id.to_string(),
         order: 2,
         transitions,
+        functions,
     }
 }
 
@@ -225,6 +298,8 @@ pub fn builtin_pop() -> MarkovTable {
         id: "pop".to_string(),
         order: 1,
         transitions,
+        // Textbook major-key roles: iii and vi are tonic substitutes.
+        functions: tag(&[(I, T), (II, PD), (III, T), (IV, PD), (V, D), (VI, T)]),
     }
 }
 
@@ -336,6 +411,19 @@ pub fn builtin_modal() -> MarkovTable {
         id: "modal".to_string(),
         order: 1,
         transitions,
+        // bVII is tagged Dominant (the mixolydian dominant substitute);
+        // bVI Predominant (it prepares bVII or V in the aeolian cadence
+        // bVI–bVII–I). The diatonic degrees keep their textbook roles.
+        functions: tag(&[
+            (I, T),
+            (II, PD),
+            (III, T),
+            (IV, PD),
+            (V, D),
+            (VI, T),
+            (BVI, PD),
+            (BVII, D),
+        ]),
     }
 }
 
@@ -431,6 +519,17 @@ pub fn builtin_post_rock() -> MarkovTable {
         id: "post-rock".to_string(),
         order: 1,
         transitions,
+        // Same calls as the modal table: bVII acts as the dominant
+        // substitute in this style's reduced-V harmonic language.
+        functions: tag(&[
+            (I, T),
+            (II, PD),
+            (III, T),
+            (IV, PD),
+            (V, D),
+            (VI, T),
+            (BVII, D),
+        ]),
     }
 }
 
@@ -519,6 +618,20 @@ pub fn builtin_metal() -> MarkovTable {
         id: "metal".to_string(),
         order: 1,
         transitions,
+        // Minor-mode mapping. Idiosyncratic calls: VI is tagged
+        // Predominant (in the i–VI–VII–i spine it prepares the
+        // subtonic, unlike the major-key vi tonic substitute) and VII
+        // Dominant (subtonic dominant substitute). III is the
+        // relative-major tonic substitute; V keeps its harmonic-minor
+        // dominant role.
+        functions: tag(&[
+            (IMIN, T),
+            (IIIM, T),
+            (IVMN, PD),
+            (V, D),
+            (VIM, PD),
+            (VIIM, D),
+        ]),
     }
 }
 
@@ -718,7 +831,23 @@ pub fn builtin_jazz() -> MarkovTable {
         ),
     ];
 
-    build_order2("jazz", &degrees, &base, overrides)
+    build_order2(
+        "jazz",
+        &degrees,
+        &base,
+        overrides,
+        // Seventh-chord analogues of the textbook roles; viiø7 is a
+        // rootless V9 in practice, hence Dominant.
+        tag(&[
+            (I7, T),
+            (II7, PD),
+            (III7, T),
+            (IV7, PD),
+            (V7, D),
+            (VI7, T),
+            (VII7, D),
+        ]),
+    )
 }
 
 /// **Classical** (order 2) -- Functional harmony with strong authentic
@@ -917,5 +1046,19 @@ pub fn builtin_classical() -> MarkovTable {
         ),
     ];
 
-    build_order2("classical", &degrees, &base, overrides)
+    build_order2(
+        "classical",
+        &degrees,
+        &base,
+        overrides,
+        tag(&[
+            (I, T),
+            (II, PD),
+            (III, T),
+            (IV, PD),
+            (V, D),
+            (VI, T),
+            (VIID, D),
+        ]),
+    )
 }
