@@ -39,6 +39,11 @@ impl VocalStyleProfile for HymnalProfile {
         false
     }
 
+    /// Strict grid is core to the style — no stress syncopation.
+    fn stress_syncopation_chance(&self) -> f32 {
+        0.0
+    }
+
     fn begin_line(&mut self, _rng: &mut XorShift, _ctx: &VocalContext, _line: &LineState<()>) {}
 
     fn pick_pitch(

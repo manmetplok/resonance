@@ -11,7 +11,9 @@ use super::types::{MotifNote, Transform};
 
 /// Rhythm pattern library: each pattern is a list of duration ratios.
 /// The ratios are scaled to fill the available time. Higher indices are
-/// more rhythmically complex.
+/// more rhythmically complex. The complexity knob's pattern-pool cap is
+/// calibrated against this list — tresillo cells live in their own
+/// gated pool below so adding them doesn't shift the cap.
 const RHYTHM_PATTERNS: &[&[u8]] = &[
     &[1, 1, 1, 1],       // steady
     &[2, 1, 1],           // long-short-short
@@ -22,6 +24,24 @@ const RHYTHM_PATTERNS: &[&[u8]] = &[
     &[2, 1, 1, 2, 2],     // varied
     &[1, 1, 2, 1, 1],     // syncopated center
 ];
+
+/// Tresillo cells (Open Music Theory, rhythm and meter in pop music):
+/// the 3+3+2 division of eight pulses, its rotations, and the double
+/// tresillo 3+3+3+3+2+2 spanning sixteen pulses.
+const TRESILLO_PATTERNS: &[&[u8]] = &[
+    &[3, 3, 2],           // tresillo
+    &[3, 2, 3],           // rotation
+    &[2, 3, 3],           // rotation
+    &[3, 3, 3, 3, 2, 2],  // double tresillo
+];
+
+/// Complexity floor below which tresillo cells never replace the base
+/// pattern — low-complexity motifs keep the simple, even pool.
+const TRESILLO_MIN_COMPLEXITY: f32 = 0.6;
+
+/// Probability that a motif above the complexity floor swaps its base
+/// rhythm pattern for a tresillo cell.
+const TRESILLO_CHANCE: f32 = 0.30;
 
 // --- Well-formed-line constants (Open Music Theory: melodic line rules) ---
 
@@ -108,7 +128,14 @@ pub(in crate::derive) fn build_motif(
     // one pattern past what the complexity knob asked for.
     let max_pattern = (motif.complexity * (RHYTHM_PATTERNS.len() - 1) as f32).floor() as usize;
     let pattern_idx = rng.next_range(max_pattern.max(1) + 1).min(RHYTHM_PATTERNS.len() - 1);
-    let rhythm = RHYTHM_PATTERNS[pattern_idx];
+    let mut rhythm = RHYTHM_PATTERNS[pattern_idx];
+    // Tresillo gate: complex motifs occasionally swap the base pattern
+    // for a 3+3+2 cell (or a rotation / the double tresillo). Drawn
+    // after the base pick so low-complexity motifs consume the same
+    // RNG stream as before the tresillo pool existed.
+    if motif.complexity >= TRESILLO_MIN_COMPLEXITY && rng.next_f32() < TRESILLO_CHANCE {
+        rhythm = TRESILLO_PATTERNS[rng.next_range(TRESILLO_PATTERNS.len())];
+    }
 
     // Build interval contour.
     let chord_intervals = chord_tone_intervals(&chord);
@@ -342,5 +369,43 @@ pub(in crate::derive) fn transform_motif(motif: &[MotifNote], transform: Transfo
             })
             .collect(),
         Transform::Fragment(n) => motif[..n.min(motif.len())].to_vec(),
+        Transform::Syncopate => syncopate_motif(motif),
     }
+}
+
+/// Straight syncopation (OMT's canonical pop rhythm device): halve the
+/// first of the cell's durations and shift every later note earlier by
+/// that half, with the final note extended so the cell still spans the
+/// same total time. In duration-ratio form (where the renderer derives
+/// onsets from cumulative durations and normalizes the total) that is:
+/// double every ratio, restore the first to its original value, and add
+/// the freed half to the last. E.g. `[1, 1, 1, 1]` (four quarters)
+/// becomes `[1, 2, 2, 3]` in eighths — onsets 0, 0.5, 1.5, 2.5.
+///
+/// The transform works at half the pattern's base division, so
+/// quarter-based patterns syncopate at the eighth level and
+/// eighth-based ones at the sixteenth level.
+fn syncopate_motif(motif: &[MotifNote]) -> Vec<MotifNote> {
+    if motif.len() < 2 {
+        return motif.to_vec();
+    }
+    let first = motif[0].duration_ratio;
+    let last_idx = motif.len() - 1;
+    motif
+        .iter()
+        .enumerate()
+        .map(|(i, note)| {
+            let duration_ratio = if i == 0 {
+                first.max(1)
+            } else if i == last_idx {
+                note.duration_ratio.saturating_mul(2).saturating_add(first).max(1)
+            } else {
+                note.duration_ratio.saturating_mul(2).max(1)
+            };
+            MotifNote {
+                duration_ratio,
+                ..*note
+            }
+        })
+        .collect()
 }

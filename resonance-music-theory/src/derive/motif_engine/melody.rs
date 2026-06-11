@@ -254,10 +254,20 @@ pub fn derive_motif_melody_with_section(
 
         let octave_shift = phrase_octave_offsets[pi];
         if octave_shift != 0 {
-            for n in phrase_notes.iter_mut() {
-                let candidate = (n.note as i16 + octave_shift as i16).clamp(0, 127) as u8;
-                if candidate >= params.register.0 && candidate <= params.register.1 {
-                    n.note = candidate;
+            // All-or-nothing, like the bass lane's `shifted_anchor`:
+            // shifting only the notes that stay in register would
+            // rewrite adjacent intervals (a validated step resolution
+            // becomes a 7th/9th), silently breaking the leap grammar
+            // and strong-beat contracts the passes above enforced. If
+            // any note would leave the register, the whole phrase
+            // keeps its anchor octave.
+            let fits = phrase_notes.iter().all(|n| {
+                let candidate = n.note as i16 + octave_shift as i16;
+                (params.register.0 as i16..=params.register.1 as i16).contains(&candidate)
+            });
+            if fits {
+                for n in phrase_notes.iter_mut() {
+                    n.note = (n.note as i16 + octave_shift as i16) as u8;
                 }
             }
         }

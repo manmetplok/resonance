@@ -100,6 +100,13 @@ impl VocalStyleProfile for ChantProfile {
         slot * 0.08
     }
 
+    /// Recitation has its own triplet-feel rhythm engine; a half-slot
+    /// anticipation would smear the spit pattern, so chant keeps its
+    /// micro-rubato on every syllable.
+    fn stress_syncopation_chance(&self) -> f32 {
+        0.0
+    }
+
     fn pick_pitch(
         &self,
         ctx: &VocalContext,

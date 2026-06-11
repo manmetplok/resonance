@@ -25,6 +25,7 @@ pub use params::{
     VoiceType,
 };
 
+use crate::g2p::{resolve_draft, SyllableStress};
 use crate::scale::Scale;
 
 use super::climax::enforce_single_climax;
@@ -201,6 +202,11 @@ pub(in crate::derive::vocal) struct VocalContext<'a> {
     /// One entry per draft line, in order, holding the line's
     /// mechanical syllable count (matches what the SVS pipeline walks).
     pub(in crate::derive::vocal) line_syllables: Vec<u32>,
+    /// Per-line lexical stress for each syllable (CMU dict via
+    /// `g2p::resolve_draft`), padded/truncated to the mechanical
+    /// syllable count so indices always line up with `line_syllables`.
+    /// Drives division-level syncopation on stressed syllables.
+    pub(in crate::derive::vocal) line_stresses: Vec<Vec<SyllableStress>>,
     pub(in crate::derive::vocal) total_syl: u32,
     pub(in crate::derive::vocal) seed: u64,
     pub(in crate::derive::vocal) scale: Option<Scale>,
@@ -240,6 +246,24 @@ impl<'a> VocalContext<'a> {
         if total_syl == 0 {
             return None;
         }
+        // Lexical stress per syllable, resolved line-by-line so the
+        // indices match `line_syllables`. The resolved count can
+        // disagree with the mechanical count on odd drafts; pad with
+        // unstressed (and truncate) so lookups never misalign.
+        let line_stresses: Vec<Vec<SyllableStress>> = params
+            .draft
+            .iter()
+            .zip(&line_syllables)
+            .map(|(line, &count)| {
+                let mut stresses: Vec<SyllableStress> =
+                    resolve_draft(std::slice::from_ref(line))
+                        .into_iter()
+                        .map(|s| s.stress)
+                        .collect();
+                stresses.resize(count as usize, SyllableStress::None);
+                stresses
+            })
+            .collect();
         let scale = if params.stay_in_scale {
             scale_from_chords(chords)
         } else {
@@ -254,6 +278,7 @@ impl<'a> VocalContext<'a> {
             lo,
             hi,
             line_syllables,
+            line_stresses,
             total_syl,
             seed,
             scale,

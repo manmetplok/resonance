@@ -6,8 +6,8 @@
 //! style-side helpers (`cap_interval`, `phrase_arch`, `beat_strength`,
 //! `rhythm_trim`, `shape_velocity`, `cadence_pitch`, `phrase_role`,
 //! `terminal_dur_beats`, `phrase_start_offset`, `rubato_offset`,
-//! `chord_tone_nearest`, `snap_to_pentatonic`, `is_pentatonic`,
-//! `MAX_INTERVAL`) that all six profiles draw on.
+//! `stress_syncopation`, `chord_tone_nearest`, `snap_to_pentatonic`,
+//! `is_pentatonic`, `MAX_INTERVAL`) that all six profiles draw on.
 
 mod anthemic;
 mod chant;
@@ -16,6 +16,7 @@ mod folk;
 mod hymnal;
 mod pop_ballad;
 
+use crate::g2p::SyllableStress;
 use crate::rng::XorShift;
 use crate::scale::Scale;
 
@@ -438,6 +439,24 @@ pub(super) fn rubato_offset(rng: &mut XorShift, max_beats: f32) -> f32 {
     (rng.next_f32() - 0.5) * 2.0 * max_beats
 }
 
+/// Division-level syncopation offset for a primary-stress syllable
+/// (Open Music Theory, rhythm in pop music): with probability `chance`
+/// the onset anticipates its grid slot by a *quantized* division —
+/// half the slot (eighth level for quarter-note slots, 70 %) or a
+/// quarter of it (sixteenth level, 30 %) — instead of the continuous
+/// micro-rubato unstressed syllables get. Returns a beats-offset
+/// (negative = earlier); `0.0` keeps the syllable on the grid.
+pub(super) fn stress_syncopation(rng: &mut XorShift, chance: f32, slot: f32) -> f32 {
+    if rng.next_f32() >= chance {
+        return 0.0;
+    }
+    if rng.next_f32() < 0.7 {
+        -slot * 0.5
+    } else {
+        -slot * 0.25
+    }
+}
+
 // ===========================================================================
 // Style-profile trait + shared walker
 // ===========================================================================
@@ -519,7 +538,9 @@ pub(super) struct StepInputs<'a> {
 ///
 /// **rng-draw order:** the walker calls `slot`, then `rubato_max`,
 /// then (if non-zero) draws one `rubato_offset`, then `pick_pitch`,
-/// `finalize_pitch`, `dur_beats`, `velocity`. Implementors must
+/// `finalize_pitch`, `dur_beats`, `velocity`. The stress-syncopation
+/// overlay draws from a per-syllable *derived* stream, so it never
+/// perturbs this sequence. Implementors must
 /// preserve their original draw order *within* each method —
 /// reordering even a single `rng.next_f32()` changes the
 /// deterministic output for that style.
@@ -590,6 +611,16 @@ pub(super) trait VocalStyleProfile {
     ) -> f32 {
         let _ = (line, s, slot);
         0.0
+    }
+
+    /// Probability that a primary-stress syllable replaces its timing
+    /// jitter with a division-level syncopation (a quantized half- or
+    /// quarter-slot anticipation, see [`stress_syncopation`]). Like
+    /// rubato, never applied to a line's first or last syllable.
+    /// Hymnal and Chant return 0: strict grid is core to Hymnal, and
+    /// Chant's recitation has its own triplet-feel rhythm engine.
+    fn stress_syncopation_chance(&self) -> f32 {
+        0.55
     }
 
     /// Pick the syllable's pitch — handles cadence override on the
@@ -712,14 +743,52 @@ fn walk_with_profile<P: VocalStyleProfile>(
             let progress_in_line = s as f32 / line_syl.max(1) as f32;
             let slot = profile.slot(&line, s);
             let rubato_max = profile.rubato_max(&line, s, slot);
-            let rubato = if s == 0 || s + 1 == line_syl || rubato_max == 0.0 {
+            // Stressed syllables trade the continuous micro-jitter for
+            // division-level syncopation: a quantized anticipation at
+            // the eighth/sixteenth division of the slot. Unstressed
+            // syllables (and stressed ones that fail the coin) keep
+            // the rubato wobble. The syncopation draws come from a
+            // *derived* per-syllable stream — the shared `rng` keeps
+            // its legacy draw sequence, so the pitch / duration /
+            // velocity decisions are untouched by the timing overlay.
+            let stress = ctx
+                .line_stresses
+                .get(line_idx)
+                .and_then(|l| l.get(s as usize))
+                .copied()
+                .unwrap_or_default();
+            let sync_chance = profile.stress_syncopation_chance();
+            let rubato = if s == 0 || s + 1 == line_syl {
                 0.0
             } else {
-                rubato_offset(&mut rng, rubato_max)
+                let wobble = if rubato_max == 0.0 {
+                    0.0
+                } else {
+                    rubato_offset(&mut rng, rubato_max)
+                };
+                if stress == SyllableStress::Primary && sync_chance > 0.0 {
+                    let mut sync_rng = XorShift::new(
+                        seed.max(1)
+                            ^ (line_idx as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                            ^ (u64::from(s) + 1).wrapping_mul(0xC2B2_AE3D_27D4_EB4F),
+                    );
+                    let sync = stress_syncopation(&mut sync_rng, sync_chance, slot);
+                    if sync != 0.0 { sync } else { wobble }
+                } else {
+                    wobble
+                }
             };
             let beat_f = line_start_beat_f + beat_cursor + rubato;
+            // The musical decisions (chord lookup, beat-strength
+            // accents, strong-beat anchoring) read the syllable's
+            // *grid* beat: rubato and stress syncopation are
+            // performance-timing displacements — an anticipated onset
+            // still belongs to the beat it anticipates, so only the
+            // rendered `start_tick` moves.
+            let grid_beat_f = line_start_beat_f + beat_cursor;
             beat_cursor += slot;
-            let beat_round = beat_f.floor().clamp(0.0, (section_beats - 1) as f32) as u32;
+            let beat_round =
+                grid_beat_f.floor().clamp(0.0, (section_beats - 1) as f32) as u32;
             let chord = chord_at_beat(chords, beat_round);
             let is_final = s + 1 == line_syl;
             let inp = StepInputs {

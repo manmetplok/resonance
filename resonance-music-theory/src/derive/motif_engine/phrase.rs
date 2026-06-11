@@ -111,14 +111,19 @@ pub(in crate::derive) fn plan_motif_transforms(
 }
 
 /// Variation for the sentence presentation's repeat of the basic idea:
-/// exact repeat or a small transposition — never an operation that
-/// obscures the idea (inversion, retrograde, fragmentation).
+/// exact repeat, a small transposition, or a straight syncopation of
+/// the same pitches — never an operation that obscures the idea
+/// (inversion, retrograde, fragmentation). The syncopated repeat keeps
+/// the interval shape intact and only displaces the surface rhythm,
+/// the canonical pop way to vary a restated idea.
 fn pick_varied_repeat(rng: &mut XorShift) -> Transform {
     let roll = rng.next_f32();
     let amount = 1 + rng.next_range(3) as i8;
-    if roll < 0.34 {
+    if roll < 0.25 {
         Transform::Identity
-    } else if roll < 0.67 {
+    } else if roll < 0.50 {
+        Transform::Syncopate
+    } else if roll < 0.75 {
         Transform::TransposeUp(amount)
     } else {
         Transform::TransposeDown(amount)
@@ -230,15 +235,17 @@ fn pick_transform(
             Transform::TransposeDown(transpose_amount)
         }
     } else if complexity < 0.7 {
-        // Moderate: add inversion and fragmentation
-        if roll < 0.20 {
+        // Moderate: add inversion, syncopation, and fragmentation
+        if roll < 0.18 {
             Transform::Identity
-        } else if roll < 0.40 {
+        } else if roll < 0.36 {
             Transform::TransposeUp(transpose_amount)
-        } else if roll < 0.60 {
+        } else if roll < 0.54 {
             Transform::TransposeDown(transpose_amount)
-        } else if roll < 0.75 {
+        } else if roll < 0.68 {
             Transform::Invert
+        } else if roll < 0.84 {
+            Transform::Syncopate
         } else {
             let frag_len = 2.max(motif_len / 2);
             Transform::Fragment(frag_len)
@@ -247,18 +254,20 @@ fn pick_transform(
         // Complex: full repertoire
         if roll < 0.10 {
             Transform::Identity
-        } else if roll < 0.25 {
+        } else if roll < 0.24 {
             Transform::TransposeUp(transpose_amount)
-        } else if roll < 0.40 {
+        } else if roll < 0.38 {
             Transform::TransposeDown(transpose_amount)
-        } else if roll < 0.55 {
+        } else if roll < 0.50 {
             Transform::Invert
-        } else if roll < 0.65 {
+        } else if roll < 0.60 {
             Transform::Retrograde
-        } else if roll < 0.75 {
+        } else if roll < 0.68 {
             Transform::Augment
-        } else if roll < 0.85 {
+        } else if roll < 0.76 {
             Transform::Diminish
+        } else if roll < 0.88 {
+            Transform::Syncopate
         } else {
             let frag_len = 2.max(motif_len / 2);
             Transform::Fragment(frag_len)
@@ -328,8 +337,19 @@ pub(super) fn realize_phrase(
     // sounds ~2x the notes of the basic idea. The harmonic rhythm
     // itself is owned by the chord progression; the melody-side
     // planner only accelerates the surface.
+    //
+    // Fragmentation outside a continuation accelerates too (rhythmic
+    // acceleration: note values halve when an idea fragments): the
+    // compensation factor alone keeps the fragment's notes at their
+    // original surface values instead of letting the tiling stretch
+    // them to fill the chord — half the duration each note would get
+    // without it.
+    let shrink_compensation =
+        (motif.len().max(1) as u64).div_ceil(transformed.len() as u64);
     let density: u64 = if phrase.role.is_continuation() {
-        2 * (motif.len().max(1) as u64).div_ceil(transformed.len() as u64)
+        2 * shrink_compensation
+    } else if matches!(transform, Transform::Fragment(_)) {
+        shrink_compensation
     } else {
         1
     };

@@ -28,6 +28,12 @@ pub(in crate::derive) enum Transform {
     Augment,
     Diminish,
     Fragment(usize),
+    /// Straight syncopation (Open Music Theory, rhythm in pop music):
+    /// halve the first duration and shift every later onset earlier by
+    /// that half, extending the final note to keep the cell's span.
+    /// Operates at half the pattern's base division — eighth-level for
+    /// quarter-based patterns, sixteenth-level for eighth-based ones.
+    Syncopate,
 }
 
 /// Internal contour shape for a phrase.
