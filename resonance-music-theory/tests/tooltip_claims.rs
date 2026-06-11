@@ -368,7 +368,7 @@ fn pad_register_clamps_every_voice() {
         tc(Chord::new(PitchClass::F, ChordQuality::Maj7), 4, 4),
         tc(Chord::new(PitchClass::G, ChordQuality::Dom7), 8, 4),
     ];
-    let notes = derive_pad(&chords, &p, TPB);
+    let notes = derive_pad(&chords, None, &p, TPB);
     assert!(!notes.is_empty());
     for n in &notes {
         assert!(

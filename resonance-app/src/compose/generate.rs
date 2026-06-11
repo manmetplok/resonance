@@ -98,7 +98,7 @@ pub fn derive_notes(
 ) -> Vec<MidiNote> {
     let timed = to_timed_chords(chords);
     let generated = match kind {
-        DeriveKind::Pad => derive_pad(&timed, &params.pad, ticks_per_beat),
+        DeriveKind::Pad => derive_pad(&timed, scale, &params.pad, ticks_per_beat),
         DeriveKind::Bass => match params.bass.style {
             BassStyle::Motif => derive_bass_motif(
                 &timed,

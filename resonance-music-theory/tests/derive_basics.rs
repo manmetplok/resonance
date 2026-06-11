@@ -25,7 +25,7 @@ fn tc(chord: Chord, start_beat: u32, duration_beats: u32) -> TimedChord {
 
 #[test]
 fn pad_empty_in_empty_out() {
-    assert!(derive_pad(&[], &PadParams::default(), 480).is_empty());
+    assert!(derive_pad(&[], None, &PadParams::default(), 480).is_empty());
 }
 
 #[test]
@@ -35,8 +35,10 @@ fn pad_produces_one_note_per_voice_per_chord() {
         tc(Chord::new(F, ChordQuality::Maj), 4, 4),
     ];
     let p = PadParams::default();
-    let notes = derive_pad(&chords, &p, 480);
-    assert_eq!(notes.len(), 6); // 3 voices × 2 chords
+    let notes = derive_pad(&chords, None, &p, 480);
+    // The default register spans two octaves, so the SATB pass renders
+    // four voices per chord (triads get one tone doubled).
+    assert_eq!(notes.len(), 8); // 4 voices × 2 chords
 }
 
 #[test]
@@ -50,7 +52,8 @@ fn pad_voices_stay_in_register() {
         register: (48, 72),
         velocity: 0.7,
     };
-    for n in derive_pad(&chords, &p, 480) {
+    let scale = Some(Scale::new(C, Mode::Major));
+    for n in derive_pad(&chords, scale, &p, 480) {
         assert!(n.note >= 48 && n.note <= 72, "{} out of register", n.note);
     }
 }
@@ -61,7 +64,7 @@ fn pad_start_ticks_match_beats() {
         tc(Chord::new(C, ChordQuality::Maj), 0, 4),
         tc(Chord::new(G, ChordQuality::Maj), 4, 4),
     ];
-    let notes = derive_pad(&chords, &PadParams::default(), 480);
+    let notes = derive_pad(&chords, None, &PadParams::default(), 480);
     // First chord at beat 0 → start_tick 0; second at beat 4 → 1920.
     let c_start: Vec<u64> = notes
         .iter()
@@ -73,8 +76,8 @@ fn pad_start_ticks_match_beats() {
         .filter(|n| n.start_tick == 1920)
         .map(|n| n.start_tick)
         .collect();
-    assert_eq!(c_start.len(), 3);
-    assert_eq!(g_start.len(), 3);
+    assert_eq!(c_start.len(), 4);
+    assert_eq!(g_start.len(), 4);
 }
 
 // ---------- Bass ----------

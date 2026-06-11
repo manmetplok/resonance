@@ -6,6 +6,7 @@ pub mod generator;
 pub mod pitch;
 pub mod progression;
 mod rng;
+pub mod satb;
 pub mod scale;
 pub mod voicing;
 
@@ -34,6 +35,7 @@ pub use progression::{
     degree_function, diatonic_chord, diatonic_triads, walk_progression, Function,
     ProgressionParams, TRANSITIONS,
 };
+pub use satb::{chordal_seventh, satb_voicings};
 pub use scale::{Mode, Scale};
 pub use fretboard::{
     voicing as fretboard_voicing, voicing_from as fretboard_voicing_from, FretboardVoicing,

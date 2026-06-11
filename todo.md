@@ -25,3 +25,18 @@ implementation sequence; each item is independently testable.
 - [x] **Section-level climax orchestration** — one climax per *section*, placed in a designated phrase (e.g. phrase 3 of 4), other phrases get lower secondary peaks; replaces independent per-phrase/per-line contour draws (fixes every vocal line arching identically).
 - [x] **Sequences as a transform** — add real sequences (model + transposed copies: descending fifths, descending thirds, ascending 5–6) to the transform vocabulary in `plan_motif_transforms`, used in continuations/departures.
 - [x] **Composable transforms** — allow transform pairs (fragment+transpose, invert+augment) at high complexity in `motif_engine/phrase.rs:92-151`; widen the operator vocabulary rather than the randomness.
+
+## Tier 4 — remaining research items (added 2026-06-11, from `melody-generation-research.md` §2 leftovers)
+
+- [x] **SATB-style voice leading for harmony rendering** — §2G, the only research section with zero implementation. Render chord lanes as voiced parts instead of block chords: bass first, melody built backwards from the cadence with correct tendency tones, inner voices to nearest chord tones; forbid parallel 5ths/octaves; never double the leading tone or a chordal 7th; prefer contrary motion against a rising 4→5 bass. New pass in `resonance-music-theory` consumed by the chord-lane renderer.
+- [ ] **Inversions + classical cadence machinery** — §2C: the harmony model has no inversions, so pre-dominant bass idioms (ii6, bass 4→5 via ii6/IV, IV-precedes-ii) and the cadential 6/4 (over bass 5, resolve 6→5 and 4→3 in the same voices) are inexpressible. Add inversion support to the chord model/generator, then the cadential 6/4 as a cadence-slot decoration. Builds on the voice-leading pass above.
+- [ ] **Harmony ↔ melody phrase-plan coordination** — §2B: the sentence/period planner (`phrase_grammar_roles`) and the Markov phrase overlay both use 4-bar groups but don't share a plan. Share the section's form plan with the chord generator so presentations get tonic-prolonging harmony and continuations get the faster harmonic rhythm (the piece deferred in f676696).
+- [ ] **Pop/jazz cadence color** — §2C/§2E leftovers: plagal-sigh melodic formula 6→♭6→5 in the cadence engine; aeolian ♭VI–♭VII–i cadence; jazz ii–V substitution in bars 9–10 of the 12-bar blues schema; turnaround I–vi–ii–V; "cadence-aware final bars" as a third schema variation operator (alongside rotation/substitution).
+- [ ] **Pentatonic harmony schema** — §2E: roots drawn from the pentatonic scale, chord quality free; add as a `SchemaKind` or a separate generator mode.
+- [ ] **Cross-lane climax separation** — §2A: "two simultaneous melodies must not place climaxes together." Section climax orchestration works within each engine; coordinate across lanes (e.g. vocal vs lead synth) so simultaneous melodies don't peak in the same bar.
+- [ ] **EmbellishmentStyle UI wiring** — the `EmbellishmentStyle` knob on `MelodyParams` (Folk/PopBallad/Jazz/Auto, added in 20d3581) is serde-only; nothing in the inspector sets it — same gap the schema generator had. Add a control to the melody/motif inspector. MUST route through the `ux-design` agent first, then `e2e-tester` for snapshot verification.
+
+### Tier 4 polish (small)
+
+- [ ] **Huron descending-step bias** — §2A: descending steps slightly more common than ascending; add as a soft weight in `choose_direction` (`motif_engine/build.rs`).
+- [ ] **Fix `Augment`/`InvertAugment` washout** — the tiling realizer normalizes duration ratios per chord, so augmentation mostly washes out at render time (noted in fd2581b, pre-existing for plain `Augment`). Make augmentation audible or drop it from the drawn vocabulary.

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::voicing::{close_voicing, voice_lead};
+use crate::satb::satb_voicings;
+use crate::scale::Scale;
 
 use super::{GeneratedNote, TimedChord};
 
@@ -20,12 +21,21 @@ impl Default for PadParams {
     }
 }
 
-/// Sustained, voice-led chord voicings. The first chord is spelled as a
-/// close voicing anchored to the register floor; subsequent chords are
-/// voice-led from the previous voicing so common tones stay put and
-/// moving voices move by the smallest interval.
+/// Sustained, SATB-style voiced harmony. Chords render as voiced parts
+/// rather than parallel block stacks: the bass is planned first, the
+/// top voice is planned backwards from the cadence with correct
+/// tendency-tone resolutions, and the inner voices take the nearest
+/// chord tones — with parallel fifths/octaves forbidden, the leading
+/// tone and chordal sevenths never doubled, and contrary motion
+/// preferred against a rising 4→5 bass (see `crate::satb`).
+///
+/// `scale` enables the key-dependent rules; pass `None` to voice-lead
+/// without leading-tone/tonic awareness. Registers narrower than 16
+/// semitones drop from four voices to three so close voicings still
+/// fit.
 pub fn derive_pad(
     chords: &[TimedChord],
+    scale: Option<Scale>,
     params: &PadParams,
     ticks_per_beat: u32,
 ) -> Vec<GeneratedNote> {
@@ -33,30 +43,14 @@ pub fn derive_pad(
         return Vec::new();
     }
     let tpb = ticks_per_beat as u64;
+    let progression: Vec<_> = chords.iter().map(|tc| tc.chord).collect();
+    let voicings = satb_voicings(&progression, scale, params.register);
+
     let mut out = Vec::new();
-
-    // Seed voicing: close voicing at the register floor, then clamp any
-    // voices above the register ceiling by dropping them an octave.
-    let mut voicing: Vec<u8> = close_voicing(chords[0].chord, params.register.0)
-        .into_iter()
-        .map(|n| {
-            let mut m = n;
-            while m > params.register.1 && m >= 12 {
-                m -= 12;
-            }
-            m
-        })
-        .collect();
-    voicing.sort_unstable();
-
-    for (i, tc) in chords.iter().enumerate() {
-        if i > 0 {
-            let next_pcs: Vec<_> = tc.chord.pitch_classes().collect();
-            voicing = voice_lead(&voicing, &next_pcs, params.register);
-        }
+    for (tc, voicing) in chords.iter().zip(voicings.iter()) {
         let start_tick = tc.start_beat as u64 * tpb;
         let duration_ticks = tc.duration_beats as u64 * tpb;
-        for &note in &voicing {
+        for &note in voicing {
             out.push(GeneratedNote {
                 note,
                 velocity: params.velocity,
