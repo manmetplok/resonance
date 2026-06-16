@@ -16,13 +16,20 @@
 //!
 //! # Scope
 //!
-//! Wayland only, floating-only (no `set_parent`). Decorations are negotiated:
-//! the toplevel requests server-side decorations (`WindowDecorations::RequestServer`),
-//! and when the compositor instead forces client-side mode (or offers no
-//! `zxdg_decoration_manager_v1` at all) the runtime draws its own minimal CSD
-//! frame — border, titlebar, and a working close button — so the window is
-//! usable on every compositor. Clipboard, DnD, and IME are not implemented in
-//! the initial version.
+//! Wayland only, floating-only (no `set_parent`). By default the runtime draws
+//! its own client-side decoration frame — border, titlebar, and a working close
+//! button — on every compositor (`WindowDecorations::RequestClient`). This is
+//! deliberate: "server-side decorations" does not imply a close button, and
+//! wlroots compositors (Hyprland, Sway) honour an SSD request but render only a
+//! thin border with no titlebar and no close affordance, leaving the window with
+//! no way to be closed from itself. Drawing our own frame guarantees an
+//! identical, always-usable close button (GNOME/Mutter, KDE/KWin, Hyprland,
+//! Sway). The close button feeds the same `close_requested` path as a server-side
+//! `xdg_toplevel.close`, so `EditorApp::on_close` is invoked exactly once either
+//! way. Setting `WPG_FORCE_SSD` opts back into requesting server-side
+//! decorations and only falling back to the client frame when the compositor
+//! forces client-side mode (useful where a real native titlebar exists, e.g.
+//! KWin). Clipboard, DnD, and IME are not implemented in the initial version.
 
 mod app;
 mod editor;

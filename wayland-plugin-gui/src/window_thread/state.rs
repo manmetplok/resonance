@@ -50,6 +50,14 @@ pub(super) struct State {
     /// the paint path draws a CSD fallback frame so the window is still
     /// usable. Defaults to `Server` until the first configure arrives.
     pub(super) decoration_mode: DecorationMode,
+    /// Whether the runtime prefers server-side decorations (the `WPG_FORCE_SSD`
+    /// opt-in). When `false` (the default), the compositor is asked not to
+    /// decorate and `decoration_mode` is pinned to [`DecorationMode::Client`]
+    /// so the runtime always draws its own frame with a working close button —
+    /// even on wlroots compositors whose SSD has no close affordance. When
+    /// `true`, the negotiated `WindowConfigure::decoration_mode` is honoured and
+    /// CSD is drawn only when the compositor forces client-side mode.
+    pub(super) prefer_server: bool,
     /// Window title, mirrored here so the CSD titlebar can render it without
     /// reaching back into `EditorOptions`.
     pub(super) title: String,

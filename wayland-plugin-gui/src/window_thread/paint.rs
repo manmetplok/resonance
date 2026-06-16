@@ -153,6 +153,46 @@ pub(super) fn paint_frame(
             ..Default::default()
         },
     );
+    let csd = state.needs_csd();
+    let title = state.title.clone();
+    let layout = FrameLayout::new(w as f32, h as f32);
+
+    let mut events = std::mem::take(&mut state.pending_events);
+    // Dev-only: inject a synthetic left-click at the CSD close button on the
+    // n-th painted frame (`WPG_TEST_CLOSE_AT=<n>`, 1-based). This drives the
+    // live `egui ui.interact()` -> `close_requested` -> `app.on_close()` path
+    // headlessly so the close button can be verified without an external click
+    // injector. No effect unless the env var is set; gated to CSD mode (where
+    // the button exists).
+    if csd {
+        if let Some(target) = std::env::var("WPG_TEST_CLOSE_AT")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+        {
+            static FRAME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            static FIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            let n = FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if n >= target.max(1) && !FIRED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                let cb = layout.close_button_rect();
+                let pos = egui::pos2((cb.min_x + cb.max_x) / 2.0, (cb.min_y + cb.max_y) / 2.0);
+                events.push(egui::Event::PointerMoved(pos));
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                });
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                });
+                eprintln!("wpg: WPG_TEST_CLOSE_AT injected synthetic close click at frame {n}");
+            }
+        }
+    }
+
     let raw_input = egui::RawInput {
         viewport_id: egui::ViewportId::ROOT,
         viewports,
@@ -160,7 +200,7 @@ pub(super) fn paint_frame(
             egui::pos2(0.0, 0.0),
             egui::vec2(w as f32, h as f32),
         )),
-        events: std::mem::take(&mut state.pending_events),
+        events,
         modifiers: state.input.modifiers(),
         time: Some(start_time.elapsed().as_secs_f64()),
         focused: true,
@@ -171,9 +211,6 @@ pub(super) fn paint_frame(
     // (border + titlebar + close button) and run the app UI in the inset rect.
     // The close button feeds the same `close_requested` path as the SSD
     // `xdg_toplevel.close` event (drained in the event loop).
-    let csd = state.needs_csd();
-    let title = state.title.clone();
-    let layout = FrameLayout::new(w as f32, h as f32);
     let mut csd_close = false;
     let full_output = state.egui_ctx.run_ui(raw_input, |ui| {
         if csd {

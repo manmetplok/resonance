@@ -266,20 +266,28 @@ impl WindowHandler for State {
         }
         self.configured = true;
         self.needs_redraw = true;
-        // Store the negotiated decoration mode. We request server-side
-        // decorations, but the compositor may force client-side (or never
-        // offer SSD), in which case `paint` draws the CSD fallback frame so
-        // the window always has a border + titlebar + close button.
+        // Decide the decoration mode for this frame.
         //
-        // `WPG_FORCE_CSD` (any non-empty value) forces `Client` mode
-        // regardless of what the compositor negotiated. This exists purely so
-        // the CSD fallback frame can be rendered/verified on an SSD compositor
-        // (Hyprland/Sway/KWin) without needing a GNOME/Mutter session; it has
-        // no effect on the production default.
+        // Default policy ("prefer client"): the runtime always draws its own
+        // frame, so the mode is pinned to `Client` regardless of what the
+        // compositor reports. This is what guarantees a working close button on
+        // wlroots compositors (Hyprland/Sway), whose server-side decorations
+        // carry no close affordance — the root cause of todo #216.
+        //
+        // `WPG_FORCE_SSD` opt-in ("prefer server"): honour the negotiated
+        // `WindowConfigure::decoration_mode` and only draw CSD when the
+        // compositor forces client-side mode (e.g. GNOME/Mutter never offers
+        // the decoration manager). This is the #215 behaviour.
+        //
+        // `WPG_FORCE_CSD` always forces `Client`, even under the SSD opt-in, so
+        // the CSD fallback frame can be rendered/verified on any compositor; it
+        // has no effect on the production default (which is already `Client`).
         self.decoration_mode = if std::env::var_os("WPG_FORCE_CSD").is_some() {
             DecorationMode::Client
-        } else {
+        } else if self.prefer_server {
             configure.decoration_mode
+        } else {
+            DecorationMode::Client
         };
     }
 }

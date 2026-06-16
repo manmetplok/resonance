@@ -70,15 +70,37 @@ impl EditorThread {
             .map_err(|_| EditorError::GlobalsMissing("xdg_wm_base"))?;
 
         let surface = compositor.create_surface(&qh);
-        // Explicitly request server-side decorations. With `ServerDefault`,
-        // SCTK leaves the mode entirely to the compositor and never binds the
-        // decoration manager, so compositors that default to (or only offer)
-        // client-side decorations render no border/titlebar and we draw
-        // nothing either. `RequestServer` binds `zxdg_decoration_manager_v1`
-        // when available and asks for SSD; the compositor may still force
-        // client-side, which we detect via `WindowConfigure::decoration_mode`
-        // and handle with the CSD fallback frame in the paint path.
-        let window = xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
+        // Resolve the decoration policy once. The default is "prefer client":
+        // the runtime draws its own frame (border + titlebar + close button)
+        // on every compositor. This is deliberate — "server-side decorations"
+        // does NOT imply a close button: wlroots compositors (Hyprland, Sway)
+        // honour an SSD request but render only a thin border with no titlebar
+        // and no close affordance, so a window relying on SSD there cannot be
+        // closed from the window itself (the original todo #216 report). Always
+        // drawing our own frame guarantees an identical, working close button
+        // everywhere. `WPG_FORCE_SSD` opts back into the #215 SSD-negotiation
+        // behaviour (request server-side, draw CSD only when the compositor
+        // forces client) for hosts/tests that want the native titlebar where
+        // one actually exists (e.g. KWin).
+        let prefer_server = std::env::var_os("WPG_FORCE_SSD").is_some();
+        let (requested, initial_mode) = if prefer_server {
+            // Ask for SSD; the configure handler reads back the negotiated mode
+            // and only draws CSD when the compositor forces client-side.
+            (
+                WindowDecorations::RequestServer,
+                smithay_client_toolkit::shell::xdg::window::DecorationMode::Server,
+            )
+        } else {
+            // Ask the compositor NOT to decorate; we draw the frame ourselves
+            // so there is always a working close button. Seed the mode to
+            // `Client` so `needs_csd()` is true from the very first paint, even
+            // before the first configure arrives.
+            (
+                WindowDecorations::RequestClient,
+                smithay_client_toolkit::shell::xdg::window::DecorationMode::Client,
+            )
+        };
+        let window = xdg_shell.create_window(surface, requested, &qh);
         window.set_title(&options.title);
         window.set_app_id(&options.app_id);
         window.set_min_size(Some(options.min_size));
@@ -140,9 +162,11 @@ impl EditorThread {
             input: InputState::new(),
             pending_events: Vec::new(),
             egui_ctx: egui::Context::default(),
-            // Assume SSD until the first configure tells us otherwise; the
-            // CSD frame is only drawn once a configure reports Client mode.
-            decoration_mode: smithay_client_toolkit::shell::xdg::window::DecorationMode::Server,
+            // Seed from the resolved policy: `Client` (draw our own frame) by
+            // default, `Server` when `WPG_FORCE_SSD` opts into SSD negotiation.
+            // The configure handler updates this per the policy below.
+            decoration_mode: initial_mode,
+            prefer_server,
             title: options.title.clone(),
         };
 
