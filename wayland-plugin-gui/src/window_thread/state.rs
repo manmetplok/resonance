@@ -5,7 +5,7 @@ use std::time::Instant;
 use smithay_client_toolkit::output::OutputState;
 use smithay_client_toolkit::registry::RegistryState;
 use smithay_client_toolkit::seat::SeatState;
-use smithay_client_toolkit::shell::xdg::window::Window;
+use smithay_client_toolkit::shell::xdg::window::{DecorationMode, Window};
 use wayland_client::protocol::wl_keyboard::WlKeyboard;
 use wayland_client::protocol::wl_pointer::WlPointer;
 use wayland_client::Connection;
@@ -43,9 +43,25 @@ pub(super) struct State {
     pub(super) input: InputState,
     pub(super) pending_events: Vec<egui::Event>,
     pub(super) egui_ctx: egui::Context,
+    /// Decoration mode the compositor negotiated for the toplevel, read back
+    /// from `WindowConfigure::decoration_mode` on every configure. We request
+    /// [`DecorationMode::Server`] (SSD) but the compositor may force
+    /// [`DecorationMode::Client`] (or never offer SSD at all), in which case
+    /// the paint path draws a CSD fallback frame so the window is still
+    /// usable. Defaults to `Server` until the first configure arrives.
+    pub(super) decoration_mode: DecorationMode,
+    /// Window title, mirrored here so the CSD titlebar can render it without
+    /// reaching back into `EditorOptions`.
+    pub(super) title: String,
 }
 
 impl State {
+    /// Whether the editor must draw its own client-side decoration frame:
+    /// true when the compositor negotiated [`DecorationMode::Client`].
+    pub(super) fn needs_csd(&self) -> bool {
+        matches!(self.decoration_mode, DecorationMode::Client)
+    }
+
     /// The integer buffer scale used for rendering.
     ///
     /// Single source of truth that keeps the three places a scale

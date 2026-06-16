@@ -10,7 +10,9 @@ use smithay_client_toolkit::seat::keyboard::{
 };
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
-use smithay_client_toolkit::shell::xdg::window::{Window, WindowConfigure, WindowHandler};
+use smithay_client_toolkit::shell::xdg::window::{
+    DecorationMode, Window, WindowConfigure, WindowHandler,
+};
 use smithay_client_toolkit::{
     delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer, delegate_registry,
     delegate_seat, delegate_xdg_shell, delegate_xdg_window, registry_handlers,
@@ -264,9 +266,21 @@ impl WindowHandler for State {
         }
         self.configured = true;
         self.needs_redraw = true;
-        // Decoration mode is negotiated automatically (server-side preferred);
-        // both modes are acceptable.
-        let _ = configure.decoration_mode;
+        // Store the negotiated decoration mode. We request server-side
+        // decorations, but the compositor may force client-side (or never
+        // offer SSD), in which case `paint` draws the CSD fallback frame so
+        // the window always has a border + titlebar + close button.
+        //
+        // `WPG_FORCE_CSD` (any non-empty value) forces `Client` mode
+        // regardless of what the compositor negotiated. This exists purely so
+        // the CSD fallback frame can be rendered/verified on an SSD compositor
+        // (Hyprland/Sway/KWin) without needing a GNOME/Mutter session; it has
+        // no effect on the production default.
+        self.decoration_mode = if std::env::var_os("WPG_FORCE_CSD").is_some() {
+            DecorationMode::Client
+        } else {
+            configure.decoration_mode
+        };
     }
 }
 

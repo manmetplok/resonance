@@ -16,9 +16,13 @@
 //!
 //! # Scope
 //!
-//! Wayland only, floating-only (no `set_parent`), server-side decorations preferred
-//! with a minimal client-side fallback. Clipboard, DnD, and IME are not implemented
-//! in the initial version.
+//! Wayland only, floating-only (no `set_parent`). Decorations are negotiated:
+//! the toplevel requests server-side decorations (`WindowDecorations::RequestServer`),
+//! and when the compositor instead forces client-side mode (or offers no
+//! `zxdg_decoration_manager_v1` at all) the runtime draws its own minimal CSD
+//! frame — border, titlebar, and a working close button — so the window is
+//! usable on every compositor. Clipboard, DnD, and IME are not implemented in
+//! the initial version.
 
 mod app;
 mod editor;
@@ -35,3 +39,12 @@ pub use error::EditorError;
 
 // Re-export egui so consumers don't need to pin a matching version themselves.
 pub use egui;
+
+/// CSD fallback-frame geometry, exposed for integration tests only.
+///
+/// Not part of the supported public API (the layout constants and rects are an
+/// implementation detail of the client-side decoration fallback). Re-exported
+/// here so the `tests/` close-button hit-test can drive the same pure geometry
+/// the live paint path uses, without an in-crate `#[cfg(test)]` module.
+#[doc(hidden)]
+pub use window_thread::decorations as csd_geometry;

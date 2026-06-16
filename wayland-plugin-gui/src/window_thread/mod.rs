@@ -10,9 +10,11 @@
 //!   keyboard, pointer, xdg window) and the `delegate_*!` macro wiring.
 //! - [`event_loop`] — the main editor thread entry point and event loop.
 //! - [`paint`] — per-frame egui paint + EGL surface management.
+//! - [`decorations`] — client-side decoration (CSD) fallback frame geometry.
 //! - [`debug`] — opt-in framebuffer dump for development debugging.
 
 mod debug;
+pub mod decorations;
 mod delegates;
 mod event_loop;
 mod paint;

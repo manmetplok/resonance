@@ -70,7 +70,15 @@ impl EditorThread {
             .map_err(|_| EditorError::GlobalsMissing("xdg_wm_base"))?;
 
         let surface = compositor.create_surface(&qh);
-        let window = xdg_shell.create_window(surface, WindowDecorations::ServerDefault, &qh);
+        // Explicitly request server-side decorations. With `ServerDefault`,
+        // SCTK leaves the mode entirely to the compositor and never binds the
+        // decoration manager, so compositors that default to (or only offer)
+        // client-side decorations render no border/titlebar and we draw
+        // nothing either. `RequestServer` binds `zxdg_decoration_manager_v1`
+        // when available and asks for SSD; the compositor may still force
+        // client-side, which we detect via `WindowConfigure::decoration_mode`
+        // and handle with the CSD fallback frame in the paint path.
+        let window = xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
         window.set_title(&options.title);
         window.set_app_id(&options.app_id);
         window.set_min_size(Some(options.min_size));
@@ -132,6 +140,10 @@ impl EditorThread {
             input: InputState::new(),
             pending_events: Vec::new(),
             egui_ctx: egui::Context::default(),
+            // Assume SSD until the first configure tells us otherwise; the
+            // CSD frame is only drawn once a configure reports Client mode.
+            decoration_mode: smithay_client_toolkit::shell::xdg::window::DecorationMode::Server,
+            title: options.title.clone(),
         };
 
         // Drive the loop until we get our first configure event, so EGL can

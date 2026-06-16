@@ -10,7 +10,93 @@ use crate::egl_context::EglContext;
 use crate::error::EditorError;
 
 use super::debug::dump_ppm;
+use super::decorations::{FrameLayout, BORDER_WIDTH, CLOSE_BUTTON_SIZE};
 use super::state::State;
+
+/// A [`FrameRect`](super::decorations::FrameRect) as an [`egui::Rect`].
+fn to_egui_rect(r: super::decorations::FrameRect) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(r.min_x, r.min_y),
+        egui::pos2(r.max_x, r.max_y),
+    )
+}
+
+/// Draw the CSD fallback chrome (border + titlebar + close button) onto `ui`
+/// and run the app UI inside the inset content rect. Returns `true` if the
+/// close button was clicked this frame, so the caller can request a close.
+///
+/// `ui` is the root UI covering the whole surface (`screen_rect`). The chrome
+/// is intentionally minimal: a one-pixel border, a flat titlebar strip with the
+/// window title, and a square close button at the right end. The geometry
+/// mirrors [`FrameLayout`] exactly so the live hit area and the unit-tested
+/// [`FrameLayout::is_close_click`] agree.
+fn draw_csd_frame(
+    ui: &mut egui::Ui,
+    title: &str,
+    layout: FrameLayout,
+    app: &mut dyn EditorApp,
+) -> bool {
+    use egui::{Align2, Color32, FontId, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
+
+    // Quiet neutral chrome that reads on any palette without importing one.
+    const FRAME_BG: Color32 = Color32::from_rgb(0x1b, 0x1d, 0x23);
+    const BORDER: Color32 = Color32::from_rgb(0x3a, 0x3d, 0x45);
+    const TITLE_TEXT: Color32 = Color32::from_rgb(0xc8, 0xc8, 0xce);
+    const CLOSE_HOVER: Color32 = Color32::from_rgb(0xc0, 0x3a, 0x3a);
+    const CLOSE_GLYPH: Color32 = Color32::from_rgb(0xe0, 0xe0, 0xe0);
+
+    let full = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(layout.width, layout.height));
+    let titlebar = to_egui_rect(layout.titlebar_rect());
+    let close_rect = to_egui_rect(layout.close_button_rect());
+
+    let painter = ui.painter().clone();
+    // Outer border around the whole window.
+    painter.rect_stroke(full, 0.0, Stroke::new(BORDER_WIDTH, BORDER), StrokeKind::Inside);
+    // Titlebar background + bottom separator.
+    painter.rect_filled(titlebar, 0.0, FRAME_BG);
+    painter.line_segment(
+        [titlebar.left_bottom(), titlebar.right_bottom()],
+        Stroke::new(BORDER_WIDTH, BORDER),
+    );
+    // Title text, left-aligned with a small inset.
+    painter.text(
+        egui::pos2(titlebar.min.x + 10.0, titlebar.center().y),
+        Align2::LEFT_CENTER,
+        title,
+        FontId::proportional(13.0),
+        TITLE_TEXT,
+    );
+
+    // Close button. Use an interactive region so hover/click reuse the
+    // existing pointer event pipeline (no manual hit-testing here); the rect
+    // is identical to `FrameLayout::close_button_rect`, the same geometry the
+    // unit test drives.
+    let resp = ui.interact(close_rect, egui::Id::new("wpg_csd_close"), Sense::click());
+    if resp.hovered() {
+        painter.rect_filled(close_rect, 0.0, CLOSE_HOVER);
+    }
+    // Draw an "x" glyph.
+    let c = close_rect.center();
+    let r = CLOSE_BUTTON_SIZE * 0.22;
+    painter.line_segment(
+        [c - Vec2::splat(r), c + Vec2::splat(r)],
+        Stroke::new(1.5, CLOSE_GLYPH),
+    );
+    painter.line_segment(
+        [c + Vec2::new(r, -r), c + Vec2::new(-r, r)],
+        Stroke::new(1.5, CLOSE_GLYPH),
+    );
+    let close_clicked = resp.clicked();
+
+    // Run the app UI inside the inset content rect.
+    let content = to_egui_rect(layout.content_rect());
+    ui.scope_builder(UiBuilder::new().max_rect(content), |content_ui| {
+        content_ui.set_clip_rect(content);
+        app.ui(content_ui);
+    });
+
+    close_clicked
+}
 
 /// Apply any pending resize (from a configure or `Command::Resize`) to the
 /// EGL surface. Sets `state.needs_redraw` if the size actually changed.
@@ -81,7 +167,29 @@ pub(super) fn paint_frame(
         ..Default::default()
     };
 
-    let full_output = state.egui_ctx.run_ui(raw_input, |ui| app.ui(ui));
+    // In CSD mode the compositor gives us no chrome, so we draw our own frame
+    // (border + titlebar + close button) and run the app UI in the inset rect.
+    // The close button feeds the same `close_requested` path as the SSD
+    // `xdg_toplevel.close` event (drained in the event loop).
+    let csd = state.needs_csd();
+    let title = state.title.clone();
+    let layout = FrameLayout::new(w as f32, h as f32);
+    let mut csd_close = false;
+    let full_output = state.egui_ctx.run_ui(raw_input, |ui| {
+        if csd {
+            if draw_csd_frame(ui, &title, layout, app) {
+                csd_close = true;
+            }
+        } else {
+            app.ui(ui);
+        }
+    });
+    if csd_close {
+        state.close_requested = true;
+        // Keep redrawing so the close is processed promptly even if the app
+        // would otherwise idle.
+        state.needs_redraw = true;
+    }
 
     let clipped_primitives = state
         .egui_ctx
@@ -105,11 +213,20 @@ pub(super) fn paint_frame(
     );
 
     // Optional framebuffer dump via env var — kept for dev
-    // debugging. Set WPG_DUMP_FRAME=/tmp/wpg.ppm to capture the
-    // next frame.
+    // debugging. Set WPG_DUMP_FRAME=/tmp/wpg.ppm to capture a frame to a PPM.
+    // By default the *first* painted frame is captured; set WPG_DUMP_FRAME_AT
+    // to a frame number (1-based) to capture a later, fully-settled frame
+    // instead (the first frame can predate the font atlas / app layout).
     if let Ok(path) = std::env::var("WPG_DUMP_FRAME") {
+        static FRAME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        let target = std::env::var("WPG_DUMP_FRAME_AT")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(1)
+            .max(1);
+        let n = FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if n >= target && !DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
             let mut buf = vec![0u8; (pw * ph * 4) as usize];
             unsafe {
                 gl.read_pixels(

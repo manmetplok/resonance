@@ -11,9 +11,15 @@ struct HelloApp {
     counter: u32,
     slider: f32,
     text: String,
+    close_calls: u32,
 }
 
 impl EditorApp for HelloApp {
+    fn on_close(&mut self) {
+        self.close_calls += 1;
+        eprintln!("hello: on_close() invoked, call #{}", self.close_calls);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.heading("wayland-plugin-gui :: hello");
@@ -49,6 +55,7 @@ fn main() {
         counter: 0,
         slider: 50.0,
         text: "type here".to_string(),
+        close_calls: 0,
     };
 
     let editor = Editor::new(
