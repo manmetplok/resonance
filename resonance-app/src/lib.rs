@@ -107,6 +107,7 @@ pub struct Resonance {
     // Sub-state groupings. See `state.rs` for definitions.
     pub(crate) transport: TransportState,
     pub(crate) viewport: ArrangeViewport,
+    pub(crate) markers: state::ArrangementMarkers,
     pub(crate) interaction: ClipInteractionState,
     pub(crate) io: ProjectIoState,
     pub(crate) mixer: MixerUiState,
@@ -351,6 +352,7 @@ impl Resonance {
 
             transport: TransportState::default(),
             viewport: ArrangeViewport::default(),
+            markers: state::ArrangementMarkers::default(),
             interaction: ClipInteractionState::default(),
             io: ProjectIoState {
                 recent_projects,
