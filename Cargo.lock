@@ -4940,6 +4940,7 @@ dependencies = [
  "pipewire",
  "resonance-common",
  "resonance-dsp",
+ "resonance-metering",
  "ringbuf",
  "serde",
  "symphonia",

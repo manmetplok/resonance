@@ -14,6 +14,7 @@ libloading = "0.8"
 indexmap = "2"
 resonance-common = { path = "../resonance-common" }
 resonance-dsp = { path = "../resonance-dsp" }
+resonance-metering = { path = "../resonance-metering" }
 hound.workspace = true
 midly = "0.5"
 midir.workspace = true

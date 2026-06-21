@@ -58,6 +58,7 @@ pub use import_pool::{import_one_to_pool, run_pool_import, PoolImportOutcome};
 mod master;
 pub(crate) mod midi;
 mod plugins;
+pub(crate) mod reference;
 mod scan;
 mod thread;
 mod tracks;

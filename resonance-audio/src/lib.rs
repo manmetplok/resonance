@@ -79,6 +79,18 @@ pub use engine::{
     set_clip_fade_in_place, set_clip_gain_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
 };
 
+/// Test surface for the reference-track (A/B) command handlers. Exposed
+/// so `tests/reference_handlers.rs` can drive each command's mutation +
+/// event emission against a bare `ReferencePlayer` without spinning up
+/// the engine thread.
+#[doc(hidden)]
+pub use engine::reference::{
+    handle_add_ref_marker, handle_load_reference_track, handle_poll_ab_meters,
+    handle_remove_ref_marker, handle_remove_reference_track, handle_set_ab_source,
+    handle_set_active_reference, handle_set_ref_loop_to_mix, handle_set_ref_loudness_match,
+    handle_set_ref_position, handle_set_ref_trim, ReferencePlayer,
+};
+
 /// Test surface for the audio import-to-pool path. Exposed so the
 /// integration test in `tests/import_audio_to_pool.rs` can drive the
 /// pure per-file import (`import_one_to_pool`) and the full ordered
