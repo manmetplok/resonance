@@ -262,6 +262,11 @@ pub const GLOBAL_TRACK_BG: Color = BG_2;
 
 /// Arrange-view track row height — matches the design's "balanced" density.
 pub const TRACK_HEIGHT: f32 = 96.0;
+/// Group/folder-track header row height. A group header is a first-class
+/// inline row (caret · swatch · name · count · macro M/S), deliberately
+/// shorter than a full track row so the hierarchy reads as structure
+/// rather than content. See the track-grouping design (doc #200).
+pub const GROUP_HEADER_HEIGHT: f32 = 60.0;
 /// Timeline ruler height.
 pub const RULER_HEIGHT: f32 = 28.0;
 /// Section band sitting under the ruler — the section-pill strip on the
