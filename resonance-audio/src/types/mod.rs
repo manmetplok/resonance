@@ -49,6 +49,7 @@ impl TrackType {
 mod clip;
 mod commands;
 mod events;
+mod reference;
 mod tempo;
 mod track;
 mod vocal_tuning;
@@ -60,6 +61,7 @@ pub use clip::{
 pub use vocal_tuning::{F0Frame, GlobalTuning, NoteBlob, NoteEdit, TuningScale, VocalTuning};
 pub use commands::AudioCommand;
 pub use events::{AudioEvent, BouncedClipData, ImportStage};
+pub use reference::{ABSource, ReferenceAnalysisStage, ReferenceId, ReferenceMarker};
 pub use tempo::{
     arrival_bpm_at_bar, avg_bpm_for_bar, bpm_at_bar, sample_frac_to_tick_frac,
     tick_frac_to_sample_frac, InputDeviceInfo, ParamInfo, PluginDescInfo, ScannedPlugin,

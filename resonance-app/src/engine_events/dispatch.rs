@@ -282,6 +282,24 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             return project_io::all_plugin_states_saved(r, states)
         }
         E::AllCleared => project_io::all_cleared(r),
+
+        // Reference-track (A/B) events. The command/event contract
+        // lands ahead of the app-side feature (todo #674); the UI that
+        // consumes these arrives in a later todo, so they are no-ops for
+        // now rather than left unhandled.
+        E::ReferenceAnalysisProgress { .. }
+        | E::ReferenceLoaded { .. }
+        | E::ReferenceLoadFailed { .. }
+        | E::ReferenceRemoved { .. }
+        | E::ActiveReferenceChanged { .. }
+        | E::ABSourceChanged { .. }
+        | E::RefLoudnessMatchChanged { .. }
+        | E::RefTrimChanged { .. }
+        | E::RefMarkerAdded { .. }
+        | E::RefMarkerRemoved { .. }
+        | E::RefPositionChanged { .. }
+        | E::RefLoopToMixChanged { .. }
+        | E::ABMeterSnapshot { .. } => {}
     }
     Task::none()
 }

@@ -2,8 +2,8 @@
 use std::path::PathBuf;
 
 use super::{
-    BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, SamplePos, SignaturePoint, TempoPoint,
-    TrackId, TrackOutput,
+    ABSource, BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, ReferenceId, SamplePos,
+    SignaturePoint, TempoPoint, TrackId, TrackOutput,
 };
 
 /// Commands sent from the GUI to the audio engine.
@@ -473,6 +473,80 @@ pub enum AudioCommand {
     /// Driven by the GUI's per-frame VU update; replaces the older
     /// direct getter that contended with the mixer's RwLocks.
     PollPeaks,
+
+    // -- Reference track (A/B) commands --
+    /// Load an external reference track from disk for A/B comparison.
+    /// The engine decodes it on a worker, measures its integrated
+    /// loudness and waveform overview, and emits
+    /// `AudioEvent::ReferenceLoaded` (with intermediate
+    /// `ReferenceAnalysisProgress`) or `ReferenceLoadFailed`. When
+    /// `id_hint` is provided (e.g. project load) the engine honours it
+    /// and bumps its allocator past it; otherwise it allocates a fresh
+    /// [`ReferenceId`].
+    LoadReferenceTrack {
+        id_hint: Option<ReferenceId>,
+        path: PathBuf,
+    },
+    /// Remove a loaded reference track and free its decoded PCM. Emits
+    /// `AudioEvent::ReferenceRemoved`. If it was the active reference,
+    /// the engine also clears the active selection.
+    RemoveReferenceTrack {
+        id: ReferenceId,
+    },
+    /// Select which loaded reference the A/B monitor auditions. Emits
+    /// `AudioEvent::ActiveReferenceChanged`.
+    SetActiveReference {
+        id: ReferenceId,
+    },
+    /// Switch the monitored signal between the project mix and the
+    /// active reference. Emits `AudioEvent::ABSourceChanged`.
+    SetABSource {
+        source: ABSource,
+    },
+    /// Toggle loudness-matching the active reference to the mix. When
+    /// enabled the engine applies the measured per-reference gain
+    /// offset so both audition at the same loudness. Emits
+    /// `AudioEvent::RefLoudnessMatchChanged` (carrying the applied
+    /// offset).
+    SetRefLoudnessMatch {
+        enabled: bool,
+    },
+    /// Manual level trim (dB) applied to the reference on top of any
+    /// loudness match. Emits `AudioEvent::RefTrimChanged`.
+    SetRefTrim {
+        db: f32,
+    },
+    /// Add a comparison marker to a reference at a sample position.
+    /// The engine allocates the marker id and emits
+    /// `AudioEvent::RefMarkerAdded`.
+    AddRefMarker {
+        ref_id: ReferenceId,
+        position_samples: SamplePos,
+        label: String,
+    },
+    /// Remove a comparison marker from a reference. Emits
+    /// `AudioEvent::RefMarkerRemoved`.
+    RemoveRefMarker {
+        ref_id: ReferenceId,
+        marker_id: u32,
+    },
+    /// Seek the reference's own playback cursor to a sample position.
+    /// Emits `AudioEvent::RefPositionChanged`.
+    SetRefPosition {
+        ref_id: ReferenceId,
+        position_samples: SamplePos,
+    },
+    /// Toggle whether the reference's playback cursor follows the mix
+    /// transport (loop-to-mix) or plays from its own cursor. Emits
+    /// `AudioEvent::RefLoopToMixChanged`.
+    SetRefLoopToMix {
+        enabled: bool,
+    },
+    /// Ask the engine for a fresh A/B meter snapshot (mix plus the
+    /// active reference) and reply with `AudioEvent::ABMeterSnapshot`.
+    /// Driven by the GUI's per-frame meter update.
+    PollABMeters,
+
     /// Break the engine-thread loop and let the thread exit cleanly.
     /// Required because the engine thread holds its own `Sender` clone
     /// (`cmd_tx_retry`) for the retry path, which prevents the channel
