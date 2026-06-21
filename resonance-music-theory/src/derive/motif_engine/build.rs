@@ -59,6 +59,11 @@ const STEP_INERTIA: f32 = 0.62;
 /// How strongly the line is pulled back toward the register center once
 /// it strays past `REGISTER_EDGE` (melodic regression).
 const EDGE_REGRESSION_BIAS: f32 = 0.30;
+/// Huron's descending tendency (Open Music Theory: melodic statistics):
+/// stepwise motion descends slightly more often than it ascends. A soft
+/// nudge applied to the up-probability of *steps* only — leaps keep their
+/// inertia/regression balance so leap recovery is unaffected.
+const DESCENDING_STEP_BIAS: f32 = 0.08;
 /// Distance from the anchor (in semitones) at which regression kicks in.
 const REGISTER_EDGE: i8 = 6;
 /// Maximum run of identical consecutive pitches.
@@ -68,9 +73,11 @@ const MAX_REPEAT_RUN: u8 = 2;
 const CANDIDATE_ATTEMPTS: usize = 8;
 
 /// Pick a melodic direction with step inertia (bias toward continuing
-/// `last_dir`) and melodic regression (bias back toward the anchor when
-/// the line sits near a register edge).
-fn choose_direction(rng: &mut XorShift, last_dir: i8, current: i8) -> i8 {
+/// `last_dir`), Huron's descending tendency for steps, and melodic
+/// regression (bias back toward the anchor when the line sits near a
+/// register edge). `is_step` gates the descending bias so it applies to
+/// stepwise motion only.
+fn choose_direction(rng: &mut XorShift, last_dir: i8, current: i8, is_step: bool) -> i8 {
     let mut p_up = if last_dir > 0 {
         STEP_INERTIA
     } else if last_dir < 0 {
@@ -78,6 +85,12 @@ fn choose_direction(rng: &mut XorShift, last_dir: i8, current: i8) -> i8 {
     } else {
         0.5
     };
+    // Apply the descending-step bias to the baseline, before edge
+    // regression — the register pull-back keeps the final say near the
+    // extremes so the bias never deepens a run off the bottom edge.
+    if is_step {
+        p_up -= DESCENDING_STEP_BIAS;
+    }
     if current >= REGISTER_EDGE {
         p_up = (p_up - EDGE_REGRESSION_BIAS).max(0.05);
     } else if current <= -REGISTER_EDGE {
@@ -177,7 +190,7 @@ pub(in crate::derive) fn build_motif(
                 current_interval
             } else if roll < repeat_chance + step_chance {
                 let step_size = if rng.next_f32() < 0.6 { 1 } else { 2 };
-                let dir = choose_direction(rng, last_dir, current_interval);
+                let dir = choose_direction(rng, last_dir, current_interval, true);
                 let candidate = current_interval + dir * step_size;
                 if has_scale {
                     candidate
@@ -186,7 +199,7 @@ pub(in crate::derive) fn build_motif(
                 }
             } else {
                 let leap_size = LEAP_SIZES[rng.next_range(LEAP_SIZES.len())];
-                let dir = choose_direction(rng, last_dir, current_interval);
+                let dir = choose_direction(rng, last_dir, current_interval, false);
                 let candidate = current_interval + dir * leap_size;
                 if has_scale {
                     candidate
