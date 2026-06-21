@@ -288,6 +288,15 @@ pub enum ProjectIoMessage {
 #[derive(Debug, Clone)]
 pub enum UiMessage {
     SwitchView(ViewMode),
+    /// Toggle full-screen Performance mode on/off (the `F` keyboard
+    /// shortcut). Entering remembers the previously active view so `F`
+    /// or `Esc` returns to it; never auto-opens on record-arm and never
+    /// disturbs transport state.
+    TogglePerformanceMode,
+    /// Leave Performance mode (the `Esc` keyboard shortcut), restoring the
+    /// view that was active when Performance mode was entered. A no-op when
+    /// not in Performance mode.
+    ExitPerformanceMode,
     OpenSettings,
     CloseSettings,
     OpenAddTrackMenu,

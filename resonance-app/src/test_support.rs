@@ -160,4 +160,41 @@ impl Resonance {
     pub fn test_set_active_project(&mut self, active: bool) {
         self.io.has_active_project = active;
     }
+
+    /// Test-only: the currently active top-level [`ViewMode`].
+    #[doc(hidden)]
+    pub fn test_view_mode(&self) -> state::ViewMode {
+        self.view_mode
+    }
+
+    /// Test-only: directly set the active view (bypassing the reducer)
+    /// to establish a starting tab for Performance-mode toggle tests.
+    #[doc(hidden)]
+    pub fn test_set_view_mode(&mut self, mode: state::ViewMode) {
+        self.view_mode = mode;
+    }
+
+    /// Test-only: whether the transport reports as playing. Used to
+    /// assert that entering/leaving Performance mode never starts or
+    /// stops playback.
+    #[doc(hidden)]
+    pub fn test_transport_playing(&self) -> bool {
+        self.transport.playing
+    }
+
+    /// Test-only: force the transport's playing flag so a test can prove
+    /// a view switch preserves it (no engine round-trip involved).
+    #[doc(hidden)]
+    pub fn test_set_transport_playing(&mut self, playing: bool) {
+        self.transport.playing = playing;
+    }
+
+    /// Test-only: arm/disarm the first track's record flag so a test can
+    /// assert that record-arm never auto-opens Performance mode.
+    #[doc(hidden)]
+    pub fn test_arm_first_track(&mut self, armed: bool) {
+        if let Some(track) = self.registry.tracks.first_mut() {
+            track.record_armed = armed;
+        }
+    }
 }

@@ -6,6 +6,10 @@ pub enum ViewMode {
     Arrange,
     Mixer,
     Compose,
+    /// Full-screen, distraction-free live chord teleprompter. Entered and
+    /// exited manually only (button + `F` / `Esc`); never auto-opens on
+    /// record-arm. Switching to/from it preserves transport state.
+    Performance,
 }
 
 /// Horizontal and vertical scroll position of the arrange-view timeline.

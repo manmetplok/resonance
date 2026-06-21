@@ -136,6 +136,20 @@ impl crate::Resonance {
                         keyboard::Key::Named(keyboard::key::Named::Enter) => Some(
                             Message::MidiEditor(MidiEditorMessage::OpenSelectedMidiClip),
                         ),
+                        // `F` toggles full-screen Performance mode in/out.
+                        // Manual only — never auto-opens on record-arm and
+                        // never disturbs transport state.
+                        keyboard::Key::Character(ref c)
+                            if c.as_str() == "f" || c.as_str() == "F" =>
+                        {
+                            Some(Message::Ui(UiMessage::TogglePerformanceMode))
+                        }
+                        // `Esc` leaves Performance mode (a no-op elsewhere,
+                        // handled in the update so it never steals Escape
+                        // from other views).
+                        keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                            Some(Message::Ui(UiMessage::ExitPerformanceMode))
+                        }
                         _ => None,
                     }
                 }

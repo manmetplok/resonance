@@ -30,6 +30,8 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // Tab switches / auxiliary overlays: block so they can't
         // steal focus from the startup modal.
         Message::Ui(UiMessage::SwitchView(_))
+        | Message::Ui(UiMessage::TogglePerformanceMode)
+        | Message::Ui(UiMessage::ExitPerformanceMode)
         | Message::Ui(UiMessage::OpenSettings)
         | Message::Ui(UiMessage::OpenAddTrackMenu) => true,
         // Benign UI: allow.

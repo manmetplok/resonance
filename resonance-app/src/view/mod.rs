@@ -13,6 +13,7 @@ pub(crate) mod knob;
 pub(crate) mod menus;
 pub mod midi_editor;
 pub(crate) mod mixer;
+pub(crate) mod performance;
 pub mod piano_roll;
 pub(crate) mod settings;
 pub(crate) mod startup;
@@ -31,11 +32,21 @@ use iced::{alignment, Element, Length};
 
 impl crate::Resonance {
     pub fn view(&self) -> Element<'_, Message> {
+        // Performance mode is a full-bleed, distraction-free surface: it
+        // owns its own status bar / footer (built in follow-up todos) and
+        // intentionally hides the normal transport chrome below.
+        if matches!(self.view_mode, ViewMode::Performance) {
+            return self.view_performance_shell();
+        }
+
         let transport = transport::view_transport(self);
         let main_area = match self.view_mode {
             ViewMode::Arrange => self.view_main_area(),
             ViewMode::Mixer => self.view_mixer(),
             ViewMode::Compose => self.view_compose(),
+            // Unreachable: Performance returns early above via
+            // `view_performance_shell`; kept so the match stays exhaustive.
+            ViewMode::Performance => self.view_performance_shell(),
         };
 
         let content: Element<'_, Message> = if let Some(ref err) = self.error_message {

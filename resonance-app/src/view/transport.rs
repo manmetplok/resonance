@@ -79,6 +79,7 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
             tab_button("Arrange", ViewMode::Arrange, r.view_mode),
             tab_button("Mixer", ViewMode::Mixer, r.view_mode),
             tab_button("Compose", ViewMode::Compose, r.view_mode),
+            tab_button("Performance", ViewMode::Performance, r.view_mode),
         ]
         .spacing(3)
         .padding(4),

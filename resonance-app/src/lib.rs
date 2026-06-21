@@ -79,6 +79,11 @@ pub struct Resonance {
     /// and metering still run, but no master-bus plugins are processed.
     pub(crate) master_fx_bypassed: bool,
     pub(crate) view_mode: ViewMode,
+    /// The view that was active when Performance mode was entered, so
+    /// exiting (`F` toggle / `Esc` / the Exit button) returns the user to
+    /// where they were rather than always to Arrange. `None` whenever the
+    /// current `view_mode` is not `Performance`.
+    pub(crate) pre_performance_view: Option<ViewMode>,
     /// Audio clips on the timeline.
     pub(crate) clips: Vec<ClipState>,
     /// MIDI clips on the timeline.
@@ -166,12 +171,12 @@ pub struct Resonance {
         Option<(resonance_audio::types::TrackId, Vec<Option<Vec<u8>>>)>,
 }
 
-/// Startup tab requested via `--tab arrange|mixer|compose`. Read once at
-/// `main` and threaded into `Resonance::new()` via this module-local
+/// Startup tab requested via `--tab arrange|mixer|compose|performance`. Read
+/// once at `main` and threaded into `Resonance::new()` via this module-local
 /// statics — keeps the iced application builder closure capture-free.
 pub static STARTUP_TAB: std::sync::OnceLock<ViewMode> = std::sync::OnceLock::new();
 
-/// Parse `--tab arrange|mixer|compose` (or `--tab=...`) from process args.
+/// Parse `--tab arrange|mixer|compose|performance` (or `--tab=...`) from args.
 /// Returns `None` when the flag isn't present or the value is unknown.
 pub fn parse_startup_tab() -> Option<ViewMode> {
     let mut args = std::env::args().skip(1);
@@ -187,8 +192,11 @@ pub fn parse_startup_tab() -> Option<ViewMode> {
             "arrange" => Some(ViewMode::Arrange),
             "mixer" => Some(ViewMode::Mixer),
             "compose" => Some(ViewMode::Compose),
+            "performance" => Some(ViewMode::Performance),
             other => {
-                eprintln!("Unknown --tab value '{other}'. Expected arrange|mixer|compose.");
+                eprintln!(
+                    "Unknown --tab value '{other}'. Expected arrange|mixer|compose|performance."
+                );
                 None
             }
         };
@@ -325,6 +333,7 @@ impl Resonance {
             master_plugins: Vec::new(),
             master_fx_bypassed: false,
             view_mode: STARTUP_TAB.get().copied().unwrap_or(ViewMode::Arrange),
+            pre_performance_view: None,
             clips: Vec::new(),
             midi_clips: Vec::new(),
             compose: compose::ComposeState::default(),

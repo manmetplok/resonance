@@ -2,13 +2,42 @@ use iced::Task;
 use resonance_audio::types::AudioCommand;
 
 use crate::message::{Message, ProjectIoMessage, UiMessage};
+use crate::state::ViewMode;
 use crate::update::project_io;
 use crate::Resonance;
 
 pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
     match m {
         UiMessage::SwitchView(mode) => {
+            // Track the view to return to when leaving Performance mode.
+            // Entering Performance from elsewhere remembers the source;
+            // switching to any other view clears the memory. Switching
+            // does not touch transport state — playback continues.
+            match (r.view_mode, mode) {
+                (ViewMode::Performance, ViewMode::Performance) => {}
+                (from, ViewMode::Performance) => r.pre_performance_view = Some(from),
+                _ => r.pre_performance_view = None,
+            }
             r.view_mode = mode;
+        }
+        UiMessage::TogglePerformanceMode => {
+            // `F` is a pure manual toggle: never auto-opens on arm, never
+            // disturbs transport. If already in Performance, return to the
+            // remembered view; otherwise enter Performance from the current
+            // view (remembering it).
+            if r.view_mode == ViewMode::Performance {
+                r.view_mode = r.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+            } else {
+                r.pre_performance_view = Some(r.view_mode);
+                r.view_mode = ViewMode::Performance;
+            }
+        }
+        UiMessage::ExitPerformanceMode => {
+            // `Esc` only leaves Performance mode; it is a no-op elsewhere so
+            // it never steals Escape from other views.
+            if r.view_mode == ViewMode::Performance {
+                r.view_mode = r.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+            }
         }
         UiMessage::OpenSettings => {
             r.mixer.settings_open = true;
