@@ -2,6 +2,7 @@
 //! lane, drumroll editor state, and the table of derived MIDI clips.
 
 pub mod drumroll;
+pub mod expression;
 pub mod generate;
 pub mod invariants;
 pub mod messages;
@@ -18,6 +19,7 @@ mod state;
 mod tests;
 
 pub use drumroll::{DrumGroup, DrumPattern, DrumrollViewState};
+pub use expression::{Breakpoint, CurveStatus, ExpressionCurve, ExpressionCurves};
 pub use generate::{DeriveKind, GenerateParams};
 pub use lane_generator::{
     DrumVoiceMode, LaneGeneratorConfig, LaneGeneratorKind, LaneGeneratorKindTag,
