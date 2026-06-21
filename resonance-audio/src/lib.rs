@@ -79,6 +79,34 @@ pub use engine::{
     set_clip_fade_in_place, set_clip_gain_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
 };
 
+/// Test surface for the automation-lane handlers. Exposed so the
+/// integration test in `tests/automation_handlers.rs` can drive the
+/// command boundary (store/replace, clear, read-flag toggle, and the
+/// missing-target no-op branches) against a plain lane map without
+/// spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::{
+    clear_automation_lane_in_place, set_automation_lane_in_place,
+    set_automation_read_enabled_in_place, AutomationLanes,
+};
+
+/// Test surface for the external-instrument config handlers. Exposed so the
+/// integration test in `tests/external_instrument_handlers.rs` can drive the
+/// command boundary (store/replace, clear, latency/patch updates, the
+/// device-offline reporting, and the not-an-external-instrument no-op
+/// branches) against a plain config map without spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::{
+    check_external_instrument_devices_in_place, clear_external_instrument_in_place,
+    set_external_instrument_in_place, set_external_instrument_latency_in_place,
+    set_external_instrument_patch_in_place, ExternalInstruments,
+};
+/// Exposed for `tests/external_instrument_handlers.rs` so it can construct an
+/// empty output registry and exercise the patch-send offline branch without
+/// opening a real MIDI port.
+#[doc(hidden)]
+pub use midi_hardware::MidiOutputRegistry;
+
 /// Test surface for the audio import-to-pool path. Exposed so the
 /// integration test in `tests/import_audio_to_pool.rs` can drive the
 /// pure per-file import (`import_one_to_pool`) and the full ordered

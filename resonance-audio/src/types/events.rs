@@ -1,5 +1,5 @@
 //! Engine → GUI event enum.
-use resonance_common::AudioFormat;
+use resonance_common::{AudioFormat, AutomationLane, AutomationTarget, ExternalInstrument};
 
 use crate::midi_hardware::MidiDeviceInfo;
 
@@ -120,6 +120,17 @@ pub enum AudioEvent {
     ClipGainChanged {
         clip_id: ClipId,
         gain_db: f32,
+    },
+    /// An automation lane was stored or replaced (or its read flag
+    /// toggled). Carries the lane exactly as the engine holds it — points
+    /// sorted, `enabled` reflecting the current read state — so the app
+    /// mirror matches engine state.
+    AutomationLaneChanged {
+        lane: AutomationLane,
+    },
+    /// The automation lane for `target` was removed from engine state.
+    AutomationLaneCleared {
+        target: AutomationTarget,
     },
     Stopped,
     Error(String),
@@ -332,6 +343,34 @@ pub enum AudioEvent {
     MidiOutputDevicesListed {
         devices: Vec<MidiDeviceInfo>,
     },
+    // -- External-instrument tracks (doc #169, epic #39) --
+    /// An external-instrument config was stored, replaced, or one of its
+    /// fields changed (bank/program, latency offset). Carries the config
+    /// exactly as the engine holds it so the app mirror matches engine state.
+    ExternalInstrumentChanged {
+        config: ExternalInstrument,
+    },
+    /// The external-instrument config for `track_id` was removed — the track
+    /// is no longer an external instrument.
+    ExternalInstrumentCleared {
+        track_id: TrackId,
+    },
+    /// The external-instrument track's MIDI output device is offline: a patch
+    /// send found no live connection, or a device re-check found it gone. The
+    /// route is preserved (config untouched) so a replug reconnects. `device`
+    /// is the configured MIDI output name, if any.
+    ExternalInstrumentMidiOutOffline {
+        track_id: TrackId,
+        device: Option<String>,
+    },
+    /// The external-instrument track's audio-return input device is offline —
+    /// a device re-check found it gone. The route is preserved so a replug
+    /// reconnects. `device` is the configured return input name, if any.
+    ExternalInstrumentReturnInputOffline {
+        track_id: TrackId,
+        device: Option<String>,
+    },
+
     /// Incoming MIDI Clock Start (0xFA) — external master started its
     /// transport and the engine is now playing in sync with it.
     MidiClockStarted,

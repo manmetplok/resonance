@@ -293,6 +293,22 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             return project_io::all_plugin_states_saved(r, states)
         }
         E::AllCleared => project_io::all_cleared(r),
+
+        // Automation lanes round-trip through the engine but the app
+        // does not hold automation state yet, so there is nothing to
+        // mirror. The app-side handler lands with the automation
+        // app-state todo (doc #162); until then these are no-ops.
+        E::AutomationLaneChanged { .. } | E::AutomationLaneCleared { .. } => {}
+
+        // External-instrument config + device-offline events round-trip
+        // through the engine, but the app does not hold external-instrument
+        // state yet, so there is nothing to mirror. The app-side handler
+        // (config mirror + offline UI) lands with the external-instrument
+        // app-state todo (doc #169); until then these are no-ops.
+        E::ExternalInstrumentChanged { .. }
+        | E::ExternalInstrumentCleared { .. }
+        | E::ExternalInstrumentMidiOutOffline { .. }
+        | E::ExternalInstrumentReturnInputOffline { .. } => {}
     }
     Task::none()
 }

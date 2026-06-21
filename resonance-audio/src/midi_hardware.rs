@@ -383,6 +383,42 @@ impl MidiOutputRegistry {
         let _ = self.set_track_output(track_id, None);
     }
 
+    /// Send a Bank Select (CC 0 MSB + CC 32 LSB) followed by a Program
+    /// Change to the device assigned to `track_id` — the "patch send" an
+    /// external-instrument track issues when its bank/program changes.
+    /// `bank` / `program` of `None` skip that part of the message.
+    ///
+    /// Returns `true` when the patch reached a live connection, `false`
+    /// when the track has no assigned device or its device is not
+    /// currently connected (i.e. the MIDI output is offline). The caller
+    /// uses the `false` result to report a recoverable device-offline
+    /// event; the assignment is left intact so a replug reconnects.
+    pub fn send_program_change(
+        &mut self,
+        track_id: TrackId,
+        channel: u8,
+        bank: Option<u16>,
+        program: Option<u8>,
+    ) -> bool {
+        let Some(name) = self.track_assignments.get(&track_id).cloned() else {
+            return false;
+        };
+        let Some(active) = self.connections.get_mut(&name) else {
+            return false;
+        };
+        let ch = channel & 0x0F;
+        if let Some(bank) = bank {
+            let msb = ((bank >> 7) & 0x7F) as u8;
+            let lsb = (bank & 0x7F) as u8;
+            let _ = active.conn.send(&[0xB0 | ch, 0, msb]);
+            let _ = active.conn.send(&[0xB0 | ch, 32, lsb]);
+        }
+        if let Some(program) = program {
+            let _ = active.conn.send(&[0xC0 | ch, program & 0x7F]);
+        }
+        true
+    }
+
     /// Send a Note On to the device assigned to `track_id`, if any.
     pub fn send_note_on(&mut self, track_id: TrackId, channel: u8, note: u8, velocity: u8) {
         let Some(name) = self.track_assignments.get(&track_id).cloned() else {

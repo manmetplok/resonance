@@ -46,9 +46,20 @@ pub(crate) fn rcu_tempo<F: FnOnce(&mut TempoMap)>(
     map.store(Arc::new(new));
 }
 
+mod automation;
+pub use automation::{
+    clear_automation_lane_in_place, set_automation_lane_in_place,
+    set_automation_read_enabled_in_place, AutomationLanes,
+};
 mod bounce_realtime;
 mod busses;
 mod clips;
+mod external_instrument;
+pub use external_instrument::{
+    check_external_instrument_devices_in_place, clear_external_instrument_in_place,
+    set_external_instrument_in_place, set_external_instrument_latency_in_place,
+    set_external_instrument_patch_in_place, ExternalInstruments,
+};
 pub use clips::transcode_to_wav;
 pub use clips::{
     set_clip_fade_in_place, set_clip_gain_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
