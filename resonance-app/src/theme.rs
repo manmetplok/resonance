@@ -215,6 +215,40 @@ pub const GOOD: Color = rgb(0x6d, 0xd6, 0xa3);
 pub const BAD: Color = rgb(0xe8, 0x7b, 0x8b);
 
 // ---------------------------------------------------------------------------
+// Group identity palette — muted jewel tones for track grouping (epic #36).
+// Each group colour has a 14% wash variant and a 34% line variant for
+// rail and header styling. These are identity colours only, never
+// semantic — do not reuse for status, errors, or other meanings.
+// ---------------------------------------------------------------------------
+
+/// Drums group identity — warm terracotta.
+pub const GRP_DRUM: Color = rgb(0xc9, 0x8f, 0x5f);
+/// Drums group wash — 14% opacity terracotta for header backgrounds.
+pub const GRP_DRUM_WASH: Color = rgba(0xc9, 0x8f, 0x5f, 0.14);
+/// Drums group line — 34% opacity terracotta for rails and borders.
+pub const GRP_DRUM_LINE: Color = rgba(0xc9, 0x8f, 0x5f, 0.34);
+
+/// Vocals group identity — muted magenta.
+pub const GRP_VOX: Color = rgb(0xc9, 0x7b, 0x9c);
+/// Vocals group wash — 14% opacity magenta for header backgrounds.
+pub const GRP_VOX_WASH: Color = rgba(0xc9, 0x7b, 0x9c, 0.14);
+/// Vocals group line — 34% opacity magenta for rails and borders.
+pub const GRP_VOX_LINE: Color = rgba(0xc9, 0x7b, 0x9c, 0.34);
+
+/// Keys group identity — desaturated teal.
+pub const GRP_KEYS: Color = rgb(0x6f, 0xb6, 0xb0);
+/// Keys group wash — 14% opacity teal for header backgrounds.
+pub const GRP_KEYS_WASH: Color = rgba(0x6f, 0xb6, 0xb0, 0.14);
+/// Keys group line — 34% opacity teal for rails and borders.
+pub const GRP_KEYS_LINE: Color = rgba(0x6f, 0xb6, 0xb0, 0.34);
+
+/// Guitar group identity — cool slate blue.
+pub const GRP_GTR: Color = rgb(0x7d, 0x86, 0xc9);
+/// Guitar group wash — 14% opacity slate for header backgrounds.
+pub const GRP_GTR_WASH: Color = rgba(0x7d, 0x86, 0xc9, 0.14);
+/// Guitar group line — 34% opacity slate for rails and borders.
+pub const GRP_GTR_LINE: Color = rgba(0x7d, 0x86, 0xc9, 0.34);
+// ---------------------------------------------------------------------------
 // Legacy aliases — keep the rest of the codebase compiling while the views
 // migrate. New code should use the tokens above directly.
 // ---------------------------------------------------------------------------
