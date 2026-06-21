@@ -332,6 +332,156 @@ fn process_multi_port(
     }
 }
 
+/// Mix every audio clip on `track_id` into the de-interleaved track
+/// buffers for the timeline window `[playhead, playhead + frames)`,
+/// applying per-frame the single coefficient
+/// `fade_in_envelope × fade_out_envelope × dB→linear(gain_db)`. Returns
+/// whether any clip contributed audio.
+///
+/// Where two clips on the same track overlap, the overlap region is an
+/// automatic crossfade: the earlier clip fades out and the later clip
+/// fades in across the shared span. With the default equal-power curves
+/// the two contributions sum to constant power, so the seam is
+/// click-free. An explicit fade that is longer than the overlap reshapes
+/// the crossfade (the longer of the two lengths wins).
+///
+/// Shared verbatim by the live mixer and the offline bounce/export (both
+/// reach it through [`render_block`]), so playback and bounced WAV render
+/// identically. Allocation-free and `O(1)` per output frame (the
+/// per-clip crossfade scan is `O(clips)`, run once per clip per block).
+pub fn mix_track_clips(
+    clips: &[AudioClip],
+    track_id: TrackId,
+    playhead: u64,
+    frames: usize,
+    track_buf_l: &mut [f32],
+    track_buf_r: &mut [f32],
+) -> bool {
+    let buf_start = playhead;
+    let buf_end = playhead + frames as u64;
+    let mut has_audio = false;
+
+    for clip in clips.iter() {
+        if clip.track_id != track_id {
+            continue;
+        }
+
+        let clip_frames = clip.duration_frames();
+        let clip_start = clip.start_sample;
+        let clip_end = clip_start + clip_frames;
+
+        if buf_end <= clip_start || buf_start >= clip_end {
+            continue;
+        }
+
+        let overlap_start = buf_start.max(clip_start);
+        let overlap_end = buf_end.min(clip_end);
+
+        // Fold the automatic same-track crossfade into the fade lengths:
+        // an overlap at the clip's head/tail behaves like a fade of that
+        // length, and the explicit fade wins only when it is longer.
+        let (head_xfade, tail_xfade) = clip_crossfade_lengths(clip, clips, clip_frames);
+        let fade_in_len = clip.fade_in_frames.max(head_xfade);
+        let fade_out_len = clip.fade_out_frames.max(tail_xfade);
+        let gain_lin = if clip.gain_db == 0.0 {
+            1.0
+        } else {
+            10f32.powf(clip.gain_db / 20.0)
+        };
+
+        let clip_data = clip.source.as_frames();
+        for timeline_frame in overlap_start..overlap_end {
+            let frame_offset = (timeline_frame - buf_start) as usize;
+            let clip_frame =
+                (timeline_frame - clip_start) as usize + clip.trim_start_frames as usize;
+            let clip_idx = clip_frame * 2;
+            if clip_idx + 1 < clip_data.len() {
+                let coef = clip_fade_gain_coef(
+                    timeline_frame,
+                    clip_start,
+                    clip_end,
+                    fade_in_len,
+                    fade_out_len,
+                    clip.fade_in_curve,
+                    clip.fade_out_curve,
+                    gain_lin,
+                );
+                track_buf_l[frame_offset] += clip_data[clip_idx] * coef;
+                track_buf_r[frame_offset] += clip_data[clip_idx + 1] * coef;
+                has_audio = true;
+            }
+        }
+    }
+
+    has_audio
+}
+
+/// Linear gain coefficient applied to `clip` at absolute timeline frame
+/// `timeline_frame`, combining the fade-in ramp, the fade-out ramp, and
+/// the clip's (already linearised) gain. `clip_end` is exclusive.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn clip_fade_gain_coef(
+    timeline_frame: u64,
+    clip_start: u64,
+    clip_end: u64,
+    fade_in_len: u64,
+    fade_out_len: u64,
+    fade_in_curve: FadeCurve,
+    fade_out_curve: FadeCurve,
+    gain_lin: f32,
+) -> f32 {
+    let mut coef = gain_lin;
+    if fade_in_len > 0 {
+        let pos = timeline_frame - clip_start;
+        if pos < fade_in_len {
+            coef *= fade_in_curve.coefficient(pos as f32 / fade_in_len as f32);
+        }
+    }
+    if fade_out_len > 0 {
+        // Frames remaining before the clip's last visible frame; the
+        // curve runs the complementary direction (`coefficient(0)` at the
+        // final frame), which equal-power turns into the constant-power
+        // crossfade complement.
+        let pos_from_end = (clip_end - 1).saturating_sub(timeline_frame);
+        if pos_from_end < fade_out_len {
+            coef *= fade_out_curve.coefficient(pos_from_end as f32 / fade_out_len as f32);
+        }
+    }
+    coef
+}
+
+/// Lengths (in frames) of the automatic crossfades at `clip`'s head and
+/// tail, derived from where other clips on the same track overlap it. The
+/// head length is the span an earlier-starting clip covers from `clip`'s
+/// start; the tail length is the span a later-starting clip covers up to
+/// `clip`'s end. Each is capped at the clip's visible duration so a clip
+/// overlapped on both sides cannot fade past its own length.
+fn clip_crossfade_lengths(clip: &AudioClip, clips: &[AudioClip], clip_frames: u64) -> (u64, u64) {
+    let clip_start = clip.start_sample;
+    let clip_end = clip_start + clip_frames;
+    let mut head = 0u64;
+    let mut tail = 0u64;
+    for other in clips.iter() {
+        if other.id == clip.id || other.track_id != clip.track_id {
+            continue;
+        }
+        let o_start = other.start_sample;
+        let o_end = o_start + other.duration_frames();
+        // An earlier-or-equal-starting clip covering this clip's start →
+        // crossfade in over the covered span.
+        if o_start <= clip_start && o_end > clip_start {
+            head = head.max(o_end.min(clip_end) - clip_start);
+        }
+        // A later-starting clip overlapping this clip's tail → crossfade
+        // out over the span from where it starts to this clip's end.
+        if o_start > clip_start && o_start < clip_end {
+            tail = tail.max(clip_end - o_start);
+        }
+    }
+    (head.min(clip_frames), tail.min(clip_frames))
+}
+
 /// Render one contiguous timeline block into the interleaved output:
 /// walks every active track + bus, mixes audio clips, dispatches MIDI
 /// events to instrument plugins, routes per-port multi-output
@@ -487,37 +637,11 @@ pub(crate) fn render_block(
                 has_audio = true;
             }
 
-            // Accumulate all clips for this track into de-interleaved track buffers
-            for clip in clips_guard.iter() {
-                if clip.track_id != track.id {
-                    continue;
-                }
-
-                let clip_frames = clip.duration_frames();
-                let clip_start = clip.start_sample;
-                let clip_end = clip_start + clip_frames;
-                let buf_start = playhead;
-                let buf_end = playhead + frames as u64;
-
-                if buf_end <= clip_start || buf_start >= clip_end {
-                    continue;
-                }
-
-                let overlap_start = buf_start.max(clip_start);
-                let overlap_end = buf_end.min(clip_end);
-
-                let clip_data = clip.source.as_frames();
-                for timeline_frame in overlap_start..overlap_end {
-                    let frame_offset = (timeline_frame - buf_start) as usize;
-                    let clip_frame =
-                        (timeline_frame - clip_start) as usize + clip.trim_start_frames as usize;
-                    let clip_idx = clip_frame * 2;
-                    if clip_idx + 1 < clip_data.len() {
-                        track_buf_l[frame_offset] += clip_data[clip_idx];
-                        track_buf_r[frame_offset] += clip_data[clip_idx + 1];
-                        has_audio = true;
-                    }
-                }
+            // Accumulate all clips for this track into de-interleaved
+            // track buffers, applying each clip's fade-in/out envelope,
+            // clip gain, and the automatic same-track crossfade.
+            if mix_track_clips(clips_guard, track.id, playhead, frames, track_buf_l, track_buf_r) {
+                has_audio = true;
             }
 
             // Process through plugin chain (skipped when FX are bypassed).

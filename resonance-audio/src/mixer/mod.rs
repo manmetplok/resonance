@@ -32,6 +32,7 @@ pub use midi_events::collect_midi_events_bounce;
 pub(crate) use midi_events::MAX_MIDI_EVENTS_PER_BUFFER;
 pub use midi_stash::{MidiStash, NoteSink};
 pub(crate) use render_core::{render_block, RenderStrategy};
+pub use render_core::mix_track_clips;
 
 use ringbuf::traits::{Consumer, Observer};
 use std::sync::atomic::Ordering;
