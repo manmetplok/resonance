@@ -2,8 +2,8 @@
 use std::path::PathBuf;
 
 use super::{
-    BusId, ClipId, MidiNote, PluginInstanceId, SamplePos, SignaturePoint, TempoPoint, TrackId,
-    TrackOutput,
+    BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, SamplePos, SignaturePoint, TempoPoint,
+    TrackId, TrackOutput,
 };
 
 /// Commands sent from the GUI to the audio engine.
@@ -39,6 +39,23 @@ pub enum AudioCommand {
     },
     DeleteClip {
         clip_id: ClipId,
+    },
+    /// Set the fade-in/out lengths and curves of an audio clip. The
+    /// engine clamps each fade length to the clip's visible duration and
+    /// emits `AudioEvent::ClipFadeChanged` with the clamped values.
+    SetClipFade {
+        clip_id: ClipId,
+        fade_in_frames: u64,
+        fade_in_curve: FadeCurve,
+        fade_out_frames: u64,
+        fade_out_curve: FadeCurve,
+    },
+    /// Set the per-clip gain of an audio clip in decibels. The engine
+    /// clamps the value to a sane range and emits
+    /// `AudioEvent::ClipGainChanged` with the clamped value.
+    SetClipGain {
+        clip_id: ClipId,
+        gain_db: f32,
     },
     SetTrackVolume {
         track_id: TrackId,

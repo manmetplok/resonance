@@ -65,6 +65,15 @@ pub use engine::midi::{outbound_step_start, OutboundStep};
 #[doc(hidden)]
 pub use engine::midi::{move_midi_clip_in_place, trim_midi_clip_in_place};
 
+/// Test surface for the audio clip fade/gain handlers. Exposed so the
+/// integration test in `tests/clip_fade_gain_handlers.rs` can drive the
+/// command boundary (clamping + event emission, including the missing-clip
+/// no-op branch) without spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::{
+    set_clip_fade_in_place, set_clip_gain_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
+};
+
 /// Test surface for the bounce path's MIDI event collection. Exposed so
 /// integration tests can drive the chunk-by-chunk note-event walk
 /// without spinning up a CLAP plugin or the engine thread.

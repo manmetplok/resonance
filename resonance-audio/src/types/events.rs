@@ -2,7 +2,7 @@
 use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
-    BusId, ClipId, InputDeviceInfo, MidiNote, ParamInfo, PluginInstanceId, SamplePos,
+    BusId, ClipId, FadeCurve, InputDeviceInfo, MidiNote, ParamInfo, PluginInstanceId, SamplePos,
     ScannedPlugin, TrackId,
 };
 
@@ -55,6 +55,20 @@ pub enum AudioEvent {
         new_duration_samples: u64,
         trim_start_frames: u64,
         trim_end_frames: u64,
+    },
+    /// A clip's fade-in/out lengths and/or curves changed. Carries the
+    /// engine-clamped values so the app mirror matches engine state.
+    ClipFadeChanged {
+        clip_id: ClipId,
+        fade_in_frames: u64,
+        fade_in_curve: FadeCurve,
+        fade_out_frames: u64,
+        fade_out_curve: FadeCurve,
+    },
+    /// A clip's per-clip gain changed. Carries the engine-clamped dB value.
+    ClipGainChanged {
+        clip_id: ClipId,
+        gain_db: f32,
     },
     Stopped,
     Error(String),

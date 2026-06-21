@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crossbeam_channel::Sender;
 use hound::{SampleFormat, WavSpec, WavWriter};
+use parking_lot::RwLock;
 
 use crate::decode;
 use crate::types::*;
@@ -162,6 +164,95 @@ pub(crate) fn handle_trim_clip(
 pub(crate) fn handle_delete_clip(ctx: &HandlerCtx, clip_id: ClipId) {
     ctx.clips.write().retain(|c| c.id != clip_id);
     let _ = ctx.event_tx.send(AudioEvent::ClipDeleted { clip_id });
+}
+
+/// Sane bounds for per-clip gain, in decibels. `-60` dB is effectively
+/// silent and `+24` dB a generous boost ceiling; values outside this
+/// range from the command are clamped before being stored or emitted.
+pub const MIN_CLIP_GAIN_DB: f32 = -60.0;
+pub const MAX_CLIP_GAIN_DB: f32 = 24.0;
+
+pub(crate) fn handle_set_clip_fade(
+    ctx: &HandlerCtx,
+    clip_id: ClipId,
+    fade_in_frames: u64,
+    fade_in_curve: FadeCurve,
+    fade_out_frames: u64,
+    fade_out_curve: FadeCurve,
+) {
+    set_clip_fade_in_place(
+        ctx.clips,
+        ctx.event_tx,
+        clip_id,
+        fade_in_frames,
+        fade_in_curve,
+        fade_out_frames,
+        fade_out_curve,
+    );
+}
+
+pub(crate) fn handle_set_clip_gain(ctx: &HandlerCtx, clip_id: ClipId, gain_db: f32) {
+    set_clip_gain_in_place(ctx.clips, ctx.event_tx, clip_id, gain_db);
+}
+
+/// Apply fade lengths/curves to the audio clip with `clip_id` and emit
+/// `ClipFadeChanged`. Each fade length is clamped to the clip's visible
+/// duration so a fade can never run past the audible region. Both the
+/// mutation and the event live inside the `if let Some(clip)` branch, so
+/// a missing-clip lookup never emits a ghost event (mirroring
+/// [`handle_move_clip`] / the MIDI clip handlers). The clamped values are
+/// what gets stored and emitted, keeping the app mirror in sync.
+#[allow(clippy::too_many_arguments)]
+pub fn set_clip_fade_in_place(
+    clips: &RwLock<Vec<AudioClip>>,
+    event_tx: &Sender<AudioEvent>,
+    clip_id: ClipId,
+    fade_in_frames: u64,
+    fade_in_curve: FadeCurve,
+    fade_out_frames: u64,
+    fade_out_curve: FadeCurve,
+) {
+    let mut guard = clips.write();
+    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+        // A fade can't be longer than the clip is audible.
+        let max = clip.duration_frames();
+        let fade_in_frames = fade_in_frames.min(max);
+        let fade_out_frames = fade_out_frames.min(max);
+        clip.fade_in_frames = fade_in_frames;
+        clip.fade_in_curve = fade_in_curve;
+        clip.fade_out_frames = fade_out_frames;
+        clip.fade_out_curve = fade_out_curve;
+        let _ = event_tx.send(AudioEvent::ClipFadeChanged {
+            clip_id,
+            fade_in_frames,
+            fade_in_curve,
+            fade_out_frames,
+            fade_out_curve,
+        });
+    }
+}
+
+/// Apply a per-clip gain to the audio clip with `clip_id` and emit
+/// `ClipGainChanged`. The value is clamped to
+/// `[MIN_CLIP_GAIN_DB, MAX_CLIP_GAIN_DB]` (a `NaN` is treated as unity)
+/// before being stored/emitted. Same missing-clip invariant as
+/// [`set_clip_fade_in_place`].
+pub fn set_clip_gain_in_place(
+    clips: &RwLock<Vec<AudioClip>>,
+    event_tx: &Sender<AudioEvent>,
+    clip_id: ClipId,
+    gain_db: f32,
+) {
+    let mut guard = clips.write();
+    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+        let gain_db = if gain_db.is_nan() {
+            0.0
+        } else {
+            gain_db.clamp(MIN_CLIP_GAIN_DB, MAX_CLIP_GAIN_DB)
+        };
+        clip.gain_db = gain_db;
+        let _ = event_tx.send(AudioEvent::ClipGainChanged { clip_id, gain_db });
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

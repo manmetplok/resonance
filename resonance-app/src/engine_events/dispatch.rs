@@ -77,6 +77,12 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             trim_start_frames,
             trim_end_frames,
         ),
+        // Clip fade/gain mirroring is implemented by todo #316
+        // (resonance-app `ClipState` fields + event mirroring). Until that
+        // lands these events are accepted but not yet mirrored into app
+        // state; this placeholder arm keeps the workspace compiling once
+        // the engine-side command/event plumbing (todo #314) is in place.
+        E::ClipFadeChanged { .. } | E::ClipGainChanged { .. } => {}
         E::RecordingFinished {
             clip_id,
             track_id,

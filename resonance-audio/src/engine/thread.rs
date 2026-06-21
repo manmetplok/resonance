@@ -372,6 +372,23 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             trim_end_frames,
         ),
         AudioCommand::DeleteClip { clip_id } => clips::handle_delete_clip(ctx, clip_id),
+        AudioCommand::SetClipFade {
+            clip_id,
+            fade_in_frames,
+            fade_in_curve,
+            fade_out_frames,
+            fade_out_curve,
+        } => clips::handle_set_clip_fade(
+            ctx,
+            clip_id,
+            fade_in_frames,
+            fade_in_curve,
+            fade_out_frames,
+            fade_out_curve,
+        ),
+        AudioCommand::SetClipGain { clip_id, gain_db } => {
+            clips::handle_set_clip_gain(ctx, clip_id, gain_db)
+        }
         AudioCommand::SetProjectDir(dir) => {
             state.project_dir = Some(dir);
         }

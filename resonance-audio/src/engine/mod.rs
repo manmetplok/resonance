@@ -50,6 +50,9 @@ mod bounce_realtime;
 mod busses;
 mod clips;
 pub use clips::transcode_to_wav;
+pub use clips::{
+    set_clip_fade_in_place, set_clip_gain_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
+};
 mod master;
 pub(crate) mod midi;
 mod plugins;
