@@ -28,11 +28,16 @@ use resonance_svs::stages::common::ExecutionProvider;
 mod paths;
 mod phonemes;
 mod post;
+mod pronunciation;
 mod segment;
 
 pub use paths::{curve_supported, CurveKind};
 pub use phonemes::{PhonemeFate, VoicebankPhonemes};
 pub use post::write_stereo_wav;
+pub use pronunciation::{
+    canonicalize_phonemes, clean_word, resolve_clip as resolve_clip_pronunciation, DictionaryEntry,
+    DictionaryScope, PhonemeProvenance, PronunciationState, SyllableOverride,
+};
 
 use paths::locate_voicebank;
 use post::{

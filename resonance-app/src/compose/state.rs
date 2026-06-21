@@ -153,6 +153,13 @@ pub struct ComposeState {
     /// lyric annotations, and per-`(def, track)` render epochs. See
     /// [`VocalAudioRegistry`] for the rationale on keying asymmetries.
     pub vocal_audio: VocalAudioRegistry,
+    /// Pronunciation control: per-clip per-syllable phoneme overrides and
+    /// the project pronunciation dictionary. The resolver folds these (plus
+    /// the global user dictionary, supplied at resolve time) over the CMU
+    /// transcription so the strip and the `.ds` build agree on what each
+    /// syllable sings. See
+    /// [`PronunciationState`](crate::compose::vocal_svs::PronunciationState).
+    pub pronunciation: crate::compose::vocal_svs::PronunciationState,
     /// Monotonic id used when allocating fresh `ClipId`s for derived
     /// clips. Kept in the high range so it never collides with engine-
     /// allocated ids coming from `CreateMidiClip`.
@@ -230,6 +237,7 @@ impl Default for ComposeState {
             drumroll,
             derived_clips: HashMap::new(),
             vocal_audio: VocalAudioRegistry::default(),
+            pronunciation: crate::compose::vocal_svs::PronunciationState::default(),
             next_derived_clip_id: DERIVED_CLIP_ID_BASE,
             vocal_bulk_lyrics: HashMap::new(),
             drum_patterns,
@@ -464,6 +472,7 @@ impl ComposeState {
         // it by scanning clip names once the MIDI clips are in place.
         self.derived_clips.clear();
         self.vocal_audio.clear();
+        self.pronunciation.clear();
         self.next_derived_clip_id = DERIVED_CLIP_ID_BASE;
         self.placements = placements
             .iter()
