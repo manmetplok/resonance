@@ -2,6 +2,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use super::{ClipId, SamplePos, TrackId};
 
 /// A single MIDI note in a clip.
@@ -356,6 +358,44 @@ impl FadeCurve {
     }
 }
 
+/// Resynthesis algorithm used when a clip is time-stretched ("warped").
+/// This is data only — the stretch itself is performed on the render /
+/// bounce path; the original [`ClipSource`] PCM is never mutated.
+///
+/// - `Tonal`: phase-vocoder-style stretch that preserves the pitch of
+///   sustained, harmonic material (vocals, pads, leads) at the cost of
+///   smearing sharp attacks.
+/// - `Transient`: transient-preserving stretch (the default) that keeps
+///   drum hits and plucked attacks crisp — the safe choice for rhythmic
+///   material and unknown content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum WarpAlgorithm {
+    Tonal,
+    #[default]
+    Transient,
+}
+
+/// A warp marker pinning a point in a clip's source audio to a musical
+/// position on the timeline. Between adjacent markers the source is read
+/// at a locally uniform rate so that `source_frame` is heard exactly at
+/// `timeline_beat`; this is what lets a clip be elastically aligned to a
+/// tempo map or hand-corrected for groove. See
+/// [`AudioClip::warp_source_frame`] for the mapping these drive.
+///
+/// Markers belonging to a clip are kept sorted by `timeline_beat`
+/// ascending (with `source_frame` likewise non-decreasing for a sane,
+/// non-reversing warp).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WarpMarker {
+    /// Position in the clip's source PCM, in stereo sample frames measured
+    /// from the start of the audio data — independent of trim and of where
+    /// the clip sits on the timeline.
+    pub source_frame: u64,
+    /// Musical position, in beats relative to the clip's start, at which
+    /// `source_frame` should be heard.
+    pub timeline_beat: f64,
+}
+
 /// An audio clip on the timeline. The PCM samples live behind
 /// [`ClipSource`], which may be an owned `Vec<f32>` or a
 /// memory-mapped WAV file — so large recorded takes never need to
@@ -390,6 +430,24 @@ pub struct AudioClip {
     /// behaviour. `Some(_)` holds the analysis cache plus per-note and
     /// global edits; the original [`ClipSource`] PCM is never mutated.
     pub vocal_tuning: Option<super::VocalTuning>,
+    /// Whether elastic time-stretching ("warp") is applied to this clip.
+    /// `false` (the default) reads the source 1:1, so existing clips are
+    /// unchanged and incur zero overhead.
+    pub warp_enabled: bool,
+    /// Tempo, in BPM, the source material was recorded / performed at.
+    /// `None` (the default) means unknown; with no warp markers this makes
+    /// warp fall back to no stretch (a unit read ratio).
+    pub original_bpm: Option<f32>,
+    /// Global pitch shift applied on the warp / resynthesis path, in
+    /// semitones. `0.0` (the default) = no transpose. Stored independently
+    /// of stretch so a clip can be pitched without being time-stretched.
+    pub transpose_semitones: f32,
+    /// Resynthesis algorithm used while warping.
+    pub warp_algorithm: WarpAlgorithm,
+    /// Warp markers pinning source frames to timeline beats, kept sorted by
+    /// `timeline_beat`. Empty (the default) → a single uniform stretch
+    /// governed by `original_bpm`; non-empty → piecewise-linear warp.
+    pub warp_markers: Vec<WarpMarker>,
 }
 
 /// Number of stereo frames per waveform peak bucket.
@@ -450,5 +508,108 @@ impl AudioClip {
     /// storing analysis results to a clip that may not have been tuned yet.
     pub fn vocal_tuning_mut(&mut self) -> &mut super::VocalTuning {
         self.vocal_tuning.get_or_insert_with(super::VocalTuning::default)
+    }
+
+    /// Uniform source-read ratio for the marker-free case: how many source
+    /// frames advance per timeline frame. `project_bpm / original_bpm`, so a
+    /// project faster than the recording reads the source faster (ratio > 1).
+    /// Falls back to `1.0` (no stretch) when `original_bpm` is unknown or
+    /// either tempo is non-positive — keeping untouched clips bit-identical.
+    fn warp_ratio(&self, project_bpm: f32) -> f64 {
+        match self.original_bpm {
+            Some(original_bpm) if original_bpm > 0.0 && project_bpm > 0.0 => {
+                (project_bpm / original_bpm) as f64
+            }
+            _ => 1.0,
+        }
+    }
+
+    /// Map a timeline read position to the position in the clip's source PCM
+    /// the warp engine should read from.
+    ///
+    /// `timeline_frame` is the playhead offset, in stereo sample frames at
+    /// `sample_rate`, from the clip's start; the returned value is the
+    /// (fractional) source frame to read. The original [`ClipSource`] is
+    /// never mutated — this only derives where to read.
+    ///
+    /// - **No warp markers:** a single uniform resample at ratio
+    ///   `project_bpm / original_bpm`. With an unknown `original_bpm` the
+    ///   ratio is `1.0`, i.e. the identity map.
+    /// - **Markers present:** each marker's `timeline_beat` is projected onto
+    ///   the frame axis (`beats × sample_rate × 60 / project_bpm`) and the
+    ///   source position is piecewise-linearly interpolated between the
+    ///   bracketing markers. Outside the marker span the rate of the nearest
+    ///   segment is extended (or the uniform ratio for a single marker).
+    ///
+    /// Markers are assumed sorted by `timeline_beat` ascending (the invariant
+    /// documented on [`WarpMarker`]).
+    pub fn warp_source_frame(
+        &self,
+        timeline_frame: f64,
+        project_bpm: f32,
+        sample_rate: u32,
+    ) -> f64 {
+        let ratio = self.warp_ratio(project_bpm);
+
+        let markers = &self.warp_markers;
+        if markers.is_empty() {
+            return timeline_frame * ratio;
+        }
+
+        // Project a marker's musical beat onto the timeline frame axis.
+        let frames_per_beat = if project_bpm > 0.0 {
+            sample_rate as f64 * 60.0 / project_bpm as f64
+        } else {
+            0.0
+        };
+        let tl_frame = |m: &WarpMarker| m.timeline_beat * frames_per_beat;
+
+        // Local source-frames-per-timeline-frame slope of a segment, falling
+        // back to the uniform ratio for a degenerate (zero-width) segment.
+        let slope = |a: &WarpMarker, b: &WarpMarker| {
+            let (ta, tb) = (tl_frame(a), tl_frame(b));
+            if tb > ta {
+                (b.source_frame as f64 - a.source_frame as f64) / (tb - ta)
+            } else {
+                ratio
+            }
+        };
+
+        let first = &markers[0];
+        if timeline_frame <= tl_frame(first) {
+            let s = if markers.len() >= 2 {
+                slope(first, &markers[1])
+            } else {
+                ratio
+            };
+            return first.source_frame as f64 + (timeline_frame - tl_frame(first)) * s;
+        }
+
+        let last = &markers[markers.len() - 1];
+        if timeline_frame >= tl_frame(last) {
+            let s = if markers.len() >= 2 {
+                slope(&markers[markers.len() - 2], last)
+            } else {
+                ratio
+            };
+            return last.source_frame as f64 + (timeline_frame - tl_frame(last)) * s;
+        }
+
+        for pair in markers.windows(2) {
+            let (a, b) = (&pair[0], &pair[1]);
+            let (ta, tb) = (tl_frame(a), tl_frame(b));
+            if timeline_frame >= ta && timeline_frame <= tb {
+                if tb <= ta {
+                    return a.source_frame as f64;
+                }
+                let frac = (timeline_frame - ta) / (tb - ta);
+                return a.source_frame as f64
+                    + frac * (b.source_frame as f64 - a.source_frame as f64);
+            }
+        }
+
+        // Unreachable when markers are sorted (the query lies within the span
+        // handled above); return the last anchor as a safe fallback.
+        last.source_frame as f64
     }
 }
