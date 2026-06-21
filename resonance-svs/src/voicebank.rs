@@ -17,12 +17,50 @@
 //! unusable bank is rejected with a descriptive error before the pipeline
 //! ever touches an ONNX session.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 
 use crate::config::{self, AcousticConfig};
+
+/// The phoneme alphabet a voicebank's dictionary is written in. The
+/// Resonance G2P emits English ARPAbet (lowercase, stress-stripped); a
+/// bank whose inventory is X-SAMPA needs a different symbol set, so the
+/// pipeline can warn rather than feed it mismatched tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhonemeTarget {
+    /// Lowercase ARPAbet (`ah`, `ae`, `f`, ...) — what every shipped bank
+    /// and the G2P use.
+    Arpabet,
+    /// X-SAMPA (`@`, `{`, `r\`, ...). Detected but not yet G2P-supported.
+    XSampa,
+}
+
+/// One of the four editable vocal expression curves. Mirrors the
+/// `CurveKind` the vocal-roll Expression dock and SVS segment builder use;
+/// kept here so [`VoicebankManifest::supports_curve`] can answer the
+/// capability question from the bank's loaded acoustic config rather than a
+/// per-bank enum match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExpressionCurve {
+    /// Dynamics / energy (loudness envelope) — needs the `energy` embed.
+    Dynamics,
+    /// Vocal tension — needs the `tension` embed.
+    Tension,
+    /// Breathiness — needs the `breathiness` embed.
+    Breathiness,
+    /// Pitch bend — applied as a pre-synthesis f0 edit, so always
+    /// available regardless of the acoustic model's inputs.
+    PitchBend,
+}
+
+/// The language the Resonance G2P transcribes into. All transcription is
+/// English ARPAbet today; banks that namespace phonemes by language (Gahata
+/// Meiji) prefix the English set with `en/`, so this is the prefix
+/// [`VoicebankManifest::phoneme_name`] reaches for when a bare symbol is
+/// absent.
+const G2P_LANGUAGE: &str = "en";
 
 /// One selectable speaker inside a multi-speaker voicebank. Single-speaker
 /// banks carry no singers (the manifest's `singers` is empty).
@@ -74,6 +112,26 @@ pub struct VoicebankManifest {
     pub phonemes: Vec<String>,
     /// `languages.json` contents (name -> language id), empty if absent.
     pub languages: BTreeMap<String, i64>,
+
+    /// Alphabet the dict is written in, detected from the inventory.
+    pub phoneme_target: PhonemeTarget,
+    /// Acoustic model accepts a per-token `languages` input (multi-language
+    /// bank). Gates [`Self::language_id`].
+    pub accepts_language_id: bool,
+    /// Acoustic model accepts an `energy` curve input — drives the
+    /// Dynamics expression curve.
+    pub accepts_energy: bool,
+    /// Acoustic model accepts a `breathiness` curve input.
+    pub accepts_breathiness: bool,
+    /// Acoustic model accepts a `tension` curve input.
+    pub accepts_tension: bool,
+    /// Acoustic model accepts a `voicing` curve input.
+    pub accepts_voicing: bool,
+
+    /// O(1) membership index over [`Self::phonemes`], built at scan time so
+    /// the per-token [`Self::phoneme_name`] / [`Self::language_id`] /
+    /// [`Self::substitute_phoneme`] lookups stay cheap on the render path.
+    phoneme_set: HashSet<String>,
 }
 
 /// Scan a voicebank folder into a [`VoicebankManifest`].
@@ -123,6 +181,9 @@ pub fn scan(dir: &Path) -> Result<VoicebankManifest> {
         .unwrap_or_else(|| root.display().to_string());
     let id = slugify(&display_name);
 
+    let phoneme_target = detect_phoneme_target(&phonemes);
+    let phoneme_set = phonemes.iter().cloned().collect();
+
     Ok(VoicebankManifest {
         id,
         display_name,
@@ -137,6 +198,13 @@ pub fn scan(dir: &Path) -> Result<VoicebankManifest> {
         singers,
         phonemes,
         languages,
+        phoneme_target,
+        accepts_language_id: acoustic.use_lang_id,
+        accepts_energy: acoustic.use_energy_embed,
+        accepts_breathiness: acoustic.use_breathiness_embed,
+        accepts_tension: acoustic.use_tension_embed,
+        accepts_voicing: acoustic.use_voicing_embed,
+        phoneme_set,
     })
 }
 
@@ -182,6 +250,133 @@ impl VoicebankManifest {
 
         Ok(())
     }
+
+    // -----------------------------------------------------------------
+    // Data-driven per-bank quirks (doc #164)
+    //
+    // These reproduce — from the scanned inventory / languages / acoustic
+    // config — the behaviour previously hardcoded per `VocalVoicebank`
+    // enum arm in `resonance-app`'s `vocal_svs/paths.rs`. Working from the
+    // data means a freshly-dropped bank gets the right treatment without a
+    // code change.
+    // -----------------------------------------------------------------
+
+    /// Resolve a bare G2P ARPAbet symbol to the dict key this bank actually
+    /// stores it under, or `None` if neither the bare form nor the
+    /// language-namespaced (`en/…`) form is in the inventory.
+    ///
+    /// Single-language banks (TIGER, Lilia) store bare ARPAbet, so the bare
+    /// lookup hits. Banks that namespace by language (Meiji) keep a small
+    /// universal bucket bare (`AP`, `SP`, `hh`, `cl`, …) and prefix the
+    /// rest, so the `en/` fallback hits for those.
+    fn dict_key_for(&self, ph: &str) -> Option<String> {
+        if self.phoneme_set.contains(ph) {
+            return Some(ph.to_string());
+        }
+        let namespaced = format!("{G2P_LANGUAGE}/{ph}");
+        if self.phoneme_set.contains(&namespaced) {
+            return Some(namespaced);
+        }
+        None
+    }
+
+    /// The dict key to feed the acoustic model for a G2P ARPAbet symbol —
+    /// bare for single-language banks, `en/`-prefixed for the namespaced
+    /// portion of a multi-language bank. Falls back to the bare symbol when
+    /// the bank stores it in neither form (matching the old code, which
+    /// passed unknown symbols through unchanged).
+    pub fn phoneme_name(&self, ph: &str) -> String {
+        self.dict_key_for(ph).unwrap_or_else(|| ph.to_string())
+    }
+
+    /// Per-token id for the acoustic model's `languages` input, or `None`
+    /// when this bank takes no language input (`use_lang_id` is off).
+    ///
+    /// Namespaced symbols (`en/ah`) report their language's id from
+    /// `languages.json`; the bare universal bucket (silence markers and
+    /// shared consonants) reports `0`, the default/silence language —
+    /// reproducing Meiji's `0` for `AP`/`hh`/… and `3` for English.
+    pub fn language_id(&self, ph: &str) -> Option<i64> {
+        if !self.accepts_language_id {
+            return None;
+        }
+        let key = self.phoneme_name(ph);
+        match key.split_once('/') {
+            Some((lang, _)) => Some(self.languages.get(lang).copied().unwrap_or(0)),
+            None => Some(0),
+        }
+    }
+
+    /// Replace a G2P ARPAbet symbol the bank's dict lacks with its nearest
+    /// available substitute; symbols the bank knows pass through unchanged.
+    ///
+    /// Only fires when the symbol resolves to neither a bare nor a
+    /// namespaced dict key — e.g. Lilia ships every ARPAbet phone except
+    /// the voiced `v`, so `v` (absent) maps to `f` (its voiceless
+    /// counterpart, present) while everything else is left alone. Banks
+    /// with the full inventory (TIGER, Meiji) substitute nothing.
+    pub fn substitute_phoneme(&self, ph: &str) -> String {
+        if self.dict_key_for(ph).is_some() {
+            return ph.to_string();
+        }
+        for candidate in nearest_substitutes(ph) {
+            if self.dict_key_for(candidate).is_some() {
+                return candidate.to_string();
+            }
+        }
+        ph.to_string()
+    }
+
+    /// Whether this bank's pipeline accepts the given expression curve.
+    ///
+    /// Pitch bend is a pre-synthesis f0 edit, so it is always available;
+    /// the other three each require their matching acoustic embed
+    /// (`energy`/`tension`/`breathiness`). TIGER's model exposes no
+    /// tension or breathiness input, so those report `false` there while
+    /// Lilia and Meiji accept all three.
+    pub fn supports_curve(&self, curve: ExpressionCurve) -> bool {
+        match curve {
+            ExpressionCurve::PitchBend => true,
+            ExpressionCurve::Dynamics => self.accepts_energy,
+            ExpressionCurve::Tension => self.accepts_tension,
+            ExpressionCurve::Breathiness => self.accepts_breathiness,
+        }
+    }
+}
+
+/// Nearest acceptable ARPAbet substitutes for a phone, most-similar first.
+/// Consulted only for symbols a bank's dict is missing, so it never alters
+/// a bank with the full inventory. Pairs voiced phones with their voiceless
+/// counterpart (same place + manner), the substitution least likely to be
+/// noticed; the reverse direction covers the rarer voiceless-gap case.
+fn nearest_substitutes(ph: &str) -> &'static [&'static str] {
+    match ph {
+        "v" => &["f", "b"],
+        "f" => &["v"],
+        "dh" => &["th", "d"],
+        "th" => &["dh", "t"],
+        "z" => &["s"],
+        "s" => &["z"],
+        "zh" => &["sh"],
+        "sh" => &["zh"],
+        "jh" => &["ch"],
+        "ch" => &["jh"],
+        _ => &[],
+    }
+}
+
+/// Detect a bank's phoneme alphabet from its inventory. ARPAbet here is
+/// lowercase ASCII letters with optional `lang/` prefixes; X-SAMPA mixes in
+/// glyphs ARPAbet never uses (`@ { } \ ~ = & |` and bare uppercase
+/// vowels like `O`/`I`/`E`). Any such glyph flips the verdict to X-SAMPA.
+fn detect_phoneme_target(phonemes: &[String]) -> PhonemeTarget {
+    let is_xsampa_glyph = |c: char| matches!(c, '@' | '{' | '}' | '\\' | '~' | '=' | '&' | '|');
+    for ph in phonemes {
+        if ph.chars().any(is_xsampa_glyph) {
+            return PhonemeTarget::XSampa;
+        }
+    }
+    PhonemeTarget::Arpabet
 }
 
 // ---------------------------------------------------------------------------
