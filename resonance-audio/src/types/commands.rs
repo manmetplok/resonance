@@ -26,6 +26,19 @@ pub enum AudioCommand {
         path: String,
         start_sample: SamplePos,
     },
+    /// Import one or more source files into the project pool **without**
+    /// placing a clip. Each file is decoded, channel up/down-mixed and
+    /// resampled to the project rate, copied into `{project_dir}/audio/`
+    /// under a stable `asset_{id}.wav` name, and has its waveform peaks
+    /// computed — all on a worker thread. Per file the engine emits an
+    /// ordered `ImportProgress` lifecycle (`Queued` → `Working` →
+    /// `Done`) plus a final `AssetImported` on success, or `ImportFailed`
+    /// on error. Requires a project directory (set via
+    /// [`AudioCommand::SetProjectDir`]); decoupled from clip placement,
+    /// so it needs no `track_id`.
+    ImportAudioToPool {
+        paths: Vec<String>,
+    },
     MoveClip {
         clip_id: ClipId,
         new_start_sample: SamplePos,

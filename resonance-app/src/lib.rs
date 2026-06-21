@@ -24,6 +24,7 @@ pub mod message;
 pub mod presets;
 pub mod project;
 pub mod recent;
+pub mod settings;
 pub mod state;
 mod test_support;
 pub mod theme;
@@ -155,6 +156,12 @@ pub struct Resonance {
         crate::state::PluginLocator,
     >,
 
+    /// Persistent application settings (autosave config, …), loaded from
+    /// `config_dir()/resonance/settings.json` on startup. Read via
+    /// [`Resonance::autosave_settings`]; re-persisted with
+    /// `settings::persist` whenever the user changes them.
+    pub(crate) settings: settings::AppSettings,
+
     // ---- Track presets ----
     /// Built-in default track presets (baked into the binary).
     pub(crate) default_presets: Vec<presets::TrackPreset>,
@@ -219,6 +226,13 @@ impl Resonance {
     /// hard-coding it.
     pub fn track_registry(&self) -> &state::TrackRegistry {
         &self.registry
+    }
+
+    /// Read-only view onto the persisted autosave settings. The autosave
+    /// timer (epic #32) and the settings UI read these; surfaced so the
+    /// view layer and tests can interrogate the live config.
+    pub fn autosave_settings(&self) -> &settings::AutosaveSettings {
+        &self.settings.autosave
     }
 
     // Tempo / signature mutators live in `update/global_track.rs` —
@@ -312,6 +326,7 @@ impl Resonance {
         let _ = engine.send(AudioCommand::ScanPlugins);
 
         let recent_projects = recent::load();
+        let settings = settings::load();
 
         let mut app = Self {
             engine,
@@ -370,6 +385,7 @@ impl Resonance {
             dirty: false,
             confirm_quit: None,
             quit_after_save: None,
+            settings,
             default_presets: presets::default_presets(),
             user_presets: presets::load_user_presets(),
             pending_track_preset: None,
