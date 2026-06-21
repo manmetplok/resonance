@@ -26,6 +26,8 @@ serde.workspace = true
 # Used by tests/import_audio_to_pool.rs to author mono / multi-rate
 # source WAVs (the public `transcode_to_wav` only writes stereo).
 hound.workspace = true
+# Used by tests/export_settings.rs for ExportSettings serde round-trips.
+serde_json.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa-sys = "0.3"
