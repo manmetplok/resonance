@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use resonance_music_theory::{VocalParams, VocalVoicebank};
 
+use super::phonemes::VoicebankPhonemes;
+
 /// Meiji's per-token language id for English-prefixed phonemes. Lifted
 /// from `voicebanks/meiji/files/languages.json` (`"en": 3`). Silence
 /// markers (`AP`/`SP`) get `0` since they're un-prefixed in the dict.
@@ -124,24 +126,14 @@ fn default_models_dir() -> PathBuf {
 /// reservation), which produces a downstream tensor-shape mismatch in
 /// some voicebanks (Lilia's FastSpeech2 graph throws `Mul` broadcast
 /// errors when PADs appear mid-sequence).
+///
+/// Thin wrapper over [`VoicebankPhonemes`] — the single source of truth
+/// the vocal-roll phoneme strip queries too, so what the strip shows and
+/// what the model is fed can never disagree (design #173). Substitution
+/// runs *before* Meiji's `en/` prefixing in `build_segment`, so this
+/// operates on bare ARPAbet for every bank (e.g. Lilia's `v` → `f`).
 pub(super) fn substitute_phoneme(voicebank: VocalVoicebank, ph: &'static str) -> &'static str {
-    match voicebank {
-        VocalVoicebank::Tiger => ph,
-        VocalVoicebank::Lilia => match ph {
-            // Lilia's MM phoneme set covers all of ARPAbet *except* the
-            // voiced labiodental fricative `v`. Substitute its closest
-            // English equivalent: the voiceless `f` (same place + manner
-            // of articulation, just unvoiced). Singers won't notice in
-            // most words; the alternative `b` would change place and
-            // sound more obviously wrong.
-            "v" => "f",
-            other => other,
-        },
-        // Meiji uses language-prefixed ARPAbet. Substitution happens
-        // *before* prefixing in build_segment, so we don't need to
-        // touch any symbols here — the full English set is present.
-        VocalVoicebank::Meiji => ph,
-    }
+    VoicebankPhonemes::new(voicebank).effective(ph)
 }
 
 /// Apply the voicebank's per-symbol naming convention. Meiji namespaces

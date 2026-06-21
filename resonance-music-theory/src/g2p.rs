@@ -46,6 +46,20 @@ pub fn is_consonant(ph: &str) -> bool {
     CONSONANTS.contains(&ph)
 }
 
+/// The full English ARPAbet inventory the G2P emits, in canonical order
+/// (vowels first, then [`CONSONANTS`]). Silence markers (`AP`/`SP`) and
+/// the `cl` closure are *not* listed — those are pipeline control tokens,
+/// not lexical phones. Downstream voicebank accessors use this as the
+/// universe of singable phones when deciding which symbols a given bank
+/// can sing. Every entry round-trips through [`canonical_phoneme`]; the
+/// `arpabet_phonemes_are_canonical` test pins the split against
+/// [`CONSONANTS`].
+pub const ARPABET_PHONEMES: &[&str] = &[
+    "aa", "ae", "ah", "ax", "ao", "aw", "ay", "eh", "er", "ey", "ih", "iy", "ow", "oy", "uh", "uw",
+    "b", "ch", "d", "dh", "f", "g", "hh", "jh", "k", "l", "m", "n", "ng", "p", "r", "s", "sh", "t",
+    "th", "v", "w", "y", "z", "zh",
+];
+
 /// Lexical stress level for a syllable, drawn from the CMU dict's stress
 /// marks on its vowel(s). The SVS pipeline maps this to per-syllable
 /// velocity / tension bumps so primary-stress syllables sing louder &
@@ -694,6 +708,10 @@ static ARPABET_INVENTORY: phf::Map<&'static str, &'static str> = phf::phf_map! {
 /// silently drop typos rather than crash. Public so the phoneme-strip
 /// editor and add-phoneme palette can validate user input against the
 /// exact same inventory the SVS pipeline sings.
+///
+/// Returns `Some(sym)` for every entry in [`ARPABET_PHONEMES`] plus the
+/// `AP`/`SP` silence markers — the canonical universe voicebank
+/// accessors validate phoneme overrides against.
 pub fn canonical_phoneme(sym: &str) -> Option<&'static str> {
     // Silence markers are uppercase-only by convention; check the
     // original input before lowercasing so `"ap"` / `"sp"` don't sneak

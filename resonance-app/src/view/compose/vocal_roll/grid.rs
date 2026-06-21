@@ -9,6 +9,7 @@ use iced::{Color, Point, Size};
 use resonance_audio::types::TICKS_PER_QUARTER_NOTE;
 use resonance_music_theory::g2p;
 
+use crate::compose::vocal_svs::VoicebankPhonemes;
 use crate::theme;
 
 use super::{
@@ -191,12 +192,24 @@ impl VocalRollCanvas<'_> {
             return;
         }
 
+        // Route every label through the active voicebank's phoneme
+        // accessor so the strip shows the symbol the model will actually
+        // sing — e.g. Lilia displays `f` where the G2P emitted the
+        // (unsupported) voiced `v`. Same source of truth `build_segment`
+        // substitutes through, so the strip and the render never disagree
+        // (design #173).
+        let voicebank = VoicebankPhonemes::new(self.params.voicebank);
         for (i, n) in self.clip.notes.iter().enumerate() {
             let Some(a) = assigned.get(i) else { break };
             if a.phonemes.is_empty() {
                 continue;
             }
-            let display = a.phonemes.join(" ");
+            let display = a
+                .phonemes
+                .iter()
+                .map(|&ph| voicebank.effective(ph))
+                .collect::<Vec<_>>()
+                .join(" ");
             let x = grid_x + self.tick_to_x(n.start_tick);
             let nw = self.duration_to_width(n.duration_ticks).max(8.0);
             if x > grid_x + grid_w {
