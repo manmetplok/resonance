@@ -96,6 +96,10 @@ pub struct AcousticConfig {
     pub use_voicing_embed: bool,
     pub use_tension_embed: bool,
     pub use_shallow_diffusion: bool,
+    /// Whether the acoustic model accepts a per-token `languages` input
+    /// (multi-language banks like Gahata Meiji). Drives
+    /// [`crate::voicebank::VoicebankManifest::language_id`].
+    pub use_lang_id: bool,
 
     pub predict_dur: bool,
     pub predict_pitch: bool,
@@ -155,6 +159,7 @@ pub fn load_acoustic(path: &Path) -> Result<AcousticConfig> {
         use_voicing_embed: raw.use_voicing_embed.unwrap_or(false),
         use_tension_embed: raw.use_tension_embed.unwrap_or(false),
         use_shallow_diffusion: raw.use_shallow_diffusion.unwrap_or(false),
+        use_lang_id: raw.use_lang_id.unwrap_or(false),
         predict_dur: raw.predict_dur.unwrap_or(false),
         predict_pitch: raw.predict_pitch.unwrap_or(false),
         predict_energy: raw.predict_energy.unwrap_or(false),

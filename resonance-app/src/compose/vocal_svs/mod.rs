@@ -26,10 +26,12 @@ use resonance_svs::pipeline::{self, PipelineArgs};
 use resonance_svs::stages::common::ExecutionProvider;
 
 mod paths;
+mod phonemes;
 mod post;
 mod segment;
 
 pub use paths::{curve_supported, CurveKind};
+pub use phonemes::{PhonemeFate, VoicebankPhonemes};
 pub use post::write_stereo_wav;
 
 use paths::locate_voicebank;
