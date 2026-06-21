@@ -329,16 +329,24 @@ pub(crate) fn engine_thread(
 
 /// Route an `ExportAudio` / `BounceToWav` job to the offline renderer.
 ///
-/// Today every job goes through the existing WAV bounce worker, which
-/// renders stereo f32 at the engine rate — i.e. the default-WAV path is
-/// byte-for-byte unchanged. Format selection (bit depth, FLAC/MP3/Opus
-/// sinks), export resampling and the two-pass loudness-normalization
-/// stage land with the encoder-sink follow-up todos (#650–#652); they
-/// branch on `settings.format` / `settings.normalize` here. `settings`
-/// is threaded through now so the command/event boundary is stable.
-fn dispatch_export(ctx: &HandlerCtx, path: String, _settings: ExportSettings) {
-    bounce::to_wav_spawn(
+/// Both commands share one render driver, which feeds the rendered mix to
+/// the encoder sink selected by `settings.format` (WAV 16/24-bit/f32 or
+/// FLAC, with export resampling when the format requests a different
+/// sample rate). `reporter` selects the event family: `BounceToWav` keeps
+/// the legacy `Bounce*` events (and, with default-WAV settings, byte-for-
+/// byte the old output); `ExportAudio` emits the generalized `Export*`
+/// events. MP3/Opus sinks and the two-pass loudness stage land in the
+/// follow-up todos (#651–#652).
+fn dispatch_export(
+    ctx: &HandlerCtx,
+    path: String,
+    settings: ExportSettings,
+    reporter: bounce::ExportReporter,
+) {
+    bounce::export_spawn(
         path,
+        settings,
+        reporter,
         Arc::clone(ctx.shared),
         Arc::clone(ctx.tracks),
         Arc::clone(ctx.busses),
@@ -541,10 +549,15 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         // -- Bounce / export --
         // Legacy WAV bounce: a thin shim over the generalized export
         // path with default 32-bit-float WAV settings (doc #196).
-        AudioCommand::BounceToWav { path } => {
-            dispatch_export(ctx, path, ExportSettings::default_wav())
+        AudioCommand::BounceToWav { path } => dispatch_export(
+            ctx,
+            path,
+            ExportSettings::default_wav(),
+            bounce::ExportReporter::Bounce,
+        ),
+        AudioCommand::ExportAudio { path, settings } => {
+            dispatch_export(ctx, path, settings, bounce::ExportReporter::Export)
         }
-        AudioCommand::ExportAudio { path, settings } => dispatch_export(ctx, path, settings),
         AudioCommand::BounceTrackToAudio {
             source_track_id,
             target_track_id,
