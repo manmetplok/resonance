@@ -71,7 +71,7 @@ impl std::fmt::Display for RotationPick {
 }
 
 /// Rotation options for `schema` — one per position in its base loop.
-/// All 13 schemas' option vectors are built once and cached; the view
+/// All schemas' option vectors are built once and cached; the view
 /// hands `pick_list` a `&'static` slice (no per-frame allocation).
 pub(super) fn rotation_picks(schema: SchemaKind) -> &'static [RotationPick] {
     static V: std::sync::OnceLock<Vec<Vec<RotationPick>>> = std::sync::OnceLock::new();

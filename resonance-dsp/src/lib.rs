@@ -13,6 +13,7 @@ pub mod pitch;
 mod rng;
 mod swap_fader;
 mod timestretch;
+pub mod tempo;
 mod window;
 
 pub use biquad::Biquad;
@@ -28,5 +29,6 @@ pub use pan::{constant_power_pan, stereo_balance};
 pub use pitch::{detect_f0, F0Config, F0Frame, YinDetector};
 pub use rng::SimpleRng;
 pub use swap_fader::SwapFader;
+pub use tempo::{detect_tempo, detect_tempo_default, fold_bpm, TempoConfig, TempoEstimate};
 pub use timestretch::{StretchAlgorithm, TimeStretch};
 pub use window::{fill_hann_window, hann_window};
