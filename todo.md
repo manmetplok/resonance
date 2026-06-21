@@ -38,5 +38,5 @@ implementation sequence; each item is independently testable.
 
 ### Tier 4 polish (small)
 
-- [ ] **Huron descending-step bias** — §2A: descending steps slightly more common than ascending; add as a soft weight in `choose_direction` (`motif_engine/build.rs`).
+- [x] **Huron descending-step bias** — §2A: descending steps slightly more common than ascending; add as a soft weight in `choose_direction` (`motif_engine/build.rs`).
 - [ ] **Fix `Augment`/`InvertAugment` washout** — the tiling realizer normalizes duration ratios per chord, so augmentation mostly washes out at render time (noted in fd2581b, pre-existing for plain `Augment`). Make augmentation audible or drop it from the drawn vocabulary.
