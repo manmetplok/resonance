@@ -30,6 +30,23 @@ pub struct DrumPattern {
     /// grid, cycle, phase, articulation pads, and generator knobs — see
     /// [`DrumGroup`].
     pub groups: Vec<DrumGroup>,
+    /// Intrinsic bar length of this pattern: how many bars the pattern
+    /// spans before it loops. Defaults to `1`. An arrangement entry's
+    /// [`EntryLength::RepeatN(n)`] maps to `n * length_bars` concrete bars
+    /// — so a 2-bar pattern repeated 3× covers 6 bars. Persisted with a
+    /// serde default so projects authored before this field loaded as
+    /// single-bar patterns.
+    ///
+    /// [`EntryLength::RepeatN(n)`]: crate::compose::EntryLength::RepeatN
+    #[serde(default = "default_pattern_length_bars")]
+    pub length_bars: u32,
+}
+
+/// Serde default for [`DrumPattern::length_bars`]: a single bar. Also the
+/// value used when a stored pattern records `0`, guarded by
+/// [`DrumPattern::bar_span`].
+fn default_pattern_length_bars() -> u32 {
+    1
 }
 
 impl DrumPattern {
@@ -37,6 +54,13 @@ impl DrumPattern {
     /// chip label.
     pub fn group_count(&self) -> usize {
         self.groups.len()
+    }
+
+    /// Effective bar length, guarded to be at least `1` so a malformed
+    /// `length_bars: 0` never collapses an arrangement entry to a
+    /// zero-bar span. Resolvers should prefer this over the raw field.
+    pub fn bar_span(&self) -> u32 {
+        self.length_bars.max(1)
     }
 
     /// Total step count across every group's pattern slot. Surfaced in
@@ -74,12 +98,14 @@ pub fn default_drum_patterns(next_id: &mut u64) -> Vec<DrumPattern> {
             name: "Main".to_string(),
             color: GROUP_PALETTE[0],
             groups: main_groups,
+            length_bars: 1,
         },
         DrumPattern {
             id: b_id,
             name: "B section".to_string(),
             color: GROUP_PALETTE[2],
             groups: Vec::new(),
+            length_bars: 1,
         },
     ]
 }
@@ -102,6 +128,7 @@ pub fn legacy_groups_to_pattern(
         name: "Main".to_string(),
         color: GROUP_PALETTE[0],
         groups,
+        length_bars: 1,
     };
     (vec![pattern], id)
 }

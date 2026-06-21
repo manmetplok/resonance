@@ -345,8 +345,8 @@ pub(super) fn restore_drum_patterns(
         compose.drum_patterns = patterns;
         let main_id = compose.drum_patterns.first().map(|p| p.id);
         for def in &mut compose.definitions {
-            if def.drum_pattern_id.is_none() {
-                def.drum_pattern_id = main_id;
+            if def.primary_pattern_id().is_none() {
+                def.set_primary_pattern(main_id);
             }
         }
     } else if clear_on_empty {

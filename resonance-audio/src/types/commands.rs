@@ -2,8 +2,8 @@
 use std::path::PathBuf;
 
 use super::{
-    BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, SamplePos, SignaturePoint, TempoPoint,
-    TrackId, TrackOutput,
+    BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, SamplePos, SendId, SendSource,
+    SignaturePoint, TempoPoint, TrackId, TrackOutput,
 };
 
 /// Commands sent from the GUI to the audio engine.
@@ -426,6 +426,37 @@ pub enum AudioCommand {
     RemovePluginFromBus {
         bus_id: BusId,
         instance_id: PluginInstanceId,
+    },
+
+    // -- Aux sends + return busses --
+    /// Mark a bus as an aux *return* bus (or clear the flag). Emits
+    /// `AudioEvent::BusRoleChanged`. No-op if the bus does not exist.
+    SetBusRole {
+        bus_id: BusId,
+        is_return: bool,
+    },
+    /// Create or update (upsert) an aux send from a track or bus into a
+    /// return bus. When `id_hint` is `None` the engine allocates a fresh
+    /// `SendId`; when `Some(id)` it updates the existing send (or honours
+    /// the id for a fresh send on project load, bumping its allocator
+    /// past it). Covers create / re-route / level / pre-post / enable in
+    /// one command. The engine runs cyclic-route validation before
+    /// registering: a send routing a bus to itself, or to a destination
+    /// whose own sends already reach the source bus, is rejected with
+    /// `AudioEvent::AuxSendRejected` and not stored. On success the
+    /// engine emits `AudioEvent::AuxSendChanged` with the resolved send.
+    SetAuxSend {
+        id_hint: Option<SendId>,
+        source: SendSource,
+        dest: BusId,
+        level_db: f32,
+        pre_fader: bool,
+        enabled: bool,
+    },
+    /// Remove an aux send. Emits `AudioEvent::AuxSendRemoved` when a send
+    /// with this id existed; otherwise a no-op.
+    RemoveAuxSend {
+        send_id: SendId,
     },
 
     // -- Master FX chain + bypass --

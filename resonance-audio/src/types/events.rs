@@ -3,7 +3,7 @@ use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
     BusId, ClipId, FadeCurve, InputDeviceInfo, MidiNote, ParamInfo, PluginInstanceId, SamplePos,
-    ScannedPlugin, TrackId,
+    ScannedPlugin, SendId, SendSource, TrackId,
 };
 
 /// Inline clip payload for the offline "bounce in place" flow. The
@@ -246,6 +246,36 @@ pub enum AudioEvent {
     BusPluginRemoved {
         bus_id: BusId,
         instance_id: PluginInstanceId,
+    },
+
+    // -- Aux sends + return busses --
+    /// A bus's return-role flag changed (see `AudioCommand::SetBusRole`).
+    BusRoleChanged {
+        bus_id: BusId,
+        is_return: bool,
+    },
+    /// An aux send was created or updated. Carries the engine-resolved
+    /// send so the app mirror matches engine state (including the
+    /// allocated `send_id` and any clamping of `level_db`).
+    AuxSendChanged {
+        send_id: SendId,
+        source: SendSource,
+        dest: BusId,
+        level_db: f32,
+        pre_fader: bool,
+        enabled: bool,
+    },
+    /// An aux send was removed (see `AudioCommand::RemoveAuxSend`).
+    AuxSendRemoved {
+        send_id: SendId,
+    },
+    /// An aux send was rejected and not registered. `reason` is a
+    /// plain-language explanation suitable for surfacing in the UI
+    /// (e.g. a self-route or a feedback cycle).
+    AuxSendRejected {
+        source: SendSource,
+        dest: BusId,
+        reason: String,
     },
 
     // -- Master FX events --

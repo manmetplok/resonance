@@ -351,6 +351,10 @@ pub struct Bus {
     muted: AtomicBool,
     /// When true, the mixer skips every plugin in this bus's FX chain.
     fx_bypassed: AtomicBool,
+    /// When true, this bus acts as an aux *return* bus — the destination
+    /// of aux sends rather than (or in addition to) a track-output
+    /// group. Purely a role marker today; it does not change summing.
+    is_return: AtomicBool,
     pub name: String,
     peak_l_bits: AtomicU32,
     peak_r_bits: AtomicU32,
@@ -370,6 +374,7 @@ impl Bus {
             pan_bits: AtomicU32::new(0.0f32.to_bits()),
             muted: AtomicBool::new(false),
             fx_bypassed: AtomicBool::new(false),
+            is_return: AtomicBool::new(false),
             name,
             peak_l_bits: AtomicU32::new(0),
             peak_r_bits: AtomicU32::new(0),
@@ -409,6 +414,15 @@ impl Bus {
 
     pub fn set_fx_bypassed(&self, v: bool) {
         self.fx_bypassed.store(v, Ordering::Relaxed);
+    }
+
+    /// Whether this bus is flagged as an aux return bus.
+    pub fn is_return(&self) -> bool {
+        self.is_return.load(Ordering::Relaxed)
+    }
+
+    pub fn set_is_return(&self, v: bool) {
+        self.is_return.store(v, Ordering::Relaxed);
     }
 
     /// See [`Track::update_peak_l`] for the non-negative invariant and the
