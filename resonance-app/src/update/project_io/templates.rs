@@ -170,7 +170,15 @@ pub fn scan_user_templates() -> Vec<TemplateEntry> {
     let Some(dir) = templates_dir() else {
         return Vec::new();
     };
+    scan_templates_in(&dir)
+}
 
+/// Scan a specific directory for user templates. Split out from
+/// [`scan_user_templates`] (which resolves the real config dir) so the
+/// classification logic can be exercised against a controlled fixture
+/// directory in tests. See [`scan_user_templates`] for the contract;
+/// a missing/unreadable `dir` yields an empty list, never an error.
+pub fn scan_templates_in(dir: &std::path::Path) -> Vec<TemplateEntry> {
     // If the directory doesn't exist, return empty (lazy creation happens on first save).
     if !dir.exists() {
         return Vec::new();
@@ -185,7 +193,7 @@ pub fn scan_user_templates() -> Vec<TemplateEntry> {
     let mut results = Vec::new();
 
     // Try to read the directory entries.
-    let entries = match fs::read_dir(&dir) {
+    let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("Failed to read templates directory: {e}");

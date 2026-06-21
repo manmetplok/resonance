@@ -3,7 +3,7 @@
 
 use resonance_app::project::{ProjectBus, ProjectFile, ProjectPlugin, ProjectTrack, PROJECT_FORMAT_VERSION};
 use resonance_app::update::project_io::{
-    compute_summary, scan_user_templates, templates_dir, ensure_templates_dir,
+    compute_summary, scan_templates_in, scan_user_templates, templates_dir, ensure_templates_dir,
     Template, TemplateEntry, TemplateKind, TemplateMetadata, TemplateSummary, StaleTemplate, StaleReason,
 };
 use std::fs;
@@ -317,6 +317,174 @@ fn template_entry_stale_variant() {
 fn scan_returns_list() {
     let results = scan_user_templates();
     assert!(results.iter().all(|e| matches!(e, TemplateEntry::Valid(_) | TemplateEntry::Stale(_))));
+}
+
+// --- Fixture-based scan coverage -------------------------------------------
+//
+// `scan_user_templates` resolves the real config dir, which a test can't
+// populate deterministically, so the classification logic is exercised
+// through `scan_templates_in(dir)` against a tempdir laid out by hand.
+
+/// Write a template folder `name/` under `root` with the given metadata and
+/// a raw `project.json` body (passed as a string so tests can inject
+/// deliberately-broken JSON).
+fn write_template(root: &std::path::Path, name: &str, meta: &TemplateMetadata, project_json: &str) {
+    let dir = root.join(name);
+    fs::create_dir_all(&dir).unwrap();
+    write_json_file(dir.join("template.json"), meta);
+    fs::write(dir.join("project.json"), project_json).unwrap();
+}
+
+fn metadata_at(schema_version: u32) -> TemplateMetadata {
+    let project = make_minimal_project();
+    TemplateMetadata {
+        name: "Fixture".to_string(),
+        description: "Fixture template".to_string(),
+        built_in: false,
+        schema_version,
+        summary: compute_summary(&project),
+        created_secs: 42,
+    }
+}
+
+#[test]
+fn scan_missing_dir_returns_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("does-not-exist");
+    assert!(scan_templates_in(&missing).is_empty());
+}
+
+#[test]
+fn scan_non_directory_path_returns_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a-file");
+    fs::write(&file, "not a dir").unwrap();
+    assert!(scan_templates_in(&file).is_empty());
+}
+
+#[test]
+fn scan_classifies_valid_template() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_json = serde_json::to_string(&make_minimal_project()).unwrap();
+    write_template(tmp.path(), "good", &metadata_at(PROJECT_FORMAT_VERSION), &project_json);
+
+    let results = scan_templates_in(tmp.path());
+    assert_eq!(results.len(), 1);
+    match &results[0] {
+        TemplateEntry::Valid(t) => {
+            assert_eq!(t.kind, TemplateKind::User);
+            assert_eq!(t.name, "Fixture");
+            assert_eq!(t.schema_version, PROJECT_FORMAT_VERSION);
+            assert!(t.path.ends_with("good"));
+        }
+        other => panic!("expected Valid, got {other:?}"),
+    }
+}
+
+#[test]
+fn scan_flags_schema_too_new_as_stale() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_json = serde_json::to_string(&make_minimal_project()).unwrap();
+    let future = PROJECT_FORMAT_VERSION + 1;
+    write_template(tmp.path(), "future", &metadata_at(future), &project_json);
+
+    let results = scan_templates_in(tmp.path());
+    assert_eq!(results.len(), 1);
+    match &results[0] {
+        TemplateEntry::Stale(s) => {
+            assert!(matches!(
+                s.reason,
+                StaleReason::SchemaVersionNewer { schema_version } if schema_version == future
+            ));
+            assert_eq!(s.schema_version, Some(future));
+        }
+        other => panic!("expected Stale, got {other:?}"),
+    }
+}
+
+#[test]
+fn scan_flags_unparseable_project_as_stale() {
+    let tmp = tempfile::tempdir().unwrap();
+    // template.json is fine and current, but project.json is garbage.
+    write_template(tmp.path(), "broken", &metadata_at(PROJECT_FORMAT_VERSION), "{ not valid json");
+
+    let results = scan_templates_in(tmp.path());
+    assert_eq!(results.len(), 1);
+    match &results[0] {
+        TemplateEntry::Stale(s) => {
+            assert!(matches!(s.reason, StaleReason::ProjectParseError { .. }));
+            assert_eq!(s.schema_version, Some(PROJECT_FORMAT_VERSION));
+        }
+        other => panic!("expected Stale, got {other:?}"),
+    }
+}
+
+#[test]
+fn scan_flags_missing_project_as_stale() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A template folder with a valid sidecar but no project.json at all.
+    let dir = tmp.path().join("no-project");
+    fs::create_dir_all(&dir).unwrap();
+    write_json_file(dir.join("template.json"), &metadata_at(PROJECT_FORMAT_VERSION));
+
+    let results = scan_templates_in(tmp.path());
+    assert_eq!(results.len(), 1);
+    assert!(matches!(
+        &results[0],
+        TemplateEntry::Stale(StaleTemplate { reason: StaleReason::ProjectParseError { .. }, .. })
+    ));
+}
+
+#[test]
+fn scan_flags_unparseable_metadata_as_stale() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("bad-meta");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("template.json"), "{ broken").unwrap();
+    fs::write(dir.join("project.json"), "{}").unwrap();
+
+    let results = scan_templates_in(tmp.path());
+    assert_eq!(results.len(), 1);
+    match &results[0] {
+        TemplateEntry::Stale(s) => {
+            assert!(matches!(s.reason, StaleReason::MetadataParseError { .. }));
+            assert_eq!(s.schema_version, None);
+        }
+        other => panic!("expected Stale, got {other:?}"),
+    }
+}
+
+#[test]
+fn scan_skips_folder_without_sidecar() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A directory that holds a project but no template.json is not a template.
+    let dir = tmp.path().join("just-a-project");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("project.json"),
+        serde_json::to_string(&make_minimal_project()).unwrap(),
+    )
+    .unwrap();
+    // A loose file at the top level should be ignored too.
+    fs::write(tmp.path().join("README.txt"), "hi").unwrap();
+
+    assert!(scan_templates_in(tmp.path()).is_empty());
+}
+
+#[test]
+fn scan_classifies_mixed_set() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_json = serde_json::to_string(&make_minimal_project()).unwrap();
+    write_template(tmp.path(), "ok", &metadata_at(PROJECT_FORMAT_VERSION), &project_json);
+    write_template(tmp.path(), "future", &metadata_at(PROJECT_FORMAT_VERSION + 1), &project_json);
+    write_template(tmp.path(), "broken", &metadata_at(PROJECT_FORMAT_VERSION), "nope");
+
+    let results = scan_templates_in(tmp.path());
+    assert_eq!(results.len(), 3);
+    let valid = results.iter().filter(|e| matches!(e, TemplateEntry::Valid(_))).count();
+    let stale = results.iter().filter(|e| matches!(e, TemplateEntry::Stale(_))).count();
+    assert_eq!(valid, 1);
+    assert_eq!(stale, 2);
 }
 
 #[test]
