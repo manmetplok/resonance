@@ -184,12 +184,56 @@ pub(super) fn voicebank_language_id(voicebank: VocalVoicebank, ph: &str) -> Opti
     }
 }
 
-/// Whether the voicebank's acoustic model accepts a `tension` per-frame
-/// curve. TIGER doesn't; Lilia and Meiji do. Cheaper than introspecting
-/// the ONNX inputs at every render.
-pub(super) fn voicebank_supports_tension(voicebank: VocalVoicebank) -> bool {
-    match voicebank {
-        VocalVoicebank::Tiger => false,
-        VocalVoicebank::Lilia | VocalVoicebank::Meiji => true,
+/// The four editable vocal expression curves (see doc #154). Each maps
+/// to a per-frame curve fed into the SVS segment builder and is shaped
+/// by the user in the vocal-roll Expression dock. Not every voicebank's
+/// acoustic model accepts every curve — see [`curve_supported`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CurveKind {
+    /// Dynamics / energy (loudness envelope). Universally supported.
+    Dynamics,
+    /// Vocal tension (relaxed/breathy ↔ compressed/belted). Accepted by
+    /// Lilia and Meiji; TIGER's acoustic model has no `tension` input.
+    Tension,
+    /// Breathiness (added breath/air in the delivery). Accepted by
+    /// Lilia and Meiji; TIGER has no `breathiness` input.
+    Breathiness,
+    /// Pitch bend — f0 offset / portamento in cents. Always applied as a
+    /// pre-synthesis f0 modification, so every voicebank supports it.
+    PitchBend,
+}
+
+impl CurveKind {
+    /// All four curve kinds, in rail display order.
+    pub const ALL: [CurveKind; 4] = [
+        CurveKind::Dynamics,
+        CurveKind::Tension,
+        CurveKind::Breathiness,
+        CurveKind::PitchBend,
+    ];
+}
+
+/// Whether `voicebank`'s pipeline accepts the given expression `curve`.
+///
+/// Single source of truth consumed by both the vocal-roll Expression
+/// dock (an unsupported curve shows an `n/a` badge) and the SVS segment
+/// builder (an unsupported curve is a cheap no-op rather than an error).
+///
+/// Matrix (doc #154):
+/// - **Dynamics** and **PitchBend** — supported on every voicebank.
+///   Pitch bend is a pre-synthesis f0 edit; dynamics maps to the
+///   universally-present energy curve.
+/// - **Tension** and **Breathiness** — TIGER's acoustic model exposes
+///   neither input, so they're unsupported there; Lilia and Meiji
+///   accept both.
+///
+/// Cheaper than introspecting the ONNX inputs at every render.
+pub fn curve_supported(voicebank: VocalVoicebank, curve: CurveKind) -> bool {
+    match curve {
+        CurveKind::Dynamics | CurveKind::PitchBend => true,
+        CurveKind::Tension | CurveKind::Breathiness => match voicebank {
+            VocalVoicebank::Tiger => false,
+            VocalVoicebank::Lilia | VocalVoicebank::Meiji => true,
+        },
     }
 }

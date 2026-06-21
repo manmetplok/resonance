@@ -18,14 +18,14 @@
 use resonance_music_theory::VocalParams;
 use resonance_svs::ds::SampleCurve;
 
-use super::super::paths::voicebank_supports_tension;
+use super::super::paths::{curve_supported, CurveKind};
 use super::f0::{F0Curve, F0_TIMESTEP};
 
 /// Build the tension `SampleCurve`. Returns `SampleCurve::default()`
 /// when the voicebank doesn't accept a tension input (so the pipeline
 /// can ignore the curve cheaply).
 pub(super) fn build_tension_curve(curve: &F0Curve, params: &VocalParams) -> SampleCurve {
-    if !voicebank_supports_tension(params.voicebank) {
+    if !curve_supported(params.voicebank, CurveKind::Tension) {
         return SampleCurve::default();
     }
     let base = params.tension.clamp(-1.0, 1.0) as f64;

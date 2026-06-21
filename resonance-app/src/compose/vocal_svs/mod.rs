@@ -29,6 +29,7 @@ mod paths;
 mod post;
 mod segment;
 
+pub use paths::{curve_supported, CurveKind};
 pub use post::write_stereo_wav;
 
 use paths::locate_voicebank;
