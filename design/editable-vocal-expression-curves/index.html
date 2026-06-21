@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — Editable vocal expression curves (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --bad:#e87b8b;
+    --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+  .serif{font-family:"Instrument Serif",Georgia,serif;font-style:italic}
+
+  /* ---- App chrome ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1)}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px;color:var(--text-1)}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .tabs{display:flex;gap:2px;margin-left:8px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+  .ghost{
+    padding:5px 11px;border:1px solid var(--line);border-radius:var(--radius-md);
+    color:var(--text-2);background:transparent;font-size:12px;cursor:pointer;font-family:inherit;
+  }
+  .ghost:hover{background:var(--bg-2)}
+  .ghost.warm{color:var(--warm);border-color:var(--warm-line)}
+
+  /* ---- State switcher ---- */
+  .statebar{
+    height:42px;flex:0 0 auto;display:flex;align-items:center;gap:8px;
+    padding:0 18px;background:var(--bg-1);border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);margin-right:4px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{
+    border:0;background:transparent;color:var(--text-2);padding:6px 13px;font-size:12px;
+    cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2);
+  }
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .hint{margin-left:auto;color:var(--text-3);font-size:11.5px}
+
+  /* ---- Body ---- */
+  .body{flex:1;display:flex;min-height:0}
+  .editor{flex:1;display:flex;flex-direction:column;min-width:0}
+
+  /* Vocal-roll region (notes) */
+  .roll{flex:1;position:relative;min-height:0;background:var(--bg-1);overflow:hidden}
+  .roll canvas, .dock-main canvas{display:block;width:100%;height:100%}
+
+  /* Expression dock */
+  .dock{
+    flex:0 0 248px;display:flex;min-height:0;
+    border-top:1px solid var(--line);background:var(--bg-1);
+  }
+  /* curve-select rail */
+  .rail{
+    width:172px;flex:0 0 auto;background:var(--bg-2);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;
+  }
+  .rail-head{
+    height:26px;display:flex;align-items:center;padding:0 11px;
+    font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);
+    border-bottom:1px solid var(--line-2);
+  }
+  .ctab{
+    position:relative;display:flex;flex-direction:column;gap:4px;
+    padding:8px 11px;border-bottom:1px solid var(--line-2);cursor:pointer;
+  }
+  .ctab:hover{background:var(--bg-3)}
+  .ctab.on{background:var(--bg-1)}
+  .ctab.on::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--c)}
+  .ctab .top{display:flex;align-items:center;gap:7px}
+  .ctab .dot{width:7px;height:7px;border-radius:2px;background:var(--c);flex:0 0 auto}
+  .ctab .nm{font-size:12px;color:var(--text-1);font-weight:500}
+  .ctab.off .nm,.ctab.off .dot{opacity:.42}
+  .ctab .badge{
+    margin-left:auto;font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;
+    padding:1px 6px;border-radius:999px;color:var(--text-3);border:1px solid var(--line);
+  }
+  .ctab .badge.edited{color:var(--warm);border-color:var(--warm-line);background:rgba(232,196,123,.10)}
+  .ctab .badge.auto{color:var(--text-3)}
+  .ctab .badge.na{color:var(--bad);border-color:rgba(232,123,139,.3);background:rgba(232,123,139,.08)}
+  .ctab .spark{height:18px;border-radius:3px;background:var(--bg-0);position:relative;overflow:hidden}
+  .ctab.off .spark{opacity:.35}
+
+  /* main curve canvas */
+  .dock-main{flex:1;position:relative;min-width:0;overflow:hidden;background:var(--bg-0)}
+
+  /* right inspector */
+  .insp{
+    flex:0 0 236px;background:var(--bg-2);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;
+  }
+  .insp-head{
+    padding:9px 13px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line-2);
+    background:linear-gradient(180deg,rgba(232,196,123,.06),transparent);
+  }
+  .insp-head .ttl{font-size:12.5px;font-weight:600;color:var(--text-1)}
+  .insp-head .pill{
+    margin-left:auto;font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;padding:2px 7px;border-radius:999px;
+    background:rgba(232,196,123,.14);color:var(--warm);border:1px solid var(--warm-line);
+  }
+  .insp-body{padding:11px 13px;display:flex;flex-direction:column;gap:13px;overflow:auto}
+  .field{display:flex;flex-direction:column;gap:6px}
+  .field .flbl{display:flex;justify-content:space-between;align-items:baseline}
+  .field .flbl span{font-size:11px;color:var(--text-2)}
+  .field .flbl b{font-size:11.5px;color:var(--text-1);font-weight:500;font-family:"Geist Mono",monospace}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:3px;background:var(--line);outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:var(--cthumb,var(--warm));border:2px solid var(--bg-2);cursor:pointer}
+  .toggle{display:flex;gap:5px}
+  .toggle button{
+    flex:1;border:1px solid var(--line);background:var(--bg-1);color:var(--text-2);
+    border-radius:var(--radius-sm);padding:6px 0;font-size:10.5px;cursor:pointer;font-family:inherit;
+  }
+  .toggle button.on{border-color:var(--accent-line);background:var(--accent-dim);color:var(--accent-soft)}
+  .insp-foot{margin-top:auto;padding:11px 13px;border-top:1px solid var(--line-2);display:flex;flex-direction:column;gap:9px}
+  .reset{
+    width:100%;padding:7px 0;border:1px solid var(--line);background:var(--bg-1);
+    color:var(--text-2);border-radius:var(--radius-md);font-size:11.5px;cursor:pointer;font-family:inherit;
+    display:flex;align-items:center;justify-content:center;gap:6px;
+  }
+  .reset:hover{background:var(--bg-3);color:var(--text-1)}
+  .reset.armed{color:var(--warm);border-color:var(--warm-line)}
+  .insp-foot .note{font-size:10.5px;color:var(--text-3);line-height:1.5}
+  .insp-foot .note b{color:var(--good);font-weight:500}
+
+  /* floating HUD readout */
+  .hud{
+    position:absolute;pointer-events:none;z-index:8;
+    background:rgba(15,16,19,.96);border:1px solid var(--line);border-radius:var(--radius-md);
+    padding:6px 9px;font-size:11px;color:var(--text-1);box-shadow:0 8px 24px rgba(0,0,0,.5);min-width:96px;
+  }
+  .hud .k{color:var(--text-3);font-size:9px;letter-spacing:.08em;text-transform:uppercase}
+  .hud .v{font-size:14px;margin-top:1px;font-family:"Geist Mono",monospace}
+  .hud .sub{color:var(--text-2);font-size:10px;margin-top:3px}
+
+  /* overlays */
+  .overlay{position:absolute;inset:0;z-index:9;display:none;align-items:center;justify-content:center;flex-direction:column;gap:12px;background:rgba(15,16,19,.72);backdrop-filter:blur(1.5px)}
+  .overlay.show{display:flex}
+  .overlay .ttl{font-size:15px;color:var(--text-1)}
+  .overlay .sub{font-size:12px;color:var(--text-2);max-width:380px;text-align:center;line-height:1.55}
+  .overlay .glyph{font-size:30px;opacity:.55}
+  .spin{width:30px;height:30px;border-radius:50%;border:2.5px solid var(--line);border-top-color:var(--warm);animation:sp 0.8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .bar{width:240px;height:4px;border-radius:3px;background:var(--line);overflow:hidden}
+  .bar i{display:block;height:100%;width:46%;background:var(--warm);border-radius:3px;animation:gr 2.2s ease-in-out infinite}
+  @keyframes gr{0%{width:8%}50%{width:72%}100%{width:96%}}
+
+  /* dock disabled veil (for unsupported active curve) */
+  .veil{position:absolute;inset:0;z-index:7;display:none;align-items:center;justify-content:center;flex-direction:column;gap:9px;background:repeating-linear-gradient(45deg,rgba(15,16,19,.82),rgba(15,16,19,.82) 10px,rgba(232,123,139,.045) 10px,rgba(232,123,139,.045) 20px)}
+  .veil.show{display:flex}
+  .veil .ttl{font-size:13px;color:var(--bad)}
+  .veil .sub{font-size:11.5px;color:var(--text-2);max-width:320px;text-align:center;line-height:1.55}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- chrome -->
+  <div class="chrome">
+    <div class="brand">re<b>·</b>sonance</div>
+    <div class="tabs">
+      <div class="tab">Arrange</div>
+      <div class="tab active">Compose</div>
+      <div class="tab">Mix</div>
+      <div class="tab">Perform</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="ghost">Generate</button>
+    <button class="ghost warm">⟳ Re-render vocal</button>
+  </div>
+
+  <!-- state switcher (prototype only) -->
+  <div class="statebar">
+    <span class="lbl">State</span>
+    <div class="seg" id="seg">
+      <button data-state="populated" class="on">Populated · edited</button>
+      <button data-state="empty">Empty</button>
+      <button data-state="rendering">Re-rendering</button>
+      <button data-state="unsupported">Unsupported curve</button>
+    </div>
+    <span class="hint" id="hint">Lilia (MM 2.8) · all four curves supported</span>
+  </div>
+
+  <!-- body -->
+  <div class="body">
+    <div class="editor">
+      <!-- vocal roll (notes) -->
+      <div class="roll">
+        <canvas id="roll"></canvas>
+        <div class="overlay" id="ovEmpty">
+          <div class="glyph">🎤</div>
+          <div class="ttl">No vocal generated yet</div>
+          <div class="sub">Expression curves layer on top of a generated melody. Hit <b>Generate</b> to derive a vocal — its dynamics, tension, breathiness and pitch baseline appear below, ready to shape.</div>
+          <button class="ghost warm" style="margin-top:4px">Generate vocal</button>
+        </div>
+        <div class="overlay" id="ovRender">
+          <div class="spin"></div>
+          <div class="ttl">Re-rendering with your edits…</div>
+          <div class="sub">The edited dynamics, tension &amp; pitch curves are being fed into the SVS segment builder. The generated baseline is kept as provenance.</div>
+          <div class="bar"><i></i></div>
+        </div>
+      </div>
+
+      <!-- expression dock -->
+      <div class="dock">
+        <div class="rail">
+          <div class="rail-head">Expression curves</div>
+          <div class="ctab on" data-curve="dyn" style="--c:var(--warm)">
+            <div class="top"><span class="dot"></span><span class="nm">Dynamics</span><span class="badge edited">edited</span></div>
+            <div class="spark"><canvas class="sparkc" width="138" height="18"></canvas></div>
+          </div>
+          <div class="ctab" data-curve="tension" style="--c:var(--accent)">
+            <div class="top"><span class="dot"></span><span class="nm">Tension</span><span class="badge edited">edited</span></div>
+            <div class="spark"><canvas class="sparkc" width="138" height="18"></canvas></div>
+          </div>
+          <div class="ctab" data-curve="breath" style="--c:var(--good)">
+            <div class="top"><span class="dot"></span><span class="nm">Breathiness</span><span class="badge auto">auto</span></div>
+            <div class="spark"><canvas class="sparkc" width="138" height="18"></canvas></div>
+          </div>
+          <div class="ctab" data-curve="pitch" style="--c:#f6ecc8">
+            <div class="top"><span class="dot"></span><span class="nm">Pitch bend</span><span class="badge auto">auto</span></div>
+            <div class="spark"><canvas class="sparkc" width="138" height="18"></canvas></div>
+          </div>
+        </div>
+
+        <div class="dock-main">
+          <canvas id="dock"></canvas>
+          <div class="hud" id="hud" style="display:none"></div>
+          <div class="veil" id="veil">
+            <div class="ttl">Tension not supported by this voicebank</div>
+            <div class="sub">The active <b>TIGER</b> voicebank doesn’t accept a per-frame tension input, so this curve is cleanly ignored on render — no error. Switch to <b>Lilia</b> or <b>Meiji</b> to shape tension, or pick another curve.</div>
+          </div>
+        </div>
+
+        <div class="insp" id="insp">
+          <div class="insp-head">
+            <span class="ttl" id="inspTtl">Dynamics</span>
+            <span class="pill" id="inspPill">edited</span>
+          </div>
+          <div class="insp-body">
+            <div class="field">
+              <div class="flbl"><span>Depth over baseline</span><b id="vDepth">+0.32</b></div>
+              <input type="range" min="0" max="100" value="62" style="--cthumb:var(--warm)">
+            </div>
+            <div class="field">
+              <div class="flbl"><span>Smoothing</span><b id="vSmooth">18 ms</b></div>
+              <input type="range" min="0" max="100" value="22" style="--cthumb:var(--warm)">
+            </div>
+            <div class="field">
+              <div class="flbl"><span>Pen</span></div>
+              <div class="toggle" id="penToggle">
+                <button class="on" data-pen="draw">Draw</button>
+                <button data-pen="point">Points</button>
+                <button data-pen="line">Line</button>
+              </div>
+            </div>
+            <div class="field">
+              <div class="flbl"><span>Snap to syllables</span></div>
+              <div class="toggle" id="snapToggle">
+                <button class="on" data-snap="on">On</button>
+                <button data-snap="off">Off</button>
+              </div>
+            </div>
+          </div>
+          <div class="insp-foot">
+            <button class="reset armed" id="resetBtn">⟲ Reset to generated</button>
+            <div class="note">Edits persist with the project and survive <b>re-render</b>; the auto-derived baseline is kept as provenance.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+//================ data model (mock) ================
+// notes: {start, dur, pitch(midi), vel, syl, slur}
+const NOTES = [
+  {s:0.00,d:0.50,p:62,v:.62,syl:"When",sl:false},
+  {s:0.50,d:0.50,p:64,v:.70,syl:"the",sl:false},
+  {s:1.00,d:0.75,p:65,v:.78,syl:"morn",sl:false},
+  {s:1.75,d:0.25,p:67,v:.55,syl:"ing",sl:true},
+  {s:2.00,d:1.00,p:69,v:.86,syl:"breaks",sl:false},
+  {s:3.00,d:0.50,p:67,v:.60,syl:"a",sl:false},
+  {s:3.50,d:0.50,p:65,v:.66,syl:"new",sl:false},
+  {s:4.00,d:0.50,p:64,v:.58,syl:"I",sl:false},
+  {s:4.50,d:0.50,p:65,v:.64,syl:"will",sl:false},
+  {s:5.00,d:0.75,p:69,v:.80,syl:"rise",sl:false},
+  {s:5.75,d:0.25,p:71,v:.74,syl:"",sl:true},
+  {s:6.00,d:1.50,p:72,v:.95,syl:"high",sl:false},
+  {s:7.50,d:0.50,p:69,v:.62,syl:"to",sl:false},
+];
+const BEATS = 8;            // visible beats
+const RANGE=[60,74];        // midi lo..hi for grid
+const NAMES=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const nm = m => NAMES[m%12]+(Math.floor(m/12)-1);
+
+// curve definitions: baseline(t) auto-derived, user(t) edited overlay (or null=auto)
+function clamp(x,a,b){return Math.min(b,Math.max(a,x));}
+// build per-note baseline from velocity / pitch so curves visibly relate to notes
+function noteAt(t){ // t in beats
+  for(const n of NOTES){ if(t>=n.s && t<n.s+n.d) return n; }
+  return NOTES[Math.max(0,Math.min(NOTES.length-1,Math.round(t)))];
+}
+const CURVES = {
+  dyn:   {label:"Dynamics", color:"#e8c47b", thumb:"var(--warm)",
+          base:t=>{const n=noteAt(t);return clamp(0.18+n.v*0.7,0,1);},
+          // user-edited: a big swell into "breaks" and the "high" climax
+          user:t=>{let b=0.18+noteAt(t).v*0.7; b+=0.22*Math.sin(clamp((t-1.5)/1.5,0,1)*Math.PI); if(t>=6&&t<7.5)b+=0.18; return clamp(b,0,1);} },
+  tension:{label:"Tension", color:"#8b6dff", thumb:"var(--accent-soft)",
+          base:t=>clamp(0.5+0.32*((noteAt(t).p-65)/7),0,1),
+          user:t=>{let b=0.5+0.32*((noteAt(t).p-65)/7); if(t>=6&&t<7.5)b=clamp(b+0.3,0,1); if(t<1)b-=0.18; return clamp(b,0,1);} },
+  breath:{label:"Breathiness", color:"#6dd6a3", thumb:"var(--good)",
+          base:t=>clamp(0.42-0.25*((noteAt(t).p-65)/7)+0.08*Math.sin(t*1.7),0,1),
+          user:null },
+  pitch: {label:"Pitch bend", color:"#f6ecc8", thumb:"var(--warm)",
+          base:t=>0.5, // 0.5 = no offset, range maps -50..+50 cents
+          user:null },
+};
+let active="dyn";
+let snapOn=true;
+let edited={dyn:true,tension:true,breath:false,pitch:false};
+let state="populated";
+let vbSupports={dyn:true,tension:true,breath:true,pitch:true};
+
+//================ vocal-roll canvas ================
+const rollC=document.getElementById('roll'), rollX=rollC.getContext('2d');
+const KEYW=52, CHORDH=22;
+function fit(c){const r=c.parentElement.getBoundingClientRect();const dpr=devicePixelRatio||1;c.width=r.width*dpr;c.height=r.height*dpr;c.getContext('2d').setTransform(dpr,0,0,dpr,0,0);return r;}
+function drawRoll(){
+  const r=fit(rollC),x=rollX,W=r.width,H=r.height;
+  x.clearRect(0,0,W,H); x.fillStyle="#15161b"; x.fillRect(0,0,W,H);
+  const gx=KEYW, gw=W-KEYW, top=CHORDH, gh=H-CHORDH;
+  const rows=RANGE[1]-RANGE[0]+1, rh=gh/rows;
+  const bx=b=>gx+b/BEATS*gw;
+  const py=p=>top+(RANGE[1]-p)*rh;
+  // chord strip
+  x.fillStyle="#1b1d23"; x.fillRect(0,0,W,CHORDH);
+  x.fillStyle="#5d626d"; x.font="9px Geist Mono, monospace";
+  ["Dmaj7","Bm7","G6","A"].forEach((c,i)=>{x.fillStyle="#9aa0ac";x.fillText(c, gx+i*gw/4+8, 14);});
+  // corner voice label
+  x.fillStyle="#1b1d23"; x.fillRect(0,0,KEYW,CHORDH);
+  x.fillStyle="#e8c47b"; x.font="600 9px Geist"; x.fillText("LILIA",6,11);
+  x.fillStyle="#5d626d"; x.font="9px Geist Mono, monospace"; x.fillText(nm(RANGE[0])+"–"+nm(RANGE[1]),6,20);
+  // note rows + keyboard
+  for(let p=RANGE[0];p<=RANGE[1];p++){
+    const yy=py(p), black=[1,3,6,8,10].includes(p%12);
+    x.fillStyle= black? "#121317":"#16171c"; x.fillRect(gx,yy,gw,rh);
+    x.fillStyle= black? "#15161b":"#1b1d23"; x.fillRect(0,yy,KEYW,rh);
+    x.strokeStyle="#1f2229"; x.beginPath();x.moveTo(gx,yy+0.5);x.lineTo(W,yy+0.5);x.stroke();
+    if(!black){x.fillStyle="#5d626d";x.font="8px Geist Mono, monospace";x.fillText(nm(p),6,yy+rh-3);}
+  }
+  // beat grid
+  for(let b=0;b<=BEATS;b++){x.strokeStyle= b%4===0? "#272a31":"#1f2229";x.beginPath();x.moveTo(bx(b)+0.5,top);x.lineTo(bx(b)+0.5,H);x.stroke();}
+  // notes
+  NOTES.forEach(n=>{
+    const X=bx(n.s),Y=py(n.p),Wd=Math.max(3,(n.d/BEATS)*gw-1.5),Hd=rh-1.5;
+    x.fillStyle= n.sl? `rgba(232,196,123,${.30+.25*n.v})` : `rgba(232,196,123,${.55+.4*n.v})`;
+    rr(x,X,Y+0.75,Wd,Hd,2); x.fill();
+    x.strokeStyle= n.sl?"rgba(232,196,123,.6)":"rgba(232,196,123,.34)"; x.lineWidth=1; x.stroke();
+    if(n.syl && Wd>14){x.fillStyle="rgba(12,10,6,.92)";x.font="italic 11px Instrument Serif, Georgia, serif";x.fillText(n.syl,X+4,Y+rh-4);}
+  });
+  // pitch curve overlay (f0)
+  x.strokeStyle="rgba(246,236,200,.85)";x.lineWidth=1.2;x.beginPath();
+  let st=false;
+  for(let b=0;b<=BEATS;b+=0.04){const n=noteAt(b);const yy=py(n.p)+rh*0.5; if(!st){x.moveTo(bx(b),yy);st=true;}else x.lineTo(bx(b),yy);}
+  x.stroke();
+  // playhead
+  x.strokeStyle="rgba(232,196,123,.3)";x.beginPath();x.moveTo(bx(0.9)+0.5,top);x.lineTo(bx(0.9)+0.5,H);x.stroke();
+}
+function rr(c,x,y,w,h,r){r=Math.min(r,w/2,h/2);c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+
+//================ expression dock canvas ================
+const dockC=document.getElementById('dock'), dockX=dockC.getContext('2d');
+let points=null; // editable breakpoint set for active curve (built from user fn)
+let dragIdx=-1;
+const PADL=52, PADR=10, PADT=22, PADB=20;
+function buildPoints(){
+  const cv=CURVES[active];
+  const fn = edited[active] && cv.user ? cv.user : cv.base;
+  points=[];
+  // breakpoints at each note onset + midpoints for a hand-edited feel
+  const ts=new Set([0]);
+  NOTES.forEach(n=>{ts.add(+n.s.toFixed(2));ts.add(+(n.s+n.d/2).toFixed(2));});
+  ts.add(BEATS);
+  [...ts].sort((a,b)=>a-b).forEach(t=>points.push({t,v:fn(t)}));
+}
+function drawDock(){
+  const r=fit(dockC),x=dockX,W=r.width,H=r.height;
+  const cv=CURVES[active];
+  x.clearRect(0,0,W,H);x.fillStyle="#0f1013";x.fillRect(0,0,W,H);
+  const gx=PADL,gw=W-PADL-PADR,gy=PADT,gh=H-PADT-PADB;
+  const bx=b=>gx+b/BEATS*gw;
+  const vy=v=>gy+(1-v)*gh;
+  // header
+  x.fillStyle="#9aa0ac";x.font="600 10px Geist";x.fillText(cv.label.toUpperCase(),10,14);
+  // value axis grid + labels
+  const ax = active==="pitch" ? ["+50¢","0","−50¢"] : ["1.0","0.5","0"];
+  [0,0.5,1].forEach((g,i)=>{const yy=vy(g);x.strokeStyle= g===0.5&&active==="pitch"?"#272a31":"#1f2229";x.setLineDash(g===0.5?[3,3]:[]);x.beginPath();x.moveTo(gx,yy);x.lineTo(gx+gw,yy);x.stroke();x.setLineDash([]);x.fillStyle="#5d626d";x.font="8px Geist Mono, monospace";x.fillText(ax[i],8,yy+3);});
+  // note onset ticks + syllable labels aligned with roll
+  NOTES.forEach(n=>{const X=bx(n.s);x.strokeStyle="rgba(90,96,108,.25)";x.beginPath();x.moveTo(X,gy);x.lineTo(X,gy+gh);x.stroke();if(n.syl){x.fillStyle="#3f434c";x.font="italic 9px Instrument Serif, Georgia, serif";x.fillText(n.syl,X+3,gy+gh+13);}});
+  // bar lines
+  for(let b=0;b<=BEATS;b+=4){x.strokeStyle="#272a31";x.beginPath();x.moveTo(bx(b),gy);x.lineTo(bx(b),gy+gh);x.stroke();}
+  // baseline ghost (auto-derived)
+  x.strokeStyle="rgba(120,124,134,.5)";x.lineWidth=1;x.setLineDash([4,3]);x.beginPath();
+  for(let b=0;b<=BEATS;b+=0.05){const v=cv.base(b);if(b===0)x.moveTo(bx(b),vy(v));else x.lineTo(bx(b),vy(v));}
+  x.stroke();x.setLineDash([]);
+  // filled area under active curve
+  const col=cv.color;
+  const grad=x.createLinearGradient(0,gy,0,gy+gh);
+  grad.addColorStop(0,hexA(col,.28));grad.addColorStop(1,hexA(col,.02));
+  x.beginPath();x.moveTo(bx(points[0].t),vy(points[0].v));
+  for(let i=1;i<points.length;i++)x.lineTo(bx(points[i].t),vy(points[i].v));
+  x.lineTo(bx(points[points.length-1].t),gy+gh);x.lineTo(bx(points[0].t),gy+gh);x.closePath();
+  x.fillStyle=grad;x.fill();
+  // active curve line
+  x.strokeStyle=col;x.lineWidth=1.6;x.beginPath();
+  points.forEach((p,i)=>{const X=bx(p.t),Y=vy(p.v);i?x.lineTo(X,Y):x.moveTo(X,Y);});x.stroke();
+  // breakpoints
+  points.forEach((p,i)=>{const X=bx(p.t),Y=vy(p.v);x.beginPath();x.arc(X,Y,i===dragIdx?4.5:3,0,7);x.fillStyle=i===dragIdx?"#fff":col;x.fill();x.strokeStyle="#0f1013";x.lineWidth=1.5;x.stroke();});
+  // legend
+  x.fillStyle="#5d626d";x.font="9px Geist";x.fillText("— edited",gx+gw-118,14);
+  x.fillStyle=col;x.fillRect(gx+gw-128,9,8,2);
+  x.fillStyle="#5d626d";x.fillText("- - baseline",gx+gw-58,14);
+}
+function hexA(h,a){const n=h.replace('#','');const r=parseInt(n.substr(0,2),16),g=parseInt(n.substr(2,2),16),b=parseInt(n.substr(4,2),16);return `rgba(${r},${g},${b},${a})`;}
+
+//================ interaction (drag breakpoints) ================
+const hud=document.getElementById('hud');
+function dockGeo(){const r=dockC.getBoundingClientRect();return {r,gx:PADL,gw:r.width-PADL-PADR,gy:PADT,gh:r.height-PADT-PADB};}
+dockC.addEventListener('mousedown',e=>{
+  if(state!=="populated") return;
+  const g=dockGeo(),mx=e.clientX-g.r.left,my=e.clientY-g.r.top;
+  let best=-1,bd=999;
+  points.forEach((p,i)=>{const X=g.gx+p.t/BEATS*g.gw,Y=g.gy+(1-p.v)*g.gh;const d=Math.hypot(mx-X,my-Y);if(d<bd){bd=d;best=i;}});
+  if(bd<14){dragIdx=best;edited[active]=true;setEdited();drawDock();showHud(e);}
+});
+window.addEventListener('mousemove',e=>{
+  if(dragIdx<0)return;
+  const g=dockGeo(),my=e.clientY-g.r.top;
+  let v=clamp(1-(my-g.gy)/g.gh,0,1);
+  if(snapOn) v=Math.round(v*20)/20;
+  points[dragIdx].v=v;drawDock();showHud(e);
+});
+window.addEventListener('mouseup',()=>{if(dragIdx>=0){dragIdx=-1;hud.style.display="none";drawDock();drawSparks();}});
+function showHud(e){
+  const g=dockGeo();const p=points[dragIdx];
+  let val = active==="pitch" ? ((p.v-0.5)*100).toFixed(0)+"¢" : p.v.toFixed(2);
+  hud.style.display="block";
+  hud.innerHTML=`<div class="k">${CURVES[active].label}</div><div class="v" style="color:${CURVES[active].color}">${val}</div><div class="sub">beat ${p.t.toFixed(2)} · ${snapOn?"snapped":"free"}</div>`;
+  let lx=clamp(e.clientX-g.r.left+12,4,g.r.width-110), ly=clamp(e.clientY-g.r.top-44,4,g.r.height-60);
+  hud.style.left=lx+"px";hud.style.top=ly+"px";
+}
+
+//================ sparklines in rail ================
+function drawSparks(){
+  document.querySelectorAll('.ctab').forEach(tab=>{
+    const key=tab.dataset.curve, cv=CURVES[key], c=tab.querySelector('.sparkc'),x=c.getContext('2d');
+    x.clearRect(0,0,c.width,c.height);
+    const off=!vbSupports[key];
+    const fn = !off && edited[key] && cv.user ? cv.user : cv.base;
+    // baseline faint
+    x.strokeStyle="rgba(120,124,134,.4)";x.lineWidth=1;x.beginPath();
+    for(let b=0;b<=BEATS;b+=0.1){const v=cv.base(b);const X=b/BEATS*c.width,Y=2+(1-v)*(c.height-4);b===0?x.moveTo(X,Y):x.lineTo(X,Y);}x.stroke();
+    x.strokeStyle=off?"#3f434c":cv.color;x.lineWidth=1.3;x.beginPath();
+    for(let b=0;b<=BEATS;b+=0.1){const v=fn(b);const X=b/BEATS*c.width,Y=2+(1-v)*(c.height-4);b===0?x.moveTo(X,Y):x.lineTo(X,Y);}x.stroke();
+  });
+}
+
+//================ UI sync ================
+function setEdited(){
+  document.querySelectorAll('.ctab').forEach(tab=>{
+    const k=tab.dataset.curve,bd=tab.querySelector('.badge');
+    if(!vbSupports[k]){bd.className="badge na";bd.textContent="n/a";tab.classList.add('off');}
+    else{tab.classList.remove('off');bd.className="badge "+(edited[k]?"edited":"auto");bd.textContent=edited[k]?"edited":"auto";}
+  });
+  // inspector
+  const cv=CURVES[active];
+  document.getElementById('inspTtl').textContent=cv.label;
+  const pill=document.getElementById('inspPill');
+  pill.textContent=edited[active]?"edited":"auto";
+  pill.style.display=vbSupports[active]?"inline-block":"none";
+  document.documentElement.style.setProperty('--cthumb',cv.thumb);
+  document.querySelectorAll('#insp input[type=range]').forEach(s=>s.style.setProperty('--cthumb',cv.thumb));
+  const rb=document.getElementById('resetBtn');
+  rb.classList.toggle('armed',edited[active]);
+}
+function selectCurve(k){
+  active=k;
+  document.querySelectorAll('.ctab').forEach(t=>t.classList.toggle('on',t.dataset.curve===k));
+  // veil if unsupported active curve
+  document.getElementById('veil').classList.toggle('show', state==="unsupported" && !vbSupports[k]);
+  buildPoints();setEdited();drawDock();
+}
+document.querySelectorAll('.ctab').forEach(t=>t.addEventListener('click',()=>selectCurve(t.dataset.curve)));
+document.getElementById('penToggle').addEventListener('click',e=>{if(e.target.dataset.pen){document.querySelectorAll('#penToggle button').forEach(b=>b.classList.toggle('on',b===e.target));}});
+document.getElementById('snapToggle').addEventListener('click',e=>{if(e.target.dataset.snap){snapOn=e.target.dataset.snap==="on";document.querySelectorAll('#snapToggle button').forEach(b=>b.classList.toggle('on',b===e.target));}});
+document.getElementById('resetBtn').addEventListener('click',()=>{edited[active]=false;buildPoints();setEdited();drawDock();drawSparks();});
+
+//================ state switcher ================
+function applyState(s){
+  state=s;
+  document.querySelectorAll('#seg button').forEach(b=>b.classList.toggle('on',b.dataset.state===s));
+  const ovE=document.getElementById('ovEmpty'),ovR=document.getElementById('ovRender'),veil=document.getElementById('veil'),hintEl=document.getElementById('hint');
+  ovE.classList.remove('show');ovR.classList.remove('show');veil.classList.remove('show');
+  vbSupports={dyn:true,tension:true,breath:true,pitch:true};
+  edited={dyn:true,tension:true,breath:false,pitch:false};
+  if(s==="empty"){ovE.classList.add('show');hintEl.textContent="No vocal generated — nothing to shape yet";}
+  else if(s==="rendering"){ovR.classList.add('show');hintEl.textContent="Feeding edited curves into the SVS segment builder…";}
+  else if(s==="unsupported"){vbSupports={dyn:true,tension:false,breath:false,pitch:true};hintEl.textContent="TIGER voicebank · tension & breathiness ignored (no error)";active="tension";}
+  else{hintEl.textContent="Lilia (MM 2.8) · all four curves supported";}
+  selectCurve(active);
+  setEdited();drawSparks();drawRoll();drawDock();
+}
+document.querySelectorAll('#seg button').forEach(b=>b.addEventListener('click',()=>applyState(b.dataset.state)));
+
+//================ boot ================
+function boot(){buildPoints();setEdited();drawRoll();drawDock();drawSparks();}
+window.addEventListener('resize',()=>{drawRoll();drawDock();});
+boot();
+</script>
+</body>
+</html>
