@@ -406,6 +406,53 @@ pub enum AudioCommand {
         channel: Option<u8>,
     },
 
+    // -- External-instrument tracks (doc #169, epic #39) --
+    /// Mark a track as an external instrument (or replace its config). The
+    /// MIDI output device/channel and audio-return device/channels are set
+    /// through the normal `SetTrackMidiOutput` / `SetTrackInputDevice` /
+    /// `SetTrackInputPort` commands; this carries only the bank/program and
+    /// latency offset that have no home on a plain track. The engine echoes
+    /// the stored config via `AudioEvent::ExternalInstrumentChanged`.
+    SetExternalInstrument {
+        config: resonance_common::ExternalInstrument,
+    },
+    /// Take a track out of external-instrument mode, dropping its config. The
+    /// engine emits `AudioEvent::ExternalInstrumentCleared` when a config was
+    /// present; clearing a non-external track is a silent no-op.
+    ClearExternalInstrument {
+        track_id: TrackId,
+    },
+    /// Set the selected bank/program for an external-instrument track and fire
+    /// the patch send (Bank Select + Program Change) on the track's MIDI output
+    /// channel. The engine echoes the updated config via
+    /// `ExternalInstrumentChanged`; if the MIDI output is offline it also emits
+    /// `ExternalInstrumentMidiOutOffline` while preserving the route. No-op when
+    /// the track is not an external instrument.
+    SetExternalInstrumentPatch {
+        track_id: TrackId,
+        /// Combined 14-bit bank (MSB << 7 | LSB), or `None` to send no Bank
+        /// Select.
+        bank: Option<u16>,
+        /// Program number (`0..=127`), or `None` to send no Program Change.
+        program: Option<u8>,
+    },
+    /// Set the manual latency offset (samples) for an external-instrument
+    /// track. The engine echoes the updated config via
+    /// `ExternalInstrumentChanged`. No-op when the track is not an external
+    /// instrument.
+    SetExternalInstrumentLatencyOffset {
+        track_id: TrackId,
+        latency_offset_samples: i64,
+    },
+    /// Re-check an external-instrument track's MIDI output and audio-return
+    /// devices against the currently-available hardware and report any that
+    /// have gone offline (`ExternalInstrumentMidiOutOffline` /
+    /// `ExternalInstrumentReturnInputOffline`). The config is preserved so a
+    /// replug reconnects. No-op when the track is not an external instrument.
+    CheckExternalInstrumentDevices {
+        track_id: TrackId,
+    },
+
     /// Configure the global MIDI clock master (Resonance → device).
     /// When `enabled` is true and `device` is set, the engine emits
     /// 24-PPQN clock pulses plus Start/Stop/Continue/Song Position
