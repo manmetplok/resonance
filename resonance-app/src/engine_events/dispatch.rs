@@ -33,6 +33,9 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::BounceProgress { fraction } => {
             transport::bounce_progress(r, fraction)
         }
+        E::ExportProgress { phase, fraction } => transport::export_progress(r, phase, fraction),
+        E::ExportComplete { path, bytes, .. } => transport::export_complete(r, path, bytes),
+        E::ExportError { kind, message } => transport::export_error(r, kind, message),
         E::MidiInputDevicesListed { devices } => transport::midi_input_devices(r, devices),
         E::MidiOutputDevicesListed { devices } => transport::midi_output_devices(r, devices),
         E::MidiClockStarted => transport::midi_clock_started(r),

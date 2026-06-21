@@ -34,6 +34,40 @@ pub struct BouncedClipData {
     pub waveform_peaks: Vec<(f32, f32)>,
 }
 
+/// Which pass of an [`AudioEvent::ExportProgress`] update is running.
+/// Non-normalized and true-peak exports run a single `Render`/`Encode`
+/// sweep; integrated-LUFS normalization adds an `Analyze` pass up front
+/// (see doc #196).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportPhase {
+    /// Rendering the project mix through the chunked render core.
+    Render,
+    /// Measuring integrated loudness / true peak before the gain trim.
+    Analyze,
+    /// Feeding rendered frames to the encoder sink.
+    Encode,
+}
+
+/// Why an [`AudioEvent::ExportError`] fired. Lets the app distinguish a
+/// recoverable encoder-unavailable case (offer the WAV/FLAC fallback)
+/// from hard I/O failures, an empty project, a running transport, or a
+/// user cancel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportErrorKind {
+    /// The selected format's encoder is unavailable (e.g. an optional
+    /// native library was not compiled in). Surfaced *before* any partial
+    /// file is written so the app can offer the always-available fallback.
+    EncoderUnavailable,
+    /// Filesystem error creating/writing/finalizing the output file.
+    Io,
+    /// The export was cancelled via `AudioCommand::CancelBounce`.
+    Cancelled,
+    /// The project has no audio to render.
+    NoAudio,
+    /// The transport is rolling; stop it before exporting.
+    TransportRunning,
+}
+
 /// Events sent from the audio engine back to the GUI.
 #[derive(Debug, Clone)]
 pub enum AudioEvent {
@@ -172,6 +206,32 @@ pub enum AudioEvent {
         path: String,
     },
     BounceError(String),
+    /// Progress update for an [`AudioCommand::ExportAudio`] job.
+    /// `fraction` is in `[0.0, 1.0]` within the reported `phase`.
+    /// Generalizes `BounceProgress` for the export pipeline; the legacy
+    /// WAV bounce shim keeps emitting `BounceProgress` unchanged.
+    ExportProgress {
+        phase: ExportPhase,
+        fraction: f32,
+    },
+    /// An [`AudioCommand::ExportAudio`] job finished successfully. The
+    /// loudness figures are populated when normalization ran (`None`/`0.0`
+    /// otherwise) so the app can show the verified achieved loudness.
+    ExportComplete {
+        path: String,
+        /// Achieved integrated loudness in LUFS, when measured.
+        achieved_lufs: Option<f32>,
+        /// Achieved true peak in dBTP.
+        achieved_dbtp: f32,
+        /// Encoded file size in bytes.
+        bytes: u64,
+    },
+    /// An [`AudioCommand::ExportAudio`] job failed (or was cancelled).
+    /// `message` is user-facing; `kind` lets the app react structurally.
+    ExportError {
+        kind: ExportErrorKind,
+        message: String,
+    },
     /// "Bounce in place" finished. Covers both the offline (internal
     /// synth) and realtime (external MIDI) flows; `clip` is `Some` when
     /// the engine rendered the clip inline (offline) and `None` when

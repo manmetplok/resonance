@@ -327,6 +327,31 @@ pub(crate) fn engine_thread(
     drop(drained_plugins);
 }
 
+/// Route an `ExportAudio` / `BounceToWav` job to the offline renderer.
+///
+/// Today every job goes through the existing WAV bounce worker, which
+/// renders stereo f32 at the engine rate — i.e. the default-WAV path is
+/// byte-for-byte unchanged. Format selection (bit depth, FLAC/MP3/Opus
+/// sinks), export resampling and the two-pass loudness-normalization
+/// stage land with the encoder-sink follow-up todos (#650–#652); they
+/// branch on `settings.format` / `settings.normalize` here. `settings`
+/// is threaded through now so the command/event boundary is stable.
+fn dispatch_export(ctx: &HandlerCtx, path: String, _settings: ExportSettings) {
+    bounce::to_wav_spawn(
+        path,
+        Arc::clone(ctx.shared),
+        Arc::clone(ctx.tracks),
+        Arc::clone(ctx.busses),
+        Arc::clone(ctx.master),
+        Arc::clone(ctx.clips),
+        Arc::clone(ctx.midi_clips),
+        Arc::clone(ctx.plugins),
+        Arc::clone(ctx.tempo_map),
+        ctx.sample_rate,
+        ctx.event_tx.clone(),
+    );
+}
+
 fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
     match cmd {
         // -- Transport --
@@ -513,20 +538,13 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         }
         AudioCommand::SaveAllPluginStates => plugins::handle_save_all_plugin_states(ctx),
 
-        // -- Bounce --
-        AudioCommand::BounceToWav { path } => bounce::to_wav_spawn(
-            path,
-            Arc::clone(ctx.shared),
-            Arc::clone(ctx.tracks),
-            Arc::clone(ctx.busses),
-            Arc::clone(ctx.master),
-            Arc::clone(ctx.clips),
-            Arc::clone(ctx.midi_clips),
-            Arc::clone(ctx.plugins),
-            Arc::clone(ctx.tempo_map),
-            ctx.sample_rate,
-            ctx.event_tx.clone(),
-        ),
+        // -- Bounce / export --
+        // Legacy WAV bounce: a thin shim over the generalized export
+        // path with default 32-bit-float WAV settings (doc #196).
+        AudioCommand::BounceToWav { path } => {
+            dispatch_export(ctx, path, ExportSettings::default_wav())
+        }
+        AudioCommand::ExportAudio { path, settings } => dispatch_export(ctx, path, settings),
         AudioCommand::BounceTrackToAudio {
             source_track_id,
             target_track_id,
