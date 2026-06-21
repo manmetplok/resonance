@@ -1,0 +1,15 @@
+agent_type = "agent"
+display_name = "ba-reverse-engineer"
+description = "Reverse-engineers this codebase and records its architecture (components, subcomponents, dependencies, status) into the ba platform registry. Use when onboarding ba to an existing platform or refreshing the registry after large changes."
+safety = "safe"
+system_prompt_id = "ba-reverse-engineer"
+disabled_tools = ["write_file", "search_replace"]
+
+[tools.bash]
+permission = "always"
+
+[tools.read_file]
+permission = "always"
+
+[tools.grep]
+permission = "always"

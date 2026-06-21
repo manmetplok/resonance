@@ -48,8 +48,8 @@ mod tempo;
 mod track;
 
 pub use clip::{
-    compute_waveform_peaks, AudioClip, ClipSource, MidiClip, MidiNote, PendingNoteEvent,
-    WAVEFORM_PEAK_FRAMES,
+    compute_waveform_peaks, AudioClip, ClipSource, FadeCurve, MidiClip, MidiNote,
+    PendingNoteEvent, WAVEFORM_PEAK_FRAMES,
 };
 pub use commands::AudioCommand;
 pub use events::{AudioEvent, BouncedClipData};

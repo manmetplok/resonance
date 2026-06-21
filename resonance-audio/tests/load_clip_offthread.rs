@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 
 use resonance_audio::transcode_to_wav;
-use resonance_audio::types::{compute_waveform_peaks, AudioClip, ClipSource};
+use resonance_audio::types::{compute_waveform_peaks, AudioClip, ClipSource, FadeCurve};
 
 fn make_tempdir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -137,6 +137,11 @@ fn worker_publish_does_not_stall_concurrent_reads() {
             name: "test".into(),
             trim_start_frames: 0,
             trim_end_frames: 0,
+            fade_in_frames: 0,
+            fade_in_curve: FadeCurve::default(),
+            fade_out_frames: 0,
+            fade_out_curve: FadeCurve::default(),
+            gain_db: 0.0,
         };
         worker_clips.write().push(clip);
         total_frames
@@ -199,6 +204,11 @@ fn concurrent_loads_all_publish_without_deadlock() {
                 name: format!("clip_{id}"),
                 trim_start_frames: 0,
                 trim_end_frames: 0,
+                fade_in_frames: 0,
+                fade_in_curve: FadeCurve::default(),
+                fade_out_frames: 0,
+                fade_out_curve: FadeCurve::default(),
+                gain_db: 0.0,
             };
             clips_arc.write().push(clip);
         }));

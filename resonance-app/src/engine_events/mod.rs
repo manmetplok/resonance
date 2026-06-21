@@ -8,6 +8,7 @@
 mod clips;
 mod dispatch;
 mod midi;
+pub mod performance;
 mod plugins;
 mod presets;
 mod project_io;

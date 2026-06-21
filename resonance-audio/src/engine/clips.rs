@@ -74,6 +74,11 @@ pub(crate) fn handle_import_clip(
                                     name: name.clone(),
                                     trim_start_frames: 0,
                                     trim_end_frames: 0,
+                                    fade_in_frames: 0,
+                                    fade_in_curve: FadeCurve::default(),
+                                    fade_out_frames: 0,
+                                    fade_out_curve: FadeCurve::default(),
+                                    gain_db: 0.0,
                                 };
                                 clips_arc.write().push(clip);
                                 let _ = thread_event_tx.send(AudioEvent::ClipImported {
@@ -228,6 +233,11 @@ pub(crate) fn handle_load_clip_from_wav(
                         name: name.clone(),
                         trim_start_frames,
                         trim_end_frames,
+                        fade_in_frames: 0,
+                        fade_in_curve: FadeCurve::default(),
+                        fade_out_frames: 0,
+                        fade_out_curve: FadeCurve::default(),
+                        gain_db: 0.0,
                     };
                     clips_arc.write().push(clip);
                     let _ = thread_event_tx.send(AudioEvent::ClipImported {

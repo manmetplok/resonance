@@ -312,6 +312,11 @@ impl RecordingState {
                 name: name.clone(),
                 trim_start_frames,
                 trim_end_frames,
+                fade_in_frames: 0,
+                fade_in_curve: FadeCurve::default(),
+                fade_out_frames: 0,
+                fade_out_curve: FadeCurve::default(),
+                gain_db: 0.0,
             };
             {
                 let mut guard = clips.write();

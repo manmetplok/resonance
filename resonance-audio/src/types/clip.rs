@@ -311,6 +311,51 @@ fn pre_touch(bytes: &[u8]) {
     std::hint::black_box(acc);
 }
 
+/// Shape of a fade ramp (and, where two clips overlap, the automatic
+/// crossfade derived from their adjacent fades). Each variant maps a
+/// normalized fade-in position `t` in `[0, 1]` to a linear gain
+/// coefficient via [`FadeCurve::coefficient`].
+///
+/// - `Linear`: `t` — constant-slope amplitude ramp.
+/// - `EqualPower`: `sin(t·π/2)` — constant-power ramp; two clips whose
+///   adjacent fades are equal-power sum to constant power across an
+///   overlap, giving a click-free crossfade seam. This is the default.
+/// - `Exp`: `t²` — slow-start exponential-ish ramp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FadeCurve {
+    Linear,
+    EqualPower,
+    Exp,
+}
+
+impl Default for FadeCurve {
+    fn default() -> Self {
+        FadeCurve::EqualPower
+    }
+}
+
+impl FadeCurve {
+    /// Linear gain coefficient for this curve at normalized fade-in
+    /// position `t`. `t` is the progress through a fade-in, in `[0, 1]`:
+    /// `0.0` → silence, `1.0` → unity. For a fade-out, pass the
+    /// complementary position `1.0 - t` so the ramp runs the other way
+    /// (`EqualPower` is symmetric: `sin((1−t)·π/2) = cos(t·π/2)`, the
+    /// constant-power complement the crossfade math relies on).
+    ///
+    /// `t` outside `[0, 1]` is clamped, so callers can hand in raw
+    /// `frame / fade_frames` ratios without a separate bounds check.
+    /// O(1) and allocation-free for the mixer hot path.
+    #[inline]
+    pub fn coefficient(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            FadeCurve::Linear => t,
+            FadeCurve::EqualPower => (t * std::f32::consts::FRAC_PI_2).sin(),
+            FadeCurve::Exp => t * t,
+        }
+    }
+}
+
 /// An audio clip on the timeline. The PCM samples live behind
 /// [`ClipSource`], which may be an owned `Vec<f32>` or a
 /// memory-mapped WAV file — so large recorded takes never need to
@@ -328,6 +373,18 @@ pub struct AudioClip {
     pub trim_start_frames: u64,
     /// Non-destructive trim: frames to skip from the end of audio data.
     pub trim_end_frames: u64,
+    /// Fade-in length in frames, ramping up over the first
+    /// `fade_in_frames` after the clip's visible start. `0` = no fade.
+    pub fade_in_frames: u64,
+    /// Curve shaping the fade-in ramp.
+    pub fade_in_curve: FadeCurve,
+    /// Fade-out length in frames, ramping down over the last
+    /// `fade_out_frames` before the clip's visible end. `0` = no fade.
+    pub fade_out_frames: u64,
+    /// Curve shaping the fade-out ramp.
+    pub fade_out_curve: FadeCurve,
+    /// Per-clip gain in decibels. `0.0` dB = unity (no change).
+    pub gain_db: f32,
 }
 
 /// Number of stereo frames per waveform peak bucket.

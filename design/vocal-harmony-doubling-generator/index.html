@@ -1,0 +1,743 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — Vocal harmony & doubling generator (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --bad:#e87b8b;
+    --radius-xs:4px; --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+  .serif{font-family:"Instrument Serif",Georgia,serif;font-style:italic}
+
+  /* ---- App chrome ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1)}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px;color:var(--text-1)}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .tabs{display:flex;gap:2px;margin-left:8px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+  .ghost{
+    padding:6px 12px;border:1px solid var(--line);border-radius:var(--radius-md);
+    color:var(--text-2);background:transparent;font-size:12px;cursor:pointer;font-family:inherit;
+    display:inline-flex;align-items:center;gap:6px;
+  }
+  .ghost:hover{background:var(--bg-2);color:var(--text-1)}
+  .ghost.warm{color:var(--warm);border-color:var(--warm-line)}
+  .ghost.accent{color:var(--accent-soft);border-color:var(--accent-line);background:var(--accent-dim)}
+  .ghost:disabled{opacity:.4;cursor:default}
+
+  /* ---- State switcher (prototype only) ---- */
+  .statebar{
+    height:42px;flex:0 0 auto;display:flex;align-items:center;gap:8px;
+    padding:0 18px;background:var(--bg-1);border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);margin-right:4px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{
+    border:0;background:transparent;color:var(--text-2);padding:6px 13px;font-size:12px;
+    cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2);
+  }
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .hint{margin-left:auto;color:var(--text-3);font-size:11.5px;display:flex;align-items:center;gap:7px}
+  .hint .seed{font-family:"Geist Mono",monospace;color:var(--text-2);background:var(--bg-2);border:1px solid var(--line);padding:2px 7px;border-radius:999px;font-size:10.5px}
+
+  /* ---- Body ---- */
+  .body{flex:1;display:flex;min-height:0}
+  .editor{flex:1;display:flex;flex-direction:column;min-width:0}
+
+  /* preview roll (lead + generated voices stacked) */
+  .roll{flex:1;position:relative;min-height:0;background:var(--bg-1);overflow:hidden}
+  .roll canvas{display:block;width:100%;height:100%}
+
+  /* roll toolbar strip */
+  .rolltools{
+    height:34px;flex:0 0 auto;display:flex;align-items:center;gap:10px;
+    padding:0 14px;background:var(--bg-1);border-top:1px solid var(--line);
+  }
+  .rolltools .grp{display:flex;align-items:center;gap:6px}
+  .rolltools .glabel{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3)}
+  .chip{
+    display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;
+    border:1px solid var(--line);background:var(--bg-2);color:var(--text-2);font-size:11px;cursor:pointer;
+  }
+  .chip:hover{background:var(--bg-3);color:var(--text-1)}
+  .chip .dot{width:8px;height:8px;border-radius:2px;background:var(--c,var(--warm))}
+  .chip.off{opacity:.4}
+  .rolltools .rt-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+
+  /* ---- Right generator rail ---- */
+  .rail{
+    flex:0 0 360px;background:var(--bg-2);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;min-height:0;
+  }
+  .rail-head{
+    padding:12px 15px 11px;display:flex;align-items:center;gap:9px;border-bottom:1px solid var(--line-2);
+    background:linear-gradient(180deg,rgba(139,109,255,.07),transparent);
+  }
+  .rail-head .ttl{font-size:13.5px;font-weight:600;color:var(--text-1)}
+  .rail-head .sub{font-size:11px;color:var(--text-3);margin-top:2px}
+  .rail-head .glyph{
+    width:30px;height:30px;flex:0 0 auto;border-radius:var(--radius-md);display:flex;align-items:center;justify-content:center;
+    background:var(--accent-dim);border:1px solid var(--accent-line);font-size:15px;
+  }
+  .rail-scroll{flex:1;overflow:auto;min-height:0}
+
+  /* collapsible group cards */
+  .group{border-bottom:1px solid var(--line-2)}
+  .group-hd{
+    height:34px;display:flex;align-items:center;gap:8px;padding:0 15px;cursor:pointer;user-select:none;
+  }
+  .group-hd:hover{background:var(--bg-3)}
+  .group-hd .caret{font-size:9px;color:var(--text-3);width:10px;transition:transform .12s}
+  .group.closed .caret{transform:rotate(-90deg)}
+  .group-hd .gt{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-2);font-weight:600}
+  .group-hd .meta{margin-left:auto;font-size:10.5px;color:var(--text-3)}
+  .group-bd{padding:4px 15px 15px;display:flex;flex-direction:column;gap:14px}
+  .group.closed .group-bd{display:none}
+
+  .field{display:flex;flex-direction:column;gap:7px}
+  .field .flbl{display:flex;justify-content:space-between;align-items:baseline}
+  .field .flbl span{font-size:11.5px;color:var(--text-2)}
+  .field .flbl b{font-size:11.5px;color:var(--text-1);font-weight:500;font-family:"Geist Mono",monospace}
+  .field .help{font-size:10.5px;color:var(--text-3);line-height:1.5}
+
+  /* segmented control */
+  .segmented{display:flex;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .segmented button{
+    flex:1;border:0;background:transparent;color:var(--text-2);padding:7px 0;font-size:11.5px;
+    cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2);
+  }
+  .segmented button:last-child{border-right:0}
+  .segmented button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .segmented.warm button.on{background:rgba(232,196,123,.14);color:var(--warm)}
+
+  /* stepper */
+  .stepper{display:flex;align-items:center;gap:0;border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden;width:fit-content}
+  .stepper button{width:30px;height:30px;border:0;background:var(--bg-1);color:var(--text-2);font-size:15px;cursor:pointer;font-family:inherit}
+  .stepper button:hover{background:var(--bg-3);color:var(--text-1)}
+  .stepper .val{min-width:42px;text-align:center;font-family:"Geist Mono",monospace;font-size:13px;color:var(--text-1);border-left:1px solid var(--line-2);border-right:1px solid var(--line-2);padding:6px 0}
+
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:3px;background:var(--line);outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:var(--cthumb,var(--accent));border:2px solid var(--bg-2);cursor:pointer}
+  input[type=range]:disabled{opacity:.4}
+
+  /* voicing diatonic indicator */
+  .diatonic{
+    display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:var(--radius-md);
+    background:rgba(109,214,163,.07);border:1px solid rgba(109,214,163,.26);
+  }
+  .diatonic .ck{color:var(--good);font-size:13px}
+  .diatonic .txt{font-size:11px;color:var(--text-2);line-height:1.45}
+  .diatonic .txt b{color:var(--good);font-weight:500}
+  .diatonic.warn{background:rgba(232,196,123,.07);border-color:var(--warm-line)}
+  .diatonic.warn .ck{color:var(--warm)}
+  .diatonic.warn .txt b{color:var(--warm)}
+
+  /* ---- Voices list ---- */
+  .voices{padding:0 0 12px}
+  .voices-hd{
+    padding:11px 15px 8px;display:flex;align-items:center;gap:8px;position:sticky;top:0;background:var(--bg-2);z-index:2;
+  }
+  .voices-hd .gt{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-2);font-weight:600}
+  .voices-hd .ct{margin-left:auto;font-size:10px;color:var(--text-3)}
+
+  .vrow{
+    margin:0 12px 8px;border:1px solid var(--line);border-radius:var(--radius-lg);background:var(--bg-1);
+    overflow:hidden;position:relative;
+  }
+  .vrow::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c)}
+  .vrow.lead{border-color:var(--warm-line)}
+  .vrow.muted{opacity:.5}
+  .vrow-top{display:flex;align-items:center;gap:9px;padding:9px 11px 9px 13px}
+  .vrow .nm{font-size:12.5px;color:var(--text-1);font-weight:500}
+  .vrow .role{font-size:10.5px;color:var(--text-3);font-family:"Geist Mono",monospace}
+  .vrow .leadtag{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--warm);border:1px solid var(--warm-line);background:rgba(232,196,123,.1);padding:1px 6px;border-radius:999px}
+  .vrow .vactions{margin-left:auto;display:flex;align-items:center;gap:4px}
+  .iconbtn{
+    width:24px;height:24px;border:1px solid var(--line);border-radius:var(--radius-xs);background:var(--bg-2);
+    color:var(--text-3);font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  }
+  .iconbtn:hover{background:var(--bg-3);color:var(--text-1)}
+  .iconbtn.on.m{color:var(--bad);border-color:rgba(232,123,139,.4);background:rgba(232,123,139,.1)}
+  .iconbtn.on.s{color:var(--warm);border-color:var(--warm-line);background:rgba(232,196,123,.1)}
+
+  .vrow-body{padding:0 11px 11px 13px;display:flex;flex-direction:column;gap:9px}
+  .vb-pick{display:flex;align-items:center;gap:7px}
+  .vb-pick .vlbl{font-size:10.5px;color:var(--text-3);width:62px}
+  .select{
+    flex:1;display:flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid var(--line);border-radius:var(--radius-md);
+    background:var(--bg-2);color:var(--text-1);font-size:11.5px;cursor:pointer;
+  }
+  .select:hover{background:var(--bg-3)}
+  .select .car{margin-left:auto;color:var(--text-3);font-size:9px}
+  .select .vbdot{width:7px;height:7px;border-radius:50%;background:var(--good)}
+  .pan-level{display:flex;gap:13px}
+  .pan-level .pl{flex:1;display:flex;flex-direction:column;gap:5px}
+  .pan-level .pl .plr{display:flex;justify-content:space-between}
+  .pan-level .pl span{font-size:10px;color:var(--text-3)}
+  .pan-level .pl b{font-size:10.5px;color:var(--text-2);font-family:"Geist Mono",monospace}
+  .badge{
+    font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;
+    padding:1px 6px;border-radius:999px;color:var(--text-3);border:1px solid var(--line);
+  }
+  .badge.edited{color:var(--warm);border-color:var(--warm-line);background:rgba(232,196,123,.1)}
+  .badge.na{color:var(--bad);border-color:rgba(232,123,139,.3);background:rgba(232,123,139,.08)}
+
+  /* footer action bar */
+  .rail-foot{
+    flex:0 0 auto;padding:12px 15px;border-top:1px solid var(--line);background:var(--bg-2);
+    display:flex;flex-direction:column;gap:9px;
+  }
+  .gen{
+    width:100%;padding:10px 0;border:1px solid var(--accent-line);background:var(--accent-dim);
+    color:var(--accent-soft);border-radius:var(--radius-md);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
+    display:flex;align-items:center;justify-content:center;gap:8px;
+  }
+  .gen:hover{background:rgba(139,109,255,.24)}
+  .foot-row{display:flex;gap:8px}
+  .foot-row .ghost{flex:1;justify-content:center}
+  .rail-foot .note{font-size:10.5px;color:var(--text-3);line-height:1.5}
+  .rail-foot .note b{color:var(--good);font-weight:500}
+
+  /* ---- Overlays ---- */
+  .overlay{position:absolute;inset:0;z-index:9;display:none;align-items:center;justify-content:center;flex-direction:column;gap:13px;background:rgba(15,16,19,.74);backdrop-filter:blur(2px);padding:30px;text-align:center}
+  .overlay.show{display:flex}
+  .overlay .glyph{font-size:34px;opacity:.6}
+  .overlay .ttl{font-size:16px;color:var(--text-1)}
+  .overlay .sub{font-size:12.5px;color:var(--text-2);max-width:420px;line-height:1.6}
+  .overlay .sub b{color:var(--accent-soft);font-weight:500}
+
+  /* rendering progress (per voice) */
+  .renderpanel{width:340px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-xl);padding:18px;box-shadow:0 20px 60px rgba(0,0,0,.55)}
+  .renderpanel .rt{font-size:13.5px;color:var(--text-1);font-weight:600;display:flex;align-items:center;gap:9px}
+  .renderpanel .rs{font-size:11.5px;color:var(--text-3);margin:5px 0 15px}
+  .vprog{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+  .vprog .vd{width:8px;height:8px;border-radius:2px;background:var(--c);flex:0 0 auto}
+  .vprog .vn{font-size:11.5px;color:var(--text-2);width:118px;text-align:left}
+  .vprog .pbar{flex:1;height:5px;border-radius:3px;background:var(--line);overflow:hidden}
+  .vprog .pbar i{display:block;height:100%;background:var(--c);border-radius:3px}
+  .vprog .pct{font-size:10px;color:var(--text-3);font-family:"Geist Mono",monospace;width:34px;text-align:right}
+  .vprog.done .vn{color:var(--text-1)}
+  .vprog.done .pct{color:var(--good)}
+  .spin{width:15px;height:15px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- chrome -->
+  <div class="chrome">
+    <div class="brand">re<b>·</b>sonance</div>
+    <div class="tabs">
+      <div class="tab">Arrange</div>
+      <div class="tab active">Compose</div>
+      <div class="tab">Mix</div>
+      <div class="tab">Perform</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="ghost">Expression curves</button>
+    <button class="ghost accent">✦ Harmony &amp; doubling</button>
+  </div>
+
+  <!-- state switcher (prototype only) -->
+  <div class="statebar">
+    <span class="lbl">State</span>
+    <div class="seg" id="seg">
+      <button data-state="populated" class="on">Generated stack</button>
+      <button data-state="empty">No lead vocal</button>
+      <button data-state="rendering">Rendering</button>
+      <button data-state="nochords">No chord track</button>
+    </div>
+    <span class="hint" id="hint">
+      <span>Lead: <b style="color:var(--warm)">Verse Vocal</b> · Lilia (MM 2.8)</span>
+      <span class="seed" id="seedChip">seed&nbsp;#4F2A</span>
+    </span>
+  </div>
+
+  <!-- body -->
+  <div class="body">
+    <!-- center: stacked preview roll -->
+    <div class="editor">
+      <div class="roll">
+        <canvas id="roll"></canvas>
+
+        <div class="overlay" id="ovEmpty">
+          <div class="glyph">🎤</div>
+          <div class="ttl">Select a lead vocal to harmonize</div>
+          <div class="sub">Harmony and doubling build on top of an existing sung line. Pick a vocal track in the arrangement, then dial in a voicing — Resonance derives <b>diatonic harmony voices</b> and <b>humanized doubles</b> that inherit the lead's lyrics and phonemes.</div>
+          <button class="ghost accent" style="margin-top:4px" onclick="applyState('populated')">Use “Verse Vocal” as lead</button>
+        </div>
+
+        <div class="overlay" id="ovRender">
+          <div class="renderpanel">
+            <div class="rt"><span class="spin"></span> Rendering vocal stack…</div>
+            <div class="rs">Each voice is rendered through resonance-svs and mixed into the project. Generation is deterministic for seed <span class="mono">#4F2A</span>.</div>
+            <div id="renderRows"></div>
+          </div>
+        </div>
+
+        <div class="overlay" id="ovNoChords">
+          <div class="glyph" style="color:var(--warm)">⚠</div>
+          <div class="ttl">No chord track to follow</div>
+          <div class="sub">Diatonic harmony needs a harmonic context to stay in key. This section has no chord progression on the global track. Generate from the lead's detected key instead, or add chords for chord-aware voicing.</div>
+          <div style="display:flex;gap:10px;margin-top:6px">
+            <button class="ghost warm" onclick="applyState('populated')">Use detected key · D major</button>
+            <button class="ghost" onclick="applyState('populated')">Open chord track</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- roll toolbar -->
+      <div class="rolltools" id="rolltools">
+        <span class="glabel">Show</span>
+        <span class="chip" data-vis="lead" style="--c:var(--warm)"><span class="dot"></span>Lead</span>
+        <span class="chip" data-vis="harm" style="--c:var(--accent)"><span class="dot"></span>Harmony ×3</span>
+        <span class="chip" data-vis="dbl" style="--c:var(--good)"><span class="dot"></span>Doubles ×2</span>
+        <div class="rt-right">
+          <span class="chip" id="soloLead">⤓ Solo lead</span>
+          <span class="chip" id="playChip" style="--c:var(--accent)"><span class="dot"></span>Audition stack</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- right: generator rail -->
+    <div class="rail">
+      <div class="rail-head">
+        <div class="glyph">✦</div>
+        <div>
+          <div class="ttl">Harmony &amp; doubling</div>
+          <div class="sub">From “Verse Vocal” — diatonic to the chord track</div>
+        </div>
+      </div>
+
+      <div class="rail-scroll">
+        <!-- HARMONY group -->
+        <div class="group" id="gHarmony">
+          <div class="group-hd" onclick="toggleGroup('gHarmony')">
+            <span class="caret">▾</span><span class="gt">Harmony</span>
+            <span class="meta" id="harmMeta">3 voices · above</span>
+          </div>
+          <div class="group-bd">
+            <div class="field">
+              <div class="flbl"><span>Voicing</span></div>
+              <div class="segmented" id="voicing">
+                <button data-v="3rd" class="on">3rd / 6th</button>
+                <button data-v="satb">SATB stack</button>
+                <button data-v="custom">Custom</button>
+              </div>
+              <div class="help" id="voicingHelp">Thirds &amp; sixths above the lead, snapped to the key — the classic pop/folk stack.</div>
+            </div>
+
+            <div class="field">
+              <div class="flbl"><span>Direction</span></div>
+              <div class="segmented" id="direction">
+                <button data-d="above" class="on">Above</button>
+                <button data-d="around">Around</button>
+                <button data-d="below">Below</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <div class="flbl"><span>Voice count</span><b id="vcVal">3</b></div>
+              <div class="stepper">
+                <button onclick="stepVoices(-1)">−</button>
+                <span class="val" id="vcStep">3</span>
+                <button onclick="stepVoices(1)">+</button>
+              </div>
+            </div>
+
+            <div class="diatonic" id="diatonic">
+              <span class="ck">✓</span>
+              <span class="txt">Following the chord track — <b>Dmaj7 · Bm7 · G6 · A</b>. Every harmony note is snapped diatonic to <b>D major</b>.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- DOUBLING group -->
+        <div class="group" id="gDoubling">
+          <div class="group-hd" onclick="toggleGroup('gDoubling')">
+            <span class="caret">▾</span><span class="gt">Doubling</span>
+            <span class="meta" id="dblMeta">2 doubles · wide</span>
+          </div>
+          <div class="group-bd">
+            <div class="field">
+              <div class="flbl"><span>Unison doubles</span><b id="dcVal">2</b></div>
+              <div class="stepper">
+                <button onclick="stepDoubles(-1)">−</button>
+                <span class="val" id="dcStep">2</span>
+                <button onclick="stepDoubles(1)">+</button>
+              </div>
+              <div class="help">Each double inherits the melody but gets unique micro-offsets so the stack widens naturally — never a static copy.</div>
+            </div>
+            <div class="field">
+              <div class="flbl"><span>Stereo width</span><b id="widthVal">±42%</b></div>
+              <input type="range" min="0" max="100" value="72" id="width" style="--cthumb:var(--good)">
+            </div>
+            <div class="field">
+              <div class="flbl"><span>Timing humanize</span><b id="timeVal">±11 ms</b></div>
+              <input type="range" min="0" max="100" value="38" id="timeHum" style="--cthumb:var(--good)">
+            </div>
+            <div class="field">
+              <div class="flbl"><span>Pitch humanize</span><b id="pitchVal">±7 ¢</b></div>
+              <input type="range" min="0" max="100" value="30" id="pitchHum" style="--cthumb:var(--good)">
+            </div>
+            <div class="field">
+              <div class="flbl"><span>Vary voicebank / formant</span></div>
+              <div class="segmented warm" id="varyVb">
+                <button data-x="off">Off</button>
+                <button data-x="on" class="on">On</button>
+              </div>
+              <div class="help">Alternate doubles render through a sibling voicebank for a wider, more believable stack where supported.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- VOICES list -->
+        <div class="voices">
+          <div class="voices-hd">
+            <span class="gt">Generated voices</span>
+            <span class="ct" id="voicesCt">6 lines</span>
+          </div>
+          <div id="voiceRows"></div>
+        </div>
+      </div>
+
+      <div class="rail-foot">
+        <button class="gen" id="genBtn" onclick="applyState('rendering')">✦ Generate &amp; render stack</button>
+        <div class="foot-row">
+          <button class="ghost">Reset to defaults</button>
+          <button class="ghost">↧ Bounce stack</button>
+        </div>
+        <div class="note">Voices land as <b>editable vocal lines</b> on the timeline — re-edit phrasing or expression curves and re-render any voice independently. Output is reproducible across save/load for the same seed &amp; inputs.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+//================ data model (mock) ================
+// D major scale for diatonic snapping
+const SCALE_PCS=[2,4,6,7,9,11,1]; // D E F# G A B C#
+const NAMES=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const nm=m=>NAMES[((m%12)+12)%12]+(Math.floor(m/12)-1);
+
+// lead vocal line
+const LEAD=[
+  {s:0.00,d:0.50,p:62,v:.62,syl:"When",sl:false},
+  {s:0.50,d:0.50,p:64,v:.70,syl:"the",sl:false},
+  {s:1.00,d:0.75,p:66,v:.78,syl:"morn",sl:false},
+  {s:1.75,d:0.25,p:69,v:.55,syl:"ing",sl:true},
+  {s:2.00,d:1.00,p:69,v:.86,syl:"breaks",sl:false},
+  {s:3.00,d:0.50,p:66,v:.60,syl:"a",sl:false},
+  {s:3.50,d:0.50,p:64,v:.66,syl:"new",sl:false},
+  {s:4.00,d:0.50,p:62,v:.58,syl:"I",sl:false},
+  {s:4.50,d:0.50,p:64,v:.64,syl:"will",sl:false},
+  {s:5.00,d:0.75,p:69,v:.80,syl:"rise",sl:false},
+  {s:5.75,d:0.25,p:71,v:.74,syl:"",sl:true},
+  {s:6.00,d:1.50,p:73,v:.95,syl:"high",sl:false},
+  {s:7.50,d:0.50,p:69,v:.62,syl:"to",sl:false},
+];
+const BEATS=8;
+const CHORDS=["Dmaj7","Bm7","G6","A"];
+
+// diatonic step shift: move a midi pitch by N scale degrees within D major
+function scaleIndex(p){
+  for(let i=0;i<SCALE_PCS.length;i++){ if(SCALE_PCS[i]===((p%12)+12)%12) return i; }
+  // not in scale -> snap up to nearest scale pc
+  let best=0,bd=99; for(let i=0;i<SCALE_PCS.length;i++){let d=Math.abs(SCALE_PCS[i]-((p%12)+12)%12);if(d<bd){bd=d;best=i;}} return best;
+}
+function shiftDiatonic(p,steps){
+  const base=scaleIndex(p);
+  let idx=base+steps;
+  let oct=Math.floor(idx/7);
+  let within=((idx%7)+7)%7;
+  const pc=SCALE_PCS[within];
+  // reconstruct absolute midi near p+approx
+  let approx=p+steps*1.8;
+  // find octave so pc lands near approx
+  let cand=Math.round((approx-pc)/12)*12+pc;
+  return cand;
+}
+
+// voice definitions: produced from LEAD by a transform
+function harmVoice(steps){ return LEAD.map(n=>({...n,p:shiftDiatonic(n.p,steps),v:n.v*0.9})); }
+function dblVoice(pan,seed){
+  return LEAD.map((n,i)=>{
+    const jt=((Math.sin(i*12.9+seed)*43758.5)%1); const jp=((Math.sin(i*78.2+seed)*1271.1)%1);
+    return {...n,s:n.s+jt*0.03,p:n.p+ (jp*0.5)/12, v:n.v*0.85};
+  });
+}
+
+// voice registry — each entry is a generated vocal line
+let VOICES=[];
+function buildVoices(){
+  VOICES=[
+    {id:"lead", name:"Verse Vocal", role:"lead", color:"#e8c47b", vb:"Lilia", pan:0, level:0, mute:false, solo:false, edited:false, lead:true, notes:LEAD, na:false},
+    {id:"h3",  name:"3rd above",  role:"+2 scale · diatonic", color:"#8b6dff", vb:"Lilia", pan:-14, level:-3.5, mute:false, solo:false, edited:true,  notes:harmVoice(2), na:false},
+    {id:"h6",  name:"6th above",  role:"+5 scale · diatonic", color:"#a892ff", vb:"Meiji", pan:18,  level:-4.5, mute:false, solo:false, edited:false, notes:harmVoice(5), na:false},
+    {id:"h3b", name:"3rd below",  role:"−2 scale · diatonic", color:"#c7b8ff", vb:"Lilia", pan:0,   level:-5.0, mute:false, solo:false, edited:false, notes:harmVoice(-2), na:false},
+    {id:"dL",  name:"Double · L", role:"unison · humanized", color:"#6dd6a3", vb:"Lilia", pan:-42, level:-6.0, mute:false, solo:false, edited:false, notes:dblVoice(-1,3.1), na:false},
+    {id:"dR",  name:"Double · R", role:"unison · humanized", color:"#7fe3b4", vb:"Meiji", pan:42,  level:-6.0, mute:false, solo:false, edited:false, notes:dblVoice(1,8.7), na:false},
+  ];
+}
+
+const VBANKS=["Lilia","Meiji","TIGER"];
+let vis={lead:true,harm:true,dbl:true};
+let state="populated";
+
+//================ preview roll canvas ================
+const rollC=document.getElementById('roll'), rollX=rollC.getContext('2d');
+const KEYW=50, CHORDH=24;
+function fit(c){const r=c.parentElement.getBoundingClientRect();const dpr=devicePixelRatio||1;c.width=r.width*dpr;c.height=r.height*dpr;c.getContext('2d').setTransform(dpr,0,0,dpr,0,0);return r;}
+
+function visibleVoices(){
+  return VOICES.filter(v=>{
+    if(v.mute) return false;
+    if(v.lead) return vis.lead;
+    if(v.id.startsWith('d')) return vis.dbl;
+    return vis.harm;
+  });
+}
+function pitchRange(){
+  let lo=127,hi=0;
+  visibleVoices().forEach(v=>v.notes.forEach(n=>{lo=Math.min(lo,n.p);hi=Math.max(hi,n.p);}));
+  if(lo>hi){lo=60;hi=74;}
+  lo=Math.floor(lo)-2; hi=Math.ceil(hi)+2;
+  return [lo,hi];
+}
+function drawRoll(){
+  const r=fit(rollC),x=rollX,W=r.width,H=r.height;
+  x.clearRect(0,0,W,H); x.fillStyle="#15161b"; x.fillRect(0,0,W,H);
+  const [LO,HI]=pitchRange();
+  const gx=KEYW, gw=W-KEYW, top=CHORDH, gh=H-CHORDH;
+  const rows=HI-LO+1, rh=gh/rows;
+  const bx=b=>gx+b/BEATS*gw;
+  const py=p=>top+(HI-p)*rh;
+
+  // chord strip
+  x.fillStyle="#1b1d23"; x.fillRect(0,0,W,CHORDH);
+  x.strokeStyle="#272a31"; x.beginPath();x.moveTo(0,CHORDH+.5);x.lineTo(W,CHORDH+.5);x.stroke();
+  CHORDS.forEach((c,i)=>{
+    const X=gx+i*gw/4;
+    x.strokeStyle="#1f2229";x.beginPath();x.moveTo(X+.5,0);x.lineTo(X+.5,CHORDH);x.stroke();
+    x.fillStyle="#9aa0ac";x.font="600 10px Geist";x.fillText(c, X+9, 16);
+  });
+  x.fillStyle="#1b1d23";x.fillRect(0,0,KEYW,CHORDH);
+  x.fillStyle="#6dd6a3";x.font="600 8.5px Geist";x.fillText("D MAJOR",6,11);
+  x.fillStyle="#5d626d";x.font="8px Geist Mono, monospace";x.fillText("diatonic",6,20);
+
+  // rows + keyboard
+  for(let p=LO;p<=HI;p++){
+    const yy=py(p), black=[1,3,6,8,10].includes(((p%12)+12)%12);
+    const inScale=SCALE_PCS.includes(((p%12)+12)%12);
+    x.fillStyle= black? "#121317":"#16171c"; x.fillRect(gx,yy,gw,rh);
+    if(inScale){x.fillStyle="rgba(109,214,163,.04)";x.fillRect(gx,yy,gw,rh);}
+    x.fillStyle= black? "#15161b":"#1b1d23"; x.fillRect(0,yy,KEYW,rh);
+    x.strokeStyle="#1f2229"; x.beginPath();x.moveTo(gx,yy+.5);x.lineTo(W,yy+.5);x.stroke();
+    if(!black && rh>9){x.fillStyle="#5d626d";x.font="8px Geist Mono, monospace";x.fillText(nm(p),6,yy+rh-3);}
+  }
+  // beat grid
+  for(let b=0;b<=BEATS;b++){x.strokeStyle= b%4===0? "#272a31":"#1f2229";x.beginPath();x.moveTo(bx(b)+.5,top);x.lineTo(bx(b)+.5,H);x.stroke();}
+
+  // draw voices: doubles first (under), then harmonies, then lead on top
+  const order=[...visibleVoices()].sort((a,b)=>{
+    const rank=v=>v.lead?2:(v.id.startsWith('d')?0:1); return rank(a)-rank(b);
+  });
+  order.forEach(v=>{
+    const isLead=v.lead, isDbl=v.id.startsWith('d');
+    v.notes.forEach(n=>{
+      const X=bx(n.s),Y=py(n.p),Wd=Math.max(3,(n.d/BEATS)*gw-1.5),Hd=Math.max(3,rh-1.5);
+      const c=v.color;
+      if(isDbl){
+        x.fillStyle=hexA(c,.20); rr(x,X,Y+.75,Wd,Hd,2); x.fill();
+        x.strokeStyle=hexA(c,.4);x.lineWidth=1;x.stroke();
+      }else if(isLead){
+        x.fillStyle=hexA(c,.55+.4*n.v); rr(x,X,Y+.75,Wd,Hd,2); x.fill();
+        x.strokeStyle=hexA(c,.6);x.lineWidth=1.2;x.stroke();
+        if(n.syl && Wd>16){x.fillStyle="rgba(12,10,6,.92)";x.font="italic 11px Instrument Serif, Georgia, serif";x.fillText(n.syl,X+4,Y+rh-4);}
+      }else{
+        x.fillStyle=hexA(c,.34+.3*n.v); rr(x,X,Y+.75,Wd,Hd,2); x.fill();
+        x.strokeStyle=hexA(c,.5);x.lineWidth=1;x.stroke();
+      }
+    });
+  });
+
+  // playhead
+  x.strokeStyle="rgba(232,196,123,.32)";x.lineWidth=1;x.beginPath();x.moveTo(bx(2.4)+.5,top);x.lineTo(bx(2.4)+.5,H);x.stroke();
+
+  // legend (bottom-right)
+  const leg=order.slice().reverse();
+  let lx=W-12, ly=H-12;
+  // simple inline legend
+  x.font="9px Geist"; x.textAlign="right";
+  const items=[{t:"lead",on:vis.lead,c:"#e8c47b",l:"Lead"},{t:"harm",on:vis.harm,c:"#8b6dff",l:"Harmony"},{t:"dbl",on:vis.dbl,c:"#6dd6a3",l:"Doubles"}];
+  let yy=H-14;
+  items.forEach(it=>{ if(!it.on)return; x.fillStyle="#9aa0ac"; x.fillText(it.l, lx-14, yy+3); x.fillStyle=it.c; x.fillRect(lx-10, yy-2, 9, 6); yy-=15; });
+  x.textAlign="left";
+}
+function rr(c,x,y,w,h,r){r=Math.min(r,w/2,h/2);c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+function hexA(h,a){const n=h.replace('#','');const r=parseInt(n.substr(0,2),16),g=parseInt(n.substr(2,2),16),b=parseInt(n.substr(4,2),16);return `rgba(${r},${g},${b},${a})`;}
+
+//================ voices list rendering ================
+function panLabel(p){ if(p===0)return "C"; return (p<0?"L":"R")+Math.abs(p); }
+function renderVoiceRows(){
+  const host=document.getElementById('voiceRows'); host.innerHTML="";
+  VOICES.forEach(v=>{
+    const row=document.createElement('div');
+    row.className="vrow"+(v.lead?" lead":"")+(v.mute?" muted":"");
+    row.style.setProperty('--c', v.color);
+    const naBadge = v.na?'<span class="badge na">n/a</span>':'';
+    const stateBadge = v.lead?'<span class="leadtag">lead</span>': (v.edited?'<span class="badge edited">edited</span>':'<span class="badge">auto</span>');
+    row.innerHTML=`
+      <div class="vrow-top">
+        <span class="nm">${v.name}</span>
+        <span class="role">${v.role}</span>
+        ${stateBadge}${naBadge}
+        <span class="vactions">
+          ${v.lead?'':`<button class="iconbtn s ${v.solo?'on':''}" title="Solo" onclick="toggleSolo('${v.id}')">S</button>
+          <button class="iconbtn m ${v.mute?'on':''}" title="Mute" onclick="toggleMute('${v.id}')">M</button>
+          <button class="iconbtn" title="Re-render this voice">⟳</button>`}
+        ${v.lead?'<button class="iconbtn" title="Edit lead line">✎</button>':''}
+      </div>
+      ${v.lead?'':`
+      <div class="vrow-body">
+        <div class="vb-pick">
+          <span class="vlbl">Voicebank</span>
+          <div class="select" onclick="cycleVb('${v.id}')">
+            <span class="vbdot" style="background:${v.na?'var(--bad)':'var(--good)'}"></span>
+            <span>${v.vb}</span><span class="car">▾</span>
+          </div>
+        </div>
+        <div class="pan-level">
+          <div class="pl">
+            <div class="plr"><span>Pan</span><b>${panLabel(v.pan)}</b></div>
+            <input type="range" min="-50" max="50" value="${v.pan}" oninput="setPan('${v.id}',this.value)" style="--cthumb:${v.color}">
+          </div>
+          <div class="pl">
+            <div class="plr"><span>Level</span><b>${v.level>0?'+':''}${v.level.toFixed(1)} dB</b></div>
+            <input type="range" min="-24" max="6" value="${v.level}" oninput="setLevel('${v.id}',this.value)" style="--cthumb:${v.color}">
+          </div>
+        </div>
+      </div>`}
+    `;
+    host.appendChild(row);
+  });
+  document.getElementById('voicesCt').textContent=VOICES.length+" lines";
+}
+
+function toggleMute(id){const v=VOICES.find(x=>x.id===id);v.mute=!v.mute;if(v.mute)v.solo=false;renderVoiceRows();drawRoll();}
+function toggleSolo(id){const v=VOICES.find(x=>x.id===id);v.solo=!v.solo;renderVoiceRows();}
+function cycleVb(id){const v=VOICES.find(x=>x.id===id);let i=VBANKS.indexOf(v.vb);v.vb=VBANKS[(i+1)%VBANKS.length];v.na=(v.vb==="TIGER");renderVoiceRows();}
+function setPan(id,val){const v=VOICES.find(x=>x.id===id);v.pan=+val;const b=event.target.closest('.pl').querySelector('b');b.textContent=panLabel(v.pan);}
+function setLevel(id,val){const v=VOICES.find(x=>x.id===id);v.level=+val;const b=event.target.closest('.pl').querySelector('b');b.textContent=(v.level>0?'+':'')+v.level.toFixed(1)+' dB';}
+
+//================ rail controls ================
+function toggleGroup(id){document.getElementById(id).classList.toggle('closed');}
+document.querySelectorAll('#voicing button').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('#voicing button').forEach(x=>x.classList.toggle('on',x===b));
+  const help={"3rd":"Thirds & sixths above the lead, snapped to the key — the classic pop/folk stack.","satb":"Full SATB-style four-part stack from the voicing engine, voice-led against the chord track.","custom":"Hand-pick each interval per voice; counts and direction become per-voice."};
+  document.getElementById('voicingHelp').textContent=help[b.dataset.v];
+  document.getElementById('harmMeta').textContent=(b.dataset.v==="satb"?"SATB · 4 voices":"3 voices · above");
+}));
+document.querySelectorAll('#direction button').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('#direction button').forEach(x=>x.classList.toggle('on',x===b));
+}));
+document.querySelectorAll('#varyVb button').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('#varyVb button').forEach(x=>x.classList.toggle('on',x===b));
+}));
+let voiceCount=3, dblCount=2;
+function stepVoices(d){voiceCount=Math.max(1,Math.min(4,voiceCount+d));document.getElementById('vcStep').textContent=voiceCount;document.getElementById('vcVal').textContent=voiceCount;document.getElementById('harmMeta').textContent=voiceCount+" voices · above";}
+function stepDoubles(d){dblCount=Math.max(0,Math.min(4,dblCount+d));document.getElementById('dcStep').textContent=dblCount;document.getElementById('dcVal').textContent=dblCount;document.getElementById('dblMeta').textContent=dblCount+(dblCount===1?" double":" doubles")+" · wide";}
+
+document.getElementById('width').addEventListener('input',e=>{document.getElementById('widthVal').textContent="±"+Math.round(e.target.value*0.58)+"%";});
+document.getElementById('timeHum').addEventListener('input',e=>{document.getElementById('timeVal').textContent="±"+Math.round(e.target.value*0.3)+" ms";});
+document.getElementById('pitchHum').addEventListener('input',e=>{document.getElementById('pitchVal').textContent="±"+Math.round(e.target.value*0.24)+" ¢";});
+
+// roll visibility chips
+document.querySelectorAll('#rolltools .chip[data-vis]').forEach(c=>c.addEventListener('click',()=>{
+  const k=c.dataset.vis; vis[k]=!vis[k]; c.classList.toggle('off',!vis[k]); drawRoll();
+}));
+
+//================ rendering state (per-voice progress) ================
+let renderTimer=null;
+function startRender(){
+  const host=document.getElementById('renderRows'); host.innerHTML="";
+  const list=VOICES.filter(v=>!v.lead && !v.mute);
+  const prog=list.map(()=>0);
+  list.forEach((v,i)=>{
+    const row=document.createElement('div'); row.className="vprog"; row.style.setProperty('--c',v.color);
+    row.innerHTML=`<span class="vd"></span><span class="vn">${v.name} · ${v.vb}</span><span class="pbar"><i style="width:0%"></i></span><span class="pct">0%</span>`;
+    host.appendChild(row);
+  });
+  const rows=[...host.children];
+  let active=0;
+  clearInterval(renderTimer);
+  renderTimer=setInterval(()=>{
+    if(active>=list.length){clearInterval(renderTimer);setTimeout(()=>applyState('populated'),420);return;}
+    prog[active]+=14+Math.random()*16;
+    const p=Math.min(100,prog[active]);
+    rows[active].querySelector('i').style.width=p+"%";
+    rows[active].querySelector('.pct').textContent=Math.round(p)+"%";
+    if(p>=100){rows[active].classList.add('done');rows[active].querySelector('.pct').textContent="✓";active++;}
+  },120);
+}
+
+//================ state switcher ================
+function applyState(s){
+  state=s;
+  document.querySelectorAll('#seg button').forEach(b=>b.classList.toggle('on',b.dataset.state===s));
+  const ovE=document.getElementById('ovEmpty'),ovR=document.getElementById('ovRender'),ovN=document.getElementById('ovNoChords');
+  [ovE,ovR,ovN].forEach(o=>o.classList.remove('show'));
+  const rail=document.querySelector('.rail'), tools=document.getElementById('rolltools');
+  const hint=document.getElementById('hint');
+  rail.style.display="flex"; tools.style.display="flex";
+  if(s==="empty"){
+    ovE.classList.add('show');
+    hint.innerHTML='<span>No lead vocal selected</span>';
+  }else if(s==="rendering"){
+    ovR.classList.add('show'); startRender();
+    hint.innerHTML='<span>Rendering 5 voices through resonance-svs…</span><span class="seed">seed&nbsp;#4F2A</span>';
+  }else if(s==="nochords"){
+    ovN.classList.add('show');
+    document.getElementById('diatonic').className="diatonic warn";
+    document.getElementById('diatonic').innerHTML='<span class="ck">⚠</span><span class="txt">No chord track on this section. Harmony will follow the lead\'s <b>detected key</b> only — add chords for chord-aware voicing.</span>';
+    hint.innerHTML='<span style="color:var(--warm)">No chord track — using detected key</span>';
+  }else{
+    document.getElementById('diatonic').className="diatonic";
+    document.getElementById('diatonic').innerHTML='<span class="ck">✓</span><span class="txt">Following the chord track — <b>Dmaj7 · Bm7 · G6 · A</b>. Every harmony note is snapped diatonic to <b>D major</b>.</span>';
+    hint.innerHTML='<span>Lead: <b style="color:var(--warm)">Verse Vocal</b> · Lilia (MM 2.8)</span><span class="seed">seed&nbsp;#4F2A</span>';
+    drawRoll();
+  }
+}
+document.querySelectorAll('#seg button').forEach(b=>b.addEventListener('click',()=>applyState(b.dataset.state)));
+
+//================ boot ================
+function boot(){buildVoices();renderVoiceRows();drawRoll();}
+window.addEventListener('resize',()=>{if(state==="populated"||state==="nochords")drawRoll();});
+boot();
+</script>
+</body>
+</html>

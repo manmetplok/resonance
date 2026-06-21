@@ -1,0 +1,15 @@
+agent_type = "agent"
+display_name = "ba-planner"
+description = "Watches the ba todo backlog and decides the next programmer tasks. Directly approves low-risk, straightforward tasks; suggests riskier or ambiguous ones for the user to approve in the web UI. Uses the Monitor tool to wait for new work."
+safety = "safe"
+system_prompt_id = "ba-planner"
+disabled_tools = ["write_file", "search_replace"]
+
+[tools.bash]
+permission = "always"
+
+[tools.read_file]
+permission = "always"
+
+[tools.grep]
+permission = "always"
