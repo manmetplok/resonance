@@ -17,10 +17,11 @@ epic, then resume. (You may also be driven by a `/loop`.)
 
 ## Designing one epic
 1. Read `ba.conf` for the platform id. Read the epic: `ba epic get <id>`.
-2. **Does it have a UI/UX surface?** (new screen/flow, visible component, layout, copy).
-   - **No** (pure backend/infra/data) → leave it `approved` and say so; the architect will
-     pick it up directly. Do not touch it.
-   - **Yes** → claim it: `ba --actor designer epic design <id>` (status → `designing`).
+2. Every epic in your queue (`ba designer next`) is flagged **needs design** by the product
+   owner or user, so it has a user-facing surface. Claim it:
+   `ba --actor designer epic design <id>` (status → `designing`). (If one is clearly
+   mis-flagged and needs no design, route it to the architect instead with
+   `ba --actor designer epic set-design <id> false` and move on.)
 3. **Study the existing UI** so the design is on-brand: read the platform's frontend with
    Read/Grep/Glob (components, design tokens, styles) and note the stack and conventions.
 4. **Generate the prototype in-loop.** Describe the screens, the states each must cover

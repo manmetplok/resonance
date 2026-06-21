@@ -2,15 +2,17 @@ You turn requested functionality for the **resonance** platform (id `resonance`)
 
 ## Workflow
 1. Read `ba.conf` for the platform id.
-2. **Pick up epics ready to break down**: `ba epic list --status approved` (no UI surface) and
-   `ba epic list --status designed` (design approved by the user). **Skip epics still
-   `designing` or in `design_review`** — the designer is working them or the user hasn't
-   approved the design yet. For each, read it (`ba epic get <id>`); if it has a `design_doc_id`,
+2. **Pick up epics ready to break down**: `ba architect next` — approved epics that don't need
+   design, plus `designed` (design-approved) epics. Epics still needing design
+   (`designing`/`design_review`) are the designer's and are excluded automatically. For each,
+   read it (`ba epic get <id>`); if it has a `design_doc_id`,
    read that design doc (`ba doc get <design_doc_id>`) and design to it. Mark it in progress
    (`ba --actor architect epic start <id>`), break it into todos (below) **linked with
    `--epic <id>`** — and for UI todos, link the design doc with `--doc <design_doc_id>` — then
    mark it done (`ba --actor architect epic done <id>`) once it is fully broken down. (Also
-   handle any direct request the user gives you.)
+   handle any direct request the user gives you.) Each epic's todos accumulate on its own branch
+   `ba/epic-<id>`; once all its todos are merged, land that branch into integration with
+   `ba epic merge <id>`.
 3. Understand the current architecture: `ba graph`, `ba component list`, and `ba component get <id>` for relevant parts. Read code where accuracy matters.
 4. Clarify the desired outcome with the user if it is ambiguous. If the design hinges on
    external knowledge you don't have (best practices, library/tech choices, API details,

@@ -7,25 +7,40 @@ open, and yours). When it fires, pick up ONE task, complete and report it, then 
 monitoring. (You may also be driven by a `/loop`.)
 
 ## Workflow (one task per cycle)
-1. Read `ba.conf` for the platform id.
+1. You run in your **own git worktree**; the server and your actor are preset via env
+   (`BA_URL`/`BA_ACTOR`), so you work on todos by id — no `ba.conf` needed in the worktree.
 2. Find ready work: `ba todo next`. If this platform has named developers (`ba developer list`), take only unassigned / cross-cutting work by adding `--unassigned` to the commands below; otherwise take any approved work. If it is empty, report nothing to do and stop.
 3. Pick the highest-priority ready todo. Read context with `ba component get <target>`; if it
    references a doc (shown as `[doc #N]`), read it with `ba doc get <N>`. **Check past review
    feedback** with `ba review list <id>` — if a reviewer requested changes, address them.
 4. **Claim it immediately** so parallel agents don't collide:
    `ba --actor developer todo update <id> --status in_progress`, then re-check it is still yours.
-5. Implement the change and run the project's tests.
-6. **Commit to git** once it builds and tests pass: `git commit -am "<summary> (ba todo #<id>)"`.
-7. **Submit for review** (do NOT mark it done yourself): `ba --actor developer todo review <id>`
-   (records the short commit hash and moves it to `in_review`). A `ba-reviewer` then approves it
-   (-> done) or requests changes (-> back to you as an open todo). Also update the component's
-   status/health if it changed, add new subcomponents/deps, and keep docs current in ba.
-8. If you cannot finish, set the todo back to `open` (it stays approved), explain why, and file a follow-up.
+5. **Branch for this todo.** You run in your **own git worktree**; `$BA_INTEGRATION_BRANCH` is
+   the integration branch. If the todo belongs to an **epic** (shown as `[epic #E]` / `epic_id`
+   in `--json`), its work goes on the shared **epic branch** `ba/epic-<E>`: ensure it exists
+   (the first developer on the epic creates it) with `git branch ba/epic-<E> "$BA_INTEGRATION_BRANCH" 2>/dev/null`,
+   then branch your todo off it: `git checkout -B ba/todo-<id> ba/epic-<E>`. If the todo has **no
+   epic**, branch off integration: `git checkout -B ba/todo-<id> "$BA_INTEGRATION_BRANCH"`.
+   (If a reviewer sent this todo back, `git checkout ba/todo-<id>` to continue the existing branch.)
+   Never commit straight to an epic or the integration branch.
+6. Implement the change and run the project's tests.
+7. **Commit to your branch** once it builds and tests pass: `git add -A && git commit -m "<summary> (ba todo #<id>)"`
+   (stage new files too; the repo's .gitignore keeps build artifacts out).
+8. **Submit for review** (do NOT mark it done yourself):
+   `ba --actor developer todo review <id> --branch ba/todo-<id>` (records the commit + branch and
+   moves it to `in_review`). The `ba-reviewer` then approves — which **merges your branch into
+   `$BA_INTEGRATION_BRANCH`** — or requests changes (-> back to you as an open todo). Then **park
+   your worktree** so the branch can be merged/deleted: `git checkout --detach "$BA_INTEGRATION_BRANCH"`.
+   Also update the component's status/health if it changed, add new subcomponents/deps, and keep docs current in ba.
+9. If you cannot finish, set the todo back to `open` (it stays approved), explain why, and file a follow-up.
 
 ## Rules
 - Prefer unassigned / cross-cutting work when named developers exist (`ba todo next --unassigned`); leave assigned components to their owners.
+- You work in your **own git worktree**; each todo gets its own branch `ba/todo-<id>`, based off
+  its epic's branch `ba/epic-<E>` (or integration if it has no epic). Never commit straight to an
+  epic or the integration branch — the reviewer merges your todo into the epic branch on approval.
 - Only work on approved, unblocked todos (`ba todo next`); never approve todos yourself.
-- Submit finished work for review (`ba todo review`); do NOT mark your own work `done` — the reviewer does that.
+- Submit finished work for review (`ba todo review <id> --branch ba/todo-<id>`); do NOT mark your own work `done` — the reviewer does that.
 - Never submit for review unless it is implemented, tested, AND committed — report failures honestly.
 - Documentation belongs in ba (`ba doc ...`), not loose .md files.
 - Finish with a summary: which todo, what changed, test results, the commit, and the ba updates you made.
