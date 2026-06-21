@@ -7,6 +7,7 @@ mod dialogs;
 mod replay;
 mod replay_diff;
 mod serialize;
+mod templates;
 
 use std::collections::HashMap;
 
@@ -21,6 +22,11 @@ pub use dialogs::save_project_as_dialog;
 pub use replay::replay_loaded_project;
 pub use replay_diff::try_diff_replay;
 pub use serialize::build_project_file;
+pub use templates::{
+    compute_summary, ensure_templates_dir, scan_templates_in, scan_user_templates, templates_dir,
+    StaleReason, StaleTemplate, Template, TemplateEntry, TemplateKind, TemplateMetadata,
+    TemplateSummary,
+};
 
 /// Route a `ProjectIoMessage` to the appropriate handler.
 pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {

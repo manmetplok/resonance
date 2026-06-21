@@ -355,4 +355,15 @@ pub enum AudioEvent {
         master_peak_l: f32,
         master_peak_r: f32,
     },
+
+    // -- Audition preview (doc #175) --
+    /// Throttled (control-rate, ~60 Hz) audition playhead position in source
+    /// frames, so the GUI can draw a scrub playhead over the preview. Only
+    /// emitted while a preview is playing.
+    AuditionPosition {
+        frame: u64,
+    },
+    /// The audition preview stopped — either it reached the end of a
+    /// non-looping file, or it was stopped via `AudioCommand::StopAudition`.
+    AuditionStopped,
 }

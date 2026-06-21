@@ -50,13 +50,24 @@ pub mod __test_support {
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
     pub use crate::midi_hardware::{parse_live_event_for_test, LiveMidiEvent};
     pub use crate::mixer::{
-        mix_track_clips, monitor_catchup_skip, monitor_read_len, ramped_gain, sum_to_output,
-        sum_to_stereo, transport_pos_beats, whole_frame_push_len,
+        mix_audition_overlay, mix_track_clips, monitor_catchup_skip, monitor_read_len,
+        ramped_gain, sum_to_output, sum_to_stereo, transport_pos_beats, whole_frame_push_len,
     };
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
     };
 }
+
+/// Test surface for the audition preview handlers (doc #175). Exposed so the
+/// integration test in `tests/audition_preview.rs` can drive the
+/// command/state boundary — decode + start, stop, options/ratio recompute,
+/// and the realtime overlay mix — against a plain `SharedState` without
+/// spinning up the engine thread or a real audio device.
+#[doc(hidden)]
+pub use engine::{
+    compute_sync_ratio, load_audition_source, set_audition_options_in_place,
+    start_audition_in_place, stop_audition_in_place, AuditionSource,
+};
 
 /// Test surface for the hardware-MIDI loop-wrap rewind logic. Exposed
 /// so integration tests can verify the discontinuity classification

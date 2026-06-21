@@ -20,3 +20,4 @@ printpdf = "0.9"
 
 [dev-dependencies]
 iced_test = "0.14"
+tempfile = "3"
