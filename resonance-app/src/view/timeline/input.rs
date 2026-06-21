@@ -14,7 +14,7 @@ use resonance_audio::types::{bpm_at_bar, TrackId};
 use crate::message::*;
 use crate::state::{self, TrackState};
 use crate::theme;
-use super::hit_test::{self, track_index, HitKind};
+use super::hit_test::{self, track_index, ClipHandles, HitKind};
 use super::scrollbar::{scroll_from_thumb_pos, ScrollbarRects};
 use super::snap::snap_sample_to_grid_tempo;
 use super::{TimelineCanvas, TimelineState};
@@ -31,6 +31,10 @@ pub(super) const DOUBLE_CLICK_MS: u128 = 400;
 pub(crate) enum ClipInteraction {
     Move,
     Trim,
+    /// Dragging an audio-clip fade handle (in or out) — horizontal drag.
+    Fade,
+    /// Dragging the audio-clip gain bead — vertical drag.
+    Gain,
     MidiMove,
     MidiTrim,
 }
@@ -150,6 +154,54 @@ impl TimelineCanvas<'_> {
             HitKind::Miss => None,
             hit => Some(hit),
         }
+    }
+
+    /// Hit-test a pointer against an audio clip, including its fade/gain
+    /// handle beads. Returns `None` on a miss so callers can fall through to
+    /// the next clip.
+    fn hit_test_audio_lane(
+        &self,
+        pos: Point,
+        sorted_tracks: &[&TrackState],
+        clip: &state::ClipState,
+    ) -> Option<HitKind> {
+        let header_height = self.fixed_header_height();
+        let track_idx = track_index(sorted_tracks, clip.track_id)?;
+        let row_y = hit_test::track_row_y(
+            track_idx,
+            header_height,
+            self.scroll_offset_y,
+            theme::TRACK_HEIGHT,
+        );
+        let rect = hit_test::clip_rect(
+            row_y,
+            theme::TRACK_HEIGHT,
+            clip.start_sample,
+            clip.duration_samples,
+            self.zoom,
+            self.sample_rate,
+            self.scroll_offset,
+        );
+        let handles = self.clip_handles(clip, rect);
+        match hit_test::hit_test_audio(pos, rect, theme::CLIP_EDGE_THRESHOLD, &handles) {
+            HitKind::Miss => None,
+            hit => Some(hit),
+        }
+    }
+
+    /// Build the fade/gain handle geometry for an audio clip.
+    ///
+    /// The per-clip fade lengths and the `fadeable` (frozen / no-source)
+    /// flag live on `ClipState` once todo #316 mirrors them in from the
+    /// engine. Until then fades read as 0 (handles sit at the top corners,
+    /// discoverable on hover) and every audio clip is treated as fadeable;
+    /// the gain bead is always present. Swap these reads for the real
+    /// `ClipState` fields when #316 lands — the geometry math is unchanged.
+    fn clip_handles(&self, _clip: &state::ClipState, rect: Rectangle) -> ClipHandles {
+        let fade_in_seconds = 0.0;
+        let fade_out_seconds = 0.0;
+        let fadeable = true;
+        hit_test::audio_clip_handles(rect, fade_in_seconds, fade_out_seconds, self.zoom, fadeable)
     }
 
     pub(super) fn handle_press(
@@ -316,19 +368,16 @@ impl TimelineCanvas<'_> {
                         start_y: pos.y,
                     }))
                 }
+                HitKind::FadeIn | HitKind::FadeOut | HitKind::Gain => {
+                    unreachable!("MIDI clips have no fade/gain handles")
+                }
                 HitKind::Miss => unreachable!("None path taken above"),
             };
         }
 
         // Check audio clips in reverse order so topmost clip wins
         for clip in self.clips.iter().rev() {
-            let Some(hit) = self.hit_test_lane(
-                pos,
-                &sorted_tracks,
-                clip.track_id,
-                clip.start_sample,
-                clip.duration_samples,
-            ) else {
+            let Some(hit) = self.hit_test_audio_lane(pos, &sorted_tracks, clip) else {
                 continue;
             };
 
@@ -339,6 +388,29 @@ impl TimelineCanvas<'_> {
                         clip_id: clip.id,
                         edge,
                         anchor_x: pos.x,
+                    }))
+                }
+                HitKind::FadeIn => {
+                    state.clip_interaction = Some(ClipInteraction::Fade);
+                    captured(Message::Clip(ClipMessage::StartClipFadeDrag {
+                        clip_id: clip.id,
+                        edge: crate::state::ClipEdge::Left,
+                        anchor_x: pos.x,
+                    }))
+                }
+                HitKind::FadeOut => {
+                    state.clip_interaction = Some(ClipInteraction::Fade);
+                    captured(Message::Clip(ClipMessage::StartClipFadeDrag {
+                        clip_id: clip.id,
+                        edge: crate::state::ClipEdge::Right,
+                        anchor_x: pos.x,
+                    }))
+                }
+                HitKind::Gain => {
+                    state.clip_interaction = Some(ClipInteraction::Gain);
+                    captured(Message::Clip(ClipMessage::StartClipGainDrag {
+                        clip_id: clip.id,
+                        anchor_y: pos.y,
                     }))
                 }
                 HitKind::Move { grab_offset_x } => {
@@ -413,6 +485,12 @@ impl TimelineCanvas<'_> {
             Some(ClipInteraction::Trim) => {
                 captured(Message::Clip(ClipMessage::UpdateClipTrim(pos.x)))
             }
+            Some(ClipInteraction::Fade) => {
+                captured(Message::Clip(ClipMessage::UpdateClipFadeDrag(pos.x)))
+            }
+            Some(ClipInteraction::Gain) => {
+                captured(Message::Clip(ClipMessage::UpdateClipGainDrag(pos.y)))
+            }
             Some(ClipInteraction::MidiMove) => captured(Message::MidiClip(
                 MidiClipMessage::UpdateMidiClipDrag(pos.x, pos.y),
             )),
@@ -441,6 +519,8 @@ impl TimelineCanvas<'_> {
             return match interaction {
                 ClipInteraction::Move => captured(Message::Clip(ClipMessage::EndClipDrag)),
                 ClipInteraction::Trim => captured(Message::Clip(ClipMessage::EndClipTrim)),
+                ClipInteraction::Fade => captured(Message::Clip(ClipMessage::EndClipFadeDrag)),
+                ClipInteraction::Gain => captured(Message::Clip(ClipMessage::EndClipGainDrag)),
                 ClipInteraction::MidiMove => {
                     captured(Message::MidiClip(MidiClipMessage::EndMidiClipDrag))
                 }
@@ -450,6 +530,71 @@ impl TimelineCanvas<'_> {
             };
         }
         None
+    }
+
+    /// Pointer cursor for the current hover / drag state. `ew-resize` for
+    /// trim and fade handles, `ns-resize` for the gain bead, `grab` over a
+    /// clip body. During an active drag the matching resize/grab cursor is
+    /// held regardless of pointer position.
+    pub(super) fn hover_interaction(
+        &self,
+        state: &TimelineState,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        use mouse::Interaction;
+        match &state.clip_interaction {
+            Some(ClipInteraction::Trim)
+            | Some(ClipInteraction::MidiTrim)
+            | Some(ClipInteraction::Fade) => return Interaction::ResizingHorizontally,
+            Some(ClipInteraction::Gain) => return Interaction::ResizingVertically,
+            Some(ClipInteraction::Move) | Some(ClipInteraction::MidiMove) => {
+                return Interaction::Grabbing
+            }
+            None => {}
+        }
+        let Some(pos) = cursor.position_in(bounds) else {
+            return Interaction::default();
+        };
+        if pos.y < self.fixed_header_height() {
+            return Interaction::default();
+        }
+        let sorted_tracks = self.visible_tracks_sorted();
+        // MIDI clips on top, then audio — matching the press hit order.
+        for clip in self.midi_clips.iter().rev() {
+            let clip_end = self.tempo_map.tick_to_abs_sample(
+                clip.start_sample,
+                clip.duration_ticks,
+                self.sample_rate,
+            );
+            let duration_samples = clip_end.saturating_sub(clip.start_sample);
+            if let Some(hit) = self.hit_test_lane(
+                pos,
+                &sorted_tracks,
+                clip.track_id,
+                clip.start_sample,
+                duration_samples,
+            ) {
+                return match hit {
+                    HitKind::Trim(_) => Interaction::ResizingHorizontally,
+                    HitKind::Move { .. } => Interaction::Grab,
+                    _ => Interaction::default(),
+                };
+            }
+        }
+        for clip in self.clips.iter().rev() {
+            if let Some(hit) = self.hit_test_audio_lane(pos, &sorted_tracks, clip) {
+                return match hit {
+                    HitKind::Trim(_) | HitKind::FadeIn | HitKind::FadeOut => {
+                        Interaction::ResizingHorizontally
+                    }
+                    HitKind::Gain => Interaction::ResizingVertically,
+                    HitKind::Move { .. } => Interaction::Grab,
+                    HitKind::Miss => Interaction::default(),
+                };
+            }
+        }
+        Interaction::default()
     }
 
     /// Compute BPM range for the tempo row graph (matches draw code).

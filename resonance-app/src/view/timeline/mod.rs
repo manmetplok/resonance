@@ -364,6 +364,15 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         None
     }
 
+    fn mouse_interaction(
+        &self,
+        state: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        self.hover_interaction(state, bounds, cursor)
+    }
+
     fn draw(
         &self,
         state: &Self::State,

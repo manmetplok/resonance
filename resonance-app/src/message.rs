@@ -170,6 +170,28 @@ pub enum ClipMessage {
     },
     UpdateClipTrim(f32),
     EndClipTrim,
+    /// Begin dragging a fade handle. `edge` selects fade-in (`Left`) vs
+    /// fade-out (`Right`); `anchor_x` is the pointer x at grab. Handled by
+    /// the edit/drag update handlers (todo #317).
+    StartClipFadeDrag {
+        clip_id: ClipId,
+        edge: ClipEdge,
+        anchor_x: f32,
+    },
+    /// Update the active fade drag to pointer x.
+    UpdateClipFadeDrag(f32),
+    /// Commit the active fade drag.
+    EndClipFadeDrag,
+    /// Begin dragging the clip-gain bead. `anchor_y` is the pointer y at
+    /// grab (gain is a vertical drag). Handled by todo #317.
+    StartClipGainDrag {
+        clip_id: ClipId,
+        anchor_y: f32,
+    },
+    /// Update the active gain drag to pointer y.
+    UpdateClipGainDrag(f32),
+    /// Commit the active gain drag.
+    EndClipGainDrag,
 }
 
 #[derive(Debug, Clone)]

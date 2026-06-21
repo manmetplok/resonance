@@ -45,6 +45,17 @@ pub fn handle(r: &mut Resonance, m: ClipMessage) -> Task<Message> {
         ClipMessage::EndClipTrim => {
             end_clip_trim(r);
         }
+        // Fade/gain drag handling (state machine + engine commands + undo)
+        // lands with todo #317. The timeline (todo #318) already emits these
+        // messages on the right hits; until #317 wires them up they are
+        // intentional no-ops so the build stays green and dragging a fade /
+        // gain handle simply does nothing yet.
+        ClipMessage::StartClipFadeDrag { .. }
+        | ClipMessage::UpdateClipFadeDrag(_)
+        | ClipMessage::EndClipFadeDrag
+        | ClipMessage::StartClipGainDrag { .. }
+        | ClipMessage::UpdateClipGainDrag(_)
+        | ClipMessage::EndClipGainDrag => {}
     }
     Task::none()
 }

@@ -537,8 +537,15 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             ClipMessage::StartClipDrag { .. } | ClipMessage::StartClipTrim { .. } => {
                 UndoAction::Begin
             }
+            ClipMessage::StartClipFadeDrag { .. } | ClipMessage::StartClipGainDrag { .. } => {
+                UndoAction::Begin
+            }
             ClipMessage::EndClipDrag | ClipMessage::EndClipTrim => UndoAction::Commit,
+            ClipMessage::EndClipFadeDrag | ClipMessage::EndClipGainDrag => UndoAction::Commit,
             ClipMessage::UpdateClipDrag(_, _) | ClipMessage::UpdateClipTrim(_) => UndoAction::Skip,
+            ClipMessage::UpdateClipFadeDrag(_) | ClipMessage::UpdateClipGainDrag(_) => {
+                UndoAction::Skip
+            }
             ClipMessage::DeleteClip(_) => UndoAction::Record,
         },
 

@@ -10,15 +10,76 @@ use crate::state::{ClipEdge, TrackState};
 use resonance_audio::types::TrackId;
 
 /// Outcome of a hit-test against a single clip rectangle.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HitKind {
     /// Pointer is on the left or right trim handle.
     Trim(ClipEdge),
+    /// Pointer is on the fade-in handle bead (top-left corner, riding
+    /// inward as the fade grows). Audio clips only.
+    FadeIn,
+    /// Pointer is on the fade-out handle bead (top-right corner). Audio
+    /// clips only.
+    FadeOut,
+    /// Pointer is on the clip-gain bead (top-centre). Audio clips only.
+    Gain,
     /// Pointer is on the clip body; `grab_offset_x` is the x offset from
     /// the clip's left edge (in canvas pixels).
     Move { grab_offset_x: f32 },
     /// Pointer missed the clip entirely.
     Miss,
+}
+
+/// Hit radius (px) of the circular fade/gain handle beads. Deliberately
+/// larger than [`crate::theme::CLIP_EDGE_THRESHOLD`] (the 6px trim band) so
+/// fades win over trim at the very top corners while trim keeps the rest of
+/// the vertical edge — see design doc #153.
+pub const FADE_HANDLE_RADIUS: f32 = 10.0;
+/// Hit radius (px) of the clip-gain bead at the clip's top-centre.
+pub const GAIN_HANDLE_RADIUS: f32 = 10.0;
+
+/// Pixel geometry of an audio clip's fade/gain handle beads. The bead
+/// centres sit on the clip's top edge; [`hit_test_audio`] tests the pointer
+/// against them.
+#[derive(Debug, Clone, Copy)]
+pub struct ClipHandles {
+    /// x of the fade-in bead centre (rides inward from the left edge as the
+    /// fade length grows; equals the left edge when the fade is 0).
+    pub fade_in_x: f32,
+    /// x of the fade-out bead centre (rides inward from the right edge).
+    pub fade_out_x: f32,
+    /// x of the clip-gain bead centre (clip top-centre).
+    pub gain_x: f32,
+    /// y of all three bead centres (the clip's top edge).
+    pub top_y: f32,
+    /// Whether fade handles are exposed. Frozen / rendered / no-source
+    /// clips set this `false` so they expose no fade hits; gain still
+    /// applies (design doc #153).
+    pub fadeable: bool,
+}
+
+/// Compute the fade/gain handle geometry for an audio clip rectangle.
+///
+/// `fade_in_seconds` / `fade_out_seconds` are the clip's fade ramp lengths;
+/// the handle x equals the ramp end (`handle x = ramp end`). Beads are
+/// clamped within the clip so a fade longer than the clip can't push a
+/// handle past the opposite edge.
+pub fn audio_clip_handles(
+    rect: Rectangle,
+    fade_in_seconds: f32,
+    fade_out_seconds: f32,
+    zoom: f32,
+    fadeable: bool,
+) -> ClipHandles {
+    let right = rect.x + rect.width;
+    let fade_in_x = (rect.x + fade_in_seconds * zoom).clamp(rect.x, right);
+    let fade_out_x = (right - fade_out_seconds * zoom).clamp(rect.x, right);
+    ClipHandles {
+        fade_in_x,
+        fade_out_x,
+        gain_x: rect.x + rect.width / 2.0,
+        top_y: rect.y,
+        fadeable,
+    }
 }
 
 /// Build the pixel rect for a clip at the given track row.
@@ -67,6 +128,41 @@ pub fn hit_test(pos: Point, rect: Rectangle, trim_threshold: f32) -> HitKind {
     HitKind::Move {
         grab_offset_x: pos.x - rect.x,
     }
+}
+
+/// Hit-test a pointer against an audio clip, including its fade/gain handle
+/// beads. The beads sit on the clip's top edge and take priority over trim
+/// at the top corners (their larger radius disambiguates fade-vs-trim per
+/// design doc #153). Gain is available even on non-fadeable clips; fade-in /
+/// fade-out hits are suppressed when `handles.fadeable` is `false`.
+///
+/// Falls back to [`hit_test`] (trim edges / body move / miss) when the
+/// pointer is on none of the beads.
+pub fn hit_test_audio(
+    pos: Point,
+    rect: Rectangle,
+    trim_threshold: f32,
+    handles: &ClipHandles,
+) -> HitKind {
+    let near = |bx: f32, r: f32| {
+        let dx = pos.x - bx;
+        let dy = pos.y - handles.top_y;
+        // Constrain to the clip's x span so a bead can't be hit from far
+        // off the side of the clip.
+        pos.x >= rect.x && pos.x <= rect.x + rect.width && dx * dx + dy * dy <= r * r
+    };
+    if handles.fadeable {
+        if near(handles.fade_in_x, FADE_HANDLE_RADIUS) {
+            return HitKind::FadeIn;
+        }
+        if near(handles.fade_out_x, FADE_HANDLE_RADIUS) {
+            return HitKind::FadeOut;
+        }
+    }
+    if near(handles.gain_x, GAIN_HANDLE_RADIUS) {
+        return HitKind::Gain;
+    }
+    hit_test(pos, rect, trim_threshold)
 }
 
 /// Arrange-view row y (top of the row, in canvas coordinates) for a given
