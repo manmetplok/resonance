@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — Standard MIDI File import (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-line:rgba(232,196,123,.34); --warm-dim:rgba(232,196,123,.14);
+    --good:#6dd6a3; --good-dim:rgba(109,214,163,.14); --bad:#e87b8b; --bad-dim:rgba(232,123,139,.14);
+    --vocal:#7bb8e8;
+    --radius-xs:4px; --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+  .serif{font-family:"Instrument Serif",Georgia,serif;font-style:italic}
+  button{font-family:inherit}
+
+  /* ---- App chrome (backdrop context) ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1);overflow:hidden}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px;color:var(--text-1)}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .proj{color:var(--text-3);font-size:12.5px;margin-left:4px}
+  .tabs{display:flex;gap:2px;margin-left:10px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+  .chrome .ghost{
+    padding:5px 11px;border:1px solid var(--line);border-radius:var(--radius-md);
+    color:var(--text-2);background:transparent;font-size:12px;cursor:pointer;
+  }
+  .chrome .ghost:hover{background:var(--bg-2)}
+
+  /* ---- faint arrange backdrop so the modal has context ---- */
+  .stage{flex:1;position:relative;overflow:hidden}
+  .arr-bg{position:absolute;inset:0;display:flex;flex-direction:column;filter:saturate(.7) brightness(.6)}
+  .arr-ruler{height:28px;flex:0 0 auto;display:flex;border-bottom:1px solid var(--line);background:var(--bg-1)}
+  .arr-ruler .bar{flex:1;border-right:1px solid var(--line-2);font-size:9px;color:var(--text-3);padding:8px 0 0 5px}
+  .arr-row{height:64px;display:flex;border-bottom:1px solid var(--line-2)}
+  .arr-head{width:200px;flex:0 0 auto;background:var(--bg-2);border-right:1px solid var(--line);
+    display:flex;align-items:center;gap:9px;padding:0 13px}
+  .arr-head .dot{width:8px;height:8px;border-radius:2px}
+  .arr-head .t{font-size:11px;color:var(--text-2)}
+  .arr-lane{flex:1;position:relative;background:var(--bg-1)}
+  .clip{position:absolute;top:10px;bottom:10px;border-radius:var(--radius-lg);opacity:.9}
+  .playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--warm);left:42%}
+
+  /* ---- State switcher (prototype control, not part of product) ---- */
+  .statebar{
+    position:absolute;left:0;right:0;top:0;z-index:40;
+    height:40px;display:flex;align-items:center;gap:8px;
+    padding:0 16px;background:rgba(15,16,19,.82);backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3);margin-right:2px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{border:0;background:transparent;color:var(--text-2);padding:6px 12px;font-size:11.5px;
+    cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2)}
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .statebar .hint{margin-left:auto;color:var(--text-3);font-size:11px}
+
+  /* ---- Modal scaffold ---- */
+  .backdrop{position:absolute;inset:0;background:rgba(0,0,0,.62);z-index:20;display:none;align-items:center;justify-content:center}
+  .backdrop.show{display:flex}
+  .dialog{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-xl);
+    width:640px;max-height:86%;display:flex;flex-direction:column;
+    box-shadow:0 24px 80px rgba(0,0,0,.55)}
+  .dlg-head{padding:22px 24px 0 24px}
+  .titlerow{display:flex;align-items:center;gap:11px}
+  .dlg-title{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:21px;color:var(--text-1)}
+  .file-pill{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--text-2);
+    background:var(--bg-1);border:1px solid var(--line);border-radius:999px;padding:4px 11px}
+  .file-pill .ic{color:var(--accent-soft)}
+  .file-pill b{color:var(--text-1);font-weight:500}
+  .dlg-sub{font-size:12.5px;color:var(--text-2);margin-top:8px;line-height:1.5}
+
+  /* summary band */
+  .summary{display:flex;gap:0;margin-top:16px;border:1px solid var(--line);border-radius:var(--radius-lg);
+    overflow:hidden;background:var(--bg-1)}
+  .summary .cell{flex:1;padding:9px 13px;border-right:1px solid var(--line-2)}
+  .summary .cell:last-child{border-right:0}
+  .summary .k{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);margin-bottom:3px}
+  .summary .v{font-size:13px;color:var(--text-1)}
+  .summary .v small{color:var(--text-3);font-size:11px}
+
+  .dlg-body{padding:18px 24px 4px;overflow-y:auto}
+  .dlg-body::-webkit-scrollbar{width:8px} .dlg-body::-webkit-scrollbar-thumb{background:var(--bg-3);border-radius:4px}
+
+  .section-lbl{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);
+    font-weight:600;margin:0 0 9px}
+  .block{margin-bottom:20px}
+
+  .selbar{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+  .selbar .count{font-size:12px;color:var(--text-2)} .selbar .count b{color:var(--text-1)}
+  .linkbtn{background:none;border:0;color:var(--accent-soft);font-size:11.5px;cursor:pointer;padding:2px 4px}
+  .linkbtn.dim{color:var(--text-3)} .linkbtn:hover{color:var(--text-1)}
+
+  /* track list */
+  .row{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:var(--radius-md);cursor:pointer}
+  .row + .row{margin-top:2px}
+  .row:hover{background:var(--bg-3)}
+  .row.on{background:var(--accent-dim)}
+  .cbx{width:16px;height:16px;border-radius:var(--radius-xs);border:1.5px solid var(--text-4);
+    flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:var(--bg-0);font-size:10px;font-weight:700}
+  .row.on .cbx{background:var(--accent);border-color:var(--accent)}
+  .swatch{width:9px;height:9px;border-radius:2px;flex:0 0 auto}
+  .sw-inst{background:var(--accent)} .sw-drum{background:var(--warm)} .sw-vocal{background:var(--vocal)}
+  .row .nm{color:var(--text-1);font-size:12.5px;min-width:108px}
+  .row .ch{font-size:10px;color:var(--text-3);padding:1px 7px;border:1px solid var(--line);border-radius:999px;flex:0 0 auto}
+  /* mini piano-roll preview of the track's notes */
+  .roll{flex:1;height:26px;background:var(--bg-1);border:1px solid var(--line-2);border-radius:var(--radius-xs);
+    position:relative;overflow:hidden}
+  .roll i{position:absolute;height:2px;border-radius:1px;background:var(--accent-soft);opacity:.85}
+  .row.drum .roll i{background:var(--warm)} .row.vocal .roll i{background:var(--vocal)}
+  .row.off{opacity:.5} .row.off .roll i{background:var(--text-4)!important}
+  .meta{font-size:10.5px;color:var(--text-3);flex:0 0 auto;width:118px;text-align:right}
+  .meta b{color:var(--text-2);font-weight:500}
+  .name-input{flex:0 0 auto;width:108px;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-xs);
+    color:var(--text-1);font-size:12px;font-family:inherit;padding:4px 7px}
+  .name-input:focus{outline:0;border-color:var(--accent-line)}
+
+  /* segmented choices */
+  .frow{display:flex;align-items:center;gap:12px;margin-bottom:11px}
+  .frow .k{width:108px;flex:0 0 auto;font-size:12px;color:var(--text-2)}
+  .seg2{display:flex;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg2 button{border:0;background:transparent;color:var(--text-2);padding:7px 13px;font-size:12px;cursor:pointer;
+    font-family:inherit;border-right:1px solid var(--line-2)}
+  .seg2 button:last-child{border-right:0}
+  .seg2 button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .seg2 button:hover:not(.on){color:var(--text-1)}
+  .foot-info{font-size:11px;color:var(--text-3)}
+
+  /* tempo-map strip viz */
+  .tempo-card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-lg);padding:13px 15px;margin-top:4px}
+  .tempo-map{display:flex;align-items:flex-end;gap:0;height:40px;margin:4px 0 9px}
+  .tempo-seg{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;
+    border-right:1px solid var(--line-2);position:relative}
+  .tempo-seg:last-child{border-right:0}
+  .tempo-seg .bar{width:64%;background:linear-gradient(var(--accent-soft),var(--accent));border-radius:2px 2px 0 0;opacity:.8}
+  .tempo-seg .bpm{font-size:9.5px;color:var(--text-2);position:absolute;top:-2px}
+  .tempo-legend{display:flex;gap:16px;font-size:10.5px;color:var(--text-3)}
+  .tempo-legend .sig{color:var(--accent-soft)}
+
+  /* note (info / warn) */
+  .note{display:flex;gap:9px;align-items:flex-start;font-size:12px;line-height:1.5;border-radius:var(--radius-md);padding:10px 12px;margin-top:10px}
+  .note .ic{flex:0 0 auto;margin-top:1px}
+  .note.info{background:var(--bg-1);border:1px solid var(--line);color:var(--text-2)}
+  .note.info .ic{color:var(--accent-soft)}
+  .note.warn{background:var(--warm-dim);border:1px solid var(--warm-line);color:#e7d3a6}
+  .note.warn .ic{color:var(--warm)}
+  .note b{color:var(--text-1);font-weight:500}
+
+  /* footer */
+  .dlg-foot{display:flex;align-items:center;gap:13px;padding:15px 24px;border-top:1px solid var(--line);margin-top:6px}
+  .summary-txt{font-size:12px;color:var(--text-2)} .summary-txt b{color:var(--text-1)}
+  .btn{padding:8px 16px;border-radius:var(--radius-md);font-size:12.5px;cursor:pointer;font-family:inherit;border:1px solid var(--line)}
+  .btn.ghost{background:transparent;color:var(--text-2)} .btn.ghost:hover{background:var(--bg-3)}
+  .btn.primary{background:var(--accent);color:#0e0a1f;border-color:var(--accent);font-weight:500}
+  .btn.primary:hover{background:var(--accent-soft)}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+
+  .hidden{display:none!important}
+
+  /* ---- drop state ---- */
+  .dropzone{width:560px;border:2px dashed var(--accent-line);border-radius:var(--radius-xl);
+    background:rgba(139,109,255,.05);padding:54px 40px;text-align:center}
+  .dropzone .big{font-size:42px;color:var(--accent-soft);margin-bottom:14px}
+  .dropzone h2{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-weight:400;font-size:24px;margin:0 0 8px}
+  .dropzone p{color:var(--text-2);font-size:13px;margin:0 0 20px;line-height:1.55}
+  .dropzone .or{color:var(--text-3);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin:18px 0 14px}
+
+  /* ---- parsing state ---- */
+  .parsing{width:480px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-xl);
+    padding:34px;text-align:center;box-shadow:0 24px 80px rgba(0,0,0,.55)}
+  .spinner{width:34px;height:34px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);
+    margin:0 auto 18px;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .parsing h2{font-size:15px;margin:0 0 6px;color:var(--text-1)}
+  .parsing p{color:var(--text-3);font-size:12px;margin:0}
+  .pbar{height:4px;background:var(--bg-1);border-radius:2px;margin-top:18px;overflow:hidden}
+  .pbar i{display:block;height:100%;width:62%;background:var(--accent);border-radius:2px}
+
+  /* ---- error / done shared card ---- */
+  .endcard{width:520px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-xl);
+    padding:30px 30px 22px;box-shadow:0 24px 80px rgba(0,0,0,.55)}
+  .endcard .badge{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:21px;margin-bottom:16px}
+  .badge.bad{background:var(--bad-dim);color:var(--bad)} .badge.good{background:var(--good-dim);color:var(--good)}
+  .endcard h2{font-size:16px;margin:0 0 8px;color:var(--text-1)}
+  .endcard p{color:var(--text-2);font-size:12.5px;line-height:1.55;margin:0 0 6px}
+  .endcard .detail{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-md);
+    padding:10px 13px;font-size:11.5px;color:var(--text-3);margin:14px 0 4px}
+  .endcard .acts{display:flex;gap:10px;margin-top:20px}
+  .imported-list{margin:14px 0 4px;display:flex;flex-direction:column;gap:5px}
+  .imported-list .il{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--text-2)}
+  .imported-list .il .dot{width:8px;height:8px;border-radius:2px}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- chrome -->
+  <div class="chrome">
+    <span class="brand">re<b>·</b>sonance</span>
+    <span class="proj">Midnight Drive.rsn</span>
+    <div class="tabs">
+      <div class="tab">Compose</div>
+      <div class="tab active">Arrange</div>
+      <div class="tab">Mixer</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="ghost">⤓ Import…</button>
+  </div>
+
+  <div class="stage">
+    <!-- faint arrange backdrop -->
+    <div class="arr-bg" aria-hidden="true">
+      <div class="arr-ruler">
+        <div class="bar">1</div><div class="bar">5</div><div class="bar">9</div>
+        <div class="bar">13</div><div class="bar">17</div><div class="bar">21</div>
+      </div>
+      <div class="arr-row"><div class="arr-head"><span class="dot" style="background:var(--warm)"></span><span class="t">Drums</span></div><div class="arr-lane"><div class="clip" style="left:4%;width:30%;background:var(--warm-dim);border:1px solid var(--warm-line)"></div><div class="playhead"></div></div></div>
+      <div class="arr-row"><div class="arr-head"><span class="dot" style="background:var(--accent)"></span><span class="t">Bass</span></div><div class="arr-lane"><div class="clip" style="left:10%;width:48%;background:var(--accent-dim);border:1px solid var(--accent-line)"></div><div class="playhead"></div></div></div>
+      <div class="arr-row"><div class="arr-head"><span class="dot" style="background:var(--accent)"></span><span class="t">Keys</span></div><div class="arr-lane"><div class="clip" style="left:22%;width:38%;background:var(--accent-dim);border:1px solid var(--accent-line)"></div><div class="playhead"></div></div></div>
+      <div class="arr-row"><div class="arr-head"><span class="dot" style="background:var(--vocal)"></span><span class="t">Lead Vox</span></div><div class="arr-lane"><div class="clip" style="left:30%;width:26%;background:rgba(123,184,232,.14);border:1px solid rgba(123,184,232,.34)"></div><div class="playhead"></div></div></div>
+    </div>
+
+    <!-- prototype-only state switcher -->
+    <div class="statebar">
+      <span class="lbl">State</span>
+      <div class="seg" id="switch">
+        <button data-s="drop">Drop file</button>
+        <button data-s="parsing">Parsing</button>
+        <button data-s="review" class="on">Review (populated)</button>
+        <button data-s="conflict">Tempo conflict</button>
+        <button data-s="error">Error</button>
+        <button data-s="done">Imported</button>
+      </div>
+      <span class="hint">empty · loading · populated · error all covered ↑</span>
+    </div>
+
+    <!-- ===================== DROP (empty) ===================== -->
+    <div class="backdrop" id="view-drop">
+      <div class="dropzone">
+        <div class="big">⤓</div>
+        <h2>Drop a MIDI file to import</h2>
+        <p>Drag a Standard MIDI File (<span class="mono">.mid</span>) anywhere onto the arrangement —<br>a phone sketch, a downloaded arrangement, an exported idea — and turn it into editable tracks.</p>
+        <div class="or">or</div>
+        <button class="btn primary" onclick="show('review')">Choose a file…</button>
+      </div>
+    </div>
+
+    <!-- ===================== PARSING (loading) ===================== -->
+    <div class="backdrop" id="view-parsing">
+      <div class="parsing">
+        <div class="spinner"></div>
+        <h2>Reading <span class="mono">verse-sketch.mid</span></h2>
+        <p>Parsing tracks, note events, tempo &amp; meter changes…</p>
+        <div class="pbar"><i></i></div>
+      </div>
+    </div>
+
+    <!-- ===================== REVIEW (populated, default) ===================== -->
+    <div class="backdrop show" id="view-review">
+      <div class="dialog">
+        <div class="dlg-head">
+          <div class="titlerow">
+            <div class="dlg-title">Import MIDI</div>
+            <span class="file-pill"><span class="ic">♪</span><b>verse-sketch.mid</b></span>
+          </div>
+          <div class="dlg-sub">Choose which parts to bring in and how their timing should meet your project. Imported clips become fully editable MIDI, and save &amp; reload just like clips you create here.</div>
+
+          <div class="summary">
+            <div class="cell"><div class="k">Format</div><div class="v">SMF 1 <small>· multi-track</small></div></div>
+            <div class="cell"><div class="k">Tracks</div><div class="v">6 <small>· 5 with notes</small></div></div>
+            <div class="cell"><div class="k">Resolution</div><div class="v mono">480 <small>PPQ</small></div></div>
+            <div class="cell"><div class="k">Length</div><div class="v mono">2:48 <small>· 32 bars</small></div></div>
+            <div class="cell"><div class="k">File tempo</div><div class="v mono">124→128</div></div>
+          </div>
+        </div>
+
+        <div class="dlg-body">
+          <!-- tracks -->
+          <div class="block">
+            <div class="selbar">
+              <span class="section-lbl" style="margin:0">Tracks to import</span>
+              <span class="spacer"></span>
+              <span class="count"><b>5</b> of 6 selected</span>
+              <button class="linkbtn" onclick="selAll(true)">All</button>
+              <button class="linkbtn dim" onclick="selAll(false)">None</button>
+            </div>
+
+            <div id="tracklist">
+              <!-- rows injected by JS so 'select which to import' + rename + per-track preview read clearly -->
+            </div>
+          </div>
+
+          <!-- tempo & meter reconciliation -->
+          <div class="block">
+            <div class="section-lbl">Tempo &amp; time signature</div>
+            <div class="frow">
+              <span class="k">When importing</span>
+              <div class="seg2" id="tempo-mode">
+                <button data-m="keep" class="on" onclick="tempoMode('keep')">Keep project tempo</button>
+                <button data-m="adopt" onclick="tempoMode('adopt')">Adopt file tempo map</button>
+              </div>
+            </div>
+
+            <div class="tempo-card">
+              <div class="tempo-legend" style="margin-bottom:4px">
+                <span>File tempo map &amp; meter</span>
+                <span class="sig">4/4 → 6/8 @ bar 17</span>
+              </div>
+              <div class="tempo-map">
+                <div class="tempo-seg"><span class="bpm">124</span><span class="bar" style="height:62%"></span></div>
+                <div class="tempo-seg"><span class="bpm">124</span><span class="bar" style="height:62%"></span></div>
+                <div class="tempo-seg"><span class="bpm">126</span><span class="bar" style="height:70%"></span></div>
+                <div class="tempo-seg"><span class="bpm">128</span><span class="bar" style="height:80%"></span></div>
+                <div class="tempo-seg"><span class="bpm">128</span><span class="bar" style="height:80%"></span></div>
+              </div>
+              <div id="tempo-note" class="note info" style="margin-top:0">
+                <span class="ic">ⓘ</span>
+                <span><b>Keep project tempo (124 BPM, 4/4).</b> Notes land on the same bars &amp; beats they occupy in the file, snapped to your project grid. The file's own tempo &amp; meter changes are discarded.</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- placement -->
+          <div class="block">
+            <div class="section-lbl">Placement</div>
+            <div class="frow">
+              <span class="k">Start at</span>
+              <div class="seg2">
+                <button class="on">Bar 1 <span class="foot-info">· song start</span></button>
+                <button>Playhead <span class="foot-info">· bar 12</span></button>
+              </div>
+            </div>
+            <div class="frow">
+              <span class="k">Add as</span>
+              <div class="seg2">
+                <button class="on">New tracks</button>
+                <button>Merge into selected</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dlg-foot">
+          <span class="summary-txt"><b>5</b> tracks · <b>1,284</b> notes → <b>5</b> new MIDI clips at bar 1</span>
+          <span class="spacer"></span>
+          <button class="btn ghost" onclick="show('drop')">Cancel</button>
+          <button class="btn primary" onclick="show('done')">Import 5 tracks</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== TEMPO CONFLICT (adopt over existing map) ===================== -->
+    <div class="backdrop" id="view-conflict">
+      <div class="dialog">
+        <div class="dlg-head">
+          <div class="titlerow">
+            <div class="dlg-title">Import MIDI</div>
+            <span class="file-pill"><span class="ic">♪</span><b>verse-sketch.mid</b></span>
+          </div>
+          <div class="dlg-sub">You chose to adopt the file's tempo map — review the consequence below before importing.</div>
+          <div class="summary">
+            <div class="cell"><div class="k">Format</div><div class="v">SMF 1</div></div>
+            <div class="cell"><div class="k">Tracks</div><div class="v">6</div></div>
+            <div class="cell"><div class="k">Resolution</div><div class="v mono">480 <small>PPQ</small></div></div>
+            <div class="cell"><div class="k">Length</div><div class="v mono">2:48</div></div>
+            <div class="cell"><div class="k">File tempo</div><div class="v mono">124→128</div></div>
+          </div>
+        </div>
+        <div class="dlg-body">
+          <div class="block">
+            <div class="section-lbl">Tempo &amp; time signature</div>
+            <div class="frow">
+              <span class="k">When importing</span>
+              <div class="seg2">
+                <button onclick="show('review')">Keep project tempo</button>
+                <button class="on">Adopt file tempo map</button>
+              </div>
+            </div>
+            <div class="tempo-card">
+              <div class="tempo-legend" style="margin-bottom:4px">
+                <span>File tempo map &amp; meter</span><span class="sig">4/4 → 6/8 @ bar 17</span>
+              </div>
+              <div class="tempo-map">
+                <div class="tempo-seg"><span class="bpm">124</span><span class="bar" style="height:62%"></span></div>
+                <div class="tempo-seg"><span class="bpm">124</span><span class="bar" style="height:62%"></span></div>
+                <div class="tempo-seg"><span class="bpm">126</span><span class="bar" style="height:70%"></span></div>
+                <div class="tempo-seg"><span class="bpm">128</span><span class="bar" style="height:80%"></span></div>
+                <div class="tempo-seg"><span class="bpm">128</span><span class="bar" style="height:80%"></span></div>
+              </div>
+              <div class="note warn">
+                <span class="ic">⚠</span>
+                <span>Your project already has a <b>tempo map (90 BPM with 2 changes)</b> and existing clips timed to it. Adopting the file's map will <b>replace the project tempo map</b> — existing tracks keep their bar positions but will play at the new tempo. This is undoable.</span>
+              </div>
+            </div>
+          </div>
+          <div class="block">
+            <div class="frow">
+              <span class="k" style="width:auto">Keep existing clips aligned by</span>
+              <div class="seg2">
+                <button class="on">Bars &amp; beats</button>
+                <button>Absolute time</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="dlg-foot">
+          <span class="summary-txt">Project tempo map will be replaced · <b>undoable</b></span>
+          <span class="spacer"></span>
+          <button class="btn ghost" onclick="show('review')">Back</button>
+          <button class="btn primary" onclick="show('done')">Adopt map &amp; import</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== ERROR ===================== -->
+    <div class="backdrop" id="view-error">
+      <div class="endcard">
+        <div class="badge bad">⚠</div>
+        <h2>Couldn't import this file</h2>
+        <p>This is a <b>Format 2 SMF</b> (independent, asynchronous patterns). Resonance imports <b>Format 0 and Format 1</b> files — the common types exported by phones, notation apps and other DAWs.</p>
+        <div class="detail mono">birdsong-loops.mid · SMF Format 2 · 8 pattern sequences · 96 PPQ</div>
+        <div class="acts">
+          <button class="btn ghost" onclick="show('drop')">Choose another file</button>
+          <button class="btn ghost" onclick="show('review')">Import first pattern only</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== DONE (imported) ===================== -->
+    <div class="backdrop" id="view-done">
+      <div class="endcard">
+        <div class="badge good">✓</div>
+        <h2>Imported 5 tracks</h2>
+        <p><span class="mono">verse-sketch.mid</span> is now editable MIDI on the arrangement, starting at bar 1. Kept your project tempo (124 BPM).</p>
+        <div class="imported-list">
+          <div class="il"><span class="dot" style="background:var(--warm)"></span>Drums · 412 notes</div>
+          <div class="il"><span class="dot" style="background:var(--accent)"></span>Bass · 188 notes</div>
+          <div class="il"><span class="dot" style="background:var(--accent)"></span>Rhodes · 256 notes</div>
+          <div class="il"><span class="dot" style="background:var(--accent)"></span>Pad · 102 notes</div>
+          <div class="il"><span class="dot" style="background:var(--vocal)"></span>Vocal Guide · 326 notes</div>
+        </div>
+        <div class="acts">
+          <button class="btn ghost" onclick="show('drop')">Undo import</button>
+          <button class="btn primary" onclick="show('review')">Show in arrangement</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  // ---- prototype state switcher ----
+  const views = ['drop','parsing','review','conflict','error','done'];
+  function show(s){
+    views.forEach(v=>document.getElementById('view-'+v).classList.toggle('show', v===s));
+    document.querySelectorAll('#switch button').forEach(b=>b.classList.toggle('on', b.dataset.s===s));
+  }
+  document.getElementById('switch').addEventListener('click', e=>{
+    const b=e.target.closest('button'); if(b) show(b.dataset.s);
+  });
+
+  // ---- tempo-mode explanatory note ----
+  function tempoMode(m){
+    document.querySelectorAll('#tempo-mode button').forEach(b=>b.classList.toggle('on', b.dataset.m===m));
+    const note=document.getElementById('tempo-note');
+    if(m==='adopt'){
+      note.className='note warn';
+      note.innerHTML='<span class="ic">⚠</span><span><b>Adopt file tempo map (124→128 BPM, 4/4 → 6/8).</b> The file\'s tempo &amp; meter changes are written into the project tempo map. Existing project clips keep their bar positions. <a href="#" onclick="show(\'conflict\');return false" style="color:var(--accent-soft)">Review what changes →</a></span>';
+    }else{
+      note.className='note info';
+      note.innerHTML='<span class="ic">ⓘ</span><span><b>Keep project tempo (124 BPM, 4/4).</b> Notes land on the same bars &amp; beats they occupy in the file, snapped to your project grid. The file\'s own tempo &amp; meter changes are discarded.</span>';
+    }
+  }
+
+  // ---- track rows ----
+  // type drives swatch + preview color; on=selected for import
+  const tracks=[
+    {nm:'Drums',     type:'drum',  ch:10, notes:412, lo:36, hi:51, on:true},
+    {nm:'Bass',      type:'inst',  ch:1,  notes:188, lo:28, hi:48, on:true},
+    {nm:'Rhodes',    type:'inst',  ch:2,  notes:256, lo:48, hi:79, on:true},
+    {nm:'Pad',       type:'inst',  ch:3,  notes:102, lo:55, hi:84, on:true},
+    {nm:'Vocal Guide',type:'vocal',ch:4,  notes:326, lo:57, hi:76, on:true},
+    {nm:'Conductor', type:'inst',  ch:0,  notes:0,   lo:0,  hi:0,  on:false, empty:true},
+  ];
+  // deterministic pseudo notes for the mini piano-roll preview
+  function roll(t){
+    if(t.empty) return '<span class="foot-info" style="position:absolute;left:8px;top:6px">tempo &amp; meter only — no notes</span>';
+    let s='', n=Math.min(t.notes,46), span=(t.hi-t.lo)||12, seed=t.nm.length*7+t.ch;
+    for(let i=0;i<n;i++){
+      seed=(seed*1103515245+12345)&0x7fffffff;
+      const x=(i/n)*96 + (seed%4);
+      const pitch=t.lo + (seed>>4)%(span+1);
+      const y=22-((pitch-t.lo)/(span||1))*20;
+      const w=2+(seed>>8)%6;
+      s+=`<i style="left:${x}%;top:${y}px;width:${w}%"></i>`;
+    }
+    return s;
+  }
+  function pitchName(p){const N=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];return N[p%12]+(Math.floor(p/12)-1);}
+  function render(){
+    document.getElementById('tracklist').innerHTML = tracks.map((t,i)=>{
+      const range = t.empty ? '—' : pitchName(t.lo)+'–'+pitchName(t.hi);
+      const meta = t.empty ? 'no notes' : `<b>${t.notes}</b> notes · ${range}`;
+      const chlbl = t.ch===0 ? 'meta' : 'ch '+t.ch;
+      return `<div class="row ${t.type} ${t.on?'on':'off'}" onclick="toggle(${i})">
+        <span class="cbx">${t.on?'✓':''}</span>
+        <span class="swatch sw-${t.type}"></span>
+        <input class="name-input" value="${t.nm}" onclick="event.stopPropagation()" />
+        <span class="ch">${chlbl}</span>
+        <span class="roll">${roll(t)}</span>
+        <span class="meta">${meta}</span>
+      </div>`;
+    }).join('');
+  }
+  function toggle(i){ if(tracks[i].empty) return; tracks[i].on=!tracks[i].on; render(); updateCount(); }
+  function selAll(v){ tracks.forEach(t=>{ if(!t.empty) t.on=v; }); render(); updateCount(); }
+  function updateCount(){
+    const n=tracks.filter(t=>t.on).length;
+    const notes=tracks.filter(t=>t.on).reduce((a,t)=>a+t.notes,0);
+    document.querySelector('.selbar .count').innerHTML=`<b>${n}</b> of ${tracks.filter(t=>!t.empty).length} selected`;
+    document.querySelector('.dlg-foot .summary-txt').innerHTML=
+      `<b>${n}</b> tracks · <b>${notes.toLocaleString()}</b> notes → <b>${n}</b> new MIDI clips at bar 1`;
+    const btn=document.querySelector('#view-review .btn.primary');
+    btn.textContent = n? `Import ${n} track${n>1?'s':''}` : 'Select tracks to import';
+    btn.disabled = n===0;
+  }
+  render(); updateCount();
+</script>
+</body>
+</html>
