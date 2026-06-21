@@ -17,6 +17,7 @@ use resonance_music_theory::{
     GUITAR_8,
 };
 
+use crate::chord_box::{self, Dims, Marker, Nut};
 use crate::compose::{ChordState, ComposeState, SectionDefinitionState};
 
 // -- Page layout (A4, mm) ----------------------------------------------------
@@ -173,6 +174,26 @@ fn cell_string_spacing(string_count: usize) -> f32 {
 
 // -- Chord fretboard cell ----------------------------------------------------
 
+/// Cell-relative text x for a centred glyph string, nudged by an estimate
+/// of its rendered width (the convention the chord-box diagram has always
+/// used). A multi-glyph label is nudged left a little further.
+fn label_nudge(text: &str) -> f32 {
+    if text.len() > 1 { 1.2 } else { 0.6 }
+}
+
+/// PDF cell geometry, shared with [`chord_box::layout`].
+fn pdf_dims(tuning: &Tuning) -> Dims {
+    Dims {
+        cell_w: CELL_W,
+        chord_name_h: FB_CHORD_NAME_H,
+        header_h: FB_HEADER,
+        fret_spacing: FB_FRET_SPACING,
+        fret_count: FB_FRET_COUNT as u8,
+        string_spacing: cell_string_spacing(tuning.string_count()),
+        dot_r: FB_DOT_R,
+    }
+}
+
 fn draw_fretboard_cell(
     ops: &mut Vec<Op>,
     cell_x: f32,
@@ -182,83 +203,70 @@ fn draw_fretboard_cell(
     start_fret: u8,
     chord: &Chord,
 ) {
-    let n = tuning.string_count();
-    let spacing = cell_string_spacing(n);
-    let board_w = (n - 1) as f32 * spacing;
-    let board_x = cell_x + (CELL_W - board_w) / 2.0;
-    let name_y = cell_y;
-    let header_y = name_y + FB_CHORD_NAME_H;
-    let nut_y = header_y + FB_HEADER;
-    let board_h = FB_FRET_COUNT as f32 * FB_FRET_SPACING;
-    let root_pc = chord.bass.unwrap_or(chord.root).to_semitone();
+    // Shared, backend-agnostic geometry. Passing the page-space cell origin
+    // makes the layout reproduce the original arithmetic exactly; this PDF
+    // backend then applies its own fonts/colours so the emitted ops stay
+    // byte-for-byte identical to the original inline code.
+    let dims = pdf_dims(tuning);
+    let lo = chord_box::layout(&dims, (cell_x, cell_y), tuning, frets, start_fret, chord);
 
     // Chord name
-    let name = chord.to_string();
-    let name_x = cell_x + (CELL_W - name.len() as f32 * 2.2) / 2.0;
-    ops.extend(text_op(&name, name_x, name_y, 7.0, BuiltinFont::HelveticaBold, black()));
+    let name_x = cell_x + (CELL_W - lo.name.len() as f32 * 2.2) / 2.0;
+    ops.extend(text_op(&lo.name, name_x, lo.name_y, 7.0, BuiltinFont::HelveticaBold, black()));
 
     // String labels (low string on left, high on right)
-    for (i, label) in tuning.labels.iter().enumerate() {
-        let sx = board_x + i as f32 * spacing - if label.len() > 1 { 1.2 } else { 0.6 };
-        ops.extend(text_op(label, sx, header_y, 3.5, BuiltinFont::Helvetica, gray(0.4)));
+    for s in &lo.strings {
+        let sx = s.x - label_nudge(s.label);
+        ops.extend(text_op(s.label, sx, lo.header_y, 3.5, BuiltinFont::Helvetica, gray(0.4)));
     }
 
     // Open/mute markers
-    for (i, f) in frets.iter().enumerate() {
-        let sx = board_x + i as f32 * spacing;
-        let marker = match f {
-            Some(0) => "O",
-            None => "X",
-            _ => continue,
+    for s in &lo.strings {
+        let marker = match s.marker {
+            Some(Marker::Open) => "O",
+            Some(Marker::Mute) => "X",
+            None => continue,
         };
-        ops.extend(text_op(marker, sx - 0.7, header_y + 2.5, 3.0, BuiltinFont::HelveticaBold, gray(0.3)));
+        ops.extend(text_op(marker, s.x - 0.7, lo.header_y + 2.5, 3.0, BuiltinFont::HelveticaBold, gray(0.3)));
     }
 
-    // Nut
-    if start_fret == 0 {
-        ops.push(Op::SetOutlineColor { col: black() });
-        ops.push(Op::SetOutlineThickness { pt: Pt(1.5) });
-        ops.push(line_op(board_x, nut_y, board_x + board_w, nut_y));
-    } else {
-        ops.extend(text_op(
-            &format!("{}f", start_fret),
-            board_x + board_w + 0.8, nut_y + 1.0,
-            2.5, BuiltinFont::Helvetica, gray(0.4),
-        ));
+    // Nut (or start-fret label)
+    match lo.nut {
+        Nut::Open => {
+            ops.push(Op::SetOutlineColor { col: black() });
+            ops.push(Op::SetOutlineThickness { pt: Pt(1.5) });
+            ops.push(line_op(lo.board_x, lo.nut_y, lo.board_x + lo.board_w, lo.nut_y));
+        }
+        Nut::StartFret(sf) => {
+            ops.extend(text_op(
+                &format!("{}f", sf),
+                lo.board_x + lo.board_w + 0.8, lo.nut_y + 1.0,
+                2.5, BuiltinFont::Helvetica, gray(0.4),
+            ));
+        }
     }
 
     // Fret lines
     ops.push(Op::SetOutlineColor { col: gray(0.65) });
     ops.push(Op::SetOutlineThickness { pt: Pt(0.3) });
-    for f in 0..=FB_FRET_COUNT {
-        let fy = nut_y + f as f32 * FB_FRET_SPACING;
-        ops.push(line_op(board_x, fy, board_x + board_w, fy));
+    for &fy in &lo.fret_ys {
+        ops.push(line_op(lo.board_x, fy, lo.board_x + lo.board_w, fy));
     }
 
     // String lines
     ops.push(Op::SetOutlineColor { col: gray(0.2) });
     ops.push(Op::SetOutlineThickness { pt: Pt(0.25) });
-    for i in 0..n {
-        let sx = board_x + i as f32 * spacing;
-        ops.push(line_op(sx, nut_y, sx, nut_y + board_h));
+    for s in &lo.strings {
+        ops.push(line_op(s.x, lo.nut_y, s.x, lo.nut_y + lo.board_h));
     }
 
     // Finger dots
-    for (i, fret_opt) in frets.iter().enumerate() {
-        let Some(&fret) = fret_opt.as_ref() else { continue };
-        if fret == 0 { continue; }
-        let display_fret = if start_fret == 0 { fret } else { fret - start_fret + 1 };
-        if display_fret > FB_FRET_COUNT as u8 { continue; }
+    for dot in &lo.dots {
+        let fill = if dot.is_root { accent() } else { dark_dot() };
+        ops.extend(circle_ops(dot.x, dot.y, dot.r, fill));
 
-        let sx = board_x + i as f32 * spacing;
-        let fy = nut_y + (display_fret as f32 - 0.5) * FB_FRET_SPACING;
-        let note_pc = (tuning.open[i] + fret) % 12;
-        let fill = if note_pc == root_pc { accent() } else { dark_dot() };
-        ops.extend(circle_ops(sx, fy, FB_DOT_R, fill));
-
-        let note_name = PitchClass::from_semitone(note_pc).as_str();
-        let tx = sx - if note_name.len() > 1 { 1.2 } else { 0.6 };
-        ops.extend(text_op(note_name, tx, fy + 0.6, 2.5, BuiltinFont::HelveticaBold, white()));
+        let tx = dot.x - label_nudge(dot.note);
+        ops.extend(text_op(dot.note, tx, dot.y + 0.6, 2.5, BuiltinFont::HelveticaBold, white()));
     }
 }
 

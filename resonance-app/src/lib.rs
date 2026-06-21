@@ -14,6 +14,7 @@ use resonance_audio::types::*;
 use resonance_audio::AudioEngine;
 use resonance_music_theory::TableRegistry;
 
+pub mod chord_box;
 pub mod chord_sheet_pdf;
 pub mod compose;
 pub mod demo;
