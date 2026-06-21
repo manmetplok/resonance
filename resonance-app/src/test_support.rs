@@ -221,4 +221,16 @@ impl Resonance {
     pub fn test_apply_engine_event(&mut self, event: resonance_audio::types::AudioEvent) {
         let _ = crate::engine_events::handle_engine_event(self, event);
     }
+
+    /// Test-only: render the standalone group-header row component
+    /// (todo #680) so `tests/group_header.rs` can snapshot it without the
+    /// component being wired into the live timeline column yet (#681/#686).
+    #[doc(hidden)]
+    pub fn test_group_header_view(
+        &self,
+        group: &resonance_common::track_group::TrackGroup,
+        member_count: usize,
+    ) -> iced::Element<'static, crate::message::Message> {
+        crate::view::track_header::group_header::view_group_header(group, member_count)
+    }
 }

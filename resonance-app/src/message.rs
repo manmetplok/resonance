@@ -25,6 +25,7 @@ pub enum Message {
     Plugin(PluginMessage),
     Viewport(ViewportMessage),
     ProjectIo(ProjectIoMessage),
+    Group(GroupMessage),
     Ui(UiMessage),
     /// Timer tick driving VU meters and auto-follow. Kept at top level to
     /// avoid wrapping cost on the hot path.
@@ -35,6 +36,28 @@ pub enum Message {
     Redo,
     /// The window manager requested that the window be closed.
     WindowCloseRequested(iced::window::Id),
+}
+
+/// Track-group (folder-track) messages emitted by the group-header row
+/// (epic #36, doc #200). The header is an organisational + macro-control
+/// strip: caret folds the group, `M`/`S` toggle the macro mute/solo that
+/// cascade to members, and the level trim scales members' contribution.
+///
+/// The header *view* (todo #680) emits these; the reducers that apply
+/// them — collapse/fold (#686), macro mute (#687), macro solo (#688) and
+/// level trim (#689) — land in their own todos. Until then they route to
+/// the placeholder `update::group::handle`.
+#[derive(Debug, Clone)]
+pub enum GroupMessage {
+    /// Fold / unfold a group, hiding or showing its member lanes.
+    ToggleCollapse(TrackId),
+    /// Toggle the group's macro mute (cascades to members non-destructively).
+    ToggleMacroMute(TrackId),
+    /// Toggle the group's macro solo (cascades to members non-destructively).
+    ToggleMacroSolo(TrackId),
+    /// Set the group's macro level trim — a multiplicative gain scaling
+    /// members' contribution (`1.0` is unity).
+    SetMacroLevel(TrackId, f32),
 }
 
 #[derive(Debug, Clone)]
