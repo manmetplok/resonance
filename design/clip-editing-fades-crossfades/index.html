@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — Clip editing: fades, crossfades & clip gain (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --bad:#e87b8b;
+    --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+    --track-h:96px; --ruler-h:28px; --header-w:280px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+  /* ---- App chrome ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1)}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px;color:var(--text-1)}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .tabs{display:flex;gap:2px;margin-left:8px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+  .ghost{
+    padding:5px 11px;border:1px solid var(--line);border-radius:var(--radius-md);
+    color:var(--text-2);background:transparent;font-size:12px;cursor:pointer;
+  }
+  .ghost:hover{background:var(--bg-2)}
+
+  /* ---- State switcher ---- */
+  .statebar{
+    height:42px;flex:0 0 auto;display:flex;align-items:center;gap:8px;
+    padding:0 18px;background:var(--bg-1);border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);margin-right:4px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{
+    border:0;background:transparent;color:var(--text-2);padding:6px 13px;font-size:12px;
+    cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2);
+  }
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .hint{margin-left:auto;color:var(--text-3);font-size:11.5px}
+
+  /* ---- Body: track-header column + canvas ---- */
+  .body{flex:1;display:flex;min-height:0}
+  .headers{
+    width:var(--header-w);flex:0 0 auto;background:var(--bg-1);
+    border-right:1px solid var(--line);overflow:hidden;
+  }
+  .ruler-spacer{height:var(--ruler-h);border-bottom:1px solid var(--line)}
+  .thead{
+    height:var(--track-h);border-bottom:1px solid var(--line-2);
+    padding:10px 14px;display:flex;flex-direction:column;gap:6px;justify-content:center;
+  }
+  .thead .row1{display:flex;align-items:center;gap:8px}
+  .swatch{width:8px;height:8px;border-radius:2px;background:var(--warm)}
+  .swatch.midi{background:var(--accent)}
+  .tname{font-size:13px;color:var(--text-1);font-weight:500}
+  .tmeta{font-size:11px;color:var(--text-3)}
+  .tbtns{display:flex;gap:5px;margin-top:2px}
+  .tbtn{
+    width:22px;height:18px;border-radius:4px;border:1px solid var(--line);
+    background:var(--bg-2);color:var(--text-3);font-size:9px;display:grid;place-items:center;
+  }
+  .tbtn.arm{color:var(--bad);border-color:var(--warm-line)}
+
+  .canvas-wrap{flex:1;position:relative;min-width:0;overflow:hidden;background:var(--bg-1)}
+  canvas{display:block;width:100%;height:100%}
+
+  /* ---- Floating clip-gain HUD / tooltip ---- */
+  .hud{
+    position:absolute;pointer-events:none;z-index:6;
+    background:rgba(21,22,27,.95);border:1px solid var(--line);border-radius:var(--radius-md);
+    padding:7px 9px;font-size:11px;color:var(--text-1);box-shadow:0 8px 24px rgba(0,0,0,.45);
+    min-width:118px;
+  }
+  .hud .k{color:var(--text-3);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase}
+  .hud .v{color:var(--warm);font-size:14px;margin-top:1px}
+  .hud .sub{color:var(--text-2);font-size:10.5px;margin-top:4px}
+
+  /* ---- Inspector flyout (clip selected) ---- */
+  .inspector{
+    position:absolute;right:14px;top:14px;width:240px;z-index:7;
+    background:var(--bg-2);border:1px solid var(--accent-line);border-radius:var(--radius-xl);
+    box-shadow:0 16px 44px rgba(0,0,0,.5);overflow:hidden;
+  }
+  .inspector.hidden{display:none}
+  .ins-head{
+    padding:11px 13px;display:flex;align-items:center;gap:8px;
+    border-bottom:1px solid var(--line-2);background:linear-gradient(180deg,rgba(232,196,123,.08),transparent);
+  }
+  .ins-head .ttl{font-size:13px;font-weight:600;color:var(--text-1)}
+  .pill{
+    font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:2px 7px;border-radius:999px;
+    background:rgba(232,196,123,.14);color:var(--warm);border:1px solid var(--warm-line);
+  }
+  .ins-body{padding:12px 13px;display:flex;flex-direction:column;gap:14px}
+  .field{display:flex;flex-direction:column;gap:6px}
+  .field .flbl{display:flex;justify-content:space-between;align-items:baseline}
+  .field .flbl span{font-size:11px;color:var(--text-2)}
+  .field .flbl b{font-size:12px;color:var(--text-1);font-weight:500}
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:3px;
+    background:var(--line);outline:none;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:13px;height:13px;border-radius:50%;
+    background:var(--warm);border:2px solid var(--bg-2);cursor:pointer;
+  }
+  input[type=range].acc::-webkit-slider-thumb{background:var(--accent-soft)}
+  .curvepick{display:flex;gap:5px}
+  .curvepick button{
+    flex:1;border:1px solid var(--line);background:var(--bg-1);color:var(--text-2);
+    border-radius:var(--radius-sm);padding:6px 0;font-size:10.5px;cursor:pointer;font-family:inherit;
+  }
+  .curvepick button.on{border-color:var(--warm-line);background:rgba(232,196,123,.10);color:var(--warm)}
+  .ins-foot{padding:10px 13px;border-top:1px solid var(--line-2);display:flex;justify-content:space-between;align-items:center}
+  .ins-foot .note{font-size:10.5px;color:var(--text-3)}
+  .reset{background:transparent;border:0;color:var(--text-3);font-size:11px;cursor:pointer;text-decoration:underline}
+  .reset:hover{color:var(--text-2)}
+
+  /* ---- Empty / error banners over canvas ---- */
+  .overlay-msg{
+    position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);z-index:5;
+    text-align:center;max-width:420px;pointer-events:none;
+  }
+  .overlay-msg .big{font-size:14px;color:var(--text-2);margin-bottom:6px}
+  .overlay-msg .small{font-size:12px;color:var(--text-3);line-height:1.5}
+  .overlay-msg.err .big{color:var(--bad)}
+  .overlay-msg .icon{font-size:26px;color:var(--text-4);margin-bottom:10px}
+  .overlay-msg.err .icon{color:var(--bad)}
+
+  .legend{
+    position:absolute;left:14px;bottom:12px;z-index:5;display:flex;gap:16px;
+    background:rgba(15,16,19,.82);border:1px solid var(--line-2);border-radius:var(--radius-md);
+    padding:8px 12px;font-size:11px;color:var(--text-2);backdrop-filter:blur(3px);
+  }
+  .legend .li{display:flex;align-items:center;gap:6px}
+  .legend .dot{width:18px;height:8px;border-radius:2px}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- chrome -->
+  <div class="chrome">
+    <div class="brand"><b>resonance</b></div>
+    <div class="tabs">
+      <div class="tab active">Arrange</div>
+      <div class="tab">Mixer</div>
+      <div class="tab">Compose</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="ghost">⌘K</button>
+    <button class="ghost">Share</button>
+  </div>
+
+  <!-- prototype state switcher (design artifact only) -->
+  <div class="statebar">
+    <span class="lbl">Prototype state</span>
+    <div class="seg" id="seg">
+      <button data-state="empty">Empty · hard edges</button>
+      <button class="on" data-state="populated">Fades + crossfade</button>
+      <button data-state="dragging">Dragging fade-in</button>
+      <button data-state="error">Unsupported clip</button>
+    </div>
+    <span class="hint">Drag the corner handles · drag the middle gain bead · hover a clip edge</span>
+  </div>
+
+  <!-- body -->
+  <div class="body">
+    <div class="headers" id="headers">
+      <div class="ruler-spacer"></div>
+      <!-- track headers injected -->
+    </div>
+    <div class="canvas-wrap" id="wrap">
+      <canvas id="cv"></canvas>
+
+      <!-- floating HUD readout -->
+      <div class="hud" id="hud" style="display:none"></div>
+
+      <!-- clip inspector flyout -->
+      <div class="inspector hidden" id="inspector">
+        <div class="ins-head">
+          <span class="swatch"></span>
+          <span class="ttl" id="ins-ttl">Vocal — Take 3</span>
+          <span class="spacer" style="flex:1"></span>
+          <span class="pill">Audio clip</span>
+        </div>
+        <div class="ins-body">
+          <div class="field">
+            <div class="flbl"><span>Fade in</span><b id="fi-val" class="mono">120 ms</b></div>
+            <input type="range" id="fi" min="0" max="800" value="120" />
+            <div class="curvepick" data-target="fi">
+              <button>Linear</button><button class="on">Equal-power</button><button>Exp</button>
+            </div>
+          </div>
+          <div class="field">
+            <div class="flbl"><span>Fade out</span><b id="fo-val" class="mono">240 ms</b></div>
+            <input type="range" id="fo" min="0" max="800" value="240" />
+            <div class="curvepick" data-target="fo">
+              <button>Linear</button><button class="on">Equal-power</button><button>Exp</button>
+            </div>
+          </div>
+          <div class="field">
+            <div class="flbl"><span>Clip gain</span><b id="g-val" class="mono">−1.5 dB</b></div>
+            <input type="range" id="g" class="acc" min="-24" max="12" step="0.5" value="-1.5" />
+          </div>
+        </div>
+        <div class="ins-foot">
+          <span class="note">Overlaps next clip → crossfade</span>
+          <button class="reset" id="reset">Reset</button>
+        </div>
+      </div>
+
+      <!-- empty / error overlays -->
+      <div class="overlay-msg" id="ov-empty" style="display:none">
+        <div class="icon">▦</div>
+        <div class="big">Clips have hard edges</div>
+        <div class="small">Hover a clip's top corner to reveal a <b style="color:var(--warm)">fade handle</b>,
+          then drag inward. Overlap two clips on a track and the seam becomes an automatic crossfade.</div>
+      </div>
+      <div class="overlay-msg err" id="ov-error" style="display:none">
+        <div class="icon">⚠</div>
+        <div class="big">Fades unavailable for this clip</div>
+        <div class="small">This is a frozen / rendered clip with no editable sample source.
+          Clip&nbsp;gain still applies, but fade and crossfade handles are disabled until the clip is unfrozen.</div>
+      </div>
+
+      <!-- legend -->
+      <div class="legend">
+        <div class="li"><span class="dot" style="background:rgba(232,196,123,.55)"></span> fade region</div>
+        <div class="li"><span class="dot" style="background:rgba(139,109,255,.55)"></span> crossfade</div>
+        <div class="li"><span class="dot" style="background:var(--warm)"></span> handle</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================================
+   Resonance clip-editing prototype.
+   Renders the arrange-view canvas the same way the real app does (warm clip
+   washes + waveform bars), then layers interactive fade handles, a clip-gain
+   bead, and crossfade visualization. Pure design artifact — no audio engine.
+   ============================================================================ */
+const T = getComputedStyle(document.documentElement);
+const tok = n => T.getPropertyValue(n).trim();
+const C = {
+  bg1:tok('--bg-1'), bg2:tok('--bg-2'), line:tok('--line'), line2:tok('--line-2'),
+  text1:tok('--text-1'), text2:tok('--text-2'), text3:tok('--text-3'),
+  warm:tok('--warm'), accent:tok('--accent'), accentSoft:tok('--accent-soft'),
+};
+const RULER_H=28, TRACK_H=96, INSET=10, EDGE=6, HANDLE=9;
+const SR=48000, ZOOM=46; // px per second
+const secToX = s => s*ZOOM;
+const xToSec = x => x/ZOOM;
+
+// Tracks shown in the arrange view.
+const tracks = [
+  {name:'Lead Vocal', meta:'Audio · stereo', kind:'audio'},
+  {name:'Acoustic Gtr', meta:'Audio · mono', kind:'audio'},
+  {name:'Synth Pad', meta:'Instrument · MIDI', kind:'midi'},
+];
+
+// Clips. fadeIn / fadeOut in milliseconds; gainDb per clip. start/dur seconds.
+function freshClips(){ return [
+  // Lead vocal: two overlapping takes → crossfade. (track 0)
+  {id:'v1', track:0, start:0.6, dur:4.2, name:'Vocal — Take 3', kind:'audio',
+     fadeIn:120, fadeOut:240, gainDb:-1.5, curveIn:'eqpow', curveOut:'eqpow'},
+  {id:'v2', track:0, start:4.0, dur:3.6, name:'Vocal — Take 4', kind:'audio',
+     fadeIn:300, fadeOut:160, gainDb:0, curveIn:'eqpow', curveOut:'lin'},
+  // Guitar: single clip with gentle in/out. (track 1)
+  {id:'g1', track:1, start:1.1, dur:6.0, name:'Gtr DI', kind:'audio',
+     fadeIn:80, fadeOut:520, gainDb:-3.0, curveIn:'lin', curveOut:'exp'},
+  // Frozen guitar tail used only for the error state.
+  {id:'g2', track:1, start:7.4, dur:2.0, name:'Gtr (frozen)', kind:'audio',
+     fadeIn:0, fadeOut:0, gainDb:0, frozen:true},
+  // Synth pad MIDI clip — no fades, shown for context. (track 2)
+  {id:'m1', track:2, start:0.4, dur:8.4, name:'Pad', kind:'midi',
+     fadeIn:0, fadeOut:0, gainDb:0},
+];}
+
+let clips = freshClips();
+let stateName = 'populated';
+let selected = 'v1';
+let drag = null;          // {clip, what:'fadeIn'|'fadeOut'|'gain', ...}
+let hover = null;         // {clip, what}
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const wrap = document.getElementById('wrap');
+const hud = document.getElementById('hud');
+const inspector = document.getElementById('inspector');
+
+// ---- track header column ----
+function buildHeaders(){
+  const h = document.getElementById('headers');
+  // keep the ruler spacer (first child), drop old rows
+  [...h.querySelectorAll('.thead')].forEach(n=>n.remove());
+  tracks.forEach(t=>{
+    const d = document.createElement('div'); d.className='thead';
+    d.innerHTML = `
+      <div class="row1">
+        <span class="swatch ${t.kind==='midi'?'midi':''}"></span>
+        <span class="tname">${t.name}</span>
+      </div>
+      <div class="tmeta">${t.meta}</div>
+      <div class="tbtns">
+        <span class="tbtn">M</span><span class="tbtn">S</span>
+        <span class="tbtn ${t.kind==='audio'?'arm':''}">●</span>
+      </div>`;
+    h.appendChild(d);
+  });
+}
+
+// ---- geometry helpers ----
+function clipRect(c){
+  const x = secToX(c.start);
+  const w = secToX(c.dur);
+  const y = RULER_H + c.track*TRACK_H + INSET;
+  const hgt = TRACK_H - 2*INSET;
+  return {x,y,w,h:hgt};
+}
+function fadeInPx(c){ return Math.min(secToX(c.fadeIn/1000), clipRect(c).w*0.9); }
+function fadeOutPx(c){ return Math.min(secToX(c.fadeOut/1000), clipRect(c).w*0.9); }
+
+// crossfade between two audio clips on same track that overlap
+function crossfades(){
+  const out=[];
+  const audio = clips.filter(c=>c.kind==='audio' && !(stateName==='error'&&c.frozen===undefined&&false));
+  for(let i=0;i<audio.length;i++) for(let j=i+1;j<audio.length;j++){
+    const a=audio[i], b=audio[j];
+    if(a.track!==b.track) continue;
+    const lo=Math.max(a.start,b.start), hi=Math.min(a.start+a.dur,b.start+b.dur);
+    if(hi>lo){ out.push({a,b,start:lo,end:hi}); }
+  }
+  return out;
+}
+
+// ---- drawing ----
+function dpr(){ return window.devicePixelRatio||1; }
+function resize(){
+  const r = wrap.getBoundingClientRect();
+  cv.width = r.width*dpr(); cv.height=r.height*dpr();
+  ctx.setTransform(dpr(),0,0,dpr(),0,0);
+  draw();
+}
+
+function roundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+
+function drawRulerGrid(){
+  const W = cv.width/dpr(), H = cv.height/dpr();
+  ctx.fillStyle=C.bg1; ctx.fillRect(0,0,W,H);
+  // ruler
+  ctx.fillStyle=C.bg1; ctx.fillRect(0,0,W,RULER_H);
+  // bar/beat grid (assume 4/4, 120bpm → 2s per bar)
+  const barSec=2;
+  ctx.font='11px Geist, sans-serif';
+  for(let bar=0, x=0; x<=W; bar++){
+    x = secToX(bar*barSec);
+    ctx.fillStyle=C.line; ctx.fillRect(x,RULER_H,1,H-RULER_H);
+    ctx.fillStyle=C.text3; ctx.fillText(String(bar+1), x+3, 14);
+    ctx.fillStyle=C.text3; ctx.fillRect(x,RULER_H-10,1,10);
+    // beats
+    for(let bt=1;bt<4;bt++){
+      const bx=secToX(bar*barSec+bt*barSec/4);
+      ctx.fillStyle=C.line2; ctx.fillRect(bx,RULER_H,1,H-RULER_H);
+    }
+  }
+  ctx.fillStyle=C.line; ctx.fillRect(0,RULER_H-1,W,1);
+  // track row separators
+  for(let i=0;i<=tracks.length;i++){
+    const y=RULER_H+i*TRACK_H; ctx.fillStyle=C.line2; ctx.fillRect(0,y,W,1);
+  }
+  // playhead
+  const ph=secToX(2.7);
+  ctx.fillStyle=C.warm; ctx.fillRect(ph,0,1.5,H);
+  ctx.beginPath(); ctx.moveTo(ph-4,0); ctx.lineTo(ph+5,0); ctx.lineTo(ph+0.5,7); ctx.closePath();
+  ctx.fillStyle=C.warm; ctx.fill();
+}
+
+// pseudo waveform — deterministic per clip id
+function wave(c, x, y, w, h){
+  const hdr=18, wy=y+hdr, wh=h-hdr-4, cy=wy+wh/2;
+  let seed=0; for(const ch of c.id) seed+=ch.charCodeAt(0);
+  ctx.fillStyle='rgba(232,196,123,.62)';
+  const step=2.2;
+  for(let px=2; px<w-2; px+=step){
+    const t=(px/w);
+    const env=Math.sin(t*Math.PI); // body louder in middle
+    const n=Math.abs(Math.sin((px*0.9+seed)*0.7)+0.5*Math.sin((px*0.31+seed)*1.9));
+    const a=Math.min(1,(0.18+0.82*n)*env);
+    const bh=Math.max(1,a*wh*0.5);
+    ctx.fillRect(x+px, cy-bh, Math.max(1,step-0.7), bh*2);
+  }
+}
+
+// fade overlay: darken the part of the clip under the fade ramp + draw ramp line
+function drawFadeRegion(c, r){
+  const fi=fadeInPx(c), fo=fadeOutPx(c);
+  // shade the fade triangles so it reads as "quieter here"
+  ctx.save();
+  roundRect(r.x,r.y,r.w,r.h,8); ctx.clip();
+  if(fi>0){
+    ctx.fillStyle='rgba(15,16,19,.40)';
+    ctx.beginPath(); ctx.moveTo(r.x,r.y); ctx.lineTo(r.x+fi,r.y); ctx.lineTo(r.x,r.y+r.h); ctx.closePath(); ctx.fill();
+    // ramp line
+    ctx.strokeStyle=C.warm; ctx.lineWidth=1.5; ctx.beginPath();
+    ctx.moveTo(r.x, r.y+r.h);
+    rampPath(c.curveIn||'lin', r.x, r.y+r.h, r.x+fi, r.y, true);
+    ctx.stroke();
+  }
+  if(fo>0){
+    ctx.fillStyle='rgba(15,16,19,.40)';
+    ctx.beginPath(); ctx.moveTo(r.x+r.w,r.y); ctx.lineTo(r.x+r.w-fo,r.y); ctx.lineTo(r.x+r.w,r.y+r.h); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle=C.warm; ctx.lineWidth=1.5; ctx.beginPath();
+    ctx.moveTo(r.x+r.w-fo, r.y);
+    rampPath(c.curveOut||'lin', r.x+r.w-fo, r.y, r.x+r.w, r.y+r.h, false);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+// trace a fade ramp from (x0,y0) to (x1,y1) given a curve type
+function rampPath(curve, x0,y0,x1,y1){
+  const N=18;
+  for(let i=1;i<=N;i++){
+    const t=i/N; const x=x0+(x1-x0)*t;
+    let yt; // 0..1 normalized progress of the gain
+    if(curve==='eqpow') yt=Math.sin(t*Math.PI/2);
+    else if(curve==='exp') yt=t*t;
+    else yt=t;
+    const y=y0+(y1-y0)*yt;
+    ctx.lineTo(x,y);
+  }
+}
+
+function drawHandles(c, r){
+  if(c.kind!=='audio') return;
+  if(stateName==='error' && c.frozen) return;
+  const fi=fadeInPx(c), fo=fadeOutPx(c);
+  const sel = (selected===c.id);
+  const showAll = sel || (hover&&hover.clip===c.id);
+  // fade-in handle: top, at end of fade-in ramp
+  drawHandle(r.x+fi, r.y, hover&&hover.clip===c.id&&hover.what==='fadeIn', showAll||fi>0);
+  // fade-out handle
+  drawHandle(r.x+r.w-fo, r.y, hover&&hover.clip===c.id&&hover.what==='fadeOut', showAll||fo>0);
+  // gain bead: middle-top
+  const gx=r.x+r.w/2, gy=r.y+8;
+  const gHover = hover&&hover.clip===c.id&&hover.what==='gain';
+  if(showAll){
+    ctx.fillStyle = gHover? C.accentSoft : 'rgba(168,146,255,.85)';
+    ctx.beginPath(); ctx.arc(gx,gy,gHover?5.5:4.5,0,7); ctx.fill();
+    ctx.strokeStyle=C.bg2; ctx.lineWidth=1.5; ctx.stroke();
+  }
+}
+function drawHandle(x,y,hot,show){
+  if(!show) return;
+  const s = hot?HANDLE+1:HANDLE;
+  ctx.fillStyle = hot? C.warm : 'rgba(232,196,123,.92)';
+  ctx.beginPath(); ctx.arc(x,y,s/2,0,7); ctx.fill();
+  ctx.strokeStyle=C.bg2; ctx.lineWidth=2; ctx.stroke();
+}
+
+function drawClip(c){
+  const r=clipRect(c);
+  const audio=c.kind==='audio';
+  const sel=selected===c.id;
+  const frozen = stateName==='error' && c.frozen;
+  const body = audio? 'rgba(232,196,123,.10)':'rgba(139,109,255,.10)';
+  const border = sel? C.accent : (audio? 'rgba(232,196,123,.34)':'rgba(139,109,255,.34)');
+  roundRect(r.x,r.y,r.w,r.h,8); ctx.fillStyle=body; ctx.fill();
+  // interior
+  if(audio){ wave(c,r.x,r.y,r.w,r.h); } else { midiNotes(c,r); }
+  // gain tint — louder clip slightly brighter body wash overlay
+  if(audio && c.gainDb){
+    const g=Math.max(-24,Math.min(12,c.gainDb));
+    roundRect(r.x,r.y,r.w,r.h,8);
+    ctx.fillStyle = g>0? `rgba(232,196,123,${0.04*g/12})` : `rgba(15,16,19,${0.28*(-g/24)})`;
+    ctx.fill();
+  }
+  // fades
+  if(audio && !frozen){ drawFadeRegion(c,r); }
+  // name
+  ctx.font='10.5px Geist, sans-serif';
+  ctx.fillStyle = audio? C.warm : C.accentSoft;
+  ctx.fillText(clamp(c.name,24), r.x+9, r.y+13);
+  if(audio && c.gainDb){
+    const lbl=(c.gainDb>0?'+':'')+c.gainDb.toFixed(1)+' dB';
+    ctx.font='9.5px "Geist Mono", monospace';
+    ctx.fillStyle=C.text3;
+    const tw=ctx.measureText(lbl).width;
+    ctx.fillText(lbl, r.x+r.w-tw-8, r.y+13);
+  }
+  if(frozen){
+    // hatch + lock to read as non-editable
+    ctx.save(); roundRect(r.x,r.y,r.w,r.h,8); ctx.clip();
+    ctx.strokeStyle='rgba(154,160,172,.18)'; ctx.lineWidth=1;
+    for(let x=r.x-r.h;x<r.x+r.w;x+=7){ ctx.beginPath(); ctx.moveTo(x,r.y+r.h); ctx.lineTo(x+r.h,r.y); ctx.stroke(); }
+    ctx.restore();
+  }
+  // border
+  roundRect(r.x,r.y,r.w,r.h,8);
+  ctx.strokeStyle=border; ctx.lineWidth=sel?1.5:1; ctx.stroke();
+  // handles on top
+  drawHandles(c,r);
+}
+function midiNotes(c,r){
+  const hdr=18, ny=r.y+hdr, nh=r.h-hdr-4;
+  ctx.fillStyle='rgba(168,146,255,.85)';
+  let seed=7; const N=22;
+  for(let i=0;i<N;i++){
+    const t=i/N; const nx=r.x+6+t*(r.w-12);
+    const pitch=(Math.sin(i*0.7)+1)/2;
+    const yy=ny+(1-pitch)*(nh-4);
+    ctx.fillRect(nx, yy, (r.w/N)*0.7, 3);
+  }
+}
+
+function drawCrossfades(){
+  if(stateName==='error') return;
+  crossfades().forEach(xf=>{
+    const x0=secToX(xf.start), x1=secToX(xf.end);
+    const c=clips.find(cc=>cc.id===xf.a.id);
+    const y=RULER_H+c.track*TRACK_H+INSET, h=TRACK_H-2*INSET;
+    ctx.save();
+    roundRect(x0,y,x1-x0,h,4); ctx.clip();
+    // lavender wash marks the crossfade zone
+    ctx.fillStyle='rgba(139,109,255,.16)'; ctx.fillRect(x0,y,x1-x0,h);
+    // two crossing equal-power curves
+    ctx.strokeStyle='rgba(168,146,255,.9)'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(x0,y); // a fades out
+    for(let i=1;i<=16;i++){const t=i/16; ctx.lineTo(x0+(x1-x0)*t, y+Math.sin(t*Math.PI/2)*h);} ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x0,y+h); // b fades in
+    for(let i=1;i<=16;i++){const t=i/16; ctx.lineTo(x0+(x1-x0)*t, y+h-Math.sin(t*Math.PI/2)*h);} ctx.stroke();
+    ctx.restore();
+    // X marker badge at top of overlap
+    ctx.fillStyle='rgba(139,109,255,.9)';
+    ctx.font='9px "Geist Mono", monospace';
+    if(x1-x0>22) ctx.fillText('⤬', (x0+x1)/2-3, y-3);
+  });
+}
+
+function draw(){
+  drawRulerGrid();
+  // order: clips first, then crossfades on top of the overlap seam
+  clips.forEach(drawClip);
+  drawCrossfades();
+  // re-draw handles for the selected clip on very top so they're never hidden
+  const s=clips.find(c=>c.id===selected); if(s) drawHandles(s, clipRect(s));
+}
+
+function clamp(s,n){ return s.length>n? s.slice(0,n-1)+'…':s; }
+
+// ---- hit testing for handles / gain / body ----
+function hit(px,py){
+  for(let i=clips.length-1;i>=0;i--){
+    const c=clips[i]; if(c.kind!=='audio') continue;
+    if(stateName==='error' && c.frozen) continue;
+    const r=clipRect(c);
+    const fi=fadeInPx(c), fo=fadeOutPx(c);
+    // handles (corners)
+    if(dist(px,py, r.x+fi, r.y)<10) return {clip:c.id, what:'fadeIn', r};
+    if(dist(px,py, r.x+r.w-fo, r.y)<10) return {clip:c.id, what:'fadeOut', r};
+    if(dist(px,py, r.x+r.w/2, r.y+8)<9) return {clip:c.id, what:'gain', r};
+    if(px>=r.x&&px<=r.x+r.w&&py>=r.y&&py<=r.y+r.h) return {clip:c.id, what:'body', r};
+  }
+  return null;
+}
+function dist(ax,ay,bx,by){ return Math.hypot(ax-bx,ay-by); }
+function localPos(e){
+  const b=cv.getBoundingClientRect();
+  return {x:e.clientX-b.left, y:e.clientY-b.top};
+}
+
+// ---- interaction ----
+cv.addEventListener('mousemove', e=>{
+  const p=localPos(e);
+  if(drag){
+    const c=clips.find(cc=>cc.id===drag.clip);
+    const r=clipRect(c);
+    if(drag.what==='fadeIn'){
+      const ms=Math.max(0, Math.min(800, Math.round(xToSec(p.x-r.x)*1000)));
+      c.fadeIn=ms;
+    } else if(drag.what==='fadeOut'){
+      const ms=Math.max(0, Math.min(800, Math.round(xToSec((r.x+r.w)-p.x)*1000)));
+      c.fadeOut=ms;
+    } else if(drag.what==='gain'){
+      const dy=drag.y-p.y; // up = louder
+      c.gainDb=Math.max(-24, Math.min(12, +(drag.g0 + dy*0.12).toFixed(1)));
+    }
+    syncInspector(); draw(); showHud(c, drag.what, e);
+    return;
+  }
+  const h=hit(p.x,p.y);
+  hover = h && h.what!=='body'? {clip:h.clip, what:h.what} : null;
+  cv.style.cursor = h? (h.what==='fadeIn'||h.what==='fadeOut'?'ew-resize': h.what==='gain'?'ns-resize':'pointer') : 'default';
+  if(hover){ const c=clips.find(cc=>cc.id===hover.clip); showHud(c, hover.what, e); }
+  else hud.style.display='none';
+  draw();
+});
+cv.addEventListener('mousedown', e=>{
+  const p=localPos(e); const h=hit(p.x,p.y);
+  if(!h){ selected=null; inspector.classList.add('hidden'); draw(); return; }
+  selected=h.clip;
+  const c=clips.find(cc=>cc.id===h.clip);
+  if(h.what==='gain'){ drag={clip:h.clip, what:'gain', y:p.y, g0:c.gainDb}; }
+  else if(h.what==='fadeIn'||h.what==='fadeOut'){ drag={clip:h.clip, what:h.what}; }
+  openInspector(c);
+  draw();
+});
+window.addEventListener('mouseup', ()=>{ if(drag){drag=null; hud.style.display='none';} });
+
+function showHud(c, what, e){
+  const p=localPos(e);
+  let k,v,sub;
+  if(what==='fadeIn'){ k='Fade in'; v=c.fadeIn+' ms'; sub=(c.curveIn==='eqpow'?'Equal-power':c.curveIn==='exp'?'Exponential':'Linear')+' · click for curve'; }
+  else if(what==='fadeOut'){ k='Fade out'; v=c.fadeOut+' ms'; sub=(c.curveOut==='eqpow'?'Equal-power':c.curveOut==='exp'?'Exponential':'Linear'); }
+  else if(what==='gain'){ k='Clip gain'; v=(c.gainDb>0?'+':'')+c.gainDb.toFixed(1)+' dB'; sub='drag ↕ · this clip only'; }
+  else { hud.style.display='none'; return; }
+  hud.innerHTML=`<div class="k">${k}</div><div class="v">${v}</div><div class="sub">${sub}</div>`;
+  hud.style.display='block';
+  const wr=wrap.getBoundingClientRect();
+  hud.style.left=Math.min(wr.width-130, p.x+14)+'px';
+  hud.style.top=Math.max(6, p.y-58)+'px';
+  hud.querySelector('.v').style.color = what==='gain'? C.accentSoft : C.warm;
+}
+
+// ---- inspector binding ----
+function openInspector(c){
+  if(c.kind!=='audio' || (stateName==='error'&&c.frozen)){ inspector.classList.add('hidden'); return; }
+  inspector.classList.remove('hidden');
+  document.getElementById('ins-ttl').textContent=c.name;
+  syncInspector();
+}
+function syncInspector(){
+  const c=clips.find(cc=>cc.id===selected); if(!c) return;
+  fi.value=c.fadeIn; fo.value=c.fadeOut; g.value=c.gainDb;
+  document.getElementById('fi-val').textContent=c.fadeIn+' ms';
+  document.getElementById('fo-val').textContent=c.fadeOut+' ms';
+  document.getElementById('g-val').textContent=(c.gainDb>0?'+':'')+ (c.gainDb<0?'−'+Math.abs(c.gainDb).toFixed(1):c.gainDb.toFixed(1))+' dB';
+  setCurveBtns('fi', c.curveIn); setCurveBtns('fo', c.curveOut);
+}
+const fi=document.getElementById('fi'), fo=document.getElementById('fo'), g=document.getElementById('g');
+fi.addEventListener('input',()=>{const c=cur(); if(c){c.fadeIn=+fi.value; syncInspector(); draw();}});
+fo.addEventListener('input',()=>{const c=cur(); if(c){c.fadeOut=+fo.value; syncInspector(); draw();}});
+g.addEventListener('input',()=>{const c=cur(); if(c){c.gainDb=+g.value; syncInspector(); draw();}});
+function cur(){ return clips.find(c=>c.id===selected); }
+document.querySelectorAll('.curvepick').forEach(grp=>{
+  grp.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+    const c=cur(); if(!c) return;
+    const map={'Linear':'lin','Equal-power':'eqpow','Exp':'exp'};
+    const v=map[b.textContent.trim()];
+    if(grp.dataset.target==='fi') c.curveIn=v; else c.curveOut=v;
+    syncInspector(); draw();
+  }));
+});
+function setCurveBtns(target, v){
+  const grp=document.querySelector(`.curvepick[data-target="${target}"]`); if(!grp) return;
+  const map={'Linear':'lin','Equal-power':'eqpow','Exp':'exp'};
+  grp.querySelectorAll('button').forEach(b=> b.classList.toggle('on', map[b.textContent.trim()]===v));
+}
+document.getElementById('reset').addEventListener('click',()=>{
+  const c=cur(); if(!c) return;
+  const f=freshClips().find(x=>x.id===c.id); Object.assign(c,f); syncInspector(); draw();
+});
+
+// ---- state switcher ----
+function setState(s){
+  stateName=s;
+  document.querySelectorAll('#seg button').forEach(b=>b.classList.toggle('on', b.dataset.state===s));
+  document.getElementById('ov-empty').style.display = s==='empty'?'block':'none';
+  document.getElementById('ov-error').style.display = s==='error'?'block':'none';
+  clips=freshClips();
+  if(s==='empty'){ clips.forEach(c=>{c.fadeIn=0;c.fadeOut=0;}); selected=null; inspector.classList.add('hidden'); }
+  else if(s==='populated'){ selected='v1'; openInspector(cur()); }
+  else if(s==='dragging'){
+    selected='g1'; const c=cur(); c.fadeIn=420; openInspector(c);
+    // simulate a live drag HUD anchored on the fade-in handle
+    const r=clipRect(c); const fakeEvt={clientX:0,clientY:0};
+    drag=null;
+    setTimeout(()=>{ // place hud near handle
+      const b=cv.getBoundingClientRect();
+      hover={clip:c.id, what:'fadeIn'};
+      showHud(c,'fadeIn',{clientX:b.left+r.x+fadeInPx(c), clientY:b.top+r.y});
+      draw();
+    },0);
+  }
+  else if(s==='error'){ selected='g2'; inspector.classList.add('hidden'); }
+  draw();
+}
+document.querySelectorAll('#seg button').forEach(b=>b.addEventListener('click',()=>setState(b.dataset.state)));
+
+// ---- init ----
+buildHeaders();
+window.addEventListener('resize', resize);
+resize();
+setState('populated');
+</script>
+</body>
+</html>
