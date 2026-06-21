@@ -10,7 +10,7 @@ pub mod satb;
 pub mod scale;
 pub mod voicing;
 
-pub use chord::{Chord, ChordQuality};
+pub use chord::{parse_chord, Chord, ChordParseError, ChordQuality};
 pub use derive::{
     count_syllables, derive_bass, derive_bass_motif, derive_melody,
     derive_motif_melody_with_section, derive_motif_rhythm, derive_pad, derive_vocal,
