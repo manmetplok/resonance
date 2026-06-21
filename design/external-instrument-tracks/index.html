@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — External hardware instrument tracks (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-dim:rgba(232,196,123,.12); --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --good-dim:rgba(109,214,163,.14); --good-line:rgba(109,214,163,.34);
+    --bad:#e87b8b; --bad-dim:rgba(232,123,139,.13); --bad-line:rgba(232,123,139,.40);
+    --radius-xs:4px; --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+
+  /* ---- App chrome ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1)}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .tabs{display:flex;gap:2px;margin-left:8px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+  .clock{font-size:12px;color:var(--text-2);display:flex;gap:14px;align-items:center}
+  .clock b{color:var(--text-1);font-weight:500}
+
+  /* ---- State switcher ---- */
+  .statebar{
+    min-height:44px;flex:0 0 auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    padding:6px 18px;background:var(--bg-1);border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);margin-right:2px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{
+    border:0;background:transparent;color:var(--text-2);padding:6px 13px;font-size:12px;
+    cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2);
+  }
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .hint{margin-left:auto;color:var(--text-3);font-size:11.5px;max-width:560px;text-align:right;line-height:1.45}
+
+  /* ---- Body: strips + inspector ---- */
+  .body{flex:1;display:flex;min-height:0}
+  .strips{
+    flex:1;min-width:0;overflow:hidden;background:var(--bg-1);
+    display:flex;align-items:flex-end;gap:16px;padding:26px;
+  }
+
+  /* Channel strip */
+  .strip{
+    width:140px;height:452px;flex:0 0 auto;background:var(--bg-2);
+    border:1px solid var(--line);border-radius:var(--radius-xl);
+    display:flex;flex-direction:column;overflow:hidden;position:relative;
+  }
+  .strip.master{width:156px}
+  .strip.selected{border-color:var(--accent-line);box-shadow:0 0 0 1px var(--accent-line),0 14px 40px rgba(0,0,0,.45)}
+  .strip.ext.selected{border-color:var(--accent-line)}
+  .s-head{padding:9px 11px;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--line-2)}
+  .s-dot{width:8px;height:8px;border-radius:2px;background:var(--warm);flex:0 0 auto}
+  .s-dot.midi{background:var(--accent)}
+  .s-dot.ext{background:var(--accent);box-shadow:0 0 0 2px var(--accent-dim)}
+  .s-name{font-size:12.5px;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .s-tag{font-size:8px;letter-spacing:.11em;text-transform:uppercase;color:var(--text-3)}
+  .s-tag.ext{color:var(--accent-soft);background:var(--accent-dim);border:1px solid var(--accent-line);padding:2px 5px;border-radius:999px}
+
+  /* External-instrument summary chips on the strip */
+  .s-ext{padding:8px 10px;border-bottom:1px solid var(--line-2);display:flex;flex-direction:column;gap:5px}
+  .chip{
+    display:flex;align-items:center;gap:6px;padding:5px 7px;border-radius:var(--radius-xs);
+    background:var(--bg-1);border:1px solid var(--line-2);font-size:10.5px;color:var(--text-2);
+  }
+  .chip .ck{font-size:8px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);flex:0 0 auto;width:30px}
+  .chip .cv{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-1)}
+  .chip.patch .cv{color:var(--accent-soft)}
+  .midiflash{width:7px;height:7px;border-radius:50%;background:var(--accent);opacity:.2;flex:0 0 auto}
+  .midiflash.beat{animation:midibeat .5s steps(1) infinite}
+  @keyframes midibeat{0%{opacity:1}40%{opacity:.2}100%{opacity:1}}
+
+  .s-meterwrap{flex:1;display:flex;gap:10px;padding:14px 14px 6px;align-items:stretch;justify-content:center}
+  .fader{width:30px;position:relative;display:flex;justify-content:center;background:var(--bg-1);border-radius:var(--radius-sm);border:1px solid var(--line-2)}
+  .fader .track{position:absolute;top:14px;bottom:14px;width:3px;background:var(--bg-3);border-radius:3px;left:50%;transform:translateX(-50%)}
+  .fader .cap{position:absolute;left:50%;transform:translateX(-50%);width:22px;height:11px;border-radius:3px;background:var(--bg-3);border:1px solid var(--line);bottom:38%}
+  .meter{width:9px;background:var(--bg-1);border-radius:3px;border:1px solid var(--line-2);position:relative;overflow:hidden}
+  .meter i{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(180deg,var(--warm),var(--good));border-radius:0 0 3px 3px;height:0%}
+  .meter.silent i{height:0% !important}
+  .retlabel{position:absolute;bottom:-1px;left:0;right:0;text-align:center;font-size:7px;color:var(--text-3)}
+
+  .s-btns{display:flex;gap:5px;padding:8px 11px;border-top:1px solid var(--line-2)}
+  .s-btns button{flex:1;height:22px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-1);color:var(--text-3);font-size:10px;font-family:inherit;cursor:pointer}
+  .s-btns button.arm.on{background:var(--bad-dim);border-color:var(--bad-line);color:var(--bad)}
+  .s-btns button.mon.on{background:var(--good-dim);border-color:var(--good-line);color:var(--good)}
+
+  /* Offline overlay on the strip */
+  .offline{position:absolute;inset:0;border-radius:var(--radius-xl);pointer-events:none;opacity:0;transition:opacity .25s}
+  .offline.on{opacity:1;box-shadow:inset 0 0 0 1px var(--bad-line),inset 0 0 26px rgba(232,123,139,.08)}
+  .offflag{
+    position:absolute;top:9px;right:9px;z-index:3;font-size:7.5px;letter-spacing:.1em;text-transform:uppercase;
+    padding:2px 6px;border-radius:999px;background:var(--bad-dim);color:var(--bad);border:1px solid var(--bad-line);
+    display:none;align-items:center;gap:4px;
+  }
+  .offflag.on{display:inline-flex}
+
+  /* ---- Inspector ---- */
+  .insp{
+    width:340px;flex:0 0 auto;background:var(--bg-1);border-left:1px solid var(--line-2);
+    padding:22px 20px;overflow-y:auto;
+  }
+  .insp::-webkit-scrollbar{width:8px}
+  .insp::-webkit-scrollbar-thumb{background:var(--bg-3);border-radius:4px}
+  .i-kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+  .i-title{font-size:17px;font-weight:500;color:var(--text-1);margin-top:2px;display:flex;align-items:center;gap:8px}
+  .i-title .badge{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;padding:2px 7px;border-radius:999px;font-weight:600}
+  .badge.ext{color:var(--accent-soft);background:var(--accent-dim);border:1px solid var(--accent-line)}
+  .badge.warm{color:var(--warm);background:var(--warm-dim);border:1px solid var(--warm-line)}
+  .badge.good{color:var(--good);background:var(--good-dim);border:1px solid var(--good-line)}
+  .badge.bad{color:var(--bad);background:var(--bad-dim);border:1px solid var(--bad-line)}
+
+  .grp{margin-top:18px}
+  .grp-head{display:flex;align-items:center;gap:8px;cursor:default}
+  .grp-head .caret{color:var(--text-3);font-size:9px}
+  .grp-head .gt{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+  .grp-head .gmeta{margin-left:auto;font-size:10px;color:var(--text-4)}
+
+  /* stat tiles */
+  .tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  .tile{background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--radius-md);padding:8px 10px}
+  .tile .tl{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+  .tile .tv{font-size:13px;margin-top:3px;color:var(--text-1)}
+
+  /* field blocks */
+  .field{margin-top:12px}
+  .field:first-child{margin-top:10px}
+  .field .fl{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px}
+  .field .fl .src{margin-left:auto;font-size:8px;letter-spacing:.08em;color:var(--accent-soft);background:var(--accent-dim);border:1px solid var(--accent-line);padding:1px 5px;border-radius:999px;text-transform:none}
+  .pick{
+    width:100%;height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;
+    background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-sm);
+    color:var(--text-1);font-size:12px;cursor:pointer;
+  }
+  .pick .pv{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pick .car{color:var(--text-3);font-size:9px}
+  .pick.placeholder .pv{color:var(--text-3)}
+  .pick.bad{border-color:var(--bad-line)}
+  .pick .d{width:7px;height:7px;border-radius:2px;background:var(--accent);flex:0 0 auto}
+  .pick .d.warm{background:var(--warm)}
+  .pick .d.good{background:var(--good)}
+  .pick .d.bad{background:var(--bad)}
+  .two{display:grid;grid-template-columns:1fr 92px;gap:8px}
+
+  /* patch block */
+  .patchcard{margin-top:6px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);padding:10px;position:relative;overflow:hidden}
+  .patchcard.lit{border-color:var(--accent-line)}
+  .patchrow{display:grid;grid-template-columns:64px 1fr;gap:8px;align-items:center}
+  .patchrow + .patchrow{margin-top:8px}
+  .pgnum{
+    background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-sm);
+    text-align:center;padding:6px 0;font-size:15px;color:var(--accent-soft);letter-spacing:.02em;
+  }
+  .patchsend{
+    position:absolute;inset:0;background:radial-gradient(120% 120% at 12% 50%,var(--accent-dim),transparent 60%);
+    opacity:0;pointer-events:none;transition:opacity .12s;
+  }
+  .patchsend.flash{opacity:1}
+  .pcnote{font-size:10px;color:var(--text-3);margin-top:8px;line-height:1.45}
+  .pcnote b{color:var(--text-2);font-weight:500}
+
+  /* latency comp */
+  .latbox{margin-top:6px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);padding:10px}
+  .latrow{display:flex;align-items:center;gap:10px}
+  .latrow .lv{font-size:15px;color:var(--text-1)}
+  .latrow .lu{font-size:10px;color:var(--text-3)}
+  .latrow .smp{margin-left:auto;font-size:10px;color:var(--text-3)}
+  .slider{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:3px;background:var(--bg-3);margin-top:10px;outline:none}
+  .slider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent-soft);border:2px solid var(--bg-1);cursor:pointer}
+  .slider::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent-soft);border:2px solid var(--bg-1);cursor:pointer}
+  .pingbtn{
+    margin-top:10px;width:100%;height:28px;border-radius:var(--radius-sm);border:1px solid var(--line);
+    background:var(--bg-1);color:var(--text-2);font-size:11px;font-family:inherit;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;gap:7px;
+  }
+  .pingbtn:hover{background:var(--bg-3);color:var(--text-1)}
+  .pingbtn.busy{border-color:var(--accent-line);color:var(--accent-soft)}
+  .pingdot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+  .pingbtn.busy .pingdot{animation:midibeat .4s steps(1) infinite}
+  .pingres{font-size:10px;color:var(--good);margin-top:8px;display:none}
+  .pingres.show{display:block}
+
+  /* monitor / arm toggle row */
+  .montoggles{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+  .tog{
+    height:30px;border-radius:var(--radius-sm);border:1px solid var(--line);background:var(--bg-2);
+    color:var(--text-3);font-size:11px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;
+  }
+  .tog .glyph{width:7px;height:7px;border-radius:50%;background:var(--text-4)}
+  .tog.mon.on{background:var(--good-dim);border-color:var(--good-line);color:var(--good)}
+  .tog.mon.on .glyph{background:var(--good)}
+  .tog.arm.on{background:var(--bad-dim);border-color:var(--bad-line);color:var(--bad)}
+  .tog.arm.on .glyph{background:var(--bad);animation:midibeat 1s steps(1) infinite}
+
+  /* inline alert */
+  .alert{margin-top:12px;border-radius:var(--radius-md);padding:10px 12px;font-size:11px;line-height:1.5;display:none}
+  .alert.bad{background:var(--bad-dim);border:1px solid var(--bad-line);color:var(--text-1)}
+  .alert .at{color:var(--bad);font-weight:600;font-size:11px}
+  .alert.show{display:block}
+  .alert .fix{margin-top:7px;display:flex;gap:7px}
+  .alert .fix button{height:24px;padding:0 10px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-1);color:var(--text-2);font-size:10.5px;font-family:inherit;cursor:pointer}
+
+  /* empty-state guidance */
+  .empty{margin-top:10px;border:1px dashed var(--line);border-radius:var(--radius-md);padding:14px;background:var(--bg-2);font-size:11.5px;color:var(--text-2);line-height:1.55}
+  .empty b{color:var(--text-1);font-weight:500}
+  .empty .step{display:flex;gap:9px;margin-top:9px;align-items:flex-start}
+  .empty .step .n{flex:0 0 auto;width:16px;height:16px;border-radius:50%;background:var(--accent-dim);border:1px solid var(--accent-line);color:var(--accent-soft);font-size:9px;display:flex;align-items:center;justify-content:center;margin-top:1px}
+
+  .footnote{padding:12px 18px;color:var(--text-4);font-size:10.5px;border-top:1px solid var(--line-2);background:var(--bg-1)}
+  .footnote b{color:var(--text-3);font-weight:500}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- chrome -->
+  <div class="chrome">
+    <div class="brand"><b>resonance</b></div>
+    <div class="tabs">
+      <div class="tab">Arrange</div>
+      <div class="tab active">Mixer</div>
+      <div class="tab">Compose</div>
+      <div class="tab">Perform</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="clock"><span>120 BPM</span><b class="mono">04 · 01 · 000</b></div>
+  </div>
+
+  <!-- state switcher -->
+  <div class="statebar">
+    <span class="lbl">State</span>
+    <div class="seg" id="seg">
+      <button data-s="empty">Unassigned</button>
+      <button data-s="config">Configuring</button>
+      <button data-s="live" class="on">Live</button>
+      <button data-s="offline">Device offline</button>
+    </div>
+    <div class="hint" id="hint"></div>
+  </div>
+
+  <!-- body -->
+  <div class="body">
+    <!-- mixer strips -->
+    <div class="strips">
+      <!-- a normal MIDI instrument strip for context -->
+      <div class="strip">
+        <div class="s-head"><span class="s-dot midi"></span><span class="s-name">Pad (SVS)</span><span class="s-tag">Inst</span></div>
+        <div class="s-meterwrap">
+          <div class="fader"><div class="track"></div><div class="cap"></div></div>
+          <div class="meter"><i style="height:42%"></i></div>
+          <div class="meter"><i style="height:38%"></i></div>
+        </div>
+        <div class="s-btns"><button>M</button><button>S</button><button>+6</button></div>
+      </div>
+
+      <!-- the external-instrument strip (selected) -->
+      <div class="strip ext selected" id="extStrip">
+        <div class="offline" id="extOffGlow"></div>
+        <div class="offflag" id="extOffFlag">● offline</div>
+        <div class="s-head">
+          <span class="s-dot ext"></span>
+          <span class="s-name">Moog Muse</span>
+          <span class="s-tag ext">Ext</span>
+        </div>
+        <div class="s-ext">
+          <div class="chip">
+            <span class="ck">MIDI</span>
+            <span class="cv" id="chipMidi">Muse · Ch 1</span>
+            <span class="midiflash" id="chipFlash"></span>
+          </div>
+          <div class="chip">
+            <span class="ck">Return</span>
+            <span class="cv" id="chipRet">Scarlett In 3/4</span>
+          </div>
+          <div class="chip patch">
+            <span class="ck">Patch</span>
+            <span class="cv" id="chipPatch">A 031 · Prog 12</span>
+          </div>
+        </div>
+        <div class="s-meterwrap">
+          <div class="fader"><div class="track"></div><div class="cap"></div></div>
+          <div class="meter" id="retMeterL"><i></i><span class="retlabel">L</span></div>
+          <div class="meter" id="retMeterR"><i></i><span class="retlabel">R</span></div>
+        </div>
+        <div class="s-btns">
+          <button class="mon" id="stripMon">Mon</button>
+          <button class="arm" id="stripArm">●</button>
+          <button>0.0</button>
+        </div>
+      </div>
+
+      <!-- master -->
+      <div class="strip master">
+        <div class="s-head"><span class="s-dot"></span><span class="s-name">Master</span><span class="s-tag">Out</span></div>
+        <div class="s-meterwrap">
+          <div class="fader"><div class="track"></div><div class="cap"></div></div>
+          <div class="meter"><i style="height:48%"></i></div>
+          <div class="meter"><i style="height:46%"></i></div>
+        </div>
+        <div class="s-btns"><button>M</button><button>S</button><button>0.0</button></div>
+      </div>
+    </div>
+
+    <!-- inspector -->
+    <div class="insp">
+      <div class="i-kicker">Inspector</div>
+      <div class="i-title">Moog Muse <span class="badge ext" id="inspBadge">External</span></div>
+
+      <!-- SIGNAL -->
+      <div class="grp">
+        <div class="grp-head"><span class="caret">▾</span><span class="gt">Signal · Return</span></div>
+        <div class="tiles">
+          <div class="tile"><div class="tl">Peak</div><div class="tv mono" id="tilePeak">−6.4 dB</div></div>
+          <div class="tile"><div class="tl">RMS</div><div class="tv mono" id="tileRms">−14.1 dB</div></div>
+          <div class="tile"><div class="tl">Pan</div><div class="tv mono">C</div></div>
+          <div class="tile"><div class="tl">Out</div><div class="tv mono">Master</div></div>
+        </div>
+      </div>
+
+      <!-- empty-state guidance (only in 'Unassigned') -->
+      <div class="empty" id="emptyGuide" style="display:none">
+        <b>External instrument track.</b> Pair a hardware synth's MIDI output with its audio return so it
+        plays and records in-line like a built-in instrument. To set it up:
+        <div class="step"><span class="n">1</span><span>Pick the synth's <b>MIDI output</b> device + channel below.</span></div>
+        <div class="step"><span class="n">2</span><span>Pick the <b>audio return</b> input the synth is wired into.</span></div>
+        <div class="step"><span class="n">3</span><span>Choose a <b>patch</b> (Bank + Program) — Resonance re-sends it on load &amp; play.</span></div>
+        <div class="step"><span class="n">4</span><span>Dial in <b>latency compensation</b> so the return lines up with the grid.</span></div>
+      </div>
+
+      <!-- ROUTING -->
+      <div class="grp">
+        <div class="grp-head"><span class="caret">▾</span><span class="gt">External Instrument</span><span class="gmeta" id="routeMeta">Muse</span></div>
+
+        <!-- MIDI OUT -->
+        <div class="field">
+          <div class="fl">MIDI Output</div>
+          <div class="two">
+            <div class="pick" id="midiDevPick"><span class="d" id="midiDevDot"></span><span class="pv" id="midiDev">Moog Muse</span><span class="car">▾</span></div>
+            <div class="pick" id="midiChPick"><span class="pv" id="midiCh">Ch 1</span><span class="car">▾</span></div>
+          </div>
+        </div>
+
+        <!-- AUDIO RETURN -->
+        <div class="field">
+          <div class="fl">Audio Return</div>
+          <div class="two">
+            <div class="pick" id="retDevPick"><span class="pv" id="retDev">Scarlett 18i20</span><span class="car">▾</span></div>
+            <div class="pick" id="retChPick"><span class="pv" id="retCh">In 3/4</span><span class="car">▾</span></div>
+          </div>
+        </div>
+
+        <!-- PATCH -->
+        <div class="field">
+          <div class="fl">Patch <span class="src" id="patchSrc" style="display:none">Muse preset →</span></div>
+          <div class="patchcard" id="patchCard">
+            <div class="patchsend" id="patchSend"></div>
+            <div class="patchrow">
+              <div class="pgnum mono" id="bankNum">A 04</div>
+              <div class="pick" id="bankPick"><span class="d"></span><span class="pv" id="bankVal">Bank A · 031</span><span class="car">▾</span></div>
+            </div>
+            <div class="patchrow">
+              <div class="pgnum mono" id="progNum">012</div>
+              <div class="pick" id="progPick"><span class="d"></span><span class="pv" id="progVal">Program 12</span><span class="car">▾</span></div>
+            </div>
+            <div class="pcnote" id="patchNote">
+              Sends <b>Bank Select (CC0/CC32)</b> + <b>Program Change</b>. Re-sent on project load and at transport start so the synth is always in the right patch.
+            </div>
+          </div>
+        </div>
+
+        <!-- LATENCY COMP -->
+        <div class="field">
+          <div class="fl">Latency Compensation</div>
+          <div class="latbox">
+            <div class="latrow">
+              <span class="lv mono" id="latMs">11.6</span><span class="lu">ms</span>
+              <span class="smp mono" id="latSmp">512 smp @ 44.1k</span>
+            </div>
+            <input type="range" min="0" max="40" step="0.1" value="11.6" class="slider" id="latSlider">
+            <button class="pingbtn" id="pingBtn"><span class="pingdot"></span><span id="pingLabel">Auto-detect (ping)</span></button>
+            <div class="pingres" id="pingRes">Measured round-trip: <b class="mono">11.6 ms</b> — applied.</div>
+          </div>
+        </div>
+
+        <!-- MONITOR / ARM -->
+        <div class="field">
+          <div class="fl">Return Monitoring</div>
+          <div class="montoggles">
+            <button class="tog mon on" id="monTog"><span class="glyph"></span>Input monitor</button>
+            <button class="tog arm" id="armTog"><span class="glyph"></span>Record arm</button>
+          </div>
+        </div>
+
+        <!-- OUTPUT -->
+        <div class="field">
+          <div class="fl">Output</div>
+          <div class="pick"><span class="pv">→ Master</span><span class="car">▾</span></div>
+        </div>
+
+        <!-- inline alert (offline) -->
+        <div class="alert bad" id="alert">
+          <div class="at" id="alertTitle">MIDI output unavailable</div>
+          <div id="alertBody">“Moog Muse” isn’t connected. Patch changes and automation can’t reach the synth, and the return input is silent.</div>
+          <div class="fix">
+            <button>Re-scan devices</button>
+            <button>Pick another device…</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- CHAIN (collapsed) -->
+      <div class="grp">
+        <div class="grp-head"><span class="caret">▸</span><span class="gt">Chain</span><span class="gmeta">0 plugins</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footnote">
+    Design prototype · <b>External hardware instrument tracks — patch selection &amp; audio return</b> · epic #39 ·
+    mirrors theme.rs tokens and the Mixer Inspector ROUTING/SIGNAL pattern. Named patches arrive with the Moog Muse device-preset epic (#40). Not the shipped build.
+  </div>
+</div>
+
+<script>
+(function(){
+  const $=id=>document.getElementById(id);
+  const seg=$('seg'), hint=$('hint');
+
+  const els={
+    badge:$('inspBadge'), empty:$('emptyGuide'), routeMeta:$('routeMeta'),
+    midiDev:$('midiDev'), midiDevDot:$('midiDevDot'), midiDevPick:$('midiDevPick'), midiCh:$('midiCh'),
+    retDev:$('retDev'), retCh:$('retCh'),
+    patchSrc:$('patchSrc'), patchCard:$('patchCard'), patchNote:$('patchNote'),
+    bankNum:$('bankNum'), bankVal:$('bankVal'), progNum:$('progNum'), progVal:$('progVal'),
+    alert:$('alert'),
+    chipMidi:$('chipMidi'), chipRet:$('chipRet'), chipPatch:$('chipPatch'), chipFlash:$('chipFlash'),
+    retL:$('retMeterL').querySelector('i'), retR:$('retMeterR').querySelector('i'),
+    extOffGlow:$('extOffGlow'), extOffFlag:$('extOffFlag'), extStrip:$('extStrip'),
+    stripMon:$('stripMon'), monTog:$('monTog'),
+    tilePeak:$('tilePeak'), tileRms:$('tileRms'),
+  };
+
+  const hints={
+    empty:'A fresh External Instrument track — no device paired yet. The inspector guides the user through MIDI out → audio return → patch → latency.',
+    config:'Device + return chosen; the user is dialling in the patch and latency. Named patches come from a device preset (epic #40); here patches are picked by Bank + Program number.',
+    live:'Fully paired and monitoring. MIDI activity pulses on the strip, the return meters move, and the chosen patch is shown by number (and name when a preset is loaded).',
+    offline:'The MIDI device was unplugged. The route is preserved (so reconnecting restores it) but an inline BAD-pink alert explains the synth is unreachable.',
+  };
+
+  let state='live', monOn=true, anim=true;
+
+  function setState(s){
+    state=s;
+    [...seg.children].forEach(b=>b.classList.toggle('on', b.dataset.s===s));
+    hint.textContent=hints[s];
+
+    // reset
+    els.empty.style.display='none';
+    els.alert.classList.remove('show');
+    els.patchSrc.style.display='none';
+    els.midiDevPick.classList.remove('bad','placeholder');
+    els.extOffGlow.classList.remove('on');
+    els.extOffFlag.classList.remove('on');
+    els.chipFlash.classList.remove('beat');
+    anim=true;
+
+    if(s==='empty'){
+      els.badge.textContent='Unconfigured'; els.badge.className='badge ext';
+      els.empty.style.display='block';
+      els.routeMeta.textContent='not set';
+      els.midiDevPick.classList.add('placeholder'); els.midiDev.textContent='(no MIDI out)'; els.midiDevDot.style.background='var(--text-4)';
+      els.midiCh.textContent='—';
+      els.retDev.textContent='(no input)'; els.retCh.textContent='—';
+      els.bankNum.textContent='— —'; els.bankVal.textContent='(no patch)'; els.bankVal.parentElement.classList.add('placeholder');
+      els.progNum.textContent='—'; els.progVal.textContent='(no program)'; els.progVal.parentElement.classList.add('placeholder');
+      els.chipMidi.textContent='—'; els.chipRet.textContent='—'; els.chipPatch.textContent='not set';
+      els.tilePeak.textContent='−∞ dB'; els.tileRms.textContent='−∞ dB';
+      anim=false;
+    }
+    else if(s==='config'){
+      els.badge.textContent='Configuring'; els.badge.className='badge warm';
+      els.routeMeta.textContent='Muse';
+      els.midiDev.textContent='Moog Muse'; els.midiDevDot.style.background='var(--accent)';
+      els.midiCh.textContent='Ch 1';
+      els.midiDevPick.classList.remove('placeholder');
+      els.retDev.textContent='Scarlett 18i20'; els.retCh.textContent='In 3/4';
+      els.bankNum.textContent='A 04'; els.bankVal.textContent='Bank A · 031'; els.bankVal.parentElement.classList.remove('placeholder');
+      els.progNum.textContent='012'; els.progVal.textContent='Program 12'; els.progVal.parentElement.classList.remove('placeholder');
+      els.chipMidi.textContent='Muse · Ch 1'; els.chipRet.textContent='Scarlett In 3/4'; els.chipPatch.textContent='A 031 · Prog 12';
+      els.tilePeak.textContent='−∞ dB'; els.tileRms.textContent='−∞ dB';
+      anim=false; // not yet monitoring
+    }
+    else if(s==='live'){
+      els.badge.textContent='Live'; els.badge.className='badge good';
+      els.routeMeta.textContent='Muse';
+      els.patchSrc.style.display='inline-block'; // preset-provided names available
+      els.midiDev.textContent='Moog Muse'; els.midiDevDot.style.background='var(--accent)'; els.midiDevPick.classList.remove('placeholder');
+      els.midiCh.textContent='Ch 1';
+      els.retDev.textContent='Scarlett 18i20'; els.retCh.textContent='In 3/4';
+      els.bankNum.textContent='A 04'; els.bankVal.textContent='Bank A · Lush Strings'; els.bankVal.parentElement.classList.remove('placeholder');
+      els.progNum.textContent='012'; els.progVal.textContent='12 · Lush Strings'; els.progVal.parentElement.classList.remove('placeholder');
+      els.chipMidi.textContent='Muse · Ch 1'; els.chipRet.textContent='Scarlett In 3/4'; els.chipPatch.textContent='Lush Strings';
+      els.chipFlash.classList.add('beat');
+      els.tilePeak.textContent='−6.4 dB'; els.tileRms.textContent='−14.1 dB';
+    }
+    else if(s==='offline'){
+      els.badge.textContent='Offline'; els.badge.className='badge bad';
+      els.routeMeta.textContent='unreachable';
+      els.midiDevPick.classList.add('bad'); els.midiDev.textContent='Moog Muse  (offline)'; els.midiDevDot.style.background='var(--bad)';
+      els.midiCh.textContent='Ch 1';
+      els.retDev.textContent='Scarlett 18i20'; els.retCh.textContent='In 3/4';
+      els.bankNum.textContent='A 04'; els.bankVal.textContent='Bank A · 031'; els.bankVal.parentElement.classList.remove('placeholder');
+      els.progNum.textContent='012'; els.progVal.textContent='Program 12'; els.progVal.parentElement.classList.remove('placeholder');
+      els.alert.classList.add('show');
+      els.chipMidi.textContent='Muse · offline'; els.chipRet.textContent='Scarlett In 3/4'; els.chipPatch.textContent='A 031 · Prog 12';
+      els.extOffGlow.classList.add('on'); els.extOffFlag.classList.add('on');
+      els.tilePeak.textContent='−∞ dB'; els.tileRms.textContent='−∞ dB';
+      anim=false;
+    }
+  }
+
+  seg.addEventListener('click',e=>{const b=e.target.closest('button');if(b)setState(b.dataset.s);});
+
+  // patch send pulse — flashes the card + strip MIDI dot whenever a patch field "changes"
+  function patchPulse(){
+    const send=$('patchSend');
+    send.classList.add('flash'); els.patchCard.classList.add('lit');
+    els.chipFlash.style.opacity='1';
+    setTimeout(()=>{send.classList.remove('flash');els.patchCard.classList.remove('lit');},220);
+  }
+  ['bankPick','progPick'].forEach(id=>$(id).addEventListener('click',patchPulse));
+
+  // latency slider
+  $('latSlider').addEventListener('input',e=>{
+    const ms=+e.target.value;
+    $('latMs').textContent=ms.toFixed(1);
+    $('latSmp').textContent=Math.round(ms/1000*44100)+' smp @ 44.1k';
+  });
+
+  // auto-detect ping
+  $('pingBtn').addEventListener('click',function(){
+    const btn=this, label=$('pingLabel'), res=$('pingRes');
+    if(btn.classList.contains('busy'))return;
+    btn.classList.add('busy'); label.textContent='Pinging…'; res.classList.remove('show');
+    let measured=(9+Math.random()*6);
+    setTimeout(()=>{
+      btn.classList.remove('busy'); label.textContent='Auto-detect (ping)';
+      $('latSlider').value=measured; $('latMs').textContent=measured.toFixed(1);
+      $('latSmp').textContent=Math.round(measured/1000*44100)+' smp @ 44.1k';
+      res.innerHTML='Measured round-trip: <b class="mono">'+measured.toFixed(1)+' ms</b> — applied.';
+      res.classList.add('show'); patchPulse();
+    },1300);
+  });
+
+  // monitor toggle (inspector + strip stay in sync)
+  function setMon(v){monOn=v;els.monTog.classList.toggle('on',v);els.stripMon.classList.toggle('on',v);}
+  els.monTog.addEventListener('click',()=>setMon(!monOn));
+  els.stripMon.addEventListener('click',()=>setMon(!monOn));
+  // record arm toggle
+  ['armTog','stripArm'].forEach(id=>$(id).addEventListener('click',()=>{
+    const on=!$('armTog').classList.contains('on');
+    $('armTog').classList.toggle('on',on); $('stripArm').classList.toggle('on',on);
+  }));
+  setMon(true);
+
+  // live-ish return meters (only when monitoring + live)
+  let t=0;
+  function frame(){
+    t+=0.05;
+    if(anim && monOn){
+      const env=0.45+0.32*Math.abs(Math.sin(t*1.3))*Math.abs(Math.sin(t*0.37));
+      const l=env*72, r=(env*0.92)*72;
+      els.retL.style.height=l.toFixed(0)+'%';
+      els.retR.style.height=r.toFixed(0)+'%';
+    }else{
+      els.retL.style.height='0%'; els.retR.style.height='0%';
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  setState('live');
+})();
+</script>
+</body>
+</html>
