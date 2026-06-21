@@ -46,6 +46,11 @@ pub(crate) fn rcu_tempo<F: FnOnce(&mut TempoMap)>(
     map.store(Arc::new(new));
 }
 
+mod automation;
+pub use automation::{
+    clear_automation_lane_in_place, set_automation_lane_in_place,
+    set_automation_read_enabled_in_place, AutomationLanes,
+};
 mod bounce_realtime;
 mod busses;
 mod clips;

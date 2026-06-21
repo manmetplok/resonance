@@ -1,5 +1,5 @@
 //! Engine → GUI event enum.
-use resonance_common::AudioFormat;
+use resonance_common::{AudioFormat, AutomationLane, AutomationTarget};
 
 use crate::midi_hardware::MidiDeviceInfo;
 
@@ -120,6 +120,17 @@ pub enum AudioEvent {
     ClipGainChanged {
         clip_id: ClipId,
         gain_db: f32,
+    },
+    /// An automation lane was stored or replaced (or its read flag
+    /// toggled). Carries the lane exactly as the engine holds it — points
+    /// sorted, `enabled` reflecting the current read state — so the app
+    /// mirror matches engine state.
+    AutomationLaneChanged {
+        lane: AutomationLane,
+    },
+    /// The automation lane for `target` was removed from engine state.
+    AutomationLaneCleared {
+        target: AutomationTarget,
     },
     Stopped,
     Error(String),

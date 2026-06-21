@@ -28,8 +28,8 @@ use crate::types::*;
 
 use super::midi::MidiHardwareState;
 use super::{
-    bounce, bounce_realtime, busses, clips, master, midi, plugins, scan, tracks, transport,
-    SharedState,
+    automation, bounce, bounce_realtime, busses, clips, master, midi, plugins, scan, tracks,
+    transport, SharedState,
 };
 
 /// Read-only handle to shared project state and channels. Passed by
@@ -122,6 +122,12 @@ pub(crate) struct HandlerState {
     /// finalizes the recording, restores the mute snapshot, and emits
     /// `TrackBounceCompleted`. `None` outside of an active bounce.
     pub pending_bounce: Option<super::bounce_realtime::PendingBounce>,
+    /// Parameter-automation lanes, one per [`AutomationTarget`]. Held
+    /// engine-thread-local; written by the `SetAutomationLane` /
+    /// `ClearAutomationLane` / `SetAutomationReadEnabled` handlers.
+    /// Points are kept sorted so a later per-block evaluator can sample
+    /// without sorting or allocating. No audio is applied yet.
+    pub automation_lanes: automation::AutomationLanes,
 }
 
 /// Hard cap on concurrent clip decode threads. Import commands past this
@@ -170,6 +176,7 @@ pub(crate) fn engine_thread(
         midi_clock_external_running: false,
         midi_clock_last_emitted_bpm: 0.0,
         pending_bounce: None,
+        automation_lanes: automation::AutomationLanes::new(),
     };
     let ctx = HandlerCtx {
         shared: &shared,
@@ -397,6 +404,28 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         ),
         AudioCommand::SetClipGain { clip_id, gain_db } => {
             clips::handle_set_clip_gain(ctx, clip_id, gain_db)
+        }
+        AudioCommand::SetAutomationLane { lane } => {
+            automation::set_automation_lane_in_place(
+                &mut state.automation_lanes,
+                ctx.event_tx,
+                lane,
+            )
+        }
+        AudioCommand::ClearAutomationLane { target } => {
+            automation::clear_automation_lane_in_place(
+                &mut state.automation_lanes,
+                ctx.event_tx,
+                target,
+            )
+        }
+        AudioCommand::SetAutomationReadEnabled { target, enabled } => {
+            automation::set_automation_read_enabled_in_place(
+                &mut state.automation_lanes,
+                ctx.event_tx,
+                target,
+                enabled,
+            )
         }
         AudioCommand::SetProjectDir(dir) => {
             state.project_dir = Some(dir);

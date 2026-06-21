@@ -79,6 +79,17 @@ pub use engine::{
     set_clip_fade_in_place, set_clip_gain_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
 };
 
+/// Test surface for the automation-lane handlers. Exposed so the
+/// integration test in `tests/automation_handlers.rs` can drive the
+/// command boundary (store/replace, clear, read-flag toggle, and the
+/// missing-target no-op branches) against a plain lane map without
+/// spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::{
+    clear_automation_lane_in_place, set_automation_lane_in_place,
+    set_automation_read_enabled_in_place, AutomationLanes,
+};
+
 /// Test surface for the audio import-to-pool path. Exposed so the
 /// integration test in `tests/import_audio_to_pool.rs` can drive the
 /// pure per-file import (`import_one_to_pool`) and the full ordered

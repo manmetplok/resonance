@@ -1,6 +1,8 @@
 //! GUI → engine command enum.
 use std::path::PathBuf;
 
+use resonance_common::{AutomationLane, AutomationTarget};
+
 use super::{
     BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, SamplePos, SignaturePoint, TempoPoint,
     TrackId, TrackOutput,
@@ -69,6 +71,29 @@ pub enum AudioCommand {
     SetClipGain {
         clip_id: ClipId,
         gain_db: f32,
+    },
+    /// Store or replace the automation lane for its target. The engine
+    /// holds one lane per [`AutomationTarget`]; sending a lane whose
+    /// `target` already has an entry replaces it wholesale. The engine
+    /// keeps the breakpoints sorted and echoes the stored lane back via
+    /// `AudioEvent::AutomationLaneChanged`. No audio is applied yet — a
+    /// later step samples the lane per block.
+    SetAutomationLane {
+        lane: AutomationLane,
+    },
+    /// Remove the automation lane stored for `target`. When a lane was
+    /// present the engine emits `AudioEvent::AutomationLaneCleared`;
+    /// clearing an absent target is a silent no-op.
+    ClearAutomationLane {
+        target: AutomationTarget,
+    },
+    /// Toggle a lane's "read" flag (`AutomationLane::enabled`) without
+    /// replacing its breakpoints. The engine echoes the updated lane via
+    /// `AudioEvent::AutomationLaneChanged`; toggling an absent target is
+    /// a silent no-op.
+    SetAutomationReadEnabled {
+        target: AutomationTarget,
+        enabled: bool,
     },
     SetTrackVolume {
         track_id: TrackId,
