@@ -1,7 +1,8 @@
 //! Handlers for the project-scoped drum-pattern bank.
 //!
 //! Each pattern owns a `Vec<DrumGroup>`; sections pick a pattern via
-//! `SectionDefinitionState::drum_pattern_id`. The manager modal targets
+//! their `SectionDefinitionState::arrangement` (the primary entry). The
+//! manager modal targets
 //! one *pattern* (`drumroll.managing_pattern_id`) and edits the groups
 //! inside it. Section assignment, pattern CRUD (add / rename / delete /
 //! duplicate) and the per-group generator knobs all live here.
@@ -145,7 +146,7 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
             pattern_id,
         } => {
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
-                def.drum_pattern_id = pattern_id;
+                def.set_primary_pattern(pattern_id);
             }
             materialize_drum_clips(r);
         }
@@ -158,6 +159,7 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
                 name: format!("Pattern {}", idx + 1),
                 color,
                 groups: Vec::new(),
+                length_bars: 1,
             });
             if r.compose.default_drum_pattern_id.is_none() {
                 r.compose.default_drum_pattern_id = Some(id);
@@ -184,6 +186,7 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
                 name: format!("{} copy", src.name),
                 color: src.color,
                 groups: new_groups,
+                length_bars: src.length_bars,
             };
             r.compose.drum_patterns.push(copy);
             r.compose.drumroll.managing_pattern_id = Some(new_pattern_id);
@@ -202,12 +205,11 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
                 return Task::none();
             }
             r.compose.drum_patterns.retain(|p| p.id != pattern_id);
-            // Re-point any section that referenced the deleted pattern
-            // back at "use the default" so the lane keeps rendering.
+            // Drop any arrangement entry (or fill) that referenced the
+            // deleted pattern so the lane keeps rendering — emptied
+            // arrangements fall back to "use the default".
             for def in &mut r.compose.definitions {
-                if def.drum_pattern_id == Some(pattern_id) {
-                    def.drum_pattern_id = None;
-                }
+                def.remove_pattern_references(pattern_id);
             }
             if r.compose.default_drum_pattern_id == Some(pattern_id) {
                 r.compose.default_drum_pattern_id =
