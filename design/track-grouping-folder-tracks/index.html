@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — Track grouping & folder tracks (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-dim:rgba(232,196,123,.12); --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --good-dim:rgba(109,214,163,.14); --good-line:rgba(109,214,163,.34);
+    --bad:#e87b8b; --bad-dim:rgba(232,123,139,.13); --bad-line:rgba(232,123,139,.40);
+    --radius-xs:4px; --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+    /* Proposed GROUP IDENTITY palette (new tokens for theme.rs — see design doc).
+       Muted jewel tones tuned to the dark lavender backdrop; identity only,
+       never semantic. Each is paired with a 14% wash + 34% line variant. */
+    --grp-drum:#c98f5f; --grp-drum-dim:rgba(201,143,95,.14); --grp-drum-line:rgba(201,143,95,.40);
+    --grp-vox:#c97b9c;  --grp-vox-dim:rgba(201,123,156,.14); --grp-vox-line:rgba(201,123,156,.40);
+    --grp-keys:#6fb6b0; --grp-keys-dim:rgba(111,182,176,.14);--grp-keys-line:rgba(111,182,176,.40);
+    --grp-gtr:#7d86c9;  --grp-gtr-dim:rgba(125,134,201,.14); --grp-gtr-line:rgba(125,134,201,.40);
+    --header-w:280px; --track-h:96px; --grp-h:60px; --ruler-h:28px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+
+  /* ---- App chrome ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1)}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .tabs{display:flex;gap:2px;margin-left:8px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+  .clock{font-size:12px;color:var(--text-2);display:flex;gap:14px;align-items:center}
+  .clock b{color:var(--text-1);font-weight:500}
+  .clock .mono{color:var(--text-1)}
+
+  /* ---- State switcher ---- */
+  .statebar{
+    min-height:46px;flex:0 0 auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    padding:6px 18px;background:var(--bg-1);border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);margin-right:2px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{
+    border:0;background:transparent;color:var(--text-2);padding:6px 12px;font-size:12px;
+    cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2);white-space:nowrap;
+  }
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .hint{margin-left:auto;color:var(--text-3);font-size:11.5px;max-width:520px;text-align:right;line-height:1.45}
+
+  /* ---- Body: header column + timeline ---- */
+  .body{flex:1;display:flex;flex-direction:column;min-height:0;background:var(--bg-1);position:relative}
+
+  /* Ruler row */
+  .rulerrow{height:var(--ruler-h);flex:0 0 auto;display:flex;border-bottom:1px solid var(--line);position:relative;z-index:3}
+  .ruler-spacer{width:var(--header-w);flex:0 0 auto;background:var(--bg-2);border-right:1px solid var(--line);
+    display:flex;align-items:center;padding:0 14px;font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3)}
+  .ruler{flex:1;position:relative;background:var(--bg-1);overflow:hidden}
+  .ruler .bar{position:absolute;top:0;bottom:0;border-left:1px solid var(--line-2);padding-left:5px;font-size:9.5px;color:var(--text-3);padding-top:7px}
+  .ruler .bar.q{border-left-color:rgba(31,34,41,.5)}
+
+  /* Scroll region */
+  .scroll{flex:1;min-height:0;overflow-y:auto;position:relative}
+  .scroll::-webkit-scrollbar{width:10px}
+  .scroll::-webkit-scrollbar-thumb{background:var(--bg-3);border-radius:6px;border:2px solid var(--bg-1)}
+
+  /* A row = header cell + lane */
+  .row{display:flex;position:relative;border-bottom:1px solid var(--line-2)}
+  .row .hcell{width:var(--header-w);flex:0 0 auto;background:var(--bg-1);border-right:1px solid var(--line);position:relative;overflow:hidden}
+  .row.sel .hcell{background:var(--bg-2);box-shadow:inset 0 0 0 1px var(--accent-line)}
+  .row.sel .lane{background:var(--accent-dim)}
+  .row .lane{flex:1;position:relative;background:var(--bg-1);overflow:hidden}
+  .row:nth-child(even) .lane{background:#16171c}
+
+  /* Group rail (colored bracket tying members to header) */
+  .rail{position:absolute;top:0;bottom:0;width:3px;z-index:2}
+  .rail.d2{left:14px}
+
+  /* ---- Group header cell ---- */
+  .grp{height:var(--grp-h)}
+  .grp .hcell{display:flex;align-items:center;gap:7px;padding:0 12px 0 16px}
+  .grp.d2 .hcell{padding-left:30px}
+  .caret{width:16px;height:16px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+    border-radius:var(--radius-xs);color:var(--text-2);cursor:pointer;font-size:9px;user-select:none}
+  .caret:hover{background:var(--bg-3);color:var(--text-1)}
+  .gfolder{flex:0 0 auto;display:flex;align-items:center;justify-content:center;font-size:12px}
+  .gswatch{width:11px;height:11px;border-radius:3px;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,.35) inset}
+  .gname{font-size:13px;font-weight:600;color:var(--text-1);white-space:nowrap;flex:0 0 auto}
+  .gcount{font-size:10px;color:var(--text-3);background:var(--bg-2);border:1px solid var(--line);border-radius:999px;padding:1px 7px;flex:0 0 auto}
+  .gctl{margin-left:auto;display:flex;align-items:center;gap:5px;flex:0 0 auto;padding-left:6px}
+  .gbtn{width:22px;height:22px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-2);
+    color:var(--text-3);font-size:10px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit}
+  .gbtn:hover{background:var(--bg-3);color:var(--text-2)}
+  .gbtn.m.on{background:var(--bad-dim);border-color:var(--bad-line);color:var(--bad)}
+  .gbtn.s.on{background:var(--warm-dim);border-color:var(--warm-line);color:var(--warm)}
+  /* group level/trim mini-slider */
+  .glevel{display:flex;align-items:center;gap:5px;flex:0 0 auto}
+  .gslider{width:34px;height:5px;border-radius:3px;background:var(--bg-3);position:relative;border:1px solid var(--line-2)}
+  .gslider .fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--text-3)}
+  .gslider .cap{position:absolute;top:50%;width:9px;height:9px;border-radius:2px;background:var(--text-2);
+    border:1px solid var(--bg-0);transform:translate(-50%,-50%);cursor:ew-resize}
+  .gdb{font-size:9px;color:var(--text-2);width:30px;text-align:right}
+
+  /* ---- Track header cell ---- */
+  .trk .hcell{display:flex;flex-direction:column;justify-content:center;gap:7px;padding:10px 14px 10px 24px}
+  .trk.d1 .hcell{padding-left:30px}
+  .trk.d2 .hcell{padding-left:44px}
+  .selstripe{position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent);z-index:3}
+  .toprow{display:flex;align-items:center;gap:11px}
+  .glyph{width:28px;height:28px;flex:0 0 auto;border-radius:var(--radius-md);background:var(--bg-2);border:1px solid var(--line-2);
+    display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--text-2)}
+  .namecol{min-width:0;flex:1;display:flex;flex-direction:column;gap:1px}
+  .tname{font-size:13px;font-weight:500;color:var(--text-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tkind{font-size:10px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
+  .viachip{font-size:8px;letter-spacing:.05em;text-transform:uppercase;color:var(--bad);background:var(--bad-dim);
+    border:1px solid var(--bad-line);border-radius:999px;padding:1px 5px}
+  .viachip.solo{color:var(--warm);background:var(--warm-dim);border-color:var(--warm-line)}
+  .btnrow{display:flex;gap:5px;justify-content:flex-end}
+  .mb{width:22px;height:20px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-1);
+    color:var(--text-3);font-size:9.5px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit}
+  .mb:hover{color:var(--text-2);background:var(--bg-2)}
+  .mb.m.on{background:var(--bad-dim);border-color:var(--bad-line);color:var(--bad)}
+  .mb.s.on{background:var(--warm-dim);border-color:var(--warm-line);color:var(--warm)}
+  .mb.r.on{background:var(--bad-dim);border-color:var(--bad-line);color:var(--bad)}
+  .mb.mon.on{background:var(--good-dim);border-color:var(--good-line);color:var(--good)}
+  .mb.inherit{opacity:.55;box-shadow:0 0 0 1px var(--bad-line) inset}
+
+  /* ---- Clips ---- */
+  .clip{position:absolute;top:12px;bottom:12px;border-radius:var(--radius-lg);overflow:hidden;
+    display:flex;align-items:flex-end;padding:5px 8px;font-size:10px;border:1px solid;}
+  .clip.midi{background:var(--accent-dim);border-color:var(--accent-line);color:var(--accent-soft)}
+  .clip.audio{background:var(--warm-dim);border-color:var(--warm-line);color:var(--warm)}
+  .clip .wf{position:absolute;left:0;right:0;bottom:0;top:0;opacity:.5}
+  .clip .lab{position:relative;z-index:2;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}
+  /* group header lane: dimmed muted state, group span band */
+  .grpband{position:absolute;left:0;right:0;top:0;height:2px;z-index:2}
+  /* consolidated summary clips when collapsed */
+  .sumclip{position:absolute;top:14px;bottom:14px;border-radius:var(--radius-md);opacity:.9}
+  .sumtag{position:absolute;left:10px;top:8px;font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);z-index:3}
+
+  /* dim a muted lane */
+  .lane.muted .clip{opacity:.32;filter:saturate(.5)}
+  .row.dim .hcell .glyph,.row.dim .tname{opacity:.6}
+
+  /* playhead */
+  .playhead{position:absolute;top:0;bottom:0;width:1.5px;background:var(--warm);z-index:6;pointer-events:none;box-shadow:0 0 6px rgba(232,196,123,.4)}
+
+  /* ---- Selection action bar (floating) ---- */
+  .selbar{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);z-index:20;
+    display:flex;align-items:center;gap:14px;padding:9px 14px;background:var(--bg-3);
+    border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:0 14px 40px rgba(0,0,0,.5)}
+  .selbar .cnt{font-size:12px;color:var(--text-1)}
+  .selbar .cnt b{color:var(--accent-soft)}
+  .selbar .act{display:flex;align-items:center;gap:7px;padding:6px 12px;border-radius:var(--radius-md);
+    background:var(--accent);color:#15121f;font-size:12px;font-weight:600;cursor:pointer;border:0;font-family:inherit}
+  .selbar .act.ghost{background:var(--bg-2);color:var(--text-2);border:1px solid var(--line)}
+  .kbd{font-size:10px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:1px 5px;color:inherit}
+
+  /* ---- Membership drag affordances ---- */
+  .ghostrow{position:absolute;left:18px;width:300px;z-index:30;pointer-events:none;
+    background:var(--bg-3);border:1px solid var(--accent-line);border-radius:var(--radius-md);
+    box-shadow:0 16px 44px rgba(0,0,0,.55);padding:10px 14px;display:flex;align-items:center;gap:11px;opacity:.96}
+  .ghostrow .glyph{background:var(--bg-2)}
+  .ghostrow .tname{font-size:13px;font-weight:500}
+  .droptarget{box-shadow:inset 0 0 0 2px var(--grp-keys-line),inset 0 0 30px var(--grp-keys-dim)}
+  .dropline{position:absolute;left:0;right:0;height:2px;background:var(--accent);z-index:25;box-shadow:0 0 8px var(--accent-line)}
+  .dropline::before{content:"";position:absolute;left:-4px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+  .droplabel{position:absolute;z-index:31;left:296px;font-size:10.5px;color:var(--grp-keys);background:var(--bg-3);
+    border:1px solid var(--grp-keys-line);border-radius:999px;padding:3px 9px;white-space:nowrap}
+
+  /* empty-state callout in flat scenario */
+  .emptynote{position:absolute;right:22px;top:14px;z-index:8;max-width:300px;background:var(--bg-2);
+    border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--radius-md);
+    padding:12px 14px;font-size:11.5px;color:var(--text-2);line-height:1.5;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+  .emptynote b{color:var(--text-1);font-weight:600}
+  .emptynote .kbd{color:var(--accent-soft)}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- App chrome -->
+  <div class="chrome">
+    <div class="brand">resonance<b>.</b></div>
+    <div class="tabs">
+      <div class="tab active">Arrange</div>
+      <div class="tab">Mixer</div>
+      <div class="tab">Compose</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="clock">
+      <span>4/4 · <b>96</b> BPM · A minor</span>
+      <span class="mono">003 . 1 . 000</span>
+    </div>
+  </div>
+
+  <!-- State switcher -->
+  <div class="statebar">
+    <span class="lbl">State</span>
+    <div class="seg" id="seg">
+      <button data-s="flat">Flat · group from selection</button>
+      <button data-s="grouped" class="on">Group expanded</button>
+      <button data-s="folded">Group collapsed</button>
+      <button data-s="member">Drag membership</button>
+      <button data-s="nested">Nested group</button>
+      <button data-s="macro">Macro mute/solo</button>
+    </div>
+    <div class="hint" id="hint"></div>
+  </div>
+
+  <!-- Body -->
+  <div class="body">
+    <div class="rulerrow">
+      <div class="ruler-spacer">Tracks</div>
+      <div class="ruler" id="ruler"></div>
+    </div>
+    <div class="scroll">
+      <div id="rows"></div>
+      <div class="playhead" style="left:0"></div>
+    </div>
+    <!-- overlays injected per-scenario -->
+    <div id="overlay"></div>
+  </div>
+</div>
+
+<script>
+/* ---------------------------------------------------------------------------
+   Group identity palette (proposed theme tokens). Identity only — not semantic.
+--------------------------------------------------------------------------- */
+const GRP = {
+  drum:{c:'var(--grp-drum)', dim:'var(--grp-drum-dim)', line:'var(--grp-drum-line)'},
+  vox: {c:'var(--grp-vox)',  dim:'var(--grp-vox-dim)',  line:'var(--grp-vox-line)'},
+  keys:{c:'var(--grp-keys)', dim:'var(--grp-keys-dim)', line:'var(--grp-keys-line)'},
+  gtr: {c:'var(--grp-gtr)',  dim:'var(--grp-gtr-dim)',  line:'var(--grp-gtr-line)'},
+};
+
+/* clip helpers ----------------------------------------------------------- */
+function clip(start,len,kind,label){return {start,len,kind,label};}
+const HINTS = {
+  flat:"Empty grouping state: a flat list. Select related tracks → a floating action offers <b>Group</b> (⌘G). Groups are organisational + macro control, distinct from FX-return buses and from instrument sub-tracks (vocal stacks).",
+  grouped:"Populated: an expanded folder track. The header carries a caret, colour swatch, name, member count and macro controls (M / S + a group level trim). The coloured rail brackets its members.",
+  folded:"Collapsed: members hide to declutter the timeline; the folder lane shows a consolidated overview of every member clip, tinted with the group colour. Fold state persists in the project.",
+  member:"Membership: drag a track onto a folder to join it. The group highlights as a drop target, an insertion line shows the landing slot, and a chip names the destination. Drag out to ungroup.",
+  nested:"Nested one level deep: a sub-group folder lives inside a parent folder, each with its own caret and macro controls. Rails stack so the hierarchy reads at a glance.",
+  macro:"Macro control cascades: muting / soloing a group flows to its members — each member shows a 'via group' tag and a dimmed lane, while its own M/S stays independent for later un-grouping.",
+};
+
+/* ---------------------------------------------------------------------------
+   Scenario models. Each returns an ordered list of rows.
+   row.type: 'group' | 'track'
+--------------------------------------------------------------------------- */
+function model(scn){
+  // building blocks reused across scenarios
+  const drumKick = {type:'track',depth:1,g:'drum',glyph:'🥁',name:'Kick',kind:'Drums',
+    clips:[clip(0,24,'audio','Kick'),clip(26,24,'audio'),clip(52,46,'audio','Kick fill')]};
+  const drumSnare= {type:'track',depth:1,g:'drum',glyph:'🎯',name:'Snare',kind:'Drums',
+    clips:[clip(0,98,'audio','Snare bus')]};
+  const drumHat  = {type:'track',depth:1,g:'drum',glyph:'✺',name:'Hi-hats',kind:'Drums',
+    clips:[clip(0,50,'audio','Hats A'),clip(52,46,'audio','Hats B')]};
+  const drumPerc = {type:'track',depth:1,g:'drum',glyph:'◇',name:'Perc',kind:'Drums',last:true,
+    clips:[clip(30,40,'audio','Shaker')]};
+
+  const voxLead  = {type:'track',depth:1,g:'vox',glyph:'🎤',name:'Lead Vox',kind:'Vocal',
+    clips:[clip(8,42,'audio','Verse'),clip(54,40,'audio','Chorus')]};
+  const voxHarm  = {type:'track',depth:1,g:'vox',glyph:'❍',name:'Harmony',kind:'Vocal · sub-stack',
+    clips:[clip(54,40,'midi','Harm +3')]};
+  const voxDbl   = {type:'track',depth:1,g:'vox',glyph:'❍',name:'Double',kind:'Vocal · sub-stack',last:true,
+    clips:[clip(54,40,'audio','Double')]};
+
+  const bass = {type:'track',depth:0,glyph:'🎸',name:'Bass',kind:'Instrument',
+    clips:[clip(0,98,'midi','Bassline')]};
+  const pad  = {type:'track',depth:0,glyph:'⌬',name:'Pad',kind:'Instrument',
+    clips:[clip(4,90,'midi','Warm pad')]};
+
+  function group(g,name,opts={}){return {type:'group',depth:opts.depth||0,g,name,
+    collapsed:!!opts.collapsed,muted:!!opts.muted,soloed:!!opts.soloed,
+    level:opts.level!=null?opts.level:-1.5, count:opts.count};}
+
+  if(scn==='flat'){
+    return [
+      {...bass},
+      {...drumKick,depth:0,g:null,sel:true},
+      {...drumSnare,depth:0,g:null,sel:true},
+      {...drumHat,depth:0,g:null,sel:true,last:false},
+      {...pad},
+      {...voxLead,depth:0,g:null},
+    ];
+  }
+  if(scn==='grouped'){
+    return [
+      group('drum','Drums',{level:-1.5}),
+      drumKick, drumSnare, drumHat, drumPerc,
+      {...bass},
+      {...pad},
+    ];
+  }
+  if(scn==='folded'){
+    return [
+      group('drum','Drums',{collapsed:true,count:4,level:-1.5}),
+      {...bass},
+      group('vox','Vocals',{level:-0.8}),
+      voxLead, voxHarm, voxDbl,
+      {...pad},
+    ];
+  }
+  if(scn==='member'){
+    return [
+      group('keys','Keys',{level:-2.4, drop:true}),
+      {...pad,g:'keys'},
+      {...bass,depth:0,g:null,last:true, dragHint:true},
+      {type:'group',depth:0,g:'drum',name:'Drums',collapsed:true,count:4,level:-1.5},
+    ];
+  }
+  if(scn==='nested'){
+    return [
+      group('vox','Vocals',{level:-0.8}),
+      {...voxLead,depth:1},
+      group('vox','BG Stack',{depth:1,level:-3.0}),
+      {...voxHarm,depth:2},
+      {...voxDbl,depth:2,last:true},
+      {...bass},
+    ];
+  }
+  if(scn==='macro'){
+    return [
+      group('drum','Drums',{muted:true,level:-1.5}),
+      {...drumKick,inheritMute:true},
+      {...drumSnare,inheritMute:true},
+      {...drumHat,inheritMute:true, muted:true}, // own mute too
+      {...drumPerc,inheritMute:true},
+      group('vox','Vocals',{soloed:true,level:-0.8}),
+      {...voxLead,inheritSolo:true},
+      {...voxHarm,inheritSolo:true},
+      {...voxDbl,inheritSolo:true},
+      {...bass, dim:true},
+    ];
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Rendering
+--------------------------------------------------------------------------- */
+const BARS=8;
+function renderRuler(){
+  const r=document.getElementById('ruler'); r.innerHTML='';
+  for(let b=0;b<BARS;b++){
+    const d=document.createElement('div'); d.className='bar'; d.style.left=(b/BARS*100)+'%';
+    d.textContent=(b+1); r.appendChild(d);
+    const q=document.createElement('div'); q.className='bar q'; q.style.left=((b+0.5)/BARS*100)+'%'; r.appendChild(q);
+  }
+}
+
+function laneClips(row){
+  return (row.clips||[]).map(c=>{
+    const k=c.kind==='midi'?'midi':'audio';
+    return `<div class="clip ${k}" style="left:${c.start}%;width:${c.len}%">
+       ${k==='audio'?'<svg class="wf" preserveAspectRatio="none" viewBox="0 0 100 40"><path d="M0,20 '+wavePath()+'" fill="none" stroke="currentColor" stroke-width="1"/></svg>':''}
+       <span class="lab">${c.label||''}</span></div>`;
+  }).join('');
+}
+function wavePath(){
+  let p=''; for(let x=2;x<=98;x+=3){const y=20+Math.sin(x*0.7)*Math.random()*14; p+=`L${x},${y.toFixed(1)} `;} return p;
+}
+
+function summaryLane(g){
+  // consolidated overview of merged member clips, tinted group colour
+  const blocks=[[2,30],[34,20],[56,40]];
+  return `<span class="sumtag">${cap(g.name)} · 4 tracks folded</span>`+
+    blocks.map(([s,l])=>`<div class="sumclip" style="left:${s}%;width:${l}%;background:${GRP[g.g].dim};box-shadow:inset 0 0 0 1px ${GRP[g.g].line}"></div>`).join('');
+}
+function cap(s){return s;}
+
+function groupRow(g){
+  const col=GRP[g.g];
+  const caret = g.collapsed?'▸':'▾';
+  const lvl = Math.max(0,Math.min(100,(g.level+12)/12*100));
+  const lane = g.collapsed
+    ? summaryLane(g)
+    : `<div class="grpband" style="background:${col.c}"></div>
+       <div style="position:absolute;inset:0;background:${col.dim};opacity:.45"></div>
+       <span class="sumtag" style="color:${col.c}">${g.name} group · spans all members</span>`;
+  const railClass = g.depth===2?'rail d2':'rail';
+  return `
+   <div class="row grp ${g.depth?'d2':''}" data-h="${g.depth?60:60}">
+     <div class="hcell" style="background:${col.dim}">
+       <div class="${railClass}" style="background:${col.c}"></div>
+       <div class="caret" onclick="toggleFold(this)">${caret}</div>
+       <div class="gswatch" style="background:${col.c}"></div>
+       <div class="gname">${g.name}</div>
+       ${g.depth?'':`<div class="gcount">${(g.count||4)} trk</div>`}
+       <div class="gctl">
+         <div class="glevel" title="Group level / trim — scales every member">
+           <div class="gslider"><div class="fill" style="width:${lvl}%;background:${col.c}"></div>
+             <div class="cap" style="left:${lvl}%"></div></div>
+           <div class="gdb mono">${g.level>0?'+':''}${g.level.toFixed(1)}</div>
+         </div>
+         <div class="gbtn m ${g.muted?'on':''}" title="Group mute (cascades)">M</div>
+         <div class="gbtn s ${g.soloed?'on':''}" title="Group solo (cascades)">S</div>
+       </div>
+     </div>
+     <div class="lane ${g.muted?'muted':''}">${lane}</div>
+   </div>`;
+}
+
+function trackRow(row){
+  const depthClass = row.depth===2?'d2':row.depth===1?'d1':'';
+  const sel = row.sel?'sel':'';
+  const dim = row.dim?'dim':'';
+  const muteOn = row.muted || row.inheritMute;
+  const soloOn = row.soloed || row.inheritSolo;
+  // rail for grouped member
+  let rail='';
+  if(row.g){const col=GRP[row.g]; const rc=row.depth===2?'rail d2':'rail';
+    rail=`<div class="${rc}" style="background:${col.c}"></div>`;}
+  // 'via group' chips
+  let via='';
+  if(row.inheritMute) via+=`<span class="viachip">via group</span>`;
+  if(row.inheritSolo) via+=`<span class="viachip solo">via group</span>`;
+  const laneMuted = (muteOn)?'muted':'';
+  return `
+   <div class="row trk ${depthClass} ${sel} ${dim}" data-h="96">
+     ${sel?'<div class="selstripe"></div>':''}
+     <div class="hcell">
+       ${rail}
+       <div class="toprow">
+         <div class="glyph">${row.glyph}</div>
+         <div class="namecol">
+           <div class="tname">${row.name}</div>
+           <div class="tkind">${row.kind}${via}</div>
+         </div>
+       </div>
+       <div class="btnrow">
+         <div class="mb m ${muteOn?'on':''} ${row.inheritMute?'inherit':''}">M</div>
+         <div class="mb s ${soloOn?'on':''} ${row.inheritSolo?'inherit':''}">S</div>
+         <div class="mb r">●</div>
+         <div class="mb mon">◎</div>
+       </div>
+     </div>
+     <div class="lane ${laneMuted}">${laneClips(row)}</div>
+   </div>`;
+}
+
+let CURRENT='grouped';
+function render(scn){
+  CURRENT=scn;
+  document.getElementById('hint').innerHTML=HINTS[scn];
+  [...document.querySelectorAll('#seg button')].forEach(b=>b.classList.toggle('on',b.dataset.s===scn));
+  const rows=model(scn);
+  document.getElementById('rows').innerHTML = rows.map(r=>
+    r.type==='group'?groupRow(r):trackRow(r)).join('');
+  renderOverlay(scn,rows);
+}
+
+/* per-scenario overlays (floating action bar, drag ghost, drop lines, notes) */
+function renderOverlay(scn,rows){
+  const o=document.getElementById('overlay'); o.innerHTML='';
+  if(scn==='flat'){
+    o.innerHTML=`
+      <div class="emptynote">No groups yet. <b>Folder tracks</b> collapse related lanes under one foldable header and let you mute / solo / trim them together.<br><br>Select tracks and press <span class="kbd">⌘G</span>, or right-click → <b>Group selected</b>.</div>
+      <div class="selbar">
+        <div class="cnt"><b>3</b> tracks selected · Kick, Snare, Hi-hats</div>
+        <button class="act">Group <span class="kbd">⌘G</span></button>
+        <button class="act ghost">Clear</button>
+      </div>`;
+  }
+  if(scn==='member'){
+    // ghost row floating between Pad and the drop, drop line under Pad (inside Keys), target highlight
+    o.innerHTML=`
+      <div class="dropline" style="top:${RULER()+GRPH()+TRKH()}px"></div>
+      <div class="droplabel" style="top:${RULER()+GRPH()+TRKH()-10}px">Add to “Keys”</div>
+      <div class="ghostrow" style="top:${RULER()+GRPH()+TRKH()+18}px">
+        <div class="glyph">🎸</div>
+        <div class="namecol"><div class="tname">Bass</div><div class="tkind">Instrument</div></div>
+      </div>`;
+    // highlight the Keys group + Pad as drop target
+    const groupEl=document.querySelector('.row.grp .lane');
+    document.querySelectorAll('.row').forEach((el,i)=>{ if(i<=1) el.querySelector('.hcell').classList.add('droptarget'); });
+  }
+}
+function RULER(){return 0;}            // scroll-relative
+function GRPH(){return 60;}
+function TRKH(){return 96;}
+
+/* fold toggle (caret) */
+function toggleFold(el){
+  const row=el.closest('.row');
+  // simple demo: switch grouped<->folded for the drums scenario
+  if(CURRENT==='grouped'){render('folded');}
+  else if(CURRENT==='folded'){render('grouped');}
+}
+
+/* wire up */
+renderRuler();
+document.getElementById('seg').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return; location.hash=b.dataset.s; render(b.dataset.s);
+});
+window.addEventListener('hashchange',()=>{const s=location.hash.slice(1); if(HINTS[s])render(s);});
+// click M/S on group/track to toggle (demo feedback)
+document.addEventListener('click',e=>{
+  const g=e.target.closest('.gbtn,.mb');
+  if(g && !g.classList.contains('inherit') && g.classList.contains('mb')||(g&&g.classList.contains('gbtn'))){
+    g.classList.toggle('on');
+  }
+});
+render(HINTS[location.hash.slice(1)]?location.hash.slice(1):'grouped');
+</script>
+</body>
+</html>
