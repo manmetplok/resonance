@@ -23,6 +23,21 @@ use crate::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 /// delta-encoded. A single End-of-Track meta event terminates the
 /// track.
 pub fn write_midi_file(path: &Path, notes: &[MidiNote]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    let buf = encode_midi(notes)?;
+    std::fs::write(path, buf).map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(())
+}
+
+/// Serialize a list of notes to the raw bytes of a Format 0 SMF.
+///
+/// Identical encoding to [`write_midi_file`] but returns the bytes
+/// instead of writing them, so callers that need a crash-safe
+/// (write-temp-then-rename) write can route the bytes through their
+/// own atomic writer.
+pub fn encode_midi(notes: &[MidiNote]) -> Result<Vec<u8>, String> {
     let mut events: Vec<(u64, TrackEventKind<'static>)> = Vec::with_capacity(notes.len() * 2);
     for n in notes {
         let key = u7::new(n.note.min(127));
@@ -72,14 +87,10 @@ pub fn write_midi_file(path: &Path, notes: &[MidiNote]) -> Result<(), String> {
         tracks: vec![track],
     };
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-    }
     let mut buf: Vec<u8> = Vec::new();
     smf.write(&mut buf)
         .map_err(|e| format!("serialize smf: {e}"))?;
-    std::fs::write(path, buf).map_err(|e| format!("write {}: {e}", path.display()))?;
-    Ok(())
+    Ok(buf)
 }
 
 /// Parse a Format 0 (or Format 1 first-track-wins) SMF at `path`
