@@ -83,6 +83,11 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         // state; this placeholder arm keeps the workspace compiling once
         // the engine-side command/event plumbing (todo #314) is in place.
         E::ClipFadeChanged { .. } | E::ClipGainChanged { .. } => {}
+        // Media-pool import lifecycle (engine todo #592). Mirroring these
+        // into the app's pool + import-progress state is todo #597; until
+        // it lands these arms accept the events without acting, keeping
+        // the workspace compiling now that the engine emits them.
+        E::ImportProgress { .. } | E::AssetImported { .. } | E::ImportFailed { .. } => {}
         E::RecordingFinished {
             clip_id,
             track_id,

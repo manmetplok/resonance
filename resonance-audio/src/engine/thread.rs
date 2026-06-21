@@ -74,6 +74,11 @@ pub(crate) struct HandlerState {
     pub next_track_id: TrackId,
     pub next_bus_id: BusId,
     pub next_clip_id: ClipId,
+    /// Monotonic id allocator for media-pool assets imported via
+    /// `AudioCommand::ImportAudioToPool`. Independent of `next_clip_id`:
+    /// asset WAVs are named `asset_{id}.wav`, clip WAVs `clip_{id}.wav`,
+    /// so the two counters never collide on disk.
+    pub next_asset_id: AssetId,
     pub next_plugin_id: PluginInstanceId,
     pub rec: RecordingState,
     pub bundles: Vec<ClapBundle>,
@@ -150,6 +155,7 @@ pub(crate) fn engine_thread(
         next_track_id: 1,
         next_bus_id: 1,
         next_clip_id: 1,
+        next_asset_id: 1,
         next_plugin_id: 1,
         rec: RecordingState::new(sample_rate),
         bundles: Vec::new(),
@@ -354,6 +360,9 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             path,
             start_sample,
         } => clips::handle_import_clip(ctx, state, track_id, path, start_sample),
+        AudioCommand::ImportAudioToPool { paths } => {
+            super::import_pool::handle_import_audio_to_pool(ctx, state, paths)
+        }
         AudioCommand::MoveClip {
             clip_id,
             new_start_sample,
