@@ -465,6 +465,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         Message::Viewport(_) => UndoAction::Skip,
         Message::Ui(_) => UndoAction::Skip,
         Message::ProjectIo(_) => UndoAction::Skip,
+        // Group macro/fold reducers are inert placeholders (todo #680);
+        // their undo classification lands with the behaviour in #686–#689.
+        Message::Group(_) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::SelectEvent(_)) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(_)) => UndoAction::Begin,
         Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag) => UndoAction::Commit,

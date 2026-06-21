@@ -37,6 +37,7 @@
 //! - [`track`] — the per-track header cells in the lane area.
 //! - [`shelf`] — the global-shelf header strip + the lane labels
 //!   (chords / tempo / signature) in the chrome.
+pub(crate) mod group_header;
 mod shelf;
 mod track;
 

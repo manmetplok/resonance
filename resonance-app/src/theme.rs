@@ -248,6 +248,23 @@ pub const GRP_GTR: Color = rgb(0x7d, 0x86, 0xc9);
 pub const GRP_GTR_WASH: Color = rgba(0x7d, 0x86, 0xc9, 0.14);
 /// Guitar group line — 34% opacity slate for rails and borders.
 pub const GRP_GTR_LINE: Color = rgba(0x7d, 0x86, 0xc9, 0.34);
+
+/// Resolve a group's identity colour slot to its (base, wash, line)
+/// theme colours — the swatch/text base, the 14% header-wash, and the
+/// 34% rail/border line. Maps the shared `GroupIdentityColor` palette
+/// (resonance-common) onto the canonical `GRP_*` tokens so views never
+/// inline group colours. Reused by the member rail (#681) and indent (#682).
+pub fn group_identity_colors(
+    c: resonance_common::group_identity::GroupIdentityColor,
+) -> (Color, Color, Color) {
+    use resonance_common::group_identity::GroupIdentityColor as G;
+    match c {
+        G::Drum => (GRP_DRUM, GRP_DRUM_WASH, GRP_DRUM_LINE),
+        G::Vocal => (GRP_VOX, GRP_VOX_WASH, GRP_VOX_LINE),
+        G::Keys => (GRP_KEYS, GRP_KEYS_WASH, GRP_KEYS_LINE),
+        G::Guitar => (GRP_GTR, GRP_GTR_WASH, GRP_GTR_LINE),
+    }
+}
 // ---------------------------------------------------------------------------
 // Legacy aliases — keep the rest of the codebase compiling while the views
 // migrate. New code should use the tokens above directly.
