@@ -468,6 +468,34 @@ pub enum AudioCommand {
         bypassed: bool,
     },
 
+    // -- Audition preview (doc #175) --
+    /// Preview an arbitrary audio file through the engine, starting at
+    /// `start_frame` (clamped to the file length). The file may be an imported
+    /// pool asset or an un-imported file straight off the filesystem; any
+    /// format the workspace decoder accepts works. The engine decodes it off
+    /// the audio thread and previews it independently of the arrangement,
+    /// transport, and undo — it is never an `AudioClip` and does not move the
+    /// main playhead. Uses the loop / sync-to-tempo options last set via
+    /// [`AudioCommand::SetAuditionOptions`]. A decode failure surfaces as
+    /// `AudioEvent::Error`. Replaces any preview already playing.
+    AuditionFile {
+        path: PathBuf,
+        start_frame: u64,
+    },
+    /// Stop the current audition preview. Emits `AudioEvent::AuditionStopped`
+    /// when a preview was actually playing; stopping an idle audition is a
+    /// silent no-op.
+    StopAudition,
+    /// Set the audition preview options. `loop_enabled` wraps the preview at
+    /// its end instead of stopping; `sync_to_tempo` time-stretches (varispeed)
+    /// the preview so its loop length snaps to the project tempo. The options
+    /// persist across `AuditionFile` commands and take effect immediately on
+    /// any preview currently playing.
+    SetAuditionOptions {
+        loop_enabled: bool,
+        sync_to_tempo: bool,
+    },
+
     /// Ask the engine to snapshot and clear every peak meter (per-track,
     /// per-bus, master L/R) and reply with `AudioEvent::PeakSnapshot`.
     /// Driven by the GUI's per-frame VU update; replaces the older

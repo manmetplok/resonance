@@ -285,6 +285,12 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             master_peak_r,
         ),
 
+        // Audition preview position/stopped events round-trip through the
+        // engine, but the app does not hold audition UI state yet (the scrub
+        // playhead + browser preview controls land with the audition app-state
+        // todo, doc #175), so there is nothing to mirror — no-ops for now.
+        E::AuditionPosition { .. } | E::AuditionStopped => {}
+
         // Project save / load — these return a Task<Message>.
         E::ClipsSavedToProjectDir { clip_files } => {
             return project_io::clips_saved(r, clip_files)
