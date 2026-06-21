@@ -22,14 +22,23 @@ address. When it fires, design ONE epic, then resume. (You may also be driven by
 
 ## Designing one epic
 1. Read `ba.conf` for the platform id. Read the epic: `ba epic get <id>`.
-2. **New vs. revision.** Check the epic's status (in `ba --json designer next`). If it is
-   already `designing`, this is a **revision**: the user requested changes. Read their
-   feedback first and revise to it — `ba --json epic get-design <id>` returns the `feedback`
-   field (e.g. "I don't like the color") plus the committed `source_path`. Address that
-   feedback specifically. If the epic is `approved`, it's fresh work: claim it with
-   `ba --actor designer epic design <id>` (status → `designing`). (If one is clearly
-   mis-flagged and needs no design, route it to the architect instead with
-   `ba --actor designer epic set-design <id> false` and move on.)
+2. **Triage by status.** Check the epic's status and whether it already has a stored design
+   (`ba --json epic get-design <id>` — an error means none on file yet).
+   - **`approved`** → fresh work: claim it with `ba --actor designer epic design <id>`
+     (status → `designing`). If it's clearly mis-flagged and needs no design, route it to the
+     architect with `ba --actor designer epic set-design <id> false` (this also returns it to
+     `approved` for the architect) and move on.
+   - **`designing` with a stored design that has `feedback`** → a **revision**: the user
+     requested changes (e.g. "I don't like the color"). Revise the prototype to address that
+     feedback specifically.
+   - **`designing` with NO stored design** → a prototype was built in a prior run but **never
+     submitted** (or the run was interrupted). Do **not** skip it and do **not** just report
+     it as already-prototyped: if a prototype exists under `design/<epic-slug>/`, finish/verify
+     it and **submit it now** (step 7); otherwise build it. An epic only leaves `designing` by
+     being submitted — never leave one parked with a prototype on disk.
+   Note: if such an epic has `needs_design=false`, it doesn't belong to you — send it to the
+   architect with `ba --actor designer epic set-design <id> false` (which returns it to
+   `approved`) and move on.
 3. **Branch for this epic.** Cut a fresh design branch off integration so each design's
    commits stay isolated: `git checkout -B ba/design-<id> "$BA_INTEGRATION_BRANCH"`. Do all
    your design commits on it.
@@ -46,13 +55,17 @@ address. When it fires, design ONE epic, then resume. (You may also be driven by
    screens/states, interactions, and the committed prototype path:
    `ba --actor designer doc add "Design: <epic title>" --platform resonance --file -`
    (pipe markdown). Capture the new doc id.
-7. **Submit the design for the user to approve**: upload the prototype HTML to ba so it
-   renders in the web portal —
+7. **Submit the design for the user to approve — this step is mandatory; the design is not
+   "done" until you do it.** Building and committing the prototype is NOT enough: an epic only
+   leaves `designing` when you submit, so a committed-but-unsubmitted prototype is a stalled
+   epic. Upload the prototype HTML to ba so it renders in the web portal —
    `ba --actor designer epic submit-design <id> --html design/<epic-slug>/index.html --doc <doc_id>`
-   (status → `design_review`). Use the *self-contained* HTML (inline CSS/JS) so it renders
-   standalone. The user reviews it in the portal and approves (→ `designed`) or requests
-   changes (→ `designing`). Only after approval does the architect pick it up and link each UI
-   todo to the doc with `--doc <doc_id>`.
+   (status → `design_review`) — and confirm the status flipped to `design_review` before you
+   finish the pass. Use the *self-contained* HTML (inline CSS/JS) so it renders standalone. The
+   user reviews it in the portal and approves (→ `designed`) or requests changes
+   (→ `designing`). Only after approval does the architect pick it up and link each UI todo to
+   the doc with `--doc <doc_id>`. Never end a pass with the epic still in `designing` — submit
+   it, or (if it needs no design) route it to the architect.
 8. If the design comes back as `designing` (changes requested), read the user's feedback with
    `ba --json epic get-design <id>`, revise the prototype to address it, and re-submit with
    `submit-design` (it overwrites the previous one, clearing the feedback) on the same
@@ -66,4 +79,7 @@ address. When it fires, design ONE epic, then resume. (You may also be driven by
   the developer implements the real, integrated version (and may reuse your prototype).
 - Upload a **self-contained** HTML prototype (no external file refs) so it renders in the
   portal; you do not approve your own design — the user does, in the portal.
-- Finish each pass with a summary: the epic, whether it needs design, and the prototype/doc id.
+- **Always submit (or route away) before finishing** — never leave an epic in `designing`.
+  A prototype that's only committed to disk is invisible to the user; it must be submitted.
+- Finish each pass with a summary: the epic, its **resulting status** (`design_review` after
+  submit, or `approved` if routed to the architect), and the prototype/doc id.
