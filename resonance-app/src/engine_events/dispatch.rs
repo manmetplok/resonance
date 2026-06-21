@@ -11,7 +11,8 @@ use crate::message::*;
 use crate::Resonance;
 
 use super::{
-    aux_sends, clips, midi, midi_map, plugins, pool, project_io, reference, tracks, transport,
+    automation, aux_sends, clips, midi, midi_map, plugins, pool, project_io, reference, tracks,
+    transport,
 };
 
 pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
@@ -463,11 +464,14 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::ABMeterSnapshot { mix, reference: ref_meter } => {
             reference::ab_meter_snapshot(r, mix, ref_meter)
         }
-        // Automation lanes round-trip through the engine but the app
-        // does not hold automation state yet, so there is nothing to
-        // mirror. The app-side handler lands with the automation
-        // app-state todo (doc #162); until then these are no-ops.
-        E::AutomationLaneChanged { .. } | E::AutomationLaneCleared { .. } => {}
+        // Automation lanes (doc #162 §3, todo #378): one-way engine→app
+        // mirror of lane state into `AutomationState`, plus the throttled
+        // live automated value into the transient live-value map.
+        E::AutomationLaneChanged { lane } => automation::lane_changed(r, lane),
+        E::AutomationLaneCleared { target } => automation::lane_cleared(r, target),
+        E::AutomatedValue { target, value_norm } => {
+            automation::automated_value(r, target, value_norm)
+        }
 
         // External-instrument config + device-offline events: mirror the
         // engine's stored config and device status into the app's

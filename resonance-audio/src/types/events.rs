@@ -210,6 +210,16 @@ pub enum AudioEvent {
     AutomationLaneCleared {
         target: AutomationTarget,
     },
+    /// Throttled (control-rate) automated value for `target` during
+    /// playback, so the app can tint the fader/knob with the live lane
+    /// value while Read is on. `value_norm` is the normalized `0.0..=1.0`
+    /// lane value. The throttled engine-side emission lands in todo #377;
+    /// the variant is defined here so the app-side live-value mirror
+    /// (todo #378) can consume it.
+    AutomatedValue {
+        target: AutomationTarget,
+        value_norm: f32,
+    },
     Stopped,
     Error(String),
     InputDevicesListed {

@@ -401,6 +401,14 @@ impl Resonance {
         self.clips.push(clip);
     }
 
+    /// Test-only: read the GUI-side automation state (mirrored lanes +
+    /// transient live values). Used by the engine-event mirroring tests
+    /// to assert lane reconstruction and live-value tracking.
+    #[doc(hidden)]
+    pub fn test_automation(&self) -> &state::AutomationState {
+        &self.automation
+    }
+
     /// Test-only: force the transport's recording flag so a test can render
     /// the Performance status bar in its recording state.
     #[doc(hidden)]
