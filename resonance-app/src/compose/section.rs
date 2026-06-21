@@ -64,10 +64,90 @@ pub struct SectionDefinitionState {
     /// reads from this so they share the underlying motif identity
     /// (intervals + rhythm + accents).
     pub motif_source: MotifSource,
-    /// Which drum pattern this section plays. `None` means "use the
-    /// project default" — resolved via
-    /// [`crate::compose::ComposeState::pattern_for_definition`].
-    pub drum_pattern_id: Option<u64>,
+    /// Ordered drum arrangement for this section: the sequence of pattern
+    /// entries the drums play across the section's bars. An empty
+    /// arrangement means "use the project default pattern for the whole
+    /// section" — resolved via
+    /// [`crate::compose::ComposeState::pattern_for_definition`]. The first
+    /// entry's pattern is the section's "primary" choice (see
+    /// [`SectionDefinitionState::primary_pattern_id`]); the full sequence
+    /// is resolved into per-bar spans by
+    /// [`crate::compose::ComposeState::resolve_arrangement_for`].
+    pub arrangement: Vec<PatternEntry>,
+}
+
+/// How long a single [`PatternEntry`] lasts within a section's bar grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryLength {
+    /// Repeat the entry's pattern `n` times back-to-back. The concrete
+    /// bar span is `n * pattern.length_bars` — so a 2-bar pattern with
+    /// `RepeatN(3)` occupies 6 bars. `RepeatN(0)` contributes nothing.
+    RepeatN(u32),
+    /// Occupy a fixed number of bars regardless of the pattern's own
+    /// intrinsic bar length. The pattern loops/tiles to fill the span;
+    /// `Bars(0)` contributes nothing.
+    Bars(u32),
+}
+
+/// One entry in a section's ordered drum arrangement. Plays `pattern_id`
+/// for `length` (see [`EntryLength`]), optionally swapping in `fill` on the
+/// last bar of the entry's span — a one-bar fill capping a repeated loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatternEntry {
+    /// Pattern played for the bulk of this entry.
+    pub pattern_id: u64,
+    /// How long the entry lasts.
+    pub length: EntryLength,
+    /// Optional fill pattern that replaces the last bar of the entry's
+    /// span. `None` means the entry plays `pattern_id` throughout.
+    pub fill: Option<u64>,
+}
+
+impl PatternEntry {
+    /// A plain entry that plays `pattern_id` once with no fill.
+    pub fn once(pattern_id: u64) -> Self {
+        Self {
+            pattern_id,
+            length: EntryLength::RepeatN(1),
+            fill: None,
+        }
+    }
+}
+
+impl SectionDefinitionState {
+    /// The section's "primary" drum pattern: the first arrangement
+    /// entry's pattern, or `None` when the arrangement is empty (meaning
+    /// "fall through to the project default"). Back-compat shim for
+    /// callers that previously read the old `drum_pattern_id: Option<u64>`
+    /// field — they resolve the first covered bar.
+    pub fn primary_pattern_id(&self) -> Option<u64> {
+        self.arrangement.first().map(|e| e.pattern_id)
+    }
+
+    /// Collapse the arrangement to a single-pattern entry, or clear it
+    /// back to "use the default" when `pattern_id` is `None`. Back-compat
+    /// shim for the old `drum_pattern_id = …` assignment; richer
+    /// multi-entry arrangements are built directly via the `arrangement`
+    /// field.
+    pub fn set_primary_pattern(&mut self, pattern_id: Option<u64>) {
+        self.arrangement = match pattern_id {
+            Some(id) => vec![PatternEntry::once(id)],
+            None => Vec::new(),
+        };
+    }
+
+    /// Drop every arrangement entry (and fill) that references
+    /// `pattern_id`. Used when a pattern is deleted from the bank so no
+    /// entry points at a stale pattern. Entries whose *fill* matches lose
+    /// just the fill; entries whose main pattern matches are removed.
+    pub fn remove_pattern_references(&mut self, pattern_id: u64) {
+        self.arrangement.retain(|e| e.pattern_id != pattern_id);
+        for entry in &mut self.arrangement {
+            if entry.fill == Some(pattern_id) {
+                entry.fill = None;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
