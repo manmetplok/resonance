@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — External sidechain (key-input) routing (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-dim:rgba(232,196,123,.12); --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --good-dim:rgba(109,214,163,.14); --good-line:rgba(109,214,163,.34);
+    --bad:#e87b8b; --bad-dim:rgba(232,123,139,.13); --bad-line:rgba(232,123,139,.40);
+    --radius-xs:4px; --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+
+  /* ---- App chrome ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1)}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .tabs{display:flex;gap:2px;margin-left:8px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+  .clock{font-size:12px;color:var(--text-2);display:flex;gap:14px;align-items:center}
+  .clock b{color:var(--text-1);font-weight:500}
+
+  /* ---- State switcher ---- */
+  .statebar{
+    height:44px;flex:0 0 auto;display:flex;align-items:center;gap:10px;
+    padding:0 18px;background:var(--bg-1);border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);margin-right:2px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{
+    border:0;background:transparent;color:var(--text-2);padding:6px 13px;font-size:12px;
+    cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2);
+  }
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .hint{margin-left:auto;color:var(--text-3);font-size:11.5px;max-width:560px;text-align:right}
+
+  /* ---- Body: mixer strips + inspector ---- */
+  .body{flex:1;display:flex;min-height:0}
+  .strips{
+    flex:1;min-width:0;overflow:hidden;background:var(--bg-1);
+    display:flex;align-items:flex-end;gap:16px;padding:26px;
+  }
+
+  /* Channel strip */
+  .strip{
+    width:140px;height:440px;flex:0 0 auto;background:var(--bg-2);
+    border:1px solid var(--line);border-radius:var(--radius-xl);
+    display:flex;flex-direction:column;overflow:hidden;position:relative;
+  }
+  .strip.bus{border-color:var(--warm-line)}
+  .strip.master{width:156px}
+  .strip.selected{border-color:var(--accent-line);box-shadow:0 0 0 1px var(--accent-line),0 14px 40px rgba(0,0,0,.45)}
+  .s-head{padding:9px 11px;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--line-2)}
+  .s-dot{width:8px;height:8px;border-radius:2px;background:var(--warm)}
+  .s-dot.midi{background:var(--accent)}
+  .s-dot.bus{background:var(--warm)}
+  .s-name{font-size:12.5px;font-weight:500;flex:1}
+  .s-tag{font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3)}
+
+  .s-fx{padding:8px 10px;border-bottom:1px solid var(--line-2);display:flex;flex-direction:column;gap:5px}
+  .fxrow{
+    display:flex;align-items:center;gap:6px;padding:5px 7px;border-radius:var(--radius-xs);
+    background:var(--bg-1);border:1px solid var(--line-2);font-size:11px;color:var(--text-2);
+  }
+  .fxrow.active{border-color:var(--accent-line);background:var(--accent-dim);color:var(--text-1)}
+  .fxrow .fxn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .keychip{
+    font-size:8px;letter-spacing:.08em;text-transform:uppercase;padding:2px 5px;border-radius:999px;
+    background:var(--warm-dim);color:var(--warm);border:1px solid var(--warm-line);
+  }
+
+  .s-meterwrap{flex:1;display:flex;gap:10px;padding:14px 14px 6px;align-items:stretch;justify-content:center}
+  .fader{width:30px;position:relative;display:flex;justify-content:center;background:var(--bg-1);border-radius:var(--radius-sm);border:1px solid var(--line-2)}
+  .fader .track{position:absolute;top:14px;bottom:14px;width:3px;background:var(--bg-3);border-radius:3px;left:50%;transform:translateX(-50%)}
+  .fader .cap{position:absolute;left:50%;transform:translateX(-50%);width:22px;height:11px;border-radius:3px;background:var(--bg-3);border:1px solid var(--line);}
+  .meter{width:9px;background:var(--bg-1);border-radius:3px;border:1px solid var(--line-2);position:relative;overflow:hidden}
+  .meter i{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(180deg,var(--warm),var(--good));border-radius:0 0 3px 3px;transition:height .12s linear}
+  .meter.gr i{background:linear-gradient(180deg,var(--bad),var(--warm));top:0;bottom:auto;border-radius:3px 3px 0 0}
+  .meter-lbl{position:absolute;bottom:-1px;left:0;right:0;text-align:center;font-size:7px;color:var(--text-3)}
+
+  .s-btns{display:flex;gap:5px;padding:8px 11px;border-top:1px solid var(--line-2)}
+  .s-btns button{flex:1;height:22px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-1);color:var(--text-3);font-size:10px;font-family:inherit;cursor:pointer}
+  .s-btns .gain{flex:0 0 auto;width:auto;padding:0 8px;color:var(--text-2)}
+
+  /* key-source pulse overlay on the kick strip when a route is active */
+  .keyglow{position:absolute;inset:0;border-radius:var(--radius-xl);pointer-events:none;opacity:0;transition:opacity .25s}
+  .keyglow.on{opacity:1;box-shadow:inset 0 0 0 1px var(--warm-line),inset 0 0 26px rgba(232,196,123,.10)}
+  .keyflag{
+    position:absolute;top:9px;right:9px;z-index:3;font-size:8px;letter-spacing:.1em;text-transform:uppercase;
+    padding:2px 6px;border-radius:999px;background:var(--warm-dim);color:var(--warm);border:1px solid var(--warm-line);
+    display:none;align-items:center;gap:4px;
+  }
+  .keyflag.on{display:inline-flex}
+  .keyflag .pulse{width:6px;height:6px;border-radius:50%;background:var(--warm);animation:beat 1s steps(1) infinite}
+  @keyframes beat{0%{opacity:1;transform:scale(1)}30%{opacity:.25;transform:scale(.6)}100%{opacity:1}}
+
+  /* routing arrow drawn between kick strip and bass-bus strip */
+  .route-arrow{position:absolute;z-index:2;pointer-events:none;display:none}
+  .route-arrow.on{display:block}
+
+  /* ---- Inspector ---- */
+  .inspector{
+    width:320px;flex:0 0 auto;background:var(--bg-2);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;overflow-y:auto;
+  }
+  .ins-top{padding:13px 15px 11px;border-bottom:1px solid var(--line-2)}
+  .ins-top .who{font-size:14px;font-weight:600}
+  .ins-top .sub{font-size:11px;color:var(--text-3);margin-top:2px}
+  .grp{border-bottom:1px solid var(--line-2)}
+  .grp-head{
+    height:34px;display:flex;align-items:center;gap:8px;padding:0 15px;cursor:default;
+  }
+  .grp-head .caret{font-size:9px;color:var(--text-3);width:10px}
+  .grp-head .gt{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-2);flex:1}
+  .grp-head .gmeta{font-size:10px;color:var(--text-3)}
+  .grp-body{padding:4px 15px 15px}
+
+  .field{margin-top:11px}
+  .field:first-child{margin-top:2px}
+  .flbl{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);font-weight:600;margin-bottom:5px;display:flex;justify-content:space-between}
+  .picker{
+    width:100%;height:30px;border-radius:var(--radius-md);border:1px solid var(--line);
+    background:var(--bg-1);color:var(--text-1);font-size:12px;padding:0 10px;
+    display:flex;align-items:center;justify-content:space-between;cursor:pointer;
+  }
+  .picker.placeholder{color:var(--text-3)}
+  .picker .chev{color:var(--text-3);font-size:10px}
+  .picker.bad{border-color:var(--bad-line)}
+  .picker .src{display:flex;align-items:center;gap:7px}
+  .picker .src .d{width:7px;height:7px;border-radius:2px;background:var(--warm)}
+
+  .row{display:flex;align-items:center;gap:8px;justify-content:space-between}
+  .stat-row{display:flex;gap:8px;margin-top:11px}
+  .stat{flex:1;background:var(--bg-1);border:1px solid var(--line-2);border-radius:var(--radius-md);padding:8px 9px}
+  .stat .k{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3)}
+  .stat .v{font-size:15px;margin-top:3px;color:var(--text-1)}
+  .stat .v.warm{color:var(--warm)}
+  .stat .v.gr{color:var(--good)}
+
+  /* SIDECHAIN card */
+  .sc-card{
+    margin-top:12px;border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden;
+    background:var(--bg-1);
+  }
+  .sc-card.active{border-color:var(--warm-line)}
+  .sc-card.listen{border-color:var(--good-line)}
+  .sc-card.err{border-color:var(--bad-line)}
+  .sc-head{
+    display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--line-2);
+    background:linear-gradient(180deg,var(--warm-dim),transparent);
+  }
+  .sc-head .ic{width:14px;height:14px;color:var(--warm)}
+  .sc-head .t{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-2);flex:1;font-weight:600}
+  .badge{font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;padding:2px 7px;border-radius:999px;border:1px solid var(--line);color:var(--text-3)}
+  .badge.warm{background:var(--warm-dim);color:var(--warm);border-color:var(--warm-line)}
+  .badge.good{background:var(--good-dim);color:var(--good);border-color:var(--good-line)}
+  .badge.bad{background:var(--bad-dim);color:var(--bad);border-color:var(--bad-line)}
+  .sc-body{padding:11px}
+
+  /* toggle pill */
+  .toggle{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
+  .sw{width:30px;height:17px;border-radius:999px;background:var(--bg-3);border:1px solid var(--line);position:relative;transition:.15s}
+  .sw i{position:absolute;top:1px;left:1px;width:13px;height:13px;border-radius:50%;background:var(--text-3);transition:.15s}
+  .toggle.on .sw{background:var(--accent-dim);border-color:var(--accent-line)}
+  .toggle.on .sw i{left:14px;background:var(--accent-soft)}
+  .toggle.warm.on .sw{background:var(--warm-dim);border-color:var(--warm-line)}
+  .toggle.warm.on .sw i{background:var(--warm)}
+  .toggle.good.on .sw{background:var(--good-dim);border-color:var(--good-line)}
+  .toggle.good.on .sw i{background:var(--good)}
+  .toggle .tl{font-size:12px;color:var(--text-1)}
+
+  .slider{margin-top:5px}
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:3px;
+    background:var(--bg-3);outline:none;margin:0;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:var(--warm);
+    border:2px solid var(--bg-1);cursor:pointer;box-shadow:0 0 0 1px var(--warm-line);
+  }
+  input[type=range].acc::-webkit-slider-thumb{background:var(--accent-soft);box-shadow:0 0 0 1px var(--accent-line)}
+
+  .divider{height:1px;background:var(--line-2);margin:12px 0}
+
+  .listen-strip{
+    display:flex;align-items:center;gap:9px;margin-top:11px;padding:8px 10px;border-radius:var(--radius-md);
+    border:1px solid var(--line);background:var(--bg-2);
+  }
+  .listen-strip.on{border-color:var(--good-line);background:var(--good-dim)}
+  .listen-strip .lt{flex:1}
+  .listen-strip .lt .a{font-size:12px;color:var(--text-1)}
+  .listen-strip .lt .b{font-size:10px;color:var(--text-3);margin-top:1px}
+  .listen-strip.on .lt .b{color:var(--good)}
+
+  .errbox{
+    margin-top:11px;padding:9px 11px;border-radius:var(--radius-md);border:1px solid var(--bad-line);
+    background:var(--bad-dim);display:flex;gap:9px;align-items:flex-start;
+  }
+  .errbox .ei{color:var(--bad);font-size:13px;line-height:1.3}
+  .errbox .et{font-size:11.5px;color:var(--text-1);line-height:1.45}
+  .errbox .et b{color:var(--bad);font-weight:600}
+
+  .empty-note{margin-top:11px;font-size:11.5px;color:var(--text-3);line-height:1.5}
+
+  .help{font-size:10.5px;color:var(--text-3);margin-top:9px;line-height:1.45}
+
+  /* mini ducking visualization */
+  .duckviz{margin-top:11px;background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--radius-md);padding:9px 10px}
+  .duckviz .dvh{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);margin-bottom:7px;display:flex;justify-content:space-between}
+  .duckviz .dvh b{color:var(--warm);font-weight:500}
+  canvas.duck{display:block;width:100%;height:46px}
+
+  .footnote{padding:14px 15px;color:var(--text-4);font-size:10px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- chrome -->
+  <div class="chrome">
+    <div class="brand">res<b>o</b>nance</div>
+    <div class="tabs">
+      <div class="tab">Arrange</div>
+      <div class="tab active">Mixer</div>
+      <div class="tab">Compose</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="clock"><span>120 BPM</span><span class="mono">004 . 1 . 00</span><b>▶</b></div>
+  </div>
+
+  <!-- state switcher -->
+  <div class="statebar">
+    <span class="lbl">State</span>
+    <div class="seg" id="seg">
+      <button data-s="none" class="on">No source</button>
+      <button data-s="active">Active · ducking</button>
+      <button data-s="listen">Auditioning key</button>
+      <button data-s="error">Cyclic route</button>
+    </div>
+    <div class="hint" id="hint"></div>
+  </div>
+
+  <!-- body -->
+  <div class="body">
+    <div class="strips" id="strips">
+      <!-- KICK (key source) -->
+      <div class="strip" id="kickStrip">
+        <div class="keyglow" id="kickGlow"></div>
+        <div class="keyflag" id="kickFlag"><span class="pulse"></span>KEY SOURCE</div>
+        <div class="s-head"><span class="s-dot"></span><span class="s-name">Kick</span><span class="s-tag">Audio</span></div>
+        <div class="s-fx"><div class="fxrow"><span class="fxn">Transient</span></div></div>
+        <div class="s-meterwrap">
+          <div class="fader"><div class="track"></div><div class="cap" style="top:120px"></div></div>
+          <div class="meter"><i style="height:62%"></i></div>
+          <div class="meter"><i style="height:58%"></i></div>
+        </div>
+        <div class="s-btns"><button>M</button><button>S</button><button class="gain">-2.0</button></div>
+      </div>
+
+      <!-- BASS BUS (sidechain target) -->
+      <div class="strip bus selected" id="bassStrip">
+        <div class="s-head"><span class="s-dot bus"></span><span class="s-name">Bass Bus</span><span class="s-tag">Bus</span></div>
+        <div class="s-fx">
+          <div class="fxrow active"><span class="fxn">Compressor</span><span class="keychip" id="chainKey" style="display:none">key</span></div>
+          <div class="fxrow"><span class="fxn">Saturator</span></div>
+        </div>
+        <div class="s-meterwrap">
+          <div class="fader"><div class="track"></div><div class="cap" style="top:96px"></div></div>
+          <div class="meter"><i id="bassL" style="height:54%"></i></div>
+          <div class="meter gr"><i id="bassGR" style="height:0%"></i><span class="meter-lbl">GR</span></div>
+        </div>
+        <div class="s-btns"><button>M</button><button>S</button><button class="gain">0.0</button></div>
+      </div>
+
+      <!-- MASTER -->
+      <div class="strip master">
+        <div class="s-head"><span class="s-dot bus"></span><span class="s-name">Master</span><span class="s-tag">Out</span></div>
+        <div class="s-fx"><div class="fxrow"><span class="fxn">Limiter</span></div></div>
+        <div class="s-meterwrap">
+          <div class="fader"><div class="track"></div><div class="cap" style="top:88px"></div></div>
+          <div class="meter"><i style="height:66%"></i></div>
+          <div class="meter"><i style="height:64%"></i></div>
+        </div>
+        <div class="s-btns"><button>M</button><button class="gain">0.0</button></div>
+      </div>
+    </div>
+
+    <!-- INSPECTOR -->
+    <div class="inspector">
+      <div class="ins-top">
+        <div class="who">Bass Bus</div>
+        <div class="sub">Compressor — selected in chain</div>
+      </div>
+
+      <!-- SIGNAL (collapsed summary) -->
+      <div class="grp">
+        <div class="grp-head"><span class="caret">▸</span><span class="gt">Signal</span><span class="gmeta">-12.4 dB</span></div>
+      </div>
+
+      <!-- ROUTING -->
+      <div class="grp">
+        <div class="grp-head"><span class="caret">▾</span><span class="gt">Routing</span></div>
+        <div class="grp-body">
+          <div class="field">
+            <div class="flbl">Output</div>
+            <div class="picker"><span class="src"><span class="d" style="background:var(--warm)"></span>Master</span><span class="chev">▾</span></div>
+          </div>
+          <div class="field">
+            <div class="flbl">Send A</div>
+            <div class="picker placeholder"><span>(none)</span><span class="chev">▾</span></div>
+          </div>
+
+          <!-- ===================== SIDECHAIN CARD ===================== -->
+          <div class="field">
+            <div class="flbl"><span>Sidechain key</span><span id="scFlbl"></span></div>
+
+            <div class="sc-card" id="scCard">
+              <div class="sc-head">
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h4l3 8 4-16 3 8h2"/></svg>
+                <span class="t">External Key</span>
+                <span class="badge" id="scBadge">Off</span>
+              </div>
+              <div class="sc-body">
+
+                <!-- source picker -->
+                <div class="field" style="margin-top:0">
+                  <div class="flbl">Key source</div>
+                  <div class="picker placeholder" id="scPicker">
+                    <span class="src" id="scPickerLabel">(none — internal detector)</span>
+                    <span class="chev">▾</span>
+                  </div>
+                </div>
+
+                <!-- error message (cyclic) -->
+                <div class="errbox" id="scErr" style="display:none">
+                  <span class="ei">⚠</span>
+                  <span class="et"><b>Can't key from “Master”.</b> That source already feeds this bus — routing it back would create a feedback loop. Pick a track upstream of the Bass Bus (e.g. Kick).</span>
+                </div>
+
+                <!-- enabled state body -->
+                <div id="scOn" style="display:none">
+                  <div class="row" style="margin-top:11px">
+                    <label class="toggle warm on" id="scEnable"><span class="sw"><i></i></span><span class="tl">Sidechain on</span></label>
+                    <span class="mono" style="font-size:11px;color:var(--text-3)">pre-fader tap</span>
+                  </div>
+
+                  <div class="field" style="margin-top:13px">
+                    <div class="flbl"><span>Key gain</span><b style="color:var(--warm)" id="scGainV">+3.0 dB</b></div>
+                    <input type="range" min="-24" max="24" value="3" id="scGain" class="slider">
+                  </div>
+
+                  <div class="divider"></div>
+
+                  <!-- detector HPF on the key path (mirrors sc_hpf_freq / sc_hpf_on) -->
+                  <div class="row">
+                    <label class="toggle on" id="scHpf"><span class="sw"><i></i></span><span class="tl">Detector HPF</span></label>
+                    <b class="mono" style="font-size:12px;color:var(--text-1)" id="scHpfV">110 Hz</b>
+                  </div>
+                  <input type="range" min="20" max="500" value="110" id="scHpfFreq" class="slider acc" style="margin-top:8px">
+                  <div class="help">Filters the <em>key</em> signal only — the audio path is untouched. Raise it so low kick energy doesn't over-trigger the compressor.</div>
+
+                  <div class="divider"></div>
+
+                  <!-- audition / listen key -->
+                  <div class="listen-strip" id="scListen">
+                    <label class="toggle good" id="scListenToggle"><span class="sw"><i></i></span></label>
+                    <div class="lt">
+                      <div class="a">Audition key</div>
+                      <div class="b" id="scListenSub">Monitor the (filtered) key signal in place of output</div>
+                    </div>
+                  </div>
+
+                  <!-- ducking viz -->
+                  <div class="duckviz" id="scDuck">
+                    <div class="dvh"><span>Gain reduction (keyed)</span><b id="scGRv">−5.8 dB</b></div>
+                    <canvas class="duck" id="duckCanvas" width="560" height="92"></canvas>
+                  </div>
+                </div>
+
+                <!-- empty note -->
+                <div class="empty-note" id="scEmpty">
+                  No external key selected. The compressor uses its <em>internal</em> detector.
+                  Pick a track or bus above to duck this bus from another source — e.g. key the Bass Bus from the <b style="color:var(--warm)">Kick</b> for classic pumping.
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CHAIN (collapsed summary) -->
+      <div class="grp">
+        <div class="grp-head"><span class="caret">▸</span><span class="gt">Chain</span><span class="gmeta">2 plugins</span></div>
+      </div>
+
+      <div class="footnote">
+        Design prototype · External sidechain (key-input) routing · epic #22 · mirrors theme.rs tokens and the Mixer ROUTING-group pattern. Not the shipped build.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const $=id=>document.getElementById(id);
+  const seg=$('seg'), hint=$('hint');
+  const els={
+    card:$('scCard'), badge:$('scBadge'), picker:$('scPicker'),
+    pickerLabel:$('scPickerLabel'), err:$('scErr'), on:$('scOn'),
+    empty:$('scEmpty'), flbl:$('scFlbl'), chainKey:$('chainKey'),
+    kickGlow:$('kickGlow'), kickFlag:$('kickFlag'),
+    listen:$('scListen'), listenToggle:$('scListenToggle'), listenSub:$('scListenSub'),
+    duck:$('scDuck'), bassStrip:$('bassStrip'), bassGR:$('bassGR'), bassL:$('bassL'),
+  };
+
+  const hints={
+    none:'Default · internal detector. Selecting an external source is what unlocks the keyed workflow.',
+    active:'Kick keys the Bass Bus compressor — amber “KEY SOURCE” flag + live gain-reduction meter show the route is live.',
+    listen:'Audition (good/mint) routes the filtered key to the monitor so you can hear exactly what triggers the detector. Output is muted while listening.',
+    error:'Self-referential / cyclic routes are rejected inline (BAD pink) with a plain-language reason before the route is committed.',
+  };
+
+  function setState(s){
+    [...seg.children].forEach(b=>b.classList.toggle('on', b.dataset.s===s));
+    hint.textContent=hints[s];
+
+    // defaults
+    els.err.style.display='none';
+    els.on.style.display='none';
+    els.empty.style.display='none';
+    els.card.className='sc-card';
+    els.picker.className='picker placeholder';
+    els.flbl.innerHTML='';
+    els.chainKey.style.display='none';
+    els.kickGlow.classList.remove('on');
+    els.kickFlag.classList.remove('on');
+    els.listen.classList.remove('on');
+    els.listenToggle.classList.remove('on');
+    els.duck.style.display='block';
+    els.bassStrip.classList.add('selected');
+
+    if(s==='none'){
+      els.pickerLabel.textContent='(none — internal detector)';
+      els.empty.style.display='block';
+      els.badge.textContent='Off'; els.badge.className='badge';
+      duckTarget=0;
+    }
+    else if(s==='active'){
+      els.card.classList.add('active');
+      els.picker.className='picker';
+      els.pickerLabel.innerHTML='<span class="d"></span>Kick';
+      els.on.style.display='block';
+      els.badge.textContent='Active'; els.badge.className='badge warm';
+      els.flbl.innerHTML='<b style="color:var(--warm);font-weight:600">● live</b>';
+      els.chainKey.style.display='inline-block';
+      els.kickGlow.classList.add('on');
+      els.kickFlag.classList.add('on');
+      duckTarget=1;
+    }
+    else if(s==='listen'){
+      els.card.classList.add('listen');
+      els.picker.className='picker';
+      els.pickerLabel.innerHTML='<span class="d"></span>Kick';
+      els.on.style.display='block';
+      els.badge.textContent='Auditioning'; els.badge.className='badge good';
+      els.flbl.innerHTML='<b style="color:var(--good);font-weight:600">● listening</b>';
+      els.chainKey.style.display='inline-block';
+      els.kickGlow.classList.add('on');
+      els.kickFlag.classList.add('on');
+      els.listen.classList.add('on');
+      els.listenToggle.classList.add('on');
+      els.listenSub.textContent='Monitoring filtered key — bus output muted';
+      duckTarget=1;
+    }
+    else if(s==='error'){
+      els.card.classList.add('err');
+      els.picker.className='picker placeholder bad';
+      els.pickerLabel.textContent='Master  (rejected)';
+      els.err.style.display='block';
+      els.badge.textContent='Invalid'; els.badge.className='badge bad';
+      els.flbl.innerHTML='<b style="color:var(--bad);font-weight:600">● rejected</b>';
+      duckTarget=0;
+    }
+  }
+
+  seg.addEventListener('click',e=>{const b=e.target.closest('button');if(b)setState(b.dataset.s);});
+
+  // live-ish ducking animation
+  let duckTarget=0, gr=0, t=0;
+  const cvs=$('duckCanvas'), ctx=cvs.getContext('2d');
+  const css=k=>getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+  function draw(){
+    t+=0.045;
+    // simulate a kick every ~1 beat -> envelope of gain reduction
+    const beat=(t%1.0);
+    const trig=Math.exp(-beat*5.5); // fast attack, decay
+    const want=duckTarget*trig;
+    gr+=(want-gr)*0.4;
+
+    // update strip meters
+    if(els.bassGR) els.bassGR.style.height=(gr*72).toFixed(0)+'%';
+    if(els.bassL)  els.bassL.style.height=(54-gr*22).toFixed(0)+'%';
+    $('scGRv').textContent='−'+(gr*9.0).toFixed(1)+' dB';
+
+    // waveform-ish ducking curve
+    const w=cvs.width,h=cvs.height;
+    ctx.clearRect(0,0,w,h);
+    ctx.strokeStyle=css('--line-2');ctx.lineWidth=1;
+    for(let i=0;i<4;i++){const x=i*w/4;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}
+    ctx.beginPath();
+    for(let x=0;x<w;x++){
+      const tt=t - (1-x/w)*1.0;
+      const b=((tt%1.0)+1.0)%1.0;
+      const env=duckTarget*Math.exp(-b*5.5);
+      const y= 8 + env*(h-16);
+      x===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+    }
+    ctx.strokeStyle=css('--warm');ctx.lineWidth=2;ctx.stroke();
+    // fill under
+    ctx.lineTo(w,h);ctx.lineTo(0,h);ctx.closePath();
+    ctx.fillStyle='rgba(232,196,123,.10)';ctx.fill();
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+
+  // wire sliders
+  $('scGain').addEventListener('input',e=>{const v=(+e.target.value);$('scGainV').textContent=(v>=0?'+':'')+v.toFixed(1)+' dB';});
+  $('scHpfFreq').addEventListener('input',e=>{$('scHpfV').textContent=e.target.value+' Hz';});
+  [['scEnable','warm'],['scHpf',null],['scListenToggle','good']].forEach(([id])=>{
+    $(id).addEventListener('click',()=>$(id).classList.toggle('on'));
+  });
+
+  setState('none');
+})();
+</script>
+</body>
+</html>
