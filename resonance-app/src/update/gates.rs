@@ -31,6 +31,8 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // steal focus from the startup modal.
         Message::Ui(UiMessage::SwitchView(_))
         | Message::Ui(UiMessage::TogglePerformanceMode)
+        | Message::Ui(UiMessage::RequestPerformanceToggle)
+        | Message::Ui(UiMessage::PerformanceToggleResolved { .. })
         | Message::Ui(UiMessage::ExitPerformanceMode)
         | Message::Ui(UiMessage::OpenSettings)
         | Message::Ui(UiMessage::OpenAddTrackMenu) => true,

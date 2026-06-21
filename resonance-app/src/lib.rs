@@ -19,6 +19,7 @@ pub mod chord_sheet_pdf;
 pub mod compose;
 pub mod demo;
 pub mod engine_events;
+pub mod focus;
 pub mod message;
 pub mod presets;
 pub mod project;

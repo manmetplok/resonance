@@ -22,6 +22,13 @@ fn exit(app: &mut Resonance) {
     let _ = app.update(Message::Ui(UiMessage::ExitPerformanceMode));
 }
 
+/// The resolution half of the `F` shortcut: `RequestPerformanceToggle` first
+/// probes widget focus, then dispatches this with the result. `editing = true`
+/// models "a text field was focused when `F` was pressed".
+fn resolve_toggle(app: &mut Resonance, editing: bool) {
+    let _ = app.update(Message::Ui(UiMessage::PerformanceToggleResolved { editing }));
+}
+
 fn switch(app: &mut Resonance, mode: ViewMode) {
     let _ = app.update(Message::Ui(UiMessage::SwitchView(mode)));
 }
@@ -122,6 +129,53 @@ fn entering_and_leaving_preserves_transport_playing() {
     assert!(
         app.test_transport_playing(),
         "leaving Performance must not stop playback"
+    );
+}
+
+#[test]
+fn typing_f_while_a_text_field_is_focused_does_not_toggle() {
+    // Regression: the global `keyboard::listen()` subscription fires `F`
+    // even while a text input is focused, so pressing `f` while editing a
+    // track name / BPM / lyrics field must NOT flip Performance mode. The
+    // focus probe resolves `editing = true`; the toggle is suppressed.
+    let (mut app, _task) = Resonance::new();
+    app.test_set_active_project(true);
+    app.test_set_view_mode(ViewMode::Compose);
+
+    resolve_toggle(&mut app, true);
+    assert_eq!(
+        app.test_view_mode(),
+        ViewMode::Compose,
+        "typing `f` into a focused text field must not enter Performance mode"
+    );
+
+    // It must equally not let the user *escape* Performance mid-edit.
+    toggle(&mut app);
+    assert_eq!(app.test_view_mode(), ViewMode::Performance);
+    resolve_toggle(&mut app, true);
+    assert_eq!(
+        app.test_view_mode(),
+        ViewMode::Performance,
+        "typing `f` into a focused text field must not exit Performance mode"
+    );
+}
+
+#[test]
+fn pressing_f_with_no_text_field_focused_toggles() {
+    // The complement of the regression test: when nothing is being edited
+    // the focus probe resolves `editing = false` and `F` toggles as normal.
+    let (mut app, _task) = Resonance::new();
+    app.test_set_active_project(true);
+    app.test_set_view_mode(ViewMode::Mixer);
+
+    resolve_toggle(&mut app, false);
+    assert_eq!(app.test_view_mode(), ViewMode::Performance);
+
+    resolve_toggle(&mut app, false);
+    assert_eq!(
+        app.test_view_mode(),
+        ViewMode::Mixer,
+        "a second un-focused `f` returns to the source view"
     );
 }
 

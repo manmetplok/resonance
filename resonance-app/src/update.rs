@@ -138,11 +138,14 @@ impl crate::Resonance {
                         ),
                         // `F` toggles full-screen Performance mode in/out.
                         // Manual only — never auto-opens on record-arm and
-                        // never disturbs transport state.
+                        // never disturbs transport state. Routed through
+                        // `RequestPerformanceToggle` so the toggle is
+                        // suppressed while a text field is focused (this
+                        // subscription fires even mid-edit; see `crate::focus`).
                         keyboard::Key::Character(ref c)
                             if c.as_str() == "f" || c.as_str() == "F" =>
                         {
-                            Some(Message::Ui(UiMessage::TogglePerformanceMode))
+                            Some(Message::Ui(UiMessage::RequestPerformanceToggle))
                         }
                         // `Esc` leaves Performance mode (a no-op elsewhere,
                         // handled in the update so it never steals Escape

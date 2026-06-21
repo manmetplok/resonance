@@ -315,6 +315,18 @@ pub enum UiMessage {
     /// or `Esc` returns to it; never auto-opens on record-arm and never
     /// disturbs transport state.
     TogglePerformanceMode,
+    /// The raw `F` key press. Unlike [`TogglePerformanceMode`] this does not
+    /// toggle directly: it first probes the live widget tree for keyboard
+    /// focus (see [`crate::focus`]) and only toggles when no text field is
+    /// being edited, so typing `F` into a track name / BPM / lyrics field
+    /// never flips Performance mode. Resolves to [`PerformanceToggleResolved`].
+    RequestPerformanceToggle,
+    /// Result of the focus probe started by [`RequestPerformanceToggle`].
+    /// `editing` is `true` when a text field held focus at the moment `F` was
+    /// pressed; the toggle is suppressed in that case.
+    PerformanceToggleResolved {
+        editing: bool,
+    },
     /// Leave Performance mode (the `Esc` keyboard shortcut), restoring the
     /// view that was active when Performance mode was entered. A no-op when
     /// not in Performance mode.

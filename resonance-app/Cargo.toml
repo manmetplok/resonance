@@ -9,7 +9,7 @@ resonance-common = { path = "../resonance-common" }
 resonance-music-theory = { path = "../resonance-music-theory" }
 resonance-plugin = { path = "../resonance-plugin", features = ["ui"] }
 resonance-svs = { path = "../resonance-svs" }
-iced = { workspace = true, features = ["canvas", "wgpu", "tokio", "lazy"] }
+iced = { workspace = true, features = ["canvas", "wgpu", "tokio", "lazy", "advanced"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 rfd.workspace = true
 serde.workspace = true

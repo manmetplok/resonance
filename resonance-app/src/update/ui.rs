@@ -21,15 +21,21 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             r.view_mode = mode;
         }
         UiMessage::TogglePerformanceMode => {
-            // `F` is a pure manual toggle: never auto-opens on arm, never
-            // disturbs transport. If already in Performance, return to the
-            // remembered view; otherwise enter Performance from the current
-            // view (remembering it).
-            if r.view_mode == ViewMode::Performance {
-                r.view_mode = r.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
-            } else {
-                r.pre_performance_view = Some(r.view_mode);
-                r.view_mode = ViewMode::Performance;
+            toggle_performance_mode(r);
+        }
+        UiMessage::RequestPerformanceToggle => {
+            // The unmodified `F` shortcut arrives via the global keyboard
+            // subscription, which fires even while a text field is focused.
+            // Probe the live widget tree for keyboard focus and only toggle
+            // once we know no text input is being edited (see `crate::focus`).
+            return crate::focus::any_text_input_focused()
+                .map(|editing| Message::Ui(UiMessage::PerformanceToggleResolved { editing }));
+        }
+        UiMessage::PerformanceToggleResolved { editing } => {
+            // Suppress the toggle when `F` was typed into a focused text
+            // field; otherwise apply the manual toggle.
+            if !editing {
+                toggle_performance_mode(r);
             }
         }
         UiMessage::ExitPerformanceMode => {
@@ -115,4 +121,17 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// Apply the manual Performance-mode toggle: a pure view switch that never
+/// auto-opens on record-arm and never disturbs transport. If already in
+/// Performance, return to the remembered view; otherwise enter Performance
+/// from the current view (remembering it for the return trip).
+fn toggle_performance_mode(r: &mut Resonance) {
+    if r.view_mode == ViewMode::Performance {
+        r.view_mode = r.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+    } else {
+        r.pre_performance_view = Some(r.view_mode);
+        r.view_mode = ViewMode::Performance;
+    }
 }
