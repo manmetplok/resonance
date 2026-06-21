@@ -22,6 +22,7 @@ pub mod midi_io;
 mod mixer;
 mod platform;
 pub(crate) mod prefault;
+pub mod quantize;
 mod recording;
 pub(crate) mod stream_errors;
 pub mod types;
