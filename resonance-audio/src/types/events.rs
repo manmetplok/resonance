@@ -1,10 +1,25 @@
 //! Engine → GUI event enum.
+use resonance_common::AudioFormat;
+
 use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
-    BusId, ClipId, FadeCurve, InputDeviceInfo, MidiNote, ParamInfo, PluginInstanceId, SamplePos,
-    ScannedPlugin, TrackId,
+    AssetId, BusId, ClipId, FadeCurve, InputDeviceInfo, MidiNote, ParamInfo, PluginInstanceId,
+    SamplePos, ScannedPlugin, TrackId,
 };
+
+/// Lifecycle stage of a single file in an `ImportAudioToPool` batch.
+/// Drives the import/transcode progress modal: every file is reported
+/// `Queued` up front, flips to `Working` while its worker decodes and
+/// transcodes, and lands on `Done` once its `AssetImported` event has
+/// been emitted. A file that fails reports no `Done` — it terminates
+/// with [`AudioEvent::ImportFailed`] instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportStage {
+    Queued,
+    Working,
+    Done,
+}
 
 /// Inline clip payload for the offline "bounce in place" flow. The
 /// realtime flow leaves this `None` because the clip arrives via the
@@ -34,6 +49,42 @@ pub enum AudioEvent {
         name: String,
         /// Downsampled waveform peaks: (min, max) per chunk of frames.
         waveform_peaks: Vec<(f32, f32)>,
+    },
+    /// Per-file progress for an `ImportAudioToPool` batch. See
+    /// [`ImportStage`]. `asset_id` matches the eventual
+    /// [`AudioEvent::AssetImported`] / [`AudioEvent::ImportFailed`] for
+    /// the same file, so the progress modal can key its rows by id.
+    ImportProgress {
+        asset_id: AssetId,
+        /// Original source path, as passed in the command.
+        path: String,
+        stage: ImportStage,
+    },
+    /// A source file was successfully imported into the project pool.
+    /// The engine-format WAV now lives at `project_relative_path` (e.g.
+    /// `"audio/asset_7.wav"`) inside the project directory, stereo f32 at
+    /// the project sample rate. `channels` and `source_sample_rate`
+    /// describe the *original* file (for display, e.g. "Mono · 44.1 kHz");
+    /// `duration_frames` is the per-channel frame count of the imported
+    /// (project-rate) WAV, i.e. what a placed clip would span.
+    AssetImported {
+        asset_id: AssetId,
+        project_relative_path: String,
+        original_path: String,
+        format: AudioFormat,
+        channels: u16,
+        source_sample_rate: u32,
+        duration_frames: u64,
+        /// Downsampled waveform peaks: (min, max) per chunk of frames.
+        peaks: Vec<(f32, f32)>,
+    },
+    /// A source file in an `ImportAudioToPool` batch failed to import
+    /// (decode/transcode error, missing file, …). `reason` is
+    /// user-facing. The batch continues with the remaining files.
+    ImportFailed {
+        asset_id: AssetId,
+        path: String,
+        reason: String,
     },
     TrackAdded {
         track_id: TrackId,
@@ -304,4 +355,15 @@ pub enum AudioEvent {
         master_peak_l: f32,
         master_peak_r: f32,
     },
+
+    // -- Audition preview (doc #175) --
+    /// Throttled (control-rate, ~60 Hz) audition playhead position in source
+    /// frames, so the GUI can draw a scrub playhead over the preview. Only
+    /// emitted while a preview is playing.
+    AuditionPosition {
+        frame: u64,
+    },
+    /// The audition preview stopped — either it reached the end of a
+    /// non-looping file, or it was stopped via `AudioCommand::StopAudition`.
+    AuditionStopped,
 }

@@ -22,6 +22,11 @@ memmap2 = "0.9"
 bytemuck.workspace = true
 serde.workspace = true
 
+[dev-dependencies]
+# Used by tests/import_audio_to_pool.rs to author mono / multi-rate
+# source WAVs (the public `transcode_to_wav` only writes stereo).
+hound.workspace = true
+
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa-sys = "0.3"
 pipewire = { version = "0.9", features = ["v0_3_44"] }
