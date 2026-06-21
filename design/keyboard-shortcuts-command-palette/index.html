@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Resonance — Command Palette & Keyboard Shortcuts (design prototype)</title>
+<style>
+  /* ---------------------------------------------------------------
+     Resonance design tokens (mirrored from resonance-app/src/theme.rs)
+     Soft-dark, lavender-accent design system.
+  ----------------------------------------------------------------*/
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --bad:#e87b8b;
+    --r-xs:4px; --r-sm:6px; --r-md:7px; --r-lg:8px; --r-xl:12px;
+    --sans:'Geist','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --mono:'Geist Mono','SFMono-Regular','JetBrains Mono',ui-monospace,monospace;
+    --serif:'Instrument Serif',Georgia,'Times New Roman',serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg-0); color:var(--text-1); font-family:var(--sans);
+    font-size:14px; -webkit-font-smoothing:antialiased;
+    display:flex; flex-direction:column; min-height:100vh;
+  }
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+  ::selection{background:rgba(139,109,255,.35)}
+
+  /* ---- demo harness chrome ---------------------------------------- */
+  .demo-bar{
+    display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+    padding:12px 20px; background:var(--bg-1);
+    border-bottom:1px solid var(--line); position:sticky; top:0; z-index:50;
+  }
+  .demo-bar .brand{font-family:var(--serif);font-style:italic;font-size:18px;color:var(--text-1)}
+  .demo-bar .brand .dim{color:var(--text-3)}
+  .demo-bar .tag{font-size:11px;color:var(--text-3);letter-spacing:.04em}
+  .seg{display:flex;gap:3px;padding:4px;background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--r-lg)}
+  .seg button{padding:6px 14px;font-size:13px;border-radius:var(--r-sm);color:var(--text-2);font-weight:500}
+  .seg button.active{background:var(--bg-3);color:var(--text-1)}
+  .seg.small button{padding:4px 10px;font-size:11px}
+  .demo-bar .group{display:flex;align-items:center;gap:8px}
+  .demo-bar label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+
+  /* ---- mock app backdrop ----------------------------------------- */
+  .app{flex:1;position:relative;overflow:hidden;background:var(--bg-1)}
+  .app-chrome{
+    height:62px;display:flex;align-items:center;gap:14px;padding:0 22px;
+    background:var(--bg-1);border-bottom:1px solid var(--line);
+  }
+  .app-chrome .a-brand{font-family:var(--serif);font-style:italic;font-size:17px}
+  .app-chrome .sep{color:var(--text-3)}
+  .app-chrome .ptitle{font-family:var(--serif);font-style:italic;font-size:17px}
+  .app-chrome .dirty{font-size:12px;color:var(--text-3)}
+  .app-chrome .spacer{flex:1}
+  .app-chrome .tabs{display:flex;gap:3px;padding:4px;background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--r-lg)}
+  .app-chrome .tabs button{padding:6px 14px;font-size:13px;font-weight:600;border-radius:var(--r-sm);color:var(--text-2)}
+  .app-chrome .tabs button.active{background:var(--bg-3);color:var(--text-1)}
+  .kbar{
+    display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;color:var(--text-2);
+    border:1px solid var(--line);border-radius:var(--r-md);background:transparent;
+  }
+  .kbar kbd{font-family:var(--mono)}
+  .gear{width:36px;height:28px;display:grid;place-items:center;border:1px solid var(--line);border-radius:var(--r-md);color:var(--text-2)}
+  .app-body{
+    height:calc(100% - 62px);
+    background:
+      repeating-linear-gradient(0deg,transparent 0 95px,var(--line-2) 95px 96px),
+      var(--bg-1);
+    position:relative;
+  }
+  .ghosttrack{position:absolute;left:0;top:0;width:280px;height:100%;border-right:1px solid var(--line);background:var(--bg-2);opacity:.6}
+  .hint-center{position:absolute;inset:0;display:grid;place-items:center;color:var(--text-4);font-size:13px;pointer-events:none}
+
+  /* ---- overlay scaffold (matches view_settings_overlay) ----------- */
+  .overlay{position:absolute;inset:0;display:grid;z-index:30}
+  .backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(1.5px)}
+  .overlay.palette{align-items:start;justify-items:center;padding-top:96px}
+  .overlay.prefs{place-items:center}
+
+  /* ================= COMMAND PALETTE ================= */
+  .palette-card{
+    position:relative;width:640px;max-width:92vw;background:var(--bg-2);
+    border:1px solid var(--line);border-radius:var(--r-xl);
+    box-shadow:0 24px 80px rgba(0,0,0,.55);overflow:hidden;
+    animation:rise .14s ease-out;
+  }
+  @keyframes rise{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+  .pal-search{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line-2)}
+  .pal-search .mag{color:var(--text-3);font-size:16px}
+  .pal-search input{
+    flex:1;background:none;border:none;outline:none;color:var(--text-1);
+    font-family:var(--sans);font-size:17px;letter-spacing:.01em;
+  }
+  .pal-search input::placeholder{color:var(--text-3)}
+  .pal-search .esc{font-family:var(--mono);font-size:11px;color:var(--text-3);border:1px solid var(--line);border-radius:var(--r-xs);padding:2px 7px}
+  .pal-list{max-height:380px;overflow-y:auto;padding:6px}
+  .pal-group{padding:12px 12px 6px;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);font-weight:600;display:flex;align-items:center;gap:8px}
+  .pal-group .ico{font-size:11px}
+  .pal-row{
+    display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:var(--r-md);
+    cursor:pointer;
+  }
+  .pal-row .glyph{width:26px;height:26px;flex:none;display:grid;place-items:center;border-radius:var(--r-sm);background:var(--bg-3);color:var(--text-2);font-size:12px}
+  .pal-row .label{flex:1;min-width:0}
+  .pal-row .label .name{font-size:14px;color:var(--text-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pal-row .label .name b{color:var(--accent-soft);font-weight:600}
+  .pal-row .label .crumb{font-size:11px;color:var(--text-3);margin-top:1px}
+  .pal-row .keys{display:flex;gap:4px;flex:none}
+  .pal-row.active{background:var(--accent-dim);box-shadow:inset 0 0 0 1px var(--accent-line)}
+  .pal-row.active .glyph{background:var(--accent);color:#0e0a1f}
+  .pal-row:hover:not(.active){background:var(--bg-3)}
+  kbd.k{
+    font-family:var(--mono);font-size:11px;color:var(--text-2);
+    background:var(--bg-1);border:1px solid var(--line);border-bottom-width:2px;
+    border-radius:var(--r-xs);padding:2px 6px;min-width:20px;text-align:center;line-height:1.3;
+  }
+  .pal-row.active kbd.k{color:var(--accent-soft);border-color:var(--accent-line)}
+  .pal-foot{
+    display:flex;align-items:center;gap:18px;padding:9px 16px;border-top:1px solid var(--line-2);
+    font-size:11px;color:var(--text-3);background:var(--bg-1)
+  }
+  .pal-foot .f{display:flex;align-items:center;gap:6px}
+  .pal-foot kbd{font-family:var(--mono);font-size:10px;color:var(--text-2);border:1px solid var(--line);border-radius:3px;padding:1px 5px}
+  .pal-foot .right{margin-left:auto;color:var(--text-3)}
+  .pal-empty{padding:48px 20px;text-align:center;color:var(--text-3)}
+  .pal-empty .big{font-size:15px;color:var(--text-2);margin-bottom:6px}
+  .pal-empty .sub{font-size:12px}
+  .pal-empty .q{font-family:var(--mono);color:var(--text-1)}
+
+  /* ================= PREFERENCES › SHORTCUTS ================= */
+  .prefs-card{
+    position:relative;width:920px;max-width:94vw;height:640px;max-height:86vh;
+    display:flex;flex-direction:column;background:var(--bg-2);
+    border:1px solid var(--line);border-radius:var(--r-xl);overflow:hidden;
+    box-shadow:0 24px 80px rgba(0,0,0,.55);animation:rise .14s ease-out;
+  }
+  .prefs-head{display:flex;align-items:center;gap:14px;padding:20px 24px 16px}
+  .prefs-head h2{font-family:var(--serif);font-style:italic;font-weight:400;font-size:22px}
+  .prefs-head .spacer{flex:1}
+  .prefs-body{flex:1;display:flex;min-height:0}
+  .prefs-nav{width:188px;flex:none;border-right:1px solid var(--line-2);padding:8px}
+  .prefs-nav button{display:flex;width:100%;align-items:center;gap:10px;padding:9px 11px;border-radius:var(--r-md);color:var(--text-2);font-size:13px;text-align:left}
+  .prefs-nav button .ico{width:16px;text-align:center;color:var(--text-3);font-size:12px}
+  .prefs-nav button.active{background:var(--accent-dim);color:var(--text-1);box-shadow:inset 0 0 0 1px var(--accent-line)}
+  .prefs-nav button.active .ico{color:var(--accent-soft)}
+  .prefs-nav button:hover:not(.active){background:var(--bg-3)}
+  .prefs-main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .prefs-toolbar{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line-2)}
+  .search-field{flex:1;display:flex;align-items:center;gap:10px;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-md);padding:8px 12px}
+  .search-field input{flex:1;background:none;border:none;outline:none;color:var(--text-1);font-family:var(--sans);font-size:13px}
+  .search-field input::placeholder{color:var(--text-3)}
+  .search-field .mag{color:var(--text-3);font-size:13px}
+  .preset{display:flex;align-items:center;gap:8px}
+  .preset label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+  select{
+    font-family:var(--sans);font-size:12px;color:var(--text-1);background:var(--bg-1);
+    border:1px solid var(--line);border-radius:var(--r-md);padding:7px 10px;outline:none;cursor:pointer;
+  }
+  .btn-ghost{padding:7px 12px;border:1px solid var(--line);border-radius:var(--r-md);color:var(--text-2);font-size:12px;background:transparent}
+  .btn-ghost:hover{background:var(--bg-2);color:var(--text-1)}
+
+  .prefs-scroll{flex:1;overflow-y:auto;padding:6px 12px 16px}
+  .cat-head{padding:18px 12px 8px;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);font-weight:600;display:flex;align-items:center;gap:8px}
+  .cat-head .count{color:var(--text-4)}
+  .bind-row{display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:var(--r-md)}
+  .bind-row:hover{background:var(--bg-3)}
+  .bind-row .name{flex:1;font-size:13px;color:var(--text-1)}
+  .bind-row .name .desc{font-size:11px;color:var(--text-3);margin-top:1px}
+  .bind-row .chord{display:flex;gap:4px;align-items:center}
+  .bind-row .modified{font-size:10px;color:var(--warm);border:1px solid var(--warm-line);border-radius:999px;padding:1px 7px;letter-spacing:.04em}
+  .bind-row .rebind{opacity:0;font-size:11px;color:var(--accent-soft);border:1px solid var(--accent-line);border-radius:var(--r-sm);padding:4px 9px;background:var(--accent-dim)}
+  .bind-row:hover .rebind{opacity:1}
+  .bind-row .reset-i{opacity:0;color:var(--text-3);font-size:11px;padding:4px}
+  .bind-row:hover .reset-i{opacity:1}
+  .bind-row .reset-i:hover{color:var(--text-1)}
+
+  /* capture (rebinding) state */
+  .bind-row.capturing{background:var(--accent-dim);box-shadow:inset 0 0 0 1px var(--accent-line)}
+  .capture-pill{display:flex;align-items:center;gap:10px;border:1px dashed var(--accent-line);border-radius:var(--r-md);padding:6px 14px;background:rgba(139,109,255,.08)}
+  .capture-pill .live{font-family:var(--mono);font-size:13px;color:var(--accent-soft)}
+  .capture-pill .blink{width:7px;height:14px;background:var(--accent);animation:blink 1s steps(2) infinite;border-radius:1px}
+  @keyframes blink{50%{opacity:0}}
+  .capture-actions{display:flex;gap:6px}
+  .mini{font-size:11px;padding:4px 9px;border-radius:var(--r-sm)}
+  .mini.cancel{color:var(--text-2);border:1px solid var(--line)}
+  .mini.save{color:#0e0a1f;background:var(--accent);font-weight:600}
+
+  /* conflict state */
+  .bind-row.conflict{box-shadow:inset 0 0 0 1px var(--bad)}
+  .bind-row.conflict .chord kbd.k{color:var(--bad);border-color:var(--bad)}
+  .conflict-banner{
+    margin:6px 12px 0;display:flex;align-items:center;gap:12px;padding:12px 14px;
+    background:rgba(232,123,139,.10);border:1px solid rgba(232,123,139,.4);border-radius:var(--r-md);
+  }
+  .conflict-banner .warn{color:var(--bad);font-size:14px}
+  .conflict-banner .msg{flex:1;font-size:12px;color:var(--text-1)}
+  .conflict-banner .msg b{color:var(--bad)}
+  .conflict-banner .msg code{font-family:var(--mono);color:var(--text-1)}
+  .conflict-banner .acts{display:flex;gap:6px}
+  .conflict-banner .acts button{font-size:11px;padding:5px 11px;border-radius:var(--r-sm)}
+  .conflict-banner .acts .keep{color:var(--text-2);border:1px solid var(--line)}
+  .conflict-banner .acts .reassign{color:var(--bad);border:1px solid var(--bad)}
+
+  .prefs-foot{display:flex;align-items:center;gap:12px;padding:14px 24px;border-top:1px solid var(--line-2);background:var(--bg-1)}
+  .prefs-foot .info{font-size:11px;color:var(--text-3)}
+  .prefs-foot .spacer{flex:1}
+  .btn-primary{padding:8px 16px;border-radius:var(--r-md);background:var(--accent);color:#0e0a1f;font-weight:600;font-size:13px}
+  .btn-primary:hover{background:var(--accent-soft)}
+  .x-btn{color:var(--text-2);font-size:14px;width:30px;height:30px;border-radius:var(--r-md);display:grid;place-items:center}
+  .x-btn:hover{background:var(--bg-3);color:var(--text-1)}
+
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+
+<!-- ===================== DEMO HARNESS ===================== -->
+<div class="demo-bar">
+  <div class="brand">resonance <span class="dim">/ design</span></div>
+  <div class="tag">epic #58 · prototype</div>
+  <div class="group">
+    <label>Surface</label>
+    <div class="seg" id="surfaceSeg">
+      <button class="active" data-surface="palette">Command Palette</button>
+      <button data-surface="prefs">Shortcuts Preferences</button>
+    </div>
+  </div>
+  <div class="group" id="palStatesGroup">
+    <label>State</label>
+    <div class="seg small" id="palStates">
+      <button data-pal="recents">Recents / empty</button>
+      <button class="active" data-pal="results">Results</button>
+      <button data-pal="noresults">No match</button>
+    </div>
+  </div>
+  <div class="group hidden" id="prefStatesGroup">
+    <label>State</label>
+    <div class="seg small" id="prefStates">
+      <button class="active" data-pref="list">Browse</button>
+      <button data-pref="capture">Rebinding</button>
+      <button data-pref="conflict">Conflict</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== MOCK APP ===================== -->
+<div class="app">
+  <div class="app-chrome">
+    <span class="a-brand">resonance</span><span class="sep">/</span>
+    <span class="ptitle">Midnight Demo</span><span class="dirty">· unsaved</span>
+    <span class="spacer"></span>
+    <div class="tabs">
+      <button class="active">Arrange</button><button>Mixer</button>
+      <button>Compose</button><button>Performance</button>
+    </div>
+    <span class="spacer"></span>
+    <div class="kbar"><span>⌘</span><kbd>K</kbd><span>Commands</span></div>
+    <div class="gear">≡</div>
+  </div>
+  <div class="app-body">
+    <div class="ghosttrack"></div>
+    <div class="hint-center">Arrange view (dimmed behind overlay)</div>
+
+    <!-- ============ COMMAND PALETTE OVERLAY ============ -->
+    <div class="overlay palette" id="paletteOverlay">
+      <div class="backdrop"></div>
+      <div class="palette-card">
+        <div class="pal-search">
+          <span class="mag">⌕</span>
+          <input id="palInput" type="text" placeholder="Search commands…" autocomplete="off" />
+          <span class="esc">ESC</span>
+        </div>
+        <div class="pal-list" id="palList"><!-- injected --></div>
+        <div class="pal-foot">
+          <span class="f"><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
+          <span class="f"><kbd>↵</kbd> Run</span>
+          <span class="f"><kbd>⌘</kbd><kbd>↵</kbd> Run &amp; keep open</span>
+          <span class="right" id="palFootRight">312 commands</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ PREFERENCES › SHORTCUTS OVERLAY ============ -->
+    <div class="overlay prefs hidden" id="prefsOverlay">
+      <div class="backdrop"></div>
+      <div class="prefs-card">
+        <div class="prefs-head">
+          <h2>Preferences</h2>
+          <span class="spacer"></span>
+          <button class="x-btn">✕</button>
+        </div>
+        <div class="prefs-body">
+          <nav class="prefs-nav">
+            <button><span class="ico">●</span> General</button>
+            <button><span class="ico">▤</span> Audio &amp; MIDI</button>
+            <button><span class="ico">◳</span> Appearance</button>
+            <button class="active"><span class="ico">⌨</span> Keyboard</button>
+            <button><span class="ico">✦</span> Compose</button>
+          </nav>
+          <div class="prefs-main">
+            <div class="prefs-toolbar">
+              <div class="search-field">
+                <span class="mag">⌕</span>
+                <input id="prefSearch" type="text" placeholder="Filter shortcuts…" autocomplete="off" />
+              </div>
+              <div class="preset">
+                <label>Preset</label>
+                <select id="presetSel">
+                  <option>Resonance (default)</option>
+                  <option>Ableton Live</option>
+                  <option>Logic Pro</option>
+                  <option>Pro Tools</option>
+                  <option>FL Studio</option>
+                </select>
+              </div>
+              <button class="btn-ghost" id="resetAllBtn">Reset all</button>
+            </div>
+            <div class="conflict-banner hidden" id="conflictBanner">
+              <span class="warn">⚠</span>
+              <span class="msg"><b>Conflict:</b> <code>⌘ ⇧ M</code> is already assigned to <b>Toggle Mixer</b>.</span>
+              <span class="acts">
+                <button class="keep">Keep both</button>
+                <button class="reassign">Reassign to “Mute Track”</button>
+              </span>
+            </div>
+            <div class="prefs-scroll" id="prefScroll"><!-- injected --></div>
+            <div class="prefs-foot">
+              <span class="info" id="prefFootInfo">Bindings are saved per user and persist across sessions · 4 customized</span>
+              <span class="spacer"></span>
+              <button class="btn-ghost">Restore defaults</button>
+              <button class="btn-primary">Done</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ------------------------------------------------------------------
+   Command registry (sample). Each command: category, name, breadcrumb,
+   keys (array of key tokens), glyph.
+-------------------------------------------------------------------*/
+const CATS = {
+  transport:{label:'Transport', ico:'▶'},
+  edit:{label:'Editing', ico:'✎'},
+  view:{label:'View & Navigation', ico:'◳'},
+  compose:{label:'Compose & Vocal', ico:'✦'},
+  mixer:{label:'Mixer', ico:'▤'},
+  project:{label:'Project', ico:'❒'},
+};
+const COMMANDS = [
+  {cat:'transport', name:'Play / Pause', crumb:'Transport', keys:['Space'], glyph:'▶'},
+  {cat:'transport', name:'Stop', crumb:'Transport', keys:['⌥','Space'], glyph:'■'},
+  {cat:'transport', name:'Toggle Record', crumb:'Transport', keys:['R'], glyph:'●'},
+  {cat:'transport', name:'Toggle Loop / Cycle', crumb:'Transport', keys:['⌘','L'], glyph:'◎'},
+  {cat:'transport', name:'Toggle Metronome', crumb:'Transport', keys:['⌘','M'], glyph:'♩'},
+  {cat:'transport', name:'Return to Start', crumb:'Transport', keys:['↩'], glyph:'⤒'},
+
+  {cat:'edit', name:'Undo', crumb:'Edit', keys:['⌘','Z'], glyph:'↺'},
+  {cat:'edit', name:'Redo', crumb:'Edit', keys:['⌘','⇧','Z'], glyph:'↻'},
+  {cat:'edit', name:'Delete Selection', crumb:'Edit', keys:['⌫'], glyph:'⌫'},
+  {cat:'edit', name:'Duplicate Selection', crumb:'Edit', keys:['⌘','D'], glyph:'⧉'},
+  {cat:'edit', name:'Split Clip at Playhead', crumb:'Edit', keys:['⌘','E'], glyph:'⫶'},
+  {cat:'edit', name:'Select All', crumb:'Edit', keys:['⌘','A'], glyph:'▦'},
+
+  {cat:'view', name:'Switch to Arrange', crumb:'View', keys:['1'], glyph:'1'},
+  {cat:'view', name:'Switch to Mixer', crumb:'View', keys:['2'], glyph:'2'},
+  {cat:'view', name:'Switch to Compose', crumb:'View', keys:['3'], glyph:'3'},
+  {cat:'view', name:'Toggle Performance Mode', crumb:'View', keys:['F'], glyph:'⛶'},
+  {cat:'view', name:'Zoom In', crumb:'View', keys:['⌘','='], glyph:'＋'},
+  {cat:'view', name:'Zoom Out', crumb:'View', keys:['⌘','-'], glyph:'－'},
+
+  {cat:'compose', name:'Generate Vocal Line', crumb:'Compose › Vocal', keys:['⌘','G'], glyph:'✦'},
+  {cat:'compose', name:'Regenerate (reroll)', crumb:'Compose › Vocal', keys:['⌘','⇧','G'], glyph:'↻'},
+  {cat:'compose', name:'Open Lane Inspector', crumb:'Compose', keys:['I'], glyph:'ⓘ'},
+  {cat:'compose', name:'Add Chord', crumb:'Compose › Chords', keys:['⌘','⇧','C'], glyph:'＋'},
+  {cat:'compose', name:'Open MIDI Editor', crumb:'Compose', keys:['↵'], glyph:'▤'},
+
+  {cat:'mixer', name:'Mute Selected Track', crumb:'Mixer', keys:['M'], glyph:'⊘'},
+  {cat:'mixer', name:'Solo Selected Track', crumb:'Mixer', keys:['S'], glyph:'◐'},
+  {cat:'mixer', name:'Arm for Record', crumb:'Mixer', keys:['⇧','R'], glyph:'●'},
+  {cat:'mixer', name:'Add Insert Effect…', crumb:'Mixer › FX', keys:['⌘','⇧','I'], glyph:'＋'},
+
+  {cat:'project', name:'Open Project…', crumb:'Project', keys:['⌘','O'], glyph:'❒'},
+  {cat:'project', name:'Save Project', crumb:'Project', keys:['⌘','S'], glyph:'❒'},
+  {cat:'project', name:'Save Project As…', crumb:'Project', keys:['⌘','⇧','S'], glyph:'❒'},
+  {cat:'project', name:'New from Template…', crumb:'Project', keys:['⌘','N'], glyph:'＋'},
+  {cat:'project', name:'Save As Template…', crumb:'Project', keys:[], glyph:'❒'},
+  {cat:'project', name:'Bounce / Export…', crumb:'Project', keys:['⌘','B'], glyph:'⤓'},
+];
+const RECENTS = ['Generate Vocal Line','Save Project','Toggle Metronome','Switch to Mixer','Bounce / Export…'];
+const CUSTOMIZED = new Set(['Toggle Loop / Cycle','Switch to Arrange','Generate Vocal Line','Mute Selected Track']);
+
+const kbd = t => `<kbd class="k">${t}</kbd>`;
+const chord = keys => keys.length ? keys.map(kbd).join('') : `<span style="color:var(--text-4);font-size:12px">Unassigned</span>`;
+function highlight(name,q){
+  if(!q) return name;
+  const i = name.toLowerCase().indexOf(q.toLowerCase());
+  if(i<0) return name;
+  return name.slice(0,i)+'<b>'+name.slice(i,i+q.length)+'</b>'+name.slice(i+q.length);
+}
+
+/* ---------------- Command Palette rendering ---------------- */
+const palList = document.getElementById('palList');
+const palInput = document.getElementById('palInput');
+const palFootRight = document.getElementById('palFootRight');
+let palMode = 'results';   // recents | results | noresults
+let activeIdx = 0;
+
+function fuzzy(q){
+  if(!q) return [];
+  q=q.toLowerCase();
+  return COMMANDS.filter(c=>c.name.toLowerCase().includes(q)||c.crumb.toLowerCase().includes(q));
+}
+
+function renderPalette(){
+  let q = palInput.value.trim();
+  let html=''; let flatRows=[];
+
+  if(palMode==='recents' || (!q && palMode!=='noresults')){
+    palInput.value=''; q='';
+    html += `<div class="pal-group"><span class="ico">◷</span> Recent</div>`;
+    html += renderRows(RECENTS.map(rn=>COMMANDS.find(x=>x.name===rn)), '', flatRows);
+    html += `<div class="pal-group"><span class="ico">✦</span> Suggested</div>`;
+    html += renderRows(COMMANDS.slice(0,5),'',flatRows);
+    palFootRight.textContent = COMMANDS.length+' commands';
+  } else {
+    const matches = q ? fuzzy(q) : COMMANDS;
+    if(palMode==='noresults' || matches.length===0){
+      html = `<div class="pal-empty"><div class="big">No commands match “<span class="q">${q||'xyzzy'}</span>”</div><div class="sub">Try a different term, or check Preferences › Keyboard to add one.</div></div>`;
+      palFootRight.textContent = '0 results';
+      palList.innerHTML = html; window._palRows=[]; return;
+    }
+    const byCat={};
+    matches.forEach(c=>{(byCat[c.cat] ||= []).push(c);});
+    Object.keys(byCat).forEach(cat=>{
+      html += `<div class="pal-group"><span class="ico">${CATS[cat].ico}</span> ${CATS[cat].label}</div>`;
+      html += renderRows(byCat[cat], q, flatRows);
+    });
+    palFootRight.textContent = matches.length+' result'+(matches.length===1?'':'s');
+  }
+  palList.innerHTML = html;
+  [...palList.querySelectorAll('.pal-row')].forEach(r=>{
+    r.addEventListener('mousemove',()=>setActive(+r.dataset.idx));
+    r.addEventListener('click',()=>flashRun(r));
+  });
+  if(activeIdx>=flatRows.length) activeIdx=0;
+  paintActive();
+  window._palRows=flatRows;
+}
+function renderRows(list,q,flat){
+  let s='';
+  list.forEach(c=>{
+    const idx=flat.length; flat.push(c);
+    s+=`<div class="pal-row" data-idx="${idx}">
+      <span class="glyph">${c.glyph}</span>
+      <span class="label"><span class="name">${highlight(c.name,q)}</span><span class="crumb">${c.crumb}</span></span>
+      <span class="keys">${chord(c.keys)}</span>
+    </div>`;
+  });
+  return s;
+}
+function setActive(i){activeIdx=i;paintActive();}
+function paintActive(){
+  [...palList.querySelectorAll('.pal-row')].forEach(r=>{
+    r.classList.toggle('active',+r.dataset.idx===activeIdx);
+  });
+}
+palInput.addEventListener('input',()=>{palMode = palInput.value.trim()? 'results':'recents'; activeIdx=0; renderPalette();});
+palInput.addEventListener('keydown',e=>{
+  const n = (window._palRows||[]).length; if(!n) return;
+  if(e.key==='ArrowDown'){activeIdx=(activeIdx+1)%n;paintActive();e.preventDefault();}
+  if(e.key==='ArrowUp'){activeIdx=(activeIdx-1+n)%n;paintActive();e.preventDefault();}
+  if(e.key==='Enter'){const r=palList.querySelector('.pal-row.active');if(r)flashRun(r);}
+});
+function flashRun(r){
+  r.style.transition='background .12s'; r.style.background='var(--accent)';
+  r.querySelector('.name').style.color='#0e0a1f';
+  setTimeout(()=>renderPalette(),140);
+}
+
+/* ---------------- Preferences › Shortcuts rendering ---------------- */
+const prefScroll = document.getElementById('prefScroll');
+const prefSearch = document.getElementById('prefSearch');
+let prefMode='list'; // list | capture | conflict
+
+function renderPrefs(){
+  const q = prefSearch.value.trim().toLowerCase();
+  const byCat={};
+  COMMANDS.filter(c=>!q||c.name.toLowerCase().includes(q)||c.crumb.toLowerCase().includes(q))
+    .forEach(c=>{(byCat[c.cat] ||= []).push(c);});
+  let html='';
+  Object.keys(CATS).forEach(cat=>{
+    if(!byCat[cat]) return;
+    html+=`<div class="cat-head">${CATS[cat].label} <span class="count">· ${byCat[cat].length}</span></div>`;
+    byCat[cat].forEach((c)=>{
+      const isCapture = prefMode==='capture' && c.name==='Mute Selected Track';
+      const isConflict = prefMode==='conflict' && c.name==='Mute Selected Track';
+      const customized = CUSTOMIZED.has(c.name);
+      if(isCapture){
+        html+=`<div class="bind-row capturing">
+          <span class="name">${c.name}<div class="desc">${c.crumb}</div></span>
+          <div class="capture-pill"><span class="blink"></span><span class="live">⌘ ⇧ M</span></div>
+          <div class="capture-actions"><button class="mini cancel" data-cancel>Cancel</button><button class="mini save" data-savecap>Save</button></div>
+        </div>`;
+      } else if(isConflict){
+        html+=`<div class="bind-row conflict">
+          <span class="name">${c.name}<div class="desc">${c.crumb}</div></span>
+          ${customized?'<span class="modified">edited</span>':''}
+          <div class="chord">${kbd('⌘')}${kbd('⇧')}${kbd('M')}</div>
+          <button class="rebind" data-rebind>Rebind</button>
+          <button class="reset-i" title="Reset to default">↺</button>
+        </div>`;
+      } else {
+        html+=`<div class="bind-row">
+          <span class="name">${c.name}<div class="desc">${c.crumb}</div></span>
+          ${customized?'<span class="modified">edited</span>':''}
+          <div class="chord">${chord(c.keys)}</div>
+          <button class="rebind" data-rebind>Rebind</button>
+          <button class="reset-i" title="Reset to default">↺</button>
+        </div>`;
+      }
+    });
+  });
+  prefScroll.innerHTML = html || `<div class="pal-empty"><div class="big">No shortcuts match “${q}”</div></div>`;
+  document.getElementById('conflictBanner').classList.toggle('hidden', prefMode!=='conflict');
+  prefScroll.querySelectorAll('[data-rebind]').forEach(b=>b.addEventListener('click',()=>setPrefState('capture')));
+  prefScroll.querySelectorAll('[data-cancel]').forEach(b=>b.addEventListener('click',()=>setPrefState('list')));
+  prefScroll.querySelectorAll('[data-savecap]').forEach(b=>b.addEventListener('click',()=>setPrefState('conflict')));
+}
+prefSearch.addEventListener('input',renderPrefs);
+
+/* ---------------- harness wiring ---------------- */
+function setSurface(s){
+  document.querySelectorAll('#surfaceSeg button').forEach(b=>b.classList.toggle('active',b.dataset.surface===s));
+  document.getElementById('paletteOverlay').classList.toggle('hidden',s!=='palette');
+  document.getElementById('prefsOverlay').classList.toggle('hidden',s!=='prefs');
+  document.getElementById('palStatesGroup').classList.toggle('hidden',s!=='palette');
+  document.getElementById('prefStatesGroup').classList.toggle('hidden',s!=='prefs');
+  if(s==='palette'){palInput.focus();} else {renderPrefs();}
+}
+document.querySelectorAll('#surfaceSeg button').forEach(b=>b.addEventListener('click',()=>setSurface(b.dataset.surface)));
+
+document.querySelectorAll('#palStates button').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('#palStates button').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active'); palMode=b.dataset.pal; activeIdx=0;
+  if(palMode==='results'){palInput.value='to';} else if(palMode==='noresults'){palInput.value='xyzzy';} else {palInput.value='';}
+  renderPalette();
+}));
+function setPrefState(s){
+  prefMode=s;
+  document.querySelectorAll('#prefStates button').forEach(x=>x.classList.toggle('active',x.dataset.pref===s));
+  renderPrefs();
+  if(s==='conflict'){document.getElementById('prefScroll').scrollTop=620;}
+}
+document.querySelectorAll('#prefStates button').forEach(b=>b.addEventListener('click',()=>setPrefState(b.dataset.pref)));
+document.getElementById('presetSel').addEventListener('change',renderPrefs);
+
+/* init */
+palInput.value='to'; palMode='results'; renderPalette();
+renderPrefs();
+setSurface('palette');
+</script>
+</body>
+</html>

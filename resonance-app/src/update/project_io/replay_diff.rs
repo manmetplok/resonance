@@ -90,6 +90,13 @@ pub fn try_diff_replay(
     // -- Compose state (definitions, placements, drum groups, lyrics) --
     apply_compose(r, target_file, extras);
 
+    // -- Global chord track --------------------------------------------
+    // Declarative app state that isn't part of `ProjectFile` yet, so it
+    // rides in the snapshot's extras and is restored wholesale here (the
+    // structural check ignores it — chord edits never alter the project
+    // shape, so they always take this fast path).
+    r.chord_track = extras.chord_track.clone();
+
     // -- Tempo / signature events --------------------------------------
     apply_tempo(r, target_file);
 

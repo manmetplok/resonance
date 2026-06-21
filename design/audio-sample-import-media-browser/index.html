@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — Audio &amp; sample import + media browser (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-line:rgba(232,196,123,.34); --warm-dim:rgba(232,196,123,.14);
+    --good:#6dd6a3; --good-dim:rgba(109,214,163,.14); --bad:#e87b8b; --bad-dim:rgba(232,123,139,.14);
+    --vocal:#7bb8e8;
+    --radius-xs:4px; --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+    /* layout constants mirrored from theme.rs */
+    --track-h:96px; --ruler-h:28px; --header-w:280px; --browser-w:312px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+  button{font-family:inherit}
+  .spacer{flex:1}
+
+  /* ---- App chrome ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1);overflow:hidden}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);z-index:5;
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px;color:var(--text-1)}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .proj{color:var(--text-3);font-size:12.5px;margin-left:4px}
+  .tabs{display:flex;gap:2px;margin-left:10px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .ghost{
+    padding:5px 11px;border:1px solid var(--line);border-radius:var(--radius-md);
+    color:var(--text-2);background:transparent;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:7px;
+  }
+  .ghost:hover{background:var(--bg-2);color:var(--text-1)}
+  .ghost.on{background:var(--accent-dim);color:var(--accent-soft);border-color:var(--accent-line)}
+
+  /* ---- prototype-only state switcher ---- */
+  .statebar{
+    height:38px;flex:0 0 auto;display:flex;align-items:center;gap:8px;
+    padding:0 16px;background:var(--bg-0);border-bottom:1px solid var(--line-2);z-index:5;
+  }
+  .statebar .lbl{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3);margin-right:2px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{border:0;background:transparent;color:var(--text-2);padding:6px 12px;font-size:11.5px;
+    cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2)}
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .statebar .hint{margin-left:auto;color:var(--text-3);font-size:11px}
+
+  /* ---- main split ---- */
+  .stage{flex:1;position:relative;display:flex;min-height:0;overflow:hidden}
+
+  /* =========================================================
+     MEDIA BROWSER  (docked left side panel)
+     ========================================================= */
+  .browser{
+    width:var(--browser-w);flex:0 0 auto;background:var(--bg-2);
+    border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;
+  }
+  .br-head{height:32px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line)}
+  .caret{width:12px;height:12px;color:var(--text-3);font-size:9px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .br-title{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-2);font-weight:600}
+  /* Files / Pool tabs */
+  .br-tabs{display:flex;gap:2px;margin-left:6px}
+  .br-tab{padding:3px 9px;border-radius:var(--radius-sm);color:var(--text-3);font-size:11px;cursor:pointer}
+  .br-tab.on{background:var(--bg-3);color:var(--text-1)}
+  .br-tab .badge{font-size:9px;color:var(--text-3);margin-left:4px}
+  .br-tab.on .badge{color:var(--accent-soft)}
+  .icobtn{width:22px;height:22px;border:0;background:transparent;color:var(--text-3);border-radius:var(--radius-xs);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px}
+  .icobtn:hover{background:var(--bg-3);color:var(--text-1)}
+
+  /* path / breadcrumb row */
+  .br-path{display:flex;align-items:center;gap:5px;padding:8px 12px;border-bottom:1px solid var(--line-2);font-size:11.5px;color:var(--text-2);overflow:hidden}
+  .br-path .crumb{cursor:pointer;white-space:nowrap}
+  .br-path .crumb:hover{color:var(--text-1)}
+  .br-path .crumb.cur{color:var(--text-1)}
+  .br-path .sep{color:var(--text-4)}
+  .br-path .star{margin-left:auto;color:var(--warm);cursor:pointer;font-size:13px}
+  .br-path .star.off{color:var(--text-4)}
+
+  /* favourites / recents shelf */
+  .shelf{padding:8px 12px;border-bottom:1px solid var(--line-2)}
+  .shelf .sl{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);margin-bottom:6px}
+  .chips{display:flex;flex-wrap:wrap;gap:5px}
+  .chip{display:flex;align-items:center;gap:5px;background:var(--bg-1);border:1px solid var(--line);border-radius:999px;
+    padding:3px 9px;font-size:11px;color:var(--text-2);cursor:pointer}
+  .chip:hover{background:var(--bg-3);color:var(--text-1)}
+  .chip.on{background:var(--accent-dim);border-color:var(--accent-line);color:var(--accent-soft)}
+  .chip .ic{color:var(--warm);font-size:10px}
+  .chip.recent .ic{color:var(--text-3)}
+
+  /* filter row */
+  .br-filter{display:flex;align-items:center;gap:7px;padding:7px 12px;border-bottom:1px solid var(--line-2)}
+  .search{flex:1;display:flex;align-items:center;gap:6px;background:var(--bg-1);border:1px solid var(--line);
+    border-radius:var(--radius-md);padding:5px 9px}
+  .search input{flex:1;border:0;background:transparent;color:var(--text-1);font-size:12px;font-family:inherit}
+  .search input:focus{outline:0}
+  .search input::placeholder{color:var(--text-4)}
+  .search .ic{color:var(--text-3);font-size:11px}
+
+  /* file list */
+  .br-list{flex:1;overflow-y:auto;min-height:0;padding:6px 8px}
+  .br-list::-webkit-scrollbar{width:8px}.br-list::-webkit-scrollbar-thumb{background:var(--bg-3);border-radius:4px}
+  .item{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:var(--radius-md);cursor:pointer;position:relative}
+  .item + .item{margin-top:1px}
+  .item:hover{background:var(--bg-3)}
+  .item.sel{background:var(--accent-dim);box-shadow:inset 0 0 0 1px var(--accent-line)}
+  .item.playing{background:var(--warm-dim);box-shadow:inset 0 0 0 1px var(--warm-line)}
+  .item .tic{width:20px;flex:0 0 auto;text-align:center;color:var(--text-3);font-size:13px}
+  .item.dir .tic{color:var(--accent-soft)}
+  .item.audio .tic{color:var(--warm)}
+  .item .nm{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--text-1);font-size:12.5px}
+  .item.dir .nm{color:var(--text-1)}
+  .item .sub{color:var(--text-3);font-size:10.5px;flex:0 0 auto}
+  .fmt{font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-3);
+    border:1px solid var(--line);border-radius:999px;padding:1px 6px;flex:0 0 auto}
+  .fmt.wav{color:var(--good)} .fmt.flac{color:var(--vocal)} .fmt.mp3{color:var(--warm)} .fmt.ogg{color:var(--accent-soft)}
+  /* mini waveform thumbnail */
+  .wf{width:74px;height:22px;flex:0 0 auto;display:flex;align-items:center;gap:1px;opacity:.8}
+  .wf b{display:block;width:1.5px;background:var(--warm);border-radius:1px}
+  .item.playing .wf b{background:var(--warm)} .item.dir .wf{display:none}
+  /* hover play affordance on audio rows */
+  .item .play{position:absolute;left:6px;width:20px;height:20px;border-radius:50%;background:var(--warm);color:var(--bg-0);
+    display:none;align-items:center;justify-content:center;font-size:9px}
+  .item.audio:hover .play{display:flex}
+  .item.audio:hover .tic{visibility:hidden}
+  .item.playing .play{display:flex}
+  /* pool-only usage meta */
+  .item .use{font-size:10px;color:var(--text-3);flex:0 0 auto}
+  .item .use b{color:var(--accent-soft);font-weight:500}
+  .item.missing{opacity:.85}
+  .item.missing .nm{color:var(--bad)} .item.missing .tic{color:var(--bad)}
+  .relink-chip{font-size:9.5px;color:var(--bad);border:1px solid var(--bad);border-radius:999px;padding:1px 7px;cursor:pointer}
+
+  /* empty state */
+  .br-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:30px 24px;gap:6px}
+  .br-empty .big{font-size:30px;color:var(--text-4)}
+  .br-empty h3{font-size:13px;color:var(--text-2);margin:6px 0 0;font-weight:500}
+  .br-empty p{font-size:11.5px;color:var(--text-3);margin:0;line-height:1.5}
+  .br-empty .btn{margin-top:8px}
+
+  /* audition transport bar (pinned bottom of browser) */
+  .audition{flex:0 0 auto;border-top:1px solid var(--line);background:var(--bg-1);padding:9px 12px}
+  .aud-top{display:flex;align-items:center;gap:9px;margin-bottom:7px}
+  .aud-play{width:28px;height:28px;flex:0 0 auto;border-radius:50%;border:0;background:var(--warm);color:var(--bg-0);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px}
+  .aud-play.idle{background:var(--bg-3);color:var(--text-3)}
+  .aud-name{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12px;color:var(--text-1)}
+  .aud-name.empty{color:var(--text-4)}
+  .aud-time{font-size:10.5px;color:var(--text-3);flex:0 0 auto}
+  /* scrub waveform */
+  .scrub{height:30px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-sm);
+    position:relative;display:flex;align-items:center;gap:1px;padding:0 4px;overflow:hidden;cursor:pointer}
+  .scrub b{display:block;width:2px;background:var(--text-4);border-radius:1px}
+  .scrub.active b{background:var(--warm-line)}
+  .scrub .ph{position:absolute;top:0;bottom:0;width:2px;background:var(--warm);left:38%;box-shadow:0 0 6px var(--warm)}
+  .scrub .played{position:absolute;top:0;bottom:0;left:0;width:38%;background:rgba(232,196,123,.10)}
+  .aud-opts{display:flex;align-items:center;gap:6px;margin-top:8px}
+  .opt{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--text-3);border:1px solid var(--line);
+    border-radius:var(--radius-sm);padding:3px 8px;cursor:pointer}
+  .opt.on{color:var(--accent-soft);border-color:var(--accent-line);background:var(--accent-dim)}
+  .opt:hover:not(.on){color:var(--text-1)}
+  .aud-hint{margin-left:auto;font-size:10px;color:var(--text-4)}
+
+  /* =========================================================
+     ARRANGE  (timeline)
+     ========================================================= */
+  .arrange{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg-1);position:relative}
+  .ruler{height:var(--ruler-h);flex:0 0 auto;display:flex;border-bottom:1px solid var(--line);background:var(--bg-1)}
+  .ruler .corner{width:var(--header-w);flex:0 0 auto;border-right:1px solid var(--line);background:var(--bg-2)}
+  .ruler .ticks{flex:1;display:flex;position:relative}
+  .ruler .bar{flex:1;border-right:1px solid var(--line-2);font-size:9px;color:var(--text-3);padding:8px 0 0 5px}
+  .lanes{flex:1;overflow-y:auto;min-height:0}
+  .trow{height:var(--track-h);display:flex;border-bottom:1px solid var(--line-2)}
+  .thead{width:var(--header-w);flex:0 0 auto;background:var(--bg-2);border-right:1px solid var(--line);
+    display:flex;align-items:center;gap:10px;padding:0 14px}
+  .thead .dot{width:9px;height:9px;border-radius:2px;flex:0 0 auto}
+  .thead .tn{font-size:12.5px;color:var(--text-1)}
+  .thead .tt{font-size:10px;color:var(--text-3)}
+  .thead .meta{margin-left:auto;display:flex;gap:5px}
+  .mbtn{width:18px;height:18px;border-radius:var(--radius-xs);background:var(--bg-1);border:1px solid var(--line);
+    color:var(--text-3);font-size:9px;display:flex;align-items:center;justify-content:center}
+  .lane{flex:1;position:relative;background:var(--bg-1)}
+  .lane.drop{background:var(--accent-dim);box-shadow:inset 0 0 0 1px var(--accent-line)}
+  .clip{position:absolute;top:10px;bottom:10px;border-radius:var(--radius-lg);overflow:hidden;
+    display:flex;flex-direction:column}
+  .clip .cn{font-size:10px;padding:3px 7px 0;color:var(--text-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .clip.audio{background:var(--warm-dim);border:1px solid var(--warm-line)}
+  .clip.audio .cn{color:#e7d3a6}
+  .clip.midi{background:var(--accent-dim);border:1px solid var(--accent-line)}
+  .clip.vox{background:rgba(123,184,232,.14);border:1px solid rgba(123,184,232,.34)}
+  /* in-clip waveform */
+  .clip .cwf{flex:1;display:flex;align-items:center;gap:1px;padding:2px 6px 6px}
+  .clip .cwf b{display:block;flex:1;background:var(--warm);opacity:.75;border-radius:1px;min-width:1px}
+  .clip.midi .cwf b{background:var(--accent-soft)} .clip.vox .cwf b{background:var(--vocal)}
+  .playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--warm);left:44%;z-index:3}
+
+  /* drop ghost clip following cursor */
+  .dropghost{position:absolute;top:10px;bottom:10px;border-radius:var(--radius-lg);border:1.5px dashed var(--accent-line);
+    background:rgba(139,109,255,.10);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;z-index:4}
+  .dropghost .dn{font-size:11px;color:var(--accent-soft)} .dropghost .dt{font-size:9.5px;color:var(--text-3)}
+  .droptip{position:absolute;z-index:6;background:var(--bg-0);border:1px solid var(--accent-line);border-radius:var(--radius-md);
+    padding:5px 10px;font-size:11px;color:var(--text-1);box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  .droptip b{color:var(--accent-soft);font-weight:500}
+  /* new-track drop zone at bottom */
+  .newtrack{height:46px;display:flex;align-items:center;gap:10px;padding:0 14px;border:1.5px dashed var(--accent-line);
+    margin:8px;border-radius:var(--radius-lg);background:rgba(139,109,255,.06);color:var(--accent-soft);font-size:12px}
+  .newtrack .ic{font-size:14px}
+
+  /* drag pill that follows the cursor while dragging from browser */
+  .dragpill{position:absolute;z-index:30;display:flex;align-items:center;gap:8px;background:var(--bg-0);
+    border:1px solid var(--warm-line);border-radius:var(--radius-md);padding:6px 11px;box-shadow:0 12px 30px rgba(0,0,0,.6);pointer-events:none}
+  .dragpill .ic{color:var(--warm)} .dragpill .nm{font-size:12px;color:var(--text-1)}
+  .dragpill .wf{opacity:.6}
+
+  /* =========================================================
+     MODALS (import progress, relink)
+     ========================================================= */
+  .backdrop{position:absolute;inset:0;background:rgba(0,0,0,.62);z-index:40;display:none;align-items:center;justify-content:center}
+  .backdrop.show{display:flex}
+  .card{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-xl);
+    width:520px;max-height:88%;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,.55)}
+  .card-head{padding:22px 24px 0}
+  .card-title{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:21px;color:var(--text-1)}
+  .card-sub{font-size:12.5px;color:var(--text-2);margin-top:8px;line-height:1.5}
+  .card-body{padding:16px 24px 4px;overflow-y:auto}
+  .card-foot{display:flex;align-items:center;gap:12px;padding:15px 24px;border-top:1px solid var(--line);margin-top:8px}
+  .btn{padding:8px 16px;border-radius:var(--radius-md);font-size:12.5px;cursor:pointer;font-family:inherit;border:1px solid var(--line)}
+  .btn.ghostb{background:transparent;color:var(--text-2)} .btn.ghostb:hover{background:var(--bg-3)}
+  .btn.primary{background:var(--accent);color:#0e0a1f;border-color:var(--accent);font-weight:500}
+  .btn.primary:hover{background:var(--accent-soft)}
+  .btn.warm{background:var(--warm);color:#2a2106;border-color:var(--warm);font-weight:500}
+  .summary-txt{font-size:12px;color:var(--text-2)} .summary-txt b{color:var(--text-1)}
+
+  /* import progress rows */
+  .imp-row{display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--line-2)}
+  .imp-row:last-child{border-bottom:0}
+  .imp-row .ic{width:18px;text-align:center}
+  .imp-row .nm{flex:1;font-size:12.5px;color:var(--text-1)}
+  .imp-row .st{font-size:11px;color:var(--text-3)}
+  .imp-row.done .ic{color:var(--good)} .imp-row.done .st{color:var(--good)}
+  .imp-row.work .ic{color:var(--warm)}
+  .imp-row.queue{opacity:.55}
+  .spin{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--warm);border-radius:50%;
+    display:inline-block;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .pbar{height:4px;background:var(--bg-1);border-radius:2px;margin:14px 0 4px;overflow:hidden}
+  .pbar i{display:block;height:100%;background:var(--warm);border-radius:2px}
+  .convnote{display:flex;gap:9px;align-items:flex-start;font-size:11.5px;line-height:1.5;border-radius:var(--radius-md);
+    padding:10px 12px;margin-top:14px;background:var(--bg-1);border:1px solid var(--line);color:var(--text-2)}
+  .convnote .ic{color:var(--accent-soft);margin-top:1px}
+  .convnote b{color:var(--text-1);font-weight:500}
+
+  /* relink */
+  .badge{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:14px}
+  .badge.bad{background:var(--bad-dim);color:var(--bad)}
+  .relink-list{display:flex;flex-direction:column;gap:6px;margin:14px 0 4px}
+  .relink-item{display:flex;align-items:center;gap:10px;background:var(--bg-1);border:1px solid var(--line);
+    border-radius:var(--radius-md);padding:9px 11px}
+  .relink-item .ic{color:var(--bad)}
+  .relink-item .nm{flex:1;font-size:12px;color:var(--text-1)}
+  .relink-item .path{font-size:10px;color:var(--text-4);font-family:"Geist Mono",monospace}
+  .relink-item.fixed{border-color:var(--good)} .relink-item.fixed .ic{color:var(--good)}
+  .relink-item .act{font-size:11px;color:var(--accent-soft);cursor:pointer;border:1px solid var(--accent-line);
+    border-radius:var(--radius-sm);padding:3px 9px}
+  .relink-item.fixed .act{color:var(--good);border-color:var(--good)}
+
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- chrome -->
+  <div class="chrome">
+    <span class="brand">re<b>·</b>sonance</span>
+    <span class="proj">Midnight Drive.rproj</span>
+    <div class="tabs"><div class="tab">Compose</div><div class="tab active">Arrange</div><div class="tab">Mixer</div></div>
+    <div class="spacer"></div>
+    <button class="ghost on" id="browser-toggle" onclick="toggleBrowser()">▤ Media</button>
+    <button class="ghost" onclick="show('import')">⤓ Import audio…</button>
+  </div>
+
+  <!-- prototype-only state switcher -->
+  <div class="statebar">
+    <span class="lbl">State</span>
+    <div class="seg" id="switch">
+      <button data-s="files" class="on">Browser · files</button>
+      <button data-s="audition">Auditioning</button>
+      <button data-s="pool">Project pool</button>
+      <button data-s="empty">Empty folder</button>
+      <button data-s="dragging">Drag → timeline</button>
+      <button data-s="import">Import / transcode</button>
+      <button data-s="relink">Missing files</button>
+    </div>
+    <span class="hint">empty · loading · populated · error all covered ↑</span>
+  </div>
+
+  <div class="stage" id="stage">
+    <!-- ===================== MEDIA BROWSER ===================== -->
+    <aside class="browser" id="browser">
+      <div class="br-head">
+        <span class="caret">▾</span>
+        <span class="br-title">Media</span>
+        <div class="br-tabs">
+          <div class="br-tab on" id="tab-files" onclick="setBrTab('files')">Files</div>
+          <div class="br-tab" id="tab-pool" onclick="setBrTab('pool')">Pool<span class="badge">7</span></div>
+        </div>
+        <span class="spacer"></span>
+        <button class="icobtn" title="New folder shortcut">＋</button>
+        <button class="icobtn" title="Refresh">↻</button>
+      </div>
+
+      <!-- breadcrumb -->
+      <div class="br-path" id="br-path">
+        <span class="crumb">Home</span><span class="sep">/</span>
+        <span class="crumb">Samples</span><span class="sep">/</span>
+        <span class="crumb cur">Drum Kits</span>
+        <span class="star" title="Favourite this folder">★</span>
+      </div>
+
+      <!-- favourites + recents shelf -->
+      <div class="shelf" id="shelf-files">
+        <div class="sl">Favourites &amp; recent</div>
+        <div class="chips">
+          <span class="chip on"><span class="ic">★</span>Drum Kits</span>
+          <span class="chip"><span class="ic">★</span>Vocal Takes</span>
+          <span class="chip"><span class="ic">★</span>Reference</span>
+          <span class="chip recent"><span class="ic">🕑</span>Downloads</span>
+          <span class="chip recent"><span class="ic">🕑</span>Stems · Session 4</span>
+        </div>
+      </div>
+
+      <!-- filter -->
+      <div class="br-filter">
+        <div class="search"><span class="ic">⌕</span><input placeholder="Filter this folder…" /></div>
+        <button class="icobtn" title="Audio files only" style="color:var(--warm)">♪</button>
+      </div>
+
+      <!-- file list (files tab) -->
+      <div class="br-list" id="list-files">
+        <div class="item dir"><span class="tic">📁</span><span class="nm">808 &amp; Sub</span><span class="sub">12 items</span></div>
+        <div class="item dir"><span class="tic">📁</span><span class="nm">Vinyl Breaks</span><span class="sub">31 items</span></div>
+        <div class="item audio sel" onclick="audition(this,'Amen Break 174.wav')">
+          <span class="play">▶</span><span class="tic">♪</span>
+          <span class="nm">Amen Break 174.wav</span>
+          <span class="wf" data-wf="20"></span>
+          <span class="fmt wav">wav</span><span class="sub">0:06</span>
+        </div>
+        <div class="item audio" onclick="audition(this,'Tape Kick 01.wav')">
+          <span class="play">▶</span><span class="tic">♪</span>
+          <span class="nm">Tape Kick 01.wav</span>
+          <span class="wf" data-wf="14"></span>
+          <span class="fmt wav">wav</span><span class="sub">0:01</span>
+        </div>
+        <div class="item audio" onclick="audition(this,'Dusty Loop 92.flac')">
+          <span class="play">▶</span><span class="tic">♪</span>
+          <span class="nm">Dusty Loop 92.flac</span>
+          <span class="wf" data-wf="18"></span>
+          <span class="fmt flac">flac</span><span class="sub">0:10</span>
+        </div>
+        <div class="item audio" onclick="audition(this,'Rim Shot.wav')">
+          <span class="play">▶</span><span class="tic">♪</span>
+          <span class="nm">Rim Shot.wav</span>
+          <span class="wf" data-wf="10"></span>
+          <span class="fmt wav">wav</span><span class="sub">0:00</span>
+        </div>
+        <div class="item audio" onclick="audition(this,'Hat Texture.ogg')">
+          <span class="play">▶</span><span class="tic">♪</span>
+          <span class="nm">Hat Texture.ogg</span>
+          <span class="wf" data-wf="16"></span>
+          <span class="fmt ogg">ogg</span><span class="sub">0:04</span>
+        </div>
+        <div class="item audio" onclick="audition(this,'Reference - Mixdown.mp3')">
+          <span class="play">▶</span><span class="tic">♪</span>
+          <span class="nm">Reference – Mixdown.mp3</span>
+          <span class="wf" data-wf="22"></span>
+          <span class="fmt mp3">mp3</span><span class="sub">3:42</span>
+        </div>
+      </div>
+
+      <!-- file list (pool tab) -->
+      <div class="br-list hidden" id="list-pool">
+        <div class="item audio" onclick="audition(this,'Amen Break 174.wav')">
+          <span class="play">▶</span><span class="tic">♪</span>
+          <span class="nm">Amen Break 174.wav</span>
+          <span class="wf" data-wf="20"></span>
+          <span class="use">used <b>×3</b></span>
+        </div>
+        <div class="item audio" onclick="audition(this,'Vox Adlib Take 2.wav')">
+          <span class="play">▶</span><span class="tic">♪</span>
+          <span class="nm">Vox Adlib Take 2.wav</span>
+          <span class="wf" data-wf="24"></span>
+          <span class="use">used <b>×1</b></span>
+        </div>
+        <div class="item audio" onclick="audition(this,'Sub Drop.flac')">
+          <span class="play">▶</span><span class="tic">♪</span>
+          <span class="nm">Sub Drop.flac</span>
+          <span class="wf" data-wf="9"></span>
+          <span class="use">used <b>×2</b></span>
+        </div>
+        <div class="item audio" onclick="audition(this,'Foley Sweep.wav')">
+          <span class="play">▶</span><span class="tic">♪</span>
+          <span class="nm">Foley Sweep.wav</span>
+          <span class="wf" data-wf="17"></span>
+          <span class="use" style="color:var(--text-4)">unused</span>
+        </div>
+        <div class="item audio missing">
+          <span class="tic">⚠</span>
+          <span class="nm">Old Guitar Loop.wav</span>
+          <span class="spacer"></span>
+          <span class="relink-chip" onclick="show('relink')">relink</span>
+        </div>
+        <div class="item audio" onclick="audition(this,'Crowd Ambience.mp3')">
+          <span class="play">▶</span><span class="tic">♪</span>
+          <span class="nm">Crowd Ambience.mp3</span>
+          <span class="wf" data-wf="21"></span>
+          <span class="use">used <b>×1</b></span>
+        </div>
+        <div class="item audio" onclick="audition(this,'Tape Kick 01.wav')">
+          <span class="play">▶</span><span class="tic">♪</span>
+          <span class="nm">Tape Kick 01.wav</span>
+          <span class="wf" data-wf="14"></span>
+          <span class="use">used <b>×4</b></span>
+        </div>
+      </div>
+
+      <!-- empty folder state -->
+      <div class="br-empty hidden" id="list-empty">
+        <div class="big">♪</div>
+        <h3>No audio here</h3>
+        <p>This folder has no <span class="mono">.wav / .flac / .mp3 / .ogg</span> files.<br>Pick another location or drop files in.</p>
+        <button class="btn primary" onclick="show('import')">Choose files…</button>
+      </div>
+
+      <!-- audition transport -->
+      <div class="audition">
+        <div class="aud-top">
+          <button class="aud-play idle" id="aud-play" onclick="toggleAud()">▶</button>
+          <span class="aud-name empty" id="aud-name">Select a sample to audition</span>
+          <span class="aud-time mono" id="aud-time">––:–– / ––:––</span>
+        </div>
+        <div class="scrub" id="scrub"><div class="played"></div><div class="ph"></div></div>
+        <div class="aud-opts">
+          <span class="opt on" id="opt-auto">Auto-play on select</span>
+          <span class="opt" id="opt-loop">↻ Loop</span>
+          <span class="opt" id="opt-sync">Sync to tempo</span>
+          <span class="aud-hint">drag a sample onto the timeline →</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ===================== ARRANGE TIMELINE ===================== -->
+    <section class="arrange" id="arrange">
+      <div class="ruler">
+        <div class="corner"></div>
+        <div class="ticks"><div class="bar">1</div><div class="bar">5</div><div class="bar">9</div>
+          <div class="bar">13</div><div class="bar">17</div><div class="bar">21</div></div>
+      </div>
+      <div class="lanes" id="lanes">
+        <div class="trow">
+          <div class="thead"><span class="dot" style="background:var(--warm)"></span><span class="tn">Drums</span>
+            <span class="meta"><span class="mbtn">M</span><span class="mbtn">S</span></span></div>
+          <div class="lane" id="lane-0">
+            <div class="clip audio" style="left:4%;width:30%"><span class="cn">Amen Break 174</span>
+              <div class="cwf" data-cwf="34"></div></div>
+            <div class="playhead"></div>
+          </div>
+        </div>
+        <div class="trow">
+          <div class="thead"><span class="dot" style="background:var(--accent)"></span><span class="tn">Bass</span>
+            <span class="meta"><span class="mbtn">M</span><span class="mbtn">S</span></span></div>
+          <div class="lane">
+            <div class="clip midi" style="left:10%;width:48%"><span class="cn">Bassline</span>
+              <div class="cwf" data-cwf="34"></div></div>
+            <div class="playhead"></div>
+          </div>
+        </div>
+        <div class="trow" id="trow-audio">
+          <div class="thead"><span class="dot" style="background:var(--warm)"></span><span class="tn">Vocal Chops</span>
+            <span class="meta"><span class="mbtn">M</span><span class="mbtn">S</span></span></div>
+          <div class="lane" id="lane-2">
+            <div class="clip audio" style="left:18%;width:22%"><span class="cn">Vox Adlib Take 2</span>
+              <div class="cwf" data-cwf="28"></div></div>
+            <div class="playhead"></div>
+          </div>
+        </div>
+        <div class="trow">
+          <div class="thead"><span class="dot" style="background:var(--vocal)"></span><span class="tn">Lead Vox</span>
+            <span class="meta"><span class="mbtn">M</span><span class="mbtn">S</span></span></div>
+          <div class="lane">
+            <div class="clip vox" style="left:30%;width:26%"><span class="cn">Verse</span>
+              <div class="cwf" data-cwf="30"></div></div>
+            <div class="playhead"></div>
+          </div>
+        </div>
+        <!-- new-track drop zone, appears while dragging -->
+        <div class="newtrack hidden" id="newtrack"><span class="ic">＋</span>Drop here to create a new audio track</div>
+      </div>
+
+      <!-- drag pill + drop ghost (dragging state) -->
+      <div class="dragpill hidden" id="dragpill"><span class="ic">♪</span><span class="nm">Dusty Loop 92.flac</span>
+        <span class="wf" data-wf="16"></span></div>
+      <div class="droptip hidden" id="droptip">Drop on <b>Vocal Chops</b> · place at <b>bar 7</b> · snaps to grid</div>
+    </section>
+
+    <!-- ===================== IMPORT / TRANSCODE (loading) ===================== -->
+    <div class="backdrop" id="view-import">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Importing 3 files</div>
+          <div class="card-sub">Copying into the project folder and converting to the engine format so this project stays self-contained and relocatable.</div>
+        </div>
+        <div class="card-body">
+          <div class="imp-row done"><span class="ic">✓</span><span class="nm">Amen Break 174.wav</span>
+            <span class="st">copied · 48 kHz stereo</span></div>
+          <div class="imp-row work"><span class="ic"><span class="spin"></span></span><span class="nm">Dusty Loop 92.flac</span>
+            <span class="st">decoding flac → resampling 44.1 → 48 kHz…</span></div>
+          <div class="imp-row queue"><span class="ic">•</span><span class="nm">Reference – Mixdown.mp3</span>
+            <span class="st">queued · mono → stereo</span></div>
+          <div class="pbar"><i style="width:46%"></i></div>
+          <div class="convnote"><span class="ic">ⓘ</span>
+            <span>Files at <b>44.1 kHz</b> are resampled to the project rate (<b>48 kHz</b>) so they play at the correct pitch &amp; speed. Originals are left untouched; copies live in <span class="mono">Midnight Drive.rproj/audio/</span>.</span></div>
+        </div>
+        <div class="card-foot">
+          <span class="summary-txt"><b>1</b> of 3 done · <b>2</b> remaining</span>
+          <span class="spacer"></span>
+          <button class="btn ghostb" onclick="show('files')">Cancel remaining</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== MISSING FILES / RELINK (error) ===================== -->
+    <div class="backdrop" id="view-relink">
+      <div class="card">
+        <div class="card-head">
+          <div class="badge bad">⚠</div>
+          <div class="card-title">2 media files couldn't be found</div>
+          <div class="card-sub">These clips reference audio that isn't in the project folder or its original location — likely moved or opened on another machine. The timeline keeps the clips; relink to restore audio.</div>
+        </div>
+        <div class="card-body">
+          <div class="relink-list">
+            <div class="relink-item" id="rl-1">
+              <span class="ic">⚠</span>
+              <div style="flex:1;min-width:0">
+                <div class="nm">Old Guitar Loop.wav</div>
+                <div class="path">~/Samples/Guitars/Old Guitar Loop.wav</div>
+              </div>
+              <span class="act" onclick="fixRelink(1)">Locate…</span>
+            </div>
+            <div class="relink-item" id="rl-2">
+              <span class="ic">⚠</span>
+              <div style="flex:1;min-width:0">
+                <div class="nm">Crowd Ambience.mp3</div>
+                <div class="path">~/Downloads/Crowd Ambience.mp3</div>
+              </div>
+              <span class="act" onclick="fixRelink(2)">Locate…</span>
+            </div>
+          </div>
+          <div class="convnote"><span class="ic">ⓘ</span>
+            <span>Pick a folder and Resonance will <b>search it for all missing files at once</b> by name. Relinked audio is copied back into the project folder.</span></div>
+        </div>
+        <div class="card-foot">
+          <span class="summary-txt" id="rl-count"><b>0</b> of 2 relinked</span>
+          <span class="spacer"></span>
+          <button class="btn ghostb" onclick="show('pool')">Leave offline</button>
+          <button class="btn primary" onclick="autoRelink()">Search a folder…</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  /* ---------- mini-waveform generators (deterministic) ---------- */
+  function fillWf(){
+    document.querySelectorAll('.wf[data-wf]').forEach(el=>{
+      if(el.dataset.done) return; el.dataset.done=1;
+      const n=+el.dataset.wf; let seed=n*53+7, h='';
+      for(let i=0;i<n;i++){seed=(seed*1103515245+12345)&0x7fffffff;
+        const v=4+(seed>>5)%18; h+=`<b style="height:${v}px"></b>`;}
+      el.innerHTML=h;
+    });
+    document.querySelectorAll('.cwf[data-cwf]').forEach(el=>{
+      if(el.dataset.done) return; el.dataset.done=1;
+      const n=+el.dataset.cwf; let seed=n*97+3, h='';
+      for(let i=0;i<n;i++){seed=(seed*1103515245+12345)&0x7fffffff;
+        const v=20+(seed>>4)%70; h+=`<b style="height:${v}%"></b>`;}
+      el.innerHTML=h;
+    });
+    // scrub track bars
+    const sc=document.getElementById('scrub');
+    if(sc && !sc.dataset.done){sc.dataset.done=1; let seed=991,h='';
+      for(let i=0;i<70;i++){seed=(seed*1103515245+12345)&0x7fffffff;
+        const v=4+(seed>>5)%22; h+=`<b style="height:${v}px"></b>`;}
+      sc.insertAdjacentHTML('beforeend',h);
+    }
+  }
+
+  /* ---------- prototype state switcher ---------- */
+  const views=['files','audition','pool','empty','dragging','import','relink'];
+  function clearModals(){['import','relink'].forEach(v=>document.getElementById('view-'+v).classList.remove('show'));}
+  function show(s){
+    document.querySelectorAll('#switch button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));
+    clearModals();
+    // default browser layout
+    setBrTab('files',true);
+    document.getElementById('list-empty').classList.add('hidden');
+    document.getElementById('list-files').classList.remove('hidden');
+    document.getElementById('newtrack').classList.add('hidden');
+    document.getElementById('dragpill').classList.add('hidden');
+    document.getElementById('droptip').classList.add('hidden');
+    document.querySelectorAll('.lane.drop').forEach(l=>l.classList.remove('drop'));
+    resetAud();
+
+    if(s==='files'){/* default */}
+    else if(s==='audition'){ const row=document.querySelector('#list-files .item.audio'); audition(row, row.querySelector('.nm').textContent.trim()); }
+    else if(s==='pool'){ setBrTab('pool'); }
+    else if(s==='empty'){
+      document.getElementById('list-files').classList.add('hidden');
+      document.getElementById('list-empty').classList.remove('hidden');
+      document.getElementById('br-path').querySelector('.crumb.cur').textContent='Empty Folder';
+    }
+    else if(s==='dragging'){ enterDrag(); }
+    else if(s==='import'){ document.getElementById('view-import').classList.add('show'); }
+    else if(s==='relink'){ document.getElementById('view-relink').classList.add('show'); resetRelink(); }
+  }
+  document.getElementById('switch').addEventListener('click',e=>{const b=e.target.closest('button');if(b)show(b.dataset.s);});
+
+  /* ---------- browser tabs ---------- */
+  function setBrTab(t,silent){
+    document.getElementById('tab-files').classList.toggle('on',t==='files');
+    document.getElementById('tab-pool').classList.toggle('on',t==='pool');
+    document.getElementById('list-files').classList.toggle('hidden',t!=='files'|| (!silent && false));
+    document.getElementById('list-pool').classList.toggle('hidden',t!=='pool');
+    document.getElementById('shelf-files').classList.toggle('hidden',t==='pool');
+    if(t==='pool'){ document.getElementById('list-files').classList.add('hidden'); document.getElementById('list-empty').classList.add('hidden'); }
+    document.getElementById('br-path').classList.toggle('hidden',t==='pool');
+  }
+
+  /* ---------- audition ---------- */
+  let audPlaying=false;
+  function audition(row,name){
+    document.querySelectorAll('.item').forEach(i=>i.classList.remove('playing'));
+    if(row) row.classList.add('playing');
+    document.getElementById('aud-name').textContent=name;
+    document.getElementById('aud-name').classList.remove('empty');
+    document.getElementById('aud-time').textContent='0:02 / 0:06';
+    document.getElementById('scrub').classList.add('active');
+    audPlaying=true; document.getElementById('aud-play').classList.remove('idle');
+    document.getElementById('aud-play').textContent='❚❚';
+  }
+  function toggleAud(){
+    if(document.getElementById('aud-name').classList.contains('empty')) return;
+    audPlaying=!audPlaying;
+    document.getElementById('aud-play').textContent=audPlaying?'❚❚':'▶';
+  }
+  function resetAud(){
+    document.querySelectorAll('.item').forEach(i=>i.classList.remove('playing'));
+    document.getElementById('aud-name').textContent='Select a sample to audition';
+    document.getElementById('aud-name').classList.add('empty');
+    document.getElementById('aud-time').textContent='––:–– / ––:––';
+    document.getElementById('scrub').classList.remove('active');
+    document.getElementById('aud-play').classList.add('idle');
+    document.getElementById('aud-play').textContent='▶';
+    audPlaying=false;
+  }
+  document.getElementById('opt-loop').onclick=function(){this.classList.toggle('on')};
+  document.getElementById('opt-auto').onclick=function(){this.classList.toggle('on')};
+  document.getElementById('opt-sync').onclick=function(){this.classList.toggle('on')};
+
+  /* ---------- drag → timeline ---------- */
+  function enterDrag(){
+    const lane=document.getElementById('lane-2');
+    lane.classList.add('drop');
+    // ghost clip inside target lane
+    if(!document.getElementById('ghost')){
+      const g=document.createElement('div');
+      g.id='ghost'; g.className='dropghost'; g.style.left='44%'; g.style.width='20%';
+      g.innerHTML='<div class="dn">Dusty Loop 92</div><div class="dt">flac · 0:10 · → 48 kHz</div>';
+      lane.appendChild(g);
+    }
+    document.getElementById('ghost').classList.remove('hidden');
+    document.getElementById('newtrack').classList.remove('hidden');
+    const pill=document.getElementById('dragpill');
+    pill.classList.remove('hidden'); pill.style.left='420px'; pill.style.top='150px';
+    const tip=document.getElementById('droptip');
+    tip.classList.remove('hidden'); tip.style.left='430px'; tip.style.top='196px';
+  }
+
+  /* ---------- relink ---------- */
+  let relinked=0;
+  function resetRelink(){relinked=0;document.querySelectorAll('.relink-item').forEach(r=>{r.classList.remove('fixed');
+    r.querySelector('.ic').textContent='⚠';r.querySelector('.act').textContent='Locate…';});
+    document.getElementById('rl-count').innerHTML='<b>0</b> of 2 relinked';}
+  function fixRelink(n){const r=document.getElementById('rl-'+n);if(r.classList.contains('fixed'))return;
+    r.classList.add('fixed');r.querySelector('.ic').textContent='✓';r.querySelector('.act').textContent='Relinked';
+    relinked++;document.getElementById('rl-count').innerHTML='<b>'+relinked+'</b> of 2 relinked';}
+  function autoRelink(){fixRelink(1);fixRelink(2);}
+
+  fillWf();
+  const qs=new URLSearchParams(location.search).get('__s');
+  show(views.includes(qs)?qs:'files');
+</script>
+</body>
+</html>

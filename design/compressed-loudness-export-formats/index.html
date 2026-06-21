@@ -1,0 +1,704 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — Export formats &amp; loudness normalization (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-line:rgba(232,196,123,.34); --warm-dim:rgba(232,196,123,.14);
+    --good:#6dd6a3; --good-dim:rgba(109,214,163,.14); --good-line:rgba(109,214,163,.34);
+    --bad:#e87b8b; --bad-dim:rgba(232,123,139,.14); --bad-line:rgba(232,123,139,.34);
+    --radius-xs:4px; --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+  .serif{font-family:"Instrument Serif",Georgia,serif;font-style:italic}
+  button{font-family:inherit}
+
+  /* ---- App chrome (backdrop context) ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1);overflow:hidden}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px;color:var(--text-1)}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .proj{color:var(--text-3);font-size:12.5px;margin-left:4px}
+  .tabs{display:flex;gap:2px;margin-left:10px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+  .chrome .ghost{
+    padding:5px 11px;border:1px solid var(--line);border-radius:var(--radius-md);
+    color:var(--text-2);background:transparent;font-size:12px;cursor:pointer;
+  }
+  .chrome .ghost:hover{background:var(--bg-2)}
+  .chrome .ghost.hot{border-color:var(--accent-line);color:var(--accent-soft)}
+
+  /* faint mixer backdrop so the modal has context */
+  .stage{flex:1;position:relative;overflow:hidden}
+  .mixer-bg{position:absolute;inset:0;display:flex;gap:16px;align-items:flex-end;
+    padding:26px;filter:saturate(.7) brightness(.6)}
+  .strip{width:140px;height:78%;background:var(--bg-2);border:1px solid var(--line);
+    border-radius:var(--radius-lg);display:flex;flex-direction:column;padding:12px 10px;gap:8px}
+  .strip .nm{font-size:11px;color:var(--text-2);text-align:center}
+  .strip .fader{flex:1;background:var(--bg-1);border-radius:var(--radius-sm);position:relative;margin:0 auto;width:14px}
+  .strip .knob{position:absolute;left:-7px;width:28px;height:10px;border-radius:3px;background:var(--bg-3);border:1px solid var(--line)}
+  .strip.bus{border-color:var(--warm-line)} .strip.master{width:156px;border-color:var(--accent-line)}
+
+  /* ---- State switcher (prototype control, not part of product) ---- */
+  .statebar{
+    position:absolute;left:0;right:0;top:0;z-index:40;
+    height:40px;display:flex;align-items:center;gap:8px;
+    padding:0 16px;background:rgba(15,16,19,.82);backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3);margin-right:2px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{border:0;background:transparent;color:var(--text-2);padding:6px 12px;font-size:11.5px;
+    cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2)}
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .statebar .hint{margin-left:auto;color:var(--text-3);font-size:11px}
+
+  /* ---- Modal scaffold ---- */
+  .backdrop{position:absolute;inset:0;background:rgba(0,0,0,.62);z-index:20;display:flex;align-items:center;justify-content:center}
+  .dialog{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-xl);
+    width:640px;max-height:86%;display:flex;flex-direction:column;
+    box-shadow:0 24px 80px rgba(0,0,0,.55)}
+  .dlg-head{padding:22px 24px 0 24px}
+  .dlg-title{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:21px;color:var(--text-1)}
+  .dlg-sub{font-size:12.5px;color:var(--text-2);margin-top:6px;line-height:1.5}
+
+  /* mode tabs (Mixdown / Stems / MIDI) */
+  .modes{display:flex;gap:2px;margin-top:16px;border-bottom:1px solid var(--line)}
+  .mode{padding:8px 14px 10px;font-size:12.5px;color:var(--text-2);cursor:pointer;
+    border-bottom:2px solid transparent;margin-bottom:-1px}
+  .mode .ic{margin-right:7px;opacity:.85}
+  .mode.on{color:var(--text-1);border-bottom-color:var(--accent)}
+  .mode:hover:not(.on){color:var(--text-1)}
+
+  .dlg-body{padding:16px 24px 4px;overflow-y:auto}
+  .dlg-body::-webkit-scrollbar{width:8px} .dlg-body::-webkit-scrollbar-thumb{background:var(--bg-3);border-radius:4px}
+
+  .section-lbl{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);
+    font-weight:600;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+  .section-lbl .ln{flex:1;height:1px;background:var(--line-2)}
+  .block{margin-bottom:20px}
+
+  /* ---- Preset bar ---- */
+  .presetbar{display:flex;align-items:center;gap:8px;background:var(--bg-1);border:1px solid var(--line);
+    border-radius:var(--radius-md);padding:8px 10px;margin-bottom:18px}
+  .presetbar .pk{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);margin-right:2px}
+  .preset-sel{appearance:none;flex:1;min-width:0;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);
+    color:var(--text-1);font-family:inherit;font-size:12.5px;padding:6px 30px 6px 11px;cursor:pointer;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' stroke='%239aa0ac' fill='none' stroke-width='1.4'/></svg>");
+    background-repeat:no-repeat;background-position:right 11px center}
+  .preset-sel .star{color:var(--warm)}
+  .mini{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-sm);
+    color:var(--text-2);font-size:11.5px;padding:6px 11px;cursor:pointer;white-space:nowrap}
+  .mini:hover{color:var(--text-1);background:var(--bg-3)}
+  .mini.accent{color:var(--accent-soft);border-color:var(--accent-line)}
+  .preset-dirty{font-size:10.5px;color:var(--warm);display:none}
+  .preset-dirty.show{display:inline}
+
+  /* form rows */
+  .frow{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  .frow .k{width:118px;flex:0 0 auto;font-size:12px;color:var(--text-2)}
+  .frow .k .sub{display:block;font-size:10.5px;color:var(--text-4);margin-top:1px}
+  .pick{flex:1;display:flex}
+  .seg2{display:flex;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg2 button{border:0;background:transparent;color:var(--text-2);padding:6px 13px;font-size:12px;cursor:pointer;
+    font-family:inherit;border-right:1px solid var(--line-2);white-space:nowrap}
+  .seg2 button:last-child{border-right:0}
+  .seg2 button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .seg2 button:disabled{color:var(--text-4);cursor:not-allowed}
+  .select{appearance:none;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-md);
+    color:var(--text-1);font-family:inherit;font-size:12px;padding:6px 30px 6px 11px;cursor:pointer;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' stroke='%239aa0ac' fill='none' stroke-width='1.4'/></svg>");
+    background-repeat:no-repeat;background-position:right 11px center}
+  .field{flex:1;display:flex;align-items:center;gap:8px;background:var(--bg-1);border:1px solid var(--line);
+    border-radius:var(--radius-md);padding:6px 10px}
+  .field input{flex:1;background:none;border:0;color:var(--text-1);font-family:inherit;font-size:12px;outline:none;min-width:0}
+  .field input::placeholder{color:var(--text-4)}
+  .field .ic{color:var(--text-3)}
+  .field button{background:var(--bg-3);border:1px solid var(--line);border-radius:var(--radius-sm);
+    color:var(--text-2);font-size:11px;padding:3px 9px;cursor:pointer}
+  .field button:hover{color:var(--text-1)}
+
+  /* ---- Format chooser (big segmented) ---- */
+  .fmtgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .fmt{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-lg);
+    padding:11px 12px;cursor:pointer;text-align:left;color:var(--text-2);position:relative}
+  .fmt:hover{background:var(--bg-3)}
+  .fmt.on{background:var(--accent-dim);border-color:var(--accent);color:var(--text-1)}
+  .fmt .nm{font-size:13px;font-weight:600;color:var(--text-1);display:flex;align-items:center;gap:6px}
+  .fmt .kind{font-size:10.5px;margin-top:3px}
+  .fmt .kind.loss{color:var(--good)} .fmt .kind.lossy{color:var(--warm)}
+  .fmt.on .nm .dot{color:var(--accent-soft)}
+  .fmt .def{position:absolute;top:9px;right:9px;font-size:9px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--text-3);border:1px solid var(--line);border-radius:999px;padding:1px 6px}
+
+  /* quality panel area that swaps per format */
+  .qpanel{margin-top:14px}
+  .est-inline{margin-left:auto;font-size:11.5px;color:var(--text-3)}
+  .est-inline b{color:var(--text-2);font-weight:500}
+
+  /* ---- Loudness / normalization ---- */
+  .lhead{display:flex;align-items:center;gap:10px;margin-bottom:2px}
+  .toggle{width:38px;height:21px;border-radius:999px;background:var(--bg-1);border:1px solid var(--line);
+    position:relative;cursor:pointer;flex:0 0 auto;transition:background .12s}
+  .toggle i{position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--text-3);transition:.14s}
+  .toggle.on{background:var(--accent-dim);border-color:var(--accent-line)}
+  .toggle.on i{left:19px;background:var(--accent-soft)}
+  .lhead .lt{font-size:13px;color:var(--text-1)}
+  .lhead .ls{font-size:11.5px;color:var(--text-3)}
+  .lbody{margin-top:14px}
+  .lbody.off{opacity:.4;pointer-events:none;filter:grayscale(.4)}
+
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{background:var(--bg-1);border:1px solid var(--line);border-radius:999px;color:var(--text-2);
+    font-size:11.5px;padding:5px 11px;cursor:pointer}
+  .chip:hover{color:var(--text-1);background:var(--bg-3)}
+  .chip.on{background:var(--accent-dim);border-color:var(--accent);color:var(--accent-soft)}
+  .chip small{color:var(--text-3);margin-left:4px}
+  .chip.on small{color:var(--accent-soft);opacity:.8}
+
+  .stepper{display:inline-flex;align-items:center;background:var(--bg-1);border:1px solid var(--line);
+    border-radius:var(--radius-md);overflow:hidden}
+  .stepper button{border:0;background:transparent;color:var(--text-2);width:30px;height:32px;cursor:pointer;font-size:15px}
+  .stepper button:hover{background:var(--bg-3);color:var(--text-1)}
+  .stepper .val{min-width:78px;text-align:center;font-size:13px;color:var(--text-1);padding:0 6px}
+  .stepper .val .u{color:var(--text-3);font-size:11px;margin-left:3px}
+
+  /* signature: loudness verification meter */
+  .meterwrap{background:var(--bg-1);border:1px solid var(--line-2);border-radius:var(--radius-lg);padding:14px 14px 12px;margin-top:14px}
+  .meterwrap .mh{display:flex;align-items:baseline;gap:8px;margin-bottom:12px}
+  .meterwrap .mh .t{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3)}
+  .meterwrap .mh .delta{margin-left:auto;font-size:12px;color:var(--accent-soft)}
+  .meterwrap .mh .delta b{color:var(--text-1);font-weight:500}
+  .scale{position:relative;height:30px;margin:0 8px}
+  .track{position:absolute;left:0;right:0;top:13px;height:6px;border-radius:999px;
+    background:linear-gradient(90deg,#2a2d35 0%,#2a2d35 55%,rgba(232,196,123,.35) 80%,rgba(232,123,139,.45) 100%)}
+  .gtarget{position:absolute;top:13px;height:6px;border-radius:999px;background:linear-gradient(90deg,var(--accent),var(--accent-soft));opacity:.9}
+  .mk{position:absolute;top:6px;width:2px;height:20px;border-radius:2px}
+  .mk.measured{background:var(--text-1);box-shadow:0 0 0 3px rgba(232,231,227,.12)}
+  .mk.target{background:var(--accent-soft);box-shadow:0 0 0 3px var(--accent-dim)}
+  .mklab{position:absolute;top:-2px;transform:translateX(-50%);font-size:10px;color:var(--text-3);white-space:nowrap}
+  .mklab b{display:block;font-size:11px;text-align:center;margin-top:13px}
+  .mklab.measured b{color:var(--text-1)} .mklab.target b{color:var(--accent-soft)}
+  .axis{display:flex;justify-content:space-between;margin:8px 8px 0;font-size:10px;color:var(--text-4)}
+  .tprow{display:flex;align-items:center;gap:10px;margin-top:13px;padding-top:12px;border-top:1px solid var(--line-2)}
+  .tprow .tpk{font-size:11.5px;color:var(--text-2);width:118px;flex:0 0 auto}
+  .tpbar{flex:1;height:8px;border-radius:999px;background:var(--bg-2);border:1px solid var(--line);overflow:hidden;position:relative}
+  .tpbar > i{display:block;height:100%;background:linear-gradient(90deg,var(--good),var(--good))}
+  .tpceil{position:absolute;top:-3px;width:2px;height:14px;background:var(--bad)}
+  .tprow .tpv{font-size:11.5px;color:var(--text-3);width:120px;text-align:right;flex:0 0 auto}
+  .tprow .tpv b{color:var(--good)}
+
+  .note{display:flex;gap:9px;align-items:flex-start;background:var(--warm-dim);border:1px solid var(--warm-line);
+    border-radius:var(--radius-md);padding:9px 12px;font-size:11.5px;color:var(--text-2);line-height:1.45;margin-top:12px}
+  .note .ic{color:var(--warm);flex:0 0 auto;margin-top:1px}
+  .note.info{background:var(--accent-dim);border-color:var(--accent-line)} .note.info .ic{color:var(--accent-soft)}
+
+  /* preview */
+  .preview{background:var(--bg-1);border:1px solid var(--line-2);border-radius:var(--radius-md);
+    padding:11px 13px;margin-top:2px}
+  .preview .pl{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);margin-bottom:7px}
+  .preview .fn{font-size:12.5px;color:var(--text-1);display:flex;gap:8px;align-items:center}
+  .preview .fn .ext{color:var(--accent-soft)}
+  .preview .more{color:var(--text-3);font-size:11px;margin-top:6px}
+
+  /* footer */
+  .dlg-foot{display:flex;align-items:center;gap:10px;padding:16px 24px;border-top:1px solid var(--line)}
+  .foot-info{font-size:11.5px;color:var(--text-3)}
+  .foot-info b{color:var(--text-2);font-weight:500}
+  .btn{padding:8px 18px;border-radius:var(--radius-md);font-size:13px;cursor:pointer;border:1px solid transparent}
+  .btn.ghost{background:transparent;border-color:var(--line);color:var(--text-1)}
+  .btn.ghost:hover{background:var(--bg-3)}
+  .btn.primary{background:var(--accent);color:var(--bg-0);font-weight:600;border-color:var(--accent)}
+  .btn.primary:hover{background:var(--accent-soft)}
+  .btn.primary:disabled{background:transparent;border-color:var(--line);color:var(--text-4);cursor:not-allowed}
+
+  /* progress / rendering */
+  .prog-dialog{width:500px}
+  .phase{display:flex;align-items:center;gap:11px;padding:8px 4px;font-size:12.5px}
+  .phase .st{width:18px;height:18px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;font-size:10px}
+  .phase .st.done{background:var(--good-dim);color:var(--good)}
+  .phase .st.now{border:2px solid var(--accent);border-right-color:transparent;animation:spin .8s linear infinite}
+  .phase .st.wait{border:1.5px solid var(--text-4)}
+  .phase .nm{flex:1;color:var(--text-1)} .phase.pending .nm{color:var(--text-3)}
+  .phase .meta{font-size:11px;color:var(--text-3)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .bar{height:8px;border-radius:999px;background:var(--bg-1);border:1px solid var(--line);overflow:hidden;margin:16px 0 6px}
+  .bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-soft));border-radius:999px}
+  .prog-pct{display:flex;justify-content:space-between;font-size:11.5px;color:var(--text-3)}
+
+  .ok-icon{width:46px;height:46px;border-radius:50%;background:var(--good-dim);color:var(--good);
+    display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:14px}
+  .err-icon{width:46px;height:46px;border-radius:50%;background:var(--bad-dim);color:var(--bad);
+    display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:14px}
+  .verify{background:var(--bg-1);border:1px solid var(--good-line);border-radius:var(--radius-md);
+    padding:12px 14px;margin:14px 0 4px}
+  .verify .vr{display:flex;align-items:center;gap:10px;font-size:12.5px;padding:3px 0}
+  .verify .vr .ic{color:var(--good)} .verify .vr .k{color:var(--text-2);width:150px}
+  .verify .vr .v{color:var(--text-1)} .verify .vr .v b{color:var(--good)}
+  .done-file{background:var(--bg-1);border:1px solid var(--line-2);border-radius:var(--radius-md);
+    padding:11px 13px;margin:12px 0 4px;display:flex;align-items:center;gap:10px;font-size:12.5px}
+  .done-file .ic{color:var(--accent-soft)} .done-file .sz{margin-left:auto;color:var(--text-3);font-size:11.5px}
+
+  .hidden{display:none !important}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="chrome">
+    <span class="brand">re<b>·</b>sonance</span>
+    <span class="proj">Midnight Drive.rsn</span>
+    <div class="tabs">
+      <div class="tab">Compose</div>
+      <div class="tab">Arrange</div>
+      <div class="tab active">Mixer</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="ghost hot">⤓ Export…</button>
+  </div>
+
+  <div class="stage">
+    <div class="mixer-bg" aria-hidden="true">
+      <div class="strip"><div class="nm">Drums</div><div class="fader"><div class="knob" style="top:30%"></div></div></div>
+      <div class="strip"><div class="nm">Bass</div><div class="fader"><div class="knob" style="top:38%"></div></div></div>
+      <div class="strip"><div class="nm">Keys</div><div class="fader"><div class="knob" style="top:44%"></div></div></div>
+      <div class="strip"><div class="nm">Lead Vox</div><div class="fader"><div class="knob" style="top:33%"></div></div></div>
+      <div class="strip bus"><div class="nm">Drum Bus</div><div class="fader"><div class="knob" style="top:36%"></div></div></div>
+      <div class="strip master"><div class="nm">Master</div><div class="fader"><div class="knob" style="top:28%"></div></div></div>
+    </div>
+
+    <!-- ===== State switcher (prototype only) ===== -->
+    <div class="statebar">
+      <span class="lbl">State</span>
+      <div class="seg" id="switch">
+        <button data-s="setup" class="on">Setup</button>
+        <button data-s="render">Rendering</button>
+        <button data-s="done">Done</button>
+        <button data-s="error">Error</button>
+      </div>
+      <span class="hint">In Setup, switch format chips &amp; toggle normalize ↓</span>
+    </div>
+
+    <!-- ===================== SETUP ===================== -->
+    <div class="backdrop" id="view-setup">
+      <div class="dialog">
+        <div class="dlg-head">
+          <div class="dlg-title">Export</div>
+          <div class="dlg-sub" id="setup-sub">Bounce the full master mix to a file. Pick a format and, for streaming, normalize to a target loudness verified on the meters.</div>
+          <div class="modes">
+            <div class="mode on" data-mode="mix"><span class="ic">◎</span>Mixdown</div>
+            <div class="mode" data-mode="stems"><span class="ic">⤓</span>Stems</div>
+            <div class="mode" data-mode="midi"><span class="ic">♪</span>MIDI</div>
+          </div>
+        </div>
+
+        <div class="dlg-body">
+          <!-- preset bar -->
+          <div class="presetbar">
+            <span class="pk">Preset</span>
+            <select class="preset-sel" id="preset" onchange="applyPreset(this.value)">
+              <option value="stream">★ Streaming master — MP3 320 · −14 LUFS</option>
+              <option value="wavmaster">WAV master — 24-bit / 48 kHz</option>
+              <option value="flac">FLAC archive — lossless · no normalize</option>
+              <option value="club">Club / loud — −9 LUFS</option>
+              <option value="custom">Custom (unsaved)</option>
+            </select>
+            <span class="preset-dirty" id="dirty">● edited</span>
+            <button class="mini" onclick="markDirty(false)">Save</button>
+            <button class="mini accent" title="Save as new preset">+ New</button>
+          </div>
+
+          <!-- ---- FORMAT & QUALITY ---- -->
+          <div class="block">
+            <div class="section-lbl">Format &amp; quality <span class="ln"></span></div>
+            <div class="fmtgrid" id="fmtgrid">
+              <button class="fmt" data-fmt="wav">
+                <span class="def">default</span>
+                <span class="nm"><span class="dot">◆</span>WAV</span>
+                <span class="kind loss">Uncompressed</span>
+              </button>
+              <button class="fmt" data-fmt="flac">
+                <span class="nm"><span class="dot">◆</span>FLAC</span>
+                <span class="kind loss">Lossless</span>
+              </button>
+              <button class="fmt on" data-fmt="mp3">
+                <span class="nm"><span class="dot">◆</span>MP3</span>
+                <span class="kind lossy">Lossy</span>
+              </button>
+              <button class="fmt" data-fmt="opus">
+                <span class="nm"><span class="dot">◆</span>Opus</span>
+                <span class="kind lossy">Lossy · OGG</span>
+              </button>
+            </div>
+
+            <!-- swappable per-format quality controls -->
+            <div class="qpanel">
+              <!-- WAV -->
+              <div class="qset hidden" data-q="wav">
+                <div class="frow">
+                  <span class="k">Bit depth</span>
+                  <div class="seg2"><button>16-bit</button><button class="on">24-bit</button><button>32-bit float</button></div>
+                </div>
+                <div class="frow">
+                  <span class="k">Sample rate</span>
+                  <div class="pick"><select class="select"><option>Project — 48 000 Hz</option><option>44 100 Hz</option><option>96 000 Hz</option></select></div>
+                  <span class="est-inline">Stereo · interleaved</span>
+                </div>
+              </div>
+
+              <!-- FLAC -->
+              <div class="qset hidden" data-q="flac">
+                <div class="frow">
+                  <span class="k">Bit depth</span>
+                  <div class="seg2"><button>16-bit</button><button class="on">24-bit</button></div>
+                </div>
+                <div class="frow">
+                  <span class="k">Sample rate</span>
+                  <div class="pick"><select class="select"><option>Project — 48 000 Hz</option><option>44 100 Hz</option><option>96 000 Hz</option></select></div>
+                </div>
+                <div class="frow">
+                  <span class="k">Compression<span class="sub">smaller file ↔ faster</span></span>
+                  <div class="seg2"><button>Fast</button><button class="on">Default (5)</button><button>Max (8)</button></div>
+                  <span class="est-inline"><b>Lossless</b> — bit-perfect</span>
+                </div>
+              </div>
+
+              <!-- MP3 -->
+              <div class="qset" data-q="mp3">
+                <div class="frow">
+                  <span class="k">Bitrate mode</span>
+                  <div class="seg2"><button class="on">Constant (CBR)</button><button>Variable (VBR)</button></div>
+                </div>
+                <div class="frow">
+                  <span class="k">Bitrate</span>
+                  <div class="seg2"><button>128</button><button>192</button><button>256</button><button class="on">320 kbps</button></div>
+                  <span class="est-inline"><b>~8.2 MB</b> at 3:24</span>
+                </div>
+              </div>
+
+              <!-- Opus -->
+              <div class="qset hidden" data-q="opus">
+                <div class="frow">
+                  <span class="k">Bitrate<span class="sub">VBR target</span></span>
+                  <div class="seg2"><button>96</button><button class="on">160</button><button>256 kbps</button></div>
+                  <span class="est-inline"><b>~4.1 MB</b> at 3:24</span>
+                </div>
+                <div class="frow">
+                  <span class="k">Optimize for</span>
+                  <div class="seg2"><button class="on">Music</button><button>Voice</button></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ---- LOUDNESS & NORMALIZATION ---- -->
+          <div class="block">
+            <div class="section-lbl">Loudness &amp; normalization <span class="ln"></span></div>
+            <div class="lhead">
+              <div class="toggle on" id="normToggle" onclick="toggleNorm()"><i></i></div>
+              <div>
+                <div class="lt">Normalize to target on export</div>
+                <div class="ls">A final gain + true-peak limit stage lands the file at your chosen level.</div>
+              </div>
+            </div>
+
+            <div class="lbody" id="lbody">
+              <div class="frow" style="margin-top:4px">
+                <span class="k">Mode</span>
+                <div class="seg2"><button class="on">Integrated (LUFS)</button><button>Peak (dBTP)</button></div>
+              </div>
+
+              <div class="frow">
+                <span class="k">Target</span>
+                <div class="stepper">
+                  <button onclick="bumpTarget(-1)">−</button>
+                  <span class="val mono"><span id="tval">−14.0</span><span class="u">LUFS</span></span>
+                  <button onclick="bumpTarget(1)">+</button>
+                </div>
+                <div class="chips" style="margin-left:6px">
+                  <button class="chip on" data-t="-14" onclick="setTarget(-14)">Streaming<small>−14</small></button>
+                  <button class="chip" data-t="-16" onclick="setTarget(-16)">Podcast<small>−16</small></button>
+                  <button class="chip" data-t="-23" onclick="setTarget(-23)">Broadcast<small>−23</small></button>
+                  <button class="chip" data-t="-9" onclick="setTarget(-9)">Club<small>−9</small></button>
+                </div>
+              </div>
+
+              <!-- signature: loudness verification meter -->
+              <div class="meterwrap">
+                <div class="mh">
+                  <span class="t">Loudness preview</span>
+                  <span class="delta">Will apply <b id="gain">−4.8 dB</b> gain</span>
+                </div>
+                <div class="scale">
+                  <div class="track"></div>
+                  <div class="gtarget" id="gtarget" style="left:0;width:62%"></div>
+                  <div class="mk measured" id="mkMeasured" style="left:78%"></div>
+                  <div class="mklab measured" id="lbMeasured" style="left:78%">measured<b>−9.2</b></div>
+                  <div class="mk target" id="mkTarget" style="left:62%"></div>
+                  <div class="mklab target" id="lbTarget" style="left:62%">target<b id="lbTval">−14.0</b></div>
+                </div>
+                <div class="axis"><span>−24</span><span>−18</span><span>−14</span><span>−9</span><span>−3 LUFS</span></div>
+
+                <div class="tprow">
+                  <span class="tpk">True-peak ceiling</span>
+                  <div class="tpbar"><i style="width:74%"></i><span class="tpceil" style="left:88%"></span></div>
+                  <span class="tpv">limit to <b>−1.0 dBTP</b></span>
+                </div>
+              </div>
+              <div class="note info"><span class="ic">ⓘ</span><span>The integrated loudness is measured in an offline analysis pass over the whole render (reusing the LUFS meter), then a single gain trim + brick-wall true-peak limiter is applied so the exported file lands on target without clipping. The displayed measured value is from the last full playthrough.</span></div>
+            </div>
+          </div>
+
+          <!-- ---- METADATA ---- -->
+          <div class="block">
+            <div class="section-lbl">Metadata <span class="ln"></span></div>
+            <div class="frow">
+              <span class="k">Title</span>
+              <div class="field"><input value="Midnight Drive" /></div>
+            </div>
+            <div class="frow">
+              <span class="k">Artist</span>
+              <div class="field"><input value="The Lilia Sessions" /></div>
+            </div>
+            <div class="frow">
+              <span class="k">Album · Year</span>
+              <div class="field" style="flex:2"><input placeholder="Album (optional)" /></div>
+              <div class="field" style="flex:1"><input class="mono" placeholder="2026" value="2026" /></div>
+            </div>
+            <div class="note"><span class="ic">⚠</span><span>WAV stores tags in a RIFF/INFO chunk that some players ignore. For reliable title/artist on the file, use FLAC, MP3, or Opus.</span></div>
+          </div>
+
+          <!-- ---- DESTINATION ---- -->
+          <div class="block">
+            <div class="section-lbl">Destination <span class="ln"></span></div>
+            <div class="frow">
+              <span class="k">Folder</span>
+              <div class="field"><span class="ic">📁</span><input value="~/Music/Resonance/Midnight Drive" readonly /><button>Choose…</button></div>
+            </div>
+            <div class="preview">
+              <div class="pl">File preview</div>
+              <div class="fn"><b>Midnight Drive</b><span class="ext" id="extPrev">.mp3</span></div>
+              <div class="more" id="prevMore">320 kbps CBR · normalized to −14 LUFS · title + artist embedded</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dlg-foot">
+          <span class="foot-info" id="foot-est"><b>MP3 320</b> · ~8.2 MB · normalize on · est. 0:12</span>
+          <span class="spacer"></span>
+          <button class="btn ghost" onclick="setState('done',true)">Cancel</button>
+          <button class="btn primary" onclick="setState('render')">Export mixdown</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== RENDERING ===================== -->
+    <div class="backdrop hidden" id="view-render">
+      <div class="dialog prog-dialog">
+        <div class="dlg-head">
+          <div class="dlg-title">Exporting mixdown</div>
+          <div class="dlg-sub">Normalization needs two passes: analyze the full render for integrated loudness, then encode with the gain trim applied. Transport is paused until this finishes.</div>
+        </div>
+        <div class="dlg-body">
+          <div class="phase"><span class="st done">✓</span><span class="nm">Render master through the full chain</span><span class="meta">3:24 · offline</span></div>
+          <div class="phase"><span class="st done">✓</span><span class="nm">Analyze integrated loudness</span><span class="meta">measured −9.2 LUFS</span></div>
+          <div class="phase"><span class="st now"></span><span class="nm">Apply −4.8 dB + true-peak limit, encode MP3</span><span class="meta">320 kbps · 58%</span></div>
+          <div class="phase pending"><span class="st wait"></span><span class="nm">Embed metadata &amp; finalize</span><span class="meta">queued</span></div>
+          <div class="bar"><i style="width:72%"></i></div>
+          <div class="prog-pct"><span>Encoding — pass 2 of 2</span><span class="mono">72%</span></div>
+        </div>
+        <div class="dlg-foot">
+          <span class="foot-info">Writing to …/Midnight Drive/Midnight Drive.mp3</span>
+          <span class="spacer"></span>
+          <button class="btn ghost" onclick="setState('done',true)">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== DONE ===================== -->
+    <div class="backdrop hidden" id="view-done">
+      <div class="dialog prog-dialog">
+        <div class="dlg-body" style="padding-top:26px">
+          <div class="ok-icon">✓</div>
+          <div class="dlg-title">Export complete</div>
+          <div class="dlg-sub">Encoded to MP3 320 kbps and normalized to your streaming target. The achieved loudness is verified against the meters below.</div>
+
+          <div class="verify">
+            <div class="vr"><span class="ic">✓</span><span class="k">Integrated loudness</span><span class="v"><b>−14.0 LUFS</b> &nbsp;·&nbsp; on target</span></div>
+            <div class="vr"><span class="ic">✓</span><span class="k">True peak</span><span class="v"><b>−1.0 dBTP</b> &nbsp;·&nbsp; under ceiling</span></div>
+            <div class="vr"><span class="ic">✓</span><span class="k">Metadata</span><span class="v">Midnight Drive — The Lilia Sessions</span></div>
+          </div>
+
+          <div class="done-file">
+            <span class="ic">♪</span><span><b>Midnight Drive</b>.mp3</span><span class="sz">8.2 MB · 3:24</span>
+          </div>
+        </div>
+        <div class="dlg-foot">
+          <span class="foot-info mono">~/Music/Resonance/Midnight Drive</span>
+          <span class="spacer"></span>
+          <button class="btn ghost">Reveal in files</button>
+          <button class="btn primary" onclick="setState('setup')">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== ERROR ===================== -->
+    <div class="backdrop hidden" id="view-error">
+      <div class="dialog prog-dialog">
+        <div class="dlg-body" style="padding-top:26px">
+          <div class="err-icon">!</div>
+          <div class="dlg-title">Export stopped</div>
+          <div class="dlg-sub">The render and loudness analysis finished, but the MP3 encoder couldn't be reached, so no file was written. Your project and export settings are untouched.</div>
+          <div class="phase" style="margin-top:14px"><span class="st done">✓</span><span class="nm">Render master</span><span class="meta">done</span></div>
+          <div class="phase"><span class="st done">✓</span><span class="nm">Analyze loudness</span><span class="meta">−9.2 LUFS</span></div>
+          <div class="phase"><span class="st" style="background:var(--bad-dim);color:var(--bad)">!</span><span class="nm">Encode MP3</span><span class="meta" style="color:var(--bad)">encoder unavailable</span></div>
+          <div class="note"><span class="ic">⚠</span><span>The MP3 encoder library failed to load. Export to <b>WAV</b> or <b>FLAC</b> (always available), or reinstall the optional encoder, then retry.</span></div>
+        </div>
+        <div class="dlg-foot">
+          <span class="spacer"></span>
+          <button class="btn ghost" onclick="setState('setup')">Back to settings</button>
+          <button class="btn primary" onclick="setState('render')">Retry</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const views=['setup','render','done','error'];
+  function showView(v){views.forEach(x=>document.getElementById('view-'+x).classList.toggle('hidden',x!==v));}
+  function setState(s,asCancel){
+    if(s==='done'&&asCancel) s='setup';
+    showView(s); markSwitch(s);
+  }
+  function markSwitch(s){document.querySelectorAll('#switch button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));}
+  document.querySelectorAll('#switch button').forEach(b=>b.onclick=()=>setState(b.dataset.s));
+
+  // ---- format chooser ----
+  const fmtMeta={
+    wav:{ext:'.wav', more:'24-bit / 48 kHz · uncompressed · normalized to −14 LUFS', foot:'WAV 24-bit · ~38 MB', size:'~38 MB'},
+    flac:{ext:'.flac', more:'24-bit lossless · compression 5 · normalized to −14 LUFS · tags embedded', foot:'FLAC 24-bit · ~22 MB', size:'~22 MB'},
+    mp3:{ext:'.mp3', more:'320 kbps CBR · normalized to −14 LUFS · title + artist embedded', foot:'MP3 320 · ~8.2 MB', size:'~8.2 MB'},
+    opus:{ext:'.opus', more:'160 kbps VBR · normalized to −14 LUFS · tags embedded', foot:'Opus 160 · ~4.1 MB', size:'~4.1 MB'},
+  };
+  function pickFormat(f){
+    document.querySelectorAll('.fmt').forEach(x=>x.classList.toggle('on',x.dataset.fmt===f));
+    document.querySelectorAll('.qset').forEach(x=>x.classList.toggle('hidden',x.dataset.q!==f));
+    const m=fmtMeta[f];
+    document.getElementById('extPrev').textContent=m.ext;
+    refreshPreviewMore();
+    refreshFoot();
+    document.getElementById('preset').value='custom'; markDirty(true);
+  }
+  document.querySelectorAll('.fmt').forEach(b=>b.onclick=()=>pickFormat(b.dataset.fmt));
+
+  function curFmt(){return document.querySelector('.fmt.on').dataset.fmt;}
+  function normOn(){return document.getElementById('normToggle').classList.contains('on');}
+
+  function refreshPreviewMore(){
+    const m=fmtMeta[curFmt()];
+    let more=m.more.replace(/normalized to −[\d.]+ LUFS/, normOn()?('normalized to '+document.getElementById('tval').textContent+' LUFS'):'no normalization');
+    document.getElementById('prevMore').textContent=more;
+  }
+  function refreshFoot(){
+    const m=fmtMeta[curFmt()];
+    document.getElementById('foot-est').innerHTML='<b>'+m.foot.split(' · ')[0]+'</b> · '+m.size+' · normalize '+(normOn()?'on':'off')+' · est. 0:12';
+  }
+
+  // ---- normalize toggle ----
+  function toggleNorm(){
+    const t=document.getElementById('normToggle'); t.classList.toggle('on');
+    document.getElementById('lbody').classList.toggle('off',!normOn());
+    refreshPreviewMore(); refreshFoot(); document.getElementById('preset').value='custom'; markDirty(true);
+  }
+
+  // ---- loudness target ----
+  let target=-14;
+  function lufsToPct(l){ // map −24..−3 LUFS to 0..100%
+    return Math.max(0,Math.min(100,(l - -24)/(-3 - -24)*100));
+  }
+  const measured=-9.2;
+  function renderTarget(){
+    document.getElementById('tval').textContent=target.toFixed(1);
+    document.getElementById('lbTval').textContent=target.toFixed(1);
+    const tp=lufsToPct(target), mp=lufsToPct(measured);
+    document.getElementById('mkTarget').style.left=tp+'%';
+    document.getElementById('lbTarget').style.left=tp+'%';
+    document.getElementById('mkMeasured').style.left=mp+'%';
+    document.getElementById('lbMeasured').style.left=mp+'%';
+    document.getElementById('gtarget').style.width=tp+'%';
+    const gain=(target-measured);
+    document.getElementById('gain').textContent=(gain>=0?'+':'−')+Math.abs(gain).toFixed(1)+' dB';
+    document.querySelectorAll('.chip[data-t]').forEach(c=>c.classList.toggle('on',+c.dataset.t===target));
+    refreshPreviewMore(); refreshFoot();
+  }
+  function setTarget(v){target=v; renderTarget(); document.getElementById('preset').value='custom'; markDirty(true);}
+  function bumpTarget(d){target=Math.round((target+d*0.5)*2)/2; renderTarget(); document.getElementById('preset').value='custom'; markDirty(true);}
+
+  // ---- seg2 groups ----
+  document.querySelectorAll('.seg2').forEach(g=>g.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    if(b.disabled)return; g.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+    document.getElementById('preset').value='custom'; markDirty(true);
+  }));
+
+  // ---- presets ----
+  function markDirty(on){document.getElementById('dirty').classList.toggle('show',on); if(!on)document.getElementById('preset').value='custom';}
+  const presets={
+    stream:{fmt:'mp3', norm:true, t:-14},
+    wavmaster:{fmt:'wav', norm:false, t:-14},
+    flac:{fmt:'flac', norm:false, t:-14},
+    club:{fmt:'mp3', norm:true, t:-9},
+  };
+  function applyPreset(key){
+    const p=presets[key]; if(!p){return;}
+    pickFormatSilent(p.fmt);
+    const t=document.getElementById('normToggle'); t.classList.toggle('on',p.norm);
+    document.getElementById('lbody').classList.toggle('off',!p.norm);
+    target=p.t; renderTarget();
+    document.getElementById('preset').value=key; markDirty(false);
+  }
+  function pickFormatSilent(f){
+    document.querySelectorAll('.fmt').forEach(x=>x.classList.toggle('on',x.dataset.fmt===f));
+    document.querySelectorAll('.qset').forEach(x=>x.classList.toggle('hidden',x.dataset.q!==f));
+    document.getElementById('extPrev').textContent=fmtMeta[f].ext;
+    refreshPreviewMore(); refreshFoot();
+  }
+
+  // ---- mode tabs ----
+  document.querySelectorAll('#view-setup .mode').forEach(m=>m.onclick=()=>{
+    document.querySelectorAll('#view-setup .mode').forEach(x=>x.classList.toggle('on',x===m));
+    const mode=m.dataset.mode;
+    document.getElementById('setup-sub').textContent = mode==='mix'
+      ? "Bounce the full master mix to a file. Pick a format and, for streaming, normalize to a target loudness verified on the meters."
+      : mode==='stems'
+      ? "Render per-track and bus stems. Format, normalization and metadata below apply to every stem; see the Stems & MIDI export design for source selection."
+      : "Export generated and recorded MIDI as Standard MIDI Files (format & loudness options don't apply).";
+  });
+
+  // init
+  renderTarget(); refreshPreviewMore(); refreshFoot();
+  const initial=(location.hash||'').replace('#',''); setState(views.includes(initial)?initial:'setup');
+</script>
+</body>
+</html>
