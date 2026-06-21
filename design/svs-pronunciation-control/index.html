@@ -1,0 +1,918 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — SVS pronunciation control (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-dim:rgba(232,196,123,.12); --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --bad:#e87b8b; --bad-dim:rgba(232,123,139,.10); --bad-line:rgba(232,123,139,.34);
+    --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+  .serif{font-family:"Instrument Serif",Georgia,serif;font-style:italic}
+  button{font-family:inherit}
+
+  /* ---- App chrome ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1)}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px;color:var(--text-1)}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .tabs{display:flex;gap:2px;margin-left:8px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .crumb{margin-left:6px;color:var(--text-3);font-size:12px}
+  .crumb b{color:var(--text-2);font-weight:500}
+  .spacer{flex:1}
+  .vb{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--text-2);
+      padding:5px 10px;border:1px solid var(--line);border-radius:999px;background:var(--bg-1)}
+  .vb .dot{width:7px;height:7px;border-radius:50%;background:var(--warm)}
+  .ghost{
+    padding:5px 11px;border:1px solid var(--line);border-radius:var(--radius-md);
+    color:var(--text-2);background:transparent;font-size:12px;cursor:pointer;
+  }
+  .ghost:hover{background:var(--bg-2);color:var(--text-1)}
+  .ghost.warm{color:var(--warm);border-color:var(--warm-line)}
+  .ghost.warm:hover{background:var(--warm-dim)}
+
+  /* ---- State switcher (prototype only) ---- */
+  .statebar{
+    height:42px;flex:0 0 auto;display:flex;align-items:center;gap:8px;
+    padding:0 18px;background:var(--bg-1);border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);margin-right:4px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{
+    border:0;background:transparent;color:var(--text-2);padding:6px 13px;font-size:12px;
+    cursor:pointer;border-right:1px solid var(--line-2);
+  }
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .hint{margin-left:auto;color:var(--text-3);font-size:11.5px}
+
+  /* ---- Body ---- */
+  .body{flex:1;display:flex;min-height:0}
+  .editor{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+
+  /* chord context strip */
+  .chordstrip{
+    height:26px;flex:0 0 auto;display:flex;align-items:center;
+    background:var(--bg-1);border-bottom:1px solid var(--line-2);position:relative;
+  }
+  .stripcap{width:54px;flex:0 0 auto;font-size:8.5px;letter-spacing:.12em;color:var(--text-3);
+    text-transform:uppercase;text-align:center;border-right:1px solid var(--line-2);
+    display:flex;align-items:center;justify-content:center;height:100%}
+  .chordstrip .lane{flex:1;position:relative;height:100%}
+  .chord{position:absolute;top:0;height:100%;display:flex;align-items:center;padding-left:8px;
+    font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:14px;color:var(--accent-soft);
+    border-left:1px solid var(--line-2)}
+
+  /* ---- Phoneme strip (the new interactive surface) ---- */
+  .phonestrip{
+    flex:0 0 auto;display:flex;align-items:stretch;min-height:62px;
+    background:var(--bg-1);border-bottom:1px solid var(--line);position:relative;
+  }
+  .phonestrip .stripcap{flex-direction:column;gap:3px;color:var(--warm);height:auto}
+  .phonestrip .stripcap small{color:var(--text-4);font-size:7.5px;letter-spacing:.1em}
+  .phlane{flex:1;position:relative}
+  .phlane .legend{position:absolute;right:10px;top:6px;display:flex;gap:11px;font-size:9px;color:var(--text-3);z-index:2}
+  .phlane .legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+
+  /* phoneme pill */
+  .pill{
+    position:absolute;top:9px;height:44px;border-radius:var(--radius-md);
+    background:rgba(232,196,123,.07);border:1px solid transparent;
+    display:flex;flex-direction:column;justify-content:center;gap:3px;
+    padding:0 7px;cursor:pointer;overflow:hidden;transition:background .08s,border-color .08s;
+  }
+  .pill:hover{background:rgba(232,196,123,.13)}
+  .pill .word{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:11.5px;
+    color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1}
+  .pill .phon{font-family:"Geist Mono",monospace;font-size:10px;color:var(--warm);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1;letter-spacing:.02em}
+  .pill.slur{background:rgba(232,196,123,.03)}
+  .pill.slur .word,.pill.slur .phon{opacity:.5}
+  .pill.slur .word::before{content:"⌣ ";color:var(--text-3);font-style:normal}
+  /* override sources */
+  .pill.edited{background:var(--warm-dim);border-color:var(--warm-line)}
+  .pill.edited .phon{color:var(--warm)}
+  .pill.dict{background:var(--accent-dim);border-color:var(--accent-line)}
+  .pill.dict .phon{color:var(--accent-soft)}
+  .pill.sel{outline:2px solid var(--warm);outline-offset:-1px;box-shadow:0 0 0 4px rgba(232,196,123,.10)}
+  .pill .tag{position:absolute;top:3px;right:4px;font-size:6.5px;letter-spacing:.06em;
+    text-transform:uppercase;padding:1px 4px;border-radius:999px;line-height:1.3}
+  .pill.edited .tag{color:var(--warm);background:rgba(232,196,123,.16)}
+  .pill.dict .tag{color:var(--accent-soft);background:rgba(139,109,255,.18)}
+  .pill.invalid{border-color:var(--bad-line);background:var(--bad-dim)}
+  .pill.invalid .phon{color:var(--bad)}
+  .pill .warnmark{position:absolute;bottom:3px;right:5px;color:var(--bad);font-size:9px}
+
+  /* ---- Vocal roll (notes) ---- */
+  .roll{flex:1;position:relative;min-height:0;background:var(--bg-1);overflow:hidden;display:flex}
+  .keys{width:54px;flex:0 0 auto;background:var(--bg-2);border-right:1px solid var(--line);position:relative}
+  .key{position:absolute;left:0;right:0;border-bottom:1px solid var(--line-2);
+    font-family:"Geist Mono",monospace;font-size:8.5px;color:var(--text-3);
+    display:flex;align-items:center;padding-left:6px}
+  .key.blk{background:var(--bg-1)}
+  .rolllane{flex:1;position:relative;overflow:hidden}
+  .rolllane canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .note{position:absolute;border-radius:5px;background:rgba(232,196,123,.22);
+    border:1px solid var(--warm-line);display:flex;align-items:center;justify-content:center;
+    overflow:hidden;cursor:pointer}
+  .note .ly{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:13px;color:var(--text-1)}
+  .note.slur{background:rgba(232,196,123,.10)}
+  .note.slur .ly{opacity:.5}
+  .note.sel{outline:2px solid var(--warm);outline-offset:1px}
+
+  /* ---- Syllable editor popover ---- */
+  .pop{
+    position:absolute;z-index:30;width:332px;background:var(--bg-2);
+    border:1px solid var(--line);border-radius:var(--radius-lg);
+    box-shadow:0 16px 48px rgba(0,0,0,.55);display:none;flex-direction:column;
+  }
+  .pop.show{display:flex}
+  .pop::before{content:"";position:absolute;top:-7px;left:42px;width:12px;height:12px;
+    background:var(--bg-2);border-left:1px solid var(--line);border-top:1px solid var(--line);transform:rotate(45deg)}
+  .pop-head{display:flex;align-items:center;gap:9px;padding:11px 13px 9px;border-bottom:1px solid var(--line-2)}
+  .pop-head .w{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px;color:var(--text-1)}
+  .pop-head .meta{font-size:10px;color:var(--text-3);font-family:"Geist Mono",monospace}
+  .pop-head .src{margin-left:auto;font-size:8px;letter-spacing:.08em;text-transform:uppercase;
+    padding:2px 7px;border-radius:999px;color:var(--text-3);border:1px solid var(--line)}
+  .pop-head .src.edited{color:var(--warm);border-color:var(--warm-line);background:var(--warm-dim)}
+  .pop-head .src.dict{color:var(--accent-soft);border-color:var(--accent-line);background:var(--accent-dim)}
+  .pop-body{padding:11px 13px;display:flex;flex-direction:column;gap:12px}
+  .seclbl{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);margin-bottom:6px}
+
+  /* phoneme chips editor */
+  .chips{display:flex;flex-wrap:wrap;gap:5px;align-items:center;min-height:30px;
+    padding:7px;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-md)}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-family:"Geist Mono",monospace;font-size:11.5px;
+    color:var(--warm);background:rgba(232,196,123,.12);border:1px solid var(--warm-line);
+    border-radius:var(--radius-sm);padding:3px 6px 3px 8px;cursor:grab}
+  .chip .x{color:var(--text-3);cursor:pointer;font-size:12px;line-height:1}
+  .chip .x:hover{color:var(--bad)}
+  .chip.sub{color:var(--accent-soft);background:var(--accent-dim);border-color:var(--accent-line)}
+  .chip.sub .orig{color:var(--text-3);text-decoration:line-through;margin-right:2px}
+  .chip.bad{color:var(--bad);background:var(--bad-dim);border-color:var(--bad-line)}
+  .chip.add{color:var(--text-3);background:transparent;border:1px dashed var(--line);cursor:pointer}
+  .chip.add:hover{color:var(--text-1);border-color:var(--text-3)}
+
+  .subnote{display:flex;gap:6px;align-items:flex-start;font-size:10.5px;color:var(--text-2);
+    line-height:1.5;padding:7px 9px;background:rgba(139,109,255,.07);border-radius:var(--radius-sm)}
+  .subnote .gl{color:var(--accent-soft)}
+  .subnote.warn{background:var(--bad-dim)}
+  .subnote.warn .gl{color:var(--bad)}
+
+  /* phoneme palette */
+  .palette{display:none;flex-direction:column;gap:7px;padding:9px;background:var(--bg-1);
+    border:1px solid var(--line);border-radius:var(--radius-md)}
+  .palette.show{display:flex}
+  .palrow{display:flex;flex-wrap:wrap;gap:4px}
+  .palrow .grp{width:100%;font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-4);margin-top:3px}
+  .pk{font-family:"Geist Mono",monospace;font-size:11px;color:var(--text-2);
+    background:var(--bg-2);border:1px solid var(--line);border-radius:4px;padding:3px 7px;cursor:pointer}
+  .pk:hover{color:var(--warm);border-color:var(--warm-line);background:rgba(232,196,123,.10)}
+  .pk.dis{color:var(--text-4);background:var(--bg-1);cursor:not-allowed;text-decoration:line-through}
+
+  /* variants */
+  .variants{display:flex;flex-direction:column;gap:5px}
+  .var{display:flex;align-items:center;gap:9px;padding:7px 9px;border:1px solid var(--line);
+    border-radius:var(--radius-md);cursor:pointer;background:var(--bg-1)}
+  .var:hover{border-color:var(--text-3)}
+  .var.on{border-color:var(--warm-line);background:var(--warm-dim)}
+  .var .rad{width:13px;height:13px;border-radius:50%;border:1.5px solid var(--text-3);flex:0 0 auto;position:relative}
+  .var.on .rad{border-color:var(--warm)}
+  .var.on .rad::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--warm)}
+  .var .ipa{font-family:"Geist Mono",monospace;font-size:11.5px;color:var(--text-1)}
+  .var .gloss{margin-left:auto;font-size:10px;color:var(--text-3);font-style:italic;font-family:"Instrument Serif",serif}
+
+  /* split / merge */
+  .smrow{display:flex;gap:6px}
+  .smrow button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;
+    padding:7px 0;border:1px solid var(--line);background:var(--bg-1);color:var(--text-2);
+    border-radius:var(--radius-md);font-size:11px;cursor:pointer}
+  .smrow button:hover{background:var(--bg-3);color:var(--text-1)}
+  .smrow button:disabled{opacity:.4;cursor:not-allowed}
+
+  .pop-foot{display:flex;align-items:center;gap:8px;padding:10px 13px;border-top:1px solid var(--line-2)}
+  .pop-foot .revert{font-size:11px;color:var(--text-3);background:none;border:0;cursor:pointer;padding:0}
+  .pop-foot .revert:hover{color:var(--warm)}
+  .pop-foot .grow{flex:1}
+  .btn{padding:6px 12px;border-radius:var(--radius-md);font-size:11.5px;cursor:pointer;border:1px solid var(--line);background:var(--bg-1);color:var(--text-2)}
+  .btn:hover{background:var(--bg-3);color:var(--text-1)}
+  .btn.dict{color:var(--accent-soft);border-color:var(--accent-line);background:var(--accent-dim)}
+  .btn.dict:hover{background:rgba(139,109,255,.22)}
+
+  /* ---- Right rail: pronunciation inspector entry ---- */
+  .rail{flex:0 0 324px;background:var(--bg-2);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+  .rail-head{padding:11px 14px;border-bottom:1px solid var(--line-2);display:flex;align-items:center;gap:8px}
+  .rail-head .t{font-size:13px;font-weight:600;color:var(--text-1)}
+  .rail-head .c{margin-left:auto;font-size:10px;color:var(--text-3);font-family:"Geist Mono",monospace}
+  .rail-body{padding:12px 14px;display:flex;flex-direction:column;gap:14px;overflow:auto}
+  .card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden}
+  .card .ch{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line-2)}
+  .card .ch .dot{width:7px;height:7px;border-radius:2px}
+  .card .ch .nm{font-size:12px;color:var(--text-1);font-weight:500}
+  .card .ch .ct{margin-left:auto;font-size:9.5px;color:var(--text-3);font-family:"Geist Mono",monospace}
+  .card .cb{padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+  .ov{display:flex;align-items:center;gap:9px;font-size:11.5px}
+  .ov .wd{font-family:"Instrument Serif",serif;font-style:italic;font-size:13px;color:var(--text-1);min-width:64px}
+  .ov .ph{font-family:"Geist Mono",monospace;font-size:10.5px;flex:1}
+  .ov.edited .ph{color:var(--warm)}
+  .ov.dict .ph{color:var(--accent-soft)}
+  .ov .mini{font-size:8px;letter-spacing:.06em;text-transform:uppercase;padding:1px 5px;border-radius:999px}
+  .ov.edited .mini{color:var(--warm);background:var(--warm-dim)}
+  .ov.dict .mini{color:var(--accent-soft);background:var(--accent-dim)}
+  .railbtn{width:100%;display:flex;align-items:center;justify-content:center;gap:7px;padding:8px 0;
+    border:1px solid var(--accent-line);background:var(--accent-dim);color:var(--accent-soft);
+    border-radius:var(--radius-md);font-size:12px;cursor:pointer}
+  .railbtn:hover{background:rgba(139,109,255,.22)}
+  .rail-note{font-size:10.5px;color:var(--text-3);line-height:1.55}
+  .rail-note b{color:var(--good);font-weight:500}
+  .emptycard{display:flex;flex-direction:column;align-items:center;gap:6px;padding:22px 14px;text-align:center}
+  .emptycard .gl{font-size:22px;opacity:.5}
+  .emptycard .t{font-size:12px;color:var(--text-2)}
+  .emptycard .s{font-size:10.5px;color:var(--text-3);line-height:1.5}
+
+  /* ---- Dictionary modal ---- */
+  .scrim{position:absolute;inset:0;z-index:40;background:rgba(15,16,19,.66);backdrop-filter:blur(2px);
+    display:none;align-items:center;justify-content:center}
+  .scrim.show{display:flex}
+  .modal{width:680px;max-height:78vh;background:var(--bg-2);border:1px solid var(--line);
+    border-radius:var(--radius-xl);box-shadow:0 24px 70px rgba(0,0,0,.6);display:flex;flex-direction:column;overflow:hidden}
+  .modal-head{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .modal-head .t{font-size:15px;font-weight:600;color:var(--text-1)}
+  .modal-head .sc{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-soft);
+    background:var(--accent-dim);border:1px solid var(--accent-line);padding:2px 8px;border-radius:999px}
+  .modal-head .x{margin-left:auto;color:var(--text-3);cursor:pointer;font-size:18px;line-height:1}
+  .modal-head .x:hover{color:var(--text-1)}
+  .modal-tools{display:flex;align-items:center;gap:8px;padding:10px 18px;border-bottom:1px solid var(--line-2)}
+  .search{flex:1;display:flex;align-items:center;gap:7px;background:var(--bg-1);border:1px solid var(--line);
+    border-radius:var(--radius-md);padding:6px 10px;color:var(--text-3);font-size:12px}
+  .search input{flex:1;background:none;border:0;outline:none;color:var(--text-1);font-family:inherit;font-size:12px}
+  .scopeseg{display:flex;border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .scopeseg button{border:0;background:transparent;color:var(--text-2);padding:6px 11px;font-size:11px;cursor:pointer;border-right:1px solid var(--line-2)}
+  .scopeseg button:last-child{border-right:0}
+  .scopeseg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .dicttable{overflow:auto;flex:1}
+  .dthead,.dtrow{display:grid;grid-template-columns:150px 1fr 92px 64px;align-items:center;gap:10px;padding:9px 18px}
+  .dthead{position:sticky;top:0;background:var(--bg-2);border-bottom:1px solid var(--line);
+    font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);z-index:1}
+  .dtrow{border-bottom:1px solid var(--line-2)}
+  .dtrow:hover{background:var(--bg-1)}
+  .dtrow .wd{font-family:"Instrument Serif",serif;font-style:italic;font-size:14px;color:var(--text-1)}
+  .dtrow .ph{font-family:"Geist Mono",monospace;font-size:11.5px;color:var(--accent-soft)}
+  .dtrow .ph .sub{color:var(--accent-soft)}
+  .dtrow .badge{font-size:8.5px;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:999px;
+    color:var(--text-3);border:1px solid var(--line);width:fit-content}
+  .dtrow .badge.proj{color:var(--accent-soft);border-color:var(--accent-line);background:var(--accent-dim)}
+  .dtrow .badge.global{color:var(--good);border-color:rgba(109,214,163,.34);background:rgba(109,214,163,.10)}
+  .dtrow .acts{display:flex;gap:8px;justify-content:flex-end;color:var(--text-3)}
+  .dtrow .acts span{cursor:pointer}
+  .dtrow .acts span:hover{color:var(--text-1)}
+  .dtrow .acts .del:hover{color:var(--bad)}
+  .dtrow.editing{background:var(--bg-1);outline:1px solid var(--warm-line);outline-offset:-1px}
+  .dtrow.editing input{background:var(--bg-2);border:1px solid var(--line);border-radius:5px;
+    padding:5px 8px;color:var(--text-1);font-size:12px;width:100%;outline:none}
+  .dtrow.editing .ph input{font-family:"Geist Mono",monospace;color:var(--accent-soft)}
+  .modal-foot{display:flex;align-items:center;gap:9px;padding:12px 18px;border-top:1px solid var(--line)}
+  .modal-foot .grow{flex:1}
+  .addrow{display:flex;align-items:center;gap:7px;color:var(--accent-soft);background:var(--accent-dim);
+    border:1px solid var(--accent-line);border-radius:var(--radius-md);padding:7px 13px;font-size:12px;cursor:pointer}
+  .addrow:hover{background:rgba(139,109,255,.22)}
+  .dictempty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:48px 20px;text-align:center}
+  .dictempty .gl{font-size:30px;opacity:.5}
+  .dictempty .t{font-size:14px;color:var(--text-1)}
+  .dictempty .s{font-size:11.5px;color:var(--text-3);line-height:1.55;max-width:380px}
+
+  /* ---- Empty / rendering overlays on the roll editor ---- */
+  .overlay{position:absolute;inset:0;z-index:20;display:none;align-items:center;justify-content:center;
+    flex-direction:column;gap:12px;background:rgba(15,16,19,.74);backdrop-filter:blur(1.5px);text-align:center}
+  .overlay.show{display:flex}
+  .overlay .gl{font-size:30px;opacity:.55}
+  .overlay .t{font-size:15px;color:var(--text-1)}
+  .overlay .s{font-size:12px;color:var(--text-2);max-width:400px;line-height:1.55}
+  .spin{width:30px;height:30px;border-radius:50%;border:2.5px solid var(--line);border-top-color:var(--warm);animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  /* re-render highlight on affected pills */
+  .pill.rendering{animation:pulse 1.1s ease-in-out infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(232,196,123,0)}50%{box-shadow:0 0 0 4px rgba(232,196,123,.22)}}
+  .reseg{position:absolute;z-index:6;background:repeating-linear-gradient(45deg,rgba(232,196,123,.05),rgba(232,196,123,.05) 8px,rgba(232,196,123,.12) 8px,rgba(232,196,123,.12) 16px);border-radius:5px;display:none}
+  .reseg.show{display:block}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- chrome -->
+  <div class="chrome">
+    <div class="brand">re<b>·</b>sonance</div>
+    <div class="tabs">
+      <div class="tab">Arrange</div>
+      <div class="tab active">Compose</div>
+      <div class="tab">Mix</div>
+      <div class="tab">Perform</div>
+    </div>
+    <span class="crumb">Lead Vocal · <b>Verse 1</b></span>
+    <div class="spacer"></div>
+    <div class="vb"><span class="dot"></span>Lilia · MM 2.8 · ARPAbet</div>
+    <button class="ghost" id="openDict">Pronunciation dictionary</button>
+    <button class="ghost warm" id="rerenderBtn">⟳ Re-render edited</button>
+  </div>
+
+  <!-- prototype state switcher -->
+  <div class="statebar">
+    <span class="lbl">State</span>
+    <div class="seg" id="seg">
+      <button data-state="populated" class="on">Populated</button>
+      <button data-state="editing">Editing syllable</button>
+      <button data-state="invalid">Validation error</button>
+      <button data-state="dict">Dictionary editor</button>
+      <button data-state="rendering">Re-rendering</button>
+      <button data-state="empty">Empty</button>
+    </div>
+    <span class="hint" id="hint">Phoneme strip is interactive — click any syllable to override.</span>
+  </div>
+
+  <!-- body -->
+  <div class="body">
+    <div class="editor">
+      <!-- chord context strip -->
+      <div class="chordstrip">
+        <div class="stripcap">CHORD</div>
+        <div class="lane" id="chordlane"></div>
+      </div>
+
+      <!-- interactive phoneme strip -->
+      <div class="phonestrip">
+        <div class="stripcap">PHN<small>EDIT</small></div>
+        <div class="phlane" id="phlane">
+          <div class="legend">
+            <span><i style="background:rgba(232,196,123,.4)"></i>auto</span>
+            <span><i style="background:var(--warm)"></i>edited</span>
+            <span><i style="background:var(--accent)"></i>dictionary</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- vocal roll -->
+      <div class="roll">
+        <div class="keys" id="keys"></div>
+        <div class="rolllane" id="rolllane">
+          <canvas id="rollcanvas"></canvas>
+        </div>
+      </div>
+
+      <!-- syllable editor popover -->
+      <div class="pop" id="pop">
+        <div class="pop-head">
+          <span class="w" id="popWord">read</span>
+          <span class="meta" id="popMeta">note 4 · D4</span>
+          <span class="src" id="popSrc">auto</span>
+        </div>
+        <div class="pop-body">
+          <div>
+            <div class="seclbl">Phonemes <span style="color:var(--text-4)">— click ✕ to remove · drag to reorder</span></div>
+            <div class="chips" id="popChips"></div>
+            <div class="palette" id="popPalette"></div>
+          </div>
+          <div id="popVarWrap">
+            <div class="seclbl">CMU pronunciation variant</div>
+            <div class="variants" id="popVariants"></div>
+          </div>
+          <div class="subnote" id="popSub" style="display:none"></div>
+          <div>
+            <div class="seclbl">Syllable boundary</div>
+            <div class="smrow">
+              <button id="splitBtn">ⵤ Split across 2 notes</button>
+              <button id="mergeBtn">⤝ Merge with next</button>
+            </div>
+          </div>
+        </div>
+        <div class="pop-foot">
+          <button class="revert" id="revertBtn">↺ Revert to auto</button>
+          <span class="grow"></span>
+          <button class="btn dict" id="toDict">+ Add to dictionary</button>
+          <button class="btn" id="popDone" style="color:var(--text-1)">Done</button>
+        </div>
+      </div>
+
+      <!-- empty / rendering overlays -->
+      <div class="overlay" id="ovEmpty">
+        <div class="gl">🎤</div>
+        <div class="t">No lyrics generated yet</div>
+        <div class="s">The phoneme strip mirrors a generated vocal melody. Generate a vocal from the right rail — its syllables and auto-derived ARPAbet phonemes appear here, ready to correct per-syllable or via the pronunciation dictionary.</div>
+        <button class="ghost warm" style="margin-top:4px">Generate vocal</button>
+      </div>
+      <div class="overlay" id="ovRender">
+        <div class="spin"></div>
+        <div class="t">Re-rendering edited segments…</div>
+        <div class="s">2 of 7 segments changed (<b class="mono">ev</b>, <b class="mono">move</b>). Only the affected <span class="mono">.ds</span> segments are rebuilt and spliced back — untouched syllables keep their cached render.</div>
+      </div>
+    </div>
+
+    <!-- right rail: pronunciation summary -->
+    <div class="rail">
+      <div class="rail-head">
+        <span class="t">Pronunciation</span>
+        <span class="c" id="railCount">3 overrides</span>
+      </div>
+      <div class="rail-body" id="railBody"></div>
+    </div>
+  </div>
+
+  <!-- dictionary modal -->
+  <div class="scrim" id="scrim">
+    <div class="modal">
+      <div class="modal-head">
+        <span class="t">Pronunciation dictionary</span>
+        <span class="sc" id="dictScopeBadge">Project</span>
+        <span class="x" id="closeDict">✕</span>
+      </div>
+      <div class="modal-tools">
+        <div class="search">🔍<input placeholder="Search words…" /></div>
+        <div class="scopeseg" id="scopeSeg">
+          <button class="on" data-scope="project">Project</button>
+          <button data-scope="global">Global</button>
+        </div>
+        <button class="ghost">⭡ Import</button>
+        <button class="ghost">⭣ Export</button>
+      </div>
+      <div class="dicttable" id="dictTable"></div>
+      <div class="modal-foot">
+        <button class="addrow" id="addEntry">+ Add entry</button>
+        <span class="grow"></span>
+        <span class="rail-note">Entries apply to every occurrence across the song · validated against <b style="color:var(--warm)">Lilia</b></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------------------------------------------------------------------------
+   Prototype data model — a generated vocal phrase for "Verse 1".
+   Each note carries its assigned syllable, the auto (G2P) phonemes, and an
+   optional override (source: auto | edited | dict). Phonemes are ARPAbet.
+   The active voicebank is Lilia, which substitutes v -> f.
+---------------------------------------------------------------------------*/
+const VOICEBANK = { name:"Lilia", sub:{ "V":"F" } };
+
+// pixel geometry
+const PPB = 150;            // px per beat
+const LANE_PAD = 14;
+let LANE_W = 0;
+
+// MIDI range shown
+const LOW = 57, HIGH = 69;  // A3..A4
+const ROWH = () => Math.max(16, (document.getElementById('rolllane').clientHeight) / (HIGH-LOW+1));
+
+const notes = [
+  { beat:0.0, len:0.75, midi:60, syl:"Cae",  auto:["K","EY1"],      ov:["K","EY1"],       src:"dict",   slur:false },
+  { beat:0.75,len:0.75, midi:62, syl:"lum",  auto:["L","AH0","M"],  ov:["L","AH0","M"],   src:"dict",   slur:false },
+  { beat:1.5, len:0.5,  midi:64, syl:"I",    auto:["AY1"],          ov:["AY1"],           src:"auto",   slur:false },
+  { beat:2.0, len:1.0,  midi:65, syl:"read", auto:["R","IY1","D"],  ov:["R","EH1","D"],   src:"edited", slur:false,
+    variants:[ {ph:["R","IY1","D"],gloss:"present tense"}, {ph:["R","EH1","D"],gloss:"past tense"} ], variantSel:1 },
+  { beat:3.0, len:0.5,  midi:67, syl:"ev",   auto:["EH1","V"],      ov:["EH1","V"],       src:"auto",   slur:false },
+  { beat:3.5, len:0.5,  midi:65, syl:"ery",  auto:["ER0","IY0"],    ov:["ER0","IY0"],     src:"auto",   slur:false },
+  { beat:4.0, len:1.5,  midi:64, syl:"move", auto:["M","UW1","V"],  ov:["M","UW1","V"],   src:"auto",   slur:false },
+];
+const TOTAL_BEATS = 6;
+
+const chords = [ {beat:0,len:2,name:"Bm"}, {beat:2,len:2,name:"G"}, {beat:4,len:2,name:"D"} ];
+
+// project dictionary entries
+let dictScope = "project";
+const dict = {
+  project: [
+    { word:"Caelum", ph:["K","EY1","L","AH0","M"], note:"character name" },
+    { word:"resonance", ph:["R","EH1","Z","AH0","N","AH0","N","S"], note:"app name" },
+  ],
+  global: [
+    { word:"gif", ph:["JH","IH1","F"], note:"" },
+    { word:"caramel", ph:["K","AA1","R","M","AH0","L"], note:"" },
+  ],
+};
+
+// voicebank phoneme inventory (grouped) — Lilia lacks V (subbed to F)
+const PALETTE = {
+  "Vowels":["AA","AE","AH","AO","AW","AY","EH","ER","EY","IH","IY","OW","OY","UH","UW"],
+  "Consonants":["B","CH","D","DH","F","G","HH","JH","K","L","M","N","NG","P","R","S","SH","T","TH","V","W","Y","Z","ZH"],
+  "Special":["SP","AP"],
+};
+const LILIA_MISSING = ["V"]; // substituted, not invalid; shown with arrow
+
+let selIdx = -1;
+let validationDemo = false; // when true, popup shows an invalid phoneme
+
+/* ---- helpers ---- */
+const x = b => LANE_PAD + b*PPB;
+const w = l => l*PPB;
+const yRow = midi => (HIGH - midi) * ROWH();
+
+function applySub(ph){ // returns {disp, subbed, orig}
+  const base = ph.replace(/[0-2]$/,"");
+  if(VOICEBANK.sub[base]){
+    const repl = VOICEBANK.sub[base] + (ph.match(/[0-2]$/)||[""])[0];
+    return { disp:repl, subbed:true, orig:ph };
+  }
+  return { disp:ph, subbed:false, orig:ph };
+}
+function phString(arr){ return arr.map(p=>{const s=applySub(p);return s.disp;}).join(" "); }
+
+/* ---- render chord strip ---- */
+function renderChords(){
+  const lane = document.getElementById('chordlane');
+  lane.innerHTML = "";
+  chords.forEach(c=>{
+    const el=document.createElement('div');
+    el.className='chord'; el.style.left=x(c.beat)+'px'; el.style.width=w(c.len)+'px';
+    el.textContent=c.name; lane.appendChild(el);
+  });
+}
+
+/* ---- render phoneme strip ---- */
+function renderPhonemes(){
+  const lane=document.getElementById('phlane');
+  lane.querySelectorAll('.pill,.reseg').forEach(n=>n.remove());
+  notes.forEach((n,i)=>{
+    const el=document.createElement('div');
+    el.className='pill '+n.src+(n.slur?' slur':'')+(i===selIdx?' sel':'');
+    // validation demo: mark 'ev' invalid
+    const invalid = validationDemo && n.syl==="ev";
+    if(invalid) el.className+=' invalid';
+    el.style.left=x(n.beat)+'px';
+    el.style.width=(w(n.len)-3)+'px';
+    const hasSub = n.ov.some(p=>applySub(p).subbed);
+    el.innerHTML =
+      `<div class="word">${n.syl}</div>`+
+      `<div class="phon">${invalid?"R EH1 RR":phString(n.ov)}</div>`+
+      (n.src==='edited'?'<span class="tag">edit</span>':'')+
+      (n.src==='dict'?'<span class="tag">dict</span>':'')+
+      ((hasSub||invalid)?'<span class="warnmark">'+(invalid?'⚠':'⇄')+'</span>':'');
+    el.title = hasSub ? "v → f substitution applied for Lilia" : "";
+    el.onclick=(e)=>{ openPop(i, el); e.stopPropagation(); };
+    lane.appendChild(el);
+  });
+}
+
+/* ---- render keyboard + canvas roll ---- */
+function renderKeys(){
+  const keys=document.getElementById('keys');
+  keys.innerHTML="";
+  const blk=[1,3,6,8,10];
+  const names=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+  for(let m=HIGH;m>=LOW;m--){
+    const el=document.createElement('div');
+    const pc=m%12; const isb=blk.includes(pc);
+    el.className='key'+(isb?' blk':'');
+    el.style.top=yRow(m)+'px'; el.style.height=ROWH()+'px';
+    el.textContent=names[pc]+(Math.floor(m/12)-1);
+    keys.appendChild(el);
+  }
+}
+function drawRoll(){
+  const lane=document.getElementById('rolllane');
+  const cv=document.getElementById('rollcanvas');
+  const W=lane.clientWidth, H=lane.clientHeight;
+  const dpr=window.devicePixelRatio||1;
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  const rh=ROWH();
+  // row stripes
+  for(let m=HIGH;m>=LOW;m--){
+    const pc=m%12; const isb=[1,3,6,8,10].includes(pc);
+    ctx.fillStyle=isb?'#15161b':'#181a20';
+    ctx.fillRect(0,yRow(m),W,rh);
+    ctx.strokeStyle='#1f2229'; ctx.beginPath();
+    ctx.moveTo(0,yRow(m)+rh); ctx.lineTo(W,yRow(m)+rh); ctx.stroke();
+  }
+  // beat/bar lines
+  for(let b=0;b<=TOTAL_BEATS;b++){
+    ctx.strokeStyle=(b%2===0)?'#272a31':'#1f2229';
+    ctx.beginPath(); ctx.moveTo(x(b),0); ctx.lineTo(x(b),H); ctx.stroke();
+  }
+  // pitch curve (portamento + vibrato) under notes
+  ctx.strokeStyle='rgba(232,196,123,.5)'; ctx.lineWidth=1.5; ctx.beginPath();
+  let started=false;
+  notes.forEach((n,i)=>{
+    const x0=x(n.beat), x1=x(n.beat+n.len);
+    const cy=yRow(n.midi)+rh/2;
+    if(!started){ ctx.moveTo(x0,cy); started=true; } else { ctx.lineTo(x0,cy); }
+    // vibrato wobble on longer notes
+    const steps=Math.max(2,Math.floor((x1-x0)/8));
+    for(let s=1;s<=steps;s++){
+      const t=s/steps; const xx=x0+(x1-x0)*t;
+      const vib=(n.len>0.8 && t>0.4)? Math.sin(t*28)*2.2*(t-0.4):0;
+      ctx.lineTo(xx,cy+vib);
+    }
+  });
+  ctx.stroke();
+  // notes
+  notes.forEach((n,i)=>{
+    const nx=x(n.beat), ny=yRow(n.midi)+3, nw=w(n.len)-3, nh=rh-6;
+    ctx.fillStyle=n.slur?'rgba(232,196,123,.10)':'rgba(232,196,123,.22)';
+    ctx.strokeStyle=i===selIdx?'#e8c47b':'rgba(232,196,123,.34)';
+    ctx.lineWidth=i===selIdx?2:1;
+    roundRect(ctx,nx,ny,nw,nh,5); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=n.slur?'rgba(232,231,227,.5)':'#e8e7e3';
+    ctx.font='italic 13px "Instrument Serif", Georgia, serif';
+    ctx.textBaseline='middle';
+    ctx.fillText(n.syl, nx+6, ny+nh/2+1);
+  });
+  // re-render hatched markers over affected notes (rendering state)
+  if(document.body.dataset.state==='rendering'){
+    [4,6].forEach(i=>{
+      const n=notes[i];
+      ctx.fillStyle='rgba(232,196,123,.10)';
+      const nx=x(n.beat), ny=yRow(n.midi)+3, nw=w(n.len)-3, nh=rh-6;
+      roundRect(ctx,nx,ny,nw,nh,5); ctx.fill();
+      ctx.strokeStyle='#e8c47b'; ctx.setLineDash([4,3]); ctx.lineWidth=1.5;
+      roundRect(ctx,nx,ny,nw,nh,5); ctx.stroke(); ctx.setLineDash([]);
+    });
+  }
+}
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath(); ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+
+/* ---- right rail summary ---- */
+function renderRail(){
+  const body=document.getElementById('railBody');
+  if(document.body.dataset.state==='empty'){
+    body.innerHTML=`<div class="card"><div class="emptycard">
+      <div class="gl">🗣</div><div class="t">Nothing to pronounce yet</div>
+      <div class="s">Generate a vocal and per-syllable phonemes plus your dictionary overrides will be summarised here.</div></div></div>`;
+    document.getElementById('railCount').textContent="";
+    return;
+  }
+  const overrides=notes.filter(n=>n.src!=='auto');
+  document.getElementById('railCount').textContent=overrides.length+" overrides";
+  let ovHtml=overrides.map(n=>`
+    <div class="ov ${n.src}">
+      <span class="wd">${n.syl}</span>
+      <span class="ph">${phString(n.ov)}</span>
+      <span class="mini">${n.src==='dict'?'dict':'edit'}</span>
+    </div>`).join("");
+  if(!overrides.length) ovHtml=`<div class="rail-note">No overrides — every syllable uses the auto-derived CMU pronunciation.</div>`;
+  body.innerHTML=`
+    <div class="card">
+      <div class="ch"><span class="dot" style="background:var(--warm)"></span><span class="nm">Overrides in this clip</span><span class="ct">${overrides.length}</span></div>
+      <div class="cb">${ovHtml}</div>
+    </div>
+    <div class="card">
+      <div class="ch"><span class="dot" style="background:var(--accent)"></span><span class="nm">Project dictionary</span><span class="ct">${dict.project.length} words</span></div>
+      <div class="cb">
+        ${dict.project.slice(0,2).map(d=>`<div class="ov dict"><span class="wd">${d.word}</span><span class="ph">${phString(d.ph)}</span></div>`).join("")}
+        <button class="railbtn" id="railOpenDict">Manage dictionary →</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ch"><span class="dot" style="background:var(--good)"></span><span class="nm">Voicebank validation</span></div>
+      <div class="cb"><div class="rail-note">Active voicebank <b style="color:var(--warm)">Lilia</b> has no <span class="mono" style="color:var(--text-1)">V</span> — it is auto-substituted to <span class="mono" style="color:var(--text-1)">F</span> on render (<span class="mono">ev</span>, <span class="mono">move</span>). <b>All phonemes valid.</b></div></div>
+    </div>`;
+  document.getElementById('railOpenDict').onclick=openDict;
+}
+
+/* ---- syllable editor popover ---- */
+function openPop(i, anchorEl){
+  selIdx=i; const n=notes[i];
+  const pop=document.getElementById('pop');
+  document.getElementById('popWord').textContent = n.syl;
+  document.getElementById('popMeta').textContent = `note ${i+1} · ${midiName(n.midi)}${n.slur?' · slur':''}`;
+  const src=document.getElementById('popSrc');
+  src.className='src '+(n.src==='auto'?'':n.src);
+  src.textContent = n.src==='auto'?'auto (CMU)':(n.src==='dict'?'from dictionary':'edited');
+
+  // chips
+  const chips=document.getElementById('popChips');
+  const invalid = validationDemo && n.syl==="ev";
+  let chipsHtml = n.ov.map((p,pi)=>{
+    const s=applySub(p);
+    if(s.subbed) return `<span class="chip sub"><span class="orig">${p}</span>${s.disp}<span class="x">✕</span></span>`;
+    return `<span class="chip">${p}<span class="x">✕</span></span>`;
+  }).join("");
+  if(invalid) chipsHtml = `<span class="chip">R<span class="x">✕</span></span><span class="chip">EH1<span class="x">✕</span></span><span class="chip bad">RR<span class="x">✕</span></span>`;
+  chipsHtml += `<span class="chip add" id="addPh">+ add</span>`;
+  chips.innerHTML=chipsHtml;
+  document.getElementById('addPh').onclick=()=>document.getElementById('popPalette').classList.toggle('show');
+
+  // palette
+  const pal=document.getElementById('popPalette');
+  pal.classList.remove('show');
+  pal.innerHTML = Object.entries(PALETTE).map(([grp,arr])=>`
+    <div class="palrow"><span class="grp">${grp}</span>
+    ${arr.map(p=>`<span class="pk ${LILIA_MISSING.includes(p)?'dis':''}" title="${LILIA_MISSING.includes(p)?'Not in Lilia — would substitute to F':''}">${p}</span>`).join("")}
+    </div>`).join("");
+
+  // variants
+  const varWrap=document.getElementById('popVarWrap');
+  if(n.variants){
+    varWrap.style.display='';
+    document.getElementById('popVariants').innerHTML = n.variants.map((v,vi)=>`
+      <div class="var ${vi===n.variantSel?'on':''}">
+        <span class="rad"></span>
+        <span class="ipa">${v.ph.join(" ")}</span>
+        <span class="gloss">${v.gloss}</span>
+      </div>`).join("");
+  } else varWrap.style.display='none';
+
+  // substitution / validation note
+  const sub=document.getElementById('popSub');
+  if(invalid){
+    sub.style.display=''; sub.className='subnote warn';
+    sub.innerHTML=`<span class="gl">⚠</span><span><b style="color:var(--bad)">RR is not in Lilia's phoneme set.</b> Pick a valid ARPAbet symbol from the palette — invalid phonemes are blocked from render so they can't corrupt the segment.</span>`;
+  } else if(n.ov.some(p=>applySub(p).subbed)){
+    sub.style.display=''; sub.className='subnote';
+    sub.innerHTML=`<span class="gl">⇄</span><span>Lilia has no <b class="mono" style="color:var(--text-1)">V</b>; it renders as <b class="mono" style="color:var(--text-1)">F</b> (same place &amp; manner, unvoiced). Switch voicebank to keep <span class="mono">V</span>.</span>`;
+  } else sub.style.display='none';
+
+  // merge/split availability
+  document.getElementById('mergeBtn').disabled = i>=notes.length-1;
+
+  // to-dict button label
+  document.getElementById('toDict').textContent = n.src==='dict' ? '✓ In dictionary' : '+ Add to dictionary';
+
+  // position popover near anchor
+  pop.classList.add('show');
+  const lane=document.getElementById('phlane').getBoundingClientRect();
+  const ed=document.querySelector('.editor').getBoundingClientRect();
+  const a=anchorEl.getBoundingClientRect();
+  let left = a.left - ed.left - 30;
+  left = Math.min(left, ed.width - 332 - 12);
+  left = Math.max(8,left);
+  pop.style.left=left+'px';
+  pop.style.top=(a.bottom - ed.top + 6)+'px';
+
+  renderPhonemes(); // refresh selection outline
+  drawRoll();
+}
+function closePop(){ document.getElementById('pop').classList.remove('show'); }
+function midiName(m){const names=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];return names[m%12]+(Math.floor(m/12)-1);}
+
+/* ---- dictionary modal ---- */
+function renderDict(){
+  const t=document.getElementById('dictTable');
+  const rows=dict[dictScope];
+  document.getElementById('dictScopeBadge').textContent = dictScope==='project'?'Project':'Global';
+  if(!rows.length){
+    t.innerHTML=`<div class="dictempty"><div class="gl">📖</div><div class="t">No ${dictScope} entries yet</div>
+      <div class="s">Add a word to fix how it's pronounced everywhere it appears — names, slang, made-up words, or a non-default variant. ${dictScope==='global'?'Global entries follow you across every project.':'Project entries travel inside the .rproj.'}</div>
+      <button class="addrow" onclick="addDictRow()">+ Add first entry</button></div>`;
+    return;
+  }
+  t.innerHTML=`<div class="dthead"><span>Word</span><span>Phonemes (ARPAbet)</span><span>Scope</span><span></span></div>`+
+    rows.map((d,i)=>`
+      <div class="dtrow" data-i="${i}">
+        <span class="wd">${d.word}</span>
+        <span class="ph">${phString(d.ph)}${d.note?` <span style="color:var(--text-4);font-family:Geist,sans-serif;font-style:italic">— ${d.note}</span>`:''}</span>
+        <span class="badge ${dictScope}">${dictScope}</span>
+        <span class="acts"><span class="ed" title="Edit">✎</span><span class="del" title="Remove">🗑</span></span>
+      </div>`).join("");
+  t.querySelectorAll('.dtrow .ed').forEach(b=>b.onclick=editDictRow);
+  t.querySelectorAll('.dtrow .del').forEach(b=>b.onclick=delDictRow);
+}
+function openDict(){ document.getElementById('scrim').classList.add('show'); renderDict(); }
+function closeDict(){ document.getElementById('scrim').classList.remove('show'); }
+function addDictRow(){
+  const t=document.getElementById('dictTable');
+  const head=t.querySelector('.dthead');
+  if(head && !t.querySelector('.dictempty')){
+    const row=document.createElement('div');
+    row.className='dtrow editing';
+    row.innerHTML=`<span><input placeholder="word" autofocus/></span>
+      <span class="ph"><input placeholder="e.g. K EY1 L AH0 M"/></span>
+      <span class="badge ${dictScope}">${dictScope}</span>
+      <span class="acts"><span title="Save">✓</span><span class="del" title="Cancel">✕</span></span>`;
+    head.after(row);
+    row.querySelector('input').focus();
+  } else { // from empty state
+    dict[dictScope].push({word:"new word",ph:["N","UW1"],note:""}); renderDict();
+  }
+}
+function editDictRow(e){
+  const row=e.target.closest('.dtrow'); const i=+row.dataset.i; const d=dict[dictScope][i];
+  row.classList.add('editing');
+  row.innerHTML=`<span><input value="${d.word}"/></span>
+    <span class="ph"><input value="${d.ph.join(' ')}"/></span>
+    <span class="badge ${dictScope}">${dictScope}</span>
+    <span class="acts"><span title="Save">✓</span><span class="del" title="Cancel">✕</span></span>`;
+}
+function delDictRow(e){
+  const row=e.target.closest('.dtrow');
+  if(row.classList.contains('editing')){ renderDict(); return; }
+  const i=+row.dataset.i; dict[dictScope].splice(i,1); renderDict();
+}
+
+/* ---- state machine ---- */
+function setState(s){
+  document.body.dataset.state=s;
+  const hints={
+    populated:"Phoneme strip is interactive — click any syllable to override.",
+    editing:"Syllable editor open — edit phonemes, pick a CMU variant, or split/merge across notes.",
+    invalid:"Invalid phoneme entered — blocked from render and flagged inline + in the editor.",
+    dict:"Project pronunciation dictionary — entries apply across the whole song and survive reload.",
+    rendering:"Only the edited segments (ev, move) re-render; cached segments are untouched.",
+    empty:"No vocal yet — generate one to populate the phoneme strip.",
+  };
+  document.getElementById('hint').textContent=hints[s];
+
+  closePop(); closeDict();
+  document.getElementById('ovEmpty').classList.toggle('show', s==='empty');
+  document.getElementById('ovRender').classList.toggle('show', s==='rendering');
+  validationDemo = (s==='invalid');
+
+  renderAll();
+
+  if(s==='editing'){ const el=document.querySelectorAll('#phlane .pill')[3]; if(el) openPop(3, el); }
+  if(s==='invalid'){ const el=document.querySelectorAll('#phlane .pill')[4]; if(el) openPop(4, el); }
+  if(s==='dict'){ openDict(); }
+  if(s==='rendering'){
+    document.querySelectorAll('#phlane .pill')[4]?.classList.add('rendering');
+    document.querySelectorAll('#phlane .pill')[6]?.classList.add('rendering');
+  }
+}
+
+function renderAll(){
+  LANE_W=document.getElementById('phlane').clientWidth;
+  renderChords(); renderPhonemes(); renderKeys(); drawRoll(); renderRail();
+}
+
+/* ---- wiring ---- */
+document.getElementById('seg').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  document.querySelectorAll('#seg button').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); setState(b.dataset.state);
+});
+document.getElementById('scopeSeg').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  document.querySelectorAll('#scopeSeg button').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); dictScope=b.dataset.scope; renderDict();
+});
+document.getElementById('openDict').onclick=openDict;
+document.getElementById('closeDict').onclick=closeDict;
+document.getElementById('addEntry').onclick=addDictRow;
+document.getElementById('popDone').onclick=closePop;
+document.getElementById('rerenderBtn').onclick=()=>{ document.querySelector('[data-state="rendering"]').click(); };
+document.getElementById('scrim').addEventListener('click',e=>{ if(e.target.id==='scrim') closeDict(); });
+// variant pick interactivity inside popover
+document.getElementById('popVariants').addEventListener('click',e=>{
+  const v=e.target.closest('.var'); if(!v)return;
+  const n=notes[selIdx]; const idx=[...v.parentNode.children].indexOf(v);
+  n.variantSel=idx; n.ov=n.variants[idx].ph.slice(); n.src='edited';
+  openPop(selIdx, document.querySelectorAll('#phlane .pill')[selIdx]);
+});
+document.getElementById('toDict').onclick=()=>{
+  const n=notes[selIdx];
+  if(n.src!=='dict'){ dict.project.push({word:n.syl,ph:n.ov.slice(),note:"from clip override"}); n.src='dict'; openPop(selIdx,document.querySelectorAll('#phlane .pill')[selIdx]); }
+};
+document.getElementById('revertBtn').onclick=()=>{
+  const n=notes[selIdx]; n.ov=n.auto.slice(); n.src='auto'; if(n.variants) n.variantSel=0;
+  openPop(selIdx, document.querySelectorAll('#phlane .pill')[selIdx]);
+};
+// palette pick adds a phoneme
+document.getElementById('popPalette').addEventListener('click',e=>{
+  const pk=e.target.closest('.pk'); if(!pk||pk.classList.contains('dis'))return;
+  const n=notes[selIdx]; n.ov.push(pk.textContent); n.src='edited';
+  openPop(selIdx, document.querySelectorAll('#phlane .pill')[selIdx]);
+});
+// chip remove
+document.getElementById('popChips').addEventListener('click',e=>{
+  if(!e.target.classList.contains('x'))return;
+  const chip=e.target.closest('.chip'); const chips=[...document.querySelectorAll('#popChips .chip:not(.add)')];
+  const idx=chips.indexOf(chip); const n=notes[selIdx];
+  if(idx>-1 && idx<n.ov.length){ n.ov.splice(idx,1); n.src='edited';
+    openPop(selIdx, document.querySelectorAll('#phlane .pill')[selIdx]); }
+});
+
+window.addEventListener('resize',()=>renderAll());
+document.body.addEventListener('click',e=>{ // click-away closes popover
+  if(document.body.dataset.state==='editing'||document.body.dataset.state==='invalid')return;
+  if(!e.target.closest('#pop') && !e.target.closest('.pill')) closePop();
+});
+
+const initial=(location.hash||'').replace('#','')||'populated';
+const initBtn=document.querySelector(`#seg button[data-state="${initial}"]`);
+if(initBtn){ document.querySelectorAll('#seg button').forEach(x=>x.classList.remove('on')); initBtn.classList.add('on'); }
+setState(initBtn?initial:'populated');
+</script>
+</body>
+</html>
