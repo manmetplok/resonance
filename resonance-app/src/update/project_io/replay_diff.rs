@@ -89,6 +89,7 @@ pub fn try_diff_replay(
 
     // -- Compose state (definitions, placements, drum groups, lyrics) --
     apply_compose(r, target_file, extras);
+    apply_track_groups(r, target_file);
 
     // -- Tempo / signature events --------------------------------------
     apply_tempo(r, target_file);
@@ -182,6 +183,12 @@ fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     if !id_set_eq(
         a.drum_patterns.iter().map(|p| p.id),
         b.drum_patterns.iter().map(|p| p.id),
+    ) {
+        return false;
+    }
+    if !id_set_eq(
+        a.track_groups.iter().map(|g| g.id),
+        b.track_groups.iter().map(|g| g.id),
     ) {
         return false;
     }
@@ -734,6 +741,17 @@ fn midi_notes_equal(a: &[MidiNote], b: &[MidiNote]) -> bool {
 fn apply_tempo(r: &mut Resonance, b: &ProjectFile) {
     restore_tempo_events(r, b);
     r.rebuild_and_send_tempo();
+}
+
+/// Restore the track group registry from a saved project file. The
+/// group id set is guaranteed equal by `structurally_compatible`, but
+/// the per-group contents (membership, collapse state, nesting, macros)
+/// may differ, so the registry is rebuilt wholesale from the snapshot.
+fn apply_track_groups(r: &mut Resonance, b: &ProjectFile) {
+    r.track_groups = crate::state::TrackGroupRegistry::new();
+    for tg in &b.track_groups {
+        r.track_groups.add_group(tg.clone());
+    }
 }
 
 #[cfg(test)]

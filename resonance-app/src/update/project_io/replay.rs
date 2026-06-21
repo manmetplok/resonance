@@ -312,6 +312,12 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // a single rebuild is simpler and keeps `replay_track` / `_bus` /
     // `_master` focused on their own concern.
     r.rebuild_plugin_index();
+
+    // Restore track groups from project file.
+    r.track_groups = TrackGroupRegistry::new();
+    for tg in &project.track_groups {
+        r.track_groups.add_group(tg.clone());
+    }
 }
 
 /// Restore the drum pattern bank from a saved project file (or undo

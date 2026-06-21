@@ -176,5 +176,6 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         // for files written by older builds.
         drum_groups: Vec::new(),
         drum_patterns: r.compose.drum_patterns.clone(),
+        track_groups: r.track_groups.get_all_groups().into_iter().cloned().collect(),
     }
 }

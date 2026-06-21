@@ -99,6 +99,9 @@ pub struct ProjectFile {
     /// builds a single-pattern bank from `drum_groups`).
     #[serde(default)]
     pub drum_patterns: Vec<crate::compose::DrumPattern>,
+    /// Track groups (folder tracks) for project organisation.
+    #[serde(default)]
+    pub track_groups: Vec<resonance_common::track_group::TrackGroup>,
 }
 
 /// An empty project at the current format version with neutral
@@ -135,6 +138,7 @@ impl Default for ProjectFile {
             midi_clock_recv_device: None,
             drum_groups: Vec::new(),
             drum_patterns: Vec::new(),
+            track_groups: Vec::new(),
         }
     }
 }
