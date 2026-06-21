@@ -385,6 +385,11 @@ pub struct AudioClip {
     pub fade_out_curve: FadeCurve,
     /// Per-clip gain in decibels. `0.0` dB = unity (no change).
     pub gain_db: f32,
+    /// Non-destructive vocal pitch/timing correction. `None` (the default)
+    /// means the clip is untuned and incurs zero overhead — existing
+    /// behaviour. `Some(_)` holds the analysis cache plus per-note and
+    /// global edits; the original [`ClipSource`] PCM is never mutated.
+    pub vocal_tuning: Option<super::VocalTuning>,
 }
 
 /// Number of stereo frames per waveform peak bucket.
@@ -431,5 +436,19 @@ impl AudioClip {
     /// End position on timeline in sample frames.
     pub fn end_sample(&self) -> SamplePos {
         self.start_sample + self.duration_frames()
+    }
+
+    /// True when the clip carries vocal-tuning data (it has been analysed
+    /// and/or edited). A clip with `Some(VocalTuning::default())` counts as
+    /// tuned even before analysis populates it.
+    pub fn is_tuned(&self) -> bool {
+        self.vocal_tuning.is_some()
+    }
+
+    /// Mutable access to the clip's [`VocalTuning`], creating an empty
+    /// (default) model on first use. Use this when applying an edit or
+    /// storing analysis results to a clip that may not have been tuned yet.
+    pub fn vocal_tuning_mut(&mut self) -> &mut super::VocalTuning {
+        self.vocal_tuning.get_or_insert_with(super::VocalTuning::default)
     }
 }

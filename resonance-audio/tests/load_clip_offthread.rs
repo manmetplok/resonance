@@ -142,6 +142,7 @@ fn worker_publish_does_not_stall_concurrent_reads() {
             fade_out_frames: 0,
             fade_out_curve: FadeCurve::default(),
             gain_db: 0.0,
+            vocal_tuning: None,
         };
         worker_clips.write().push(clip);
         total_frames
@@ -209,6 +210,7 @@ fn concurrent_loads_all_publish_without_deadlock() {
                 fade_out_frames: 0,
                 fade_out_curve: FadeCurve::default(),
                 gain_db: 0.0,
+                vocal_tuning: None,
             };
             clips_arc.write().push(clip);
         }));

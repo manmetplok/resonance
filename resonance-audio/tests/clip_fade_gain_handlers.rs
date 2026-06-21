@@ -32,6 +32,7 @@ fn sample_clip(id: u64, track_id: u64, frames: usize) -> AudioClip {
         fade_out_frames: 0,
         fade_out_curve: FadeCurve::default(),
         gain_db: 0.0,
+        vocal_tuning: None,
     }
 }
 
