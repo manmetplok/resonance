@@ -44,6 +44,11 @@ pub struct ClapShared<'a> {
     /// Map from CLAP param ID to slot index.
     pub(crate) clap_id_to_slot: std::collections::HashMap<u32, usize>,
     pub(crate) input_channels: Option<u32>,
+    /// Channel count of the optional external sidechain (key) input port, or
+    /// `None` when the plugin declares no sidechain. Captured once from
+    /// `ResonancePlugin::SIDECHAIN_INPUT` at construction; consulted by the
+    /// audio-ports extension and the audio processor.
+    pub(crate) sidechain_channels: Option<u32>,
     /// Cached output-port layout, captured once from `ResonancePlugin::output_layout()`
     /// at plugin construction. The CLAP audio-ports extension, the host, and the
     /// audio processor all consult this instead of re-calling the plugin hook.
@@ -132,6 +137,13 @@ pub struct ClapAudioProcessor<'a, P: ResonancePlugin> {
     /// (read from host into these before the plugin call).
     pub(crate) input_left: Vec<f32>,
     pub(crate) input_right: Vec<f32>,
+    /// Pre-allocated scratch for the external sidechain (key) signal, read
+    /// from the host's secondary input port before the plugin call. Always
+    /// stereo-shaped (a mono key port is mirrored into both); empty when the
+    /// plugin declares no sidechain. Sized at activation, never reallocated
+    /// on the audio thread.
+    pub(crate) key_left: Vec<f32>,
+    pub(crate) key_right: Vec<f32>,
     /// Pre-allocated output scratch, one `(left, right)` pair per declared
     /// output port. Populated by the plugin on each `process()` call and
     /// then copied back into the CLAP audio buffers.

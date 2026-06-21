@@ -36,6 +36,10 @@ mod state;
 // `resonance_plugin::clap_bridge::ClapShared` etc.
 pub use shared::{ClapAudioProcessor, ClapMainThread, ClapShared};
 
+// Sidechain (key) input-port policy — also consumed by the host mixer that
+// delivers the external key to the target plugin's sidechain port.
+pub use ports::{input_port_count, sidechain_port_index, SIDECHAIN_PORT_ID};
+
 // Param metadata is `pub(crate)` and accessed through `clap_bridge::shared`.
 pub(crate) use shared::ParamMeta;
 
@@ -118,6 +122,16 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             }
         }
 
+        // Validate the optional sidechain (key) input port. Like output
+        // ports, only mono/stereo are supported.
+        if let Some(ch) = P::SIDECHAIN_INPUT {
+            if ch != 1 && ch != 2 {
+                return Err(PluginError::Message(
+                    "Only mono and stereo sidechain input ports are supported",
+                ));
+            }
+        }
+
         let mut param_metas: Vec<ParamMeta> = Vec::with_capacity(count);
         let mut param_values: Vec<AtomicU64> = Vec::with_capacity(count);
         let mut clap_id_to_slot: std::collections::HashMap<u32, usize> =
@@ -170,6 +184,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             param_values,
             clap_id_to_slot,
             input_channels: P::INPUT_CHANNELS,
+            sidechain_channels: P::SIDECHAIN_INPUT,
             output_ports,
             midi_input: P::MIDI_INPUT,
             params_dirty: AtomicBool::new(false),

@@ -77,6 +77,20 @@ pub struct OutputBuffer<'a> {
     pub right: &'a mut [f32],
 }
 
+/// Read-only view of the external sidechain (key) signal for one process
+/// block. Delivered to [`ResonancePlugin::process_with_key`] when the plugin
+/// declares [`ResonancePlugin::SIDECHAIN_INPUT`] and the host has connected a
+/// secondary input port.
+///
+/// Always presented stereo-shaped: a mono key port fills both `left` and
+/// `right` with the same samples, so detectors can read either channel
+/// without special-casing channel count. Both slices are exactly `frames`
+/// samples long.
+pub struct KeyBuffer<'a> {
+    pub left: &'a [f32],
+    pub right: &'a [f32],
+}
+
 /// Iterator over note events within a process block.
 /// Borrows from a pre-allocated buffer to avoid audio-thread allocations.
 pub struct EventIterator<'a> {
@@ -143,6 +157,17 @@ pub trait ResonancePlugin: Send + 'static {
     /// Whether this plugin accepts MIDI note input.
     const MIDI_INPUT: bool = false;
 
+    /// Number of channels on an optional external sidechain (key) input
+    /// port. `None` (default) means the plugin declares **no** sidechain
+    /// port and behaves exactly as before: at most one (main) input port.
+    /// `Some(1)` / `Some(2)` opts into a secondary, **non-main** CLAP input
+    /// port (CLAP `IS_MAIN` cleared, distinct port id) carrying an external
+    /// key signal; the per-block key buffer is delivered to
+    /// [`process_with_key`](ResonancePlugin::process_with_key). Only mono (1)
+    /// and stereo (2) are supported; other values are rejected at plugin
+    /// construction.
+    const SIDECHAIN_INPUT: Option<u32> = None;
+
     /// Describe the plugin's audio output layout. Called once at activation
     /// and cached for the plugin's lifetime — **do not** change the port
     /// count across activations, the host caches it and sizes buffers
@@ -197,6 +222,31 @@ pub trait ResonancePlugin: Send + 'static {
         events: &mut EventIterator<'_>,
         tempo: Option<TempoInfo>,
     );
+
+    /// Process a buffer of audio with an optional external sidechain (key)
+    /// signal alongside the main input.
+    ///
+    /// The CLAP bridge always calls this method; the default implementation
+    /// discards the key and forwards to [`process`](ResonancePlugin::process),
+    /// so plugins that don't declare [`SIDECHAIN_INPUT`](ResonancePlugin::SIDECHAIN_INPUT)
+    /// — and existing plugins that never override it — are completely
+    /// unaffected.
+    ///
+    /// Plugins that opt into a sidechain port override **this** method and
+    /// read `key` (the external key for this block, or `None` when the host
+    /// has not connected the sidechain port). `outputs`, `frames`, `events`
+    /// and `tempo` carry the same contract as [`process`](ResonancePlugin::process).
+    fn process_with_key(
+        &mut self,
+        outputs: &mut [OutputBuffer<'_>],
+        key: Option<KeyBuffer<'_>>,
+        frames: usize,
+        events: &mut EventIterator<'_>,
+        tempo: Option<TempoInfo>,
+    ) {
+        let _ = key;
+        self.process(outputs, frames, events, tempo);
+    }
 
     /// Save plugin state to bytes. Default: JSON serialization of params
     /// composed with whatever `extra_state_saver()` returns (so plugins that

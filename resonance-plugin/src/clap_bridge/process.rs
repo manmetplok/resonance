@@ -4,8 +4,9 @@ use std::sync::atomic::Ordering;
 
 use clack_plugin::prelude::*;
 
+use super::ports::sidechain_port_index;
 use super::shared::{ClapAudioProcessor, ClapMainThread, ClapShared};
-use crate::plugin::{EventIterator, NoteEvent, OutputBuffer, ResonancePlugin, TempoInfo};
+use crate::plugin::{EventIterator, KeyBuffer, NoteEvent, OutputBuffer, ResonancePlugin, TempoInfo};
 
 impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainThread<'a, P>>
     for ClapAudioProcessor<'a, P>
@@ -38,11 +39,20 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         let output_scratch = (0..port_count)
             .map(|_| (vec![0.0_f32; max_frames], vec![0.0_f32; max_frames]))
             .collect();
+        // Only allocate key scratch for plugins that declare a sidechain
+        // port; others keep these empty (and never read them).
+        let key_len = if P::SIDECHAIN_INPUT.is_some() {
+            max_frames
+        } else {
+            0
+        };
         Ok(ClapAudioProcessor {
             plugin,
             shared,
             input_left: vec![0.0; max_frames],
             input_right: vec![0.0; max_frames],
+            key_left: vec![0.0; key_len],
+            key_right: vec![0.0; key_len],
             output_scratch,
             note_events: Vec::with_capacity(256),
         })
@@ -214,6 +224,41 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             input_right.fill(0.0);
         }
 
+        // Read the external sidechain (key) signal, if this plugin declares
+        // one, into the key scratch. Always stereo-shaped: a mono key port is
+        // mirrored into both channels so detectors read either uniformly.
+        // `key` is `None` for plugins without a sidechain port, or when the
+        // host did not connect it for this block.
+        let key = if let Some(sc_index) =
+            sidechain_port_index(P::INPUT_CHANNELS, P::SIDECHAIN_INPUT)
+        {
+            let key_left = &mut self.key_left[..frames];
+            let key_right = &mut self.key_right[..frames];
+            key_left.fill(0.0);
+            key_right.fill(0.0);
+            let mut connected = false;
+            if let Some(port) = audio.input_port(sc_index) {
+                if let Some(channels) = port.channels()?.into_f32() {
+                    connected = true;
+                    if let Some(l) = channels.channel(0) {
+                        key_left.copy_from_slice(&l[..frames]);
+                    }
+                    match channels.channel(1) {
+                        // Stereo key port: use the second channel.
+                        Some(r) => key_right.copy_from_slice(&r[..frames]),
+                        // Mono key port: mirror the single channel.
+                        None => key_right.copy_from_slice(key_left),
+                    }
+                }
+            }
+            connected.then_some(KeyBuffer {
+                left: &self.key_left[..frames],
+                right: &self.key_right[..frames],
+            })
+        } else {
+            None
+        };
+
         // Zero every output scratch pair for this frame range, then seed
         // port 0 with the input so effect plugins see their audio in-place.
         for (idx, (l, r)) in self.output_scratch.iter_mut().enumerate() {
@@ -251,7 +296,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         let port_views = unsafe { port_views_arr[..port_views_len].assume_init_mut() };
 
         self.plugin
-            .process(port_views, frames, &mut event_iter, tempo);
+            .process_with_key(port_views, key, frames, &mut event_iter, tempo);
 
         // port_views borrows end here (OutputBuffer has no Drop impl).
 
