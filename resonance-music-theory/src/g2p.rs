@@ -16,6 +16,7 @@
 //! parse cost (~50 ms on first lookup) is amortised across an entire
 //! song.
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use cmudict_fast::{Cmudict, Stress, Symbol};
@@ -142,6 +143,66 @@ pub fn cmu_variant_count(word: &str) -> usize {
         .get(&cleaned)
         .map(|r| r.len().max(1))
         .unwrap_or(1)
+}
+
+/// One CMU pronunciation variant of a word, surfaced for the phoneme
+/// strip's variant picker so a user can choose between e.g. `read`
+/// /riːd/ (present) and /rɛd/ (past).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PronunciationVariant {
+    /// 1-indexed variant number — the same value you'd type as the
+    /// `(N)` lyric hint (`read(2)` picks index 2).
+    pub index: usize,
+    /// Phonemes in the lowercase ARPAbet form the SVS pipeline sings,
+    /// with per-phoneme lexical stress (meaningful on vowels only).
+    /// Identical to what `word(index)` produces in a lyric.
+    pub phonemes: Vec<(&'static str, SyllableStress)>,
+    /// Short human label: uppercase ARPAbet with CMU stress digits on
+    /// the vowels, e.g. `"R IY1 D"`. What you'd write on a score to tell
+    /// one variant apart from another.
+    pub label: String,
+}
+
+/// Enumerate every CMU pronunciation variant of `word`, in CMU order
+/// (index 1 = the default). Each entry carries the phoneme sequence the
+/// SVS pipeline would sing plus a short uppercase-ARPAbet label for the
+/// picker. Out-of-vocabulary words return a single rule-based variant.
+///
+/// Builds on [`cmu_variant_count`] + the internal variant transcriber,
+/// so the phonemes match exactly what `word(N)` produces in a lyric.
+/// Always returns at least one variant for any input.
+pub fn cmu_variants(word: &str) -> Vec<PronunciationVariant> {
+    let count = cmu_variant_count(word);
+    (1..=count)
+        .map(|index| {
+            let phonemes = word_to_phonemes_variant(word, index);
+            let label = arpabet_label(&phonemes);
+            PronunciationVariant {
+                index,
+                phonemes,
+                label,
+            }
+        })
+        .collect()
+}
+
+/// Render a phoneme+stress sequence as an uppercase-ARPAbet display
+/// string with CMU stress digits on the vowels:
+/// `[("r",None),("iy",Primary),("d",None)]` → `"R IY1 D"`. Consonants
+/// and the silence markers (`AP`/`SP`) carry no digit.
+fn arpabet_label(phonemes: &[(&'static str, SyllableStress)]) -> String {
+    phonemes
+        .iter()
+        .map(|(p, stress)| {
+            let upper = p.to_uppercase();
+            if is_consonant(p) || *p == "AP" || *p == "SP" {
+                upper
+            } else {
+                format!("{upper}{}", stress.glyph())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Map a CMU `Symbol` to the lowercase ARPAbet phoneme string the
@@ -561,6 +622,22 @@ fn parse_phoneme_block(inner: &str) -> Vec<Vec<&'static str>> {
     groups
 }
 
+/// The full ARPAbet symbol inventory the SVS pipeline understands, in a
+/// stable display order: vowels (incl. the schwa `ax`), then consonants,
+/// then the silence markers `AP`/`SP`. Drives the add-phoneme palette so
+/// callers can render a button per symbol without poking at the internal
+/// `phf` map. Kept in lockstep with [`ARPABET_INVENTORY`] by a test.
+pub const ARPABET_SYMBOLS: &[&str] = &[
+    // Vowels.
+    "aa", "ae", "ah", "ax", "ao", "aw", "ay", "eh", "er", "ey", "ih", "iy", "ow", "oy", "uh",
+    "uw",
+    // Consonants.
+    "b", "ch", "d", "dh", "f", "g", "hh", "jh", "k", "l", "m", "n", "ng", "p", "r", "s", "sh",
+    "t", "th", "v", "w", "y", "z", "zh",
+    // Silence markers — sung as a rest / breath, not stored in the phf map.
+    "AP", "SP",
+];
+
 /// ARPAbet phoneme inventory the SVS pipeline understands. Keys are the
 /// lowercase canonical forms; the value is the same `&'static str` so we
 /// can hand it back as the canonical form after a case-insensitive
@@ -614,8 +691,10 @@ static ARPABET_INVENTORY: phf::Map<&'static str, &'static str> = phf::phf_map! {
 /// the SVS pipeline understands, returning the canonical `&'static str`
 /// form. Accepts case-insensitive input and the silence markers
 /// (`AP`, `SP`). Returns `None` for unknown symbols so callers can
-/// silently drop typos rather than crash.
-fn canonical_phoneme(sym: &str) -> Option<&'static str> {
+/// silently drop typos rather than crash. Public so the phoneme-strip
+/// editor and add-phoneme palette can validate user input against the
+/// exact same inventory the SVS pipeline sings.
+pub fn canonical_phoneme(sym: &str) -> Option<&'static str> {
     // Silence markers are uppercase-only by convention; check the
     // original input before lowercasing so `"ap"` / `"sp"` don't sneak
     // through as silence.
@@ -664,17 +743,50 @@ pub fn is_slur_lyric(s: &str) -> bool {
     t == "+" || t == "-"
 }
 
+/// Where a syllable's phonemes came from, so the UI can badge edited /
+/// dictionary syllables and downstream code can reason about how much to
+/// trust the transcription. The resolution precedence is
+/// `Edited` > `Dict` > `Auto`: a per-syllable override (or an inline
+/// `[..]` block) beats a caller-supplied dictionary hit, which beats the
+/// CMU / rule-based auto transcription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PhonemeProvenance {
+    /// CMU dictionary or rule-based fallback — the default path.
+    #[default]
+    Auto,
+    /// A caller-supplied word→phonemes dictionary entry replaced CMU.
+    Dict,
+    /// A per-syllable phoneme override: an inline `[..]` lyric block or
+    /// a caller-supplied per-syllable edit.
+    Edited,
+}
+
+/// A caller-supplied pronunciation dictionary: cleaned lowercase word →
+/// the flat phoneme list to sing for the *whole* word, overriding CMU.
+/// Build the phoneme vec with [`canonical_phoneme`] so every symbol is a
+/// valid `&'static str` the pipeline recognises. List phonemes flat (no
+/// `·`); the resolver re-splits them across the word's syllable count
+/// exactly like the CMU path. Dictionary phonemes carry no stress.
+pub type PhonemeDictionary = HashMap<String, Vec<&'static str>>;
+
+/// A caller-supplied per-syllable phoneme override, keyed by the
+/// resolved-syllable index (the `syllable_index` an [`AssignedSyllable`]
+/// reports). Highest precedence — replaces whatever the resolver picked
+/// for that syllable. Build values with [`canonical_phoneme`].
+pub type SyllableOverrides = HashMap<usize, Vec<&'static str>>;
+
 /// One syllable resolved against the lyric draft. Carries the surface
 /// label (the glyphs you'd write on a score), the phoneme list the
 /// SVS model will sing, a `is_word_end` flag that drives SP injection
-/// between words, and the syllable's lexical stress (drawn from CMU's
-/// stress marks on its vowel).
+/// between words, the syllable's lexical stress (drawn from CMU's
+/// stress marks on its vowel), and the phonemes' [`PhonemeProvenance`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSyllable {
     pub label: String,
     pub phonemes: Vec<&'static str>,
     pub is_word_end: bool,
     pub stress: SyllableStress,
+    pub provenance: PhonemeProvenance,
 }
 
 /// One note's assignment after the lyric side-table annotations have
@@ -707,6 +819,9 @@ pub struct AssignedSyllable {
     /// per-syllable velocity / tension bump and the stress overlay
     /// in the vocal roll.
     pub stress: SyllableStress,
+    /// Where this note's phonemes came from. Slur notes inherit the
+    /// held syllable's provenance. See [`PhonemeProvenance`].
+    pub provenance: PhonemeProvenance,
 }
 
 /// Resolve every syllable in a lyric draft to its (surface, phonemes,
@@ -718,7 +833,23 @@ pub struct AssignedSyllable {
 /// Phoneme-block tokens (`[hh ah]` overrides) get their label set to
 /// the bracketed phoneme list — the user explicitly typed phonemes,
 /// not glyphs, so that's the most faithful surface to display.
+///
+/// Equivalent to [`resolve_draft_with_dict`] with an empty dictionary.
 pub fn resolve_draft(draft: &[crate::derive::LyricLine]) -> Vec<ResolvedSyllable> {
+    resolve_draft_with_dict(draft, &PhonemeDictionary::new())
+}
+
+/// Like [`resolve_draft`], but a caller-supplied [`PhonemeDictionary`]
+/// takes precedence over the CMU / rule-based transcription for any word
+/// it contains (matched on the cleaned, lowercased word). Dictionary
+/// phonemes are re-split across the word's syllable count just like CMU
+/// output and reported with [`PhonemeProvenance::Dict`]; words absent
+/// from the dictionary resolve exactly as before (`Auto`). Inline
+/// `[..]` blocks always win and report `Edited`.
+pub fn resolve_draft_with_dict(
+    draft: &[crate::derive::LyricLine],
+    dictionary: &PhonemeDictionary,
+) -> Vec<ResolvedSyllable> {
     let mut tokens: Vec<LyricToken> = Vec::new();
     for line in draft {
         tokens.extend(tokenize_line(&line.text));
@@ -735,11 +866,26 @@ pub fn resolve_draft(draft: &[crate::derive::LyricLine]) -> Vec<ResolvedSyllable
                         is_word_end: i == last_idx,
                         // Bracket overrides carry no stress info.
                         stress: SyllableStress::None,
+                        // An inline block is the user typing phonemes
+                        // directly — the highest-precedence source.
+                        provenance: PhonemeProvenance::Edited,
                     });
                 }
             }
             LyricToken::Word { cleaned, syl_count, variant_idx } => {
-                let phonemes = word_to_phonemes_variant(&cleaned, variant_idx);
+                let (phonemes, provenance) = match dictionary.get(&cleaned) {
+                    Some(dict_phonemes) => (
+                        dict_phonemes
+                            .iter()
+                            .map(|p| (*p, SyllableStress::None))
+                            .collect::<Vec<_>>(),
+                        PhonemeProvenance::Dict,
+                    ),
+                    None => (
+                        word_to_phonemes_variant(&cleaned, variant_idx),
+                        PhonemeProvenance::Auto,
+                    ),
+                };
                 let phoneme_groups: Vec<Vec<(&'static str, SyllableStress)>> = if syl_count <= 1 {
                     vec![phonemes]
                 } else {
@@ -773,6 +919,7 @@ pub fn resolve_draft(draft: &[crate::derive::LyricLine]) -> Vec<ResolvedSyllable
                         phonemes,
                         is_word_end: i == last_idx,
                         stress,
+                        provenance,
                     });
                 }
             }
@@ -795,16 +942,40 @@ pub fn resolve_draft(draft: &[crate::derive::LyricLine]) -> Vec<ResolvedSyllable
 ///   phonemes still come from the resolved syllable).
 ///
 /// Returns exactly `note_count` entries.
+///
+/// Equivalent to [`assign_syllables_to_notes_with`] with no per-syllable
+/// overrides.
 pub fn assign_syllables_to_notes(
     syllables: &[ResolvedSyllable],
     annotations: &[String],
     note_count: usize,
+) -> Vec<AssignedSyllable> {
+    assign_syllables_to_notes_with(syllables, annotations, note_count, &SyllableOverrides::new())
+}
+
+/// Like [`assign_syllables_to_notes`], but applies caller-supplied
+/// per-syllable phoneme [`SyllableOverrides`] — the highest-precedence
+/// resolution layer. When a non-slur note resolves to a syllable whose
+/// index is present in `overrides`, that note sings the override
+/// phonemes and reports [`PhonemeProvenance::Edited`]; otherwise it
+/// keeps the resolved syllable's phonemes and provenance (`Dict` if the
+/// syllable came from a dictionary, else `Auto`). A following slur note
+/// holds the (possibly overridden) vowel and inherits its provenance.
+///
+/// With an empty `overrides` map this is byte-for-byte identical to the
+/// pre-override behaviour, so existing call sites are unaffected.
+pub fn assign_syllables_to_notes_with(
+    syllables: &[ResolvedSyllable],
+    annotations: &[String],
+    note_count: usize,
+    overrides: &SyllableOverrides,
 ) -> Vec<AssignedSyllable> {
     let mut out: Vec<AssignedSyllable> = Vec::with_capacity(note_count);
     let mut cursor: usize = 0;
     let mut last_syllable_idx: usize = 0;
     let mut last_vowel: Option<&'static str> = None;
     let mut last_stress: SyllableStress = SyllableStress::None;
+    let mut last_provenance: PhonemeProvenance = PhonemeProvenance::Auto;
     for i in 0..note_count {
         let entry = annotations.get(i).map(|s| s.trim()).unwrap_or("");
         if is_slur_lyric(entry) {
@@ -817,6 +988,7 @@ pub fn assign_syllables_to_notes(
                 is_word_end: false,
                 syllable_index: last_syllable_idx,
                 stress: last_stress,
+                provenance: last_provenance,
             });
             continue;
         }
@@ -831,20 +1003,31 @@ pub fn assign_syllables_to_notes(
                 is_word_end: false,
                 syllable_index: syl_index,
                 stress: SyllableStress::None,
+                provenance: PhonemeProvenance::Auto,
             });
             continue;
+        };
+        // Override > dictionary > CMU-auto: a per-syllable override (keyed
+        // by resolved-syllable index) replaces the phonemes and stamps
+        // `Edited`; otherwise we keep the syllable's own phonemes and
+        // provenance.
+        let (phonemes, provenance) = match overrides.get(&syl_index) {
+            Some(ov) => (ov.clone(), PhonemeProvenance::Edited),
+            None => (syl.phonemes.clone(), syl.provenance),
         };
         // Cache the last non-consonant phoneme so a following slur
         // note can hold the vowel. Falls back to the final phoneme
         // when the syllable is all-consonant (rare; only happens for
-        // pathological overrides).
-        if let Some(v) = syl.phonemes.iter().rev().find(|p| !is_consonant(p)) {
+        // pathological overrides). Reads the resolved phonemes (after
+        // any override) so a slur holds the edited vowel.
+        if let Some(v) = phonemes.iter().rev().find(|p| !is_consonant(p)) {
             last_vowel = Some(*v);
-        } else if let Some(v) = syl.phonemes.last() {
+        } else if let Some(v) = phonemes.last() {
             last_vowel = Some(*v);
         }
         last_syllable_idx = syl_index;
         last_stress = syl.stress;
+        last_provenance = provenance;
         let label = if !entry.is_empty() {
             entry.to_string()
         } else {
@@ -852,11 +1035,12 @@ pub fn assign_syllables_to_notes(
         };
         out.push(AssignedSyllable {
             label,
-            phonemes: syl.phonemes.clone(),
+            phonemes,
             is_slur: false,
             is_word_end: syl.is_word_end,
             syllable_index: syl_index,
             stress: syl.stress,
+            provenance,
         });
     }
     out
