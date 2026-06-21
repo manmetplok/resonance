@@ -75,6 +75,16 @@ const IIDIM: Degree = Degree {
     inversion: 0,
 };
 
+/// v — minor dominant. Schema-specific vocabulary: the dominant root
+/// recoloured minor, part of the pentatonic schema's "quality-free"
+/// recolouring (see [`PENTATONIC_VOCAB`]).
+const V_MIN: Degree = Degree {
+    root: 5,
+    flat: false,
+    quality: ChordQuality::Min,
+    inversion: 0,
+};
+
 // ---------------------------------------------------------------------------
 // SchemaKind
 // ---------------------------------------------------------------------------
@@ -116,11 +126,21 @@ pub enum SchemaKind {
     CircleOfFifths,
     /// Puff opener: I–iii–IV–I ("Puff, the Magic Dragon").
     Puff,
+    /// Pentatonic walk: I–ii–iii–V–vi. Every chord is rooted on a
+    /// major-pentatonic scale degree (1 2 3 5 6 — no 4 or 7), so the
+    /// progression has no leading-tone pull and a rootsy, modal-folk
+    /// identity. Unlike the diatonic schemas the substitution vocabulary
+    /// is **quality-free**: every position can be recoloured major↔minor
+    /// on the same pentatonic root (I↔i, ii↔II, V↔v, …), and most can
+    /// additionally swap for a function-sharing pentatonic neighbour
+    /// (the supertonic, which shares only its root and fifth with the
+    /// other pentatonic triads, is limited to its same-root flip).
+    Pentatonic,
 }
 
 impl SchemaKind {
     /// All schema kinds, in display order.
-    pub const ALL: [SchemaKind; 13] = [
+    pub const ALL: [SchemaKind; 14] = [
         SchemaKind::TwelveBarBlues,
         SchemaKind::DooWop,
         SchemaKind::Axis,
@@ -134,6 +154,7 @@ impl SchemaKind {
         SchemaKind::LydianShuttle,
         SchemaKind::CircleOfFifths,
         SchemaKind::Puff,
+        SchemaKind::Pentatonic,
     ];
 
     /// The canonical degree loop in root rotation.
@@ -152,6 +173,8 @@ impl SchemaKind {
             SchemaKind::LydianShuttle => &[I, II_MAJ],
             SchemaKind::CircleOfFifths => &[I, IV, VIID, III, VI, II, V, I],
             SchemaKind::Puff => &[I, III, IV, I],
+            // Walks the five major-pentatonic triad roots in order.
+            SchemaKind::Pentatonic => &[I, II, III, V, VI],
         }
     }
 
@@ -187,6 +210,18 @@ impl SchemaKind {
             SchemaKind::LydianShuttle => "lydian-shuttle",
             SchemaKind::CircleOfFifths => "circle-of-fifths",
             SchemaKind::Puff => "puff",
+            SchemaKind::Pentatonic => "pentatonic",
+        }
+    }
+
+    /// Substitution vocabulary for this schema's function-preserving
+    /// swaps. Most schemas draw from the shared major/minor vocabulary
+    /// (see [`vocabulary`]); the pentatonic schema overrides it with a
+    /// quality-free, pentatonic-rooted set (see [`PENTATONIC_VOCAB`]).
+    fn substitution_vocab(self) -> &'static [Degree] {
+        match self {
+            SchemaKind::Pentatonic => PENTATONIC_VOCAB,
+            _ => vocabulary(self.mode()),
         }
     }
 
@@ -206,6 +241,7 @@ impl SchemaKind {
             SchemaKind::LydianShuttle => "Lydian Shuttle",
             SchemaKind::CircleOfFifths => "Circle of Fifths",
             SchemaKind::Puff => "Puff",
+            SchemaKind::Pentatonic => "Pentatonic",
         }
     }
 }
@@ -256,7 +292,7 @@ pub fn generate(
         0.0
     };
     let mode = kind.mode();
-    let vocab = vocabulary(mode);
+    let vocab = kind.substitution_vocab();
 
     let mut rng = XorShift::new(seed);
     let mut chords = Vec::with_capacity(len);
@@ -312,6 +348,15 @@ fn vocabulary(mode: Mode) -> &'static [Degree] {
         _ => &[I, II, III, IV, V, VI, VIID, BVI, BVII, IVMN, II_MAJ],
     }
 }
+
+/// Substitution vocabulary for [`SchemaKind::Pentatonic`]: every triad
+/// rooted on a major-pentatonic scale degree (1 2 3 5 6), in both major
+/// and minor qualities. Because a major and minor triad on the same root
+/// share two pitch classes (root + fifth), the [`MIN_SHARED_TONES`]
+/// filter admits same-root quality flips, giving the schema its
+/// "quality-free" recolouring while still excluding the avoid-tone roots
+/// 4 and 7.
+const PENTATONIC_VOCAB: &[Degree] = &[I, IMIN, II, II_MAJ, III, IIIM, V, V_MIN, VI, VIM];
 
 /// All vocabulary degrees that share at least [`MIN_SHARED_TONES`]
 /// pitch classes with `original` (projected through `mode`), excluding
