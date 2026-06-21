@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Resonance — Performance Mode (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (theme.rs) ------------------------------- */
+  :root {
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --t1:#e8e7e3; --t2:#9aa0ac; --t3:#5d626d; --t4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --bad:#e87b8b;
+    --r-xs:4px; --r-sm:6px; --r-md:7px; --r-lg:8px; --r-xl:12px;
+    --sans:"Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono:"Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --serif:"Instrument Serif", Georgia, "Times New Roman", serif;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { background:var(--bg-0); color:var(--t1); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; }
+  body { padding:40px; display:flex; flex-direction:column; gap:48px; }
+
+  /* Page caption */
+  .doc-head { max-width:1920px; margin:0 auto; width:100%; }
+  .doc-head h1 { font-family:var(--serif); font-style:italic; font-size:34px;
+    font-weight:400; color:var(--t1); letter-spacing:.3px; }
+  .doc-head p { color:var(--t2); font-size:14px; margin-top:6px; max-width:880px;
+    line-height:1.5; }
+  .doc-head .legend { display:flex; gap:14px; margin-top:14px; flex-wrap:wrap; }
+  .doc-head .legend span { font-family:var(--mono); font-size:11px; color:var(--t3);
+    border:1px solid var(--line); border-radius:var(--r-sm); padding:4px 9px; }
+
+  /* ---- A "frame" = one full-screen Performance state ------------------- */
+  .frame {
+    position:relative; width:1920px; max-width:100%; aspect-ratio:16/9;
+    margin:0 auto; background:var(--bg-0); border:1px solid var(--line);
+    border-radius:var(--r-xl); overflow:hidden;
+    display:grid; grid-template-rows:56px 1fr 180px 44px;
+  }
+  .frame-tag {
+    position:absolute; top:70px; left:14px; z-index:30;
+    font-family:var(--mono); font-size:11px; color:var(--t3);
+    background:rgba(15,16,19,.7); border:1px solid var(--line);
+    border-radius:999px; padding:5px 12px; backdrop-filter:blur(4px);
+  }
+
+  /* ---- Status bar ----------------------------------------------------- */
+  .status { display:flex; align-items:center; justify-content:space-between;
+    padding:0 28px; border-bottom:1px solid var(--line-2);
+    background:linear-gradient(180deg, var(--bg-1), var(--bg-0)); }
+  .status .grp { display:flex; align-items:center; gap:14px; }
+  .pill { font-family:var(--sans); font-size:11px; font-weight:600;
+    letter-spacing:1.4px; text-transform:uppercase; padding:4px 11px;
+    border-radius:999px; }
+  .pill.lav { color:var(--accent-soft); background:var(--accent-dim);
+    border:1px solid var(--accent-line); }
+  .proj { font-family:var(--serif); font-style:italic; font-size:19px; color:var(--t2); }
+  .xport { display:flex; align-items:center; gap:10px; font-size:13px;
+    letter-spacing:1.6px; text-transform:uppercase; color:var(--t2); font-weight:600; }
+  .dot { width:11px; height:11px; border-radius:50%; }
+  .dot.rec { background:var(--bad); box-shadow:0 0 0 0 rgba(232,123,139,.6);
+    animation:pulse 1.4s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(232,123,139,.55);}
+    70%{box-shadow:0 0 0 9px rgba(232,123,139,0);} 100%{box-shadow:0 0 0 0 rgba(232,123,139,0);} }
+  .tri { width:0;height:0;border-left:9px solid var(--t2);
+    border-top:6px solid transparent;border-bottom:6px solid transparent; }
+  .telem { display:flex; align-items:center; gap:18px; }
+  .telem .num { font-family:var(--mono); font-size:14px; color:var(--t1);
+    letter-spacing:.5px; }
+  .telem .lab { font-family:var(--mono); font-size:13px; color:var(--t3); }
+  .telem .clock { font-family:var(--mono); font-size:18px; color:var(--warm);
+    letter-spacing:2px; }
+  .ghost { font-family:var(--sans); font-size:12px; color:var(--t2);
+    border:1px solid var(--line); background:transparent; border-radius:var(--r-md);
+    padding:6px 12px; cursor:pointer; }
+  .ghost kbd { font-family:var(--mono); color:var(--t3); margin-left:6px; }
+
+  /* ---- Center stage --------------------------------------------------- */
+  .stage { display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
+    gap:60px; padding:0 80px; position:relative; }
+  .stage-left { display:flex; flex-direction:column; align-items:flex-end;
+    justify-content:center; gap:18px; }
+  .chord-symbol { font-family:var(--serif); font-style:italic; font-weight:400;
+    line-height:.86; color:var(--t1); }
+  .chord-symbol .big { font-size:230px; letter-spacing:-2px; display:block; }
+  .chord-symbol .quality { color:var(--accent-soft); }
+  .chord-symbol .slash { color:var(--t2); font-size:150px; }
+  .chord-meta { font-family:var(--mono); font-size:14px; color:var(--t3);
+    text-align:right; letter-spacing:1px; text-transform:uppercase; }
+  .chord-meta b { color:var(--t2); font-weight:500; }
+  .chord-tones { display:flex; gap:8px; justify-content:flex-end; }
+  .tone { font-family:var(--mono); font-size:13px; padding:3px 9px;
+    border-radius:var(--r-sm); border:1px solid var(--line); color:var(--t2); }
+  .tone.root { color:#0e0a1f; background:var(--accent); border-color:var(--accent);
+    font-weight:600; }
+
+  .stage-center { display:flex; flex-direction:column; align-items:center; gap:14px; }
+  .diagram-cap { font-family:var(--mono); font-size:12px; color:var(--t3);
+    letter-spacing:1px; text-transform:uppercase; }
+
+  .stage-right { display:flex; flex-direction:column; align-items:flex-start;
+    justify-content:center; gap:20px; }
+
+  /* beat ring labels */
+  .ring-wrap { position:relative; width:210px; height:210px; }
+  .ring-center { position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; pointer-events:none; }
+  .ring-center .beat-no { font-family:var(--mono); font-size:64px; color:var(--t1);
+    line-height:1; }
+  .ring-center .beat-of { font-family:var(--mono); font-size:14px; color:var(--t3);
+    margin-top:6px; letter-spacing:1px; }
+  .untilnext { font-family:var(--mono); font-size:13px; color:var(--warm);
+    letter-spacing:1px; text-align:center; }
+  .untilnext span { color:var(--t3); }
+
+  /* count-in big number */
+  .countin { display:flex; flex-direction:column; align-items:center; gap:10px; }
+  .countin .num { font-family:var(--mono); font-size:150px; color:var(--good);
+    line-height:1; text-shadow:0 0 40px rgba(109,214,163,.25); }
+  .countin .lab { font-family:var(--sans); font-size:14px; font-weight:600;
+    letter-spacing:3px; text-transform:uppercase; color:var(--good); }
+  .countin .primed { font-family:var(--mono); font-size:12px; color:var(--t3);
+    letter-spacing:1px; text-transform:uppercase; }
+
+  /* empty state */
+  .empty { grid-column:1 / -1; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:22px; }
+  .empty .dash { font-family:var(--serif); font-style:italic; font-size:200px;
+    color:var(--t4); line-height:.8; }
+  .empty .msg { font-size:20px; color:var(--t2); }
+  .empty .hint { font-family:var(--mono); font-size:13px; color:var(--t3);
+    letter-spacing:.5px; }
+
+  /* ---- Next-chords lane ----------------------------------------------- */
+  .nextlane { border-top:1px solid var(--line-2);
+    background:linear-gradient(180deg, var(--bg-0), var(--bg-1));
+    display:flex; align-items:center; gap:22px; padding:0 80px; }
+  .nextlane .nl-label { font-family:var(--mono); font-size:12px; color:var(--t3);
+    letter-spacing:1.5px; text-transform:uppercase; writing-mode:vertical-rl;
+    transform:rotate(180deg); height:120px; display:flex; align-items:center;
+    justify-content:center; }
+  .nl-cards { display:flex; align-items:center; gap:26px; }
+  .nl-card { display:flex; align-items:center; gap:18px; padding:14px 22px;
+    border-radius:var(--r-lg); border:1px solid transparent; }
+  .nl-card.first { border-color:var(--accent-line); background:var(--accent-dim); }
+  .nl-card .sym { font-family:var(--serif); font-style:italic; }
+  .nl-card.first .sym { font-size:56px; color:var(--t1); }
+  .nl-card .sym { font-size:40px; color:var(--t2); }
+  .nl-card.dim .sym { color:var(--t3); }
+  .nl-when { font-family:var(--mono); font-size:11px; color:var(--t3);
+    letter-spacing:1px; text-transform:uppercase; margin-top:4px; }
+  .nl-card.first .nl-when { color:var(--accent-soft); }
+  .nl-arrow { color:var(--t4); font-size:20px; }
+
+  /* ---- Footer setting strip ------------------------------------------- */
+  .footer { display:flex; align-items:center; justify-content:space-between;
+    padding:0 28px; border-top:1px solid var(--line-2); background:var(--bg-0); }
+  .seg { display:flex; gap:0; border:1px solid var(--line); border-radius:var(--r-sm);
+    overflow:hidden; }
+  .seg button { font-family:var(--sans); font-size:12px; color:var(--t2);
+    background:transparent; border:none; padding:6px 13px; cursor:pointer;
+    border-right:1px solid var(--line-2); }
+  .seg button:last-child { border-right:none; }
+  .seg button.on { color:var(--t1); background:var(--bg-3); }
+  .footer .grp { display:flex; align-items:center; gap:16px; }
+  .footer .glabel { font-family:var(--mono); font-size:11px; color:var(--t3);
+    letter-spacing:1px; text-transform:uppercase; }
+  .stepper { display:flex; align-items:center; gap:0; border:1px solid var(--line);
+    border-radius:var(--r-sm); overflow:hidden; }
+  .stepper button { background:transparent; border:none; color:var(--t2);
+    width:26px; height:28px; cursor:pointer; font-size:14px; }
+  .stepper .val { font-family:var(--mono); font-size:12px; color:var(--t1);
+    padding:0 12px; min-width:62px; text-align:center; }
+  .khints { font-family:var(--mono); font-size:11px; color:var(--t3); letter-spacing:.5px; }
+  .khints kbd { color:var(--t2); }
+</style>
+</head>
+<body>
+
+<div class="doc-head">
+  <h1>Performance Mode — live chord teleprompter</h1>
+  <p>Design prototype for ba epic #11. A full-screen, distraction-free view that follows
+     the transport during a take: a huge current chord with a playable fingering diagram,
+     a beat / count-in cue, and a next-chords preview. Readable from across the room.
+     Built strictly on the Resonance theme tokens, the chord-box convention from
+     <code>chord_sheet_pdf.rs</code>, and the fretboard voicing model. Four states shown.</p>
+  <div class="legend">
+    <span>serif chord · mono telemetry · Geist labels</span>
+    <span>root dot = ACCENT lavender</span>
+    <span>WARM = transport / playhead</span>
+    <span>GOOD mint = count-in</span>
+    <span>BAD pink = record arm</span>
+  </div>
+</div>
+
+<!-- =====================================================================
+     STATE 1 — POPULATED / LIVE RECORDING  (the hero)
+====================================================================== -->
+<div class="frame" id="f-live">
+  <div class="frame-tag">STATE · populated / recording</div>
+
+  <div class="status">
+    <div class="grp">
+      <span class="pill lav">Performance</span>
+      <span class="proj">Nightdrive</span>
+    </div>
+    <div class="xport">
+      <span class="dot rec"></span> Recording
+    </div>
+    <div class="telem">
+      <span class="clock">12 . 3</span>
+      <span class="num">90</span><span class="lab">BPM</span>
+      <span class="num">6/8</span>
+      <span class="num">B</span><span class="lab">min</span>
+      <button class="ghost">Exit <kbd>⎋</kbd></button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-left">
+      <div class="chord-symbol"><span class="big">C<span class="quality">m7</span></span></div>
+      <div class="chord-tones">
+        <span class="tone root">C</span><span class="tone">E♭</span>
+        <span class="tone">G</span><span class="tone">B♭</span>
+      </div>
+      <div class="chord-meta"><b>Current</b> · bar 12 · 2 beats left</div>
+    </div>
+
+    <div class="stage-center">
+      <div id="diag-live"></div>
+      <div class="diagram-cap">Open position · Guitar 6</div>
+    </div>
+
+    <div class="stage-right">
+      <div class="ring-wrap"><div id="ring-live"></div>
+        <div class="ring-center">
+          <span class="beat-no">3</span><span class="beat-of">/ 6</span>
+        </div>
+      </div>
+      <div class="untilnext">F7 <span>in 2 beats</span></div>
+    </div>
+  </div>
+
+  <div class="nextlane">
+    <div class="nl-label">Up next</div>
+    <div class="nl-cards">
+      <div class="nl-card first">
+        <span class="sym">F<span style="color:var(--accent-soft)">7</span></span>
+        <div><div id="mini-f7"></div></div>
+        <div class="nl-when">in 1 bar</div>
+      </div>
+      <span class="nl-arrow">›</span>
+      <div class="nl-card">
+        <span class="sym">B♭<span style="color:var(--t3)">maj7</span></span>
+        <div><div id="mini-bb"></div></div>
+        <div class="nl-when">in 2 bars</div>
+      </div>
+      <span class="nl-arrow">›</span>
+      <div class="nl-card dim">
+        <span class="sym">G<span style="color:var(--t4)">m7</span></span>
+        <div><div id="mini-gm"></div></div>
+        <div class="nl-when">in 3 bars</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="grp">
+      <span class="glabel">Instrument</span>
+      <div class="seg">
+        <button class="on">Guitar 6</button><button>Guitar 8</button>
+        <button>Bass 4</button><button>Bass 5</button>
+      </div>
+      <span class="glabel">Capo</span>
+      <div class="stepper"><button>–</button><span class="val">0</span><button>+</button></div>
+    </div>
+    <div class="khints">
+      <kbd>Space</kbd> play · <kbd>R</kbd> record · <kbd>F</kbd> fullscreen · <kbd>⎋</kbd> exit
+    </div>
+  </div>
+</div>
+
+<!-- =====================================================================
+     STATE 2 — COUNT-IN  (pre-count, first chord primed)
+====================================================================== -->
+<div class="frame" id="f-count">
+  <div class="frame-tag">STATE · count-in (pre-count)</div>
+
+  <div class="status">
+    <div class="grp">
+      <span class="pill lav">Performance</span>
+      <span class="proj">Nightdrive</span>
+    </div>
+    <div class="xport" style="color:var(--bad)">
+      <span class="dot rec"></span> Armed · counting in
+    </div>
+    <div class="telem">
+      <span class="clock" style="color:var(--good)">– . 2</span>
+      <span class="num">90</span><span class="lab">BPM</span>
+      <span class="num">6/8</span>
+      <span class="num">B</span><span class="lab">min</span>
+      <button class="ghost">Exit <kbd>⎋</kbd></button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-left">
+      <div class="chord-symbol" style="opacity:.45">
+        <span class="big">E<span class="quality">m</span></span></div>
+      <div class="chord-meta" style="opacity:.6"><b>First chord</b> · primed</div>
+    </div>
+
+    <div class="stage-center" style="opacity:.5">
+      <div id="diag-em"></div>
+      <div class="diagram-cap">Open position · Guitar 6</div>
+    </div>
+
+    <div class="stage-right">
+      <div class="countin">
+        <span class="num">2</span>
+        <span class="lab">Count-in</span>
+        <span class="primed">Em ready · audio in 2 beats</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="nextlane">
+    <div class="nl-label">Starting</div>
+    <div class="nl-cards">
+      <div class="nl-card first">
+        <span class="sym">E<span style="color:var(--accent-soft)">m</span></span>
+        <div class="nl-when">first</div>
+      </div>
+      <span class="nl-arrow">›</span>
+      <div class="nl-card dim"><span class="sym">C<span style="color:var(--t4)">maj7</span></span>
+        <div class="nl-when">in 1 bar</div></div>
+      <span class="nl-arrow">›</span>
+      <div class="nl-card dim"><span class="sym">D</span>
+        <div class="nl-when">in 2 bars</div></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="grp">
+      <span class="glabel">Instrument</span>
+      <div class="seg">
+        <button class="on">Guitar 6</button><button>Guitar 8</button>
+        <button>Bass 4</button><button>Bass 5</button>
+      </div>
+      <span class="glabel">Capo</span>
+      <div class="stepper"><button>–</button><span class="val">0</span><button>+</button></div>
+    </div>
+    <div class="khints"><kbd>Space</kbd> play · <kbd>R</kbd> record · <kbd>F</kbd> fullscreen · <kbd>⎋</kbd> exit</div>
+  </div>
+</div>
+
+<!-- =====================================================================
+     STATE 3 — REHEARSAL / SLASH CHORD, BOXED VOICING
+====================================================================== -->
+<div class="frame" id="f-slash">
+  <div class="frame-tag">STATE · rehearsal · slash chord, boxed voicing</div>
+
+  <div class="status">
+    <div class="grp">
+      <span class="pill lav">Performance</span>
+      <span class="proj">Nightdrive</span>
+    </div>
+    <div class="xport"><span class="tri"></span> Rehearsal</div>
+    <div class="telem">
+      <span class="clock">06 . 1</span>
+      <span class="num">90</span><span class="lab">BPM</span>
+      <span class="num">6/8</span>
+      <span class="num">B</span><span class="lab">min</span>
+      <button class="ghost">Exit <kbd>⎋</kbd></button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-left">
+      <div class="chord-symbol"><span class="big">F<span class="slash">/A</span></span></div>
+      <div class="chord-tones">
+        <span class="tone">F</span><span class="tone">A</span>
+        <span class="tone">C</span><span class="tone root">A bass</span>
+      </div>
+      <div class="chord-meta"><b>Current</b> · first inversion · bass A</div>
+    </div>
+
+    <div class="stage-center">
+      <div id="diag-slash"></div>
+      <div class="diagram-cap">Boxed · 5fr · bass on low string</div>
+    </div>
+
+    <div class="stage-right">
+      <div class="ring-wrap"><div id="ring-slash"></div>
+        <div class="ring-center">
+          <span class="beat-no">1</span><span class="beat-of">/ 6</span>
+        </div>
+      </div>
+      <div class="untilnext">Gm <span>in 5 beats</span></div>
+    </div>
+  </div>
+
+  <div class="nextlane">
+    <div class="nl-label">Up next</div>
+    <div class="nl-cards">
+      <div class="nl-card first">
+        <span class="sym">G<span style="color:var(--accent-soft)">m</span></span>
+        <div><div id="mini-gm2"></div></div>
+        <div class="nl-when">in 1 bar</div>
+      </div>
+      <span class="nl-arrow">›</span>
+      <div class="nl-card">
+        <span class="sym">A<span style="color:var(--t3)">ø7</span></span>
+        <div><div id="mini-am7b5"></div></div>
+        <div class="nl-when">in 2 bars</div>
+      </div>
+      <span class="nl-arrow">›</span>
+      <div class="nl-card dim">
+        <span class="sym">D<span style="color:var(--t4)">7</span></span>
+        <div><div id="mini-d7"></div></div>
+        <div class="nl-when">in 3 bars</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="grp">
+      <span class="glabel">Instrument</span>
+      <div class="seg">
+        <button class="on">Guitar 6</button><button>Guitar 8</button>
+        <button>Bass 4</button><button>Bass 5</button>
+      </div>
+      <span class="glabel">Capo</span>
+      <div class="stepper"><button>–</button><span class="val">0</span><button>+</button></div>
+    </div>
+    <div class="khints"><kbd>Space</kbd> play · <kbd>R</kbd> record · <kbd>F</kbd> fullscreen · <kbd>⎋</kbd> exit</div>
+  </div>
+</div>
+
+<!-- =====================================================================
+     STATE 4 — EMPTY / NO PROGRESSION
+====================================================================== -->
+<div class="frame" id="f-empty">
+  <div class="frame-tag">STATE · empty / no chord under playhead</div>
+
+  <div class="status">
+    <div class="grp">
+      <span class="pill lav">Performance</span>
+      <span class="proj">Untitled</span>
+    </div>
+    <div class="xport"><span class="tri"></span> Stopped</div>
+    <div class="telem">
+      <span class="clock">01 . 1</span>
+      <span class="num">120</span><span class="lab">BPM</span>
+      <span class="num">4/4</span>
+      <span class="num">C</span><span class="lab">maj</span>
+      <button class="ghost">Exit <kbd>⎋</kbd></button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="empty">
+      <span class="dash">—</span>
+      <span class="msg">No chord under the playhead</span>
+      <span class="hint">Place sections with a progression in Compose, then roll the transport</span>
+    </div>
+  </div>
+
+  <div class="nextlane">
+    <div class="nl-label">Up next</div>
+    <div class="nl-cards">
+      <div class="nl-card dim"><span class="sym" style="color:var(--t4)">—</span>
+        <div class="nl-when">no upcoming chords</div></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="grp">
+      <span class="glabel">Instrument</span>
+      <div class="seg">
+        <button class="on">Guitar 6</button><button>Guitar 8</button>
+        <button>Bass 4</button><button>Bass 5</button>
+      </div>
+      <span class="glabel">Capo</span>
+      <div class="stepper"><button>–</button><span class="val">0</span><button>+</button></div>
+    </div>
+    <div class="khints"><kbd>Space</kbd> play · <kbd>R</kbd> record · <kbd>F</kbd> fullscreen · <kbd>⎋</kbd> exit</div>
+  </div>
+</div>
+
+<script>
+/* =======================================================================
+   SVG chord-box renderer — mirrors chord_sheet_pdf.rs draw_fretboard_cell:
+   nut OR start-fret label, O/X markers above the board, finger dots with
+   note name inside, ROOT dot filled ACCENT lavender, others neutral dark.
+   strings vertical (low string left), 4-fret window.
+   voicing.frets[i] = Some(fret) | 0 (open) | null (muted)
+   ======================================================================= */
+const NS = "http://www.w3.org/2000/svg";
+const COL = {
+  line:"#272a31", line2:"#1f2229", t2:"#9aa0ac", t3:"#5d626d",
+  accent:"#8b6dff", neutral:"#23262e", neutralLine:"#3a3e48",
+  ink:"#0e0a1f", t1:"#e8e7e3", warm:"#e8c47b", good:"#6dd6a3"
+};
+function el(tag, attrs){ const e=document.createElementNS(NS,tag);
+  for(const k in attrs) e.setAttribute(k,attrs[k]); return e; }
+
+/* labels for the strings, low->high left->right */
+function chordBox(opts){
+  const { frets, startFret=0, labels, rootIdx, size=1 } = opts;
+  const n = frets.length;
+  const sp = 34*size;                 // string spacing
+  const fh = 40*size;                  // fret spacing
+  const FRETS = 4;
+  const padX = 26*size, padTop = 34*size, padBot = 22*size;
+  const boardW = (n-1)*sp, boardH = FRETS*fh;
+  const W = boardW + padX*2 + (startFret>0?22*size:0);
+  const H = boardH + padTop + padBot;
+  const svg = el("svg",{width:W,height:H,viewBox:`0 0 ${W} ${H}`});
+  const ox = padX, oy = padTop;
+
+  // O / X markers above nut
+  frets.forEach((f,i)=>{
+    const sx = ox + i*sp;
+    let m = f===0 ? "○" : (f===null ? "✕" : null);
+    if(m){ const t=el("text",{x:sx,y:oy-10*size,"text-anchor":"middle",
+      "font-family":"var(--mono)","font-size":(14*size)+"px",
+      fill: f===0?COL.t2:COL.t3}); t.textContent=m; svg.appendChild(t); }
+  });
+
+  // nut or start-fret label
+  if(startFret===0){
+    svg.appendChild(el("rect",{x:ox-1,y:oy-3*size,width:boardW+2,height:4*size,
+      rx:1.5,fill:COL.t2}));
+  } else {
+    const t=el("text",{x:ox+boardW+10*size,y:oy+fh*0.6,
+      "font-family":"var(--mono)","font-size":(13*size)+"px",fill:COL.t3});
+    t.textContent=startFret+"fr"; svg.appendChild(t);
+  }
+
+  // fret lines
+  for(let f=0; f<=FRETS; f++){
+    svg.appendChild(el("line",{x1:ox,y1:oy+f*fh,x2:ox+boardW,y2:oy+f*fh,
+      stroke:COL.line,"stroke-width":1}));
+  }
+  // string lines
+  for(let i=0;i<n;i++){
+    svg.appendChild(el("line",{x1:ox+i*sp,y1:oy,x2:ox+i*sp,y2:oy+boardH,
+      stroke:COL.line2,"stroke-width":1}));
+  }
+
+  // finger dots
+  const dotR = 14*size;
+  frets.forEach((f,i)=>{
+    if(f===null || f===0) return;
+    const disp = startFret===0 ? f : (f-startFret+1);
+    if(disp<1 || disp>FRETS) return;
+    const sx = ox + i*sp;
+    const sy = oy + (disp-0.5)*fh;
+    const isRoot = i===rootIdx;
+    svg.appendChild(el("circle",{cx:sx,cy:sy,r:dotR,
+      fill:isRoot?COL.accent:COL.neutral,
+      stroke:isRoot?COL.accent:COL.neutralLine,"stroke-width":1}));
+    if(opts.noteNames){
+      const nm = opts.noteNames[i];
+      if(nm){ const t=el("text",{x:sx,y:sy+1,"text-anchor":"middle",
+        "dominant-baseline":"central","font-family":"var(--mono)",
+        "font-size":(11*size)+"px", fill:isRoot?COL.ink:COL.t1});
+        t.textContent=nm; svg.appendChild(t);} }
+  });
+
+  // string labels below
+  if(labels){
+    labels.forEach((lab,i)=>{
+      const t=el("text",{x:ox+i*sp,y:oy+boardH+16*size,"text-anchor":"middle",
+        "font-family":"var(--mono)","font-size":(11*size)+"px",fill:COL.t3});
+      t.textContent=lab; svg.appendChild(t);
+    });
+  }
+  return svg;
+}
+
+const GTR = ["E","A","D","G","B","e"];
+
+// Cm7 (x35353)  root on A string (idx1)
+document.getElementById("diag-live").appendChild(chordBox({
+  frets:[null,3,5,3,5,3], startFret:0, labels:GTR, rootIdx:1, size:1.5,
+  noteNames:[null,"C","G","C","E♭","G"]}));
+
+// Em open (022000) root on low E (idx0)
+document.getElementById("diag-em").appendChild(chordBox({
+  frets:[0,2,2,0,0,0], startFret:0, labels:GTR, rootIdx:0, size:1.5,
+  noteNames:[null,"B","E",null,null,null]}));
+
+// F/A boxed at 5fr  (bass A on low string at fret5)
+document.getElementById("diag-slash").appendChild(chordBox({
+  frets:[5,8,7,5,6,5], startFret:5, labels:GTR, rootIdx:0, size:1.5,
+  noteNames:["A","F","C","A","C","A"]}));
+
+// minis
+const mini = (id,o)=>{const n=document.getElementById(id); if(n) n.appendChild(chordBox(Object.assign({labels:GTR,size:.7},o)));};
+mini("mini-f7",   {frets:[1,3,1,2,1,1],startFret:0,rootIdx:0});
+mini("mini-bb",   {frets:[null,1,3,2,3,1],startFret:0,rootIdx:1});
+mini("mini-gm",   {frets:[3,5,5,3,3,3],startFret:3,rootIdx:0});
+mini("mini-gm2",  {frets:[3,5,5,3,3,3],startFret:3,rootIdx:0});
+mini("mini-am7b5",{frets:[5,6,5,6,null,null],startFret:5,rootIdx:0});
+mini("mini-d7",   {frets:[null,null,0,2,1,2],startFret:0,rootIdx:2});
+
+/* =======================================================================
+   Beat ring — pips around a circle, current beat lit, past beats dim,
+   plus a WARM shrinking arc = time until next chord.
+   ======================================================================= */
+function beatRing(opts){
+  const { beats, current, fillFrac, size=210 } = opts;
+  const r = size/2, cx=r, cy=r, R=r-22, pipR=8;
+  const svg = el("svg",{width:size,height:size,viewBox:`0 0 ${size} ${size}`});
+  // base track
+  svg.appendChild(el("circle",{cx,cy,r:R,fill:"none",stroke:COL.line2,"stroke-width":3}));
+  // warm "time until next" arc (shrinking) — from top, clockwise
+  const frac = Math.max(0,Math.min(1,fillFrac));
+  const ang = frac*2*Math.PI;
+  const C = 2*Math.PI*R;
+  const arc = el("circle",{cx,cy,r:R,fill:"none",stroke:COL.warm,"stroke-width":3,
+    "stroke-linecap":"round",
+    "stroke-dasharray":`${C} ${C}`,
+    "stroke-dashoffset": C*(1-frac),
+    transform:`rotate(-90 ${cx} ${cy})`});
+  svg.appendChild(arc);
+  // beat pips
+  for(let i=0;i<beats;i++){
+    const a = -Math.PI/2 + i*(2*Math.PI/beats);
+    const px = cx + R*Math.cos(a), py = cy + R*Math.sin(a);
+    const lit = i===current, past = i<current;
+    svg.appendChild(el("circle",{cx:px,cy:py,r:lit?pipR+2:pipR,
+      fill: lit?COL.t1 : past?COL.t3 : COL.bg2 ?? "#1b1d23",
+      stroke: lit?COL.t1:COL.line, "stroke-width":lit?0:1.5}));
+  }
+  return svg;
+}
+document.getElementById("ring-live").appendChild(
+  beatRing({beats:6,current:2,fillFrac:.36}));      // bar of 6, beat 3, ~1/3 to next
+document.getElementById("ring-slash").appendChild(
+  beatRing({beats:6,current:0,fillFrac:.85}));      // beat 1, long until next chord
+</script>
+</body>
+</html>
