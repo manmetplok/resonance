@@ -29,14 +29,14 @@ pub(crate) fn view_group_header(
     let group_id = group.id;
     let (base, wash, line) = theme::group_identity_colors(group.identity_color);
 
-    // ---- Caret (folds the group) ----
+    // ---- Caret (folds the group) ---
     // The caret is the expand/collapse affordance: ▾ when the group is
     // expanded (members shown), ▸ when collapsed. `collapse_caret` takes
     // `expanded`, so pass `!is_collapsed`.
     let caret = mouse_area(crate::view::controls::collapse_caret(!group.is_collapsed))
         .on_press(Message::Group(GroupMessage::ToggleCollapse(group_id)));
 
-    // ---- Identity colour swatch (14 px rounded square, identity base) ----
+    // ---- Identity colour swatch (14 px rounded square, identity base) ---
     let swatch = container(Space::new())
         .width(14)
         .height(14)
@@ -50,14 +50,17 @@ pub(crate) fn view_group_header(
             ..Default::default()
         });
 
-    // ---- Bold group name ----
-    let name = text(group.name.clone())
-        .size(13)
-        .font(theme::UI_FONT_SEMIBOLD)
-        .color(theme::TEXT_1)
-        .wrapping(iced::widget::text::Wrapping::None);
+    // ---- Bold group name ---
+    let name = container(
+        text(group.name.clone())
+            .size(13)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::TEXT_1)
+            .wrapping(iced::widget::text::Wrapping::None),
+    )
+    .clip(true);
 
-    // ---- `N trk` count badge (pill — mirrors shelf.rs's count badge) ----
+    // ---- `N trk` count badge (pill — mirrors shelf.rs's count badge) ---
     let count_badge = container(
         text(format!("{member_count} trk"))
             .size(10)
@@ -66,9 +69,9 @@ pub(crate) fn view_group_header(
     )
     .padding(iced::Padding {
         top: 1.0,
-        right: 7.0,
+        right: 5.0,
         bottom: 1.0,
-        left: 7.0,
+        left: 5.0,
     })
     .style(|_theme| container::Style {
         background: Some(iced::Background::Color(theme::BG_2)),
@@ -80,29 +83,29 @@ pub(crate) fn view_group_header(
         ..Default::default()
     });
 
-    // ---- Group level trim: compact slider + dB readout ----
+    // ---- Group level trim: compact slider + dB readout ---
     // The trim is a multiplicative macro gain (`1.0` is unity). The slider
-    // spans 0.0..=2.0 around unity; the readout shows dB (−∞ at silence).
+    // spans 0.0..=2.0 around unity; the readout shows dB value.
     let level = group.macro_level;
     let level_slider = slider(0.0..=2.0f32, level, move |v| {
         Message::Group(GroupMessage::SetMacroLevel(group_id, v))
     })
     .step(0.01f32)
-    .width(70);
+    .width(50);
     let db_text = if level <= 0.0001 {
-        "−∞ dB".to_string()
+        "−∞".to_string()
     } else {
-        format!("{:.1} dB", 20.0 * level.log10())
+        format!("{:.1}", 20.0 * level.log10())
     };
     let db_label = text(db_text)
         .size(9)
         .font(theme::MONO_FONT)
         .color(theme::TEXT_2);
     let level_trim = row![level_slider, db_label]
-        .spacing(5)
+        .spacing(3)
         .align_y(alignment::Vertical::Center);
 
-    // ---- Macro M / S buttons (reuse BAD/WARM-styled controls) ----
+    // ---- Macro M / S buttons (reuse BAD/WARM-styled controls) ---
     let m_btn = crate::view::controls::mute_button(
         group.macro_mute,
         Message::Group(GroupMessage::ToggleMacroMute(group_id)),
@@ -114,21 +117,21 @@ pub(crate) fn view_group_header(
         12,
     );
 
-    // ---- Assemble the row ----
+    // ---- Assemble the row ---
     let inner = row![
         caret,
-        Space::new().width(7),
+        Space::new().width(6),
         swatch,
-        Space::new().width(7),
+        Space::new().width(6),
         name,
-        Space::new().width(7),
+        Space::new().width(6),
         count_badge,
         Space::new().width(Length::Fill),
         level_trim,
-        Space::new().width(6),
+        Space::new().width(4),
         m_btn,
         s_btn,
-        Space::new().width(8),
+        Space::new().width(4),
     ]
     .spacing(0)
     .align_y(alignment::Vertical::Center)
