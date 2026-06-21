@@ -21,6 +21,8 @@ arc-swap.workspace = true
 memmap2 = "0.9"
 bytemuck.workspace = true
 serde.workspace = true
+flacenc = { version = "0.5.1", default-features = false, features = ["par"] }
+rubato = "0.16"
 
 [dev-dependencies]
 # Used by tests/import_audio_to_pool.rs to author mono / multi-rate
