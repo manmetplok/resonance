@@ -173,7 +173,7 @@ fn resolve_slots(
             });
         }
     }
-    slots.sort_by(|a, b| a.global_start_beat.cmp(&b.global_start_beat));
+    slots.sort_by_key(|s| s.global_start_beat);
     slots
 }
 

@@ -220,11 +220,21 @@ fn tempo_and_signature_change_mid_take() {
     // steps to 90 bpm. The derivation must place chords through the changed
     // bar table.
     let mut map = TempoMap::default();
-    map.signature_points = vec![SignaturePoint {
-        bar: 2,
-        numerator: 3,
-        denominator: 4,
-    }];
+    // Declare the bar-0 meter explicitly: `rebuild_bar_table` seeds the
+    // initial numerator from the first signature point, so the opening 4/4
+    // span needs its own point before the bar-2 switch to 3/4.
+    map.signature_points = vec![
+        SignaturePoint {
+            bar: 0,
+            numerator: 4,
+            denominator: 4,
+        },
+        SignaturePoint {
+            bar: 2,
+            numerator: 3,
+            denominator: 4,
+        },
+    ];
     map.tempo_points = vec![TempoPoint { bar: 2, bpm: 90.0 }];
     map.rebuild_bar_table(SR);
 
