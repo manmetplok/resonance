@@ -55,7 +55,7 @@ mod vocal_tuning;
 
 pub use clip::{
     compute_waveform_peaks, AudioClip, ClipSource, FadeCurve, MidiClip, MidiNote,
-    PendingNoteEvent, WAVEFORM_PEAK_FRAMES,
+    PendingNoteEvent, WarpAlgorithm, WarpMarker, WAVEFORM_PEAK_FRAMES,
 };
 pub use vocal_tuning::{F0Frame, GlobalTuning, NoteBlob, NoteEdit, TuningScale, VocalTuning};
 pub use commands::AudioCommand;
