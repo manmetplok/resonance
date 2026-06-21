@@ -7,6 +7,7 @@ pub mod group_identity;
 pub mod midi_map;
 pub mod registry;
 mod scan;
+pub mod track_group;
 mod wav;
 
 pub use automation::{
@@ -26,6 +27,7 @@ pub use audio_probe::{
 pub use denormal::flush_denormals;
 pub use group_identity::{GroupColor, GroupIdentityColor};
 pub use scan::scan_directory;
+pub use track_group::{MACRO_LEVEL_UNITY, TrackGroup};
 pub use wav::{
     decode_file, decode_wav_channels, decode_wav_stereo, linear_resample_mono,
     linear_resample_stereo, StreamingLinearResampler, WavChannels,
