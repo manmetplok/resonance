@@ -29,6 +29,11 @@ pub(super) fn imported(
             total_frames: duration_samples,
             trim_start_frames: 0,
             trim_end_frames: 0,
+            fade_in_frames: 0,
+            fade_in_curve: FadeCurve::default(),
+            fade_out_frames: 0,
+            fade_out_curve: FadeCurve::default(),
+            gain_db: 0.0,
             waveform_peaks,
         });
     }
@@ -77,6 +82,28 @@ pub(super) fn trimmed(
     }
 }
 
+pub(super) fn fade_changed(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    fade_in_frames: u64,
+    fade_in_curve: FadeCurve,
+    fade_out_frames: u64,
+    fade_out_curve: FadeCurve,
+) {
+    if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {
+        clip.fade_in_frames = fade_in_frames;
+        clip.fade_in_curve = fade_in_curve;
+        clip.fade_out_frames = fade_out_frames;
+        clip.fade_out_curve = fade_out_curve;
+    }
+}
+
+pub(super) fn gain_changed(r: &mut Resonance, clip_id: ClipId, gain_db: f32) {
+    if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {
+        clip.gain_db = gain_db;
+    }
+}
+
 pub(super) fn recording_finished(
     r: &mut Resonance,
     clip_id: ClipId,
@@ -95,6 +122,11 @@ pub(super) fn recording_finished(
         total_frames: duration_samples,
         trim_start_frames: 0,
         trim_end_frames: 0,
+        fade_in_frames: 0,
+        fade_in_curve: FadeCurve::default(),
+        fade_out_frames: 0,
+        fade_out_curve: FadeCurve::default(),
+        gain_db: 0.0,
         waveform_peaks,
     });
     r.transport.recording = false;

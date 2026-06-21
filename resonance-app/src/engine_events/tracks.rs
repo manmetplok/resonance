@@ -140,6 +140,11 @@ pub(super) fn bounce_completed(
                 total_frames: c.duration_samples,
                 trim_start_frames: 0,
                 trim_end_frames: 0,
+                fade_in_frames: 0,
+                fade_in_curve: FadeCurve::default(),
+                fade_out_frames: 0,
+                fade_out_curve: FadeCurve::default(),
+                gain_db: 0.0,
                 waveform_peaks: c.waveform_peaks,
             });
         }
