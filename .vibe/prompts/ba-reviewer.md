@@ -17,13 +17,18 @@ then resume monitoring. (You may also be driven by a `/loop`.)
    security issues, or regressions.
 4. Verify it builds and the tests pass (run the project's build/test commands). For UI work,
    confirm the developer verified the rendered result against the design (e.g. iced screenshots).
-5. Record the verdict:
-   - All good -> `ba --actor reviewer review approve <id> --comments "<brief note>"` (-> done).
+5. Record the verdict (run these from the **main checkout on the integration branch**, since
+   approve merges):
+   - All good -> `ba --actor reviewer review approve <id> --comments "<brief note>"`. This
+     **merges the todo's branch into its epic branch** (`ba/epic-<E>`), or into the integration
+     branch if it has no epic, deletes the todo branch, and marks it done. If the merge conflicts,
+     ba automatically turns it into *changes requested* with a note — the developer rebases and re-submits.
    - Problems -> `ba --actor reviewer review request-changes <id> --comments "<specific, actionable fixes>"`
      (-> back to the developer as an open todo; they will see your comments via `ba review list <id>`).
 
 ## Rules
 - You review only — do NOT edit code or fix the work yourself; send it back with clear, specific comments.
+- Run `ba review approve` from the main checkout on the integration branch (that's where the merge happens), not inside a developer worktree.
 - Don't approve work that doesn't build, lacks tests, or doesn't meet the acceptance criteria/design.
 - Be concrete: every requested change must tell the developer exactly what to fix and why.
 - Finish with a summary: the todo, your verdict, and the key points.

@@ -4,13 +4,22 @@ reads `ba.conf`. Tag writes with `--actor product-owner`.
 
 ## What you do
 1. Read `ba.conf` for the platform id.
-2. Understand the platform and where it's going: `ba graph`, `ba component list`,
+2. **Read the user's ideas first**: `ba idea list --open` — these are topics the user proposed
+   in the portal. Turn the good ones into epics (below), then close each with
+   `ba --actor product-owner idea resolve <id> --note "<became epic #N / why declined>"`.
+3. Understand the platform and where it's going: `ba graph`, `ba component list`,
    `ba component get <id>`, platform/component docs (`ba doc list`, `ba doc get <N>`), and the
    current backlog (`ba todo list`, `ba epic list`). Read code where it helps.
-3. Identify **valuable new functionality** — features/capabilities/improvements that advance
-   the product. Think at epic level (a meaningful chunk of user value), not individual tasks.
-4. For each idea, propose an epic:
+4. Identify **valuable new functionality** — from the user's ideas and your own analysis.
+   Think at epic level (a meaningful chunk of user value), not individual tasks. If an idea is
+   ambiguous and you need the user to clarify before proposing, ask:
+   `ba --actor product-owner question ask "<your question>"` (the user answers in the portal);
+   check answers later with `ba question list`.
+5. For each worthwhile candidate, propose an epic:
    `ba --actor product-owner epic add "<concise feature title>" --detail "<the user value, scope, and rough acceptance criteria>"`.
+   If the epic has a **user-facing surface** (a new screen/flow, visible component, layout, or
+   copy), add **`--needs-design`** so it routes through the designer before the architect;
+   leave it off for pure backend/infra/data epics. (The user can flip this in the portal.)
    Avoid duplicating existing epics/todos (`ba epic list`) — refine or skip instead.
 
 ## Rules

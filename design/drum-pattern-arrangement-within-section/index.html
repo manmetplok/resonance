@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — Drum pattern arrangement within a section (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-dim:rgba(232,196,123,.12); --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --good-dim:rgba(109,214,163,.14); --good-line:rgba(109,214,163,.34);
+    --bad:#e87b8b; --bad-dim:rgba(232,123,139,.13); --bad-line:rgba(232,123,139,.40);
+    --radius-xs:4px; --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+
+    /* pattern accent colors (DrumPattern.color) */
+    --p-main:#8b6dff; --p-groove:#6dd6a3; --p-fill:#e8c47b; --p-build:#e87b8b; --p-bsec:#7fb2ff;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+
+  /* ---- App chrome ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1)}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .tabs{display:flex;gap:2px;margin-left:8px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+  .clock{font-size:12px;color:var(--text-2);display:flex;gap:14px;align-items:center}
+  .clock b{color:var(--text-1);font-weight:500}
+
+  /* ---- State switcher ---- */
+  .statebar{
+    min-height:44px;flex:0 0 auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    padding:6px 18px;background:var(--bg-1);border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);margin-right:2px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{
+    border:0;background:transparent;color:var(--text-2);padding:6px 13px;font-size:12px;
+    cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2);white-space:nowrap;
+  }
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .hint{margin-left:auto;color:var(--text-3);font-size:11.5px;max-width:560px;text-align:right;line-height:1.45}
+
+  /* ---- Body / Compose layout ---- */
+  .body{flex:1;display:flex;min-height:0}
+  .work{flex:1;min-width:0;display:flex;flex-direction:column;overflow:auto}
+  .rail{width:324px;flex:0 0 324px;background:var(--bg-1);border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:auto}
+
+  /* group banner (SECTION / TRACKS) */
+  .banner{height:30px;display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--bg-1);border-bottom:1px solid var(--line-2)}
+  .banner .caret{color:var(--text-3);font-size:9px}
+  .banner .btag{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-2)}
+  .banner .bmeta{margin-left:auto;color:var(--text-3);font-size:11px}
+
+  /* the lane: side tag + content, mirrors pattern_picker side/right split */
+  .lane{display:flex;border-bottom:1px solid var(--line-2)}
+  .lane .side{
+    width:160px;flex:0 0 160px;background:var(--bg-1);padding:0 12px;display:flex;flex-direction:column;
+    justify-content:center;border-right:1px solid var(--line-2);
+  }
+  .side .kick{font-size:9px;letter-spacing:.12em;font-weight:600;color:var(--text-3)}
+  .side .nm{font-size:12px;color:var(--text-1)}
+  .lane .content{flex:1;min-width:0;background:var(--bg-2);padding:8px 12px}
+
+  /* ===== arrangement strip ===== */
+  .arr-strip{min-height:32px}
+  .arr-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .entries{display:flex;align-items:center;gap:7px;flex-wrap:wrap;flex:1;min-width:0}
+
+  .entry{
+    display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--radius-sm);
+    border:1px solid var(--line-2);background:transparent;cursor:pointer;position:relative;
+  }
+  .entry:hover{background:var(--bg-3)}
+  .entry.sel{border-color:var(--accent);background:var(--accent-dim)}
+  .entry .dot{width:8px;height:8px;border-radius:999px;flex:0 0 auto}
+  .entry .enm{font-size:11.5px;color:var(--text-1)}
+  .entry .sub{font-size:9px;color:var(--text-4)}
+  /* repeat stepper */
+  .rep{display:flex;align-items:center;gap:2px;background:var(--bg-1);border:1px solid var(--line-2);border-radius:var(--radius-xs);padding:1px}
+  .rep b{font-size:11px;color:var(--text-1);min-width:30px;text-align:center}
+  .rep b small{color:var(--text-3);font-weight:400}
+  .rep button{width:16px;height:16px;border:0;background:transparent;color:var(--text-2);cursor:pointer;font-size:12px;line-height:1;border-radius:3px}
+  .rep button:hover{background:var(--bg-3);color:var(--text-1)}
+  .entry .fillbadge{display:none;align-items:center;gap:3px;font-size:8.5px;letter-spacing:.08em;color:#1b1d23;background:var(--warm);border-radius:3px;padding:1px 5px;font-weight:700}
+  .entry.hasfill .fillbadge{display:inline-flex}
+  .entry .gripx{color:var(--text-4);font-size:11px;cursor:pointer}
+  .entry .gripx:hover{color:var(--bad)}
+
+  .addentry{display:flex;align-items:center;gap:6px;padding:5px 10px;border:1px dashed var(--line);border-radius:var(--radius-sm);
+    background:transparent;color:var(--text-2);font-size:11px;cursor:pointer;font-family:inherit}
+  .addentry:hover{border-color:var(--accent-line);color:var(--accent-soft)}
+
+  /* coverage chip */
+  .cov{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;padding:4px 9px;border-radius:999px;white-space:nowrap}
+  .cov .cdot{width:6px;height:6px;border-radius:999px}
+  .cov.ok{color:var(--good);background:var(--good-dim);border:1px solid var(--good-line)}
+  .cov.ok .cdot{background:var(--good)}
+  .cov.warn{color:var(--warm);background:var(--warm-dim);border:1px solid var(--warm-line)}
+  .cov.warn .cdot{background:var(--warm)}
+  .cov.err{color:var(--bad);background:var(--bad-dim);border:1px solid var(--bad-line)}
+  .cov.err .cdot{background:var(--bad)}
+
+  /* ===== tiling ribbon (bars) ===== */
+  .ribbon-lane .content{padding:6px 12px 10px}
+  .barhdr{display:flex;margin-bottom:4px}
+  .barhdr .bcell{flex:1;text-align:center;font-size:9px;color:var(--text-4);border-left:1px solid var(--line-2);padding-bottom:2px}
+  .barhdr .bcell:first-child{border-left:0}
+  .ribbon{position:relative;height:38px;display:flex;background:var(--bg-1);border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--line-2)}
+  /* each bar slot is a flex cell; segments are absolute spans over them via inline width/left */
+  .seg-span{position:absolute;top:0;bottom:0;display:flex;align-items:center;justify-content:center;
+    border-right:1px solid rgba(15,16,19,.55);overflow:hidden}
+  .seg-span .slabel{font-size:10px;color:#0f1013;font-weight:600;white-space:nowrap;padding:0 6px;opacity:.92}
+  .seg-span .scount{font-size:8.5px;color:rgba(15,16,19,.7);margin-left:5px}
+  .seg-span.fill{background-image:repeating-linear-gradient(45deg,transparent,transparent 4px,rgba(15,16,19,.16) 4px,rgba(15,16,19,.16) 8px)}
+  .seg-span .filltag{position:absolute;bottom:2px;right:4px;font-size:7.5px;letter-spacing:.1em;color:#0f1013;font-weight:800;opacity:.85}
+  /* bar gridlines overlay */
+  .gridlines{position:absolute;inset:0;display:flex;pointer-events:none}
+  .gridlines i{flex:1;border-left:1px solid rgba(255,255,255,.04)}
+  .gridlines i:first-child{border-left:0}
+  /* gap + overflow markers */
+  .gap-span{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(45deg,var(--bg-0),var(--bg-0) 5px,#191a1f 5px,#191a1f 10px);
+    border-left:1px dashed var(--warm-line);display:flex;align-items:center;justify-content:center}
+  .gap-span span{font-size:8.5px;color:var(--warm);letter-spacing:.06em}
+  .overflow-cap{position:absolute;top:0;bottom:0;right:0;width:46px;background:linear-gradient(90deg,transparent,var(--bad-dim));
+    border-left:1px dashed var(--bad-line);display:flex;align-items:center;justify-content:center}
+  .overflow-cap span{font-size:8px;color:var(--bad);writing-mode:vertical-rl;letter-spacing:.08em}
+  .ribcaption{margin-top:6px;font-size:10px;color:var(--text-3);display:flex;gap:14px;align-items:center}
+  .ribcaption .lg{display:inline-flex;align-items:center;gap:5px}
+  .ribcaption .lg i{width:9px;height:9px;border-radius:2px}
+  .ribcaption .lg i.fillkey{background-image:repeating-linear-gradient(45deg,var(--warm),var(--warm) 2px,rgba(15,16,19,.4) 2px,rgba(15,16,19,.4) 4px);background-color:var(--warm)}
+
+  /* ===== drum grid context (resolved cells per bar) ===== */
+  .grid-lane .content{padding:8px 12px 12px;background:var(--bg-2)}
+  .gtitle{font-size:9px;letter-spacing:.12em;color:var(--text-3);margin-bottom:7px;display:flex;align-items:center;gap:8px}
+  .gtitle .resolved{color:var(--text-4);text-transform:none;letter-spacing:0;font-size:10px}
+  .grid-row{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+  .grid-row .plabel{width:74px;flex:0 0 74px;font-size:10px;color:var(--text-2);text-align:right}
+  .steps{flex:1;display:flex;gap:3px}
+  .step{flex:1;height:14px;border-radius:2px;background:var(--bg-1);border:1px solid var(--line-2)}
+  .step.on{background:var(--accent);border-color:var(--accent)}
+  .step.on.g{background:var(--good);border-color:var(--good)}
+  .step.on.f{background:var(--warm);border-color:var(--warm)}
+  .step.on.b{background:var(--bad);border-color:var(--bad)}
+  /* faint bar boundaries inside the grid via gap groups */
+  .barsep{width:1px;background:var(--line);flex:0 0 1px;align-self:stretch;margin:0 1px}
+
+  /* ===== right rail: pattern bank + entry inspector ===== */
+  .card{margin:12px 12px 0;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden}
+  .card .chead{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line-2)}
+  .card .chead .ct{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-2)}
+  .card .chead .cm{margin-left:auto;font-size:10px;color:var(--text-3)}
+  .card .cbody{padding:10px 12px}
+
+  .bankrow{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:var(--radius-sm);cursor:grab;border:1px solid transparent}
+  .bankrow:hover{background:var(--bg-3);border-color:var(--line-2)}
+  .bankrow .dot{width:9px;height:9px;border-radius:999px;flex:0 0 auto}
+  .bankrow .bn{font-size:12px;color:var(--text-1)}
+  .bankrow .bmeta2{margin-left:auto;font-size:9.5px;color:var(--text-4)}
+  .bankrow .drag{color:var(--text-4);font-size:11px}
+  .bankhint{margin-top:8px;font-size:10px;color:var(--text-4);line-height:1.5}
+
+  /* inspector fields */
+  .insp-empty{padding:18px 12px;text-align:center;color:var(--text-3);font-size:11px;line-height:1.6}
+  .field{margin-bottom:12px}
+  .field>label{display:block;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);margin-bottom:5px}
+  .selpat{display:flex;align-items:center;gap:8px;padding:7px 9px;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-md);cursor:pointer}
+  .selpat:hover{border-color:var(--accent-line)}
+  .selpat .dot{width:9px;height:9px;border-radius:999px}
+  .selpat .pn{font-size:12px;color:var(--text-1)}
+  .selpat .ca{margin-left:auto;color:var(--text-3);font-size:9px}
+  .menu{display:none;margin-top:4px;background:var(--bg-3);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .menu.open{display:block}
+  .menu .mi{display:flex;align-items:center;gap:8px;padding:7px 9px;font-size:11.5px;color:var(--text-2);cursor:pointer}
+  .menu .mi:hover{background:var(--bg-2);color:var(--text-1)}
+  .menu .mi .dot{width:8px;height:8px;border-radius:999px}
+
+  .lenmode{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .lenmode button{flex:1;border:0;background:transparent;color:var(--text-2);padding:6px 0;font-size:11px;cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2)}
+  .lenmode button:last-child{border-right:0}
+  .lenmode button.on{background:var(--accent-dim);color:var(--accent-soft)}
+
+  .stepper{display:flex;align-items:center;gap:10px}
+  .stepper .big{width:40px;height:34px;border:1px solid var(--line);background:var(--bg-1);color:var(--text-1);border-radius:var(--radius-md);font-size:18px;cursor:pointer;font-family:inherit}
+  .stepper .big:hover{background:var(--bg-3)}
+  .stepper .val{flex:1;text-align:center}
+  .stepper .val b{font-size:22px;color:var(--text-1)}
+  .stepper .val small{display:block;font-size:10px;color:var(--text-3);margin-top:1px}
+
+  .filltoggle{display:flex;align-items:center;gap:9px;padding:9px;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-md);cursor:pointer}
+  .filltoggle .sw{width:30px;height:17px;border-radius:999px;background:var(--bg-3);border:1px solid var(--line);position:relative;flex:0 0 auto;transition:.12s}
+  .filltoggle .sw::after{content:"";position:absolute;top:1px;left:1px;width:13px;height:13px;border-radius:999px;background:var(--text-3);transition:.12s}
+  .filltoggle.on .sw{background:var(--warm-dim);border-color:var(--warm-line)}
+  .filltoggle.on .sw::after{left:14px;background:var(--warm)}
+  .filltoggle .ftx{font-size:11.5px;color:var(--text-1)}
+  .filltoggle .ftx small{display:block;font-size:9.5px;color:var(--text-3)}
+  .fillpat{margin-top:8px}
+
+  .insp-actions{display:flex;gap:8px;margin-top:4px}
+  .insp-actions button{flex:1;border:1px solid var(--line);background:var(--bg-2);color:var(--text-2);padding:7px 0;border-radius:var(--radius-md);font-size:11px;cursor:pointer;font-family:inherit}
+  .insp-actions button.danger:hover{border-color:var(--bad-line);color:var(--bad)}
+  .insp-actions button:hover{background:var(--bg-3);color:var(--text-1)}
+
+  /* validation banner inside content */
+  .vbanner{display:none;align-items:center;gap:9px;margin-top:8px;padding:8px 11px;border-radius:var(--radius-md);font-size:11px;line-height:1.4}
+  .vbanner.show{display:flex}
+  .vbanner.warn{background:var(--warm-dim);border:1px solid var(--warm-line);color:var(--warm)}
+  .vbanner.err{background:var(--bad-dim);border:1px solid var(--bad-line);color:var(--bad)}
+  .vbanner .vi{font-weight:800}
+  .vbanner b{font-weight:600}
+  .vbanner button{margin-left:auto;border:1px solid currentColor;background:transparent;color:inherit;padding:4px 9px;border-radius:var(--radius-xs);font-size:10px;cursor:pointer;font-family:inherit;white-space:nowrap}
+
+  .scene{display:none}
+  .scene.on{display:block}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- top chrome -->
+  <div class="chrome">
+    <div class="brand"><b>resonance</b></div>
+    <div class="tabs">
+      <div class="tab">Arrange</div>
+      <div class="tab">Mixer</div>
+      <div class="tab active">Compose</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="clock"><span>Verse · <b>8 bars</b></span><span>4/4</span><span><b>124</b> BPM</span></div>
+  </div>
+
+  <!-- scene switcher -->
+  <div class="statebar">
+    <span class="lbl">State</span>
+    <div class="seg" id="seg">
+      <button data-s="migrated" class="on">Migrated (legacy)</button>
+      <button data-s="chain">Chained + fill</button>
+      <button data-s="editing">Editing entry</button>
+      <button data-s="gap">Gap (under-fill)</button>
+      <button data-s="overflow">Overflow</button>
+    </div>
+    <div class="hint" id="hint"></div>
+  </div>
+
+  <div class="body">
+    <!-- ============ WORKSPACE ============ -->
+    <div class="work">
+      <div class="banner"><span class="caret">▾</span><span class="btag">Section · Verse</span><span class="bmeta" id="bmeta">8 bars · 4/4 · drum arrangement</span></div>
+
+      <!-- arrangement strip -->
+      <div class="lane arr-strip">
+        <div class="side"><span class="kick">ARRANGEMENT</span><span class="nm">Verse</span></div>
+        <div class="content">
+          <div class="arr-row">
+            <div class="entries" id="entries"><!-- entries injected --></div>
+            <button class="addentry" onclick="event.stopPropagation()">＋ Add pattern</button>
+            <div id="covslot"></div>
+          </div>
+          <div class="vbanner" id="vbanner"><span class="vi">!</span><span id="vtext"></span><button onclick="event.stopPropagation()" id="vfix">Fix</button></div>
+        </div>
+      </div>
+
+      <!-- tiling ribbon -->
+      <div class="lane ribbon-lane">
+        <div class="side"><span class="kick">TILING</span><span class="nm" id="ribsub">8-bar grid</span></div>
+        <div class="content">
+          <div class="barhdr" id="barhdr"></div>
+          <div class="ribbon" id="ribbon">
+            <div class="gridlines" id="gridlines"></div>
+            <!-- spans injected -->
+          </div>
+          <div class="ribcaption">
+            <span class="lg"><i style="background:var(--p-groove)"></i>pattern span</span>
+            <span class="lg"><i class="fillkey"></i>fill (last bar)</span>
+            <span class="lg"><i style="background:#191a1f;border:1px dashed var(--warm-line)"></i>gap</span>
+            <span class="lg"><i style="background:var(--bad-dim);border:1px dashed var(--bad-line)"></i>overflow (clipped)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- drum grid context -->
+      <div class="lane grid-lane" style="border-bottom:0">
+        <div class="side"><span class="kick">DRUM GRID</span><span class="nm" id="gridsub">bars 1–2</span></div>
+        <div class="content">
+          <div class="gtitle">RESOLVED GROUPS <span class="resolved" id="gridresolved">— Groove A playing on bars 1–6</span></div>
+          <div id="gridrows"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ RIGHT RAIL ============ -->
+    <div class="rail">
+      <!-- pattern bank -->
+      <div class="card">
+        <div class="chead"><span class="ct">Pattern bank</span><span class="cm">project · 5</span></div>
+        <div class="cbody">
+          <div class="bankrow"><span class="dot" style="background:var(--p-main)"></span><span class="bn">Main</span><span class="bmeta2">2 bars · 4 grp</span><span class="drag">⠿</span></div>
+          <div class="bankrow"><span class="dot" style="background:var(--p-groove)"></span><span class="bn">Groove A</span><span class="bmeta2">2 bars · 5 grp</span><span class="drag">⠿</span></div>
+          <div class="bankrow"><span class="dot" style="background:var(--p-fill)"></span><span class="bn">Fill B</span><span class="bmeta2">1 bar · 3 grp</span><span class="drag">⠿</span></div>
+          <div class="bankrow"><span class="dot" style="background:var(--p-build)"></span><span class="bn">Build</span><span class="bmeta2">2 bars · 4 grp</span><span class="drag">⠿</span></div>
+          <div class="bankrow"><span class="dot" style="background:var(--p-bsec)"></span><span class="bn">B Section</span><span class="bmeta2">4 bars · 5 grp</span><span class="drag">⠿</span></div>
+          <div class="bankhint">Drag a pattern into the arrangement, or use ＋ Add. Patterns are project-wide — editing one updates every section that chains it.</div>
+        </div>
+      </div>
+
+      <!-- entry inspector -->
+      <div class="card" style="flex:1">
+        <div class="chead"><span class="ct">Entry</span><span class="cm" id="inspmeta"></span></div>
+        <div class="cbody" id="inspbody"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------- pattern bank model ---------- */
+const PAT = {
+  main:   {name:"Main",     color:"var(--p-main)",   bars:2},
+  groove: {name:"Groove A", color:"var(--p-groove)", bars:2},
+  fill:   {name:"Fill B",   color:"var(--p-fill)",   bars:1},
+  build:  {name:"Build",    color:"var(--p-build)",  bars:2},
+  bsec:   {name:"B Section",color:"var(--p-bsec)",   bars:4},
+};
+const SECTION_BARS = 8;
+
+/* an arrangement = ordered entries. each entry: pattern key, repeat count,
+   optional fill (swaps the LAST bar of the entry to a fill pattern). */
+const SCENES = {
+  migrated: {
+    sel:null,
+    entries:[ {p:"main", rep:4, fill:null} ],   // 4×2 = 8 bars, exact
+  },
+  chain: {
+    sel:1,
+    entries:[ {p:"groove", rep:3, fill:null}, {p:"groove", rep:1, fill:"fill"} ],
+  },
+  editing: {
+    sel:0,
+    entries:[ {p:"groove", rep:3, fill:null}, {p:"build", rep:1, fill:"fill"} ],
+  },
+  gap: {
+    sel:null,
+    entries:[ {p:"groove", rep:2, fill:null} ],  // 2×2 = 4 bars → 4-bar gap
+  },
+  overflow: {
+    sel:null,
+    entries:[ {p:"groove", rep:3, fill:null}, {p:"bsec", rep:1, fill:null} ], // 6 + 4 = 10 → 2 overflow
+  },
+};
+
+const HINTS = {
+  migrated:"Legacy projects open unchanged: the old single Section.drum_pattern_id becomes a one-entry arrangement (Main ×4) tiling the whole section. Nothing to re-learn.",
+  chain:"The happy path — chain ordered entries with explicit repeat counts. Here Groove A plays 3 bars, then a fill variant lands on the final bar. Coverage reads 8 / 8.",
+  editing:"Select an entry to edit it in the rail: swap its pattern, set repeat count OR fixed bar length, and toggle a fill on its last repeat. Changes re-tile live.",
+  gap:"Under-fill is non-destructive: the section keeps playing but the uncovered bars are shown as a hatched gap with a warm warning + one-click 'fill to end'.",
+  overflow:"Over-fill clips at the section boundary. Bars past bar 8 are flagged as overflow (pink) so the user sees exactly what won't be heard — trim or shorten a repeat.",
+};
+
+/* ---------- helpers ---------- */
+function entryBars(e){ return PAT[e.p].bars * e.rep; }
+function totalBars(entries){ return entries.reduce((s,e)=>s+entryBars(e),0); }
+function colorOf(p){ return PAT[p].color; }
+
+/* ---------- render arrangement entries ---------- */
+let CUR = "migrated";
+function state(){ return SCENES[CUR]; }
+
+function renderEntries(){
+  const wrap = document.getElementById("entries");
+  wrap.innerHTML = "";
+  state().entries.forEach((e,i)=>{
+    const p = PAT[e.p];
+    const div = document.createElement("div");
+    div.className = "entry" + (state().sel===i?" sel":"") + (e.fill?" hasfill":"");
+    div.onclick = (ev)=>{ ev.stopPropagation(); selectEntry(i); };
+    div.innerHTML = `
+      <span class="dot" style="background:${p.color}"></span>
+      <span><span class="enm">${p.name}</span> <span class="sub">${p.bars}b ×${e.rep} = ${entryBars(e)}b</span></span>
+      <span class="rep" onclick="event.stopPropagation()">
+        <button onclick="bump(${i},-1)">−</button>
+        <b>×${e.rep}</b>
+        <button onclick="bump(${i},1)">＋</button>
+      </span>
+      <span class="fillbadge">▸ FILL</span>
+      <span class="gripx" title="remove" onclick="event.stopPropagation()">✕</span>`;
+    wrap.appendChild(div);
+  });
+}
+
+function bump(i,d){
+  const e = state().entries[i];
+  e.rep = Math.max(1, e.rep + d);
+  renderAll();
+}
+function selectEntry(i){ state().sel = (state().sel===i?null:i); renderAll(); }
+
+/* ---------- render tiling ribbon ---------- */
+function renderRibbon(){
+  const hdr = document.getElementById("barhdr");
+  const rib = document.getElementById("ribbon");
+  const gl  = document.getElementById("gridlines");
+  hdr.innerHTML=""; gl.innerHTML="";
+  // bar header + gridlines (always full section width)
+  for(let b=0;b<SECTION_BARS;b++){
+    const c=document.createElement("div"); c.className="bcell"; c.textContent=b+1; hdr.appendChild(c);
+    const g=document.createElement("i"); gl.appendChild(g);
+  }
+  // clear previous spans (keep gridlines node)
+  [...rib.querySelectorAll(".seg-span,.gap-span,.overflow-cap")].forEach(n=>n.remove());
+
+  const total = totalBars(state().entries);
+  const drawBars = Math.max(total, SECTION_BARS);      // scale so overflow is visible
+  const unit = 100/drawBars;                            // % per bar
+  let cursor = 0;
+  state().entries.forEach((e)=>{
+    const len = entryBars(e);
+    const fillLast = e.fill ? 1 : 0;
+    const mainLen = len - fillLast;
+    const p = PAT[e.p];
+    // main span
+    if(mainLen>0){
+      const s=document.createElement("div"); s.className="seg-span";
+      s.style.left=(cursor*unit)+"%"; s.style.width=(mainLen*unit)+"%"; s.style.background=p.color;
+      s.innerHTML=`<span class="slabel">${p.name}<span class="scount">×${e.rep}</span></span>`;
+      rib.appendChild(s);
+    }
+    // fill span (last bar)
+    if(fillLast){
+      const fp = PAT[e.fill];
+      const f=document.createElement("div"); f.className="seg-span fill";
+      f.style.left=((cursor+mainLen)*unit)+"%"; f.style.width=(fillLast*unit)+"%"; f.style.background=fp.color;
+      f.innerHTML=`<span class="slabel" style="font-size:9px">${fp.name}</span><span class="filltag">FILL</span>`;
+      rib.appendChild(f);
+    }
+    cursor += len;
+  });
+  // gap
+  if(total < SECTION_BARS){
+    const g=document.createElement("div"); g.className="gap-span";
+    g.style.left=(total*unit)+"%"; g.style.width=((SECTION_BARS-total)*unit)+"%";
+    g.innerHTML=`<span>GAP · ${SECTION_BARS-total} bar${SECTION_BARS-total>1?"s":""} silent</span>`;
+    rib.appendChild(g);
+  }
+  // overflow cap (after bar 8)
+  if(total > SECTION_BARS){
+    const o=document.createElement("div"); o.className="overflow-cap";
+    o.style.left=(SECTION_BARS*unit)+"%"; o.style.width=((total-SECTION_BARS)*unit)+"%"; o.style.right="auto";
+    o.innerHTML=`<span>OVERFLOW · ${total-SECTION_BARS} bar${total-SECTION_BARS>1?"s":""} clipped</span>`;
+    rib.appendChild(o);
+  }
+}
+
+/* ---------- coverage chip + validation banner ---------- */
+function renderCoverage(){
+  const total = totalBars(state().entries);
+  const slot = document.getElementById("covslot");
+  const vb = document.getElementById("vbanner");
+  const vt = document.getElementById("vtext");
+  let cls="ok", txt=`${total} / ${SECTION_BARS} bars`;
+  vb.className="vbanner";
+  if(total<SECTION_BARS){
+    cls="warn"; txt=`${total} / ${SECTION_BARS} · gap ${SECTION_BARS-total}`;
+    vb.className="vbanner warn show";
+    vt.innerHTML=`<b>${SECTION_BARS-total} bars uncovered.</b> The drum lane goes silent for the rest of the section.`;
+    document.getElementById("vfix").textContent="Fill to end";
+  } else if(total>SECTION_BARS){
+    cls="err"; txt=`${total} / ${SECTION_BARS} · overflow ${total-SECTION_BARS}`;
+    vb.className="vbanner err show";
+    vt.innerHTML=`<b>${total-SECTION_BARS} bars overflow.</b> Bars past ${SECTION_BARS} are clipped and won't play or bounce.`;
+    document.getElementById("vfix").textContent="Trim to fit";
+  }
+  slot.innerHTML=`<span class="cov ${cls}"><span class="cdot"></span>${txt}</span>`;
+}
+
+/* ---------- drum grid context (first entry's pattern, 2 bars) ---------- */
+function renderGrid(){
+  const first = state().entries[0];
+  const p = PAT[first.p];
+  document.getElementById("gridsub").textContent = "bars 1–2";
+  document.getElementById("gridresolved").textContent = `— ${p.name} playing on bars 1–${Math.min(entryBars(first),SECTION_BARS)}`;
+  const klass = {main:"",groove:"g",fill:"f",build:"b",bsec:""}[first.p]||"";
+  const rows = [
+    ["Kick",   [1,0,0,0,1,0,1,0, 1,0,0,0,1,0,0,0]],
+    ["Snare",  [0,0,1,0,0,0,1,0, 0,0,1,0,0,1,1,0]],
+    ["Hat",    [1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1]],
+    ["Perc",   [0,0,0,1,0,0,0,0, 0,1,0,0,0,0,1,0]],
+  ];
+  const host = document.getElementById("gridrows");
+  host.innerHTML="";
+  rows.forEach(([name,steps])=>{
+    const r=document.createElement("div"); r.className="grid-row";
+    let cells="";
+    steps.forEach((on,idx)=>{
+      if(idx===8) cells+=`<span class="barsep"></span>`;
+      cells+=`<span class="step ${on?"on "+klass:""}"></span>`;
+    });
+    r.innerHTML=`<span class="plabel">${name}</span><div class="steps">${cells}</div>`;
+    host.appendChild(r);
+  });
+}
+
+/* ---------- entry inspector ---------- */
+function renderInspector(){
+  const body=document.getElementById("inspbody");
+  const meta=document.getElementById("inspmeta");
+  const sel=state().sel;
+  if(sel===null || !state().entries[sel]){
+    meta.textContent="";
+    body.innerHTML=`<div class="insp-empty">Select an arrangement entry to edit its pattern, length, and fill.<br><br>Or drag a pattern from the bank above to append a new entry.</div>`;
+    return;
+  }
+  const e=state().entries[sel];
+  const p=PAT[e.p];
+  meta.textContent=`#${sel+1}`;
+  body.innerHTML=`
+    <div class="field">
+      <label>Pattern</label>
+      <div class="selpat" onclick="toggleMenu('patmenu')">
+        <span class="dot" style="background:${p.color}"></span><span class="pn">${p.name}</span><span class="ca">▾</span>
+      </div>
+      <div class="menu" id="patmenu">
+        ${Object.keys(PAT).map(k=>`<div class="mi" onclick="pickPattern('${k}')"><span class="dot" style="background:${PAT[k].color}"></span>${PAT[k].name}<span style="margin-left:auto;color:var(--text-4);font-size:9.5px">${PAT[k].bars}b</span></div>`).join("")}
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Length mode</label>
+      <div class="lenmode">
+        <button class="on">Repeat ×N</button>
+        <button>Fixed bars</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Repeat count</label>
+      <div class="stepper">
+        <button class="big" onclick="bump(${sel},-1)">−</button>
+        <div class="val"><b>×${e.rep}</b><small>${p.bars}-bar pattern → ${entryBars(e)} bars</small></div>
+        <button class="big" onclick="bump(${sel},1)">＋</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Fill on last repeat</label>
+      <div class="filltoggle ${e.fill?"on":""}" onclick="toggleFill(${sel})">
+        <div class="sw"></div>
+        <div class="ftx">Swap final bar to a fill<small>${e.fill?"Using "+PAT[e.fill].name:"Off — plays the pattern straight through"}</small></div>
+      </div>
+      ${e.fill?`<div class="selpat fillpat" onclick="toggleMenu('fillmenu')"><span class="dot" style="background:${PAT[e.fill].color}"></span><span class="pn">${PAT[e.fill].name}</span><span class="ca">▾</span></div>
+        <div class="menu" id="fillmenu">${Object.keys(PAT).map(k=>`<div class="mi" onclick="pickFill('${k}')"><span class="dot" style="background:${PAT[k].color}"></span>${PAT[k].name}</div>`).join("")}</div>`:""}
+    </div>
+
+    <div class="insp-actions">
+      <button onclick="dupEntry(${sel})">Duplicate</button>
+      <button class="danger" onclick="removeEntry(${sel})">Remove</button>
+    </div>`;
+}
+
+function pickPattern(k){ state().entries[state().sel].p=k; closeMenus(); renderAll(); }
+function pickFill(k){ state().entries[state().sel].fill=k; closeMenus(); renderAll(); }
+function toggleFill(i){ const e=state().entries[i]; e.fill = e.fill?null:"fill"; renderAll(); }
+function dupEntry(i){ const e=state().entries[i]; state().entries.splice(i+1,0,{...e}); state().sel=i+1; renderAll(); }
+function removeEntry(i){ state().entries.splice(i,1); state().sel=null; renderAll(); }
+
+function toggleMenu(id){ const m=document.getElementById(id); if(!m) return; const open=m.classList.contains("open"); closeMenus(); if(!open)m.classList.add("open"); }
+function closeMenus(){ document.querySelectorAll(".menu").forEach(m=>m.classList.remove("open")); }
+document.body.addEventListener("click",closeMenus);
+
+/* ---------- master render ---------- */
+function renderAll(){
+  renderEntries();
+  renderRibbon();
+  renderCoverage();
+  renderGrid();
+  renderInspector();
+}
+
+/* ---------- scene switching ---------- */
+function go(s){
+  CUR=s;
+  document.querySelectorAll("#seg button").forEach(b=>b.classList.toggle("on",b.dataset.s===s));
+  document.getElementById("hint").textContent=HINTS[s];
+  renderAll();
+}
+document.querySelectorAll("#seg button").forEach(b=>b.onclick=()=>go(b.dataset.s));
+go("migrated");
+</script>
+</body>
+</html>

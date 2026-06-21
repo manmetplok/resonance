@@ -11,6 +11,7 @@ mod lfo;
 mod pan;
 pub mod pitch;
 mod rng;
+pub mod segment;
 mod swap_fader;
 mod window;
 
@@ -26,5 +27,6 @@ pub use lfo::Lfo;
 pub use pan::{constant_power_pan, stereo_balance};
 pub use pitch::{detect_f0, F0Config, F0Frame, YinDetector};
 pub use rng::SimpleRng;
+pub use segment::{segment_notes, NoteBlob, SegmentConfig};
 pub use swap_fader::SwapFader;
 pub use window::{fill_hann_window, hann_window};
