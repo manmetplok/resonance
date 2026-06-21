@@ -180,6 +180,17 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             tracks::bus_fx_bypass_changed(r, bus_id, bypassed)
         }
 
+        // Aux send / return-bus events. The engine-side data model,
+        // commands, events, and cyclic-route validation land first
+        // (todo #475); the app-side aux-send state, mirroring, and
+        // mixer view are separate follow-up todos. Until those land
+        // these events are accepted but not yet mirrored into app
+        // state, keeping the workspace compiling.
+        E::BusRoleChanged { .. }
+        | E::AuxSendChanged { .. }
+        | E::AuxSendRemoved { .. }
+        | E::AuxSendRejected { .. } => {}
+
         // Plugin lifecycle
         E::PluginAdded {
             track_id,

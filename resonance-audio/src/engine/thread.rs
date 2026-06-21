@@ -75,6 +75,11 @@ pub(crate) struct HandlerState {
     pub next_bus_id: BusId,
     pub next_clip_id: ClipId,
     pub next_plugin_id: PluginInstanceId,
+    pub next_send_id: SendId,
+    /// Aux sends keyed by id, in insertion order. Engine-thread-local
+    /// (never read from the audio callback), so plain data — see
+    /// [`AuxSend`]. The source of truth for cyclic-route validation.
+    pub aux_sends: IndexMap<SendId, AuxSend>,
     pub rec: RecordingState,
     pub bundles: Vec<ClapBundle>,
     pub active_imports: Arc<AtomicUsize>,
@@ -151,6 +156,8 @@ pub(crate) fn engine_thread(
         next_bus_id: 1,
         next_clip_id: 1,
         next_plugin_id: 1,
+        next_send_id: 1,
+        aux_sends: IndexMap::new(),
         rec: RecordingState::new(sample_rate),
         bundles: Vec::new(),
         active_imports: Arc::new(AtomicUsize::new(0)),
@@ -701,6 +708,24 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             bus_id,
             instance_id,
         } => busses::handle_remove_plugin_from_bus(ctx, bus_id, instance_id),
+
+        // -- Aux sends + return busses --
+        AudioCommand::SetBusRole { bus_id, is_return } => {
+            busses::handle_set_bus_role(ctx, bus_id, is_return)
+        }
+        AudioCommand::SetAuxSend {
+            id_hint,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+            enabled,
+        } => busses::handle_set_aux_send(
+            ctx, state, id_hint, source, dest, level_db, pre_fader, enabled,
+        ),
+        AudioCommand::RemoveAuxSend { send_id } => {
+            busses::handle_remove_aux_send(ctx, state, send_id)
+        }
 
         // -- Master FX chain + bypass --
         AudioCommand::AddPluginToMaster {

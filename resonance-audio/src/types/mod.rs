@@ -6,6 +6,7 @@ pub type ClipId = u64;
 pub type SamplePos = u64;
 pub type PluginInstanceId = u64;
 pub type BusId = u64;
+pub type SendId = u64;
 
 /// Where a track's post-fader audio lands. Tracks either sum directly
 /// into the master output (the default, matching pre-bus behaviour) or
@@ -41,6 +42,7 @@ impl TrackType {
     }
 }
 
+mod aux_send;
 mod clip;
 mod commands;
 mod events;
@@ -48,6 +50,7 @@ mod tempo;
 mod track;
 mod vocal_tuning;
 
+pub use aux_send::{aux_send_would_cycle, AuxSend, SendSource};
 pub use clip::{
     compute_waveform_peaks, AudioClip, ClipSource, FadeCurve, MidiClip, MidiNote,
     PendingNoteEvent, WAVEFORM_PEAK_FRAMES,
