@@ -6,6 +6,11 @@ pub type ClipId = u64;
 pub type SamplePos = u64;
 pub type PluginInstanceId = u64;
 pub type BusId = u64;
+/// Identifier for an imported media-pool asset. Allocated by the engine
+/// on `AudioCommand::ImportAudioToPool` and carried by the
+/// import-lifecycle events. Independent of [`ClipId`]: an asset lives in
+/// the project pool and may back zero, one, or many clips.
+pub type AssetId = u64;
 
 /// Where a track's post-fader audio lands. Tracks either sum directly
 /// into the master output (the default, matching pre-bus behaviour) or
@@ -50,11 +55,11 @@ mod vocal_tuning;
 
 pub use clip::{
     compute_waveform_peaks, AudioClip, ClipSource, FadeCurve, MidiClip, MidiNote,
-    PendingNoteEvent, WAVEFORM_PEAK_FRAMES,
+    PendingNoteEvent, WarpAlgorithm, WarpMarker, WAVEFORM_PEAK_FRAMES,
 };
 pub use vocal_tuning::{F0Frame, GlobalTuning, NoteBlob, NoteEdit, TuningScale, VocalTuning};
 pub use commands::AudioCommand;
-pub use events::{AudioEvent, BouncedClipData};
+pub use events::{AudioEvent, BouncedClipData, ImportStage};
 pub use tempo::{
     arrival_bpm_at_bar, avg_bpm_for_bar, bpm_at_bar, sample_frac_to_tick_frac,
     tick_frac_to_sample_frac, InputDeviceInfo, ParamInfo, PluginDescInfo, ScannedPlugin,

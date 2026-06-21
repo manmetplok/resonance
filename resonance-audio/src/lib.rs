@@ -29,6 +29,10 @@ pub mod types;
 
 pub use decode::{linear_resample, StreamingLinearResampler};
 pub use engine::{transcode_to_wav, AudioEngine, EngineSendError};
+// `AudioEvent::AssetImported` carries an `AudioFormat`; re-export it so
+// app consumers of the event surface don't need a direct dependency on
+// `resonance_common` just to match on it.
+pub use resonance_common::AudioFormat;
 pub use limits::DEFAULT_HISTORY_CAPACITY;
 pub use midi_hardware::MidiDeviceInfo;
 pub use types::*;
@@ -74,6 +78,14 @@ pub use engine::midi::{move_midi_clip_in_place, trim_midi_clip_in_place};
 pub use engine::{
     set_clip_fade_in_place, set_clip_gain_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
 };
+
+/// Test surface for the audio import-to-pool path. Exposed so the
+/// integration test in `tests/import_audio_to_pool.rs` can drive the
+/// pure per-file import (`import_one_to_pool`) and the full ordered
+/// event lifecycle (`run_pool_import`) without bringing up the engine
+/// thread or a real audio device.
+#[doc(hidden)]
+pub use engine::{import_one_to_pool, run_pool_import, PoolImportOutcome};
 
 /// Test surface for the bounce path's MIDI event collection. Exposed so
 /// integration tests can drive the chunk-by-chunk note-event walk

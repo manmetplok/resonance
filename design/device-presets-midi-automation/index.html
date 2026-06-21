@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — Device presets & MIDI parameter automation (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-dim:rgba(232,196,123,.12); --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --good-dim:rgba(109,214,163,.14); --good-line:rgba(109,214,163,.34);
+    --bad:#e87b8b; --bad-dim:rgba(232,123,139,.13); --bad-line:rgba(232,123,139,.40);
+    --radius-xs:4px; --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+
+  /* ---- App chrome ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1)}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .tabs{display:flex;gap:2px;margin-left:8px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+  .clock{font-size:12px;color:var(--text-2);display:flex;gap:14px;align-items:center}
+  .clock b{color:var(--text-1);font-weight:500}
+
+  /* ---- State switcher ---- */
+  .statebar{
+    min-height:44px;flex:0 0 auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    padding:6px 18px;background:var(--bg-1);border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);margin-right:2px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{
+    border:0;background:transparent;color:var(--text-2);padding:6px 13px;font-size:12px;
+    cursor:pointer;font-family:inherit;border-right:1px solid var(--line-2);white-space:nowrap;
+  }
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .hint{margin-left:auto;color:var(--text-3);font-size:11.5px;max-width:520px;text-align:right;line-height:1.45}
+
+  /* ---- Body ---- */
+  .body{flex:1;display:flex;min-height:0}
+  .scene{flex:1;display:none;min-height:0}
+  .scene.on{display:flex}
+
+  /* left context column (timeline / strip) */
+  .ctx{flex:1;min-width:0;background:var(--bg-1);display:flex;flex-direction:column;overflow:hidden}
+  .ctx-strip{flex:1;display:flex;align-items:flex-end;gap:16px;padding:26px}
+
+  /* Channel strip (mirrors mixer) */
+  .strip{
+    width:140px;height:430px;flex:0 0 auto;background:var(--bg-2);
+    border:1px solid var(--line);border-radius:var(--radius-xl);
+    display:flex;flex-direction:column;overflow:hidden;position:relative;
+  }
+  .strip.master{width:156px}
+  .strip.selected{border-color:var(--accent-line);box-shadow:0 0 0 1px var(--accent-line),0 14px 40px rgba(0,0,0,.45)}
+  .s-head{padding:9px 11px;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--line-2)}
+  .s-dot{width:8px;height:8px;border-radius:2px;background:var(--warm);flex:0 0 auto}
+  .s-dot.midi{background:var(--accent)}
+  .s-dot.ext{background:var(--accent);box-shadow:0 0 0 2px var(--accent-dim)}
+  .s-name{font-size:12.5px;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .s-tag{font-size:8px;letter-spacing:.11em;text-transform:uppercase;color:var(--text-3)}
+  .s-tag.ext{color:var(--accent-soft);background:var(--accent-dim);border:1px solid var(--accent-line);padding:2px 5px;border-radius:999px}
+  .s-ext{padding:8px 10px;border-bottom:1px solid var(--line-2);display:flex;flex-direction:column;gap:5px}
+  .chip{display:flex;align-items:center;gap:6px;padding:5px 7px;border-radius:var(--radius-xs);background:var(--bg-1);border:1px solid var(--line-2);font-size:10.5px;color:var(--text-2)}
+  .chip .ck{font-size:8px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);flex:0 0 auto;width:34px}
+  .chip .cv{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-1)}
+  .chip.device .cv{color:var(--accent-soft)}
+  .chip.patch .cv{color:var(--warm)}
+  .midiflash{width:7px;height:7px;border-radius:50%;background:var(--accent);opacity:.2;flex:0 0 auto}
+  .midiflash.beat{animation:midibeat .5s steps(1) infinite}
+  @keyframes midibeat{0%{opacity:1}40%{opacity:.2}100%{opacity:1}}
+  .s-meterwrap{flex:1;display:flex;gap:10px;padding:14px 14px 6px;align-items:stretch;justify-content:center}
+  .fader{width:30px;position:relative;display:flex;justify-content:center;background:var(--bg-1);border-radius:var(--radius-sm);border:1px solid var(--line-2)}
+  .fader .track{position:absolute;top:14px;bottom:14px;width:3px;background:var(--bg-3);border-radius:3px;left:50%;transform:translateX(-50%)}
+  .fader .cap{position:absolute;left:50%;transform:translateX(-50%);width:22px;height:11px;border-radius:3px;background:var(--bg-3);border:1px solid var(--line);bottom:38%}
+  .meter{width:9px;background:var(--bg-1);border-radius:3px;border:1px solid var(--line-2);position:relative;overflow:hidden}
+  .meter i{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(180deg,var(--warm),var(--good));border-radius:0 0 3px 3px;height:0%}
+  .s-btns{display:flex;gap:5px;padding:8px 11px;border-top:1px solid var(--line-2)}
+  .s-btns button{flex:1;height:22px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-1);color:var(--text-3);font-size:10px;font-family:inherit;cursor:pointer}
+
+  /* ---- Timeline automation lane (Arrange) ---- */
+  .tl{flex:1;display:flex;flex-direction:column;min-height:0}
+  .tl-ruler{height:28px;display:flex;border-bottom:1px solid var(--line);background:var(--bg-1)}
+  .tl-headcol{width:280px;flex:0 0 auto;border-right:1px solid var(--line);display:flex;align-items:center;padding:0 14px;color:var(--text-3);font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+  .tl-bars{flex:1;display:flex;position:relative}
+  .tl-bars .bar{flex:1;border-right:1px solid var(--line-2);color:var(--text-3);font-size:10px;padding:6px 0 0 6px}
+  .lane{display:flex;border-bottom:1px solid var(--line-2);background:var(--bg-1)}
+  .lane.track{height:96px}
+  .lane.auto{height:64px;background:#141318}
+  .lane-head{width:280px;flex:0 0 auto;border-right:1px solid var(--line);padding:9px 14px;display:flex;flex-direction:column;gap:5px;justify-content:center}
+  .lane-head.indent{padding-left:30px;position:relative}
+  .lane-head.indent::before{content:"";position:absolute;left:16px;top:0;bottom:0;width:2px;background:var(--accent-line)}
+  .lh-name{font-size:12px;font-weight:500;color:var(--text-1);display:flex;align-items:center;gap:7px}
+  .lh-name .dot{width:8px;height:8px;border-radius:2px;background:var(--accent)}
+  .lh-sub{font-size:10px;color:var(--text-3);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .bindchip{font-size:9px;letter-spacing:.04em;padding:1px 6px;border-radius:999px;font-family:"Geist Mono",monospace}
+  .bindchip.cc{color:var(--accent-soft);background:var(--accent-dim);border:1px solid var(--accent-line)}
+  .bindchip.nrpn{color:var(--good);background:var(--good-dim);border:1px solid var(--good-line)}
+  .lane-canvas{flex:1;position:relative;overflow:hidden}
+  .lane-canvas svg{position:absolute;inset:0;width:100%;height:100%}
+  .emit-flag{position:absolute;top:7px;right:10px;font-size:9px;letter-spacing:.06em;color:var(--accent-soft);background:var(--accent-dim);border:1px solid var(--accent-line);border-radius:999px;padding:2px 8px;display:flex;align-items:center;gap:6px}
+  .emit-flag .ed{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+  .emit-flag.beat .ed{animation:midibeat .5s steps(1) infinite}
+  .valread{position:absolute;top:7px;left:10px;font-size:10px;color:var(--text-2);background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--radius-xs);padding:2px 8px}
+  .valread b{color:var(--text-1)}
+  .playhead{position:absolute;top:0;bottom:0;width:1px;background:var(--warm);left:34%}
+
+  .tl-foot{height:42px;flex:0 0 auto;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--bg-1);color:var(--text-3);font-size:11px}
+  .addlane{height:26px;padding:0 12px;border-radius:var(--radius-sm);border:1px dashed var(--line);background:transparent;color:var(--text-2);font-size:11px;font-family:inherit;cursor:pointer;display:flex;align-items:center;gap:7px}
+  .addlane:hover{border-color:var(--accent-line);color:var(--accent-soft)}
+
+  /* ---- Inspector ---- */
+  .insp{width:360px;flex:0 0 auto;background:var(--bg-1);border-left:1px solid var(--line-2);padding:22px 20px;overflow-y:auto}
+  .insp::-webkit-scrollbar{width:8px}
+  .insp::-webkit-scrollbar-thumb{background:var(--bg-3);border-radius:4px}
+  .i-kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+  .i-title{font-size:17px;font-weight:500;color:var(--text-1);margin-top:2px;display:flex;align-items:center;gap:8px}
+  .badge{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;padding:2px 7px;border-radius:999px;font-weight:600}
+  .badge.ext{color:var(--accent-soft);background:var(--accent-dim);border:1px solid var(--accent-line)}
+  .badge.good{color:var(--good);background:var(--good-dim);border:1px solid var(--good-line)}
+  .badge.bad{color:var(--bad);background:var(--bad-dim);border:1px solid var(--bad-line)}
+
+  .grp{margin-top:18px}
+  .grp-head{display:flex;align-items:center;gap:8px;cursor:default}
+  .grp-head .caret{color:var(--text-3);font-size:9px}
+  .grp-head .gt{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+  .grp-head .gmeta{margin-left:auto;font-size:10px;color:var(--text-4)}
+  .grp-head .hr{flex:1;height:1px;background:var(--line-2)}
+
+  .tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  .tile{background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--radius-md);padding:8px 10px}
+  .tile .tl2{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+  .tile .tv{font-size:13px;margin-top:3px;color:var(--text-1)}
+
+  .field{margin-top:12px}
+  .field .fl{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px}
+  .field .fl .src{margin-left:auto;font-size:8px;letter-spacing:.08em;color:var(--accent-soft);background:var(--accent-dim);border:1px solid var(--accent-line);padding:1px 5px;border-radius:999px;text-transform:none}
+  .pick{position:relative;width:100%;min-height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--text-1);font-size:12px;cursor:pointer}
+  .pick .pv{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:7px 0}
+  .pick .car{color:var(--text-3);font-size:9px}
+  .pick.placeholder .pv{color:var(--text-3)}
+  .pick.open{border-color:var(--accent-line)}
+  .pick .d{width:7px;height:7px;border-radius:2px;background:var(--accent);flex:0 0 auto}
+  .pick .d.warm{background:var(--warm)}
+  .pick .d.good{background:var(--good)}
+
+  /* dropdown menu (device / patch / param picker) */
+  .menu{position:absolute;left:0;right:0;top:calc(100% + 5px);z-index:20;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 18px 44px rgba(0,0,0,.5);overflow:hidden;display:none}
+  .menu.open{display:block}
+  .menu .msearch{padding:8px;border-bottom:1px solid var(--line-2)}
+  .menu .msearch input{width:100%;height:28px;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--text-1);padding:0 10px;font-family:inherit;font-size:12px;outline:none}
+  .menu .mscroll{max-height:260px;overflow-y:auto}
+  .mgrp{font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-4);padding:9px 12px 4px;font-weight:600}
+  .mitem{display:flex;align-items:center;gap:9px;padding:7px 12px;cursor:pointer;font-size:12px}
+  .mitem:hover{background:var(--bg-3)}
+  .mitem.sel{background:var(--accent-dim)}
+  .mitem .mi-dot{width:7px;height:7px;border-radius:2px;background:var(--accent);flex:0 0 auto}
+  .mitem .mi-name{flex:1;color:var(--text-1)}
+  .mitem .mi-name .mi-sub{display:block;font-size:10px;color:var(--text-3);margin-top:1px}
+  .mitem .mi-bind{font-family:"Geist Mono",monospace;font-size:10px;color:var(--accent-soft)}
+  .mitem .mi-bind.nrpn{color:var(--good)}
+  .mitem .mi-check{color:var(--accent-soft);font-size:11px}
+  .menu .mfoot{border-top:1px solid var(--line-2);padding:8px 12px;display:flex;gap:8px}
+  .menu .mfoot button{flex:1;height:26px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-1);color:var(--text-2);font-size:10.5px;font-family:inherit;cursor:pointer}
+  .menu .mfoot button:hover{background:var(--bg-3);color:var(--text-1)}
+  .pillrow{display:flex;gap:6px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--line-2)}
+  .pillrow .bp{font-size:10px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--bg-1);color:var(--text-2);cursor:pointer}
+  .pillrow .bp.on{background:var(--warm-dim);border-color:var(--warm-line);color:var(--warm)}
+
+  /* patch-by-name card */
+  .patchcard{margin-top:6px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);padding:10px;position:relative;overflow:hidden}
+  .patchcard.lit{border-color:var(--warm-line)}
+  .patchsend{position:absolute;inset:0;background:radial-gradient(120% 120% at 12% 50%,var(--warm-dim),transparent 60%);opacity:0;pointer-events:none;transition:opacity .12s}
+  .patchsend.flash{opacity:1}
+  .pcnote{font-size:10px;color:var(--text-3);margin-top:8px;line-height:1.45}
+  .pcnote b{color:var(--text-2);font-weight:500}
+  .raw{font-family:"Geist Mono",monospace;color:var(--text-3);font-size:10px}
+
+  .empty{margin-top:10px;border:1px dashed var(--line);border-radius:var(--radius-md);padding:14px;background:var(--bg-2);font-size:11.5px;color:var(--text-2);line-height:1.55}
+  .empty b{color:var(--text-1);font-weight:500}
+  .empty .step{display:flex;gap:9px;margin-top:9px;align-items:flex-start}
+  .empty .step .n{flex:0 0 auto;width:16px;height:16px;border-radius:50%;background:var(--accent-dim);border:1px solid var(--accent-line);color:var(--accent-soft);font-size:9px;display:flex;align-items:center;justify-content:center;margin-top:1px}
+
+  .alert{margin-top:12px;border-radius:var(--radius-md);padding:10px 12px;font-size:11px;line-height:1.5;display:none}
+  .alert.bad{background:var(--bad-dim);border:1px solid var(--bad-line);color:var(--text-1)}
+  .alert.show{display:block}
+  .alert .at{color:var(--bad);font-weight:600;font-size:11px;display:flex;align-items:center;gap:6px}
+  .alert.warm-a{background:var(--warm-dim);border:1px solid var(--warm-line)}
+  .alert.warm-a .at{color:var(--warm)}
+  .alert .fix{margin-top:7px;display:flex;gap:7px}
+  .alert .fix button{height:24px;padding:0 10px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-1);color:var(--text-2);font-size:10.5px;font-family:inherit;cursor:pointer}
+
+  /* ---- Definition editor (full width) ---- */
+  .editor{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg-1)}
+  .ed-head{flex:0 0 auto;padding:16px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px}
+  .ed-head .et{font-size:16px;font-weight:500}
+  .ed-head .esub{font-size:11px;color:var(--text-3)}
+  .ed-head .save{font-size:9.5px;color:var(--good);display:flex;align-items:center;gap:6px}
+  .ed-head .save .sd{width:6px;height:6px;border-radius:50%;background:var(--good)}
+  .ed-actions{margin-left:auto;display:flex;gap:8px}
+  .ed-actions button{height:30px;padding:0 13px;border-radius:var(--radius-md);border:1px solid var(--line);background:var(--bg-2);color:var(--text-2);font-size:11.5px;font-family:inherit;cursor:pointer;display:flex;align-items:center;gap:7px}
+  .ed-actions button:hover{background:var(--bg-3);color:var(--text-1)}
+  .ed-actions button.primary{background:var(--accent-dim);border-color:var(--accent-line);color:var(--accent-soft)}
+  .ed-body{flex:1;display:grid;grid-template-columns:1.55fr 1fr;min-height:0}
+  .ed-col{min-height:0;overflow-y:auto;padding:18px 22px}
+  .ed-col + .ed-col{border-left:1px solid var(--line-2)}
+  .ed-col::-webkit-scrollbar{width:8px}
+  .ed-col::-webkit-scrollbar-thumb{background:var(--bg-3);border-radius:4px}
+  .ed-coltitle{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+  .ed-coltitle .ct{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+  .ed-coltitle .cn{font-size:10px;color:var(--text-4);margin-left:auto}
+
+  table.params{width:100%;border-collapse:collapse}
+  table.params th{font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-4);font-weight:600;text-align:left;padding:0 8px 7px}
+  table.params td{padding:6px 8px;border-top:1px solid var(--line-2);vertical-align:middle}
+  table.params tr:hover td{background:#16171c}
+  table.params tr.bad-row td{background:var(--bad-dim)}
+  .cell-in{width:100%;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-xs);color:var(--text-1);font-size:11.5px;padding:5px 8px;font-family:inherit;outline:none}
+  .cell-in:focus{border-color:var(--accent-line)}
+  .cell-in.mono{font-family:"Geist Mono",monospace}
+  .cell-in.bad{border-color:var(--bad-line);color:var(--bad)}
+  .selwrap{position:relative}
+  .cell-sel{width:100%;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-xs);color:var(--text-1);font-size:11.5px;padding:5px 8px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:6px}
+  .cell-sel .car{color:var(--text-3);font-size:8px}
+  .typetag{font-size:8.5px;letter-spacing:.04em;font-family:"Geist Mono",monospace;padding:2px 6px;border-radius:var(--radius-xs)}
+  .typetag.cc{color:var(--accent-soft);background:var(--accent-dim)}
+  .typetag.nrpn{color:var(--good);background:var(--good-dim)}
+  .rowdel{width:22px;height:22px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-1);color:var(--text-3);cursor:pointer;font-size:11px}
+  .rowdel:hover{border-color:var(--bad-line);color:var(--bad)}
+  .curve-mini{width:46px;height:22px;background:var(--bg-1);border:1px solid var(--line-2);border-radius:var(--radius-xs);display:block}
+  .addrow{margin-top:10px;width:100%;height:30px;border-radius:var(--radius-sm);border:1px dashed var(--line);background:transparent;color:var(--text-2);font-size:11px;font-family:inherit;cursor:pointer}
+  .addrow:hover{border-color:var(--accent-line);color:var(--accent-soft)}
+
+  /* patch bank list in editor */
+  .banktabs{display:flex;gap:6px;margin-bottom:10px}
+  .banktabs .bt{font-size:10.5px;padding:5px 11px;border-radius:var(--radius-sm);border:1px solid var(--line);background:var(--bg-2);color:var(--text-2);cursor:pointer}
+  .banktabs .bt.on{background:var(--warm-dim);border-color:var(--warm-line);color:var(--warm)}
+  .patchlist{display:flex;flex-direction:column;gap:5px}
+  .pl-row{display:grid;grid-template-columns:42px 1fr 28px;gap:8px;align-items:center;background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:5px 8px}
+  .pl-row .plnum{font-family:"Geist Mono",monospace;font-size:11px;color:var(--text-3);text-align:center}
+  .pl-row .plname{font-size:12px;color:var(--text-1)}
+  .pl-row input.plname{background:transparent;border:0;outline:none;font-family:inherit;width:100%}
+  .ed-note{margin-top:14px;background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--radius-md);padding:11px 12px;font-size:10.5px;color:var(--text-3);line-height:1.5}
+  .ed-note b{color:var(--text-2);font-weight:500}
+
+  .footnote{padding:11px 18px;color:var(--text-4);font-size:10.5px;border-top:1px solid var(--line-2);background:var(--bg-1)}
+  .footnote b{color:var(--text-3);font-weight:500}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- chrome -->
+  <div class="chrome">
+    <div class="brand"><b>resonance</b></div>
+    <div class="tabs">
+      <div class="tab" id="tabArrange">Arrange</div>
+      <div class="tab active" id="tabMixer">Mixer</div>
+      <div class="tab">Compose</div>
+      <div class="tab">Perform</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="clock"><span>124 BPM</span><b class="mono">09 · 03 · 210</b></div>
+  </div>
+
+  <!-- state switcher -->
+  <div class="statebar">
+    <span class="lbl">Flow</span>
+    <div class="seg" id="seg">
+      <button data-s="device" class="on">Assign device</button>
+      <button data-s="patch">Named patch</button>
+      <button data-s="automate">Automate param</button>
+      <button data-s="editor">Definition editor</button>
+      <button data-s="conflict">Validation / error</button>
+    </div>
+    <div class="hint" id="hint"></div>
+  </div>
+
+  <!-- body -->
+  <div class="body">
+
+    <!-- ============ SCENE: assign device ============ -->
+    <div class="scene on" data-scene="device">
+      <div class="ctx">
+        <div class="ctx-strip">
+          <div class="strip">
+            <div class="s-head"><span class="s-dot midi"></span><span class="s-name">Pad (SVS)</span><span class="s-tag">Inst</span></div>
+            <div class="s-meterwrap"><div class="fader"><div class="track"></div><div class="cap"></div></div><div class="meter"><i style="height:40%"></i></div><div class="meter"><i style="height:36%"></i></div></div>
+            <div class="s-btns"><button>M</button><button>S</button><button>+4</button></div>
+          </div>
+          <div class="strip selected">
+            <div class="s-head"><span class="s-dot ext"></span><span class="s-name">Moog Muse</span><span class="s-tag ext">Ext</span></div>
+            <div class="s-ext">
+              <div class="chip device"><span class="ck">Device</span><span class="cv" id="stripDevice">Moog Muse</span></div>
+              <div class="chip"><span class="ck">MIDI</span><span class="cv">Muse · Ch 1</span><span class="midiflash"></span></div>
+              <div class="chip patch"><span class="ck">Patch</span><span class="cv">Bank A · Brass Ens</span></div>
+            </div>
+            <div class="s-meterwrap"><div class="fader"><div class="track"></div><div class="cap"></div></div><div class="meter"><i style="height:30%"></i></div><div class="meter"><i style="height:28%"></i></div></div>
+            <div class="s-btns"><button>Mon</button><button>●</button><button>0.0</button></div>
+          </div>
+          <div class="strip master">
+            <div class="s-head"><span class="s-dot"></span><span class="s-name">Master</span><span class="s-tag">Out</span></div>
+            <div class="s-meterwrap"><div class="fader"><div class="track"></div><div class="cap"></div></div><div class="meter"><i style="height:46%"></i></div><div class="meter"><i style="height:44%"></i></div></div>
+            <div class="s-btns"><button>M</button><button>S</button><button>0.0</button></div>
+          </div>
+        </div>
+        <div class="footnote">A <b>device preset</b> is a data file: it names the synth's params (with CC/NRPN bindings + ranges) and its patch banks. Picking one teaches Resonance the gear — no per-project setup.</div>
+      </div>
+
+      <div class="insp">
+        <div class="i-kicker">Inspector</div>
+        <div class="i-title">Moog Muse <span class="badge ext">External</span></div>
+
+        <div class="grp">
+          <div class="grp-head"><span class="caret">▾</span><span class="gt">Device Preset</span><span class="hr"></span><span class="gmeta">v1.2 · bundled</span></div>
+          <div class="field">
+            <div class="fl">Synth model <span class="src">drives params &amp; patches</span></div>
+            <div class="pick open" id="devPick" onclick="toggleMenu('devMenu')">
+              <span class="d"></span><span class="pv" id="devPickVal">Moog Muse</span><span class="car">▾</span>
+              <div class="menu open" id="devMenu" onclick="event.stopPropagation()">
+                <div class="msearch"><input placeholder="Search device presets…"></div>
+                <div class="mscroll">
+                  <div class="mgrp">Bundled presets</div>
+                  <div class="mitem sel"><span class="mi-dot"></span><span class="mi-name">Moog Muse<span class="mi-sub">8-voice bi-timbral · 42 params · 256 patches</span></span><span class="mi-check">✓</span></div>
+                  <div class="mitem"><span class="mi-dot warm" style="background:var(--warm)"></span><span class="mi-name">Sequential Prophet-6<span class="mi-sub">21 params · 500 patches</span></span></div>
+                  <div class="mitem"><span class="mi-dot" style="background:var(--good)"></span><span class="mi-name">Korg Minilogue XD<span class="mi-sub">35 params · 500 patches</span></span></div>
+                  <div class="mgrp">This project</div>
+                  <div class="mitem"><span class="mi-dot" style="background:var(--text-3)"></span><span class="mi-name">My DIY Eurorack<span class="mi-sub">user-authored · 6 params</span></span></div>
+                  <div class="mgrp">Generic</div>
+                  <div class="mitem"><span class="mi-dot" style="background:var(--text-4)"></span><span class="mi-name">None — raw CC numbers<span class="mi-sub">automate any CC 0–127 by number</span></span></div>
+                </div>
+                <div class="mfoot"><button>＋ New definition…</button><button>Import .rdev…</button></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="fl">What this preset adds</div>
+            <div class="tiles">
+              <div class="tile"><div class="tl2">Named params</div><div class="tv">42 <span style="color:var(--text-3);font-size:10px">automatable</span></div></div>
+              <div class="tile"><div class="tl2">Patch banks</div><div class="tv">4 × 64 <span style="color:var(--text-3);font-size:10px">named</span></div></div>
+              <div class="tile"><div class="tl2">CC bindings</div><div class="tv">31</div></div>
+              <div class="tile"><div class="tl2">NRPN bindings</div><div class="tv">11</div></div>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="fl">Definition</div>
+            <div class="pcnote" style="background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--radius-md);padding:10px 12px">
+              Bundled <b>moog-muse.rdev</b> (read-only). <b>Duplicate to edit</b> for custom mappings — your copy is saved alongside the project so it travels with the file.
+              <div style="margin-top:9px;display:flex;gap:8px">
+                <button onclick="go('editor')" style="height:26px;padding:0 11px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-1);color:var(--text-2);font-size:10.5px;font-family:inherit;cursor:pointer">Duplicate &amp; edit…</button>
+                <button style="height:26px;padding:0 11px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-1);color:var(--text-2);font-size:10.5px;font-family:inherit;cursor:pointer">View chart</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grp">
+          <div class="grp-head"><span class="caret">▸</span><span class="gt">External Instrument</span><span class="hr"></span><span class="gmeta">MIDI · Return · Latency</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ SCENE: named patch ============ -->
+    <div class="scene" data-scene="patch">
+      <div class="ctx">
+        <div class="ctx-strip">
+          <div class="strip selected">
+            <div class="s-head"><span class="s-dot ext"></span><span class="s-name">Moog Muse</span><span class="s-tag ext">Ext</span></div>
+            <div class="s-ext">
+              <div class="chip device"><span class="ck">Device</span><span class="cv">Moog Muse</span></div>
+              <div class="chip patch"><span class="ck">Patch</span><span class="cv" id="stripPatch">Bank A · Brass Ens</span><span class="midiflash" id="patchFlashDot"></span></div>
+            </div>
+            <div class="s-meterwrap"><div class="fader"><div class="track"></div><div class="cap"></div></div><div class="meter"><i style="height:33%"></i></div><div class="meter"><i style="height:31%"></i></div></div>
+            <div class="s-btns"><button>Mon</button><button>●</button><button>0.0</button></div>
+          </div>
+          <div class="strip master">
+            <div class="s-head"><span class="s-dot"></span><span class="s-name">Master</span><span class="s-tag">Out</span></div>
+            <div class="s-meterwrap"><div class="fader"><div class="track"></div><div class="cap"></div></div><div class="meter"><i style="height:46%"></i></div><div class="meter"><i style="height:44%"></i></div></div>
+            <div class="s-btns"><button>M</button><button>S</button><button>0.0</button></div>
+          </div>
+        </div>
+        <div class="footnote">With a device preset assigned, the patch picker lists <b>names</b> from the preset's bank list — no more memorising program numbers. The raw Bank Select + Program Change is shown small for engineers who need it.</div>
+      </div>
+
+      <div class="insp">
+        <div class="i-kicker">Inspector</div>
+        <div class="i-title">Patch <span class="badge ext">Moog Muse</span></div>
+
+        <div class="grp">
+          <div class="grp-head"><span class="caret">▾</span><span class="gt">Patch — by name</span><span class="hr"></span><span class="gmeta">Muse preset</span></div>
+          <div class="field">
+            <div class="fl">Patch</div>
+            <div class="pick open" id="patchPick" onclick="toggleMenu('patchMenu')">
+              <span class="d warm"></span>
+              <span class="pv"><span id="patchPickVal">Brass Ensemble</span> <span class="raw" id="patchPickRaw">— A 003 · PC 002</span></span><span class="car">▾</span>
+              <div class="menu open" id="patchMenu" onclick="event.stopPropagation()">
+                <div class="msearch"><input placeholder="Search 256 patches…"></div>
+                <div class="pillrow">
+                  <span class="bp on">Bank A</span><span class="bp">Bank B</span><span class="bp">Bank C</span><span class="bp">Bank D</span>
+                </div>
+                <div class="mscroll">
+                  <div class="mitem"><span class="mi-name">Init Patch<span class="mi-sub">A 001</span></span></div>
+                  <div class="mitem"><span class="mi-name">Mini Bass<span class="mi-sub">A 002</span></span></div>
+                  <div class="mitem sel"><span class="mi-name">Brass Ensemble<span class="mi-sub">A 003</span></span><span class="mi-check">✓</span></div>
+                  <div class="mitem"><span class="mi-name">Glass Pad<span class="mi-sub">A 004</span></span></div>
+                  <div class="mitem"><span class="mi-name">Acid Lead<span class="mi-sub">A 005</span></span></div>
+                  <div class="mitem"><span class="mi-name">Sub Drone<span class="mi-sub">A 006</span></span></div>
+                  <div class="mitem"><span class="mi-name">Vox Choir<span class="mi-sub">A 007</span></span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="fl">Sends on select</div>
+            <div class="patchcard lit" id="patchCard">
+              <div class="patchsend" id="patchSend"></div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div class="mono" style="background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-sm);padding:7px 10px;color:var(--warm);font-size:15px">A 003</div>
+                <div style="flex:1">
+                  <div style="font-size:13px;color:var(--text-1)">Brass Ensemble</div>
+                  <div class="raw">CC0 0 · CC32 0 · PC 2</div>
+                </div>
+                <button onclick="resend()" style="height:28px;padding:0 11px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-1);color:var(--text-2);font-size:10.5px;font-family:inherit;cursor:pointer">Re-send</button>
+              </div>
+              <div class="pcnote">Sends <b>Bank Select (CC0/CC32)</b> + <b>Program Change</b> on select, on project load, and at transport start so the synth always matches the named patch.</div>
+            </div>
+          </div>
+
+          <div class="alert warm-a" id="patchMissing" style="display:none">
+            <div class="at">● Patch number not named</div>
+            <div>This project stored <b>A 058</b> but the preset has no name for it. Showing the raw number — <b>add it</b> in the definition editor to label it.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ SCENE: automate param ============ -->
+    <div class="scene" data-scene="automate">
+      <div class="ctx">
+        <div class="tl">
+          <div class="tl-ruler">
+            <div class="tl-headcol">Tracks</div>
+            <div class="tl-bars"><div class="bar">9</div><div class="bar">10</div><div class="bar">11</div><div class="bar">12</div></div>
+          </div>
+
+          <div class="lane track">
+            <div class="lane-head">
+              <div class="lh-name"><span class="dot"></span>Moog Muse</div>
+              <div class="lh-sub">External instrument · Ch 1</div>
+            </div>
+            <div class="lane-canvas">
+              <div style="position:absolute;left:6px;top:18px;right:6px;height:58px;border-radius:var(--radius-lg);background:var(--accent-dim);border:1px solid var(--accent-line)"></div>
+              <div class="playhead"></div>
+            </div>
+          </div>
+
+          <div class="lane auto">
+            <div class="lane-head indent">
+              <div class="lh-name" style="font-size:11.5px">Filter Cutoff</div>
+              <div class="lh-sub">Muse preset <span class="bindchip cc">→ CC 74</span></div>
+            </div>
+            <div class="lane-canvas" id="cutoffCanvas">
+              <div class="valread"><b id="cutoffVal">98</b> / 127 · <span class="mono" id="cutoffPct">77%</span></div>
+              <div class="emit-flag beat"><span class="ed"></span><span class="mono">CC74 → MIDI out</span></div>
+              <svg viewBox="0 0 400 64" preserveAspectRatio="none">
+                <polyline points="0,46 60,40 110,18 170,10 230,30 300,16 360,36 400,30" fill="none" stroke="var(--accent-soft)" stroke-width="1.6"/>
+                <polygon points="0,64 0,46 60,40 110,18 170,10 230,30 300,16 360,36 400,30 400,64" fill="var(--accent-dim)"/>
+                <circle cx="110" cy="18" r="3" fill="var(--accent-soft)"/><circle cx="170" cy="10" r="3" fill="var(--accent-soft)"/><circle cx="300" cy="16" r="3" fill="var(--accent-soft)"/>
+              </svg>
+              <div class="playhead"></div>
+            </div>
+          </div>
+
+          <div class="lane auto">
+            <div class="lane-head indent">
+              <div class="lh-name" style="font-size:11.5px">Filter Resonance</div>
+              <div class="lh-sub">Muse preset <span class="bindchip nrpn">→ NRPN 1·08</span></div>
+            </div>
+            <div class="lane-canvas">
+              <div class="valread"><b>+0.34</b> · <span class="mono">res</span></div>
+              <div class="emit-flag"><span class="ed"></span><span class="mono">NRPN → MIDI out</span></div>
+              <svg viewBox="0 0 400 64" preserveAspectRatio="none">
+                <polyline points="0,40 100,40 100,24 240,24 240,46 400,46" fill="none" stroke="var(--good)" stroke-width="1.6"/>
+                <polygon points="0,64 0,40 100,40 100,24 240,24 240,46 400,46 400,64" fill="var(--good-dim)"/>
+              </svg>
+              <div class="playhead"></div>
+            </div>
+          </div>
+
+          <div class="tl-foot">
+            <button class="addlane" id="addLaneBtn" onclick="toggleMenu('paramMenu')">＋ Add automation lane
+              <div class="menu" id="paramMenu" style="bottom:calc(100% + 6px);top:auto;width:320px" onclick="event.stopPropagation()">
+                <div class="msearch"><input placeholder="Search Moog Muse parameters…"></div>
+                <div class="mscroll">
+                  <div class="mgrp">Filter</div>
+                  <div class="mitem"><span class="mi-name">Cutoff</span><span class="mi-bind">CC 74</span></div>
+                  <div class="mitem"><span class="mi-name">Resonance</span><span class="mi-bind nrpn">NRPN 1·08</span></div>
+                  <div class="mitem"><span class="mi-name">Env Amount</span><span class="mi-bind nrpn">NRPN 1·09</span></div>
+                  <div class="mitem"><span class="mi-name">Keytrack</span><span class="mi-bind">CC 71</span></div>
+                  <div class="mgrp">Amp envelope</div>
+                  <div class="mitem"><span class="mi-name">Attack</span><span class="mi-bind">CC 73</span></div>
+                  <div class="mitem"><span class="mi-name">Decay</span><span class="mi-bind nrpn">NRPN 2·02</span></div>
+                  <div class="mitem"><span class="mi-name">Sustain</span><span class="mi-bind nrpn">NRPN 2·03</span></div>
+                  <div class="mitem"><span class="mi-name">Release</span><span class="mi-bind">CC 72</span></div>
+                  <div class="mgrp">Oscillators</div>
+                  <div class="mitem"><span class="mi-name">Osc 2 Detune</span><span class="mi-bind nrpn">NRPN 3·01</span></div>
+                  <div class="mitem"><span class="mi-name">Sub Level</span><span class="mi-bind">CC 76</span></div>
+                  <div class="mgrp">Track</div>
+                  <div class="mitem"><span class="mi-name">Volume</span><span class="mi-bind">CC 7</span></div>
+                  <div class="mitem"><span class="mi-name">Pan</span><span class="mi-bind">CC 10</span></div>
+                </div>
+                <div class="mfoot"><button>Other CC by number…</button></div>
+              </div>
+            </button>
+            <span>Lanes emit to hardware MIDI out — <b style="color:var(--text-2)">live &amp; on bounce</b>. Bounce re-streams the same CC/NRPN at render time.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="insp">
+        <div class="i-kicker">Automation lane</div>
+        <div class="i-title">Filter Cutoff</div>
+        <div class="grp">
+          <div class="grp-head"><span class="caret">▾</span><span class="gt">Binding</span><span class="hr"></span></div>
+          <div class="tiles">
+            <div class="tile"><div class="tl2">Message</div><div class="tv">CC 74</div></div>
+            <div class="tile"><div class="tl2">Source</div><div class="tv" style="font-size:12px;color:var(--accent-soft)">Muse preset</div></div>
+            <div class="tile"><div class="tl2">Range</div><div class="tv mono" style="font-size:12px">0 – 127</div></div>
+            <div class="tile"><div class="tl2">Curve</div><div class="tv" style="font-size:12px">Linear</div></div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="grp-head"><span class="caret">▾</span><span class="gt">Emit</span><span class="hr"></span></div>
+          <div class="field">
+            <div class="pcnote" style="background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--radius-md);padding:10px 12px">
+              Lane values map through the param's range/curve to <b>CC 74</b> on <b>Muse · Ch 1</b>. Output is throttled to avoid MIDI flooding and re-streamed identically during <b>bounce</b>.
+            </div>
+          </div>
+          <div class="field">
+            <div class="fl">Also available</div>
+            <div class="pcnote">All <b style="color:var(--text-2)">42 named Muse params</b> + plugin/track params from epic #14 share this picker. Pick a different param to re-bind this lane.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ SCENE: definition editor ============ -->
+    <div class="scene" data-scene="editor">
+      <div class="editor">
+        <div class="ed-head">
+          <div>
+            <div class="et">Moog Muse <span style="color:var(--text-3);font-weight:400;font-size:12px">(copy)</span></div>
+            <div class="esub mono">my-moog-muse.rdev · saved alongside project</div>
+          </div>
+          <div class="save"><span class="sd"></span>Auto-saved</div>
+          <div class="ed-actions">
+            <button>Export .rdev…</button>
+            <button>Validate</button>
+            <button class="primary">Done</button>
+          </div>
+        </div>
+        <div class="ed-body">
+          <!-- params column -->
+          <div class="ed-col">
+            <div class="ed-coltitle"><span class="ct">Parameters</span><span class="cn" id="paramCount">9 of 42 shown · group: Filter, Envelope, Osc</span></div>
+            <table class="params">
+              <thead><tr><th style="width:30%">Name</th><th style="width:16%">Type</th><th style="width:18%">Binding</th><th style="width:16%">Range</th><th>Curve</th><th></th></tr></thead>
+              <tbody id="paramRows">
+                <tr><td><input class="cell-in" value="Cutoff"></td><td><span class="typetag cc">CC</span></td><td><input class="cell-in mono" value="74"></td><td><input class="cell-in mono" value="0–127"></td><td><svg class="curve-mini" viewBox="0 0 46 22"><polyline points="2,20 44,2" fill="none" stroke="var(--accent-soft)" stroke-width="1.4"/></svg></td><td><button class="rowdel">✕</button></td></tr>
+                <tr><td><input class="cell-in" value="Resonance"></td><td><span class="typetag nrpn">NRPN</span></td><td><input class="cell-in mono" value="1 · 08"></td><td><input class="cell-in mono" value="0–127"></td><td><svg class="curve-mini" viewBox="0 0 46 22"><path d="M2,20 Q30,20 44,2" fill="none" stroke="var(--good)" stroke-width="1.4"/></svg></td><td><button class="rowdel">✕</button></td></tr>
+                <tr><td><input class="cell-in" value="Filter Env Amt"></td><td><span class="typetag nrpn">NRPN</span></td><td><input class="cell-in mono" value="1 · 09"></td><td><input class="cell-in mono" value="−64–63"></td><td><svg class="curve-mini" viewBox="0 0 46 22"><polyline points="2,20 44,2" fill="none" stroke="var(--accent-soft)" stroke-width="1.4"/></svg></td><td><button class="rowdel">✕</button></td></tr>
+                <tr><td><input class="cell-in" value="Amp Attack"></td><td><span class="typetag cc">CC</span></td><td><input class="cell-in mono" value="73"></td><td><input class="cell-in mono" value="0–127"></td><td><svg class="curve-mini" viewBox="0 0 46 22"><path d="M2,20 Q14,2 44,2" fill="none" stroke="var(--accent-soft)" stroke-width="1.4"/></svg></td><td><button class="rowdel">✕</button></td></tr>
+                <tr><td><input class="cell-in" value="Amp Release"></td><td><span class="typetag cc">CC</span></td><td><input class="cell-in mono" value="72"></td><td><input class="cell-in mono" value="0–127"></td><td><svg class="curve-mini" viewBox="0 0 46 22"><path d="M2,20 Q14,2 44,2" fill="none" stroke="var(--accent-soft)" stroke-width="1.4"/></svg></td><td><button class="rowdel">✕</button></td></tr>
+                <tr><td><input class="cell-in" value="Osc 2 Detune"></td><td><span class="typetag nrpn">NRPN</span></td><td><input class="cell-in mono" value="3 · 01"></td><td><input class="cell-in mono" value="−64–63"></td><td><svg class="curve-mini" viewBox="0 0 46 22"><polyline points="2,20 44,2" fill="none" stroke="var(--good)" stroke-width="1.4"/></svg></td><td><button class="rowdel">✕</button></td></tr>
+                <tr><td><input class="cell-in" value="Sub Level"></td><td><span class="typetag cc">CC</span></td><td><input class="cell-in mono" value="76"></td><td><input class="cell-in mono" value="0–127"></td><td><svg class="curve-mini" viewBox="0 0 46 22"><polyline points="2,20 44,2" fill="none" stroke="var(--accent-soft)" stroke-width="1.4"/></svg></td><td><button class="rowdel">✕</button></td></tr>
+              </tbody>
+            </table>
+            <button class="addrow" id="addParamBtn">＋ Add parameter</button>
+            <div class="ed-note"><b>Binding</b> is either a MIDI <b>CC</b> (0–127) or an <b>NRPN</b> (MSB · LSB). <b>Range</b> sets the value mapping; the <b>curve</b> shapes how lane values fill it. The researcher captured the Muse implementation chart — see linked doc.</div>
+          </div>
+
+          <!-- patch bank column -->
+          <div class="ed-col">
+            <div class="ed-coltitle"><span class="ct">Patch banks</span><span class="cn">4 banks · 256 patches</span></div>
+            <div class="banktabs">
+              <span class="bt on">A</span><span class="bt">B</span><span class="bt">C</span><span class="bt">D</span>
+            </div>
+            <div class="patchlist">
+              <div class="pl-row"><span class="plnum">001</span><input class="plname" value="Init Patch"><button class="rowdel">✕</button></div>
+              <div class="pl-row"><span class="plnum">002</span><input class="plname" value="Mini Bass"><button class="rowdel">✕</button></div>
+              <div class="pl-row"><span class="plnum">003</span><input class="plname" value="Brass Ensemble"><button class="rowdel">✕</button></div>
+              <div class="pl-row"><span class="plnum">004</span><input class="plname" value="Glass Pad"><button class="rowdel">✕</button></div>
+              <div class="pl-row"><span class="plnum">005</span><input class="plname" value="Acid Lead"><button class="rowdel">✕</button></div>
+              <div class="pl-row"><span class="plnum">006</span><input class="plname" value="Sub Drone"><button class="rowdel">✕</button></div>
+              <div class="pl-row"><span class="plnum">007</span><input class="plname" value="Vox Choir"><button class="rowdel">✕</button></div>
+            </div>
+            <button class="addrow" style="margin-top:8px">＋ Add patch</button>
+            <div class="ed-note"><b>Bank Select</b> for Bank A: <span class="mono" style="color:var(--text-2)">CC0 = 0, CC32 = 0</span>. Names here populate the patch-by-name picker on every external-instrument track using this device.</div>
+          </div>
+        </div>
+        <div class="footnote">Edits write to the project-local <b>my-moog-muse.rdev</b> — no code changes, travels with the project. The bundled preset stays untouched.</div>
+      </div>
+    </div>
+
+    <!-- ============ SCENE: validation / error ============ -->
+    <div class="scene" data-scene="conflict">
+      <div class="editor">
+        <div class="ed-head">
+          <div>
+            <div class="et">My DIY Eurorack</div>
+            <div class="esub mono">diy-eurorack.rdev · 2 issues found</div>
+          </div>
+          <div class="save" style="color:var(--bad)"><span class="sd" style="background:var(--bad)"></span>Validation failed</div>
+          <div class="ed-actions">
+            <button>Export .rdev…</button>
+            <button class="primary" style="background:var(--bad-dim);border-color:var(--bad-line);color:var(--bad)">Fix 2 issues</button>
+          </div>
+        </div>
+        <div class="ed-body">
+          <div class="ed-col">
+            <div class="ed-coltitle"><span class="ct">Parameters</span><span class="cn" style="color:var(--bad)">1 binding conflict</span></div>
+            <div class="alert bad show" style="margin-top:0;margin-bottom:12px">
+              <div class="at">● Duplicate CC binding</div>
+              <div><b>Cutoff</b> and <b>Wavefolder</b> are both bound to <b class="mono">CC 74</b>. Two params can't share one CC — automating either would move both on the hardware. Give one a different CC or NRPN.</div>
+            </div>
+            <table class="params">
+              <thead><tr><th style="width:30%">Name</th><th style="width:16%">Type</th><th style="width:18%">Binding</th><th style="width:16%">Range</th><th>Curve</th><th></th></tr></thead>
+              <tbody>
+                <tr class="bad-row"><td><input class="cell-in" value="Cutoff"></td><td><span class="typetag cc">CC</span></td><td><input class="cell-in mono bad" value="74"></td><td><input class="cell-in mono" value="0–127"></td><td><svg class="curve-mini" viewBox="0 0 46 22"><polyline points="2,20 44,2" fill="none" stroke="var(--accent-soft)" stroke-width="1.4"/></svg></td><td><button class="rowdel">✕</button></td></tr>
+                <tr class="bad-row"><td><input class="cell-in" value="Wavefolder"></td><td><span class="typetag cc">CC</span></td><td><input class="cell-in mono bad" value="74"></td><td><input class="cell-in mono" value="0–127"></td><td><svg class="curve-mini" viewBox="0 0 46 22"><polyline points="2,20 44,2" fill="none" stroke="var(--accent-soft)" stroke-width="1.4"/></svg></td><td><button class="rowdel">✕</button></td></tr>
+                <tr><td><input class="cell-in" value="VCA Gain"></td><td><span class="typetag cc">CC</span></td><td><input class="cell-in mono" value="7"></td><td><input class="cell-in mono" value="0–127"></td><td><svg class="curve-mini" viewBox="0 0 46 22"><polyline points="2,20 44,2" fill="none" stroke="var(--accent-soft)" stroke-width="1.4"/></svg></td><td><button class="rowdel">✕</button></td></tr>
+                <tr><td><input class="cell-in" value="Slew"></td><td><span class="typetag cc">CC</span></td><td><input class="cell-in mono bad" value="—"></td><td><input class="cell-in mono" value="0–127"></td><td><svg class="curve-mini" viewBox="0 0 46 22"><polyline points="2,20 44,2" fill="none" stroke="var(--text-4)" stroke-width="1.4"/></svg></td><td><button class="rowdel">✕</button></td></tr>
+              </tbody>
+            </table>
+            <button class="addrow">＋ Add parameter</button>
+          </div>
+          <div class="ed-col">
+            <div class="ed-coltitle"><span class="ct">Issues</span><span class="cn" style="color:var(--bad)">2</span></div>
+            <div class="alert bad show" style="margin-top:0">
+              <div class="at">● Missing binding</div>
+              <div><b>Slew</b> has no CC/NRPN assigned. It won't appear in the automation picker until bound.</div>
+            </div>
+            <div style="margin-top:14px">
+              <div class="ed-coltitle"><span class="ct">Device status</span></div>
+              <div class="alert warm-a show" style="margin-top:0">
+                <div class="at">● Device offline</div>
+                <div>“My DIY Eurorack” MIDI port isn't connected. You can still edit the definition and automate — values are <b>queued and flushed</b> when the device returns. Bounce will emit them regardless.</div>
+                <div class="fix"><button>Re-scan MIDI</button><button>Pick port…</button></div>
+              </div>
+            </div>
+            <div class="ed-note" style="margin-top:14px"><b>Validation</b> runs on every edit and before bounce: duplicate CC/NRPN, out-of-range numbers (CC&gt;127, NRPN&gt;16383), unbound params, and patch numbers without names are flagged here so a definition never silently misbehaves on hardware.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const hints = {
+    device:  "Assign a device preset to an external-instrument track — it teaches Resonance the synth's named params + patch banks in one pick. Bundled Moog Muse, or user-authored.",
+    patch:   "Patch picker shows preset NAMES (Brass Ensemble) instead of raw program numbers; selecting re-sends Bank Select + Program Change. Engineers still see the raw bytes.",
+    automate:"Named device params appear in the automation param picker alongside plugin/track params. Lanes emit the bound CC/NRPN to hardware live AND on bounce.",
+    editor:  "Author or edit a device definition: name params → CC/NRPN + range + curve, and label the patch banks. Saved alongside the project — no code changes for new gear.",
+    conflict:"Validation surface: duplicate/missing bindings and offline device are caught before they reach hardware. Errors use the unified pink; offline uses warm amber.",
+  };
+  function go(s){
+    document.querySelectorAll('#seg button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));
+    document.querySelectorAll('.scene').forEach(sc=>sc.classList.toggle('on',sc.dataset.scene===s));
+    document.getElementById('hint').textContent = hints[s];
+    document.getElementById('tabArrange').classList.toggle('active', s==='automate');
+    document.getElementById('tabMixer').classList.toggle('active', s!=='automate');
+    closeMenus();
+  }
+  document.querySelectorAll('#seg button').forEach(b=>b.onclick=()=>go(b.dataset.s));
+  function closeMenus(){document.querySelectorAll('.menu').forEach(m=>m.classList.remove('open'))}
+  function toggleMenu(id){const m=document.getElementById(id);const open=m.classList.contains('open');closeMenus();if(!open)m.classList.add('open');}
+  document.body.addEventListener('click',()=>closeMenus());
+  document.querySelectorAll('.pick,.addlane').forEach(el=>el.addEventListener('click',e=>e.stopPropagation()));
+
+  // live value readout on the cutoff lane
+  let t=0;
+  setInterval(()=>{
+    t+=0.07;
+    const v=Math.round(96+22*Math.sin(t));
+    const cv=document.getElementById('cutoffVal'), cp=document.getElementById('cutoffPct');
+    if(cv){cv.textContent=v;cp.textContent=Math.round(v/127*100)+'%';}
+  },120);
+  // patch re-send flash
+  function resend(){const s=document.getElementById('patchSend');if(!s)return;s.classList.add('flash');setTimeout(()=>s.classList.remove('flash'),140);}
+
+  go('device');
+</script>
+</body>
+</html>
