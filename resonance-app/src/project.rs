@@ -384,6 +384,132 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// One timestamped snapshot under a project's `backups/` directory.
+/// Returned by [`list_backups`] for the restore UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupEntry {
+    /// Absolute path to the backup file (`backups/project-<rfc3339>.json`).
+    pub path: PathBuf,
+    /// The RFC3339 UTC timestamp embedded in the file name, verbatim.
+    pub timestamp: String,
+}
+
+/// Current wall clock as an RFC3339 UTC string suitable for a backup
+/// file name. Callers pass the result to [`write_backup`]; keeping the
+/// clock read out of `write_backup` lets tests drive rotation with
+/// deterministic timestamps.
+pub fn backup_timestamp_now() -> String {
+    use time::format_description::well_known::Rfc3339;
+    use time::OffsetDateTime;
+
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        // Formatting RFC3339 from a valid `OffsetDateTime` is infallible
+        // in practice; fall back to an epoch-seconds stamp rather than
+        // unwrap so a backup is still written under some sortable name.
+        .unwrap_or_else(|_| {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            format!("epoch-{secs}")
+        })
+}
+
+fn backup_file_name(timestamp: &str) -> String {
+    format!("project-{timestamp}.json")
+}
+
+/// Snapshot the project's already-written `project.json` into
+/// `backups/project-<timestamp>.json` (atomic write) and prune the
+/// oldest snapshots so at most `retention` remain.
+///
+/// Call this only after a successful save: it reads the canonical
+/// `project.json`, so a failed save (which never wrote it, or left the
+/// prior copy intact) is never captured as a fresh backup. The
+/// audio/MIDI/plugin blobs are *shared*, not copied — a backup is a
+/// metadata snapshot whose relative paths still resolve against the
+/// project directory.
+///
+/// `timestamp` is the RFC3339 UTC stamp for the file name (see
+/// [`backup_timestamp_now`]). A `retention` of 0 prunes every snapshot,
+/// including the one just written; callers that want backups pass `>= 1`.
+pub fn write_backup(project_dir: &Path, timestamp: &str, retention: u32) -> Result<PathBuf, String> {
+    let source = project_dir.join("project.json");
+    let bytes =
+        std::fs::read(&source).map_err(|e| format!("Read project.json for backup: {e}"))?;
+
+    let backups_dir = project_dir.join("backups");
+    std::fs::create_dir_all(&backups_dir).map_err(|e| format!("Create backups dir: {e}"))?;
+
+    let dest = backups_dir.join(backup_file_name(timestamp));
+    atomic_write(&dest, &bytes).map_err(|e| format!("Write backup: {e}"))?;
+
+    prune_backups(&backups_dir, retention)?;
+    Ok(dest)
+}
+
+/// Delete the oldest snapshots in `backups_dir` until at most `retention`
+/// remain. Newest-first ordering comes from [`scan_backups`].
+fn prune_backups(backups_dir: &Path, retention: u32) -> Result<(), String> {
+    for entry in scan_backups(backups_dir).into_iter().skip(retention as usize) {
+        std::fs::remove_file(&entry.path)
+            .map_err(|e| format!("Prune backup {}: {e}", entry.path.display()))?;
+    }
+    Ok(())
+}
+
+/// List the versioned backups under `{project_dir}/backups`, newest
+/// first, for the restore UI. A missing or unreadable `backups/` dir
+/// yields an empty list rather than an error — there's simply nothing to
+/// restore.
+pub fn list_backups(project_dir: &Path) -> Vec<BackupEntry> {
+    scan_backups(&project_dir.join("backups"))
+}
+
+/// Scan a `backups/` directory for `project-<timestamp>.json` snapshots,
+/// sorted newest-first by their embedded RFC3339 timestamp. Leftover
+/// `*.tmp` files from an interrupted [`atomic_write`] are ignored (they
+/// don't end in `.json`), as is any unrelated file.
+fn scan_backups(backups_dir: &Path) -> Vec<BackupEntry> {
+    use time::format_description::well_known::Rfc3339;
+    use time::OffsetDateTime;
+
+    let read_dir = match std::fs::read_dir(backups_dir) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut entries: Vec<(Option<OffsetDateTime>, BackupEntry)> = read_dir
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            let name = path.file_name()?.to_str()?;
+            let timestamp = name.strip_prefix("project-")?.strip_suffix(".json")?;
+            let parsed = OffsetDateTime::parse(timestamp, &Rfc3339).ok();
+            Some((
+                parsed,
+                BackupEntry {
+                    path: path.clone(),
+                    timestamp: timestamp.to_string(),
+                },
+            ))
+        })
+        .collect();
+
+    // Newest first. Parse the RFC3339 stamp rather than string-compare:
+    // variable sub-second precision (`…00Z` vs `…00.5Z`) doesn't sort
+    // chronologically as plain text. Unparseable names sort oldest.
+    entries.sort_by(|(a, _), (b, _)| match (a, b) {
+        (Some(a), Some(b)) => b.cmp(a),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+
+    entries.into_iter().map(|(_, e)| e).collect()
+}
+
 /// Read a project from disk. Audio clips stay on disk and are
 /// memory-mapped by the engine's load-clip handler — this function
 /// only parses `project.json`, loads MIDI clips from their `.mid`
