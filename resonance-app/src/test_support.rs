@@ -197,4 +197,33 @@ impl Resonance {
             track.record_armed = armed;
         }
     }
+
+    /// Test-only: borrow the global chord track.
+    #[doc(hidden)]
+    pub fn test_chord_track(&self) -> &crate::chord_track::ChordTrack {
+        &self.chord_track
+    }
+
+    /// Test-only: mutably borrow the global chord track so a test can
+    /// stage regions/key changes directly (no `ChordTrackMessage`
+    /// handlers exist yet — those land in a later todo).
+    #[doc(hidden)]
+    pub fn test_chord_track_mut(&mut self) -> &mut crate::chord_track::ChordTrack {
+        &mut self.chord_track
+    }
+
+    /// Test-only: capture an undo snapshot of the current declarative
+    /// state. Used to prove the chord track survives the snapshot's
+    /// `extras` round-trip without driving the engine.
+    #[doc(hidden)]
+    pub fn test_snapshot_for_undo(&self) -> crate::undo::UndoSnapshot {
+        self.snapshot_for_undo()
+    }
+
+    /// Test-only: apply the runtime-only undo extras, exercising the
+    /// slow-path restore of chord-track state without an engine replay.
+    #[doc(hidden)]
+    pub fn test_finalize_undo_restore(&mut self, extras: crate::undo::UndoExtras) {
+        self.finalize_undo_restore(extras);
+    }
 }

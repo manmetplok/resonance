@@ -32,6 +32,11 @@ pub struct UndoExtras {
     /// a session the undo system snapshots them separately because
     /// the project-file form of a clip isn't rebuilt on each edit.
     pub vocal_clip_lyrics: HashMap<ClipId, Vec<String>>,
+    /// The global chord track (epic #33). Captured here rather than in
+    /// `ProjectFile` because chord-track persistence is a later todo;
+    /// until then the track is declarative app state that the replay
+    /// path can't rebuild, so undo snapshots it directly.
+    pub chord_track: crate::chord_track::ChordTrack,
 }
 
 /// One point in the undo/redo history. Wraps the `LoadedProject` shape
@@ -236,6 +241,7 @@ impl crate::Resonance {
             compose_derived_clips: self.compose.derived_clips.clone(),
             compose_next_derived_clip_id: self.compose.next_derived_clip_id,
             vocal_clip_lyrics: self.compose.vocal_audio.clip_lyrics.clone(),
+            chord_track: self.chord_track.clone(),
         };
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
@@ -342,6 +348,7 @@ impl crate::Resonance {
         self.compose.derived_clips = extras.compose_derived_clips;
         self.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
         self.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics;
+        self.chord_track = extras.chord_track;
     }
 
     /// Attempt to undo. No-ops (returning false) if the history is empty
