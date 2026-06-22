@@ -47,6 +47,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::ConfirmDiscardAndQuit)
         | Message::Ui(UiMessage::CancelQuit)
         | Message::Ui(UiMessage::ToggleGlobalTracks)
+        | Message::Ui(UiMessage::ToggleReferencePanel)
         | Message::Ui(UiMessage::ToggleMixerInspectorGroup(_))
         | Message::Ui(UiMessage::ToggleMidiClockSend)
         | Message::Ui(UiMessage::SetMidiClockSendDevice(_))

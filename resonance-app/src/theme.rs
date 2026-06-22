@@ -304,6 +304,10 @@ pub const MIXER_SUB_STRIP_RAIL_WIDTH: f32 = 2.0;
 pub const MASTER_STRIP_WIDTH: f32 = 156.0;
 /// Inspector column width on the Mixer.
 pub const INSPECTOR_WIDTH: f32 = 320.0;
+/// Reference & A/B right-rail width on the Mixer (design doc #184/#198).
+pub const REFERENCE_PANEL_WIDTH: f32 = 360.0;
+/// Inner padding shared by the Mixer's right rails (inspector, reference).
+pub const RAIL_PADDING: f32 = 26.0;
 /// Horizontal gap between unrelated strips in a mixer strip lane.
 /// Parent + sub-track clusters stay flush (0 px) inside this gap.
 pub const MIXER_STRIP_GAP: f32 = 16.0;

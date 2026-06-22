@@ -101,12 +101,36 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         .height(28)
         .style(|_theme, status| theme::ghost_button_style(status));
 
+    // "REF" toggle for the Reference & A/B right-rail. Only meaningful in
+    // the Mix view (the panel lives there), so it's hidden elsewhere; a
+    // zero-width spacer keeps the right cluster's spacing identical when
+    // absent.
+    let ref_toggle: Element<'_, Message> = if matches!(r.view_mode, ViewMode::Mixer) {
+        let active = r.mixer.reference_panel_open;
+        let btn = button(
+            text("REF")
+                .size(11)
+                .font(theme::UI_FONT_SEMIBOLD)
+                .line_height(LineHeight::Relative(1.0)),
+        )
+        .on_press(Message::Ui(UiMessage::ToggleReferencePanel))
+        .padding([6, 12])
+        .height(28)
+        .style(move |_theme, status| theme::toggle_button_style(active, theme::ACCENT, true, status));
+        // Trailing gap rides inside the element so the right cluster keeps
+        // identical spacing in views that hide the toggle.
+        row![btn, Space::new().width(10)].into()
+    } else {
+        Space::new().width(0).into()
+    };
+
     let chrome_row = row![
         Space::new().width(SHELL_HPAD),
         left,
         Space::new().width(Length::Fill),
         tabs,
         Space::new().width(Length::Fill),
+        ref_toggle,
         settings_btn,
         Space::new().width(SHELL_HPAD),
     ]

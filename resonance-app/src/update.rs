@@ -162,6 +162,43 @@ impl crate::Resonance {
             _ => None,
         });
         let close_requests = iced::window::close_requests().map(Message::WindowCloseRequested);
-        Subscription::batch([tick, keys, close_requests])
+
+        let mut subs = vec![tick, keys, close_requests];
+
+        // Reference drag-drop: while the Mix view is showing, forward
+        // dropped audio files (wav/flac/mp3/ogg) to the reference loader.
+        // The listener is only attached in the Mix view, so a stray drop
+        // in Arrange/Compose never silently loads a reference; iced diffs
+        // subscriptions by recipe, so it attaches/detaches as the view
+        // mode changes.
+        if matches!(self.view_mode, crate::state::ViewMode::Mixer) {
+            subs.push(reference_file_drop());
+        }
+
+        Subscription::batch(subs)
     }
+}
+
+/// Listen for window file-drop events and forward any dropped file whose
+/// extension is an accepted audio container to
+/// [`ReferenceMessage::LoadRequested`]. Non-audio drops are ignored.
+fn reference_file_drop() -> Subscription<Message> {
+    use crate::reference::ReferenceMessage;
+    use crate::update::reference::REFERENCE_AUDIO_EXTENSIONS;
+
+    iced::event::listen_with(|event, _status, _window| match event {
+        iced::Event::Window(iced::window::Event::FileDropped(path)) => {
+            let is_audio = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| {
+                    REFERENCE_AUDIO_EXTENSIONS
+                        .iter()
+                        .any(|ext| e.eq_ignore_ascii_case(ext))
+                })
+                .unwrap_or(false);
+            is_audio.then_some(Message::Reference(ReferenceMessage::LoadRequested(path)))
+        }
+        _ => None,
+    })
 }

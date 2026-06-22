@@ -9,6 +9,12 @@ use resonance_audio::types::ReferenceId;
 
 #[derive(Debug, Clone)]
 pub enum ReferenceMessage {
+    /// Open the OS file picker (filtered to audio formats) to choose a
+    /// reference to load. Resolves to [`Self::FilePicked`].
+    PickFile,
+    /// Result of the file picker: `Some(path)` loads it, `None` (cancelled)
+    /// is a no-op.
+    FilePicked(Option<PathBuf>),
     /// Load a reference track from disk for A/B comparison.
     LoadRequested(PathBuf),
     /// Remove a loaded reference and free its decoded audio.
