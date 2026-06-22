@@ -24,6 +24,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Clip(_)
         | Message::MidiClip(_)
         | Message::MidiEditor(_)
+        | Message::VocalTuning(_)
         | Message::Plugin(_)
         | Message::Viewport(_)
         | Message::GlobalTrack(_) => true,
@@ -84,6 +85,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::Clip(_)
         | Message::MidiClip(_)
         | Message::MidiEditor(_)
+        | Message::VocalTuning(_)
         | Message::Plugin(_)
         | Message::Viewport(_)
         | Message::GlobalTrack(_)

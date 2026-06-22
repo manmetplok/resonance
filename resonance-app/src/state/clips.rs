@@ -43,6 +43,14 @@ pub struct ClipState {
     pub trim_end_frames: u64,
     /// Downsampled waveform peaks: (min, max) per chunk of frames.
     pub waveform_peaks: Vec<(f32, f32)>,
+    /// GUI-side mirror of the clip's non-destructive vocal-tuning model
+    /// (doc #160). `None` means the clip has never been pitch-analysed —
+    /// the common case for non-vocal audio, with zero overhead. The engine
+    /// owns the authoritative copy on the `AudioClip`; this mirror is
+    /// filled from `AudioEvent::ClipPitchDetected` so the pitch editor can
+    /// read the detected contour / notes (and, later, the per-note and
+    /// global edits) without a read-back round-trip.
+    pub vocal_tuning: Option<VocalTuning>,
 }
 
 /// GUI-side MIDI clip state.

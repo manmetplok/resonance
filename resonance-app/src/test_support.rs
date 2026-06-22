@@ -197,4 +197,35 @@ impl Resonance {
             track.record_armed = armed;
         }
     }
+
+    /// Test-only: read the GUI-side audio clip list, to assert engine-event
+    /// mirroring (e.g. `ClipPitchDetected` → `vocal_tuning`, doc #160)
+    /// without the real engine round-trip.
+    #[doc(hidden)]
+    pub fn test_clips(&self) -> &[state::ClipState] {
+        &self.clips
+    }
+
+    /// Test-only: push an audio clip straight into GUI state, bypassing
+    /// the engine notification round-trip.
+    #[doc(hidden)]
+    pub fn test_push_clip(&mut self, clip: state::ClipState) {
+        self.clips.push(clip);
+    }
+
+    /// Test-only: which audio clip's vocal pitch editor is open, if any
+    /// (doc #160). Set by the `VocalTuningMessage::OpenPitchEditor`
+    /// reducer when opened on a vocal clip.
+    #[doc(hidden)]
+    pub fn test_editing_pitch_clip(&self) -> Option<resonance_audio::types::ClipId> {
+        self.interaction.editing_pitch_clip
+    }
+
+    /// Test-only: drive an `AudioEvent` through the real engine-event
+    /// dispatch so tests can assert app-state mirroring. The returned
+    /// `Task` is dropped — tests assert on state, not follow-up commands.
+    #[doc(hidden)]
+    pub fn test_apply_engine_event(&mut self, event: resonance_audio::types::AudioEvent) {
+        let _ = crate::engine_events::handle_engine_event(self, event);
+    }
 }

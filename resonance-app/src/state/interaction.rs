@@ -31,6 +31,11 @@ pub struct ClipInteractionState {
     pub midi_clip_drag: Option<MidiClipDragState>,
     pub midi_clip_trim: Option<MidiClipTrimState>,
     pub editing_midi_clip: Option<MidiEditorState>,
+    /// Audio clip whose vocal pitch editor is open, if any (doc #160).
+    /// Set when the user opens the pitch editor on a vocal clip (which
+    /// also requests analysis); the editor view (a later todo) renders
+    /// the clip's [`ClipState::vocal_tuning`](super::ClipState) mirror.
+    pub editing_pitch_clip: Option<ClipId>,
     /// Currently selected event on a global track (tempo or signature).
     pub selected_global_event: Option<SelectedGlobalEvent>,
 }
