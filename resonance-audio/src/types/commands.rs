@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::{
     BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, SamplePos, SignaturePoint, TempoPoint,
-    TrackId, TrackOutput,
+    TrackId, TrackOutput, WarpAlgorithm, WarpMarker,
 };
 
 /// Commands sent from the GUI to the audio engine.
@@ -69,6 +69,36 @@ pub enum AudioCommand {
     SetClipGain {
         clip_id: ClipId,
         gain_db: f32,
+    },
+    /// Set an audio clip's warp ("follow tempo") parameters. The engine
+    /// stores them on the clip and emits `AudioEvent::ClipWarpChanged`
+    /// with the stored values. Warp markers are carried separately by
+    /// [`AudioCommand::SetClipWarpMarkers`]. Defaults (`warp_enabled =
+    /// false`, `original_bpm = None`, `transpose_semitones = 0.0`) leave
+    /// the clip reading its source 1:1.
+    SetClipWarp {
+        clip_id: ClipId,
+        warp_enabled: bool,
+        original_bpm: Option<f32>,
+        transpose_semitones: f32,
+        warp_algorithm: WarpAlgorithm,
+    },
+    /// Replace an audio clip's full warp-marker set. Adding, moving and
+    /// removing a marker are all expressed as a full-set replace. The
+    /// engine sorts the incoming markers by `timeline_beat` to uphold the
+    /// [`WarpMarker`] sorted invariant, stores them, and emits
+    /// `AudioEvent::ClipWarpMarkersChanged` with the sorted set.
+    SetClipWarpMarkers {
+        clip_id: ClipId,
+        markers: Vec<WarpMarker>,
+    },
+    /// Run tempo/BPM detection over a clip's source audio. The engine
+    /// runs the DSP detector and replies with
+    /// `AudioEvent::ClipTempoDetected`. The detector and its reply event
+    /// are wired up in a later todo; this command is plumbed here so the
+    /// command/event boundary is complete.
+    DetectClipTempo {
+        clip_id: ClipId,
     },
     SetTrackVolume {
         track_id: TrackId,
