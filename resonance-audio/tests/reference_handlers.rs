@@ -12,10 +12,10 @@ use crossbeam_channel::{unbounded, Receiver};
 
 use resonance_audio::types::{ABSource, AudioEvent, ReferenceId};
 use resonance_audio::{
-    handle_add_ref_marker, handle_load_reference_track, handle_poll_ab_meters,
-    handle_remove_ref_marker, handle_remove_reference_track, handle_set_ab_source,
-    handle_set_active_reference, handle_set_ref_loop_to_mix, handle_set_ref_loudness_match,
-    handle_set_ref_position, handle_set_ref_trim, ReferencePlayer,
+    handle_add_ref_marker, handle_poll_ab_meters, handle_remove_ref_marker,
+    handle_remove_reference_track, handle_set_ab_source, handle_set_active_reference,
+    handle_set_ref_loop_to_mix, handle_set_ref_loudness_match, handle_set_ref_position,
+    handle_set_ref_trim, register_reference, ReferencePlayer,
 };
 
 /// Drain the single event the handler under test just emitted.
@@ -24,57 +24,33 @@ fn next_event(rx: &Receiver<AudioEvent>) -> AudioEvent {
 }
 
 #[test]
-fn load_reference_allocates_id_and_emits_loaded() {
+fn register_reference_allocates_monotonic_ids() {
     let mut player = ReferencePlayer::new();
-    let (tx, rx) = unbounded::<AudioEvent>();
 
-    handle_load_reference_track(&mut player, &tx, None, PathBuf::from("/music/ref_master.wav"));
+    // Registration is a pure mutation — it allocates the id and pushes
+    // the (unanalysed) entry without emitting any event; the analysis
+    // worker emits `ReferenceLoaded` once decode + LUFS measurement land.
+    let first = register_reference(&mut player, None, PathBuf::from("/music/ref_master.wav"));
+    assert_eq!(first, ReferenceId(1));
 
-    match next_event(&rx) {
-        AudioEvent::ReferenceLoaded {
-            id,
-            name,
-            path,
-            integrated_lufs,
-            waveform_peaks,
-        } => {
-            assert_eq!(id, ReferenceId(1));
-            assert_eq!(name, "ref_master");
-            assert_eq!(path, "/music/ref_master.wav");
-            assert!(integrated_lufs.is_infinite() && integrated_lufs < 0.0);
-            assert!(waveform_peaks.is_empty());
-        }
-        other => panic!("expected ReferenceLoaded, got {other:?}"),
-    }
-
-    // A second load gets the next id.
-    handle_load_reference_track(&mut player, &tx, None, PathBuf::from("/music/other.flac"));
-    match next_event(&rx) {
-        AudioEvent::ReferenceLoaded { id, name, .. } => {
-            assert_eq!(id, ReferenceId(2));
-            assert_eq!(name, "other");
-        }
-        other => panic!("expected ReferenceLoaded, got {other:?}"),
-    }
+    let second = register_reference(&mut player, None, PathBuf::from("/music/other.flac"));
+    assert_eq!(second, ReferenceId(2));
 }
 
 #[test]
-fn load_reference_honours_id_hint_and_bumps_allocator() {
+fn register_reference_honours_id_hint_and_bumps_allocator() {
     let mut player = ReferencePlayer::new();
-    let (tx, rx) = unbounded::<AudioEvent>();
 
-    handle_load_reference_track(&mut player, &tx, Some(ReferenceId(10)), PathBuf::from("/a.wav"));
-    assert!(matches!(
-        next_event(&rx),
-        AudioEvent::ReferenceLoaded { id, .. } if id == ReferenceId(10)
-    ));
+    assert_eq!(
+        register_reference(&mut player, Some(ReferenceId(10)), PathBuf::from("/a.wav")),
+        ReferenceId(10)
+    );
 
-    // Fresh (un-hinted) load must skip past the hinted id.
-    handle_load_reference_track(&mut player, &tx, None, PathBuf::from("/b.wav"));
-    assert!(matches!(
-        next_event(&rx),
-        AudioEvent::ReferenceLoaded { id, .. } if id == ReferenceId(11)
-    ));
+    // A fresh (un-hinted) registration must skip past the hinted id.
+    assert_eq!(
+        register_reference(&mut player, None, PathBuf::from("/b.wav")),
+        ReferenceId(11)
+    );
 }
 
 #[test]
@@ -82,8 +58,7 @@ fn remove_reference_clears_active_and_emits() {
     let mut player = ReferencePlayer::new();
     let (tx, rx) = unbounded::<AudioEvent>();
 
-    handle_load_reference_track(&mut player, &tx, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
-    let _ = next_event(&rx);
+    register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
     handle_set_active_reference(&mut player, &tx, ReferenceId(1));
     assert!(matches!(next_event(&rx), AudioEvent::ActiveReferenceChanged { id } if id == ReferenceId(1)));
 
@@ -104,8 +79,7 @@ fn set_active_reference_requires_existing() {
     handle_set_active_reference(&mut player, &tx, ReferenceId(1));
     assert!(rx.try_recv().is_err());
 
-    handle_load_reference_track(&mut player, &tx, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
-    let _ = next_event(&rx);
+    register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
     handle_set_active_reference(&mut player, &tx, ReferenceId(1));
     assert!(matches!(next_event(&rx), AudioEvent::ActiveReferenceChanged { id } if id == ReferenceId(1)));
 }
@@ -158,8 +132,7 @@ fn add_and_remove_markers() {
     let mut player = ReferencePlayer::new();
     let (tx, rx) = unbounded::<AudioEvent>();
 
-    handle_load_reference_track(&mut player, &tx, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
-    let _ = next_event(&rx);
+    register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
 
     handle_add_ref_marker(&mut player, &tx, ReferenceId(1), 48_000, "drop".into());
     let first_marker = match next_event(&rx) {
@@ -206,8 +179,7 @@ fn set_ref_position_seeks_cursor() {
     let mut player = ReferencePlayer::new();
     let (tx, rx) = unbounded::<AudioEvent>();
 
-    handle_load_reference_track(&mut player, &tx, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
-    let _ = next_event(&rx);
+    register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
 
     handle_set_ref_position(&mut player, &tx, ReferenceId(1), 123_456);
     assert!(matches!(
@@ -245,8 +217,7 @@ fn poll_ab_meters_snapshot_reflects_active_reference() {
         other => panic!("expected ABMeterSnapshot, got {other:?}"),
     }
 
-    handle_load_reference_track(&mut player, &tx, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
-    let _ = next_event(&rx);
+    register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
     handle_set_active_reference(&mut player, &tx, ReferenceId(1));
     let _ = next_event(&rx);
 

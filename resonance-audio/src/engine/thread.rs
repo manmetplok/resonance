@@ -739,8 +739,20 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
 
         // -- Reference track (A/B) --
         AudioCommand::LoadReferenceTrack { id_hint, path } => {
-            reference::handle_load_reference_track(&mut state.reference, ctx.event_tx, id_hint, path)
+            reference::handle_load_reference_track(
+                &mut state.reference,
+                ctx.event_tx,
+                ctx.cmd_tx_retry,
+                ctx.sample_rate,
+                id_hint,
+                path,
+            )
         }
+        AudioCommand::ReferenceAnalyzed {
+            id,
+            pcm,
+            integrated_lufs,
+        } => reference::handle_reference_analyzed(&mut state.reference, id, pcm, integrated_lufs),
         AudioCommand::RemoveReferenceTrack { id } => {
             reference::handle_remove_reference_track(&mut state.reference, ctx.event_tx, id)
         }
