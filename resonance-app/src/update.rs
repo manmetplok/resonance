@@ -15,6 +15,7 @@ pub mod midi_clip;
 pub mod midi_editor;
 pub mod plugin;
 pub mod project_io;
+pub mod reference;
 pub mod tick;
 pub mod track;
 pub mod transport;
@@ -84,6 +85,7 @@ impl crate::Resonance {
             Message::Plugin(m) => plugin::handle(self, m),
             Message::Viewport(m) => viewport::handle(self, m),
             Message::ProjectIo(m) => project_io::handle(self, m),
+            Message::Reference(m) => reference::handle(self, m),
             Message::Ui(m) => ui::handle(self, m),
             Message::Tick => tick::handle_tick(self),
             Message::WindowCloseRequested(id) => {
