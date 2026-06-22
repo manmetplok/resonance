@@ -183,6 +183,11 @@ pub struct ImportDialogState {
     pub error: Option<String>,
     /// Set on the `Imported` stage with the import outcome.
     pub result: Option<ImportResultSummary>,
+    /// True when the dialog was opened solely because a MIDI file was
+    /// dragged over the window (not via the chrome button or a real drop).
+    /// Lets a stray drag-out (`HoverLeft`) dismiss the otherwise-empty
+    /// dialog without disturbing one the user opened deliberately.
+    pub opened_by_hover: bool,
 }
 
 impl ImportDialogState {
@@ -199,6 +204,7 @@ impl ImportDialogState {
             placement: Placement::default(),
             error: None,
             result: None,
+            opened_by_hover: false,
         }
     }
 }

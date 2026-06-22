@@ -94,6 +94,20 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         ..Default::default()
     });
 
+    // Window-chrome import affordance — the inbound sibling of the
+    // (forthcoming) Export… entry. Opens the MIDI Import modal; dragging a
+    // `.mid` onto the window is the other route (see `update.rs`).
+    let import_btn = button(
+        text("Import\u{2026}")
+            .size(12)
+            .font(theme::UI_FONT_MEDIUM)
+            .line_height(LineHeight::Relative(1.0)),
+    )
+    .on_press(Message::Import(ImportMessage::Open))
+    .padding([7, 14])
+    .height(28)
+    .style(|_theme, status| theme::ghost_button_style(status));
+
     let settings_btn = button(centered_icon(fa::BARS, theme::TEXT_2, 13, 28))
         .on_press(Message::Ui(UiMessage::OpenSettings))
         .padding(0)
@@ -107,6 +121,8 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         Space::new().width(Length::Fill),
         tabs,
         Space::new().width(Length::Fill),
+        import_btn,
+        Space::new().width(10),
         settings_btn,
         Space::new().width(SHELL_HPAD),
     ]

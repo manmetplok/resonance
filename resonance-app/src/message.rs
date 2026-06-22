@@ -405,9 +405,19 @@ pub enum ImportMessage {
     Open,
     /// Dismiss the modal without importing.
     Cancel,
+    /// A recognized MIDI file is being dragged over the window. Opens the
+    /// modal at the Drop stage so the drop target is visible; a no-op when
+    /// a dialog is already open. Emitted by the window file-drop
+    /// subscription in `update.rs`.
+    HoverFile,
+    /// The dragged file(s) left the window without being dropped. Dismisses
+    /// a dialog that was opened purely by the hover (and is still empty), so
+    /// a stray drag-over doesn't leave the modal stuck open.
+    HoverLeft,
     /// The user picked a file via the file dialog.
     FileChosen(std::path::PathBuf),
-    /// A file was dropped onto the modal.
+    /// A `.mid`/`.midi` file was dropped (onto the window or the modal).
+    /// Opens the modal if it isn't already open, then kicks off the parse.
     FileDropped(std::path::PathBuf),
     /// Background parse finished — `Ok` carries the parsed summary + rows,
     /// `Err` a user-facing error string.

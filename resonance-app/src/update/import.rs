@@ -6,11 +6,22 @@
 //! interaction arms only update the dialog's transient state — they don't
 //! yet touch the project or the audio engine.
 
+use std::path::Path;
+
 use iced::Task;
 
 use crate::message::{ImportMessage, Message};
 use crate::state::{ImportDialogState, ImportStage};
 use crate::Resonance;
+
+/// True when `path` looks like a Standard MIDI File by extension
+/// (`.mid`/`.midi`, case-insensitive). The file-drop subscription uses
+/// this to ignore non-MIDI drops so only MIDI files start an import.
+pub fn is_midi_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mid") || ext.eq_ignore_ascii_case("midi"))
+}
 
 pub fn handle(app: &mut Resonance, message: ImportMessage) -> Task<Message> {
     match message {
@@ -20,15 +31,41 @@ pub fn handle(app: &mut Resonance, message: ImportMessage) -> Task<Message> {
         ImportMessage::Cancel => {
             app.import_dialog = None;
         }
-        // A file was chosen or dropped: remember it and move to Parsing.
-        // The parse task itself is wired in a follow-up todo; it reports
-        // back via `ParseCompleted`.
-        ImportMessage::FileChosen(path) | ImportMessage::FileDropped(path) => {
-            if let Some(d) = app.import_dialog.as_mut() {
-                d.source_path = Some(path);
-                d.stage = ImportStage::Parsing;
-                d.error = None;
+        // A MIDI file is being dragged over the window: surface the drop
+        // target by opening the modal at the Drop stage. A no-op when a
+        // dialog is already open, so it never disturbs an in-flight review.
+        // Tagged `opened_by_hover` so a stray drag-out can dismiss it.
+        ImportMessage::HoverFile => {
+            if app.import_dialog.is_none() {
+                let mut dialog = ImportDialogState::new();
+                dialog.opened_by_hover = true;
+                app.import_dialog = Some(dialog);
             }
+        }
+        // The drag left the window without a drop: close the dialog only if
+        // the hover itself opened it and nothing has happened since (still
+        // empty at the Drop stage). A dialog the user opened deliberately —
+        // or one already parsing a dropped file — is left untouched.
+        ImportMessage::HoverLeft => {
+            if let Some(d) = app.import_dialog.as_ref() {
+                if d.opened_by_hover
+                    && d.stage == ImportStage::Drop
+                    && d.source_path.is_none()
+                {
+                    app.import_dialog = None;
+                }
+            }
+        }
+        // A file was chosen or dropped: remember it and move to Parsing. A
+        // drop can arrive before the modal is open (dropped straight onto
+        // the arrangement), so open it on demand. The parse task itself is
+        // wired in a follow-up todo; it reports back via `ParseCompleted`.
+        ImportMessage::FileChosen(path) | ImportMessage::FileDropped(path) => {
+            let d = app.import_dialog.get_or_insert_with(ImportDialogState::new);
+            d.source_path = Some(path);
+            d.stage = ImportStage::Parsing;
+            d.error = None;
+            d.opened_by_hover = false;
         }
         ImportMessage::ParseCompleted(result) => {
             if let Some(d) = app.import_dialog.as_mut() {
