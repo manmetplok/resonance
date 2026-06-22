@@ -221,4 +221,46 @@ impl Resonance {
     pub fn test_apply_engine_event(&mut self, event: resonance_audio::types::AudioEvent) {
         let _ = crate::engine_events::handle_engine_event(self, event);
     }
+
+    /// Test-only: read the external-instrument state mirror for a track, if
+    /// it's in external-instrument mode. Used by the external-instrument
+    /// reducer tests to assert config + offline-flag mutations.
+    #[doc(hidden)]
+    pub fn test_external_instrument(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<state::ExternalInstrumentState> {
+        self.external_instruments.get(&track_id).copied()
+    }
+
+    /// Test-only: derive the lifecycle [`state::ExternalInstrumentStatus`] for
+    /// a track from its external-instrument state + owning `TrackState`.
+    /// `None` when the track isn't external or doesn't exist.
+    #[doc(hidden)]
+    pub fn test_external_instrument_status(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<state::ExternalInstrumentStatus> {
+        let ext = self.external_instruments.get(&track_id)?;
+        let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
+        Some(ext.status(track))
+    }
+
+    /// Test-only: capture the current undo snapshot's runtime extras (the
+    /// part of an undo entry that the `ProjectFile` shape doesn't carry,
+    /// including external-instrument config). Lets a reducer test prove the
+    /// external-instrument config is captured for undo without standing up
+    /// the async engine replay loop.
+    #[doc(hidden)]
+    pub fn test_snapshot_undo_extras(&self) -> crate::undo::UndoExtras {
+        self.snapshot_for_undo().extras
+    }
+
+    /// Test-only: drive the GUI external-instrument map (and engine) back to
+    /// `extras`, the same restore path both undo replays use. Pairs with
+    /// [`Self::test_snapshot_undo_extras`] to exercise a config round-trip.
+    #[doc(hidden)]
+    pub fn test_restore_external_instruments(&mut self, extras: &crate::undo::UndoExtras) {
+        self.restore_external_instruments(extras);
+    }
 }

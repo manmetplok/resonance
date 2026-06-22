@@ -7,6 +7,7 @@
 
 mod clips;
 mod dispatch;
+mod external_instrument;
 mod midi;
 pub mod performance;
 mod plugins;

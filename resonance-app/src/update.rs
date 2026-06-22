@@ -8,6 +8,7 @@ pub const TICK_INTERVAL_MS: u64 = 16;
 pub mod bus;
 pub mod clips;
 pub mod compose;
+pub mod external_instrument;
 pub mod gates;
 pub mod global_track;
 pub mod master;
@@ -76,6 +77,7 @@ impl crate::Resonance {
             Message::GlobalTrack(m) => global_track::handle(self, m),
             Message::Transport(m) => transport::handle(self, m),
             Message::Track(m) => track::handle(self, m),
+            Message::ExternalInstrument(m) => external_instrument::handle(self, m),
             Message::Bus(m) => bus::handle(self, m),
             Message::Master(m) => master::handle(self, m),
             Message::Clip(m) => clips::handle(self, m),
