@@ -32,13 +32,15 @@ use super::SharedState;
 
 mod clip;
 mod encoder;
+mod limiter;
+mod normalize;
 mod render;
 mod resample;
 mod wav;
 
 pub use clip::to_audio_clip;
 pub use render::try_lock_with_backoff;
-pub use wav::encode_buffer_for_test;
+pub use wav::{encode_buffer_for_test, normalize_buffer_for_test};
 pub(crate) use wav::{run_export, ExportReporter};
 
 /// Spawn an offline export on a dedicated worker thread so the engine
