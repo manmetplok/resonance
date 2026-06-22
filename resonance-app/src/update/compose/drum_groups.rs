@@ -11,8 +11,11 @@ use iced::Task;
 
 use resonance_audio::types::{AudioCommand, MidiNote, TrackId, TrackType, TICKS_PER_QUARTER_NOTE};
 
+use std::collections::HashMap;
+
 use crate::compose::drumroll::{groups, DrumGroup, DrumGroupPad, DrumPattern, GROUP_PALETTE};
-use crate::compose::messages::DrumGroupsMessage;
+use crate::compose::messages::{ArrangementMessage, DrumGroupsMessage};
+use crate::compose::SectionDefinitionState;
 use crate::message::Message;
 use crate::state::InstrumentType;
 use crate::util::{next_seed, seed_from_id};
@@ -371,6 +374,118 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
         }
     }
     Task::none()
+}
+
+/// Handle a [`ArrangementMessage`]: edit one section's ordered drum
+/// arrangement. Every arm mutates the targeted section's `arrangement`
+/// (via the pure [`SectionDefinitionState`] mutators) and, when something
+/// actually changed, re-materializes the drum clips so playback follows.
+/// The undo snapshot is taken upstream in `update()` before dispatch.
+pub(super) fn handle_arrangement(
+    r: &mut crate::Resonance,
+    msg: ArrangementMessage,
+) -> Task<Message> {
+    let changed = match msg {
+        ArrangementMessage::AddEntry {
+            definition_id,
+            pattern_id,
+        } => {
+            // Only append patterns that actually exist in the bank.
+            if r.compose.find_pattern(pattern_id).is_none() {
+                false
+            } else {
+                mutate_definition(r, definition_id, |def| {
+                    def.add_entry(pattern_id);
+                    true
+                })
+            }
+        }
+        ArrangementMessage::RemoveEntry {
+            definition_id,
+            index,
+        } => mutate_definition(r, definition_id, |def| def.remove_entry(index)),
+        ArrangementMessage::MoveEntry {
+            definition_id,
+            from,
+            to,
+        } => mutate_definition(r, definition_id, |def| def.move_entry(from, to)),
+        ArrangementMessage::SetEntryLength {
+            definition_id,
+            index,
+            length,
+        } => mutate_definition(r, definition_id, |def| def.set_entry_length(index, length)),
+        ArrangementMessage::SetEntryFill {
+            definition_id,
+            index,
+            fill,
+        } => {
+            // A chosen fill must reference a real pattern; clearing (None)
+            // is always allowed.
+            if matches!(fill, Some(id) if r.compose.find_pattern(id).is_none()) {
+                false
+            } else {
+                mutate_definition(r, definition_id, |def| def.set_entry_fill(index, fill))
+            }
+        }
+        ArrangementMessage::DuplicateEntry {
+            definition_id,
+            index,
+        } => mutate_definition(r, definition_id, |def| def.duplicate_entry(index)),
+        ArrangementMessage::FillToEnd { definition_id } => fill_to_end(r, definition_id),
+        ArrangementMessage::TrimToFit { definition_id } => trim_to_fit(r, definition_id),
+    };
+
+    if changed {
+        materialize_drum_clips(r);
+    }
+    Task::none()
+}
+
+/// Look up a section definition by id and run `f` against it, returning
+/// whatever `f` reports (and `false` when the section is gone). Centralises
+/// the find-mut-or-bail dance every arrangement arm would otherwise repeat.
+fn mutate_definition(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    f: impl FnOnce(&mut SectionDefinitionState) -> bool,
+) -> bool {
+    r.compose
+        .find_definition_mut(definition_id)
+        .map(f)
+        .unwrap_or(false)
+}
+
+/// Snapshot the bank's per-pattern bar lengths so the arrangement mutators
+/// (which take `&mut` the section) can resolve `RepeatN` spans without
+/// holding a second borrow of the pattern bank.
+fn pattern_bar_lengths(r: &crate::Resonance) -> HashMap<u64, u32> {
+    r.compose
+        .drum_patterns
+        .iter()
+        .map(|p| (p.id, p.bar_span()))
+        .collect()
+}
+
+fn fill_to_end(r: &mut crate::Resonance, definition_id: u64) -> bool {
+    let lens = pattern_bar_lengths(r);
+    // The fallback pattern (used when the arrangement is empty) is the
+    // section's resolved default, so "fill to end" on a blank section lays
+    // down the pattern the lane already renders.
+    let fallback = r
+        .compose
+        .find_definition(definition_id)
+        .and_then(|def| r.compose.pattern_for_definition(def))
+        .map(|p| p.id);
+    mutate_definition(r, definition_id, |def| {
+        def.fill_to_end(|id| lens.get(&id).copied().unwrap_or(1), fallback)
+    })
+}
+
+fn trim_to_fit(r: &mut crate::Resonance, definition_id: u64) -> bool {
+    let lens = pattern_bar_lengths(r);
+    mutate_definition(r, definition_id, |def| {
+        def.trim_to_fit(|id| lens.get(&id).copied().unwrap_or(1))
+    })
 }
 
 /// Resolve which pattern the manager is currently editing. Falls back

@@ -148,6 +148,161 @@ impl SectionDefinitionState {
             }
         }
     }
+
+    // ---- Arrangement editing -------------------------------------------
+    //
+    // Pure, in-place mutators behind the `ComposeMessage::Arrangement`
+    // handlers. Each returns `true` when it actually changed the
+    // arrangement so the caller can skip a needless `materialize_drum_clips`
+    // + engine round-trip when nothing moved. They never touch the pattern
+    // bank — `fill_to_end` / `trim_to_fit` take a `pattern_len` closure so
+    // the bank borrow stays at the call site.
+
+    /// Append a fresh single-repeat entry playing `pattern_id`.
+    pub fn add_entry(&mut self, pattern_id: u64) {
+        self.arrangement.push(PatternEntry::once(pattern_id));
+    }
+
+    /// Remove the entry at `index`. No-op (returns `false`) when out of
+    /// range.
+    pub fn remove_entry(&mut self, index: usize) -> bool {
+        if index < self.arrangement.len() {
+            self.arrangement.remove(index);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Move the entry at `from` to sit at `to`, shifting the entries in
+    /// between. Covers "move up" (`to = from - 1`), "move down"
+    /// (`to = from + 1`), and arbitrary drag-to-index. No-op for a
+    /// no-movement or out-of-range request.
+    pub fn move_entry(&mut self, from: usize, to: usize) -> bool {
+        let len = self.arrangement.len();
+        if from >= len || to >= len || from == to {
+            return false;
+        }
+        let entry = self.arrangement.remove(from);
+        self.arrangement.insert(to, entry);
+        true
+    }
+
+    /// Set the length mode + value of the entry at `index`. No-op when the
+    /// index is out of range or the length is unchanged.
+    pub fn set_entry_length(&mut self, index: usize, length: EntryLength) -> bool {
+        match self.arrangement.get_mut(index) {
+            Some(e) if e.length != length => {
+                e.length = length;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Set (or clear, with `None`) the fill pattern on the entry at
+    /// `index`. No-op when the index is out of range or the fill is
+    /// unchanged.
+    pub fn set_entry_fill(&mut self, index: usize, fill: Option<u64>) -> bool {
+        match self.arrangement.get_mut(index) {
+            Some(e) if e.fill != fill => {
+                e.fill = fill;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Insert a copy of the entry at `index` immediately after it. No-op
+    /// when out of range.
+    pub fn duplicate_entry(&mut self, index: usize) -> bool {
+        let Some(entry) = self.arrangement.get(index).cloned() else {
+            return false;
+        };
+        self.arrangement.insert(index + 1, entry);
+        true
+    }
+
+    /// Close a trailing gap so the arrangement covers the whole section.
+    /// Extends the last `Bars` entry in place; for a `RepeatN` last entry
+    /// (or an empty arrangement) appends a `Bars` entry instead — using the
+    /// last entry's pattern, or `fallback_pattern` when the arrangement is
+    /// empty. No-op when the entries already meet or overrun the section.
+    pub fn fill_to_end(&mut self, pattern_len: impl Fn(u64) -> u32, fallback_pattern: Option<u64>) -> bool {
+        let total: u32 = self
+            .arrangement
+            .iter()
+            .map(|e| entry_bars(e, &pattern_len))
+            .sum();
+        if total >= self.length_bars {
+            return false;
+        }
+        let gap = self.length_bars - total;
+        match self.arrangement.last().map(|e| (e.length, e.pattern_id)) {
+            Some((EntryLength::Bars(b), _)) => {
+                let idx = self.arrangement.len() - 1;
+                self.arrangement[idx].length = EntryLength::Bars(b + gap);
+            }
+            Some((EntryLength::RepeatN(_), pattern_id)) => {
+                self.arrangement.push(PatternEntry {
+                    pattern_id,
+                    length: EntryLength::Bars(gap),
+                    fill: None,
+                });
+            }
+            None => {
+                let Some(pattern_id) = fallback_pattern else {
+                    return false;
+                };
+                self.arrangement.push(PatternEntry {
+                    pattern_id,
+                    length: EntryLength::Bars(gap),
+                    fill: None,
+                });
+            }
+        }
+        true
+    }
+
+    /// Shrink (and, if needed, drop) trailing entries until the arrangement
+    /// no longer overruns the section. The last surviving entry is clipped
+    /// to land exactly on the section boundary via a `Bars` length. No-op
+    /// when the entries already fit.
+    pub fn trim_to_fit(&mut self, pattern_len: impl Fn(u64) -> u32) -> bool {
+        let mut total: u32 = self
+            .arrangement
+            .iter()
+            .map(|e| entry_bars(e, &pattern_len))
+            .sum();
+        if total <= self.length_bars {
+            return false;
+        }
+        while total > self.length_bars {
+            let Some(idx) = self.arrangement.len().checked_sub(1) else {
+                break;
+            };
+            let span = entry_bars(&self.arrangement[idx], &pattern_len);
+            let over = total - self.length_bars;
+            if span <= over {
+                self.arrangement.pop();
+                total -= span;
+            } else {
+                self.arrangement[idx].length = EntryLength::Bars(span - over);
+                total -= over;
+            }
+        }
+        true
+    }
+}
+
+/// Concrete bar span of one entry: `RepeatN(n)` expands to `n` copies of
+/// the pattern's intrinsic length; `Bars(b)` is `b` verbatim. Mirrors the
+/// expansion in [`crate::compose::resolve_arrangement`].
+fn entry_bars(entry: &PatternEntry, pattern_len: &impl Fn(u64) -> u32) -> u32 {
+    match entry.length {
+        EntryLength::RepeatN(n) => n.saturating_mul(pattern_len(entry.pattern_id).max(1)),
+        EntryLength::Bars(b) => b,
+    }
 }
 
 #[derive(Debug, Clone)]

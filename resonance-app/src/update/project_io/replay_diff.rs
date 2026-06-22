@@ -713,6 +713,11 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile, extras: &UndoExtras) {
     r.compose.derived_clips = extras.compose_derived_clips.clone();
     r.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
     r.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics.clone();
+    // Overwrite the (flattened) arrangements rebuilt by `load_from_project`
+    // with the full snapshotted entries so undo/redo restores multi-entry
+    // arrangements, fills, and `Bars` lengths that the project file can't
+    // yet persist.
+    crate::undo::restore_arrangements(&mut r.compose, &extras.compose_arrangements);
 }
 
 /// `MidiNote` is a plain bag of `u8/f32/u64` fields but does not derive
