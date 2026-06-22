@@ -1,9 +1,10 @@
 //! Mixer **Reference & A/B** right-rail (design doc #184/#198). A 360px
 //! panel that auditions external mastered tracks against the mix. This
 //! module lands the panel *container* and its state routing — the shell
-//! header, the fully-built **Empty** drop-zone state, and stubbed bodies
-//! for the **Analyzing / Populated / Error** states whose detail UI lands
-//! in the follow-up todos (T9 / T10 / T12).
+//! header, the fully-built **Empty** drop-zone and **Analyzing** checklist
+//! states, and the **Error / Missing** cards (full-panel for a load that
+//! created no entry, inline per-entry for a missing/errored reference). The
+//! populated **A/B controls** for *loaded* references land in a later todo.
 //!
 //! The reference plays through the monitor path only and is excluded from
 //! every bounce / stem export; the panel is purely a monitoring surface.
@@ -14,32 +15,41 @@ use iced::{alignment, Element, Length};
 use resonance_audio::types::ReferenceAnalysisStage;
 
 use crate::message::*;
-use crate::reference::{ReferenceState, ReferenceStatus};
+use crate::reference::{ReferenceEntry, ReferenceState, ReferenceStatus};
 use crate::theme::{self, fa};
 use crate::update::reference::REFERENCE_AUDIO_EXTENSIONS;
 
 /// Which body the panel container routes to, derived from
-/// [`ReferenceState`]. The per-entry Missing/Error and the populated A/B
-/// controls are filled in by later todos; this scaffold only needs the
-/// top-level routing to be correct.
+/// [`ReferenceState`]. The populated A/B controls for *loaded* references
+/// are filled in by a later todo; missing/errored entries already render
+/// inline within the populated body so the rest of the panel stays usable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PanelState {
     /// No references loaded and no pending load.
     Empty,
     /// At least one reference is mid-analysis.
     Analyzing,
-    /// One or more references decoded and ready to audition.
+    /// One or more references exist (loaded, missing, or errored).
     Populated,
-    /// A load failed (no entry was created) — surfaced from `last_error`.
+    /// A load failed with no entry to attach the notice to — surfaced from
+    /// `last_error` while the slot is otherwise empty.
     Error,
 }
 
 fn classify(state: &ReferenceState) -> PanelState {
-    // A load-failure notice wins: it carries no entry, so without this
-    // branch a failed load on an otherwise-empty slot would fall through
-    // to `Empty` and silently drop the error.
-    if state.last_error.is_some() {
-        return PanelState::Error;
+    // A load failure that created no entry takes the whole panel: there is
+    // nothing else to show it against. A missing/errored *entry*, by
+    // contrast, renders inline in `Populated` so any loaded references
+    // alongside it stay usable (design doc #198).
+    if state.entries.is_empty() {
+        if state.last_error.is_some() {
+            return PanelState::Error;
+        }
+        if state.pending_loads.is_empty() {
+            return PanelState::Empty;
+        }
+        // A load is dispatched but no analysis event has arrived yet.
+        return PanelState::Populated;
     }
     if state
         .entries
@@ -48,11 +58,7 @@ fn classify(state: &ReferenceState) -> PanelState {
     {
         return PanelState::Analyzing;
     }
-    if state.entries.is_empty() && state.pending_loads.is_empty() {
-        PanelState::Empty
-    } else {
-        PanelState::Populated
-    }
+    PanelState::Populated
 }
 
 pub(super) fn view(r: &crate::Resonance) -> Element<'_, Message> {
@@ -370,44 +376,146 @@ fn progress_bar(current: usize) -> Element<'static, Message> {
 fn populated_body(state: &ReferenceState) -> Element<'_, Message> {
     let mut col = column![].spacing(8);
     for entry in &state.entries {
-        col = col.push(placeholder_card(&entry.name, theme::TEXT_1));
+        let card = match &entry.status {
+            ReferenceStatus::Missing => error_card(entry, None),
+            ReferenceStatus::Error(reason) => error_card(entry, Some(reason)),
+            // Loaded / Analyzing entries get the placeholder until the
+            // populated A/B controls land in their own todo.
+            _ => placeholder_card(&entry.name, theme::TEXT_1),
+        };
+        col = col.push(card);
     }
     col.into()
 }
 
+/// Full-panel error body for a load that failed before any entry existed
+/// (so the notice lives in `last_error`, not on an entry). Reached only
+/// while the slot is otherwise empty; a missing/errored entry alongside
+/// loaded references renders inline via [`error_card`] instead.
 fn error_body(state: &ReferenceState) -> Element<'_, Message> {
     let reason = state
         .last_error
         .clone()
         .unwrap_or_else(|| "Reference failed to load".to_string());
 
-    let dismiss = button(text("Dismiss").size(12))
-        .on_press(Message::Reference(
-            crate::reference::ReferenceMessage::DismissError,
-        ))
-        .padding([7, 14])
-        .style(|_theme, status| theme::small_button_style(status));
-
-    container(
+    bad_card(
         column![
-            text(reason).size(12).color(theme::BAD),
-            Space::new().height(12),
-            dismiss,
+            error_heading("Couldn\u{2019}t load reference"),
+            Space::new().height(6),
+            text(reason).size(12).color(theme::TEXT_2),
+            Space::new().height(14),
+            // No entry to drop, so Dismiss just clears the notice.
+            error_actions(Message::Reference(
+                crate::reference::ReferenceMessage::DismissError,
+            )),
         ]
         .spacing(0),
     )
-    .width(Length::Fill)
-    .padding([16, 16])
-    .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(theme::BG_2)),
-        border: iced::Border {
-            color: theme::BAD,
-            width: 1.0,
-            radius: theme::RADIUS_MD.into(),
-        },
-        ..Default::default()
-    })
+}
+
+/// A BAD-tinted card for one missing or errored reference entry. `reason`
+/// is `Some` for an [`ReferenceStatus::Error`] (the analysis failure text)
+/// and `None` for an [`ReferenceStatus::Missing`] entry (file gone since
+/// the project was saved). Dismiss drops just this entry; Choose another
+/// re-opens the picker. Other entries are untouched.
+fn error_card<'a>(entry: &'a ReferenceEntry, reason: Option<&'a str>) -> Element<'a, Message> {
+    let name = if entry.name.is_empty() {
+        std::path::Path::new(&entry.path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Reference")
+            .to_string()
+    } else {
+        entry.name.clone()
+    };
+
+    let detail = reason
+        .map(str::to_string)
+        .unwrap_or_else(|| "File not found".to_string());
+
+    let mut body = column![
+        error_heading(&name),
+        Space::new().height(4),
+        text(detail).size(11).color(theme::TEXT_2),
+    ]
+    .spacing(0);
+
+    // For a missing file, show the path so the user can tell which one.
+    if reason.is_none() && !entry.path.is_empty() {
+        body = body.push(Space::new().height(2));
+        body = body.push(text(entry.path.clone()).size(10).color(theme::TEXT_3));
+    }
+
+    body = body.push(Space::new().height(14));
+    body = body.push(error_actions(Message::Reference(
+        crate::reference::ReferenceMessage::Remove(entry.id),
+    )));
+
+    bad_card(body)
+}
+
+/// Heading row for an error card: a BAD-tinted info glyph + the title.
+fn error_heading(title: &str) -> Element<'static, Message> {
+    row![
+        text(fa::CIRCLE_INFO.to_string())
+            .font(theme::ICON_FONT)
+            .size(12)
+            .color(theme::BAD),
+        text(title.to_string())
+            .size(13)
+            .font(theme::UI_FONT_MEDIUM)
+            .color(theme::TEXT_1),
+    ]
+    .spacing(8)
+    .align_y(alignment::Vertical::Center)
     .into()
+}
+
+/// The two error actions: a `dismiss` button (whose message drops the
+/// failed entry or clears the notice) and a "Choose another…" button that
+/// re-opens the file picker.
+fn error_actions(dismiss_msg: Message) -> Element<'static, Message> {
+    let dismiss = button(text("Dismiss").size(12).font(theme::UI_FONT_MEDIUM))
+        .on_press(dismiss_msg)
+        .padding([7, 14])
+        .style(|_theme, status| theme::small_button_style(status));
+
+    let choose = button(
+        text("Choose another\u{2026}")
+            .size(12)
+            .font(theme::UI_FONT_MEDIUM),
+    )
+    .on_press(Message::Reference(
+        crate::reference::ReferenceMessage::PickFile,
+    ))
+    .padding([7, 14])
+    .style(|_theme, status| theme::small_button_style(status));
+
+    row![dismiss, choose].spacing(8).into()
+}
+
+/// Wrap `content` in the shared BAD-tinted card chrome (faint red wash +
+/// BAD border) used by both the full-panel error body and per-entry cards.
+fn bad_card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(content)
+        .width(Length::Fill)
+        .padding([16, 16])
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color {
+                a: 0.08,
+                ..theme::BAD
+            })),
+            border: iced::Border {
+                color: iced::Color {
+                    a: 0.5,
+                    ..theme::BAD
+                },
+                width: 1.0,
+                radius: theme::RADIUS_MD.into(),
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
 fn placeholder_card(label: &str, color: iced::Color) -> Element<'static, Message> {
