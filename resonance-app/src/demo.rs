@@ -115,7 +115,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
 
     app.registry.tracks = vec![drums, bass, pad, lead, audio, vocal];
     app.registry.next_track_order = 6;
-    app.interaction.selected_track = Some(2);
+    app.interaction.select_single_track(Some(2));
     // Demo seed bypasses the engine-event handlers that normally keep
     // this cache fresh, so refresh by hand.
     app.compose.refresh_track_count(&app.registry.tracks);
@@ -476,7 +476,7 @@ pub fn seed_demo_with_drum_subtracks(app: &mut Resonance) {
     app.registry.tracks = vec![drums, bass, pad, lead, kick, snare, hh, tom];
     app.registry.next_track_order = 8;
     app.registry.next_sub_track_id = 14;
-    app.interaction.selected_track = Some(1);
+    app.interaction.select_single_track(Some(1));
 
     // Expand the drum parent so the mixer renders its sub-strips —
     // the whole point of the visual is verified in that state.
@@ -510,7 +510,7 @@ pub fn seed_minimal_drum_track_no_busses(app: &mut Resonance) {
 
     app.registry.tracks = vec![drums];
     app.registry.next_track_order = 1;
-    app.interaction.selected_track = Some(1);
+    app.interaction.select_single_track(Some(1));
     app.compose.refresh_track_count(&app.registry.tracks);
     app.refresh_transport_labels();
 

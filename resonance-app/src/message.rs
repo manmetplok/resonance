@@ -58,6 +58,11 @@ pub enum GroupMessage {
     /// Set the group's macro level trim — a multiplicative gain scaling
     /// members' contribution (`1.0` is unity).
     SetMacroLevel(TrackId, f32),
+    /// Create a new group from the current multi-track selection (the
+    /// "Group selected" floating-bar action and the `Cmd-G` shortcut,
+    /// todo #684). The selected tracks become the new group's members; a
+    /// no-op when fewer than two tracks are selected.
+    CreateGroupFromSelection,
 }
 
 #[derive(Debug, Clone)]
@@ -362,7 +367,13 @@ pub enum UiMessage {
     /// User clicked "New Project" in the startup modal.
     StartNewProject,
     /// Select (highlight) a track in the arrange view, or deselect all.
+    /// Whether the click replaces or extends the multi-selection is read
+    /// from the live modifier state ([`ModifiersChanged`]).
     SelectTrack(Option<TrackId>),
+    /// Live keyboard modifier state changed. Tracked so a track-header
+    /// click can tell a plain select from an additive (Cmd/Shift) one
+    /// without the mouse event carrying modifiers (todo #684).
+    ModifiersChanged(iced::keyboard::Modifiers),
     /// User confirmed "Save & Quit" in the unsaved-changes dialog.
     ConfirmSaveAndQuit,
     /// User confirmed "Discard & Quit" in the unsaved-changes dialog.

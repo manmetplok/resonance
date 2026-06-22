@@ -222,6 +222,28 @@ impl Resonance {
         let _ = crate::engine_events::handle_engine_event(self, event);
     }
 
+    /// Test-only: read the Arrange multi-track selection set, in click
+    /// order. Drives `tests/group_creation_from_selection.rs`.
+    #[doc(hidden)]
+    pub fn test_selected_tracks(&self) -> &[resonance_audio::types::TrackId] {
+        &self.interaction.selected_tracks
+    }
+
+    /// Test-only: borrow the track-group registry so a reducer test can
+    /// assert that "Group selected" created the expected group.
+    #[doc(hidden)]
+    pub fn test_track_groups(&self) -> &state::TrackGroupRegistry {
+        &self.track_groups
+    }
+
+    /// Test-only: seed the Arrange multi-track selection directly, bypassing
+    /// the per-click `SelectTrack` plumbing.
+    #[doc(hidden)]
+    pub fn test_set_selected_tracks(&mut self, ids: Vec<resonance_audio::types::TrackId>) {
+        self.interaction.selected_track = ids.last().copied();
+        self.interaction.selected_tracks = ids;
+    }
+
     /// Test-only: render the standalone group-header row component
     /// (todo #680) so `tests/group_header.rs` can snapshot it without the
     /// component being wired into the live timeline column yet (#681/#686).

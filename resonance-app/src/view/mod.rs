@@ -15,6 +15,7 @@ pub mod midi_editor;
 pub(crate) mod mixer;
 pub(crate) mod performance;
 pub mod piano_roll;
+pub(crate) mod selection_bar;
 pub(crate) mod settings;
 pub(crate) mod startup;
 pub mod timeline;
@@ -113,6 +114,12 @@ impl crate::Resonance {
             && matches!(self.view_mode, ViewMode::Compose)
         {
             stack![base, compose::drum_groups_manager::view(self)].into()
+        } else if matches!(self.view_mode, ViewMode::Arrange)
+            && self.interaction.selected_tracks.len() >= 2
+        {
+            // Floating "Group selected" bar — non-modal, so it layers over
+            // the arrange view without blocking it (todo #684).
+            stack![base, selection_bar::view_selection_bar(self)].into()
         } else {
             base
         }

@@ -131,6 +131,12 @@ impl crate::Resonance {
                         keyboard::Key::Character(ref c) if c.as_str() == "y" => {
                             Some(Message::Redo)
                         }
+                        // `Cmd-G` groups the current multi-track selection.
+                        // No-ops in the reducer when fewer than two tracks
+                        // are selected (see `update::group`).
+                        keyboard::Key::Character(ref c) if c.as_str() == "g" => {
+                            Some(Message::Group(GroupMessage::CreateGroupFromSelection))
+                        }
                         _ => None,
                     }
                 } else {
@@ -158,6 +164,12 @@ impl crate::Resonance {
                         _ => None,
                     }
                 }
+            }
+            // Track the live modifier state so a track-header click can tell
+            // a plain select from an additive (Cmd/Shift) one — the mouse
+            // press itself carries no modifiers (todo #684).
+            keyboard::Event::ModifiersChanged(mods) => {
+                Some(Message::Ui(UiMessage::ModifiersChanged(mods)))
             }
             _ => None,
         });

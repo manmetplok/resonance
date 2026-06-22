@@ -20,13 +20,30 @@ use iced::Task;
 use crate::message::{GroupMessage, Message};
 use crate::Resonance;
 
-pub fn handle(_r: &mut Resonance, m: GroupMessage) -> Task<Message> {
+pub fn handle(r: &mut Resonance, m: GroupMessage) -> Task<Message> {
     match m {
         // Behaviour implemented in todos #686–#689; see module docs.
         GroupMessage::ToggleCollapse(_)
         | GroupMessage::ToggleMacroMute(_)
         | GroupMessage::ToggleMacroSolo(_)
         | GroupMessage::SetMacroLevel(_, _) => {}
+        GroupMessage::CreateGroupFromSelection => create_group_from_selection(r),
     }
     Task::none()
+}
+
+/// Fold the current multi-track selection into a fresh group (the
+/// "Group selected" bar / `Cmd-G`). A group of one is meaningless, so this
+/// no-ops below two selected tracks — matching the bar's visibility
+/// threshold. The group id is drawn from the shared track-id allocator so
+/// it can never collide with a real track. The selection is cleared once
+/// the group exists, so the floating bar dismisses itself.
+fn create_group_from_selection(r: &mut Resonance) {
+    let members = r.interaction.selected_tracks.clone();
+    if members.len() < 2 {
+        return;
+    }
+    let group_id = r.registry.allocate_sub_track_id();
+    r.track_groups.create_group_from_selection(group_id, &members);
+    r.interaction.select_single_track(None);
 }
