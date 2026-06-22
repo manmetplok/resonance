@@ -348,3 +348,81 @@ fn indent_depth_multiple_groups() {
     // track1 is a direct member of both groups, max depth is 1
     assert_eq!(registry.indent_depth(track1), 1);
 }
+
+#[test]
+fn get_group_identity_colors_ungrouped_track() {
+    let registry = TrackGroupRegistry::new();
+    let track1 = track_id(10);
+
+    // Ungrouped track should return empty vector
+    let colors = registry.get_group_identity_colors(track1);
+    assert!(colors.is_empty());
+}
+
+#[test]
+fn get_group_identity_colors_direct_member() {
+    let mut registry = TrackGroupRegistry::new();
+    let group_id = track_id(1);
+    let track1 = track_id(10);
+
+    // Create a group with Drums identity
+    let mut group = TrackGroup::new(group_id, "Drums", GroupIdentityColor::Drum);
+    group.ordered_members = vec![track1];
+    registry.add_group(group);
+
+    // track1 should have Drums color
+    let colors = registry.get_group_identity_colors(track1);
+    assert_eq!(colors.len(), 1);
+    assert_eq!(colors[0], GroupIdentityColor::Drum);
+}
+
+#[test]
+fn get_group_identity_colors_nested_member() {
+    let mut registry = TrackGroupRegistry::new();
+    let parent_id = track_id(1);
+    let child_id = track_id(2);
+    let track1 = track_id(10);
+
+    // Create parent group with Drums identity
+    let mut parent = TrackGroup::new(parent_id, "Parent", GroupIdentityColor::Drum);
+    parent.ordered_members = vec![child_id];
+    registry.add_group(parent);
+
+    // Create child group (nested under parent) with Vocal identity
+    let mut child = TrackGroup::new(child_id, "Child", GroupIdentityColor::Vocal);
+    child.nesting_parent = Some(parent_id);
+    child.ordered_members = vec![track1];
+    registry.add_group(child);
+
+    // track1 is a member of child which is nested in parent
+    // get_groups_containing_track should return both parent and child
+    // So colors should include both Vocal and Drums
+    let colors = registry.get_group_identity_colors(track1);
+    assert_eq!(colors.len(), 2);
+    // Order depends on iteration order of groups, but both should be present
+    assert!(colors.contains(&GroupIdentityColor::Vocal));
+    assert!(colors.contains(&GroupIdentityColor::Drum));
+}
+
+#[test]
+fn get_group_identity_colors_multiple_groups() {
+    let mut registry = TrackGroupRegistry::new();
+    let group1_id = track_id(1);
+    let group2_id = track_id(2);
+    let track1 = track_id(10);
+
+    // Add two groups, both containing track1
+    let mut group1 = TrackGroup::new(group1_id, "Group1", GroupIdentityColor::Drum);
+    group1.ordered_members = vec![track1];
+    registry.add_group(group1);
+
+    let mut group2 = TrackGroup::new(group2_id, "Group2", GroupIdentityColor::Vocal);
+    group2.ordered_members = vec![track1];
+    registry.add_group(group2);
+
+    // track1 is a direct member of both groups
+    let colors = registry.get_group_identity_colors(track1);
+    assert_eq!(colors.len(), 2);
+    assert!(colors.contains(&GroupIdentityColor::Drum));
+    assert!(colors.contains(&GroupIdentityColor::Vocal));
+}

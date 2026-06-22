@@ -109,11 +109,20 @@ impl TrackGroupRegistry {
             .unwrap_or(0)
     }
 
-    /// Returns all groups in the registry.
+    /// Returns the group identity colours for a track's parent groups.
     ///
-    /// Iteration order is unspecified (the registry is backed by a hash
-    /// map). Use [`get_all_groups_sorted`](Self::get_all_groups_sorted)
-    /// whenever a stable order matters — in particular for persistence.
+    /// Returns a vector of identity colours, one for each level of group
+    /// membership (direct parent first, then grandparent, etc.).
+    /// Used for rendering the coloured rails on track headers.
+    /// Tracks that are not group members return an empty vector.
+    pub fn get_group_identity_colors(&self, track_id: TrackId) -> Vec<GroupIdentityColor> {
+        let groups = self.get_groups_containing_track(track_id);
+        groups
+            .iter()
+            .map(|group| group.identity_color)
+            .collect()
+    }
+
     pub fn get_all_groups(&self) -> Vec<&TrackGroup> {
         self.groups.values().collect()
     }
