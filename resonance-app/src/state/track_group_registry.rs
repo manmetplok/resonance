@@ -241,6 +241,35 @@ impl TrackGroupRegistry {
         }
     }
 
+    /// Returns the id of the group that lists `track_id` as a *direct*
+    /// member, if any.
+    ///
+    /// Unlike [`get_groups_containing_track`](Self::get_groups_containing_track),
+    /// this only considers direct membership (not nested-parent reach) and
+    /// returns at most one group — the model treats a track as belonging to
+    /// a single group at a time. When several groups happen to list the same
+    /// track (which membership edits avoid), the lowest group id wins so the
+    /// answer is deterministic. Used by drag-and-drop membership (todo #685)
+    /// to know what to detach a dragged track from.
+    pub fn group_of_member(&self, track_id: TrackId) -> Option<TrackId> {
+        self.groups
+            .values()
+            .filter(|g| g.ordered_members.contains(&track_id))
+            .map(|g| g.id)
+            .min()
+    }
+
+    /// Returns true if `group_id` is the nesting parent of any other group.
+    ///
+    /// A group that already holds a nested child cannot itself be nested
+    /// (that would push its child two levels deep), so drag-and-drop nesting
+    /// (todo #685) refuses to move a parent group under another group.
+    pub fn is_parent_group(&self, group_id: TrackId) -> bool {
+        self.groups
+            .values()
+            .any(|g| g.nesting_parent == Some(group_id))
+    }
+
     /// Adds a track to the specified group's membership.
     ///
     /// If the track is already a member, this is a no-op.

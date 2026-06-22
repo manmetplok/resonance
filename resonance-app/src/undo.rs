@@ -468,9 +468,15 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // Creating a group from the selection mutates the persisted group
         // registry, so it's a recordable edit (todo #684).
         Message::Group(GroupMessage::CreateGroupFromSelection) => UndoAction::Record,
+        // Committing a drag-and-drop membership change is the single
+        // recordable point of the gesture (todo #685): the registry's
+        // membership / nesting is part of the persisted project, so an
+        // undo restores the prior grouping. The drag's start / update /
+        // cancel phases are transient UI bookkeeping and skip the history.
+        Message::Group(GroupMessage::DropMembership) => UndoAction::Record,
         // The remaining group macro/fold reducers are inert placeholders
-        // (todo #680); their undo classification lands with the behaviour
-        // in #686–#689.
+        // (todo #680) and the membership-drag start/update/cancel phases
+        // are transient; their undo classification is a skip.
         Message::Group(_) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::SelectEvent(_)) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(_)) => UndoAction::Begin,

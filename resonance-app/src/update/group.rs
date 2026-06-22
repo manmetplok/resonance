@@ -11,14 +11,20 @@
 //! - macro solo with cascade to members — todo #688
 //! - group level trim (macro scaling) — todo #689
 //!
-//! Until those land this handler is an inert placeholder: it routes every
-//! variant to a no-op so the header is wired end-to-end (and snapshot-
-//! testable) without pre-empting the reducer todos.
+//! Until those land the caret / macro / trim variants route to a no-op so
+//! the header is wired end-to-end (and snapshot-testable) without
+//! pre-empting the reducer todos.
+//!
+//! Two reducer families *are* implemented here: group creation from a
+//! multi-track selection (todo #684) and drag-and-drop membership editing
+//! (todo #685 — see the "Drag-and-drop membership" section below).
 
 use iced::Task;
 
 use crate::message::{GroupMessage, Message};
+use crate::state::{MembershipDragState, MembershipDragSubject, MembershipDropTarget};
 use crate::Resonance;
+use resonance_audio::types::TrackId;
 
 pub fn handle(r: &mut Resonance, m: GroupMessage) -> Task<Message> {
     match m {
@@ -28,6 +34,16 @@ pub fn handle(r: &mut Resonance, m: GroupMessage) -> Task<Message> {
         | GroupMessage::ToggleMacroSolo(_)
         | GroupMessage::SetMacroLevel(_, _) => {}
         GroupMessage::CreateGroupFromSelection => create_group_from_selection(r),
+        GroupMessage::StartMembershipDrag(subject, cursor_y) => {
+            start_membership_drag(r, subject, cursor_y)
+        }
+        GroupMessage::UpdateMembershipDrag { target, cursor_y } => {
+            update_membership_drag(r, target, cursor_y)
+        }
+        GroupMessage::DropMembership => drop_membership(r),
+        GroupMessage::CancelMembershipDrag => {
+            r.interaction.membership_drag = None;
+        }
     }
     Task::none()
 }
@@ -46,4 +62,110 @@ fn create_group_from_selection(r: &mut Resonance) {
     let group_id = r.registry.allocate_sub_track_id();
     r.track_groups.create_group_from_selection(group_id, &members);
     r.interaction.select_single_track(None);
+}
+
+// ---------------------------------------------------------------------
+// Drag-and-drop membership (todo #685)
+// ---------------------------------------------------------------------
+//
+// Direct manipulation of group membership: drag a track row onto a group
+// to join it, onto open space to ungroup it; drag a group header onto
+// another group to nest it (one level deep, members travelling with it),
+// onto open space to un-nest it. The drag is a transient three-phase
+// gesture — start (grab) → update (hover) → drop (commit) — mirroring the
+// clip-drag reducers. Only the committed change touches the registry (and
+// the undo history via `GroupMessage::DropMembership`); start / update /
+// cancel are pure UI bookkeeping.
+
+/// Open a membership drag. Records what is being dragged and the group it
+/// currently sits in, so a later drop onto open space knows what to detach
+/// from.
+fn start_membership_drag(r: &mut Resonance, subject: MembershipDragSubject, cursor_y: f32) {
+    let origin_group = match subject {
+        MembershipDragSubject::Track(track_id) => r.track_groups.group_of_member(track_id),
+        MembershipDragSubject::Group(group_id) => {
+            r.track_groups.get_group(group_id).and_then(|g| g.nesting_parent)
+        }
+    };
+    r.interaction.membership_drag = Some(MembershipDragState {
+        subject,
+        origin_group,
+        hover: None,
+        cursor_y,
+    });
+}
+
+/// Update the hovered drop target and pointer position of the active drag.
+/// A no-op when no drag is in flight.
+fn update_membership_drag(
+    r: &mut Resonance,
+    target: Option<MembershipDropTarget>,
+    cursor_y: f32,
+) {
+    if let Some(drag) = r.interaction.membership_drag.as_mut() {
+        drag.hover = target;
+        drag.cursor_y = cursor_y;
+    }
+}
+
+/// Commit the active membership drag, applying the change implied by the
+/// hovered target. Clears the drag either way. A no-op (leaving the
+/// registry untouched) when nothing is dragging or no target is hovered —
+/// so a release into empty space cancels rather than mutating.
+fn drop_membership(r: &mut Resonance) {
+    let Some(drag) = r.interaction.membership_drag.take() else {
+        return;
+    };
+    let Some(target) = drag.hover else {
+        return;
+    };
+    apply_membership_change(r, drag.subject, drag.origin_group, target);
+}
+
+/// Apply a resolved membership change to the registry. Pure registry
+/// mutation; the caller owns clearing the drag state.
+fn apply_membership_change(
+    r: &mut Resonance,
+    subject: MembershipDragSubject,
+    origin_group: Option<TrackId>,
+    target: MembershipDropTarget,
+) {
+    match (subject, target) {
+        // Track joins a group: detach from its current group first so a
+        // track is never listed under two groups at once.
+        (MembershipDragSubject::Track(track_id), MembershipDropTarget::IntoGroup(dest)) => {
+            // Ignore a drop onto a non-group id, or back onto the same group.
+            if r.track_groups.get_group(dest).is_none() || origin_group == Some(dest) {
+                return;
+            }
+            if let Some(from) = origin_group {
+                r.track_groups.remove_member(from, track_id);
+            }
+            r.track_groups.add_member(dest, track_id);
+        }
+        // Track dropped on open space: leave whatever group it was in.
+        (MembershipDragSubject::Track(track_id), MembershipDropTarget::Ungrouped) => {
+            if let Some(from) = origin_group {
+                r.track_groups.remove_member(from, track_id);
+            }
+        }
+        // Group nests under another group (members travel with it). Refuse
+        // self-nesting, dropping onto a non-group, and nesting a group that
+        // is itself a parent (which would push its child two levels deep).
+        // `set_nesting_parent` independently rejects a parent that already
+        // has a parent, closing the cycle.
+        (MembershipDragSubject::Group(group_id), MembershipDropTarget::IntoGroup(dest)) => {
+            if group_id == dest
+                || r.track_groups.get_group(dest).is_none()
+                || r.track_groups.is_parent_group(group_id)
+            {
+                return;
+            }
+            r.track_groups.set_nesting_parent(group_id, Some(dest));
+        }
+        // Group dropped on open space: detach it back to the top level.
+        (MembershipDragSubject::Group(group_id), MembershipDropTarget::Ungrouped) => {
+            r.track_groups.set_nesting_parent(group_id, None);
+        }
+    }
 }
