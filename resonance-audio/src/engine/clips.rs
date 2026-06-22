@@ -14,6 +14,8 @@ use parking_lot::RwLock;
 use crate::decode;
 use crate::types::*;
 
+use resonance_dsp::tempo::{detect_tempo_default, TempoEstimate};
+
 use super::thread::{HandlerCtx, HandlerState, MAX_CONCURRENT_IMPORTS};
 
 pub(crate) fn handle_import_clip(
@@ -228,12 +230,12 @@ pub(crate) fn handle_set_clip_warp_markers(
     set_clip_warp_markers_in_place(ctx.clips, ctx.event_tx, clip_id, markers);
 }
 
-/// Handle `AudioCommand::DetectClipTempo`. The onset/autocorrelation
-/// tempo detector and the `AudioEvent::ClipTempoDetected` reply land in
-/// a later todo (E4, todo #420); routing the command to this handler
-/// keeps the command/event boundary complete in the meantime. No state
-/// is mutated and no event is emitted yet.
-pub(crate) fn handle_detect_clip_tempo(_ctx: &HandlerCtx, _clip_id: ClipId) {}
+/// Handle `AudioCommand::DetectClipTempo`. Thin wrapper over
+/// [`detect_clip_tempo_in_place`], passing the engine's project sample
+/// rate through. See that helper for the behaviour contract.
+pub(crate) fn handle_detect_clip_tempo(ctx: &HandlerCtx, clip_id: ClipId) {
+    detect_clip_tempo_in_place(ctx.clips, ctx.event_tx, ctx.sample_rate, clip_id);
+}
 
 /// Apply fade lengths/curves to the audio clip with `clip_id` and emit
 /// `ClipFadeChanged`. Each fade length is clamped to the clip's visible
@@ -344,6 +346,44 @@ pub fn set_clip_warp_markers_in_place(
         clip.warp_markers = markers.clone();
         let _ = event_tx.send(AudioEvent::ClipWarpMarkersChanged { clip_id, markers });
     }
+}
+
+/// Run the `resonance-dsp` tempo detector over the audio clip with
+/// `clip_id` and emit [`AudioEvent::ClipTempoDetected`] with the
+/// estimated BPM and confidence. The clip's stereo-interleaved source
+/// is downmixed to mono (`(l + r) * 0.5`) for the detector, which works
+/// on a single channel. `sample_rate` is the engine's project rate.
+///
+/// This is analysis only: the clip is never mutated. The app decides
+/// whether to act on the estimate (e.g. via `AudioCommand::SetClipWarp`
+/// to set `original_bpm`). Same missing-clip invariant as
+/// [`set_clip_warp_in_place`]: a lookup miss emits no ghost event. The
+/// clip read lock is released before the event is sent.
+pub fn detect_clip_tempo_in_place(
+    clips: &RwLock<Vec<AudioClip>>,
+    event_tx: &Sender<AudioEvent>,
+    sample_rate: u32,
+    clip_id: ClipId,
+) {
+    let mono = {
+        let guard = clips.read();
+        match guard.iter().find(|c| c.id == clip_id) {
+            Some(clip) => clip
+                .source
+                .as_frames()
+                .chunks_exact(2)
+                .map(|frame| (frame[0] + frame[1]) * 0.5)
+                .collect::<Vec<f32>>(),
+            None => return,
+        }
+    };
+
+    let TempoEstimate { bpm, confidence } = detect_tempo_default(&mono, sample_rate as f32);
+    let _ = event_tx.send(AudioEvent::ClipTempoDetected {
+        clip_id,
+        bpm,
+        confidence,
+    });
 }
 
 #[allow(clippy::too_many_arguments)]

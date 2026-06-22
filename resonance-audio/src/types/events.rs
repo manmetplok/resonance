@@ -137,6 +137,17 @@ pub enum AudioEvent {
         clip_id: ClipId,
         markers: Vec<WarpMarker>,
     },
+
+    /// Tempo/BPM detection finished for an audio clip. The detector
+    /// ran over the clip's source samples and estimated a tempo and
+    /// confidence. The app may use this to populate the clip's
+    /// `original_bpm` via [`AudioCommand::SetClipWarp`]; the engine
+    /// itself does not mutate the clip.
+    ClipTempoDetected {
+        clip_id: ClipId,
+        bpm: f32,
+        confidence: f32,
+    },
     Stopped,
     Error(String),
     InputDevicesListed {

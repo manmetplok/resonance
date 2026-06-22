@@ -77,8 +77,8 @@ pub use engine::midi::{move_midi_clip_in_place, trim_midi_clip_in_place};
 /// marker-sort invariant) without spinning up the engine thread.
 #[doc(hidden)]
 pub use engine::{
-    set_clip_fade_in_place, set_clip_gain_in_place, set_clip_warp_in_place,
-    set_clip_warp_markers_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
+    detect_clip_tempo_in_place, set_clip_fade_in_place, set_clip_gain_in_place,
+    set_clip_warp_in_place, set_clip_warp_markers_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
 };
 
 /// Test surface for the audio import-to-pool path. Exposed so the
