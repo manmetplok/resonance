@@ -61,6 +61,11 @@ pub struct ChordTrack {
     /// Key/scale changes, kept sorted by `start_sample`; the first is
     /// the song key.
     pub key_changes: Vec<KeyChange>,
+    /// Last chord-symbol parse error, set by the `SetSymbol`/`AddRegion`
+    /// handlers (todo #441) when a symbol can't be parsed and cleared on
+    /// the next successful edit. Transient view feedback; carried along
+    /// in undo snapshots like the rest of the track.
+    pub last_error: Option<String>,
 }
 
 impl ChordTrack {

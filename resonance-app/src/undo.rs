@@ -478,6 +478,10 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         Message::GlobalTrack(GlobalTrackMessage::UpdateTempoEvent { .. }) => UndoAction::Skip,
         Message::GlobalTrack(_) => UndoAction::Record,
 
+        // Every chord-track edit is a discrete action (no drag gestures
+        // reach the update layer — todo #441), so each records one entry.
+        Message::ChordTrack(_) => UndoAction::Record,
+
         Message::Transport(t) => match t {
             TransportMessage::StartLoopDrag(_) => UndoAction::Begin,
             TransportMessage::EndLoopDrag => UndoAction::Commit,

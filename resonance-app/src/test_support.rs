@@ -161,6 +161,15 @@ impl Resonance {
         self.io.has_active_project = active;
     }
 
+    /// Test-only: set the on-disk project path. Undo/redo recording is
+    /// gated on a saved path (`can_record_undo`), so reducer tests that
+    /// drive `Message::Undo`/`Redo` through `update()` set a dummy path
+    /// here in addition to flipping the active-project flag.
+    #[doc(hidden)]
+    pub fn test_set_project_path(&mut self, path: Option<std::path::PathBuf>) {
+        self.io.project_path = path;
+    }
+
     /// Test-only: the currently active top-level [`ViewMode`].
     #[doc(hidden)]
     pub fn test_view_mode(&self) -> state::ViewMode {
