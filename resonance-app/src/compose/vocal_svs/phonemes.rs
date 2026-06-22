@@ -2,10 +2,11 @@
 //! voicebank can actually sing, and what substitution applies* (design
 //! #173 key decision).
 //!
-//! Two consumers must never disagree on this: the SVS segment builder
-//! ([`super::segment::build_segment`], via [`super::paths::substitute_phoneme`])
-//! decides what tokens the model is fed, and the vocal-roll phoneme
-//! strip shows the user what the model will sing. If they each carried
+//! Two consumers must never disagree on this: the pronunciation
+//! validation gate ([`super::validate_for_voicebank`], whose substituted
+//! output the segment builder feeds the model) decides what tokens the
+//! model is fed, and the vocal-roll phoneme strip shows the user what the
+//! model will sing. If they each carried
 //! their own table, the strip could display `v` while the model sang
 //! `f`. Both now go through [`VoicebankPhonemes`].
 //!

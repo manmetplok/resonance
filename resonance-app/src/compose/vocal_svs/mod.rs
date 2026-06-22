@@ -21,6 +21,7 @@
 use std::path::PathBuf;
 
 use resonance_audio::types::MidiNote;
+use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::VocalParams;
 use resonance_svs::pipeline::{self, PipelineArgs};
 use resonance_svs::stages::common::ExecutionProvider;
@@ -30,6 +31,7 @@ mod phonemes;
 mod post;
 mod pronunciation;
 mod segment;
+mod validate;
 
 pub use paths::{curve_supported, CurveKind};
 pub use phonemes::{PhonemeFate, VoicebankPhonemes};
@@ -38,12 +40,13 @@ pub use pronunciation::{
     canonicalize_phonemes, clean_word, resolve_clip as resolve_clip_pronunciation, DictionaryEntry,
     DictionaryScope, PhonemeProvenance, PronunciationState, SyllableOverride,
 };
+pub use segment::build_segment;
+pub use validate::{validate_for_voicebank, InvalidPhonemeReason, InvalidSyllable};
 
 use paths::locate_voicebank;
 use post::{
     apply_ap_gate, collect_ap_intervals, mono_to_stereo_with_gain, resample_to, safety_gain_factor,
 };
-use segment::build_segment;
 
 /// Output of `render_vocal_clip` — stereo-interleaved f32 samples ready
 /// for `transcode_to_wav` / `write_stereo_f32_wav`, plus their rate
@@ -70,17 +73,17 @@ const SEGMENT_PAD_SEC: f64 = 0.3;
 /// script hasn't been run, env var unset, etc.) so the caller can fall
 /// back to its existing MIDI-only behaviour silently.
 ///
-/// `lyrics` is a per-note annotation slice (parallel to `notes`). Notes
-/// whose lyric equals the OpenUtau slur marker (`"+"`) get treated as
-/// melisma continuations of the previous syllable instead of consuming
-/// a fresh phoneme list. An empty `lyrics` slice is equivalent to the
-/// legacy "every note is its own syllable" mode and is what the engine
-/// sees for non-vocal clips rendered through the same code path during
-/// testing.
-pub fn render_vocal_clip_with_lyrics(
+/// `assigned` is the per-note resolved + voicebank-validated syllable
+/// stream (one entry per note), produced on the main thread by
+/// [`resolve_clip_pronunciation`] + [`validate_for_voicebank`] so
+/// per-syllable overrides, dictionary entries and the voicebank's
+/// substitutions are already folded into the phonemes the model sings.
+/// Slur notes carry the held vowel from the previous syllable; an empty
+/// `assigned` slice renders nothing.
+pub fn render_vocal_clip(
     notes: &[MidiNote],
     params: &VocalParams,
-    lyrics: &[String],
+    assigned: &[AssignedSyllable],
     ticks_per_quarter: u32,
     bpm: f32,
     engine_sample_rate: u32,
@@ -92,7 +95,7 @@ pub fn render_vocal_clip_with_lyrics(
         return Ok(None);
     };
 
-    let segment = build_segment(notes, params, lyrics, ticks_per_quarter, bpm);
+    let segment = build_segment(notes, params, assigned, ticks_per_quarter, bpm);
     if segment.ph_seq.is_empty() {
         return Ok(None);
     }
