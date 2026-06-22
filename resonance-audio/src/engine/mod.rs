@@ -30,8 +30,8 @@ use crate::types::*;
 
 mod bounce;
 pub use bounce::{
-    render_stem, stem_filter, stem_project_range, to_audio_clip, try_lock_with_backoff,
-    write_stem_wav, StemBitDepth, StemFilter, StemSource,
+    export_stems, render_stem, stem_filter, stem_project_range, to_audio_clip,
+    try_lock_with_backoff, write_stem_wav, StemFilter,
 };
 mod bounce_common;
 pub use bounce_common::midi_render_range;
