@@ -318,6 +318,10 @@ pub const TRACK_HEIGHT: f32 = 96.0;
 /// shorter than a full track row so the hierarchy reads as structure
 /// rather than content. See the track-grouping design (doc #200).
 pub const GROUP_HEADER_HEIGHT: f32 = 60.0;
+/// Indent for tracks that are members of a group. Nested group members
+/// use doubled indent to show hierarchy depth at a glance. See the
+/// track-grouping design (doc #200).
+pub const GROUP_MEMBER_INDENT: f32 = 14.0;
 /// Timeline ruler height.
 pub const RULER_HEIGHT: f32 = 28.0;
 /// Section band sitting under the ruler — the section-pill strip on the

@@ -18,11 +18,15 @@ use crate::util::short;
 use crate::Resonance;
 
 pub(super) fn view_track_header(
-    _r: &Resonance,
+    r: &Resonance,
     track: &TrackState,
     is_selected: bool,
 ) -> Element<'static, Message> {
     let track_id = track.id;
+
+    // Calculate indent level for group members using the registry method
+    let indent_level = r.track_groups.indent_depth(track_id);
+    let indent_pixels = indent_level as f32 * theme::GROUP_MEMBER_INDENT;
 
     // ---- Glyph (28×28 rounded BG_2 square with the track's instrument icon) ----
     let glyph_char = glyph_for_track(track);
@@ -130,7 +134,7 @@ pub(super) fn view_track_header(
             top: 10.0,
             right: 24.0,
             bottom: 10.0,
-            left: 24.0,
+            left: 24.0 + indent_pixels,
         });
 
     let body_with_bg = container(body)

@@ -25,6 +25,7 @@ impl crate::Resonance {
 
         let timeline_data = TimelineCanvas {
             tracks: &self.registry.tracks,
+            track_groups: &self.track_groups,
             clips: &self.clips,
             playhead: self.transport.playhead,
             sample_rate: self.sample_rate,

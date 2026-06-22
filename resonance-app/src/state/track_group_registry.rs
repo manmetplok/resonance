@@ -65,6 +65,35 @@ impl TrackGroupRegistry {
             .collect()
     }
 
+    /// Returns the indent depth for a track based on its group membership.
+    ///
+    /// - Returns 0 for tracks that are not members of any group
+    /// - Returns 1 for direct members of a group
+    /// - Returns 2 for members of a nested group (group inside a group)
+    ///
+    /// This is used to visually indent group member tracks in the UI.
+    pub fn indent_depth(&self, track_id: TrackId) -> usize {
+        let groups = self.get_groups_containing_track(track_id);
+        groups
+            .iter()
+            .filter_map(|group| {
+                let mut depth = 1;
+                let mut current_group = *group;
+                // Walk up the nesting chain
+                while let Some(parent_id) = current_group.nesting_parent {
+                    depth += 1;
+                    if let Some(parent) = self.groups.get(&parent_id) {
+                        current_group = parent;
+                    } else {
+                        break;
+                    }
+                }
+                Some(depth)
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Returns all groups in the registry.
     pub fn get_all_groups(&self) -> Vec<&TrackGroup> {
         self.groups.values().collect()
