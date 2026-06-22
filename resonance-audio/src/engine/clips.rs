@@ -201,6 +201,40 @@ pub(crate) fn handle_set_clip_gain(ctx: &HandlerCtx, clip_id: ClipId, gain_db: f
     set_clip_gain_in_place(ctx.clips, ctx.event_tx, clip_id, gain_db);
 }
 
+pub(crate) fn handle_set_clip_warp(
+    ctx: &HandlerCtx,
+    clip_id: ClipId,
+    warp_enabled: bool,
+    original_bpm: Option<f32>,
+    transpose_semitones: f32,
+    warp_algorithm: WarpAlgorithm,
+) {
+    set_clip_warp_in_place(
+        ctx.clips,
+        ctx.event_tx,
+        clip_id,
+        warp_enabled,
+        original_bpm,
+        transpose_semitones,
+        warp_algorithm,
+    );
+}
+
+pub(crate) fn handle_set_clip_warp_markers(
+    ctx: &HandlerCtx,
+    clip_id: ClipId,
+    markers: Vec<WarpMarker>,
+) {
+    set_clip_warp_markers_in_place(ctx.clips, ctx.event_tx, clip_id, markers);
+}
+
+/// Handle `AudioCommand::DetectClipTempo`. The onset/autocorrelation
+/// tempo detector and the `AudioEvent::ClipTempoDetected` reply land in
+/// a later todo (E4, todo #420); routing the command to this handler
+/// keeps the command/event boundary complete in the meantime. No state
+/// is mutated and no event is emitted yet.
+pub(crate) fn handle_detect_clip_tempo(_ctx: &HandlerCtx, _clip_id: ClipId) {}
+
 /// Apply fade lengths/curves to the audio clip with `clip_id` and emit
 /// `ClipFadeChanged`. Each fade length is clamped to the clip's visible
 /// duration so a fade can never run past the audible region. Both the
@@ -258,6 +292,57 @@ pub fn set_clip_gain_in_place(
         };
         clip.gain_db = gain_db;
         let _ = event_tx.send(AudioEvent::ClipGainChanged { clip_id, gain_db });
+    }
+}
+
+/// Apply warp ("follow tempo") parameters to the audio clip with
+/// `clip_id` and emit `ClipWarpChanged`. The original [`ClipSource`] PCM
+/// is never mutated — warp is non-destructive and only changes how the
+/// source is read on the render path. Same missing-clip invariant as
+/// [`set_clip_fade_in_place`]: a lookup miss emits no ghost event.
+pub fn set_clip_warp_in_place(
+    clips: &RwLock<Vec<AudioClip>>,
+    event_tx: &Sender<AudioEvent>,
+    clip_id: ClipId,
+    warp_enabled: bool,
+    original_bpm: Option<f32>,
+    transpose_semitones: f32,
+    warp_algorithm: WarpAlgorithm,
+) {
+    let mut guard = clips.write();
+    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+        clip.warp_enabled = warp_enabled;
+        clip.original_bpm = original_bpm;
+        clip.transpose_semitones = transpose_semitones;
+        clip.warp_algorithm = warp_algorithm;
+        let _ = event_tx.send(AudioEvent::ClipWarpChanged {
+            clip_id,
+            warp_enabled,
+            original_bpm,
+            transpose_semitones,
+            warp_algorithm,
+        });
+    }
+}
+
+/// Replace the full warp-marker set of the audio clip with `clip_id`
+/// and emit `ClipWarpMarkersChanged`. The incoming markers are sorted by
+/// `timeline_beat` ascending before being stored so the [`WarpMarker`]
+/// invariant the warp-mapping math relies on always holds, regardless of
+/// the order the caller built them in. The sorted set is what's both
+/// stored and emitted. Same missing-clip invariant as
+/// [`set_clip_fade_in_place`].
+pub fn set_clip_warp_markers_in_place(
+    clips: &RwLock<Vec<AudioClip>>,
+    event_tx: &Sender<AudioEvent>,
+    clip_id: ClipId,
+    mut markers: Vec<WarpMarker>,
+) {
+    let mut guard = clips.write();
+    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+        markers.sort_by(|a, b| a.timeline_beat.total_cmp(&b.timeline_beat));
+        clip.warp_markers = markers.clone();
+        let _ = event_tx.send(AudioEvent::ClipWarpMarkersChanged { clip_id, markers });
     }
 }
 

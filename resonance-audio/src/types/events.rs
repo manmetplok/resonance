@@ -5,7 +5,7 @@ use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
     AssetId, BusId, ClipId, FadeCurve, InputDeviceInfo, MidiNote, ParamInfo, PluginInstanceId,
-    SamplePos, ScannedPlugin, TrackId,
+    SamplePos, ScannedPlugin, TrackId, WarpAlgorithm, WarpMarker,
 };
 
 /// Lifecycle stage of a single file in an `ImportAudioToPool` batch.
@@ -120,6 +120,22 @@ pub enum AudioEvent {
     ClipGainChanged {
         clip_id: ClipId,
         gain_db: f32,
+    },
+    /// A clip's warp ("follow tempo") parameters changed. Carries the
+    /// engine-stored values so the app mirror matches engine state.
+    ClipWarpChanged {
+        clip_id: ClipId,
+        warp_enabled: bool,
+        original_bpm: Option<f32>,
+        transpose_semitones: f32,
+        warp_algorithm: WarpAlgorithm,
+    },
+    /// A clip's warp-marker set changed (full-set replace). Carries the
+    /// engine-sorted markers (ascending `timeline_beat`) so the app
+    /// mirror matches engine state.
+    ClipWarpMarkersChanged {
+        clip_id: ClipId,
+        markers: Vec<WarpMarker>,
     },
     Stopped,
     Error(String),
