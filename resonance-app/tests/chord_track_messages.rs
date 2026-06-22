@@ -96,6 +96,50 @@ fn add_at_playhead_splits_the_region_under_the_playhead() {
 }
 
 #[test]
+fn add_at_playhead_seeds_tonic_from_song_key() {
+    let mut app = app();
+    // Song key A minor: a region added at the playhead should default to
+    // the tonic triad (Am), not a hardcoded C major (doc #168).
+    app.test_chord_track_mut()
+        .insert_key_change(key_change(1, 0, PitchClass::A, Mode::Minor));
+    send(&mut app, ChordTrackMessage::AddAtPlayhead);
+
+    let track = app.test_chord_track();
+    assert_eq!(track.regions.len(), 1);
+    assert_eq!(
+        track.regions[0].chord,
+        Chord::new(PitchClass::A, ChordQuality::Min),
+        "default chord is the tonic of the song key"
+    );
+}
+
+#[test]
+fn add_at_playhead_seeds_tonic_from_key_at_position() {
+    let mut app = app();
+    // Song key C major, then a G Lydian change at 200. The playhead sits
+    // past the change, so the new region picks up the key in effect there
+    // (G major triad), exercising `key_at` rather than just the song key.
+    app.test_chord_track_mut()
+        .insert_key_change(key_change(1, 0, PitchClass::C, Mode::Major));
+    app.test_chord_track_mut()
+        .insert_key_change(key_change(2, 200, PitchClass::G, Mode::Lydian));
+    let _ = app.update(Message::Transport(TransportMessage::SeekToSample(300)));
+    send(&mut app, ChordTrackMessage::AddAtPlayhead);
+
+    let region = app
+        .test_chord_track()
+        .regions
+        .iter()
+        .find(|r| r.start_sample == 300)
+        .expect("region added at the playhead");
+    assert_eq!(
+        region.chord,
+        Chord::new(PitchClass::G, ChordQuality::Maj),
+        "Lydian seeds a major tonic from the key in effect at the start"
+    );
+}
+
+#[test]
 fn add_region_parses_symbol_and_inserts() {
     let mut app = app();
     send(

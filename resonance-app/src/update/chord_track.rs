@@ -14,12 +14,30 @@
 //! regions to keep `regions` sorted and non-overlapping.
 
 use iced::Task;
-use resonance_music_theory::{parse_chord, Chord, ChordQuality, PitchClass};
+use resonance_music_theory::{parse_chord, Chord, ChordQuality, Mode, PitchClass, Scale};
 
 use crate::chord_track::{ChordRegion, KeyChange};
 use crate::message::{ChordTrackMessage, Message};
 use crate::view::timeline::snap_sample_to_grid_tempo;
 use crate::Resonance;
+
+/// The tonic chord of `scale` — the default chord seeded for a region
+/// added with no explicit symbol (doc #168: "default chord from key").
+/// Root is the scale root; the triad quality follows the mode: the
+/// major-flavoured modes give a major triad, the minor-flavoured ones a
+/// minor triad, and Locrian (diminished fifth) a diminished triad.
+fn tonic_chord(scale: Scale) -> Chord {
+    let quality = match scale.mode {
+        Mode::Major | Mode::Lydian | Mode::Mixolydian => ChordQuality::Maj,
+        Mode::Minor
+        | Mode::Dorian
+        | Mode::Phrygian
+        | Mode::HarmonicMinor
+        | Mode::MelodicMinor => ChordQuality::Min,
+        Mode::Locrian => ChordQuality::Dim,
+    };
+    Chord::new(scale.root, quality)
+}
 
 impl Resonance {
     /// Snap a raw sample position to the timeline grid using the current
@@ -82,11 +100,17 @@ pub fn handle(r: &mut Resonance, m: ChordTrackMessage) -> Task<Message> {
             if end <= start {
                 return Task::none();
             }
+            // Seed the chord from the key in effect at the new region's
+            // start (doc #168); fall back to C major with no key context.
+            let chord = r
+                .chord_track
+                .key_at(start)
+                .map_or_else(|| Chord::new(PitchClass::C, ChordQuality::Maj), tonic_chord);
             let id = r.compose.fresh_id();
             r.chord_track.last_error = None;
             r.chord_track.insert_region(ChordRegion {
                 id,
-                chord: Chord::new(PitchClass::C, ChordQuality::Maj),
+                chord,
                 start_sample: start,
                 end_sample: end,
                 pinned: false,
