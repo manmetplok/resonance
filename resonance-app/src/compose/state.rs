@@ -18,6 +18,7 @@ use super::section::{
     ChordState, EditSectionForm, NewSectionForm, SectionDefinitionState, SectionPlacementState,
     SelectedLane,
 };
+use super::vocal_svs::SvsRenderCache;
 
 /// Starting point for app-allocated derived clip ids. Chosen high enough
 /// that it will never collide with engine-allocated clip ids (which count
@@ -67,6 +68,15 @@ pub struct VocalAudioRegistry {
     /// this side-table is the composition layer that adds vocal
     /// metadata without touching the audio-side type.
     pub clip_lyrics: HashMap<ClipId, Vec<String>>,
+    /// Per-`(definition, track)` content-addressed SVS render cache, so an
+    /// edit only re-renders the sub-clip segments it touched (todo #495).
+    /// Wrapped in `Arc<Mutex>` because the render runs off-thread
+    /// (`spawn_blocking`); the completion side reads
+    /// [`SvsRenderCache::last_plan`] for the "N of M segments changed"
+    /// overlay. Keyed at the *render* scope like [`render_epoch`], not the
+    /// per-placement install scope.
+    pub render_cache:
+        HashMap<(u64, TrackId), std::sync::Arc<std::sync::Mutex<SvsRenderCache>>>,
 }
 
 impl VocalAudioRegistry {
@@ -74,6 +84,7 @@ impl VocalAudioRegistry {
         self.clips.clear();
         self.render_epoch.clear();
         self.clip_lyrics.clear();
+        self.render_cache.clear();
     }
 }
 
@@ -153,6 +164,13 @@ pub struct ComposeState {
     /// lyric annotations, and per-`(def, track)` render epochs. See
     /// [`VocalAudioRegistry`] for the rationale on keying asymmetries.
     pub vocal_audio: VocalAudioRegistry,
+    /// Pronunciation control: per-clip per-syllable phoneme overrides and
+    /// the project pronunciation dictionary. The resolver folds these (plus
+    /// the global user dictionary, supplied at resolve time) over the CMU
+    /// transcription so the strip and the `.ds` build agree on what each
+    /// syllable sings. See
+    /// [`PronunciationState`](crate::compose::vocal_svs::PronunciationState).
+    pub pronunciation: crate::compose::vocal_svs::PronunciationState,
     /// Monotonic id used when allocating fresh `ClipId`s for derived
     /// clips. Kept in the high range so it never collides with engine-
     /// allocated ids coming from `CreateMidiClip`.
@@ -230,6 +248,7 @@ impl Default for ComposeState {
             drumroll,
             derived_clips: HashMap::new(),
             vocal_audio: VocalAudioRegistry::default(),
+            pronunciation: crate::compose::vocal_svs::PronunciationState::default(),
             next_derived_clip_id: DERIVED_CLIP_ID_BASE,
             vocal_bulk_lyrics: HashMap::new(),
             drum_patterns,
@@ -508,6 +527,7 @@ impl ComposeState {
         // it by scanning clip names once the MIDI clips are in place.
         self.derived_clips.clear();
         self.vocal_audio.clear();
+        self.pronunciation.clear();
         self.next_derived_clip_id = DERIVED_CLIP_ID_BASE;
         self.placements = placements
             .iter()

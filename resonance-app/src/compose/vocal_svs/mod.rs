@@ -21,22 +21,36 @@
 use std::path::PathBuf;
 
 use resonance_audio::types::MidiNote;
+use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::VocalParams;
 use resonance_svs::pipeline::{self, PipelineArgs};
 use resonance_svs::stages::common::ExecutionProvider;
 
 mod paths;
+mod phonemes;
 mod post;
+mod pronunciation;
+mod render_cache;
 mod segment;
+mod validate;
 
 pub use paths::{curve_supported, CurveKind};
+pub use phonemes::{PhonemeFate, VoicebankPhonemes};
 pub use post::write_stereo_wav;
+pub use pronunciation::{
+    canonicalize_phonemes, clean_word, resolve_clip as resolve_clip_pronunciation, DictionaryEntry,
+    DictionaryScope, PhonemeProvenance, PronunciationState, SyllableOverride,
+};
+pub use render_cache::{
+    render_units_cached, split_render_units, RenderPlan, RenderUnit, SvsRenderCache,
+};
+pub use segment::build_segment;
+pub use validate::{validate_for_voicebank, InvalidPhonemeReason, InvalidSyllable};
 
 use paths::locate_voicebank;
 use post::{
     apply_ap_gate, collect_ap_intervals, mono_to_stereo_with_gain, resample_to, safety_gain_factor,
 };
-use segment::build_segment;
 
 /// Output of `render_vocal_clip` — stereo-interleaved f32 samples ready
 /// for `transcode_to_wav` / `write_stereo_f32_wav`, plus their rate
@@ -58,25 +72,38 @@ pub struct RenderedVocal {
 /// private items.
 const SEGMENT_PAD_SEC: f64 = 0.3;
 
+/// A gap to the next note longer than its sing duration by more than this
+/// many seconds is treated as a genuine silence (breath / rest): the
+/// duration builder inserts a trailing `AP` there, and
+/// [`render_cache::split_render_units`] cuts a render-unit boundary at the
+/// same point. Shared so the two never disagree about where silences are.
+pub(crate) const SILENCE_GAP_SEC: f64 = 0.4;
+
 /// Render a vocal MIDI clip + lyric draft to a singing waveform. Returns
 /// `None` when the SVS model files aren't installed (the PoC's download
 /// script hasn't been run, env var unset, etc.) so the caller can fall
 /// back to its existing MIDI-only behaviour silently.
 ///
-/// `lyrics` is a per-note annotation slice (parallel to `notes`). Notes
-/// whose lyric equals the OpenUtau slur marker (`"+"`) get treated as
-/// melisma continuations of the previous syllable instead of consuming
-/// a fresh phoneme list. An empty `lyrics` slice is equivalent to the
-/// legacy "every note is its own syllable" mode and is what the engine
-/// sees for non-vocal clips rendered through the same code path during
-/// testing.
-pub fn render_vocal_clip_with_lyrics(
+/// `assigned` is the per-note resolved + voicebank-validated syllable
+/// stream (one entry per note), produced on the main thread by
+/// [`resolve_clip_pronunciation`] + [`validate_for_voicebank`] so
+/// per-syllable overrides, dictionary entries and the voicebank's
+/// substitutions are already folded into the phonemes the model sings.
+/// Slur notes carry the held vowel from the previous syllable; an empty
+/// `assigned` slice renders nothing.
+/// `cache` carries per-unit rendered audio across renders of the same
+/// clip so an edit only re-renders the segments it touched (see
+/// [`render_cache`]); pass a fresh [`SvsRenderCache`] for a clip that has
+/// never been rendered. After the call its [`SvsRenderCache::last_plan`]
+/// holds the "N of M segments changed" tally for the UI overlay.
+pub fn render_vocal_clip(
     notes: &[MidiNote],
     params: &VocalParams,
-    lyrics: &[String],
+    assigned: &[AssignedSyllable],
     ticks_per_quarter: u32,
     bpm: f32,
     engine_sample_rate: u32,
+    cache: &mut SvsRenderCache,
 ) -> Result<Option<RenderedVocal>, String> {
     if notes.is_empty() {
         return Ok(None);
@@ -85,8 +112,11 @@ pub fn render_vocal_clip_with_lyrics(
         return Ok(None);
     };
 
-    let segment = build_segment(notes, params, lyrics, ticks_per_quarter, bpm);
-    if segment.ph_seq.is_empty() {
+    // Split the clip into independently-renderable units at genuine
+    // silences. A continuous phrase yields a single unit whose segment
+    // matches the old whole-clip build.
+    let units = split_render_units(notes, params, assigned, ticks_per_quarter, bpm);
+    if units.iter().all(|u| u.segment.ph_seq.is_empty()) {
         return Ok(None);
     }
 
@@ -106,17 +136,22 @@ pub fn render_vocal_clip_with_lyrics(
         depth: 1000,
     };
 
-    // Pre-compute AP/SP intervals from the segment so we can gate the
-    // rendered audio later. Must be done before `render_segments`
-    // consumes the segment.
-    let ap_intervals = collect_ap_intervals(&segment.ph_seq, &segment.ph_dur);
+    // Render each missing unit through the acoustic + vocoder pipeline,
+    // gating its own AP/SP rests to silence; cache hits skip all of this.
+    let render_fn = |segment: &resonance_svs::ds::DsSegment| -> Result<(Vec<f32>, u32), String> {
+        let ap_intervals = collect_ap_intervals(&segment.ph_seq, &segment.ph_dur);
+        let rendered = pipeline::render_segments(std::slice::from_ref(segment), &args)
+            .map_err(|e| format!("svs render: {e:#}"))?;
+        let sr = rendered.sample_rate;
+        let mut mono = rendered.samples;
+        apply_ap_gate(&mut mono, &ap_intervals, sr);
+        Ok((mono, sr))
+    };
 
-    let rendered = pipeline::render_segments(&[segment], &args)
-        .map_err(|e| format!("svs render: {e:#}"))?;
-    let model_sr = rendered.sample_rate;
-    let mut mono: Vec<f32> = rendered.samples;
+    let stitched = render_units_cached(&units, cache, render_fn)?;
+    let model_sr = stitched.sample_rate;
+    let mono = stitched.mono;
 
-    apply_ap_gate(&mut mono, &ap_intervals, model_sr);
     let gain = safety_gain_factor(&mono);
     let stereo = mono_to_stereo_with_gain(&mono, gain);
     let (samples_stereo, out_sr) = resample_to(stereo, model_sr, engine_sample_rate);

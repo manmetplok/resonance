@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Resonance — Project Templates & Starter Sessions (design prototype)</title>
+<style>
+  /* ---------------------------------------------------------------
+     Resonance design tokens (mirrored from resonance-app/src/theme.rs)
+     Soft-dark, lavender-accent design system.
+  ----------------------------------------------------------------*/
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-line:rgba(232,196,123,.34); --warm-dim:rgba(232,196,123,.14);
+    --good:#6dd6a3; --bad:#e87b8b; --bad-dim:rgba(232,123,139,.14); --bad-line:rgba(232,123,139,.4);
+    --r-xs:4px; --r-sm:6px; --r-md:7px; --r-lg:8px; --r-xl:12px;
+    --sans:'Geist','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --mono:'Geist Mono','SFMono-Regular','JetBrains Mono',ui-monospace,monospace;
+    --serif:'Instrument Serif',Georgia,'Times New Roman',serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg-0); color:var(--text-1); font-family:var(--sans);
+    font-size:14px; -webkit-font-smoothing:antialiased;
+    display:flex; flex-direction:column; min-height:100vh;
+  }
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+  ::selection{background:rgba(139,109,255,.35)}
+  svg{display:block}
+
+  /* ---- demo harness chrome ---------------------------------------- */
+  .demo-bar{
+    display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+    padding:12px 20px; background:var(--bg-1);
+    border-bottom:1px solid var(--line); position:sticky; top:0; z-index:50;
+  }
+  .demo-bar .brand{font-family:var(--serif);font-style:italic;font-size:18px;color:var(--text-1)}
+  .demo-bar .brand .dim{color:var(--text-3)}
+  .demo-bar .tag{font-size:11px;color:var(--text-3);letter-spacing:.04em}
+  .demo-bar .group{display:flex;align-items:center;gap:8px}
+  .demo-bar label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+  .seg{display:flex;gap:3px;padding:4px;background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--r-lg)}
+  .seg button{padding:6px 13px;font-size:12px;border-radius:var(--r-sm);color:var(--text-2);font-weight:500;white-space:nowrap}
+  .seg button.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+
+  /* ---- mock app backdrop ----------------------------------------- */
+  .app{flex:1;position:relative;overflow:hidden;background:var(--bg-1);min-height:760px}
+  .app-chrome{
+    height:62px;display:flex;align-items:center;gap:14px;padding:0 22px;
+    background:var(--bg-1);border-bottom:1px solid var(--line);
+  }
+  .app-chrome .dot{width:9px;height:9px;border-radius:50%;background:var(--accent)}
+  .app-chrome .a-brand{font-family:var(--serif);font-style:italic;font-size:17px}
+  .app-chrome .sep{color:var(--text-3)}
+  .app-chrome .ptitle{font-size:13px;color:var(--text-2)}
+  .app-body{
+    height:calc(100% - 62px);
+    background:
+      repeating-linear-gradient(0deg,transparent 0 95px,var(--line-2) 95px 96px),
+      var(--bg-1);
+    position:relative;
+  }
+  .ghosttrack{position:absolute;left:0;top:0;width:240px;height:100%;border-right:1px solid var(--line);background:var(--bg-2);opacity:.6}
+
+  /* ---- overlay scaffold ------------------------------------------- */
+  .overlay{position:absolute;inset:0;display:grid;place-items:center;z-index:30}
+  .backdrop{position:absolute;inset:0;background:rgba(0,0,0,.65);backdrop-filter:blur(1.5px)}
+
+  /* ================= STARTUP MODAL ================= */
+  .modal{
+    position:relative;width:760px;max-width:94vw;background:var(--bg-2);
+    border:1px solid var(--line);border-radius:var(--r-xl);
+    box-shadow:0 24px 60px rgba(0,0,0,.5);overflow:hidden;
+    display:flex;flex-direction:column;max-height:88vh;
+  }
+  .modal-head{padding:30px 32px 0}
+  .brandline{display:flex;align-items:center;gap:8px}
+  .brandline .dot{width:9px;height:9px;border-radius:50%;background:var(--accent)}
+  .brandline .name{font-size:14px;font-weight:500;color:var(--text-1)}
+  .title{font-family:var(--serif);font-style:italic;font-size:30px;color:var(--text-1);margin-top:18px;line-height:1}
+  .subtitle{font-size:13px;color:var(--text-3);margin-top:6px}
+
+  .actions{display:flex;gap:10px;margin-top:22px}
+  .btn{display:inline-flex;align-items:center;gap:9px;padding:10px 16px;border-radius:var(--r-md);font-size:13px;font-weight:600;border:1px solid transparent}
+  .btn svg{width:14px;height:14px}
+  .btn.primary{background:var(--accent);color:var(--bg-0)}
+  .btn.primary:hover{background:var(--accent-soft)}
+  .btn.ghost{background:transparent;color:var(--text-1);border-color:var(--line)}
+  .btn.ghost:hover{background:var(--bg-3);border-color:var(--line)}
+  .btn.flex{flex:1;justify-content:center}
+
+  .tabs{display:flex;gap:3px;padding:4px;background:var(--bg-1);border:1px solid var(--line-2);border-radius:var(--r-lg);margin:24px 32px 0;width:max-content}
+  .tabs button{padding:7px 16px;font-size:13px;font-weight:600;border-radius:var(--r-sm);color:var(--text-2);display:inline-flex;align-items:center;gap:8px}
+  .tabs button .count{font-size:11px;color:var(--text-3);font-weight:500}
+  .tabs button.active{background:var(--bg-3);color:var(--text-1)}
+  .tabs button.active .count{color:var(--text-2)}
+
+  .panel{padding:20px 32px 28px;overflow-y:auto;flex:1}
+  .panel::-webkit-scrollbar{width:10px}
+  .panel::-webkit-scrollbar-thumb{background:var(--bg-3);border-radius:6px;border:3px solid var(--bg-2)}
+
+  .sect-label{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);margin:4px 0 12px;display:flex;align-items:center;gap:10px}
+  .sect-label .ln{flex:1;height:1px;background:var(--line)}
+  .sect-label .add{display:inline-flex;align-items:center;gap:6px;color:var(--text-2);letter-spacing:.02em;text-transform:none;font-weight:500;font-size:11px;cursor:pointer}
+  .sect-label .add:hover{color:var(--accent-soft)}
+  .sect-label .add svg{width:11px;height:11px}
+
+  /* ---- recent list ---- */
+  .recent{display:flex;flex-direction:column;gap:4px}
+  .recent-row{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:var(--r-md);cursor:pointer}
+  .recent-row:hover{background:var(--bg-3)}
+  .recent-row svg{width:14px;height:14px;color:var(--text-3);flex:none}
+  .recent-row .nm{font-size:13px;font-weight:500;color:var(--text-1)}
+  .recent-row .pa{font-size:10px;color:var(--text-3);margin-top:2px}
+  .recent-row .when{margin-left:auto;font-size:11px;color:var(--text-3)}
+
+  /* ---- template grid ---- */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .tpl{
+    position:relative;text-align:left;background:var(--bg-1);border:1px solid var(--line);
+    border-radius:var(--r-lg);padding:16px;cursor:pointer;transition:border-color .12s,background .12s,transform .06s;
+    display:flex;flex-direction:column;gap:10px;
+  }
+  .tpl:hover{border-color:var(--accent-line);background:var(--bg-3)}
+  .tpl:active{transform:translateY(1px)}
+  .tpl .toprow{display:flex;align-items:flex-start;gap:12px}
+  .tpl .ico{width:38px;height:38px;border-radius:var(--r-md);display:grid;place-items:center;background:var(--accent-dim);color:var(--accent-soft);flex:none}
+  .tpl .ico svg{width:18px;height:18px}
+  .tpl .ico.warm{background:var(--warm-dim);color:var(--warm)}
+  .tpl .ico.neutral{background:var(--bg-3);color:var(--text-2)}
+  .tpl .nm{font-size:14px;font-weight:600;color:var(--text-1)}
+  .tpl .desc{font-size:12px;color:var(--text-2);line-height:1.45;margin-top:3px}
+  .tpl .chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:auto}
+  .chip{font-size:10.5px;color:var(--text-2);background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r-xs);padding:3px 7px;font-family:var(--mono);letter-spacing:-.01em}
+  .tpl:hover .chip{background:var(--bg-2)}
+  .badge{position:absolute;top:14px;right:14px;font-size:9px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-soft);background:var(--accent-dim);border-radius:var(--r-xs);padding:2px 6px}
+
+  /* per-card menu (user templates) */
+  .kebab{position:absolute;top:12px;right:12px;width:26px;height:26px;border-radius:var(--r-sm);display:grid;place-items:center;color:var(--text-3);opacity:0}
+  .tpl.user:hover .kebab{opacity:1}
+  .kebab:hover{background:var(--bg-2);color:var(--text-1)}
+  .kebab svg{width:14px;height:14px}
+  .menu{position:absolute;top:40px;right:12px;z-index:5;background:var(--bg-3);border:1px solid var(--line);border-radius:var(--r-md);padding:5px;min-width:150px;box-shadow:0 12px 30px rgba(0,0,0,.5)}
+  .menu button{display:flex;width:100%;align-items:center;gap:9px;padding:7px 10px;border-radius:var(--r-sm);font-size:12.5px;color:var(--text-1)}
+  .menu button:hover{background:var(--bg-2)}
+  .menu button.danger{color:var(--bad)}
+  .menu button svg{width:13px;height:13px}
+  .menu .div{height:1px;background:var(--line);margin:4px 2px}
+
+  /* inline rename state */
+  .tpl.renaming{border-color:var(--accent-line)}
+  .rename-field{display:flex;align-items:center;gap:8px;width:100%}
+  .rename-field input{flex:1;background:var(--bg-2);border:1px solid var(--accent-line);border-radius:var(--r-sm);color:var(--text-1);font-family:var(--sans);font-size:13px;padding:7px 9px;outline:none}
+  .icon-btn{width:28px;height:28px;border-radius:var(--r-sm);display:grid;place-items:center;border:1px solid var(--line);color:var(--text-2)}
+  .icon-btn:hover{background:var(--bg-2);color:var(--text-1)}
+  .icon-btn.ok{color:var(--good);border-color:var(--line)}
+  .icon-btn svg{width:13px;height:13px}
+
+  /* ---- empty / loading / error states ---- */
+  .state{border:1px dashed var(--line);border-radius:var(--r-lg);padding:30px 24px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:8px}
+  .state .si{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--bg-3);color:var(--text-3);margin-bottom:4px}
+  .state .si svg{width:18px;height:18px}
+  .state .st{font-size:13px;font-weight:600;color:var(--text-2)}
+  .state .ss{font-size:12px;color:var(--text-3);max-width:380px;line-height:1.5}
+  .state.err{border-color:var(--bad-line);border-style:solid;background:var(--bad-dim)}
+  .state.err .si{background:var(--bad-dim);color:var(--bad)}
+  .state.err .st{color:var(--bad)}
+
+  .skel{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-lg);padding:16px;display:flex;flex-direction:column;gap:10px}
+  .sk{background:linear-gradient(90deg,var(--bg-3) 25%,var(--bg-2) 37%,var(--bg-3) 63%);background-size:400% 100%;animation:sh 1.4s ease infinite;border-radius:var(--r-xs)}
+  @keyframes sh{0%{background-position:100% 0}100%{background-position:-100% 0}}
+  .skel .row{display:flex;gap:12px;align-items:center}
+  .skel .sk.av{width:38px;height:38px;border-radius:var(--r-md);flex:none}
+
+  /* incompatible card variant */
+  .tpl.stale{opacity:.85;border-style:dashed;cursor:default}
+  .tpl.stale:hover{border-color:var(--bad-line);background:var(--bg-1)}
+  .tpl.stale .ico{background:var(--bad-dim);color:var(--bad)}
+  .tpl.stale .warnline{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--bad);margin-top:2px}
+  .tpl.stale .warnline svg{width:12px;height:12px;flex:none}
+
+  /* ================= SAVE-AS-TEMPLATE DIALOG ================= */
+  .dlg{position:relative;width:540px;max-width:94vw;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r-xl);box-shadow:0 24px 60px rgba(0,0,0,.5);overflow:hidden}
+  .dlg-head{padding:24px 28px 0;display:flex;align-items:flex-start;gap:14px}
+  .dlg-head .ico{width:40px;height:40px;border-radius:var(--r-md);background:var(--accent-dim);color:var(--accent-soft);display:grid;place-items:center;flex:none}
+  .dlg-head .ico svg{width:19px;height:19px}
+  .dlg-head .h{font-size:17px;font-weight:600;color:var(--text-1)}
+  .dlg-head .s{font-size:12px;color:var(--text-3);margin-top:3px;line-height:1.45}
+  .dlg-body{padding:22px 28px 0;display:flex;flex-direction:column;gap:16px}
+  .field label{display:block;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);margin-bottom:7px}
+  .field input,.field textarea{width:100%;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-md);color:var(--text-1);font-family:var(--sans);font-size:13px;padding:10px 12px;outline:none;resize:none}
+  .field input:focus,.field textarea:focus{border-color:var(--accent-line)}
+  .field .hint{font-size:11px;color:var(--text-3);margin-top:6px}
+  .capture{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-md);padding:14px}
+  .capture .ct{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);margin-bottom:11px}
+  .capture .clist{display:grid;grid-template-columns:1fr 1fr;gap:9px 18px}
+  .cap{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--text-2)}
+  .cap svg{width:13px;height:13px;color:var(--text-3);flex:none}
+  .cap b{color:var(--text-1);font-weight:600}
+  .opt{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text-2);cursor:pointer;padding:2px 0}
+  .opt .box{width:16px;height:16px;border-radius:var(--r-xs);border:1px solid var(--line);background:var(--bg-1);display:grid;place-items:center;flex:none}
+  .opt.on .box{background:var(--accent);border-color:var(--accent)}
+  .opt .box svg{width:11px;height:11px;color:var(--bg-0);opacity:0}
+  .opt.on .box svg{opacity:1}
+  .dlg-foot{display:flex;justify-content:flex-end;gap:10px;padding:22px 28px 24px;margin-top:6px;border-top:1px solid var(--line)}
+
+  /* ---- "applying template" transition toast/overlay ---- */
+  .applying{position:relative;width:360px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r-xl);padding:26px;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+  .applying .spin{width:34px;height:34px;border-radius:50%;border:3px solid var(--bg-3);border-top-color:var(--accent);margin:0 auto 16px;animation:rot .8s linear infinite}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  .applying .t{font-size:14px;font-weight:600;color:var(--text-1)}
+  .applying .s{font-size:12px;color:var(--text-3);margin-top:5px}
+
+  /* hide all panels by default; JS toggles */
+  .view{display:none}
+  .view.active{display:grid}
+  [data-state]{display:none}
+</style>
+</head>
+<body>
+
+<!-- ============ DEMO HARNESS ============ -->
+<div class="demo-bar">
+  <span class="brand">Resonance<span class="dim"> · design</span></span>
+  <span class="tag">Epic #55 — Project Templates &amp; Starter Sessions</span>
+  <div class="spacer"></div>
+  <div class="group">
+    <label>Screen</label>
+    <div class="seg" id="screenSeg">
+      <button data-screen="startup" class="active">Startup overlay</button>
+      <button data-screen="save">Save as Template</button>
+      <button data-screen="applying">Applying…</button>
+    </div>
+  </div>
+  <div class="group" id="tabGroup">
+    <label>Tab</label>
+    <div class="seg" id="tabSeg">
+      <button data-tab="recent">Recent</button>
+      <button data-tab="templates" class="active">Templates</button>
+    </div>
+  </div>
+  <div class="group" id="stateGroup">
+    <label>User templates</label>
+    <div class="seg" id="stateSeg">
+      <button data-state="populated" class="active">Populated</button>
+      <button data-state="empty">Empty</button>
+      <button data-state="loading">Loading</button>
+      <button data-state="error">Error</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MOCK APP ============ -->
+<div class="app">
+  <div class="app-chrome">
+    <span class="dot"></span>
+    <span class="a-brand">Resonance</span>
+    <span class="sep">/</span>
+    <span class="ptitle">untitled</span>
+  </div>
+  <div class="app-body">
+    <div class="ghosttrack"></div>
+
+    <!-- =========== STARTUP OVERLAY =========== -->
+    <div class="overlay view active" id="view-startup">
+      <div class="backdrop"></div>
+      <div class="modal">
+        <div class="modal-head">
+          <div class="brandline">
+            <span class="dot"></span><span class="name">Resonance</span>
+          </div>
+          <div class="title">New session</div>
+          <div class="subtitle">Start a project to begin</div>
+          <div class="actions">
+            <button class="btn primary flex">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+              New Project
+            </button>
+            <button class="btn ghost flex">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+              Open Project…
+            </button>
+          </div>
+        </div>
+
+        <div class="tabs" id="modalTabs">
+          <button data-tab="recent">
+            Recent Projects <span class="count">5</span>
+          </button>
+          <button data-tab="templates" class="active">
+            Templates <span class="count">7</span>
+          </button>
+        </div>
+
+        <!-- ---- RECENT TAB ---- -->
+        <div class="panel" id="panel-recent" style="display:none">
+          <div class="recent">
+            <div class="recent-row">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+              <div><div class="nm">Midnight Ballad</div><div class="pa">~/Music/Resonance/midnight-ballad.rsn</div></div>
+              <span class="when">2h ago</span>
+            </div>
+            <div class="recent-row">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+              <div><div class="nm">Garage EP — mixdown</div><div class="pa">~/Music/Resonance/garage-ep.rsn</div></div>
+              <span class="when">Yesterday</span>
+            </div>
+            <div class="recent-row">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+              <div><div class="nm">Lilia demo / verse hook</div><div class="pa">~/Desktop/sketches/lilia-demo.rsn</div></div>
+              <span class="when">3 days ago</span>
+            </div>
+            <div class="recent-row">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+              <div><div class="nm">Beat pack 04</div><div class="pa">~/Music/Resonance/beats/pack-04.rsn</div></div>
+              <span class="when">Last week</span>
+            </div>
+            <div class="recent-row">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+              <div><div class="nm">Podcast — ep. 12</div><div class="pa">~/Work/pod/ep-12.rsn</div></div>
+              <span class="when">2 weeks ago</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ---- TEMPLATES TAB ---- -->
+        <div class="panel" id="panel-templates">
+          <!-- Built-in -->
+          <div class="sect-label">Starter templates<span class="ln"></span></div>
+          <div class="grid">
+            <button class="tpl">
+              <span class="badge">Built-in</span>
+              <div class="toprow">
+                <span class="ico">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                </span>
+                <div><div class="nm">Vocal songwriting</div>
+                  <div class="desc">Chord track, a Compose vocal line on the Lilia voicebank, and a soft instrument bed — ready to write a song.</div>
+                </div>
+              </div>
+              <div class="chips">
+                <span class="chip">Chord track</span><span class="chip">Lilia vocal</span>
+                <span class="chip">Pad + bass</span><span class="chip">120 BPM · 4/4</span>
+              </div>
+            </button>
+
+            <button class="tpl">
+              <span class="badge">Built-in</span>
+              <div class="toprow">
+                <span class="ico warm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="10" width="3" height="6" rx="1"/><rect x="9" y="6" width="3" height="14" rx="1"/><rect x="15" y="3" width="3" height="18" rx="1"/></svg>
+                </span>
+                <div><div class="nm">Band recording</div>
+                  <div class="desc">Mic'd audio tracks routed to instrument buses with a mastered output chain. Plug in and hit record.</div>
+                </div>
+              </div>
+              <div class="chips">
+                <span class="chip">6 audio trk</span><span class="chip">Drum + inst bus</span>
+                <span class="chip">Master chain</span><span class="chip">120 BPM</span>
+              </div>
+            </button>
+
+            <button class="tpl">
+              <span class="badge">Built-in</span>
+              <div class="toprow">
+                <span class="ico warm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/></svg>
+                </span>
+                <div><div class="nm">Beatmaking</div>
+                  <div class="desc">Drum sampler and a wavetable synth feeding two FX sends. Lay down a loop in seconds.</div>
+                </div>
+              </div>
+              <div class="chips">
+                <span class="chip">Drum sampler</span><span class="chip">Wavetable</span>
+                <span class="chip">Reverb + delay send</span><span class="chip">90 BPM</span>
+              </div>
+            </button>
+
+            <button class="tpl">
+              <div class="toprow">
+                <span class="ico neutral">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+                </span>
+                <div><div class="nm">Empty</div>
+                  <div class="desc">A clean project — no tracks, default tempo. Build it up exactly how you like.</div>
+                </div>
+              </div>
+              <div class="chips">
+                <span class="chip">0 tracks</span><span class="chip">120 BPM · 4/4</span>
+              </div>
+            </button>
+          </div>
+
+          <!-- User templates -->
+          <div class="sect-label" style="margin-top:26px">
+            Your templates
+            <span class="ln"></span>
+            <span class="add">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+              Save current project as template
+            </span>
+          </div>
+
+          <!-- POPULATED -->
+          <div data-state="populated">
+            <div class="grid">
+              <button class="tpl user">
+                <button class="kebab" onclick="toggleMenu(event,'m1')">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+                </button>
+                <div class="menu" id="m1" style="display:none">
+                  <button onclick="startRename('u1')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>
+                    Rename
+                  </button>
+                  <button>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                    Reveal in Finder
+                  </button>
+                  <div class="div"></div>
+                  <button class="danger">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+                    Delete template
+                  </button>
+                </div>
+                <div class="toprow" id="u1-view">
+                  <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>
+                  <div><div class="nm">Lo-fi sketch</div>
+                    <div class="desc">My go-to chilled loop start — dusty drums, Rhodes, sidechained pad.</div>
+                  </div>
+                </div>
+                <div class="chips"><span class="chip">3 tracks</span><span class="chip">2 sends</span><span class="chip">78 BPM</span><span class="chip">Saved Jun 14</span></div>
+              </button>
+
+              <button class="tpl user">
+                <button class="kebab" onclick="toggleMenu(event,'m2')">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+                </button>
+                <div class="menu" id="m2" style="display:none">
+                  <button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>Rename</button>
+                  <button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Reveal in Finder</button>
+                  <div class="div"></div>
+                  <button class="danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>Delete template</button>
+                </div>
+                <div class="toprow">
+                  <span class="ico neutral"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4"/></svg></span>
+                  <div><div class="nm">Podcast — 2 mic</div>
+                    <div class="desc">Two voice tracks, noise gate + EQ inserts, mono podcast master.</div>
+                  </div>
+                </div>
+                <div class="chips"><span class="chip">2 audio trk</span><span class="chip">Gate + EQ</span><span class="chip">Mono master</span></div>
+              </button>
+            </div>
+          </div>
+
+          <!-- EMPTY -->
+          <div data-state="empty">
+            <div class="state">
+              <span class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7a2 2 0 012-2h3l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2z"/><path d="M12 11v5M9.5 13.5h5" stroke-linecap="round"/></svg></span>
+              <div class="st">No saved templates yet</div>
+              <div class="ss">Set up a project the way you like it, then choose <b style="color:var(--text-2)">File ▸ Save As Template</b> — or use the link above — to reuse it any time.</div>
+            </div>
+          </div>
+
+          <!-- LOADING -->
+          <div data-state="loading">
+            <div class="grid">
+              <div class="skel"><div class="row"><div class="sk av"></div><div style="flex:1"><div class="sk" style="height:13px;width:55%"></div><div class="sk" style="height:10px;width:90%;margin-top:8px"></div></div></div><div class="sk" style="height:18px;width:70%"></div></div>
+              <div class="skel"><div class="row"><div class="sk av"></div><div style="flex:1"><div class="sk" style="height:13px;width:50%"></div><div class="sk" style="height:10px;width:85%;margin-top:8px"></div></div></div><div class="sk" style="height:18px;width:60%"></div></div>
+            </div>
+          </div>
+
+          <!-- ERROR (one bad template among good, plus a load error) -->
+          <div data-state="error">
+            <div class="grid">
+              <button class="tpl user">
+                <div class="toprow">
+                  <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>
+                  <div><div class="nm">Lo-fi sketch</div><div class="desc">My go-to chilled loop start — dusty drums, Rhodes, sidechained pad.</div></div>
+                </div>
+                <div class="chips"><span class="chip">3 tracks</span><span class="chip">78 BPM</span></div>
+              </button>
+              <div class="tpl stale">
+                <div class="toprow">
+                  <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg></span>
+                  <div><div class="nm">Old multibus mix</div>
+                    <div class="warnline">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+                      Couldn't load — saved in an older project format
+                    </div>
+                  </div>
+                </div>
+                <div class="chips"><span class="chip" style="color:var(--bad);border-color:var(--bad-line)">schema v3 · needs v5</span></div>
+              </div>
+            </div>
+            <div class="state err" style="margin-top:12px">
+              <span class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg></span>
+              <div class="st">1 template couldn't be opened</div>
+              <div class="ss">It was saved in an older format and failed to migrate. The file is left untouched in your templates folder so you can recover it.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- =========== SAVE AS TEMPLATE =========== -->
+    <div class="overlay view" id="view-save">
+      <div class="backdrop"></div>
+      <div class="dlg">
+        <div class="dlg-head">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg></span>
+          <div>
+            <div class="h">Save as Template</div>
+            <div class="s">Saves this project's structure — not its audio or notes — as a reusable starting point.</div>
+          </div>
+        </div>
+        <div class="dlg-body">
+          <div class="field">
+            <label>Template name</label>
+            <input type="text" value="Indie band session" />
+          </div>
+          <div class="field">
+            <label>Description <span style="text-transform:none;letter-spacing:0;color:var(--text-4);font-weight:400">— optional</span></label>
+            <textarea rows="2" placeholder="What is this template good for?">Live 4-piece tracking layout with my usual bus routing and master chain.</textarea>
+          </div>
+          <div class="capture">
+            <div class="ct">Captured from “Garage EP — mixdown”</div>
+            <div class="clist">
+              <div class="cap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="10" width="3" height="6" rx="1"/><rect x="9" y="6" width="3" height="14" rx="1"/><rect x="15" y="3" width="3" height="18" rx="1"/></svg><span><b>6</b> tracks</span></div>
+              <div class="cap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l2 5 4-14 2 9h6"/></svg><span><b>3</b> buses / aux sends</span></div>
+              <div class="cap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/></svg><span><b>9</b> plugins / inserts</span></div>
+              <div class="cap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span><b>120</b> BPM · 4/4</span></div>
+            </div>
+          </div>
+          <div>
+            <div class="opt on" onclick="this.classList.toggle('on')">
+              <span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12l5 5L20 6"/></svg></span>
+              Include markers &amp; tempo map
+            </div>
+            <div class="opt on" onclick="this.classList.toggle('on')">
+              <span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12l5 5L20 6"/></svg></span>
+              Include master output chain
+            </div>
+          </div>
+        </div>
+        <div class="dlg-foot">
+          <button class="btn ghost">Cancel</button>
+          <button class="btn primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+            Save Template
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =========== APPLYING TRANSITION =========== -->
+    <div class="overlay view" id="view-applying">
+      <div class="backdrop"></div>
+      <div class="applying">
+        <div class="spin"></div>
+        <div class="t">Setting up “Vocal songwriting”…</div>
+        <div class="s">Creating a fresh untitled project — your template stays untouched.</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const screenSeg = document.getElementById('screenSeg');
+  const tabSeg = document.getElementById('tabSeg');
+  const stateSeg = document.getElementById('stateSeg');
+  const tabGroup = document.getElementById('tabGroup');
+  const stateGroup = document.getElementById('stateGroup');
+  const modalTabs = document.getElementById('modalTabs');
+
+  function setScreen(s){
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    document.getElementById('view-'+s).classList.add('active');
+    [...screenSeg.children].forEach(b=>b.classList.toggle('active', b.dataset.screen===s));
+    const showTabs = s==='startup';
+    tabGroup.style.display = showTabs?'flex':'none';
+    syncStateGroup();
+  }
+  function setTab(t){
+    document.getElementById('panel-recent').style.display = t==='recent'?'block':'none';
+    document.getElementById('panel-templates').style.display = t==='templates'?'block':'none';
+    [...tabSeg.children].forEach(b=>b.classList.toggle('active', b.dataset.tab===t));
+    [...modalTabs.children].forEach(b=>b.classList.toggle('active', b.dataset.tab===t));
+    syncStateGroup();
+  }
+  function syncStateGroup(){
+    const onTemplates = document.getElementById('panel-templates').style.display!=='none';
+    const startup = document.getElementById('view-startup').classList.contains('active');
+    stateGroup.style.display = (onTemplates && startup)?'flex':'none';
+  }
+  function setState(st){
+    document.querySelectorAll('#panel-templates [data-state]').forEach(el=>{
+      el.style.display = el.dataset.state===st?'block':'none';
+    });
+    [...stateSeg.children].forEach(b=>b.classList.toggle('active', b.dataset.state===st));
+  }
+  function toggleMenu(e,id){
+    e.stopPropagation();
+    const m=document.getElementById(id);
+    const open = m.style.display!=='none';
+    document.querySelectorAll('.menu').forEach(x=>x.style.display='none');
+    m.style.display = open?'none':'block';
+  }
+  function startRename(id){
+    document.querySelectorAll('.menu').forEach(x=>x.style.display='none');
+    const card = document.getElementById(id+'-view');
+    if(!card) return;
+    card.parentElement.classList.add('renaming');
+    card.outerHTML = `<div class="rename-field" id="${id}-view">
+      <input value="Lo-fi sketch" autofocus />
+      <button class="icon-btn ok" onclick="cancelRename('${id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12l5 5L20 6"/></svg></button>
+      <button class="icon-btn" onclick="cancelRename('${id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>`;
+    document.querySelector(`#${id}-view input`).focus();
+  }
+  function cancelRename(id){
+    const f = document.getElementById(id+'-view');
+    f.parentElement.classList.remove('renaming');
+    f.outerHTML = `<div class="toprow" id="${id}-view">
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>
+      <div><div class="nm">Lo-fi sketch</div><div class="desc">My go-to chilled loop start — dusty drums, Rhodes, sidechained pad.</div></div>
+    </div>`;
+  }
+  document.addEventListener('click', ()=>document.querySelectorAll('.menu').forEach(x=>x.style.display='none'));
+
+  screenSeg.addEventListener('click', e=>{const b=e.target.closest('button'); if(b) setScreen(b.dataset.screen);});
+  tabSeg.addEventListener('click', e=>{const b=e.target.closest('button'); if(b) setTab(b.dataset.tab);});
+  modalTabs.addEventListener('click', e=>{const b=e.target.closest('button'); if(b) setTab(b.dataset.tab);});
+  stateSeg.addEventListener('click', e=>{const b=e.target.closest('button'); if(b) setState(b.dataset.state);});
+
+  // init
+  setTab('templates'); setState('populated'); setScreen('startup');
+</script>
+</body>
+</html>
