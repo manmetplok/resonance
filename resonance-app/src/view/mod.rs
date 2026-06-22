@@ -9,6 +9,7 @@ pub(crate) mod confirm_delete_track;
 pub(crate) mod confirm_quit;
 pub(crate) mod controls;
 pub(crate) mod editor_panel;
+pub(crate) mod import_dialog;
 pub(crate) mod knob;
 pub(crate) mod menus;
 pub mod midi_editor;
@@ -105,6 +106,8 @@ impl crate::Resonance {
             .into()
         } else if self.bounce_dialog.is_some() {
             stack![base, bounce_dialog::view_bounce_dialog_overlay(self)].into()
+        } else if self.import_dialog.is_some() {
+            stack![base, import_dialog::view_import_dialog_overlay(self)].into()
         } else if self.mixer.settings_open {
             stack![base, settings::view_settings_overlay(self)].into()
         } else if self.mixer.add_track_menu_open {

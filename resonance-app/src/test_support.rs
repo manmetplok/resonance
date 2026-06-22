@@ -22,6 +22,15 @@ impl Resonance {
         &self.tempo_map
     }
 
+    /// Test-only: borrow the MIDI Import modal state (or `None` when the
+    /// modal is closed). Drives `tests/import_dialog.rs`, which asserts
+    /// the open/close + review-stage plumbing without rendering the
+    /// overlay.
+    #[doc(hidden)]
+    pub fn test_import_dialog(&self) -> Option<&state::ImportDialogState> {
+        self.import_dialog.as_ref()
+    }
+
     #[doc(hidden)]
     pub fn test_tempo_events(&self) -> &[state::TempoEvent] {
         &self.tempo_events
