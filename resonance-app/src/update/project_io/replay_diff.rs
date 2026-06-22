@@ -90,6 +90,9 @@ pub fn try_diff_replay(
     // -- Compose state (definitions, placements, drum groups, lyrics) --
     apply_compose(r, target_file, extras);
 
+    // -- External-instrument config (not carried by ProjectFile) -------
+    r.restore_external_instruments(extras);
+
     // -- Tempo / signature events --------------------------------------
     apply_tempo(r, target_file);
 

@@ -112,6 +112,10 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.registry.next_track_order = 0;
     r.registry.next_bus_order = 0;
     r.plugin_index.clear();
+    // External-instrument mode is per-track GUI state not yet carried by
+    // ProjectFile; drop it so a load starts clean (an undo restore re-asserts
+    // it from `UndoExtras` right after this runs).
+    r.external_instruments.clear();
 
     // Bump the app-side sub-track id counter past any persisted ids so
     // new sub-tracks allocated after this load don't collide with

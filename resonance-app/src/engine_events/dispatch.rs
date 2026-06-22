@@ -300,15 +300,21 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         // app-state todo (doc #162); until then these are no-ops.
         E::AutomationLaneChanged { .. } | E::AutomationLaneCleared { .. } => {}
 
-        // External-instrument config + device-offline events round-trip
-        // through the engine, but the app does not hold external-instrument
-        // state yet, so there is nothing to mirror. The app-side handler
-        // (config mirror + offline UI) lands with the external-instrument
-        // app-state todo (doc #169); until then these are no-ops.
-        E::ExternalInstrumentChanged { .. }
-        | E::ExternalInstrumentCleared { .. }
-        | E::ExternalInstrumentMidiOutOffline { .. }
-        | E::ExternalInstrumentReturnInputOffline { .. } => {}
+        // External-instrument config + device-offline events: mirror the
+        // engine's stored config and device status into the app's
+        // `external_instruments` map (doc #169, epic #39).
+        E::ExternalInstrumentChanged { config } => {
+            super::external_instrument::changed(r, config)
+        }
+        E::ExternalInstrumentCleared { track_id } => {
+            super::external_instrument::cleared(r, track_id)
+        }
+        E::ExternalInstrumentMidiOutOffline { track_id, .. } => {
+            super::external_instrument::midi_out_offline(r, track_id)
+        }
+        E::ExternalInstrumentReturnInputOffline { track_id, .. } => {
+            super::external_instrument::return_input_offline(r, track_id)
+        }
     }
     Task::none()
 }
