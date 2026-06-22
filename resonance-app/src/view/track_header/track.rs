@@ -166,7 +166,7 @@ pub(crate) fn view_track_header(
         .map(|&color| {
             let (base, _, _) = theme::group_identity_colors(color);
             container(Space::new().height(Length::Fill))
-                .width(3)
+                .width(theme::GROUP_RAIL_WIDTH)
                 .height(Length::Fill)
                 .style(move |_theme| container::Style {
                     background: Some(iced::Background::Color(base)),

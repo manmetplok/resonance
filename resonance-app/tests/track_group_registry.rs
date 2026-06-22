@@ -399,9 +399,8 @@ fn get_group_identity_colors_nested_member() {
     // So colors should include both Vocal and Drums
     let colors = registry.get_group_identity_colors(track1);
     assert_eq!(colors.len(), 2);
-    // Order depends on iteration order of groups, but both should be present
-    assert!(colors.contains(&GroupIdentityColor::Vocal));
-    assert!(colors.contains(&GroupIdentityColor::Drum));
+    // Colors should be ordered outermost->innermost: parent (Drum, depth 0) then child (Vocal, depth 1)
+    assert_eq!(colors, vec![GroupIdentityColor::Drum, GroupIdentityColor::Vocal]);
 }
 
 #[test]
@@ -423,6 +422,6 @@ fn get_group_identity_colors_multiple_groups() {
     // track1 is a direct member of both groups
     let colors = registry.get_group_identity_colors(track1);
     assert_eq!(colors.len(), 2);
-    assert!(colors.contains(&GroupIdentityColor::Drum));
-    assert!(colors.contains(&GroupIdentityColor::Vocal));
+    // Both groups have depth 0, so order is by id: group1 (Drum, id=1) then group2 (Vocal, id=2)
+    assert_eq!(colors, vec![GroupIdentityColor::Drum, GroupIdentityColor::Vocal]);
 }
