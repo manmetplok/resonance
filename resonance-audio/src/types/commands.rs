@@ -26,6 +26,19 @@ pub enum AudioCommand {
         path: String,
         start_sample: SamplePos,
     },
+    /// Import one or more source files into the project pool **without**
+    /// placing a clip. Each file is decoded, channel up/down-mixed and
+    /// resampled to the project rate, copied into `{project_dir}/audio/`
+    /// under a stable `asset_{id}.wav` name, and has its waveform peaks
+    /// computed — all on a worker thread. Per file the engine emits an
+    /// ordered `ImportProgress` lifecycle (`Queued` → `Working` →
+    /// `Done`) plus a final `AssetImported` on success, or `ImportFailed`
+    /// on error. Requires a project directory (set via
+    /// [`AudioCommand::SetProjectDir`]); decoupled from clip placement,
+    /// so it needs no `track_id`.
+    ImportAudioToPool {
+        paths: Vec<String>,
+    },
     MoveClip {
         clip_id: ClipId,
         new_start_sample: SamplePos,
@@ -484,6 +497,34 @@ pub enum AudioCommand {
     },
     SetMasterFxBypass {
         bypassed: bool,
+    },
+
+    // -- Audition preview (doc #175) --
+    /// Preview an arbitrary audio file through the engine, starting at
+    /// `start_frame` (clamped to the file length). The file may be an imported
+    /// pool asset or an un-imported file straight off the filesystem; any
+    /// format the workspace decoder accepts works. The engine decodes it off
+    /// the audio thread and previews it independently of the arrangement,
+    /// transport, and undo — it is never an `AudioClip` and does not move the
+    /// main playhead. Uses the loop / sync-to-tempo options last set via
+    /// [`AudioCommand::SetAuditionOptions`]. A decode failure surfaces as
+    /// `AudioEvent::Error`. Replaces any preview already playing.
+    AuditionFile {
+        path: PathBuf,
+        start_frame: u64,
+    },
+    /// Stop the current audition preview. Emits `AudioEvent::AuditionStopped`
+    /// when a preview was actually playing; stopping an idle audition is a
+    /// silent no-op.
+    StopAudition,
+    /// Set the audition preview options. `loop_enabled` wraps the preview at
+    /// its end instead of stopping; `sync_to_tempo` time-stretches (varispeed)
+    /// the preview so its loop length snaps to the project tempo. The options
+    /// persist across `AuditionFile` commands and take effect immediately on
+    /// any preview currently playing.
+    SetAuditionOptions {
+        loop_enabled: bool,
+        sync_to_tempo: bool,
     },
 
     /// Ask the engine to snapshot and clear every peak meter (per-track,

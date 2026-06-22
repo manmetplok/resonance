@@ -28,8 +28,8 @@ use crate::types::*;
 
 use super::midi::MidiHardwareState;
 use super::{
-    bounce, bounce_realtime, busses, clips, master, midi, plugins, scan, tracks, transport,
-    SharedState,
+    audition, bounce, bounce_realtime, busses, clips, master, midi, plugins, scan, tracks,
+    transport, SharedState,
 };
 
 /// Read-only handle to shared project state and channels. Passed by
@@ -74,6 +74,11 @@ pub(crate) struct HandlerState {
     pub next_track_id: TrackId,
     pub next_bus_id: BusId,
     pub next_clip_id: ClipId,
+    /// Monotonic id allocator for media-pool assets imported via
+    /// `AudioCommand::ImportAudioToPool`. Independent of `next_clip_id`:
+    /// asset WAVs are named `asset_{id}.wav`, clip WAVs `clip_{id}.wav`,
+    /// so the two counters never collide on disk.
+    pub next_asset_id: AssetId,
     pub next_plugin_id: PluginInstanceId,
     pub next_send_id: SendId,
     /// Aux sends keyed by id, in insertion order. Engine-thread-local
@@ -155,6 +160,7 @@ pub(crate) fn engine_thread(
         next_track_id: 1,
         next_bus_id: 1,
         next_clip_id: 1,
+        next_asset_id: 1,
         next_plugin_id: 1,
         next_send_id: 1,
         aux_sends: IndexMap::new(),
@@ -191,6 +197,7 @@ pub(crate) fn engine_thread(
     };
 
     let mut last_playhead_report = std::time::Instant::now();
+    let mut last_audition_report = std::time::Instant::now();
 
     // Report actual sample rate to GUI
     let _ = ctx
@@ -290,6 +297,11 @@ pub(crate) fn engine_thread(
             state.rec.drain_ring_to_buffers();
         }
 
+        // Audition preview housekeeping: emit AuditionStopped on a natural
+        // finish, keep the sync-to-tempo ratio current, and throttle the
+        // AuditionPosition events that drive the preview scrub playhead.
+        audition::poll_audition(&ctx, &mut last_audition_report);
+
         // Report playhead position at ~60Hz using wall-clock time
         if ctx.shared.playing.load(Ordering::SeqCst)
             && last_playhead_report.elapsed() >= std::time::Duration::from_millis(16)
@@ -361,6 +373,9 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             path,
             start_sample,
         } => clips::handle_import_clip(ctx, state, track_id, path, start_sample),
+        AudioCommand::ImportAudioToPool { paths } => {
+            super::import_pool::handle_import_audio_to_pool(ctx, state, paths)
+        }
         AudioCommand::MoveClip {
             clip_id,
             new_start_sample,
@@ -746,6 +761,21 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         }
         AudioCommand::SetMasterFxBypass { bypassed } => {
             master::handle_set_master_fx_bypass(ctx, bypassed)
+        }
+        AudioCommand::AuditionFile { path, start_frame } => {
+            audition::handle_audition_file(ctx, path, start_frame)
+        }
+        AudioCommand::StopAudition => {
+            if audition::stop_audition_in_place(ctx.shared) {
+                let _ = ctx.event_tx.send(AudioEvent::AuditionStopped);
+            }
+        }
+        AudioCommand::SetAuditionOptions {
+            loop_enabled,
+            sync_to_tempo,
+        } => {
+            let bpm = ctx.tempo_map.load().bpm as f64;
+            audition::set_audition_options_in_place(ctx.shared, bpm, loop_enabled, sync_to_tempo);
         }
         AudioCommand::PollPeaks => handle_poll_peaks(ctx),
         AudioCommand::ShutDown => {

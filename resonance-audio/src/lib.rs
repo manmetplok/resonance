@@ -29,6 +29,10 @@ pub mod types;
 
 pub use decode::{linear_resample, StreamingLinearResampler};
 pub use engine::{transcode_to_wav, AudioEngine, EngineSendError};
+// `AudioEvent::AssetImported` carries an `AudioFormat`; re-export it so
+// app consumers of the event surface don't need a direct dependency on
+// `resonance_common` just to match on it.
+pub use resonance_common::AudioFormat;
 pub use limits::DEFAULT_HISTORY_CAPACITY;
 pub use midi_hardware::MidiDeviceInfo;
 pub use types::*;
@@ -46,13 +50,25 @@ pub mod __test_support {
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
     pub use crate::midi_hardware::{parse_live_event_for_test, LiveMidiEvent};
     pub use crate::mixer::{
-        mix_track_clips, monitor_catchup_skip, monitor_read_len, ramped_gain, render_aux_for_test,
-        sum_to_output, sum_to_stereo, transport_pos_beats, whole_frame_push_len,
+        mix_audition_overlay, mix_track_clips, monitor_catchup_skip, monitor_read_len,
+        ramped_gain, render_aux_for_test, sum_to_output, sum_to_stereo, transport_pos_beats,
+        whole_frame_push_len,
     };
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
     };
 }
+
+/// Test surface for the audition preview handlers (doc #175). Exposed so the
+/// integration test in `tests/audition_preview.rs` can drive the
+/// command/state boundary — decode + start, stop, options/ratio recompute,
+/// and the realtime overlay mix — against a plain `SharedState` without
+/// spinning up the engine thread or a real audio device.
+#[doc(hidden)]
+pub use engine::{
+    compute_sync_ratio, load_audition_source, set_audition_options_in_place,
+    start_audition_in_place, stop_audition_in_place, AuditionSource,
+};
 
 /// Test surface for the hardware-MIDI loop-wrap rewind logic. Exposed
 /// so integration tests can verify the discontinuity classification
@@ -74,6 +90,14 @@ pub use engine::midi::{move_midi_clip_in_place, trim_midi_clip_in_place};
 pub use engine::{
     set_clip_fade_in_place, set_clip_gain_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
 };
+
+/// Test surface for the audio import-to-pool path. Exposed so the
+/// integration test in `tests/import_audio_to_pool.rs` can drive the
+/// pure per-file import (`import_one_to_pool`) and the full ordered
+/// event lifecycle (`run_pool_import`) without bringing up the engine
+/// thread or a real audio device.
+#[doc(hidden)]
+pub use engine::{import_one_to_pool, run_pool_import, PoolImportOutcome};
 
 /// Test surface for the bounce path's MIDI event collection. Exposed so
 /// integration tests can drive the chunk-by-chunk note-event walk

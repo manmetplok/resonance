@@ -46,6 +46,11 @@ pub(crate) fn rcu_tempo<F: FnOnce(&mut TempoMap)>(
     map.store(Arc::new(new));
 }
 
+pub(crate) mod audition;
+pub use audition::{
+    compute_sync_ratio, load_audition_source, set_audition_options_in_place,
+    start_audition_in_place, stop_audition_in_place, AuditionSource,
+};
 mod bounce_realtime;
 mod busses;
 mod clips;
@@ -53,6 +58,8 @@ pub use clips::transcode_to_wav;
 pub use clips::{
     set_clip_fade_in_place, set_clip_gain_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
 };
+mod import_pool;
+pub use import_pool::{import_one_to_pool, run_pool_import, PoolImportOutcome};
 mod master;
 pub(crate) mod midi;
 mod plugins;
@@ -129,6 +136,30 @@ pub struct SharedState {
     /// so the render path needs no lock. Empty until the first send is
     /// created, so projects without sends pay nothing.
     pub aux_sends: arc_swap::ArcSwap<Vec<AuxSend>>,
+
+    // -- Audition preview (doc #175) --
+    /// Decoded preview source, published wait-free by the engine thread and
+    /// read by the audio callback. `None` when no preview is loaded. See
+    /// [`audition`].
+    pub audition_source: arc_swap::ArcSwapOption<audition::AuditionSource>,
+    /// Whether a preview is currently playing. The audio callback checks this
+    /// first each block; it clears the flag itself when a non-looping preview
+    /// reaches the end.
+    pub audition_playing: AtomicBool,
+    /// Audition playhead in source frames, stored as bit-punned `f64` (it can
+    /// be fractional under sync-to-tempo varispeed). Sole writer is the audio
+    /// callback; the engine thread reads it for `AuditionPosition` events.
+    pub audition_pos_bits: AtomicU64,
+    /// Loop the preview when it reaches the end (vs. stopping).
+    pub audition_loop: AtomicBool,
+    /// Sync-to-tempo (varispeed) enabled for the preview.
+    pub audition_sync: AtomicBool,
+    /// Playback ratio (source frames per output frame) as bit-punned `f32`,
+    /// computed by the engine thread; `1.0` is natural speed.
+    pub audition_ratio_bits: AtomicU32,
+    /// Latched by the audio callback when a non-looping preview reaches its
+    /// end; consumed by the engine thread to emit `AuditionStopped` once.
+    pub audition_finished: AtomicBool,
 }
 
 impl Default for SharedState {
@@ -153,6 +184,13 @@ impl Default for SharedState {
             count_in_total: AtomicU64::new(0),
             bounce_cancel: AtomicBool::new(false),
             aux_sends: arc_swap::ArcSwap::from_pointee(Vec::new()),
+            audition_source: arc_swap::ArcSwapOption::empty(),
+            audition_playing: AtomicBool::new(false),
+            audition_pos_bits: AtomicU64::new(0),
+            audition_loop: AtomicBool::new(false),
+            audition_sync: AtomicBool::new(false),
+            audition_ratio_bits: AtomicU32::new(1.0f32.to_bits()),
+            audition_finished: AtomicBool::new(false),
         }
     }
 }

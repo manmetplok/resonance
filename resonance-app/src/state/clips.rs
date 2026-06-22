@@ -41,6 +41,16 @@ pub struct ClipState {
     pub total_frames: u64,
     pub trim_start_frames: u64,
     pub trim_end_frames: u64,
+    /// Fade-in length in frames; `0` = no fade. Mirrored from the engine.
+    pub fade_in_frames: u64,
+    /// Curve shaping the fade-in ramp.
+    pub fade_in_curve: FadeCurve,
+    /// Fade-out length in frames; `0` = no fade. Mirrored from the engine.
+    pub fade_out_frames: u64,
+    /// Curve shaping the fade-out ramp.
+    pub fade_out_curve: FadeCurve,
+    /// Per-clip gain in decibels. `0.0` dB = unity (no change).
+    pub gain_db: f32,
     /// Downsampled waveform peaks: (min, max) per chunk of frames.
     pub waveform_peaks: Vec<(f32, f32)>,
 }
