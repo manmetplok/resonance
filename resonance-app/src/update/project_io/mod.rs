@@ -106,6 +106,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.io.pending_load = Some(loaded);
             r.undo.clear();
             r.plugin_state_cache.clear();
+            r.freeze.reset();
             r.dirty = false;
             let _ = r.engine.send(AudioCommand::ClearAll);
             r.io.has_active_project = true;

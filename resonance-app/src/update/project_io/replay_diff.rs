@@ -90,6 +90,9 @@ pub fn try_diff_replay(
     // -- Compose state (definitions, placements, drum groups, lyrics) --
     apply_compose(r, target_file, extras);
 
+    // -- Track freeze status (detach/delete caches no longer frozen) ----
+    r.apply_freeze_restore(extras.track_freeze.clone());
+
     // -- Tempo / signature events --------------------------------------
     apply_tempo(r, target_file);
 
