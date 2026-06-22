@@ -21,7 +21,7 @@ mod chord_inspector;
 pub(crate) mod drum_groups;
 mod expand;
 mod lane_inspector;
-mod regenerate;
+pub(crate) mod regenerate;
 mod section;
 mod vocal_lyrics;
 mod vocal_render;
