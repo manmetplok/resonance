@@ -29,7 +29,7 @@ use crate::stream_errors::{format_underrun_line, UnderrunRateLimiter};
 use crate::types::*;
 
 mod bounce;
-pub use bounce::{to_audio_clip, try_lock_with_backoff};
+pub use bounce::{to_audio_clip, to_wav, try_lock_with_backoff};
 mod bounce_common;
 pub use bounce_common::midi_render_range;
 
@@ -124,6 +124,12 @@ pub struct SharedState {
     /// running on their worker threads can be aborted from the same
     /// `CancelBounce` command without threading another channel.
     pub bounce_cancel: AtomicBool,
+    /// Reference A/B monitor snapshot. Published by the control thread
+    /// (`reference::ReferencePlayer::publish`) and read lock-free by the
+    /// audio callback to replace the post-master output with the active
+    /// reference's PCM. Never consulted by any offline/realtime bounce
+    /// path, so exports always render the processed mix.
+    pub reference: reference::ReferenceMonitor,
 }
 
 impl Default for SharedState {
@@ -147,6 +153,7 @@ impl Default for SharedState {
             count_in_remaining: AtomicU64::new(0),
             count_in_total: AtomicU64::new(0),
             bounce_cancel: AtomicBool::new(false),
+            reference: reference::ReferenceMonitor::default(),
         }
     }
 }

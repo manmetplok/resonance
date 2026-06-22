@@ -157,6 +157,37 @@ pub(crate) fn mix_audio(
     }
     let output_frames = frames;
 
+    // Reference A/B monitor: when the user has switched the monitored
+    // source to a loaded reference, replace the entire output with the
+    // reference PCM, bypassing the mix + master/mastering chain (this is
+    // the post-master monitor tap). Suppressed while recording or
+    // counting in so a realtime bounce / punch-in monitors the live
+    // signal, not the reference. The offline/realtime bounce render
+    // paths never consult `shared.reference`, so exports stay the
+    // processed mix regardless of this selection.
+    if !shared.recording.load(Ordering::Relaxed)
+        && !shared.count_in_active.load(Ordering::Relaxed)
+    {
+        let playhead = shared.playhead.load(Ordering::Relaxed);
+        if shared.reference.render(
+            &mut data[..output_frames * channels],
+            channels,
+            output_frames,
+            playhead,
+        ) {
+            // Keep the transport rolling while playing so loop-to-mix
+            // tracking and a later switch back to the mix resume at the
+            // right spot; when stopped the reference free-runs (audition)
+            // and the playhead stays put.
+            if shared.playing.load(Ordering::Relaxed) {
+                let new_playhead =
+                    advance_playhead_silent(shared, playhead, output_frames as u64);
+                shared.playhead.store(new_playhead, Ordering::Relaxed);
+            }
+            return;
+        }
+    }
+
     // Snapshot tempo once per block. Hold the ArcSwap guard so the bar
     // table is available for tempo-map-aware MIDI tick→sample conversion
     // in the rendering path. The guard pins this block's snapshot; the

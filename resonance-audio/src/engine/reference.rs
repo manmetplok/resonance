@@ -27,8 +27,10 @@
 //! from integration tests, mirroring the clip fade/gain handler pattern.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use arc_swap::ArcSwapOption;
 use crossbeam_channel::Sender;
 
 use crate::decode::decode_file;
@@ -142,6 +144,144 @@ impl ReferencePlayer {
     #[doc(hidden)]
     pub fn entry_has_pcm(&self, id: ReferenceId) -> Option<bool> {
         self.entry(id).map(|e| e.pcm.is_some())
+    }
+
+    /// Publish the current A/B state into the audio-thread
+    /// [`ReferenceMonitor`]. Called from the engine control thread after
+    /// a reference command mutates this player, so the cpal callback sees
+    /// the new selection / gain / PCM on its next block.
+    ///
+    /// `reset_cursor` re-syncs the monitor's live cursor to the active
+    /// entry's stored cursor — used on (re)activation, explicit seeks,
+    /// and decode completion. Control-only changes (source toggle, trim,
+    /// loudness, loop) pass `false` so a free-running reference isn't
+    /// yanked back to the start mid-audition.
+    pub fn publish(&self, monitor: &ReferenceMonitor, reset_cursor: bool) {
+        let active = self.active_id.and_then(|id| self.entry(id));
+        monitor
+            .source_is_reference
+            .store(self.ab_source == ABSource::Reference, Ordering::Relaxed);
+        monitor.loop_to_mix.store(self.loop_to_mix, Ordering::Relaxed);
+        monitor.pcm.store(active.and_then(|e| e.pcm.clone()));
+        // gain = (loudness_match ? active offset : 0) + manual trim, dB->linear.
+        let offset_db = if self.loudness_match {
+            active.map(|e| e.offset_db).unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let gain = 10f32.powf((offset_db + self.ref_trim_db) / 20.0);
+        monitor.gain_bits.store(gain.to_bits(), Ordering::Relaxed);
+        if reset_cursor {
+            monitor
+                .cursor
+                .store(active.map(|e| e.cursor).unwrap_or(0), Ordering::Relaxed);
+        }
+    }
+}
+
+/// Wait-free snapshot of the reference A/B monitor, published by the
+/// engine control thread ([`ReferencePlayer::publish`]) and read
+/// lock-free by the audio callback ([`ReferenceMonitor::render`]) to
+/// replace the post-master monitor output with the active reference's
+/// PCM. It lives in [`crate::engine::SharedState`] so the cpal callback
+/// can reach it without locking the control-thread-owned
+/// [`ReferencePlayer`].
+///
+/// The offline / realtime bounce render paths deliberately never read
+/// this (see [`crate::engine::bounce`] and `bounce_realtime`), so every
+/// export is the processed mix regardless of the live A/B selection.
+pub struct ReferenceMonitor {
+    /// `true` when the monitored source is the reference (else the mix).
+    source_is_reference: AtomicBool,
+    /// The active reference's decoded interleaved-stereo PCM, or `None`
+    /// when nothing is active or it is still decoding.
+    pcm: ArcSwapOption<Vec<f32>>,
+    /// Free-running playback cursor in sample frames. The audio thread
+    /// advances it each block; control-thread seeks / (re)activation
+    /// overwrite it via [`ReferencePlayer::publish`].
+    cursor: AtomicU64,
+    /// Combined linear monitor gain (loudness-match offset + manual
+    /// trim), bit-punned f32.
+    gain_bits: AtomicU32,
+    /// When `true`, the reference cursor follows the mix transport each
+    /// block instead of free-running.
+    loop_to_mix: AtomicBool,
+}
+
+impl Default for ReferenceMonitor {
+    fn default() -> Self {
+        ReferenceMonitor {
+            source_is_reference: AtomicBool::new(false),
+            pcm: ArcSwapOption::empty(),
+            cursor: AtomicU64::new(0),
+            gain_bits: AtomicU32::new(1.0f32.to_bits()),
+            loop_to_mix: AtomicBool::new(false),
+        }
+    }
+}
+
+impl ReferenceMonitor {
+    /// Replace `data` (interleaved, `channels`-wide, `frames` long) with
+    /// the active reference's PCM scaled by the monitor gain, advancing
+    /// the playback cursor. Returns `true` when the reference was engaged
+    /// and the buffer was replaced; `false` (buffer left untouched) when
+    /// the monitored source is the mix or no decoded reference is active,
+    /// so the caller keeps the processed mix.
+    ///
+    /// `playhead` is the transport position in sample frames. In
+    /// loop-to-mix mode the reference is read from there each block so it
+    /// stays locked to the song; otherwise it free-runs from its own
+    /// cursor and wraps at the end of the reference.
+    pub fn render(&self, data: &mut [f32], channels: usize, frames: usize, playhead: u64) -> bool {
+        if !self.source_is_reference.load(Ordering::Relaxed) {
+            return false;
+        }
+        let Some(pcm) = self.pcm.load_full() else {
+            return false;
+        };
+        let total = (pcm.len() / 2) as u64;
+        if total == 0 {
+            return false;
+        }
+        let gain = f32::from_bits(self.gain_bits.load(Ordering::Relaxed));
+        let loop_to_mix = self.loop_to_mix.load(Ordering::Relaxed);
+        let start = if loop_to_mix {
+            playhead % total
+        } else {
+            self.cursor.load(Ordering::Relaxed) % total
+        };
+        for f in 0..frames {
+            let src = ((start + f as u64) % total) as usize * 2;
+            let l = (pcm[src] * gain).clamp(-1.0, 1.0);
+            let r = (pcm[src + 1] * gain).clamp(-1.0, 1.0);
+            let base = f * channels;
+            data[base] = l;
+            if channels > 1 {
+                data[base + 1] = r;
+            }
+            // Reference PCM is stereo; silence any further channels.
+            for c in 2..channels {
+                data[base + c] = 0.0;
+            }
+        }
+        if !loop_to_mix {
+            self.cursor
+                .store((start + frames as u64) % total, Ordering::Relaxed);
+        }
+        true
+    }
+
+    /// Current free-run cursor (sample frames). Test accessor.
+    #[doc(hidden)]
+    pub fn cursor_for_test(&self) -> u64 {
+        self.cursor.load(Ordering::Relaxed)
+    }
+
+    /// Whether the monitored source is currently the reference. Test
+    /// accessor for the publish path.
+    #[doc(hidden)]
+    pub fn is_reference_for_test(&self) -> bool {
+        self.source_is_reference.load(Ordering::Relaxed)
     }
 }
 
