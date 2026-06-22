@@ -17,8 +17,10 @@
 //!
 //! Only the static chrome (bands 1 and 4 plus the band skeleton) is wired
 //! here; the live Canvas content is added by the follow-up todos. Per the
-//! view-performance rules the non-live regions are plain (lazily-built)
-//! widgets — no per-frame churn.
+//! view-performance rules the three non-live bands (centre stage, next-lane
+//! skeleton, footer) are wrapped in `iced::widget::lazy` keyed on a
+//! fingerprint of their inputs, so the status bar's per-frame telemetry tick
+//! never rebuilds them — no per-frame churn during a take.
 
 use crate::message::{Message, UiMessage};
 use crate::theme;
@@ -36,19 +38,83 @@ const CHROME_HPAD: f32 = 28.0;
 /// Horizontal lead-in/out for the wide stage + next-lane bands (80px).
 const STAGE_HPAD: f32 = 80.0;
 
+// -- Static-band inputs ------------------------------------------------------
+//
+// The centre stage, next-lane skeleton, and footer render no per-frame state
+// in this scaffold, so the values they show are pinned here and fed to both
+// the band builders and their lazy-cache fingerprints below. Each const is the
+// single seam a follow-up todo swaps for real state — at which point the
+// matching lazy region begins invalidating on genuine input changes:
+//   * #308 wires the chord under the playhead    -> `STAGE_HAS_CHORD`
+//   * #309 wires the look-ahead cards            -> `NEXT_LANE_HAS_CHORDS`
+//   * #311 wires the instrument + capo controls  -> `FOOTER_ACTIVE_TUNING` / `FOOTER_CAPO_FRETS`
+
+/// Whether a chord sits under the playhead (centre stage shows the empty
+/// state until #308 lands).
+const STAGE_HAS_CHORD: bool = false;
+/// Whether any upcoming chords exist (next-lane shows the empty card until
+/// #309 lands).
+const NEXT_LANE_HAS_CHORDS: bool = false;
+/// Active instrument tuning cell (Guitar 6); the selector lands in #311.
+const FOOTER_ACTIVE_TUNING: usize = 0;
+/// Capo position in frets; the stepper lands in #311.
+const FOOTER_CAPO_FRETS: u8 = 0;
+
+/// Hash a static band's inputs into a stable fingerprint for its lazy cache.
+/// Matches the `*_fingerprint` convention used by the mixer inspector and
+/// track-header columns.
+fn fingerprint(parts: &[u64]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    parts.hash(&mut h);
+    h.finish()
+}
+
+/// Fingerprint for the centre-stage lazy region.
+fn center_stage_fingerprint() -> u64 {
+    fingerprint(&[STAGE_HAS_CHORD as u64])
+}
+
+/// Fingerprint for the next-chords-lane lazy region.
+fn next_lane_fingerprint() -> u64 {
+    fingerprint(&[NEXT_LANE_HAS_CHORDS as u64])
+}
+
+/// Fingerprint for the footer lazy region.
+fn footer_fingerprint() -> u64 {
+    fingerprint(&[FOOTER_ACTIVE_TUNING as u64, FOOTER_CAPO_FRETS as u64])
+}
+
 impl Resonance {
     /// Top-level Performance shell: a full-bleed BG_0 surface stacking the
     /// four design bands. The normal transport chrome is hidden in this
     /// mode (see [`crate::Resonance::view`]).
     pub(crate) fn view_performance_shell(&self) -> Element<'_, Message> {
+        // Only the status bar carries live state (the bar·beat clock + transport
+        // cluster tick every audio frame), so it is rebuilt each redraw. The
+        // other three bands render no per-frame state in this scaffold, so their
+        // content is cached behind `iced::widget::lazy` keyed on a fingerprint
+        // of its inputs — during a take the telemetry clock can churn without
+        // rebuilding the stage / next-lane / footer subtrees (view-performance
+        // rule #2; see ui-work.md §11, and the reference impls in
+        // mixer/inspector.rs and track_header/mod.rs). The next-lane + footer
+        // are fixed-height, so the whole band wraps; the centre stage is
+        // `Length::Fill` (which lazy doesn't forward), so it caches its content
+        // internally and keeps its sizing container outside the cache.
+        let next_lane_fp = next_lane_fingerprint();
+        let footer_fp = footer_fingerprint();
         let body = column![
             self.performance_status_bar(),
             hairline(),
             self.performance_center_stage(),
             hairline(),
-            self.performance_next_lane(),
+            iced::widget::lazy(next_lane_fp, move |_: &u64| -> Element<'static, Message> {
+                self.performance_next_lane()
+            }),
             hairline(),
-            self.performance_footer(),
+            iced::widget::lazy(footer_fp, move |_: &u64| -> Element<'static, Message> {
+                self.performance_footer()
+            }),
         ]
         .spacing(0);
 
@@ -213,26 +279,19 @@ impl Resonance {
     /// diagram + beat ring land in todos #308/#310; until then this shows
     /// the design's empty state (an em-dash with guidance), which is also
     /// the genuine "no chord under the playhead" fallback.
+    ///
+    /// The band's `Length::Fill` container stays *outside* the lazy cache —
+    /// `iced::widget::lazy` doesn't forward a `Fill` size hint, so wrapping
+    /// the whole band collapses the layout. The container is cheap structural
+    /// chrome; the (static) empty-state content it centres is what gets
+    /// cached, keyed on [`center_stage_fingerprint`].
     fn performance_center_stage(&self) -> Element<'_, Message> {
-        let placeholder = column![
-            text("\u{2014}")
-                .size(200)
-                .font(theme::SERIF_ITALIC_FONT)
-                .color(theme::TEXT_4)
-                .line_height(LineHeight::Relative(0.8)),
-            Space::new().height(18),
-            text("No chord under the playhead")
-                .size(20)
-                .color(theme::TEXT_2),
-            Space::new().height(10),
-            text("Place sections with a progression in Compose, then roll the transport")
-                .size(13)
-                .font(theme::MONO_FONT)
-                .color(theme::TEXT_3),
-        ]
-        .align_x(alignment::Horizontal::Center);
+        let content = iced::widget::lazy(
+            center_stage_fingerprint(),
+            |_: &u64| -> Element<'static, Message> { center_stage_content() },
+        );
 
-        container(placeholder)
+        container(content)
             .width(Length::Fill)
             .height(Length::Fill)
             .padding([0, STAGE_HPAD as u16])
@@ -245,8 +304,10 @@ impl Resonance {
 
     /// Next-chords look-ahead lane. The current + upcoming cards with mini
     /// fingering diagrams land in todo #309; this is the band skeleton with
-    /// its label and an empty-state card.
-    fn performance_next_lane(&self) -> Element<'_, Message> {
+    /// its label and an empty-state card. Returns owned (`'static`) content
+    /// so it can live behind the lazy cache in
+    /// [`Resonance::view_performance_shell`].
+    fn performance_next_lane(&self) -> Element<'static, Message> {
         let label = text("UP NEXT")
             .size(12)
             .font(theme::MONO_FONT)
@@ -292,13 +353,20 @@ impl Resonance {
 
     /// Footer: instrument/tuning + capo placeholders on the left (the
     /// interactive controls land in todo #311) and the keyboard-hint line
-    /// on the right.
-    fn performance_footer(&self) -> Element<'_, Message> {
+    /// on the right. Returns owned (`'static`) content so it can live behind
+    /// the lazy cache in [`Resonance::view_performance_shell`]; the active
+    /// tuning + capo are read from the placeholder consts that also feed
+    /// [`footer_fingerprint`].
+    fn performance_footer(&self) -> Element<'static, Message> {
         // Instrument segmented placeholder (Guitar 6 active by default).
         let tunings = ["Guitar 6", "Guitar 8", "Bass 4", "Bass 5"];
         let mut seg = row![].spacing(0).align_y(alignment::Vertical::Center);
         for (i, t) in tunings.iter().enumerate() {
-            seg = seg.push(segmented_cell(t, i == 0, i + 1 == tunings.len()));
+            seg = seg.push(segmented_cell(
+                t,
+                i == FOOTER_ACTIVE_TUNING,
+                i + 1 == tunings.len(),
+            ));
         }
         let seg = container(seg).style(segmented_frame);
 
@@ -307,7 +375,7 @@ impl Resonance {
             container(
                 row![
                     stepper_glyph("\u{2013}"),
-                    text("0")
+                    text(FOOTER_CAPO_FRETS.to_string())
                         .size(12)
                         .font(theme::MONO_FONT)
                         .color(theme::TEXT_1),
@@ -348,6 +416,31 @@ impl Resonance {
 }
 
 // -- Small stateless pieces --------------------------------------------------
+
+/// The centred empty-state shown on the centre stage: a large em-dash with
+/// guidance. Static (owns its content), so it sits behind the centre-stage
+/// lazy cache; the live chord symbol + fingering diagram replace it in
+/// todos #308/#310.
+fn center_stage_content() -> Element<'static, Message> {
+    column![
+        text("\u{2014}")
+            .size(200)
+            .font(theme::SERIF_ITALIC_FONT)
+            .color(theme::TEXT_4)
+            .line_height(LineHeight::Relative(0.8)),
+        Space::new().height(18),
+        text("No chord under the playhead")
+            .size(20)
+            .color(theme::TEXT_2),
+        Space::new().height(10),
+        text("Place sections with a progression in Compose, then roll the transport")
+            .size(13)
+            .font(theme::MONO_FONT)
+            .color(theme::TEXT_3),
+    ]
+    .align_x(alignment::Horizontal::Center)
+    .into()
+}
 
 /// The lavender `PERFORMANCE` identity pill.
 fn performance_pill<'a>() -> Element<'a, Message> {
