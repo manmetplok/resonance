@@ -5,8 +5,8 @@
 use resonance_audio::types::*;
 
 use crate::project::{
-    ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin, ProjectTrack,
-    PROJECT_FORMAT_VERSION,
+    ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin, ProjectReference,
+    ProjectReferenceMarker, ProjectReferenceSettings, ProjectTrack, PROJECT_FORMAT_VERSION,
 };
 use crate::Resonance;
 
@@ -145,6 +145,41 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         })
         .collect();
 
+    // Reference A/B block. Persist only the durable facts (path, name,
+    // cached loudness, markers); the decoded PCM / waveform are rebuilt by
+    // re-issuing `LoadReferenceTrack` on load. The active reference is
+    // addressed by index so a reload's reallocated engine ids don't matter.
+    let references: Vec<ProjectReference> = r
+        .reference
+        .entries
+        .iter()
+        .map(|e| ProjectReference {
+            path: e.path.clone(),
+            name: e.name.clone(),
+            integrated_lufs: e.integrated_lufs,
+            markers: e
+                .markers
+                .iter()
+                .map(|m| ProjectReferenceMarker {
+                    id: m.id,
+                    position_samples: m.position_samples,
+                    label: m.label.clone(),
+                })
+                .collect(),
+        })
+        .collect();
+    let reference_settings = ProjectReferenceSettings {
+        monitor_only: true,
+        active: r
+            .reference
+            .active_id
+            .and_then(|id| r.reference.index_of(id)),
+        ab_source_is_reference: r.reference.ab_source == ABSource::Reference,
+        loudness_match: r.reference.loudness_match,
+        trim_db: r.reference.trim_db,
+        loop_to_mix: r.reference.loop_to_mix,
+    };
+
     ProjectFile {
         version: PROJECT_FORMAT_VERSION,
         sample_rate: r.sample_rate,
@@ -176,5 +211,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         // for files written by older builds.
         drum_groups: Vec::new(),
         drum_patterns: r.compose.drum_patterns.clone(),
+        references,
+        reference_settings,
     }
 }

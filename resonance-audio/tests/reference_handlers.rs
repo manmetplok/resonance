@@ -72,6 +72,25 @@ fn remove_reference_clears_active_and_emits() {
 }
 
 #[test]
+fn clear_drops_entries_and_resets_id_allocator() {
+    let mut player = ReferencePlayer::new();
+    register_reference(&mut player, Some(ReferenceId(5)), PathBuf::from("/a.wav"));
+    register_reference(&mut player, None, PathBuf::from("/b.wav")); // -> id 6
+    assert_eq!(player.entry_has_pcm(ReferenceId(5)), Some(false));
+
+    player.clear();
+
+    // Entries are gone...
+    assert_eq!(player.entry_has_pcm(ReferenceId(5)), None);
+    // ...and the id allocator restarts from 1, so a reloaded project's
+    // references re-register from the bottom, matching the app-side restore.
+    assert_eq!(
+        register_reference(&mut player, None, PathBuf::from("/c.wav")),
+        ReferenceId(1)
+    );
+}
+
+#[test]
 fn set_active_reference_requires_existing() {
     let mut player = ReferencePlayer::new();
     let (tx, rx) = unbounded::<AudioEvent>();
