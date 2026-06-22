@@ -53,6 +53,10 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::SetMidiClockRecvDevice(_)) => false,
         // Project I/O drives the modal itself: always allow.
         Message::ProjectIo(_) => false,
+        // The MIDI Import modal is an auxiliary overlay that imports into
+        // a project — block it (like Open Settings / Add Track) so it
+        // can't steal focus while the startup modal owns the screen.
+        Message::Import(_) => true,
         // Timer tick: harmless, drives VU meters — allow.
         Message::Tick => false,
         // Window close request: always allow so the app can exit.
@@ -87,6 +91,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::Plugin(_)
         | Message::Viewport(_)
         | Message::GlobalTrack(_)
+        | Message::Import(_)
         | Message::Ui(_)
         | Message::Undo
         | Message::Redo => true,

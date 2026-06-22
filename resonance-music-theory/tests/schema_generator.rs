@@ -385,6 +385,73 @@ fn default_length_matches_loop() {
     assert_eq!(SchemaKind::PlagalVamp.default_length(), 2);
 }
 
+// ---------------------------------------------------------------------------
+// 9. Pentatonic schema (roots from the pentatonic scale, quality-free)
+// ---------------------------------------------------------------------------
+
+/// Major-pentatonic scale degrees (1-indexed): 1 2 3 5 6 — no 4, no 7.
+const PENTATONIC_ROOTS: [u8; 5] = [1, 2, 3, 5, 6];
+
+#[test]
+fn pentatonic_canonical_walks_the_pentatonic_roots() {
+    use Degree as D;
+    let spec = schema_spec(SchemaKind::Pentatonic, 5, 0, 0.0);
+    let mat = generate_with(&spec, 7, &no_locks(5)).unwrap();
+    assert_eq!(
+        degrees_of(&mat),
+        vec![D::I, D::II_MIN, D::III_MIN, D::V, D::VI_MIN]
+    );
+    assert_eq!(SchemaKind::Pentatonic.default_length(), 5);
+    assert_eq!(SchemaKind::Pentatonic.mode(), Mode::Major);
+}
+
+#[test]
+fn pentatonic_every_chord_is_rooted_on_a_pentatonic_degree() {
+    // Across canonical *and* substituted output, no chord is ever rooted
+    // on the avoid tones (4 or 7), and none is a borrowed/flat root.
+    let spec = schema_spec(SchemaKind::Pentatonic, 10, 0, 1.0);
+    for seed in 0..200u64 {
+        let mat = generate_with(&spec, seed, &no_locks(10)).unwrap();
+        for chord in &mat.chords {
+            let d = chord.degree;
+            assert!(!d.flat, "seed {seed}: pentatonic chord {d} has a flat root");
+            assert!(
+                PENTATONIC_ROOTS.contains(&d.root),
+                "seed {seed}: chord {d} root {} is not a pentatonic degree",
+                d.root
+            );
+        }
+    }
+}
+
+#[test]
+fn pentatonic_substitution_is_quality_free() {
+    // The defining feature: substitution can recolour a position's
+    // quality (major<->minor) relative to the canonical diatonic loop.
+    // Over many seeds at least one position must differ in quality from
+    // its canonical chord while keeping the same root.
+    use Degree as D;
+    let canonical = [D::I, D::II_MIN, D::III_MIN, D::V, D::VI_MIN];
+    let spec = schema_spec(SchemaKind::Pentatonic, 5, 0, 1.0);
+    let mut saw_recolour = false;
+    for seed in 0..200u64 {
+        let mat = generate_with(&spec, seed, &no_locks(5)).unwrap();
+        for (i, chord) in mat.chords.iter().enumerate() {
+            let base = canonical[i];
+            if chord.degree.root == base.root && chord.degree.quality != base.quality {
+                saw_recolour = true;
+            }
+        }
+        if saw_recolour {
+            break;
+        }
+    }
+    assert!(
+        saw_recolour,
+        "pentatonic substitution never recoloured a chord's quality"
+    );
+}
+
 #[test]
 fn minor_schemas_report_minor_mode() {
     assert_eq!(SchemaKind::Lament.mode(), Mode::Minor);

@@ -22,6 +22,15 @@ impl Resonance {
         &self.tempo_map
     }
 
+    /// Test-only: borrow the MIDI Import modal state (or `None` when the
+    /// modal is closed). Drives `tests/import_dialog.rs`, which asserts
+    /// the open/close + review-stage plumbing without rendering the
+    /// overlay.
+    #[doc(hidden)]
+    pub fn test_import_dialog(&self) -> Option<&state::ImportDialogState> {
+        self.import_dialog.as_ref()
+    }
+
     #[doc(hidden)]
     pub fn test_tempo_events(&self) -> &[state::TempoEvent] {
         &self.tempo_events
@@ -196,5 +205,29 @@ impl Resonance {
         if let Some(track) = self.registry.tracks.first_mut() {
             track.record_armed = armed;
         }
+    }
+
+    /// Test-only: read the GUI-side audio clip list. Used by the
+    /// engine-event mirroring tests to assert that fade/gain events
+    /// land on the matching `ClipState`.
+    #[doc(hidden)]
+    pub fn test_clips(&self) -> &[state::ClipState] {
+        &self.clips
+    }
+
+    /// Test-only: push an audio clip straight into GUI state, bypassing
+    /// the engine `ClipImported` round-trip, so a test can then drive
+    /// fade/gain events against a known clip id.
+    #[doc(hidden)]
+    pub fn test_push_clip(&mut self, clip: state::ClipState) {
+        self.clips.push(clip);
+    }
+
+    /// Test-only: feed an [`AudioEvent`] through the same engine→app
+    /// dispatch the per-frame tick uses, so reducer tests can verify the
+    /// one-way mirroring without bringing up a real audio engine.
+    #[doc(hidden)]
+    pub fn test_apply_engine_event(&mut self, event: resonance_audio::types::AudioEvent) {
+        let _ = crate::engine_events::handle_engine_event(self, event);
     }
 }
