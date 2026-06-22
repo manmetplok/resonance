@@ -564,6 +564,40 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
+        // -- Freeze --
+        AudioCommand::FreezeTrack {
+            track_id,
+            cache_path,
+        } => bounce::to_freeze_cache_spawn(
+            track_id,
+            cache_path,
+            Arc::clone(ctx.shared),
+            Arc::clone(ctx.tracks),
+            Arc::clone(ctx.busses),
+            Arc::clone(ctx.master),
+            Arc::clone(ctx.clips),
+            Arc::clone(ctx.midi_clips),
+            Arc::clone(ctx.plugins),
+            Arc::clone(ctx.tempo_map),
+            ctx.sample_rate,
+            ctx.event_tx.clone(),
+        ),
+        AudioCommand::SetTrackFrozenSource { track_id, source } => {
+            tracks::handle_set_track_frozen_source(ctx, track_id, source)
+        }
+        AudioCommand::UnfreezeTrack { track_id } => {
+            tracks::handle_unfreeze_track(ctx, track_id)
+        }
+        AudioCommand::CancelFreeze => {
+            // Freeze reuses the shared bounce-cancel atomic (the offline
+            // freeze renderer polls it between chunks, same as the bounce
+            // renderers). The worker drops the partial cache file and
+            // emits `FreezeCancelled`.
+            ctx.shared
+                .bounce_cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
         // -- Instrument tracks + MIDI --
         AudioCommand::AddInstrumentTrack { id_hint, name } => {
             midi::handle_add_instrument_track(ctx, state, id_hint, name)

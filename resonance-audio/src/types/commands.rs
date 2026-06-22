@@ -2,7 +2,7 @@
 use std::path::PathBuf;
 
 use super::{
-    BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, SamplePos, SignaturePoint, TempoPoint,
+    BusId, ClipId, FadeCurve, FrozenSource, MidiNote, PluginInstanceId, SamplePos, SignaturePoint, TempoPoint,
     TrackId, TrackOutput,
 };
 
@@ -454,6 +454,33 @@ pub enum AudioCommand {
     SetMasterFxBypass {
         bypassed: bool,
     },
+
+    // -- Freeze commands --
+    /// Kick off an offline render of the track's post-instrument/post-FX
+    /// output to `cache_path`. The render produces a freeze-cache WAV
+    /// containing the full track output (including SVS-rendered vocals).
+    /// Emits progress events, then `FreezeCompleted` on success or
+    /// `FreezeError`/`FreezeCancelled` on failure/cancel.
+    FreezeTrack {
+        track_id: TrackId,
+        cache_path: String,
+    },
+    /// Attach or detach a decoded freeze cache buffer to/from a track.
+    /// Used on project load to rehydrate frozen tracks without re-rendering,
+    /// and on unfreeze to clear the frozen source.
+    SetTrackFrozenSource {
+        track_id: TrackId,
+        /// `Some(source)` attaches the frozen buffer for playback.
+        /// `None` detaches it, restoring live synth+FX playback.
+        source: Option<FrozenSource>,
+    },
+    /// Detach the frozen source from a track and resume live synth+FX playback.
+    UnfreezeTrack {
+        track_id: TrackId,
+    },
+    /// Cancel an in-flight freeze render. Cooperative: the render polls
+    /// the shared cancel flag between chunks and aborts cleanly.
+    CancelFreeze,
 
     /// Ask the engine to snapshot and clear every peak meter (per-track,
     /// per-bus, master L/R) and reply with `AudioEvent::PeakSnapshot`.

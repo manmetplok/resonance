@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use arc_swap::{ArcSwap, ArcSwapOption, Guard};
 
-use super::{BusId, PluginInstanceId, TrackId, TrackOutput, TrackType};
+use super::{BusId, FrozenSource, PluginInstanceId, TrackId, TrackOutput, TrackType};
 
 /// Sentinel value used in `Track::output_bus_bits` to encode
 /// `TrackOutput::Master` (so the enum can live in a single AtomicU64
@@ -94,6 +94,11 @@ pub struct Track {
     /// Channel that hardware MIDI output uses. None = channel 1.
     /// Only read on the engine control thread.
     pub midi_output_channel: Option<u8>,
+    /// Optional frozen source buffer for this track. When set, the mixer
+    /// plays the cached audio instead of running the live synth/FX chain.
+    /// Wrapped in `ArcSwapOption` so the audio thread can read without
+    /// blocking on the engine control thread's edits.
+    pub frozen_source: ArcSwapOption<FrozenSource>,
 }
 
 impl Track {
@@ -127,6 +132,7 @@ impl Track {
             midi_input_channel: None,
             midi_output_device: ArcSwapOption::const_empty(),
             midi_output_channel: None,
+            frozen_source: ArcSwapOption::const_empty(),
         }
     }
 
@@ -459,4 +465,3 @@ impl MasterBus {
         Self::default()
     }
 }
-

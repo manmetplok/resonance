@@ -5,6 +5,7 @@ use super::{
     BusId, ClipId, FadeCurve, InputDeviceInfo, MidiNote, ParamInfo, PluginInstanceId, SamplePos,
     ScannedPlugin, TrackId,
 };
+use resonance_common::FreezeCacheRef;
 
 /// Inline clip payload for the offline "bounce in place" flow. The
 /// realtime flow leaves this `None` because the clip arrives via the
@@ -293,6 +294,32 @@ pub enum AudioEvent {
     /// stabilises so the GUI BPM display can mirror the master.
     MidiClockTempoDetected {
         bpm: f32,
+    },
+
+    // -- Freeze events --
+    /// Periodic progress update for a freeze render, emitted as the
+    /// offline renderer processes chunks. `fraction` is in `[0.0, 1.0]`.
+    /// Mirrors the bounce progress event shape.
+    FreezeProgress {
+        track_id: TrackId,
+        fraction: f32,
+    },
+    /// Freeze render completed successfully. The track now has a valid
+    /// freeze cache that can be attached via `SetTrackFrozenSource`.
+    FreezeCompleted {
+        track_id: TrackId,
+        cache_ref: FreezeCacheRef,
+    },
+    /// Freeze render failed. The string is user-facing.
+    FreezeError {
+        track_id: TrackId,
+        message: String,
+    },
+    /// Freeze render was cancelled by the user via `AudioCommand::CancelFreeze`.
+    /// The engine guarantees the partially-written cache file (if any) is
+    /// removed before this event fires.
+    FreezeCancelled {
+        track_id: TrackId,
     },
 
     /// Snapshot of peak meters for VU display, sent in response to

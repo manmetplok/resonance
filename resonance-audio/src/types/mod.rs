@@ -44,6 +44,7 @@ impl TrackType {
 mod clip;
 mod commands;
 mod events;
+mod freeze;
 mod tempo;
 mod track;
 mod vocal_tuning;
@@ -52,6 +53,7 @@ pub use clip::{
     compute_waveform_peaks, AudioClip, ClipSource, FadeCurve, MidiClip, MidiNote,
     PendingNoteEvent, WAVEFORM_PEAK_FRAMES,
 };
+pub use freeze::FrozenSource;
 pub use vocal_tuning::{F0Frame, GlobalTuning, NoteBlob, NoteEdit, TuningScale, VocalTuning};
 pub use commands::AudioCommand;
 pub use events::{AudioEvent, BouncedClipData};

@@ -35,6 +35,11 @@ use super::render::{
 /// capture of the rendered mix with no requantization.
 const FREEZE_BIT_DEPTH: u16 = 32;
 
+/// Error message returned when a freeze render is cancelled cooperatively.
+/// [`super::freeze_terminal_event`] matches on this to emit
+/// `AudioEvent::FreezeCancelled` rather than `FreezeError`.
+pub const FREEZE_CANCELLED_MSG: &str = "Freeze cancelled";
+
 /// Render the full post-instrument / post-FX output of `source_track_id`
 /// (and any of its instrument sub-tracks) over the project range to a
 /// 32-bit float stereo WAV at `path`, returning a [`FreezeCacheRef`] on
@@ -183,7 +188,7 @@ pub fn to_freeze_cache(
             shared.bounce_cancel.store(false, Ordering::Relaxed);
             drop(writer);
             let _ = std::fs::remove_file(&path);
-            return Err("Freeze cancelled".into());
+            return Err(FREEZE_CANCELLED_MSG.into());
         }
 
         let frames = ((render_stop - pos) as usize).min(BOUNCE_CHUNK);
