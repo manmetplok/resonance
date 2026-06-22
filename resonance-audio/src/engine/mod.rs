@@ -29,7 +29,10 @@ use crate::stream_errors::{format_underrun_line, UnderrunRateLimiter};
 use crate::types::*;
 
 mod bounce;
-pub use bounce::{to_audio_clip, to_freeze_cache, try_lock_with_backoff};
+pub use bounce::{
+    freeze_terminal_event, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn,
+    try_lock_with_backoff, FREEZE_CANCELLED_MSG,
+};
 mod bounce_common;
 pub use bounce_common::midi_render_range;
 

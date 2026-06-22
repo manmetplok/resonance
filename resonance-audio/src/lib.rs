@@ -40,7 +40,8 @@ pub use types::*;
 pub mod __test_support {
     pub use crate::clap_host::{ClapBundle, SyncClapInstance};
     pub use crate::engine::{
-        midi_render_range, to_audio_clip, to_freeze_cache, try_lock_with_backoff, SharedState,
+        freeze_terminal_event, midi_render_range, to_audio_clip, to_freeze_cache,
+        to_freeze_cache_spawn, try_lock_with_backoff, FREEZE_CANCELLED_MSG, SharedState,
     };
     pub use crate::latency::{chain_latencies, compensation_delays, LatencyComp};
     pub use crate::limits::MAX_COMP_LATENCY;
