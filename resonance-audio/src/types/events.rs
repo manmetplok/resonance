@@ -2,8 +2,8 @@
 use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
-    BusId, ClipId, FadeCurve, InputDeviceInfo, MidiNote, ParamInfo, PluginInstanceId, SamplePos,
-    ScannedPlugin, TrackId,
+    BusId, ClipId, F0Frame, FadeCurve, InputDeviceInfo, MidiNote, NoteBlob, ParamInfo,
+    PluginInstanceId, SamplePos, ScannedPlugin, TrackId,
 };
 
 /// Inline clip payload for the offline "bounce in place" flow. The
@@ -69,6 +69,16 @@ pub enum AudioEvent {
     ClipGainChanged {
         clip_id: ClipId,
         gain_db: f32,
+    },
+    /// Vocal pitch analysis finished for a clip (`AnalyzeClipPitch`). The
+    /// detected f0 `contour` and segmented `notes` mirror what the engine
+    /// stored in the clip's [`VocalTuning`](super::VocalTuning) cache, so
+    /// the app can update its own mirror without a read-getter. Both
+    /// vectors may be empty when the clip carries no voiced material.
+    ClipPitchDetected {
+        clip_id: ClipId,
+        notes: Vec<NoteBlob>,
+        contour: Vec<F0Frame>,
     },
     Stopped,
     Error(String),
