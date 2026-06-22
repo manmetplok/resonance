@@ -217,6 +217,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
             trim_start_frames: pc.trim_start_frames,
             trim_end_frames: pc.trim_end_frames,
             waveform_peaks: Vec::new(), // Will be populated by ClipImported event
+            vocal_tuning: None, // Re-derived on demand when the pitch editor opens.
         });
     }
 

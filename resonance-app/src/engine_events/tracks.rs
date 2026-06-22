@@ -141,6 +141,7 @@ pub(super) fn bounce_completed(
                 trim_start_frames: 0,
                 trim_end_frames: 0,
                 waveform_peaks: c.waveform_peaks,
+                vocal_tuning: None,
             });
         }
     } else {

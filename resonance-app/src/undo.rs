@@ -576,6 +576,12 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MidiEditorMessage::ScrollY(_) => UndoAction::Skip,
         },
 
+        // Pitch-editor open/close is editor lifecycle + an analysis
+        // request (a read-only engine query whose result is cached, not
+        // user-authored project data) — never an undoable edit, mirroring
+        // the MIDI editor open/close above.
+        Message::VocalTuning(_) => UndoAction::Skip,
+
         Message::Compose(c) => match c {
             // Form input, selections, panel open/close: UI only.
             ComposeMessage::OpenCreateSectionDialog
