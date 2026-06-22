@@ -6,7 +6,7 @@ use resonance_music_theory::{
     VoiceType,
 };
 
-use crate::compose::{LaneGeneratorKindTag, RailPanelKey, SelectedLane};
+use crate::compose::{EntryLength, LaneGeneratorKindTag, RailPanelKey, SelectedLane};
 
 /// The two workspace group banners in the Compose lane column. Carried
 /// by [`ComposeMessage::ToggleWorkspaceGroup`].
@@ -23,6 +23,10 @@ pub enum ComposeMessage {
     /// Drum-groups messages — project-scoped group management plus the
     /// per-group generator knobs surfaced in the right rail.
     DrumGroups(DrumGroupsMessage),
+
+    /// Drum-arrangement messages — edit a section's ordered list of
+    /// pattern entries (the sequence the drums play across its bars).
+    Arrangement(ArrangementMessage),
 
     // Create a new MIDI clip that spans the selected section on the given
     // instrument track. Used by the "+" button that appears over empty
@@ -519,4 +523,55 @@ pub enum DrumGroupsMessage {
         pad_index: usize,
         step: usize,
     },
+}
+
+// ---------------------------------------------------------------------------
+// Drum arrangement
+// ---------------------------------------------------------------------------
+
+/// Messages that edit a section's drum *arrangement* — the ordered
+/// [`Vec<PatternEntry>`](crate::compose::PatternEntry) on
+/// [`SectionDefinitionState::arrangement`](crate::compose::SectionDefinitionState::arrangement)
+/// describing which pattern plays over which bars. Every variant carries
+/// the target `definition_id` so the edit lands on a specific section
+/// rather than relying on the current focus. Each routes through
+/// `update::compose::drum_groups::handle_arrangement`, mutates the
+/// arrangement, and re-materializes the drum clips so playback stays in
+/// sync; the existing undo machinery records a snapshot per edit.
+#[derive(Debug, Clone)]
+pub enum ArrangementMessage {
+    /// Append a fresh single-repeat entry playing `pattern_id` (picked
+    /// from the pattern bank). Ignored if the pattern doesn't exist.
+    AddEntry { definition_id: u64, pattern_id: u64 },
+    /// Remove the entry at `index`.
+    RemoveEntry { definition_id: u64, index: usize },
+    /// Move the entry at `from` to position `to`, shifting the rest. Drives
+    /// move-up / move-down buttons and drag-to-reorder.
+    MoveEntry {
+        definition_id: u64,
+        from: usize,
+        to: usize,
+    },
+    /// Set the length mode + value of the entry at `index`
+    /// (`RepeatN(n)` / `Bars(b)`).
+    SetEntryLength {
+        definition_id: u64,
+        index: usize,
+        length: EntryLength,
+    },
+    /// Set the entry's fill pattern (`Some(id)` to enable + choose, `None`
+    /// to clear). Ignored if a chosen fill pattern doesn't exist.
+    SetEntryFill {
+        definition_id: u64,
+        index: usize,
+        fill: Option<u64>,
+    },
+    /// Insert a copy of the entry at `index` right after it.
+    DuplicateEntry { definition_id: u64, index: usize },
+    /// Remediation: extend the arrangement (last entry or a new one) so it
+    /// covers the section exactly, closing any trailing gap.
+    FillToEnd { definition_id: u64 },
+    /// Remediation: shrink / drop trailing entries so the arrangement lands
+    /// exactly on the section boundary, dropping any overflow.
+    TrimToFit { definition_id: u64 },
 }

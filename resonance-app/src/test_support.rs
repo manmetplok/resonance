@@ -197,4 +197,13 @@ impl Resonance {
             track.record_armed = armed;
         }
     }
+
+    /// Test-only: anchor the project at `path` so `can_record_undo` is
+    /// satisfied. Undo snapshots key audio-clip paths off the project dir,
+    /// so the undo machinery refuses to record until a path is set; this
+    /// lets undo/redo round-trip tests run without a real save to disk.
+    #[doc(hidden)]
+    pub fn test_set_project_path(&mut self, path: std::path::PathBuf) {
+        self.io.project_path = Some(path);
+    }
 }
