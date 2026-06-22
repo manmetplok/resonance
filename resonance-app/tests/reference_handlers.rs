@@ -127,6 +127,23 @@ fn remove_drops_entry_and_clears_active() {
 }
 
 #[test]
+fn remove_clears_stale_load_error() {
+    let mut app = app();
+    fold_loaded(&mut app, 1, "a");
+    // A load failure leaves a dismissable notice in `last_error`.
+    app.test_handle_engine_event(resonance_audio::types::AudioEvent::ReferenceLoadFailed {
+        path: "/refs/broken.wav".into(),
+        reason: "decode error".into(),
+    });
+    assert!(app.test_reference().last_error.is_some());
+
+    // Removing a reference resolves the outstanding notice, so it can't
+    // resurface as the full-panel error body once the slot empties.
+    send(&mut app, ReferenceMessage::Remove(ReferenceId(1)));
+    assert!(app.test_reference().last_error.is_none());
+}
+
+#[test]
 fn toggle_loop_to_mix_flips() {
     let mut app = app();
     assert!(!app.test_reference().loop_to_mix);

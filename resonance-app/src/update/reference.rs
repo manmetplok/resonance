@@ -93,6 +93,11 @@ fn remove(r: &mut Resonance, id: ReferenceId) {
     if r.reference.active_id == Some(id) {
         r.reference.active_id = None;
     }
+    // Removing a reference (e.g. dismissing a missing entry) resolves any
+    // outstanding load-failure notice — otherwise, once the last entry is
+    // gone, the stale `last_error` would resurface as the full-panel error
+    // body instead of returning to the empty drop-zone.
+    r.reference.last_error = None;
     let _ = r.engine.send(AudioCommand::RemoveReferenceTrack { id });
 }
 
