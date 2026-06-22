@@ -236,6 +236,14 @@ impl Resonance {
         &self.track_groups
     }
 
+    /// Test-only: borrow the active drag-and-drop membership drag (todo
+    /// #685), so a reducer test can assert it opens on a grab, tracks the
+    /// hovered target, and clears on drop / cancel.
+    #[doc(hidden)]
+    pub fn test_membership_drag(&self) -> Option<&state::MembershipDragState> {
+        self.interaction.membership_drag.as_ref()
+    }
+
     /// Test-only: seed the Arrange multi-track selection directly, bypassing
     /// the per-click `SelectTrack` plumbing.
     #[doc(hidden)]

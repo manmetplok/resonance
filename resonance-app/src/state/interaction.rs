@@ -6,6 +6,54 @@ use resonance_audio::types::*;
 use super::clips::{ClipDragState, ClipTrimState, MidiClipDragState, MidiClipTrimState};
 use super::global::SelectedGlobalEvent;
 
+/// What is being dragged during a drag-and-drop group-membership edit
+/// (epic #36, doc #200, todo #685). A track row joins / leaves a group; a
+/// group header nests under / un-nests from another group (members travel
+/// with it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MembershipDragSubject {
+    /// A track row being dragged to change which group it belongs to.
+    Track(TrackId),
+    /// A group header being dragged to nest under / detach from a parent
+    /// group. The id is the group's own id.
+    Group(TrackId),
+}
+
+/// Where a membership drag currently hovers, already resolved to a drop
+/// intent by the view's hit-test (a hover over a group's header *or* any
+/// of its members both resolve to [`IntoGroup`](Self::IntoGroup)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MembershipDropTarget {
+    /// Over a group — the dragged subject joins this group (a track) or
+    /// nests under it (a group). The id is the destination group's id.
+    IntoGroup(TrackId),
+    /// Over open, ungrouped space — the dragged subject leaves its group
+    /// (a track) or un-nests back to the top level (a group).
+    Ungrouped,
+}
+
+/// Live state of an in-progress drag-and-drop group-membership edit
+/// (todo #685). Opened when a track row or group header starts dragging,
+/// updated as the pointer moves over candidate drop targets, and consumed
+/// on drop. Purely transient: it is never persisted and never enters the
+/// undo snapshot — only the committed membership change is recorded.
+#[derive(Debug, Clone)]
+pub struct MembershipDragState {
+    /// The track or group being dragged.
+    pub subject: MembershipDragSubject,
+    /// The group the subject currently sits in — a track's parent group or
+    /// a group's nesting parent — so a drop onto open space knows what to
+    /// detach from. `None` when the subject is already at the top level.
+    pub origin_group: Option<TrackId>,
+    /// The drop target under the pointer, if any. Drives the drop-target
+    /// highlight, insertion line and destination chip while dragging, and
+    /// selects the membership change applied on drop. `None` means "no
+    /// valid target here" — dropping is then a no-op.
+    pub hover: Option<MembershipDropTarget>,
+    /// Latest pointer Y within the track-header column, for the drag ghost.
+    pub cursor_y: f32,
+}
+
 /// State for the MIDI piano roll editor.
 #[derive(Debug, Clone)]
 pub struct MidiEditorState {
@@ -43,6 +91,8 @@ pub struct ClipInteractionState {
     pub editing_midi_clip: Option<MidiEditorState>,
     /// Currently selected event on a global track (tempo or signature).
     pub selected_global_event: Option<SelectedGlobalEvent>,
+    /// Active drag-and-drop group-membership edit, if any (todo #685).
+    pub membership_drag: Option<MembershipDragState>,
 }
 
 impl ClipInteractionState {

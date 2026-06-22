@@ -6,7 +6,10 @@
 use crate::compose::ComposeMessage;
 use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
-use crate::state::{ClipEdge, LoopDragTarget, MixerInspectorGroup, SelectedGlobalEvent, ViewMode};
+use crate::state::{
+    ClipEdge, LoopDragTarget, MembershipDragSubject, MembershipDropTarget, MixerInspectorGroup,
+    SelectedGlobalEvent, ViewMode,
+};
 use resonance_audio::types::{
     BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
 };
@@ -43,10 +46,15 @@ pub enum Message {
 /// strip: caret folds the group, `M`/`S` toggle the macro mute/solo that
 /// cascade to members, and the level trim scales members' contribution.
 ///
-/// The header *view* (todo #680) emits these; the reducers that apply
-/// them — collapse/fold (#686), macro mute (#687), macro solo (#688) and
-/// level trim (#689) — land in their own todos. Until then they route to
-/// the placeholder `update::group::handle`.
+/// The header *view* (todo #680) emits the caret / macro / trim variants;
+/// the reducers that apply them — collapse/fold (#686), macro mute (#687),
+/// macro solo (#688) and level trim (#689) — land in their own todos.
+/// Until then they route to the placeholder `update::group::handle`.
+///
+/// The `*MembershipDrag*` / `*Membership*` variants drive drag-and-drop
+/// group membership (todo #685): a track row or group header is dragged
+/// onto a group to join / nest, or onto open space to ungroup / un-nest.
+/// Their reducers live in `update::group` and mutate the registry directly.
 #[derive(Debug, Clone)]
 pub enum GroupMessage {
     /// Fold / unfold a group, hiding or showing its member lanes.
@@ -63,6 +71,24 @@ pub enum GroupMessage {
     /// todo #684). The selected tracks become the new group's members; a
     /// no-op when fewer than two tracks are selected.
     CreateGroupFromSelection,
+    /// Begin a drag-and-drop membership edit (todo #685). The subject is the
+    /// track row or group header that was grabbed; `cursor_y` is the pointer
+    /// Y in the header column at grab, for the drag ghost.
+    StartMembershipDrag(MembershipDragSubject, f32),
+    /// The active membership drag's pointer moved. `target` is the drop
+    /// target the view resolved under the cursor (`None` when over nothing
+    /// droppable); `cursor_y` is the latest pointer Y.
+    UpdateMembershipDrag {
+        target: Option<MembershipDropTarget>,
+        cursor_y: f32,
+    },
+    /// Commit the active membership drag, applying the hovered target's
+    /// change to the group registry. A no-op when nothing is dragging or no
+    /// valid target is hovered.
+    DropMembership,
+    /// Abandon the active membership drag with no change (released off any
+    /// target, or `Esc`).
+    CancelMembershipDrag,
 }
 
 #[derive(Debug, Clone)]
