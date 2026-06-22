@@ -26,6 +26,7 @@ pub(crate) fn view_track_header(
 
     // Calculate indent level for group members using the registry method
     let indent_level = r.track_groups.indent_depth(track_id);
+    let group_colors = r.track_groups.get_group_identity_colors(track_id);
     let indent_pixels = indent_level as f32 * theme::GROUP_MEMBER_INDENT;
 
     // ---- Glyph (28×28 rounded BG_2 square with the track's instrument icon) ----
@@ -159,6 +160,22 @@ pub(crate) fn view_track_header(
             ..Default::default()
         });
 
+    // Create group identity rails (3px each, leftmost first)
+    let group_rails: Vec<_> = group_colors
+        .iter()
+        .map(|&color| {
+            let (base, _, _) = theme::group_identity_colors(color);
+            container(Space::new().height(Length::Fill))
+                .width(theme::GROUP_RAIL_WIDTH)
+                .height(Length::Fill)
+                .style(move |_theme| container::Style {
+                    background: Some(iced::Background::Color(base)),
+                    ..Default::default()
+                })
+                .into()
+        })
+        .collect();
+
     let stripe = container(Space::new().height(Length::Fill))
         .width(2)
         .height(Length::Fill)
@@ -171,7 +188,7 @@ pub(crate) fn view_track_header(
     // sum to exactly `TRACK_HEIGHT` — matching the canvas's per-row
     // pitch. Without this trim, every column row was 1 px taller than
     // the canvas row and headers drifted down 1 px per track.
-    let cell = row![stripe, body_with_bg].height(theme::TRACK_HEIGHT - 1.0);
+    let cell = row![row(group_rails).width(Length::Shrink), stripe, body_with_bg].height(theme::TRACK_HEIGHT - 1.0);
 
     // 1px hairline below each cell so rows separate without a heavy border.
     let hairline = container(Space::new().width(Length::Fill))

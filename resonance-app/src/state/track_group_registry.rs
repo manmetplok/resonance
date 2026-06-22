@@ -109,11 +109,37 @@ impl TrackGroupRegistry {
             .unwrap_or(0)
     }
 
-    /// Returns all groups in the registry.
+    /// Returns the group identity colours for a track's parent groups.
     ///
-    /// Iteration order is unspecified (the registry is backed by a hash
-    /// map). Use [`get_all_groups_sorted`](Self::get_all_groups_sorted)
-    /// whenever a stable order matters — in particular for persistence.
+    /// Returns a vector of identity colours, one for each level of group
+    /// membership (outermost/root group first, then nested children).
+    /// Used for rendering the coloured rails on track headers.
+    /// Tracks that are not group members return an empty vector.
+    pub fn get_group_identity_colors(&self, track_id: TrackId) -> Vec<GroupIdentityColor> {
+        let mut groups: Vec<_> = self.get_groups_containing_track(track_id);
+        // Sort by nesting depth (ascending: outermost groups first) then by id for determinism
+        groups.sort_by(|a, b| {
+            let depth_a = self.nesting_depth(a.id);
+            let depth_b = self.nesting_depth(b.id);
+            depth_a.cmp(&depth_b).then_with(|| a.id.cmp(&b.id))
+        });
+        groups
+            .iter()
+            .map(|group| group.identity_color)
+            .collect()
+    }
+
+    /// Returns the nesting depth of a group (0 for root groups, 1 for direct children, etc.).
+    fn nesting_depth(&self, group_id: TrackId) -> usize {
+        let mut depth = 0;
+        let mut current_id = group_id;
+        while let Some(parent_id) = self.groups.get(&current_id).and_then(|g| g.nesting_parent) {
+            depth += 1;
+            current_id = parent_id;
+        }
+        depth
+    }
+
     pub fn get_all_groups(&self) -> Vec<&TrackGroup> {
         self.groups.values().collect()
     }
