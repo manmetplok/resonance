@@ -24,6 +24,7 @@ pub mod message;
 pub mod presets;
 pub mod project;
 pub mod recent;
+pub mod reference;
 pub mod state;
 mod test_support;
 pub mod theme;
@@ -92,6 +93,9 @@ pub struct Resonance {
     pub(crate) midi_clips: Vec<MidiClipState>,
     /// Compose tab state: section definitions, placements, chord progressions.
     pub(crate) compose: compose::ComposeState,
+
+    /// Reference-track (A/B) comparison state. See `crate::reference`.
+    pub(crate) reference: reference::ReferenceState,
     /// Markov table registry for chord generators. Constructed once at
     /// startup with all built-in tables.
     pub(crate) table_registry: TableRegistry,
@@ -339,6 +343,7 @@ impl Resonance {
             clips: Vec::new(),
             midi_clips: Vec::new(),
             compose: compose::ComposeState::default(),
+            reference: reference::ReferenceState::default(),
             table_registry: TableRegistry::with_builtins(),
 
             tempo_events: vec![state::TempoEvent { bar: 0, bpm: 120.0 }],

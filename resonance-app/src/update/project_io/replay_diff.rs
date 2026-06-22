@@ -90,6 +90,13 @@ pub fn try_diff_replay(
     // -- Compose state (definitions, placements, drum groups, lyrics) --
     apply_compose(r, target_file, extras);
 
+    // -- Reference (A/B) content ---------------------------------------
+    // References aren't in the `ProjectFile`, so they ride along in the
+    // snapshot's `extras` and are restored verbatim here. Engine re-sync
+    // of references across undo lands with the A/B playback work; the
+    // engine reference handlers are stubs until then.
+    r.reference.restore_undo(extras.reference.clone());
+
     // -- Tempo / signature events --------------------------------------
     apply_tempo(r, target_file);
 
