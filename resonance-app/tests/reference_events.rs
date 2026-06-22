@@ -180,6 +180,29 @@ fn markers_add_and_remove_idempotently() {
 }
 
 #[test]
+fn position_changed_updates_entry_cursor() {
+    let mut app = app();
+    fold(
+        &mut app,
+        AudioEvent::ReferenceLoaded {
+            id: ReferenceId(1),
+            name: "a".to_string(),
+            path: "/a.wav".to_string(),
+            integrated_lufs: -14.0,
+            waveform_peaks: vec![],
+        },
+    );
+    fold(
+        &mut app,
+        AudioEvent::RefPositionChanged {
+            ref_id: ReferenceId(1),
+            position_samples: 48_000,
+        },
+    );
+    assert_eq!(app.test_reference().entries[0].position_samples, 48_000);
+}
+
+#[test]
 fn removed_event_drops_entry_and_active() {
     let mut app = app();
     fold(
