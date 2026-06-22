@@ -47,6 +47,15 @@ impl Resonance {
         self.interaction.selected_global_event
     }
 
+    /// Test-only: borrow the open Export-modal state (`None` when the
+    /// modal is closed). Lets `tests/export_dialog_shell.rs` assert the
+    /// open/close + mode-tab plumbing through the real `ExportMessage`
+    /// reducer without poking at the `pub(crate)` field.
+    #[doc(hidden)]
+    pub fn test_export_dialog(&self) -> Option<&state::ExportDialogState> {
+        self.export_dialog.as_ref()
+    }
+
     /// Test-only: borrow the track registry to walk `sorted_tracks()` /
     /// inspect sub-track links from an integration test (which doesn't
     /// see `pub(crate)` fields). Used by

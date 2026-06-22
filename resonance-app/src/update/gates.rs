@@ -53,6 +53,8 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::SetMidiClockRecvDevice(_)) => false,
         // Project I/O drives the modal itself: always allow.
         Message::ProjectIo(_) => false,
+        // Export modal drives its own overlay; gated at the open site.
+        Message::Export(_) => false,
         // Timer tick: harmless, drives VU meters — allow.
         Message::Tick => false,
         // Window close request: always allow so the app can exit.
@@ -88,6 +90,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::Viewport(_)
         | Message::GlobalTrack(_)
         | Message::Ui(_)
+        | Message::Export(_)
         | Message::Undo
         | Message::Redo => true,
     }

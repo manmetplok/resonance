@@ -6,7 +6,9 @@
 use crate::compose::ComposeMessage;
 use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
-use crate::state::{ClipEdge, LoopDragTarget, MixerInspectorGroup, SelectedGlobalEvent, ViewMode};
+use crate::state::{
+    ClipEdge, ExportMode, LoopDragTarget, MixerInspectorGroup, SelectedGlobalEvent, ViewMode,
+};
 use resonance_audio::types::{
     BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
 };
@@ -25,6 +27,7 @@ pub enum Message {
     Plugin(PluginMessage),
     Viewport(ViewportMessage),
     ProjectIo(ProjectIoMessage),
+    Export(ExportMessage),
     Ui(UiMessage),
     /// Timer tick driving VU meters and auto-follow. Kept at top level to
     /// avoid wrapping cost on the hot path.
@@ -131,6 +134,24 @@ pub enum BounceMessage {
     /// a bounce is actually running. Distinct from `Cancel`, which only
     /// dismisses the pre-bounce input-picker dialog.
     CancelInProgress,
+}
+
+/// User actions in the Export modal (design doc #155). The scaffold wires
+/// the shell lifecycle - open/close and the mode-tab switch - plus the
+/// footer's primary action. The per-tab body controls (source checklist,
+/// range/format, destination) emit their own messages added by the body
+/// todos (#326/#327); `Confirm` kicks off the render in #330/#331.
+#[derive(Debug, Clone)]
+pub enum ExportMessage {
+    /// Open the modal in its default (Audio-stems) state.
+    Open,
+    /// Dismiss the modal, discarding the transient selection.
+    Close,
+    /// Switch the active mode tab (Audio stems / MIDI).
+    SetMode(ExportMode),
+    /// Footer primary action - render the selected sources. Wired here so
+    /// the shell is complete; the actual orchestration lands in #330/#331.
+    Confirm,
 }
 
 #[derive(Debug, Clone)]
