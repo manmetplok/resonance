@@ -1,5 +1,5 @@
 //! Engine → GUI event enum.
-use resonance_common::AudioFormat;
+use resonance_common::{AudioFormat, BindingId, ControlSource, MidiBinding, MidiTarget};
 
 use crate::midi_hardware::MidiDeviceInfo;
 
@@ -354,6 +354,42 @@ pub enum AudioEvent {
         bus_peaks: Vec<(BusId, f32, f32)>,
         master_peak_l: f32,
         master_peak_r: f32,
+    },
+
+    // -- MIDI Learn & hardware controller mapping (doc #167 §2 E2) --
+    /// In MIDI Learn mode, the first qualifying control-surface message
+    /// arrived: report the armed `target` together with the captured
+    /// `source` so the app can create / replace the binding (with default
+    /// range / mode) and exit learn mode. The engine leaves learn mode after
+    /// emitting this.
+    MidiLearnCaptured {
+        target: MidiTarget,
+        source: ControlSource,
+    },
+    /// A binding was inserted or replaced in the engine's active set (echo of
+    /// `SetMidiBinding`, or one per binding of a `SetControllerMap`). Lets the
+    /// app rebuild `MidiMapState` purely from events, including after
+    /// project-load replay.
+    MidiBindingChanged {
+        binding: MidiBinding,
+    },
+    /// A binding was removed from the active set (echo of `ClearMidiBinding`,
+    /// or one per cleared binding of `ClearAllMidiBindings`).
+    MidiBindingCleared {
+        id: BindingId,
+    },
+    /// Throttled control-rate feedback that a hardware move drove `target` to
+    /// `value_norm` (normalized 0..=1), so the app can update the on-screen
+    /// fader/knob/toggle without round-tripping through the normal value path.
+    ControlSurfaceParamChanged {
+        target: MidiTarget,
+        value_norm: f32,
+    },
+    /// The set of available control-surface MIDI input device names changed
+    /// (hot-plug, or initial enumeration), so the app can refresh its device
+    /// picker.
+    ControlSurfaceDevicesChanged {
+        inputs: Vec<String>,
     },
 
     // -- Audition preview (doc #175) --

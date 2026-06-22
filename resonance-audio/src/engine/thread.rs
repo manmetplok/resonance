@@ -28,8 +28,8 @@ use crate::types::*;
 
 use super::midi::MidiHardwareState;
 use super::{
-    audition, bounce, bounce_realtime, busses, clips, master, midi, plugins, scan, tracks,
-    transport, SharedState,
+    audition, bounce, bounce_realtime, busses, clips, master, midi, midi_map, plugins, scan,
+    tracks, transport, SharedState,
 };
 
 /// Read-only handle to shared project state and channels. Passed by
@@ -761,6 +761,19 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             let bpm = ctx.tempo_map.load().bpm as f64;
             audition::set_audition_options_in_place(ctx.shared, bpm, loop_enabled, sync_to_tempo);
         }
+        // -- MIDI Learn & hardware controller mapping (doc #167 §2 E2) --
+        AudioCommand::SetMidiBinding { binding } => {
+            midi_map::handle_set_midi_binding(ctx, binding)
+        }
+        AudioCommand::ClearMidiBinding { id } => midi_map::handle_clear_midi_binding(ctx, id),
+        AudioCommand::SetControllerMap { map } => midi_map::handle_set_controller_map(ctx, map),
+        AudioCommand::ClearAllMidiBindings => midi_map::handle_clear_all_midi_bindings(ctx),
+        AudioCommand::SetControlSurfaceInput { device } => {
+            midi_map::handle_set_control_surface_input(ctx, device)
+        }
+        AudioCommand::EnterMidiLearn { target } => midi_map::handle_enter_midi_learn(ctx, target),
+        AudioCommand::CancelMidiLearn => midi_map::handle_cancel_midi_learn(ctx),
+
         AudioCommand::PollPeaks => handle_poll_peaks(ctx),
         AudioCommand::ShutDown => {
             // Handled in the engine_thread loop directly; this arm is

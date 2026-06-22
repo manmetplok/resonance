@@ -1,6 +1,8 @@
 //! GUI → engine command enum.
 use std::path::PathBuf;
 
+use resonance_common::{BindingId, ControllerMap, MidiBinding, MidiTarget};
+
 use super::{
     BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, SamplePos, SignaturePoint, TempoPoint,
     TrackId, TrackOutput,
@@ -495,6 +497,46 @@ pub enum AudioCommand {
         loop_enabled: bool,
         sync_to_tempo: bool,
     },
+
+    // -- MIDI Learn & hardware controller mapping (doc #167 §2 E2) --
+    /// Insert or replace (by `binding.id`) one hardware-control → target
+    /// mapping in the engine's active binding set. Sent when the app learns
+    /// a control or edits a binding's range / mode / takeover. The engine
+    /// echoes the resolved binding back via `AudioEvent::MidiBindingChanged`
+    /// so app state stays a pure projection of engine events (no read-getters,
+    /// doc #105).
+    SetMidiBinding {
+        binding: MidiBinding,
+    },
+    /// Remove the active binding with this id. Emits
+    /// `AudioEvent::MidiBindingCleared` on success (and is a silent no-op if
+    /// no such binding is active).
+    ClearMidiBinding {
+        id: BindingId,
+    },
+    /// Replace the entire active binding set with `map`'s bindings. Used by
+    /// controller-preset load and by project-load replay; the engine emits a
+    /// `MidiBindingChanged` per resulting binding so the app can rebuild its
+    /// `MidiMapState` from events alone.
+    SetControllerMap {
+        map: ControllerMap,
+    },
+    /// Drop every active binding (e.g. switching to an empty preset).
+    ClearAllMidiBindings,
+    /// Pick (`Some`) or clear (`None`) the dedicated control-surface MIDI
+    /// input port the engine listens to for CC / note control messages,
+    /// independent of the per-track MIDI inputs.
+    SetControlSurfaceInput {
+        device: Option<String>,
+    },
+    /// Arm MIDI Learn for `target`: the next qualifying control-surface
+    /// message is captured and reported via `AudioEvent::MidiLearnCaptured`
+    /// instead of being applied, then learn mode exits automatically.
+    EnterMidiLearn {
+        target: MidiTarget,
+    },
+    /// Cancel an armed MIDI Learn without capturing anything (Esc / re-click).
+    CancelMidiLearn,
 
     /// Ask the engine to snapshot and clear every peak meter (per-track,
     /// per-bus, master L/R) and reply with `AudioEvent::PeakSnapshot`.
