@@ -312,6 +312,127 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // a single rebuild is simpler and keeps `replay_track` / `_bus` /
     // `_master` focused on their own concern.
     r.rebuild_plugin_index();
+
+    // Reference A/B block: re-decode each saved reference and restore the
+    // panel settings. References live entirely outside the render/export
+    // path (see the engine-side gate in `engine::bounce`), so this never
+    // touches the bounced/exported mix.
+    restore_references(r, project);
+}
+
+/// Restore the reference A/B block from a saved project. Wipes any prior
+/// project's references, then for each saved entry re-issues
+/// `LoadReferenceTrack` (so the PCM / waveform are rebuilt) and re-seeds
+/// the GUI mirror with the durable facts — name, path, cached loudness and
+/// the user's markers — that the re-decode does not itself carry back.
+///
+/// A reference whose file has gone missing is kept as a `Missing` entry
+/// (name + path preserved) and is *not* sent to the engine, so the panel
+/// can show it without crashing or losing the user's markers.
+///
+/// Engine ids are reallocated here: the engine's reference id counter was
+/// reset by `ClearAll`, so present entries take ids `1..=K` in load order,
+/// exactly mirroring what the engine allocates as it registers each
+/// `LoadReferenceTrack`. Missing entries — which the engine never hears
+/// about — take ids from a high, disjoint base so a later in-session load
+/// can never collide with one.
+pub(crate) fn restore_references(r: &mut Resonance, project: &ProjectFile) {
+    use crate::reference::{ReferenceEntry, ReferenceMarkerState, ReferenceStatus};
+
+    /// Base for ids handed to missing (never-registered) references. The
+    /// engine allocates reference ids sequentially from 1, so it would
+    /// take ~1e9 loads in a single session to reach this — i.e. never.
+    const MISSING_ID_BASE: u32 = 1_000_000_000;
+
+    // Drop the previous project's references (entries + settings + any
+    // in-flight load bookkeeping). Nothing here talks to the engine — the
+    // engine's own reference state was already emptied by `ClearAll`.
+    r.reference = crate::reference::ReferenceState::default();
+
+    let settings = &project.reference_settings;
+
+    let mut next_present_id: u32 = 1;
+    let mut next_missing_id: u32 = MISSING_ID_BASE;
+    for pr in &project.references {
+        let exists = std::path::Path::new(&pr.path).exists();
+        let markers: Vec<ReferenceMarkerState> = pr
+            .markers
+            .iter()
+            .map(|m| ReferenceMarkerState {
+                id: m.id,
+                position_samples: m.position_samples,
+                label: m.label.clone(),
+            })
+            .collect();
+
+        let (id, status) = if exists {
+            let id = ReferenceId(next_present_id);
+            next_present_id += 1;
+            // Re-decode: the engine registers the entry under this id
+            // synchronously and streams analysis + `ReferenceLoaded` back,
+            // which the folding layer reconciles onto the entry we seed
+            // below (preserving its markers).
+            let _ = r.engine.send(AudioCommand::LoadReferenceTrack {
+                id_hint: Some(id),
+                path: std::path::PathBuf::from(&pr.path),
+            });
+            (id, ReferenceStatus::Analyzing(ReferenceAnalysisStage::Decoding))
+        } else {
+            let id = ReferenceId(next_missing_id);
+            next_missing_id += 1;
+            r.reference.last_error =
+                Some(format!("Reference file not found: {}", pr.path));
+            (id, ReferenceStatus::Missing)
+        };
+
+        r.reference.entries.push(ReferenceEntry {
+            id,
+            name: pr.name.clone(),
+            path: pr.path.clone(),
+            status,
+            integrated_lufs: pr.integrated_lufs,
+            waveform_peaks: Vec::new(),
+            markers,
+            position_samples: 0,
+        });
+    }
+
+    // Restore the panel settings. The active selection was saved as an
+    // index into the (ordered) reference list; map it back to the entry's
+    // freshly-allocated id and only engage it on the engine when that
+    // reference actually loaded (a Missing one was never registered).
+    let active = settings
+        .active
+        .and_then(|idx| r.reference.entries.get(idx))
+        .map(|e| (e.id, e.status != ReferenceStatus::Missing));
+    r.reference.active_id = active.map(|(id, _)| id);
+    if let Some((id, present)) = active {
+        if present {
+            let _ = r.engine.send(AudioCommand::SetActiveReference { id });
+        }
+    }
+
+    r.reference.ab_source = if settings.ab_source_is_reference {
+        ABSource::Reference
+    } else {
+        ABSource::Mix
+    };
+    r.reference.loudness_match = settings.loudness_match;
+    r.reference.trim_db = settings.trim_db;
+    r.reference.loop_to_mix = settings.loop_to_mix;
+
+    let _ = r.engine.send(AudioCommand::SetABSource {
+        source: r.reference.ab_source,
+    });
+    let _ = r.engine.send(AudioCommand::SetRefLoudnessMatch {
+        enabled: settings.loudness_match,
+    });
+    let _ = r.engine.send(AudioCommand::SetRefTrim {
+        db: settings.trim_db,
+    });
+    let _ = r.engine.send(AudioCommand::SetRefLoopToMix {
+        enabled: settings.loop_to_mix,
+    });
 }
 
 /// Restore the drum pattern bank from a saved project file (or undo

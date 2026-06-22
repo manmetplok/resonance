@@ -123,6 +123,16 @@ impl ReferencePlayer {
         Self::default()
     }
 
+    /// Drop every loaded reference and reset the A/B controls to their
+    /// defaults, including the id allocator. Used by `ClearAll` (project
+    /// close / load) so a freshly loaded project's references are
+    /// re-registered from id 1, matching the app-side restore. The caller
+    /// must `publish` afterwards so the audio-thread monitor stops reading
+    /// the dropped reference's PCM.
+    pub fn clear(&mut self) {
+        *self = ReferencePlayer::new();
+    }
+
     fn entry_mut(&mut self, id: ReferenceId) -> Option<&mut ReferenceEntry> {
         self.entries.iter_mut().find(|e| e.id == id)
     }

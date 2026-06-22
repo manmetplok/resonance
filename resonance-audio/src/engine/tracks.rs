@@ -376,6 +376,13 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // Clear bundles
     state.bundles.clear();
 
+    // Drop loaded A/B references and reset their controls, then publish so
+    // the audio-thread monitor stops reading the dropped reference's PCM.
+    // (References are monitor-only and never in any render, but a stale one
+    // would otherwise linger across a project load.)
+    state.reference.clear();
+    state.reference.publish(&ctx.shared.reference, true);
+
     // Reset ID counters
     state.next_track_id = 1;
     state.next_bus_id = 1;

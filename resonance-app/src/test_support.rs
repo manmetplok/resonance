@@ -212,6 +212,25 @@ impl Resonance {
         self.reference.pending_loads.push_back(path.to_string());
     }
 
+    /// Test-only: serialize the current GUI state to the on-disk
+    /// [`crate::project::ProjectFile`] shape, so a persistence test can
+    /// inspect (or round-trip) the reference A/B block without writing to
+    /// disk.
+    #[doc(hidden)]
+    pub fn test_build_project_file(&self) -> crate::project::ProjectFile {
+        crate::update::project_io::build_project_file(self)
+    }
+
+    /// Test-only: replay just the reference A/B block of a saved
+    /// [`crate::project::ProjectFile`] into this app, exercising the same
+    /// restore path a full project load runs. Lets a persistence test
+    /// verify reference round-trip / missing-file handling without
+    /// constructing a whole `LoadedProject`.
+    #[doc(hidden)]
+    pub fn test_restore_references(&mut self, file: &crate::project::ProjectFile) {
+        crate::update::project_io::restore_references(self, file);
+    }
+
     /// Test-only: anchor a project path so `can_record_undo` is satisfied
     /// (it requires `has_active_project` *and* a `project_path`). Pair
     /// with [`Self::test_set_active_project`] to make undo/redo recordable
