@@ -1,5 +1,6 @@
 //! GUI → engine command enum.
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::{
     ABSource, BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, ReferenceId, SamplePos,
@@ -546,6 +547,16 @@ pub enum AudioCommand {
     /// active reference) and reply with `AudioEvent::ABMeterSnapshot`.
     /// Driven by the GUI's per-frame meter update.
     PollABMeters,
+    /// **Engine-internal** — not sent by the GUI. Posted by the reference
+    /// analysis worker (via the engine's retry-command channel) once a
+    /// freshly-loaded reference has been decoded and loudness-measured,
+    /// carrying the decoded stereo-interleaved PCM and integrated LUFS so
+    /// the engine can store them into the registered reference entry.
+    ReferenceAnalyzed {
+        id: ReferenceId,
+        pcm: Arc<Vec<f32>>,
+        integrated_lufs: f32,
+    },
 
     /// Break the engine-thread loop and let the thread exit cleanly.
     /// Required because the engine thread holds its own `Sender` clone

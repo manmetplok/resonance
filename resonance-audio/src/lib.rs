@@ -86,9 +86,10 @@ pub use engine::{
 #[doc(hidden)]
 pub use engine::reference::{
     handle_add_ref_marker, handle_load_reference_track, handle_poll_ab_meters,
-    handle_remove_ref_marker, handle_remove_reference_track, handle_set_ab_source,
-    handle_set_active_reference, handle_set_ref_loop_to_mix, handle_set_ref_loudness_match,
-    handle_set_ref_position, handle_set_ref_trim, ReferencePlayer,
+    handle_reference_analyzed, handle_remove_ref_marker, handle_remove_reference_track,
+    handle_set_ab_source, handle_set_active_reference, handle_set_ref_loop_to_mix,
+    handle_set_ref_loudness_match, handle_set_ref_position, handle_set_ref_trim, register_reference,
+    run_reference_analysis, ReferencePlayer, REFERENCE_OVERVIEW_PEAKS,
 };
 
 /// Test surface for the audio import-to-pool path. Exposed so the
