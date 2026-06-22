@@ -11,11 +11,17 @@
 //! * 16/24-bit WAV and 16/24-bit FLAC decode back to the source within a
 //!   bit-depth-appropriate tolerance, with the input frame count preserved.
 //! * Requesting a different sample rate resamples the file.
-//! * MP3/Opus report `EncoderUnavailable` and leave no file behind.
+//! * MP3 (with the `mp3` feature) round-trips CBR and VBR through
+//!   `libmp3lame` — symphonia decodes a valid stereo stream at the engine
+//!   rate whose energy survives the lossy pass (todo #653).
+//! * Opus (always) and MP3 (feature-off build) report `EncoderUnavailable`
+//!   and leave no file behind.
 
 use std::path::{Path, PathBuf};
 
 use resonance_audio::__test_support::encode_buffer_for_test;
+#[cfg(feature = "mp3")]
+use resonance_audio::types::Mp3Rate;
 use resonance_audio::types::{BitDepth, ExportFormat, ExportMetadata, FlacLevel};
 use resonance_common::{decode_file, probe_audio_file, AudioFormat};
 
@@ -225,22 +231,27 @@ fn unavailable_encoders_leave_no_file() {
     let dir = tempdir("unavailable");
     let mix = test_mix();
 
-    for (name, format) in [
-        (
-            "export.mp3",
-            ExportFormat::Mp3 {
-                mode: resonance_audio::types::Mp3Rate::Cbr,
-                bitrate_kbps: 320,
-            },
-        ),
-        (
-            "export.opus",
-            ExportFormat::Opus {
-                bitrate_kbps: 192,
-                optimize: resonance_audio::types::OpusOptimize::Music,
-            },
-        ),
-    ] {
+    // Opus has no encoder yet (lands in #651) and always reports
+    // unavailable. MP3 is available when the `mp3` feature is compiled in,
+    // so it only joins this set in a feature-off build.
+    #[allow(unused_mut)]
+    let mut cases: Vec<(&str, ExportFormat)> = vec![(
+        "export.opus",
+        ExportFormat::Opus {
+            bitrate_kbps: 192,
+            optimize: resonance_audio::types::OpusOptimize::Music,
+        },
+    )];
+    #[cfg(not(feature = "mp3"))]
+    cases.push((
+        "export.mp3",
+        ExportFormat::Mp3 {
+            mode: resonance_audio::types::Mp3Rate::Cbr,
+            bitrate_kbps: 320,
+        },
+    ));
+
+    for (name, format) in cases {
         let out = dir.join(name);
         let err = encode_buffer_for_test(
             &format,
@@ -253,4 +264,79 @@ fn unavailable_encoders_leave_no_file() {
         assert!(err.contains("not available"), "message: {err}");
         assert!(!out.exists(), "no partial file must be left behind");
     }
+}
+
+/// Root-mean-square level of an interleaved buffer — an energy proxy that
+/// lets the lossy MP3 round trip be checked without a sample-exact
+/// comparison (which MP3 can never satisfy).
+#[cfg(feature = "mp3")]
+fn rms(buf: &[f32]) -> f32 {
+    if buf.is_empty() {
+        return 0.0;
+    }
+    (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt()
+}
+
+/// Encode the test mix as MP3, decode it back through symphonia, and assert
+/// the file is a valid stereo MP3 at the engine rate whose duration and
+/// energy survive the lossy pass.
+#[cfg(feature = "mp3")]
+fn assert_mp3_round_trip(mode: Mp3Rate, bitrate_kbps: u32, tag: &str) {
+    let dir = tempdir(tag);
+    let mix = test_mix();
+    let out = dir.join(format!("{tag}.mp3"));
+
+    let bytes = encode_buffer_for_test(
+        &ExportFormat::Mp3 { mode, bitrate_kbps },
+        &ExportMetadata::default(),
+        ENGINE_SR,
+        &mix,
+        &out,
+    )
+    .expect("encode mp3");
+    assert!(bytes > 0, "a non-empty file is reported");
+    assert_eq!(
+        std::fs::metadata(&out).unwrap().len(),
+        bytes,
+        "reported byte size matches the file on disk"
+    );
+
+    // symphonia must accept the stream as MP3 at the engine sample rate.
+    let info = probe_audio_file(&out).expect("probe mp3");
+    assert_eq!(info.format, AudioFormat::Mp3);
+    assert_eq!(info.sample_rate, ENGINE_SR, "mp3 keeps the engine sample rate");
+    assert_eq!(info.channels, 2, "stereo");
+
+    // Decode the whole stream: MP3 adds encoder delay + padding, so the
+    // frame count is close to the input but not exact.
+    let decoded = decode_native(&out);
+    assert!(!decoded.is_empty(), "decoded audio is non-empty");
+    let decoded_frames = (decoded.len() / 2) as i64;
+    let diff = (decoded_frames - FRAMES as i64).abs();
+    assert!(
+        diff <= 3000,
+        "decoded frames {decoded_frames} ~ {FRAMES} (diff {diff})"
+    );
+
+    // Signal energy survives the lossy encode (catches a silent or
+    // wrongly-scaled encode — e.g. if full-scale f32 were misinterpreted).
+    let (in_rms, out_rms) = (rms(&mix), rms(&decoded));
+    let ratio = out_rms / in_rms;
+    assert!(
+        (0.5..2.0).contains(&ratio),
+        "energy preserved: in {in_rms:.4} out {out_rms:.4} ratio {ratio:.3}"
+    );
+}
+
+#[cfg(feature = "mp3")]
+#[test]
+fn mp3_cbr_round_trips() {
+    assert_mp3_round_trip(Mp3Rate::Cbr, 320, "mp3-cbr-320");
+    assert_mp3_round_trip(Mp3Rate::Cbr, 128, "mp3-cbr-128");
+}
+
+#[cfg(feature = "mp3")]
+#[test]
+fn mp3_vbr_round_trips() {
+    assert_mp3_round_trip(Mp3Rate::Vbr, 192, "mp3-vbr-192");
 }
