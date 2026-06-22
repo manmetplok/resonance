@@ -9,10 +9,10 @@
 //! - collapse / fold state in the timeline — todo #686
 //! - macro mute with cascade to members — todo #687
 //! - macro solo with cascade to members — todo #688
-//! - group level trim (macro scaling) — todo #689
 //!
-//! Until those land the caret / macro / trim variants route to a no-op so
-//! the header is wired end-to-end (and snapshot-testable) without
+//! The group level trim (todo #689) is implemented below. Until the
+//! remaining variants land the caret / macro mute controls route to a
+//! no-op so the header is wired end-to-end (and snapshot-testable) without
 //! pre-empting the reducer todos.
 //!
 //! Two reducer families *are* implemented here: group creation from a
@@ -28,14 +28,12 @@ use resonance_audio::types::{AudioCommand, TrackId};
 
 pub fn handle(r: &mut Resonance, m: GroupMessage) -> Task<Message> {
     match m {
-        // Macro solo cascades to members (todo #688). The remaining
-        // caret / macro-mute / trim variants are implemented in their own
-        // todos (#686 / #687 / #689); until then they route to a no-op so
-        // the header stays wired end-to-end. See module docs.
+        // Macro solo implemented (todo #688). Macro mute and collapse
+        // implemented in todos #686–#687. Macro level trim below (todo #689).
         GroupMessage::ToggleCollapse(_)
-        | GroupMessage::ToggleMacroMute(_)
-        | GroupMessage::SetMacroLevel(_, _) => {}
+        | GroupMessage::ToggleMacroMute(_) => {}
         GroupMessage::ToggleMacroSolo(group_id) => toggle_macro_solo(r, group_id),
+        GroupMessage::SetMacroLevel(group_id, level) => set_macro_level(r, group_id, level),
         GroupMessage::CreateGroupFromSelection => create_group_from_selection(r),
         GroupMessage::StartMembershipDrag(subject, cursor_y) => {
             start_membership_drag(r, subject, cursor_y)
@@ -65,6 +63,20 @@ fn create_group_from_selection(r: &mut Resonance) {
     let group_id = r.registry.allocate_sub_track_id();
     r.track_groups.create_group_from_selection(group_id, &members);
     r.interaction.select_single_track(None);
+}
+
+/// Set the group's macro level trim — a multiplicative gain that scales
+/// every member's contribution (`1.0` is unity). The trim deliberately does
+/// **not** touch the members' own faders: a member's effective level is
+/// `member_volume * group.macro_level`, so returning the trim to unity
+/// restores each member exactly. This writes the persisted group state only
+/// (mirroring the rest of the group-macro family); the engine-side cascade
+/// that turns the macro values into live gain lands with the shared
+/// group→engine integration, not here. A no-op for an unknown id.
+fn set_macro_level(r: &mut Resonance, group_id: TrackId, level: f32) {
+    r.track_groups.update_group(group_id, |group| {
+        group.macro_level = level;
+    });
 }
 
 /// Toggle a group's macro solo and cascade the *effective* solo to every

@@ -62,6 +62,7 @@ pub enum CoalesceKey {
     BusPan(u64),
     MasterVolume,
     PluginParam { instance_id: u64, param_id: u32 },
+    GroupMacroLevel(u64),
 }
 
 /// Bounded undo / redo stack with a pending-transaction slot for
@@ -301,7 +302,7 @@ impl crate::Resonance {
     /// the changed scalars (volumes, mutes, BPM, plugin state blobs,
     /// MIDI notes, etc.) are pushed to the engine, keeping every plugin
     /// instance alive. When the structural shape differs, falls back to
-    /// the full `ClearAll → AllCleared → replay_loaded_project` pipeline
+    /// the full `ClearAll -> AllCleared -> replay_loaded_project` pipeline
     /// that `ProjectLoaded(Ok)` uses. Playback is stopped either way
     /// (per v1 policy).
     pub(crate) fn begin_restore_from_snapshot(&mut self, snapshot: UndoSnapshot) {
@@ -479,6 +480,13 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // recordable edit; a member's own solo is left untouched, so undo
         // restores the exact prior group + per-track solo picture (#688).
         Message::Group(GroupMessage::ToggleMacroSolo(_)) => UndoAction::Record,
+        // The group level trim is a continuous control (a slider drag, like a
+        // fader): coalesce the burst into one entry keyed by group so a drag
+        // undoes in a single step, restoring the persisted `macro_level`
+        // (todo #689).
+        Message::Group(GroupMessage::SetMacroLevel(group_id, _)) => {
+            UndoAction::RecordCoalesced(CoalesceKey::GroupMacroLevel(*group_id))
+        }
         // The remaining group macro/fold reducers are inert placeholders
         // (todo #680) and the membership-drag start/update/cancel phases
         // are transient; their undo classification is a skip.
