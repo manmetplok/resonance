@@ -811,9 +811,12 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             reference::handle_set_ref_loop_to_mix(&mut state.reference, ctx.event_tx, enabled);
             state.reference.publish(&ctx.shared.reference, false);
         }
-        AudioCommand::PollABMeters => {
-            reference::handle_poll_ab_meters(&state.reference, ctx.event_tx)
-        }
+        AudioCommand::PollABMeters => reference::handle_poll_ab_meters(
+            &state.reference,
+            ctx.shared.mix_meter.load(),
+            ctx.shared.ref_meter.load(),
+            ctx.event_tx,
+        ),
 
         AudioCommand::ShutDown => {
             // Handled in the engine_thread loop directly; this arm is
