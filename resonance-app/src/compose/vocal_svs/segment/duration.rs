@@ -134,7 +134,7 @@ pub(super) fn build_phoneme_track(
         // chosen so half-bar pauses become rests but typical syllable
         // spacing doesn't.
         let sing_sec_cap = (n.duration_ticks as f64 * seconds_per_tick).max(0.05);
-        let (sing_sec, ap_sec) = if slot_sec > sing_sec_cap + 0.4 {
+        let (sing_sec, ap_sec) = if slot_sec > sing_sec_cap + super::super::SILENCE_GAP_SEC {
             (sing_sec_cap, slot_sec - sing_sec_cap)
         } else {
             (slot_sec, 0.0)
