@@ -6,10 +6,12 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use resonance_common::{TakeContent, TakeGroupId, TimelineRange};
+
 use crate::platform;
 use crate::types::*;
 
-use super::thread::{HandlerCtx, HandlerState};
+use super::thread::{HandlerCtx, HandlerState, LoopRecordSession};
 
 pub(crate) fn handle_play(ctx: &HandlerCtx, state: &mut HandlerState) {
     let was_playing = ctx.shared.playing.load(Ordering::Relaxed);
@@ -254,6 +256,23 @@ pub(crate) fn begin_recording_stream(
     let _ = ctx.event_tx.send(AudioEvent::RecordingStarted {
         start_sample: state.rec.start_sample,
     });
+
+    // Open a cycle-record session when loop-record mode is armed and a
+    // real loop range is active. Each loop seam then rolls the in-progress
+    // capture into a distinct take (see `poll_loop_record_seam`); without
+    // it a looped recording keeps the legacy single-clip behaviour.
+    state.loop_record_session = if state.rec.loop_record
+        && state.rec.loop_enabled
+        && state.rec.loop_out > state.rec.loop_in
+    {
+        Some(LoopRecordSession {
+            slot: TimelineRange::from_bounds(state.rec.loop_in, state.rec.loop_out),
+            pass_index: 0,
+            groups: std::collections::HashMap::new(),
+        })
+    } else {
+        None
+    };
 }
 
 pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
@@ -264,9 +283,15 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
     cancel_precount(ctx, state);
 
     if was_recording {
-        state
-            .rec
-            .finalize_recording(ctx.sample_rate, ctx.clips.as_ref(), ctx.event_tx);
+        if state.loop_record_session.is_some() {
+            // Cycle-record: emit the trailing pass as its own take instead
+            // of the legacy single trimmed clip.
+            finalize_loop_record_pass(ctx, state, false);
+        } else {
+            state
+                .rec
+                .finalize_recording(ctx.sample_rate, ctx.clips.as_ref(), ctx.event_tx);
+        }
         state.rec.input_stream = None;
     }
     panic_all_instrument_plugins(ctx);
@@ -289,9 +314,15 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
     cancel_precount(ctx, state);
 
     if was_recording {
-        state
-            .rec
-            .finalize_recording(ctx.sample_rate, ctx.clips.as_ref(), ctx.event_tx);
+        if state.loop_record_session.is_some() {
+            // Cycle-record: emit the trailing pass as its own take instead
+            // of the legacy single trimmed clip.
+            finalize_loop_record_pass(ctx, state, false);
+        } else {
+            state
+                .rec
+                .finalize_recording(ctx.sample_rate, ctx.clips.as_ref(), ctx.event_tx);
+        }
         state.rec.input_stream = None;
     }
 
@@ -400,4 +431,118 @@ pub(crate) fn handle_set_loop_range(
     ctx.shared.loop_enabled.store(enabled, Ordering::Relaxed);
     ctx.shared.loop_in.store(loop_in, Ordering::Relaxed);
     ctx.shared.loop_out.store(loop_out, Ordering::Relaxed);
+}
+
+/// Toggle cycle-record (loop-record) mode. Stored on the recording state
+/// so [`begin_recording_stream`] opens a [`LoopRecordSession`] when the
+/// next record starts inside an active loop range.
+pub(crate) fn handle_set_loop_record_mode(state: &mut HandlerState, on: bool) {
+    state.rec.loop_record = on;
+}
+
+/// Detect a loop wrap during a cycle-record run and roll the finished pass.
+///
+/// Runs on the engine control thread every iteration. `last_playhead`
+/// carries the previous-iteration position across calls; when the playhead
+/// has moved backwards (the audio thread wrapped `loop_out` → `loop_in`)
+/// while recording with an open [`LoopRecordSession`], the just-completed
+/// pass is finalized into one take per armed track and a fresh capture is
+/// started for the next pass.
+pub(crate) fn poll_loop_record_seam(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    last_playhead: &mut SamplePos,
+) {
+    let playhead = ctx.shared.playhead.load(Ordering::Relaxed);
+    let wrapped = playhead < *last_playhead;
+    *last_playhead = playhead;
+    if !wrapped
+        || !ctx.shared.recording.load(Ordering::Relaxed)
+        || state.loop_record_session.is_none()
+    {
+        return;
+    }
+    finalize_loop_record_pass(ctx, state, true);
+}
+
+/// Finalize the current cycle-record pass into one take per armed track
+/// (an audio clip or a MIDI note set) and emit `AudioEvent::TakeCaptured`
+/// for each. With `reopen` a fresh capture is started for the next pass
+/// and `pass_index` is advanced; without it (transport stop) the session
+/// is torn down after this trailing pass.
+pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerState, reopen: bool) {
+    let Some(project_dir) = state.project_dir.clone() else {
+        return;
+    };
+    let (slot, pass_index) = match state.loop_record_session.as_ref() {
+        Some(s) => (s.slot, s.pass_index),
+        None => return,
+    };
+    let audio_dir = project_dir.join("audio");
+
+    // Pass 0's audio writer started where the user punched in; later passes
+    // start at the loop boundary the seam wrapped to.
+    let clip_start = if pass_index == 0 {
+        state.rec.start_sample
+    } else {
+        slot.start
+    };
+
+    // -- Audio takes --
+    let rolled = state.rec.roll_audio_pass(
+        ctx.sample_rate,
+        clip_start,
+        ctx.clips.as_ref(),
+        &audio_dir,
+        &mut state.next_clip_id,
+        reopen,
+    );
+    for take in rolled {
+        let group_id = loop_record_group_for(state, take.track_id);
+        let _ = ctx.event_tx.send(AudioEvent::TakeCaptured {
+            group_id,
+            track_id: take.track_id,
+            slot,
+            pass_index,
+            content: TakeContent::Audio {
+                clip_ref: take.clip_id,
+            },
+        });
+    }
+
+    // -- MIDI takes (instrument tracks) --
+    let midi_takes = super::midi::capture_loop_record_midi_pass(ctx, state, slot.end());
+    for (track_id, notes) in midi_takes {
+        let group_id = loop_record_group_for(state, track_id);
+        let _ = ctx.event_tx.send(AudioEvent::TakeCaptured {
+            group_id,
+            track_id,
+            slot,
+            pass_index,
+            content: TakeContent::Midi { notes },
+        });
+    }
+
+    if reopen {
+        if let Some(s) = state.loop_record_session.as_mut() {
+            s.pass_index += 1;
+        }
+    } else {
+        state.loop_record_session = None;
+    }
+}
+
+/// Stable take-group id for `track_id` within the active cycle-record run,
+/// allocated on first use so every pass of a track shares one group.
+fn loop_record_group_for(state: &mut HandlerState, track_id: TrackId) -> TakeGroupId {
+    let next = &mut state.next_take_group_id;
+    let session = state
+        .loop_record_session
+        .as_mut()
+        .expect("loop-record session present");
+    *session.groups.entry(track_id).or_insert_with(|| {
+        let id = *next;
+        *next += 1;
+        id
+    })
 }
