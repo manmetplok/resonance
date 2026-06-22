@@ -55,6 +55,9 @@ pub mod __test_support {
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
     };
+    /// Re-exported so app-side handler tests can name the command receiver
+    /// returned by [`AudioEngine::for_test_capture`](crate::AudioEngine::for_test_capture).
+    pub use crossbeam_channel::Receiver;
 }
 
 /// Test surface for the hardware-MIDI loop-wrap rewind logic. Exposed

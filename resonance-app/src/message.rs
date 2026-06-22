@@ -18,6 +18,7 @@ pub enum Message {
     Transport(TransportMessage),
     Track(TrackMessage),
     Bus(BusMessage),
+    Freeze(FreezeMessage),
     Master(MasterMessage),
     Clip(ClipMessage),
     MidiClip(MidiClipMessage),
@@ -143,6 +144,31 @@ pub enum BusMessage {
     ToggleBusFxBypass(BusId),
     AddPluginToBus(BusId, ScannedPlugin),
     RemovePluginFromBus(BusId, PluginInstanceId),
+}
+
+/// Track-freeze actions raised from the track header / context menu and
+/// the Tracks header-cap "Freeze all" button. Each variant maps to one
+/// engine command (or, for the batch variants, a sequence driven one
+/// track at a time). The handlers set the initiating UI status
+/// ([`FreezeStatus`](crate::state::FreezeStatus)) and let the engine's
+/// progress / completion events (mirrored by ba todo #575) drive the
+/// later transitions.
+#[derive(Debug, Clone)]
+pub enum FreezeMessage {
+    /// Freeze one track: render its post-FX output to a cache WAV and
+    /// switch playback to the cache. No-op if it's already freezing.
+    FreezeTrack(TrackId),
+    /// Unfreeze one track: detach the cache, remove the cache file, and
+    /// restore live synth + FX editing.
+    UnfreezeTrack(TrackId),
+    /// Re-render a frozen (typically stale) track's cache in place.
+    RefreezeTrack(TrackId),
+    /// Cancel the in-flight freeze render. Also abandons any active batch.
+    CancelFreeze,
+    /// Freeze every currently selected freezable track, sequentially.
+    FreezeSelectedTracks,
+    /// Freeze every freezable track in the project, sequentially.
+    FreezeAllTracks,
 }
 
 #[derive(Debug, Clone)]

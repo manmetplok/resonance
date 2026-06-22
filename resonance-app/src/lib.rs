@@ -126,6 +126,11 @@ pub struct Resonance {
     /// `TrackBounceCompleted`, `TrackBounceError`, or
     /// `TrackBounceCancelled`.
     pub(crate) bounce_in_progress: Option<crate::state::BounceProgressState>,
+    /// App-side track-freeze orchestration: per-track freeze status plus
+    /// the active "freeze selected / all" batch queue. Driven by the
+    /// `FreezeMessage` handlers (ba todo #574) and the engine freeze-event
+    /// mirror (ba todo #575). Cleared on project load.
+    pub(crate) freeze: crate::state::FreezeState,
     /// True when the project has been modified since the last save.
     pub(crate) dirty: bool,
     /// When set, the "unsaved changes" quit-confirmation dialog is shown.
@@ -367,6 +372,7 @@ impl Resonance {
             confirm_delete_track: None,
             bounce_dialog: None,
             bounce_in_progress: None,
+            freeze: crate::state::FreezeState::default(),
             dirty: false,
             confirm_quit: None,
             quit_after_save: None,
