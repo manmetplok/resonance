@@ -40,6 +40,79 @@ use std::sync::atomic::Ordering;
 use crate::engine::SharedState;
 use crate::types::*;
 
+/// Test-only harness around [`render_block`]: assembles the `IndexMap` /
+/// scratch-buffer plumbing from plain vecs, renders one offline (Bounce)
+/// block at playhead 0, and returns the interleaved-stereo master output
+/// plus the per-bus summing buffers. After the call each bus buffer still
+/// holds that bus's accumulated signal *before* its own fader — for a
+/// return bus that is exactly the summed aux-send contribution, so an
+/// integration test can assert the tap in isolation. Keeps `indexmap` and
+/// the render scaffolding out of the `tests/` crate.
+#[doc(hidden)]
+#[allow(clippy::type_complexity)]
+pub fn render_aux_for_test(
+    tracks: Vec<Track>,
+    busses: Vec<Bus>,
+    clips: Vec<AudioClip>,
+    aux_sends: Vec<AuxSend>,
+    frames: usize,
+    sample_rate: u32,
+) -> (Vec<f32>, Vec<(Vec<f32>, Vec<f32>)>) {
+    use indexmap::IndexMap;
+
+    let tracks_guard: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
+    let busses_guard: IndexMap<BusId, Bus> = busses.into_iter().map(|b| (b.id, b)).collect();
+    let plugins_guard: IndexMap<
+        PluginInstanceId,
+        parking_lot::Mutex<crate::clap_host::SyncClapInstance>,
+    > = IndexMap::new();
+    let midi_clips: Vec<MidiClip> = Vec::new();
+    let tempo_map = TempoMap::default();
+    let latency = crate::latency::LatencyComp::empty();
+    let active_busses = busses_guard.len();
+
+    let mut data = vec![0.0f32; frames * 2];
+    let mut track_buf_l = vec![0.0f32; frames];
+    let mut track_buf_r = vec![0.0f32; frames];
+    let mut bus_bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..active_busses)
+        .map(|_| (vec![0.0f32; frames], vec![0.0f32; frames]))
+        .collect();
+    let mut port_scratch: Vec<(Vec<f32>, Vec<f32>)> = Vec::new();
+    let mut note_buf: Vec<PendingNoteEvent> = Vec::new();
+
+    let in_filter = |_id: TrackId| true;
+    let mut strategy = RenderStrategy::Bounce {
+        in_filter: &in_filter,
+        respect_mute_solo: false,
+    };
+
+    render_block(
+        &mut data,
+        2,
+        &tracks_guard,
+        &busses_guard,
+        &clips,
+        &midi_clips,
+        &plugins_guard,
+        &tempo_map,
+        sample_rate,
+        false,
+        active_busses,
+        &aux_sends,
+        0,
+        frames,
+        &mut track_buf_l,
+        &mut track_buf_r,
+        &mut bus_bufs,
+        &mut port_scratch,
+        &mut note_buf,
+        &latency,
+        &mut strategy,
+    );
+
+    (data, bus_bufs)
+}
+
 use click::{render_count_in_clicks, render_metronome_clicks};
 use common::{advance_playhead_silent, panic_instrument_tracks, TransportSnap};
 use master::{apply_master_fx_chain, apply_master_volume_and_peaks};
@@ -327,6 +400,11 @@ pub(crate) fn mix_audio(
     let comp_guard = latency_comp.load();
     let comp_ref: &crate::latency::LatencyComp = &comp_guard;
 
+    // Snapshot the aux-send table once per buffer (wait-free; the engine
+    // thread republishes it on every send add/remove/clear).
+    let aux_guard = shared.aux_sends.load();
+    let aux_ref: &[AuxSend] = &aux_guard;
+
     let any_solo = any_top_level_solo(tracks_guard.values());
 
     // Detect a loop seam inside this buffer. When the callback reaches or
@@ -372,6 +450,7 @@ pub(crate) fn mix_audio(
             sample_rate,
             any_solo,
             active_busses,
+            aux_ref,
             playhead,
             head_frames,
             track_buf_l,
@@ -406,6 +485,7 @@ pub(crate) fn mix_audio(
             sample_rate,
             any_solo,
             active_busses,
+            aux_ref,
             loop_in,
             tail_frames,
             track_buf_l,
@@ -436,6 +516,7 @@ pub(crate) fn mix_audio(
             sample_rate,
             any_solo,
             active_busses,
+            aux_ref,
             playhead,
             frames,
             track_buf_l,

@@ -482,11 +482,59 @@ fn clip_crossfade_lengths(clip: &AudioClip, clips: &[AudioClip], clip_frames: u6
     (head.min(clip_frames), tail.min(clip_frames))
 }
 
+/// Linear gain for an aux-send level in dB. `0 dB` short-circuits to
+/// unity (the common case for a freshly-created send) so the per-block
+/// tap stays cheap.
+#[inline]
+fn db_to_linear(db: f32) -> f32 {
+    if db == 0.0 {
+        1.0
+    } else {
+        10f32.powf(db / 20.0)
+    }
+}
+
+/// Sum bus `src_idx`'s summing buffer into bus `dst_idx`'s, scaled by the
+/// (possibly ramped) `gain_l`/`gain_r`. The two indices are required to
+/// differ — a bus can never aux-send to itself (cyclic-route validation
+/// rejects it) — so a disjoint `split_at_mut` lets both buffers be
+/// borrowed at once without allocating a temporary.
+#[inline]
+fn sum_bus_to_bus(
+    bus_bufs: &mut [(Vec<f32>, Vec<f32>)],
+    src_idx: usize,
+    dst_idx: usize,
+    frames: usize,
+    gain_l: (f32, f32),
+    gain_r: (f32, f32),
+) {
+    if src_idx == dst_idx {
+        return;
+    }
+    let (src, dst) = if src_idx < dst_idx {
+        let (left, right) = bus_bufs.split_at_mut(dst_idx);
+        (&left[src_idx], &mut right[0])
+    } else {
+        let (left, right) = bus_bufs.split_at_mut(src_idx);
+        (&right[0], &mut left[dst_idx])
+    };
+    sum_to_stereo(&mut dst.0, &mut dst.1, frames, &src.0, &src.1, gain_l, gain_r);
+}
+
 /// Render one contiguous timeline block into the interleaved output:
 /// walks every active track + bus, mixes audio clips, dispatches MIDI
 /// events to instrument plugins, routes per-port multi-output
 /// instruments through their sub-tracks, and sums into the output (or
 /// per-bus summing buffer). Allocation-free.
+///
+/// `aux_sends` is the engine's current aux-send table (a lock-free
+/// snapshot loaded once per block by the caller). For every enabled send
+/// the source track/bus's signal is tapped — pre-fader (raw, send level
+/// only) or post-fader (after the source's fader/pan ramp) — scaled by
+/// the send level and summed into the destination return bus's summing
+/// buffer, in addition to the source's normal output. Empty ⇒ the block
+/// renders byte-for-byte as before, so projects without sends are
+/// unaffected.
 ///
 /// The caller is responsible for:
 /// - Passing `data` sliced to exactly `frames * channels` samples and
@@ -505,6 +553,7 @@ pub(crate) fn render_block(
     sample_rate: u32,
     any_solo: bool,
     active_busses: usize,
+    aux_sends: &[AuxSend],
     playhead: u64,
     frames: usize,
     track_buf_l: &mut [f32],
@@ -722,6 +771,44 @@ pub(crate) fn render_block(
             track.set_last_gains(gain_l.1, gain_r.1);
         }
 
+        // Aux sends: tap this track's signal into each destination return
+        // bus, on top of the main output routed above. Post-fader follows
+        // the fader/pan/mute ramp (`gain_l`/`gain_r`, which ramps to zero
+        // on a muted track); pre-fader takes the raw post-plugin signal
+        // with the send level only. The destination's summing buffer is
+        // always filled before the bus pass runs it, so a track→return
+        // send is sample-correct regardless of bus ordering.
+        for send in aux_sends {
+            if !send.enabled || send.source != SendSource::Track(track.id) {
+                continue;
+            }
+            let Some(dst_idx) = busses_guard
+                .get_index_of(&send.dest)
+                .filter(|idx| *idx < active_busses)
+            else {
+                continue;
+            };
+            let send_lin = db_to_linear(send.level_db);
+            let (send_gain_l, send_gain_r) = if send.pre_fader {
+                ((send_lin, send_lin), (send_lin, send_lin))
+            } else {
+                (
+                    (gain_l.0 * send_lin, gain_l.1 * send_lin),
+                    (gain_r.0 * send_lin, gain_r.1 * send_lin),
+                )
+            };
+            let (dst_l, dst_r) = &mut bus_bufs[dst_idx];
+            sum_to_stereo(
+                dst_l,
+                dst_r,
+                frames,
+                track_buf_l,
+                track_buf_r,
+                send_gain_l,
+                send_gain_r,
+            );
+        }
+
         // Sub-track fan-out: for every non-main plugin output port that
         // was filled by the instrument above, look up the matching
         // sub-track (if any) and route its scratch buffer through the
@@ -837,6 +924,38 @@ pub(crate) fn render_block(
         );
         if strategy.is_live() {
             bus.set_last_gains(bus_gain_l.1, bus_gain_r.1);
+        }
+
+        // Aux sends sourced from this bus, tapped after its own fader so
+        // post-fader reflects the bus level (the pre-fader buffer is still
+        // intact — `sum_to_output` only read it). The tapped signal lands
+        // in the destination's summing buffer, which is only re-read if
+        // that bus is processed later in this pass: return busses are
+        // created after their feeder busses, so their index is higher and
+        // the "returns after feeders" ordering holds. A send to an
+        // earlier-indexed bus (already flushed this block) is skipped by
+        // the natural ordering — its signal would otherwise be summed into
+        // a buffer that's already gone to master.
+        for send in aux_sends {
+            if !send.enabled || send.source != SendSource::Bus(bus.id) {
+                continue;
+            }
+            let Some(dst_idx) = busses_guard
+                .get_index_of(&send.dest)
+                .filter(|idx| *idx < active_busses && *idx != bus_idx)
+            else {
+                continue;
+            };
+            let send_lin = db_to_linear(send.level_db);
+            let (send_gain_l, send_gain_r) = if send.pre_fader {
+                ((send_lin, send_lin), (send_lin, send_lin))
+            } else {
+                (
+                    (bus_gain_l.0 * send_lin, bus_gain_l.1 * send_lin),
+                    (bus_gain_r.0 * send_lin, bus_gain_r.1 * send_lin),
+                )
+            };
+            sum_bus_to_bus(bus_bufs, bus_idx, dst_idx, frames, send_gain_l, send_gain_r);
         }
     }
 }

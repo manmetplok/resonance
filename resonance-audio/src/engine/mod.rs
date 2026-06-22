@@ -121,6 +121,14 @@ pub struct SharedState {
     /// running on their worker threads can be aborted from the same
     /// `CancelBounce` command without threading another channel.
     pub bounce_cancel: AtomicBool,
+    /// Lock-free snapshot of the engine's aux-send table, published by
+    /// the control thread on every send add/remove/clear and read once
+    /// per block by the live mixer and the offline bounce renderer. The
+    /// authoritative table lives on the control thread
+    /// (`HandlerState::aux_sends`); this is the audio-thread-visible copy
+    /// so the render path needs no lock. Empty until the first send is
+    /// created, so projects without sends pay nothing.
+    pub aux_sends: arc_swap::ArcSwap<Vec<AuxSend>>,
 }
 
 impl Default for SharedState {
@@ -144,6 +152,7 @@ impl Default for SharedState {
             count_in_remaining: AtomicU64::new(0),
             count_in_total: AtomicU64::new(0),
             bounce_cancel: AtomicBool::new(false),
+            aux_sends: arc_swap::ArcSwap::from_pointee(Vec::new()),
         }
     }
 }

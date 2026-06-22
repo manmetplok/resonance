@@ -198,6 +198,16 @@ pub(crate) fn handle_remove_plugin_from_bus(
 const AUX_SEND_MIN_DB: f32 = -120.0;
 const AUX_SEND_MAX_DB: f32 = 24.0;
 
+/// Republish the control-thread aux-send table into the lock-free
+/// snapshot the audio callback and bounce renderer read each block (see
+/// [`SharedState::aux_sends`](crate::engine::SharedState)). Called after
+/// every mutation of `state.aux_sends` so the render path never sees a
+/// stale or partially-updated table.
+pub(crate) fn publish_aux_sends(ctx: &HandlerCtx, state: &HandlerState) {
+    let snapshot: Vec<AuxSend> = state.aux_sends.values().copied().collect();
+    ctx.shared.aux_sends.store(std::sync::Arc::new(snapshot));
+}
+
 pub(crate) fn handle_set_bus_role(ctx: &HandlerCtx, bus_id: BusId, is_return: bool) {
     // Silently no-op on an unknown bus, matching the other bus setters.
     if let Some(bus) = ctx.busses.read().get(&bus_id) {
@@ -302,6 +312,9 @@ pub(crate) fn handle_set_aux_send(
             enabled,
         },
     );
+    // Make the new/updated send visible to the audio + bounce render
+    // paths before confirming the change to the app.
+    publish_aux_sends(ctx, state);
 
     let _ = ctx.event_tx.send(AudioEvent::AuxSendChanged {
         send_id,
@@ -315,6 +328,7 @@ pub(crate) fn handle_set_aux_send(
 
 pub(crate) fn handle_remove_aux_send(ctx: &HandlerCtx, state: &mut HandlerState, send_id: SendId) {
     if state.aux_sends.shift_remove(&send_id).is_some() {
+        publish_aux_sends(ctx, state);
         let _ = ctx.event_tx.send(AudioEvent::AuxSendRemoved { send_id });
     }
 }

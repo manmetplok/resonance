@@ -360,8 +360,9 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // Clear busses
     ctx.busses.write().clear();
 
-    // Clear aux sends
+    // Clear aux sends (and publish the now-empty table to the render path)
     state.aux_sends.clear();
+    super::busses::publish_aux_sends(ctx, state);
 
     // Clear master FX chain
     ctx.master.write().plugin_ids.clear();

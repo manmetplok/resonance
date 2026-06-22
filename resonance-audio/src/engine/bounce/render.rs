@@ -209,6 +209,10 @@ pub(super) fn render_chunk(
     let active_busses = busses_guard.len().min(scratch.bus_bufs.len());
     let any_solo = any_top_level_solo(tracks_guard.values());
 
+    // Aux-send snapshot: the offline bounce taps + sums sends identically
+    // to the live path so a bounced/exported WAV matches playback.
+    let aux_guard = ctx.shared.aux_sends.load();
+
     // Per-track / sub-track / bus rendering: shared with the live audio
     // callback (`mixer/render_core.rs`). The Bounce strategy swaps the
     // live path's non-blocking locks for deterministic blocking ones
@@ -232,6 +236,7 @@ pub(super) fn render_chunk(
         ctx.sample_rate,
         any_solo,
         active_busses,
+        &aux_guard,
         pos,
         frames,
         &mut scratch.track_buf_l,
