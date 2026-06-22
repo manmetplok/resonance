@@ -8,6 +8,7 @@
 mod clips;
 mod dispatch;
 mod midi;
+mod midi_map;
 pub mod performance;
 mod plugins;
 mod presets;
