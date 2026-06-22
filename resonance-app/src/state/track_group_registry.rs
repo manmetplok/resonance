@@ -151,6 +151,31 @@ impl TrackGroupRegistry {
         id
     }
 
+    /// Creates a group from a selection of member tracks (todo #684).
+    ///
+    /// `id` is the freshly-allocated group id (from the shared track-id
+    /// space). The group's name is auto-generated (`"Group N"`, where `N`
+    /// counts up from the number of existing groups) and its identity
+    /// colour cycles through [`GroupIdentityColor::all`] by that same
+    /// count, so successive groups get visually distinct swatches. The
+    /// `members` are added in the given order; duplicates are ignored by
+    /// [`add_member`](Self::add_member). Returns the new group's id.
+    pub fn create_group_from_selection(
+        &mut self,
+        id: TrackId,
+        members: &[TrackId],
+    ) -> TrackId {
+        let n = self.groups.len();
+        let name = format!("Group {}", n + 1);
+        let palette = GroupIdentityColor::all();
+        let color = palette[n % palette.len()];
+        self.add_group_new(id, name, color);
+        for &member in members {
+            self.add_member(id, member);
+        }
+        id
+    }
+
     /// Removes the group with the given id from the registry.
     ///
     /// Returns the removed group if it existed, or `None` if no such group existed.

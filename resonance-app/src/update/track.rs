@@ -82,9 +82,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             if has_audio || has_midi {
                 r.confirm_delete_track = Some(id);
             } else {
-                if r.interaction.selected_track == Some(id) {
-                    r.interaction.selected_track = None;
-                }
+                r.interaction.deselect_track(id);
                 if r.compose.expanded_track_id == Some(id) {
                     r.compose.expanded_track_id = None;
                 }
@@ -93,9 +91,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
         }
         TrackMessage::ConfirmRemoveTrack => {
             if let Some(id) = r.confirm_delete_track.take() {
-                if r.interaction.selected_track == Some(id) {
-                    r.interaction.selected_track = None;
-                }
+                r.interaction.deselect_track(id);
                 if r.compose.expanded_track_id == Some(id) {
                     r.compose.expanded_track_id = None;
                 }

@@ -64,9 +64,26 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             return project_io::save_project_as_dialog();
         }
         UiMessage::SelectTrack(id) => {
-            r.interaction.selected_track = id;
-            r.interaction.selected_clip = None;
-            r.interaction.selected_midi_clip = None;
+            match id {
+                // An additive (Cmd/Shift) click on a track toggles it in the
+                // multi-selection and leaves any clip selection alone.
+                Some(track_id) if r.interaction.select_additive => {
+                    r.interaction.toggle_track_selection(track_id);
+                }
+                // A plain click (or an explicit deselect-all) replaces the
+                // selection and drops the clip selection, as before.
+                _ => {
+                    r.interaction.select_single_track(id);
+                    r.interaction.selected_clip = None;
+                    r.interaction.selected_midi_clip = None;
+                }
+            }
+        }
+        UiMessage::ModifiersChanged(mods) => {
+            // Cmd (macOS) / Ctrl (other platforms) and Shift both extend the
+            // track selection. Mirroring the live state here lets the
+            // modifier-less mouse press decide single vs additive.
+            r.interaction.select_additive = mods.command() || mods.shift();
         }
         UiMessage::ConfirmSaveAndQuit => {
             let window_id = r.confirm_quit.take();

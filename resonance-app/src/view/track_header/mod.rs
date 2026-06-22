@@ -79,6 +79,15 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
     // of the column, so it must invalidate the lazy cache.
     (!r.compose.placements.is_empty()).hash(&mut h);
     r.interaction.selected_track.hash(&mut h);
+    // Multi-track selection drives both the per-row highlight and the
+    // group-member indent, so the lazy cache must invalidate when it
+    // changes or when a group is (un)formed from it.
+    r.interaction.selected_tracks.hash(&mut h);
+    for g in r.track_groups.get_all_groups_sorted() {
+        g.id.hash(&mut h);
+        g.ordered_members.hash(&mut h);
+        g.nesting_parent.hash(&mut h);
+    }
     r.interaction.selected_global_event.hash(&mut h);
     r.transport.time_sig_num.hash(&mut h);
     r.transport.time_sig_den.hash(&mut h);
@@ -228,7 +237,7 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
     };
 
     let mut lane_col = column![].spacing(0);
-    let selected_track = r.interaction.selected_track;
+    let selected_tracks = &r.interaction.selected_tracks;
     for (i, track) in sorted_tracks.iter().enumerate() {
         if i < first_visible {
             continue;
@@ -236,7 +245,7 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
         if i >= last_visible {
             break;
         }
-        let is_selected = selected_track == Some(track.id);
+        let is_selected = selected_tracks.contains(&track.id);
         lane_col = lane_col.push(track::view_track_header(r, track, is_selected));
     }
 
