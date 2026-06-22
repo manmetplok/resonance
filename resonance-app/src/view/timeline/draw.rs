@@ -1137,25 +1137,8 @@ fn clip_lane_rect(
     let track_index = sorted_tracks.iter().position(|t| t.id == track_id)?;
 
 
-    // Calculate indent for group members
-    let groups = canvas.track_groups.get_groups_containing_track(track_id);
-    let indent_level = groups
-        .iter()
-        .filter_map(|group| {
-            let mut depth = 1;
-            let mut current_group = *group;
-            while let Some(parent_id) = current_group.nesting_parent {
-                depth += 1;
-                if let Some(parent) = canvas.track_groups.get_group(parent_id) {
-                    current_group = parent;
-                } else {
-                    break;
-                }
-            }
-            Some(depth)
-        })
-        .max()
-        .unwrap_or(0);
+    // Calculate indent for group members using the registry method
+    let indent_level = canvas.track_groups.indent_depth(track_id);
     let indent = indent_level as f32 * theme::GROUP_MEMBER_INDENT;
     let lane_y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT - y_off;
     let y = lane_y + theme::CLIP_LANE_INSET;

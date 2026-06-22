@@ -43,25 +43,8 @@ impl crate::Resonance {
         let is_collapsed =
             has_sub_tracks && !self.mixer.expanded_sub_track_parents.contains(&track.id);
 
-        // Calculate indent level for group members
-        let groups = self.track_groups.get_groups_containing_track(track.id);
-        let indent_level = groups
-            .iter()
-            .filter_map(|group| {
-                let mut depth = 1;
-                let mut current_group = *group;
-                while let Some(parent_id) = current_group.nesting_parent {
-                    depth += 1;
-                    if let Some(parent) = self.track_groups.get_group(parent_id) {
-                        current_group = parent;
-                    } else {
-                        break;
-                    }
-                }
-                Some(depth)
-            })
-            .max()
-            .unwrap_or(0);
+        // Calculate indent level for group members using the registry method
+        let indent_level = self.track_groups.indent_depth(track.id);
         let indent_pixels = indent_level as f32 * theme::GROUP_MEMBER_INDENT;
 
         // Track names that overflow the 140 px strip get an ellipsis so

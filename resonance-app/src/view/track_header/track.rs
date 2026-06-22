@@ -24,29 +24,8 @@ pub(super) fn view_track_header(
 ) -> Element<'static, Message> {
     let track_id = track.id;
 
-    // Calculate indent level for group members
-    // Member of a group: 1 indent, member of a nested group: 2 indents
-    let groups = r.track_groups.get_groups_containing_track(track_id);
-    let indent_level = groups
-        .iter()
-        .filter_map(|group| {
-            // Count how many levels deep this group is nested
-            let mut depth = 1;
-            let mut current_group = *group;
-            // Check if this group itself has a parent (is nested)
-            while let Some(parent_id) = current_group.nesting_parent {
-                depth += 1;
-                if let Some(parent) = r.track_groups.get_group(parent_id) {
-                    current_group = parent;
-                } else {
-                    break;
-                }
-            }
-            Some(depth)
-        })
-        .max()
-        .unwrap_or(0);
-
+    // Calculate indent level for group members using the registry method
+    let indent_level = r.track_groups.indent_depth(track_id);
     let indent_pixels = indent_level as f32 * theme::GROUP_MEMBER_INDENT;
 
     // ---- Glyph (28×28 rounded BG_2 square with the track's instrument icon) ----

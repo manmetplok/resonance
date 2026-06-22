@@ -259,3 +259,76 @@ fn get_all_member_ids_flattens_nesting() {
     assert!(all_members.contains(&track1));
     assert!(all_members.contains(&track2));
 }
+
+#[test]
+fn indent_depth_ungrouped_track() {
+    let mut registry = TrackGroupRegistry::new();
+    let group_id = track_id(1);
+    let track1 = track_id(10);
+    let track2 = track_id(11);
+
+    // Add a group with track1 as member
+    let mut group = TrackGroup::new(group_id, "Drums", GroupIdentityColor::Drum);
+    group.ordered_members = vec![track1];
+    registry.add_group(group);
+
+    // track2 is not a member of any group
+    assert_eq!(registry.indent_depth(track2), 0);
+}
+
+#[test]
+fn indent_depth_direct_member() {
+    let mut registry = TrackGroupRegistry::new();
+    let group_id = track_id(1);
+    let track1 = track_id(10);
+
+    // Add a group with track1 as member
+    let mut group = TrackGroup::new(group_id, "Drums", GroupIdentityColor::Drum);
+    group.ordered_members = vec![track1];
+    registry.add_group(group);
+
+    // track1 is a direct member of one group
+    assert_eq!(registry.indent_depth(track1), 1);
+}
+
+#[test]
+fn indent_depth_nested_member() {
+    let mut registry = TrackGroupRegistry::new();
+    let parent_id = track_id(1);
+    let child_id = track_id(2);
+    let track1 = track_id(10);
+
+    // Create parent group with child as member
+    let mut parent = TrackGroup::new(parent_id, "Parent", GroupIdentityColor::Drum);
+    parent.ordered_members = vec![child_id];
+    registry.add_group(parent);
+
+    // Create child group (nested under parent) with track1 as member
+    let mut child = TrackGroup::new(child_id, "Child", GroupIdentityColor::Vocal);
+    child.nesting_parent = Some(parent_id);
+    child.ordered_members = vec![track1];
+    registry.add_group(child);
+
+    // track1 is a member of a nested group (child inside parent)
+    assert_eq!(registry.indent_depth(track1), 2);
+}
+
+#[test]
+fn indent_depth_multiple_groups() {
+    let mut registry = TrackGroupRegistry::new();
+    let group1_id = track_id(1);
+    let group2_id = track_id(2);
+    let track1 = track_id(10);
+
+    // Add two groups, both containing track1
+    let mut group1 = TrackGroup::new(group1_id, "Group1", GroupIdentityColor::Drum);
+    group1.ordered_members = vec![track1];
+    registry.add_group(group1);
+
+    let mut group2 = TrackGroup::new(group2_id, "Group2", GroupIdentityColor::Vocal);
+    group2.ordered_members = vec![track1];
+    registry.add_group(group2);
+
+    // track1 is a direct member of both groups, max depth is 1
+    assert_eq!(registry.indent_depth(track1), 1);
+}
