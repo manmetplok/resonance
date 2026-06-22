@@ -41,8 +41,8 @@ pub(crate) use hardware::{
     handle_set_track_midi_output,
 };
 pub(crate) use live::{
-    close_open_recordings, flush_live_note_stash, handle_live_midi_event, handle_send_note_off,
-    handle_send_note_on,
+    close_open_recordings, flush_live_note_stash, handle_live_control_event,
+    handle_live_midi_event, handle_send_note_off, handle_send_note_on,
 };
 /// Test surface for the live-note contention path. Exposed under
 /// `__test_support` (via `lib.rs`) so the regression test in

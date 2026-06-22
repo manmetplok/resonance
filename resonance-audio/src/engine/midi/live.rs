@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 
 use parking_lot::Mutex;
 
-use crate::midi_hardware::LiveMidiEvent;
+use crate::midi_hardware::{LiveControlEvent, LiveMidiEvent};
 use crate::mixer::{MidiStash, NoteSink};
 use crate::types::*;
 
@@ -216,6 +216,23 @@ pub(crate) fn handle_live_midi_event(
             handle_send_note_off(ctx, state, track_id, note, offset);
             handle_record_midi_event(ctx, state, track_id, false, note, 0.0, arrival);
         }
+    }
+}
+
+/// Dispatch a single drained [`LiveControlEvent`] from the dedicated
+/// control-surface input.
+///
+/// Binding lookup, soft-takeover, MIDI-learn capture and throttled
+/// feedback land in todo #430 (doc #167 §2 E3). For now the event is
+/// drained and dropped so the bounded control channel can't back up
+/// while a surface is connected but unmapped.
+pub(crate) fn handle_live_control_event(
+    _ctx: &HandlerCtx,
+    _state: &mut HandlerState,
+    event: LiveControlEvent,
+) {
+    match event {
+        LiveControlEvent::Cc { .. } | LiveControlEvent::Note { .. } => {}
     }
 }
 

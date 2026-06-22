@@ -1,4 +1,5 @@
 /// Shared utilities for Resonance plugins.
+pub mod audio_probe;
 pub mod automation;
 mod denormal;
 pub mod drum_map;
@@ -16,6 +17,10 @@ pub use midi_map::{
     apply_delta, cc_to_norm, decode_relative, delete_controller_map, load_controller_maps,
     save_controller_map, takeover_value, BindingId, CcMode, ControlSource, ControllerMap,
     ControllerMapStore, MidiBinding, MidiTarget, RelativeEnc, SendId, Takeover, TransportAction,
+};
+pub use audio_probe::{
+    probe_audio_file, scan_audio_folder, waveform_thumbnail, AudioFileEntry, AudioFormat,
+    AudioInfo, WaveformThumbnail,
 };
 pub use denormal::flush_denormals;
 pub use scan::scan_directory;

@@ -17,6 +17,7 @@
 //! play / lock-contended branches, and stitches the per-block render
 //! across the loop seam.
 
+mod audition;
 mod click;
 mod common;
 mod master;
@@ -40,6 +41,7 @@ use std::sync::atomic::Ordering;
 use crate::engine::SharedState;
 use crate::types::*;
 
+pub use audition::mix_audition_overlay;
 use click::{render_count_in_clicks, render_metronome_clicks};
 use common::{advance_playhead_silent, panic_instrument_tracks, TransportSnap};
 use master::{apply_master_fx_chain, apply_master_volume_and_peaks};
@@ -198,6 +200,11 @@ pub(crate) fn mix_audio(
     let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);
     let monitor_frames = monitor_samples / frame_stride;
 
+    // The arrangement render below has several early-exit branches (count-in,
+    // not-playing, lock-contended). Wrap them in a labeled block so each one
+    // `break`s to a common tail that mixes the audition preview overlay — the
+    // preview must be audible regardless of which branch the arrangement took.
+    'arrangement: {
     // Count-in branch: hold the playhead, skip track/clip rendering,
     // and emit metronome ticks from a count-in-local elapsed counter
     // so the last click lands exactly one beat before the punch-in
@@ -264,7 +271,7 @@ pub(crate) fn mix_audio(
         shared
             .count_in_remaining
             .store(new_remaining, Ordering::Relaxed);
-        return;
+        break 'arrangement;
     }
 
     if !shared.playing.load(Ordering::Relaxed) {
@@ -272,7 +279,7 @@ pub(crate) fn mix_audio(
         if monitor_frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
             let (Some(tracks_guard), Some(plugins_guard)) = (tracks.try_read(), plugins.try_read())
             else {
-                return;
+                break 'arrangement;
             };
             let any_monitor = mix_monitor_passthrough(
                 data,
@@ -291,7 +298,7 @@ pub(crate) fn mix_audio(
                 apply_master_volume_and_peaks(data, channels, shared);
             }
         }
-        return;
+        break 'arrangement;
     }
 
     let playhead = shared.playhead.load(Ordering::Relaxed);
@@ -313,7 +320,7 @@ pub(crate) fn mix_audio(
         // Lock contended -- advance playhead to avoid desync, output silence this buffer
         let new_playhead = advance_playhead_silent(shared, playhead, output_frames as u64);
         shared.playhead.store(new_playhead, Ordering::Relaxed);
-        return;
+        break 'arrangement;
     };
 
     let active_busses = busses_guard.len().min(bus_bufs.len());
@@ -492,4 +499,11 @@ pub(crate) fn mix_audio(
     apply_master_volume_and_peaks(data, channels, shared);
 
     shared.playhead.store(new_playhead, Ordering::Relaxed);
+    } // 'arrangement
+
+    // Audition preview overlay: summed in after the arrangement + master pass,
+    // independent of transport, so a sample audition is audible whether or not
+    // the project is rolling. Bypasses the master fader/FX by design — it's a
+    // monitor-style preview, not part of the mix.
+    mix_audition_overlay(data, channels, shared);
 }
