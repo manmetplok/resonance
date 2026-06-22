@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use crossbeam_channel::Sender;
+use resonance_metering::{LraMeter, LufsMeter, MeterSnapshot, PlrMeter, TruePeakMeter};
 
 use crate::decode::decode_file;
 use crate::types::{
@@ -282,6 +283,169 @@ impl ReferenceMonitor {
     #[doc(hidden)]
     pub fn is_reference_for_test(&self) -> bool {
         self.source_is_reference.load(Ordering::Relaxed)
+    }
+}
+
+/// How often (seconds) a short-term mean-square is pushed into the LRA
+/// tracker, matching the mastering plugin's 1 Hz cadence.
+const LRA_TICK_SECONDS: f32 = 1.0;
+
+/// Streaming meter tap for one A/B signal — the processed mix or the
+/// active reference. Owns the BS.1770-4 / EBU R128 measurement DSP
+/// (`ref_lufs_meter` / `ref_true_peak` / `ref_lra`) and turns the audio it
+/// is fed into a `Copy` [`MeterSnapshot`], so the mix tap and the
+/// reference tap are the same type driven from two different signals.
+///
+/// Trimmed to the readouts the A/B panel compares — integrated /
+/// short-term / momentary LUFS, true-peak, loudness range, and the derived
+/// PLR/PSR. The two fields it doesn't measure (`correlation`, `crest_db`)
+/// stay at their [`MeterSnapshot::default`] values.
+///
+/// Audio-thread-owned and single-threaded: [`feed_interleaved`] mutates
+/// the meters in place (no locks, no allocation after [`reserve`]); the
+/// control thread never touches it. Published snapshots reach the control
+/// thread lock-free through an
+/// [`AtomicMeterSnapshot`](resonance_metering::AtomicMeterSnapshot).
+pub struct ABMeterTap {
+    lufs: LufsMeter,
+    true_peak: TruePeakMeter,
+    lra: LraMeter,
+    /// De-interleave scratch, grown to the largest block seen so the
+    /// audio-thread feed path never allocates.
+    scratch_l: Vec<f32>,
+    scratch_r: Vec<f32>,
+    samples_since_lra: usize,
+    lra_tick_samples: usize,
+}
+
+impl ABMeterTap {
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            lufs: LufsMeter::new(sample_rate),
+            true_peak: TruePeakMeter::new(),
+            lra: LraMeter::new(),
+            scratch_l: Vec::new(),
+            scratch_r: Vec::new(),
+            samples_since_lra: 0,
+            lra_tick_samples: (LRA_TICK_SECONDS * sample_rate).max(1.0) as usize,
+        }
+    }
+
+    /// Pre-size the de-interleave scratch so [`feed_interleaved`] is
+    /// allocation-free for blocks up to `frames` long. Called once from the
+    /// engine when the audio buffer size is known (and pre-faulted there).
+    pub fn reserve(&mut self, frames: usize) {
+        if self.scratch_l.len() < frames {
+            self.scratch_l.resize(frames, 0.0);
+            self.scratch_r.resize(frames, 0.0);
+        }
+    }
+
+    /// Clear all accumulated loudness/peak/range state. Used when the
+    /// metered signal restarts (e.g. a reference re-activates from its top)
+    /// so a fresh integrated reading matches an offline analysis of the
+    /// played material.
+    pub fn reset(&mut self) {
+        self.lufs.reset();
+        self.true_peak.reset();
+        self.lra.reset();
+        self.samples_since_lra = 0;
+    }
+
+    /// Feed one interleaved block (`channels`-wide, `frames` long) to every
+    /// meter. Mono input is duplicated across L/R so the BS.1770 stereo sum
+    /// sees a proper pair. De-interleaves into owned scratch (grown only on
+    /// the rare oversize block) then ticks the LRA tracker at ~1 Hz.
+    pub fn feed_interleaved(&mut self, data: &[f32], channels: usize, frames: usize) {
+        if frames == 0 || channels == 0 {
+            return;
+        }
+        let frames = frames.min(data.len() / channels);
+        if frames == 0 {
+            return;
+        }
+        self.reserve(frames);
+        let l = &mut self.scratch_l[..frames];
+        let r = &mut self.scratch_r[..frames];
+        if channels >= 2 {
+            for f in 0..frames {
+                let base = f * channels;
+                l[f] = data[base];
+                r[f] = data[base + 1];
+            }
+        } else {
+            for f in 0..frames {
+                let s = data[f * channels];
+                l[f] = s;
+                r[f] = s;
+            }
+        }
+        self.lufs.push_stereo(l, r);
+        self.true_peak.push_stereo(l, r);
+        self.tick_lra(frames);
+    }
+
+    /// Push a 3 s short-term mean-square into the LRA tracker every
+    /// `lra_tick_samples`, recovering the mean-square by inverting the
+    /// short-term LUFS formula (same approach as the mastering plugin).
+    fn tick_lra(&mut self, frames: usize) {
+        self.samples_since_lra += frames;
+        while self.samples_since_lra >= self.lra_tick_samples {
+            self.samples_since_lra -= self.lra_tick_samples;
+            let st = self.lufs.short_term_lufs();
+            if st.is_finite() {
+                let ms = 10.0_f64.powf((st as f64 + 0.691) / 10.0);
+                self.lra.push_short_term_mean_square(ms);
+            }
+        }
+    }
+
+    /// Build a [`MeterSnapshot`] from the current meter state. Cheap (reads
+    /// only), so the audio thread can publish one per block.
+    pub fn snapshot(&self) -> MeterSnapshot {
+        let (tp_l, tp_r) = self.true_peak.per_channel_dbtp();
+        let tp_max = self.true_peak.peak_dbtp();
+        let integrated = self.lufs.integrated_lufs();
+        let short_term = self.lufs.short_term_lufs();
+        let plr = PlrMeter::compute(tp_max, tp_max, integrated, short_term);
+        MeterSnapshot {
+            momentary_lufs: self.lufs.momentary_lufs(),
+            short_term_lufs: short_term,
+            integrated_lufs: integrated,
+            true_peak_left_dbtp: tp_l,
+            true_peak_right_dbtp: tp_r,
+            true_peak_max_dbtp: tp_max,
+            plr_db: plr.plr_db,
+            psr_db: plr.psr_db,
+            lra_lu: self.lra.lra_lu(),
+            ..MeterSnapshot::default()
+        }
+    }
+}
+
+/// Audio-thread-owned pair of [`ABMeterTap`]s — one for the processed mix,
+/// one for the active reference — held in the cpal callback's scratch and
+/// passed into [`crate::mixer::mix_audio`] by `&mut`. Each block the mixer
+/// feeds whichever signal it rendered and publishes that tap's snapshot
+/// into [`crate::engine::SharedState`] for the control thread to poll.
+pub struct ABMeters {
+    pub mix: ABMeterTap,
+    pub reference: ABMeterTap,
+}
+
+impl ABMeters {
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            mix: ABMeterTap::new(sample_rate),
+            reference: ABMeterTap::new(sample_rate),
+        }
+    }
+
+    /// Pre-size both taps' de-interleave scratch for blocks up to `frames`
+    /// long so neither allocates inside the realtime callback.
+    pub fn reserve(&mut self, frames: usize) {
+        self.mix.reserve(frames);
+        self.reference.reserve(frames);
     }
 }
 
@@ -644,15 +808,24 @@ pub fn handle_set_ref_loop_to_mix(
     let _ = event_tx.send(AudioEvent::RefLoopToMixChanged { enabled });
 }
 
-/// `PollABMeters`: reply with an A/B meter snapshot. Stub — emits
-/// default (silent) meters; real metering lands with the playback path.
-pub fn handle_poll_ab_meters(player: &ReferencePlayer, event_tx: &Sender<AudioEvent>) {
-    use resonance_metering::MeterSnapshot;
-    let reference = player
-        .active_id
-        .map(|_| MeterSnapshot::default());
-    let _ = event_tx.send(AudioEvent::ABMeterSnapshot {
-        mix: MeterSnapshot::default(),
-        reference,
-    });
+/// `PollABMeters`: reply with the latest A/B meter snapshot. `mix` is the
+/// processed-mix tap published by the audio callback (always present); the
+/// reference snapshot is only meaningful when a reference is loaded, so it
+/// is forwarded as `Some(reference_snapshot)` when one is active and `None`
+/// otherwise. The audio thread feeds the reference tap from the reference
+/// PCM *after* its loudness-match/trim gain is applied, so the reference
+/// snapshot — and hence the panel's Delta against the mix — reflects the
+/// level the user actually hears.
+///
+/// Both snapshots are loaded lock-free from
+/// [`crate::engine::SharedState`] by the caller and passed in by value,
+/// keeping this handler pure so it can be driven headlessly from tests.
+pub fn handle_poll_ab_meters(
+    player: &ReferencePlayer,
+    mix: MeterSnapshot,
+    reference_snapshot: MeterSnapshot,
+    event_tx: &Sender<AudioEvent>,
+) {
+    let reference = player.active_id.map(|_| reference_snapshot);
+    let _ = event_tx.send(AudioEvent::ABMeterSnapshot { mix, reference });
 }

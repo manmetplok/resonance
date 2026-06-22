@@ -15,8 +15,9 @@ use resonance_audio::{
     handle_add_ref_marker, handle_poll_ab_meters, handle_remove_ref_marker,
     handle_remove_reference_track, handle_set_ab_source, handle_set_active_reference,
     handle_set_ref_loop_to_mix, handle_set_ref_loudness_match, handle_set_ref_position,
-    handle_set_ref_trim, register_reference, ReferencePlayer,
+    handle_set_ref_trim, register_reference, ABMeterTap, ReferencePlayer,
 };
+use resonance_metering::{LufsMeter, MeterSnapshot};
 
 /// Drain the single event the handler under test just emitted.
 fn next_event(rx: &Receiver<AudioEvent>) -> AudioEvent {
@@ -205,15 +206,38 @@ fn set_ref_loop_to_mix_emits() {
     assert!(matches!(next_event(&rx), AudioEvent::RefLoopToMixChanged { enabled: false }));
 }
 
+/// Build `frames` of interleaved stereo PCM from a per-channel generator.
+fn interleaved_stereo(frames: usize, mut gen: impl FnMut(usize) -> (f32, f32)) -> Vec<f32> {
+    let mut out = Vec::with_capacity(frames * 2);
+    for i in 0..frames {
+        let (l, r) = gen(i);
+        out.push(l);
+        out.push(r);
+    }
+    out
+}
+
 #[test]
 fn poll_ab_meters_snapshot_reflects_active_reference() {
     let mut player = ReferencePlayer::new();
     let (tx, rx) = unbounded::<AudioEvent>();
 
-    // No active reference → reference meter is None.
-    handle_poll_ab_meters(&player, &tx);
+    let mix = MeterSnapshot {
+        integrated_lufs: -14.0,
+        ..MeterSnapshot::default()
+    };
+    let ref_snap = MeterSnapshot {
+        integrated_lufs: -9.0,
+        ..MeterSnapshot::default()
+    };
+
+    // No active reference → reference meter is None, mix always present.
+    handle_poll_ab_meters(&player, mix, ref_snap, &tx);
     match next_event(&rx) {
-        AudioEvent::ABMeterSnapshot { reference, .. } => assert!(reference.is_none()),
+        AudioEvent::ABMeterSnapshot { mix: m, reference } => {
+            assert!(reference.is_none());
+            assert_eq!(m.integrated_lufs, -14.0);
+        }
         other => panic!("expected ABMeterSnapshot, got {other:?}"),
     }
 
@@ -221,10 +245,83 @@ fn poll_ab_meters_snapshot_reflects_active_reference() {
     handle_set_active_reference(&mut player, &tx, ReferenceId(1));
     let _ = next_event(&rx);
 
-    // Active reference → reference meter is present.
-    handle_poll_ab_meters(&player, &tx);
+    // Active reference → reference meter is present and carries the
+    // published reference snapshot verbatim (so the panel Delta is real).
+    handle_poll_ab_meters(&player, mix, ref_snap, &tx);
     match next_event(&rx) {
-        AudioEvent::ABMeterSnapshot { reference, .. } => assert!(reference.is_some()),
+        AudioEvent::ABMeterSnapshot { mix: m, reference } => {
+            assert_eq!(m.integrated_lufs, -14.0);
+            let r = reference.expect("active reference → Some snapshot");
+            assert_eq!(r.integrated_lufs, -9.0);
+        }
         other => panic!("expected ABMeterSnapshot, got {other:?}"),
     }
+}
+
+#[test]
+fn ab_meter_tap_integrated_matches_offline_analysis() {
+    // A 3 s 997 Hz tone at -0.5 amplitude, the canonical metering probe.
+    let sr = 48_000u32;
+    let frames = sr as usize * 3;
+    let freq = 997.0_f32;
+    let amp = 0.5_f32;
+    let interleaved = interleaved_stereo(frames, |i| {
+        let s = amp * (std::f32::consts::TAU * freq * i as f32 / sr as f32).sin();
+        (s, s)
+    });
+
+    // Stream it through the tap one ~1024-frame block at a time, exactly
+    // as the audio callback feeds it.
+    let mut tap = ABMeterTap::new(sr as f32);
+    for chunk in interleaved.chunks(1024 * 2) {
+        let block_frames = chunk.len() / 2;
+        tap.feed_interleaved(chunk, 2, block_frames);
+    }
+    let snap = tap.snapshot();
+
+    // Offline analysis of the same signal (deinterleaved).
+    let left: Vec<f32> = interleaved.iter().step_by(2).copied().collect();
+    let right: Vec<f32> = interleaved.iter().skip(1).step_by(2).copied().collect();
+    let offline = LufsMeter::analyze_offline(sr as f32, &left, &right);
+
+    assert!(
+        snap.integrated_lufs.is_finite(),
+        "streaming integrated should be finite for a steady tone"
+    );
+    assert!(
+        (snap.integrated_lufs - offline.integrated).abs() < 0.1,
+        "streaming integrated {} should match offline {} within tolerance",
+        snap.integrated_lufs,
+        offline.integrated
+    );
+    // True peak of a -0.5 (≈ -6 dBFS) tone sits well above the floor.
+    assert!(snap.true_peak_max_dbtp > -12.0 && snap.true_peak_max_dbtp < 0.0);
+}
+
+#[test]
+fn ab_meter_tap_reset_clears_accumulators() {
+    let sr = 48_000u32;
+    let interleaved = interleaved_stereo(sr as usize, |_| (0.5, 0.5));
+
+    let mut tap = ABMeterTap::new(sr as f32);
+    tap.feed_interleaved(&interleaved, 2, sr as usize);
+    assert!(tap.snapshot().integrated_lufs.is_finite());
+
+    tap.reset();
+    let cleared = tap.snapshot();
+    assert_eq!(cleared.integrated_lufs, f32::NEG_INFINITY);
+    assert_eq!(cleared.true_peak_max_dbtp, MeterSnapshot::default().true_peak_max_dbtp);
+}
+
+#[test]
+fn ab_meter_tap_handles_mono_blocks() {
+    // A single-channel block should be metered (L duplicated to R), not
+    // panic on the stride math.
+    let sr = 48_000u32;
+    let mono: Vec<f32> = (0..sr as usize)
+        .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / sr as f32).sin())
+        .collect();
+    let mut tap = ABMeterTap::new(sr as f32);
+    tap.feed_interleaved(&mono, 1, mono.len());
+    assert!(tap.snapshot().integrated_lufs.is_finite());
 }

@@ -37,6 +37,7 @@ pub use render_core::mix_track_clips;
 use ringbuf::traits::{Consumer, Observer};
 use std::sync::atomic::Ordering;
 
+use crate::engine::reference::ABMeters;
 use crate::engine::SharedState;
 use crate::types::*;
 
@@ -138,6 +139,11 @@ pub(crate) fn mix_audio(
     monitor_temp: &mut [f32],
     buf_frames: usize,
     quantum: usize,
+    // A/B metering taps: the mix tap is fed the processed-mix output at the
+    // end of a playing block; the reference tap is fed the reference PCM
+    // when the monitored source is a reference. Both publish their snapshot
+    // into `shared` for the control thread's `PollABMeters` reply.
+    ab_meters: &mut ABMeters,
 ) {
     resonance_common::flush_denormals();
 
@@ -175,6 +181,12 @@ pub(crate) fn mix_audio(
             output_frames,
             playhead,
         ) {
+            // Meter the reference exactly as monitored — post loudness-match
+            // / trim gain — so the panel's Delta against the mix is honest.
+            ab_meters
+                .reference
+                .feed_interleaved(&data[..output_frames * channels], channels, output_frames);
+            shared.ref_meter.store(&ab_meters.reference.snapshot());
             // Keep the transport rolling while playing so loop-to-mix
             // tracking and a later switch back to the mix resume at the
             // right spot; when stopped the reference free-runs (audition)
@@ -521,6 +533,12 @@ pub(crate) fn mix_audio(
 
     // Apply master volume, hard clip, and compute master peak levels
     apply_master_volume_and_peaks(data, channels, shared);
+
+    // Meter the processed mix (post master FX + volume) for the A/B panel.
+    ab_meters
+        .mix
+        .feed_interleaved(&data[..output_frames * channels], channels, output_frames);
+    shared.mix_meter.store(&ab_meters.mix.snapshot());
 
     shared.playhead.store(new_playhead, Ordering::Relaxed);
 }
