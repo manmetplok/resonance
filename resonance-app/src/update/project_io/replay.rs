@@ -50,6 +50,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.confirm_quit = None;
     r.compose
         .load_from_project(&project.section_definitions, &project.section_placements);
+    r.markers = crate::state::ArrangementMarkers::from(project.arrangement_markers.clone());
 
     // Restore the project's drum pattern bank (with legacy promotion),
     // keeping the `ComposeState::default()` bank in place when the
