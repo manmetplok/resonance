@@ -61,6 +61,11 @@ pub struct TimelineCanvas<'a> {
     pub section_placements: &'a [crate::compose::SectionPlacementState],
     pub section_definitions: &'a [crate::compose::SectionDefinitionState],
     pub selected_placement_id: Option<u64>,
+    /// Arrangement markers (flags + region spans) rendered in the ruler
+    /// band. Empty slice => nothing drawn. `selected_marker_id` recolors
+    /// the matching flag / span with the accent (todo #368).
+    pub markers: &'a [state::ArrangementMarker],
+    pub selected_marker_id: Option<u64>,
 }
 
 impl TimelineCanvas<'_> {
@@ -270,6 +275,13 @@ pub struct TimelineFingerprint {
     /// canvas cache would hold a stale chord layout after a chord is
     /// added / removed / re-rolled inside Compose.
     pub section_chord_total: usize,
+    pub markers_len: usize,
+    /// Hash of every marker's `(id, start, end, name, color)` so the cache
+    /// invalidates when a marker is added, moved, renamed, recolored or
+    /// turned into a region — tracking the count alone would miss in-place
+    /// edits and leave a stale flag / span on screen.
+    pub markers_hash: u64,
+    pub selected_marker_id: Option<u64>,
 }
 
 impl<'a> TimelineCanvas<'a> {
@@ -292,6 +304,19 @@ impl<'a> TimelineCanvas<'a> {
             e.denominator.hash(&mut sh);
         }
         let signature_events_hash = sh.finish();
+
+        // Hash the full marker content so any in-place edit (move, rename,
+        // recolor, region resize) invalidates the cache and the flag / span
+        // redraws on the next frame.
+        let mut mh = std::collections::hash_map::DefaultHasher::new();
+        for m in self.markers {
+            m.id.hash(&mut mh);
+            m.start_sample.hash(&mut mh);
+            m.end_sample.hash(&mut mh);
+            m.name.hash(&mut mh);
+            m.color.hash(&mut mh);
+        }
+        let markers_hash = mh.finish();
 
         TimelineFingerprint {
             clips_len: self.clips.len(),
@@ -323,6 +348,9 @@ impl<'a> TimelineCanvas<'a> {
                 .iter()
                 .map(|d| d.chords.len())
                 .sum(),
+            markers_len: self.markers.len(),
+            markers_hash,
+            selected_marker_id: self.selected_marker_id,
         }
     }
 }
@@ -605,6 +633,12 @@ impl<'a> TimelineCanvas<'a> {
                 frame.fill(&tri, loop_color);
             }
         }
+
+        // Arrangement-marker flags + region spans, drawn in the ruler band
+        // on top of the bar/beat ticks and the loop range so the flags and
+        // labels stay legible. Static layer — invalidates only on marker
+        // edits via the fingerprint, never per playback frame.
+        self.draw_markers(frame, bounds.width, ruler_height);
 
         // Playhead is drawn in the uncached overlay pass — see
         // `draw_overlay_into`. Keeping it out of the cached path lets

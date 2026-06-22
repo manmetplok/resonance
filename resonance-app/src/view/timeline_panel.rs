@@ -53,6 +53,8 @@ impl crate::Resonance {
             section_placements: &self.compose.placements,
             section_definitions: &self.compose.definitions,
             selected_placement_id: self.compose.selected_placement_id,
+            markers: self.markers.as_slice(),
+            selected_marker_id: self.interaction.selected_marker_id,
         };
 
         // Fixed canvas width = full content width. With the canvas no
