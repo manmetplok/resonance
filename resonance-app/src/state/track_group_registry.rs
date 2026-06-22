@@ -95,8 +95,26 @@ impl TrackGroupRegistry {
     }
 
     /// Returns all groups in the registry.
+    ///
+    /// Iteration order is unspecified (the registry is backed by a hash
+    /// map). Use [`get_all_groups_sorted`](Self::get_all_groups_sorted)
+    /// whenever a stable order matters — in particular for persistence.
     pub fn get_all_groups(&self) -> Vec<&TrackGroup> {
         self.groups.values().collect()
+    }
+
+    /// Returns all groups ordered by id.
+    ///
+    /// Group ids live in the monotonically-assigned track-id space, so an
+    /// id sort gives a stable, creation-ordered list. This is the order
+    /// project save uses so the same registry always serialises to the
+    /// same on-disk `track_groups` array — without it the hash-map
+    /// iteration order leaks into `project.json` and re-saving an
+    /// unchanged project produces a spurious diff.
+    pub fn get_all_groups_sorted(&self) -> Vec<&TrackGroup> {
+        let mut groups: Vec<&TrackGroup> = self.groups.values().collect();
+        groups.sort_unstable_by_key(|g| g.id);
+        groups
     }
 
     /// Returns all groups as mutable references.

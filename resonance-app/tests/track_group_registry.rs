@@ -238,6 +238,22 @@ fn get_root_groups() {
 }
 
 #[test]
+fn get_all_groups_sorted_orders_by_id_regardless_of_insertion() {
+    let mut registry = TrackGroupRegistry::new();
+    // Insert out of id order; the sorted view must still come back by id.
+    registry.add_group_new(track_id(30), "C", GroupIdentityColor::Keys);
+    registry.add_group_new(track_id(10), "A", GroupIdentityColor::Drum);
+    registry.add_group_new(track_id(20), "B", GroupIdentityColor::Vocal);
+
+    let ids: Vec<TrackId> = registry
+        .get_all_groups_sorted()
+        .iter()
+        .map(|g| g.id)
+        .collect();
+    assert_eq!(ids, vec![track_id(10), track_id(20), track_id(30)]);
+}
+
+#[test]
 fn get_all_member_ids_flattens_nesting() {
     let mut registry = TrackGroupRegistry::new();
     let parent_id = track_id(1);
