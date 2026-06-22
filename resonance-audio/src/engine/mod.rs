@@ -22,7 +22,7 @@ use ringbuf::traits::Split;
 
 use crate::clap_host::SyncClapInstance;
 use crate::midi_clock::MidiClockEvent;
-use crate::midi_hardware::LiveMidiEvent;
+use crate::midi_hardware::{LiveControlEvent, LiveMidiEvent};
 use crate::mixer;
 use crate::platform::{self, DeviceDirection};
 use crate::stream_errors::{format_underrun_line, UnderrunRateLimiter};
@@ -313,6 +313,10 @@ impl AudioEngine {
         // MIDI events queue without bound. 1024 fits a comfortable
         // burst at typical engine-thread cadence (~60 Hz wakeups).
         let (live_midi_tx, live_midi_rx) = crossbeam_channel::bounded::<LiveMidiEvent>(1024);
+        // Separate channel for the dedicated control-surface input. Same
+        // bound + rationale as the per-track live MIDI channel above.
+        let (live_control_tx, live_control_rx) =
+            crossbeam_channel::bounded::<LiveControlEvent>(1024);
         // MIDI clock arrives at 24 PPQN (≈48 msgs/sec at 120 BPM)
         // plus Start/Stop/Continue. 4096 covers seconds of bursty
         // input even if the engine thread stalls.
@@ -568,6 +572,8 @@ impl AudioEngine {
                     monitor_prod_audio,
                     live_midi_tx,
                     live_midi_rx,
+                    live_control_tx,
+                    live_control_rx,
                     clock_tx,
                     clock_rx,
                     sample_rate,

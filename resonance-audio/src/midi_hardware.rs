@@ -61,6 +61,38 @@ pub enum LiveMidiEvent {
     },
 }
 
+/// Control-surface MIDI input drained from the midir-spawned thread on
+/// the engine control thread. Unlike [`LiveMidiEvent`] this is not tied
+/// to a track: it carries the raw channel so the mapping layer can match
+/// a binding's [`ControlSource`] by `(channel, cc)` / `(channel, note)`.
+///
+/// Binding application + soft-takeover consume these (doc #167 §2 E3,
+/// todo #430); for now the engine drains and drops them.
+///
+/// [`ControlSource`]: resonance-common's `midi_map::ControlSource`
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // fields consumed by binding application in todo #430 (E3)
+pub enum LiveControlEvent {
+    /// Control Change (`0xB0`): a knob/fader/encoder move.
+    Cc {
+        channel: u8,
+        cc: u8,
+        value: u8,
+        arrival: std::time::Instant,
+    },
+    /// Note On/Off (`0x90`/`0x80`): a pad/button used as a toggle or
+    /// trigger. `velocity == 0` means the key was released (either an
+    /// explicit Note Off or a Note On with velocity 0, per the
+    /// running-status convention), so the mapping layer can treat
+    /// `velocity > 0` as "pressed".
+    Note {
+        channel: u8,
+        note: u8,
+        velocity: u8,
+        arrival: std::time::Instant,
+    },
+}
+
 /// Enumerate currently-available MIDI input devices.
 pub fn enumerate_midi_inputs() -> Vec<MidiDeviceInfo> {
     let input = match MidiInput::new("resonance-enumerate-in") {
@@ -295,6 +327,163 @@ fn parse_live_event(
 }
 
 // -----------------------------------------------------------------------------
+// Control surface input
+// -----------------------------------------------------------------------------
+
+struct ActiveControlConn {
+    device_name: String,
+    _conn: MidiInputConnection<()>,
+}
+
+/// A single, track-independent MIDI input dedicated to a hardware
+/// control surface (knobs, faders, pads, transport). Mirrors the
+/// per-track [`MidiInputRegistry`] threading model — midir calls stay on
+/// the engine control thread, the spawned midir thread parses bytes and
+/// pushes [`LiveControlEvent`]s into a bounded crossbeam channel — but
+/// holds at most one connection and listens omni (the binding layer
+/// matches on the per-event channel rather than a port-wide filter).
+pub struct ControlSurfaceInput {
+    conn: Option<ActiveControlConn>,
+    /// Set when the chosen device isn't currently present; reconciled on
+    /// the next [`Self::reconcile`] so re-plugging recovers without the
+    /// user re-picking it.
+    pending: Option<String>,
+    tx: Sender<LiveControlEvent>,
+}
+
+impl ControlSurfaceInput {
+    pub fn new(tx: Sender<LiveControlEvent>) -> Self {
+        Self {
+            conn: None,
+            pending: None,
+            tx,
+        }
+    }
+
+    /// Pick the control-surface input device. `device_name = None`
+    /// closes any open port and clears a pending request. A device that
+    /// isn't currently present is stored as pending (no error) and opened
+    /// by [`Self::reconcile`] once it appears.
+    ///
+    /// Wired to `AudioCommand::SetControlSurfaceInput` in todo #429 (E2).
+    #[allow(dead_code)]
+    pub fn set_input(&mut self, device_name: Option<String>) -> Result<(), String> {
+        // Already connected to the requested device — nothing to do.
+        if let Some(active) = &self.conn {
+            if Some(&active.device_name) == device_name.as_ref() {
+                return Ok(());
+            }
+        }
+
+        // Drop any previous connection (closes the port) and pending want.
+        self.conn = None;
+        self.pending = None;
+
+        let Some(name) = device_name else {
+            return Ok(());
+        };
+
+        match open_control_input(&name, self.tx.clone()) {
+            Ok(active) => {
+                self.conn = Some(active);
+                Ok(())
+            }
+            Err(_) => {
+                self.pending = Some(name);
+                Ok(())
+            }
+        }
+    }
+
+    /// Try to open a pending control-surface device that has just
+    /// appeared. Called after every input enumeration so a freshly
+    /// plugged-in surface starts working without user intervention.
+    pub fn reconcile(&mut self) {
+        let Some(name) = self.pending.clone() else {
+            return;
+        };
+        if let Ok(active) = open_control_input(&name, self.tx.clone()) {
+            self.conn = Some(active);
+            self.pending = None;
+        }
+    }
+}
+
+/// Open the named MIDI input as the control surface and wire up the
+/// message callback. The callback stamps a monotonic `arrival`, parses
+/// the bytes into a [`LiveControlEvent`], and pushes it onto the bounded
+/// channel; a full channel drops the event rather than blocking the
+/// midir thread.
+fn open_control_input(
+    name: &str,
+    tx: Sender<LiveControlEvent>,
+) -> Result<ActiveControlConn, String> {
+    let input = MidiInput::new("resonance-control-surface")
+        .map_err(|e| format!("create control-surface input: {e}"))?;
+    let port = input
+        .ports()
+        .into_iter()
+        .find(|p| input.port_name(p).map(|n| n == name).unwrap_or(false))
+        .ok_or_else(|| format!("control-surface input port not found: {name}"))?;
+
+    let tx_callback = tx;
+    let conn = input
+        .connect(
+            &port,
+            "resonance-control-surface-conn",
+            move |_timestamp, raw, _| {
+                // midir's `_timestamp` is platform-specific; capture a
+                // monotonic `Instant` ourselves (see `open_input`).
+                let arrival = std::time::Instant::now();
+                if let Some(event) = parse_control_event(raw, arrival) {
+                    let _ = tx_callback.try_send(event);
+                }
+            },
+            (),
+        )
+        .map_err(|e| format!("connect control-surface input {name}: {e}"))?;
+
+    Ok(ActiveControlConn {
+        device_name: name.to_string(),
+        _conn: conn,
+    })
+}
+
+/// Parse a raw MIDI status byte slice from the control surface into a
+/// [`LiveControlEvent`]. Emits `Cc` for `0xB0`, `Note` for `0x90`/`0x80`
+/// (a Note On with velocity 0 collapses to `velocity = 0`, matching the
+/// running-status note-off convention). Returns `None` for any other
+/// message kind or malformed/truncated data. Listens omni — the channel
+/// is captured on the event for the binding layer to match.
+fn parse_control_event(raw: &[u8], arrival: std::time::Instant) -> Option<LiveControlEvent> {
+    let status = *raw.first()?;
+    let kind = status & 0xF0;
+    let channel = status & 0x0F;
+    match kind {
+        0xB0 if raw.len() >= 3 => Some(LiveControlEvent::Cc {
+            channel,
+            cc: raw[1] & 0x7F,
+            value: raw[2] & 0x7F,
+            arrival,
+        }),
+        0x90 if raw.len() >= 3 => Some(LiveControlEvent::Note {
+            channel,
+            note: raw[1] & 0x7F,
+            // velocity 0 stays 0 → the mapping layer reads it as release.
+            velocity: raw[2] & 0x7F,
+            arrival,
+        }),
+        0x80 if raw.len() >= 3 => Some(LiveControlEvent::Note {
+            channel,
+            note: raw[1] & 0x7F,
+            velocity: 0,
+            arrival,
+        }),
+        _ => None,
+    }
+}
+
+// -----------------------------------------------------------------------------
 // MIDI output
 // -----------------------------------------------------------------------------
 
@@ -463,4 +652,11 @@ pub fn parse_live_event_for_test(
         encode_channel_filter(channel_filter),
         std::time::Instant::now(),
     )
+}
+
+/// Parse raw control-surface MIDI bytes into a [`LiveControlEvent`].
+/// Exposed for tests under `resonance-audio/tests/`. Stamps the result
+/// with a fresh `Instant::now()`; tests that don't care can ignore it.
+pub fn parse_control_event_for_test(raw: &[u8]) -> Option<LiveControlEvent> {
+    parse_control_event(raw, std::time::Instant::now())
 }

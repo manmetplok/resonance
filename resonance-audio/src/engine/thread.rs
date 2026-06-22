@@ -21,7 +21,7 @@ use crate::clap_host::{ClapBundle, SyncClapInstance};
 use crate::midi_clock::{
     ClockTempoTracker, MidiClockEvent, MidiClockReceiver, MidiClockSender,
 };
-use crate::midi_hardware::LiveMidiEvent;
+use crate::midi_hardware::{LiveControlEvent, LiveMidiEvent};
 use crate::mixer::MidiStash;
 use crate::recording::RecordingState;
 use crate::types::*;
@@ -145,6 +145,8 @@ pub(crate) fn engine_thread(
     monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
     live_midi_tx: Sender<LiveMidiEvent>,
     live_midi_rx: Receiver<LiveMidiEvent>,
+    live_control_tx: Sender<LiveControlEvent>,
+    live_control_rx: Receiver<LiveControlEvent>,
     clock_tx: Sender<MidiClockEvent>,
     clock_rx: Receiver<MidiClockEvent>,
     sample_rate: u32,
@@ -161,7 +163,7 @@ pub(crate) fn engine_thread(
         bundles: Vec::new(),
         active_imports: Arc::new(AtomicUsize::new(0)),
         project_dir: None,
-        midi_hw: MidiHardwareState::new(live_midi_tx),
+        midi_hw: MidiHardwareState::new(live_midi_tx, live_control_tx),
         midi_recording: HashMap::new(),
         live_note_stash: MidiStash::new(),
         midi_clock_sender: MidiClockSender::new(),
@@ -230,6 +232,13 @@ pub(crate) fn engine_thread(
         // optional record-into-clip and Thru-to-output.
         for ev in live_midi_rx.try_iter() {
             midi::handle_live_midi_event(&ctx, &mut state, ev);
+        }
+
+        // Drain control-surface CC/note messages queued since the last
+        // iteration. Binding application lands in todo #430; today they
+        // are consumed so the bounded channel can't back up.
+        for ev in live_control_rx.try_iter() {
+            midi::handle_live_control_event(&ctx, &mut state, ev);
         }
 
         // Retry live note events parked while a plugin lock was
