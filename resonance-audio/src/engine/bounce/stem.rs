@@ -229,6 +229,9 @@ pub fn render_stem(
     let render_stop = render_end + comp_latency;
     let mut skip_frames = comp_latency as usize;
 
+    // Stem export renders the static mix; parameter-automation lanes are
+    // not threaded through the stem spawn path yet.
+    let automation = super::super::AutomationSnapshot::default();
     let ctx = ChunkCtx {
         shared,
         tracks,
@@ -241,6 +244,7 @@ pub fn render_stem(
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
+        automation: &automation,
     };
     let mut scratch = ChunkScratch::new();
 

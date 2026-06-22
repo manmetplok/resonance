@@ -82,14 +82,16 @@ pub(super) fn dispatch_clips(
                 &mut state.automation_lanes,
                 ctx.event_tx,
                 lane,
-            )
+            );
+            super::super::publish_automation_snapshot(ctx, &state.automation_lanes);
         }
         AudioCommand::ClearAutomationLane { target } => {
             automation::clear_automation_lane_in_place(
                 &mut state.automation_lanes,
                 ctx.event_tx,
                 target,
-            )
+            );
+            super::super::publish_automation_snapshot(ctx, &state.automation_lanes);
         }
         AudioCommand::SetAutomationReadEnabled { target, enabled } => {
             automation::set_automation_read_enabled_in_place(
@@ -97,7 +99,8 @@ pub(super) fn dispatch_clips(
                 ctx.event_tx,
                 target,
                 enabled,
-            )
+            );
+            super::super::publish_automation_snapshot(ctx, &state.automation_lanes);
         }
         AudioCommand::SetProjectDir(dir) => {
             state.project_dir = Some(dir);

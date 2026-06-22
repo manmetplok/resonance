@@ -29,6 +29,7 @@ fn dispatch_export(
         Arc::clone(ctx.midi_clips),
         Arc::clone(ctx.plugins),
         Arc::clone(ctx.tempo_map),
+        ctx.automation.load_full(),
         ctx.sample_rate,
         ctx.event_tx.clone(),
     );
@@ -69,6 +70,7 @@ pub(super) fn dispatch_bounce(
             Arc::clone(ctx.midi_clips),
             Arc::clone(ctx.plugins),
             Arc::clone(ctx.tempo_map),
+            ctx.automation.load_full(),
             ctx.sample_rate,
             ctx.event_tx.clone(),
         ),

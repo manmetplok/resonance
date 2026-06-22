@@ -160,6 +160,10 @@ pub fn to_freeze_cache(
     let comp_latency = latency_comp.max_latency();
     let render_stop = render_end + comp_latency;
     let mut skip_frames = comp_latency as usize;
+    // Freeze renders the track's static mix; parameter-automation lanes
+    // are not applied to the cache (they replay live over the frozen
+    // audio would be wrong — the lanes target the live chain).
+    let automation = super::super::AutomationSnapshot::default();
     let ctx = ChunkCtx {
         shared,
         tracks,
@@ -172,6 +176,7 @@ pub fn to_freeze_cache(
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
+        automation: &automation,
     };
     let mut scratch = ChunkScratch::new();
 

@@ -52,6 +52,10 @@ pub(crate) struct HandlerCtx<'a> {
     pub plugins: &'a Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
     pub tempo_map: &'a Arc<arc_swap::ArcSwap<TempoMap>>,
     pub latency_comp: &'a Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
+    /// Parameter-automation snapshot published to the audio callback and
+    /// the offline bounce. Rebuilt from `automation_lanes` whenever the
+    /// lane set changes.
+    pub automation: &'a Arc<arc_swap::ArcSwap<automation::AutomationSnapshot>>,
     pub monitor_prod: &'a Arc<Mutex<ringbuf::HeapProd<f32>>>,
     pub event_tx: &'a Sender<AudioEvent>,
     pub cmd_tx_retry: &'a Sender<AudioCommand>,
@@ -186,6 +190,17 @@ pub(crate) struct HandlerState {
 /// bound get dropped with an error event.
 pub(crate) const MAX_CONCURRENT_IMPORTS: usize = 4;
 
+/// Rebuild the audio-thread automation snapshot from the engine-thread
+/// lane map and publish it wait-free. Called after any lane mutation so
+/// the audio callback and bounce see the new lanes on their next block.
+pub(crate) fn publish_automation_snapshot(
+    ctx: &HandlerCtx,
+    lanes: &automation::AutomationLanes,
+) {
+    let snapshot = automation::AutomationSnapshot::build(lanes, &ctx.plugins.read());
+    ctx.automation.store(Arc::new(snapshot));
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn engine_thread(
     cmd_rx: Receiver<AudioCommand>,
@@ -200,6 +215,7 @@ pub(crate) fn engine_thread(
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     plugins_arc: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
     latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
+    automation: Arc<arc_swap::ArcSwap<automation::AutomationSnapshot>>,
     monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
     live_midi_tx: Sender<LiveMidiEvent>,
     live_midi_rx: Receiver<LiveMidiEvent>,
@@ -249,6 +265,7 @@ pub(crate) fn engine_thread(
         plugins: &plugins_arc,
         tempo_map: &tempo_map,
         latency_comp: &latency_comp,
+        automation: &automation,
         monitor_prod: &monitor_prod,
         event_tx: &event_tx,
         cmd_tx_retry: &cmd_tx_retry,

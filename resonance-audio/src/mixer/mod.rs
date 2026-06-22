@@ -18,6 +18,7 @@
 //! across the loop seam.
 
 mod audition;
+mod automation_apply;
 mod click;
 mod common;
 mod master;
@@ -34,12 +35,13 @@ pub(crate) use midi_events::MAX_MIDI_EVENTS_PER_BUFFER;
 pub use midi_stash::{MidiStash, NoteSink};
 pub(crate) use render_core::{render_block, RenderStrategy};
 pub use render_core::mix_track_clips;
+pub use automation_apply::{auto_gain_ramp, auto_master_volume, auto_muted};
 
 use ringbuf::traits::{Consumer, Observer};
 use std::sync::atomic::Ordering;
 
 use crate::engine::reference::ABMeters;
-use crate::engine::SharedState;
+use crate::engine::{AutomationSnapshot, SharedState};
 use crate::types::*;
 
 pub use audition::mix_audition_overlay;
@@ -111,6 +113,7 @@ pub fn render_aux_for_test(
         &mut port_scratch,
         &mut note_buf,
         &latency,
+        &AutomationSnapshot::default(),
         &mut strategy,
     );
 
@@ -199,6 +202,7 @@ pub(crate) fn mix_audio(
     >,
     tempo_map: &arc_swap::ArcSwap<TempoMap>,
     latency_comp: &arc_swap::ArcSwap<crate::latency::LatencyComp>,
+    automation: &arc_swap::ArcSwap<AutomationSnapshot>,
     sample_rate: u32,
     track_buf_l: &mut [f32],
     track_buf_r: &mut [f32],
@@ -376,7 +380,7 @@ pub(crate) fn mix_audio(
 
         // Master volume + peaks so the count-in audio hits meters the
         // same way normal playback does.
-        apply_master_volume_and_peaks(data, channels, shared);
+        apply_master_volume_and_peaks(data, channels, shared, None);
 
         // Decrement the remaining-clicks counter. Once it hits zero
         // the metronome goes quiet, but `count_in_active` keeps the
@@ -412,7 +416,7 @@ pub(crate) fn mix_audio(
             );
             if any_monitor {
                 // Apply master volume and compute master peak levels
-                apply_master_volume_and_peaks(data, channels, shared);
+                apply_master_volume_and_peaks(data, channels, shared, None);
             }
         }
         break 'arrangement;
@@ -455,6 +459,12 @@ pub(crate) fn mix_audio(
     // thread republishes it on every send add/remove/clear).
     let aux_guard = shared.aux_sends.load();
     let aux_ref: &[AuxSend] = &aux_guard;
+
+    // Snapshot the parameter-automation lanes once per buffer (wait-free,
+    // published by the engine thread on lane edits). Held across both
+    // seam sub-blocks and the master pass so the whole buffer agrees.
+    let auto_guard = automation.load();
+    let auto_ref: &AutomationSnapshot = &auto_guard;
 
     let any_solo = any_top_level_solo(tracks_guard.values());
 
@@ -515,6 +525,7 @@ pub(crate) fn mix_audio(
             input_channels,
             transport_snap,
             comp_ref,
+            auto_ref,
         );
 
         // Flush instrument voices at the seam.
@@ -551,6 +562,7 @@ pub(crate) fn mix_audio(
             input_channels,
             transport_snap,
             comp_ref,
+            auto_ref,
         );
 
         loop_in + tail_frames as u64
@@ -581,6 +593,7 @@ pub(crate) fn mix_audio(
             input_channels,
             transport_snap,
             comp_ref,
+            auto_ref,
         );
         playhead + output_frames as u64
     };
@@ -620,8 +633,12 @@ pub(crate) fn mix_audio(
         );
     }
 
-    // Apply master volume, hard clip, and compute master peak levels
-    apply_master_volume_and_peaks(data, channels, shared);
+    // Apply master volume, hard clip, and compute master peak levels.
+    // A master-gain automation lane (evaluated at the buffer's end frame)
+    // overrides the static fader; the pass ramps from the previous
+    // block's value so the sweep stays click-free.
+    let auto_master = auto_master_volume(auto_ref, playhead + output_frames as u64);
+    apply_master_volume_and_peaks(data, channels, shared, auto_master);
 
     // Meter the processed mix (post master FX + volume) for the A/B panel.
     ab_meters

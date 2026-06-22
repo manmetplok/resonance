@@ -46,7 +46,8 @@ pub mod __test_support {
     pub use crate::engine::{
         encode_buffer_for_test, freeze_terminal_event, midi_render_range,
         normalize_buffer_for_test, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,
-        try_lock_with_backoff, FREEZE_CANCELLED_MSG, SharedState,
+        try_lock_with_backoff, AutomationSnapshot, ResolvedParamLane, FREEZE_CANCELLED_MSG,
+        SharedState,
     };
     pub use crate::engine::{
         export_stems, render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter,
@@ -63,8 +64,9 @@ pub mod __test_support {
         parse_live_event_for_test, LiveControlEvent, LiveMidiEvent,
     };
     pub use crate::mixer::{
-        mix_audition_overlay, mix_track_clips, monitor_catchup_skip, monitor_read_len,
-        ramped_gain, render_aux_for_test, sum_to_output, sum_to_stereo, transport_pos_beats,
+        auto_gain_ramp, auto_master_volume, auto_muted, mix_audition_overlay, mix_track_clips,
+        monitor_catchup_skip, monitor_read_len, ramped_gain, render_aux_for_test, sum_to_output,
+        sum_to_stereo, transport_pos_beats,
         whole_frame_push_len,
     };
     pub use crate::stream_errors::{
