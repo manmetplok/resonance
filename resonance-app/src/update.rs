@@ -162,6 +162,22 @@ impl crate::Resonance {
             _ => None,
         });
         let close_requests = iced::window::close_requests().map(Message::WindowCloseRequested);
-        Subscription::batch([tick, keys, close_requests])
+        // Window-level file drops: dragging a `.mid`/`.midi` over the
+        // window opens the Import modal (showing its drop target) and a
+        // drop kicks off the parse. Non-MIDI files are ignored. These
+        // route through `update()` like any other message, so the
+        // startup-modal gate blocks them until a project is open.
+        let file_drops = iced::window::events().filter_map(|(_id, event)| match event {
+            iced::window::Event::FileHovered(path) => {
+                import::is_midi_path(&path).then_some(Message::Import(ImportMessage::HoverFile))
+            }
+            iced::window::Event::FileDropped(path) => import::is_midi_path(&path)
+                .then_some(Message::Import(ImportMessage::FileDropped(path))),
+            iced::window::Event::FilesHoveredLeft => {
+                Some(Message::Import(ImportMessage::HoverLeft))
+            }
+            _ => None,
+        });
+        Subscription::batch([tick, keys, close_requests, file_drops])
     }
 }
