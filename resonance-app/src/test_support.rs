@@ -73,6 +73,40 @@ impl Resonance {
         &self.aux.sends
     }
 
+    /// Test-only: swap in a command-capturing engine and hand back the
+    /// receiver its [`send`](resonance_audio::AudioEngine::send) calls
+    /// queue onto. Lets `tests/aux_send_handlers.rs` assert the exact
+    /// `AudioCommand`s an update handler emits, with no real audio device
+    /// and no engine thread. The previously installed engine is dropped
+    /// (its shutdown handshake runs on `Drop`).
+    #[doc(hidden)]
+    pub fn test_capture_engine(
+        &mut self,
+    ) -> resonance_audio::__test_support::Receiver<resonance_audio::types::AudioCommand> {
+        let (engine, cmd_rx) = resonance_audio::AudioEngine::for_test_capture();
+        self.engine = engine;
+        cmd_rx
+    }
+
+    /// Test-only: route a message straight through the dispatcher,
+    /// bypassing the startup/bounce gates and undo bookkeeping. Mirrors
+    /// `test_apply_engine_event` for the user-input side, so a handler
+    /// test doesn't need to flip `has_active_project` just to get a
+    /// message delivered.
+    #[doc(hidden)]
+    pub fn test_dispatch(&mut self, message: crate::message::Message) {
+        let _ = self.dispatch(message);
+    }
+
+    /// Test-only: seed the aux-send mirror directly so a handler test can
+    /// exercise the "edit an existing send" upsert path without first
+    /// driving the create round trip. Mirrors what an `AuxSendChanged`
+    /// echo would produce.
+    #[doc(hidden)]
+    pub fn test_seed_aux_send(&mut self, send: resonance_audio::types::AuxSend) {
+        self.aux.upsert(send);
+    }
+
     /// Test-only: read the most recent aux-send rejection forwarded to
     /// the UI (`None` once a later send succeeds).
     #[doc(hidden)]
