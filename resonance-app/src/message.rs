@@ -318,12 +318,21 @@ pub enum ProjectIoMessage {
     BouncePathSelected(Option<String>),
     SaveProject,
     SaveProjectAs,
+    /// Begin a periodic autosave snapshot. Routed through the same async
+    /// engine save state machine as [`Self::SaveProject`], but writes the
+    /// metadata to `project.autosave.json`, leaves the project dirty, and
+    /// targets a per-session scratch dir when the project was never saved.
+    /// Fired by the change-gated autosave timer (todo #465).
+    Autosave,
     OpenProject,
     /// User clicked a recent entry in the startup modal.
     OpenRecent(std::path::PathBuf),
     SavePathSelected(Option<String>),
     OpenPathSelected(Option<String>),
-    ProjectSaved(Result<(), String>),
+    /// Async save completion. The `bool` is `true` when the completed
+    /// save was an autosave (routes to `last_autosave_at`, keeps `dirty`
+    /// set, skips the recents list) rather than a manual save.
+    ProjectSaved(Result<(), String>, bool),
     ProjectLoaded(Result<Box<LoadedProject>, String>),
     ExportChordSheet,
     ChordSheetPathSelected(Option<String>, Vec<u8>),

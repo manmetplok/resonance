@@ -20,6 +20,7 @@
 /// a prior build and re-export.
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use resonance_audio::midi_io;
@@ -29,6 +30,17 @@ pub mod sections;
 pub use sections::{ProjectSectionChord, ProjectSectionDefinition, ProjectSectionPlacement};
 
 pub const PROJECT_FORMAT_VERSION: u32 = 2;
+
+/// File name of the canonical project-metadata document inside a `.rproj`
+/// directory. A manual save (over)writes this file.
+pub const PROJECT_JSON: &str = "project.json";
+
+/// File name of the autosave snapshot, written alongside
+/// [`PROJECT_JSON`]. Kept as a *separate* side file (never overwriting
+/// the canonical `project.json`) so a crash mid-autosave can only ever
+/// truncate the snapshot, leaving the last manual save fully intact.
+/// See epic #32 / doc #171 "Autosave triggering".
+pub const AUTOSAVE_JSON: &str = "project.autosave.json";
 
 /// On-disk project format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,6 +300,11 @@ pub struct SaveCollector {
     pub plugin_states: Vec<(PluginInstanceId, Vec<u8>)>,
     pub clips_done: bool,
     pub plugins_done: bool,
+    /// True when this collector is servicing a periodic autosave rather
+    /// than a manual save. Autosaves write their metadata to
+    /// [`AUTOSAVE_JSON`], leave `dirty` set, skip the recents list and
+    /// versioned backups, and update `last_autosave_at` on completion.
+    pub autosave: bool,
 }
 
 /// Write a project to disk. Assumes the engine has already written
@@ -296,6 +313,34 @@ pub struct SaveCollector {
 /// state blobs.
 pub fn save_project(
     path: &Path,
+    project: &ProjectFile,
+    plugin_states: &[(PluginInstanceId, Vec<u8>)],
+    midi_clips: &[(ClipId, Vec<MidiNote>)],
+) -> Result<(), String> {
+    write_project_metadata(path, PROJECT_JSON, project, plugin_states, midi_clips)
+}
+
+/// Write an autosave snapshot. Identical to [`save_project`] except the
+/// project metadata goes to [`AUTOSAVE_JSON`] instead of [`PROJECT_JSON`],
+/// so the canonical `project.json` is never overwritten. The shared
+/// audio / MIDI / plugin blobs are written to the same id-keyed paths as
+/// a normal save, so the side file plus those blobs form a complete,
+/// loadable snapshot for crash recovery.
+pub fn save_autosave(
+    path: &Path,
+    project: &ProjectFile,
+    plugin_states: &[(PluginInstanceId, Vec<u8>)],
+    midi_clips: &[(ClipId, Vec<MidiNote>)],
+) -> Result<(), String> {
+    write_project_metadata(path, AUTOSAVE_JSON, project, plugin_states, midi_clips)
+}
+
+/// Shared body of [`save_project`] / [`save_autosave`]: write the plugin
+/// state blobs and MIDI clip files, then the project-metadata JSON under
+/// `json_file_name`. Every write goes through [`atomic_write`].
+fn write_project_metadata(
+    path: &Path,
+    json_file_name: &str,
     project: &ProjectFile,
     plugin_states: &[(PluginInstanceId, Vec<u8>)],
     midi_clips: &[(ClipId, Vec<MidiNote>)],
@@ -309,23 +354,205 @@ pub fn save_project(
     for (instance_id, data) in plugin_states {
         let file_name = format!("plugin_{instance_id}.bin");
         let file_path = plugins_dir.join(&file_name);
-        std::fs::write(&file_path, data).map_err(|e| format!("Write {file_name}: {e}"))?;
+        atomic_write(&file_path, data).map_err(|e| format!("Write {file_name}: {e}"))?;
     }
 
     // Write MIDI clips as Standard MIDI Files.
     for (clip_id, notes) in midi_clips {
         let file_path = midi_dir.join(format!("clip_{clip_id}.mid"));
-        midi_io::write_midi_file(&file_path, notes)
-            .map_err(|e| format!("Write midi {clip_id}: {e}"))?;
+        let bytes = midi_io::encode_midi(notes).map_err(|e| format!("Encode midi {clip_id}: {e}"))?;
+        atomic_write(&file_path, &bytes).map_err(|e| format!("Write midi {clip_id}: {e}"))?;
     }
 
-    // Write project.json.
+    // Write the project-metadata JSON (project.json or, for an autosave,
+    // project.autosave.json).
     let json =
         serde_json::to_string_pretty(project).map_err(|e| format!("Serialize project: {e}"))?;
-    std::fs::write(path.join("project.json"), json)
-        .map_err(|e| format!("Write project.json: {e}"))?;
+    atomic_write(&path.join(json_file_name), json.as_bytes())
+        .map_err(|e| format!("Write {json_file_name}: {e}"))?;
 
     Ok(())
+}
+
+/// Crash-safe file write: write `bytes` to a sibling `*.tmp` in the
+/// same directory, fsync it, atomically rename it over `path`, then
+/// fsync the parent directory so the rename itself reaches disk. A
+/// crash at any point leaves either the previous file or the new file
+/// fully intact — never a truncated target.
+///
+/// The temp file lives in the same directory as the target so the
+/// rename stays within one filesystem (cross-device renames are not
+/// atomic). Its name embeds the target's file name to avoid colliding
+/// with the temp files of sibling writes in the same directory.
+///
+/// A leftover `*.tmp` from an interrupted write is inert: it shares no
+/// name with any file the loader looks for, so it can never clobber a
+/// good `project.json`, `.mid`, or `.bin`.
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| format!("Atomic write target {} has no parent dir", path.display()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("Atomic write target {} has no file name", path.display()))?;
+
+    let mut tmp_name = file_name.to_os_string();
+    tmp_name.push(".tmp");
+    let tmp_path = parent.join(&tmp_name);
+
+    // Write the full contents and fsync before the rename so the new
+    // data is durable on disk before it becomes visible at `path`.
+    {
+        let mut f = std::fs::File::create(&tmp_path)
+            .map_err(|e| format!("create {}: {e}", tmp_path.display()))?;
+        f.write_all(bytes)
+            .map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
+        f.sync_all()
+            .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))?;
+    }
+
+    // Atomic on POSIX: an observer sees either the old or the new file.
+    std::fs::rename(&tmp_path, path).map_err(|e| {
+        // Best-effort cleanup so a failed rename doesn't strand the tmp.
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("rename {} -> {}: {e}", tmp_path.display(), path.display())
+    })?;
+
+    // fsync the directory so the rename entry itself survives a crash.
+    // Directory fsync is unsupported on some platforms/filesystems, so
+    // failures here are tolerated — the file data is already durable.
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+
+    Ok(())
+}
+
+/// One timestamped snapshot under a project's `backups/` directory.
+/// Returned by [`list_backups`] for the restore UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupEntry {
+    /// Absolute path to the backup file (`backups/project-<rfc3339>.json`).
+    pub path: PathBuf,
+    /// The RFC3339 UTC timestamp embedded in the file name, verbatim.
+    pub timestamp: String,
+}
+
+/// Current wall clock as an RFC3339 UTC string suitable for a backup
+/// file name. Callers pass the result to [`write_backup`]; keeping the
+/// clock read out of `write_backup` lets tests drive rotation with
+/// deterministic timestamps.
+pub fn backup_timestamp_now() -> String {
+    use time::format_description::well_known::Rfc3339;
+    use time::OffsetDateTime;
+
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        // Formatting RFC3339 from a valid `OffsetDateTime` is infallible
+        // in practice; fall back to an epoch-seconds stamp rather than
+        // unwrap so a backup is still written under some sortable name.
+        .unwrap_or_else(|_| {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            format!("epoch-{secs}")
+        })
+}
+
+fn backup_file_name(timestamp: &str) -> String {
+    format!("project-{timestamp}.json")
+}
+
+/// Snapshot the project's already-written `project.json` into
+/// `backups/project-<timestamp>.json` (atomic write) and prune the
+/// oldest snapshots so at most `retention` remain.
+///
+/// Call this only after a successful save: it reads the canonical
+/// `project.json`, so a failed save (which never wrote it, or left the
+/// prior copy intact) is never captured as a fresh backup. The
+/// audio/MIDI/plugin blobs are *shared*, not copied — a backup is a
+/// metadata snapshot whose relative paths still resolve against the
+/// project directory.
+///
+/// `timestamp` is the RFC3339 UTC stamp for the file name (see
+/// [`backup_timestamp_now`]). A `retention` of 0 prunes every snapshot,
+/// including the one just written; callers that want backups pass `>= 1`.
+pub fn write_backup(project_dir: &Path, timestamp: &str, retention: u32) -> Result<PathBuf, String> {
+    let source = project_dir.join("project.json");
+    let bytes =
+        std::fs::read(&source).map_err(|e| format!("Read project.json for backup: {e}"))?;
+
+    let backups_dir = project_dir.join("backups");
+    std::fs::create_dir_all(&backups_dir).map_err(|e| format!("Create backups dir: {e}"))?;
+
+    let dest = backups_dir.join(backup_file_name(timestamp));
+    atomic_write(&dest, &bytes).map_err(|e| format!("Write backup: {e}"))?;
+
+    prune_backups(&backups_dir, retention)?;
+    Ok(dest)
+}
+
+/// Delete the oldest snapshots in `backups_dir` until at most `retention`
+/// remain. Newest-first ordering comes from [`scan_backups`].
+fn prune_backups(backups_dir: &Path, retention: u32) -> Result<(), String> {
+    for entry in scan_backups(backups_dir).into_iter().skip(retention as usize) {
+        std::fs::remove_file(&entry.path)
+            .map_err(|e| format!("Prune backup {}: {e}", entry.path.display()))?;
+    }
+    Ok(())
+}
+
+/// List the versioned backups under `{project_dir}/backups`, newest
+/// first, for the restore UI. A missing or unreadable `backups/` dir
+/// yields an empty list rather than an error — there's simply nothing to
+/// restore.
+pub fn list_backups(project_dir: &Path) -> Vec<BackupEntry> {
+    scan_backups(&project_dir.join("backups"))
+}
+
+/// Scan a `backups/` directory for `project-<timestamp>.json` snapshots,
+/// sorted newest-first by their embedded RFC3339 timestamp. Leftover
+/// `*.tmp` files from an interrupted [`atomic_write`] are ignored (they
+/// don't end in `.json`), as is any unrelated file.
+fn scan_backups(backups_dir: &Path) -> Vec<BackupEntry> {
+    use time::format_description::well_known::Rfc3339;
+    use time::OffsetDateTime;
+
+    let read_dir = match std::fs::read_dir(backups_dir) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut entries: Vec<(Option<OffsetDateTime>, BackupEntry)> = read_dir
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            let name = path.file_name()?.to_str()?;
+            let timestamp = name.strip_prefix("project-")?.strip_suffix(".json")?;
+            let parsed = OffsetDateTime::parse(timestamp, &Rfc3339).ok();
+            Some((
+                parsed,
+                BackupEntry {
+                    path: path.clone(),
+                    timestamp: timestamp.to_string(),
+                },
+            ))
+        })
+        .collect();
+
+    // Newest first. Parse the RFC3339 stamp rather than string-compare:
+    // variable sub-second precision (`…00Z` vs `…00.5Z`) doesn't sort
+    // chronologically as plain text. Unparseable names sort oldest.
+    entries.sort_by(|(a, _), (b, _)| match (a, b) {
+        (Some(a), Some(b)) => b.cmp(a),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+
+    entries.into_iter().map(|(_, e)| e).collect()
 }
 
 /// Read a project from disk. Audio clips stay on disk and are

@@ -24,6 +24,7 @@ pub mod message;
 pub mod presets;
 pub mod project;
 pub mod recent;
+pub mod settings;
 pub mod state;
 mod test_support;
 pub mod theme;
@@ -159,6 +160,17 @@ pub struct Resonance {
         crate::state::PluginLocator,
     >,
 
+    /// Persistent application settings (autosave config, …), loaded from
+    /// `config_dir()/resonance/settings.json` on startup. Read via
+    /// [`Resonance::autosave_settings`]; re-persisted with
+    /// `settings::persist` whenever the user changes them.
+    pub(crate) settings: settings::AppSettings,
+
+    /// Stable per-process identifier (pid + startup timestamp). Used to
+    /// namespace the autosave scratch dir for a never-saved project so
+    /// concurrent app instances never collide (epic #32 / doc #171).
+    pub(crate) session_id: String,
+
     // ---- Track presets ----
     /// Built-in default track presets (baked into the binary).
     pub(crate) default_presets: Vec<presets::TrackPreset>,
@@ -223,6 +235,50 @@ impl Resonance {
     /// hard-coding it.
     pub fn track_registry(&self) -> &state::TrackRegistry {
         &self.registry
+    }
+
+    /// Read-only view onto the persisted autosave settings. The autosave
+    /// timer (epic #32) and the settings UI read these; surfaced so the
+    /// view layer and tests can interrogate the live config.
+    pub fn autosave_settings(&self) -> &settings::AutosaveSettings {
+        &self.settings.autosave
+    }
+
+    /// Stable per-process session id, used to namespace the autosave
+    /// scratch dir for a never-saved project.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    // ---- Save/autosave status surface ----
+    // Read-only views onto the save lifecycle, surfaced so the window
+    // chrome (todo #470) and the autosave integration tests can observe
+    // routing without reaching into `pub(crate)` state.
+
+    /// Whether the project has unsaved changes since the last *manual*
+    /// save. Autosaves deliberately leave this set.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Whether a manual save or autosave is currently writing to disk.
+    pub fn is_saving(&self) -> bool {
+        self.io.saving
+    }
+
+    /// Wall-clock time of the last successful manual save, if any.
+    pub fn last_saved_at(&self) -> Option<std::time::SystemTime> {
+        self.io.last_saved_at
+    }
+
+    /// Wall-clock time of the last successful autosave snapshot, if any.
+    pub fn last_autosave_at(&self) -> Option<std::time::SystemTime> {
+        self.io.last_autosave_at
+    }
+
+    /// Number of entries currently in the recent-projects list.
+    pub fn recent_project_count(&self) -> usize {
+        self.io.recent_projects.len()
     }
 
     // Tempo / signature mutators live in `update/global_track.rs` —
@@ -316,6 +372,16 @@ impl Resonance {
         let _ = engine.send(AudioCommand::ScanPlugins);
 
         let recent_projects = recent::load();
+        let settings = settings::load();
+        // Per-process session id: pid + startup nanos. Cheap, dependency
+        // free, and unique enough to namespace the autosave scratch dir.
+        let session_id = {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            format!("{}-{}", std::process::id(), nanos)
+        };
 
         let mut app = Self {
             engine,
@@ -375,6 +441,8 @@ impl Resonance {
             dirty: false,
             confirm_quit: None,
             quit_after_save: None,
+            settings,
+            session_id,
             default_presets: presets::default_presets(),
             user_presets: presets::load_user_presets(),
             pending_track_preset: None,
