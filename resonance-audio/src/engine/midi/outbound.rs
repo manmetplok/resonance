@@ -225,26 +225,3 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
 
     state.midi_hw.midi_outbound_last_playhead = curr;
 }
-
-/// Send a Bank Select (CC 0 MSB + CC 32 LSB) followed by a Program Change
-/// for a given track on its configured MIDI output device and channel.
-///
-/// This delegates to [`MidiOutputRegistry::send_program_change`] which uses
-/// the same realtime MIDI-out path as timeline notes, ensuring no allocation
-/// on the audio thread. Bank and program values are 0-based internally with
-/// correct 7-bit MIDI encoding (MSB = (bank >> 7) & 0x7F, LSB = bank & 0x7F).
-///
-/// Returns `true` if the messages reached a live MIDI output connection,
-/// `false` if the track has no device assigned or the device is offline.
-pub(crate) fn send_track_program_change(
-    state: &mut HandlerState,
-    track_id: TrackId,
-    channel: u8,
-    bank: Option<u16>,
-    program: Option<u8>,
-) -> bool {
-    state
-        .midi_hw
-        .midi_outputs
-        .send_program_change(track_id, channel, bank, program)
-}

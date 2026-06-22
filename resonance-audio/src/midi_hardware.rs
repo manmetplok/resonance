@@ -419,6 +419,30 @@ impl MidiOutputRegistry {
         true
     }
 
+    /// Test-only: returns the byte sequences that would be sent by
+    /// `send_program_change` for a given bank/program/channel, verifying
+    /// the CC0, CC32, Program Change ordering. This is a pure encoding
+    /// function that matches what the realtime `send_program_change` emits.
+    #[doc(hidden)]
+    pub fn program_change_bytes(
+        channel: u8,
+        bank: Option<u16>,
+        program: Option<u8>,
+    ) -> Vec<Vec<u8>> {
+        let mut result = Vec::new();
+        let ch = channel & 0x0F;
+        if let Some(bank) = bank {
+            let msb = ((bank >> 7) & 0x7F) as u8;
+            let lsb = (bank & 0x7F) as u8;
+            result.push(vec![0xB0 | ch, 0, msb]);
+            result.push(vec![0xB0 | ch, 32, lsb]);
+        }
+        if let Some(program) = program {
+            result.push(vec![0xC0 | ch, program & 0x7F]);
+        }
+        result
+    }
+
     /// Send a Note On to the device assigned to `track_id`, if any.
     pub fn send_note_on(&mut self, track_id: TrackId, channel: u8, note: u8, velocity: u8) {
         let Some(name) = self.track_assignments.get(&track_id).cloned() else {

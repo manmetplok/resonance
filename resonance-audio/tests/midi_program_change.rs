@@ -1,15 +1,15 @@
 //! Bank Select (CC0/CC32) + Program Change MIDI emission (todo #449, doc #169).
 //!
-//! Two things are exercised here, both against production code:
-//!   * [`ExternalInstrument::patch_messages`] — the encoder that turns a
-//!     track's selected bank/program into the exact byte sequence sent to the
-//!     hardware: Bank Select MSB (CC 0) + LSB (CC 32) *first*, Program Change
-//!     *last*, with 0-based values encoded as 7-bit MIDI data.
-//!   * [`MidiOutputRegistry::send_program_change`] — the realtime emit path
-//!     that hands those bytes to the device assigned to a track.
+//! Two independent implementations of the Bank Select + Program Change
+//! encoding are exercised here:
+//!   * [`ExternalInstrument::patch_messages`] in resonance-common — heap-allocated Vecs,
+//!     used for patch selection in the app.
+//!   * [`MidiOutputRegistry::send_program_change`] in resonance-audio — realtime emit
+//!     path that sends bytes directly to hardware MIDI devices via midir, with
+//!     stack-based arrays to avoid audio-thread allocation.
 //!
-//! The encoder and the emit path share the same encoding, so asserting on the
-//! encoder pins the on-the-wire byte sequence ordering required by #449.
+//! Both implementations must emit the same byte sequences (CC0 MSB, CC32 LSB,
+//! then Program Change) with correct 7-bit encoding. The tests verify they match.
 
 use resonance_audio::MidiOutputRegistry;
 use resonance_audio::TrackId;
@@ -135,5 +135,120 @@ fn send_program_change_false_without_device() {
     assert!(
         !registry.send_program_change(track_id, 0, Some(0), Some(0)),
         "send_program_change must report failure when no device is assigned"
+    );
+}
+
+/// Verify that the emit-path encoding (MidiOutputRegistry::program_change_bytes)
+/// matches the app-side encoding (ExternalInstrument::patch_messages) for
+/// the same bank/program/channel inputs. This ensures both independent
+/// implementations produce identical on-the-wire byte sequences.
+#[test]
+fn emit_path_encoding_matches_patch_messages() {
+    // Bank 130 on channel 3: MSB=1, LSB=2
+    let channel = 3u8;
+    let bank = Some(130u16);
+    let program = Some(42u8);
+
+    let emit_bytes = MidiOutputRegistry::program_change_bytes(channel, bank, program);
+    let config = ExternalInstrument {
+        track_id: 1,
+        bank,
+        program,
+        latency_offset_samples: 0,
+    };
+    let patch_bytes = config.patch_messages(channel);
+
+    assert_eq!(
+        emit_bytes, patch_bytes,
+        "emit-path encoding must match patch_messages encoding for bank+program on channel {}",
+        channel
+    );
+}
+
+/// Verify emit-path encoding for program-only case.
+#[test]
+fn emit_path_encoding_program_only() {
+    let channel = 5u8;
+    let bank = None;
+    let program = Some(64u8);
+
+    let emit_bytes = MidiOutputRegistry::program_change_bytes(channel, bank, program);
+    let config = ExternalInstrument {
+        track_id: 1,
+        bank,
+        program,
+        latency_offset_samples: 0,
+    };
+    let patch_bytes = config.patch_messages(channel);
+
+    assert_eq!(emit_bytes, patch_bytes);
+}
+
+/// Verify emit-path encoding for bank-only case.
+#[test]
+fn emit_path_encoding_bank_only() {
+    let channel = 0u8;
+    let bank = Some(256u16); // MSB=2, LSB=0
+    let program = None;
+
+    let emit_bytes = MidiOutputRegistry::program_change_bytes(channel, bank, program);
+    let config = ExternalInstrument {
+        track_id: 1,
+        bank,
+        program,
+        latency_offset_samples: 0,
+    };
+    let patch_bytes = config.patch_messages(channel);
+
+    assert_eq!(emit_bytes, patch_bytes);
+}
+
+/// Verify emit-path encoding for neither bank nor program.
+#[test]
+fn emit_path_encoding_empty() {
+    let channel = 10u8;
+    let bank = None;
+    let program = None;
+
+    let emit_bytes = MidiOutputRegistry::program_change_bytes(channel, bank, program);
+    let config = ExternalInstrument {
+        track_id: 1,
+        bank,
+        program,
+        latency_offset_samples: 0,
+    };
+    let patch_bytes = config.patch_messages(channel);
+
+    assert_eq!(emit_bytes, patch_bytes);
+    assert!(emit_bytes.is_empty());
+}
+
+/// Verify emit-path encoding at 7-bit boundaries (max values).
+#[test]
+fn emit_path_encoding_7bit_boundaries() {
+    let channel = 0u8;
+    let bank = Some(16383u16); // 0x3FFF = MSB 127, LSB 127
+    let program = Some(127u8);
+
+    let emit_bytes = MidiOutputRegistry::program_change_bytes(channel, bank, program);
+    let config = ExternalInstrument {
+        track_id: 1,
+        bank,
+        program,
+        latency_offset_samples: 0,
+    };
+    let patch_bytes = config.patch_messages(channel);
+
+    assert_eq!(
+        emit_bytes, patch_bytes,
+        "7-bit boundary encoding: bank 16383 = MSB 127, LSB 127; program 127"
+    );
+    assert_eq!(
+        emit_bytes,
+        vec![
+            vec![0xB0, 0, 127],
+            vec![0xB0, 32, 127],
+            vec![0xC0, 127],
+        ]
     );
 }

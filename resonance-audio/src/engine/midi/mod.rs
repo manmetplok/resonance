@@ -56,7 +56,7 @@ pub use live::deliver_or_stash;
 /// without the engine thread.
 pub use live::live_arrival_sample_offset;
 pub use outbound::{outbound_step_start, OutboundStep};
-pub(crate) use outbound::{poll_timeline_to_midi_output, send_track_program_change};
+pub(crate) use outbound::poll_timeline_to_midi_output;
 
 use crate::types::TempoMap;
 
