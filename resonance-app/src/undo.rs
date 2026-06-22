@@ -489,6 +489,26 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | TransportMessage::ToggleLoop => UndoAction::Record,
         },
 
+        Message::Marker(m) => match m {
+            // Mutating edits: record an undo entry capturing the
+            // pre-edit marker set (markers ride the ProjectFile
+            // snapshot/replay path). `LoopToRegion` mutates the loop
+            // range, matching `ToggleLoop`'s classification.
+            MarkerMessage::AddAtPlayhead
+            | MarkerMessage::Rename(_, _)
+            | MarkerMessage::Recolor(_, _)
+            | MarkerMessage::Delete(_)
+            | MarkerMessage::MoveStart(_, _)
+            | MarkerMessage::SetRegionEnd(_, _)
+            | MarkerMessage::LoopToRegion(_) => UndoAction::Record,
+            // Navigation only — moves the playhead / starts playback,
+            // no project mutation, mirroring `SeekToSample` / `Play`.
+            MarkerMessage::JumpToNext
+            | MarkerMessage::JumpToPrev
+            | MarkerMessage::JumpTo(_)
+            | MarkerMessage::PlayFromMarker(_) => UndoAction::Skip,
+        },
+
         Message::Track(t) => match t {
             TrackMessage::SetTrackVolume(id, _) => {
                 UndoAction::RecordCoalesced(CoalesceKey::TrackVolume(*id))

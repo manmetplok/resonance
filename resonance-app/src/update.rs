@@ -10,6 +10,7 @@ pub mod clips;
 pub mod compose;
 pub mod gates;
 pub mod global_track;
+pub mod marker;
 pub mod master;
 pub mod midi_clip;
 pub mod midi_editor;
@@ -75,6 +76,7 @@ impl crate::Resonance {
             Message::Compose(m) => compose::handle(self, m),
             Message::GlobalTrack(m) => global_track::handle(self, m),
             Message::Transport(m) => transport::handle(self, m),
+            Message::Marker(m) => marker::handle(self, m),
             Message::Track(m) => track::handle(self, m),
             Message::Bus(m) => bus::handle(self, m),
             Message::Master(m) => master::handle(self, m),
