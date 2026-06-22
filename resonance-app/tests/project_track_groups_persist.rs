@@ -6,7 +6,7 @@
 //! (no `track_groups` key) still load via the `#[serde(default)]`
 //! fallback.
 
-use resonance_app::project::ProjectFile;
+use resonance_app::project::{load_project, save_project, ProjectFile};
 use resonance_common::group_identity::GroupIdentityColor;
 use resonance_common::track_group::TrackGroup;
 
@@ -61,4 +61,30 @@ fn legacy_project_without_track_groups_loads_empty() {
     let restored: ProjectFile =
         serde_json::from_value(legacy).expect("legacy project loads");
     assert!(restored.track_groups.is_empty());
+}
+
+#[test]
+fn track_groups_survive_disk_save_load_round_trip() {
+    // Write a project to a real `.rproj` directory and read it back via
+    // the actual `save_project` / `load_project` entry points, so the
+    // on-disk path — not just in-memory serde — is covered. Every group
+    // field the epic persists (membership, nesting, fold state, macros)
+    // must round-trip intact.
+    let dir = std::env::temp_dir().join(format!(
+        "resonance_track_groups_persist_{}.rproj",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let file = ProjectFile {
+        track_groups: sample_groups(),
+        ..ProjectFile::default()
+    };
+
+    save_project(&dir, &file, &[], &[]).expect("save project");
+    let loaded = load_project(&dir).expect("load project");
+
+    assert_eq!(loaded.file.track_groups, file.track_groups);
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
