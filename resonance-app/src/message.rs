@@ -231,6 +231,11 @@ pub enum MidiEditorMessage {
         clip_id: ClipId,
         note_index: usize,
     },
+    /// Remove every currently-selected note from `clip_id` in one edit
+    /// (the piano roll's Delete/Backspace on a multi-note selection).
+    RemoveSelectedNotes {
+        clip_id: ClipId,
+    },
     MoveNote {
         clip_id: ClipId,
         note_index: usize,
@@ -242,9 +247,26 @@ pub enum MidiEditorMessage {
         note_index: usize,
         new_duration_ticks: u64,
     },
+    /// Replace the selection with a single note, or clear it (`None`).
+    /// Used by a plain click and by the vocal roll's single-select path.
     SelectNote {
         note_index: Option<usize>,
     },
+    /// Toggle one note's membership in the selection (shift/ctrl-click).
+    ToggleNoteSelection {
+        note_index: usize,
+    },
+    /// Apply a rubber-band marquee result: the notes whose rectangles fall
+    /// inside the drag rect. `additive` (shift held) unions with the
+    /// current selection instead of replacing it.
+    SelectNotesInRect {
+        indices: Vec<usize>,
+        additive: bool,
+    },
+    /// Select every note in the open clip (Ctrl/Cmd+A).
+    SelectAllNotes,
+    /// Drop the whole selection (click on empty space).
+    ClearNoteSelection,
     PreviewNote(TrackId, u8),
     StopPreview(TrackId, u8),
     ScrollY(f32),

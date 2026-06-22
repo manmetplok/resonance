@@ -458,7 +458,7 @@ pub fn open_midi_editor(r: &mut Resonance, clip_id: ClipId) {
             zoom_x: 0.5,
             zoom_y: 12.0,
             snap_ticks: TICKS_PER_QUARTER_NOTE / 4,
-            selected_note: None,
+            selected_notes: std::collections::BTreeSet::new(),
         });
     }
 }

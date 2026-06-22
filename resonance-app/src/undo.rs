@@ -564,6 +564,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         Message::MidiEditor(e) => match e {
             MidiEditorMessage::AddNote { .. }
             | MidiEditorMessage::RemoveNote { .. }
+            | MidiEditorMessage::RemoveSelectedNotes { .. }
             | MidiEditorMessage::MoveNote { .. }
             | MidiEditorMessage::ResizeNote { .. }
             | MidiEditorMessage::ToggleSlur { .. } => UndoAction::Record,
@@ -571,6 +572,10 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MidiEditorMessage::OpenSelectedMidiClip
             | MidiEditorMessage::CloseMidiEditor
             | MidiEditorMessage::SelectNote { .. }
+            | MidiEditorMessage::ToggleNoteSelection { .. }
+            | MidiEditorMessage::SelectNotesInRect { .. }
+            | MidiEditorMessage::SelectAllNotes
+            | MidiEditorMessage::ClearNoteSelection
             | MidiEditorMessage::PreviewNote(_, _)
             | MidiEditorMessage::StopPreview(_, _)
             | MidiEditorMessage::ScrollY(_) => UndoAction::Skip,
