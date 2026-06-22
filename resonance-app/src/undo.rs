@@ -474,6 +474,11 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // undo restores the prior grouping. The drag's start / update /
         // cancel phases are transient UI bookkeeping and skip the history.
         Message::Group(GroupMessage::DropMembership) => UndoAction::Record,
+        // Toggling a group's macro solo mutates the persisted group
+        // registry (macro_solo lives in the project), so it is a single
+        // recordable edit; a member's own solo is left untouched, so undo
+        // restores the exact prior group + per-track solo picture (#688).
+        Message::Group(GroupMessage::ToggleMacroSolo(_)) => UndoAction::Record,
         // The remaining group macro/fold reducers are inert placeholders
         // (todo #680) and the membership-drag start/update/cancel phases
         // are transient; their undo classification is a skip.

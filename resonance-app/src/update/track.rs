@@ -136,7 +136,12 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.soloed = !t.soloed;
                 t.soloed
             });
-            if let Some(soloed) = new_soloed {
+            if let Some(own) = new_soloed {
+                // A group's macro solo composes with the track's own solo,
+                // so the engine always receives the *effective* solo: the
+                // track stays soloed while its group solo holds even after
+                // its own solo is cleared (todo #688).
+                let soloed = own || r.track_groups.is_track_soloed_via_group(id);
                 let _ = r.engine.send(AudioCommand::SetTrackSolo {
                     track_id: id,
                     soloed,

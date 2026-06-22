@@ -102,9 +102,23 @@ pub(super) fn view_track_header(
     .spacing(0)
     .align_y(alignment::Vertical::Center);
 
+    // "via group" solo chip: shown only when this member is soloed purely
+    // because its group's macro solo is engaged (not by its own solo), so
+    // the row reads as "soloed because the group is" (todo #688). When
+    // absent it collapses to a zero-size spacer, leaving the layout (and
+    // the alignment snapshot) untouched.
+    let solo_via_group =
+        !track.soloed && r.track_groups.is_track_soloed_via_group(track_id);
+    let via_group_chip: Element<'static, Message> = if solo_via_group {
+        crate::view::controls::via_group_solo_chip()
+    } else {
+        Space::new().width(0).height(0).into()
+    };
+
     // Bottom of the cell: 4-button row, right-aligned to keep the glyph +
-    // name visually the dominant element.
-    let button_row = row![Space::new().width(Length::Fill), buttons]
+    // name visually the dominant element. The "via group" chip sits at the
+    // left, before the fill, so it never displaces the buttons.
+    let button_row = row![via_group_chip, Space::new().width(Length::Fill), buttons]
         .align_y(alignment::Vertical::Center);
 
     let body_col = column![top_row, Space::new().height(8), button_row,]

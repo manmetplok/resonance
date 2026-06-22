@@ -24,15 +24,18 @@ use iced::Task;
 use crate::message::{GroupMessage, Message};
 use crate::state::{MembershipDragState, MembershipDragSubject, MembershipDropTarget};
 use crate::Resonance;
-use resonance_audio::types::TrackId;
+use resonance_audio::types::{AudioCommand, TrackId};
 
 pub fn handle(r: &mut Resonance, m: GroupMessage) -> Task<Message> {
     match m {
-        // Behaviour implemented in todos #686–#689; see module docs.
+        // Macro solo cascades to members (todo #688). The remaining
+        // caret / macro-mute / trim variants are implemented in their own
+        // todos (#686 / #687 / #689); until then they route to a no-op so
+        // the header stays wired end-to-end. See module docs.
         GroupMessage::ToggleCollapse(_)
         | GroupMessage::ToggleMacroMute(_)
-        | GroupMessage::ToggleMacroSolo(_)
         | GroupMessage::SetMacroLevel(_, _) => {}
+        GroupMessage::ToggleMacroSolo(group_id) => toggle_macro_solo(r, group_id),
         GroupMessage::CreateGroupFromSelection => create_group_from_selection(r),
         GroupMessage::StartMembershipDrag(subject, cursor_y) => {
             start_membership_drag(r, subject, cursor_y)
@@ -62,6 +65,44 @@ fn create_group_from_selection(r: &mut Resonance) {
     let group_id = r.registry.allocate_sub_track_id();
     r.track_groups.create_group_from_selection(group_id, &members);
     r.interaction.select_single_track(None);
+}
+
+/// Toggle a group's macro solo and cascade the *effective* solo to every
+/// member track (todo #688, doc #200).
+///
+/// Macro solo is non-destructive: it never writes a member's own `soloed`
+/// flag. Instead the engine receives each member's *effective* solo — its
+/// own solo OR any containing group's macro solo — so a member stays
+/// soloed while the group solo holds and reverts to its own state when the
+/// group solo clears. Engaging the group solo therefore dims every
+/// ungrouped track through the engine's standard solo logic. Nested-group
+/// members travel with the cascade via the flattened member list.
+fn toggle_macro_solo(r: &mut Resonance, group_id: TrackId) {
+    if r.track_groups
+        .update_group(group_id, |g| g.macro_solo = !g.macro_solo)
+        .is_none()
+    {
+        return; // no such group — stale message after removal
+    }
+    for member in r.track_groups.get_all_member_ids(group_id) {
+        let soloed = member_effective_solo(r, member);
+        let _ = r.engine.send(AudioCommand::SetTrackSolo {
+            track_id: member,
+            soloed,
+        });
+    }
+}
+
+/// A track's *effective* solo: its own `soloed` flag OR membership in any
+/// macro-soloed group. This is what the audio engine must see so a group
+/// solo and a per-track solo compose instead of overwriting one another.
+fn member_effective_solo(r: &Resonance, track_id: TrackId) -> bool {
+    let own = r
+        .registry
+        .sorted_tracks()
+        .iter()
+        .any(|t| t.id == track_id && t.soloed);
+    own || r.track_groups.is_track_soloed_via_group(track_id)
 }
 
 // ---------------------------------------------------------------------

@@ -65,6 +65,21 @@ impl TrackGroupRegistry {
             .collect()
     }
 
+    /// Returns true when the track is soloed *via a group* — it belongs
+    /// (directly, or through one level of nesting) to at least one group
+    /// whose macro solo is engaged.
+    ///
+    /// This is deliberately independent of the track's own `soloed` flag:
+    /// the macro cascade never touches a member's own solo. The flag drives
+    /// both the "via group" header chip and the *effective* solo the audio
+    /// engine receives, so a group solo and a per-track solo compose
+    /// instead of fighting (todo #688).
+    pub fn is_track_soloed_via_group(&self, track_id: TrackId) -> bool {
+        self.get_groups_containing_track(track_id)
+            .iter()
+            .any(|group| group.macro_solo)
+    }
+
     /// Returns the indent depth for a track based on its group membership.
     ///
     /// - Returns 0 for tracks that are not members of any group
