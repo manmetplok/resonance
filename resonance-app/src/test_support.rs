@@ -197,4 +197,11 @@ impl Resonance {
             track.record_armed = armed;
         }
     }
+
+    /// Test-only: force the transport's recording flag so a test can render
+    /// the Performance status bar in its recording state.
+    #[doc(hidden)]
+    pub fn test_set_transport_recording(&mut self, recording: bool) {
+        self.transport.recording = recording;
+    }
 }
