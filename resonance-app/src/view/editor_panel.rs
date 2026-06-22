@@ -97,7 +97,7 @@ impl crate::Resonance {
                     zoom_x: editor_state.zoom_x,
                     zoom_y: editor_state.zoom_y,
                     snap_ticks: editor_state.snap_ticks,
-                    selected_note: editor_state.selected_note,
+                    selected_notes: &editor_state.selected_notes,
                     time_sig_num: self.transport.time_sig_num,
                 })
                 .width(Length::Fixed(content_w))

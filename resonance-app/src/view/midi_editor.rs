@@ -2,6 +2,8 @@
 use iced::widget::canvas;
 use iced::{mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
+use std::collections::BTreeSet;
+
 use crate::message::*;
 use crate::view::piano_roll::{
     self, hit_test_note, is_black_key, NoteEdge, NoteStyle, PianoRollLayout, PianoRollViewport,
@@ -29,7 +31,7 @@ pub struct PianoRollCanvas<'a> {
     pub zoom_x: f32,
     pub zoom_y: f32,
     pub snap_ticks: u64,
-    pub selected_note: Option<usize>,
+    pub selected_notes: &'a BTreeSet<usize>,
     pub time_sig_num: u8,
 }
 
@@ -45,11 +47,51 @@ enum DragMode {
     ResizeNote { note_index: usize, anchor_tick: u64 },
 }
 
+/// Minimum cursor travel (in pixels) before a left-press on empty grid is
+/// treated as a rubber-band marquee rather than a click that creates a
+/// note. Keeps a slightly-shaky click from drawing a stray selection.
+const MARQUEE_THRESHOLD_PX: f32 = 4.0;
+
+/// A left-press that started on empty grid space. It resolves on release:
+/// a negligible drag is a click (creates a note at `create_*`), a longer
+/// drag is a marquee selection over the swept rectangle.
+#[derive(Debug, Clone, Copy)]
+struct EmptyDrag {
+    /// Canvas-local press point.
+    origin: Point,
+    /// Canvas-local current cursor point.
+    current: Point,
+    /// The note + snapped start tick to create if this turns out to be a
+    /// plain click rather than a marquee drag.
+    create_note: u8,
+    create_tick: u64,
+}
+
+impl EmptyDrag {
+    /// Whether the cursor has travelled far enough to count as a marquee.
+    fn is_marquee(&self) -> bool {
+        (self.current.x - self.origin.x).abs() >= MARQUEE_THRESHOLD_PX
+            || (self.current.y - self.origin.y).abs() >= MARQUEE_THRESHOLD_PX
+    }
+
+    /// The swept (normalised) rectangle, in canvas-local coordinates.
+    fn rect(&self) -> Rectangle {
+        piano_roll::rect_from_points(self.origin, self.current)
+    }
+}
+
 /// Local state for the piano roll canvas, tracking drags and previews.
 #[derive(Debug, Default)]
 pub struct PianoRollState {
     drag: Option<DragMode>,
     previewing_note: Option<u8>,
+    /// Active empty-grid press: either a pending note-create or an
+    /// in-progress rubber-band marquee (see [`EmptyDrag`]).
+    empty_drag: Option<EmptyDrag>,
+    /// Latest keyboard modifier state, tracked from `ModifiersChanged`
+    /// events so mouse presses can tell shift/ctrl-click from a plain
+    /// click (mouse events don't carry modifiers on their own).
+    modifiers: iced::keyboard::Modifiers,
     /// Cached drawn geometry — invalidated only when the fingerprint of
     /// the inputs (notes / scroll / zoom / selection / clip identity)
     /// changes. Without this the piano roll redrew on every hover and
@@ -76,10 +118,23 @@ pub struct PianoRollFingerprint {
     pub zoom_x_bits: u32,
     pub zoom_y_bits: u32,
     pub snap_ticks: u64,
-    pub selected_note: Option<usize>,
+    pub selected_notes_hash: u64,
     pub time_sig_num: u8,
     pub drag_active: bool,
     pub preview_note: Option<u8>,
+}
+
+/// Hash the selection set into a single comparable value for the draw
+/// cache fingerprint. `BTreeSet` iterates in sorted order, so equal
+/// selections always hash equally.
+fn hash_selection(set: &BTreeSet<usize>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    set.len().hash(&mut h);
+    for i in set {
+        i.hash(&mut h);
+    }
+    h.finish()
 }
 
 impl canvas::Program<Message> for PianoRollCanvas<'_> {
@@ -148,11 +203,21 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                     if pos.x >= grid_x {
                         let click_tick = viewport.x_local_to_tick(pos.x - grid_x);
                         let click_note = viewport.y_local_to_note(pos.y);
+                        // Shift/Ctrl held → additive selection edit, not a drag.
+                        let additive = state.modifiers.shift() || state.modifiers.command();
 
                         // Check if clicking on an existing note
                         for (i, n) in self.clip.notes.iter().enumerate() {
                             let rect = self.note_rect(&layout, &viewport, n);
                             if let Some(edge) = hit_test_note(rect, pos) {
+                                // Shift/Ctrl-click toggles the note's membership
+                                // and never starts a drag — it's purely a
+                                // selection edit.
+                                if additive {
+                                    return Some(canvas::Action::publish(Message::MidiEditor(
+                                        MidiEditorMessage::ToggleNoteSelection { note_index: i },
+                                    )).and_capture());
+                                }
                                 state.drag = Some(match edge {
                                     NoteEdge::ResizeRight => DragMode::ResizeNote {
                                         note_index: i,
@@ -173,15 +238,17 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                             }
                         }
 
-                        // Clicked empty space: create a new note
+                        // Empty space: defer the decision to release. A
+                        // negligible drag is a click that creates a note; a
+                        // longer drag is a rubber-band marquee selection.
                         let snapped = self.snap(click_tick);
-                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::AddNote {
-                                clip_id: self.clip.id,
-                                note: click_note,
-                                start_tick: snapped,
-                                duration_ticks: self.snap_ticks,
-                                velocity: DEFAULT_VELOCITY,
-                            })).and_capture());
+                        state.empty_drag = Some(EmptyDrag {
+                            origin: pos,
+                            current: pos,
+                            create_note: click_note,
+                            create_tick: snapped,
+                        });
+                        return Some(canvas::Action::capture());
                     }
                 }
             }
@@ -206,6 +273,12 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
             // --- Mouse move (drag) ---
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 if let Some(pos) = cursor.position_in(bounds) {
+                    // Extend an in-progress empty-grid press (marquee). The
+                    // overlay repaints on the next periodic UI tick.
+                    if let Some(ref mut ed) = state.empty_drag {
+                        ed.current = pos;
+                        return Some(canvas::Action::capture());
+                    }
                     match &state.drag {
                         Some(DragMode::MoveNote {
                             note_index,
@@ -245,6 +318,38 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
             // --- Mouse release ---
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 state.drag = None;
+                // Resolve an empty-grid press.
+                if let Some(ed) = state.empty_drag.take() {
+                    if ed.is_marquee() {
+                        let indices = piano_roll::notes_in_marquee(
+                            &self.clip.notes,
+                            &layout,
+                            &viewport,
+                            ed.rect(),
+                        );
+                        let additive = state.modifiers.shift();
+                        return Some(canvas::Action::publish(Message::MidiEditor(
+                            MidiEditorMessage::SelectNotesInRect { indices, additive },
+                        )).and_capture());
+                    } else if !self.selected_notes.is_empty() {
+                        // Plain click on empty space with an active selection
+                        // clears it rather than creating a note.
+                        return Some(canvas::Action::publish(Message::MidiEditor(
+                            MidiEditorMessage::ClearNoteSelection,
+                        )).and_capture());
+                    } else {
+                        // Nothing selected: a plain empty click creates a note.
+                        return Some(canvas::Action::publish(Message::MidiEditor(
+                            MidiEditorMessage::AddNote {
+                                clip_id: self.clip.id,
+                                note: ed.create_note,
+                                start_tick: ed.create_tick,
+                                duration_ticks: self.snap_ticks,
+                                velocity: DEFAULT_VELOCITY,
+                            },
+                        )).and_capture());
+                    }
+                }
                 if let Some(note) = state.previewing_note.take() {
                     return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::StopPreview(
                             self.track_id,
@@ -262,14 +367,54 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Backspace),
                 ..
             }) => {
-                if let Some(idx) = self.selected_note {
-                    if idx < self.clip.notes.len() {
-                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::RemoveNote {
-                                clip_id: self.clip.id,
-                                note_index: idx,
-                            })).and_capture());
-                    }
+                if !self.selected_notes.is_empty() {
+                    return Some(canvas::Action::publish(Message::MidiEditor(
+                        MidiEditorMessage::RemoveSelectedNotes {
+                            clip_id: self.clip.id,
+                        },
+                    )).and_capture());
                 }
+            }
+
+            // --- Ctrl/Cmd+Shift+A: select the notes currently in view ---
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Character(ref c),
+                modifiers,
+                ..
+            }) if modifiers.command()
+                && modifiers.shift()
+                && c.as_str().eq_ignore_ascii_case("a") =>
+            {
+                let view_rect = Rectangle {
+                    x: grid_x,
+                    y: 0.0,
+                    width: (bounds.width - grid_x).max(0.0),
+                    height: grid_h,
+                };
+                let indices =
+                    piano_roll::notes_in_marquee(&self.clip.notes, &layout, &viewport, view_rect);
+                return Some(canvas::Action::publish(Message::MidiEditor(
+                    MidiEditorMessage::SelectNotesInRect {
+                        indices,
+                        additive: false,
+                    },
+                )).and_capture());
+            }
+
+            // --- Ctrl/Cmd+A: select every note in the clip ---
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Character(ref c),
+                modifiers,
+                ..
+            }) if modifiers.command() && c.as_str().eq_ignore_ascii_case("a") => {
+                return Some(canvas::Action::publish(Message::MidiEditor(
+                    MidiEditorMessage::SelectAllNotes,
+                )).and_capture());
+            }
+
+            // --- Track modifier state for shift/ctrl-aware mouse clicks ---
+            iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(mods)) => {
+                state.modifiers = *mods;
             }
 
             _ => {}
@@ -293,6 +438,33 @@ impl canvas::Program<Message> for PianoRollCanvas<'_> {
         let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
             self.draw_into(frame, bounds);
         });
+        // The rubber-band marquee is drawn live, outside the cached note
+        // layer, so dragging it doesn't invalidate ~100 cached note rects
+        // every frame; it repaints with the periodic UI tick.
+        if let Some(ed) = state.empty_drag {
+            if ed.is_marquee() {
+                let rect = ed.rect();
+                let mut overlay = canvas::Frame::new(renderer, bounds.size());
+                overlay.fill_rectangle(
+                    Point::new(rect.x, rect.y),
+                    Size::new(rect.width, rect.height),
+                    Color {
+                        a: 0.15,
+                        ..theme::ACCENT
+                    },
+                );
+                overlay.stroke(
+                    &canvas::Path::rectangle(
+                        Point::new(rect.x, rect.y),
+                        Size::new(rect.width, rect.height),
+                    ),
+                    canvas::Stroke::default()
+                        .with_color(theme::ACCENT)
+                        .with_width(1.0),
+                );
+                return vec![geometry, overlay.into_geometry()];
+            }
+        }
         vec![geometry]
     }
 }
@@ -363,7 +535,7 @@ impl PianoRollCanvas<'_> {
             zoom_x_bits: self.zoom_x.to_bits(),
             zoom_y_bits: self.zoom_y.to_bits(),
             snap_ticks: self.snap_ticks,
-            selected_note: self.selected_note,
+            selected_notes_hash: hash_selection(self.selected_notes),
             time_sig_num: self.time_sig_num,
             drag_active: state.drag.is_some(),
             preview_note: state.previewing_note,
@@ -534,7 +706,7 @@ impl PianoRollCanvas<'_> {
                 continue;
             }
 
-            let style = if self.selected_note == Some(i) {
+            let style = if self.selected_notes.contains(&i) {
                 NoteStyle::selected()
             } else {
                 NoteStyle::plain()
@@ -584,7 +756,7 @@ impl PianoRollCanvas<'_> {
             let bar_h = n.velocity.clamp(0.0, 1.0) * (lane_h - 4.0);
             let bar_y = lane_y + lane_h - bar_h - 2.0;
 
-            let is_selected = self.selected_note == Some(i);
+            let is_selected = self.selected_notes.contains(&i);
             let color = if is_selected {
                 theme::ACCENT
             } else {
