@@ -83,6 +83,11 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         // state; this placeholder arm keeps the workspace compiling once
         // the engine-side command/event plumbing (todo #314) is in place.
         E::ClipFadeChanged { .. } | E::ClipGainChanged { .. } => {}
+        // Vocal pitch analysis (todo #357) emits the detected contour/notes
+        // here. Mirroring them into app-side `VocalTuning` state is a
+        // follow-up app todo; until then the event is accepted but not yet
+        // reflected in app state, mirroring the fade/gain placeholder above.
+        E::ClipPitchDetected { .. } => {}
         E::RecordingFinished {
             clip_id,
             track_id,

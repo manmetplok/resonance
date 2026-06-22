@@ -29,7 +29,7 @@ use crate::types::*;
 use super::midi::MidiHardwareState;
 use super::{
     bounce, bounce_realtime, busses, clips, master, midi, plugins, scan, tracks, transport,
-    SharedState,
+    vocal_analysis, SharedState,
 };
 
 /// Read-only handle to shared project state and channels. Passed by
@@ -388,6 +388,9 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         ),
         AudioCommand::SetClipGain { clip_id, gain_db } => {
             clips::handle_set_clip_gain(ctx, clip_id, gain_db)
+        }
+        AudioCommand::AnalyzeClipPitch { clip_id } => {
+            vocal_analysis::handle_analyze_clip_pitch(ctx, state, clip_id)
         }
         AudioCommand::SetProjectDir(dir) => {
             state.project_dir = Some(dir);
