@@ -10,8 +10,6 @@ use std::path::{Path, PathBuf};
 
 use resonance_music_theory::{VocalParams, VocalVoicebank};
 
-use super::phonemes::VoicebankPhonemes;
-
 /// Meiji's per-token language id for English-prefixed phonemes. Lifted
 /// from `voicebanks/meiji/files/languages.json` (`"en": 3`). Silence
 /// markers (`AP`/`SP`) get `0` since they're un-prefixed in the dict.
@@ -118,22 +116,6 @@ fn try_voicebank(
 fn default_models_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../resonance-svs/models")
-}
-
-/// Replace any G2P-emitted phonemes that are missing from the chosen
-/// voicebank's phoneme dict with the closest acceptable substitute.
-/// Sending an unknown phoneme would land on token-id 0 (the `<PAD>`
-/// reservation), which produces a downstream tensor-shape mismatch in
-/// some voicebanks (Lilia's FastSpeech2 graph throws `Mul` broadcast
-/// errors when PADs appear mid-sequence).
-///
-/// Thin wrapper over [`VoicebankPhonemes`] — the single source of truth
-/// the vocal-roll phoneme strip queries too, so what the strip shows and
-/// what the model is fed can never disagree (design #173). Substitution
-/// runs *before* Meiji's `en/` prefixing in `build_segment`, so this
-/// operates on bare ARPAbet for every bank (e.g. Lilia's `v` → `f`).
-pub(super) fn substitute_phoneme(voicebank: VocalVoicebank, ph: &'static str) -> &'static str {
-    VoicebankPhonemes::new(voicebank).effective(ph)
 }
 
 /// Apply the voicebank's per-symbol naming convention. Meiji namespaces
