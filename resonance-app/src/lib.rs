@@ -104,6 +104,11 @@ pub struct Resonance {
     /// Rebuilt from `tempo_events` / `signature_events` whenever they change.
     pub(crate) tempo_map: TempoMap,
 
+    /// MIDI Learn / hardware control-surface mapping, mirrored from the
+    /// engine's active binding set. A pure projection of `MidiBinding*` /
+    /// `ControlSurface*` events — see `state::MidiMapState`.
+    pub(crate) midi_map: MidiMapState,
+
     // Sub-state groupings. See `state.rs` for definitions.
     pub(crate) transport: TransportState,
     pub(crate) viewport: ArrangeViewport,
@@ -348,6 +353,8 @@ impl Resonance {
                 denominator: 4,
             }],
             tempo_map: TempoMap::default(),
+
+            midi_map: MidiMapState::default(),
 
             transport: TransportState::default(),
             viewport: ArrangeViewport::default(),
