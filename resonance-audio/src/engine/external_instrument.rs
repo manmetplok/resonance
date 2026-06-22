@@ -155,6 +155,21 @@ pub fn check_external_instrument_devices_in_place(
     }
 }
 
+/// Read a track's MIDI output channel (defaulting to channel 0) and device
+/// name from the shared track table. Shared by the patch-send dispatch glue,
+/// which has to resolve the same `(channel, device)` pair the realtime send
+/// needs.
+fn track_midi_out(ctx: &HandlerCtx, track_id: TrackId) -> (u8, Option<String>) {
+    let tracks = ctx.tracks.read();
+    match tracks.get(&track_id) {
+        Some(t) => (
+            t.midi_output_channel.unwrap_or(0),
+            t.midi_output_device.load_full().map(|n| (*n).clone()),
+        ),
+        None => (0, None),
+    }
+}
+
 /// Dispatch glue for `AudioCommand::SetExternalInstrumentPatch`: read the
 /// track's MIDI output channel + device, then update the config and fire the
 /// patch send via [`set_external_instrument_patch_in_place`].
@@ -165,16 +180,7 @@ pub(crate) fn handle_set_patch(
     bank: Option<u16>,
     program: Option<u8>,
 ) {
-    let (channel, device) = {
-        let tracks = ctx.tracks.read();
-        match tracks.get(&track_id) {
-            Some(t) => (
-                t.midi_output_channel.unwrap_or(0),
-                t.midi_output_device.load_full().map(|n| (*n).clone()),
-            ),
-            None => (0, None),
-        }
-    };
+    let (channel, device) = track_midi_out(ctx, track_id);
     set_external_instrument_patch_in_place(
         &mut state.external_instruments,
         ctx.event_tx,
@@ -223,4 +229,62 @@ pub(crate) fn handle_check_devices(
         &available_midi_outputs,
         &available_inputs,
     );
+}
+
+/// Re-send Bank Select + Program Change for a single external-instrument track
+/// straight from its *stored* config, without mutating it or echoing
+/// `ExternalInstrumentChanged` — the config is unchanged; this only re-asserts
+/// the patch to the hardware so a freshly-powered or reconnected synth lands on
+/// the saved bank/program. The `(channel, midi_out_device)` pair is the track's
+/// MIDI output, resolved by the caller exactly as for a live patch change.
+///
+/// No-op when the track is not an external instrument or has neither a bank nor
+/// a program selected (there is nothing to send, so no offline event either).
+/// When the patch can't reach a live connection an
+/// `ExternalInstrumentMidiOutOffline` event is emitted for `midi_out_device`,
+/// mirroring [`set_external_instrument_patch_in_place`]; the config is always
+/// left intact (offline is recoverable — a replug reconnects).
+pub fn resend_external_instrument_patch_in_place(
+    instruments: &ExternalInstruments,
+    event_tx: &Sender<AudioEvent>,
+    midi_outputs: &mut MidiOutputRegistry,
+    track_id: TrackId,
+    channel: u8,
+    midi_out_device: Option<String>,
+) {
+    let Some(config) = instruments.get(&track_id) else {
+        return;
+    };
+    if config.bank.is_none() && config.program.is_none() {
+        return;
+    }
+    let reached = midi_outputs.send_program_change(track_id, channel, config.bank, config.program);
+    if !reached {
+        let _ = event_tx.send(AudioEvent::ExternalInstrumentMidiOutOffline {
+            track_id,
+            device: midi_out_device,
+        });
+    }
+}
+
+/// Dispatch glue for `AudioCommand::ResendExternalInstrumentPatches` and the
+/// transport-start hook: re-send the stored patch for *every* external-
+/// instrument track, reading each track's MIDI output channel + device from the
+/// shared track table. Tracks with no bank/program selected are skipped; an
+/// offline output is reported per track via `ExternalInstrumentMidiOutOffline`.
+pub(crate) fn handle_resend_patches(ctx: &HandlerCtx, state: &mut HandlerState) {
+    // Snapshot the keys so the per-track table read doesn't overlap the
+    // `&mut state.midi_hw` borrow the send needs.
+    let track_ids: Vec<TrackId> = state.external_instruments.keys().copied().collect();
+    for track_id in track_ids {
+        let (channel, device) = track_midi_out(ctx, track_id);
+        resend_external_instrument_patch_in_place(
+            &state.external_instruments,
+            ctx.event_tx,
+            &mut state.midi_hw.midi_outputs,
+            track_id,
+            channel,
+            device,
+        );
+    }
 }

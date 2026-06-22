@@ -17,8 +17,9 @@ use crossbeam_channel::unbounded;
 use resonance_audio::types::AudioEvent;
 use resonance_audio::{
     check_external_instrument_devices_in_place, clear_external_instrument_in_place,
-    set_external_instrument_in_place, set_external_instrument_latency_in_place,
-    set_external_instrument_patch_in_place, ExternalInstruments, MidiOutputRegistry,
+    resend_external_instrument_patch_in_place, set_external_instrument_in_place,
+    set_external_instrument_latency_in_place, set_external_instrument_patch_in_place,
+    ExternalInstruments, MidiOutputRegistry,
 };
 use resonance_common::ExternalInstrument;
 
@@ -177,6 +178,77 @@ fn patch_no_op_when_not_external() {
     );
     assert!(rx.try_recv().is_err(), "no event for a non-external track");
     assert!(instruments.is_empty());
+}
+
+#[test]
+fn resend_reports_offline_route_preserved() {
+    let mut instruments = ExternalInstruments::new();
+    let (tx, rx) = unbounded::<AudioEvent>();
+    // Empty registry: no device assigned -> the re-send finds no live
+    // connection and reports the MIDI output as offline.
+    let mut outputs = MidiOutputRegistry::new();
+
+    let mut config = ExternalInstrument::new(TRACK);
+    config.bank = Some(128);
+    config.program = Some(42);
+    set_external_instrument_in_place(&mut instruments, &tx, config);
+    let _ = rx.try_recv(); // drain the Changed echo from the initial store
+
+    resend_external_instrument_patch_in_place(
+        &instruments,
+        &tx,
+        &mut outputs,
+        TRACK,
+        0,
+        Some("Synth Port".to_string()),
+    );
+
+    // Re-send does NOT echo ExternalInstrumentChanged — the config is
+    // unchanged. The offline report is the only event, and the route stands.
+    match rx.try_recv() {
+        Ok(AudioEvent::ExternalInstrumentMidiOutOffline { track_id, device }) => {
+            assert_eq!(track_id, TRACK);
+            assert_eq!(device.as_deref(), Some("Synth Port"));
+        }
+        other => panic!("expected ExternalInstrumentMidiOutOffline, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "exactly one event emitted (no Changed echo)");
+
+    let stored = instruments[&TRACK];
+    assert_eq!(stored.bank, Some(128), "config preserved");
+    assert_eq!(stored.program, Some(42), "config preserved");
+}
+
+#[test]
+fn resend_no_op_when_no_patch_selected() {
+    let mut instruments = ExternalInstruments::new();
+    let (tx, rx) = unbounded::<AudioEvent>();
+    let mut outputs = MidiOutputRegistry::new();
+
+    // External instrument with neither bank nor program -> nothing to send,
+    // so no offline event even though the registry is empty.
+    set_external_instrument_in_place(&mut instruments, &tx, ExternalInstrument::new(TRACK));
+    let _ = rx.try_recv();
+
+    resend_external_instrument_patch_in_place(&instruments, &tx, &mut outputs, TRACK, 0, None);
+    assert!(rx.try_recv().is_err(), "no patch selected -> silent");
+}
+
+#[test]
+fn resend_no_op_when_not_external() {
+    let instruments = ExternalInstruments::new();
+    let (tx, rx) = unbounded::<AudioEvent>();
+    let mut outputs = MidiOutputRegistry::new();
+
+    resend_external_instrument_patch_in_place(
+        &instruments,
+        &tx,
+        &mut outputs,
+        TRACK,
+        0,
+        Some("Synth Port".to_string()),
+    );
+    assert!(rx.try_recv().is_err(), "no event for a non-external track");
 }
 
 #[test]
