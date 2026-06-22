@@ -84,15 +84,22 @@ impl From<&EncoderError> for ExportErrorKind {
     }
 }
 
+/// libopus only operates at 48 kHz (and a few sub-rates); the export
+/// pipeline always resamples to 48 kHz before the Opus sink.
+const OPUS_SAMPLE_RATE: u32 = 48_000;
+
 /// Resolve the encoded file's output sample rate: the format's requested
-/// rate, falling back to the engine rate. Formats without a rate field
-/// keep the engine rate (they error in `build_sink` before this matters).
+/// rate, falling back to the engine rate. MP3 keeps the engine rate; Opus
+/// is pinned to 48 kHz so the shared resampler converts the mix before the
+/// sink. Formats without a rate field otherwise keep the engine rate (they
+/// error in `build_sink` before this matters).
 fn output_sample_rate(format: &ExportFormat, engine_sr: u32) -> u32 {
     match *format {
         ExportFormat::Wav { sample_rate, .. } | ExportFormat::Flac { sample_rate, .. } => {
             sample_rate.unwrap_or(engine_sr)
         }
-        ExportFormat::Mp3 { .. } | ExportFormat::Opus { .. } => engine_sr,
+        ExportFormat::Mp3 { .. } => engine_sr,
+        ExportFormat::Opus { .. } => OPUS_SAMPLE_RATE,
     }
 }
 

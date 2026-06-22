@@ -30,13 +30,21 @@ rubato = "0.16"
 # Gated behind the `mp3` feature so a build without a C toolchain can opt
 # out and degrade to ExportErrorKind::EncoderUnavailable (todo #653).
 mp3lame-encoder = { version = "0.2", optional = true }
+# Opus/Ogg export (libopus + the Ogg container muxer). `opus` links the
+# system libopus; `ogg` is the pure-Rust container writer. Gated behind the
+# `opus` feature so a build without libopus opts out and degrades to
+# ExportErrorKind::EncoderUnavailable (todo #651).
+opus = { version = "0.3", optional = true }
+ogg = { version = "0.9", optional = true }
 
 [features]
-# MP3 encoder sink. On by default so exports offer MP3 out of the box;
-# build with `--no-default-features` (or a profile that drops it) when a
-# C toolchain / libmp3lame source build is unavailable.
-default = ["mp3"]
+# MP3 + Opus encoder sinks. On by default so exports offer them out of the
+# box; build with `--no-default-features` (or drop the individual feature)
+# when a C toolchain / libmp3lame source build or system libopus is
+# unavailable — the affected format then reports EncoderUnavailable.
+default = ["mp3", "opus"]
 mp3 = ["dep:mp3lame-encoder"]
+opus = ["dep:opus", "dep:ogg"]
 
 [dev-dependencies]
 # Used by tests/import_audio_to_pool.rs to author mono / multi-rate
