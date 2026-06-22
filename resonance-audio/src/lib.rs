@@ -45,9 +45,9 @@ pub mod __test_support {
     pub use crate::clap_host::{ClapBundle, SyncClapInstance};
     pub use crate::engine::{midi_render_range, to_audio_clip, try_lock_with_backoff, SharedState};
     pub use crate::engine::{
-        render_stem, stem_filter, stem_project_range, write_stem_wav, StemBitDepth, StemFilter,
-        StemSource,
+        export_stems, render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter,
     };
+    pub use crate::types::{StemBitDepth, StemSource, StemTarget};
     pub use crate::latency::{chain_latencies, compensation_delays, LatencyComp};
     pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;

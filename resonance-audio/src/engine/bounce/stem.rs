@@ -44,33 +44,10 @@ use super::render::{
     build_latency_comp, render_chunk, reset_plugins, ChunkCtx, ChunkScratch, BOUNCE_CHUNK,
 };
 
-/// Which slice of the mix a stem captures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StemSource {
-    /// A single track plus its sub-tracks (multi-output instruments fan
-    /// out to sibling sub-tracks). Excludes master FX + master volume,
-    /// like a bounce-in-place clip, so the stem re-imports at unity.
-    Track(TrackId),
-    /// A return / aux / group bus: every top-level track routed to the
-    /// bus (plus their sub-tracks). The bus's own FX chain runs (it is
-    /// fed only by the in-filter tracks), but master FX + master volume
-    /// are excluded.
-    Bus(BusId),
-    /// The full mix — every track, with master FX, master volume and the
-    /// final hard-clip applied, identical to [`super::to_wav`].
-    Master,
-}
-
-/// PCM encoding for a written stem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StemBitDepth {
-    /// 16-bit signed integer.
-    Int16,
-    /// 24-bit signed integer (packed 3 bytes/sample).
-    Int24,
-    /// 32-bit IEEE float (the engine's native format — lossless).
-    Float32,
-}
+// `StemSource` and `StemBitDepth` are pure protocol descriptors and live
+// in `crate::types` (re-exported here via `use crate::types::*`). The
+// hound-specific encoding helpers below stay in the engine layer so the
+// protocol layer carries no dependency on the WAV encoder.
 
 impl StemBitDepth {
     fn bits(self) -> u16 {

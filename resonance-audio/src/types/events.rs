@@ -172,6 +172,44 @@ pub enum AudioEvent {
         path: String,
     },
     BounceError(String),
+
+    // -- Stem export (multi-target offline render) --
+    /// The stem export could not start at all (transport rolling, empty
+    /// range, or no targets). No files were written. The string is
+    /// user-facing. Per-target failures use `StemExportTargetError`.
+    StemExportError(String),
+    /// A stem export target is starting. `target_index` is its 0-based
+    /// position in the queue, `total` the number of targets, and
+    /// `fraction` the overall queue progress in `[0.0, 1.0]` at the
+    /// moment this target begins.
+    StemExportProgress {
+        target_index: usize,
+        total: usize,
+        fraction: f32,
+    },
+    /// One stem target finished rendering and its WAV is on disk.
+    StemExportTargetDone {
+        index: usize,
+        path: String,
+    },
+    /// One stem target failed to render or write. The export KEEPS every
+    /// stem written so far and continues with the remaining targets, so
+    /// the app can offer "retry remaining". The string is user-facing.
+    StemExportTargetError {
+        index: usize,
+        message: String,
+    },
+    /// The whole stem export finished. `files` lists every WAV actually
+    /// written, in queue order (a target that errored is absent).
+    StemExportComplete {
+        files: Vec<String>,
+    },
+    /// The stem export was cancelled (via `AudioCommand::CancelStemExport`)
+    /// between targets. Stems already written stay on disk and are listed
+    /// in `files`; the in-flight target, if any, is not.
+    StemExportCancelled {
+        files: Vec<String>,
+    },
     /// "Bounce in place" finished. Covers both the offline (internal
     /// synth) and realtime (external MIDI) flows; `clip` is `Some` when
     /// the engine rendered the clip inline (offline) and `None` when
