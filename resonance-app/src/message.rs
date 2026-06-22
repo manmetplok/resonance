@@ -61,15 +61,20 @@ pub enum TransportMessage {
 /// Arrangement-marker actions, routed like [`TransportMessage`] and
 /// handled by `update/marker.rs`. The mutating variants
 /// (`AddAtPlayhead`, `Rename`, `Recolor`, `Delete`, `MoveStart`,
-/// `SetRegionEnd`, `LoopToRegion`) record an undo entry; the navigation
-/// variants (`JumpToNext`, `JumpToPrev`, `JumpTo`, `PlayFromMarker`)
-/// only move the playhead / transport and are not undoable, mirroring
-/// `SeekToSample` / `Play`.
+/// `SetRegionEnd`, `LoopToRegion`, `SeedFromSections`) record an undo
+/// entry; the navigation variants (`JumpToNext`, `JumpToPrev`, `JumpTo`,
+/// `PlayFromMarker`) only move the playhead / transport and are not
+/// undoable, mirroring `SeekToSample` / `Play`.
 #[derive(Debug, Clone)]
 pub enum MarkerMessage {
     /// Drop a new point marker at the current playhead (snapped to the
     /// grid via `snap_sample_to_grid_tempo`).
     AddAtPlayhead,
+    /// Replace all section-seeded markers with a fresh set derived from
+    /// the current Compose section placements — one ranged marker per
+    /// placement, named/coloured from its section definition. Markers the
+    /// user placed by hand are left untouched.
+    SeedFromSections,
     /// Rename the marker with the given id.
     Rename(u64, String),
     /// Recolor the marker with the given id.

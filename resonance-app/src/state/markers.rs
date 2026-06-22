@@ -11,6 +11,12 @@ pub struct ArrangementMarker {
     pub start_sample: u64,
     /// `Some` => ranged region (section span); `None` => point marker (flag).
     pub end_sample: Option<u64>,
+    /// `true` for markers derived from Compose section placements via
+    /// `MarkerMessage::SeedFromSections`. Re-seeding clears and rebuilds
+    /// only these, leaving hand-placed markers untouched. Defaults to
+    /// `false` so legacy projects load every marker as hand-placed.
+    #[serde(default)]
+    pub seeded: bool,
 }
 
 impl ArrangementMarker {
@@ -22,6 +28,7 @@ impl ArrangementMarker {
             color,
             start_sample,
             end_sample: None,
+            seeded: false,
         }
     }
 
@@ -39,6 +46,22 @@ impl ArrangementMarker {
             color,
             start_sample,
             end_sample: Some(end_sample),
+            seeded: false,
+        }
+    }
+
+    /// Create a ranged region marker tagged as section-seeded, so a
+    /// re-seed can replace it without disturbing hand-placed markers.
+    pub fn new_seeded_region(
+        id: u64,
+        name: String,
+        color: [u8; 3],
+        start_sample: u64,
+        end_sample: u64,
+    ) -> Self {
+        Self {
+            seeded: true,
+            ..Self::new_region(id, name, color, start_sample, end_sample)
         }
     }
 

@@ -500,7 +500,8 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MarkerMessage::Delete(_)
             | MarkerMessage::MoveStart(_, _)
             | MarkerMessage::SetRegionEnd(_, _)
-            | MarkerMessage::LoopToRegion(_) => UndoAction::Record,
+            | MarkerMessage::LoopToRegion(_)
+            | MarkerMessage::SeedFromSections => UndoAction::Record,
             // Navigation only — moves the playhead / starts playback,
             // no project mutation, mirroring `SeekToSample` / `Play`.
             MarkerMessage::JumpToNext

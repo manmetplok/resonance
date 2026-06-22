@@ -36,6 +36,7 @@ pub fn handle(r: &mut Resonance, m: MarkerMessage) -> Task<Message> {
             r.markers
                 .add(ArrangementMarker::new_point(id, name, color, start));
         }
+        MarkerMessage::SeedFromSections => seed_from_sections(r),
         MarkerMessage::Rename(id, name) => {
             if let Some(marker) = r.markers.get_mut(id) {
                 marker.name = name;
@@ -85,6 +86,39 @@ pub fn handle(r: &mut Resonance, m: MarkerMessage) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// Replace every section-seeded marker with a fresh set derived from the
+/// current Compose section placements: one ranged marker per placement,
+/// name + colour copied from the referenced section definition and span
+/// computed from `start_bar` + `length_bars` via the tempo map. Markers
+/// the user placed by hand (`seeded == false`) are left untouched, so a
+/// re-seed after editing the arrangement stays idempotent. Placements
+/// whose definition is missing are skipped.
+fn seed_from_sections(r: &mut Resonance) {
+    // Resolve each placement to a ranged-marker spec up front so the
+    // marker mutation below doesn't overlap the compose / tempo-map borrows.
+    let seeds: Vec<(String, [u8; 3], u64, u64)> = r
+        .compose
+        .placements
+        .iter()
+        .filter_map(|p| {
+            let def = r.compose.find_definition(p.definition_id)?;
+            let start = r.tempo_map.bar_to_sample(p.start_bar);
+            let end = r.tempo_map.bar_to_sample(p.start_bar + def.length_bars);
+            Some((def.name.clone(), def.color, start, end))
+        })
+        .collect();
+
+    // Clear the previously-seeded markers, keeping hand-placed ones, then
+    // rebuild from the freshly-resolved specs.
+    r.markers.markers.retain(|m| !m.seeded);
+    for (name, color, start, end) in seeds {
+        let id = r.markers.allocate_id();
+        r.markers.add(ArrangementMarker::new_seeded_region(
+            id, name, color, start, end,
+        ));
+    }
 }
 
 /// Snap a raw sample position to the grid using the live tempo / zoom,
