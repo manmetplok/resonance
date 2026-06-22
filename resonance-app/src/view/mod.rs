@@ -3,6 +3,7 @@
 /// mixer, compose, track_header, menus, settings, editor_panel,
 /// timeline_panel, timeline, piano_roll, midi_editor).
 pub(crate) mod bounce_dialog;
+pub(crate) mod export_dialog;
 pub(crate) mod bounce_progress;
 pub(crate) mod compose;
 pub(crate) mod confirm_delete_track;
@@ -105,6 +106,8 @@ impl crate::Resonance {
             .into()
         } else if self.bounce_dialog.is_some() {
             stack![base, bounce_dialog::view_bounce_dialog_overlay(self)].into()
+        } else if self.export_dialog.is_some() {
+            stack![base, export_dialog::view_export_dialog_overlay(self)].into()
         } else if self.mixer.settings_open {
             stack![base, settings::view_settings_overlay(self)].into()
         } else if self.mixer.add_track_menu_open {
