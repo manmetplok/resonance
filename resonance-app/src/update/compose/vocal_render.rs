@@ -54,7 +54,7 @@ pub(super) fn roll_vocal_melody(
 ) -> Task<Message> {
     use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 
-    let Some(def) = r.compose.find_definition(definition_id).cloned() else {
+    let Some(mut def) = r.compose.find_definition(definition_id).cloned() else {
         return Task::none();
     };
     let Some(cfg) = def.lane_generators.get(&track_id).cloned() else {
@@ -70,6 +70,11 @@ pub(super) fn roll_vocal_melody(
     if def.chords.is_empty() || params.draft.is_empty() {
         return Task::none();
     }
+
+    // Constrain the vocal melody to the user's pinned chord-track harmony
+    // (doc #168, todo #445), mirroring the instrument lanes in
+    // `regenerate_lane`.
+    super::regenerate::apply_chord_track_harmony(r, definition_id, &mut def);
 
     let timed = crate::compose::generate::to_timed_chords(&def.chords);
     let beats_per_bar = r.transport.time_sig_num.max(1) as u32;

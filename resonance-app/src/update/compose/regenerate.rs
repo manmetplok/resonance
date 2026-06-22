@@ -135,12 +135,14 @@ pub(super) fn regenerate_lane(
     definition_id: u64,
     track_id: TrackId,
 ) -> iced::Task<crate::message::Message> {
-    let def = match r.compose.find_definition(definition_id) {
+    let mut def = match r.compose.find_definition(definition_id) {
         Some(d) => d.clone(),
         None => return iced::Task::none(),
     };
 
-    let Some(config) = def.lane_generators.get(&track_id) else {
+    // Clone the lane config so we can mutate `def` (chord-track overlay,
+    // below) without holding a borrow of its `lane_generators`.
+    let Some(config) = def.lane_generators.get(&track_id).cloned() else {
         return iced::Task::none();
     };
 
@@ -163,6 +165,13 @@ pub(super) fn regenerate_lane(
             return super::vocal_render::roll_vocal_melody(r, definition_id, track_id);
         }
     };
+
+    // Constrain regeneration to the user's pinned chord-track harmony
+    // (doc #168, todo #445): pinned chord regions override the section's
+    // generated chords and the chord track's key context supplies the
+    // scale. Done after the vocal/drum early-returns — the vocal path
+    // applies the same overlay inside `roll_vocal_melody`.
+    apply_chord_track_harmony(r, definition_id, &mut def);
 
     let gen_params = match &config.kind {
         LaneGeneratorKind::Bass(p) => crate::compose::GenerateParams {
@@ -281,6 +290,49 @@ pub(super) fn regenerate_lane(
 pub(super) fn compose_samples_per_bar(sample_rate: u32, bpm: f32, time_sig_num: u8) -> u64 {
     let samples_per_beat = sample_rate as f64 * 60.0 / bpm as f64;
     (samples_per_beat * time_sig_num as f64) as u64
+}
+
+/// Overlay the global chord track's user-pinned regions onto a section
+/// definition's chords and adopt the chord track's key context, so a
+/// regenerated lane follows the user's pinned harmony rather than the
+/// section's own auto-generated chords (doc #168, todo #445).
+///
+/// The section is anchored to its earliest placement on the timeline: an
+/// unplaced section has no absolute position to map the chord track onto
+/// (and renders nothing anyway), so it is left untouched. A section
+/// placed more than once is anchored to its first placement — the
+/// derived clip is reused across every placement, so a single harmonic
+/// reading is all the rest of the pipeline can carry.
+pub(crate) fn apply_chord_track_harmony(
+    r: &crate::Resonance,
+    definition_id: u64,
+    def: &mut crate::compose::SectionDefinitionState,
+) {
+    let Some(start_bar) = r
+        .compose
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == definition_id)
+        .map(|p| p.start_bar)
+        .min()
+    else {
+        return;
+    };
+
+    let samples_per_bar =
+        compose_samples_per_bar(r.sample_rate, r.transport.bpm, r.transport.time_sig_num);
+    let section_start_sample = start_bar as u64 * samples_per_bar;
+    let samples_per_beat = r.sample_rate as f64 * 60.0 / r.transport.bpm as f64;
+
+    def.chords = generate::overlay_pinned_chords(
+        &def.chords,
+        &r.chord_track,
+        section_start_sample,
+        samples_per_beat,
+    );
+    if let Some(scale) = r.chord_track.key_at(section_start_sample) {
+        def.scale = Some(scale);
+    }
 }
 
 /// Derive every vocal lane in the section to a flat list of
