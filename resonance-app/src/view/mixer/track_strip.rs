@@ -43,6 +43,27 @@ impl crate::Resonance {
         let is_collapsed =
             has_sub_tracks && !self.mixer.expanded_sub_track_parents.contains(&track.id);
 
+        // Calculate indent level for group members
+        let groups = self.track_groups.get_groups_containing_track(track.id);
+        let indent_level = groups
+            .iter()
+            .filter_map(|group| {
+                let mut depth = 1;
+                let mut current_group = *group;
+                while let Some(parent_id) = current_group.nesting_parent {
+                    depth += 1;
+                    if let Some(parent) = self.track_groups.get_group(parent_id) {
+                        current_group = parent;
+                    } else {
+                        break;
+                    }
+                }
+                Some(depth)
+            })
+            .max()
+            .unwrap_or(0);
+        let indent_pixels = indent_level as f32 * theme::GROUP_MEMBER_INDENT;
+
         // Track names that overflow the 140 px strip get an ellipsis so
         // they don't push onto a second line. Wrapping::None alone isn't
         // enough — Iced still wraps when the parent has finite width.
@@ -107,7 +128,7 @@ impl crate::Resonance {
         head_row = head_row.push(name_text);
         let track_name: Element<'_, Message> = container(head_row)
             .width(Length::Fill)
-            .padding([6, 10])
+            .padding([6.0, 10.0 + indent_pixels])
             .style(strip_head_bg)
             .into();
 

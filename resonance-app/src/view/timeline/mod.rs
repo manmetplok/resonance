@@ -36,6 +36,7 @@ pub use self::snap::{snap_sample_to_grid, snap_sample_to_grid_tempo};
 #[derive(Debug)]
 pub struct TimelineCanvas<'a> {
     pub tracks: &'a [TrackState],
+    pub track_groups: &'a state::TrackGroupRegistry,
     pub clips: &'a [ClipState],
     pub playhead: u64,
     pub sample_rate: u32,

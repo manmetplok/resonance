@@ -864,7 +864,7 @@ impl TimelineCanvas<'_> {
         y_off: f32,
         visible_height: f32,
     ) {
-        let Some((y, clip_height)) = clip_lane_rect(
+        let Some((y, clip_height, indent)) = clip_lane_rect(self,
             clip.track_id,
             sorted_tracks,
             ruler_height,
@@ -877,7 +877,7 @@ impl TimelineCanvas<'_> {
         let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
         let duration_seconds = clip.duration_samples as f32 / self.sample_rate as f32;
 
-        let x = start_seconds * self.zoom - self.scroll_offset;
+        let x = start_seconds * self.zoom - self.scroll_offset + indent;
         let w = duration_seconds * self.zoom;
         if w <= 0.0 {
             return;
@@ -976,7 +976,7 @@ impl TimelineCanvas<'_> {
         y_off: f32,
         visible_height: f32,
     ) {
-        let Some((y, clip_height)) = clip_lane_rect(
+        let Some((y, clip_height, indent)) = clip_lane_rect(self,
             clip.track_id,
             sorted_tracks,
             ruler_height,
@@ -995,7 +995,7 @@ impl TimelineCanvas<'_> {
         let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
         let duration_seconds = duration_samples as f32 / self.sample_rate as f32;
 
-        let x = start_seconds * self.zoom - self.scroll_offset;
+        let x = start_seconds * self.zoom - self.scroll_offset + indent;
         let w = duration_seconds * self.zoom;
         if w <= 0.0 {
             return;
@@ -1127,14 +1127,36 @@ impl VisibleBar {
 /// or `None` when the track is unknown or the lane is scrolled out of
 /// view. The `CLIP_LANE_INSET` top/bottom inset matches the design.
 fn clip_lane_rect(
+    canvas: &TimelineCanvas,
     track_id: TrackId,
     sorted_tracks: &[&TrackState],
     ruler_height: f32,
     y_off: f32,
     visible_height: f32,
-) -> Option<(f32, f32)> {
+) -> Option<(f32, f32, f32)> {
     let track_index = sorted_tracks.iter().position(|t| t.id == track_id)?;
 
+
+    // Calculate indent for group members
+    let groups = canvas.track_groups.get_groups_containing_track(track_id);
+    let indent_level = groups
+        .iter()
+        .filter_map(|group| {
+            let mut depth = 1;
+            let mut current_group = *group;
+            while let Some(parent_id) = current_group.nesting_parent {
+                depth += 1;
+                if let Some(parent) = canvas.track_groups.get_group(parent_id) {
+                    current_group = parent;
+                } else {
+                    break;
+                }
+            }
+            Some(depth)
+        })
+        .max()
+        .unwrap_or(0);
+    let indent = indent_level as f32 * theme::GROUP_MEMBER_INDENT;
     let lane_y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT - y_off;
     let y = lane_y + theme::CLIP_LANE_INSET;
     let clip_height = theme::TRACK_HEIGHT - 2.0 * theme::CLIP_LANE_INSET;
@@ -1143,7 +1165,7 @@ fn clip_lane_rect(
         return None;
     }
 
-    Some((y, clip_height))
+    Some((y, clip_height, indent))
 }
 
 /// Shared chrome for audio and MIDI clips on the timeline: rounded
