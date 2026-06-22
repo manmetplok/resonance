@@ -14,8 +14,15 @@
 //! * MP3 (with the `mp3` feature) round-trips CBR and VBR through
 //!   `libmp3lame` — symphonia decodes a valid stereo stream at the engine
 //!   rate whose energy survives the lossy pass (todo #653).
-//! * Opus (always) and MP3 (feature-off build) report `EncoderUnavailable`
-//!   and leave no file behind.
+//! * Opus (with the `opus` feature) round-trips Music and Voice through
+//!   `libopus`, muxed into Ogg — the reference libopus decoder reconstructs
+//!   a stereo stream whose energy survives the lossy pass, and the export
+//!   resampler feeds the 48 kHz-only codec from a non-48 kHz engine rate
+//!   (todo #651). symphonia is not used to decode Opus: this workspace's
+//!   symphonia build registers no Opus codec, so libopus (the reference
+//!   decoder) verifies the file instead.
+//! * MP3 and/or Opus report `EncoderUnavailable` and leave no file behind in
+//!   a build with the corresponding feature switched off.
 
 use std::path::{Path, PathBuf};
 
@@ -45,9 +52,17 @@ fn tempdir(tag: &str) -> PathBuf {
 /// inside [-1, 1] so the integer paths never clip, which keeps the
 /// round-trip comparison purely about quantization error.
 fn test_mix() -> Vec<f32> {
-    let mut buf = Vec::with_capacity(FRAMES * 2);
-    for n in 0..FRAMES {
-        let t = n as f32 / ENGINE_SR as f32;
+    test_mix_at(ENGINE_SR)
+}
+
+/// Like [`test_mix`] but rendered at `sample_rate` and ~0.25 s long, so a
+/// non-48 kHz rate can exercise the export resampler.
+#[allow(dead_code)] // Only the Opus tests render at a non-default rate.
+fn test_mix_at(sample_rate: u32) -> Vec<f32> {
+    let frames = (sample_rate / 4) as usize;
+    let mut buf = Vec::with_capacity(frames * 2);
+    for n in 0..frames {
+        let t = n as f32 / sample_rate as f32;
         buf.push(0.5 * (2.0 * std::f32::consts::PI * 440.0 * t).sin());
         buf.push(0.5 * (2.0 * std::f32::consts::PI * 330.0 * t).sin());
     }
@@ -231,17 +246,19 @@ fn unavailable_encoders_leave_no_file() {
     let dir = tempdir("unavailable");
     let mix = test_mix();
 
-    // Opus has no encoder yet (lands in #651) and always reports
-    // unavailable. MP3 is available when the `mp3` feature is compiled in,
-    // so it only joins this set in a feature-off build.
+    // MP3 and Opus are available when their feature is compiled in, so each
+    // only joins this set in a feature-off build. With the default features
+    // (both on) there is nothing to check and the loop is a no-op.
     #[allow(unused_mut)]
-    let mut cases: Vec<(&str, ExportFormat)> = vec![(
+    let mut cases: Vec<(&str, ExportFormat)> = Vec::new();
+    #[cfg(not(feature = "opus"))]
+    cases.push((
         "export.opus",
         ExportFormat::Opus {
             bitrate_kbps: 192,
             optimize: resonance_audio::types::OpusOptimize::Music,
         },
-    )];
+    ));
     #[cfg(not(feature = "mp3"))]
     cases.push((
         "export.mp3",
@@ -267,9 +284,9 @@ fn unavailable_encoders_leave_no_file() {
 }
 
 /// Root-mean-square level of an interleaved buffer — an energy proxy that
-/// lets the lossy MP3 round trip be checked without a sample-exact
-/// comparison (which MP3 can never satisfy).
-#[cfg(feature = "mp3")]
+/// lets a lossy round trip (MP3 / Opus) be checked without a sample-exact
+/// comparison (which a lossy codec can never satisfy).
+#[cfg(any(feature = "mp3", feature = "opus"))]
 fn rms(buf: &[f32]) -> f32 {
     if buf.is_empty() {
         return 0.0;
@@ -339,4 +356,120 @@ fn mp3_cbr_round_trips() {
 #[test]
 fn mp3_vbr_round_trips() {
     assert_mp3_round_trip(Mp3Rate::Vbr, 192, "mp3-vbr-192");
+}
+
+/// Decode an Ogg-Opus file with the reference libopus decoder (symphonia
+/// has no Opus codec in this workspace), returning interleaved stereo f32.
+/// Skips the two header packets (`OpusHead` / `OpusTags`) and decodes the
+/// rest at 48 kHz.
+#[cfg(feature = "opus")]
+fn decode_opus(path: &Path) -> Vec<f32> {
+    use std::io::Cursor;
+    let bytes = std::fs::read(path).expect("read opus file");
+    let mut reader = ogg::PacketReader::new(Cursor::new(bytes));
+    let mut decoder = opus::Decoder::new(48_000, opus::Channels::Stereo).expect("opus decoder");
+    let mut out: Vec<f32> = Vec::new();
+    // Largest Opus frame is 120 ms = 5760 samples/channel; size the scratch
+    // buffer for that worst case (our encoder uses 20 ms frames).
+    let mut scratch = vec![0f32; 5760 * 2];
+    let mut packet_idx = 0usize;
+    while let Some(packet) = reader.read_packet().expect("read ogg packet") {
+        if packet_idx < 2 {
+            packet_idx += 1; // OpusHead, then OpusTags.
+            continue;
+        }
+        let frames = decoder
+            .decode_float(&packet.data, &mut scratch, false)
+            .expect("decode opus packet");
+        out.extend_from_slice(&scratch[..frames * 2]);
+        packet_idx += 1;
+    }
+    out
+}
+
+/// Encode the test mix (rendered at `engine_sr`) as Ogg-Opus, decode it back
+/// through libopus, and assert it is a valid Ogg stream at 48 kHz whose
+/// duration and energy survive the lossy pass.
+#[cfg(feature = "opus")]
+fn assert_opus_round_trip(
+    optimize: resonance_audio::types::OpusOptimize,
+    bitrate_kbps: u32,
+    engine_sr: u32,
+    tag: &str,
+) {
+    let dir = tempdir(tag);
+    // Render the source at `engine_sr` so a non-48k rate exercises the
+    // export resampler that feeds the 48 kHz-only codec.
+    let mix = test_mix_at(engine_sr);
+    let out = dir.join(format!("{tag}.opus"));
+
+    let bytes = encode_buffer_for_test(
+        &ExportFormat::Opus {
+            bitrate_kbps,
+            optimize,
+        },
+        &ExportMetadata::default(),
+        engine_sr,
+        &mix,
+        &out,
+    )
+    .expect("encode opus");
+    assert!(bytes > 0, "a non-empty file is reported");
+    assert_eq!(
+        std::fs::metadata(&out).unwrap().len(),
+        bytes,
+        "reported byte size matches the file on disk"
+    );
+
+    // The file is a real Ogg stream whose first logical page starts an
+    // OpusHead identification header.
+    let raw = std::fs::read(&out).unwrap();
+    assert_eq!(&raw[..4], b"OggS", "file is an Ogg container");
+    assert!(
+        raw.windows(8).any(|w| w == b"OpusHead"),
+        "Ogg stream carries an OpusHead header"
+    );
+
+    // Decoding via libopus yields a non-empty stereo stream whose length is
+    // close to the resampled-and-frame-padded input (Opus pads the tail to a
+    // whole 20 ms frame and adds pre-skip priming samples).
+    let decoded = decode_opus(&out);
+    assert!(!decoded.is_empty(), "decoded audio is non-empty");
+    let decoded_frames = (decoded.len() / 2) as i64;
+    let expected_frames = (mix.len() / 2) as f64 * 48_000.0 / engine_sr as f64;
+    let diff = (decoded_frames - expected_frames.round() as i64).abs();
+    assert!(
+        diff <= 2_000,
+        "decoded frames {decoded_frames} ~ {expected_frames:.0} (diff {diff})"
+    );
+
+    // Signal energy survives the lossy encode (catches a silent or
+    // wrongly-scaled encode). Resample to the engine rate first so both
+    // buffers are measured at the same rate.
+    let (in_rms, out_rms) = (rms(&mix), rms(&decoded));
+    let ratio = out_rms / in_rms;
+    assert!(
+        (0.5..2.0).contains(&ratio),
+        "energy preserved: in {in_rms:.4} out {out_rms:.4} ratio {ratio:.3}"
+    );
+}
+
+#[cfg(feature = "opus")]
+#[test]
+fn opus_music_and_voice_round_trip() {
+    use resonance_audio::types::OpusOptimize;
+    // Both application hints, at the export UI's bitrates, from the 48 kHz
+    // engine rate (no resampling): the file decodes and energy survives.
+    assert_opus_round_trip(OpusOptimize::Music, 160, ENGINE_SR, "opus-music-160");
+    assert_opus_round_trip(OpusOptimize::Voice, 96, ENGINE_SR, "opus-voice-96");
+    assert_opus_round_trip(OpusOptimize::Music, 256, ENGINE_SR, "opus-music-256");
+}
+
+#[cfg(feature = "opus")]
+#[test]
+fn opus_resamples_non_48k_engine_rate() {
+    use resonance_audio::types::OpusOptimize;
+    // A 44.1 kHz engine rate must be resampled to the codec's 48 kHz by the
+    // shared export resampler before the Opus sink.
+    assert_opus_round_trip(OpusOptimize::Music, 160, 44_100, "opus-resample-44k");
 }

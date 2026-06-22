@@ -1,18 +1,19 @@
 //! Pluggable encoder sinks for the offline export pipeline (doc #196).
 //!
 //! The render loop produces interleaved stereo `f32` frames; an
-//! [`EncoderSink`] consumes them and writes the encoded file. Today three
-//! sinks exist — [`WavSink`] (16/24-bit PCM or 32-bit float), [`FlacSink`]
-//! (lossless 16/24-bit via the pure-Rust `flacenc`) and [`Mp3Sink`] (lossy
-//! CBR/VBR via `libmp3lame`, behind the `mp3` feature). The 32-bit-float
-//! WAV path is byte-for-byte identical to the legacy hound tail it
-//! replaces.
+//! [`EncoderSink`] consumes them and writes the encoded file. Four sinks
+//! exist — [`WavSink`] (16/24-bit PCM or 32-bit float), [`FlacSink`]
+//! (lossless 16/24-bit via the pure-Rust `flacenc`), [`Mp3Sink`] (lossy
+//! CBR/VBR via `libmp3lame`, behind the `mp3` feature) and [`OpusSink`]
+//! (lossy Ogg-Opus via `libopus`, behind the `opus` feature). The
+//! 32-bit-float WAV path is byte-for-byte identical to the legacy hound
+//! tail it replaces.
 //!
 //! Sinks are constructed via [`build_sink`], which is the single place
 //! that decides whether a format's encoder is available. Formats whose
-//! encoder is not compiled in (MP3 without the `mp3` feature) or not yet
-//! wired (Opus lands in #651) return [`EncoderError::Unavailable`] *before
-//! any file is created*, so the caller can surface
+//! encoder is not compiled in (MP3 without the `mp3` feature, Opus without
+//! the `opus` feature) return [`EncoderError::Unavailable`] *before any
+//! file is created*, so the caller can surface
 //! `ExportErrorKind::EncoderUnavailable` without leaving a partial file
 //! behind.
 
@@ -22,6 +23,8 @@ use std::path::{Path, PathBuf};
 
 #[cfg(feature = "mp3")]
 use crate::types::Mp3Rate;
+#[cfg(feature = "opus")]
+use crate::types::OpusOptimize;
 use crate::types::{BitDepth, ExportFormat, ExportMetadata, FlacLevel};
 
 /// Why an encoder sink could not be built, written or finalized.
@@ -92,9 +95,28 @@ pub(super) fn build_sink(
                 ))
             }
         }
-        ExportFormat::Opus { .. } => Err(EncoderError::Unavailable(
-            "Opus export is not available in this build".into(),
-        )),
+        ExportFormat::Opus {
+            bitrate_kbps,
+            optimize,
+        } => {
+            #[cfg(feature = "opus")]
+            {
+                Ok(Box::new(OpusSink::new(
+                    path,
+                    sample_rate,
+                    bitrate_kbps,
+                    optimize,
+                )?))
+            }
+            #[cfg(not(feature = "opus"))]
+            {
+                let _ = (bitrate_kbps, optimize);
+                Err(EncoderError::Unavailable(
+                    "Opus export is not available in this build (compile with the `opus` feature)"
+                        .into(),
+                ))
+            }
+        }
     }
 }
 
@@ -509,6 +531,222 @@ fn vbr_quality(kbps: u32) -> mp3lame_encoder::Quality {
         k if k >= 160 => VeryNice, // V3
         k if k >= 128 => Nice,     // V4
         _ => Good,                 // V5
+    }
+}
+
+// --- Opus -------------------------------------------------------------------
+
+/// 20 ms at 48 kHz — a standard Opus frame size and a sensible
+/// quality/overhead balance. Per channel; the interleaved stereo frame is
+/// twice this many `f32`s.
+#[cfg(feature = "opus")]
+const OPUS_FRAME: usize = 960;
+
+/// libopus packets never exceed ~1275 bytes per frame; 4000 is the
+/// libopus-recommended safe ceiling for the encode output buffer.
+#[cfg(feature = "opus")]
+const OPUS_MAX_PACKET: usize = 4000;
+
+/// Audio packets batched onto one Ogg page. One 20 ms packet per page would
+/// bloat the container with ~27-byte page headers (several percent at
+/// typical bitrates); batching ~1 s of packets per page amortizes that
+/// while keeping the granule-position resolution fine.
+#[cfg(feature = "opus")]
+const OPUS_PACKETS_PER_PAGE: usize = 50;
+
+/// Ogg-Opus sink backed by `libopus` (built from bundled source by
+/// `audiopus_sys`, behind the `opus` feature) and the pure-Rust `ogg`
+/// container muxer. libopus runs only at a small set of rates, so the export
+/// pipeline resamples to 48 kHz *before* the sink (see
+/// `output_sample_rate` in [`super::wav`]); frames therefore always arrive
+/// here at 48 kHz interleaved stereo.
+///
+/// Audio is encoded in fixed 20 ms frames (960 samples/channel) and the
+/// resulting Opus packets are buffered in RAM; the whole Ogg stream is muxed
+/// and written once in [`finalize`](EncoderSink::finalize), so — like
+/// [`FlacSink`]/[`Mp3Sink`] — a cancelled export never leaves a partial
+/// `.opus` on disk.
+///
+/// libopus defaults to unconstrained VBR, so setting only the target bitrate
+/// yields the VBR stream the export UI asks for; the Music/Voice
+/// optimization selects the encoder *application* hint (`Audio` vs `Voip`),
+/// which biases libopus's psychoacoustic model toward general audio or
+/// speech intelligibility.
+#[cfg(feature = "opus")]
+pub(super) struct OpusSink {
+    path: PathBuf,
+    encoder: opus::Encoder,
+    /// Interleaved stereo f32 awaiting a full 20 ms frame.
+    pending: Vec<f32>,
+    /// Encoded Opus packets, each paired with the running 48 kHz
+    /// sample-per-channel count at its end (its Ogg granule position).
+    packets: Vec<(Vec<u8>, u64)>,
+    /// Cumulative samples-per-channel handed to the encoder.
+    granule: u64,
+    /// Encoder lookahead, written as the Ogg-Opus pre-skip so a decoder
+    /// drops the priming samples and the output aligns with the source.
+    pre_skip: u16,
+}
+
+#[cfg(feature = "opus")]
+impl OpusSink {
+    fn new(
+        path: &Path,
+        sample_rate: u32,
+        bitrate_kbps: u32,
+        optimize: OpusOptimize,
+    ) -> Result<Self, EncoderError> {
+        use opus::{Application, Bitrate, Channels};
+
+        let application = match optimize {
+            OpusOptimize::Music => Application::Audio,
+            OpusOptimize::Voice => Application::Voip,
+        };
+        let io = |e: opus::Error| EncoderError::Io(format!("Opus encoder setup error: {e}"));
+        let mut encoder =
+            opus::Encoder::new(sample_rate, Channels::Stereo, application).map_err(io)?;
+        // libopus defaults to unconstrained VBR; only the target bitrate
+        // needs setting to honour the requested 96/160/256 kbps.
+        encoder
+            .set_bitrate(Bitrate::Bits(bitrate_kbps as i32 * 1000))
+            .map_err(io)?;
+        let pre_skip = encoder.get_lookahead().map_err(io)?.max(0) as u16;
+        Ok(OpusSink {
+            path: path.to_path_buf(),
+            encoder,
+            pending: Vec::new(),
+            packets: Vec::new(),
+            granule: 0,
+            pre_skip,
+        })
+    }
+
+    /// Encode every full 20 ms frame currently buffered in `pending`,
+    /// leaving any sub-frame remainder for the next call / `finalize`.
+    fn drain_frames(&mut self) -> Result<(), EncoderError> {
+        const FRAME_LEN: usize = OPUS_FRAME * 2;
+        while self.pending.len() >= FRAME_LEN {
+            // `encoder` and `pending` are distinct fields, so the encode's
+            // immutable borrow of `pending` and the mutable borrow of
+            // `encoder` don't conflict; the `drain` below then mutates it.
+            let packet = self
+                .encoder
+                .encode_vec_float(&self.pending[..FRAME_LEN], OPUS_MAX_PACKET)
+                .map_err(|e| EncoderError::Io(format!("Opus encode error: {e}")))?;
+            self.pending.drain(..FRAME_LEN);
+            self.granule += OPUS_FRAME as u64;
+            self.packets.push((packet, self.granule));
+        }
+        Ok(())
+    }
+}
+
+/// Build the 19-byte Ogg-Opus ID header (`OpusHead`, channel mapping family
+/// 0 / stereo) carrying the encoder's pre-skip. See RFC 7845 §5.1.
+#[cfg(feature = "opus")]
+fn opus_head(pre_skip: u16) -> Vec<u8> {
+    let mut h = Vec::with_capacity(19);
+    h.extend_from_slice(b"OpusHead");
+    h.push(1); // version
+    h.push(2); // channel count (stereo)
+    h.extend_from_slice(&pre_skip.to_le_bytes());
+    h.extend_from_slice(&48_000u32.to_le_bytes()); // original input rate (informational)
+    h.extend_from_slice(&0i16.to_le_bytes()); // output gain (Q7.8 dB), none
+    h.push(0); // channel mapping family 0
+    h
+}
+
+/// Build the Ogg-Opus comment header (`OpusTags`, RFC 7845 §5.2): a Vorbis-
+/// comment vendor string plus the export metadata as `KEY=value` tags.
+#[cfg(feature = "opus")]
+fn opus_tags(meta: &ExportMetadata) -> Vec<u8> {
+    const VENDOR: &[u8] = b"Resonance";
+    let mut comments: Vec<String> = Vec::new();
+    if let Some(t) = &meta.title {
+        comments.push(format!("TITLE={t}"));
+    }
+    if let Some(a) = &meta.artist {
+        comments.push(format!("ARTIST={a}"));
+    }
+    if let Some(a) = &meta.album {
+        comments.push(format!("ALBUM={a}"));
+    }
+    if let Some(y) = meta.year {
+        comments.push(format!("DATE={y}"));
+    }
+
+    let mut t = Vec::new();
+    t.extend_from_slice(b"OpusTags");
+    t.extend_from_slice(&(VENDOR.len() as u32).to_le_bytes());
+    t.extend_from_slice(VENDOR);
+    t.extend_from_slice(&(comments.len() as u32).to_le_bytes());
+    for c in comments {
+        let b = c.as_bytes();
+        t.extend_from_slice(&(b.len() as u32).to_le_bytes());
+        t.extend_from_slice(b);
+    }
+    t
+}
+
+#[cfg(feature = "opus")]
+impl EncoderSink for OpusSink {
+    fn write_frames(&mut self, frames: &[f32]) -> Result<(), EncoderError> {
+        self.pending.extend_from_slice(frames);
+        self.drain_frames()
+    }
+
+    fn finalize(mut self: Box<Self>, meta: &ExportMetadata) -> Result<u64, EncoderError> {
+        use ogg::{PacketWriteEndInfo, PacketWriter};
+
+        const FRAME_LEN: usize = OPUS_FRAME * 2;
+        // Encode the final partial frame, zero-padded to a full 20 ms block
+        // (libopus only accepts whole frame sizes).
+        if !self.pending.is_empty() {
+            self.pending.resize(FRAME_LEN, 0.0);
+            self.drain_frames()?;
+        }
+
+        // Mux the whole Ogg-Opus logical stream in RAM, then write once so a
+        // cancel before this point leaves nothing on disk.
+        let serial = 0x5265_736f; // "Reso" — arbitrary fixed logical-stream serial.
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut writer = PacketWriter::new(&mut buf);
+            let io = |e: std::io::Error| EncoderError::Io(format!("Ogg write error: {e}"));
+
+            // ID header (OpusHead) alone on the first page (BOS), then the
+            // comment header (OpusTags) on its own page — both mandated by
+            // the Ogg-Opus mapping and both at granule position 0.
+            let head_end = if self.packets.is_empty() {
+                // Degenerate empty stream: end it on the comment page so the
+                // file still carries an end-of-stream flag.
+                PacketWriteEndInfo::EndStream
+            } else {
+                PacketWriteEndInfo::EndPage
+            };
+            writer
+                .write_packet(opus_head(self.pre_skip), serial, PacketWriteEndInfo::EndPage, 0)
+                .map_err(io)?;
+            writer
+                .write_packet(opus_tags(meta), serial, head_end, 0)
+                .map_err(io)?;
+
+            let last = self.packets.len().saturating_sub(1);
+            for (i, (packet, granule)) in self.packets.into_iter().enumerate() {
+                let end = if i == last {
+                    PacketWriteEndInfo::EndStream
+                } else if (i + 1) % OPUS_PACKETS_PER_PAGE == 0 {
+                    PacketWriteEndInfo::EndPage
+                } else {
+                    PacketWriteEndInfo::NormalPacket
+                };
+                writer.write_packet(packet, serial, end, granule).map_err(io)?;
+            }
+        }
+
+        std::fs::write(&self.path, &buf)
+            .map_err(|e| EncoderError::Io(format!("Failed to write Opus file: {e}")))?;
+        Ok(buf.len() as u64)
     }
 }
 
