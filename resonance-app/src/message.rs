@@ -337,6 +337,8 @@ pub enum UiMessage {
     CloseSettings,
     OpenAddTrackMenu,
     CloseAddTrackMenu,
+    /// Show / hide the Reference & A/B right-rail in the Mix view.
+    ToggleReferencePanel,
     DismissError,
     /// User clicked "New Project" in the startup modal.
     StartNewProject,

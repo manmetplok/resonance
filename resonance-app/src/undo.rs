@@ -618,13 +618,22 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // toggles, markers, scrub, and error dismissal are transient.
         Message::Reference(rm) => match rm {
             ReferenceMessage::LoadRequested(_)
+            // A picked file ends in the same load path as a drag-drop, so
+            // a successful pick is just as reversible; a cancelled pick
+            // (`None`) changes nothing.
+            | ReferenceMessage::FilePicked(Some(_))
             | ReferenceMessage::Remove(_)
             | ReferenceMessage::SetActive(_)
             | ReferenceMessage::ToggleLoudnessMatch => UndoAction::Record,
             ReferenceMessage::TrimChanged(_) => {
                 UndoAction::RecordCoalesced(CoalesceKey::ReferenceTrim)
             }
-            ReferenceMessage::ToggleAbSource
+            // Opening the picker and a cancelled pick are pure UI / no-ops;
+            // the monitoring toggles, markers, scrub, and error dismissal
+            // are transient.
+            ReferenceMessage::PickFile
+            | ReferenceMessage::FilePicked(None)
+            | ReferenceMessage::ToggleAbSource
             | ReferenceMessage::MomentaryAudition(_)
             | ReferenceMessage::AddMarker { .. }
             | ReferenceMessage::RemoveMarker { .. }

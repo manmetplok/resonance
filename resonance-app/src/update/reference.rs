@@ -14,6 +14,15 @@ use crate::Resonance;
 
 pub fn handle(r: &mut Resonance, m: ReferenceMessage) -> Task<Message> {
     match m {
+        // The only arm that spawns an async side effect (the OS file
+        // picker); every other arm mutates state + sends a command
+        // synchronously and falls through to `Task::none()` below.
+        ReferenceMessage::PickFile => return pick_file_dialog(),
+        ReferenceMessage::FilePicked(picked) => {
+            if let Some(path) = picked {
+                load_requested(r, path);
+            }
+        }
         ReferenceMessage::LoadRequested(path) => load_requested(r, path),
         ReferenceMessage::Remove(id) => remove(r, id),
         ReferenceMessage::SetActive(id) => set_active(r, id),
@@ -37,6 +46,28 @@ pub fn handle(r: &mut Resonance, m: ReferenceMessage) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// Audio container extensions the reference loader accepts, shared by the
+/// file picker filter and the window file-drop subscription so both honour
+/// the same set.
+pub const REFERENCE_AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "mp3", "ogg"];
+
+/// Open the OS file picker filtered to [`REFERENCE_AUDIO_EXTENSIONS`]. The
+/// chosen path (or `None` on cancel) comes back as
+/// [`ReferenceMessage::FilePicked`].
+fn pick_file_dialog() -> Task<Message> {
+    Task::perform(
+        async move {
+            rfd::AsyncFileDialog::new()
+                .set_title("Add Reference Track")
+                .add_filter("Audio", REFERENCE_AUDIO_EXTENSIONS)
+                .pick_file()
+                .await
+                .map(|f| f.path().to_path_buf())
+        },
+        |picked| Message::Reference(ReferenceMessage::FilePicked(picked)),
+    )
 }
 
 fn load_requested(r: &mut Resonance, path: PathBuf) {
