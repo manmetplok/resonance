@@ -26,7 +26,8 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::MidiEditor(_)
         | Message::Plugin(_)
         | Message::Viewport(_)
-        | Message::GlobalTrack(_) => true,
+        | Message::GlobalTrack(_)
+        | Message::ChordTrack(_) => true,
         // Tab switches / auxiliary overlays: block so they can't
         // steal focus from the startup modal.
         Message::Ui(UiMessage::SwitchView(_))
@@ -87,6 +88,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::Plugin(_)
         | Message::Viewport(_)
         | Message::GlobalTrack(_)
+        | Message::ChordTrack(_)
         | Message::Ui(_)
         | Message::Undo
         | Message::Redo => true,
