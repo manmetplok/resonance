@@ -58,16 +58,45 @@ impl ArrangementMarker {
     }
 }
 
-/// Sort markers by start_sample.
-#[derive(Debug, Clone, Default)]
+/// A collection of arrangement markers, kept sorted by `start_sample`,
+/// with a monotonic id counter for handing out fresh marker ids.
+#[derive(Debug, Clone)]
 pub struct ArrangementMarkers {
     pub markers: Vec<ArrangementMarker>,
+    /// Next id to hand out from [`Self::allocate_id`]. Recomputed as
+    /// `max(existing id) + 1` whenever the collection is rebuilt from a
+    /// persisted `Vec` (see the `From` impl), mirroring how the track
+    /// registry restores `next_sub_track_id` on project load.
+    next_id: u64,
+}
+
+impl Default for ArrangementMarkers {
+    fn default() -> Self {
+        Self {
+            markers: Vec::new(),
+            next_id: 1,
+        }
+    }
 }
 
 impl ArrangementMarkers {
     /// Create a new empty markers collection.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Allocate a fresh, unused marker id. Mirrors the track registry's
+    /// `allocate_sub_track_id`: hands out `next_id` and bumps the counter,
+    /// skipping any id already present so a counter restored from a loaded
+    /// project (or externally-built ids) can never collide.
+    pub fn allocate_id(&mut self) -> u64 {
+        loop {
+            let candidate = self.next_id;
+            self.next_id += 1;
+            if !self.markers.iter().any(|m| m.id == candidate) {
+                return candidate;
+            }
+        }
     }
 
     /// Get a marker by ID.
@@ -96,7 +125,7 @@ impl ArrangementMarkers {
 
     /// Sort markers by start_sample, maintaining stable order for markers at the same position.
     pub fn sort(&mut self) {
-        self.markers.sort_by(|a, b| a.start_sample.cmp(&b.start_sample));
+        self.markers.sort_by_key(|m| m.start_sample);
     }
 
     /// Get the marker covering a given sample position. A point marker
@@ -188,14 +217,17 @@ impl std::ops::DerefMut for ArrangementMarkers {
 
 impl From<Vec<ArrangementMarker>> for ArrangementMarkers {
     fn from(markers: Vec<ArrangementMarker>) -> Self {
-        let mut s = Self { markers };
+        // Restore the id counter to one past the highest persisted id so a
+        // fresh `allocate_id` can never collide with a loaded marker.
+        let next_id = markers.iter().map(|m| m.id).max().map_or(1, |m| m + 1);
+        let mut s = Self { markers, next_id };
         s.sort();
         s
     }
 }
 
-impl Into<Vec<ArrangementMarker>> for ArrangementMarkers {
-    fn into(self) -> Vec<ArrangementMarker> {
-        self.markers
+impl From<ArrangementMarkers> for Vec<ArrangementMarker> {
+    fn from(markers: ArrangementMarkers) -> Self {
+        markers.markers
     }
 }

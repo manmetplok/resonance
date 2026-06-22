@@ -265,6 +265,39 @@ fn test_legacy_project_loads_without_markers() {
 }
 
 #[test]
+fn test_allocate_id_unique_and_skips_existing() {
+    let mut markers = ArrangementMarkers::new();
+    let a = markers.allocate_id();
+    let b = markers.allocate_id();
+    assert_ne!(a, b);
+    assert!(b > a);
+
+    // An id already present in the collection is skipped, never reissued.
+    markers.add(ArrangementMarker::new_point(
+        b + 1,
+        "X".to_string(),
+        [0, 0, 0],
+        0,
+    ));
+    let c = markers.allocate_id();
+    assert_ne!(c, b + 1, "allocate must skip the existing id");
+    assert!(markers.get(c).is_none(), "allocated id is fresh/unused");
+}
+
+#[test]
+fn test_allocate_id_resumes_after_rebuild_from_vec() {
+    // Rebuilding from a persisted Vec restores the counter to max+1, so the
+    // first allocation after load can't collide with a loaded marker —
+    // mirroring how the track registry restores next_sub_track_id on load.
+    let vec = vec![
+        ArrangementMarker::new_point(5, "A".to_string(), [0, 0, 0], 0),
+        ArrangementMarker::new_point(9, "B".to_string(), [0, 0, 0], 100),
+    ];
+    let mut markers: ArrangementMarkers = vec.into();
+    assert_eq!(markers.allocate_id(), 10, "counter resumes at max id + 1");
+}
+
+#[test]
 fn test_clear() {
     let mut markers = ArrangementMarkers::new();
     markers.add(ArrangementMarker::new_point(1, "A".to_string(), [255, 0, 0], 100));
