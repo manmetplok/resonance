@@ -809,6 +809,117 @@ impl TimelineCanvas<'_> {
         });
     }
 
+    /// Render arrangement markers in the ruler band: point markers as a
+    /// colour-tinted flag (pole + swallow-tailed pennant + name label),
+    /// ranged markers as a translucent labelled span with start/end edge
+    /// lines. Deliberately distinct from the amber loop range (which fills
+    /// the ruler with centred triangle handles) and the rounded Compose
+    /// section pills (which sit in their own band below the ruler).
+    ///
+    /// The selected marker (if any) gets the stronger accent: a full-opacity
+    /// pole, an outlined flag, and a bright `TEXT_1` label.
+    pub(super) fn draw_markers(
+        &self,
+        frame: &mut canvas::Frame,
+        width: f32,
+        ruler_height: f32,
+    ) {
+        const FLAG_W: f32 = 11.0;
+        const FLAG_H: f32 = 9.0;
+
+        for marker in self.markers {
+            let start_x = self.sample_to_x(marker.start_sample);
+            let end_x = marker.end_sample.map(|e| self.sample_to_x(e));
+
+            // Cull markers wholly off either edge (a region's right edge or
+            // a point's own x).
+            let right_edge = end_x.unwrap_or(start_x);
+            if right_edge < 0.0 || start_x > width {
+                continue;
+            }
+
+            let is_selected = self.selected_marker_id == Some(marker.id);
+            let color = Color::from_rgb(
+                marker.color[0] as f32 / 255.0,
+                marker.color[1] as f32 / 255.0,
+                marker.color[2] as f32 / 255.0,
+            );
+
+            // Ranged region: translucent fill across the ruler + an edge
+            // line at the end so the span's extent reads clearly.
+            if let Some(end_x) = end_x {
+                let span_x = start_x.max(0.0);
+                let span_w = (end_x.min(width) - span_x).max(0.0);
+                if span_w > 0.0 {
+                    frame.fill_rectangle(
+                        Point::new(span_x, 0.0),
+                        Size::new(span_w, ruler_height),
+                        Color {
+                            a: if is_selected { 0.26 } else { 0.16 },
+                            ..color
+                        },
+                    );
+                }
+                if end_x >= 0.0 && end_x <= width {
+                    frame.fill_rectangle(
+                        Point::new(end_x - 0.5, 0.0),
+                        Size::new(1.0, ruler_height),
+                        Color { a: 0.7, ..color },
+                    );
+                }
+            }
+
+            // Start pole — the flag's mast, shared by point and ranged
+            // markers so a region also gets a clear start handle.
+            if start_x >= 0.0 && start_x <= width {
+                frame.fill_rectangle(
+                    Point::new(start_x - 0.5, 0.0),
+                    Size::new(1.0, ruler_height),
+                    if is_selected {
+                        color
+                    } else {
+                        Color { a: 0.8, ..color }
+                    },
+                );
+            }
+
+            // Flag pennant at the top of the pole.
+            if start_x <= width && start_x + FLAG_W >= 0.0 {
+                let fx = start_x;
+                let flag = canvas::Path::new(|b| {
+                    b.move_to(Point::new(fx, 0.0));
+                    b.line_to(Point::new(fx + FLAG_W, 0.0));
+                    b.line_to(Point::new(fx + FLAG_W - 3.0, FLAG_H * 0.5));
+                    b.line_to(Point::new(fx + FLAG_W, FLAG_H));
+                    b.line_to(Point::new(fx, FLAG_H));
+                    b.close();
+                });
+                frame.fill(&flag, color);
+                if is_selected {
+                    frame.stroke(
+                        &flag,
+                        canvas::Stroke::default()
+                            .with_width(1.0)
+                            .with_color(theme::TEXT_1),
+                    );
+                }
+            }
+
+            // Name label, just right of the flag near the top of the ruler.
+            let label_x = start_x.max(0.0) + FLAG_W + 4.0;
+            if label_x < width - 6.0 {
+                frame.fill_text(canvas::Text {
+                    content: crate::util::short_with(&marker.name, 18, "..."),
+                    position: Point::new(label_x, 1.0),
+                    color: if is_selected { theme::TEXT_1 } else { color },
+                    size: 10.0.into(),
+                    font: theme::UI_FONT_SEMIBOLD,
+                    ..canvas::Text::default()
+                });
+            }
+        }
+    }
+
     /// Draw the bar/beat ruler at the top.
     /// Uses per-bar tempo and time-signature values so bar numbers are
     /// positioned correctly when tempo changes.
