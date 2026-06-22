@@ -18,6 +18,7 @@ use super::section::{
     ChordState, EditSectionForm, NewSectionForm, SectionDefinitionState, SectionPlacementState,
     SelectedLane,
 };
+use super::vocal_svs::SvsRenderCache;
 
 /// Starting point for app-allocated derived clip ids. Chosen high enough
 /// that it will never collide with engine-allocated clip ids (which count
@@ -67,6 +68,15 @@ pub struct VocalAudioRegistry {
     /// this side-table is the composition layer that adds vocal
     /// metadata without touching the audio-side type.
     pub clip_lyrics: HashMap<ClipId, Vec<String>>,
+    /// Per-`(definition, track)` content-addressed SVS render cache, so an
+    /// edit only re-renders the sub-clip segments it touched (todo #495).
+    /// Wrapped in `Arc<Mutex>` because the render runs off-thread
+    /// (`spawn_blocking`); the completion side reads
+    /// [`SvsRenderCache::last_plan`] for the "N of M segments changed"
+    /// overlay. Keyed at the *render* scope like [`render_epoch`], not the
+    /// per-placement install scope.
+    pub render_cache:
+        HashMap<(u64, TrackId), std::sync::Arc<std::sync::Mutex<SvsRenderCache>>>,
 }
 
 impl VocalAudioRegistry {
@@ -74,6 +84,7 @@ impl VocalAudioRegistry {
         self.clips.clear();
         self.render_epoch.clear();
         self.clip_lyrics.clear();
+        self.render_cache.clear();
     }
 }
 

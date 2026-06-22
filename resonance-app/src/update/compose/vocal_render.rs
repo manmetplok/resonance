@@ -204,13 +204,33 @@ fn enqueue_vocal_render(
 
     r.compose.last_error = None;
 
+    // Per-clip content-addressed render cache: an edit only re-renders the
+    // sub-clip segments it touched. Shared into the blocking render thread
+    // via `Arc<Mutex>`; the cache's `last_plan` is read back afterwards for
+    // the "N of M segments changed" overlay (#495).
+    let render_cache = r
+        .compose
+        .vocal_audio
+        .render_cache
+        .entry((definition_id, track_id))
+        .or_default()
+        .clone();
+
     let bpm = r.transport.bpm;
     let engine_sr = r.sample_rate;
     let dest_dir = vocal_audio_dir(r);
     Task::perform(
         async move {
             tokio::task::spawn_blocking(move || {
-                render_vocal_wav(&midi_notes, &params, &assigned, bpm, engine_sr, &dest_dir)
+                render_vocal_wav(
+                    &midi_notes,
+                    &params,
+                    &assigned,
+                    bpm,
+                    engine_sr,
+                    &dest_dir,
+                    &render_cache,
+                )
             })
             .await
             .unwrap_or_else(|join_err| Err(format!("vocal render task join: {join_err}")))
@@ -557,6 +577,7 @@ fn describe_invalid(invalid: &[crate::compose::vocal_svs::InvalidSyllable]) -> S
 /// Off-thread render entry point. Runs the SVS pipeline + writes the WAV.
 /// Returns `Ok(None)` when the SVS model dir isn't installed (silent
 /// fallback to MIDI-only mode), `Ok(Some(path))` on success.
+#[allow(clippy::too_many_arguments)]
 fn render_vocal_wav(
     midi_notes: &[resonance_audio::types::MidiNote],
     params: &VocalParams,
@@ -564,10 +585,14 @@ fn render_vocal_wav(
     bpm: f32,
     engine_sample_rate: u32,
     dest_dir: &std::path::Path,
+    render_cache: &std::sync::Mutex<crate::compose::vocal_svs::SvsRenderCache>,
 ) -> Result<Option<(std::path::PathBuf, u64, u64)>, String> {
     use crate::compose::vocal_svs;
     use resonance_audio::types::TICKS_PER_QUARTER_NOTE;
 
+    let mut cache = render_cache
+        .lock()
+        .map_err(|_| "vocal render cache poisoned".to_string())?;
     let rendered = match vocal_svs::render_vocal_clip(
         midi_notes,
         params,
@@ -575,6 +600,7 @@ fn render_vocal_wav(
         TICKS_PER_QUARTER_NOTE as u32,
         bpm,
         engine_sample_rate,
+        &mut cache,
     ) {
         Ok(Some(r)) => r,
         Ok(None) => return Ok(None),
