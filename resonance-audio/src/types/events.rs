@@ -1,5 +1,5 @@
 //! Engine → GUI event enum.
-use resonance_common::AudioFormat;
+use resonance_common::{AudioFormat, TakeContent, TakeGroupId, TimelineRange};
 
 use crate::midi_hardware::MidiDeviceInfo;
 
@@ -138,6 +138,23 @@ pub enum AudioEvent {
         name: String,
         /// Downsampled waveform peaks: (min, max) per chunk of frames.
         waveform_peaks: Vec<(f32, f32)>,
+    },
+    /// One loop pass of a cycle-record run was captured into a distinct
+    /// take. Emitted per armed track at each loop seam (and once more for
+    /// the trailing pass when recording stops) while
+    /// `AudioCommand::SetLoopRecordMode(true)` is active. `group_id` is
+    /// stable for a track across all passes of one record run, so the app
+    /// can fold passes 0..N of a track into a single take group.
+    /// `content` carries the audio clip reference or the captured MIDI
+    /// notes depending on the track type.
+    TakeCaptured {
+        group_id: TakeGroupId,
+        track_id: TrackId,
+        /// The loop region the take was recorded over, in sample frames.
+        slot: TimelineRange,
+        /// Zero-based loop pass that produced this take.
+        pass_index: u32,
+        content: TakeContent,
     },
     PluginAdded {
         track_id: TrackId,

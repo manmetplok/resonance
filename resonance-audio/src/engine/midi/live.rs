@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
 use parking_lot::Mutex;
+use resonance_common::TakeNote;
 
 use crate::midi_hardware::LiveMidiEvent;
 use crate::mixer::{MidiStash, NoteSink};
@@ -424,4 +425,56 @@ pub(crate) fn close_open_recordings(ctx: &HandlerCtx, state: &mut HandlerState) 
     // Send All Notes Off on every output port so a hardware synth
     // doesn't sustain anything we'd lose on the engine side.
     state.midi_hw.midi_outputs.all_notes_off_everywhere();
+}
+
+/// Close the current cycle-record MIDI pass for every armed instrument
+/// track: finalize any still-open notes at the loop boundary (`close_sample`,
+/// the loop region's end), snapshot the recorded notes as take content, and
+/// clear the per-track recording state so the next pass lazily opens a fresh
+/// clip. Returns the captured notes per track for the caller to wrap into
+/// `AudioEvent::TakeCaptured`. The recorded `MidiClip`s themselves stay in
+/// the timeline as the takes' source material.
+pub(crate) fn capture_loop_record_midi_pass(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    close_sample: SamplePos,
+) -> Vec<(TrackId, Vec<TakeNote>)> {
+    if state.midi_recording.is_empty() {
+        return Vec::new();
+    }
+    let close_tick = sample_to_abs_tick(&ctx.tempo_map.load(), close_sample, ctx.sample_rate);
+    let mut takes: Vec<(TrackId, Vec<TakeNote>)> = Vec::new();
+    {
+        let mut clips = ctx.midi_clips.write();
+        for (track_id, rec) in state.midi_recording.iter() {
+            let Some(clip) = clips.iter_mut().find(|c| c.id == rec.clip_id) else {
+                continue;
+            };
+            // Close still-open notes at the loop boundary so the take has
+            // complete durations rather than zero-length tails.
+            for idx in rec.open_notes.values() {
+                if let Some(n) = clip.notes.get_mut(*idx) {
+                    let dur = close_tick
+                        .saturating_sub(rec.clip_start_tick)
+                        .saturating_sub(n.start_tick);
+                    n.duration_ticks = n.duration_ticks.max(dur);
+                }
+            }
+            let notes: Vec<TakeNote> = clip
+                .notes
+                .iter()
+                .map(|n| TakeNote {
+                    note: n.note,
+                    velocity: n.velocity,
+                    start_tick: n.start_tick,
+                    duration_ticks: n.duration_ticks,
+                })
+                .collect();
+            if !notes.is_empty() {
+                takes.push((*track_id, notes));
+            }
+        }
+    }
+    state.midi_recording.clear();
+    takes
 }

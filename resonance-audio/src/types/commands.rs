@@ -177,6 +177,13 @@ pub enum AudioCommand {
         loop_in: SamplePos,
         loop_out: SamplePos,
     },
+    /// Toggle loop-record (cycle-record) capture. When enabled and the
+    /// transport loops while a track is armed, the engine finalizes the
+    /// in-progress capture into a distinct take at each loop seam and
+    /// starts a fresh capture for the next pass, emitting
+    /// `AudioEvent::TakeCaptured` per pass. When disabled, a looped
+    /// recording keeps the legacy single-clip behaviour.
+    SetLoopRecordMode(bool),
     SavePluginState {
         instance_id: PluginInstanceId,
     },
