@@ -124,7 +124,12 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.muted = !t.muted;
                 t.muted
             });
-            if let Some(muted) = new_muted {
+            if let Some(own) = new_muted {
+                // A group's macro mute composes with the track's own mute,
+                // so the engine always receives the *effective* mute: the
+                // track stays muted while its group mute holds even after
+                // its own mute is cleared (todo #687).
+                let muted = own || r.track_groups.is_track_muted_via_group(id);
                 let _ = r.engine.send(AudioCommand::SetTrackMute {
                     track_id: id,
                     muted,
