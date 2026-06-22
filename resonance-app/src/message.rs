@@ -312,6 +312,11 @@ pub enum ProjectIoMessage {
     OpenPathSelected(Option<String>),
     ProjectSaved(Result<(), String>),
     ProjectLoaded(Result<Box<LoadedProject>, String>),
+    /// A *user* template finished loading from disk (todo #665). Carries the
+    /// same `LoadedProject` payload as [`Self::ProjectLoaded`], but the
+    /// instantiate handler replays it as a fresh, untitled project (path left
+    /// `None`) so the template source on disk is never overwritten.
+    TemplateLoaded(Result<Box<LoadedProject>, String>),
     ExportChordSheet,
     ChordSheetPathSelected(Option<String>, Vec<u8>),
 }

@@ -4,6 +4,7 @@
 //! tasks live in `dialogs.rs`.
 
 mod dialogs;
+mod instantiate;
 mod replay;
 mod replay_diff;
 mod serialize;
@@ -19,6 +20,7 @@ use crate::project::SaveCollector;
 use crate::Resonance;
 
 pub use dialogs::save_project_as_dialog;
+pub use instantiate::{begin_instantiate, instantiate_builtin, load_user_template_task};
 pub use replay::replay_loaded_project;
 pub use replay_diff::try_diff_replay;
 pub use serialize::build_project_file;
@@ -136,6 +138,12 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
         ProjectIoMessage::ProjectLoaded(Err(e)) => {
             r.error_message = Some(format!("Load failed: {e}"));
+        }
+        ProjectIoMessage::TemplateLoaded(Ok(loaded)) => {
+            instantiate::begin_instantiate(r, loaded);
+        }
+        ProjectIoMessage::TemplateLoaded(Err(e)) => {
+            r.error_message = Some(format!("Open template failed: {e}"));
         }
         ProjectIoMessage::ExportChordSheet => {
             let pdf_bytes = crate::chord_sheet_pdf::build_chord_sheet_pdf(

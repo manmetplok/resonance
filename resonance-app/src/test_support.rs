@@ -221,4 +221,25 @@ impl Resonance {
     pub fn test_apply_engine_event(&mut self, event: resonance_audio::types::AudioEvent) {
         let _ = crate::engine_events::handle_engine_event(self, event);
     }
+
+    /// Test-only: the current project path. `None` for an untitled project
+    /// (including one freshly instantiated from a template).
+    #[doc(hidden)]
+    pub fn test_project_path(&self) -> Option<&std::path::Path> {
+        self.io.project_path.as_deref()
+    }
+
+    /// Test-only: whether a project is active (startup modal dismissed).
+    #[doc(hidden)]
+    pub fn test_has_active_project(&self) -> bool {
+        self.io.has_active_project
+    }
+
+    /// Test-only: seed the current project path, standing in for a project
+    /// the user previously opened, so a test can prove that instantiating a
+    /// template clears it (leaving the new project untitled).
+    #[doc(hidden)]
+    pub fn test_set_project_path(&mut self, path: Option<std::path::PathBuf>) {
+        self.io.project_path = path;
+    }
 }
