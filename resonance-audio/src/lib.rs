@@ -59,7 +59,8 @@ pub mod __test_support {
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
     pub use crate::midi_hardware::{
-        parse_control_event_for_test, parse_live_event_for_test, LiveControlEvent, LiveMidiEvent,
+        encode_control_change, encode_nrpn, parse_control_event_for_test,
+        parse_live_event_for_test, LiveControlEvent, LiveMidiEvent,
     };
     pub use crate::mixer::{
         mix_audition_overlay, mix_track_clips, monitor_catchup_skip, monitor_read_len,

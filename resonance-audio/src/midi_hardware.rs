@@ -658,6 +658,46 @@ impl MidiOutputRegistry {
         }
     }
 
+    /// Send a raw Control Change to the device assigned to `track_id`,
+    /// if any. Reuses the same per-device sender lookup as
+    /// [`Self::send_note_on`].
+    // Emission primitive only (ba todo #718); the timeline/automation
+    // call sites land in a follow-up todo.
+    #[allow(dead_code)]
+    pub fn send_control_change(&mut self, track_id: TrackId, channel: u8, cc: u8, value: u8) {
+        let Some(name) = self.track_assignments.get(&track_id).cloned() else {
+            return;
+        };
+        if let Some(active) = self.connections.get_mut(&name) {
+            let _ = active.conn.send(&encode_control_change(channel, cc, value));
+        }
+    }
+
+    /// Send an NRPN (Non-Registered Parameter Number) to the device
+    /// assigned to `track_id`, if any. The NRPN is encoded by
+    /// [`encode_nrpn`] as a run of Control Change messages; each 3-byte
+    /// CC message is sent individually since `midir` expects one MIDI
+    /// message per `send` call.
+    #[allow(dead_code)]
+    pub fn send_nrpn(
+        &mut self,
+        track_id: TrackId,
+        channel: u8,
+        msb: u8,
+        lsb: u8,
+        value: u16,
+        fourteen_bit: bool,
+    ) {
+        let Some(name) = self.track_assignments.get(&track_id).cloned() else {
+            return;
+        };
+        if let Some(active) = self.connections.get_mut(&name) {
+            for msg in encode_nrpn(channel, msb, lsb, value, fourteen_bit).chunks_exact(3) {
+                let _ = active.conn.send(msg);
+            }
+        }
+    }
+
     /// Full MIDI panic for one device: explicit Note Off for every note
     /// we know is held, then sustain pedal off (CC 64 = 0) and All Notes
     /// Off (CC 123 = 0) on every channel.
@@ -695,6 +735,46 @@ impl Default for MidiOutputRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Control Change status nibble (channel goes in the low nibble).
+const CC_STATUS: u8 = 0xB0;
+/// NRPN parameter-select controllers: MSB then LSB.
+const CC_NRPN_PARAM_MSB: u8 = 99;
+const CC_NRPN_PARAM_LSB: u8 = 98;
+/// Data-entry controllers used to carry the NRPN value.
+const CC_DATA_ENTRY_MSB: u8 = 6;
+const CC_DATA_ENTRY_LSB: u8 = 38;
+
+/// Encode a single Control Change message `[status|channel, cc, value]`.
+/// Channel is masked to 0..=15 and the controller/value to 0..=127 so an
+/// out-of-range argument can neither corrupt the status byte nor smuggle a
+/// high bit into a data byte.
+pub fn encode_control_change(channel: u8, cc: u8, value: u8) -> [u8; 3] {
+    [CC_STATUS | (channel & 0x0F), cc & 0x7F, value & 0x7F]
+}
+
+/// Encode an NRPN as the standard sequence of Control Change messages:
+/// CC99 = parameter MSB, CC98 = parameter LSB, CC6 = data-entry MSB, and
+/// — only when `fourteen_bit` — CC38 = data-entry LSB.
+///
+/// For a 7-bit parameter the 7-bit `value` (0..=127) is carried in the
+/// single CC6 data-entry MSB. For a 14-bit parameter `value` (0..=16383)
+/// is split into its high 7 bits (CC6) and low 7 bits (CC38). The returned
+/// buffer is the flat byte stream, 3 bytes per CC message (9 bytes for a
+/// 7-bit NRPN, 12 for a 14-bit one).
+pub fn encode_nrpn(channel: u8, msb: u8, lsb: u8, value: u16, fourteen_bit: bool) -> Vec<u8> {
+    let ch = channel & 0x0F;
+    let mut bytes = Vec::with_capacity(if fourteen_bit { 12 } else { 9 });
+    bytes.extend_from_slice(&encode_control_change(ch, CC_NRPN_PARAM_MSB, msb));
+    bytes.extend_from_slice(&encode_control_change(ch, CC_NRPN_PARAM_LSB, lsb));
+    if fourteen_bit {
+        bytes.extend_from_slice(&encode_control_change(ch, CC_DATA_ENTRY_MSB, (value >> 7) as u8));
+        bytes.extend_from_slice(&encode_control_change(ch, CC_DATA_ENTRY_LSB, value as u8));
+    } else {
+        bytes.extend_from_slice(&encode_control_change(ch, CC_DATA_ENTRY_MSB, value as u8));
+    }
+    bytes
 }
 
 /// Parse raw MIDI bytes from a hardware input port. Exposed for
