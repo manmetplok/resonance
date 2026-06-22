@@ -17,7 +17,7 @@ use crate::view::controls::{
 use crate::util::short;
 use crate::Resonance;
 
-pub(super) fn view_track_header(
+pub(crate) fn view_track_header(
     r: &Resonance,
     track: &TrackState,
     is_selected: bool,

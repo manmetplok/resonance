@@ -39,7 +39,7 @@
 //!   (chords / tempo / signature) in the chrome.
 pub(crate) mod group_header;
 mod shelf;
-mod track;
+pub(crate) mod track;
 
 use iced::widget::{column, container, stack, Space};
 use iced::{Element, Length, Padding};
