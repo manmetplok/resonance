@@ -8,9 +8,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use resonance_audio::types::{ClipId, MidiNote, TICKS_PER_QUARTER_NOTE};
+use resonance_audio::types::{ClipId, MidiNote, PluginInstanceId, TICKS_PER_QUARTER_NOTE};
 
 use crate::compose::{LaneGeneratorConfig, LaneGeneratorKind};
 use crate::project::{
@@ -327,6 +327,186 @@ pub fn compute_summary(project: &ProjectFile) -> TemplateSummary {
         tempo_bpm: project.bpm,
         time_sig: format!("{}/{}", project.time_sig_num, project.time_sig_den),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Save-As-Template write path (impl-plan doc #197, todo #666).
+//
+// Capture the open project as a reusable user template. The capture is the
+// normal save shape — `project.json` + `midi/` + `plugins/` written via
+// [`crate::project::save_project`] — under a uniquely-named folder in the
+// templates dir, plus a `template.json` sidecar so [`scan_user_templates`]
+// can list it with a summary and the instantiate flow (todo #665) can open
+// it as a fresh untitled project. Two capture toggles let the author decide
+// whether to carry the tempo map and the master output chain into the
+// template; everything else is captured verbatim.
+// ---------------------------------------------------------------------------
+
+/// The two author-facing toggles applied when capturing a template
+/// (design doc #197). Each, when `false`, strips the corresponding data
+/// from the captured project before it is written so the template starts
+/// clean for the next song.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TemplateCaptureOptions {
+    /// Carry the tempo map — the tempo and time-signature change events —
+    /// into the template. When `false`, both event lists are cleared so the
+    /// template opens at a single flat tempo/signature. (The project schema
+    /// has no separate arrangement-marker list; the tempo map *is* the
+    /// "markers & tempo map" the toggle governs.)
+    pub include_markers_and_tempo: bool,
+    /// Carry the master output FX chain into the template. When `false`,
+    /// `master_plugins` is cleared so the template ships without a baked-in
+    /// mastering chain.
+    pub include_master_chain: bool,
+}
+
+impl TemplateCaptureOptions {
+    /// Capture everything — both toggles on. The default a "Save as
+    /// template" command starts from before the author opts data out.
+    pub fn capture_all() -> Self {
+        Self {
+            include_markers_and_tempo: true,
+            include_master_chain: true,
+        }
+    }
+}
+
+impl Default for TemplateCaptureOptions {
+    fn default() -> Self {
+        Self::capture_all()
+    }
+}
+
+/// Apply the capture toggles to a project in place: drop the tempo map
+/// and/or the master FX chain the author chose to leave out.
+fn apply_capture_options(project: &mut ProjectFile, options: TemplateCaptureOptions) {
+    if !options.include_markers_and_tempo {
+        project.tempo_events.clear();
+        project.signature_events.clear();
+    }
+    if !options.include_master_chain {
+        project.master_plugins.clear();
+        // A bypassed/empty chain has no meaning without plugins; reset it so
+        // the template doesn't ship a stray "master FX bypassed" flag.
+        project.master_fx_bypassed = false;
+    }
+}
+
+/// Turn a template name into a filesystem-safe folder slug: lowercase
+/// ASCII alphanumerics, every other run collapsed to a single `-`, with
+/// leading/trailing dashes trimmed. An empty result (e.g. a name of only
+/// punctuation) falls back to `"template"` so we always have a base name.
+fn slugify(name: &str) -> String {
+    let mut slug = String::new();
+    let mut prev_dash = false;
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash && !slug.is_empty() {
+            slug.push('-');
+            prev_dash = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        "template".to_string()
+    } else {
+        slug
+    }
+}
+
+/// Pick a folder path under `root` for a template named `name` that does
+/// not yet exist on disk. Starts from the bare slug and appends `-2`, `-3`,
+/// … until a free name is found, so saving two templates with the same
+/// name never clobbers the first.
+fn unique_template_dir(root: &Path, name: &str) -> PathBuf {
+    let base = slugify(name);
+    let first = root.join(&base);
+    if !first.exists() {
+        return first;
+    }
+    let mut n = 2u32;
+    loop {
+        let candidate = root.join(format!("{base}-{n}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Keep only the plugin-state blobs whose instance is still referenced by
+/// the (post-toggle) project, so dropping the master chain doesn't leave
+/// orphaned `plugins/plugin_*.bin` files in the template folder.
+fn referenced_plugin_states(
+    project: &ProjectFile,
+    plugin_states: &[(PluginInstanceId, Vec<u8>)],
+) -> Vec<(PluginInstanceId, Vec<u8>)> {
+    use std::collections::HashSet;
+    let mut referenced: HashSet<PluginInstanceId> = HashSet::new();
+    for t in &project.tracks {
+        referenced.extend(t.plugins.iter().map(|p| p.instance_id));
+    }
+    for b in &project.busses {
+        referenced.extend(b.plugins.iter().map(|p| p.instance_id));
+    }
+    referenced.extend(project.master_plugins.iter().map(|p| p.instance_id));
+    plugin_states
+        .iter()
+        .filter(|(id, _)| referenced.contains(id))
+        .cloned()
+        .collect()
+}
+
+/// Write `project` as a user template under `root` (the templates dir).
+///
+/// Applies the capture `options`, picks a unique folder name derived from
+/// `name`, writes the project in the normal save shape (`project.json` +
+/// `midi/` + `plugins/`) via [`crate::project::save_project`], then writes
+/// the `template.json` sidecar whose `summary` reflects the project *after*
+/// the toggles were applied. Returns the created folder path.
+///
+/// `created_secs` is passed in (rather than read from the clock here) so
+/// the write is deterministic and unit-testable. The app entry point
+/// [`save_current_as_template`](super::save_current_as_template) stamps it
+/// with the wall clock.
+#[allow(clippy::too_many_arguments)]
+pub fn write_template(
+    root: &Path,
+    name: &str,
+    description: &str,
+    mut project: ProjectFile,
+    plugin_states: &[(PluginInstanceId, Vec<u8>)],
+    midi_clips: &[(ClipId, Vec<MidiNote>)],
+    options: TemplateCaptureOptions,
+    created_secs: u64,
+) -> Result<PathBuf, String> {
+    apply_capture_options(&mut project, options);
+
+    let folder = unique_template_dir(root, name);
+    fs::create_dir_all(&folder)
+        .map_err(|e| format!("Create template directory: {e}"))?;
+
+    let states = referenced_plugin_states(&project, plugin_states);
+    crate::project::save_project(&folder, &project, &states, midi_clips)?;
+
+    let metadata = TemplateMetadata {
+        name: name.to_string(),
+        description: description.to_string(),
+        built_in: false,
+        schema_version: project.version,
+        summary: compute_summary(&project),
+        created_secs,
+    };
+    let json = serde_json::to_string_pretty(&metadata)
+        .map_err(|e| format!("Serialize template.json: {e}"))?;
+    fs::write(folder.join("template.json"), json)
+        .map_err(|e| format!("Write template.json: {e}"))?;
+
+    Ok(folder)
 }
 
 // ---------------------------------------------------------------------------

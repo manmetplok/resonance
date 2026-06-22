@@ -296,6 +296,15 @@ pub enum ProjectIoMessage {
     BouncePathSelected(Option<String>),
     SaveProject,
     SaveProjectAs,
+    /// Capture the open project as a reusable user template (todo #666).
+    /// `name`/`description` label it in the picker; the two booleans are
+    /// the capture toggles (carry the tempo map / the master FX chain).
+    SaveAsTemplate {
+        name: String,
+        description: String,
+        include_markers_and_tempo: bool,
+        include_master_chain: bool,
+    },
     OpenProject,
     /// User clicked a recent entry in the startup modal.
     OpenRecent(std::path::PathBuf),
