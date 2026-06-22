@@ -83,6 +83,34 @@ pub fn solo_button<'a>(
         .padding(0)
 }
 
+/// Small amber "via group" chip shown on a member track whose solo is
+/// driven by its group's macro solo rather than its own (todo #688). It is
+/// a non-interactive status badge — an outlined WARM pill — so it reads as
+/// "soloed because the group is" without competing with the solo button.
+pub fn via_group_solo_chip<'a>() -> Element<'a, Message> {
+    container(
+        text("S·grp")
+            .size(8)
+            .font(theme::MONO_FONT)
+            .color(theme::WARM),
+    )
+    .padding(iced::Padding {
+        top: 1.0,
+        right: 4.0,
+        bottom: 1.0,
+        left: 4.0,
+    })
+    .style(|_theme| container::Style {
+        border: iced::Border {
+            color: theme::WARM_LINE,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
 /// Input-monitor toggle button (eye — green when monitoring).
 pub fn monitor_button<'a>(
     enabled: bool,

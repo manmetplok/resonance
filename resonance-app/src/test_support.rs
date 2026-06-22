@@ -264,6 +264,24 @@ impl Resonance {
         crate::view::track_header::group_header::view_group_header(group, member_count)
     }
 
+
+    /// Test-only: mutable borrow of the track-group registry so tests can
+    /// set up group state (todo #688).
+    #[doc(hidden)]
+    pub fn test_track_groups_mut(&mut self) -> &mut state::TrackGroupRegistry {
+        &mut self.track_groups
+    }
+
+    /// Test-only: render a standalone track-header cell for a member
+    /// track (todo #688) so tests can snapshot the "via group" solo chip.
+    #[doc(hidden)]
+    pub fn test_track_header_view(
+        &self,
+        track: &state::TrackState,
+    ) -> iced::Element<'static, crate::message::Message> {
+        crate::view::track_header::track::view_track_header(self, track, false)
+    }
+
     /// Test-only: render the floating "N tracks selected · Group ⌘G" bar
     /// (todo #684) so `tests/selection_bar.rs` can snapshot it standalone.
     #[doc(hidden)]
