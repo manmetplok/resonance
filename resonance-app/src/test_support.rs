@@ -255,4 +255,11 @@ impl Resonance {
     ) -> iced::Element<'static, crate::message::Message> {
         crate::view::track_header::group_header::view_group_header(group, member_count)
     }
+
+    /// Test-only: render the floating "N tracks selected · Group ⌘G" bar
+    /// (todo #684) so `tests/selection_bar.rs` can snapshot it standalone.
+    #[doc(hidden)]
+    pub fn test_selection_bar_view(&self, count: usize) -> iced::Element<'static, crate::message::Message> {
+        crate::view::selection_bar::selection_bar_with_count(count)
+    }
 }

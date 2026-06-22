@@ -14,9 +14,9 @@ use crate::message::*;
 use crate::theme;
 use crate::Resonance;
 
-pub(crate) fn view_selection_bar(r: &Resonance) -> Element<'_, Message> {
-    let count = r.interaction.selected_tracks.len();
-
+/// Render the floating selection bar with the given track count.
+/// This variant returns a `'static` element for snapshot testing.
+pub(crate) fn selection_bar_with_count(count: usize) -> Element<'static, Message> {
     let label = text(format!("{count} tracks selected"))
         .size(13)
         .font(theme::UI_FONT_MEDIUM)
@@ -66,4 +66,9 @@ pub(crate) fn view_selection_bar(r: &Resonance) -> Element<'_, Message> {
             left: 0.0,
         })
         .into()
+}
+
+pub(crate) fn view_selection_bar(r: &Resonance) -> Element<'_, Message> {
+    let count = r.interaction.selected_tracks.len();
+    selection_bar_with_count(count)
 }
