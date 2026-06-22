@@ -13,6 +13,7 @@ pub mod arrange;
 pub mod plugin_index;
 
 // Data types, grouped by domain.
+pub mod aux_sends;
 pub mod clips;
 pub mod global;
 pub mod interaction;
@@ -22,6 +23,7 @@ pub mod tracks;
 pub mod transport;
 pub mod viewport;
 
+pub use aux_sends::*;
 pub use clips::*;
 pub use global::*;
 pub use interaction::*;

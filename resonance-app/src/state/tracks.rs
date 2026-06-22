@@ -305,6 +305,10 @@ pub struct BusState {
     pub muted: bool,
     /// When true, every plugin in this bus's FX chain is bypassed.
     pub fx_bypassed: bool,
+    /// When true, this bus acts as a return bus for aux sends. Mirrored
+    /// from the engine's `BusRoleChanged` event; see
+    /// [`crate::state::AuxSendState`].
+    pub is_return: bool,
     pub plugins: Vec<PluginSlotState>,
     pub level_l: f32,
     pub level_r: f32,
@@ -320,6 +324,7 @@ impl BusState {
             pan: 0.0,
             muted: false,
             fx_bypassed: false,
+            is_return: false,
             plugins: Vec::new(),
             level_l: 0.0,
             level_r: 0.0,

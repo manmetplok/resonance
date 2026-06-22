@@ -111,6 +111,10 @@ pub struct Resonance {
     pub(crate) io: ProjectIoState,
     pub(crate) mixer: MixerUiState,
     pub(crate) registry: TrackRegistry,
+    /// GUI-side mirror of the engine's aux-send graph, reconstructed
+    /// purely from `AuxSendChanged` / `AuxSendRemoved` / `AuxSendRejected`
+    /// events. Bus return-role rides on `BusState::is_return`.
+    pub(crate) aux: state::AuxSendState,
     /// Session-local undo/redo history. Cleared on project load.
     pub(crate) undo: UndoHistory,
     /// When set, the confirmation dialog for deleting a track with
@@ -361,6 +365,7 @@ impl Resonance {
                 next_sub_track_id: 1_000_000_000,
                 ..TrackRegistry::default()
             },
+            aux: state::AuxSendState::default(),
             undo: UndoHistory::new(),
             plugin_state_cache: std::collections::HashMap::new(),
             plugin_index: std::collections::HashMap::new(),

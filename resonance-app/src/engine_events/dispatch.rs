@@ -10,7 +10,7 @@ use resonance_audio::types::*;
 use crate::message::*;
 use crate::Resonance;
 
-use super::{clips, midi, plugins, project_io, tracks, transport};
+use super::{aux_sends, clips, midi, plugins, project_io, tracks, transport};
 
 pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
     use AudioEvent as E;
@@ -180,16 +180,27 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             tracks::bus_fx_bypass_changed(r, bus_id, bypassed)
         }
 
-        // Aux send / return-bus events. The engine-side data model,
-        // commands, events, and cyclic-route validation land first
-        // (todo #475); the app-side aux-send state, mirroring, and
-        // mixer view are separate follow-up todos. Until those land
-        // these events are accepted but not yet mirrored into app
-        // state, keeping the workspace compiling.
-        E::BusRoleChanged { .. }
-        | E::AuxSendChanged { .. }
-        | E::AuxSendRemoved { .. }
-        | E::AuxSendRejected { .. } => {}
+        // Aux send / return-bus events. Mirrored into app state purely
+        // from these events (todo #478) — the engine-side data model,
+        // commands, and cyclic-route validation landed in todo #475. The
+        // mixer view that surfaces sends/returns is a separate follow-up.
+        E::BusRoleChanged { bus_id, is_return } => {
+            aux_sends::bus_role_changed(r, bus_id, is_return)
+        }
+        E::AuxSendChanged {
+            send_id,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+            enabled,
+        } => aux_sends::send_changed(r, send_id, source, dest, level_db, pre_fader, enabled),
+        E::AuxSendRemoved { send_id } => aux_sends::send_removed(r, send_id),
+        E::AuxSendRejected {
+            source,
+            dest,
+            reason,
+        } => aux_sends::send_rejected(r, source, dest, reason),
 
         // Plugin lifecycle
         E::PluginAdded {
