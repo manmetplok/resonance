@@ -2,6 +2,7 @@
 pub mod audio_probe;
 pub mod automation;
 mod denormal;
+pub mod device_definition;
 pub mod external_instrument;
 pub mod drum_map;
 pub mod group_identity;
@@ -17,6 +18,13 @@ pub use automation::{
     lane_value_to_plugin_param, lane_value_to_real, plugin_param_to_lane_value,
     real_to_lane_value, sample_lane, AutomationLane, AutomationTarget, Breakpoint, BusId,
     CurveKind, LaneId, PluginInstanceId, TrackId,
+};
+// `device_definition::MidiBinding` (a device parameter's CC/NRPN address) is a
+// distinct concept from `midi_map::MidiBinding` (a MIDI-Learn control mapping);
+// it stays reachable as `device_definition::MidiBinding` to avoid the name clash.
+pub use device_definition::{
+    binding_value_to_lane, lane_value_to_binding_value, DeviceDefinition, DeviceDefinitionError,
+    DeviceParam, ParamCurve, PatchEntry, SCHEMA_VERSION,
 };
 pub use external_instrument::ExternalInstrument;
 pub use midi_map::{
