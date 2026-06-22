@@ -24,6 +24,13 @@
 //! - Restore the mute snapshot, mute the source, disarm the target.
 //! - Emit `AudioEvent::TrackBounceCompleted` so the app reflects the
 //!   source mute and reorders the new track.
+//!
+//! Reference A/B exclusion: a realtime bounce captures the live input
+//! device into the recording WAV, not the mixer's output buffer, so the
+//! reference monitor can't reach the rendered audio. The live monitor
+//! output is additionally kept on the mix (not the reference) because
+//! `mixer::mix_audio` suppresses the reference tap while `recording` is
+//! set, which it is for the duration of the bounce.
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
