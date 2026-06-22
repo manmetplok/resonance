@@ -98,8 +98,9 @@ pub use engine::{
 #[doc(hidden)]
 pub use engine::{
     check_external_instrument_devices_in_place, clear_external_instrument_in_place,
-    set_external_instrument_in_place, set_external_instrument_latency_in_place,
-    set_external_instrument_patch_in_place, ExternalInstruments,
+    resend_external_instrument_patch_in_place, set_external_instrument_in_place,
+    set_external_instrument_latency_in_place, set_external_instrument_patch_in_place,
+    ExternalInstruments,
 };
 /// Exposed for `tests/external_instrument_handlers.rs` so it can construct an
 /// empty output registry and exercise the patch-send offline branch without

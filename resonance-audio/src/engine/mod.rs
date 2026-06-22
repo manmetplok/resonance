@@ -57,8 +57,9 @@ mod clips;
 mod external_instrument;
 pub use external_instrument::{
     check_external_instrument_devices_in_place, clear_external_instrument_in_place,
-    set_external_instrument_in_place, set_external_instrument_latency_in_place,
-    set_external_instrument_patch_in_place, ExternalInstruments,
+    resend_external_instrument_patch_in_place, set_external_instrument_in_place,
+    set_external_instrument_latency_in_place, set_external_instrument_patch_in_place,
+    ExternalInstruments,
 };
 pub use clips::transcode_to_wav;
 pub use clips::{

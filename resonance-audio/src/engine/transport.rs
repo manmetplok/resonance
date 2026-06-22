@@ -24,6 +24,9 @@ pub(crate) fn handle_play(ctx: &HandlerCtx, state: &mut HandlerState) {
         } else {
             super::midi::clock_send_continue(ctx, state, pos);
         }
+        // Re-assert each external instrument's saved patch so the hardware
+        // lands on the right bank/program when playback begins (doc #169).
+        super::external_instrument::handle_resend_patches(ctx, state);
     }
 }
 

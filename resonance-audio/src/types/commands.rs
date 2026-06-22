@@ -452,6 +452,14 @@ pub enum AudioCommand {
     CheckExternalInstrumentDevices {
         track_id: TrackId,
     },
+    /// Re-send Bank Select + Program Change for **every** external-instrument
+    /// track from its stored config, without mutating any config. Sent by the
+    /// app once after a project load has replayed all `SetExternalInstrument`
+    /// configs, so a freshly-powered synth lands on its saved patch; the engine
+    /// also fires this itself at transport start. Tracks with no bank/program
+    /// are skipped; an offline output is reported per track via
+    /// `ExternalInstrumentMidiOutOffline` while its route is preserved.
+    ResendExternalInstrumentPatches,
 
     /// Configure the global MIDI clock master (Resonance → device).
     /// When `enabled` is true and `device` is set, the engine emits

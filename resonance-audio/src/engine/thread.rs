@@ -739,6 +739,9 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         AudioCommand::CheckExternalInstrumentDevices { track_id } => {
             external_instrument::handle_check_devices(ctx, state, track_id)
         }
+        AudioCommand::ResendExternalInstrumentPatches => {
+            external_instrument::handle_resend_patches(ctx, state)
+        }
         AudioCommand::SetMidiClockOutput { device, enabled } => {
             midi::handle_set_midi_clock_output(ctx, state, device, enabled)
         }
