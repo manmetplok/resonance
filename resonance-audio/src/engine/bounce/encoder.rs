@@ -1,23 +1,27 @@
 //! Pluggable encoder sinks for the offline export pipeline (doc #196).
 //!
 //! The render loop produces interleaved stereo `f32` frames; an
-//! [`EncoderSink`] consumes them and writes the encoded file. Today two
-//! sinks exist — [`WavSink`] (16/24-bit PCM or 32-bit float) and
-//! [`FlacSink`] (lossless 16/24-bit via the pure-Rust `flacenc`). The
-//! 32-bit-float WAV path is byte-for-byte identical to the legacy hound
-//! tail it replaces.
+//! [`EncoderSink`] consumes them and writes the encoded file. Today three
+//! sinks exist — [`WavSink`] (16/24-bit PCM or 32-bit float), [`FlacSink`]
+//! (lossless 16/24-bit via the pure-Rust `flacenc`) and [`Mp3Sink`] (lossy
+//! CBR/VBR via `libmp3lame`, behind the `mp3` feature). The 32-bit-float
+//! WAV path is byte-for-byte identical to the legacy hound tail it
+//! replaces.
 //!
 //! Sinks are constructed via [`build_sink`], which is the single place
 //! that decides whether a format's encoder is available. Formats whose
-//! encoder is not yet wired (MP3/Opus land in #651) return
-//! [`EncoderError::Unavailable`] *before any file is created*, so the
-//! caller can surface `ExportErrorKind::EncoderUnavailable` without
-//! leaving a partial file behind.
+//! encoder is not compiled in (MP3 without the `mp3` feature) or not yet
+//! wired (Opus lands in #651) return [`EncoderError::Unavailable`] *before
+//! any file is created*, so the caller can surface
+//! `ExportErrorKind::EncoderUnavailable` without leaving a partial file
+//! behind.
 
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "mp3")]
+use crate::types::Mp3Rate;
 use crate::types::{BitDepth, ExportFormat, ExportMetadata, FlacLevel};
 
 /// Why an encoder sink could not be built, written or finalized.
@@ -74,9 +78,20 @@ pub(super) fn build_sink(
             bit_depth,
             compression,
         )?)),
-        ExportFormat::Mp3 { .. } => Err(EncoderError::Unavailable(
-            "MP3 export is not available in this build".into(),
-        )),
+        ExportFormat::Mp3 { mode, bitrate_kbps } => {
+            #[cfg(feature = "mp3")]
+            {
+                Ok(Box::new(Mp3Sink::new(path, sample_rate, mode, bitrate_kbps)?))
+            }
+            #[cfg(not(feature = "mp3"))]
+            {
+                let _ = (mode, bitrate_kbps);
+                Err(EncoderError::Unavailable(
+                    "MP3 export is not available in this build (compile with the `mp3` feature)"
+                        .into(),
+                ))
+            }
+        }
         ExportFormat::Opus { .. } => Err(EncoderError::Unavailable(
             "Opus export is not available in this build".into(),
         )),
@@ -339,6 +354,161 @@ impl EncoderSink for FlacSink {
         std::fs::write(&self.path, &bytes)
             .map_err(|e| EncoderError::Io(format!("Failed to write FLAC file: {e}")))?;
         Ok(bytes.len() as u64)
+    }
+}
+
+// --- MP3 --------------------------------------------------------------------
+
+/// MP3 sink backed by `libmp3lame` (built from bundled C source by the
+/// `mp3lame-encoder` crate, behind the `mp3` feature). Interleaved stereo
+/// `f32` frames feed LAME's IEEE-float input directly (full-scale ±1.0, no
+/// intermediate quantization — LAME applies its own psychoacoustic
+/// quantization). The whole MPEG stream is buffered in RAM and written once
+/// in [`finalize`], so — like [`FlacSink`] — a cancelled export never
+/// leaves a partial `.mp3` on disk.
+///
+/// `Cbr` holds a constant bitrate; `Vbr` targets a quality level (mapped
+/// from `bitrate_kbps`) and lets the bitrate float. A LAME "Info" (CBR) /
+/// "Xing" (VBR) header frame is prepended at finalize so players report the
+/// correct duration and honour encoder delay/padding for gapless playback.
+#[cfg(feature = "mp3")]
+pub(super) struct Mp3Sink {
+    path: PathBuf,
+    encoder: mp3lame_encoder::Encoder,
+    /// Encoded MPEG audio frames accumulated across `write_frames`. The
+    /// Info/Xing header is spliced in front in `finalize`.
+    out: Vec<u8>,
+}
+
+#[cfg(feature = "mp3")]
+impl Mp3Sink {
+    fn new(
+        path: &Path,
+        sample_rate: u32,
+        mode: Mp3Rate,
+        bitrate_kbps: u32,
+    ) -> Result<Self, EncoderError> {
+        use mp3lame_encoder::{Builder, Quality, VbrMode};
+
+        let io = |e: mp3lame_encoder::BuildError| {
+            EncoderError::Io(format!("MP3 encoder setup error: {e:?}"))
+        };
+        let mut builder = Builder::new()
+            .ok_or_else(|| EncoderError::Io("Failed to allocate LAME encoder".into()))?;
+        builder.set_num_channels(2).map_err(io)?;
+        builder.set_sample_rate(sample_rate).map_err(io)?;
+        // Best LAME analysis quality (`-q 0`): export is offline, so the
+        // slowest / highest-quality setting costs nothing user-visible.
+        builder.set_quality(Quality::Best).map_err(io)?;
+        match mode {
+            Mp3Rate::Cbr => {
+                builder.set_brate(cbr_bitrate(bitrate_kbps)).map_err(io)?;
+            }
+            Mp3Rate::Vbr => {
+                builder.set_vbr_mode(VbrMode::Mtrh).map_err(io)?;
+                builder.set_vbr_quality(vbr_quality(bitrate_kbps)).map_err(io)?;
+            }
+        }
+        // Emit a LAME Info (CBR) / Xing (VBR) header frame so players read
+        // the correct duration and drop encoder delay/padding for gapless
+        // playback. It is spliced in front of the audio in `finalize`.
+        builder.set_to_write_vbr_tag(true).map_err(io)?;
+        let encoder = builder.build().map_err(io)?;
+        Ok(Mp3Sink {
+            path: path.to_path_buf(),
+            encoder,
+            out: Vec::new(),
+        })
+    }
+}
+
+#[cfg(feature = "mp3")]
+impl EncoderSink for Mp3Sink {
+    fn write_frames(&mut self, frames: &[f32]) -> Result<(), EncoderError> {
+        use mp3lame_encoder::{max_required_buffer_size, InterleavedPcm};
+        // `encode_to_vec` writes into spare capacity only, so reserve LAME's
+        // worst-case output size for this chunk up front (per-channel sample
+        // count = interleaved length / 2).
+        self.out
+            .reserve(max_required_buffer_size(frames.len() / 2));
+        self.encoder
+            .encode_to_vec(InterleavedPcm(frames), &mut self.out)
+            .map_err(|e| EncoderError::Io(format!("MP3 encode error: {e:?}")))?;
+        Ok(())
+    }
+
+    fn finalize(mut self: Box<Self>, _meta: &ExportMetadata) -> Result<u64, EncoderError> {
+        use mp3lame_encoder::FlushGap;
+
+        // Flush LAME's internal buffers (final partial frame + padding).
+        // 7200 bytes is one max-size MPEG frame — the most a flush emits.
+        self.out.reserve(7200);
+        self.encoder
+            .flush_to_vec::<FlushGap>(&mut self.out)
+            .map_err(|e| EncoderError::Io(format!("MP3 flush error: {e:?}")))?;
+
+        // Prepend the LAME Info/Xing header frame so it is the first frame
+        // of the stream. No ID3v2 tag is written, so the splice boundary is
+        // the start of the file (see `mp3lame_encoder`'s documented write
+        // order: id3v2 tag, then VBR tag, then audio).
+        let lame_tag_size = self.encoder.lame_tag_size();
+        let mut file = Vec::with_capacity(lame_tag_size + self.out.len());
+        if lame_tag_size > 0 {
+            let mut tag = Vec::with_capacity(lame_tag_size);
+            self.encoder.lame_tag_encode_to_vec(&mut tag);
+            file.extend_from_slice(&tag);
+        }
+        file.extend_from_slice(&self.out);
+
+        std::fs::write(&self.path, &file)
+            .map_err(|e| EncoderError::Io(format!("Failed to write MP3 file: {e}")))?;
+        Ok(file.len() as u64)
+    }
+}
+
+/// Snap a requested kbps to the nearest libmp3lame constant bitrate. The
+/// export UI offers 128/192/256/320; any other value picks the closest
+/// supported rate (LAME only accepts a fixed set), defaulting to 192.
+#[cfg(feature = "mp3")]
+fn cbr_bitrate(kbps: u32) -> mp3lame_encoder::Bitrate {
+    use mp3lame_encoder::Bitrate::*;
+    const RATES: &[(u32, mp3lame_encoder::Bitrate)] = &[
+        (8, Kbps8),
+        (16, Kbps16),
+        (24, Kbps24),
+        (32, Kbps32),
+        (40, Kbps40),
+        (48, Kbps48),
+        (64, Kbps64),
+        (80, Kbps80),
+        (96, Kbps96),
+        (112, Kbps112),
+        (128, Kbps128),
+        (160, Kbps160),
+        (192, Kbps192),
+        (224, Kbps224),
+        (256, Kbps256),
+        (320, Kbps320),
+    ];
+    RATES
+        .iter()
+        .min_by_key(|(r, _)| (*r as i64 - kbps as i64).unsigned_abs())
+        .map(|&(_, b)| b)
+        .unwrap_or(Kbps192)
+}
+
+/// Map a target bitrate to a libmp3lame VBR quality (`-V`, 0 = highest
+/// quality / largest file, 9 = lowest). Loosely follows the standard LAME
+/// presets (V0 ≈ 245 kbps, V2 ≈ 190, V3 ≈ 175, V4 ≈ 165).
+#[cfg(feature = "mp3")]
+fn vbr_quality(kbps: u32) -> mp3lame_encoder::Quality {
+    use mp3lame_encoder::Quality::*;
+    match kbps {
+        k if k >= 256 => Best,     // V0
+        k if k >= 192 => NearBest, // V2
+        k if k >= 160 => VeryNice, // V3
+        k if k >= 128 => Nice,     // V4
+        _ => Good,                 // V5
     }
 }
 

@@ -23,6 +23,17 @@ bytemuck.workspace = true
 serde.workspace = true
 flacenc = { version = "0.5.1", default-features = false, features = ["par"] }
 rubato = "0.16"
+# MP3 export (libmp3lame, built from bundled C source — no system lib).
+# Gated behind the `mp3` feature so a build without a C toolchain can opt
+# out and degrade to ExportErrorKind::EncoderUnavailable (todo #653).
+mp3lame-encoder = { version = "0.2", optional = true }
+
+[features]
+# MP3 encoder sink. On by default so exports offer MP3 out of the box;
+# build with `--no-default-features` (or a profile that drops it) when a
+# C toolchain / libmp3lame source build is unavailable.
+default = ["mp3"]
+mp3 = ["dep:mp3lame-encoder"]
 
 [dev-dependencies]
 # Used by tests/import_audio_to_pool.rs to author mono / multi-rate
