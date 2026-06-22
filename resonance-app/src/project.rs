@@ -31,6 +31,17 @@ pub use sections::{ProjectSectionChord, ProjectSectionDefinition, ProjectSection
 
 pub const PROJECT_FORMAT_VERSION: u32 = 2;
 
+/// File name of the canonical project-metadata document inside a `.rproj`
+/// directory. A manual save (over)writes this file.
+pub const PROJECT_JSON: &str = "project.json";
+
+/// File name of the autosave snapshot, written alongside
+/// [`PROJECT_JSON`]. Kept as a *separate* side file (never overwriting
+/// the canonical `project.json`) so a crash mid-autosave can only ever
+/// truncate the snapshot, leaving the last manual save fully intact.
+/// See epic #32 / doc #171 "Autosave triggering".
+pub const AUTOSAVE_JSON: &str = "project.autosave.json";
+
 /// On-disk project format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectFile {
@@ -289,6 +300,11 @@ pub struct SaveCollector {
     pub plugin_states: Vec<(PluginInstanceId, Vec<u8>)>,
     pub clips_done: bool,
     pub plugins_done: bool,
+    /// True when this collector is servicing a periodic autosave rather
+    /// than a manual save. Autosaves write their metadata to
+    /// [`AUTOSAVE_JSON`], leave `dirty` set, skip the recents list and
+    /// versioned backups, and update `last_autosave_at` on completion.
+    pub autosave: bool,
 }
 
 /// Write a project to disk. Assumes the engine has already written
@@ -297,6 +313,34 @@ pub struct SaveCollector {
 /// state blobs.
 pub fn save_project(
     path: &Path,
+    project: &ProjectFile,
+    plugin_states: &[(PluginInstanceId, Vec<u8>)],
+    midi_clips: &[(ClipId, Vec<MidiNote>)],
+) -> Result<(), String> {
+    write_project_metadata(path, PROJECT_JSON, project, plugin_states, midi_clips)
+}
+
+/// Write an autosave snapshot. Identical to [`save_project`] except the
+/// project metadata goes to [`AUTOSAVE_JSON`] instead of [`PROJECT_JSON`],
+/// so the canonical `project.json` is never overwritten. The shared
+/// audio / MIDI / plugin blobs are written to the same id-keyed paths as
+/// a normal save, so the side file plus those blobs form a complete,
+/// loadable snapshot for crash recovery.
+pub fn save_autosave(
+    path: &Path,
+    project: &ProjectFile,
+    plugin_states: &[(PluginInstanceId, Vec<u8>)],
+    midi_clips: &[(ClipId, Vec<MidiNote>)],
+) -> Result<(), String> {
+    write_project_metadata(path, AUTOSAVE_JSON, project, plugin_states, midi_clips)
+}
+
+/// Shared body of [`save_project`] / [`save_autosave`]: write the plugin
+/// state blobs and MIDI clip files, then the project-metadata JSON under
+/// `json_file_name`. Every write goes through [`atomic_write`].
+fn write_project_metadata(
+    path: &Path,
+    json_file_name: &str,
     project: &ProjectFile,
     plugin_states: &[(PluginInstanceId, Vec<u8>)],
     midi_clips: &[(ClipId, Vec<MidiNote>)],
@@ -320,11 +364,12 @@ pub fn save_project(
         atomic_write(&file_path, &bytes).map_err(|e| format!("Write midi {clip_id}: {e}"))?;
     }
 
-    // Write project.json.
+    // Write the project-metadata JSON (project.json or, for an autosave,
+    // project.autosave.json).
     let json =
         serde_json::to_string_pretty(project).map_err(|e| format!("Serialize project: {e}"))?;
-    atomic_write(&path.join("project.json"), json.as_bytes())
-        .map_err(|e| format!("Write project.json: {e}"))?;
+    atomic_write(&path.join(json_file_name), json.as_bytes())
+        .map_err(|e| format!("Write {json_file_name}: {e}"))?;
 
     Ok(())
 }

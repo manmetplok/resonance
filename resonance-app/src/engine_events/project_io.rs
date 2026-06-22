@@ -62,9 +62,16 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
     let project_file = crate::update::build_project_file(r);
     let path = save.path.clone();
     let plugin_states = save.plugin_states;
-    // Snapshot a versioned backup after each successful save. The
+    let autosave = save.autosave;
+    // Snapshot a versioned backup after each successful *manual* save. The
     // retention count comes from the persisted autosave settings (#462).
-    let backup_retention = r.autosave_settings().backup_retention;
+    // Autosaves don't snapshot: they write `project.autosave.json`, not
+    // the canonical `project.json` that `write_backup` archives.
+    let backup_retention = if autosave {
+        0
+    } else {
+        r.autosave_settings().backup_retention
+    };
 
     let midi_clips: Vec<(ClipId, Vec<MidiNote>)> = r
         .midi_clips
@@ -74,7 +81,11 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
 
     Task::perform(
         async move {
-            crate::project::save_project(&path, &project_file, &plugin_states, &midi_clips)?;
+            if autosave {
+                crate::project::save_autosave(&path, &project_file, &plugin_states, &midi_clips)?;
+            } else {
+                crate::project::save_project(&path, &project_file, &plugin_states, &midi_clips)?;
+            }
             // Snapshot the just-written project.json into backups/. A
             // failed backup must not fail the save — the project is
             // already safely on disk — so it's logged, not propagated.
@@ -86,7 +97,7 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
             }
             Ok(())
         },
-        |r| Message::ProjectIo(ProjectIoMessage::ProjectSaved(r)),
+        move |r| Message::ProjectIo(ProjectIoMessage::ProjectSaved(r, autosave)),
     )
 }
 
