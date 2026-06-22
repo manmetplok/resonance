@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use resonance_common::{AutomationLane, AutomationTarget};
+use resonance_common::{AutomationLane, AutomationTarget, LaneId};
 
 /// GUI-side automation state, mirrored one-way from engine events.
 #[derive(Debug, Clone, Default)]
@@ -26,4 +26,19 @@ pub struct AutomationState {
     /// target when its lane is removed so a stale tint can't outlive the
     /// lane.
     pub live_values: HashMap<AutomationTarget, f32>,
+    /// Monotonic source of [`LaneId`]s for lanes the *app* creates (a
+    /// "pick parameter → add lane" edit). The engine stores lanes keyed by
+    /// target and echoes the id back unchanged, so the app owns id
+    /// allocation. Never reused — a fresh id per `AddLane` keeps ids unique
+    /// across a session even after undo re-creates a lane.
+    next_lane_id: LaneId,
+}
+
+impl AutomationState {
+    /// Allocate the next unique lane id (1-based; `0` means "none
+    /// allocated yet", matching the `Default` value).
+    pub fn alloc_lane_id(&mut self) -> LaneId {
+        self.next_lane_id += 1;
+        self.next_lane_id
+    }
 }

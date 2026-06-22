@@ -251,6 +251,15 @@ impl Resonance {
         self.io.has_active_project = active;
     }
 
+    /// Test-only: anchor the project at `path` so `can_record_undo`
+    /// (which needs a saved-path to replay snapshots against) is true.
+    /// Lets reducer tests exercise undo/redo round-trips without going
+    /// through a real save dialog.
+    #[doc(hidden)]
+    pub fn test_set_project_path(&mut self, path: std::path::PathBuf) {
+        self.io.project_path = Some(path);
+    }
+
     /// Test-only: the currently active top-level [`ViewMode`].
     #[doc(hidden)]
     pub fn test_view_mode(&self) -> state::ViewMode {
@@ -363,15 +372,6 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_restore_performance(&mut self, file: &crate::project::ProjectFile) {
         crate::update::project_io::restore_performance(self, file);
-    }
-
-    /// Test-only: anchor a project path so `can_record_undo` is satisfied
-    /// (it requires `has_active_project` *and* a `project_path`). Pair
-    /// with [`Self::test_set_active_project`] to make undo/redo recordable
-    /// in a reducer test without a real save.
-    #[doc(hidden)]
-    pub fn test_set_project_path(&mut self, path: std::path::PathBuf) {
-        self.io.project_path = Some(path);
     }
 
     /// Test-only: fold an engine event into app state, exercising the same

@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use resonance_audio::types::{AudioCommand, ClipId, FadeCurve, MidiNote, PluginInstanceId};
-use resonance_common::ExternalInstrument;
+use resonance_common::{AutomationLane, AutomationTarget, ExternalInstrument};
 
 use crate::project::LoadedProject;
 use resonance_audio::types::TrackId;
@@ -85,6 +85,14 @@ pub struct UndoExtras {
     /// `vocal_clip_lyrics`. The runtime device-offline flags are *not*
     /// captured: they reflect live hardware, not project state.
     pub external_instruments: HashMap<TrackId, ExternalInstrument>,
+    /// App-side parameter-automation lanes, one per target. Captured here
+    /// so lane and breakpoint edits are reversible. Automation lanes are
+    /// currently runtime-only — they aren't written into `ProjectFile`
+    /// yet (project persistence lands in todo #379), so they ride in the
+    /// extras like the other state the replay path can't rebuild on its
+    /// own. `restore_automation_lanes` reconciles the engine to this set
+    /// on undo/redo.
+    pub automation_lanes: HashMap<AutomationTarget, AutomationLane>,
 }
 
 /// Re-apply the snapshotted full arrangements onto the compose state after
@@ -195,6 +203,7 @@ impl crate::Resonance {
                 .iter()
                 .map(|(id, st)| (*id, st.config()))
                 .collect(),
+            automation_lanes: self.automation.lanes.clone(),
         };
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
@@ -299,6 +308,7 @@ impl crate::Resonance {
     /// `replay_loaded_project` runs, only when the pending load came
     /// from an undo/redo (distinguished by `pending_undo_extras.is_some()`).
     pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
+        self.restore_automation_lanes(&extras.automation_lanes);
         self.restore_external_instruments(&extras);
         self.compose.derived_clips = extras.compose_derived_clips;
         self.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
@@ -308,6 +318,46 @@ impl crate::Resonance {
         restore_arrangements(&mut self.compose, &extras.compose_arrangements);
         self.apply_freeze_restore(extras.track_freeze);
         self.apply_clip_fade_gain_restore(&extras.clip_fade_gain);
+    }
+
+    /// Reconcile the engine's automation lanes to `target` and overwrite
+    /// the app-side mirror to match. Shared by both undo/redo restore
+    /// paths (the structure-preserving diff replay and the full
+    /// clear-and-replay), and correct for either because the engine's
+    /// lane set always equals the current mirror at call time: the diff
+    /// path never touches lanes, and `ClearAll` deliberately leaves the
+    /// engine's automation lanes intact (they are re-keyed per target,
+    /// not by track/clip identity).
+    ///
+    /// Lanes present now but absent from `target` are cleared; lanes that
+    /// are new or whose breakpoints/Read flag changed are re-sent
+    /// whole-lane. Transient live-value tints for dropped targets are
+    /// discarded so a stale fader/knob tint can't outlive its lane.
+    pub(crate) fn restore_automation_lanes(
+        &mut self,
+        target: &HashMap<AutomationTarget, AutomationLane>,
+    ) {
+        let stale: Vec<AutomationTarget> = self
+            .automation
+            .lanes
+            .keys()
+            .filter(|t| !target.contains_key(t))
+            .cloned()
+            .collect();
+        for t in stale {
+            let _ = self.engine.send(AudioCommand::ClearAutomationLane { target: t });
+        }
+        for (t, lane) in target {
+            if self.automation.lanes.get(t) != Some(lane) {
+                let _ = self
+                    .engine
+                    .send(AudioCommand::SetAutomationLane { lane: lane.clone() });
+            }
+        }
+        self.automation.lanes = target.clone();
+        self.automation
+            .live_values
+            .retain(|t, _| target.contains_key(t));
     }
 
     /// Re-apply snapshotted clip fade/gain to the GUI mirror and re-sync the

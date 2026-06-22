@@ -134,6 +134,12 @@ pub fn try_diff_replay(
     // -- Tempo / signature events --------------------------------------
     apply_tempo(r, target_file);
 
+    // -- Automation lanes ----------------------------------------------
+    // Lanes aren't part of `ProjectFile` (and so don't affect the
+    // structural check), so reconcile them straight from the snapshot's
+    // extras: clear lanes that went away, re-send those that changed.
+    r.restore_automation_lanes(&extras.automation_lanes);
+
     // -- Sort track / bus registry so view-layer invariant holds -------
     r.registry.resort_tracks();
     r.registry.resort_busses();

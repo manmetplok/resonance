@@ -243,6 +243,20 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | PluginMessage::ClosePluginEditor(_) => UndoAction::Skip,
         },
 
+        Message::Automation(a) => match a {
+            // A breakpoint drag is one gesture → one undo entry.
+            AutomationMessage::StartBreakpointDrag { .. } => UndoAction::Begin,
+            AutomationMessage::EndBreakpointDrag => UndoAction::Commit,
+            AutomationMessage::DragBreakpoint { .. } => UndoAction::Skip,
+            // Every discrete lane / breakpoint edit is atomic.
+            AutomationMessage::AddLane(_)
+            | AutomationMessage::RemoveLane(_)
+            | AutomationMessage::ToggleRead(_)
+            | AutomationMessage::AddBreakpoint { .. }
+            | AutomationMessage::DeleteBreakpoint { .. }
+            | AutomationMessage::SetCurveKind { .. } => UndoAction::Record,
+        },
+
         Message::Clip(c) => match c {
             ClipMessage::StartClipDrag { .. } | ClipMessage::StartClipTrim { .. } => {
                 UndoAction::Begin
