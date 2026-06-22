@@ -24,8 +24,9 @@ pub use replay_diff::try_diff_replay;
 pub use serialize::build_project_file;
 pub use templates::{
     builtin_templates, compute_summary, ensure_templates_dir, scan_templates_in,
-    scan_user_templates, templates_dir, BuiltinProject, BuiltinTemplateId, StaleReason,
-    StaleTemplate, Template, TemplateEntry, TemplateKind, TemplateMetadata, TemplateSummary,
+    scan_user_templates, templates_dir, write_template, BuiltinProject, BuiltinTemplateId,
+    StaleReason, StaleTemplate, Template, TemplateCaptureOptions, TemplateEntry, TemplateKind,
+    TemplateMetadata, TemplateSummary,
 };
 
 /// Route a `ProjectIoMessage` to the appropriate handler.
@@ -48,6 +49,20 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
         ProjectIoMessage::SaveProjectAs => {
             return dialogs::save_project_as_dialog();
+        }
+        ProjectIoMessage::SaveAsTemplate {
+            name,
+            description,
+            include_markers_and_tempo,
+            include_master_chain,
+        } => {
+            let options = templates::TemplateCaptureOptions {
+                include_markers_and_tempo,
+                include_master_chain,
+            };
+            if let Err(e) = save_current_as_template(r, &name, &description, options) {
+                r.error_message = Some(format!("Save template failed: {e}"));
+            }
         }
         ProjectIoMessage::SavePathSelected(Some(path)) => {
             let path = if path.ends_with(".rproj") {
@@ -171,4 +186,53 @@ pub fn start_save(r: &mut Resonance) -> Task<Message> {
     let _ = r.engine.send(AudioCommand::SaveClipsToProjectDir);
     let _ = r.engine.send(AudioCommand::SaveAllPluginStates);
     Task::none()
+}
+
+/// Capture the open project as a user template (todo #666).
+///
+/// Synchronous: it serializes the current app state via
+/// [`build_project_file`], pairs it with the cached plugin-state blobs and
+/// the in-memory MIDI clips, and writes a fresh template folder under the
+/// user templates dir via [`templates::write_template`]. The plugin states
+/// come from `plugin_state_cache` (the same snapshot undo and "Save as
+/// preset" use) rather than a fresh engine round-trip, so no async save
+/// collector is needed. Returns the created folder path.
+fn save_current_as_template(
+    r: &Resonance,
+    name: &str,
+    description: &str,
+    options: templates::TemplateCaptureOptions,
+) -> Result<std::path::PathBuf, String> {
+    let root = templates::ensure_templates_dir()
+        .ok_or_else(|| "could not resolve the templates directory".to_string())?;
+
+    let project = build_project_file(r);
+
+    let plugin_states: Vec<(PluginInstanceId, Vec<u8>)> = r
+        .plugin_state_cache
+        .iter()
+        .map(|(id, data)| (*id, data.clone()))
+        .collect();
+
+    let midi_clips: Vec<(ClipId, Vec<MidiNote>)> = r
+        .midi_clips
+        .iter()
+        .map(|mc| (mc.id, mc.notes.clone()))
+        .collect();
+
+    let created_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    templates::write_template(
+        &root,
+        name,
+        description,
+        project,
+        &plugin_states,
+        &midi_clips,
+        options,
+        created_secs,
+    )
 }
