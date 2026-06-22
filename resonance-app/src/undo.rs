@@ -62,6 +62,8 @@ pub enum CoalesceKey {
     BusPan(u64),
     MasterVolume,
     PluginParam { instance_id: u64, param_id: u32 },
+    /// An aux-send level slider drag, keyed by the send's id.
+    SendLevel(u64),
 }
 
 /// Bounded undo / redo stack with a pending-transaction slot for
@@ -514,6 +516,25 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             }
             BusMessage::SetBusPan(id, _) => UndoAction::RecordCoalesced(CoalesceKey::BusPan(*id)),
             _ => UndoAction::Record,
+        },
+
+        // Aux-send edits. A level drag coalesces into one entry per
+        // gesture (like the volume/pan faders); every other send action is
+        // a discrete, atomic edit. End-to-end *restoration* of sends on
+        // undo is completed by the persistence slice (ba todo #482), which
+        // teaches the snapshot/replay path about the send graph; here we
+        // only classify the bookkeeping (dirty-mark + redo-clear).
+        Message::Mixer(m) => match m {
+            MixerMessage::SetSendLevel(send_id, _) => {
+                UndoAction::RecordCoalesced(CoalesceKey::SendLevel(*send_id))
+            }
+            MixerMessage::AddSend { .. }
+            | MixerMessage::RemoveSend(_)
+            | MixerMessage::SetSendDest(_, _)
+            | MixerMessage::ToggleSendPreFader(_)
+            | MixerMessage::ToggleSendEnabled(_)
+            | MixerMessage::SetBusReturnRole(_, _)
+            | MixerMessage::CreateReturnFromSend { .. } => UndoAction::Record,
         },
 
         Message::Master(_) => UndoAction::Record,

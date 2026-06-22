@@ -399,6 +399,15 @@ pub struct TrackRegistry {
     /// range so it never collides with engine-allocated track ids
     /// (engine tracks count up from 1).
     pub next_sub_track_id: u64,
+    /// Id counter for FX return busses the *app* creates up front (the
+    /// "create new FX return from this send" gesture), so it can name the
+    /// return role and the send's destination before the engine echoes
+    /// `BusAdded`. Like [`next_sub_track_id`](Self::next_sub_track_id) it
+    /// lives in a high range so an app-chosen id never collides with the
+    /// engine's own bus allocator (busses count up from 1). Seeded in
+    /// `Resonance::new`; the engine bumps its allocator past any id it
+    /// receives as a hint, so the two never overlap.
+    pub next_return_bus_id: u64,
 }
 
 impl TrackRegistry {
@@ -466,6 +475,21 @@ impl TrackRegistry {
             let candidate = self.next_sub_track_id;
             self.next_sub_track_id += 1;
             if !self.tracks.iter().any(|t| t.id == candidate) {
+                return candidate;
+            }
+        }
+    }
+
+    /// Allocate a fresh bus id for an app-created FX return bus, skipping
+    /// past any id already taken by a bus in the registry. Same collision-
+    /// avoidance rationale as [`allocate_sub_track_id`](Self::allocate_sub_track_id):
+    /// the app hands this id to the engine as an `AddBus` hint, so it must
+    /// not clash with a bus the engine allocated itself.
+    pub fn allocate_return_bus_id(&mut self) -> BusId {
+        loop {
+            let candidate = self.next_return_bus_id;
+            self.next_return_bus_id += 1;
+            if !self.busses.iter().any(|b| b.id == candidate) {
                 return candidate;
             }
         }

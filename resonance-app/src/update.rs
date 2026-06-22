@@ -13,6 +13,7 @@ pub mod global_track;
 pub mod master;
 pub mod midi_clip;
 pub mod midi_editor;
+pub mod mixer;
 pub mod plugin;
 pub mod project_io;
 pub mod tick;
@@ -70,13 +71,14 @@ impl crate::Resonance {
     /// Message router. Each message variant is delegated to the handler
     /// module that owns its concern. See `update/*.rs` for the per-domain
     /// logic.
-    fn dispatch(&mut self, message: Message) -> Task<Message> {
+    pub(crate) fn dispatch(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Compose(m) => compose::handle(self, m),
             Message::GlobalTrack(m) => global_track::handle(self, m),
             Message::Transport(m) => transport::handle(self, m),
             Message::Track(m) => track::handle(self, m),
             Message::Bus(m) => bus::handle(self, m),
+            Message::Mixer(m) => mixer::handle(self, m),
             Message::Master(m) => master::handle(self, m),
             Message::Clip(m) => clips::handle(self, m),
             Message::MidiClip(m) => midi_clip::handle(self, m),
