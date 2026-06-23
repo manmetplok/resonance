@@ -452,6 +452,7 @@ impl Resonance {
             mixer: MixerUiState::default(),
             registry: TrackRegistry {
                 next_sub_track_id: 1_000_000_000,
+                next_return_bus_id: 2_000_000_000,
                 ..TrackRegistry::default()
             },
             aux: state::AuxSendState::default(),

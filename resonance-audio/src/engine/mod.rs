@@ -758,6 +758,47 @@ impl AudioEngine {
             quantum: 128,
         }
     }
+
+    /// Test-only constructor that builds an `AudioEngine` with no spawned
+    /// engine thread and no cpal stream, but whose command channel's
+    /// receiver is handed back to the caller. Commands sent via
+    /// [`AudioEngine::send`] therefore queue on the returned `Receiver`
+    /// instead of being processed, so a test can assert *exactly* which
+    /// commands an update handler emitted — without bringing up a real
+    /// audio device or racing an engine thread.
+    ///
+    /// The engine never processes the queued commands, so it emits no
+    /// echo events: a test simulating a round trip feeds the resulting
+    /// `AudioEvent`s back in itself (mirroring the live engine's echo).
+    #[doc(hidden)]
+    pub fn for_test_capture() -> (Self, Receiver<AudioCommand>) {
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<AudioCommand>();
+        let (_event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
+
+        let shared = Arc::new(SharedState::default());
+        let monitor_ring = ringbuf::HeapRb::<f32>::new(1);
+        let (prod, _cons) = monitor_ring.split();
+
+        let engine = Self {
+            cmd_tx,
+            event_rx,
+            _stream: None,
+            engine_thread: None,
+            shared,
+            tracks: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
+            busses: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
+            master: Arc::new(parking_lot::RwLock::new(MasterBus::new())),
+            clips: Arc::new(parking_lot::RwLock::new(Vec::new())),
+            midi_clips: Arc::new(parking_lot::RwLock::new(Vec::new())),
+            plugins: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
+            tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
+            monitor_prod: Arc::new(parking_lot::Mutex::new(prod)),
+            sample_rate: 48_000,
+            channels: 2,
+            quantum: 128,
+        };
+        (engine, cmd_rx)
+    }
 }
 
 impl Drop for AudioEngine {

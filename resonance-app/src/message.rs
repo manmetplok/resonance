@@ -12,7 +12,7 @@ use crate::state::{
     PlacementStart, SelectedGlobalEvent, TempoAlignment, TempoChoice, ViewMode,
 };
 use resonance_audio::types::{
-    BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
+    BusId, ClipId, PluginInstanceId, ScannedPlugin, SendId, SendSource, TrackId, TrackOutput,
 };
 
 #[derive(Debug, Clone)]
@@ -23,6 +23,7 @@ pub enum Message {
     Marker(MarkerMessage),
     Track(TrackMessage),
     Bus(BusMessage),
+    Mixer(MixerMessage),
     Master(MasterMessage),
     Clip(ClipMessage),
     MidiClip(MidiClipMessage),
@@ -213,6 +214,39 @@ pub enum BusMessage {
     ToggleBusFxBypass(BusId),
     AddPluginToBus(BusId, ScannedPlugin),
     RemovePluginFromBus(BusId, PluginInstanceId),
+}
+
+/// Aux-send + return-bus actions raised from the Mixer inspector's
+/// ROUTING group. Every variant maps to one engine command (or, for
+/// [`CreateReturnFromSend`](MixerMessage::CreateReturnFromSend), a short
+/// ordered sequence). The handlers never mutate the send graph directly:
+/// the engine validates each command and echoes `AuxSendChanged` /
+/// `AuxSendRemoved` / `BusRoleChanged`, which the engine-event mirror
+/// (ba todo #478) folds into [`AuxSendState`](crate::state::AuxSendState).
+/// That single-writer rule keeps the GUI from showing a route the engine
+/// rejected as cyclic.
+#[derive(Debug, Clone)]
+pub enum MixerMessage {
+    /// Create a new aux send from `source` into return bus `dest` with
+    /// default routing (0 dB, post-fader, enabled). The engine allocates
+    /// the [`SendId`].
+    AddSend { source: SendSource, dest: BusId },
+    /// Remove the send with this id.
+    RemoveSend(SendId),
+    /// Set a send's level in dB (slider drag). Coalesces into a single
+    /// undo entry per drag, like the volume/pan faders.
+    SetSendLevel(SendId, f32),
+    /// Re-route an existing send into a different return bus.
+    SetSendDest(SendId, BusId),
+    /// Flip a send between a pre- and post-fader source tap.
+    ToggleSendPreFader(SendId),
+    /// Enable / disable a send while keeping its routing and level.
+    ToggleSendEnabled(SendId),
+    /// Mark a bus as an aux *return* bus, or clear the flag.
+    SetBusReturnRole(BusId, bool),
+    /// Create a brand-new FX return bus and route `source` into it in one
+    /// gesture: add a bus, flag it as a return, then upsert the send.
+    CreateReturnFromSend { source: SendSource },
 }
 
 #[derive(Debug, Clone)]
