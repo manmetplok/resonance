@@ -88,13 +88,15 @@ pub use engine::midi::{outbound_step_start, OutboundStep};
 #[doc(hidden)]
 pub use engine::midi::{move_midi_clip_in_place, trim_midi_clip_in_place};
 
-/// Test surface for the audio clip fade/gain handlers. Exposed so the
-/// integration test in `tests/clip_fade_gain_handlers.rs` can drive the
-/// command boundary (clamping + event emission, including the missing-clip
-/// no-op branch) without spinning up the engine thread.
+/// Test surface for the audio clip fade/gain/warp handlers. Exposed so
+/// the integration tests in `tests/clip_fade_gain_handlers.rs` and
+/// `tests/clip_warp_handlers.rs` can drive the command boundary (mutation
+/// + event emission, including the missing-clip no-op branch and the
+/// marker-sort invariant) without spinning up the engine thread.
 #[doc(hidden)]
 pub use engine::{
-    set_clip_fade_in_place, set_clip_gain_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
+    detect_clip_tempo_in_place, set_clip_fade_in_place, set_clip_gain_in_place,
+    set_clip_warp_in_place, set_clip_warp_markers_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
 };
 
 /// Test surface for the reference-track (A/B) command handlers. Exposed

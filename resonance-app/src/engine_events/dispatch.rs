@@ -103,6 +103,16 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             fade_out_curve,
         ),
         E::ClipGainChanged { clip_id, gain_db } => clips::gain_changed(r, clip_id, gain_db),
+        // Clip warp / follow-tempo events (engine todo #418). Mirroring
+        // these into `ClipState` is todo #421; until it lands these arms
+        // accept the events without acting, keeping the workspace
+        // compiling now that the engine emits them.
+        E::ClipWarpChanged { .. } | E::ClipWarpMarkersChanged { .. } => {}
+        // Clip tempo/BPM detection reply (engine todo #420). The detector
+        // emits this so the command/event boundary is complete; mirroring
+        // the detected BPM into the app is a follow-up todo, so accept it
+        // without acting for now.
+        E::ClipTempoDetected { .. } => {}
         // Media-pool import lifecycle (engine todo #592). Mirroring these
         // into the app's pool + import-progress state is todo #597; until
         // it lands these arms accept the events without acting, keeping

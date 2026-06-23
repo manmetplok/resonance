@@ -450,6 +450,26 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         AudioCommand::SetClipGain { clip_id, gain_db } => {
             clips::handle_set_clip_gain(ctx, clip_id, gain_db)
         }
+        AudioCommand::SetClipWarp {
+            clip_id,
+            warp_enabled,
+            original_bpm,
+            transpose_semitones,
+            warp_algorithm,
+        } => clips::handle_set_clip_warp(
+            ctx,
+            clip_id,
+            warp_enabled,
+            original_bpm,
+            transpose_semitones,
+            warp_algorithm,
+        ),
+        AudioCommand::SetClipWarpMarkers { clip_id, markers } => {
+            clips::handle_set_clip_warp_markers(ctx, clip_id, markers)
+        }
+        AudioCommand::DetectClipTempo { clip_id } => {
+            clips::handle_detect_clip_tempo(ctx, clip_id)
+        }
         AudioCommand::SetProjectDir(dir) => {
             state.project_dir = Some(dir);
         }

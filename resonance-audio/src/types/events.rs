@@ -7,7 +7,7 @@ use crate::midi_hardware::MidiDeviceInfo;
 use super::{
     ABSource, AssetId, BusId, ClipId, FadeCurve, InputDeviceInfo, MidiNote, ParamInfo,
     PluginInstanceId, ReferenceAnalysisStage, ReferenceId, SamplePos, ScannedPlugin, SendId,
-    SendSource, TrackId,
+    SendSource, TrackId, WarpAlgorithm, WarpMarker,
 };
 
 /// Lifecycle stage of a single file in an `ImportAudioToPool` batch.
@@ -122,6 +122,33 @@ pub enum AudioEvent {
     ClipGainChanged {
         clip_id: ClipId,
         gain_db: f32,
+    },
+    /// A clip's warp ("follow tempo") parameters changed. Carries the
+    /// engine-stored values so the app mirror matches engine state.
+    ClipWarpChanged {
+        clip_id: ClipId,
+        warp_enabled: bool,
+        original_bpm: Option<f32>,
+        transpose_semitones: f32,
+        warp_algorithm: WarpAlgorithm,
+    },
+    /// A clip's warp-marker set changed (full-set replace). Carries the
+    /// engine-sorted markers (ascending `timeline_beat`) so the app
+    /// mirror matches engine state.
+    ClipWarpMarkersChanged {
+        clip_id: ClipId,
+        markers: Vec<WarpMarker>,
+    },
+
+    /// Tempo/BPM detection finished for an audio clip. The detector
+    /// ran over the clip's source samples and estimated a tempo and
+    /// confidence. The app may use this to populate the clip's
+    /// `original_bpm` via [`AudioCommand::SetClipWarp`]; the engine
+    /// itself does not mutate the clip.
+    ClipTempoDetected {
+        clip_id: ClipId,
+        bpm: f32,
+        confidence: f32,
     },
     Stopped,
     Error(String),
