@@ -211,8 +211,12 @@ pub const WARM_LINE: Color = rgba(0xe8, 0xc4, 0x7b, 0.34);
 
 /// Mint green — meters, success.
 pub const GOOD: Color = rgb(0x6d, 0xd6, 0xa3);
+/// Mint wash — fill behind an active "good" toggle (input monitor on).
+pub const GOOD_DIM: Color = rgba(0x6d, 0xd6, 0xa3, 0.14);
 /// Soft pink — mute, peaking, errors.
 pub const BAD: Color = rgb(0xe8, 0x7b, 0x8b);
+/// Pink wash — fill behind an active "bad" toggle (record arm on).
+pub const BAD_DIM: Color = rgba(0xe8, 0x7b, 0x8b, 0.13);
 
 // ---------------------------------------------------------------------------
 // Legacy aliases — keep the rest of the codebase compiling while the views

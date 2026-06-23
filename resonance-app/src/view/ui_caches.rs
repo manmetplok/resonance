@@ -20,8 +20,9 @@ use resonance_audio::types::{InputDeviceInfo, ScannedPlugin};
 
 use crate::state::BusState;
 use crate::view::mixer::picks::{
-    input_channel_choices, midi_choices_base, output_channel_choices, output_choices_for,
-    MidiChannelChoice, MidiPickerChoice, OutputChoice,
+    bank_choices, input_channel_choices, midi_choices_base, output_channel_choices,
+    output_choices_for, program_choices, BankChoice, MidiChannelChoice, MidiPickerChoice,
+    OutputChoice, ProgramChoice,
 };
 
 #[derive(Debug, Clone)]
@@ -51,6 +52,14 @@ pub(crate) struct UiViewCaches {
     /// per-track input-device pickers in the mixer inspector and the
     /// bounce-dialog don't clone the full Vec every frame.
     pub input_devices: Rc<[InputDeviceInfo]>,
+    /// "(no bank)" plus banks 0..=127 — the external-instrument Patch
+    /// card's Bank Select picker. Built once at startup; never
+    /// invalidates.
+    pub bank_choices: Rc<[BankChoice]>,
+    /// "(no program)" plus programs 0..=127 — the external-instrument
+    /// Patch card's Program Change picker. Built once at startup; never
+    /// invalidates.
+    pub program_choices: Rc<[ProgramChoice]>,
 }
 
 impl Default for UiViewCaches {
@@ -72,6 +81,8 @@ impl Default for UiViewCaches {
             fx_plugins: Rc::from(Vec::<ScannedPlugin>::new()),
             instrument_plugins: Rc::from(Vec::<ScannedPlugin>::new()),
             input_devices: Rc::from(Vec::<InputDeviceInfo>::new()),
+            bank_choices: Rc::from(bank_choices()),
+            program_choices: Rc::from(program_choices()),
         }
     }
 }
