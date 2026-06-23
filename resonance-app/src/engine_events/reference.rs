@@ -44,12 +44,14 @@ pub(super) fn loaded(
     path: String,
     integrated_lufs: f32,
     waveform_peaks: Vec<(f32, f32)>,
+    length_samples: u64,
 ) {
     if let Some(entry) = r.reference.entry_mut(id) {
         entry.name = name;
         entry.path = path;
         entry.integrated_lufs = integrated_lufs;
         entry.waveform_peaks = waveform_peaks;
+        entry.length_samples = length_samples;
         entry.status = ReferenceStatus::Loaded;
     } else {
         // No provisional entry (no analysis-progress was seen) — register
@@ -64,6 +66,7 @@ pub(super) fn loaded(
             waveform_peaks,
             markers: Vec::new(),
             position_samples: 0,
+            length_samples,
         });
     }
 }

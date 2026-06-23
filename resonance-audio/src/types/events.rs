@@ -368,13 +368,16 @@ pub enum AudioEvent {
     /// A reference track finished loading and analysing. `path` is the
     /// source file it was loaded from; `integrated_lufs` is its measured
     /// loudness (used for loudness matching); `waveform_peaks` is the
-    /// downsampled overview (min, max) per chunk of frames.
+    /// downsampled overview (min, max) per chunk of frames;
+    /// `length_samples` is the reference's total length in frames, so the
+    /// panel can map its playback cursor / markers onto the overview.
     ReferenceLoaded {
         id: ReferenceId,
         name: String,
         path: String,
         integrated_lufs: f32,
         waveform_peaks: Vec<(f32, f32)>,
+        length_samples: u64,
     },
     /// A reference track failed to load (decode error, missing file, …).
     /// `reason` is user-facing.

@@ -27,6 +27,7 @@ pub fn handle(r: &mut Resonance, m: ReferenceMessage) -> Task<Message> {
         ReferenceMessage::Remove(id) => remove(r, id),
         ReferenceMessage::SetActive(id) => set_active(r, id),
         ReferenceMessage::ToggleAbSource => toggle_ab_source(r),
+        ReferenceMessage::SetAbSource(source) => set_ab_source(r, source),
         ReferenceMessage::MomentaryAudition(pressed) => momentary_audition(r, pressed),
         ReferenceMessage::ToggleLoudnessMatch => toggle_loudness_match(r),
         ReferenceMessage::TrimChanged(db) => trim_changed(r, db),

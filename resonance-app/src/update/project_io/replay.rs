@@ -394,6 +394,9 @@ pub(crate) fn restore_references(r: &mut Resonance, project: &ProjectFile) {
             waveform_peaks: Vec::new(),
             markers,
             position_samples: 0,
+            // Filled in by the re-decode's `ReferenceLoaded` echo; a
+            // missing file simply never reports one.
+            length_samples: 0,
         });
     }
 

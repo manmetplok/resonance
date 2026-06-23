@@ -64,6 +64,7 @@ fn loaded_upserts_entry_to_loaded() {
             path: "/refs/x.wav".to_string(),
             integrated_lufs: -12.0,
             waveform_peaks: vec![(-1.0, 1.0), (-0.2, 0.3)],
+            length_samples: 96_000,
         },
     );
 
@@ -74,6 +75,7 @@ fn loaded_upserts_entry_to_loaded() {
     assert_eq!(e.name, "Final");
     assert_eq!(e.integrated_lufs, -12.0);
     assert_eq!(e.waveform_peaks.len(), 2);
+    assert_eq!(e.length_samples, 96_000, "length folds onto the entry");
 }
 
 #[test]
@@ -88,6 +90,7 @@ fn loaded_without_prior_progress_registers_directly() {
             path: "/refs/x.wav".to_string(),
             integrated_lufs: -9.0,
             waveform_peaks: vec![],
+            length_samples: 0,
         },
     );
     let st = app.test_reference();
@@ -157,6 +160,7 @@ fn markers_add_and_remove_idempotently() {
             path: "/a.wav".to_string(),
             integrated_lufs: -14.0,
             waveform_peaks: vec![],
+            length_samples: 96_000,
         },
     );
     let add = || AudioEvent::RefMarkerAdded {
@@ -190,6 +194,7 @@ fn position_changed_updates_entry_cursor() {
             path: "/a.wav".to_string(),
             integrated_lufs: -14.0,
             waveform_peaks: vec![],
+            length_samples: 96_000,
         },
     );
     fold(
@@ -213,6 +218,7 @@ fn removed_event_drops_entry_and_active() {
             path: "/a.wav".to_string(),
             integrated_lufs: -14.0,
             waveform_peaks: vec![],
+            length_samples: 96_000,
         },
     );
     fold(&mut app, AudioEvent::ActiveReferenceChanged { id: ReferenceId(1) });

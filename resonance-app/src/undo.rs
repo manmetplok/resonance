@@ -634,6 +634,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             ReferenceMessage::PickFile
             | ReferenceMessage::FilePicked(None)
             | ReferenceMessage::ToggleAbSource
+            | ReferenceMessage::SetAbSource(_)
             | ReferenceMessage::MomentaryAudition(_)
             | ReferenceMessage::AddMarker { .. }
             | ReferenceMessage::RemoveMarker { .. }

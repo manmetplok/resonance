@@ -59,6 +59,10 @@ pub struct ReferenceEntry {
     pub markers: Vec<ReferenceMarkerState>,
     /// The reference's own playback cursor, in sample frames.
     pub position_samples: u64,
+    /// Total length of the reference, in sample frames. `0` until the
+    /// engine reports it on [`ReferenceStatus::Loaded`]; used to map the
+    /// playback cursor and markers onto the waveform overview.
+    pub length_samples: u64,
 }
 
 impl ReferenceEntry {
@@ -75,6 +79,7 @@ impl ReferenceEntry {
             waveform_peaks: Vec::new(),
             markers: Vec::new(),
             position_samples: 0,
+            length_samples: 0,
         }
     }
 }

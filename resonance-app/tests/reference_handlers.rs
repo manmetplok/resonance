@@ -34,6 +34,7 @@ fn fold_loaded(app: &mut Resonance, id: u32, name: &str) {
         path: format!("/refs/{name}.wav"),
         integrated_lufs: -14.0,
         waveform_peaks: vec![(-0.5, 0.5)],
+        length_samples: 480_000,
     });
 }
 
