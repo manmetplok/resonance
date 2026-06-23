@@ -18,6 +18,7 @@ use super::section::{
     ChordState, EditSectionForm, NewSectionForm, SectionDefinitionState, SectionPlacementState,
     SelectedLane,
 };
+use super::vocal_svs::SvsRenderCache;
 
 /// Starting point for app-allocated derived clip ids. Chosen high enough
 /// that it will never collide with engine-allocated clip ids (which count
@@ -67,6 +68,15 @@ pub struct VocalAudioRegistry {
     /// this side-table is the composition layer that adds vocal
     /// metadata without touching the audio-side type.
     pub clip_lyrics: HashMap<ClipId, Vec<String>>,
+    /// Per-`(definition, track)` content-addressed SVS render cache, so an
+    /// edit only re-renders the sub-clip segments it touched (todo #495).
+    /// Wrapped in `Arc<Mutex>` because the render runs off-thread
+    /// (`spawn_blocking`); the completion side reads
+    /// [`SvsRenderCache::last_plan`] for the "N of M segments changed"
+    /// overlay. Keyed at the *render* scope like [`render_epoch`], not the
+    /// per-placement install scope.
+    pub render_cache:
+        HashMap<(u64, TrackId), std::sync::Arc<std::sync::Mutex<SvsRenderCache>>>,
 }
 
 impl VocalAudioRegistry {
@@ -74,6 +84,7 @@ impl VocalAudioRegistry {
         self.clips.clear();
         self.render_epoch.clear();
         self.clip_lyrics.clear();
+        self.render_cache.clear();
     }
 }
 
@@ -153,6 +164,13 @@ pub struct ComposeState {
     /// lyric annotations, and per-`(def, track)` render epochs. See
     /// [`VocalAudioRegistry`] for the rationale on keying asymmetries.
     pub vocal_audio: VocalAudioRegistry,
+    /// Pronunciation control: per-clip per-syllable phoneme overrides and
+    /// the project pronunciation dictionary. The resolver folds these (plus
+    /// the global user dictionary, supplied at resolve time) over the CMU
+    /// transcription so the strip and the `.ds` build agree on what each
+    /// syllable sings. See
+    /// [`PronunciationState`](crate::compose::vocal_svs::PronunciationState).
+    pub pronunciation: crate::compose::vocal_svs::PronunciationState,
     /// Monotonic id used when allocating fresh `ClipId`s for derived
     /// clips. Kept in the high range so it never collides with engine-
     /// allocated ids coming from `CreateMidiClip`.
@@ -230,6 +248,7 @@ impl Default for ComposeState {
             drumroll,
             derived_clips: HashMap::new(),
             vocal_audio: VocalAudioRegistry::default(),
+            pronunciation: crate::compose::vocal_svs::PronunciationState::default(),
             next_derived_clip_id: DERIVED_CLIP_ID_BASE,
             vocal_bulk_lyrics: HashMap::new(),
             drum_patterns,
@@ -295,10 +314,13 @@ impl ComposeState {
     }
 
     /// Resolve which drum pattern a section uses. Falls back through the
-    /// section's explicit choice → the project default → the first
-    /// pattern in the bank. Returns `None` only if the bank is empty.
+    /// section's primary arrangement entry (the pattern covering its first
+    /// bar) → the project default → the first pattern in the bank. Returns
+    /// `None` only if the bank is empty. For per-bar resolution across a
+    /// multi-entry arrangement use [`Self::resolve_arrangement_for`] /
+    /// [`Self::pattern_for_bar`].
     pub fn pattern_for_definition(&self, def: &SectionDefinitionState) -> Option<&DrumPattern> {
-        def.drum_pattern_id
+        def.primary_pattern_id()
             .and_then(|id| self.drum_patterns.iter().find(|p| p.id == id))
             .or_else(|| {
                 self.default_drum_pattern_id
@@ -314,10 +336,43 @@ impl ComposeState {
     ) -> Option<&mut DrumPattern> {
         let def = self.definitions.iter().find(|d| d.id == def_id)?;
         let id = def
-            .drum_pattern_id
+            .primary_pattern_id()
             .or(self.default_drum_pattern_id)
             .or_else(|| self.drum_patterns.first().map(|p| p.id))?;
         self.drum_patterns.iter_mut().find(|p| p.id == id)
+    }
+
+    /// Resolve a section's drum arrangement into ordered per-bar spans and
+    /// a coverage status. Expands `RepeatN` entries using each pattern's
+    /// intrinsic [`DrumPattern::bar_span`] and tiles across the section's
+    /// `length_bars`. Pure given the pattern bank — see
+    /// [`crate::compose::resolve_arrangement`].
+    pub fn resolve_arrangement_for(
+        &self,
+        def: &SectionDefinitionState,
+    ) -> crate::compose::ResolvedArrangement {
+        crate::compose::resolve_arrangement(&def.arrangement, def.length_bars, |id| {
+            self.find_pattern(id).map(|p| p.bar_span()).unwrap_or(1)
+        })
+    }
+
+    /// Resolve which pattern (and whether it's a fill bar) plays at `bar`
+    /// (0-based, section-relative). Bars not covered by an explicit
+    /// arrangement entry — a trailing gap, or an empty arrangement — fall
+    /// through to [`Self::pattern_for_definition`], matching the
+    /// single-pattern behaviour callers relied on before arrangements.
+    pub fn pattern_for_bar(
+        &self,
+        def: &SectionDefinitionState,
+        bar: u32,
+    ) -> Option<(&DrumPattern, bool)> {
+        let resolved = self.resolve_arrangement_for(def);
+        if let Some(span) = resolved.span_at(bar) {
+            if let Some(pattern) = self.find_pattern(span.pattern_id) {
+                return Some((pattern, span.is_fill));
+            }
+        }
+        self.pattern_for_definition(def).map(|p| (p, false))
     }
 
     /// Look up a pattern by id.
@@ -407,7 +462,10 @@ impl ComposeState {
                 beats_per_chord: d.beats_per_chord,
                 seventh_chords: d.seventh_chords,
                 motif_source: d.motif_source.clone(),
-                drum_pattern_id: d.drum_pattern_id,
+                // Persistence still stores a single pattern id; collapse
+                // the arrangement to its primary entry. Richer multi-entry
+                // arrangements are not yet persisted (separate todo).
+                drum_pattern_id: d.primary_pattern_id(),
             })
             .collect()
     }
@@ -456,7 +514,12 @@ impl ComposeState {
                 beats_per_chord: d.beats_per_chord,
                 seventh_chords: d.seventh_chords,
                 motif_source: d.motif_source.clone(),
-                drum_pattern_id: d.drum_pattern_id,
+                // Persisted single pattern id seeds a single-entry
+                // arrangement (or an empty one for "use the default").
+                arrangement: d
+                    .drum_pattern_id
+                    .map(|id| vec![crate::compose::PatternEntry::once(id)])
+                    .unwrap_or_default(),
             })
             .collect();
         // Runtime-only state: start each load with an empty derived-clip
@@ -464,6 +527,7 @@ impl ComposeState {
         // it by scanning clip names once the MIDI clips are in place.
         self.derived_clips.clear();
         self.vocal_audio.clear();
+        self.pronunciation.clear();
         self.next_derived_clip_id = DERIVED_CLIP_ID_BASE;
         self.placements = placements
             .iter()

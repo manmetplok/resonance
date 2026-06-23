@@ -360,6 +360,10 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // Clear busses
     ctx.busses.write().clear();
 
+    // Clear aux sends (and publish the now-empty table to the render path)
+    state.aux_sends.clear();
+    super::busses::publish_aux_sends(ctx, state);
+
     // Clear master FX chain
     ctx.master.write().plugin_ids.clear();
     ctx.shared
@@ -388,6 +392,7 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     state.next_bus_id = 1;
     state.next_clip_id = 1;
     state.next_plugin_id = 1;
+    state.next_send_id = 1;
 
     let _ = ctx.event_tx.send(AudioEvent::AllCleared);
 }

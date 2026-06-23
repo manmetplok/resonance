@@ -233,6 +233,11 @@ pub enum MidiEditorMessage {
         clip_id: ClipId,
         note_index: usize,
     },
+    /// Remove every currently-selected note from `clip_id` in one edit
+    /// (the piano roll's Delete/Backspace on a multi-note selection).
+    RemoveSelectedNotes {
+        clip_id: ClipId,
+    },
     MoveNote {
         clip_id: ClipId,
         note_index: usize,
@@ -244,9 +249,26 @@ pub enum MidiEditorMessage {
         note_index: usize,
         new_duration_ticks: u64,
     },
+    /// Replace the selection with a single note, or clear it (`None`).
+    /// Used by a plain click and by the vocal roll's single-select path.
     SelectNote {
         note_index: Option<usize>,
     },
+    /// Toggle one note's membership in the selection (shift/ctrl-click).
+    ToggleNoteSelection {
+        note_index: usize,
+    },
+    /// Apply a rubber-band marquee result: the notes whose rectangles fall
+    /// inside the drag rect. `additive` (shift held) unions with the
+    /// current selection instead of replacing it.
+    SelectNotesInRect {
+        indices: Vec<usize>,
+        additive: bool,
+    },
+    /// Select every note in the open clip (Ctrl/Cmd+A).
+    SelectAllNotes,
+    /// Drop the whole selection (click on empty space).
+    ClearNoteSelection,
     PreviewNote(TrackId, u8),
     StopPreview(TrackId, u8),
     ScrollY(f32),
@@ -298,12 +320,21 @@ pub enum ProjectIoMessage {
     BouncePathSelected(Option<String>),
     SaveProject,
     SaveProjectAs,
+    /// Begin a periodic autosave snapshot. Routed through the same async
+    /// engine save state machine as [`Self::SaveProject`], but writes the
+    /// metadata to `project.autosave.json`, leaves the project dirty, and
+    /// targets a per-session scratch dir when the project was never saved.
+    /// Fired by the change-gated autosave timer (todo #465).
+    Autosave,
     OpenProject,
     /// User clicked a recent entry in the startup modal.
     OpenRecent(std::path::PathBuf),
     SavePathSelected(Option<String>),
     OpenPathSelected(Option<String>),
-    ProjectSaved(Result<(), String>),
+    /// Async save completion. The `bool` is `true` when the completed
+    /// save was an autosave (routes to `last_autosave_at`, keeps `dirty`
+    /// set, skips the recents list) rather than a manual save.
+    ProjectSaved(Result<(), String>, bool),
     ProjectLoaded(Result<Box<LoadedProject>, String>),
     ExportChordSheet,
     ChordSheetPathSelected(Option<String>, Vec<u8>),

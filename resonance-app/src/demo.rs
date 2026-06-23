@@ -7,7 +7,7 @@
 //! The runtime never calls this — it lives in the library crate purely
 //! so `resonance-app/tests/*.rs` can call it via `resonance_app::demo`.
 
-use resonance_audio::types::{MidiNote, TrackId, TrackOutput};
+use resonance_audio::types::{FadeCurve, MidiNote, TrackId, TrackOutput};
 
 use crate::state::{self, BusState, ClipState, MidiClipState, PluginSlotState, TrackState};
 use crate::Resonance;
@@ -216,6 +216,11 @@ pub fn seed_demo_content(app: &mut Resonance) {
         total_frames: bar_samples * 5 + bar_samples / 2,
         trim_start_frames: 0,
         trim_end_frames: 0,
+        fade_in_frames: 0,
+        fade_in_curve: FadeCurve::default(),
+        fade_out_frames: 0,
+        fade_out_curve: FadeCurve::default(),
+        gain_db: 0.0,
         waveform_peaks,
     }];
 
@@ -272,7 +277,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
         beats_per_chord: 4,
         seventh_chords: false,
         motif_source: MotifSource::default(),
-        drum_pattern_id: None,
+        arrangement: Vec::new(),
     });
 
     let placement_id = app.compose.fresh_id();

@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{
-    ABSource, BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, ReferenceId, SamplePos,
+    ABSource, BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, ReferenceId, SamplePos, SendId,
+    SendSource,
     SignaturePoint, TempoPoint, TrackId, TrackOutput,
 };
 
@@ -442,6 +443,37 @@ pub enum AudioCommand {
         instance_id: PluginInstanceId,
     },
 
+    // -- Aux sends + return busses --
+    /// Mark a bus as an aux *return* bus (or clear the flag). Emits
+    /// `AudioEvent::BusRoleChanged`. No-op if the bus does not exist.
+    SetBusRole {
+        bus_id: BusId,
+        is_return: bool,
+    },
+    /// Create or update (upsert) an aux send from a track or bus into a
+    /// return bus. When `id_hint` is `None` the engine allocates a fresh
+    /// `SendId`; when `Some(id)` it updates the existing send (or honours
+    /// the id for a fresh send on project load, bumping its allocator
+    /// past it). Covers create / re-route / level / pre-post / enable in
+    /// one command. The engine runs cyclic-route validation before
+    /// registering: a send routing a bus to itself, or to a destination
+    /// whose own sends already reach the source bus, is rejected with
+    /// `AudioEvent::AuxSendRejected` and not stored. On success the
+    /// engine emits `AudioEvent::AuxSendChanged` with the resolved send.
+    SetAuxSend {
+        id_hint: Option<SendId>,
+        source: SendSource,
+        dest: BusId,
+        level_db: f32,
+        pre_fader: bool,
+        enabled: bool,
+    },
+    /// Remove an aux send. Emits `AudioEvent::AuxSendRemoved` when a send
+    /// with this id existed; otherwise a no-op.
+    RemoveAuxSend {
+        send_id: SendId,
+    },
+
     // -- Master FX chain + bypass --
     /// Add a plugin to the master bus insert chain. Master FX run after
     /// every track/bus has been summed, before the master volume pass.
@@ -467,6 +499,34 @@ pub enum AudioCommand {
     },
     SetMasterFxBypass {
         bypassed: bool,
+    },
+
+    // -- Audition preview (doc #175) --
+    /// Preview an arbitrary audio file through the engine, starting at
+    /// `start_frame` (clamped to the file length). The file may be an imported
+    /// pool asset or an un-imported file straight off the filesystem; any
+    /// format the workspace decoder accepts works. The engine decodes it off
+    /// the audio thread and previews it independently of the arrangement,
+    /// transport, and undo — it is never an `AudioClip` and does not move the
+    /// main playhead. Uses the loop / sync-to-tempo options last set via
+    /// [`AudioCommand::SetAuditionOptions`]. A decode failure surfaces as
+    /// `AudioEvent::Error`. Replaces any preview already playing.
+    AuditionFile {
+        path: PathBuf,
+        start_frame: u64,
+    },
+    /// Stop the current audition preview. Emits `AudioEvent::AuditionStopped`
+    /// when a preview was actually playing; stopping an idle audition is a
+    /// silent no-op.
+    StopAudition,
+    /// Set the audition preview options. `loop_enabled` wraps the preview at
+    /// its end instead of stopping; `sync_to_tempo` time-stretches (varispeed)
+    /// the preview so its loop length snaps to the project tempo. The options
+    /// persist across `AuditionFile` commands and take effect immediately on
+    /// any preview currently playing.
+    SetAuditionOptions {
+        loop_enabled: bool,
+        sync_to_tempo: bool,
     },
 
     /// Ask the engine to snapshot and clear every peak meter (per-track,

@@ -216,6 +216,11 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
             total_frames: pc.total_frames,
             trim_start_frames: pc.trim_start_frames,
             trim_end_frames: pc.trim_end_frames,
+            fade_in_frames: 0,
+            fade_in_curve: FadeCurve::default(),
+            fade_out_frames: 0,
+            fade_out_curve: FadeCurve::default(),
+            gain_db: 0.0,
             waveform_peaks: Vec::new(), // Will be populated by ClipImported event
         });
     }
@@ -469,8 +474,8 @@ pub(super) fn restore_drum_patterns(
         compose.drum_patterns = patterns;
         let main_id = compose.drum_patterns.first().map(|p| p.id);
         for def in &mut compose.definitions {
-            if def.drum_pattern_id.is_none() {
-                def.drum_pattern_id = main_id;
+            if def.primary_pattern_id().is_none() {
+                def.set_primary_pattern(main_id);
             }
         }
     } else if clear_on_empty {

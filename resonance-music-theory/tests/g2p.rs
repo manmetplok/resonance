@@ -4,8 +4,9 @@
 //! sensible per-note chunks.
 
 use resonance_music_theory::g2p::{
-    assign_syllables_to_notes, auto_syllabify_text, cmu_syllable_count, cmu_variant_count,
-    is_consonant, phonemes_for_draft, resolve_draft, syllabify_word, SyllableStress, CONSONANTS,
+    assign_syllables_to_notes, auto_syllabify_text, canonical_phoneme, cmu_syllable_count,
+    cmu_variant_count, is_consonant, phonemes_for_draft, resolve_draft, syllabify_word,
+    SyllableStress, ARPABET_PHONEMES, CONSONANTS,
 };
 use resonance_music_theory::LyricLine;
 
@@ -339,6 +340,29 @@ fn stress_velocity_factor_orders_correctly() {
         SyllableStress::Primary.velocity_factor() > SyllableStress::Secondary.velocity_factor()
     );
     assert!(SyllableStress::Secondary.velocity_factor() > SyllableStress::None.velocity_factor());
+}
+
+#[test]
+fn arpabet_phonemes_are_canonical() {
+    // Every published inventory entry must round-trip through the
+    // validator to itself — guards against a typo'd or non-canonical
+    // symbol creeping into the public slice the voicebank accessors lean
+    // on.
+    for &ph in ARPABET_PHONEMES {
+        assert_eq!(
+            canonical_phoneme(ph),
+            Some(ph),
+            "{ph} is in ARPABET_PHONEMES but not a canonical symbol"
+        );
+    }
+    // The inventory is the 16 vowels followed by exactly CONSONANTS, so
+    // the consonant half can never silently drift from the duration
+    // splitter's notion of a consonant.
+    assert_eq!(ARPABET_PHONEMES.len(), 16 + CONSONANTS.len());
+    assert_eq!(&ARPABET_PHONEMES[16..], CONSONANTS);
+    // Silence markers validate but are deliberately *not* lexical phones.
+    assert_eq!(canonical_phoneme("AP"), Some("AP"));
+    assert!(!ARPABET_PHONEMES.contains(&"AP"));
 }
 
 #[test]

@@ -21,7 +21,8 @@ pub(super) fn handle(
                 // everything else takes the target mode's defaults.
                 let length = match &def.generator_spec {
                     Some(GeneratorSpec::MarkovProgression { length, .. })
-                    | Some(GeneratorSpec::Schema { length, .. }) => *length,
+                    | Some(GeneratorSpec::Schema { length, .. })
+                    | Some(GeneratorSpec::Pentatonic { length, .. }) => *length,
                     None => def.generate_params.chord_count.max(1) as u8,
                 };
                 match (kind, &def.generator_spec) {
@@ -141,7 +142,8 @@ pub(super) fn handle(
             if let Some(def) = r.compose.find_definition_mut(definition_id) {
                 match &mut def.generator_spec {
                     Some(GeneratorSpec::MarkovProgression { length: l, .. })
-                    | Some(GeneratorSpec::Schema { length: l, .. }) => {
+                    | Some(GeneratorSpec::Schema { length: l, .. })
+                    | Some(GeneratorSpec::Pentatonic { length: l, .. }) => {
                         *l = length;
                     }
                     None => {
@@ -381,6 +383,7 @@ fn generate_chord_lane(r: &mut crate::Resonance, definition_id: u64, respect_loc
     let length = match &spec {
         GeneratorSpec::MarkovProgression { length, .. } => *length as usize,
         GeneratorSpec::Schema { length, .. } => *length as usize,
+        GeneratorSpec::Pentatonic { length, .. } => *length as usize,
     };
 
     let locked: Vec<Option<resonance_music_theory::Degree>> = if respect_locks {

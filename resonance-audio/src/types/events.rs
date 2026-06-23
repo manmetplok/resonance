@@ -6,7 +6,8 @@ use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
     ABSource, AssetId, BusId, ClipId, FadeCurve, InputDeviceInfo, MidiNote, ParamInfo,
-    PluginInstanceId, ReferenceAnalysisStage, ReferenceId, SamplePos, ScannedPlugin, TrackId,
+    PluginInstanceId, ReferenceAnalysisStage, ReferenceId, SamplePos, ScannedPlugin, SendId,
+    SendSource, TrackId,
 };
 
 /// Lifecycle stage of a single file in an `ImportAudioToPool` batch.
@@ -300,6 +301,36 @@ pub enum AudioEvent {
         instance_id: PluginInstanceId,
     },
 
+    // -- Aux sends + return busses --
+    /// A bus's return-role flag changed (see `AudioCommand::SetBusRole`).
+    BusRoleChanged {
+        bus_id: BusId,
+        is_return: bool,
+    },
+    /// An aux send was created or updated. Carries the engine-resolved
+    /// send so the app mirror matches engine state (including the
+    /// allocated `send_id` and any clamping of `level_db`).
+    AuxSendChanged {
+        send_id: SendId,
+        source: SendSource,
+        dest: BusId,
+        level_db: f32,
+        pre_fader: bool,
+        enabled: bool,
+    },
+    /// An aux send was removed (see `AudioCommand::RemoveAuxSend`).
+    AuxSendRemoved {
+        send_id: SendId,
+    },
+    /// An aux send was rejected and not registered. `reason` is a
+    /// plain-language explanation suitable for surfacing in the UI
+    /// (e.g. a self-route or a feedback cycle).
+    AuxSendRejected {
+        source: SendSource,
+        dest: BusId,
+        reason: String,
+    },
+
     // -- Master FX events --
     MasterPluginAdded {
         instance_id: PluginInstanceId,
@@ -435,4 +466,14 @@ pub enum AudioEvent {
         mix: MeterSnapshot,
         reference: Option<MeterSnapshot>,
     },
+    // -- Audition preview (doc #175) --
+    /// Throttled (control-rate, ~60 Hz) audition playhead position in source
+    /// frames, so the GUI can draw a scrub playhead over the preview. Only
+    /// emitted while a preview is playing.
+    AuditionPosition {
+        frame: u64,
+    },
+    /// The audition preview stopped — either it reached the end of a
+    /// non-looping file, or it was stopped via `AudioCommand::StopAudition`.
+    AuditionStopped,
 }

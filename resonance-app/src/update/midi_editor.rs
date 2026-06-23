@@ -43,6 +43,12 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
                 clip_id,
                 note_index,
             });
+            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+                editor.clear_selection();
+            }
+        }
+        MidiEditorMessage::RemoveSelectedNotes { clip_id } => {
+            remove_selected_notes(r, clip_id);
         }
         MidiEditorMessage::MoveNote {
             clip_id,
@@ -70,7 +76,35 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
         }
         MidiEditorMessage::SelectNote { note_index } => {
             if let Some(ref mut editor) = r.interaction.editing_midi_clip {
-                editor.selected_note = note_index;
+                editor.select_single(note_index);
+            }
+        }
+        MidiEditorMessage::ToggleNoteSelection { note_index } => {
+            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+                editor.toggle_note(note_index);
+            }
+        }
+        MidiEditorMessage::SelectNotesInRect { indices, additive } => {
+            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+                editor.apply_marquee(indices, additive);
+            }
+        }
+        MidiEditorMessage::SelectAllNotes => {
+            if let Some(clip_id) = r.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id) {
+                let len = r
+                    .midi_clips
+                    .iter()
+                    .find(|c| c.id == clip_id)
+                    .map(|c| c.notes.len())
+                    .unwrap_or(0);
+                if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+                    editor.select_all(len);
+                }
+            }
+        }
+        MidiEditorMessage::ClearNoteSelection => {
+            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+                editor.clear_selection();
             }
         }
         MidiEditorMessage::PreviewNote(track_id, note) => {
@@ -93,6 +127,41 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// Remove every selected note from `clip_id`. Indices are sent to the
+/// engine in descending order so each removal can't invalidate the
+/// indices of the not-yet-removed notes below it. Selection is cleared
+/// afterwards since the indices no longer refer to anything.
+fn remove_selected_notes(r: &mut crate::Resonance, clip_id: resonance_audio::types::ClipId) {
+    let Some(editor) = r.interaction.editing_midi_clip.as_ref() else {
+        return;
+    };
+    let note_count = r
+        .midi_clips
+        .iter()
+        .find(|c| c.id == clip_id)
+        .map(|c| c.notes.len())
+        .unwrap_or(0);
+    // Descending order: removing a higher index never shifts a lower one.
+    let mut indices: Vec<usize> = editor
+        .selected_notes
+        .iter()
+        .copied()
+        .filter(|&i| i < note_count)
+        .collect();
+    indices.sort_unstable_by(|a, b| b.cmp(a));
+
+    for note_index in indices {
+        let _ = r.engine.send(AudioCommand::RemoveMidiNote {
+            clip_id,
+            note_index,
+        });
+    }
+
+    if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+        editor.clear_selection();
+    }
 }
 
 /// Toggle the OpenUtau slur marker on the i-th note of `clip_id`. The

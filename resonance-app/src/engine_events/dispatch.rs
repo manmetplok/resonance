@@ -10,7 +10,7 @@ use resonance_audio::types::*;
 use crate::message::*;
 use crate::Resonance;
 
-use super::{clips, midi, plugins, project_io, reference, tracks, transport};
+use super::{aux_sends, clips, midi, plugins, project_io, reference, tracks, transport};
 
 pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
     use AudioEvent as E;
@@ -77,12 +77,23 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             trim_start_frames,
             trim_end_frames,
         ),
-        // Clip fade/gain mirroring is implemented by todo #316
-        // (resonance-app `ClipState` fields + event mirroring). Until that
-        // lands these events are accepted but not yet mirrored into app
-        // state; this placeholder arm keeps the workspace compiling once
-        // the engine-side command/event plumbing (todo #314) is in place.
-        E::ClipFadeChanged { .. } | E::ClipGainChanged { .. } => {}
+        // Clip fade/gain mirroring (todo #316): one-way engine→app sync of
+        // the engine-clamped fade/gain values into the matching `ClipState`.
+        E::ClipFadeChanged {
+            clip_id,
+            fade_in_frames,
+            fade_in_curve,
+            fade_out_frames,
+            fade_out_curve,
+        } => clips::fade_changed(
+            r,
+            clip_id,
+            fade_in_frames,
+            fade_in_curve,
+            fade_out_frames,
+            fade_out_curve,
+        ),
+        E::ClipGainChanged { clip_id, gain_db } => clips::gain_changed(r, clip_id, gain_db),
         // Media-pool import lifecycle (engine todo #592). Mirroring these
         // into the app's pool + import-progress state is todo #597; until
         // it lands these arms accept the events without acting, keeping
@@ -185,6 +196,28 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             tracks::bus_fx_bypass_changed(r, bus_id, bypassed)
         }
 
+        // Aux send / return-bus events. Mirrored into app state purely
+        // from these events (todo #478) — the engine-side data model,
+        // commands, and cyclic-route validation landed in todo #475. The
+        // mixer view that surfaces sends/returns is a separate follow-up.
+        E::BusRoleChanged { bus_id, is_return } => {
+            aux_sends::bus_role_changed(r, bus_id, is_return)
+        }
+        E::AuxSendChanged {
+            send_id,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+            enabled,
+        } => aux_sends::send_changed(r, send_id, source, dest, level_db, pre_fader, enabled),
+        E::AuxSendRemoved { send_id } => aux_sends::send_removed(r, send_id),
+        E::AuxSendRejected {
+            source,
+            dest,
+            reason,
+        } => aux_sends::send_rejected(r, source, dest, reason),
+
         // Plugin lifecycle
         E::PluginAdded {
             track_id,
@@ -273,6 +306,12 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             master_peak_l,
             master_peak_r,
         ),
+
+        // Audition preview position/stopped events round-trip through the
+        // engine, but the app does not hold audition UI state yet (the scrub
+        // playhead + browser preview controls land with the audition app-state
+        // todo, doc #175), so there is nothing to mirror — no-ops for now.
+        E::AuditionPosition { .. } | E::AuditionStopped => {}
 
         // Project save / load — these return a Task<Message>.
         E::ClipsSavedToProjectDir { clip_files } => {

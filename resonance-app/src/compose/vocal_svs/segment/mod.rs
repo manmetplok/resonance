@@ -18,6 +18,7 @@
 //! fixed `F0_TIMESTEP` interval over the whole segment.
 
 use resonance_audio::types::MidiNote;
+use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::{VocalParams, VocalTimbre};
 use resonance_svs::ds::{DsSegment, SampleCurve};
 
@@ -29,16 +30,19 @@ use duration::build_phoneme_track;
 use f0::{build_f0_curve, F0_TIMESTEP};
 use tension::build_tension_curve;
 
-/// Build a single `DsSegment` covering every note in the clip. See
-/// the module docs for the stage breakdown.
-pub(super) fn build_segment(
+/// Build a single `DsSegment` covering every note in the clip from the
+/// pre-resolved, voicebank-validated `assigned` syllable stream (one
+/// entry per note). See the module docs for the stage breakdown and
+/// [`super::resolve_clip_pronunciation`] / [`super::validate_for_voicebank`]
+/// for how `assigned` is produced.
+pub fn build_segment(
     notes: &[MidiNote],
     params: &VocalParams,
-    lyrics: &[String],
+    assigned: &[AssignedSyllable],
     ticks_per_quarter: u32,
     bpm: f32,
 ) -> DsSegment {
-    let track = build_phoneme_track(notes, params, lyrics, ticks_per_quarter, bpm);
+    let track = build_phoneme_track(notes, params, assigned, ticks_per_quarter, bpm);
     let f0_curve = build_f0_curve(&track, params);
     let tension = build_tension_curve(&f0_curve, params);
     let gender = build_gender_curve(params, f0_curve.samples.len());

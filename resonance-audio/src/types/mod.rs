@@ -6,6 +6,7 @@ pub type ClipId = u64;
 pub type SamplePos = u64;
 pub type PluginInstanceId = u64;
 pub type BusId = u64;
+pub type SendId = u64;
 /// Identifier for an imported media-pool asset. Allocated by the engine
 /// on `AudioCommand::ImportAudioToPool` and carried by the
 /// import-lifecycle events. Independent of [`ClipId`]: an asset lives in
@@ -46,6 +47,7 @@ impl TrackType {
     }
 }
 
+mod aux_send;
 mod clip;
 mod commands;
 mod events;
@@ -54,6 +56,7 @@ mod tempo;
 mod track;
 mod vocal_tuning;
 
+pub use aux_send::{aux_send_would_cycle, AuxSend, SendSource};
 pub use clip::{
     compute_waveform_peaks, AudioClip, ClipSource, FadeCurve, MidiClip, MidiNote,
     PendingNoteEvent, WAVEFORM_PEAK_FRAMES,

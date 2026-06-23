@@ -44,6 +44,9 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         ProjectIoMessage::SaveProjectAs => {
             return dialogs::save_project_as_dialog();
         }
+        ProjectIoMessage::Autosave => {
+            return start_autosave(r);
+        }
         ProjectIoMessage::SavePathSelected(Some(path)) => {
             let path = if path.ends_with(".rproj") {
                 std::path::PathBuf::from(path)
@@ -82,22 +85,39 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
             return dialogs::load_project_task(path);
         }
-        ProjectIoMessage::ProjectSaved(Ok(())) => {
+        ProjectIoMessage::ProjectSaved(Ok(()), autosave) => {
             r.io.save_state = None;
-            r.dirty = false;
-            r.io.has_active_project = true;
-            if let Some(ref path) = r.io.project_path {
-                crate::recent::add(&mut r.io.recent_projects, path);
-            }
-            if let Some(id) = r.quit_after_save.take() {
-                r.engine.shutdown(std::time::Duration::from_millis(150));
-                return iced::window::close(id);
+            r.io.saving = false;
+            if autosave {
+                // An autosave is a recovery snapshot, not a commit: it
+                // must leave `dirty` set (the project still differs from
+                // the last manual save), never touch the recents list,
+                // and never satisfy a pending quit-after-save.
+                r.io.last_autosave_at = Some(std::time::SystemTime::now());
+            } else {
+                r.dirty = false;
+                r.io.has_active_project = true;
+                r.io.last_saved_at = Some(std::time::SystemTime::now());
+                if let Some(ref path) = r.io.project_path {
+                    crate::recent::add(&mut r.io.recent_projects, path);
+                }
+                if let Some(id) = r.quit_after_save.take() {
+                    r.engine.shutdown(std::time::Duration::from_millis(150));
+                    return iced::window::close(id);
+                }
             }
         }
-        ProjectIoMessage::ProjectSaved(Err(e)) => {
+        ProjectIoMessage::ProjectSaved(Err(e), autosave) => {
             r.io.save_state = None;
-            r.quit_after_save = None;
-            r.error_message = Some(format!("Save failed: {e}"));
+            r.io.saving = false;
+            if autosave {
+                // A failed autosave must never interrupt the user with a
+                // modal — the timer will try again. Log and move on.
+                eprintln!("Autosave failed: {e}");
+            } else {
+                r.quit_after_save = None;
+                r.error_message = Some(format!("Save failed: {e}"));
+            }
         }
         ProjectIoMessage::ProjectLoaded(Ok(loaded)) => {
             let _ = r.engine.send(AudioCommand::Stop);
@@ -135,26 +155,63 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
     Task::none()
 }
 
-/// Begin an async save. Requires `r.io.project_path` to already be set;
-/// callers use `Message::ProjectIo(ProjectIoMessage::SaveProjectAs)`
-/// first if the project has never been saved. Initializes the
-/// `SaveCollector` state machine, tells the engine which directory to
-/// target, and kicks off the two parallel engine requests (clip files +
-/// plugin states).
+/// Begin an async manual save. Requires `r.io.project_path` to already be
+/// set; callers use `Message::ProjectIo(ProjectIoMessage::SaveProjectAs)`
+/// first if the project has never been saved.
 pub fn start_save(r: &mut Resonance) -> Task<Message> {
-    let path = match &r.io.project_path {
-        Some(p) => p.clone(),
-        None => return Task::none(),
-    };
+    begin_save(r, false)
+}
 
-    // Make sure the project directory exists before the engine tries to
-    // write clip WAVs into `{path}/audio/`. For a brand-new project
-    // this is the first time the directory is created.
-    if let Err(e) = std::fs::create_dir_all(&path) {
-        r.error_message = Some(format!("Create project directory: {e}"));
+/// Begin an async autosave snapshot. Unlike [`start_save`] this works on
+/// a never-saved project too: with no `project_path` it targets a
+/// per-session scratch dir under `cache_dir()/resonance/autosave/`. The
+/// snapshot routes to `project.autosave.json` and the completion handler
+/// leaves the project dirty (see [`ProjectIoMessage::Autosave`]).
+pub fn start_autosave(r: &mut Resonance) -> Task<Message> {
+    begin_save(r, true)
+}
+
+/// Shared save kickoff. Initializes the `SaveCollector` state machine,
+/// tells the engine which directory to target, and fires the two
+/// parallel engine requests (clip files + plugin states). The `autosave`
+/// flag rides along on the collector so the completion path
+/// (`engine_events::project_io`) routes correctly.
+fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
+    // Never run two saves at once: a second collector would clobber the
+    // first. A manual save the user explicitly triggered wins, so only
+    // an autosave backs off here — the timer will retry next tick.
+    if autosave && r.io.save_state.is_some() {
         return Task::none();
     }
 
+    let path = match (&r.io.project_path, autosave) {
+        (Some(p), _) => p.clone(),
+        // Never-saved project + autosave: snapshot into a scratch dir.
+        (None, true) => match autosave_scratch_dir(r) {
+            Some(p) => p,
+            None => {
+                eprintln!("Autosave skipped: no cache directory available.");
+                return Task::none();
+            }
+        },
+        // A manual save with no path is a programming error here — the
+        // caller routes through SaveProjectAs first.
+        (None, false) => return Task::none(),
+    };
+
+    // Make sure the directory exists before the engine tries to write
+    // clip WAVs into `{path}/audio/`. For a brand-new project this is the
+    // first time the directory is created.
+    if let Err(e) = std::fs::create_dir_all(&path) {
+        if autosave {
+            eprintln!("Autosave skipped: create dir {}: {e}", path.display());
+        } else {
+            r.error_message = Some(format!("Create project directory: {e}"));
+        }
+        return Task::none();
+    }
+
+    r.io.saving = true;
     let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
     r.io.save_state = Some(SaveCollector {
         path,
@@ -162,8 +219,17 @@ pub fn start_save(r: &mut Resonance) -> Task<Message> {
         plugin_states: Vec::new(),
         clips_done: false,
         plugins_done: false,
+        autosave,
     });
     let _ = r.engine.send(AudioCommand::SaveClipsToProjectDir);
     let _ = r.engine.send(AudioCommand::SaveAllPluginStates);
     Task::none()
+}
+
+/// Scratch directory for autosaving a never-saved project:
+/// `cache_dir()/resonance/autosave/<session-id>/`. The per-session id
+/// keeps concurrent app instances from stomping on each other's
+/// snapshots. `None` when the platform has no cache directory.
+fn autosave_scratch_dir(r: &Resonance) -> Option<std::path::PathBuf> {
+    dirs::cache_dir().map(|c| c.join("resonance").join("autosave").join(r.session_id()))
 }

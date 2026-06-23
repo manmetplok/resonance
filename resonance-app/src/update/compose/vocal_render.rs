@@ -151,6 +151,9 @@ pub(super) fn roll_vocal_melody(
         params,
         placement_starts,
         name,
+        // A fresh roll has no edited clip yet, so no per-syllable
+        // overrides apply — only the project dictionary + auto path.
+        None,
     )
 }
 
@@ -171,8 +174,23 @@ fn enqueue_vocal_render(
     params: resonance_music_theory::VocalParams,
     placement_starts: Vec<(u64, u64)>,
     clip_name: String,
+    clip_id: Option<resonance_audio::types::ClipId>,
 ) -> Task<Message> {
     use crate::compose::messages::VocalAudioReadyData;
+
+    // Resolve pronunciation (override > project-dict > global-dict >
+    // CMU-auto) and gate every phoneme through the active voicebank
+    // *before* touching the existing audio. A blocked phoneme aborts the
+    // render with a report and leaves the current clip intact rather than
+    // corrupting the segment. (#494)
+    let assigned = match resolve_and_validate(r, &params, &lyrics, midi_notes.len(), clip_id) {
+        Ok(assigned) => assigned,
+        Err(message) => {
+            r.compose.last_error = Some(message);
+            return Task::none();
+        }
+    };
+
     tear_down_old_vocal_audio(r, definition_id, track_id);
 
     let epoch_entry = r
@@ -186,13 +204,33 @@ fn enqueue_vocal_render(
 
     r.compose.last_error = None;
 
+    // Per-clip content-addressed render cache: an edit only re-renders the
+    // sub-clip segments it touched. Shared into the blocking render thread
+    // via `Arc<Mutex>`; the cache's `last_plan` is read back afterwards for
+    // the "N of M segments changed" overlay (#495).
+    let render_cache = r
+        .compose
+        .vocal_audio
+        .render_cache
+        .entry((definition_id, track_id))
+        .or_default()
+        .clone();
+
     let bpm = r.transport.bpm;
     let engine_sr = r.sample_rate;
     let dest_dir = vocal_audio_dir(r);
     Task::perform(
         async move {
             tokio::task::spawn_blocking(move || {
-                render_vocal_wav(&midi_notes, &params, &lyrics, bpm, engine_sr, &dest_dir)
+                render_vocal_wav(
+                    &midi_notes,
+                    &params,
+                    &assigned,
+                    bpm,
+                    engine_sr,
+                    &dest_dir,
+                    &render_cache,
+                )
             })
             .await
             .unwrap_or_else(|join_err| Err(format!("vocal render task join: {join_err}")))
@@ -302,6 +340,9 @@ pub(super) fn rerender_vocal_audio(
         params,
         placement_starts,
         clip_name,
+        // Re-rendering an existing clip: its per-syllable pronunciation
+        // overrides (if any) apply on top of the dictionary + auto path.
+        Some(clip_id),
     )
 }
 
@@ -466,27 +507,100 @@ fn vocal_audio_dir(r: &crate::Resonance) -> std::path::PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("resonance_vocal"))
 }
 
+/// Resolve the clip's per-note pronunciation and gate every phoneme
+/// through the active voicebank, returning the substituted syllable
+/// stream ready for [`render_vocal_wav`] or a user-facing error listing
+/// the syllables that can't be sung. (#494)
+///
+/// Precedence is `override > project-dict > global-dict > CMU-auto`: the
+/// clip's overrides (only present for a re-render of an edited clip) win,
+/// then the project dictionary. The global (user-config) dictionary has
+/// no on-disk store yet — a later todo wires it; until then it is empty.
+fn resolve_and_validate(
+    r: &crate::Resonance,
+    params: &VocalParams,
+    annotations: &[String],
+    note_count: usize,
+    clip_id: Option<resonance_audio::types::ClipId>,
+) -> Result<Vec<resonance_music_theory::g2p::AssignedSyllable>, String> {
+    use crate::compose::vocal_svs;
+
+    let empty = std::collections::HashMap::new();
+    let overrides = clip_id
+        .and_then(|c| r.compose.pronunciation.clip_overrides(c))
+        .unwrap_or(&empty);
+    let resolved = vocal_svs::resolve_clip_pronunciation(
+        &params.draft,
+        annotations,
+        note_count,
+        overrides,
+        &r.compose.pronunciation.project_dictionary,
+        &[],
+    );
+    vocal_svs::validate_for_voicebank(&resolved, params.voicebank).map_err(|invalid| describe_invalid(&invalid))
+}
+
+/// Render the blocked-phoneme report into a single status-bar line. Caps
+/// the number of syllables spelled out so a wholesale-bad draft doesn't
+/// produce a wall of text.
+fn describe_invalid(invalid: &[crate::compose::vocal_svs::InvalidSyllable]) -> String {
+    const MAX_SHOWN: usize = 6;
+    let shown = invalid.len().min(MAX_SHOWN);
+    let mut parts: Vec<String> = invalid
+        .iter()
+        .take(shown)
+        .map(|s| {
+            let label = if s.label.is_empty() {
+                "?".to_string()
+            } else {
+                s.label.clone()
+            };
+            format!(
+                "note {} \u{201c}{}\u{201d}: {} ({})",
+                s.note_index + 1,
+                label,
+                s.phoneme,
+                s.reason.as_str()
+            )
+        })
+        .collect();
+    if invalid.len() > shown {
+        parts.push(format!("+{} more", invalid.len() - shown));
+    }
+    format!(
+        "Can\u{2019}t render vocals \u{2014} {} phoneme(s) the voicebank can\u{2019}t sing: {}",
+        invalid.len(),
+        parts.join("; ")
+    )
+}
+
 /// Off-thread render entry point. Runs the SVS pipeline + writes the WAV.
 /// Returns `Ok(None)` when the SVS model dir isn't installed (silent
 /// fallback to MIDI-only mode), `Ok(Some(path))` on success.
+#[allow(clippy::too_many_arguments)]
 fn render_vocal_wav(
     midi_notes: &[resonance_audio::types::MidiNote],
     params: &VocalParams,
-    lyrics: &[String],
+    assigned: &[resonance_music_theory::g2p::AssignedSyllable],
     bpm: f32,
     engine_sample_rate: u32,
     dest_dir: &std::path::Path,
+    render_cache: &std::sync::Mutex<crate::compose::vocal_svs::SvsRenderCache>,
 ) -> Result<Option<(std::path::PathBuf, u64, u64)>, String> {
     use crate::compose::vocal_svs;
     use resonance_audio::types::TICKS_PER_QUARTER_NOTE;
 
-    let rendered = match vocal_svs::render_vocal_clip_with_lyrics(
+    let mut cache = render_cache
+        .lock()
+        .map_err(|_| "vocal render cache poisoned".to_string())?;
+    let rendered = match vocal_svs::render_vocal_clip(
         midi_notes,
         params,
-        lyrics,
+        assigned,
         TICKS_PER_QUARTER_NOTE as u32,
         bpm,
         engine_sample_rate,
+        &mut cache,
     ) {
         Ok(Some(r)) => r,
         Ok(None) => return Ok(None),

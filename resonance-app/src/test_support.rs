@@ -57,6 +57,29 @@ impl Resonance {
         &self.registry
     }
 
+    /// Test-only: feed an engine event through the real dispatch so
+    /// integration tests exercise the same mirroring path the live app
+    /// does. The returned follow-up `Task` is dropped — tests assert on
+    /// the resulting state, not on emitted messages.
+    #[doc(hidden)]
+    pub fn test_apply_engine_event(&mut self, event: resonance_audio::types::AudioEvent) {
+        let _ = crate::engine_events::handle_engine_event(self, event);
+    }
+
+    /// Test-only: read the mirrored aux-send graph. Driven from
+    /// `tests/aux_send_mirror.rs` to assert events reconstruct state.
+    #[doc(hidden)]
+    pub fn test_aux_sends(&self) -> &[resonance_audio::types::AuxSend] {
+        &self.aux.sends
+    }
+
+    /// Test-only: read the most recent aux-send rejection forwarded to
+    /// the UI (`None` once a later send succeeds).
+    #[doc(hidden)]
+    pub fn test_aux_last_rejection(&self) -> Option<&state::AuxSendRejection> {
+        self.aux.last_rejection.as_ref()
+    }
+
     /// Test-only: read the mixer-side expanded-sub-track-parents set,
     /// also driven from `tests/mixer_sub_track_grouping.rs`.
     #[doc(hidden)]
@@ -249,5 +272,21 @@ impl Resonance {
         event: resonance_audio::types::AudioEvent,
     ) {
         let _ = crate::engine_events::handle_engine_event(self, event);
+    }
+
+    /// Test-only: read the GUI-side audio clip list. Used by the
+    /// engine-event mirroring tests to assert that fade/gain events
+    /// land on the matching `ClipState`.
+    #[doc(hidden)]
+    pub fn test_clips(&self) -> &[state::ClipState] {
+        &self.clips
+    }
+
+    /// Test-only: push an audio clip straight into GUI state, bypassing
+    /// the engine `ClipImported` round-trip, so a test can then drive
+    /// fade/gain events against a known clip id.
+    #[doc(hidden)]
+    pub fn test_push_clip(&mut self, clip: state::ClipState) {
+        self.clips.push(clip);
     }
 }

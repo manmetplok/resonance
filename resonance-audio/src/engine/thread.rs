@@ -28,7 +28,8 @@ use crate::types::*;
 
 use super::midi::MidiHardwareState;
 use super::{
-    bounce, bounce_realtime, busses, clips, master, midi, plugins, reference, scan, tracks,
+    audition, bounce, bounce_realtime, busses, clips, master, midi, plugins, reference, scan,
+    tracks,
     transport, SharedState,
 };
 
@@ -80,6 +81,11 @@ pub(crate) struct HandlerState {
     /// so the two counters never collide on disk.
     pub next_asset_id: AssetId,
     pub next_plugin_id: PluginInstanceId,
+    pub next_send_id: SendId,
+    /// Aux sends keyed by id, in insertion order. Engine-thread-local
+    /// (never read from the audio callback), so plain data — see
+    /// [`AuxSend`]. The source of truth for cyclic-route validation.
+    pub aux_sends: IndexMap<SendId, AuxSend>,
     pub rec: RecordingState,
     pub bundles: Vec<ClapBundle>,
     pub active_imports: Arc<AtomicUsize>,
@@ -160,6 +166,8 @@ pub(crate) fn engine_thread(
         next_clip_id: 1,
         next_asset_id: 1,
         next_plugin_id: 1,
+        next_send_id: 1,
+        aux_sends: IndexMap::new(),
         rec: RecordingState::new(sample_rate),
         bundles: Vec::new(),
         active_imports: Arc::new(AtomicUsize::new(0)),
@@ -194,6 +202,7 @@ pub(crate) fn engine_thread(
     };
 
     let mut last_playhead_report = std::time::Instant::now();
+    let mut last_audition_report = std::time::Instant::now();
 
     // Report actual sample rate to GUI
     let _ = ctx
@@ -292,6 +301,11 @@ pub(crate) fn engine_thread(
         if ctx.shared.recording.load(Ordering::Relaxed) {
             state.rec.drain_ring_to_buffers();
         }
+
+        // Audition preview housekeeping: emit AuditionStopped on a natural
+        // finish, keep the sync-to-tempo ratio current, and throttle the
+        // AuditionPosition events that drive the preview scrub playhead.
+        audition::poll_audition(&ctx, &mut last_audition_report);
 
         // Report playhead position at ~60Hz using wall-clock time
         if ctx.shared.playing.load(Ordering::SeqCst)
@@ -715,6 +729,24 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             instance_id,
         } => busses::handle_remove_plugin_from_bus(ctx, bus_id, instance_id),
 
+        // -- Aux sends + return busses --
+        AudioCommand::SetBusRole { bus_id, is_return } => {
+            busses::handle_set_bus_role(ctx, bus_id, is_return)
+        }
+        AudioCommand::SetAuxSend {
+            id_hint,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+            enabled,
+        } => busses::handle_set_aux_send(
+            ctx, state, id_hint, source, dest, level_db, pre_fader, enabled,
+        ),
+        AudioCommand::RemoveAuxSend { send_id } => {
+            busses::handle_remove_aux_send(ctx, state, send_id)
+        }
+
         // -- Master FX chain + bypass --
         AudioCommand::AddPluginToMaster {
             clap_file_path,
@@ -734,6 +766,21 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         }
         AudioCommand::SetMasterFxBypass { bypassed } => {
             master::handle_set_master_fx_bypass(ctx, bypassed)
+        }
+        AudioCommand::AuditionFile { path, start_frame } => {
+            audition::handle_audition_file(ctx, path, start_frame)
+        }
+        AudioCommand::StopAudition => {
+            if audition::stop_audition_in_place(ctx.shared) {
+                let _ = ctx.event_tx.send(AudioEvent::AuditionStopped);
+            }
+        }
+        AudioCommand::SetAuditionOptions {
+            loop_enabled,
+            sync_to_tempo,
+        } => {
+            let bpm = ctx.tempo_map.load().bpm as f64;
+            audition::set_audition_options_in_place(ctx.shared, bpm, loop_enabled, sync_to_tempo);
         }
         AudioCommand::PollPeaks => handle_poll_peaks(ctx),
 
