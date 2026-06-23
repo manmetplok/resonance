@@ -18,6 +18,7 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
         tasks.push(task);
     }
     update_vu_meters(r);
+    poll_ab_meters(r);
     sync_tempo_at_playhead(r);
     auto_follow_playhead(r);
     refresh_midi_devices_if_stale(r);
@@ -58,6 +59,18 @@ fn update_vu_meters(r: &mut Resonance) {
     r.master_level_l *= PEAK_DECAY;
     r.master_level_r *= PEAK_DECAY;
     let _ = r.engine.send(AudioCommand::PollPeaks);
+}
+
+/// Drive the Reference panel's comparative loudness readout: while the
+/// rail is open with at least one loaded reference, ask the engine for a
+/// fresh A/B meter snapshot each tick. The reply arrives as
+/// `AudioEvent::ABMeterSnapshot` and is folded into `r.reference.ab_meter`
+/// by `engine_events::reference::ab_meter_snapshot`. Gated on the panel
+/// being visible so we don't poll the A/B taps when nothing reads them.
+fn poll_ab_meters(r: &mut Resonance) {
+    if r.mixer.reference_panel_open && !r.reference.entries.is_empty() {
+        let _ = r.engine.send(AudioCommand::PollABMeters);
+    }
 }
 
 /// Fold a peak snapshot from the engine into the VU state. Each level
