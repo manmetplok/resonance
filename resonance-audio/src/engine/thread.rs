@@ -25,6 +25,7 @@ use crate::midi_hardware::LiveMidiEvent;
 use crate::mixer::MidiStash;
 use crate::recording::RecordingState;
 use crate::types::*;
+use resonance_common::{TakeGroupId, TimelineRange};
 
 use super::midi::MidiHardwareState;
 use super::{
@@ -68,6 +69,24 @@ pub(crate) struct RecordingMidiState {
     pub open_notes: HashMap<u8, usize>,
 }
 
+/// Bookkeeping for an in-flight cycle-record (loop-record) run. Created
+/// in [`transport::begin_recording_stream`] when loop-record mode and a
+/// loop range are both active, advanced at each loop seam, and torn down
+/// when recording stops. Lives on the engine control thread so it never
+/// touches the audio callback.
+pub(crate) struct LoopRecordSession {
+    /// The loop region being cycled over, in sample frames. Reported on
+    /// every `AudioEvent::TakeCaptured` as the take's slot.
+    pub slot: TimelineRange,
+    /// Zero-based index of the pass currently being captured. Bumped at
+    /// each seam after the completed pass's takes are emitted.
+    pub pass_index: u32,
+    /// Stable take-group id per track for this run, allocated lazily the
+    /// first time a track produces a take. Keeps all passes of a track
+    /// folded into a single group on the app side.
+    pub groups: HashMap<TrackId, TakeGroupId>,
+}
+
 /// Mutable engine-thread-local state that persists across command
 /// dispatches: monotonic id counters, the recording session, the loaded
 /// CLAP bundles, and the concurrent-import counter.
@@ -86,6 +105,10 @@ pub(crate) struct HandlerState {
     /// (never read from the audio callback), so plain data — see
     /// [`AuxSend`]. The source of truth for cyclic-route validation.
     pub aux_sends: IndexMap<SendId, AuxSend>,
+    /// Monotonic id allocator for cycle-record take groups. One group is
+    /// handed out per armed track per loop-record run (see
+    /// [`LoopRecordSession::groups`]).
+    pub next_take_group_id: TakeGroupId,
     pub rec: RecordingState,
     pub bundles: Vec<ClapBundle>,
     pub active_imports: Arc<AtomicUsize>,
@@ -131,6 +154,8 @@ pub(crate) struct HandlerState {
     /// Reference-track (A/B) state: loaded references, active selection,
     /// monitored source, and the loudness-match / trim / loop knobs.
     pub reference: super::reference::ReferencePlayer,
+    /// In-flight cycle-record run, or `None` when not loop-recording.
+    pub loop_record_session: Option<LoopRecordSession>,
 }
 
 /// Hard cap on concurrent clip decode threads. Import commands past this
@@ -168,6 +193,7 @@ pub(crate) fn engine_thread(
         next_plugin_id: 1,
         next_send_id: 1,
         aux_sends: IndexMap::new(),
+        next_take_group_id: 1,
         rec: RecordingState::new(sample_rate),
         bundles: Vec::new(),
         active_imports: Arc::new(AtomicUsize::new(0)),
@@ -182,6 +208,7 @@ pub(crate) fn engine_thread(
         midi_clock_last_emitted_bpm: 0.0,
         pending_bounce: None,
         reference: super::reference::ReferencePlayer::new(),
+        loop_record_session: None,
     };
     let ctx = HandlerCtx {
         shared: &shared,
@@ -203,6 +230,9 @@ pub(crate) fn engine_thread(
 
     let mut last_playhead_report = std::time::Instant::now();
     let mut last_audition_report = std::time::Instant::now();
+    // Previous-iteration playhead, used to detect a loop wrap so the
+    // cycle-record seam handler can roll the just-finished pass into a take.
+    let mut last_playhead: SamplePos = 0;
 
     // Report actual sample rate to GUI
     let _ = ctx
@@ -306,6 +336,9 @@ pub(crate) fn engine_thread(
         // finish, keep the sync-to-tempo ratio current, and throttle the
         // AuditionPosition events that drive the preview scrub playhead.
         audition::poll_audition(&ctx, &mut last_audition_report);
+        // Cycle-record: when the playhead wraps a loop boundary mid-record,
+        // roll the just-completed pass into a take and start a fresh one.
+        transport::poll_loop_record_seam(&ctx, &mut state, &mut last_playhead);
 
         // Report playhead position at ~60Hz using wall-clock time
         if ctx.shared.playing.load(Ordering::SeqCst)
@@ -371,6 +404,7 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             loop_in,
             loop_out,
         } => transport::handle_set_loop_range(ctx, state, enabled, loop_in, loop_out),
+        AudioCommand::SetLoopRecordMode(on) => transport::handle_set_loop_record_mode(state, on),
 
         // -- Audio clips --
         AudioCommand::ImportClip {

@@ -8,6 +8,7 @@ pub mod track_group;
 pub mod midi_map;
 pub mod registry;
 mod scan;
+pub mod take;
 mod wav;
 
 pub use automation::{
@@ -28,6 +29,10 @@ pub use denormal::flush_denormals;
 pub use group_identity::{GroupColor, GroupIdentityColor};
 pub use track_group::{GroupId, TrackGroup};
 pub use scan::scan_directory;
+pub use take::{
+    ClipId, Comp, CompSegment, Take, TakeContent, TakeGroup, TakeGroupId, TakeId, TakeNote,
+    TimelineRange,
+};
 pub use wav::{
     decode_file, decode_wav_channels, decode_wav_stereo, linear_resample_mono,
     linear_resample_stereo, StreamingLinearResampler, WavChannels,

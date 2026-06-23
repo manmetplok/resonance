@@ -65,6 +65,12 @@ pub struct RecordingState {
     pub loop_enabled: bool,
     pub loop_in: SamplePos,
     pub loop_out: SamplePos,
+    /// Cycle-record mode (set by `AudioCommand::SetLoopRecordMode`). When
+    /// true and the transport loops while recording, the engine control
+    /// thread rolls the capture into a distinct take at each loop seam
+    /// (see [`RecordingState::roll_audio_pass`]) instead of producing one
+    /// trimmed clip for the whole run.
+    pub loop_record: bool,
     /// Set when a `Record` with `precount_bars > 0` is in its count-in
     /// phase. `target_sample` is the playhead position the user hit
     /// record at — once the playhead catches up to it, the input stream
@@ -96,6 +102,7 @@ impl RecordingState {
             loop_enabled: false,
             loop_in: 0,
             loop_out: 0,
+            loop_record: false,
             precount: None,
             deint_scratch: Vec::with_capacity(DRAIN_SCRATCH_LEN),
         }
@@ -337,6 +344,157 @@ impl RecordingState {
 
         self.ring_consumer = None;
         clips_emitted
+    }
+
+    /// Roll the current cycle-record pass for every armed audio track into
+    /// a distinct clip and (when `reopen`) start a fresh writer for the
+    /// next pass.
+    ///
+    /// The streaming resampler keeps running across the seam, so no input
+    /// frames are dropped — at most a sub-frame of resampler carry is
+    /// attributed to the next take rather than this one. `clip_start_sample`
+    /// positions the finished clips on the timeline (the loop region's
+    /// start). Pass `reopen = true` at a loop seam (keeps capturing) and
+    /// `reopen = false` for the trailing pass at transport stop (flushes
+    /// the resampler tail and leaves the buffers closed).
+    ///
+    /// Returns one [`RolledAudioTake`] per track that captured at least one
+    /// frame this pass; the caller wraps each into an
+    /// `AudioEvent::TakeCaptured`.
+    pub fn roll_audio_pass(
+        &mut self,
+        engine_sample_rate: u32,
+        clip_start_sample: SamplePos,
+        clips: &parking_lot::RwLock<Vec<AudioClip>>,
+        audio_dir: &Path,
+        next_clip_id: &mut ClipId,
+        reopen: bool,
+    ) -> Vec<RolledAudioTake> {
+        // Stream any pending input into the current writers first so the
+        // finished take includes everything captured up to the seam.
+        self.drain_ring_to_buffers();
+
+        let mut rolled = Vec::new();
+        for (track_id, track_buf) in self.buffers.iter_mut() {
+            // Close the current take's writer. At a seam we keep the
+            // resampler running (no flush) so the next pass continues
+            // seamlessly; on the trailing pass we flush its held tail.
+            if reopen {
+                close_pass_writer(track_buf);
+            } else if let Err(e) = finalize_wav_file(track_buf) {
+                eprintln!("recording: {e}");
+                continue;
+            }
+
+            let finished_path = track_buf.path.clone();
+            let finished_clip_id = track_buf.clip_id;
+            let finished_frames = track_buf.frames_written;
+            let finished_peaks = std::mem::take(&mut track_buf.peaks);
+
+            // Reopen a fresh writer for the next pass (seam only).
+            if reopen {
+                let new_clip_id = *next_clip_id;
+                *next_clip_id += 1;
+                match open_track_wav_file(audio_dir, new_clip_id, engine_sample_rate) {
+                    Ok((path, writer)) => {
+                        track_buf.writer = Some(writer);
+                        track_buf.path = path;
+                        track_buf.clip_id = new_clip_id;
+                        track_buf.frames_written = 0;
+                        track_buf.peak_min = f32::MAX;
+                        track_buf.peak_max = f32::MIN;
+                        track_buf.peak_frames = 0;
+                    }
+                    Err(e) => {
+                        eprintln!("recording: reopen pass writer failed: {e}");
+                        // Leave the writer closed; later passes for this
+                        // track simply produce nothing.
+                    }
+                }
+            }
+
+            if finished_frames == 0 {
+                // Empty pass (no input, or stop landed on the seam): drop
+                // the empty WAV and emit no take.
+                let _ = std::fs::remove_file(&finished_path);
+                continue;
+            }
+
+            let source = match ClipSource::open_wav(&finished_path) {
+                Ok(src) => src,
+                Err(e) => {
+                    eprintln!("recording: mmap {} failed: {e}", finished_path.display());
+                    continue;
+                }
+            };
+            let name = format!("Take {}", finished_clip_id);
+            let clip = AudioClip {
+                id: finished_clip_id,
+                track_id: *track_id,
+                start_sample: clip_start_sample,
+                source,
+                name,
+                trim_start_frames: 0,
+                trim_end_frames: 0,
+                fade_in_frames: 0,
+                fade_in_curve: FadeCurve::default(),
+                fade_out_frames: 0,
+                fade_out_curve: FadeCurve::default(),
+                gain_db: 0.0,
+                vocal_tuning: None,
+            };
+            clips.write().push(clip);
+            rolled.push(RolledAudioTake {
+                track_id: *track_id,
+                clip_id: finished_clip_id,
+                start_sample: clip_start_sample,
+                duration_samples: finished_frames,
+                waveform_peaks: finished_peaks,
+            });
+        }
+
+        if !reopen {
+            self.buffers.clear();
+            self.ring_consumer = None;
+        }
+        rolled
+    }
+}
+
+/// A finished audio take produced by rolling a cycle-record pass at a loop
+/// seam (or at transport stop for the trailing pass). The owning
+/// [`RecordingState::roll_audio_pass`] has already pushed the matching
+/// [`AudioClip`] into the shared clip map; this carries the metadata the
+/// engine control thread needs to emit `AudioEvent::TakeCaptured`.
+#[derive(Debug, Clone)]
+pub struct RolledAudioTake {
+    pub track_id: TrackId,
+    pub clip_id: ClipId,
+    pub start_sample: SamplePos,
+    pub duration_samples: u64,
+    pub waveform_peaks: Vec<(f32, f32)>,
+}
+
+/// Close a take's WAV writer at a loop seam WITHOUT flushing the streaming
+/// resampler, so the next pass's writer continues the input stream
+/// seamlessly. Commits the trailing peak bucket and finalizes the writer
+/// so the on-disk WAV header carries the correct data-chunk size.
+fn close_pass_writer(track_buf: &mut TrackRecordingBuf) {
+    if track_buf.peak_frames > 0 {
+        track_buf
+            .peaks
+            .push((track_buf.peak_min, track_buf.peak_max));
+        track_buf.peak_frames = 0;
+        track_buf.peak_min = f32::MAX;
+        track_buf.peak_max = f32::MIN;
+    }
+    if let Some(writer) = track_buf.writer.take() {
+        if let Err(e) = writer.finalize() {
+            eprintln!(
+                "recording: finalize pass wav {}: {e}",
+                track_buf.path.display()
+            );
+        }
     }
 }
 

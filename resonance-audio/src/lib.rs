@@ -149,4 +149,4 @@ pub use engine::midi::live_arrival_sample_offset;
 /// accumulates audio in RAM as a take grows. Not part of the public
 /// API — the engine owns `RecordingState` internally.
 #[doc(hidden)]
-pub use recording::{PrecountState, RecordingState, TrackRecordingBuf};
+pub use recording::{PrecountState, RecordingState, RolledAudioTake, TrackRecordingBuf};

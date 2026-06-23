@@ -115,6 +115,12 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             name,
             waveform_peaks,
         ),
+        // Cycle-record take capture (epic #15). The engine emits one
+        // `TakeCaptured` per loop pass with its take-group/slot id; the
+        // recorded clips themselves arrive via `RecordingFinished`. GUI
+        // take-lane mirroring/comping is a follow-up todo, so for now we
+        // accept the event without acting — keeping the match exhaustive.
+        E::TakeCaptured { .. } => {}
 
         // MIDI clip + note events
         E::MidiClipCreated {
