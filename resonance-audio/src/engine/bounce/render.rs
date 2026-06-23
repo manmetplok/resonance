@@ -189,6 +189,12 @@ pub(super) fn reset_plugins(
 /// for which the closure returns false is skipped exactly like a muted
 /// one — but its bus isn't drained either, so reverb tails on shared
 /// buses still come from the in-filter tracks only.
+///
+/// Reference A/B exclusion: this shared bounce core renders the mix
+/// only. It takes no [`crate::engine::reference::ReferenceMonitor`] and
+/// never reads `ctx.shared.reference`, so the live A/B selection cannot
+/// leak into any offline export — the reference monitor tap lives solely
+/// in the live callback (`mixer::mix_audio`).
 pub(super) fn render_chunk(
     ctx: &ChunkCtx<'_>,
     scratch: &mut ChunkScratch,

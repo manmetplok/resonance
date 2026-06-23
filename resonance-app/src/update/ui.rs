@@ -57,6 +57,9 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         UiMessage::CloseAddTrackMenu => {
             r.mixer.add_track_menu_open = false;
         }
+        UiMessage::ToggleReferencePanel => {
+            r.mixer.reference_panel_open = !r.mixer.reference_panel_open;
+        }
         UiMessage::DismissError => {
             r.error_message = None;
         }

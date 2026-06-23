@@ -29,7 +29,7 @@ use crate::stream_errors::{format_underrun_line, UnderrunRateLimiter};
 use crate::types::*;
 
 mod bounce;
-pub use bounce::{to_audio_clip, try_lock_with_backoff};
+pub use bounce::{to_audio_clip, to_wav, try_lock_with_backoff};
 mod bounce_common;
 pub use bounce_common::midi_render_range;
 
@@ -63,6 +63,7 @@ pub use import_pool::{import_one_to_pool, run_pool_import, PoolImportOutcome};
 mod master;
 pub(crate) mod midi;
 mod plugins;
+pub(crate) mod reference;
 mod scan;
 mod thread;
 mod tracks;
@@ -128,6 +129,22 @@ pub struct SharedState {
     /// running on their worker threads can be aborted from the same
     /// `CancelBounce` command without threading another channel.
     pub bounce_cancel: AtomicBool,
+    /// Reference A/B monitor snapshot. Published by the control thread
+    /// (`reference::ReferencePlayer::publish`) and read lock-free by the
+    /// audio callback to replace the post-master output with the active
+    /// reference's PCM. Never consulted by any offline/realtime bounce
+    /// path, so exports always render the processed mix.
+    pub reference: reference::ReferenceMonitor,
+    /// Latest processed-mix loudness/peak/range snapshot, published by the
+    /// audio callback's mix metering tap each block and read lock-free by
+    /// the control thread to answer `PollABMeters`. Holds its last value
+    /// while the mix isn't playing (e.g. while auditioning a reference).
+    pub mix_meter: resonance_metering::AtomicMeterSnapshot,
+    /// Latest active-reference loudness/peak/range snapshot, published by
+    /// the audio callback's reference metering tap while a reference is
+    /// auditioned (post loudness-match/trim gain). Forwarded to the UI only
+    /// when a reference is active; see `reference::handle_poll_ab_meters`.
+    pub ref_meter: resonance_metering::AtomicMeterSnapshot,
     /// Lock-free snapshot of the engine's aux-send table, published by
     /// the control thread on every send add/remove/clear and read once
     /// per block by the live mixer and the offline bounce renderer. The
@@ -183,6 +200,9 @@ impl Default for SharedState {
             count_in_remaining: AtomicU64::new(0),
             count_in_total: AtomicU64::new(0),
             bounce_cancel: AtomicBool::new(false),
+            reference: reference::ReferenceMonitor::default(),
+            mix_meter: resonance_metering::AtomicMeterSnapshot::new(),
+            ref_meter: resonance_metering::AtomicMeterSnapshot::new(),
             aux_sends: arc_swap::ArcSwap::from_pointee(Vec::new()),
             audition_source: arc_swap::ArcSwapOption::empty(),
             audition_playing: AtomicBool::new(false),
@@ -431,6 +451,11 @@ impl AudioEngine {
             let mut monitor_temp = vec![0.0f32; audio_buf_frames * MAX_INPUT_CHANNELS];
             let monitor_ring = ringbuf::HeapRb::<f32>::new(audio_quantum * MAX_INPUT_CHANNELS * 4);
             let (prod, mut monitor_cons) = monitor_ring.split();
+            // A/B metering taps (mix + reference). Pre-size their
+            // de-interleave scratch to the callback buffer so the realtime
+            // feed path never allocates.
+            let mut ab_meters = reference::ABMeters::new(audio_sample_rate as f32);
+            ab_meters.reserve(audio_buf_frames);
 
             // Pre-fault every page of the audio-thread scratch so the cpal
             // callback isn't the first writer. `vec![0.0f32; N]` and
@@ -481,6 +506,7 @@ impl AudioEngine {
                         &mut monitor_temp,
                         audio_buf_frames,
                         audio_quantum,
+                        &mut ab_meters,
                     );
                 },
                 move |err| match err {

@@ -221,6 +221,59 @@ impl Resonance {
         }
     }
 
+    /// Test-only: read-only view of the reference-track (A/B) state.
+    #[doc(hidden)]
+    pub fn test_reference(&self) -> &crate::reference::ReferenceState {
+        &self.reference
+    }
+
+    /// Test-only: enqueue a pending reference-load path, mimicking what a
+    /// dispatched `LoadReferenceTrack` does, so an engine-event-folding
+    /// test can exercise the id↔path correlation without an active project.
+    #[doc(hidden)]
+    pub fn test_reference_push_pending(&mut self, path: &str) {
+        self.reference.pending_loads.push_back(path.to_string());
+    }
+
+    /// Test-only: serialize the current GUI state to the on-disk
+    /// [`crate::project::ProjectFile`] shape, so a persistence test can
+    /// inspect (or round-trip) the reference A/B block without writing to
+    /// disk.
+    #[doc(hidden)]
+    pub fn test_build_project_file(&self) -> crate::project::ProjectFile {
+        crate::update::project_io::build_project_file(self)
+    }
+
+    /// Test-only: replay just the reference A/B block of a saved
+    /// [`crate::project::ProjectFile`] into this app, exercising the same
+    /// restore path a full project load runs. Lets a persistence test
+    /// verify reference round-trip / missing-file handling without
+    /// constructing a whole `LoadedProject`.
+    #[doc(hidden)]
+    pub fn test_restore_references(&mut self, file: &crate::project::ProjectFile) {
+        crate::update::project_io::restore_references(self, file);
+    }
+
+    /// Test-only: anchor a project path so `can_record_undo` is satisfied
+    /// (it requires `has_active_project` *and* a `project_path`). Pair
+    /// with [`Self::test_set_active_project`] to make undo/redo recordable
+    /// in a reducer test without a real save.
+    #[doc(hidden)]
+    pub fn test_set_project_path(&mut self, path: std::path::PathBuf) {
+        self.io.project_path = Some(path);
+    }
+
+    /// Test-only: fold an engine event into app state, exercising the same
+    /// `engine_events` dispatch the live event pump uses. Lets tests verify
+    /// that the engine's authoritative echoes update the GUI mirror.
+    #[doc(hidden)]
+    pub fn test_handle_engine_event(
+        &mut self,
+        event: resonance_audio::types::AudioEvent,
+    ) {
+        let _ = crate::engine_events::handle_engine_event(self, event);
+    }
+
     /// Test-only: read the GUI-side audio clip list. Used by the
     /// engine-event mirroring tests to assert that fade/gain events
     /// land on the matching `ClipState`.

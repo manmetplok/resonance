@@ -38,6 +38,7 @@ pub use render_core::mix_track_clips;
 use ringbuf::traits::{Consumer, Observer};
 use std::sync::atomic::Ordering;
 
+use crate::engine::reference::ABMeters;
 use crate::engine::SharedState;
 use crate::types::*;
 
@@ -214,6 +215,11 @@ pub(crate) fn mix_audio(
     monitor_temp: &mut [f32],
     buf_frames: usize,
     quantum: usize,
+    // A/B metering taps: the mix tap is fed the processed-mix output at the
+    // end of a playing block; the reference tap is fed the reference PCM
+    // when the monitored source is a reference. Both publish their snapshot
+    // into `shared` for the control thread's `PollABMeters` reply.
+    ab_meters: &mut ABMeters,
 ) {
     resonance_common::flush_denormals();
 
@@ -232,6 +238,43 @@ pub(crate) fn mix_audio(
         log_oversize_buffer(raw_output_frames, buf_frames);
     }
     let output_frames = frames;
+
+    // Reference A/B monitor: when the user has switched the monitored
+    // source to a loaded reference, replace the entire output with the
+    // reference PCM, bypassing the mix + master/mastering chain (this is
+    // the post-master monitor tap). Suppressed while recording or
+    // counting in so a realtime bounce / punch-in monitors the live
+    // signal, not the reference. The offline/realtime bounce render
+    // paths never consult `shared.reference`, so exports stay the
+    // processed mix regardless of this selection.
+    if !shared.recording.load(Ordering::Relaxed)
+        && !shared.count_in_active.load(Ordering::Relaxed)
+    {
+        let playhead = shared.playhead.load(Ordering::Relaxed);
+        if shared.reference.render(
+            &mut data[..output_frames * channels],
+            channels,
+            output_frames,
+            playhead,
+        ) {
+            // Meter the reference exactly as monitored — post loudness-match
+            // / trim gain — so the panel's Delta against the mix is honest.
+            ab_meters
+                .reference
+                .feed_interleaved(&data[..output_frames * channels], channels, output_frames);
+            shared.ref_meter.store(&ab_meters.reference.snapshot());
+            // Keep the transport rolling while playing so loop-to-mix
+            // tracking and a later switch back to the mix resume at the
+            // right spot; when stopped the reference free-runs (audition)
+            // and the playhead stays put.
+            if shared.playing.load(Ordering::Relaxed) {
+                let new_playhead =
+                    advance_playhead_silent(shared, playhead, output_frames as u64);
+                shared.playhead.store(new_playhead, Ordering::Relaxed);
+            }
+            return;
+        }
+    }
 
     // Snapshot tempo once per block. Hold the ArcSwap guard so the bar
     // table is available for tempo-map-aware MIDI tick→sample conversion
@@ -579,6 +622,12 @@ pub(crate) fn mix_audio(
 
     // Apply master volume, hard clip, and compute master peak levels
     apply_master_volume_and_peaks(data, channels, shared);
+
+    // Meter the processed mix (post master FX + volume) for the A/B panel.
+    ab_meters
+        .mix
+        .feed_interleaved(&data[..output_frames * channels], channels, output_frames);
+    shared.mix_meter.store(&ab_meters.mix.snapshot());
 
     shared.playhead.store(new_playhead, Ordering::Relaxed);
     } // 'arrangement

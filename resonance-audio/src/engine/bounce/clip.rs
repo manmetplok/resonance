@@ -3,6 +3,10 @@
 //! Excludes master FX and master volume because the bounced clip will
 //! play back through master on the next playback (which would otherwise
 //! double those processors).
+//!
+//! Reference A/B is excluded too: the render goes through `render_chunk`,
+//! which never reads `shared.reference`, so a bounce captures the mix
+//! regardless of the live A/B monitor selection.
 
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;

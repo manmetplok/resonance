@@ -26,6 +26,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::MidiEditor(_)
         | Message::Plugin(_)
         | Message::Viewport(_)
+        | Message::Reference(_)
         | Message::GlobalTrack(_) => true,
         // Tab switches / auxiliary overlays: block so they can't
         // steal focus from the startup modal.
@@ -46,6 +47,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::ConfirmDiscardAndQuit)
         | Message::Ui(UiMessage::CancelQuit)
         | Message::Ui(UiMessage::ToggleGlobalTracks)
+        | Message::Ui(UiMessage::ToggleReferencePanel)
         | Message::Ui(UiMessage::ToggleMixerInspectorGroup(_))
         | Message::Ui(UiMessage::ToggleMidiClockSend)
         | Message::Ui(UiMessage::SetMidiClockSendDevice(_))
@@ -86,6 +88,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::MidiEditor(_)
         | Message::Plugin(_)
         | Message::Viewport(_)
+        | Message::Reference(_)
         | Message::GlobalTrack(_)
         | Message::Ui(_)
         | Message::Undo

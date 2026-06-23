@@ -43,7 +43,9 @@ pub use types::*;
 #[doc(hidden)]
 pub mod __test_support {
     pub use crate::clap_host::{ClapBundle, SyncClapInstance};
-    pub use crate::engine::{midi_render_range, to_audio_clip, try_lock_with_backoff, SharedState};
+    pub use crate::engine::{
+        midi_render_range, to_audio_clip, to_wav, try_lock_with_backoff, SharedState,
+    };
     pub use crate::latency::{chain_latencies, compensation_delays, LatencyComp};
     pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;
@@ -89,6 +91,20 @@ pub use engine::midi::{move_midi_clip_in_place, trim_midi_clip_in_place};
 #[doc(hidden)]
 pub use engine::{
     set_clip_fade_in_place, set_clip_gain_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
+};
+
+/// Test surface for the reference-track (A/B) command handlers. Exposed
+/// so `tests/reference_handlers.rs` can drive each command's mutation +
+/// event emission against a bare `ReferencePlayer` without spinning up
+/// the engine thread.
+#[doc(hidden)]
+pub use engine::reference::{
+    handle_add_ref_marker, handle_load_reference_track, handle_poll_ab_meters,
+    handle_reference_analyzed, handle_remove_ref_marker, handle_remove_reference_track,
+    handle_set_ab_source, handle_set_active_reference, handle_set_ref_loop_to_mix,
+    handle_set_ref_loudness_match, handle_set_ref_position, handle_set_ref_trim, register_reference,
+    run_reference_analysis, ABMeterTap, ABMeters, ReferenceMonitor, ReferencePlayer,
+    REFERENCE_OVERVIEW_PEAKS,
 };
 
 /// Test surface for the audio import-to-pool path. Exposed so the

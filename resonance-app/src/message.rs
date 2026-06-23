@@ -6,6 +6,7 @@
 use crate::compose::ComposeMessage;
 use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
+use crate::reference::ReferenceMessage;
 use crate::state::{ClipEdge, LoopDragTarget, MixerInspectorGroup, SelectedGlobalEvent, ViewMode};
 use resonance_audio::types::{
     BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
@@ -25,6 +26,7 @@ pub enum Message {
     Plugin(PluginMessage),
     Viewport(ViewportMessage),
     ProjectIo(ProjectIoMessage),
+    Reference(ReferenceMessage),
     Ui(UiMessage),
     /// Timer tick driving VU meters and auto-follow. Kept at top level to
     /// avoid wrapping cost on the hot path.
@@ -366,6 +368,8 @@ pub enum UiMessage {
     CloseSettings,
     OpenAddTrackMenu,
     CloseAddTrackMenu,
+    /// Show / hide the Reference & A/B right-rail in the Mix view.
+    ToggleReferencePanel,
     DismissError,
     /// User clicked "New Project" in the startup modal.
     StartNewProject,

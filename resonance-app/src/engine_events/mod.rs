@@ -13,6 +13,7 @@ pub mod performance;
 mod plugins;
 mod presets;
 mod project_io;
+mod reference;
 mod tracks;
 mod transport;
 

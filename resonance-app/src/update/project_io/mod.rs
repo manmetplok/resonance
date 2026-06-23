@@ -19,6 +19,7 @@ use crate::Resonance;
 
 pub use dialogs::save_project_as_dialog;
 pub use replay::replay_loaded_project;
+pub(crate) use replay::restore_references;
 pub use replay_diff::try_diff_replay;
 pub use serialize::build_project_file;
 

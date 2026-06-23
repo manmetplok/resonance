@@ -1,11 +1,13 @@
 //! Engine → GUI event enum.
 use resonance_common::AudioFormat;
+use resonance_metering::MeterSnapshot;
 
 use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
-    AssetId, BusId, ClipId, FadeCurve, InputDeviceInfo, MidiNote, ParamInfo, PluginInstanceId,
-    SamplePos, ScannedPlugin, SendId, SendSource, TrackId,
+    ABSource, AssetId, BusId, ClipId, FadeCurve, InputDeviceInfo, MidiNote, ParamInfo,
+    PluginInstanceId, ReferenceAnalysisStage, ReferenceId, SamplePos, ScannedPlugin, SendId,
+    SendSource, TrackId,
 };
 
 /// Lifecycle stage of a single file in an `ImportAudioToPool` batch.
@@ -386,6 +388,84 @@ pub enum AudioEvent {
         master_peak_r: f32,
     },
 
+    // -- Reference track (A/B) events --
+    /// Progress of the offline analysis a freshly-loaded reference goes
+    /// through. Emitted in stage order before the final
+    /// `ReferenceLoaded`.
+    ReferenceAnalysisProgress {
+        id: ReferenceId,
+        stage: ReferenceAnalysisStage,
+    },
+    /// A reference track finished loading and analysing. `path` is the
+    /// source file it was loaded from; `integrated_lufs` is its measured
+    /// loudness (used for loudness matching); `waveform_peaks` is the
+    /// downsampled overview (min, max) per chunk of frames;
+    /// `length_samples` is the reference's total length in frames, so the
+    /// panel can map its playback cursor / markers onto the overview.
+    ReferenceLoaded {
+        id: ReferenceId,
+        name: String,
+        path: String,
+        integrated_lufs: f32,
+        waveform_peaks: Vec<(f32, f32)>,
+        length_samples: u64,
+    },
+    /// A reference track failed to load (decode error, missing file, …).
+    /// `reason` is user-facing.
+    ReferenceLoadFailed {
+        path: String,
+        reason: String,
+    },
+    /// A reference track was removed.
+    ReferenceRemoved {
+        id: ReferenceId,
+    },
+    /// The active reference selection changed.
+    ActiveReferenceChanged {
+        id: ReferenceId,
+    },
+    /// The monitored A/B source switched between mix and reference.
+    ABSourceChanged {
+        source: ABSource,
+    },
+    /// Loudness-match toggled. `offset_db` is the gain offset the engine
+    /// applies to the active reference when `enabled` is true.
+    RefLoudnessMatchChanged {
+        enabled: bool,
+        offset_db: f32,
+    },
+    /// The reference's manual level trim changed (dB).
+    RefTrimChanged {
+        db: f32,
+    },
+    /// A comparison marker was added to a reference. `marker_id` is the
+    /// engine-allocated id.
+    RefMarkerAdded {
+        ref_id: ReferenceId,
+        marker_id: u32,
+        position_samples: SamplePos,
+        label: String,
+    },
+    /// A comparison marker was removed from a reference.
+    RefMarkerRemoved {
+        ref_id: ReferenceId,
+        marker_id: u32,
+    },
+    /// A reference's own playback cursor moved.
+    RefPositionChanged {
+        ref_id: ReferenceId,
+        position_samples: SamplePos,
+    },
+    /// The reference loop-to-mix follow mode toggled.
+    RefLoopToMixChanged {
+        enabled: bool,
+    },
+    /// A/B meter snapshot in response to `AudioCommand::PollABMeters`.
+    /// `reference` is `None` when no reference is active.
+    ABMeterSnapshot {
+        mix: MeterSnapshot,
+        reference: Option<MeterSnapshot>,
+    },
     // -- Audition preview (doc #175) --
     /// Throttled (control-rate, ~60 Hz) audition playhead position in source
     /// frames, so the GUI can draw a scrub playhead over the preview. Only

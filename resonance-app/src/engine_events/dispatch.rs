@@ -10,7 +10,7 @@ use resonance_audio::types::*;
 use crate::message::*;
 use crate::Resonance;
 
-use super::{aux_sends, clips, midi, plugins, project_io, tracks, transport};
+use super::{aux_sends, clips, midi, plugins, project_io, reference, tracks, transport};
 
 pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
     use AudioEvent as E;
@@ -321,6 +321,42 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             return project_io::all_plugin_states_saved(r, states)
         }
         E::AllCleared => project_io::all_cleared(r),
+
+        // Reference-track (A/B) events fold into `Resonance::reference`.
+        E::ReferenceAnalysisProgress { id, stage } => reference::analysis_progress(r, id, stage),
+        E::ReferenceLoaded {
+            id,
+            name,
+            path,
+            integrated_lufs,
+            waveform_peaks,
+            length_samples,
+        } => reference::loaded(r, id, name, path, integrated_lufs, waveform_peaks, length_samples),
+        E::ReferenceLoadFailed { path, reason } => reference::load_failed(r, path, reason),
+        E::ReferenceRemoved { id } => reference::removed(r, id),
+        E::ActiveReferenceChanged { id } => reference::active_changed(r, id),
+        E::ABSourceChanged { source } => reference::ab_source_changed(r, source),
+        E::RefLoudnessMatchChanged { enabled, offset_db } => {
+            reference::loudness_match_changed(r, enabled, offset_db)
+        }
+        E::RefTrimChanged { db } => reference::trim_changed(r, db),
+        E::RefMarkerAdded {
+            ref_id,
+            marker_id,
+            position_samples,
+            label,
+        } => reference::marker_added(r, ref_id, marker_id, position_samples, label),
+        E::RefMarkerRemoved { ref_id, marker_id } => {
+            reference::marker_removed(r, ref_id, marker_id)
+        }
+        E::RefPositionChanged {
+            ref_id,
+            position_samples,
+        } => reference::position_changed(r, ref_id, position_samples),
+        E::RefLoopToMixChanged { enabled } => reference::loop_to_mix_changed(r, enabled),
+        E::ABMeterSnapshot { mix, reference: ref_meter } => {
+            reference::ab_meter_snapshot(r, mix, ref_meter)
+        }
     }
     Task::none()
 }

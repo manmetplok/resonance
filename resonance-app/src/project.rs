@@ -111,6 +111,17 @@ pub struct ProjectFile {
     /// builds a single-pattern bank from `drum_groups`).
     #[serde(default)]
     pub drum_patterns: Vec<crate::compose::DrumPattern>,
+    /// Loaded A/B reference tracks (external mastered tracks the user
+    /// auditions against the mix). Empty on legacy projects. These are
+    /// **monitor-only** — see [`ProjectReferenceSettings::monitor_only`] —
+    /// and never participate in any render or export.
+    #[serde(default)]
+    pub references: Vec<ProjectReference>,
+    /// Panel-level A/B settings (active selection, monitored source,
+    /// loudness-match / trim, loop-to-mix). Defaults to a neutral,
+    /// mix-monitoring state on legacy projects.
+    #[serde(default)]
+    pub reference_settings: ProjectReferenceSettings,
 }
 
 /// An empty project at the current format version with neutral
@@ -147,6 +158,88 @@ impl Default for ProjectFile {
             midi_clock_recv_device: None,
             drum_groups: Vec::new(),
             drum_patterns: Vec::new(),
+            references: Vec::new(),
+            reference_settings: ProjectReferenceSettings::default(),
+        }
+    }
+}
+
+/// One persisted A/B reference track. Holds only the durable, on-disk
+/// facts: the source path, its display name, the cached integrated
+/// loudness (so the loudness readout doesn't blank until the re-decode
+/// finishes), and the user's comparison markers. The decoded PCM and
+/// waveform overview are intentionally **not** persisted — they are
+/// rebuilt by re-issuing `LoadReferenceTrack` on load.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectReference {
+    /// Absolute path to the source audio file.
+    pub path: String,
+    /// Display name (file stem unless the engine supplied one).
+    pub name: String,
+    /// Cached integrated loudness (LUFS) measured during analysis, so the
+    /// readout shows a value before the re-decode completes. May be
+    /// `-inf` if the original analysis never finished.
+    pub integrated_lufs: f32,
+    /// User-placed comparison markers, in the order they were saved.
+    #[serde(default)]
+    pub markers: Vec<ProjectReferenceMarker>,
+}
+
+/// A persisted comparison marker on a reference track.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectReferenceMarker {
+    /// Per-reference marker id.
+    pub id: u32,
+    /// Position within the reference track, in sample frames.
+    pub position_samples: u64,
+    /// User-facing label.
+    pub label: String,
+}
+
+/// Persisted panel-level A/B settings. Mirrors the durable subset of
+/// `reference::ReferenceState`, addressing the active reference by its
+/// index into [`ProjectFile::references`] rather than by engine id (ids
+/// are reallocated on load).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectReferenceSettings {
+    /// Always `true`: a sentinel asserting (per design doc #198) that the
+    /// persisted reference block is monitor-only and must never reach a
+    /// render or export. Kept on disk as self-documenting provenance.
+    #[serde(default = "default_true")]
+    pub monitor_only: bool,
+    /// Index into [`ProjectFile::references`] of the active reference, or
+    /// `None` when nothing is selected.
+    #[serde(default)]
+    pub active: Option<usize>,
+    /// Whether the monitored source was the reference (else the mix).
+    /// Stored as a bool because the engine `ABSource` type deliberately
+    /// carries no serde derive.
+    #[serde(default)]
+    pub ab_source_is_reference: bool,
+    /// Whether the active reference is loudness-matched to the mix.
+    #[serde(default)]
+    pub loudness_match: bool,
+    /// Manual level trim (dB) on top of any loudness match.
+    #[serde(default)]
+    pub trim_db: f32,
+    /// Whether the reference cursor follows the mix transport.
+    #[serde(default)]
+    pub loop_to_mix: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for ProjectReferenceSettings {
+    fn default() -> Self {
+        Self {
+            monitor_only: true,
+            active: None,
+            ab_source_is_reference: false,
+            loudness_match: false,
+            trim_db: 0.0,
+            loop_to_mix: false,
         }
     }
 }

@@ -3,6 +3,8 @@ pub mod audio_probe;
 pub mod automation;
 mod denormal;
 pub mod drum_map;
+pub mod group_identity;
+pub mod track_group;
 pub mod midi_map;
 pub mod registry;
 mod scan;
@@ -23,6 +25,8 @@ pub use audio_probe::{
     AudioInfo, WaveformThumbnail,
 };
 pub use denormal::flush_denormals;
+pub use group_identity::{GroupColor, GroupIdentityColor};
+pub use track_group::{GroupId, TrackGroup};
 pub use scan::scan_directory;
 pub use wav::{
     decode_file, decode_wav_channels, decode_wav_stereo, linear_resample_mono,

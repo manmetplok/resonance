@@ -2,6 +2,10 @@
 //!
 //! Includes master FX + master volume + hard-clip so the file plays
 //! back identically outside the app.
+//!
+//! Reference A/B is excluded: this offline render drives `render_chunk`,
+//! which never reads `shared.reference`, so the exported file is always
+//! the processed mix regardless of the live A/B selection.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -18,8 +22,12 @@ use super::render::{
     build_latency_comp, render_chunk, reset_plugins, ChunkCtx, ChunkScratch, BOUNCE_CHUNK,
 };
 
+/// Public so integration tests can drive the WAV renderer directly
+/// (e.g. the reference-A/B export-exclusion test) without going through
+/// the full engine command path; production callers route through
+/// [`AudioCommand::BounceToWav`] via [`super::to_wav_spawn`].
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn to_wav(
+pub fn to_wav(
     path: String,
     shared: &Arc<SharedState>,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,

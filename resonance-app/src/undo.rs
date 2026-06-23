@@ -32,6 +32,11 @@ pub struct UndoExtras {
     /// a session the undo system snapshots them separately because
     /// the project-file form of a clip isn't rebuilt on each edit.
     pub vocal_clip_lyrics: HashMap<ClipId, Vec<String>>,
+    /// Reference-track (A/B) content. References aren't part of the
+    /// `ProjectFile` yet, so `replay_loaded_project` can't rebuild them;
+    /// the undoable subset is snapshotted here and reapplied after the
+    /// replay (both the fast diff path and the full-clear path).
+    pub reference: crate::reference::ReferenceUndo,
 }
 
 /// One point in the undo/redo history. Wraps the `LoadedProject` shape
@@ -62,6 +67,8 @@ pub enum CoalesceKey {
     BusPan(u64),
     MasterVolume,
     PluginParam { instance_id: u64, param_id: u32 },
+    /// The reference-track manual trim fader.
+    ReferenceTrim,
 }
 
 /// Bounded undo / redo stack with a pending-transaction slot for
@@ -236,6 +243,7 @@ impl crate::Resonance {
             compose_derived_clips: self.compose.derived_clips.clone(),
             compose_next_derived_clip_id: self.compose.next_derived_clip_id,
             vocal_clip_lyrics: self.compose.vocal_audio.clip_lyrics.clone(),
+            reference: self.reference.undo_snapshot(),
         };
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
@@ -342,6 +350,7 @@ impl crate::Resonance {
         self.compose.derived_clips = extras.compose_derived_clips;
         self.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
         self.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics;
+        self.reference.restore_undo(extras.reference);
     }
 
     /// Attempt to undo. No-ops (returning false) if the history is empty
@@ -451,6 +460,7 @@ pub enum UndoAction {
 pub fn classify(message: &crate::message::Message) -> UndoAction {
     use crate::compose::ComposeMessage;
     use crate::message::*;
+    use crate::reference::ReferenceMessage;
 
     match message {
         // Meta-messages never reach the classifier — update() handles
@@ -605,6 +615,37 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
 
             // Everything else in Compose mutates project state.
             _ => UndoAction::Record,
+        },
+
+        // Reference-track (A/B). Only the content-changing actions named
+        // in the design (load / remove / set-active / loudness-match /
+        // trim) are reversible; the trim drag coalesces. The monitoring
+        // toggles, markers, scrub, and error dismissal are transient.
+        Message::Reference(rm) => match rm {
+            ReferenceMessage::LoadRequested(_)
+            // A picked file ends in the same load path as a drag-drop, so
+            // a successful pick is just as reversible; a cancelled pick
+            // (`None`) changes nothing.
+            | ReferenceMessage::FilePicked(Some(_))
+            | ReferenceMessage::Remove(_)
+            | ReferenceMessage::SetActive(_)
+            | ReferenceMessage::ToggleLoudnessMatch => UndoAction::Record,
+            ReferenceMessage::TrimChanged(_) => {
+                UndoAction::RecordCoalesced(CoalesceKey::ReferenceTrim)
+            }
+            // Opening the picker and a cancelled pick are pure UI / no-ops;
+            // the monitoring toggles, markers, scrub, and error dismissal
+            // are transient.
+            ReferenceMessage::PickFile
+            | ReferenceMessage::FilePicked(None)
+            | ReferenceMessage::ToggleAbSource
+            | ReferenceMessage::SetAbSource(_)
+            | ReferenceMessage::MomentaryAudition(_)
+            | ReferenceMessage::AddMarker { .. }
+            | ReferenceMessage::RemoveMarker { .. }
+            | ReferenceMessage::Scrub { .. }
+            | ReferenceMessage::ToggleLoopToMix
+            | ReferenceMessage::DismissError => UndoAction::Skip,
         },
     }
 }
