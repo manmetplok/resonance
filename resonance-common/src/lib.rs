@@ -3,6 +3,7 @@ pub mod audio_probe;
 pub mod automation;
 mod denormal;
 pub mod device_definition;
+pub mod device_registry;
 pub mod external_instrument;
 pub mod drum_map;
 pub mod group_identity;
@@ -25,6 +26,9 @@ pub use automation::{
 pub use device_definition::{
     binding_value_to_lane, lane_value_to_binding_value, DeviceDefinition, DeviceDefinitionError,
     DeviceParam, ParamCurve, PatchEntry, SCHEMA_VERSION,
+};
+pub use device_registry::{
+    user_definitions_dir, DeviceDefinitionRegistry, DeviceScanError, DEVICE_DEFINITION_EXT,
 };
 pub use external_instrument::ExternalInstrument;
 pub use midi_map::{
