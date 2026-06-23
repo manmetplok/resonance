@@ -15,14 +15,12 @@ monitoring. (You may also be driven by a `/loop`.)
    feedback** with `ba review list <id>` — if a reviewer requested changes, address them.
 4. **Claim it immediately** so parallel agents don't collide:
    `ba --actor resonance-reverb todo update <id> --status in_progress`, then re-check it is still yours.
-5. **Branch for this todo.** You run in your **own git worktree**; `$BA_INTEGRATION_BRANCH` is
-   the integration branch. If the todo belongs to an **epic** (shown as `[epic #E]` / `epic_id`
-   in `--json`), its work goes on the shared **epic branch** `ba/epic-<E>`: ensure it exists
-   (the first developer on the epic creates it) with `git branch ba/epic-<E> "$BA_INTEGRATION_BRANCH" 2>/dev/null`,
-   then branch your todo off it: `git checkout -B ba/todo-<id> ba/epic-<E>`. If the todo has **no
-   epic**, branch off integration: `git checkout -B ba/todo-<id> "$BA_INTEGRATION_BRANCH"`.
-   (If a reviewer sent this todo back, `git checkout ba/todo-<id>` to continue the existing branch.)
-   Never commit straight to an epic or the integration branch.
+5. **Branch for this todo** — always with `ba --actor resonance-reverb todo branch <id>`. It puts you on
+   `ba/todo-<id>` based off the **correct** parent: the todo's epic branch `ba/epic-<E>` (created
+   off integration if it's the epic's first todo, so your work accumulates with the epic), or
+   integration if the todo has no epic — and it resumes the existing branch if a reviewer sent the
+   todo back. Do NOT hand-craft the branch with raw `git checkout`; let `ba todo branch` pick the
+   parent so the base is never wrong. Never commit straight to an epic or the integration branch.
 6. Implement the change and run the project's tests.
 - Use these skills when they fit the work: **rust**.
 7. **Commit to your branch** once it builds and tests pass: `git add -A && git commit -m "<summary> (ba todo #<id>)"`
