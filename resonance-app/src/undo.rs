@@ -475,6 +475,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         Message::Viewport(_) => UndoAction::Skip,
         Message::Ui(_) => UndoAction::Skip,
         Message::ProjectIo(_) => UndoAction::Skip,
+        Message::Export(_) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::SelectEvent(_)) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(_)) => UndoAction::Begin,
         Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag) => UndoAction::Commit,

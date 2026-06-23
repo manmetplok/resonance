@@ -325,6 +325,11 @@ impl RecordingState {
                 fade_out_curve: FadeCurve::default(),
                 gain_db: 0.0,
                 vocal_tuning: None,
+                warp_enabled: false,
+                original_bpm: None,
+                transpose_semitones: 0.0,
+                warp_algorithm: Default::default(),
+                warp_markers: Vec::new(),
             };
             {
                 let mut guard = clips.write();
@@ -442,6 +447,11 @@ impl RecordingState {
                 fade_out_curve: FadeCurve::default(),
                 gain_db: 0.0,
                 vocal_tuning: None,
+                warp_enabled: false,
+                original_bpm: None,
+                transpose_semitones: 0.0,
+                warp_algorithm: Default::default(),
+                warp_markers: Vec::new(),
             };
             clips.write().push(clip);
             rolled.push(RolledAudioTake {

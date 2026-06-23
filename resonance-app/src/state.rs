@@ -15,6 +15,7 @@ pub mod plugin_index;
 // Data types, grouped by domain.
 pub mod aux_sends;
 pub mod clips;
+pub mod export;
 pub mod global;
 pub mod interaction;
 pub mod mixer;
@@ -25,6 +26,7 @@ pub mod viewport;
 
 pub use aux_sends::*;
 pub use clips::*;
+pub use export::*;
 pub use global::*;
 pub use interaction::*;
 pub use mixer::*;

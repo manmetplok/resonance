@@ -30,10 +30,15 @@ use super::SharedState;
 
 mod clip;
 mod render;
+mod stem;
+mod stem_export;
 mod wav;
 
 pub use clip::to_audio_clip;
 pub use render::try_lock_with_backoff;
+pub use stem::{render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter};
+pub use stem_export::export_stems;
+pub(crate) use stem_export::export_stems_spawn;
 pub use wav::to_wav;
 
 /// Spawn the bounce on a dedicated worker thread so the engine

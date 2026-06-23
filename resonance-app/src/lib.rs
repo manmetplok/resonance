@@ -136,6 +136,10 @@ pub struct Resonance {
     /// `TrackBounceCompleted`, `TrackBounceError`, or
     /// `TrackBounceCancelled`.
     pub(crate) bounce_in_progress: Option<crate::state::BounceProgressState>,
+    /// When set, the Export modal is open. Holds the shared shell state
+    /// (mode tab, source selection, range, format, destination) - see
+    /// `state::ExportDialogState` and `view::export_dialog`.
+    pub(crate) export_dialog: Option<crate::state::ExportDialogState>,
     /// True when the project has been modified since the last save.
     pub(crate) dirty: bool,
     /// When set, the "unsaved changes" quit-confirmation dialog is shown.
@@ -444,6 +448,7 @@ impl Resonance {
             confirm_delete_track: None,
             bounce_dialog: None,
             bounce_in_progress: None,
+            export_dialog: None,
             dirty: false,
             confirm_quit: None,
             quit_after_save: None,

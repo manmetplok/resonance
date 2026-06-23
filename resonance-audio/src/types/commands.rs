@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use super::{
     ABSource, BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, ReferenceId, SamplePos, SendId,
-    SendSource,
-    SignaturePoint, TempoPoint, TrackId, TrackOutput,
+    SendSource, SignaturePoint, StemBitDepth, StemTarget, TempoPoint, TrackId, TrackOutput,
 };
 
 /// Commands sent from the GUI to the audio engine.
@@ -246,6 +245,37 @@ pub enum AudioCommand {
     /// realtime path. In both cases the freshly-added target track is
     /// removed and a `TrackBounceCancelled` event is emitted.
     CancelBounce,
+    /// Offline "export stems": render several mix slices (one track, one
+    /// bus, or the whole master) to separate WAV files. Every target is
+    /// rendered over ONE shared range so the stems share a zero origin
+    /// and re-import sample-aligned. Targets are rendered sequentially on
+    /// a worker thread (like [`AudioCommand::BounceToWav`]); the engine
+    /// emits `StemExportProgress` / `StemExportTargetDone` per target,
+    /// `StemExportTargetError` for a target that fails to render or write
+    /// (already-written stems are kept and the queue continues), and a
+    /// final `StemExportComplete` listing the files actually written.
+    ExportStems {
+        /// The mix slices to render and where to write each one.
+        targets: Vec<StemTarget>,
+        /// Shared render window in engine samples. `None` renders the
+        /// full project range (every audio + MIDI clip), matching the
+        /// project bounce.
+        range: Option<(SamplePos, SamplePos)>,
+        /// Output WAV sample rate. The engine renders at its native rate
+        /// and resamples on write only when this differs.
+        sample_rate: u32,
+        /// Output WAV bit depth / encoding.
+        bit_depth: StemBitDepth,
+        /// Render a tail past the end of the range so reverb / delay
+        /// tails decay into the stem instead of being cut off.
+        include_fx_tail: bool,
+    },
+    /// Cancel an in-flight stem export between targets. The worker polls
+    /// a shared atomic and stops before the next target; stems already
+    /// written stay on disk and a `StemExportCancelled` event reports
+    /// them. Shares the bounce cancel flag, so it also aborts an offline
+    /// bounce in progress (the two never overlap in practice).
+    CancelStemExport,
     /// Set the current project directory. Recorded and imported
     /// clips are written into `{project_dir}/audio/` as WAV files,
     /// and recording refuses to start if no project directory has

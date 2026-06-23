@@ -624,6 +624,36 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
                 .bounce_cancel
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
+        AudioCommand::ExportStems {
+            targets,
+            range,
+            sample_rate,
+            bit_depth,
+            include_fx_tail,
+        } => bounce::export_stems_spawn(
+            targets,
+            range,
+            sample_rate,
+            bit_depth,
+            include_fx_tail,
+            Arc::clone(ctx.shared),
+            Arc::clone(ctx.tracks),
+            Arc::clone(ctx.busses),
+            Arc::clone(ctx.master),
+            Arc::clone(ctx.clips),
+            Arc::clone(ctx.midi_clips),
+            Arc::clone(ctx.plugins),
+            Arc::clone(ctx.tempo_map),
+            ctx.sample_rate,
+            ctx.event_tx.clone(),
+        ),
+        AudioCommand::CancelStemExport => {
+            // Shares the cooperative cancel flag with the bounce paths;
+            // the stem-export worker polls it between targets.
+            ctx.shared
+                .bounce_cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
 
         // -- Instrument tracks + MIDI --
         AudioCommand::AddInstrumentTrack { id_hint, name } => {

@@ -8,6 +8,7 @@ pub const TICK_INTERVAL_MS: u64 = 16;
 pub mod bus;
 pub mod clips;
 pub mod compose;
+pub mod export;
 pub mod gates;
 pub mod global_track;
 pub mod master;
@@ -86,6 +87,7 @@ impl crate::Resonance {
             Message::Viewport(m) => viewport::handle(self, m),
             Message::ProjectIo(m) => project_io::handle(self, m),
             Message::Reference(m) => reference::handle(self, m),
+            Message::Export(m) => export::handle(self, m),
             Message::Ui(m) => ui::handle(self, m),
             Message::Tick => tick::handle_tick(self),
             Message::WindowCloseRequested(id) => {

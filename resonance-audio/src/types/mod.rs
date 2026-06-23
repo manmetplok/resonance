@@ -52,6 +52,7 @@ mod clip;
 mod commands;
 mod events;
 mod reference;
+mod stem;
 mod tempo;
 mod track;
 mod vocal_tuning;
@@ -59,12 +60,13 @@ mod vocal_tuning;
 pub use aux_send::{aux_send_would_cycle, AuxSend, SendSource};
 pub use clip::{
     compute_waveform_peaks, AudioClip, ClipSource, FadeCurve, MidiClip, MidiNote,
-    PendingNoteEvent, WAVEFORM_PEAK_FRAMES,
+    PendingNoteEvent, WarpAlgorithm, WarpMarker, WAVEFORM_PEAK_FRAMES,
 };
 pub use vocal_tuning::{F0Frame, GlobalTuning, NoteBlob, NoteEdit, TuningScale, VocalTuning};
 pub use commands::AudioCommand;
 pub use events::{AudioEvent, BouncedClipData, ImportStage};
 pub use reference::{ABSource, ReferenceAnalysisStage, ReferenceId, ReferenceMarker};
+pub use stem::{StemBitDepth, StemSource, StemTarget};
 pub use tempo::{
     arrival_bpm_at_bar, avg_bpm_for_bar, bpm_at_bar, sample_frac_to_tick_frac,
     tick_frac_to_sample_frac, InputDeviceInfo, ParamInfo, PluginDescInfo, ScannedPlugin,

@@ -39,6 +39,11 @@ fn dc_clip(
         fade_out_curve,
         gain_db,
         vocal_tuning: None,
+        warp_enabled: false,
+        original_bpm: None,
+        transpose_semitones: 0.0,
+        warp_algorithm: Default::default(),
+        warp_markers: Vec::new(),
     }
 }
 

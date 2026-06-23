@@ -33,6 +33,15 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::BounceProgress { fraction } => {
             transport::bounce_progress(r, fraction)
         }
+        // Stem-export plumbing (ba todo #325): the engine emits this
+        // multi-target queue; wiring it into the export modal's progress
+        // UI is a follow-up todo, so consume the events here for now.
+        E::StemExportError(_)
+        | E::StemExportProgress { .. }
+        | E::StemExportTargetDone { .. }
+        | E::StemExportTargetError { .. }
+        | E::StemExportComplete { .. }
+        | E::StemExportCancelled { .. } => {}
         E::MidiInputDevicesListed { devices } => transport::midi_input_devices(r, devices),
         E::MidiOutputDevicesListed { devices } => transport::midi_output_devices(r, devices),
         E::MidiClockStarted => transport::midi_clock_started(r),
