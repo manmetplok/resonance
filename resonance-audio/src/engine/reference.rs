@@ -562,6 +562,8 @@ pub fn run_reference_analysis(
     });
 
     let pcm = Arc::new(pcm);
+    // `pcm` is stereo-interleaved, so the frame count is half its length.
+    let length_samples = (pcm.len() / 2) as u64;
     emit_cmd(AudioCommand::ReferenceAnalyzed {
         id,
         pcm: Arc::clone(&pcm),
@@ -573,6 +575,7 @@ pub fn run_reference_analysis(
         path: path_str,
         integrated_lufs,
         waveform_peaks,
+        length_samples,
     });
 }
 

@@ -112,6 +112,7 @@ fn analysis_emits_staged_progress_then_loaded() {
             path: ev_path,
             integrated_lufs,
             waveform_peaks,
+            length_samples,
         } => {
             assert_eq!(*id, ReferenceId(3));
             assert_eq!(name, "ref");
@@ -123,6 +124,8 @@ fn analysis_emits_staged_progress_then_loaded() {
             );
             assert!(!waveform_peaks.is_empty());
             assert!(waveform_peaks.len() <= REFERENCE_OVERVIEW_PEAKS);
+            // The reported length is the decoded frame count (non-empty file).
+            assert!(*length_samples > 0, "reference length should be non-zero");
         }
         other => panic!("expected ReferenceLoaded last, got {other:?}"),
     }

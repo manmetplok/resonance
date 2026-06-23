@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use resonance_audio::types::ReferenceId;
+use resonance_audio::types::{ABSource, ReferenceId};
 
 #[derive(Debug, Clone)]
 pub enum ReferenceMessage {
@@ -23,6 +23,9 @@ pub enum ReferenceMessage {
     SetActive(ReferenceId),
     /// Flip the monitored source between the mix and the active reference.
     ToggleAbSource,
+    /// Set the monitored source directly — used by the two-segment A/B
+    /// control where pressing a segment selects it (rather than toggling).
+    SetAbSource(ABSource),
     /// Press-and-hold audition. `true` switches to the reference and
     /// remembers the prior source; `false` restores it.
     MomentaryAudition(bool),

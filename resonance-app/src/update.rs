@@ -173,10 +173,46 @@ impl crate::Resonance {
         // mode changes.
         if matches!(self.view_mode, crate::state::ViewMode::Mixer) {
             subs.push(reference_file_drop());
+
+            // Momentary A/B audition: while the reference rail is open with
+            // a reference selected, holding `B` monitors the reference and
+            // releasing it returns to the prior source. Gated on those
+            // conditions (and attached only here) so the key never hijacks
+            // typing elsewhere; iced re-diffs subscriptions as state changes.
+            if self.mixer.reference_panel_open && self.reference.active_id.is_some() {
+                subs.push(reference_momentary_keys());
+            }
         }
 
         Subscription::batch(subs)
     }
+}
+
+/// The held key that momentarily auditions the active reference (press →
+/// monitor reference, release → restore the prior source).
+const MOMENTARY_AUDITION_KEY: &str = "b";
+
+/// Press-and-hold reference audition on [`MOMENTARY_AUDITION_KEY`]. Emits
+/// `MomentaryAudition(true)` on key-down and `(false)` on key-up; key-repeat
+/// down events are idempotent (the handler guards the restore target). Only
+/// attached while the reference rail is open with a reference selected, so it
+/// can't steal the key from other surfaces.
+fn reference_momentary_keys() -> Subscription<Message> {
+    use crate::reference::ReferenceMessage;
+
+    fn is_momentary_key(key: &keyboard::Key) -> bool {
+        matches!(key, keyboard::Key::Character(c) if c.as_str().eq_ignore_ascii_case(MOMENTARY_AUDITION_KEY))
+    }
+
+    keyboard::listen().filter_map(|event| match event {
+        keyboard::Event::KeyPressed { ref key, .. } if is_momentary_key(key) => {
+            Some(Message::Reference(ReferenceMessage::MomentaryAudition(true)))
+        }
+        keyboard::Event::KeyReleased { ref key, .. } if is_momentary_key(key) => {
+            Some(Message::Reference(ReferenceMessage::MomentaryAudition(false)))
+        }
+        _ => None,
+    })
 }
 
 /// Listen for window file-drop events and forward any dropped file whose

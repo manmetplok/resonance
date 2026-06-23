@@ -36,6 +36,7 @@ fn fold_loaded(app: &mut Resonance, id: u32, name: &str, path: &str, lufs: f32) 
         path: path.to_string(),
         integrated_lufs: lufs,
         waveform_peaks: vec![(-0.5, 0.5)],
+        length_samples: 480_000,
     });
 }
 
