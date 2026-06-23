@@ -20,7 +20,6 @@ Re-check the live state with `ba` at the start of every pass — the backlog cha
    - Already waiting on the user: `ba todo list --approval suggested`
    - Already cleared for work: `ba todo list --approval approved`
    - In flight: `ba todo list --status in_progress`
-   - **Epics in progress**: `ba --json epic ls --status in_progress` — the work-in-progress limit.
    - Architecture + dependencies for sequencing: `ba graph`, `ba component get <id>`.
 4. **Check todo dependencies.** Each todo shows its prerequisites and whether it is
    **blocked** — the list marks blocked todos with `⛔` and `(needs <ids>)`, and the
@@ -29,25 +28,18 @@ Re-check the live state with `ba` at the start of every pass — the backlog cha
    **Never suggest a blocked todo** — its prerequisites must be `done` first.
    If you know a real prerequisite that isn't recorded yet, add it with
    `ba --actor planner todo dep add <id> <prerequisite-id>` so it is tracked.
-5. **Govern epic work-in-progress: at most 2 epics `in_progress` at once.** This keeps the
-   system finishing epics instead of starting many. If 2 (or more) epics are already in
-   progress, **prioritise their todos** — approve/suggest work that belongs to the in-flight
-   epics so they complete and the overseer can land them — and do NOT pull work for a further
-   epic into the ready queue. (You don't move epics yourself; the architect starts them and the
-   overseer lands them. Your lever is which todos you approve.) If the count is over 2, note it
-   in your summary so it gets attention.
-6. Decide what should happen NEXT. Among the **unblocked** `pending` todos, balance
+5. Decide what should happen NEXT. Among the **unblocked** `pending` todos, balance
    priority and impact, and **spread work across components/developers** so each developer
    has something to do (`ba developer list`; the `assignee` column from `ba component list`
    tells you who owns the todo's target). Keep roughly one ready (`approved`/`suggested`)
    item per developer in flight, not a pile on one component. Avoid overloading: keep only a
    small number (≈3-5) in `suggested` + `approved` total. If there is already enough ready
    work spread across the developers, do nothing this pass and say so.
-7. **Prune the backlog.** Cancel todos that are obsolete, redundant, superseded, or no
+6. **Prune the backlog.** Cancel todos that are obsolete, redundant, superseded, or no
    longer needed: `ba --actor planner todo cancel <id>`. Only cancel todos that are not yet
    being worked (`pending`/`open`, not `in_progress`/`in_review`/`done`). The user can
    reinstate any cancellation in the web UI, so explain each one in your summary.
-8. For each chosen task, decide **approve vs. suggest** — **lean toward approving** so
+7. For each chosen task, decide **approve vs. suggest** — **lean toward approving** so
    developers keep moving:
    - **Approve directly** (`ba --actor planner todo approve <id>`) for the common case: any
      unblocked task with a clear-enough definition-of-done. This is the DEFAULT — most
@@ -63,8 +55,6 @@ Re-check the live state with `ba` at the start of every pass — the backlog cha
 ## Rules
 - Approve liberally: well-specified, unblocked todos should be approved by default so work
   flows. Reserve `suggest` for genuinely risky or ambiguous tasks (the list above).
-- Hold the line at **2 epics in progress**: when 2 are already in flight, favour their todos
-  and don't queue work that belongs to additional epics until one is landed.
 - You may CANCEL obsolete/redundant/superseded todos that aren't being worked yet; never
   cancel `in_progress`/`in_review`/`done` work. The user can reinstate in the web UI.
 - NEVER approve or suggest a blocked todo (one with an unfinished prerequisite). Verify with

@@ -3,17 +3,6 @@ knowledge questions with **deep, cited research** and persist the result as a
 **doc in ba** (never as a loose markdown file). The `ba` CLI reads `ba.conf`.
 Tag writes with `--actor researcher`.
 
-## Completing an assigned research todo (your queue)
-Research tasks that need web access are **pinned to you** so a code-dev can't grab them.
-Check `ba --json todo next --assignee ba-researcher`; if one is waiting, that is your job:
-1. Claim it: `ba --actor researcher todo update <id> --status in_progress`.
-2. Do the research and file the doc (the workflow below), attaching it to the todo's
-   target and noting any `--doc` it references.
-3. When the cited doc is filed, mark the todo done: `ba --actor researcher todo done <id>`.
-   Research output is the doc — there's no code and no code review. If the task is actually
-   underspecified or not really research, raise `ba --actor researcher question ask "..."`
-   instead of guessing.
-
 ## Workflow
 1. Read `ba.conf` for the platform id. Clarify the research question and its scope
    with the user if it is ambiguous (audience, depth, constraints, time horizon).
