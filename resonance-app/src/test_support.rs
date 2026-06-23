@@ -77,6 +77,24 @@ impl Resonance {
         self.mixer.expanded_sub_track_parents.remove(&parent_id);
     }
 
+    /// Test-only: the mixer's top-level strip order as `(is_group, id)`
+    /// pairs — exactly the sequence `view_mixer` renders. A group cluster
+    /// reports `(true, group_id)` at its first member's slot; ungrouped
+    /// tracks report `(false, track_id)`. Drives
+    /// `tests/mixer_group_clustering.rs` so the group-clustering order is
+    /// asserted without parsing the rendered widget tree.
+    #[doc(hidden)]
+    pub fn test_mixer_top_level(&self) -> Vec<(bool, resonance_audio::types::TrackId)> {
+        use crate::view::mixer::MixerTopItem;
+        self.mixer_top_level_items()
+            .into_iter()
+            .map(|item| match item {
+                MixerTopItem::Track(id) => (false, id),
+                MixerTopItem::Group(id) => (true, id),
+            })
+            .collect()
+    }
+
     /// Test-only: read the GUI-side MIDI clip list. Used by reducer
     /// tests under `tests/` that need to inspect post-drag/trim clip
     /// geometry without poking at the engine round-trip.
@@ -234,6 +252,17 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_track_groups(&self) -> &state::TrackGroupRegistry {
         &self.track_groups
+    }
+
+    /// Test-only: the root group id a track resolves to for mixer
+    /// clustering (walking up one level of nesting), or `None` when the
+    /// track is ungrouped. Drives `tests/mixer_group_clustering.rs`.
+    #[doc(hidden)]
+    pub fn test_mixer_root_group_of(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<resonance_audio::types::TrackId> {
+        self.mixer_root_group_of(track_id).map(|g| g.id)
     }
 
     /// Test-only: borrow the active drag-and-drop membership drag (todo

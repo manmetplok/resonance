@@ -325,6 +325,11 @@ pub const GROUP_MEMBER_INDENT: f32 = 14.0;
 /// Width of the coloured identity rail shown on group member track headers.
 /// See doc #200.
 pub const GROUP_RAIL_WIDTH: f32 = 3.0;
+/// Side length of the group identity swatch (the rounded colour square in a
+/// group header). Shared by the Arrange group-header row and the Mixer
+/// group-header strip so the identity cue is pixel-identical across both
+/// surfaces. See doc #200.
+pub const GROUP_SWATCH_SIZE: f32 = 14.0;
 /// Timeline ruler height.
 pub const RULER_HEIGHT: f32 = 28.0;
 /// Section band sitting under the ruler — the section-pill strip on the
@@ -363,6 +368,12 @@ pub const MIXER_SUB_STRIP_WIDTH: f32 = 92.0;
 /// reads a parent → child relationship even before reading the strip's
 /// dimmed name.
 pub const MIXER_SUB_STRIP_RAIL_WIDTH: f32 = 2.0;
+/// Width of a group-header strip on the Mixer — the coloured cluster's
+/// leading strip carrying the caret, identity swatch, name, count and the
+/// macro level / mute / solo controls. Slimmer than a full channel strip:
+/// it hosts controls, not a signal path. See the track-grouping design
+/// (doc #200) — "Mixer reflection".
+pub const MIXER_GROUP_HEADER_WIDTH: f32 = 116.0;
 /// Master strip width.
 pub const MASTER_STRIP_WIDTH: f32 = 156.0;
 /// Inspector column width on the Mixer.
@@ -406,6 +417,9 @@ pub const RADIUS_MD: f32 = 7.0;
 pub const RADIUS_LG: f32 = 8.0;
 /// Strip cards, drum grid panel.
 pub const RADIUS_XL: f32 = 12.0;
+/// Fully-rounded pill (count badges, status chips). A radius larger than
+/// any pill's half-height resolves to a stadium shape.
+pub const RADIUS_PILL: f32 = 999.0;
 
 pub fn resonance_theme() -> Theme {
     Theme::Dark
