@@ -38,6 +38,33 @@ pub(crate) fn handle_set_track_fx_bypass(ctx: &HandlerCtx, track_id: TrackId, by
         .send(AudioEvent::TrackFxBypassChanged { track_id, bypassed });
 }
 
+/// Attach or detach a track's decoded freeze-cache buffer.
+///
+/// `Some(source)` makes the track frozen — the mixer can replay the cached
+/// audio instead of the live instrument + FX chain. `None` detaches it,
+/// restoring live playback. Used on project load to rehydrate frozen tracks
+/// without re-rendering, and by `UnfreezeTrack` to clear the cache. The
+/// field is an `ArcSwapOption`, so a read lock on `tracks` is enough — the
+/// audio thread reads it wait-free.
+pub(crate) fn handle_set_track_frozen_source(
+    ctx: &HandlerCtx,
+    track_id: TrackId,
+    source: Option<FrozenSource>,
+) {
+    if let Some(track) = ctx.tracks.read().get(&track_id) {
+        track.frozen_source.store(source.map(Arc::new));
+    }
+}
+
+/// Detach a track's frozen source so playback resumes through the live
+/// instrument + FX chain. Equivalent to `SetTrackFrozenSource { source: None }`,
+/// kept as a distinct command so the intent reads clearly at the call site.
+pub(crate) fn handle_unfreeze_track(ctx: &HandlerCtx, track_id: TrackId) {
+    if let Some(track) = ctx.tracks.read().get(&track_id) {
+        track.frozen_source.store(None);
+    }
+}
+
 pub(crate) fn handle_set_master_volume(ctx: &HandlerCtx, volume: f32) {
     ctx.shared
         .master_volume_bits

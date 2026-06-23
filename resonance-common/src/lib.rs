@@ -6,6 +6,7 @@ pub mod drum_map;
 pub mod group_identity;
 pub mod track_group;
 pub mod midi_map;
+pub mod freeze;
 pub mod registry;
 mod scan;
 pub mod take;
@@ -36,4 +37,8 @@ pub use take::{
 pub use wav::{
     decode_file, decode_wav_channels, decode_wav_stereo, linear_resample_mono,
     linear_resample_stereo, StreamingLinearResampler, WavChannels,
+};
+pub use freeze::{
+    compute_fingerprint, FreezeCacheRef, FreezeCacheStatus, FreezeFingerprintBuilder,
+    FreezeFingerprintInputs, TrackFreezeState,
 };

@@ -105,6 +105,9 @@ pub fn try_diff_replay(
     // shape, so they always take this fast path).
     r.chord_track = extras.chord_track.clone();
 
+    // -- Track freeze status (detach/delete caches no longer frozen) ----
+    r.apply_freeze_restore(extras.track_freeze.clone());
+
     // -- Tempo / signature events --------------------------------------
     apply_tempo(r, target_file);
 

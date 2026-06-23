@@ -5,9 +5,9 @@ use std::sync::Arc;
 use resonance_common::{BindingId, ControllerMap, MidiBinding, MidiTarget};
 
 use super::{
-    ABSource, BusId, ClipId, FadeCurve, MidiNote, PluginInstanceId, ReferenceId, SamplePos, SendId,
-    SendSource, SignaturePoint, StemBitDepth, StemTarget, TempoPoint, TrackId, TrackOutput,
-    WarpAlgorithm, WarpMarker,
+    ABSource, BusId, ClipId, FadeCurve, FrozenSource, MidiNote, PluginInstanceId, ReferenceId,
+    SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth, StemTarget, TempoPoint, TrackId,
+    TrackOutput, WarpAlgorithm, WarpMarker,
 };
 
 /// Commands sent from the GUI to the audio engine.
@@ -646,6 +646,33 @@ pub enum AudioCommand {
     },
     /// Cancel an armed MIDI Learn without capturing anything (Esc / re-click).
     CancelMidiLearn,
+
+    // -- Freeze commands --
+    /// Kick off an offline render of the track's post-instrument/post-FX
+    /// output to `cache_path`. The render produces a freeze-cache WAV
+    /// containing the full track output (including SVS-rendered vocals).
+    /// Emits progress events, then `FreezeCompleted` on success or
+    /// `FreezeError`/`FreezeCancelled` on failure/cancel.
+    FreezeTrack {
+        track_id: TrackId,
+        cache_path: String,
+    },
+    /// Attach or detach a decoded freeze cache buffer to/from a track.
+    /// Used on project load to rehydrate frozen tracks without re-rendering,
+    /// and on unfreeze to clear the frozen source.
+    SetTrackFrozenSource {
+        track_id: TrackId,
+        /// `Some(source)` attaches the frozen buffer for playback.
+        /// `None` detaches it, restoring live synth+FX playback.
+        source: Option<FrozenSource>,
+    },
+    /// Detach the frozen source from a track and resume live synth+FX playback.
+    UnfreezeTrack {
+        track_id: TrackId,
+    },
+    /// Cancel an in-flight freeze render. Cooperative: the render polls
+    /// the shared cancel flag between chunks and aborts cleanly.
+    CancelFreeze,
 
     /// Ask the engine to snapshot and clear every peak meter (per-track,
     /// per-bus, master L/R) and reply with `AudioEvent::PeakSnapshot`.

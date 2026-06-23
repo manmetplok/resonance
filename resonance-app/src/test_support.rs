@@ -484,4 +484,77 @@ impl Resonance {
         crate::update::compose::regenerate::apply_chord_track_harmony(self, definition_id, &mut def);
         (def.chords, def.scale)
     }
+
+    /// Test-only: read a track's freeze status (defaults to idle).
+    #[doc(hidden)]
+    pub fn test_freeze_status(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> crate::state::FreezeStatus {
+        self.freeze.status(track_id)
+    }
+
+    /// Test-only: force a track's freeze status, mirroring what the engine
+    /// freeze-event mirror (ba todo #575) would set on completion.
+    #[doc(hidden)]
+    pub fn test_set_freeze_status(
+        &mut self,
+        track_id: resonance_audio::types::TrackId,
+        status: crate::state::FreezeStatus,
+    ) {
+        self.freeze.set(track_id, status);
+    }
+
+    /// Test-only: read the active freeze batch queue, if any.
+    #[doc(hidden)]
+    pub fn test_freeze_queue(&self) -> Option<&crate::state::FreezeQueue> {
+        self.freeze.queue.as_ref()
+    }
+
+    /// Test-only: advance the freeze batch to the next track, as the
+    /// engine completion mirror (ba todo #575) will once it lands. Returns
+    /// `true` when a next freeze was started.
+    #[doc(hidden)]
+    pub fn test_advance_freeze_queue(&mut self) -> bool {
+        crate::update::freeze::advance_freeze_queue(self)
+    }
+
+    /// Test-only: select a track so `FreezeSelectedTracks` has a target.
+    #[doc(hidden)]
+    pub fn test_select_track(&mut self, track_id: resonance_audio::types::TrackId) {
+        self.interaction.selected_track = Some(track_id);
+    }
+
+    /// Test-only: append a track of the given type so freeze tests have a
+    /// registry to operate on without an engine round-trip.
+    #[doc(hidden)]
+    pub fn test_add_track(
+        &mut self,
+        track_id: resonance_audio::types::TrackId,
+        track_type: resonance_audio::types::TrackType,
+    ) {
+        use resonance_audio::types::TrackType;
+        let order = self.registry.tracks.len();
+        let track = match track_type {
+            TrackType::Audio => crate::state::TrackState::new_audio(track_id, order),
+            TrackType::Instrument => crate::state::TrackState::new_instrument(track_id, order),
+            TrackType::Vocal => crate::state::TrackState::new_vocal(track_id, order),
+        };
+        self.registry.tracks.push(track);
+        self.registry.resort_tracks();
+    }
+
+    /// Test-only: drive an undo-restore reconciliation directly with a
+    /// target freeze map, exercising `apply_freeze_restore` without the
+    /// full snapshot/replay pipeline.
+    #[doc(hidden)]
+    pub fn test_apply_freeze_restore(
+        &mut self,
+        target: std::collections::HashMap<
+            resonance_audio::types::TrackId,
+            crate::state::FreezeStatus,
+        >,
+    ) {
+        self.apply_freeze_restore(target);
+    }
 }

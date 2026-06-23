@@ -10,6 +10,7 @@ pub mod chord_track;
 pub mod clips;
 pub mod compose;
 pub mod export;
+pub mod freeze;
 pub mod gates;
 pub mod global_track;
 pub mod marker;
@@ -87,6 +88,7 @@ impl crate::Resonance {
             Message::Track(m) => track::handle(self, m),
             Message::Bus(m) => bus::handle(self, m),
             Message::Mixer(m) => mixer::handle(self, m),
+            Message::Freeze(m) => freeze::handle(self, m),
             Message::Master(m) => master::handle(self, m),
             Message::Clip(m) => clips::handle(self, m),
             Message::MidiClip(m) => midi_clip::handle(self, m),

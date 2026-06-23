@@ -356,6 +356,16 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         // playhead + browser preview controls land with the audition app-state
         // todo, doc #175), so there is nothing to mirror — no-ops for now.
         E::AuditionPosition { .. } | E::AuditionStopped => {}
+        // Freeze progress / lifecycle. The engine-side command/event
+        // plumbing (todo #572) emits these; mirroring them into app state
+        // (per-track freeze status, progress modal, attaching the decoded
+        // cache on load) lands with the app-side freeze work later in this
+        // epic. Until then the events are accepted but not yet mirrored,
+        // mirroring the placeholder approach used for clip fade/gain above.
+        E::FreezeProgress { .. }
+        | E::FreezeCompleted { .. }
+        | E::FreezeError { .. }
+        | E::FreezeCancelled { .. } => {}
 
         // Project save / load — these return a Task<Message>.
         E::ClipsSavedToProjectDir { clip_files } => {

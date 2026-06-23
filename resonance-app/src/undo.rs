@@ -49,6 +49,12 @@ pub struct UndoExtras {
     /// arrangement edits — reorder, fills, length modes, multi-entry —
     /// fully reversible without waiting on disk persistence.
     pub compose_arrangements: HashMap<u64, Vec<crate::compose::PatternEntry>>,
+    /// Per-track freeze status at snapshot time. The rendered cache is not
+    /// part of undo history, so on restore
+    /// [`crate::Resonance::apply_freeze_restore`] detaches + deletes the
+    /// cache of any track that is no longer frozen and downgrades a
+    /// re-frozen track whose cache file is gone to stale.
+    pub track_freeze: HashMap<TrackId, crate::state::FreezeStatus>,
 }
 
 /// Re-apply the snapshotted full arrangements onto the compose state after
@@ -282,6 +288,7 @@ impl crate::Resonance {
                 .iter()
                 .map(|d| (d.id, d.arrangement.clone()))
                 .collect(),
+            track_freeze: self.freeze.statuses.clone(),
         };
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
@@ -339,6 +346,7 @@ impl crate::Resonance {
             && self.io.save_state.is_none()
             && !self.transport.recording
             && !self.undo.has_pending()
+            && !self.freeze.any_in_flight()
     }
 
     /// Drive the engine and GUI back to `snapshot`. Tries a structure-
@@ -391,6 +399,7 @@ impl crate::Resonance {
         self.reference.restore_undo(extras.reference);
         self.chord_track = extras.chord_track;
         restore_arrangements(&mut self.compose, &extras.compose_arrangements);
+        self.apply_freeze_restore(extras.track_freeze);
     }
 
     /// Attempt to undo. No-ops (returning false) if the history is empty
@@ -613,6 +622,19 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MixerMessage::ToggleSendEnabled(_)
             | MixerMessage::SetBusReturnRole(_, _)
             | MixerMessage::CreateReturnFromSend { .. } => UndoAction::Record,
+        },
+        // Freeze edits. Freeze / unfreeze / refreeze / batch-freeze are
+        // discrete, atomic transitions worth an undo entry; the rendered
+        // cache is deliberately excluded from history (see `UndoExtras` and
+        // `apply_freeze_restore`). Cancelling an in-flight render is a
+        // transient abort, not a project mutation — skip it.
+        Message::Freeze(f) => match f {
+            FreezeMessage::CancelFreeze => UndoAction::Skip,
+            FreezeMessage::FreezeTrack(_)
+            | FreezeMessage::UnfreezeTrack(_)
+            | FreezeMessage::RefreezeTrack(_)
+            | FreezeMessage::FreezeSelectedTracks
+            | FreezeMessage::FreezeAllTracks => UndoAction::Record,
         },
 
         Message::Master(_) => UndoAction::Record,

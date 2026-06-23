@@ -215,6 +215,39 @@ pub const GOOD: Color = rgb(0x6d, 0xd6, 0xa3);
 pub const BAD: Color = rgb(0xe8, 0x7b, 0x8b);
 
 // ---------------------------------------------------------------------------
+// Frost treatment — frozen (bounce-in-place) tracks.  (design doc #181)
+//
+// IMPORTANT: this is NOT a new palette hue. Resonance's palette is
+// deliberately constrained and has no "cold" colour. Frozen state is a
+// visual *mode*, rendered as a treatment derived from existing tokens:
+// a translucent cool wash over `BG_2`, a desaturated icy edge, and a
+// tinted snowflake glyph. The three constants below are the single
+// source of truth for that treatment — freeze styling must reference
+// them rather than spelling out inline colours, exactly as `on-solo` /
+// `on-mute` reference their semantic tints.
+//
+// They share the same alpha conventions as the accent treatment
+// (`ACCENT_DIM` at 0.16 for the wash, `ACCENT_LINE` at 0.34 for the
+// edge) so the frost mode reads as part of the existing system rather
+// than a bolt-on. The icy hue is the one cool tone the design admits,
+// and only ever as this mode — never as a standalone fill.
+
+/// Icy base tone the frost treatment is derived from — a soft,
+/// desaturated steel-blue. Not used directly; the three public frost
+/// constants below carry the actual treatment values.
+const FROST_BASE: (u8, u8, u8) = (0x9d, 0xb8, 0xd4);
+
+/// Translucent cool wash layered over `BG_2` to "frost" a frozen
+/// track's header / lane. Low alpha so the surface beneath still reads.
+pub const FROST_WASH: Color = rgba(FROST_BASE.0, FROST_BASE.1, FROST_BASE.2, 0.16);
+/// Desaturated icy edge — the hairline outline / left-rail tint that
+/// marks a frozen channel. Mirrors `ACCENT_LINE`'s 0.34 edge alpha.
+pub const FROST_EDGE: Color = rgba(FROST_BASE.0, FROST_BASE.1, FROST_BASE.2, 0.34);
+/// Snowflake glyph tint for the freeze affordance. The solid icy tone
+/// so the glyph reads cleanly against the frosted header.
+pub const FROST_ICON: Color = rgb(FROST_BASE.0, FROST_BASE.1, FROST_BASE.2);
+
+// ---------------------------------------------------------------------------
 // Legacy aliases — keep the rest of the codebase compiling while the views
 // migrate. New code should use the tokens above directly.
 // ---------------------------------------------------------------------------

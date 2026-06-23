@@ -22,6 +22,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Track(_)
         | Message::Bus(_)
         | Message::Mixer(_)
+        | Message::Freeze(_)
         | Message::Master(_)
         | Message::Clip(_)
         | Message::MidiClip(_)
@@ -94,6 +95,48 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::Track(_)
         | Message::Bus(_)
         | Message::Mixer(_)
+        | Message::Freeze(_)
+        | Message::Master(_)
+        | Message::Clip(_)
+        | Message::MidiClip(_)
+        | Message::MidiEditor(_)
+        | Message::VocalTuning(_)
+        | Message::Plugin(_)
+        | Message::Viewport(_)
+        | Message::Reference(_)
+        | Message::GlobalTrack(_)
+        | Message::Import(_)
+        | Message::ChordTrack(_)
+        | Message::Ui(_)
+        | Message::Export(_)
+        | Message::Undo
+        | Message::Redo => true,
+    }
+}
+
+/// True for every user-initiated message we need to drop while a freeze
+/// render is in flight (a single freeze or a "freeze all" batch). Mirrors
+/// [`bounce_blocks_message`]: the offline freeze renderer shares plugin
+/// instances with the live mixer, so any project mutation mid-render could
+/// corrupt the cache. The Cancel button is the one carve-out so the user
+/// can always stop the run.
+fn freeze_blocks_message(message: &crate::message::Message) -> bool {
+    use crate::message::*;
+    match message {
+        // Whitelist: cancelling the in-flight freeze.
+        Message::Freeze(FreezeMessage::CancelFreeze) => false,
+        // Engine event traffic, project I/O, and the timer tick keep
+        // flowing — the freeze relies on the tick to drain `FreezeProgress`
+        // / `FreezeCompleted` events that advance the batch and clear state.
+        Message::ProjectIo(_) | Message::Tick | Message::WindowCloseRequested(_) => false,
+        // Everything else: block.
+        Message::Compose(_)
+        | Message::Transport(_)
+        | Message::Marker(_)
+        | Message::Track(_)
+        | Message::Bus(_)
+        | Message::Mixer(_)
+        | Message::Freeze(_)
         | Message::Master(_)
         | Message::Clip(_)
         | Message::MidiClip(_)
@@ -122,6 +165,9 @@ impl crate::Resonance {
             return true;
         }
         if self.bounce_in_progress.is_some() && bounce_blocks_message(message) {
+            return true;
+        }
+        if self.freeze.any_in_flight() && freeze_blocks_message(message) {
             return true;
         }
         false
