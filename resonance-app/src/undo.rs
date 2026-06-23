@@ -42,6 +42,30 @@ pub struct UndoExtras {
     /// until then the track is declarative app state that the replay
     /// path can't rebuild, so undo snapshots it directly.
     pub chord_track: crate::chord_track::ChordTrack,
+    /// Full drum arrangement per section definition. The project-file
+    /// form still flattens each arrangement to its primary pattern id
+    /// (multi-entry persistence is a separate todo), so the snapshot
+    /// captures the complete `Vec<PatternEntry>` here to make
+    /// arrangement edits — reorder, fills, length modes, multi-entry —
+    /// fully reversible without waiting on disk persistence.
+    pub compose_arrangements: HashMap<u64, Vec<crate::compose::PatternEntry>>,
+}
+
+/// Re-apply the snapshotted full arrangements onto the compose state after
+/// a project replay. The replay path rebuilds each section's arrangement
+/// from the persisted (flattened) primary pattern id; this overwrites it
+/// with the captured `Vec<PatternEntry>` so multi-entry arrangements,
+/// fills, and `Bars` length modes survive an undo/redo. Sections present
+/// in the live state but missing from the snapshot are left untouched.
+pub(crate) fn restore_arrangements(
+    compose: &mut crate::compose::ComposeState,
+    arrangements: &HashMap<u64, Vec<crate::compose::PatternEntry>>,
+) {
+    for (id, arrangement) in arrangements {
+        if let Some(def) = compose.find_definition_mut(*id) {
+            def.arrangement = arrangement.clone();
+        }
+    }
 }
 
 /// One point in the undo/redo history. Wraps the `LoadedProject` shape
@@ -252,6 +276,12 @@ impl crate::Resonance {
             vocal_clip_lyrics: self.compose.vocal_audio.clip_lyrics.clone(),
             reference: self.reference.undo_snapshot(),
             chord_track: self.chord_track.clone(),
+            compose_arrangements: self
+                .compose
+                .definitions
+                .iter()
+                .map(|d| (d.id, d.arrangement.clone()))
+                .collect(),
         };
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
@@ -360,6 +390,7 @@ impl crate::Resonance {
         self.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics;
         self.reference.restore_undo(extras.reference);
         self.chord_track = extras.chord_track;
+        restore_arrangements(&mut self.compose, &extras.compose_arrangements);
     }
 
     /// Attempt to undo. No-ops (returning false) if the history is empty

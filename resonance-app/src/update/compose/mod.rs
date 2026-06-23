@@ -31,6 +31,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
 
     match msg {
         ComposeMessage::DrumGroups(m) => return drum_groups::handle(r, m),
+        ComposeMessage::Arrangement(m) => return drum_groups::handle_arrangement(r, m),
 
         ComposeMessage::CreateMidiClipInSection {
             track_id,
