@@ -22,6 +22,7 @@ use self::input::{ClipInteraction, MarkerDrag, TempoDrag};
 
 use resonance_audio::types::{ClipId, TempoMap, TrackId};
 
+pub mod automation;
 pub mod draw;
 pub mod hit_test;
 pub mod input;
@@ -80,6 +81,10 @@ pub struct TimelineCanvas<'a> {
     /// handlers publish `DragMessage::Hover` / `Drop`. Drawn in the uncached
     /// overlay pass so it repaints as the cursor moves.
     pub drag: Option<&'a state::DragPlacement>,
+    /// App-side mirror of the engine's parameter-automation lanes. The
+    /// timeline renders the primary lane for each track as an overlay band
+    /// (doc #162 §3); empty => no lanes drawn.
+    pub automation: &'a crate::state::AutomationState,
 }
 
 impl TimelineCanvas<'_> {
@@ -330,6 +335,11 @@ pub struct TimelineFingerprint {
     /// Hash of the frozen-track set so the "unsupported" hatch appears /
     /// clears the moment a track is frozen or thawed.
     pub frozen_hash: u64,
+    /// Hash of every automation lane's target, Read state and breakpoints.
+    /// Repaints the cached lane geometry when a lane is added, cleared, or
+    /// edited. The *live* playhead value is drawn uncached, so it is
+    /// intentionally excluded here (same discipline as `playhead`).
+    pub automation_hash: u64,
 }
 
 impl<'a> TimelineCanvas<'a> {
@@ -388,6 +398,24 @@ impl<'a> TimelineCanvas<'a> {
         }
         let frozen_hash = frz.finish();
 
+        // Hash lane geometry so an add / clear / breakpoint edit invalidates
+        // the cached lane layer. Iterating the HashMap in arbitrary order is
+        // fine: equal lane sets must hash equal, so fold each lane's hash into
+        // an order-independent xor accumulator.
+        let mut automation_hash: u64 = self.automation.lanes.len() as u64;
+        for lane in self.automation.lanes.values() {
+            let mut lh = std::collections::hash_map::DefaultHasher::new();
+            lane.target.hash(&mut lh);
+            lane.id.hash(&mut lh);
+            lane.enabled.hash(&mut lh);
+            for p in &lane.points {
+                p.time_frames.hash(&mut lh);
+                p.value.to_bits().hash(&mut lh);
+                p.curve.hash(&mut lh);
+            }
+            automation_hash ^= lh.finish();
+        }
+
         TimelineFingerprint {
             clips_len: self.clips.len(),
             midi_clips_len: self.midi_clips.len(),
@@ -423,6 +451,7 @@ impl<'a> TimelineCanvas<'a> {
             selected_marker_id: self.selected_marker_id,
             clips_hash,
             frozen_hash,
+            automation_hash,
         }
     }
 }
@@ -629,6 +658,11 @@ impl<'a> TimelineCanvas<'a> {
                     bounds.height,
                 );
             }
+
+            // Automation lane overlay (static layer: axis, segments, dots).
+            // Drawn over the clips so the envelope reads on top of them; the
+            // live playhead value rides the uncached overlay pass below.
+            self.draw_automation_lanes(frame, &sorted_tracks, header_height, y_off, bounds);
 
             // Lane-area portion of the loop in/out markers — the dim
             // overlays. The vertical loop lines, amber range fill, and
@@ -837,6 +871,10 @@ impl<'a> TimelineCanvas<'a> {
         if let Some(drag) = self.drag {
             self.draw_drag_placement(frame, bounds, drag);
         }
+
+        // Live automated-value indicators ride the uncached overlay so they
+        // follow the playhead without invalidating the cached lane geometry.
+        self.draw_automation_live_values(frame, &sorted_tracks, header_height, y_off, bounds);
 
         // The ruler-height local is unused if neither overlay fires;
         // keep it so future overlay additions (e.g. selection brushes)

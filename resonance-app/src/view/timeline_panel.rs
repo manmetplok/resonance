@@ -68,6 +68,7 @@ impl crate::Resonance {
             selected_marker_id: self.interaction.selected_marker_id,
             frozen_tracks,
             drag: self.drag_placement.as_ref(),
+            automation: &self.automation,
         };
 
         // Fixed canvas width = full content width. With the canvas no
