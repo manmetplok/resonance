@@ -30,7 +30,7 @@ use resonance_common::{TakeGroupId, TimelineRange};
 use super::midi::MidiHardwareState;
 use super::{
     audition, bounce, bounce_realtime, busses, clips, master, midi, midi_map, plugins, reference,
-    scan, tracks, transport, SharedState,
+    scan, tracks, transport, vocal_analysis, SharedState,
 };
 
 /// Read-only handle to shared project state and channels. Passed by
@@ -477,6 +477,9 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         }
         AudioCommand::DetectClipTempo { clip_id } => {
             clips::handle_detect_clip_tempo(ctx, clip_id)
+        }
+        AudioCommand::AnalyzeClipPitch { clip_id } => {
+            vocal_analysis::handle_analyze_clip_pitch(ctx, state, clip_id)
         }
         AudioCommand::SetProjectDir(dir) => {
             state.project_dir = Some(dir);

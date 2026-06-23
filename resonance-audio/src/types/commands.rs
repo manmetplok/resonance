@@ -104,6 +104,14 @@ pub enum AudioCommand {
     DetectClipTempo {
         clip_id: ClipId,
     },
+    /// Run vocal pitch analysis (monophonic f0 detection + note
+    /// segmentation) on the clip's mono mix off the realtime thread. The
+    /// result is stored in the clip's [`VocalTuning`](super::VocalTuning)
+    /// analysis cache and emitted as `AudioEvent::ClipPitchDetected`. A
+    /// no-op (no event) when the clip no longer exists.
+    AnalyzeClipPitch {
+        clip_id: ClipId,
+    },
     SetTrackVolume {
         track_id: TrackId,
         volume: f32,

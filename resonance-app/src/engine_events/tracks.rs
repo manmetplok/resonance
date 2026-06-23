@@ -146,6 +146,7 @@ pub(super) fn bounce_completed(
                 fade_out_curve: FadeCurve::default(),
                 gain_db: 0.0,
                 waveform_peaks: c.waveform_peaks,
+                vocal_tuning: None,
             });
         }
     } else {

@@ -118,6 +118,14 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         // it lands these arms accept the events without acting, keeping
         // the workspace compiling now that the engine emits them.
         E::ImportProgress { .. } | E::AssetImported { .. } | E::ImportFailed { .. } => {}
+        // Vocal pitch analysis (todo #357) emits the detected contour/notes
+        // here; mirror them into the clip's app-side `VocalTuning` (todo
+        // #359) so the pitch editor reads them without a read-back.
+        E::ClipPitchDetected {
+            clip_id,
+            notes,
+            contour,
+        } => clips::pitch_detected(r, clip_id, notes, contour),
         E::RecordingFinished {
             clip_id,
             track_id,

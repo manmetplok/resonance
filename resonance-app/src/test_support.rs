@@ -357,4 +357,12 @@ impl Resonance {
             self.transport.loop_enabled,
         )
     }
+
+    /// Test-only: which audio clip's vocal pitch editor is open, if any
+    /// (doc #160). Set by the `VocalTuningMessage::OpenPitchEditor`
+    /// reducer when opened on a vocal clip.
+    #[doc(hidden)]
+    pub fn test_editing_pitch_clip(&self) -> Option<resonance_audio::types::ClipId> {
+        self.interaction.editing_pitch_clip
+    }
 }

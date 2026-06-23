@@ -222,6 +222,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
         fade_out_curve: FadeCurve::default(),
         gain_db: 0.0,
         waveform_peaks,
+        vocal_tuning: None,
     }];
 
     // Place the playhead a bit into the song so it's visible.

@@ -8,9 +8,9 @@ use resonance_metering::MeterSnapshot;
 use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
-    ABSource, AssetId, BusId, ClipId, FadeCurve, InputDeviceInfo, MidiNote, ParamInfo,
-    PluginInstanceId, ReferenceAnalysisStage, ReferenceId, SamplePos, ScannedPlugin, SendId,
-    SendSource, TrackId, WarpAlgorithm, WarpMarker,
+    ABSource, AssetId, BusId, ClipId, F0Frame, FadeCurve, InputDeviceInfo, MidiNote, NoteBlob,
+    ParamInfo, PluginInstanceId, ReferenceAnalysisStage, ReferenceId, SamplePos, ScannedPlugin,
+    SendId, SendSource, TrackId, WarpAlgorithm, WarpMarker,
 };
 
 /// Lifecycle stage of a single file in an `ImportAudioToPool` batch.
@@ -152,6 +152,16 @@ pub enum AudioEvent {
         clip_id: ClipId,
         bpm: f32,
         confidence: f32,
+    },
+    /// Vocal pitch analysis finished for a clip (`AnalyzeClipPitch`). The
+    /// detected f0 `contour` and segmented `notes` mirror what the engine
+    /// stored in the clip's [`VocalTuning`](super::VocalTuning) cache, so
+    /// the app can update its own mirror without a read-getter. Both
+    /// vectors may be empty when the clip carries no voiced material.
+    ClipPitchDetected {
+        clip_id: ClipId,
+        notes: Vec<NoteBlob>,
+        contour: Vec<F0Frame>,
     },
     Stopped,
     Error(String),

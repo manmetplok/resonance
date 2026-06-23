@@ -223,6 +223,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
             fade_out_curve: FadeCurve::default(),
             gain_db: 0.0,
             waveform_peaks: Vec::new(), // Will be populated by ClipImported event
+            vocal_tuning: None, // Re-derived on demand when the pitch editor opens.
         });
     }
 

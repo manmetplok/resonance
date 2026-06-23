@@ -23,6 +23,7 @@ pub mod track;
 pub mod transport;
 pub mod ui;
 pub mod viewport;
+pub mod vocal_tuning;
 
 pub(crate) use project_io::{build_project_file, replay_loaded_project, try_diff_replay};
 
@@ -85,6 +86,7 @@ impl crate::Resonance {
             Message::Clip(m) => clips::handle(self, m),
             Message::MidiClip(m) => midi_clip::handle(self, m),
             Message::MidiEditor(m) => midi_editor::handle(self, m),
+            Message::VocalTuning(m) => vocal_tuning::handle(self, m),
             Message::Plugin(m) => plugin::handle(self, m),
             Message::Viewport(m) => viewport::handle(self, m),
             Message::ProjectIo(m) => project_io::handle(self, m),
