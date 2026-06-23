@@ -13,6 +13,7 @@ use super::drumroll::{
     default_drum_patterns, default_kit_pads, DrumGroup, DrumPattern, DrumrollViewState,
     KitPadInfo,
 };
+use super::expression::ExpressionCurves;
 use super::lane_generator::{LaneGeneratorConfig, LaneGeneratorKind};
 use super::section::{
     ChordState, EditSectionForm, NewSectionForm, SectionDefinitionState, SectionPlacementState,
@@ -181,6 +182,15 @@ pub struct ComposeState {
     /// Lazily populated from the lane's current `params.draft` on first
     /// use, and re-synced when per-line edits or re-rolls happen.
     pub vocal_bulk_lyrics: HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
+    /// Per-vocal-lane editable expression curves (dynamics, tension,
+    /// breathiness, pitch bend), keyed `(definition_id, track_id)` — the
+    /// same lane scope as `vocal_bulk_lyrics` and the render epoch. Each
+    /// bundle layers the user's overlay over the generator's auto-derived
+    /// baseline (doc #154, epic #17). Lanes with no entry yet behave as
+    /// untouched (`ExpressionCurves::default`). Wiring into the segment
+    /// builder and project file lands in later todos; this just holds the
+    /// model.
+    pub expression_curves: HashMap<(u64, TrackId), ExpressionCurves>,
     /// Project-scoped drum pattern bank. Each pattern bundles its own
     /// [`DrumGroup`] list, so a project can carry multiple kit/snare/hat
     /// arrangements and the section picker assigns one pattern per
@@ -251,6 +261,7 @@ impl Default for ComposeState {
             pronunciation: crate::compose::vocal_svs::PronunciationState::default(),
             next_derived_clip_id: DERIVED_CLIP_ID_BASE,
             vocal_bulk_lyrics: HashMap::new(),
+            expression_curves: HashMap::new(),
             drum_patterns,
             default_drum_pattern_id: default_pattern_id,
             kit_pads: default_kit_pads(),
@@ -291,6 +302,29 @@ impl ComposeState {
     pub fn fresh_id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
+    }
+
+    /// Expression curves for the vocal lane `(definition_id, track_id)`, or
+    /// `None` if the lane has no entry yet (treat as untouched).
+    pub fn expression_curves(
+        &self,
+        definition_id: u64,
+        track_id: TrackId,
+    ) -> Option<&ExpressionCurves> {
+        self.expression_curves.get(&(definition_id, track_id))
+    }
+
+    /// Mutable expression curves for the vocal lane, inserting a default
+    /// (untouched) bundle if the lane doesn't have one yet. Use this before
+    /// applying a user edit.
+    pub fn expression_curves_mut(
+        &mut self,
+        definition_id: u64,
+        track_id: TrackId,
+    ) -> &mut ExpressionCurves {
+        self.expression_curves
+            .entry((definition_id, track_id))
+            .or_default()
     }
 
     /// Allocate a fresh clip id to use with `LoadMidiClipDirect`. See
@@ -528,6 +562,9 @@ impl ComposeState {
         self.derived_clips.clear();
         self.vocal_audio.clear();
         self.pronunciation.clear();
+        // Expression-curve overlays have no project persistence yet (that
+        // arrives in todo #335); start each load with untouched curves.
+        self.expression_curves.clear();
         self.next_derived_clip_id = DERIVED_CLIP_ID_BASE;
         self.placements = placements
             .iter()

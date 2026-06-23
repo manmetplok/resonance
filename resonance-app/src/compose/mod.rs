@@ -3,6 +3,7 @@
 
 pub mod arrangement;
 pub mod drumroll;
+pub mod expression;
 pub mod generate;
 pub mod invariants;
 pub mod messages;
@@ -22,6 +23,7 @@ pub use arrangement::{
     resolve_arrangement, ArrangementCoverage, ArrangementSpan, ResolvedArrangement,
 };
 pub use drumroll::{DrumGroup, DrumPattern, DrumrollViewState};
+pub use expression::{Breakpoint, CurveStatus, ExpressionCurve, ExpressionCurves};
 pub use generate::{DeriveKind, GenerateParams};
 pub use lane_generator::{
     DrumVoiceMode, LaneGeneratorConfig, LaneGeneratorKind, LaneGeneratorKindTag,

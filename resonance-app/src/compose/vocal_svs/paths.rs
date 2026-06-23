@@ -162,7 +162,7 @@ pub(super) fn voicebank_language_id(voicebank: VocalVoicebank, ph: &str) -> Opti
 /// to a per-frame curve fed into the SVS segment builder and is shaped
 /// by the user in the vocal-roll Expression dock. Not every voicebank's
 /// acoustic model accepts every curve — see [`curve_supported`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum CurveKind {
     /// Dynamics / energy (loudness envelope). Universally supported.
     Dynamics,
@@ -185,6 +185,19 @@ impl CurveKind {
         CurveKind::Breathiness,
         CurveKind::PitchBend,
     ];
+
+    /// Inclusive `(min, max)` range a curve's values live in (doc #154).
+    ///
+    /// Dynamics, tension and breathiness are normalised `0..=1` envelopes;
+    /// pitch bend is an f0 offset in cents, drawn on a `-50..=+50` axis.
+    /// Used to clamp both auto-derived baselines and user overlay edits so
+    /// no curve can carry an out-of-range value.
+    pub fn value_range(self) -> (f32, f32) {
+        match self {
+            CurveKind::Dynamics | CurveKind::Tension | CurveKind::Breathiness => (0.0, 1.0),
+            CurveKind::PitchBend => (-50.0, 50.0),
+        }
+    }
 }
 
 /// Whether `voicebank`'s pipeline accepts the given expression `curve`.
