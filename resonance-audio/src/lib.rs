@@ -44,8 +44,9 @@ pub use types::*;
 pub mod __test_support {
     pub use crate::clap_host::{ClapBundle, SyncClapInstance};
     pub use crate::engine::{
-        freeze_terminal_event, midi_render_range, to_audio_clip, to_freeze_cache,
-        to_freeze_cache_spawn, to_wav, try_lock_with_backoff, FREEZE_CANCELLED_MSG, SharedState,
+        encode_buffer_for_test, freeze_terminal_event, midi_render_range,
+        normalize_buffer_for_test, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,
+        try_lock_with_backoff, FREEZE_CANCELLED_MSG, SharedState,
     };
     pub use crate::engine::{
         export_stems, render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter,

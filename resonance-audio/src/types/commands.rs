@@ -5,9 +5,9 @@ use std::sync::Arc;
 use resonance_common::{BindingId, ControllerMap, MidiBinding, MidiTarget};
 
 use super::{
-    ABSource, BusId, ClipId, FadeCurve, FrozenSource, MidiNote, PluginInstanceId, ReferenceId,
-    SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth, StemTarget, TempoPoint, TrackId,
-    TrackOutput, WarpAlgorithm, WarpMarker,
+    ABSource, BusId, ClipId, ExportSettings, FadeCurve, FrozenSource, MidiNote, PluginInstanceId,
+    ReferenceId, SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth, StemTarget,
+    TempoPoint, TrackId, TrackOutput, WarpAlgorithm, WarpMarker,
 };
 
 /// Commands sent from the GUI to the audio engine.
@@ -241,9 +241,22 @@ pub enum AudioCommand {
     ClosePluginEditor {
         instance_id: PluginInstanceId,
     },
-    /// Offline render of the project to a WAV file.
+    /// Offline render of the project to a WAV file. Legacy entry point,
+    /// kept as a thin shim: the engine maps it onto [`AudioCommand::ExportAudio`]
+    /// with [`ExportSettings::default_wav`] (32-bit-float WAV at the engine
+    /// rate) so existing callers keep working until the app migrates.
     BounceToWav {
         path: String,
+    },
+    /// Offline render + encode of the project to `path` using the
+    /// format / loudness-normalization / metadata described by `settings`
+    /// (see doc #196). Generalizes [`AudioCommand::BounceToWav`]. The
+    /// WAV f32 path renders identically to the legacy bounce; other
+    /// formats and the normalization passes land with the encoder-sink
+    /// follow-up todos. Emits the `Export*` lifecycle events.
+    ExportAudio {
+        path: String,
+        settings: ExportSettings,
     },
     /// Bounce in place — render one instrument track (and any of its
     /// sub-tracks) to a single in-RAM stereo `AudioClip` on

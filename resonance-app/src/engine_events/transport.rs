@@ -68,6 +68,35 @@ pub(super) fn bounce_progress(r: &mut Resonance, fraction: f32) {
     }
 }
 
+/// Generalized export lifecycle (doc #196). The engine currently routes
+/// the WAV path through the legacy `Bounce*` events; these mirror the
+/// same UI state so the app is ready once the encoder pipeline starts
+/// emitting `Export*`. `phase` is ignored for the single mix progress bar.
+pub(super) fn export_progress(
+    r: &mut Resonance,
+    _phase: resonance_audio::types::ExportPhase,
+    fraction: f32,
+) {
+    r.io.bouncing = true;
+    if let Some(state) = r.bounce_in_progress.as_mut() {
+        state.fraction = fraction.clamp(0.0, 1.0);
+    }
+}
+
+pub(super) fn export_complete(r: &mut Resonance, path: String, bytes: u64) {
+    r.io.bouncing = false;
+    eprintln!("Export complete: {path} ({bytes} bytes)");
+}
+
+pub(super) fn export_error(
+    r: &mut Resonance,
+    _kind: resonance_audio::types::ExportErrorKind,
+    message: String,
+) {
+    r.io.bouncing = false;
+    r.error_message = Some(format!("Export failed: {message}"));
+}
+
 pub(super) fn midi_input_devices(r: &mut Resonance, devices: Vec<MidiDeviceInfo>) {
     r.midi_input_devices = devices;
     r.view_caches.rebuild_midi_input(&r.midi_input_devices);

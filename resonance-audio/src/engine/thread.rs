@@ -386,6 +386,39 @@ pub(crate) fn engine_thread(
     drop(drained_plugins);
 }
 
+/// Route an `ExportAudio` / `BounceToWav` job to the offline renderer.
+///
+/// Both commands share one render driver, which feeds the rendered mix to
+/// the encoder sink selected by `settings.format` (WAV 16/24-bit/f32 or
+/// FLAC, with export resampling when the format requests a different
+/// sample rate). `reporter` selects the event family: `BounceToWav` keeps
+/// the legacy `Bounce*` events (and, with default-WAV settings, byte-for-
+/// byte the old output); `ExportAudio` emits the generalized `Export*`
+/// events. MP3/Opus sinks and the two-pass loudness stage land in the
+/// follow-up todos (#651–#652).
+fn dispatch_export(
+    ctx: &HandlerCtx,
+    path: String,
+    settings: ExportSettings,
+    reporter: bounce::ExportReporter,
+) {
+    bounce::export_spawn(
+        path,
+        settings,
+        reporter,
+        Arc::clone(ctx.shared),
+        Arc::clone(ctx.tracks),
+        Arc::clone(ctx.busses),
+        Arc::clone(ctx.master),
+        Arc::clone(ctx.clips),
+        Arc::clone(ctx.midi_clips),
+        Arc::clone(ctx.plugins),
+        Arc::clone(ctx.tempo_map),
+        ctx.sample_rate,
+        ctx.event_tx.clone(),
+    );
+}
+
 fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
     match cmd {
         // -- Transport --
@@ -596,20 +629,18 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         }
         AudioCommand::SaveAllPluginStates => plugins::handle_save_all_plugin_states(ctx),
 
-        // -- Bounce --
-        AudioCommand::BounceToWav { path } => bounce::to_wav_spawn(
+        // -- Bounce / export --
+        // Legacy WAV bounce: a thin shim over the generalized export
+        // path with default 32-bit-float WAV settings (doc #196).
+        AudioCommand::BounceToWav { path } => dispatch_export(
+            ctx,
             path,
-            Arc::clone(ctx.shared),
-            Arc::clone(ctx.tracks),
-            Arc::clone(ctx.busses),
-            Arc::clone(ctx.master),
-            Arc::clone(ctx.clips),
-            Arc::clone(ctx.midi_clips),
-            Arc::clone(ctx.plugins),
-            Arc::clone(ctx.tempo_map),
-            ctx.sample_rate,
-            ctx.event_tx.clone(),
+            ExportSettings::default_wav(),
+            bounce::ExportReporter::Bounce,
         ),
+        AudioCommand::ExportAudio { path, settings } => {
+            dispatch_export(ctx, path, settings, bounce::ExportReporter::Export)
+        }
         AudioCommand::BounceTrackToAudio {
             source_track_id,
             target_track_id,

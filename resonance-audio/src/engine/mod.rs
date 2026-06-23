@@ -30,10 +30,10 @@ use crate::types::*;
 
 mod bounce;
 pub use bounce::{
-    export_stems, freeze_terminal_event, render_stem, stem_filter, stem_project_range,
-    to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav, try_lock_with_backoff,
-    write_stem_wav, FREEZE_CANCELLED_MSG, StemFilter,
-
+    encode_buffer_for_test, export_stems, freeze_terminal_event, normalize_buffer_for_test,
+    render_stem, stem_filter, stem_project_range, to_audio_clip, to_freeze_cache,
+    to_freeze_cache_spawn, to_wav, try_lock_with_backoff, write_stem_wav, FREEZE_CANCELLED_MSG,
+    StemFilter,
 };
 mod bounce_common;
 pub use bounce_common::midi_render_range;
