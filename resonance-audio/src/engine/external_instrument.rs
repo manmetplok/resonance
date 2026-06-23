@@ -21,8 +21,12 @@
 //! reconnects — it never tears the config down.
 //!
 //! Everything here runs on the engine control thread; the audio callback is not
-//! touched, so there are no realtime allocations. Applying the latency offset
-//! to the audio return is a later step — this is the config boundary only.
+//! touched, so there are no realtime allocations. This module is the config
+//! boundary: it only stores and echoes the manual latency offset. Applying it is
+//! the plugin-delay-compensation pass' ([`crate::latency::add_external_offsets`])
+//! job — the engine loop republishes the comp table after every external-
+//! instrument config change so the rest of the mix is delayed to meet the late
+//! hardware audio return (live monitoring + the realtime bounce that records it).
 
 use std::collections::{HashMap, HashSet};
 

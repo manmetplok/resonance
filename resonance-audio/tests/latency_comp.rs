@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 use resonance_audio::__test_support::{
-    chain_latencies, compensation_delays, LatencyComp, MAX_COMP_LATENCY,
+    add_external_offsets, chain_latencies, compensation_delays, LatencyComp, MAX_COMP_LATENCY,
 };
 use resonance_audio::types::{Bus, BusId, Track, TrackId, TrackOutput};
 
@@ -75,6 +75,34 @@ fn chain_latencies_sum_track_bus_and_parent_instrument() {
     assert_eq!(chains[&11], 7);
     assert_eq!(chains[&12], 30);
     assert_eq!(chains[&13], 80);
+}
+
+#[test]
+fn add_external_offsets_folds_positive_only() {
+    let mut chains = vec![(1u64, 100u64), (2, 0), (3, 50)];
+    let offsets: HashMap<TrackId, i64> = [(1, 512i64), (2, -10), (3, 0)].into();
+    add_external_offsets(&mut chains, |id| offsets.get(&id).copied().unwrap_or(0));
+    // Positive offset stacks on top of the existing plugin-chain latency.
+    assert_eq!(chains[0], (1, 612));
+    // Negative offset is ignored — a live return can't be advanced.
+    assert_eq!(chains[1], (2, 0));
+    // Zero offset (and untracked tracks) are no-ops.
+    assert_eq!(chains[2], (3, 50));
+}
+
+#[test]
+fn external_offset_delays_rest_of_mix_to_meet_return() {
+    // Track 1 is an external instrument whose hardware return is 480
+    // samples round-trip late; track 2 is a plain track with no latency.
+    // After folding the offset, PDC must hold the return at 0 and delay
+    // the rest of the mix by 480 so everything lands together.
+    let mut chains = vec![(1u64, 0u64), (2, 0)];
+    add_external_offsets(&mut chains, |id| if id == 1 { 480 } else { 0 });
+    let (max, delays) = compensation_delays(&chains);
+    assert_eq!(max, 480);
+    let delays: HashMap<TrackId, u64> = delays.into_iter().collect();
+    assert_eq!(delays[&1], 0, "the late return is never delayed further");
+    assert_eq!(delays[&2], 480, "the rest of the mix waits for the return");
 }
 
 #[test]
