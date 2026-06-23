@@ -1,9 +1,11 @@
 //! Engine-side Track and Bus, with atomic hot-path accessors for the
 //! audio callback.
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use arc_swap::{ArcSwap, ArcSwapOption, Guard};
+use resonance_common::DeviceParam;
 
 use super::{BusId, FrozenSource, PluginInstanceId, TrackId, TrackOutput, TrackType};
 
@@ -99,6 +101,19 @@ pub struct Track {
     /// Wrapped in `ArcSwapOption` so the audio thread can read without
     /// blocking on the engine control thread's edits.
     pub frozen_source: ArcSwapOption<FrozenSource>,
+    /// Automatable device parameters of the device preset selected on this
+    /// external-instrument track, keyed by [`DeviceParam::id`]. Set via
+    /// `AudioCommand::SetTrackDeviceParams` when a preset is selected
+    /// (architecture doc #201 §4, epic #40). A `DeviceParam` automation
+    /// lane resolves its target through this map at render time (epic #40
+    /// E3) to find the bound CC/NRPN + value range, so the engine never
+    /// reaches back across the command/event boundary for a definition.
+    ///
+    /// Wrapped in `ArcSwap` like [`plugin_chain`](Self::plugin_chain) so
+    /// the audio thread reads the map lock-free while the control thread
+    /// swaps in a fresh one — readers see either the pre- or post-edit
+    /// map, never a torn one. Empty when no device is selected.
+    device_params: ArcSwap<HashMap<String, DeviceParam>>,
 }
 
 impl Track {
@@ -133,6 +148,7 @@ impl Track {
             midi_output_device: ArcSwapOption::const_empty(),
             midi_output_channel: None,
             frozen_source: ArcSwapOption::const_empty(),
+            device_params: ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
@@ -287,6 +303,41 @@ impl Track {
     /// "wipe all FX" path.
     pub fn clear_plugins(&self) {
         self.plugin_chain.store(Arc::new(Vec::new()));
+    }
+
+    /// Borrow this track's device-parameter map (keyed by
+    /// [`DeviceParam::id`]). The returned [`Guard`] derefs to
+    /// `&HashMap<String, DeviceParam>`. Like [`plugins`](Self::plugins)
+    /// the `ArcSwap` snapshot is a single atomic load, so holding the
+    /// guard never blocks a concurrent [`set_device_params`](Self::set_device_params).
+    pub fn device_params(&self) -> Guard<Arc<HashMap<String, DeviceParam>>> {
+        self.device_params.load()
+    }
+
+    /// Look up one device param by id. Cheap clone of the stored
+    /// [`DeviceParam`] (or `None`), so the caller can drop the map guard
+    /// before using it — handy on the render path.
+    pub fn device_param(&self, param_id: &str) -> Option<DeviceParam> {
+        self.device_params.load().get(param_id).cloned()
+    }
+
+    /// Replace the whole device-parameter map with `params`, keying each
+    /// by its `id` (last-wins on a duplicate id). Returns the stored param
+    /// ids in the order they were supplied, deduplicated — the order the
+    /// confirming `AudioEvent::TrackDeviceParamsApplied` reports. An empty
+    /// `params` clears the map. Copy-on-write publish via a single atomic
+    /// store, mirroring [`set_plugin_chain`](Self::set_plugin_chain).
+    pub fn set_device_params(&self, params: Vec<DeviceParam>) -> Vec<String> {
+        let mut map = HashMap::with_capacity(params.len());
+        let mut order = Vec::with_capacity(params.len());
+        for p in params {
+            if !map.contains_key(&p.id) {
+                order.push(p.id.clone());
+            }
+            map.insert(p.id.clone(), p);
+        }
+        self.device_params.store(Arc::new(map));
+        order
     }
 
     /// Atomically update peak L to the max of the current and new value.

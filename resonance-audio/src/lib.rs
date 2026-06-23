@@ -108,6 +108,14 @@ pub use engine::midi::{
     quantize_midi_notes_in_place,
 };
 
+/// Test surface for the `SetTrackDeviceParams` command boundary (epic #40,
+/// doc #201 §4). Exposed so the integration test in
+/// `tests/device_params_handler.rs` can drive the engine-side map update +
+/// `TrackDeviceParamsApplied` emission (and the missing-track no-op branch)
+/// without spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::midi::set_track_device_params_in_place;
+
 /// Test surface for the audio clip fade/gain/warp handlers. Exposed so
 /// the integration tests in `tests/clip_fade_gain_handlers.rs` and
 /// `tests/clip_warp_handlers.rs` can drive the command boundary (mutation

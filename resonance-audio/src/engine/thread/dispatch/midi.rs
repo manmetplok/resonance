@@ -150,6 +150,9 @@ pub(super) fn dispatch_midi(
             device,
             channel,
         } => midi::handle_set_track_midi_output(ctx, state, track_id, device, channel),
+        AudioCommand::SetTrackDeviceParams { track_id, params } => {
+            midi::handle_set_track_device_params(ctx, track_id, params)
+        }
         AudioCommand::SetExternalInstrument { config } => {
             external_instrument::set_external_instrument_in_place(
                 &mut state.external_instruments,

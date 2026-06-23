@@ -611,6 +611,19 @@ pub enum AudioEvent {
     MidiClockTempoDetected {
         bpm: f32,
     },
+    /// Confirms the engine applied `AudioCommand::SetTrackDeviceParams`
+    /// (architecture doc #201 §4, epic #40): the resolved param ids now
+    /// stored on the engine-side track, in the order they were supplied
+    /// (deduplicated by id, last-wins). Because the command/event boundary
+    /// is one-way — the app cannot query the engine's device-param map —
+    /// the app uses this echo to reconstruct/confirm its mirror of the
+    /// engine state after a project-load command replay. An empty
+    /// `param_ids` means the track's map was cleared. Not emitted for an
+    /// unknown track id.
+    TrackDeviceParamsApplied {
+        track_id: TrackId,
+        param_ids: Vec<String>,
+    },
 
     // -- Freeze events --
     /// Periodic progress update for a freeze render, emitted as the

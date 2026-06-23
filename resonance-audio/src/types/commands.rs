@@ -6,6 +6,8 @@ use resonance_common::{BindingId, ControllerMap, MidiBinding, MidiTarget};
 
 use resonance_common::{AutomationLane, AutomationTarget};
 
+use resonance_common::DeviceParam;
+
 use super::{
     ABSource, BusId, ClipId, ExportSettings, FadeCurve, FrozenSource, MidiNote, PluginInstanceId,
     ReferenceId, SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth, StemTarget,
@@ -615,6 +617,26 @@ pub enum AudioCommand {
     /// changes nothing. No-op when the track is not an external instrument.
     DetectExternalInstrumentLatency {
         track_id: TrackId,
+    },
+
+    /// Hand the engine the automatable device parameters of the device
+    /// preset selected on an external-instrument track (architecture doc
+    /// #201 §4, epic #40). The engine stores each [`DeviceParam`] on the
+    /// engine-side track keyed by `DeviceParam::id` so a
+    /// `AutomationTarget::DeviceParam` lane can be mapped to its bound
+    /// CC/NRPN at render time **without reaching back across the
+    /// command/event boundary** (no engine getters). The app sends this
+    /// when a device preset is selected or changed on the track.
+    ///
+    /// An empty `params` vec clears the map (acts as a "no device
+    /// selected" / clear command). The engine replaces the whole map on
+    /// every command — it is not a merge — and confirms with
+    /// [`crate::types::AudioEvent::TrackDeviceParamsApplied`]. Per-block
+    /// lane evaluation that actually emits the MIDI is a later todo (E3);
+    /// this command only plumbs the binding map into the engine.
+    SetTrackDeviceParams {
+        track_id: TrackId,
+        params: Vec<DeviceParam>,
     },
 
     /// Configure the global MIDI clock master (Resonance → device).

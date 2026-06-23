@@ -140,6 +140,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::ListMidiOutputDevices
         | AudioCommand::SetTrackMidiInput { .. }
         | AudioCommand::SetTrackMidiOutput { .. }
+        | AudioCommand::SetTrackDeviceParams { .. }
         | AudioCommand::SetExternalInstrument { .. }
         | AudioCommand::ClearExternalInstrument { .. }
         | AudioCommand::SetExternalInstrumentPatch { .. }

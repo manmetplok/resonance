@@ -33,7 +33,7 @@ pub fn set_automation_lane_in_place(
     mut lane: AutomationLane,
 ) {
     lane.sort_points();
-    let target = lane.target;
+    let target = lane.target.clone();
     lanes.insert(target, lane.clone());
     let _ = event_tx.send(AudioEvent::AutomationLaneChanged { lane });
 }
