@@ -8,7 +8,8 @@ use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
 use crate::reference::ReferenceMessage;
 use crate::state::{
-    ClipEdge, ExportMode, LoopDragTarget, MixerInspectorGroup, SelectedGlobalEvent, ViewMode,
+    ClipEdge, ExportMode, LoopDragTarget, MixerInspectorGroup, ParsedImport, PlacementMode,
+    PlacementStart, SelectedGlobalEvent, TempoAlignment, TempoChoice, ViewMode,
 };
 use resonance_audio::types::{
     BusId, ClipId, PluginInstanceId, ScannedPlugin, TrackId, TrackOutput,
@@ -32,6 +33,7 @@ pub enum Message {
     ProjectIo(ProjectIoMessage),
     Reference(ReferenceMessage),
     Export(ExportMessage),
+    Import(ImportMessage),
     Ui(UiMessage),
     /// Timer tick driving VU meters and auto-follow. Kept at top level to
     /// avoid wrapping cost on the hot path.
@@ -503,4 +505,53 @@ pub enum GlobalTrackMessage {
     SelectEvent(Option<SelectedGlobalEvent>),
     /// Delete the currently selected global track event.
     DeleteSelectedEvent,
+}
+
+/// User actions for the MIDI Import modal (see [`crate::state::ImportDialogState`]
+/// and [`crate::view::import_dialog`]). Lifecycle: `Open` → file
+/// chosen/parsed → review / tempo-conflict → `Confirm`, or `Cancel` to
+/// dismiss. The interactions beyond open/close drive the dialog's review
+/// state; the parse task and the actual import land in the follow-up
+/// todos (doc #158), so their orchestration is not wired here yet.
+#[derive(Debug, Clone)]
+pub enum ImportMessage {
+    /// Open the modal at the Drop stage.
+    Open,
+    /// Dismiss the modal without importing.
+    Cancel,
+    /// A recognized MIDI file is being dragged over the window. Opens the
+    /// modal at the Drop stage so the drop target is visible; a no-op when
+    /// a dialog is already open. Emitted by the window file-drop
+    /// subscription in `update.rs`.
+    HoverFile,
+    /// The dragged file(s) left the window without being dropped. Dismisses
+    /// a dialog that was opened purely by the hover (and is still empty), so
+    /// a stray drag-over doesn't leave the modal stuck open.
+    HoverLeft,
+    /// The user picked a file via the file dialog.
+    FileChosen(std::path::PathBuf),
+    /// A `.mid`/`.midi` file was dropped (onto the window or the modal).
+    /// Opens the modal if it isn't already open, then kicks off the parse.
+    FileDropped(std::path::PathBuf),
+    /// Background parse finished — `Ok` carries the parsed summary + rows,
+    /// `Err` a user-facing error string.
+    ParseCompleted(Result<ParsedImport, String>),
+    /// Toggle whether the row at this index is included in the import.
+    ToggleTrack(usize),
+    /// Select (`true`) or deselect (`false`) every row at once.
+    SetAllTracks(bool),
+    /// Rename the destination track for the row at this index.
+    RenameTrack(usize, String),
+    /// Choose how to reconcile the file vs project tempo.
+    SetTempoChoice(TempoChoice),
+    /// Set the timeline anchor for imported clips.
+    SetPlacementStart(PlacementStart),
+    /// Switch between new-tracks and merge-into-selected placement.
+    SetPlacementMode(PlacementMode),
+    /// Set the merge target track for `MergeIntoSelected`.
+    SetMergeTarget(Option<TrackId>),
+    /// Choose bar- vs time-aligned tempo-conflict resolution.
+    SetConflictAlignment(TempoAlignment),
+    /// Confirm and start the import.
+    Confirm,
 }

@@ -59,6 +59,10 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         Message::ProjectIo(_) => false,
         // Export modal drives its own overlay; gated at the open site.
         Message::Export(_) => false,
+        // The MIDI Import modal is an auxiliary overlay that imports into
+        // a project — block it (like Open Settings / Add Track) so it
+        // can't steal focus while the startup modal owns the screen.
+        Message::Import(_) => true,
         // Timer tick: harmless, drives VU meters — allow.
         Message::Tick => false,
         // Window close request: always allow so the app can exit.
@@ -96,6 +100,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::Viewport(_)
         | Message::Reference(_)
         | Message::GlobalTrack(_)
+        | Message::Import(_)
         | Message::Ui(_)
         | Message::Export(_)
         | Message::Undo

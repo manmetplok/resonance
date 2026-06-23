@@ -136,6 +136,10 @@ pub struct Resonance {
     /// MIDI track. Holds the source track id plus the user's current
     /// device/port selection.
     pub(crate) bounce_dialog: Option<crate::state::BounceDialogState>,
+    /// When set, the "Import MIDI" modal is shown. Holds the import
+    /// flow's stage, the parsed per-track rows, and the user's tempo /
+    /// placement choices. `None` when the modal is closed.
+    pub(crate) import_dialog: Option<crate::state::ImportDialogState>,
     /// When set, a bounce-in-place run is in flight. Drives the modal
     /// progress overlay and gates transport / mutating UI so the user
     /// can't disturb the render mid-flight. Cleared by
@@ -456,6 +460,7 @@ impl Resonance {
             plugin_index: std::collections::HashMap::new(),
             confirm_delete_track: None,
             bounce_dialog: None,
+            import_dialog: None,
             bounce_in_progress: None,
             export_dialog: None,
             dirty: false,

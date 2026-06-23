@@ -476,6 +476,10 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         Message::Ui(_) => UndoAction::Skip,
         Message::ProjectIo(_) => UndoAction::Skip,
         Message::Export(_) => UndoAction::Skip,
+        // The import modal is transient dialog state until the actual
+        // import lands (a follow-up todo, doc #158); none of its
+        // interactions mutate the project yet, so nothing to record.
+        Message::Import(_) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::SelectEvent(_)) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(_)) => UndoAction::Begin,
         Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag) => UndoAction::Commit,

@@ -12,6 +12,7 @@ pub mod export;
 pub mod gates;
 pub mod global_track;
 pub mod marker;
+pub mod import;
 pub mod master;
 pub mod midi_clip;
 pub mod midi_editor;
@@ -92,6 +93,7 @@ impl crate::Resonance {
             Message::ProjectIo(m) => project_io::handle(self, m),
             Message::Reference(m) => reference::handle(self, m),
             Message::Export(m) => export::handle(self, m),
+            Message::Import(m) => import::handle(self, m),
             Message::Ui(m) => ui::handle(self, m),
             Message::Tick => tick::handle_tick(self),
             Message::WindowCloseRequested(id) => {
@@ -169,7 +171,24 @@ impl crate::Resonance {
         });
         let close_requests = iced::window::close_requests().map(Message::WindowCloseRequested);
 
-        let mut subs = vec![tick, keys, close_requests];
+        // Window-level file drops: dragging a `.mid`/`.midi` over the
+        // window opens the Import modal (showing its drop target) and a
+        // drop kicks off the parse. Non-MIDI files are ignored. These
+        // route through `update()` like any other message, so the
+        // startup-modal gate blocks them until a project is open.
+        let file_drops = iced::window::events().filter_map(|(_id, event)| match event {
+            iced::window::Event::FileHovered(path) => {
+                import::is_midi_path(&path).then_some(Message::Import(ImportMessage::HoverFile))
+            }
+            iced::window::Event::FileDropped(path) => import::is_midi_path(&path)
+                .then_some(Message::Import(ImportMessage::FileDropped(path))),
+            iced::window::Event::FilesHoveredLeft => {
+                Some(Message::Import(ImportMessage::HoverLeft))
+            }
+            _ => None,
+        });
+
+        let mut subs = vec![tick, keys, close_requests, file_drops];
 
         // Reference drag-drop: while the Mix view is showing, forward
         // dropped audio files (wav/flac/mp3/ogg) to the reference loader.
