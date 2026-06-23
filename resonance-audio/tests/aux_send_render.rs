@@ -50,6 +50,11 @@ fn dc_track(id: TrackId, output: TrackOutput) -> (Track, AudioClip) {
         fade_out_curve: FadeCurve::default(),
         gain_db: 0.0,
         vocal_tuning: None,
+        warp_enabled: false,
+        original_bpm: None,
+        transpose_semitones: 0.0,
+        warp_algorithm: Default::default(),
+        warp_markers: Vec::new(),
     };
     (track, clip)
 }

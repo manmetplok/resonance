@@ -25,6 +25,7 @@ fn clip(id: u64, track_id: u64) -> ClipState {
         fade_out_curve: FadeCurve::default(),
         gain_db: 0.0,
         waveform_peaks: Vec::new(),
+        vocal_tuning: None,
     }
 }
 
