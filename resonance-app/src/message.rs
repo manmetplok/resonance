@@ -471,6 +471,15 @@ pub enum ProjectIoMessage {
     /// targets a per-session scratch dir when the project was never saved.
     /// Fired by the change-gated autosave timer (todo #465).
     Autosave,
+    /// Capture the open project as a reusable user template (todo #666).
+    /// `name`/`description` label it in the picker; the two booleans are
+    /// the capture toggles (carry the tempo map / the master FX chain).
+    SaveAsTemplate {
+        name: String,
+        description: String,
+        include_markers_and_tempo: bool,
+        include_master_chain: bool,
+    },
     OpenProject,
     /// User clicked a recent entry in the startup modal.
     OpenRecent(std::path::PathBuf),
@@ -481,6 +490,11 @@ pub enum ProjectIoMessage {
     /// set, skips the recents list) rather than a manual save.
     ProjectSaved(Result<(), String>, bool),
     ProjectLoaded(Result<Box<LoadedProject>, String>),
+    /// A *user* template finished loading from disk (todo #665). Carries the
+    /// same `LoadedProject` payload as [`Self::ProjectLoaded`], but the
+    /// instantiate handler replays it as a fresh, untitled project (path left
+    /// `None`) so the template source on disk is never overwritten.
+    TemplateLoaded(Result<Box<LoadedProject>, String>),
     ExportChordSheet,
     ChordSheetPathSelected(Option<String>, Vec<u8>),
 }

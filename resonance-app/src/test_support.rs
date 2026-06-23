@@ -557,4 +557,18 @@ impl Resonance {
     ) {
         self.apply_freeze_restore(target);
     }
+
+    /// Test-only: the current project path. `None` for an untitled project
+    /// (including one freshly instantiated from a template).
+    #[doc(hidden)]
+    pub fn test_project_path(&self) -> Option<&std::path::Path> {
+        self.io.project_path.as_deref()
+    }
+
+    /// Test-only: whether a project is active (startup modal dismissed).
+    #[doc(hidden)]
+    pub fn test_has_active_project(&self) -> bool {
+        self.io.has_active_project
+    }
+
 }

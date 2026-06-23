@@ -4,9 +4,11 @@
 //! tasks live in `dialogs.rs`.
 
 mod dialogs;
+mod instantiate;
 mod replay;
 mod replay_diff;
 mod serialize;
+mod templates;
 
 use std::collections::HashMap;
 
@@ -18,10 +20,17 @@ use crate::project::SaveCollector;
 use crate::Resonance;
 
 pub use dialogs::save_project_as_dialog;
+pub use instantiate::{begin_instantiate, instantiate_builtin, load_user_template_task};
 pub use replay::replay_loaded_project;
 pub(crate) use replay::restore_references;
 pub use replay_diff::try_diff_replay;
 pub use serialize::build_project_file;
+pub use templates::{
+    builtin_templates, compute_summary, ensure_templates_dir, scan_templates_in,
+    scan_user_templates, templates_dir, write_template, BuiltinProject, BuiltinTemplateId,
+    StaleReason, StaleTemplate, Template, TemplateCaptureOptions, TemplateEntry, TemplateKind,
+    TemplateMetadata, TemplateSummary,
+};
 
 /// Route a `ProjectIoMessage` to the appropriate handler.
 pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
@@ -46,6 +55,20 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
         ProjectIoMessage::Autosave => {
             return start_autosave(r);
+        }
+        ProjectIoMessage::SaveAsTemplate {
+            name,
+            description,
+            include_markers_and_tempo,
+            include_master_chain,
+        } => {
+            let options = templates::TemplateCaptureOptions {
+                include_markers_and_tempo,
+                include_master_chain,
+            };
+            if let Err(e) = save_current_as_template(r, &name, &description, options) {
+                r.error_message = Some(format!("Save template failed: {e}"));
+            }
         }
         ProjectIoMessage::SavePathSelected(Some(path)) => {
             let path = if path.ends_with(".rproj") {
@@ -137,6 +160,12 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
         ProjectIoMessage::ProjectLoaded(Err(e)) => {
             r.error_message = Some(format!("Load failed: {e}"));
+        }
+        ProjectIoMessage::TemplateLoaded(Ok(loaded)) => {
+            instantiate::begin_instantiate(r, loaded);
+        }
+        ProjectIoMessage::TemplateLoaded(Err(e)) => {
+            r.error_message = Some(format!("Open template failed: {e}"));
         }
         ProjectIoMessage::ExportChordSheet => {
             let pdf_bytes = crate::chord_sheet_pdf::build_chord_sheet_pdf(
@@ -233,4 +262,53 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
 /// snapshots. `None` when the platform has no cache directory.
 fn autosave_scratch_dir(r: &Resonance) -> Option<std::path::PathBuf> {
     dirs::cache_dir().map(|c| c.join("resonance").join("autosave").join(r.session_id()))
+}
+
+/// Capture the open project as a user template (todo #666).
+///
+/// Synchronous: it serializes the current app state via
+/// [`build_project_file`], pairs it with the cached plugin-state blobs and
+/// the in-memory MIDI clips, and writes a fresh template folder under the
+/// user templates dir via [`templates::write_template`]. The plugin states
+/// come from `plugin_state_cache` (the same snapshot undo and "Save as
+/// preset" use) rather than a fresh engine round-trip, so no async save
+/// collector is needed. Returns the created folder path.
+fn save_current_as_template(
+    r: &Resonance,
+    name: &str,
+    description: &str,
+    options: templates::TemplateCaptureOptions,
+) -> Result<std::path::PathBuf, String> {
+    let root = templates::ensure_templates_dir()
+        .ok_or_else(|| "could not resolve the templates directory".to_string())?;
+
+    let project = build_project_file(r);
+
+    let plugin_states: Vec<(PluginInstanceId, Vec<u8>)> = r
+        .plugin_state_cache
+        .iter()
+        .map(|(id, data)| (*id, data.clone()))
+        .collect();
+
+    let midi_clips: Vec<(ClipId, Vec<MidiNote>)> = r
+        .midi_clips
+        .iter()
+        .map(|mc| (mc.id, mc.notes.clone()))
+        .collect();
+
+    let created_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    templates::write_template(
+        &root,
+        name,
+        description,
+        project,
+        &plugin_states,
+        &midi_clips,
+        options,
+        created_secs,
+    )
 }
