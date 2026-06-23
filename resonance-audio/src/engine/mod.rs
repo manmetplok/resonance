@@ -59,7 +59,8 @@ pub use audition::{
 mod automation;
 pub use automation::{
     clear_automation_lane_in_place, set_automation_lane_in_place,
-    set_automation_read_enabled_in_place, AutomationLanes, AutomationSnapshot, ResolvedParamLane,
+    set_automation_read_enabled_in_place, AutomationLanes, AutomationSnapshot, LiveValueEmitter,
+    ResolvedParamLane, AUTOMATED_VALUE_EPSILON, AUTOMATED_VALUE_THROTTLE,
 };
 mod bounce_realtime;
 mod busses;

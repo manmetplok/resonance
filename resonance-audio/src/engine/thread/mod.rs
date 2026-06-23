@@ -280,6 +280,12 @@ pub(crate) fn engine_thread(
     // cycle-record seam handler can roll the just-finished pass into a take.
     let mut last_playhead: SamplePos = 0;
 
+    // Live automated-value emission (todo #377): throttle clock + the
+    // per-target "last value sent" memo. Reset whenever the transport
+    // isn't rolling so a fresh play re-tints the controls.
+    let mut last_automated_value_emit = std::time::Instant::now();
+    let mut live_value_emitter = automation::LiveValueEmitter::default();
+
     // Report actual sample rate to GUI
     let _ = ctx
         .event_tx
@@ -406,6 +412,28 @@ pub(crate) fn engine_thread(
             last_playhead_report = std::time::Instant::now();
             let pos = ctx.shared.playhead.load(Ordering::SeqCst);
             let _ = ctx.event_tx.send(AudioEvent::PlayheadMoved(pos));
+        }
+
+        // Emit throttled (control-rate) live automated values so the app
+        // can tint faders/knobs with the lane value while Read is on.
+        // One batch every ~30 ms while playing; only targets whose value
+        // moved are sent (doc #162 §2, todo #377). When the transport
+        // isn't rolling, forget the memo once so the next play re-emits.
+        if ctx.shared.playing.load(Ordering::SeqCst) {
+            if last_automated_value_emit.elapsed() >= automation::AUTOMATED_VALUE_THROTTLE {
+                last_automated_value_emit = std::time::Instant::now();
+                let frame = ctx.shared.playhead.load(Ordering::SeqCst);
+                for (target, value_norm) in
+                    live_value_emitter.poll(&state.automation_lanes, frame)
+                {
+                    let _ = ctx.event_tx.send(AudioEvent::AutomatedValue {
+                        target: target.clone(),
+                        value_norm: *value_norm,
+                    });
+                }
+            }
+        } else if !live_value_emitter.is_idle() {
+            live_value_emitter.reset();
         }
     }
 

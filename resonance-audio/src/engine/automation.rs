@@ -14,6 +14,7 @@
 //! or allocating on the audio thread.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use crossbeam_channel::Sender;
 use indexmap::IndexMap;
@@ -152,5 +153,73 @@ pub fn set_automation_read_enabled_in_place(
         lane.enabled = enabled;
         let lane = lane.clone();
         let _ = event_tx.send(AudioEvent::AutomationLaneChanged { lane });
+    }
+}
+
+/// Control-rate cadence for the live automated-value emission (doc #162
+/// §2, todo #377): at most one `AutomatedValue` burst per target every
+/// ~30 ms while the transport rolls. The engine loop already wakes every
+/// ~16 ms, so this is enforced with a wall-clock check, not a busy wait.
+pub const AUTOMATED_VALUE_THROTTLE: Duration = Duration::from_millis(30);
+
+/// Smallest change in a normalized lane value (`0.0..=1.0`) that warrants
+/// a fresh `AutomatedValue`. Below this the fader/knob tint wouldn't
+/// visibly move, so the emission is suppressed — the same "only when the
+/// value moves perceptibly" rule the MIDI-clock tempo tracker applies, so
+/// a flat lane region doesn't spam the event queue every tick.
+pub const AUTOMATED_VALUE_EPSILON: f32 = 1.0 / 512.0;
+
+/// Engine-thread bookkeeping for the throttled live automated-value
+/// emission (todo #377). Remembers the last normalized value sent per
+/// target so a steady (flat) lane region emits once and then falls quiet,
+/// and reuses a scratch buffer so collecting each ~30 ms batch doesn't
+/// allocate. Lives on the engine control thread, never the audio callback.
+#[derive(Debug, Default)]
+pub struct LiveValueEmitter {
+    last_sent: HashMap<AutomationTarget, f32>,
+    scratch: Vec<(AutomationTarget, f32)>,
+}
+
+impl LiveValueEmitter {
+    /// Sample every **enabled** (Read-on) lane at `frame` and return the
+    /// `(target, value_norm)` pairs whose normalized value moved at least
+    /// [`AUTOMATED_VALUE_EPSILON`] since the previous emission, updating the
+    /// per-target memo in place. Read-disabled lanes are skipped entirely
+    /// (the app keeps showing the static value). The returned slice borrows
+    /// the reused scratch buffer, so it's valid until the next call.
+    pub fn poll(
+        &mut self,
+        lanes: &AutomationLanes,
+        frame: u64,
+    ) -> &[(AutomationTarget, f32)] {
+        self.scratch.clear();
+        for lane in lanes.values() {
+            if !lane.enabled {
+                continue;
+            }
+            let value = lane.sample(frame);
+            let moved = match self.last_sent.get(&lane.target) {
+                Some(prev) => (prev - value).abs() >= AUTOMATED_VALUE_EPSILON,
+                None => true,
+            };
+            if moved {
+                self.last_sent.insert(lane.target.clone(), value);
+                self.scratch.push((lane.target.clone(), value));
+            }
+        }
+        &self.scratch
+    }
+
+    /// Whether anything has been emitted since the last [`Self::reset`].
+    pub fn is_idle(&self) -> bool {
+        self.last_sent.is_empty()
+    }
+
+    /// Forget every memoized value so the next [`Self::poll`] re-emits a
+    /// fresh value for each enabled lane. Called when the transport stops
+    /// or pauses, so a later replay — possibly from the very same frame —
+    /// re-tints the controls instead of being suppressed as "unchanged".
+    pub fn reset(&mut self) {
+        self.last_sent.clear();
     }
 }

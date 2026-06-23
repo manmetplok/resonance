@@ -151,7 +151,8 @@ pub use engine::reference::{
 #[doc(hidden)]
 pub use engine::{
     clear_automation_lane_in_place, set_automation_lane_in_place,
-    set_automation_read_enabled_in_place, AutomationLanes,
+    set_automation_read_enabled_in_place, AutomationLanes, LiveValueEmitter,
+    AUTOMATED_VALUE_EPSILON, AUTOMATED_VALUE_THROTTLE,
 };
 
 /// Test surface for the external-instrument config handlers. Exposed so the
