@@ -36,10 +36,10 @@ pub(crate) fn view_group_header(
     let caret = mouse_area(crate::view::controls::collapse_caret(!group.is_collapsed))
         .on_press(Message::Group(GroupMessage::ToggleCollapse(group_id)));
 
-    // ---- Identity colour swatch (14 px rounded square, identity base) ---
+    // ---- Identity colour swatch (rounded square, identity base) ---
     let swatch = container(Space::new())
-        .width(14)
-        .height(14)
+        .width(theme::GROUP_SWATCH_SIZE)
+        .height(theme::GROUP_SWATCH_SIZE)
         .style(move |_theme| container::Style {
             background: Some(iced::Background::Color(base)),
             border: iced::Border {

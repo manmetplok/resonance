@@ -4,6 +4,7 @@
 //! `bus_strip.rs`, `master_strip.rs`, `plugin_panel.rs`.
 
 mod bus_strip;
+mod group_strip;
 mod inspector;
 mod master_strip;
 pub(crate) mod picks;
@@ -13,11 +14,15 @@ mod track_strip;
 use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{alignment, Color, Element, Length};
 
+use resonance_audio::types::ScannedPlugin;
+
 use crate::message::*;
 use crate::state::*;
 use crate::theme;
 
 use picks::PluginOwner;
+
+pub(crate) use group_strip::MixerTopItem;
 
 impl crate::Resonance {
     pub(crate) fn view_mixer(&self) -> Element<'_, Message> {
@@ -26,70 +31,43 @@ impl crate::Resonance {
         let available_plugins = &self.available_plugins;
 
         // -- Top row: track strips + master strip on the right. --
-        // Sub-tracks render as their own strips next to the parent. The
-        // previous pass walked `sorted_tracks` linearly, which placed
-        // sub-tracks at their `.order` position — wherever they happened
-        // to be allocated, often after several unrelated tracks. That
-        // broke the parent → child relationship at a glance.
-        //
-        // New pass: for every top-level track, emit the parent strip
-        // and immediately follow it with its sub-tracks (in
-        // `output_port_index` order — the same order the engine fans
-        // them out). Sub-tracks are skipped in the outer iteration so
-        // they only appear right after their parent. Each parent + its
-        // sub-tracks is wrapped in a tight inner row (0 px spacing) so
-        // the cluster visually attaches; the outer row keeps
-        // `MIXER_STRIP_GAP` between unrelated tracks, and the lane gets
-        // a `MIXER_LANE_HPAD` lead-in so the first strip doesn't sit
-        // flush against the window edge.
+        // The lane is built in two clustering layers so related strips
+        // stay visually attached instead of scattering to their `.order`
+        // positions:
+        //   1. Top-level order (`mixer_top_level_items`): ungrouped
+        //      tracks keep their sorted position; a track group folds
+        //      into one coloured cluster at the slot of its first member
+        //      (`view_mixer_group_cluster`).
+        //   2. Per track (`view_track_cluster`): a parent strip is
+        //      immediately followed by its expanded sub-tracks (in
+        //      `output_port_index` order — how the engine fans them out)
+        //      in a tight inner row (0 px spacing).
+        // The outer row keeps `MIXER_STRIP_GAP` between unrelated
+        // strips/clusters, and the lane gets a `MIXER_LANE_HPAD` lead-in
+        // so the first strip doesn't sit flush against the window edge.
         let mut track_strip_row = row![]
             .spacing(theme::MIXER_STRIP_GAP)
             .padding([0.0, theme::MIXER_LANE_HPAD]);
-        for track in sorted_tracks {
-            if track.sub_track.is_some() {
-                // Already emitted by its parent's cluster (or skipped
-                // because its parent was collapsed).
-                continue;
-            }
-
-            let parent_strip = self.view_channel_strip(track, available_plugins);
-
-            let parent_expanded = self.mixer.expanded_sub_track_parents.contains(&track.id);
-            let mut subs: Vec<&TrackState> = if parent_expanded {
-                sorted_tracks
-                    .iter()
-                    .filter(|t| {
-                        matches!(t.sub_track, Some(link) if link.parent_track_id == track.id)
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            // Sort sub-strips by their plugin output port index, not by
-            // `.order`. The port index is stable across project
-            // load/save; `.order` is the allocation-time counter and
-            // can interleave with unrelated tracks. With a stable port
-            // sort, "Kick / Snare / HH / Tom" always renders in the
-            // same left-to-right order regardless of when each
-            // sub-track was created.
-            subs.sort_by_key(|t| {
-                t.sub_track
-                    .map(|l| l.output_port_index)
-                    .unwrap_or(0)
-            });
-
-            if subs.is_empty() {
-                track_strip_row = track_strip_row.push(parent_strip);
-            } else {
-                // Cluster: parent + sub-strips with no internal gap, so
-                // the recessed sub-strip backgrounds visually butt up
-                // against the parent strip.
-                let mut cluster = row![parent_strip].spacing(0);
-                for sub in subs {
-                    cluster =
-                        cluster.push(self.view_sub_channel_strip(sub, available_plugins));
+        for item in self.mixer_top_level_items() {
+            match item {
+                group_strip::MixerTopItem::Track(track_id) => {
+                    if let Some(track) = sorted_tracks.iter().find(|t| t.id == track_id) {
+                        track_strip_row = track_strip_row.push(self.view_track_cluster(
+                            track,
+                            sorted_tracks,
+                            available_plugins,
+                        ));
+                    }
                 }
-                track_strip_row = track_strip_row.push(cluster);
+                group_strip::MixerTopItem::Group(group_id) => {
+                    if let Some(group) = self.track_groups.get_group(group_id) {
+                        track_strip_row = track_strip_row.push(self.view_mixer_group_cluster(
+                            group,
+                            sorted_tracks,
+                            available_plugins,
+                        ));
+                    }
+                }
             }
         }
         // Construct the scrollable with its horizontal direction up
@@ -156,6 +134,43 @@ impl crate::Resonance {
             .height(Length::Fill)
             .style(theme::base_bg)
             .into()
+    }
+
+    /// Render a top-level track strip plus its expanded sub-track strips as
+    /// a tight (0 px) cluster — the parent + sub-track grouping lifted out
+    /// of `view_mixer` so it is reused both standalone and inside a group
+    /// cluster (`view_mixer_group_cluster`). Sub-tracks sort by their plugin
+    /// `output_port_index` (stable across save/load) and render through the
+    /// recessed `view_sub_channel_strip`; an unexpanded or sub-less parent
+    /// just returns its own strip.
+    pub(super) fn view_track_cluster<'a>(
+        &'a self,
+        track: &'a TrackState,
+        sorted_tracks: &'a [TrackState],
+        available_plugins: &'a [ScannedPlugin],
+    ) -> Element<'a, Message> {
+        let parent_strip = self.view_channel_strip(track, available_plugins);
+
+        let parent_expanded = self.mixer.expanded_sub_track_parents.contains(&track.id);
+        if !parent_expanded {
+            return parent_strip;
+        }
+        let mut subs: Vec<&TrackState> = sorted_tracks
+            .iter()
+            .filter(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id))
+            .collect();
+        if subs.is_empty() {
+            return parent_strip;
+        }
+        subs.sort_by_key(|t| t.sub_track.map(|l| l.output_port_index).unwrap_or(0));
+
+        // Cluster: parent + sub-strips with no internal gap, so the recessed
+        // sub-strip backgrounds visually butt up against the parent strip.
+        let mut cluster = row![parent_strip].spacing(0);
+        for sub in subs {
+            cluster = cluster.push(self.view_sub_channel_strip(sub, available_plugins));
+        }
+        cluster.into()
     }
 
     /// Small "+ Bus" strip that lives in the same slot the master strip
