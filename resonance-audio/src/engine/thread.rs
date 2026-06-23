@@ -230,7 +230,7 @@ pub(crate) fn engine_thread(
                 let refresh_latency = plugins::affects_latency(&cmd);
                 dispatch(&ctx, &mut state, cmd);
                 if refresh_latency {
-                    plugins::refresh_latency_comp(&ctx);
+                    plugins::refresh_latency_comp(&ctx, &state.external_instruments);
                 }
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
