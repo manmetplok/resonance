@@ -89,6 +89,7 @@ pub fn try_diff_replay(
 
     // -- Compose state (definitions, placements, drum groups, lyrics) --
     apply_compose(r, target_file, extras);
+    apply_markers(r, target_file);
 
     // -- Reference (A/B) content ---------------------------------------
     // References aren't in the `ProjectFile`, so they ride along in the
@@ -189,6 +190,12 @@ fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     if !id_set_eq(
         a.drum_patterns.iter().map(|p| p.id),
         b.drum_patterns.iter().map(|p| p.id),
+    ) {
+        return false;
+    }
+    if !id_set_eq(
+        a.arrangement_markers.iter().map(|m| m.id),
+        b.arrangement_markers.iter().map(|m| m.id),
     ) {
         return false;
     }
@@ -741,6 +748,10 @@ fn midi_notes_equal(a: &[MidiNote], b: &[MidiNote]) -> bool {
 fn apply_tempo(r: &mut Resonance, b: &ProjectFile) {
     restore_tempo_events(r, b);
     r.rebuild_and_send_tempo();
+}
+
+fn apply_markers(r: &mut Resonance, b: &ProjectFile) {
+    r.markers = crate::state::ArrangementMarkers::from(b.arrangement_markers.clone());
 }
 
 #[cfg(test)]

@@ -122,6 +122,9 @@ pub struct ProjectFile {
     /// mix-monitoring state on legacy projects.
     #[serde(default)]
     pub reference_settings: ProjectReferenceSettings,
+    /// Arrangement markers on the timeline. Empty on legacy projects.
+    #[serde(default)]
+    pub arrangement_markers: Vec<crate::state::ArrangementMarker>,
 }
 
 /// An empty project at the current format version with neutral
@@ -160,6 +163,7 @@ impl Default for ProjectFile {
             drum_patterns: Vec::new(),
             references: Vec::new(),
             reference_settings: ProjectReferenceSettings::default(),
+            arrangement_markers: Vec::new(),
         }
     }
 }

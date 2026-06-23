@@ -213,5 +213,6 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         drum_patterns: r.compose.drum_patterns.clone(),
         references,
         reference_settings,
+        arrangement_markers: r.markers.markers.clone(),
     }
 }

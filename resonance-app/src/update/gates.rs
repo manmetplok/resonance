@@ -18,6 +18,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // Interactive user input: block.
         Message::Compose(_)
         | Message::Transport(_)
+        | Message::Marker(_)
         | Message::Track(_)
         | Message::Bus(_)
         | Message::Master(_)
@@ -82,6 +83,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         // Everything else: block.
         Message::Compose(_)
         | Message::Transport(_)
+        | Message::Marker(_)
         | Message::Track(_)
         | Message::Bus(_)
         | Message::Master(_)

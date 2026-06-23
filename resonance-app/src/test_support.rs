@@ -320,4 +320,41 @@ impl Resonance {
     pub fn test_arm_midi_learn(&mut self, target: resonance_common::MidiTarget) {
         self.midi_map.learn_target = Some(target);
     }
+
+    /// Test-only: borrow the arrangement-marker collection so the marker
+    /// reducer tests can assert post-dispatch state (count, order,
+    /// names, colours, region bounds) without poking private fields.
+    #[doc(hidden)]
+    pub fn test_markers(&self) -> &state::ArrangementMarkers {
+        &self.markers
+    }
+
+    /// Test-only: insert a marker straight into state, bypassing the
+    /// `AddAtPlayhead` snap path, so a test can seed markers at exact
+    /// sample positions before exercising rename / move / jump / loop
+    /// reducers. Returns the marker's id.
+    #[doc(hidden)]
+    pub fn test_add_marker(&mut self, marker: state::ArrangementMarker) -> u64 {
+        self.markers.add(marker)
+    }
+
+    /// Test-only: the current transport playhead sample. Marker
+    /// navigation reducers move this in lockstep with the `SeekTo`
+    /// command sent to the engine.
+    #[doc(hidden)]
+    pub fn test_playhead(&self) -> u64 {
+        self.transport.playhead
+    }
+
+    /// Test-only: the transport loop range / enabled flags
+    /// `(loop_in, loop_out, loop_enabled)`. `LoopToRegion` sets these in
+    /// lockstep with the `SetLoopRange` command sent to the engine.
+    #[doc(hidden)]
+    pub fn test_loop_state(&self) -> (u64, u64, bool) {
+        (
+            self.transport.loop_in,
+            self.transport.loop_out,
+            self.transport.loop_enabled,
+        )
+    }
 }

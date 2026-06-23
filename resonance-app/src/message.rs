@@ -19,6 +19,7 @@ pub enum Message {
     Compose(ComposeMessage),
     GlobalTrack(GlobalTrackMessage),
     Transport(TransportMessage),
+    Marker(MarkerMessage),
     Track(TrackMessage),
     Bus(BusMessage),
     Master(MasterMessage),
@@ -60,6 +61,49 @@ pub enum TransportMessage {
     StartLoopDrag(LoopDragTarget),
     UpdateLoopDrag(f32),
     EndLoopDrag,
+}
+
+/// Arrangement-marker actions, routed like [`TransportMessage`] and
+/// handled by `update/marker.rs`. The mutating variants
+/// (`AddAtPlayhead`, `Rename`, `Recolor`, `Delete`, `MoveStart`,
+/// `SetRegionEnd`, `LoopToRegion`, `SeedFromSections`) record an undo
+/// entry; the navigation variants (`JumpToNext`, `JumpToPrev`, `JumpTo`,
+/// `PlayFromMarker`) only move the playhead / transport and are not
+/// undoable, mirroring `SeekToSample` / `Play`.
+#[derive(Debug, Clone)]
+pub enum MarkerMessage {
+    /// Drop a new point marker at the current playhead (snapped to the
+    /// grid via `snap_sample_to_grid_tempo`).
+    AddAtPlayhead,
+    /// Replace all section-seeded markers with a fresh set derived from
+    /// the current Compose section placements — one ranged marker per
+    /// placement, named/coloured from its section definition. Markers the
+    /// user placed by hand are left untouched.
+    SeedFromSections,
+    /// Rename the marker with the given id.
+    Rename(u64, String),
+    /// Recolor the marker with the given id.
+    Recolor(u64, [u8; 3]),
+    /// Delete the marker with the given id.
+    Delete(u64),
+    /// Move a marker's start to a new sample position (snapped to the
+    /// grid). The collection re-sorts after the move.
+    MoveStart(u64, u64),
+    /// Set (or clear, with `None`) a marker's region end, turning a
+    /// point marker into a ranged region and back.
+    SetRegionEnd(u64, Option<u64>),
+    /// Move the playhead to the next marker after the playhead.
+    JumpToNext,
+    /// Move the playhead to the previous marker before the playhead.
+    JumpToPrev,
+    /// Move the playhead to a specific marker.
+    JumpTo(u64),
+    /// Set the loop range to a marker's region and enable looping. A
+    /// ranged marker loops over `[start, end]`; a point marker loops
+    /// from its start to the next marker's start.
+    LoopToRegion(u64),
+    /// Seek to a marker and start playback.
+    PlayFromMarker(u64),
 }
 
 #[derive(Debug, Clone)]

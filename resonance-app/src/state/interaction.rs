@@ -88,4 +88,8 @@ pub struct ClipInteractionState {
     pub editing_midi_clip: Option<MidiEditorState>,
     /// Currently selected event on a global track (tempo or signature).
     pub selected_global_event: Option<SelectedGlobalEvent>,
+    /// Currently selected arrangement marker, if any. Threaded into the
+    /// timeline canvas so the selected flag / region span renders with the
+    /// stronger accent (todo #368). Click-to-select wiring lands separately.
+    pub selected_marker_id: Option<u64>,
 }
