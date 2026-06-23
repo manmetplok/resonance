@@ -37,6 +37,11 @@ pub struct UndoExtras {
     /// the undoable subset is snapshotted here and reapplied after the
     /// replay (both the fast diff path and the full-clear path).
     pub reference: crate::reference::ReferenceUndo,
+    /// The global chord track (epic #33). Captured here rather than in
+    /// `ProjectFile` because chord-track persistence is a later todo;
+    /// until then the track is declarative app state that the replay
+    /// path can't rebuild, so undo snapshots it directly.
+    pub chord_track: crate::chord_track::ChordTrack,
 }
 
 /// One point in the undo/redo history. Wraps the `LoadedProject` shape
@@ -246,6 +251,7 @@ impl crate::Resonance {
             compose_next_derived_clip_id: self.compose.next_derived_clip_id,
             vocal_clip_lyrics: self.compose.vocal_audio.clip_lyrics.clone(),
             reference: self.reference.undo_snapshot(),
+            chord_track: self.chord_track.clone(),
         };
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
@@ -353,6 +359,7 @@ impl crate::Resonance {
         self.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
         self.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics;
         self.reference.restore_undo(extras.reference);
+        self.chord_track = extras.chord_track;
     }
 
     /// Attempt to undo. No-ops (returning false) if the history is empty
@@ -487,6 +494,10 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag) => UndoAction::Commit,
         Message::GlobalTrack(GlobalTrackMessage::UpdateTempoEvent { .. }) => UndoAction::Skip,
         Message::GlobalTrack(_) => UndoAction::Record,
+
+        // Every chord-track edit is a discrete action (no drag gestures
+        // reach the update layer — todo #441), so each records one entry.
+        Message::ChordTrack(_) => UndoAction::Record,
 
         Message::Transport(t) => match t {
             TransportMessage::StartLoopDrag(_) => UndoAction::Begin,

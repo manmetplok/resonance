@@ -408,4 +408,80 @@ impl Resonance {
     pub fn test_editing_pitch_clip(&self) -> Option<resonance_audio::types::ClipId> {
         self.interaction.editing_pitch_clip
     }
+
+    /// Test-only: borrow the global chord track.
+    #[doc(hidden)]
+    pub fn test_chord_track(&self) -> &crate::chord_track::ChordTrack {
+        &self.chord_track
+    }
+
+    /// Test-only: mutably borrow the global chord track so a test can
+    /// stage regions/key changes directly (no `ChordTrackMessage`
+    /// handlers exist yet — those land in a later todo).
+    #[doc(hidden)]
+    pub fn test_chord_track_mut(&mut self) -> &mut crate::chord_track::ChordTrack {
+        &mut self.chord_track
+    }
+
+    /// Test-only: capture an undo snapshot of the current declarative
+    /// state. Used to prove the chord track survives the snapshot's
+    /// `extras` round-trip without driving the engine.
+    #[doc(hidden)]
+    pub fn test_snapshot_for_undo(&self) -> crate::undo::UndoSnapshot {
+        self.snapshot_for_undo()
+    }
+
+    /// Test-only: apply the runtime-only undo extras, exercising the
+    /// slow-path restore of chord-track state without an engine replay.
+    #[doc(hidden)]
+    pub fn test_finalize_undo_restore(&mut self, extras: crate::undo::UndoExtras) {
+        self.finalize_undo_restore(extras);
+    }
+
+    /// Test-only: stage a compose section definition directly, bypassing
+    /// the inline new-section form. Used by chord-track regeneration
+    /// tests to set up a known progression to override.
+    #[doc(hidden)]
+    pub fn test_push_section_definition(
+        &mut self,
+        def: crate::compose::SectionDefinitionState,
+    ) {
+        self.compose.definitions.push(def);
+    }
+
+    /// Test-only: place a staged section definition at `start_bar`,
+    /// returning the fresh placement id.
+    #[doc(hidden)]
+    pub fn test_place_section(&mut self, definition_id: u64, start_bar: u32) -> u64 {
+        let id = self.compose.fresh_id();
+        self.compose
+            .placements
+            .push(crate::compose::SectionPlacementState {
+                id,
+                definition_id,
+                start_bar,
+            });
+        id
+    }
+
+    /// Test-only: run the chord-track harmony overlay for a section
+    /// definition exactly as lane regeneration does, returning the
+    /// effective `(chords, scale)` the generators would consume. Lets
+    /// tests prove pinned chord-track regions and key context flow into
+    /// regeneration without driving the audio engine.
+    #[doc(hidden)]
+    pub fn test_section_harmony(
+        &self,
+        definition_id: u64,
+    ) -> (
+        Vec<crate::compose::ChordState>,
+        Option<resonance_music_theory::Scale>,
+    ) {
+        let Some(def) = self.compose.find_definition(definition_id) else {
+            return (Vec::new(), None);
+        };
+        let mut def = def.clone();
+        crate::update::compose::regenerate::apply_chord_track_harmony(self, definition_id, &mut def);
+        (def.chords, def.scale)
+    }
 }

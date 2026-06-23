@@ -6,6 +6,7 @@ use iced::{keyboard, Subscription, Task};
 pub const TICK_INTERVAL_MS: u64 = 16;
 
 pub mod bus;
+pub mod chord_track;
 pub mod clips;
 pub mod compose;
 pub mod export;
@@ -80,6 +81,7 @@ impl crate::Resonance {
         match message {
             Message::Compose(m) => compose::handle(self, m),
             Message::GlobalTrack(m) => global_track::handle(self, m),
+            Message::ChordTrack(m) => chord_track::handle(self, m),
             Message::Transport(m) => transport::handle(self, m),
             Message::Marker(m) => marker::handle(self, m),
             Message::Track(m) => track::handle(self, m),

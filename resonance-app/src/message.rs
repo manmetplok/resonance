@@ -14,11 +14,13 @@ use crate::state::{
 use resonance_audio::types::{
     BusId, ClipId, PluginInstanceId, ScannedPlugin, SendId, SendSource, TrackId, TrackOutput,
 };
+use resonance_music_theory::Scale;
 
 #[derive(Debug, Clone)]
 pub enum Message {
     Compose(ComposeMessage),
     GlobalTrack(GlobalTrackMessage),
+    ChordTrack(ChordTrackMessage),
     Transport(TransportMessage),
     Marker(MarkerMessage),
     Track(TrackMessage),
@@ -588,4 +590,52 @@ pub enum ImportMessage {
     SetConflictAlignment(TempoAlignment),
     /// Confirm and start the import.
     Confirm,
+}
+
+/// Edits to the global chord track (epic #33, doc #168). Routed like
+/// [`GlobalTrackMessage`] through `update::chord_track::handle`; each
+/// variant that mutates the track records exactly one undo entry. The
+/// positions carried here are raw sample positions — the handler snaps
+/// them to the timeline grid (the same snap the clip-drag handlers use)
+/// and keeps regions sorted and non-overlapping. No view lives here
+/// (that is todo #442); these are the app-side messages + handlers.
+#[derive(Debug, Clone)]
+pub enum ChordTrackMessage {
+    /// Add a default (C major) region at the snapped playhead. Fills the
+    /// gap up to the next region, or one bar; if the playhead lands
+    /// inside an existing region that region is split at the playhead.
+    AddAtPlayhead,
+    /// Add a region spanning `[start_sample, end_sample)` carrying the
+    /// chord parsed from `symbol`. Positions are snapped; on a parse
+    /// error the track's `last_error` is set and nothing is added.
+    AddRegion {
+        start_sample: u64,
+        end_sample: u64,
+        symbol: String,
+    },
+    /// Re-parse region `id`'s chord from `symbol` via the music-theory
+    /// chord parser. On a parse error set `last_error` and leave the
+    /// region unchanged; on success clear it.
+    SetSymbol { id: u64, symbol: String },
+    /// Move region `id`'s start to the snapped `sample`, clamped so it
+    /// stays after the previous region and before its own end.
+    MoveStart { id: u64, sample: u64 },
+    /// Set region `id`'s end to the snapped `sample`, clamped so it
+    /// stays after its own start and before the next region's start.
+    SetEnd { id: u64, sample: u64 },
+    /// Delete region `id`.
+    Delete { id: u64 },
+    /// Toggle region `id`'s pinned flag (pins constrain Compose regen).
+    TogglePin { id: u64 },
+    /// Set the song key — the scale of the earliest key change, inserting
+    /// one at sample 0 when the track has no key context yet.
+    SetSongKey { scale: Scale },
+    /// Insert (or, if one already sits at the snapped position, retune) a
+    /// key change at the snapped `sample` with `scale`.
+    InsertKeyChange { sample: u64, scale: Scale },
+    /// Move key change `id` to the snapped `sample`, keeping the key list
+    /// sorted.
+    MoveKeyChange { id: u64, sample: u64 },
+    /// Delete key change `id`.
+    DeleteKeyChange { id: u64 },
 }

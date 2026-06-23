@@ -98,6 +98,13 @@ pub fn try_diff_replay(
     // engine reference handlers are stubs until then.
     r.reference.restore_undo(extras.reference.clone());
 
+    // -- Global chord track --------------------------------------------
+    // Declarative app state that isn't part of `ProjectFile` yet, so it
+    // rides in the snapshot's extras and is restored wholesale here (the
+    // structural check ignores it — chord edits never alter the project
+    // shape, so they always take this fast path).
+    r.chord_track = extras.chord_track.clone();
+
     // -- Tempo / signature events --------------------------------------
     apply_tempo(r, target_file);
 

@@ -17,6 +17,7 @@ use resonance_music_theory::TableRegistry;
 pub mod chord_box;
 pub mod chord_sheet_pdf;
 pub mod commands;
+pub mod chord_track;
 pub mod compose;
 pub mod demo;
 pub mod engine_events;
@@ -109,6 +110,11 @@ pub struct Resonance {
     /// GUI-side tempo map — shared implementation with the audio engine.
     /// Rebuilt from `tempo_events` / `signature_events` whenever they change.
     pub(crate) tempo_map: TempoMap,
+    /// Global chord track — song-wide harmonic backbone (chord regions +
+    /// key context), timeline metadata owned by the app alongside the
+    /// tempo/signature tracks. Pure metadata: nothing is sent to the
+    /// realtime engine. See `chord_track`.
+    pub(crate) chord_track: chord_track::ChordTrack,
 
     /// MIDI Learn / hardware control-surface mapping, mirrored from the
     /// engine's active binding set. A pure projection of `MidiBinding*` /
@@ -438,6 +444,7 @@ impl Resonance {
                 denominator: 4,
             }],
             tempo_map: TempoMap::default(),
+            chord_track: chord_track::ChordTrack::new(),
 
             midi_map: MidiMapState::default(),
 
