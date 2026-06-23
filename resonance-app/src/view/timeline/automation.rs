@@ -28,6 +28,7 @@ use resonance_common::{
     lane_value_to_real, sample_lane, AutomationLane, AutomationTarget, Breakpoint, CurveKind,
 };
 
+use super::snap::snap_sample_to_grid_tempo;
 use super::TimelineCanvas;
 
 /// Vertical inset of the value band from the track row's top/bottom edges.
@@ -38,6 +39,9 @@ const BAND_INSET: f32 = 18.0;
 const DOT_RADIUS: f32 = 3.5;
 /// Radius of the live playhead value indicator.
 const LIVE_DOT_RADIUS: f32 = 4.0;
+/// Pixel pick radius for clicking a breakpoint dot (todo #382). A touch
+/// larger than [`DOT_RADIUS`] so the small dots are easy to grab.
+pub const BREAKPOINT_HIT_RADIUS: f32 = 7.0;
 
 /// The value-band rect (top-left + height) inside a track row whose top edge is
 /// `row_y`. Normalized lane value `1.0` maps to `band_top`, `0.0` to the band
@@ -51,6 +55,40 @@ pub fn automation_band(row_y: f32) -> (f32, f32) {
 /// Map a normalized lane value (`0.0..=1.0`) to a y pixel inside the band.
 pub fn value_to_y(value: f32, band_top: f32, band_height: f32) -> f32 {
     band_top + (1.0 - value.clamp(0.0, 1.0)) * band_height
+}
+
+/// Inverse of [`value_to_y`]: map a pixel y inside the band back to a
+/// normalized lane value, clamped to `0.0..=1.0`. A zero-height band maps
+/// everything to `0.0` so the division is safe.
+pub fn value_from_y(y: f32, band_top: f32, band_height: f32) -> f32 {
+    if band_height <= 0.0 {
+        return 0.0;
+    }
+    (1.0 - (y - band_top) / band_height).clamp(0.0, 1.0)
+}
+
+/// Index of the breakpoint nearest `pos` within `hit_radius` pixels, or
+/// `None` on a miss. Pure (the breakpoint→x mapping is passed as `x_of`)
+/// so the pick geometry is unit-testable without a live canvas; ties break
+/// toward the closest dot.
+pub fn nearest_breakpoint(
+    points: &[Breakpoint],
+    pos: Point,
+    band_top: f32,
+    band_height: f32,
+    x_of: impl Fn(u64) -> f32,
+    hit_radius: f32,
+) -> Option<usize> {
+    let mut best: Option<(usize, f32)> = None;
+    for (idx, p) in points.iter().enumerate() {
+        let dx = pos.x - x_of(p.time_frames);
+        let dy = pos.y - value_to_y(p.value, band_top, band_height);
+        let dist2 = dx * dx + dy * dy;
+        if dist2 <= hit_radius * hit_radius && best.is_none_or(|(_, b)| dist2 < b) {
+            best = Some((idx, dist2));
+        }
+    }
+    best.map(|(idx, _)| idx)
 }
 
 /// Build the envelope polyline for a sorted breakpoint list within a value
@@ -325,6 +363,166 @@ impl TimelineCanvas<'_> {
                 });
             }
         });
+    }
+}
+
+/// A pointer hit on a breakpoint dot: which lane drives it and the index of
+/// the hit point within the lane's time-sorted point list.
+#[derive(Debug, Clone)]
+pub(crate) struct BreakpointHit {
+    pub target: AutomationTarget,
+    pub index: usize,
+}
+
+/// Breakpoint hit-testing and edit-geometry for the timeline canvas
+/// (todo #382 / A4). These translate a pointer position into the lane,
+/// breakpoint and value the input handlers in [`super::input`] act on.
+impl TimelineCanvas<'_> {
+    /// Sample position (frames) under pixel `x`, floored at 0.
+    pub(super) fn x_to_frames(&self, x: f32) -> u64 {
+        let seconds = ((x + self.scroll_offset) / self.zoom).max(0.0);
+        (seconds as f64 * self.sample_rate as f64) as u64
+    }
+
+    /// [`Self::x_to_frames`] snapped to the timeline grid — used when
+    /// *adding* a breakpoint so new points land on the beat. Drags stay
+    /// unsnapped for fine value/time control.
+    fn x_to_frames_snapped(&self, x: f32) -> u64 {
+        snap_sample_to_grid_tempo(
+            self.x_to_frames(x),
+            self.bpm,
+            self.time_sig_num,
+            self.sample_rate,
+            self.zoom,
+            self.tempo_map,
+        )
+    }
+
+    /// The primary lane and its row's top y for the visible track row whose
+    /// vertical span contains `y`. `None` when `y` isn't over an automated
+    /// track row (no lanes, or the row under `y` has none).
+    fn automation_row_at(&self, y: f32) -> Option<(&AutomationLane, f32)> {
+        if self.automation.lanes.is_empty() {
+            return None;
+        }
+        let header_height = self.fixed_header_height();
+        let y_off = self.scroll_offset_y;
+        for (i, track) in self.visible_tracks_sorted().iter().enumerate() {
+            let row_y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
+            if y >= row_y && y <= row_y + theme::TRACK_HEIGHT {
+                let lane = self.primary_lane_for_track(self.automation, track)?;
+                return Some((lane, row_y));
+            }
+        }
+        None
+    }
+
+    /// Value-band geometry (`band_top`, `band_height`) for the row owning
+    /// `target`'s lane. Used mid-drag, where the pointer y may leave the
+    /// band but the value still maps against the band that owns the point.
+    fn target_band(&self, target: &AutomationTarget) -> Option<(f32, f32)> {
+        let header_height = self.fixed_header_height();
+        let y_off = self.scroll_offset_y;
+        for (i, track) in self.visible_tracks_sorted().iter().enumerate() {
+            let owns = self
+                .primary_lane_for_track(self.automation, track)
+                .map(|l| &l.target)
+                == Some(target);
+            if owns {
+                let row_y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
+                return Some(automation_band(row_y));
+            }
+        }
+        None
+    }
+
+    /// The breakpoint dot under the pointer, if any. Used to start a
+    /// drag / curve-toggle (left) or delete (right).
+    pub(super) fn breakpoint_hit(&self, pos: Point) -> Option<BreakpointHit> {
+        let (lane, row_y) = self.automation_row_at(pos.y)?;
+        let (band_top, band_height) = automation_band(row_y);
+        let idx = nearest_breakpoint(
+            &lane.points,
+            pos,
+            band_top,
+            band_height,
+            |frames| self.sample_to_x(frames),
+            BREAKPOINT_HIT_RADIUS,
+        )?;
+        Some(BreakpointHit {
+            target: lane.target.clone(),
+            index: idx,
+        })
+    }
+
+    /// An "add a breakpoint here" target for a press on empty band space:
+    /// the lane target, the grid-snapped frame, and the value mapped from
+    /// the pointer y. `None` unless the pointer is inside an automated
+    /// row's value band — the row's top/bottom insets stay free for clip
+    /// grabbing on automated tracks.
+    pub(super) fn band_add_at(&self, pos: Point) -> Option<(AutomationTarget, u64, f32)> {
+        let (lane, row_y) = self.automation_row_at(pos.y)?;
+        let (band_top, band_height) = automation_band(row_y);
+        if pos.y < band_top - BREAKPOINT_HIT_RADIUS
+            || pos.y > band_top + band_height + BREAKPOINT_HIT_RADIUS
+        {
+            return None;
+        }
+        let value = value_from_y(pos.y, band_top, band_height);
+        Some((lane.target.clone(), self.x_to_frames_snapped(pos.x), value))
+    }
+
+    /// New `(frame, value)` for a breakpoint drag to `pos`: value from the
+    /// pointer y mapped into the lane's band, frame from the pointer x
+    /// clamped between the point's time-neighbors so the drag can't reorder
+    /// the lane — which keeps the dragged index stable for the whole
+    /// gesture (the update handler re-sorts, but a clamped move is a no-op
+    /// for the sort).
+    pub(super) fn breakpoint_drag_to(
+        &self,
+        target: &AutomationTarget,
+        index: usize,
+        pos: Point,
+    ) -> Option<(u64, f32)> {
+        let (band_top, band_height) = self.target_band(target)?;
+        let value = value_from_y(pos.y, band_top, band_height);
+        let lane = self.automation.lanes.get(target)?;
+        if index >= lane.points.len() {
+            return None;
+        }
+        let left = if index > 0 {
+            lane.points[index - 1].time_frames
+        } else {
+            0
+        };
+        let right = if index + 1 < lane.points.len() {
+            lane.points[index + 1].time_frames
+        } else {
+            u64::MAX
+        };
+        let frames = self.x_to_frames(pos.x).clamp(left, right);
+        Some((frames, value))
+    }
+
+    /// The curve kind a double-click should set on the breakpoint at
+    /// `index`: the *other* of the two kinds (Linear ⇄ Stepped). Defaults
+    /// to flipping the default when the point is gone.
+    pub(super) fn toggled_breakpoint_curve(
+        &self,
+        target: &AutomationTarget,
+        index: usize,
+    ) -> CurveKind {
+        let current = self
+            .automation
+            .lanes
+            .get(target)
+            .and_then(|l| l.points.get(index))
+            .map(|p| p.curve)
+            .unwrap_or_default();
+        match current {
+            CurveKind::Linear => CurveKind::Stepped,
+            CurveKind::Stepped => CurveKind::Linear,
+        }
     }
 }
 

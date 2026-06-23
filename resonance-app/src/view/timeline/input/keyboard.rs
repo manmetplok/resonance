@@ -3,12 +3,13 @@
 use iced::keyboard;
 
 use crate::message::*;
-use super::super::TimelineCanvas;
+use super::super::{TimelineCanvas, TimelineState};
 use super::{captured, UpdateResult};
 
 impl TimelineCanvas<'_> {
     pub(in crate::view::timeline) fn handle_key(
         &self,
+        state: &mut TimelineState,
         key: &keyboard::Key,
     ) -> UpdateResult {
         use keyboard::key::Named;
@@ -22,6 +23,14 @@ impl TimelineCanvas<'_> {
         );
         if !is_delete {
             return None;
+        }
+        // Delete the breakpoint last clicked/dragged (most specific, and the
+        // most recent explicit selection), before clip / global deletes.
+        if let Some((target, index)) = state.selected_breakpoint.take() {
+            return captured(Message::Automation(AutomationMessage::DeleteBreakpoint {
+                target,
+                index,
+            }));
         }
         // Delete selected global track event.
         if self.selected_global_event.is_some() {

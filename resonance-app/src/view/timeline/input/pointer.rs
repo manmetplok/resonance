@@ -15,7 +15,9 @@ use crate::theme;
 use super::super::hit_test::{HitKind, MarkerHit};
 use super::super::scrollbar::scroll_from_thumb_pos;
 use super::super::{TimelineCanvas, TimelineState};
-use super::{captured, ClipInteraction, MarkerDrag, UpdateResult, DOUBLE_CLICK_MS};
+use super::{captured, BreakpointDrag, ClipInteraction, MarkerDrag, UpdateResult, DOUBLE_CLICK_MS};
+
+use resonance_common::CurveKind;
 
 /// Is `pos` inside `rect`?
 fn rect_contains(rect: &Rectangle, pos: Point) -> bool {
@@ -308,10 +310,60 @@ impl TimelineCanvas<'_> {
             return self.handle_global_track_click(state, pos, bounds);
         }
 
+        // Automation breakpoint dots win over clips (they're small targets
+        // drawn on top of the lane band). A dot hit selects + starts a drag,
+        // or — on a double-click — toggles its curve kind.
+        if let Some(hit) = self.breakpoint_hit(pos) {
+            let now = Instant::now();
+            let is_double = state
+                .last_breakpoint_click
+                .as_ref()
+                .map(|(t, target, idx)| {
+                    *target == hit.target
+                        && *idx == hit.index
+                        && now.duration_since(*t).as_millis() <= DOUBLE_CLICK_MS
+                })
+                .unwrap_or(false);
+            state.last_breakpoint_click = Some((now, hit.target.clone(), hit.index));
+            state.selected_breakpoint = Some((hit.target.clone(), hit.index));
+            if is_double {
+                state.last_breakpoint_click = None;
+                let curve = self.toggled_breakpoint_curve(&hit.target, hit.index);
+                return captured(Message::Automation(AutomationMessage::SetCurveKind {
+                    target: hit.target,
+                    index: hit.index,
+                    curve,
+                }));
+            }
+            state.breakpoint_drag = Some(BreakpointDrag {
+                target: hit.target.clone(),
+                index: hit.index,
+            });
+            return captured(Message::Automation(AutomationMessage::StartBreakpointDrag {
+                target: hit.target,
+                index: hit.index,
+            }));
+        }
+        // Any press that isn't on a breakpoint clears the keyboard-delete
+        // selection (clip / track / band-add presses all fall through here).
+        state.selected_breakpoint = None;
+
         // Clip hit-testing in the track area.
         let sorted_tracks = self.visible_tracks_sorted();
         if let Some(result) = self.press_clips(state, pos, &sorted_tracks) {
             return Some(result);
+        }
+
+        // Empty space inside an automated track's value band → add a
+        // breakpoint there. Checked after clips so clicking a clip still
+        // moves the clip; only the bare band adds a point.
+        if let Some((target, time_frames, value)) = self.band_add_at(pos) {
+            return captured(Message::Automation(AutomationMessage::AddBreakpoint {
+                target,
+                time_frames,
+                value,
+                curve: CurveKind::default(),
+            }));
         }
 
         // Clicked on empty track area → select the track under the cursor
@@ -405,6 +457,17 @@ impl TimelineCanvas<'_> {
                 bpm,
             }));
         }
+        // Automation breakpoint drag: x → time (clamped between neighbors),
+        // y → value.
+        if let Some(drag) = &state.breakpoint_drag {
+            let (time_frames, value) = self.breakpoint_drag_to(&drag.target, drag.index, pos)?;
+            return captured(Message::Automation(AutomationMessage::DragBreakpoint {
+                target: drag.target.clone(),
+                index: drag.index,
+                time_frames,
+                value,
+            }));
+        }
         match &state.clip_interaction {
             Some(ClipInteraction::Move) => {
                 captured(Message::Clip(ClipMessage::UpdateClipDrag(pos.x, pos.y)))
@@ -456,6 +519,9 @@ impl TimelineCanvas<'_> {
         // swallow the release so it doesn't fall through to other handlers.
         if state.marker_drag.take().is_some() {
             return Some(canvas::Action::capture());
+        }
+        if state.breakpoint_drag.take().is_some() {
+            return captured(Message::Automation(AutomationMessage::EndBreakpointDrag));
         }
         if let Some(interaction) = state.clip_interaction.take() {
             return match interaction {

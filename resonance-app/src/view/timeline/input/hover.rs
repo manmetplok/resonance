@@ -54,6 +54,11 @@ impl TimelineCanvas<'_> {
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
         use mouse::Interaction;
+        // An active breakpoint drag holds the grabbing cursor regardless of
+        // where the pointer wandered.
+        if state.breakpoint_drag.is_some() {
+            return Interaction::Grabbing;
+        }
         // An active marker drag holds its cursor regardless of pointer
         // position: resize for an end-edge drag, grabbing for a start move.
         if let Some(drag) = state.marker_drag {
@@ -86,6 +91,10 @@ impl TimelineCanvas<'_> {
         }
         if pos.y < self.fixed_header_height() {
             return Interaction::default();
+        }
+        // Breakpoint dots win over clips (matching the press order).
+        if self.breakpoint_hit(pos).is_some() {
+            return Interaction::Grab;
         }
         let sorted_tracks = self.visible_tracks_sorted();
         // MIDI clips on top, then audio — matching the press hit order.
@@ -122,20 +131,37 @@ impl TimelineCanvas<'_> {
                 };
             }
         }
+        // Empty band space (not over a clip) hints click-to-add a breakpoint.
+        if self.band_add_at(pos).is_some() {
+            return Interaction::Crosshair;
+        }
         Interaction::default()
     }
 
-    /// Right-click press: open the marker context menu when the pointer is
-    /// over a marker in the ruler band. The menu anchor is the cursor's
+    /// Right-click press: delete the automation breakpoint under the cursor
+    /// (the repo convention is right-click = delete — chord lane, MIDI
+    /// editor, vocal roll), or open the marker context menu when the pointer
+    /// is over a marker in the ruler band. The menu anchor is the cursor's
     /// window-space position so the floating overlay lands under the pointer
     /// regardless of horizontal scroll. Misses fall through (`None`) so the
     /// event keeps propagating.
     pub(in crate::view::timeline) fn handle_right_press(
         &self,
+        state: &mut TimelineState,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> UpdateResult {
         let pos = cursor.position_in(bounds)?;
+        if pos.y >= self.fixed_header_height() {
+            if let Some(hit) = self.breakpoint_hit(pos) {
+                state.selected_breakpoint = None;
+                state.breakpoint_drag = None;
+                return captured(Message::Automation(AutomationMessage::DeleteBreakpoint {
+                    target: hit.target,
+                    index: hit.index,
+                }));
+            }
+        }
         let (id, _hit) = self.marker_at(pos)?;
         let anchor = cursor.position().unwrap_or(pos);
         captured(Message::MarkerUi(MarkerUiMessage::OpenMenu {

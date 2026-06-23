@@ -9,6 +9,7 @@
 use iced::widget::canvas;
 
 use crate::message::Message;
+use resonance_common::AutomationTarget;
 
 pub(in crate::view::timeline) mod hit_test;
 mod global_tracks;
@@ -34,6 +35,17 @@ pub(crate) enum ClipInteraction {
     Gain,
     MidiMove,
     MidiTrim,
+}
+
+/// Active drag on an automation breakpoint (todo #382). Holds which lane
+/// and which point (by time-sorted index) is moving. The index stays valid
+/// for the whole gesture because [`TimelineCanvas::breakpoint_drag_to`]
+/// clamps the point between its time-neighbors, so the lane never reorders
+/// mid-drag.
+#[derive(Debug, Clone)]
+pub(crate) struct BreakpointDrag {
+    pub target: AutomationTarget,
+    pub index: usize,
 }
 
 /// Active drag on an arrangement marker: either the start pole (moves the

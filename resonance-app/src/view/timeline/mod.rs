@@ -18,9 +18,10 @@ use iced::{keyboard, mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 use crate::message::*;
 use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
-use self::input::{ClipInteraction, MarkerDrag, TempoDrag};
+use self::input::{BreakpointDrag, ClipInteraction, MarkerDrag, TempoDrag};
 
 use resonance_audio::types::{ClipId, TempoMap, TrackId};
+use resonance_common::AutomationTarget;
 
 pub mod automation;
 pub mod draw;
@@ -256,6 +257,14 @@ pub struct TimelineState {
     pub(super) marker_drag: Option<MarkerDrag>,
     /// Most recent click on a marker flag, for double-click (rename) detection.
     pub(super) last_marker_click: Option<(Instant, u64)>,
+    /// Active automation-breakpoint drag (todo #382).
+    pub(super) breakpoint_drag: Option<BreakpointDrag>,
+    /// The breakpoint the last press landed on, kept for keyboard delete.
+    /// Cleared by any press that doesn't hit a breakpoint. View-local —
+    /// there's no on-canvas highlight for it yet.
+    pub(super) selected_breakpoint: Option<(AutomationTarget, usize)>,
+    /// Last breakpoint press, for double-click (curve-kind toggle) detection.
+    pub(super) last_breakpoint_click: Option<(Instant, AutomationTarget, usize)>,
     /// Geometry cache — re-runs the draw closure only when the cached
     /// fingerprint mismatches. Skips a full redraw on every hover /
     /// sibling-update event, which is most of them.
@@ -474,7 +483,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                 self.handle_press(state, bounds, cursor)
             }
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
-                self.handle_right_press(bounds, cursor)
+                self.handle_right_press(state, bounds, cursor)
             }
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 self.handle_move(state, bounds, cursor)
@@ -483,7 +492,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
                 self.handle_release(state)
             }
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
-                self.handle_key(key)
+                self.handle_key(state, key)
             }
             _ => None,
         };
