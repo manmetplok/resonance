@@ -42,6 +42,7 @@ pub(crate) use hardware::{
 };
 pub(crate) use live::{
     capture_loop_record_midi_pass, close_open_recordings, flush_live_note_stash,
+    handle_live_control_event,
     handle_live_midi_event, handle_send_note_off, handle_send_note_on,
 };
 /// Test surface for the live-note contention path. Exposed under

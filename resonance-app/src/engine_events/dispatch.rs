@@ -10,7 +10,7 @@ use resonance_audio::types::*;
 use crate::message::*;
 use crate::Resonance;
 
-use super::{aux_sends, clips, midi, plugins, project_io, reference, tracks, transport};
+use super::{aux_sends, clips, midi, midi_map, plugins, project_io, reference, tracks, transport};
 
 pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
     use AudioEvent as E;
@@ -201,6 +201,17 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             note_index,
             velocity,
         } => midi::note_velocity_set(r, clip_id, note_index, velocity),
+
+        // MIDI Learn & hardware control-surface mapping (doc #167 §3 A1).
+        // App state is a pure projection of these events; the active
+        // binding set is rebuilt from MidiBindingChanged / Cleared alone.
+        E::MidiLearnCaptured { target, source } => midi_map::learn_captured(r, target, source),
+        E::MidiBindingChanged { binding } => midi_map::binding_changed(r, binding),
+        E::MidiBindingCleared { id } => midi_map::binding_cleared(r, id),
+        E::ControlSurfaceParamChanged { target, value_norm } => {
+            midi_map::param_changed(r, target, value_norm)
+        }
+        E::ControlSurfaceDevicesChanged { inputs } => midi_map::devices_changed(r, inputs),
 
         // Track / bus lifecycle
         E::TrackAdded { track_id } => tracks::added(r, track_id),

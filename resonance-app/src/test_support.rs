@@ -305,4 +305,19 @@ impl Resonance {
     pub fn test_set_transport_recording(&mut self, recording: bool) {
         self.transport.recording = recording;
     }
+
+    /// Test-only: read the GUI-side MIDI control-surface mapping, so the
+    /// engine-event mirroring tests can assert bindings / learn state.
+    #[doc(hidden)]
+    pub fn test_midi_map(&self) -> &state::MidiMapState {
+        &self.midi_map
+    }
+
+    /// Test-only: arm MIDI Learn for `target` (the UI-side step that
+    /// normally precedes a `MidiLearnCaptured` event), so a test can then
+    /// verify the capture handler clears learn mode.
+    #[doc(hidden)]
+    pub fn test_arm_midi_learn(&mut self, target: resonance_common::MidiTarget) {
+        self.midi_map.learn_target = Some(target);
+    }
 }

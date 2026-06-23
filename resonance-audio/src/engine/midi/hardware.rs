@@ -20,6 +20,9 @@ pub(crate) fn handle_list_midi_inputs(ctx: &HandlerCtx, state: &mut HandlerState
     // user intervention. The unchanged-list dedupe below only
     // suppresses the GUI round-trip, not the reconnect attempt.
     state.midi_hw.midi_inputs.reconcile();
+    // Same reconcile pass for the dedicated control-surface port so a
+    // re-plugged surface reconnects without the user re-picking it.
+    state.midi_hw.control_surface.reconcile();
     if devices != state.midi_hw.last_midi_input_devices {
         state.midi_hw.last_midi_input_devices = devices.clone();
         let _ = ctx
