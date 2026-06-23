@@ -8,7 +8,7 @@
 //! the codebase keeps compiling while it migrates piece by piece.
 use iced::font::{Family, Weight};
 use iced::widget::text::{Shaping, Text};
-use iced::widget::{button, container, text, text_input};
+use iced::widget::{button, container, text, text_input, Container, Row};
 use iced::{Color, Font, Theme};
 
 /// Raw bytes of the bundled Font Awesome Solid font, extended with a custom
@@ -790,6 +790,148 @@ pub fn card_warm(_theme: &Theme) -> container::Style {
             color: WARM_LINE,
             width: 1.0,
             radius: RADIUS_XL.into(),
+        },
+        ..Default::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard-shortcut presentation — keycaps + nav / edited / conflict states.
+//
+// Foundations for the command palette and the Preferences › Keyboard panel
+// (epic #58). Shortcuts read as physical keycaps rendered in `MONO_FONT`;
+// modifiers show as glyphs (⌘ ⌥ ⇧ ↵) so a chord like ⌘⇧M reads as one
+// compact row. Selection / edited / conflict states reuse the existing
+// semantic tokens (`ACCENT_*`, `WARM*`, `BAD`) so nothing looks bolted on.
+// ---------------------------------------------------------------------------
+
+/// Modifier- and special-key glyphs used to render a key chord as keycaps.
+/// Centralised here so call sites never hardcode the codepoints.
+pub mod kbd {
+    /// Command / Super (⌘).
+    pub const CMD: char = '\u{2318}';
+    /// Option / Alt (⌥).
+    pub const OPTION: char = '\u{2325}';
+    /// Shift (⇧).
+    pub const SHIFT: char = '\u{21e7}';
+    /// Control (⌃).
+    pub const CONTROL: char = '\u{2303}';
+    /// Return / Enter (↵).
+    pub const ENTER: char = '\u{21b5}';
+    /// Up arrow (↑) — palette navigation footer.
+    pub const ARROW_UP: char = '\u{2191}';
+    /// Down arrow (↓) — palette navigation footer.
+    pub const ARROW_DOWN: char = '\u{2193}';
+}
+
+/// Visual tone of a keycap. `Neutral` is the resting state; `Active` lifts
+/// the caps inside a selected palette row (accent-soft text + accent ring);
+/// `Conflict` flags the offending chord on a binding clash (`BAD`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeycapTone {
+    Neutral,
+    Active,
+    Conflict,
+}
+
+/// Keycap fill — one step below the panel so caps read as inset tiles.
+pub const KEYCAP_BG: Color = BG_1;
+/// Keycap label size (mono).
+pub const KEYCAP_TEXT_SIZE: f32 = 11.0;
+/// Inner padding of a keycap as `[vertical, horizontal]`.
+pub const KEYCAP_PADDING: [f32; 2] = [2.0, 6.0];
+/// Gap between adjacent keycaps in a chord row.
+pub const KEYCAP_GAP: f32 = 4.0;
+
+/// Container style for a single keycap: `BG_1` fill, hairline outline, and a
+/// small radius — the `kbd` tile look from the design. `tone` recolours the
+/// text and border to match the surrounding row state.
+///
+/// Note: the design calls for a bottom-weighted (2 px) lower border to mimic
+/// a physical key. iced 0.14's `Border` carries a single uniform width, so
+/// the cap uses a uniform 1 px outline; the mono font + inset fill still read
+/// unmistakably as a keycap.
+pub fn keycap_style(tone: KeycapTone) -> impl Fn(&Theme) -> container::Style {
+    move |_theme| {
+        let (text_color, border_color) = match tone {
+            KeycapTone::Neutral => (TEXT_2, LINE),
+            KeycapTone::Active => (ACCENT_SOFT, ACCENT_LINE),
+            KeycapTone::Conflict => (BAD, BAD),
+        };
+        container::Style {
+            text_color: Some(text_color),
+            background: Some(iced::Background::Color(KEYCAP_BG)),
+            border: iced::Border {
+                color: border_color,
+                width: 1.0,
+                radius: RADIUS_XS.into(),
+            },
+            ..Default::default()
+        }
+    }
+}
+
+/// One keycap tile: a mono-font label inside an outlined cap. `label` is the
+/// rendered glyph(s) — a single key (`"M"`), a modifier glyph (`kbd::CMD`),
+/// or a short name (`"Esc"`).
+pub fn keycap<'a, Message: 'a>(label: &str, tone: KeycapTone) -> Container<'a, Message> {
+    container(
+        text(label.to_string())
+            .font(MONO_FONT)
+            .size(KEYCAP_TEXT_SIZE)
+            // Advanced shaping so the modifier glyphs (⌘ ⌥ ⇧ ↵) resolve
+            // through font fallback rather than rendering as tofu.
+            .shaping(Shaping::Advanced),
+    )
+    .padding(KEYCAP_PADDING)
+    .style(keycap_style(tone))
+}
+
+/// A chord rendered as a row of keycaps — e.g. `&["⌘", "⇧", "M"]`. Caps lay
+/// out left-to-right with `KEYCAP_GAP` spacing and share one `tone`.
+pub fn keycap_row<'a, Message: 'a>(labels: &[&str], tone: KeycapTone) -> Row<'a, Message> {
+    let mut row = Row::new()
+        .spacing(KEYCAP_GAP)
+        .align_y(iced::alignment::Vertical::Center);
+    for label in labels {
+        row = row.push(keycap(label, tone));
+    }
+    row
+}
+
+/// Active-row wash for the palette's selected result and the Preferences
+/// nav-rail's current item: `ACCENT_DIM` fill with an `ACCENT_LINE` inset
+/// ring (iced paints the 1 px border inside the bounds, matching the
+/// prototype's `box-shadow: inset 0 0 0 1px`). Same selection language as
+/// `card_selected`.
+pub fn active_row_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(ACCENT_DIM)),
+        border: iced::Border {
+            color: ACCENT_LINE,
+            width: 1.0,
+            radius: RADIUS_MD.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Small "edited" pill shown on a binding row whose chord diverges from its
+/// default — warm amber wash + border. Reuses the `WARM` tokens (and the
+/// lane-inspector pill treatment) so "customised" reads the same everywhere.
+pub fn edited_pill_style(theme: &Theme) -> container::Style {
+    editing_pill_warm_style(theme)
+}
+
+/// Conflict outline for a binding row whose captured chord collides with an
+/// existing binding: a `BAD` ring with no fill, pairing with the conflict
+/// banner that names the current owner.
+pub fn conflict_ring_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        border: iced::Border {
+            color: BAD,
+            width: 1.0,
+            radius: RADIUS_LG.into(),
         },
         ..Default::default()
     }

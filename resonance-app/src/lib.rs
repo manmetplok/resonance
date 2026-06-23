@@ -16,6 +16,7 @@ use resonance_music_theory::TableRegistry;
 
 pub mod chord_box;
 pub mod chord_sheet_pdf;
+pub mod commands;
 pub mod compose;
 pub mod demo;
 pub mod engine_events;
