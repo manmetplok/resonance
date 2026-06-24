@@ -23,3 +23,4 @@ time = { workspace = true, features = ["formatting", "parsing"] }
 [dev-dependencies]
 iced_test = "0.14"
 tempfile = "3"
+hound.workspace = true

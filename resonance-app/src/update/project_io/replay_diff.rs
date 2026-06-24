@@ -804,6 +804,7 @@ mod tests {
             midi_input_channel: None,
             midi_output_device: None,
             midi_output_channel: None,
+            freeze: resonance_common::TrackFreezeState::unfrozen(),
         }
     }
 

@@ -57,6 +57,11 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             midi_input_channel: t.midi_input_channel,
             midi_output_device: t.midi_output_device.clone(),
             midi_output_channel: t.midi_output_channel,
+            // Project the live freeze status onto its persisted shape.
+            // Transient states (Idle / Freezing / Failed) round-trip as
+            // "not frozen"; Frozen / Stale persist their cache ref so the
+            // load path can re-attach the cache (ba todo #577).
+            freeze: r.freeze.status(t.id).to_persisted(),
         })
         .collect();
 

@@ -306,6 +306,23 @@ impl Resonance {
         crate::update::project_io::restore_references(self, file);
     }
 
+    /// Test-only: drive the freeze-cache rehydrate path a disk load runs
+    /// (ba todo #577) without constructing a whole `LoadedProject` or
+    /// pumping the ClearAll → AllCleared round-trip. `freezes` is each
+    /// track's persisted [`crate::state::FreezeStatus`] source — the
+    /// per-track [`resonance_common::TrackFreezeState`] paired with its id.
+    #[doc(hidden)]
+    pub fn test_rehydrate_frozen_tracks(
+        &mut self,
+        project_dir: &std::path::Path,
+        freezes: &[(
+            resonance_audio::types::TrackId,
+            resonance_common::TrackFreezeState,
+        )],
+    ) {
+        self.rehydrate_frozen_tracks(project_dir, freezes);
+    }
+
     /// Test-only: anchor a project path so `can_record_undo` is satisfied
     /// (it requires `has_active_project` *and* a `project_path`). Pair
     /// with [`Self::test_set_active_project`] to make undo/redo recordable

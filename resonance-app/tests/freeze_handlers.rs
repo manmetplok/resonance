@@ -25,7 +25,10 @@ fn capturing_app() -> (Resonance, Receiver<AudioCommand>, tempfile::TempDir) {
     let (mut app, _task) = Resonance::new();
     let rx = app.test_capture_engine();
     let dir = tempfile::tempdir().expect("temp project dir");
-    app.test_set_project_path(dir.path().to_path_buf());
+    // Anchor the project at a `.rproj` bundle inside the temp dir so the
+    // sibling freeze-cache dir (`project.freeze/`, ba todo #577) lands
+    // inside it too and is cleaned up with the TempDir.
+    app.test_set_project_path(dir.path().join("project.rproj"));
     (app, rx, dir)
 }
 
@@ -41,11 +44,16 @@ fn cache_ref(filename: &str) -> FreezeCacheRef {
     FreezeCacheRef::new(filename.to_string(), 48_000, 32, 0, FreezeCacheStatus::Frozen)
 }
 
-/// Path the handler writes a track's freeze cache to, given the project dir.
-fn cache_path(project_dir: &std::path::Path, track_id: TrackId) -> PathBuf {
-    project_dir
-        .join("freeze")
-        .join(format!("freeze_{track_id}.wav"))
+/// The sibling freeze-cache dir for the test project, mirroring
+/// `freeze_cache_dir_for`: `<tmp>/project.freeze/` next to the
+/// `<tmp>/project.rproj` the capturing app is anchored to (ba todo #577).
+fn freeze_dir(tmp: &std::path::Path) -> PathBuf {
+    tmp.join("project.freeze")
+}
+
+/// Path the handler writes a track's freeze cache to, given the temp dir.
+fn cache_path(tmp: &std::path::Path, track_id: TrackId) -> PathBuf {
+    freeze_dir(tmp).join(format!("freeze_{track_id}.wav"))
 }
 
 // ---------------------------------------------------------------------
@@ -75,7 +83,7 @@ fn freeze_track_emits_command_and_marks_freezing() {
     );
     // The handler creates the freeze cache directory up front so the
     // engine's WAV writer (which doesn't mkdir) can write into it.
-    assert!(dir.path().join("freeze").is_dir());
+    assert!(freeze_dir(dir.path()).is_dir());
 }
 
 #[test]
@@ -153,7 +161,7 @@ fn unfreeze_detaches_and_deletes_cache() {
     let (mut app, rx, dir) = capturing_app();
     app.test_add_track(1, TrackType::Instrument);
     // Simulate a completed freeze: status frozen + a real cache file.
-    let cache_dir = dir.path().join("freeze");
+    let cache_dir = freeze_dir(dir.path());
     std::fs::create_dir_all(&cache_dir).unwrap();
     let file = cache_dir.join("freeze_1.wav");
     std::fs::write(&file, b"fake wav").unwrap();
@@ -341,7 +349,7 @@ fn cancel_freeze_is_not_undoable() {
 fn undo_of_freeze_detaches_and_removes_cache() {
     let (mut app, rx, dir) = capturing_app();
     app.test_add_track(1, TrackType::Instrument);
-    let cache_dir = dir.path().join("freeze");
+    let cache_dir = freeze_dir(dir.path());
     std::fs::create_dir_all(&cache_dir).unwrap();
     let file = cache_dir.join("freeze_1.wav");
     std::fs::write(&file, b"fake wav").unwrap();
@@ -388,7 +396,7 @@ fn redo_of_freeze_marks_stale_when_cache_is_gone() {
 fn redo_of_freeze_keeps_frozen_when_cache_exists() {
     let (mut app, _rx, dir) = capturing_app();
     app.test_add_track(1, TrackType::Instrument);
-    let cache_dir = dir.path().join("freeze");
+    let cache_dir = freeze_dir(dir.path());
     std::fs::create_dir_all(&cache_dir).unwrap();
     std::fs::write(cache_dir.join("freeze_1.wav"), b"fake wav").unwrap();
     let mut target = HashMap::new();

@@ -105,14 +105,35 @@ pub(super) fn all_cleared(r: &mut Resonance) {
     if let Some(loaded) = r.io.pending_load.take() {
         // Extract project_path before replay (replay clears it)
         let path = r.io.project_path.clone();
+        // A pending undo/redo extras bundle marks this clear/replay as a
+        // history restore rather than a fresh disk load. Capture the
+        // per-track freeze refs now, before `replay_loaded_project`
+        // consumes `loaded`, so a disk load can re-attach frozen caches
+        // afterwards (ba todo #577). Undo/redo restores reconcile freeze
+        // via `apply_freeze_restore` in `finalize_undo_restore` instead.
+        let freeze_rehydrate = r.io.pending_undo_extras.is_none().then(|| {
+            (
+                loaded.project_dir.clone(),
+                loaded
+                    .file
+                    .tracks
+                    .iter()
+                    .map(|t| (t.id, t.freeze.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        });
         crate::update::replay_loaded_project(r, loaded);
         r.io.project_path = path;
         r.io.loading = false;
         // If this clear/replay came from an undo or redo, apply the
         // runtime-only state that replay can't recover (currently: the
-        // compose derived-clip cache).
+        // compose derived-clip cache + freeze status). Otherwise it's a
+        // disk load: re-attach each frozen track's cache so reopening
+        // replays the cache without re-rendering.
         if let Some(extras) = r.io.pending_undo_extras.take() {
             r.finalize_undo_restore(extras);
+        } else if let Some((dir, freezes)) = freeze_rehydrate {
+            r.rehydrate_frozen_tracks(&dir, &freezes);
         }
     }
 }

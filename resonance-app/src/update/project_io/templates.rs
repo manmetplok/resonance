@@ -688,6 +688,8 @@ fn base_track(id: u64, order: usize, name: &str, track_type: &str) -> ProjectTra
         midi_input_channel: None,
         midi_output_device: None,
         midi_output_channel: None,
+        // Starter-template tracks are always live; nothing to freeze yet.
+        freeze: resonance_common::TrackFreezeState::unfrozen(),
     }
 }
 
