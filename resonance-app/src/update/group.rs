@@ -6,14 +6,13 @@
 //! cascade and fold-state logic land with their tests, not buried in the
 //! view todo:
 //!
-//! - collapse / fold state in the timeline — todo #686
 //! - macro mute with cascade to members — todo #687
 //! - macro solo with cascade to members — todo #688
 //!
-//! The group level trim (todo #689) is implemented below. Until the
-//! remaining variants land the caret / macro mute controls route to a
-//! no-op so the header is wired end-to-end (and snapshot-testable) without
-//! pre-empting the reducer todos.
+//! The collapse / fold state (todo #686) and group level trim (todo #689)
+//! are implemented below. Until the remaining macro-mute variant lands its
+//! control routes to a no-op so the header is wired end-to-end (and
+//! snapshot-testable) without pre-empting the reducer todos.
 //!
 //! Two reducer families *are* implemented here: group creation from a
 //! multi-track selection (todo #684) and drag-and-drop membership editing
@@ -28,10 +27,11 @@ use resonance_audio::types::{AudioCommand, TrackId};
 
 pub fn handle(r: &mut Resonance, m: GroupMessage) -> Task<Message> {
     match m {
-        // Macro solo implemented (todo #688). Macro mute and collapse
-        // implemented in todos #686–#687. Macro level trim below (todo #689).
-        GroupMessage::ToggleCollapse(_)
-        | GroupMessage::ToggleMacroMute(_) => {}
+        // Collapse / fold state in the timeline — todo #686.
+        GroupMessage::ToggleCollapse(group_id) => toggle_collapse(r, group_id),
+        // Macro solo implemented (todo #688). Macro mute implemented in
+        // todo #687. Macro level trim below (todo #689).
+        GroupMessage::ToggleMacroMute(_) => {}
         GroupMessage::ToggleMacroSolo(group_id) => toggle_macro_solo(r, group_id),
         GroupMessage::SetMacroLevel(group_id, level) => set_macro_level(r, group_id, level),
         GroupMessage::CreateGroupFromSelection => create_group_from_selection(r),
@@ -47,6 +47,19 @@ pub fn handle(r: &mut Resonance, m: GroupMessage) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// Fold / unfold a group (todo #686). Flips the group's `is_collapsed`
+/// flag; the arrange view reads it through the shared `ArrangeRowLayout`
+/// (doc #203), which omits a collapsed group's member rows from both the
+/// timeline canvas and the track-header column while keeping the group's
+/// own header row — so the group can always be re-expanded. The flag is
+/// persisted in the project file (todo #690), so the fold state survives a
+/// save/reload round-trip and is captured by the undo snapshot. A no-op
+/// for an unknown id (stale message after the group was removed).
+fn toggle_collapse(r: &mut Resonance, group_id: TrackId) {
+    r.track_groups
+        .update_group(group_id, |group| group.is_collapsed = !group.is_collapsed);
 }
 
 /// Fold the current multi-track selection into a fresh group (the

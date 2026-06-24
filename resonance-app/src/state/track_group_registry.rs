@@ -80,6 +80,23 @@ impl TrackGroupRegistry {
             .any(|group| group.macro_solo)
     }
 
+    /// Returns `true` when the track should be hidden from the arrange view
+    /// because one of the groups it belongs to is collapsed (folded).
+    ///
+    /// A track is hidden when *any* group containing it — directly, or via
+    /// a nested sub-group — has `is_collapsed == true`. This mirrors the
+    /// member-omission the shared `ArrangeRowLayout` performs when it walks
+    /// a collapsed group (todo #686, doc #203): the layout drops these rows
+    /// from both the timeline canvas and the track-header column, so a
+    /// folded 200-track group never allocates a single header widget or
+    /// canvas lane. The helper exposes that same predicate for hit-testing
+    /// and tests without re-walking the layout.
+    pub fn is_track_hidden_by_collapse(&self, track_id: TrackId) -> bool {
+        self.get_groups_containing_track(track_id)
+            .iter()
+            .any(|group| group.is_collapsed)
+    }
+
     /// Returns the indent depth for a track based on its group membership.
     ///
     /// - Returns 0 for tracks that are not members of any group
