@@ -425,3 +425,75 @@ fn get_group_identity_colors_multiple_groups() {
     // Both groups have depth 0, so order is by id: group1 (Drum, id=1) then group2 (Vocal, id=2)
     assert_eq!(colors, vec![GroupIdentityColor::Drum, GroupIdentityColor::Vocal]);
 }
+
+// ---- Collapse-driven row hiding (todo #686) ----
+//
+// `is_track_hidden_by_collapse` is the predicate the arrange view (and the
+// shared `ArrangeRowLayout`) use to drop a folded group's member rows from
+// both the timeline canvas and the track-header column.
+
+#[test]
+fn hidden_by_collapse_false_for_ungrouped_track() {
+    let mut registry = TrackGroupRegistry::new();
+    let group_id = track_id(1);
+    let member = track_id(10);
+    let loner = track_id(11);
+
+    let mut group = TrackGroup::new(group_id, "Drums", GroupIdentityColor::Drum);
+    group.ordered_members = vec![member];
+    group.is_collapsed = true;
+    registry.add_group(group);
+
+    // A track in no group is never hidden, even while other groups fold.
+    assert!(!registry.is_track_hidden_by_collapse(loner));
+}
+
+#[test]
+fn hidden_by_collapse_tracks_group_fold_state() {
+    let mut registry = TrackGroupRegistry::new();
+    let group_id = track_id(1);
+    let member = track_id(10);
+
+    let mut group = TrackGroup::new(group_id, "Drums", GroupIdentityColor::Drum);
+    group.ordered_members = vec![member];
+    registry.add_group(group);
+
+    // Expanded: member row stays visible.
+    assert!(!registry.is_track_hidden_by_collapse(member));
+
+    // Collapsed: member row is hidden.
+    registry.set_collapse_state(group_id, true);
+    assert!(registry.is_track_hidden_by_collapse(member));
+
+    // Re-expanded: member row returns.
+    registry.set_collapse_state(group_id, false);
+    assert!(!registry.is_track_hidden_by_collapse(member));
+}
+
+#[test]
+fn hidden_by_collapse_when_outer_group_folds_nested_member() {
+    let mut registry = TrackGroupRegistry::new();
+    let parent_id = track_id(1);
+    let child_id = track_id(2);
+    let track1 = track_id(10);
+
+    // parent ⊃ child ⊃ track1
+    let mut parent = TrackGroup::new(parent_id, "Parent", GroupIdentityColor::Drum);
+    parent.ordered_members = vec![child_id];
+    registry.add_group(parent);
+
+    let mut child = TrackGroup::new(child_id, "Child", GroupIdentityColor::Vocal);
+    child.nesting_parent = Some(parent_id);
+    child.ordered_members = vec![track1];
+    registry.add_group(child);
+
+    // Folding the outer group hides the nested member too — collapse on
+    // *any* containing group removes the row.
+    registry.set_collapse_state(parent_id, true);
+    assert!(registry.is_track_hidden_by_collapse(track1));
+
+    // Folding only the inner child also hides it.
+    registry.set_collapse_state(parent_id, false);
+    registry.set_collapse_state(child_id, true);
+    assert!(registry.is_track_hidden_by_collapse(track1));
+}

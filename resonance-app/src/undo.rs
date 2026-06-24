@@ -480,6 +480,12 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // recordable edit; a member's own solo is left untouched, so undo
         // restores the exact prior group + per-track solo picture (#688).
         Message::Group(GroupMessage::ToggleMacroSolo(_)) => UndoAction::Record,
+        // Folding / unfolding a group flips the persisted `is_collapsed`
+        // flag (todo #686, persisted via #690), so the fold state is part
+        // of the project and a single toggle is a recordable edit — undo
+        // restores the prior fold picture and the hidden member rows
+        // reappear.
+        Message::Group(GroupMessage::ToggleCollapse(_)) => UndoAction::Record,
         // The group level trim is a continuous control (a slider drag, like a
         // fader): coalesce the burst into one entry keyed by group so a drag
         // undoes in a single step, restoring the persisted `macro_level`

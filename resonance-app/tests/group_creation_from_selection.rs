@@ -11,7 +11,9 @@
 
 use iced::keyboard::Modifiers;
 use resonance_app::message::{GroupMessage, Message, UiMessage};
-use resonance_app::state::TrackGroupRegistry;
+use resonance_app::state::{TrackGroupRegistry, TrackState};
+use resonance_app::undo::{classify, UndoAction};
+use resonance_app::view::arrange_layout::ArrangeRowKind;
 use resonance_app::Resonance;
 use resonance_common::automation::TrackId;
 use resonance_common::group_identity::GroupIdentityColor;
@@ -137,4 +139,92 @@ fn create_group_from_selection_noops_below_two_tracks() {
     // No group created, and the single selection is left untouched.
     assert_eq!(app.test_track_groups().len(), 0);
     assert_eq!(app.test_selected_tracks(), &[42]);
+}
+
+// ---- Collapse / fold state in the timeline (todo #686) ------------------
+//
+// The group-header caret fires `GroupMessage::ToggleCollapse`; the reducer
+// flips the group's persisted `is_collapsed`, and the shared
+// `ArrangeRowLayout` (the single source both the canvas and the header
+// column render from) then omits the collapsed group's member rows while
+// keeping its own header row, so the group can be re-expanded.
+
+/// Push two real instrument tracks and fold them into a group through the
+/// public reducer path; returns the group id.
+fn grouped_pair(app: &mut Resonance, a: TrackId, b: TrackId) -> TrackId {
+    app.test_push_track(TrackState::new_instrument(a, a as usize));
+    app.test_push_track(TrackState::new_instrument(b, b as usize));
+    app.test_set_selected_tracks(vec![a, b]);
+    let _ = app.update(Message::Group(GroupMessage::CreateGroupFromSelection));
+    app.test_track_groups().get_all_groups()[0].id
+}
+
+/// The ids of the `Track` rows in the current arrange-row layout, in order.
+fn visible_track_rows(app: &Resonance) -> Vec<TrackId> {
+    app.test_arrange_row_layout()
+        .rows()
+        .iter()
+        .filter_map(|row| row.track_id())
+        .collect()
+}
+
+/// Whether the layout still carries the header row for `group_id`.
+fn header_row_present(app: &Resonance, group_id: TrackId) -> bool {
+    app.test_arrange_row_layout()
+        .rows()
+        .iter()
+        .any(|row| row.kind == ArrangeRowKind::GroupHeader(group_id))
+}
+
+#[test]
+fn toggle_collapse_flips_fold_state_and_hides_member_rows() {
+    let mut app = active_app();
+    let gid = grouped_pair(&mut app, 10, 11);
+
+    // Fresh groups start expanded: both member lanes are present, and the
+    // group's own header row sits in the layout.
+    assert!(!app.test_track_groups().get_group(gid).unwrap().is_collapsed);
+    assert!(visible_track_rows(&app).contains(&10));
+    assert!(visible_track_rows(&app).contains(&11));
+    assert!(header_row_present(&app, gid));
+
+    // Firing the caret's message folds the group: the flag flips, the
+    // members read hidden, and their lanes drop out of the layout — while
+    // the header row REMAINS so the group can be re-expanded.
+    let _ = app.update(Message::Group(GroupMessage::ToggleCollapse(gid)));
+    assert!(app.test_track_groups().get_group(gid).unwrap().is_collapsed);
+    assert!(app.test_track_groups().is_track_hidden_by_collapse(10));
+    assert!(app.test_track_groups().is_track_hidden_by_collapse(11));
+    assert!(!visible_track_rows(&app).contains(&10));
+    assert!(!visible_track_rows(&app).contains(&11));
+    assert!(
+        header_row_present(&app, gid),
+        "the group header row must survive collapse so it can be re-expanded"
+    );
+
+    // Toggling again expands it back: members reappear.
+    let _ = app.update(Message::Group(GroupMessage::ToggleCollapse(gid)));
+    assert!(!app.test_track_groups().get_group(gid).unwrap().is_collapsed);
+    assert!(visible_track_rows(&app).contains(&10));
+    assert!(visible_track_rows(&app).contains(&11));
+}
+
+#[test]
+fn toggle_collapse_unknown_group_is_a_noop() {
+    let mut app = active_app();
+    // No group with this id exists — the reducer must not panic.
+    let _ = app.update(Message::Group(GroupMessage::ToggleCollapse(9999)));
+    assert_eq!(app.test_track_groups().len(), 0);
+}
+
+#[test]
+fn toggle_collapse_is_a_recordable_edit_for_undo() {
+    // `is_collapsed` is persisted in the project file (todo #690), so a
+    // fold toggle is a single recordable edit — undo restores the prior
+    // fold state and the hidden member rows reappear. The classifier is the
+    // single decision point, so pinning it here pins the undo round-trip.
+    assert!(matches!(
+        classify(&Message::Group(GroupMessage::ToggleCollapse(7))),
+        UndoAction::Record
+    ));
 }

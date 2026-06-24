@@ -301,6 +301,23 @@ impl Resonance {
         &mut self.track_groups
     }
 
+    /// Test-only: build the shared arrange-row layout exactly as the
+    /// track-header column does (sorted arrange tracks + the collapse-aware
+    /// registry). Drives `tests/group_creation_from_selection.rs`'
+    /// end-to-end fold check: after a `ToggleCollapse` the collapsed
+    /// group's member rows must vanish from the layout while its header row
+    /// remains, since both the column and the canvas render from this one
+    /// layout (todo #686, doc #203).
+    #[doc(hidden)]
+    pub fn test_arrange_row_layout(&self) -> crate::view::arrange_layout::ArrangeRowLayout {
+        let sorted: Vec<&state::TrackState> = self
+            .sorted_tracks()
+            .iter()
+            .filter(|t| t.sub_track.is_none())
+            .collect();
+        crate::view::arrange_layout::ArrangeRowLayout::build(&sorted, &self.track_groups)
+    }
+
     /// Test-only: render a standalone track-header cell for a member
     /// track (todo #688) so tests can snapshot the "via group" solo chip.
     #[doc(hidden)]
