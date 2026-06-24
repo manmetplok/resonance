@@ -66,6 +66,11 @@ pub struct TimelineCanvas<'a> {
     /// the matching flag / span with the accent (todo #368).
     pub markers: &'a [state::ArrangementMarker],
     pub selected_marker_id: Option<u64>,
+    /// Tracks that are frozen (valid cache *or* stale). Their clips render
+    /// with the frozen-render treatment — warm/audio waveform language
+    /// overlaid with the frost wash and relabelled "frozen render" — per
+    /// design doc #181. A track absent from the set renders live as usual.
+    pub frozen_tracks: std::collections::HashSet<TrackId>,
 }
 
 impl TimelineCanvas<'_> {
@@ -282,6 +287,10 @@ pub struct TimelineFingerprint {
     /// edits and leave a stale flag / span on screen.
     pub markers_hash: u64,
     pub selected_marker_id: Option<u64>,
+    /// Order-independent hash of the frozen-track set. Invalidates the
+    /// cache when a track freezes / unfreezes so its lane repaints with
+    /// (or without) the frozen-render treatment.
+    pub frozen_tracks_hash: u64,
 }
 
 impl<'a> TimelineCanvas<'a> {
@@ -318,6 +327,13 @@ impl<'a> TimelineCanvas<'a> {
         }
         let markers_hash = mh.finish();
 
+        // XOR-fold the frozen track ids so the hash is independent of the
+        // set's iteration order (a `HashSet` has no stable order).
+        let frozen_tracks_hash = self
+            .frozen_tracks
+            .iter()
+            .fold(0u64, |acc, id| acc ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
         TimelineFingerprint {
             clips_len: self.clips.len(),
             midi_clips_len: self.midi_clips.len(),
@@ -351,6 +367,7 @@ impl<'a> TimelineCanvas<'a> {
             markers_len: self.markers.len(),
             markers_hash,
             selected_marker_id: self.selected_marker_id,
+            frozen_tracks_hash,
         }
     }
 }
