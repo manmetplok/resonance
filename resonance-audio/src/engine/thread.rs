@@ -828,6 +828,42 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             note_index,
             velocity,
         } => midi::handle_set_midi_note_velocity(ctx, clip_id, note_index, velocity),
+        AudioCommand::QuantizeMidiNotes {
+            clip_id,
+            indices,
+            grid,
+            strength,
+            swing,
+            mode,
+            quantize_ends,
+            iterative,
+        } => midi::handle_quantize_midi_notes(
+            ctx,
+            clip_id,
+            indices,
+            grid,
+            strength,
+            swing,
+            mode,
+            quantize_ends,
+            iterative,
+        ),
+        AudioCommand::HumanizeMidiNotes {
+            clip_id,
+            indices,
+            timing_ticks,
+            vel_amt,
+            seed,
+        } => midi::handle_humanize_midi_notes(ctx, clip_id, indices, timing_ticks, vel_amt, seed),
+        AudioCommand::ApplyGrooveToClip {
+            clip_id,
+            indices,
+            template,
+            strength,
+        } => midi::handle_apply_groove_to_clip(ctx, clip_id, indices, template, strength),
+        AudioCommand::ExtractGrooveFromClip { clip_id, grid } => {
+            midi::handle_extract_groove_from_clip(ctx, clip_id, grid)
+        }
         // GUI-originated notes carry no arrival timestamp; offset 0
         // (start of the next block) is the earliest delivery anyway.
         AudioCommand::SendNoteOn {

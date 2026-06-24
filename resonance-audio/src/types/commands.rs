@@ -9,6 +9,7 @@ use super::{
     ReferenceId, SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth, StemTarget,
     TempoPoint, TrackId, TrackOutput, WarpAlgorithm, WarpMarker,
 };
+use crate::quantize::{Division, GrooveTemplate, QuantizeMode};
 
 /// Commands sent from the GUI to the audio engine.
 #[derive(Debug, Clone)]
@@ -433,6 +434,55 @@ pub enum AudioCommand {
         clip_id: ClipId,
         note_index: usize,
         velocity: f32,
+    },
+
+    // -- Bulk MIDI note edits (quantize / humanize / groove) --
+    /// Quantize the notes at `indices` in `clip_id` toward `grid`, using
+    /// the engine's authoritative tempo map. Applied atomically; emits a
+    /// single `AudioEvent::MidiNotesEdited` carrying the full resulting
+    /// note array.
+    QuantizeMidiNotes {
+        clip_id: ClipId,
+        /// Selected note indices to quantize; out-of-range indices are
+        /// ignored and an empty selection is a no-op.
+        indices: Vec<usize>,
+        grid: Division,
+        /// Blend toward the grid in `0.0..=1.0` (`1.0` snaps exactly).
+        strength: f32,
+        /// Swing applied to odd grid steps, `0.0..=1.0`.
+        swing: f32,
+        mode: QuantizeMode,
+        /// Snap note-offs to the grid as well as note-ons.
+        quantize_ends: bool,
+        /// Apply the strength blend repeatedly (soft/iterative quantize).
+        iterative: bool,
+    },
+    /// Apply seeded timing + velocity jitter to the notes at `indices`.
+    /// Deterministic for a given `seed`; emits one `MidiNotesEdited`.
+    HumanizeMidiNotes {
+        clip_id: ClipId,
+        indices: Vec<usize>,
+        /// Maximum absolute timing offset in ticks.
+        timing_ticks: u32,
+        /// Velocity jitter fraction, `0.0..=1.0`.
+        vel_amt: f32,
+        seed: u64,
+    },
+    /// Apply a groove template to the notes at `indices` at `strength`.
+    /// Emits one `MidiNotesEdited`.
+    ApplyGrooveToClip {
+        clip_id: ClipId,
+        indices: Vec<usize>,
+        template: GrooveTemplate,
+        /// Template blend, `0.0..=1.0`.
+        strength: f32,
+    },
+    /// Extract a groove template from `clip_id` at `grid` resolution.
+    /// Reads the clip but does not modify it; emits
+    /// `AudioEvent::GrooveExtracted` with the derived template.
+    ExtractGrooveFromClip {
+        clip_id: ClipId,
+        grid: Division,
     },
 
     // -- Live MIDI input --
