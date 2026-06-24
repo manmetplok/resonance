@@ -24,9 +24,10 @@ use std::path::PathBuf;
 
 use iced::Task;
 use resonance_audio::types::{AudioCommand, TrackId, TrackType};
+use resonance_common::{compute_fingerprint, FreezeCacheStatus, FreezeFingerprintBuilder};
 
 use crate::message::{FreezeMessage, Message};
-use crate::state::{FreezeQueue, FreezeStatus, TrackState};
+use crate::state::{FreezeQueue, FreezeStatus, MidiClipState, TrackState};
 use crate::Resonance;
 
 pub fn handle(r: &mut Resonance, m: FreezeMessage) -> Task<Message> {
@@ -309,5 +310,140 @@ impl Resonance {
             .collect();
         self.freeze.statuses = reconciled;
         self.freeze.queue = None;
+    }
+}
+
+// ---------------------------------------------------------------------
+// Read-only gating + stale invalidation (ba todo #576)
+// ---------------------------------------------------------------------
+//
+// A frozen track's *inputs* — notes, lyrics, plugin params, instrument
+// selection — are read-only while the cache stands in for the live chain.
+// The pre-dispatch classifier in `update/gates.rs` spots an edit aimed at
+// those inputs and, when the track is frozen, routes it here instead of
+// dispatching it: the edit never mutates state or enters the undo stack,
+// it just flips the freeze to `Stale` so the UI can offer a refreeze
+// (banner is the UI todo). Mixer controls (volume / pan / mute / solo /
+// routing / sends) are *not* freeze inputs, so they never reach this path
+// and stay fully live.
+
+impl Resonance {
+    /// Invalidate a frozen track to [`FreezeStatus::Stale`], keeping the
+    /// (now-outdated) cache attached so playback still works until the user
+    /// refreezes. Returns `true` when a `Frozen → Stale` transition
+    /// happened; `Stale` stays stale (idempotent) and a track that isn't
+    /// frozen is left untouched.
+    pub(crate) fn invalidate_frozen_track(&mut self, track_id: TrackId) -> bool {
+        match self.freeze.status(track_id) {
+            FreezeStatus::Frozen { cache_ref } => {
+                let mut cache_ref = cache_ref;
+                cache_ref.status = FreezeCacheStatus::Stale;
+                self.freeze
+                    .set(track_id, FreezeStatus::Stale { cache_ref });
+                true
+            }
+            // Already stale, or simply not frozen — nothing to invalidate.
+            _ => false,
+        }
+    }
+
+    /// Recompute the resonance-common input fingerprint over a track's
+    /// current frozen inputs (notes, lyrics, plugin params, instrument
+    /// selection). Returns `None` when the track no longer exists. The
+    /// fingerprint is order-stable: clips and plugins are folded in a fixed
+    /// order so reshuffling the backing `Vec`s never changes the hash.
+    pub(crate) fn compute_track_freeze_fingerprint(&self, track_id: TrackId) -> Option<u64> {
+        let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
+
+        // Notes + lyrics: every MIDI clip bound to this track, in clip-id
+        // order so the backing Vec's order can't perturb the hash.
+        let mut clips: Vec<&MidiClipState> = self
+            .midi_clips
+            .iter()
+            .filter(|c| c.track_id == track_id)
+            .collect();
+        clips.sort_by_key(|c| c.id);
+
+        let mut notes = Vec::new();
+        let mut lyrics = Vec::new();
+        for clip in clips {
+            notes.extend_from_slice(&clip.id.to_le_bytes());
+            notes.extend_from_slice(&clip.start_sample.to_le_bytes());
+            notes.extend_from_slice(&clip.duration_ticks.to_le_bytes());
+            notes.extend_from_slice(&clip.trim_start_ticks.to_le_bytes());
+            notes.extend_from_slice(&clip.trim_end_ticks.to_le_bytes());
+            for n in &clip.notes {
+                notes.push(n.note);
+                notes.extend_from_slice(&n.velocity.to_bits().to_le_bytes());
+                notes.extend_from_slice(&n.start_tick.to_le_bytes());
+                notes.extend_from_slice(&n.duration_ticks.to_le_bytes());
+            }
+            if let Some(clip_lyrics) = self.compose.vocal_audio.clip_lyrics.get(&clip.id) {
+                for syllable in clip_lyrics {
+                    lyrics.extend_from_slice(syllable.as_bytes());
+                    lyrics.push(0); // NUL-separate syllables so "a","b" ≠ "ab"
+                }
+            }
+        }
+
+        // Plugin params + instrument selection: the whole chain in slot
+        // order, plus the FX-bypass flag (it changes the post-FX render
+        // that freeze captured).
+        let mut plugin_params = Vec::new();
+        for slot in &track.plugins {
+            plugin_params.extend_from_slice(slot.clap_plugin_id.as_bytes());
+            plugin_params.push(0);
+            for p in &slot.params {
+                plugin_params.extend_from_slice(&p.id.to_le_bytes());
+                plugin_params.extend_from_slice(&p.current_value.to_bits().to_le_bytes());
+            }
+        }
+        plugin_params.push(track.fx_bypassed as u8);
+
+        // The instrument is the chain's first plugin (slot 0 on an
+        // instrument/vocal track); empty when the track has no synth yet.
+        let instrument_id = track
+            .plugins
+            .first()
+            .map(|p| p.clap_plugin_id.clone())
+            .unwrap_or_default();
+
+        let inputs = FreezeFingerprintBuilder::new()
+            .with_notes(notes)
+            .with_lyrics(lyrics)
+            .with_plugin_params(plugin_params)
+            .with_instrument_id(instrument_id)
+            .build();
+        Some(compute_fingerprint(&inputs))
+    }
+
+    /// Whether a frozen track's current inputs no longer match the
+    /// fingerprint captured when its cache was rendered. `false` when the
+    /// track isn't frozen (no cache to compare against) or the recompute
+    /// fails.
+    pub(crate) fn freeze_inputs_changed(&self, track_id: TrackId) -> bool {
+        let Some(cache_ref) = self.freeze.status(track_id).cache_ref().cloned() else {
+            return false;
+        };
+        match self.compute_track_freeze_fingerprint(track_id) {
+            Some(fingerprint) => fingerprint != cache_ref.render_fingerprint,
+            None => false,
+        }
+    }
+
+    /// Recompute the input fingerprint to *confirm* staleness on a suspected
+    /// change: if a still-`Frozen` track's inputs have drifted from the
+    /// rendered cache, downgrade it to `Stale`. Returns `true` when it
+    /// transitioned. Unlike [`invalidate_frozen_track`] (which trusts the
+    /// caller that a change happened), this verifies via the fingerprint, so
+    /// it's safe to call on changes that may turn out to be no-ops.
+    pub(crate) fn revalidate_frozen_track(&mut self, track_id: TrackId) -> bool {
+        if matches!(self.freeze.status(track_id), FreezeStatus::Frozen { .. })
+            && self.freeze_inputs_changed(track_id)
+        {
+            self.invalidate_frozen_track(track_id)
+        } else {
+            false
+        }
     }
 }
