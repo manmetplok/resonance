@@ -1,10 +1,13 @@
 //! Per-track header cell for the Arrange view track-header column:
-//! 28×28 instrument glyph + name/kind stacked column + a slim 4-button
-//! row (mute / solo / arm / monitor). Selection paints a 2px lavender
-//! stripe on the left edge.
+//! 28×28 instrument glyph + name/kind stacked column + a slim 5-button
+//! row (freeze / mute / solo / arm / monitor). Selection paints a 2px
+//! lavender stripe on the left edge.
 //!
 //! Mono toggle, FX bypass, and bounce-in-place stay on the mixer strip
 //! where channel-strip controls live; the Arrange header is for arranging.
+//! Freeze is the exception (design doc #181): it leads the button row here
+//! and also appears on the mixer strip, so the bounce-in-place state reads
+//! consistently in both surfaces.
 use iced::widget::{column, container, mouse_area, row, text, Space};
 use iced::{alignment, Color, Element, Length};
 
@@ -12,8 +15,8 @@ use crate::message::*;
 use crate::state::{self, TrackState};
 use crate::theme::{self, fa};
 use crate::view::controls::{
-    delete_button, monitor_button, monitor_button_locked, mute_button, record_arm_button,
-    record_arm_button_locked, solo_button,
+    delete_button, freeze_button, monitor_button, monitor_button_locked, mute_button,
+    record_arm_button, record_arm_button_locked, solo_button,
 };
 use crate::util::short;
 use crate::Resonance;
@@ -78,8 +81,11 @@ pub(super) fn view_track_header(
 
     let name_col = column![container(name).width(Length::Fill).clip(true), kind_line].spacing(2);
 
-    // ---- 4 mini buttons: Mute / Solo / Arm / Monitor ----
-    // Mute + solo stay live on a frozen track (you still mix it); arm +
+    // ---- 5 mini buttons: Freeze / Mute / Solo / Arm / Monitor ----
+    // Freeze leads the row (design doc #181): a snowflake toggle that
+    // bounces the track in place and plays the cache. Active (frozen) it
+    // takes the frost treatment — the same semantic-tint pattern mute/solo
+    // use. Mute + solo stay live on a frozen track (you still mix it); arm +
     // monitor lock — a frozen track has no live input to arm or monitor,
     // so they dim to the read-only style with no `on_press`.
     let (arm_btn, monitor_btn) = if frozen {
@@ -91,6 +97,7 @@ pub(super) fn view_track_header(
         )
     };
     let buttons = row![
+        freeze_button(frozen, track.id, 12),
         mute_button(
             track.muted,
             Message::Track(TrackMessage::ToggleMute(track.id)),
