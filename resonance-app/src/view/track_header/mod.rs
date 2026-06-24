@@ -11,13 +11,18 @@
 //! scrolling. Internally it's a two-layer `stack`:
 //!
 //! - **Lane subtree** (base layer): a `chrome_h`-tall transparent
-//!   spacer followed by the lane area. The lane area applies
-//!   `scroll_offset_y` as a negative top padding so the partial top
-//!   row scrolls smoothly instead of snapping to row boundaries.
-//!   Manual virtualization drops tracks above `scroll_offset_y` AND
-//!   below `scroll_offset_y + viewport_lane_h` from the widget tree,
-//!   so a 200-track session only allocates a handful of
-//!   `view_track_header` subtrees.
+//!   spacer followed by the lane area. The lane area applies the
+//!   partial-top fractional offset as a negative top padding so the
+//!   first visible row scrolls smoothly instead of snapping to row
+//!   boundaries. The rows themselves come from the shared
+//!   [`ArrangeRowLayout`](crate::view::arrange_layout) (todo #729),
+//!   which interleaves 60 px group-header rows with 96 px track lanes
+//!   and hides the members of collapsed groups. Variable-height
+//!   virtualization selects rows by cumulative Y — dropping rows fully
+//!   above `scroll_offset_y` AND fully below
+//!   `scroll_offset_y + viewport_lane_h` — so a 200-track session only
+//!   allocates a handful of `view_group_header` / `view_track_header`
+//!   subtrees.
 //! - **Chrome subtree** (top layer): ruler + section-band placeholder
 //!   (when sections exist) + always-visible 32 px global-shelf header +
 //!   per-lane labels (chords / tempo / signature) when expanded, then
@@ -47,6 +52,7 @@ use iced::{Element, Length, Padding};
 use crate::message::*;
 use crate::state::TrackState;
 use crate::theme;
+use crate::view::arrange_layout::{ArrangeRowKind, ArrangeRowLayout};
 use crate::Resonance;
 
 pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
@@ -87,6 +93,16 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
         g.id.hash(&mut h);
         g.ordered_members.hash(&mut h);
         g.nesting_parent.hash(&mut h);
+        // Group-header rows now render inline in the column (todo #730), so
+        // everything `view_group_header` paints — plus collapse state, which
+        // drives the variable-height ArrangeRowLayout (collapsed groups hide
+        // their members) — must invalidate the lazy cache.
+        g.is_collapsed.hash(&mut h);
+        g.name.hash(&mut h);
+        g.identity_color.hash(&mut h);
+        g.macro_mute.hash(&mut h);
+        g.macro_solo.hash(&mut h);
+        g.macro_level.to_bits().hash(&mut h);
     }
     r.interaction.selected_global_event.hash(&mut h);
     r.transport.time_sig_num.hash(&mut h);
@@ -204,49 +220,87 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
     // then renders the same negative-padding fractional-scroll lane
     // area as before. The chrome on the top layer masks anything that
     // overflows above the lane area's natural top edge.
+    //
+    // The arrange view is no longer a uniform stack of 96 px lanes:
+    // group/folder tracks interleave 60 px group-header rows, and a
+    // collapsed group hides its members. The shared `ArrangeRowLayout`
+    // (todo #729) is the single source of truth for that heterogeneous
+    // layout — both this column and the canvas consume it instead of
+    // re-deriving row Y from a fixed pitch. We iterate its rows here so
+    // the column stays row-for-row aligned with the canvas.
     let sorted_tracks: Vec<&TrackState> = r
         .sorted_tracks()
         .iter()
         .filter(|t| t.sub_track.is_none())
         .collect();
+    let layout = ArrangeRowLayout::build(&sorted_tracks, &r.track_groups);
 
     let scroll_y = r.viewport.scroll_offset_y.max(0.0);
-    let first_visible = (scroll_y / theme::TRACK_HEIGHT).floor() as usize;
-    let frac_offset = scroll_y - first_visible as f32 * theme::TRACK_HEIGHT;
 
-    // Bottom-side virtualization: drop tracks that sit entirely below
-    // the on-screen viewport. The lane area's drawn height is the full
-    // canvas viewport height minus the chrome (ruler + section band +
-    // global shelf + lane labels), so we cap `last_visible` by the
-    // number of rows that fit inside `viewport_lane_h` plus one
-    // overscan row to cover the partial bottom edge on sub-pixel
-    // scroll. When the canvas hasn't reported a viewport size yet
-    // (`viewport_height == 0`), fall back to "show everything from
-    // `first_visible` onward" so the initial paint isn't blank.
+    // Variable-height virtualization via cumulative-Y range selection.
+    // The lane area's drawn height is the full canvas viewport height
+    // minus the chrome (ruler + section band + global shelf + lane
+    // labels). We keep only rows whose vertical span intersects
+    // `[scroll_y, scroll_y + viewport_lane_h)`:
+    //
+    //   - drop rows fully above (`y_bottom <= scroll_y`),
+    //   - stop at the first row fully below (`y_top >= lane_bottom`).
+    //
+    // Because rows carry their own `y_top`/`height`, a partial bottom
+    // row is naturally included (its `y_top` is still `< lane_bottom`),
+    // so no separate overscan row is needed. When the canvas hasn't
+    // reported a viewport size yet (`viewport_height == 0`), show every
+    // row from the first visible one onward so the initial paint isn't
+    // blank.
     //
     // The chrome subtree paints opaque backgrounds on its own
     // (non-empty) Z-layer above the lane subtree — virtualizing the
     // lane column doesn't affect that masking invariant. See the
     // module doc-comment and `track_header_no_bleed_into_chrome_*`.
     let viewport_lane_h = (r.viewport.viewport_height - chrome_h).max(0.0);
-    let last_visible = if r.viewport.viewport_height > 0.0 {
-        let rows_visible = (viewport_lane_h / theme::TRACK_HEIGHT).ceil() as usize + 1;
-        first_visible.saturating_add(rows_visible)
+    let lane_bottom = if r.viewport.viewport_height > 0.0 {
+        scroll_y + viewport_lane_h
     } else {
-        sorted_tracks.len()
+        f32::INFINITY
     };
 
-    let mut lane_col = column![].spacing(0);
+    // Cumulative-Y window of visible rows. The partial-top fractional
+    // offset is measured against the first visible row's `y_top` (which
+    // may be a 60 px group header or a 96 px lane), so smooth sub-row
+    // scrolling works across the mixed row pitches.
+    let visible_rows: Vec<&crate::view::arrange_layout::ArrangeRow> = layout
+        .rows()
+        .iter()
+        .skip_while(|row| row.y_bottom() <= scroll_y)
+        .take_while(|row| row.y_top < lane_bottom)
+        .collect();
+    let frac_offset = visible_rows
+        .first()
+        .map(|row| scroll_y - row.y_top)
+        .unwrap_or(0.0);
+
+    let by_id: std::collections::HashMap<_, _> =
+        sorted_tracks.iter().map(|t| (t.id, *t)).collect();
     let selected_tracks = &r.interaction.selected_tracks;
-    for (i, track) in sorted_tracks.iter().enumerate() {
-        if i < first_visible {
-            continue;
+    let mut lane_col = column![].spacing(0);
+    for row in visible_rows {
+        match row.kind {
+            ArrangeRowKind::GroupHeader(group_id) => {
+                if let Some(group) = r.track_groups.get_group(group_id) {
+                    // `member_count` mirrors the mixer group strip: the
+                    // flattened (recursive) member count from the registry.
+                    let member_count = r.track_groups.get_all_member_ids(group_id).len();
+                    lane_col =
+                        lane_col.push(group_header::view_group_header(group, member_count));
+                }
+            }
+            ArrangeRowKind::Track(track_id) => {
+                if let Some(track) = by_id.get(&track_id) {
+                    let is_selected = selected_tracks.contains(&track_id);
+                    lane_col = lane_col.push(track::view_track_header(r, track, is_selected));
+                }
+            }
         }
-        if i >= last_visible {
-            break;
-        }
-        let is_selected = selected_tracks.contains(&track.id);
-        lane_col = lane_col.push(track::view_track_header(r, track, is_selected));
     }
 
     let lane_area = container(lane_col)
