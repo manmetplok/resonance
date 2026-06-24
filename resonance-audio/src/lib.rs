@@ -95,6 +95,16 @@ pub use engine::midi::{outbound_step_start, OutboundStep};
 #[doc(hidden)]
 pub use engine::midi::{move_midi_clip_in_place, trim_midi_clip_in_place};
 
+/// Test surface for the bulk MIDI-edit handlers (quantize / humanize /
+/// groove). Exposed so the engine tests in `tests/midi_bulk_edits.rs` can
+/// drive each bulk command's mutation + event emission (including the
+/// missing-clip no-op branch) without spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::midi::{
+    apply_groove_to_clip_in_place, extract_groove_from_clip_in_place, humanize_midi_notes_in_place,
+    quantize_midi_notes_in_place,
+};
+
 /// Test surface for the audio clip fade/gain/warp handlers. Exposed so
 /// the integration tests in `tests/clip_fade_gain_handlers.rs` and
 /// `tests/clip_warp_handlers.rs` can drive the command boundary (mutation

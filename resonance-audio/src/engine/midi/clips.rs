@@ -12,6 +12,10 @@
 use crossbeam_channel::Sender;
 use parking_lot::RwLock;
 
+use crate::quantize::{
+    apply_groove, extract_groove, humanize_notes, quantize_notes, Division, GrooveTemplate,
+    QuantizeMode,
+};
 use crate::types::*;
 
 use super::super::thread::{HandlerCtx, HandlerState};
@@ -313,5 +317,211 @@ pub(crate) fn handle_set_midi_note_velocity(
                 velocity,
             });
         }
+    }
+}
+
+// -- Bulk MIDI note edits: quantize / humanize / groove --
+//
+// Each bulk op is atomic: it locks the clip table once, applies the pure
+// `quantize` algorithm against the clip's notes (and, where the geometry
+// needs it, the engine's authoritative `TempoMap`), replaces the clip's
+// note array, and emits exactly ONE `AudioEvent::MidiNotesEdited` carrying
+// the full resulting note array. The app mirrors that array and records
+// the prior notes for a single-step undo. Note order is preserved — the
+// pure algorithms operate strictly by index and never reorder, merge, or
+// drop notes, so engine and app mirrors stay index-aligned.
+//
+// As with the move/trim handlers, mutation and event emission are folded
+// into a single `if let Some(clip)` branch so a missing-clip lookup is a
+// no-op that emits no ghost event. The inner `*_in_place` helpers are
+// re-exported under `__test_support` (via `lib.rs`) so the regression
+// tests in `tests/` can drive them headlessly — no engine thread.
+
+/// Engine-thread handler for [`AudioCommand::QuantizeMidiNotes`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_quantize_midi_notes(
+    ctx: &HandlerCtx,
+    clip_id: ClipId,
+    indices: Vec<usize>,
+    grid: Division,
+    strength: f32,
+    swing: f32,
+    mode: QuantizeMode,
+    quantize_ends: bool,
+    iterative: bool,
+) {
+    let tempo = ctx.tempo_map.load();
+    quantize_midi_notes_in_place(
+        ctx.midi_clips,
+        ctx.event_tx,
+        &tempo,
+        ctx.sample_rate,
+        clip_id,
+        &indices,
+        grid,
+        strength,
+        swing,
+        mode,
+        quantize_ends,
+        iterative,
+    );
+}
+
+/// Engine-thread handler for [`AudioCommand::HumanizeMidiNotes`].
+pub(crate) fn handle_humanize_midi_notes(
+    ctx: &HandlerCtx,
+    clip_id: ClipId,
+    indices: Vec<usize>,
+    timing_ticks: u32,
+    vel_amt: f32,
+    seed: u64,
+) {
+    humanize_midi_notes_in_place(
+        ctx.midi_clips,
+        ctx.event_tx,
+        clip_id,
+        &indices,
+        timing_ticks,
+        vel_amt,
+        seed,
+    );
+}
+
+/// Engine-thread handler for [`AudioCommand::ApplyGrooveToClip`].
+pub(crate) fn handle_apply_groove_to_clip(
+    ctx: &HandlerCtx,
+    clip_id: ClipId,
+    indices: Vec<usize>,
+    template: GrooveTemplate,
+    strength: f32,
+) {
+    let tempo = ctx.tempo_map.load();
+    apply_groove_to_clip_in_place(
+        ctx.midi_clips,
+        ctx.event_tx,
+        &tempo,
+        clip_id,
+        &indices,
+        &template,
+        strength,
+    );
+}
+
+/// Engine-thread handler for [`AudioCommand::ExtractGrooveFromClip`].
+pub(crate) fn handle_extract_groove_from_clip(
+    ctx: &HandlerCtx,
+    clip_id: ClipId,
+    grid: Division,
+) {
+    let tempo = ctx.tempo_map.load();
+    extract_groove_from_clip_in_place(ctx.midi_clips, ctx.event_tx, &tempo, clip_id, grid);
+}
+
+/// Quantize the selected notes in `clip_id` and emit one bulk
+/// `MidiNotesEdited`. No-op (and no event) if the clip is missing.
+///
+/// The grid is aligned to the project bar lines via the clip's absolute
+/// start tick (`sample_to_abs_tick(start_sample) - trim_start_ticks`),
+/// matching the playback projection in `outbound.rs`, so trimmed clips
+/// and clips that do not begin on a bar boundary quantize correctly.
+#[allow(clippy::too_many_arguments)]
+pub fn quantize_midi_notes_in_place(
+    midi_clips: &RwLock<Vec<MidiClip>>,
+    event_tx: &Sender<AudioEvent>,
+    tempo: &TempoMap,
+    sample_rate: u32,
+    clip_id: ClipId,
+    indices: &[usize],
+    grid: Division,
+    strength: f32,
+    swing: f32,
+    mode: QuantizeMode,
+    quantize_ends: bool,
+    iterative: bool,
+) {
+    let mut guard = midi_clips.write();
+    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+        let clip_start_tick = tempo
+            .sample_to_abs_tick(clip.start_sample, sample_rate)
+            .saturating_sub(clip.trim_start_ticks);
+        let new_notes = quantize_notes(
+            &clip.notes,
+            indices,
+            grid,
+            strength,
+            swing,
+            mode,
+            quantize_ends,
+            iterative,
+            tempo,
+            clip_start_tick,
+        );
+        clip.notes = new_notes.clone();
+        let _ = event_tx.send(AudioEvent::MidiNotesEdited {
+            clip_id,
+            notes: new_notes,
+        });
+    }
+}
+
+/// Humanize the selected notes in `clip_id` and emit one bulk
+/// `MidiNotesEdited`. No-op (and no event) if the clip is missing.
+pub fn humanize_midi_notes_in_place(
+    midi_clips: &RwLock<Vec<MidiClip>>,
+    event_tx: &Sender<AudioEvent>,
+    clip_id: ClipId,
+    indices: &[usize],
+    timing_ticks: u32,
+    vel_amt: f32,
+    seed: u64,
+) {
+    let mut guard = midi_clips.write();
+    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+        let new_notes = humanize_notes(&clip.notes, indices, timing_ticks, vel_amt, seed);
+        clip.notes = new_notes.clone();
+        let _ = event_tx.send(AudioEvent::MidiNotesEdited {
+            clip_id,
+            notes: new_notes,
+        });
+    }
+}
+
+/// Apply a groove template to the selected notes in `clip_id` and emit
+/// one bulk `MidiNotesEdited`. No-op (and no event) if the clip is
+/// missing.
+pub fn apply_groove_to_clip_in_place(
+    midi_clips: &RwLock<Vec<MidiClip>>,
+    event_tx: &Sender<AudioEvent>,
+    tempo: &TempoMap,
+    clip_id: ClipId,
+    indices: &[usize],
+    template: &GrooveTemplate,
+    strength: f32,
+) {
+    let mut guard = midi_clips.write();
+    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+        let new_notes = apply_groove(&clip.notes, indices, template, strength, tempo);
+        clip.notes = new_notes.clone();
+        let _ = event_tx.send(AudioEvent::MidiNotesEdited {
+            clip_id,
+            notes: new_notes,
+        });
+    }
+}
+
+/// Extract a groove template from `clip_id` at `grid` resolution and emit
+/// `GrooveExtracted`. Read-only: the clip is not modified. No-op (and no
+/// event) if the clip is missing.
+pub fn extract_groove_from_clip_in_place(
+    midi_clips: &RwLock<Vec<MidiClip>>,
+    event_tx: &Sender<AudioEvent>,
+    tempo: &TempoMap,
+    clip_id: ClipId,
+    grid: Division,
+) {
+    let guard = midi_clips.read();
+    if let Some(clip) = guard.iter().find(|c| c.id == clip_id) {
+        let template = extract_groove(&clip.notes, grid, tempo);
+        let _ = event_tx.send(AudioEvent::GrooveExtracted { template });
     }
 }
