@@ -389,7 +389,12 @@ pub fn mix_track_clips(
             10f32.powf(clip.gain_db / 20.0)
         };
 
-        let clip_data = clip.source.as_frames();
+        // Read the retuned cache when the clip carries vocal-tuning edits,
+        // else the original PCM. Both share the same frame layout, so the
+        // trim/fade/gain indexing below is identical; untuned clips hit the
+        // zero-overhead source path. Shared by live playback and the
+        // offline bounce/export, so corrected audio is identical (todo #358).
+        let clip_data = clip.render_frames();
         for timeline_frame in overlap_start..overlap_end {
             let frame_offset = (timeline_frame - buf_start) as usize;
             let clip_frame =

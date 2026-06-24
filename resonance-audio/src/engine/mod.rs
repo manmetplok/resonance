@@ -77,6 +77,7 @@ mod tracks;
 mod transport;
 mod vocal_analysis;
 pub use vocal_analysis::{analyze_clip_pitch_in_place, analyze_pitch};
+pub mod vocal_render;
 
 /// Shared state between the engine control thread and the audio callback.
 /// `pub` (not `pub(crate)`) only so `__test_support` can re-export it for

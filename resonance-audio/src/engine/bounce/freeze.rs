@@ -85,6 +85,10 @@ pub fn to_freeze_cache(
         return Err("Stop transport before freezing".into());
     }
 
+    // Refresh vocal-tuning render caches so a retuned clip on the frozen
+    // track is captured corrected, identical to live playback (todo #358).
+    super::super::vocal_render::ensure_tuning_caches(clips, sample_rate);
+
     // Resolve source + sub-tracks (multi-output instruments like
     // resonance-drums spawn sibling tracks fed by parent output ports).
     let filter_set: HashSet<TrackId> = {

@@ -448,6 +448,16 @@ pub struct AudioClip {
     /// `timeline_beat`. Empty (the default) → a single uniform stretch
     /// governed by `original_bpm`; non-empty → piecewise-linear warp.
     pub warp_markers: Vec<WarpMarker>,
+    /// Derived, **non-persisted** render cache holding the formant-preserving
+    /// retuned PCM for this clip (interleaved stereo, exactly the same frame
+    /// count as [`ClipSource::as_frames`]). Built off the realtime thread by
+    /// [`crate::engine::vocal_render::ensure_tuning_caches`] whenever
+    /// [`Self::vocal_tuning`] carries edits, and read on the hot mixer path
+    /// via [`Self::render_frames`] so corrected audio is identical in live
+    /// playback and bounce/export (todo #358). `None` when the clip is
+    /// untuned or its tuning is the identity edit — the zero-overhead path.
+    /// The original [`ClipSource`] PCM is never mutated.
+    pub tuning_render_cache: Option<Vec<f32>>,
 }
 
 /// Number of stereo frames per waveform peak bucket.
@@ -501,6 +511,22 @@ impl AudioClip {
     /// tuned even before analysis populates it.
     pub fn is_tuned(&self) -> bool {
         self.vocal_tuning.is_some()
+    }
+
+    /// Stereo-interleaved frames the mixer should read for this clip: the
+    /// retuned [`Self::tuning_render_cache`] when present, otherwise the
+    /// original [`ClipSource`] PCM. Both buffers share the same frame
+    /// layout, so the caller's trim/fade/gain indexing is unchanged.
+    ///
+    /// Called from the mixer hot path — O(1) and allocation-free. Untuned
+    /// clips (the cache is `None`) return the source slice directly, so they
+    /// keep their existing zero-overhead behaviour.
+    #[inline]
+    pub fn render_frames(&self) -> &[f32] {
+        match &self.tuning_render_cache {
+            Some(cache) => cache.as_slice(),
+            None => self.source.as_frames(),
+        }
     }
 
     /// Mutable access to the clip's [`VocalTuning`], creating an empty

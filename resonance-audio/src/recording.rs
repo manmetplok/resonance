@@ -330,6 +330,7 @@ impl RecordingState {
                 transpose_semitones: 0.0,
                 warp_algorithm: Default::default(),
                 warp_markers: Vec::new(),
+                tuning_render_cache: None,
             };
             {
                 let mut guard = clips.write();
@@ -452,6 +453,7 @@ impl RecordingState {
                 transpose_semitones: 0.0,
                 warp_algorithm: Default::default(),
                 warp_markers: Vec::new(),
+                tuning_render_cache: None,
             };
             clips.write().push(clip);
             rolled.push(RolledAudioTake {

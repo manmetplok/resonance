@@ -303,6 +303,10 @@ pub(crate) fn run_export(
         return;
     }
 
+    // Refresh the vocal-tuning render caches so the export mixes corrected
+    // audio for any retuned clip, identical to live playback (todo #358).
+    super::super::vocal_render::ensure_tuning_caches(clips, sample_rate);
+
     // Compute project range from audio clips + MIDI clips.
     let (render_start, render_end) = {
         let clips_guard = clips.read();
