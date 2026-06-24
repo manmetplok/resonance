@@ -190,11 +190,17 @@ pub(super) fn reset_plugins(
 /// one — but its bus isn't drained either, so reverb tails on shared
 /// buses still come from the in-filter tracks only.
 ///
+/// `freeze_raw` selects the freeze-cache capture mode (see
+/// [`mixer::RenderStrategy::Bounce`]): in-filter tracks render their raw
+/// post-FX signal at unity gain straight to master so the cache is fader-
+/// and route-independent. Every non-freeze caller passes `false`.
+///
 /// Reference A/B exclusion: this shared bounce core renders the mix
 /// only. It takes no [`crate::engine::reference::ReferenceMonitor`] and
 /// never reads `ctx.shared.reference`, so the live A/B selection cannot
 /// leak into any offline export — the reference monitor tap lives solely
 /// in the live callback (`mixer::mix_audio`).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_chunk(
     ctx: &ChunkCtx<'_>,
     scratch: &mut ChunkScratch,
@@ -203,6 +209,7 @@ pub(super) fn render_chunk(
     in_filter: &dyn Fn(TrackId) -> bool,
     include_master_fx: bool,
     respect_mute_solo: bool,
+    freeze_raw: bool,
 ) {
     scratch.mix_buf[..frames * 2].fill(0.0);
 
@@ -229,6 +236,7 @@ pub(super) fn render_chunk(
     let mut strategy = mixer::RenderStrategy::Bounce {
         in_filter,
         respect_mute_solo,
+        freeze_raw,
     };
     mixer::render_block(
         &mut scratch.mix_buf[..frames * 2],

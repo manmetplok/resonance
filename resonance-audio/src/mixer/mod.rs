@@ -88,6 +88,7 @@ pub fn render_aux_for_test(
     let mut strategy = RenderStrategy::Bounce {
         in_filter: &in_filter,
         respect_mute_solo: false,
+        freeze_raw: false,
     };
 
     render_block(

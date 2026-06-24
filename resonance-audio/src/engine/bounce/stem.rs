@@ -260,6 +260,7 @@ pub fn render_stem(
             &in_filter,
             filter.include_master_fx,
             respect_mute_solo,
+            false,
         );
         // Drop the leading plugin-latency frames so the stem aligns with
         // the timeline (and with every other stem over this range).

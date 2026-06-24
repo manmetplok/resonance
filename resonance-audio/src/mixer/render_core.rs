@@ -47,6 +47,14 @@ pub(crate) enum RenderStrategy<'a> {
     Bounce {
         in_filter: &'a dyn Fn(TrackId) -> bool,
         respect_mute_solo: bool,
+        /// Freeze-cache capture mode. When `true`, every in-filter track
+        /// renders its **raw post-instrument / post-FX** signal — unity
+        /// gain, no pan, forced straight to master (its own fader / pan /
+        /// bus routing skipped). This keeps the cached WAV fader- and
+        /// route-independent so the frozen playback substitution can
+        /// re-apply volume / pan / routing / sends live on playback and
+        /// stay sample-identical to the unfrozen track (doc #187).
+        freeze_raw: bool,
     },
 }
 
@@ -73,6 +81,15 @@ impl RenderStrategy<'_> {
     #[inline]
     fn is_live(&self) -> bool {
         matches!(self, Self::Live { .. })
+    }
+
+    /// Freeze-cache capture: bypass per-track / sub-track fader, pan and
+    /// bus routing, summing the raw post-FX buffer straight to master.
+    /// Only the `Bounce { freeze_raw: true }` strategy does this; every
+    /// other path honours the track's real output routing.
+    #[inline]
+    fn force_master_route(&self) -> bool {
+        matches!(self, Self::Bounce { freeze_raw: true, .. })
     }
 
     /// Acquire an effect plugin's lock. Live: non-blocking, skipping the
@@ -160,6 +177,7 @@ impl RenderStrategy<'_> {
             Self::Bounce {
                 in_filter,
                 respect_mute_solo,
+                freeze_raw,
             } => {
                 // For `to_wav` we honour the user's mix (muted /
                 // non-soloed tracks drop out). For bounce-in-place
@@ -173,7 +191,13 @@ impl RenderStrategy<'_> {
                 if !in_filter(track.id) {
                     return None;
                 }
-                let (gain_l, gain_r) = track_stereo_gains(track);
+                // Freeze captures the raw post-FX signal at unity / no
+                // pan; the live mixer re-applies volume / pan on playback.
+                let (gain_l, gain_r) = if *freeze_raw {
+                    (1.0, 1.0)
+                } else {
+                    track_stereo_gains(track)
+                };
                 Some(TrackDisposition {
                     gain_l: (gain_l, gain_l),
                     gain_r: (gain_r, gain_r),
@@ -212,6 +236,7 @@ impl RenderStrategy<'_> {
             Self::Bounce {
                 in_filter,
                 respect_mute_solo,
+                ..
             } => {
                 if *respect_mute_solo
                     && (sub_track.muted() || (any_solo && !sub_track.soloed()))
@@ -221,6 +246,10 @@ impl RenderStrategy<'_> {
                 if !in_filter(sub_track.id) {
                     return None;
                 }
+                // Under `freeze_raw` the sub-track keeps its own
+                // fader / pan (its internal balance is baked into the
+                // parent's cache) but `force_master_route` sums it into
+                // master so the whole fan-out lands in one cache file.
                 let (gain_l, gain_r) = track_stereo_gains(sub_track);
                 Some(((gain_l, gain_l), (gain_r, gain_r)))
             }
@@ -330,6 +359,81 @@ fn process_multi_port(
     for slot in slots.iter_mut().take(port_count) {
         unsafe { slot.assume_init_drop() };
     }
+}
+
+/// Fill the de-interleaved track buffers from a track's [`FrozenSource`]
+/// cache for the timeline window `[playhead, playhead + frames)`,
+/// replacing the live instrument + insert-FX render (doc #187, todo
+/// #573). The cache is interleaved stereo L/R, rendered from sample 0 so
+/// timeline frame `t` maps directly to cache frame `t`; frames past the
+/// end of the cache stay silent (the caller zeroed the buffers).
+///
+/// Sample-rate mismatch between the cache and the engine is handled by
+/// linear interpolation: with matching rates (the normal case — the
+/// cache is rendered at the project rate) the read is frame-for-frame and
+/// therefore bit-exact, which is what makes a frozen bounce sample-
+/// identical to the unfrozen one. Returns whether any non-zero sample was
+/// written. Allocation-free and `O(frames)`.
+fn fill_from_frozen_source(
+    source: &FrozenSource,
+    engine_sample_rate: u32,
+    playhead: u64,
+    frames: usize,
+    track_buf_l: &mut [f32],
+    track_buf_r: &mut [f32],
+) -> bool {
+    let samples = source.samples.as_slice();
+    let cache_frames = source.frame_count;
+    let mut has_audio = false;
+
+    if source.sample_rate == engine_sample_rate || engine_sample_rate == 0 {
+        // Frame-for-frame copy — bit-exact, the parity-critical path.
+        for f in 0..frames {
+            let tl = playhead + f as u64;
+            if tl >= cache_frames {
+                break;
+            }
+            let idx = tl as usize * 2;
+            if idx + 1 >= samples.len() {
+                break;
+            }
+            let (l, r) = (samples[idx], samples[idx + 1]);
+            track_buf_l[f] = l;
+            track_buf_r[f] = r;
+            has_audio |= l != 0.0 || r != 0.0;
+        }
+    } else {
+        // Rate mismatch: resample the cache on the fly by linear
+        // interpolation. Timeline frame `tl` maps to cache position
+        // `tl * cache_rate / engine_rate`.
+        let ratio = source.sample_rate as f64 / engine_sample_rate as f64;
+        for f in 0..frames {
+            let tl = playhead + f as u64;
+            let src_pos = tl as f64 * ratio;
+            let i0 = src_pos.floor() as u64;
+            if i0 >= cache_frames {
+                break;
+            }
+            let frac = (src_pos - i0 as f64) as f32;
+            let idx0 = i0 as usize * 2;
+            if idx0 + 1 >= samples.len() {
+                break;
+            }
+            let (l0, r0) = (samples[idx0], samples[idx0 + 1]);
+            let (l1, r1) = if i0 + 1 < cache_frames && idx0 + 3 < samples.len() {
+                (samples[idx0 + 2], samples[idx0 + 3])
+            } else {
+                (l0, r0)
+            };
+            let l = l0 + (l1 - l0) * frac;
+            let r = r0 + (r1 - r0) * frac;
+            track_buf_l[f] = l;
+            track_buf_r[f] = r;
+            has_audio |= l != 0.0 || r != 0.0;
+        }
+    }
+
+    has_audio
 }
 
 /// Mix every audio clip on `track_id` into the de-interleaved track
@@ -598,7 +702,31 @@ pub(crate) fn render_block(
         // knows how many `port_scratch` entries to route to sub-tracks.
         let mut extra_ports_filled: usize = 0;
 
-        if track.track_type == TrackType::Instrument {
+        // Frozen playback substitution (doc #187, todo #573): when the
+        // track carries an active frozen source, play its cached post-FX
+        // samples in place of running the timeline synth + insert FX. The
+        // cache is timeline-aligned and captured pre-fader (see
+        // `freeze_raw`), so the post-source mixer stage below — PDC,
+        // volume, pan, mute / solo, routing and aux sends — still applies
+        // live. This path is shared by the live callback and the offline
+        // bounce / stem renderer, so a frozen track is transparently
+        // identical in playback and in export, with no separate code path.
+        // (The instrument's fan-out is skipped, so `extra_ports_filled`
+        // stays 0; a frozen multi-output track's sub-mix is already baked
+        // into its single cache file.)
+        let frozen_source = track.frozen_source.load_full();
+        if let Some(source) = frozen_source.as_deref() {
+            if fill_from_frozen_source(
+                source,
+                sample_rate,
+                playhead,
+                frames,
+                &mut track_buf_l[..frames],
+                &mut track_buf_r[..frames],
+            ) {
+                has_audio = true;
+            }
+        } else if track.track_type == TrackType::Instrument {
             // -- Instrument track: collect MIDI events, send to instrument plugin --
             collect_midi_events(
                 midi_clips_guard,
@@ -745,16 +873,23 @@ pub(crate) fn render_block(
         // output or into the target bus's summing buffer. If the target
         // bus no longer exists (e.g. removed mid-block), fall back to
         // master so the track isn't silenced.
-        let routed_to_bus = match track.output() {
-            TrackOutput::Bus(bus_id) => busses_guard
-                .get_index_of(&bus_id)
-                .filter(|idx| *idx < active_busses)
-                .map(|idx| {
-                    let (bl, br) = &mut bus_bufs[idx];
-                    sum_to_stereo(bl, br, frames, track_buf_l, track_buf_r, gain_l, gain_r);
-                })
-                .is_some(),
-            TrackOutput::Master => false,
+        let routed_to_bus = if strategy.force_master_route() {
+            // Freeze capture: sum the raw post-FX buffer straight to
+            // master, never through the track's bus (bus FX would
+            // otherwise bake into the cache and double on playback).
+            false
+        } else {
+            match track.output() {
+                TrackOutput::Bus(bus_id) => busses_guard
+                    .get_index_of(&bus_id)
+                    .filter(|idx| *idx < active_busses)
+                    .map(|idx| {
+                        let (bl, br) = &mut bus_bufs[idx];
+                        sum_to_stereo(bl, br, frames, track_buf_l, track_buf_r, gain_l, gain_r);
+                    })
+                    .is_some(),
+                TrackOutput::Master => false,
+            }
         };
         if !routed_to_bus {
             sum_to_output(
@@ -869,16 +1004,22 @@ pub(crate) fn render_block(
                 }
 
                 // Route post-fader audio to the sub-track's destination.
-                let routed = match sub_track.output() {
-                    TrackOutput::Bus(bus_id) => busses_guard
-                        .get_index_of(&bus_id)
-                        .filter(|idx| *idx < active_busses)
-                        .map(|idx| {
-                            let (bl, br) = &mut bus_bufs[idx];
-                            sum_to_stereo(bl, br, frames, pl, pr, sub_gain_l, sub_gain_r);
-                        })
-                        .is_some(),
-                    TrackOutput::Master => false,
+                // Freeze capture folds the fan-out into master so the
+                // parent's cache carries the whole multi-output mix.
+                let routed = if strategy.force_master_route() {
+                    false
+                } else {
+                    match sub_track.output() {
+                        TrackOutput::Bus(bus_id) => busses_guard
+                            .get_index_of(&bus_id)
+                            .filter(|idx| *idx < active_busses)
+                            .map(|idx| {
+                                let (bl, br) = &mut bus_bufs[idx];
+                                sum_to_stereo(bl, br, frames, pl, pr, sub_gain_l, sub_gain_r);
+                            })
+                            .is_some(),
+                        TrackOutput::Master => false,
+                    }
                 };
                 if !routed {
                     sum_to_output(data, channels, frames, pl, pr, sub_gain_l, sub_gain_r);
