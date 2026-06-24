@@ -29,6 +29,11 @@ pub mod types;
 
 pub use decode::{linear_resample, StreamingLinearResampler};
 pub use engine::{transcode_to_wav, AudioEngine, EngineSendError};
+/// Decode a freeze-cache WAV back into a [`FrozenSource`] for project-load
+/// rehydration (ba todo #577). Lives in the audio crate alongside the
+/// writer ([`engine::to_freeze_cache`]) so the cache format stays owned in
+/// one place; the app calls it to build the `SetTrackFrozenSource` payload.
+pub use engine::read_freeze_cache;
 // `AudioEvent::AssetImported` carries an `AudioFormat`; re-export it so
 // app consumers of the event surface don't need a direct dependency on
 // `resonance_common` just to match on it.

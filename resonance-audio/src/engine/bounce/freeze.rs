@@ -246,6 +246,58 @@ pub fn to_freeze_cache(
     ))
 }
 
+/// Decode a freeze-cache WAV at `path` into a [`FrozenSource`] ready to
+/// attach to a track for playback (ba todo #577).
+///
+/// The cache files written by [`to_freeze_cache`] are 32-bit float stereo
+/// (interleaved L/R) and timeline-aligned from sample 0, so the decoded
+/// buffer plays back with no stored offset. `cache_ref` is the persisted
+/// reference the buffer is being rehydrated from; it travels into the
+/// returned [`FrozenSource`] unchanged so the caller keeps its
+/// filename / fingerprint / status metadata.
+///
+/// Returns `Err` — never panics — when the file is missing, unreadable,
+/// the wrong format, or truncated, so the project-load path can fall the
+/// track back to a *stale* (offer-refreeze) state instead of crashing.
+pub fn read_freeze_cache(path: &Path, cache_ref: FreezeCacheRef) -> Result<FrozenSource, String> {
+    let mut reader = hound::WavReader::open(path)
+        .map_err(|e| format!("Open freeze cache {}: {e}", path.display()))?;
+    let spec = reader.spec();
+    if spec.channels != 2 {
+        return Err(format!(
+            "Freeze cache {} is not stereo (has {} channel(s))",
+            path.display(),
+            spec.channels
+        ));
+    }
+
+    // Caches are written as 32-bit float; decode int as a defensive
+    // fallback so a hand-substituted PCM file still loads rather than
+    // erroring the whole project.
+    let samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => reader
+            .samples::<f32>()
+            .collect::<Result<Vec<f32>, _>>()
+            .map_err(|e| format!("Read freeze cache {}: {e}", path.display()))?,
+        hound::SampleFormat::Int => {
+            let scale = 1.0 / (1i64 << (spec.bits_per_sample - 1)) as f32;
+            reader
+                .samples::<i32>()
+                .map(|s| s.map(|v| v as f32 * scale))
+                .collect::<Result<Vec<f32>, _>>()
+                .map_err(|e| format!("Read freeze cache {}: {e}", path.display()))?
+        }
+    };
+
+    let frame_count = (samples.len() / 2) as u64;
+    Ok(FrozenSource::new(
+        cache_ref,
+        Arc::new(samples),
+        spec.sample_rate,
+        frame_count,
+    ))
+}
+
 /// Compute a stable fingerprint over the engine-visible freeze inputs:
 /// the filtered tracks' MIDI notes plus the source track's plugin chain
 /// (instrument = first slot). Re-rendering with identical notes and an

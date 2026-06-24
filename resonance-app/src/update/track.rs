@@ -88,6 +88,8 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 if r.compose.expanded_track_id == Some(id) {
                     r.compose.expanded_track_id = None;
                 }
+                // Tear down any freeze cache the track owned (ba todo #577).
+                r.cleanup_freeze_on_delete(id);
                 let _ = r.engine.send(AudioCommand::RemoveTrack { track_id: id });
             }
         }
@@ -99,6 +101,8 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 if r.compose.expanded_track_id == Some(id) {
                     r.compose.expanded_track_id = None;
                 }
+                // Tear down any freeze cache the track owned (ba todo #577).
+                r.cleanup_freeze_on_delete(id);
                 let _ = r.engine.send(AudioCommand::RemoveTrack { track_id: id });
             }
         }

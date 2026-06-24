@@ -44,7 +44,7 @@ mod stem_export;
 mod wav;
 
 pub use clip::to_audio_clip;
-pub use freeze::{to_freeze_cache, FREEZE_CANCELLED_MSG};
+pub use freeze::{read_freeze_cache, to_freeze_cache, FREEZE_CANCELLED_MSG};
 pub use render::try_lock_with_backoff;
 pub use stem::{render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter};
 pub use stem_export::export_stems;

@@ -306,6 +306,17 @@ pub struct ProjectTrack {
     /// Hardware MIDI output channel (0..=15), or `None` = channel 1.
     #[serde(default)]
     pub midi_output_channel: Option<u8>,
+    /// Persisted track-freeze state (ba todo #577). Defaults to
+    /// [`TrackFreezeState::default`](resonance_common::TrackFreezeState)
+    /// (live / unfrozen) so projects authored before freeze existed load
+    /// unchanged. A frozen track records its
+    /// [`FreezeCacheRef`](resonance_common::FreezeCacheRef) here; on load
+    /// the cache WAV is re-decoded and re-attached via
+    /// `AudioCommand::SetTrackFrozenSource` so reopening replays the cache
+    /// without re-rendering. A missing / corrupt cache loads the track as
+    /// stale (offer refreeze) rather than failing the project.
+    #[serde(default)]
+    pub freeze: resonance_common::TrackFreezeState,
 }
 
 /// On-disk bus state.
