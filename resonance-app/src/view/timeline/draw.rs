@@ -5,8 +5,9 @@
 use iced::widget::canvas;
 use iced::{Color, Point, Size};
 
-use crate::state::{self, ClipState, MidiClipState, TrackState};
+use crate::state::{self, ClipState, MidiClipState};
 use crate::theme;
+use crate::view::arrange_layout::ArrangeRowLayout;
 use super::TimelineCanvas;
 use resonance_audio::types::{avg_bpm_for_bar, TrackId};
 
@@ -859,14 +860,14 @@ impl TimelineCanvas<'_> {
         &self,
         frame: &mut canvas::Frame,
         clip: &ClipState,
-        sorted_tracks: &[&TrackState],
+        layout: &ArrangeRowLayout,
         ruler_height: f32,
         y_off: f32,
         visible_height: f32,
     ) {
         let Some((y, clip_height, indent)) = clip_lane_rect(self,
             clip.track_id,
-            sorted_tracks,
+            layout,
             ruler_height,
             y_off,
             visible_height,
@@ -971,14 +972,14 @@ impl TimelineCanvas<'_> {
         &self,
         frame: &mut canvas::Frame,
         clip: &MidiClipState,
-        sorted_tracks: &[&TrackState],
+        layout: &ArrangeRowLayout,
         ruler_height: f32,
         y_off: f32,
         visible_height: f32,
     ) {
         let Some((y, clip_height, indent)) = clip_lane_rect(self,
             clip.track_id,
-            sorted_tracks,
+            layout,
             ruler_height,
             y_off,
             visible_height,
@@ -1123,26 +1124,33 @@ impl VisibleBar {
     }
 }
 
-/// Lane-relative rect for a clip on `track_id`: returns `(y, height)`,
-/// or `None` when the track is unknown or the lane is scrolled out of
-/// view. The `CLIP_LANE_INSET` top/bottom inset matches the design.
+/// Lane-relative rect for a clip on `track_id`: returns `(y, height,
+/// indent)`, or `None` when the track has no visible lane (unknown, a
+/// member of a collapsed group, or scrolled out of view). The lane Y /
+/// height come from the shared [`ArrangeRowLayout`] (doc #203) rather
+/// than `track_index * TRACK_HEIGHT`, so clips sit correctly under the
+/// variable row pitch and clips on hidden (collapsed-member) tracks are
+/// not drawn. The `CLIP_LANE_INSET` top/bottom inset matches the design.
+///
+/// `ruler_height` is the fixed canvas-header height the lane area starts
+/// below; the layout's `y_top` is measured from the top of that lane
+/// area, so the two are simply added.
 fn clip_lane_rect(
     canvas: &TimelineCanvas,
     track_id: TrackId,
-    sorted_tracks: &[&TrackState],
+    layout: &ArrangeRowLayout,
     ruler_height: f32,
     y_off: f32,
     visible_height: f32,
 ) -> Option<(f32, f32, f32)> {
-    let track_index = sorted_tracks.iter().position(|t| t.id == track_id)?;
-
+    let (row_y_top, row_height) = layout.track_row_rect(track_id)?;
 
     // Calculate indent for group members using the registry method
     let indent_level = canvas.track_groups.indent_depth(track_id);
     let indent = indent_level as f32 * theme::GROUP_MEMBER_INDENT;
-    let lane_y = ruler_height + track_index as f32 * theme::TRACK_HEIGHT - y_off;
+    let lane_y = ruler_height + row_y_top - y_off;
     let y = lane_y + theme::CLIP_LANE_INSET;
-    let clip_height = theme::TRACK_HEIGHT - 2.0 * theme::CLIP_LANE_INSET;
+    let clip_height = row_height - 2.0 * theme::CLIP_LANE_INSET;
 
     if y + clip_height < ruler_height || y > visible_height {
         return None;

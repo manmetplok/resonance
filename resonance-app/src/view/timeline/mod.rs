@@ -18,6 +18,7 @@ use iced::{keyboard, mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 use crate::message::*;
 use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
+use crate::view::arrange_layout::{ArrangeRowKind, ArrangeRowLayout};
 use self::input::{ClipInteraction, TempoDrag};
 
 use resonance_audio::types::{ClipId, TempoMap, TrackId};
@@ -177,15 +178,27 @@ impl TimelineCanvas<'_> {
 
     /// Total vertical content height (tracks + ruler + global tracks).
     /// Excludes sub-tracks since the arrange view hides them entirely.
+    ///
+    /// The lane area height comes from the shared [`ArrangeRowLayout`]
+    /// (doc #203), so interleaved 60 px group-header rows and the missing
+    /// rows of collapsed groups are reflected in the scrollbar extent —
+    /// not the old `visible_tracks * TRACK_HEIGHT` uniform-pitch guess.
     pub(crate) fn content_height_px(&self) -> f32 {
-        let visible = self.tracks.iter().filter(|t| t.sub_track.is_none()).count();
-        self.fixed_header_height() + visible as f32 * theme::TRACK_HEIGHT
+        self.fixed_header_height() + self.arrange_layout().total_height()
     }
 
     /// Tracks visible in the arrange view, sorted by `order`. Excludes
     /// sub-tracks (rendered only in the mixer view).
     pub(super) fn visible_tracks_sorted(&self) -> Vec<&TrackState> {
         hit_test::sorted_arrange_tracks(self.tracks)
+    }
+
+    /// The shared heterogeneous arrange-row layout (group-header rows +
+    /// track rows, collapse-aware) for this canvas. Both lane rendering
+    /// and clip placement consume it instead of `index * TRACK_HEIGHT`.
+    pub(super) fn arrange_layout(&self) -> ArrangeRowLayout {
+        let sorted = self.visible_tracks_sorted();
+        ArrangeRowLayout::build(&sorted, self.track_groups)
     }
 }
 
@@ -432,9 +445,12 @@ impl<'a> TimelineCanvas<'a> {
         self.draw_global_tracks(frame, bounds.width, band_top + band_height);
 
         // Draw track backgrounds. Only non-sub-tracks are rendered; the
-        // mixer view is where sub-track lanes live.
-        let sorted_tracks = self.visible_tracks_sorted();
-        let track_area_height = sorted_tracks.len() as f32 * theme::TRACK_HEIGHT;
+        // mixer view is where sub-track lanes live. The layout enumerates
+        // the heterogeneous rows (group-header bands + track lanes) with
+        // their own heights / cumulative Y — replacing the old uniform
+        // `index * TRACK_HEIGHT` pitch (doc #203).
+        let layout = self.arrange_layout();
+        let track_area_height = layout.total_height();
 
         // Everything inside the lane region — track rows, grid lines,
         // clips, and the loop in/out dim overlays — is clipped to the
@@ -456,38 +472,75 @@ impl<'a> TimelineCanvas<'a> {
             (track_area_height - y_off).max(bounds.height - header_height);
         let loop_dim_height = loop_total_height_below_header.max(0.0);
         frame.with_clip(lane_clip, |frame| {
-            for (i, track) in sorted_tracks.iter().enumerate() {
-                let y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
+            // Zebra striping alternates over *track* rows only, so an
+            // interleaved 60 px group-header band doesn't flip the
+            // parity of the lanes around it.
+            let mut zebra = 0usize;
+            for row in layout.rows() {
+                let y = header_height + row.y_top - y_off;
 
-                // Skip tracks entirely above or below the visible area
-                if y + theme::TRACK_HEIGHT < header_height || y > bounds.height {
+                // Skip rows entirely above or below the visible area.
+                if y + row.height < header_height || y > bounds.height {
+                    if matches!(row.kind, ArrangeRowKind::Track(_)) {
+                        zebra += 1;
+                    }
                     continue;
                 }
 
-                let is_selected = self.selected_track == Some(track.id);
-                let bg = if is_selected {
-                    theme::BG_2
-                } else if i % 2 == 0 {
-                    theme::BG
-                } else {
-                    theme::PANEL_DARK
-                };
-                frame.fill_rectangle(
-                    Point::new(0.0, y),
-                    Size::new(bounds.width, theme::TRACK_HEIGHT),
-                    bg,
-                );
+                match row.kind {
+                    ArrangeRowKind::GroupHeader(group_id) => {
+                        // Group-colour lane band. When the group is
+                        // expanded this is the faint "spans all members"
+                        // identity tint; a collapsed group keeps a plain
+                        // band for now (the consolidated-overview strip is
+                        // a separate follow-up — todo #733).
+                        if let Some(group) = self.track_groups.get_group(group_id) {
+                            let (_base, wash, line) =
+                                theme::group_identity_colors(group.identity_color);
+                            let band = if group.is_collapsed { theme::BG_2 } else { wash };
+                            frame.fill_rectangle(
+                                Point::new(0.0, y),
+                                Size::new(bounds.width, row.height),
+                                band,
+                            );
+                            // Identity-coloured bottom rule so the band
+                            // reads as a structural divider.
+                            frame.fill_rectangle(
+                                Point::new(0.0, y + row.height - 1.0),
+                                Size::new(bounds.width, 1.0),
+                                line,
+                            );
+                        }
+                    }
+                    ArrangeRowKind::Track(track_id) => {
+                        let is_selected = self.selected_track == Some(track_id);
+                        let bg = if is_selected {
+                            theme::BG_2
+                        } else if zebra % 2 == 0 {
+                            theme::BG
+                        } else {
+                            theme::PANEL_DARK
+                        };
+                        frame.fill_rectangle(
+                            Point::new(0.0, y),
+                            Size::new(bounds.width, row.height),
+                            bg,
+                        );
 
-                // Recording overlay is drawn in the uncached overlay pass
-                // — see `draw_overlay_into`. It grows with `playhead`,
-                // which would otherwise invalidate the cache every frame.
+                        // Recording overlay is drawn in the uncached
+                        // overlay pass — see `draw_overlay_into`. It grows
+                        // with `playhead`, which would otherwise
+                        // invalidate the cache every frame.
 
-                // Track separator line
-                frame.fill_rectangle(
-                    Point::new(0.0, y + theme::TRACK_HEIGHT - 1.0),
-                    Size::new(bounds.width, 1.0),
-                    theme::LINE_2,
-                );
+                        // Track separator line
+                        frame.fill_rectangle(
+                            Point::new(0.0, y + row.height - 1.0),
+                            Size::new(bounds.width, 1.0),
+                            theme::LINE_2,
+                        );
+                        zebra += 1;
+                    }
+                }
             }
 
             // Draw bar/beat grid lines through track area
@@ -504,7 +557,7 @@ impl<'a> TimelineCanvas<'a> {
                 self.draw_clip(
                     frame,
                     clip,
-                    &sorted_tracks,
+                    &layout,
                     header_height,
                     y_off,
                     bounds.height,
@@ -516,7 +569,7 @@ impl<'a> TimelineCanvas<'a> {
                 self.draw_midi_clip(
                     frame,
                     clip,
-                    &sorted_tracks,
+                    &layout,
                     header_height,
                     y_off,
                     bounds.height,
@@ -652,8 +705,8 @@ impl<'a> TimelineCanvas<'a> {
         let ruler_height = theme::RULER_HEIGHT;
         let header_height = self.fixed_header_height();
         let y_off = self.scroll_offset_y;
-        let sorted_tracks = self.visible_tracks_sorted();
-        let track_area_height = sorted_tracks.len() as f32 * theme::TRACK_HEIGHT;
+        let layout = self.arrange_layout();
+        let track_area_height = layout.total_height();
 
         // Per-track recording overlay (one shaded strip per armed
         // track that spans from record-start to playhead, wrapping
@@ -669,12 +722,16 @@ impl<'a> TimelineCanvas<'a> {
                 height: (bounds.height - header_height).max(0.0),
             };
             frame.with_clip(lane_clip, |frame| {
-                for (i, track) in sorted_tracks.iter().enumerate() {
-                    if !self.recording_tracks.contains(&track.id) {
+                for &track_id in &self.recording_tracks {
+                    // A recording member of a collapsed group has no
+                    // visible lane (`track_row_rect` -> None), so its
+                    // overlay is skipped — matching the hidden clips.
+                    let Some((row_y_top, row_height)) = layout.track_row_rect(track_id)
+                    else {
                         continue;
-                    }
-                    let y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
-                    if y + theme::TRACK_HEIGHT < header_height || y > bounds.height {
+                    };
+                    let y = header_height + row_y_top - y_off;
+                    if y + row_height < header_height || y > bounds.height {
                         continue;
                     }
                     let (overlay_start, overlay_end) = if self.loop_enabled {
@@ -690,7 +747,7 @@ impl<'a> TimelineCanvas<'a> {
                     if overlay_w > 0.0 {
                         frame.fill_rectangle(
                             Point::new(overlay_x, y),
-                            Size::new(overlay_w, theme::TRACK_HEIGHT),
+                            Size::new(overlay_w, row_height),
                             Color::from_rgba(0.8, 0.2, 0.2, 0.08),
                         );
                     }
