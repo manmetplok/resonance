@@ -240,7 +240,7 @@ fn render_range(
             return RenderOutcome::Cancelled;
         }
         let frames = ((render_stop - pos) as usize).min(BOUNCE_CHUNK);
-        render_chunk(ctx, scratch, pos, frames, &everything, true, true);
+        render_chunk(ctx, scratch, pos, frames, &everything, true, true, false);
 
         let drop_now = skip_frames.min(frames);
         skip_frames -= drop_now;

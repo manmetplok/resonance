@@ -194,8 +194,11 @@ pub fn to_freeze_cache(
         let frames = ((render_stop - pos) as usize).min(BOUNCE_CHUNK);
         // include_master_fx = false (cache replays through master),
         // respect_mute_solo = false (freeze the track's own output
-        // regardless of its live mute/solo state).
-        render_chunk(&ctx, &mut scratch, pos, frames, &in_filter, false, false);
+        // regardless of its live mute/solo state), freeze_raw = true
+        // (capture the raw pre-fader / pre-pan / pre-routing post-FX
+        // signal so the live mixer re-applies volume / pan / routing on
+        // playback and stays sample-identical to the unfrozen track).
+        render_chunk(&ctx, &mut scratch, pos, frames, &in_filter, false, false, true);
 
         let drop_now = skip_frames.min(frames);
         skip_frames -= drop_now;

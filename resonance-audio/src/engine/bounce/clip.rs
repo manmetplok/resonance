@@ -179,7 +179,7 @@ pub fn to_audio_clip(
         }
 
         let frames = ((render_stop - pos) as usize).min(BOUNCE_CHUNK);
-        render_chunk(&ctx, &mut scratch, pos, frames, &in_filter, false, false);
+        render_chunk(&ctx, &mut scratch, pos, frames, &in_filter, false, false, false);
         let drop_now = skip_frames.min(frames);
         skip_frames -= drop_now;
         let copy = (frames - drop_now).min(total_frames - written);
