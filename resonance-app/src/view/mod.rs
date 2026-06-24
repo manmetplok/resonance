@@ -10,6 +10,7 @@ pub(crate) mod confirm_delete_track;
 pub(crate) mod confirm_quit;
 pub mod controls;
 pub(crate) mod editor_panel;
+pub mod freeze_banner;
 pub(crate) mod import_dialog;
 pub(crate) mod knob;
 pub(crate) mod menus;
