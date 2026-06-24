@@ -1,7 +1,7 @@
 //! Track header column shown on the left of the Arrange view. Matches
 //! the redesign: 28×28 instrument glyph + name/kind stacked column +
-//! a slim 4-button row (mute / solo / arm / monitor). Selection paints a
-//! 2px lavender stripe on the left edge.
+//! a slim 5-button row (freeze / mute / solo / arm / monitor). Selection
+//! paints a 2px lavender stripe on the left edge.
 //!
 //! Mono toggle, FX bypass, and bounce-in-place stay on the mixer strip
 //! where channel-strip controls live; the Arrange header is for arranging.

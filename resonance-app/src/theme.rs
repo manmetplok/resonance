@@ -142,6 +142,8 @@ pub mod fa {
     /// Counter-clockwise rotating arrow — used for "regenerate / reroll"
     /// affordances next to a primary Generate button.
     pub const ARROW_ROTATE_LEFT: char = '\u{f0e2}';
+    /// Snowflake — used for the track-header Freeze (bounce-in-place) toggle.
+    pub const SNOWFLAKE: char = '\u{f2dc}';
 }
 
 // ---------------------------------------------------------------------------

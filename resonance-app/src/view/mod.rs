@@ -8,7 +8,7 @@ pub(crate) mod bounce_progress;
 pub(crate) mod compose;
 pub(crate) mod confirm_delete_track;
 pub(crate) mod confirm_quit;
-pub(crate) mod controls;
+pub mod controls;
 pub(crate) mod editor_panel;
 pub(crate) mod import_dialog;
 pub(crate) mod knob;
