@@ -2,6 +2,7 @@
 /// lives here; concrete surfaces are in sibling modules (transport,
 /// mixer, compose, track_header, menus, settings, editor_panel,
 /// timeline_panel, timeline, piano_roll, midi_editor).
+pub mod arrange_layout;
 pub(crate) mod bounce_dialog;
 pub(crate) mod bounce_progress;
 pub(crate) mod compose;
