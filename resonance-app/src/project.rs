@@ -197,6 +197,32 @@ pub struct ProjectTrack {
     /// Hardware MIDI output channel (0..=15), or `None` = channel 1.
     #[serde(default)]
     pub midi_output_channel: Option<u8>,
+    /// External-instrument config (doc #169). `Some` marks the track as an
+    /// external instrument. `None` on plain tracks and legacy projects. The
+    /// MIDI output / audio-return devices live in the existing track fields
+    /// (`midi_output_device`/`_channel`, `input_device_name`,
+    /// `input_port_index`) and the monitor / record-arm flags on the track
+    /// record; this carries only the bank/program + latency-offset extras.
+    /// Runtime device-offline flags are not persisted (they reflect live
+    /// hardware, re-checked after load).
+    #[serde(default)]
+    pub external_instrument: Option<ProjectExternalInstrument>,
+}
+
+/// On-disk external-instrument config (doc #169). Mirrors the persistable
+/// fields of [`resonance_common::ExternalInstrument`]; the track id is implied
+/// by the owning [`ProjectTrack`] and the runtime offline flags are not saved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectExternalInstrument {
+    /// Selected MIDI bank (combined 14-bit MSB << 7 | LSB), or `None`.
+    #[serde(default)]
+    pub bank: Option<u16>,
+    /// Selected MIDI program (`0..=127`), or `None`.
+    #[serde(default)]
+    pub program: Option<u8>,
+    /// Manual latency offset in samples aligning the audio return.
+    #[serde(default)]
+    pub latency_offset_samples: i64,
 }
 
 /// On-disk bus state.

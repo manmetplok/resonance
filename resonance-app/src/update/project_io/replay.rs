@@ -112,9 +112,11 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.registry.next_track_order = 0;
     r.registry.next_bus_order = 0;
     r.plugin_index.clear();
-    // External-instrument mode is per-track GUI state not yet carried by
-    // ProjectFile; drop it so a load starts clean (an undo restore re-asserts
-    // it from `UndoExtras` right after this runs).
+    // Drop external-instrument mode so the load starts clean. A fresh
+    // project load re-asserts it per-track from `ProjectTrack.external_instrument`
+    // in `replay_track`; an undo restore re-asserts it from `UndoExtras`
+    // right after this runs (and its snapshot project file carries the same
+    // config, so the two agree idempotently).
     r.external_instruments.clear();
 
     // Bump the app-side sub-track id counter past any persisted ids so
@@ -582,6 +584,27 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
     track.midi_output_channel = pt.midi_output_channel;
     r.registry.tracks.push(track);
     r.registry.next_track_order += 1;
+
+    // Re-establish external-instrument mode. The route (MIDI out device +
+    // channel, audio-return device + port) and the monitor / record-arm
+    // flags were already replayed via the track fields above; here we
+    // register the bank/program/latency config with the engine
+    // (`SetExternalInstrument`) and mirror it into the app map. The actual
+    // Bank Select + Program Change patch is re-sent once for every external
+    // track after the whole project finishes replaying (see
+    // `engine_events::project_io::all_cleared`), so a freshly-powered synth
+    // lands on its saved patch and any offline device is reported then. The
+    // runtime offline flags start clear and are re-checked on the next ping.
+    if let Some(ext) = &pt.external_instrument {
+        let mut state = ExternalInstrumentState::new(track_id);
+        state.bank = ext.bank;
+        state.program = ext.program;
+        state.latency_offset_samples = ext.latency_offset_samples;
+        let _ = r.engine.send(AudioCommand::SetExternalInstrument {
+            config: state.config(),
+        });
+        r.external_instruments.insert(track_id, state);
+    }
 }
 
 fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProject) {
