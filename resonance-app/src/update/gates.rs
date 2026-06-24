@@ -155,7 +155,110 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
     }
 }
 
+/// The MIDI clip a [`MidiEditorMessage`] *edits*, or `None` for the
+/// navigation / selection / preview variants that touch no note data.
+/// Used by [`Resonance::frozen_input_edit_target`] to gate note + lyric
+/// edits on frozen tracks.
+fn midi_editor_edit_clip(
+    m: &crate::message::MidiEditorMessage,
+) -> Option<resonance_audio::types::ClipId> {
+    use crate::message::MidiEditorMessage::*;
+    match m {
+        AddNote { clip_id, .. }
+        | RemoveNote { clip_id, .. }
+        | MoveNote { clip_id, .. }
+        | ResizeNote { clip_id, .. }
+        | ToggleSlur { clip_id, .. } => Some(*clip_id),
+        // Open / close / select / preview / scroll don't change note data.
+        OpenMidiEditor(_)
+        | OpenSelectedMidiClip
+        | CloseMidiEditor
+        | SelectNote { .. }
+        | PreviewNote(..)
+        | StopPreview(..)
+        | ScrollY(_) => None,
+    }
+}
+
+/// The track a [`PluginMessage`] edits the *render inputs* of — a param
+/// change, or adding / removing a plugin (which includes swapping the
+/// instrument). The panel-toggle / editor-window variants don't change the
+/// rendered signal, so they're never gated.
+fn plugin_edit_target(
+    r: &crate::Resonance,
+    m: &crate::message::PluginMessage,
+) -> Option<resonance_audio::types::TrackId> {
+    use crate::message::PluginMessage::*;
+    match m {
+        SetPluginParam(instance_id, ..) => r.track_of_plugin(*instance_id),
+        AddPluginToTrack(track_id, _) | RemovePluginFromTrack(track_id, _) => Some(*track_id),
+        TogglePluginPanel(_) | OpenPluginEditor(_) | ClosePluginEditor(_) => None,
+    }
+}
+
 impl crate::Resonance {
+    /// The track owning a MIDI clip, by clip id.
+    fn track_of_midi_clip(
+        &self,
+        clip_id: resonance_audio::types::ClipId,
+    ) -> Option<resonance_audio::types::TrackId> {
+        self.midi_clips
+            .iter()
+            .find(|c| c.id == clip_id)
+            .map(|c| c.track_id)
+    }
+
+    /// The track owning a plugin instance, by instance id. Prefers the
+    /// `plugin_index` side-table, falling back to a scan so a desynced
+    /// index degrades to O(n) instead of a miss (mirrors `with_plugin_mut`).
+    fn track_of_plugin(
+        &self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+    ) -> Option<resonance_audio::types::TrackId> {
+        if let Some(crate::state::PluginLocator::Track(track_id)) =
+            self.plugin_index.get(&instance_id).copied()
+        {
+            return Some(track_id);
+        }
+        self.registry
+            .tracks
+            .iter()
+            .find(|t| t.plugins.iter().any(|p| p.instance_id == instance_id))
+            .map(|t| t.id)
+    }
+
+    /// When `message` is an edit to a track's *frozen inputs* — notes,
+    /// lyrics, plugin params, instrument selection, or the FX-bypass flag
+    /// (all of which the freeze render captured) — return that track id.
+    /// `None` for everything else, including the mixer controls (volume /
+    /// pan / mute / solo / routing / sends) that stay live while frozen.
+    ///
+    /// The caller ([`update_inner`](crate::Resonance::update)) uses this to
+    /// gate edits on a frozen track: the edit is dropped (no mutation, no
+    /// undo) and the freeze flips to `Stale` instead (ba todo #576).
+    pub(crate) fn frozen_input_edit_target(
+        &self,
+        message: &crate::message::Message,
+    ) -> Option<resonance_audio::types::TrackId> {
+        use crate::message::*;
+        match message {
+            // Note + lyric edits, keyed by the clip's owning track.
+            Message::MidiEditor(m) => {
+                midi_editor_edit_clip(m).and_then(|clip_id| self.track_of_midi_clip(clip_id))
+            }
+            // Deleting a MIDI clip removes its notes from the render.
+            Message::MidiClip(MidiClipMessage::DeleteMidiClip(clip_id)) => {
+                self.track_of_midi_clip(*clip_id)
+            }
+            // Plugin params, plugin add/remove, instrument swap.
+            Message::Plugin(m) => plugin_edit_target(self, m),
+            // Bypassing the FX chain changes the post-FX signal freeze
+            // rendered — treat it as an input edit, not a mixer control.
+            Message::Track(TrackMessage::ToggleTrackFxBypass(track_id)) => Some(*track_id),
+            _ => None,
+        }
+    }
+
     /// Combined pre-dispatch gate. Returns `true` when `message` should
     /// be dropped — either because the startup modal is up and the
     /// message would mutate project state, or because an offline bounce

@@ -485,6 +485,99 @@ impl Resonance {
         (def.chords, def.scale)
     }
 
+    /// Test-only: route a message through the *full* `update()` entry,
+    /// including the pre-dispatch gates and undo bookkeeping. Used by the
+    /// frozen-input read-only gating tests (ba todo #576), which need the
+    /// gate that `test_dispatch` deliberately skips.
+    #[doc(hidden)]
+    pub fn test_update(&mut self, message: crate::message::Message) {
+        let _ = self.update(message);
+    }
+
+    /// Test-only: whether the project is marked dirty (unsaved changes). A
+    /// blocked frozen-input edit must leave this untouched — proof it never
+    /// mutated state or recorded undo.
+    #[doc(hidden)]
+    pub fn test_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Test-only: whether the undo stack has a restorable snapshot. A
+    /// blocked frozen-input edit must not grow it.
+    #[doc(hidden)]
+    pub fn test_can_undo(&self) -> bool {
+        self.undo.can_undo()
+    }
+
+    /// Test-only: push a plugin slot onto a track's chain (bypassing the
+    /// engine round-trip) and index it, so the freeze fingerprint /
+    /// plugin-param gating tests have a real chain to operate on.
+    #[doc(hidden)]
+    pub fn test_push_track_plugin(
+        &mut self,
+        track_id: resonance_audio::types::TrackId,
+        plugin: state::PluginSlotState,
+    ) {
+        let instance_id = plugin.instance_id;
+        if let Some(track) = self.registry.tracks.iter_mut().find(|t| t.id == track_id) {
+            track.plugins.push(plugin);
+            self.insert_plugin_index(instance_id, state::PluginLocator::Track(track_id));
+        }
+    }
+
+    /// Test-only: set a plugin param's current value directly (no engine
+    /// round-trip), so a fingerprint test can mutate an input and recompute.
+    #[doc(hidden)]
+    pub fn test_set_plugin_param(
+        &mut self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+        param_id: u32,
+        value: f64,
+    ) {
+        self.with_plugin_mut(instance_id, |p| {
+            if let Some(param) = p.params.iter_mut().find(|pp| pp.id == param_id) {
+                param.current_value = value;
+            }
+        });
+    }
+
+    /// Test-only: read a plugin param's current value (no engine round-trip).
+    #[doc(hidden)]
+    pub fn test_plugin_param(
+        &mut self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+        param_id: u32,
+    ) -> Option<f64> {
+        self.with_plugin_mut(instance_id, |p| {
+            p.params
+                .iter()
+                .find(|pp| pp.id == param_id)
+                .map(|pp| pp.current_value)
+        })
+        .flatten()
+    }
+
+    /// Test-only: recompute the resonance-common freeze input fingerprint
+    /// for a track (ba todo #576).
+    #[doc(hidden)]
+    pub fn test_freeze_fingerprint(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<u64> {
+        self.compute_track_freeze_fingerprint(track_id)
+    }
+
+    /// Test-only: recompute the fingerprint and downgrade a still-`Frozen`
+    /// track to `Stale` if its inputs drifted. Returns whether it
+    /// transitioned (ba todo #576).
+    #[doc(hidden)]
+    pub fn test_revalidate_frozen_track(
+        &mut self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> bool {
+        self.revalidate_frozen_track(track_id)
+    }
+
     /// Test-only: read a track's freeze status (defaults to idle).
     #[doc(hidden)]
     pub fn test_freeze_status(

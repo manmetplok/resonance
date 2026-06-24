@@ -67,6 +67,17 @@ impl crate::Resonance {
             }
             _ => {}
         }
+        // Read-only gating of frozen inputs (ba todo #576): an edit aimed
+        // at a frozen track's inputs (notes, lyrics, plugin params,
+        // instrument selection) must not mutate state or enter the undo
+        // stack. Drop it before `record_undo`/`dispatch` and invalidate the
+        // freeze to `Stale` so the UI surfaces the refreeze affordance.
+        if let Some(track_id) = self.frozen_input_edit_target(&message) {
+            if self.freeze.status(track_id).is_frozen() {
+                self.invalidate_frozen_track(track_id);
+                return Task::none();
+            }
+        }
         let commit_after = self.record_undo(&message);
         let task = self.dispatch(message);
         if commit_after {
