@@ -1112,9 +1112,51 @@ impl TimelineCanvas<'_> {
             return;
         }
 
+        let is_selected = self.selected_midi_clip == Some(clip.id);
+
+        // Frozen tracks render their cached audio, so the lane switches
+        // from the live MIDI language (lavender notes) to the audio render
+        // language: a warm waveform silhouette overlaid with the frost
+        // wash and relabelled "frozen render" (design doc #181).
+        if self.frozen_tracks.contains(&clip.track_id) {
+            let chrome = ClipChrome {
+                x,
+                y,
+                w,
+                h: clip_height,
+                // Warm wash body — the audio-domain language — so the
+                // frozen render reads as rendered audio, not live MIDI.
+                body_color: Color {
+                    a: 0.10,
+                    ..theme::WARM
+                },
+                // Frost edge marks the clip as frozen; selection still wins.
+                border_color: if is_selected {
+                    theme::ACCENT
+                } else {
+                    theme::FROST_EDGE
+                },
+                is_selected,
+                name: "frozen render",
+                name_color: theme::WARM,
+                show_name: true,
+            };
+            chrome.draw(frame, |frame| {
+                self.draw_frozen_render_waveform(frame, clip, x, y, w, clip_height);
+                // Frost wash laid over the warm waveform so the render
+                // reads as frozen — the one cool tone the palette admits.
+                let wash = canvas::Path::rounded_rectangle(
+                    Point::new(x, y),
+                    Size::new(w, clip_height),
+                    8.0.into(),
+                );
+                frame.fill(&wash, theme::FROST_WASH);
+            });
+            return;
+        }
+
         // MIDI clips: lavender wash + lavender border, name in lavender
         // accent.
-        let is_selected = self.selected_midi_clip == Some(clip.id);
         let chrome = ClipChrome {
             x,
             y,
@@ -1138,6 +1180,71 @@ impl TimelineCanvas<'_> {
         chrome.draw(frame, |frame| {
             self.draw_midi_clip_notes(frame, clip, x, y, w, clip_height)
         });
+    }
+
+    /// Synthesise a warm "rendered audio" waveform silhouette for a frozen
+    /// MIDI clip. The freeze cache's real peaks aren't carried in the view
+    /// model ([`FreezeCacheRef`](resonance_common::FreezeCacheRef) holds
+    /// only metadata), so the silhouette is derived deterministically from
+    /// the clip's notes: audio is drawn only where a note actually sounds,
+    /// with a stable per-column amplitude so the same clip always renders
+    /// the same shape (golden-snapshot safe — no float trig, no RNG).
+    fn draw_frozen_render_waveform(
+        &self,
+        frame: &mut canvas::Frame,
+        clip: &MidiClipState,
+        x: f32,
+        y: f32,
+        w: f32,
+        clip_height: f32,
+    ) {
+        let header_height = 18.0;
+        let wave_y = y + header_height;
+        let wave_h = clip_height - header_height - 4.0;
+        if wave_h <= 2.0 || w <= 2.0 || clip.notes.is_empty() {
+            return;
+        }
+        let wave_center = wave_y + wave_h * 0.5;
+        let total_ticks = clip.duration_ticks as f32;
+        if total_ticks <= 0.0 {
+            return;
+        }
+
+        // Warm bars, slightly translucent, matching the live-audio waveform
+        // language (`draw_clip_waveform`).
+        let waveform_color = Color {
+            a: 0.7,
+            ..theme::WARM
+        };
+
+        let start_px = (-x).max(0.0);
+        let mut px = start_px;
+        while px < w {
+            // Clip-space tick under this column.
+            let tick = (px / w) * total_ticks;
+            // Audio only where a note sounds (coverage gate).
+            let sounding = clip.notes.iter().any(|n| {
+                let s = n.start_tick as f32 - clip.trim_start_ticks as f32;
+                tick >= s && tick < s + n.duration_ticks as f32
+            });
+            if sounding {
+                // Deterministic per-column amplitude in [0.25, 0.95] from an
+                // integer hash of the column index — looks like dense
+                // rendered audio without any platform-dependent maths.
+                let i = px as u32;
+                let h = i.wrapping_mul(2_246_822_519) ^ (i >> 3).wrapping_mul(3_266_489_917);
+                let r = (h & 0xffff) as f32 / 65_535.0;
+                let amp = 0.25 + 0.70 * r;
+                let half = amp * wave_h * 0.5;
+                let draw_x = x + px;
+                frame.fill_rectangle(
+                    Point::new(draw_x, wave_center - half),
+                    Size::new(1.0, half * 2.0),
+                    waveform_color,
+                );
+            }
+            px += 1.0;
+        }
     }
 
     /// Note preview — small lavender rects mapped to the clip's note

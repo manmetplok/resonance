@@ -57,6 +57,26 @@ pub fn record_arm_button<'a>(
         .padding(0)
 }
 
+/// Locked record-arm button for a frozen track. The arm input is
+/// read-only while frozen (the cache, not the live input, is what plays),
+/// so the control dims to `TEXT_4` and drops its `on_press` — it reads as
+/// "present but inert" rather than disappearing, matching design doc #181's
+/// "record-arm + input-monitor controls dim to a locked style". Mute / solo
+/// stay live and are built with their normal helpers.
+pub fn record_arm_button_locked<'a>(size: u16) -> iced::widget::Button<'a, Message> {
+    button(icon_button(fa::CIRCLE, theme::TEXT_4, size))
+        .style(|_theme, status| theme::small_button_style(status))
+        .padding(0)
+}
+
+/// Locked input-monitor button for a frozen track. Mirrors
+/// [`record_arm_button_locked`]: dimmed to `TEXT_4`, no `on_press`.
+pub fn monitor_button_locked<'a>(size: u16) -> iced::widget::Button<'a, Message> {
+    button(icon_button(fa::EYE, theme::TEXT_4, size))
+        .style(|_theme, status| theme::small_button_style(status))
+        .padding(0)
+}
+
 /// Mute toggle button (speaker-with-X — accent when muted).
 pub fn mute_button<'a>(
     muted: bool,

@@ -55,6 +55,15 @@ impl crate::Resonance {
             selected_placement_id: self.compose.selected_placement_id,
             markers: self.markers.as_slice(),
             selected_marker_id: self.interaction.selected_marker_id,
+            // Tracks whose lane should render the frozen-render treatment
+            // (frost wash over a warm waveform, "frozen render" label).
+            frozen_tracks: self
+                .registry
+                .tracks
+                .iter()
+                .filter(|t| self.freeze.status(t.id).is_frozen())
+                .map(|t| t.id)
+                .collect(),
         };
 
         // Fixed canvas width = full content width. With the canvas no

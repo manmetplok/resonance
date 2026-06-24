@@ -247,6 +247,23 @@ pub const FROST_EDGE: Color = rgba(FROST_BASE.0, FROST_BASE.1, FROST_BASE.2, 0.3
 /// so the glyph reads cleanly against the frosted header.
 pub const FROST_ICON: Color = rgb(FROST_BASE.0, FROST_BASE.1, FROST_BASE.2);
 
+/// Composite the translucent [`FROST_WASH`] over an opaque `base` surface,
+/// returning the resulting *opaque* colour. Container backgrounds and
+/// canvas fills take a single colour rather than a layered alpha stack, so
+/// "frosting" a header / lane substrate means pre-blending the wash here.
+/// Source-over: `out = base·(1−a) + wash·a` with `a = FROST_WASH.a`. Keeps
+/// the frost treatment derived from the one wash token rather than a second
+/// hand-picked opaque shade.
+pub fn frost_over(base: Color) -> Color {
+    let a = FROST_WASH.a;
+    Color {
+        r: base.r * (1.0 - a) + FROST_WASH.r * a,
+        g: base.g * (1.0 - a) + FROST_WASH.g * a,
+        b: base.b * (1.0 - a) + FROST_WASH.b * a,
+        a: 1.0,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Legacy aliases — keep the rest of the codebase compiling while the views
 // migrate. New code should use the tokens above directly.

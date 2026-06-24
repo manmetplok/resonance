@@ -119,6 +119,10 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
         t.instrument_icon.hash(&mut h);
         t.instrument_type.hash(&mut h);
         t.input_device_name.hash(&mut h);
+        // Freeze state drives the frost treatment (frosted header, FROZEN
+        // pill, locked chip, dimmed arm/monitor), so it must enter the
+        // lazy-cache key or a freeze/unfreeze wouldn't repaint the column.
+        r.freeze.status(t.id).is_frozen().hash(&mut h);
         if let Some(p) = t.plugins.first() {
             p.plugin_name.hash(&mut h);
         }

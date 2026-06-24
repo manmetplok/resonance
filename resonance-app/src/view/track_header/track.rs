@@ -12,17 +12,25 @@ use crate::message::*;
 use crate::state::{self, TrackState};
 use crate::theme::{self, fa};
 use crate::view::controls::{
-    delete_button, monitor_button, mute_button, record_arm_button, solo_button,
+    delete_button, monitor_button, monitor_button_locked, mute_button, record_arm_button,
+    record_arm_button_locked, solo_button,
 };
 use crate::util::short;
 use crate::Resonance;
 
 pub(super) fn view_track_header(
-    _r: &Resonance,
+    r: &Resonance,
     track: &TrackState,
     is_selected: bool,
 ) -> Element<'static, Message> {
     let track_id = track.id;
+
+    // A frozen track (valid cache *or* stale) plays its rendered cache
+    // rather than the live synth/FX chain, so its header takes the frost
+    // treatment from design doc #181: frosted substrate + `FROZEN` pill,
+    // a "Notes & FX locked" chip, and dimmed/locked arm + monitor controls.
+    // Mute / solo / pan / volume stay live (mixing a frozen track is fine).
+    let frozen = r.freeze.status(track.id).is_frozen();
 
     // ---- Glyph (28×28 rounded BG_2 square with the track's instrument icon) ----
     let glyph_char = glyph_for_track(track);
@@ -57,13 +65,31 @@ pub(super) fn view_track_header(
         .color(theme::TEXT_3)
         .wrapping(iced::widget::text::Wrapping::None);
 
-    let name_col = column![
-        container(name).width(Length::Fill).clip(true),
-        container(kind).width(Length::Fill).clip(true),
-    ]
-    .spacing(2);
+    // Kind line: the descriptor text, plus a `FROZEN` pill when the track
+    // is frozen so the cached-playback state reads in the same glance as
+    // the track name. The pill sits inline after the kind label.
+    let kind_line: Element<'static, Message> = if frozen {
+        row![container(kind).clip(true), Space::new().width(6), frozen_pill()]
+            .align_y(alignment::Vertical::Center)
+            .into()
+    } else {
+        container(kind).width(Length::Fill).clip(true).into()
+    };
+
+    let name_col = column![container(name).width(Length::Fill).clip(true), kind_line].spacing(2);
 
     // ---- 4 mini buttons: Mute / Solo / Arm / Monitor ----
+    // Mute + solo stay live on a frozen track (you still mix it); arm +
+    // monitor lock — a frozen track has no live input to arm or monitor,
+    // so they dim to the read-only style with no `on_press`.
+    let (arm_btn, monitor_btn) = if frozen {
+        (record_arm_button_locked(12), monitor_button_locked(12))
+    } else {
+        (
+            record_arm_button(track.record_armed, track.id, 12),
+            monitor_button(track.monitor_enabled, track.id, 12),
+        )
+    };
     let buttons = row![
         mute_button(
             track.muted,
@@ -75,8 +101,8 @@ pub(super) fn view_track_header(
             Message::Track(TrackMessage::ToggleSolo(track.id)),
             12,
         ),
-        record_arm_button(track.record_armed, track.id, 12),
-        monitor_button(track.monitor_enabled, track.id, 12),
+        arm_btn,
+        monitor_btn,
     ]
     .spacing(5)
     .align_y(alignment::Vertical::Center);
@@ -99,26 +125,43 @@ pub(super) fn view_track_header(
     .align_y(alignment::Vertical::Center);
 
     // Bottom of the cell: 4-button row, right-aligned to keep the glyph +
-    // name visually the dominant element.
-    let button_row = row![Space::new().width(Length::Fill), buttons]
-        .align_y(alignment::Vertical::Center);
+    // name visually the dominant element. On a frozen track a "Notes & FX
+    // locked" chip leads the row, marking that the frozen inputs are
+    // read-only until the track is unfrozen.
+    let button_row = if frozen {
+        row![locked_chip(), Space::new().width(Length::Fill), buttons]
+    } else {
+        row![Space::new().width(Length::Fill), buttons]
+    }
+    .align_y(alignment::Vertical::Center);
 
     let body_col = column![top_row, Space::new().height(8), button_row,]
         .spacing(0)
         .height(Length::Fill);
 
     // ---- Background, left selection stripe, hairline bottom ----
-    let bg = if track.record_armed {
+    // A frozen track frosts its substrate: the base background is pre-blended
+    // with `FROST_WASH` (see `theme::frost_over`) so the header reads as a
+    // cool, cached surface. Selection / arm states still win their stripe
+    // colour; the frost edge marks the channel otherwise.
+    let base_bg = if track.record_armed {
         theme::PANEL_ARMED
     } else if is_selected {
         theme::BG_2
     } else {
         theme::BG_1
     };
+    let bg = if frozen {
+        theme::frost_over(base_bg)
+    } else {
+        base_bg
+    };
     let stripe_color = if track.record_armed {
         theme::BAD
     } else if is_selected {
         theme::ACCENT
+    } else if frozen {
+        theme::FROST_EDGE
     } else {
         Color::TRANSPARENT
     };
@@ -165,6 +208,64 @@ pub(super) fn view_track_header(
     mouse_area(stack)
         .on_press(Message::Ui(UiMessage::SelectTrack(Some(track_id))))
         .into()
+}
+
+/// Small `FROZEN` pill rendered on a frozen track's kind line. Uses the
+/// frost treatment (frost wash fill + frost edge + icy tint) so it reads as
+/// the same visual mode as the frosted header rather than a new badge style.
+fn frozen_pill() -> Element<'static, Message> {
+    container(
+        text("FROZEN")
+            .size(8)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::FROST_ICON)
+            .wrapping(iced::widget::text::Wrapping::None),
+    )
+    .padding(iced::Padding {
+        top: 1.0,
+        right: 5.0,
+        bottom: 1.0,
+        left: 5.0,
+    })
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::FROST_WASH)),
+        border: iced::Border {
+            color: theme::FROST_EDGE,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+/// "Notes & FX locked" chip marking that a frozen track's inputs (notes,
+/// lyrics, plugin params) are read-only until it is unfrozen. Rendered in
+/// the muted `TEXT_3` on the frost wash so it reads as an informational
+/// marker, not an interactive control.
+fn locked_chip() -> Element<'static, Message> {
+    container(
+        text("Notes & FX locked")
+            .size(9)
+            .color(theme::TEXT_3)
+            .wrapping(iced::widget::text::Wrapping::None),
+    )
+    .padding(iced::Padding {
+        top: 1.0,
+        right: 6.0,
+        bottom: 1.0,
+        left: 6.0,
+    })
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::FROST_WASH)),
+        border: iced::Border {
+            color: theme::FROST_EDGE,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
 }
 
 /// Pick a Font Awesome glyph for the given track. Uses the persisted
