@@ -52,6 +52,7 @@ pub mod __test_support {
         export_stems, render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter,
     };
     pub use crate::types::{StemBitDepth, StemSource, StemTarget};
+    pub use crate::engine::vocal_render::{ensure_tuning_caches, pitch_ratio_curve, retune_clip};
     pub use crate::latency::{chain_latencies, compensation_delays, LatencyComp};
     pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;

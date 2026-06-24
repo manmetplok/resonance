@@ -61,6 +61,7 @@ fn sine_clip(id: u64, freq: f32, dur_secs: f32) -> AudioClip {
         transpose_semitones: 0.0,
         warp_algorithm: Default::default(),
         warp_markers: Vec::new(),
+        tuning_render_cache: None,
     }
 }
 
