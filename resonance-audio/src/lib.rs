@@ -94,6 +94,14 @@ pub use engine::{
 #[doc(hidden)]
 pub use engine::midi::{outbound_step_start, OutboundStep};
 
+/// Test surface for the device-parameter automation → CC/NRPN emission
+/// core (doc #201 §4, todo #723). Exposed so the integration test in
+/// `tests/device_param_automation.rs` can drive the pure emitter with a
+/// capturing fake [`DeviceParamMidiSink`] — asserting the ordered
+/// CC/NRPN sequence and live↔bounce parity — without opening a port.
+#[doc(hidden)]
+pub use engine::midi::{emit_device_param_automation, DeviceParamMidiSink};
+
 /// Test surface for the MIDI clip move/trim handlers. Exposed so the
 /// regression test in `tests/midi_clip_handlers.rs` can drive the
 /// missing-clip no-op branch without spinning up the engine thread.

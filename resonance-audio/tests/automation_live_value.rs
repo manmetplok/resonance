@@ -21,14 +21,14 @@ fn ramp_lane(id: u64, target: AutomationTarget) -> AutomationLane {
 
 fn lanes_with(lane: AutomationLane) -> AutomationLanes {
     let mut lanes = AutomationLanes::new();
-    lanes.insert(lane.target, lane);
+    lanes.insert(lane.target.clone(), lane);
     lanes
 }
 
 #[test]
 fn first_poll_emits_each_enabled_lane() {
     let target = AutomationTarget::TrackGain(1);
-    let lanes = lanes_with(ramp_lane(1, target));
+    let lanes = lanes_with(ramp_lane(1, target.clone()));
     let mut emitter = LiveValueEmitter::default();
 
     let batch = emitter.poll(&lanes, 0);
@@ -42,12 +42,12 @@ fn first_poll_emits_each_enabled_lane() {
 #[test]
 fn moving_playhead_emits_changed_value_only() {
     let target = AutomationTarget::TrackGain(1);
-    let lanes = lanes_with(ramp_lane(1, target));
+    let lanes = lanes_with(ramp_lane(1, target.clone()));
     let mut emitter = LiveValueEmitter::default();
 
     // Prime at frame 500 (value 0.5).
     let first = emitter.poll(&lanes, 500).to_vec();
-    assert_eq!(first, vec![(target, 0.5)]);
+    assert_eq!(first, vec![(target.clone(), 0.5)]);
 
     // Re-poll at the SAME frame: value unchanged ⇒ nothing emitted.
     assert!(
@@ -63,7 +63,7 @@ fn moving_playhead_emits_changed_value_only() {
 #[test]
 fn sub_epsilon_move_is_suppressed() {
     let target = AutomationTarget::TrackGain(1);
-    let lanes = lanes_with(ramp_lane(1, target));
+    let lanes = lanes_with(ramp_lane(1, target.clone()));
     let mut emitter = LiveValueEmitter::default();
 
     let _ = emitter.poll(&lanes, 500); // prime at 0.5
@@ -98,8 +98,8 @@ fn distinct_targets_tracked_independently() {
     let gain = AutomationTarget::TrackGain(1);
     let pan = AutomationTarget::TrackPan(2);
     let mut lanes = AutomationLanes::new();
-    lanes.insert(gain, ramp_lane(1, gain));
-    lanes.insert(pan, ramp_lane(2, pan));
+    lanes.insert(gain.clone(), ramp_lane(1, gain.clone()));
+    lanes.insert(pan.clone(), ramp_lane(2, pan.clone()));
     let mut emitter = LiveValueEmitter::default();
 
     let batch = emitter.poll(&lanes, 250).to_vec();
@@ -111,7 +111,7 @@ fn distinct_targets_tracked_independently() {
 #[test]
 fn reset_re_emits_unchanged_value() {
     let target = AutomationTarget::TrackGain(1);
-    let lanes = lanes_with(ramp_lane(1, target));
+    let lanes = lanes_with(ramp_lane(1, target.clone()));
     let mut emitter = LiveValueEmitter::default();
 
     let _ = emitter.poll(&lanes, 500); // prime at 0.5

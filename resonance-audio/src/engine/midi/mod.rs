@@ -75,8 +75,10 @@ pub use live::deliver_or_stash;
 /// test in `tests/live_arrival_offset.rs` can drive the pure function
 /// without the engine thread.
 pub use live::live_arrival_sample_offset;
-pub use outbound::{outbound_step_start, OutboundStep};
-pub(crate) use outbound::poll_timeline_to_midi_output;
+pub use outbound::{
+    emit_device_param_automation, outbound_step_start, DeviceParamMidiSink, OutboundStep,
+};
+pub(crate) use outbound::{poll_device_param_automation, poll_timeline_to_midi_output};
 
 use crate::types::TempoMap;
 

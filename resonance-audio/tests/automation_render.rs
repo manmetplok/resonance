@@ -27,7 +27,7 @@ const BLOCK: usize = 512;
 fn gain_bp(frame: u64, db: f32) -> Breakpoint {
     Breakpoint::new(
         frame,
-        real_to_lane_value(AutomationTarget::TrackGain(TRACK), db),
+        real_to_lane_value(&AutomationTarget::TrackGain(TRACK), db),
         CurveKind::Linear,
     )
 }
@@ -41,7 +41,7 @@ fn fade_out_snapshot(end: u64) -> AutomationSnapshot {
         vec![gain_bp(0, 0.0), gain_bp(end, -60.0)],
     );
     let mut snap = AutomationSnapshot::default();
-    snap.mix_lanes.insert(lane.target, lane);
+    snap.mix_lanes.insert(lane.target.clone(), lane);
     snap
 }
 
@@ -167,7 +167,7 @@ fn mute_lane_thresholds_at_half() {
         ],
     );
     let mut snap = AutomationSnapshot::default();
-    snap.mix_lanes.insert(lane.target, lane);
+    snap.mix_lanes.insert(lane.target.clone(), lane);
 
     assert_eq!(
         auto_muted(&snap, AutomationTarget::TrackMute(TRACK), 0),
@@ -189,12 +189,12 @@ fn pan_lane_shifts_stereo_balance() {
         AutomationTarget::TrackPan(TRACK),
         vec![Breakpoint::new(
             0,
-            real_to_lane_value(AutomationTarget::TrackPan(TRACK), -1.0),
+            real_to_lane_value(&AutomationTarget::TrackPan(TRACK), -1.0),
             CurveKind::Linear,
         )],
     );
     let mut snap = AutomationSnapshot::default();
-    snap.mix_lanes.insert(lane.target, lane);
+    snap.mix_lanes.insert(lane.target.clone(), lane);
 
     let ((gl, _), (gr, _)) = auto_gain_ramp(
         &snap,
@@ -216,16 +216,16 @@ fn master_lane_sweeps_volume() {
         1,
         AutomationTarget::MasterGain,
         vec![
-            Breakpoint::new(0, real_to_lane_value(AutomationTarget::MasterGain, 0.0), CurveKind::Linear),
+            Breakpoint::new(0, real_to_lane_value(&AutomationTarget::MasterGain, 0.0), CurveKind::Linear),
             Breakpoint::new(
                 1000,
-                real_to_lane_value(AutomationTarget::MasterGain, -60.0),
+                real_to_lane_value(&AutomationTarget::MasterGain, -60.0),
                 CurveKind::Linear,
             ),
         ],
     );
     let mut snap = AutomationSnapshot::default();
-    snap.mix_lanes.insert(lane.target, lane);
+    snap.mix_lanes.insert(lane.target.clone(), lane);
 
     let start = auto_master_volume(&snap, 0).expect("master lane ⇒ Some");
     let end = auto_master_volume(&snap, 1000).expect("master lane ⇒ Some");

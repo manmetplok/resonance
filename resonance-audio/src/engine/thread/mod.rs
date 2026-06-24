@@ -353,6 +353,13 @@ pub(crate) fn engine_thread(
         // audio→engine queue.
         midi::poll_timeline_to_midi_output(&ctx, &mut state);
 
+        // Emit hardware CC/NRPN for any DeviceParam automation lane whose
+        // mapped value moved since the last poll (doc #201 §4, todo #723).
+        // Same engine cadence + de-duped writes as the note poll above;
+        // runs for live playback and the realtime bounce drive alike, so
+        // a bounced render emits the identical control stream.
+        midi::poll_device_param_automation(&ctx, &mut state);
+
         // Emit MIDI clock pulses to a configured master device. Done
         // every iteration so the wire-level clock advances at engine
         // cadence (~60 Hz) rather than only on transport events.
