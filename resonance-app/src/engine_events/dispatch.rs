@@ -10,7 +10,9 @@ use resonance_audio::types::*;
 use crate::message::*;
 use crate::Resonance;
 
-use super::{aux_sends, clips, midi, midi_map, plugins, project_io, reference, tracks, transport};
+use super::{
+    aux_sends, clips, freeze, midi, midi_map, plugins, project_io, reference, tracks, transport,
+};
 
 pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
     use AudioEvent as E;
@@ -359,16 +361,16 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         // playhead + browser preview controls land with the audition app-state
         // todo, doc #175), so there is nothing to mirror — no-ops for now.
         E::AuditionPosition { .. } | E::AuditionStopped => {}
-        // Freeze progress / lifecycle. The engine-side command/event
-        // plumbing (todo #572) emits these; mirroring them into app state
-        // (per-track freeze status, progress modal, attaching the decoded
-        // cache on load) lands with the app-side freeze work later in this
-        // epic. Until then the events are accepted but not yet mirrored,
-        // mirroring the placeholder approach used for clip fade/gain above.
-        E::FreezeProgress { .. }
-        | E::FreezeCompleted { .. }
-        | E::FreezeError { .. }
-        | E::FreezeCancelled { .. } => {}
+        // Freeze progress / lifecycle (ba todo #575). The engine renders
+        // off-thread (todo #571/#572) and reports back through these
+        // events; the mirror folds them into per-track freeze status and
+        // advances the batch queue.
+        E::FreezeProgress { track_id, fraction } => freeze::progress(r, track_id, fraction),
+        E::FreezeCompleted { track_id, cache_ref } => {
+            freeze::completed(r, track_id, cache_ref)
+        }
+        E::FreezeError { track_id, message } => freeze::error(r, track_id, message),
+        E::FreezeCancelled { track_id } => freeze::cancelled(r, track_id),
 
         // Project save / load — these return a Task<Message>.
         E::ClipsSavedToProjectDir { clip_files } => {
