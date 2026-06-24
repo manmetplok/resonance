@@ -12,6 +12,7 @@ use super::{
     ParamInfo, PluginInstanceId, ReferenceAnalysisStage, ReferenceId, SamplePos, ScannedPlugin,
     SendId, SendSource, TrackId, WarpAlgorithm, WarpMarker,
 };
+use crate::quantize::GrooveTemplate;
 use resonance_common::FreezeCacheRef;
 
 /// Lifecycle stage of a single file in an `ImportAudioToPool` batch.
@@ -433,6 +434,22 @@ pub enum AudioEvent {
         clip_id: ClipId,
         note_index: usize,
         velocity: f32,
+    },
+
+    // -- Bulk MIDI note edits (quantize / humanize / groove) --
+    /// One atomic bulk edit result: the full resulting note array for
+    /// `clip_id` after a quantize / humanize / groove operation. The app
+    /// mirrors this into `ClipState` and records the prior notes for a
+    /// single-step undo. Note order is preserved (operations work by
+    /// index and never reorder, merge, or drop notes).
+    MidiNotesEdited {
+        clip_id: ClipId,
+        notes: Vec<MidiNote>,
+    },
+    /// A groove template extracted from a clip via
+    /// `AudioCommand::ExtractGrooveFromClip`.
+    GrooveExtracted {
+        template: GrooveTemplate,
     },
 
     // -- Bus events --

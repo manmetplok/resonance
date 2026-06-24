@@ -21,9 +21,22 @@ pub(crate) use state::MidiHardwareState;
 
 pub(crate) use clips::{
     handle_add_instrument_track, handle_add_midi_note, handle_add_vocal_track,
-    handle_create_midi_clip, handle_delete_midi_clip, handle_load_midi_clip_direct,
-    handle_move_midi_clip, handle_move_midi_note, handle_remove_midi_note, handle_resize_midi_note,
-    handle_set_midi_note_velocity, handle_trim_midi_clip,
+    handle_apply_groove_to_clip, handle_create_midi_clip, handle_delete_midi_clip,
+    handle_extract_groove_from_clip, handle_humanize_midi_notes, handle_load_midi_clip_direct,
+    handle_move_midi_clip, handle_move_midi_note, handle_quantize_midi_notes,
+    handle_remove_midi_note, handle_resize_midi_note, handle_set_midi_note_velocity,
+    handle_trim_midi_clip,
+};
+
+/// Test surface for the bulk MIDI-edit handlers (quantize / humanize /
+/// groove). Exposed under `__test_support` (via `lib.rs`) so the
+/// engine tests in `tests/midi_bulk_edits.rs` can drive each code path —
+/// missing-clip no-op, atomic apply, selection-respecting, and the bulk
+/// `MidiNotesEdited` / `GrooveExtracted` event emission — without bringing
+/// up the engine thread.
+pub use clips::{
+    apply_groove_to_clip_in_place, extract_groove_from_clip_in_place,
+    humanize_midi_notes_in_place, quantize_midi_notes_in_place,
 };
 
 /// Test surface for the MIDI clip move/trim handlers. Exposed under
