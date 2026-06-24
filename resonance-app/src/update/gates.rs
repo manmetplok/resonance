@@ -166,14 +166,21 @@ fn midi_editor_edit_clip(
     match m {
         AddNote { clip_id, .. }
         | RemoveNote { clip_id, .. }
+        | RemoveSelectedNotes { clip_id, .. }
         | MoveNote { clip_id, .. }
         | ResizeNote { clip_id, .. }
         | ToggleSlur { clip_id, .. } => Some(*clip_id),
         // Open / close / select / preview / scroll don't change note data.
+        // The selection variants (toggle / marquee / select-all / clear)
+        // only move the highlight, so they're never gated on a frozen track.
         OpenMidiEditor(_)
         | OpenSelectedMidiClip
         | CloseMidiEditor
         | SelectNote { .. }
+        | ToggleNoteSelection { .. }
+        | SelectNotesInRect { .. }
+        | SelectAllNotes
+        | ClearNoteSelection
         | PreviewNote(..)
         | StopPreview(..)
         | ScrollY(_) => None,

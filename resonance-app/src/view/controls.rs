@@ -77,6 +77,39 @@ pub fn monitor_button_locked<'a>(size: u16) -> iced::widget::Button<'a, Message>
         .padding(0)
 }
 
+/// Freeze (bounce-in-place) toggle button — leading mini-control in the
+/// track-header M/S/arm/monitor row. A snowflake glyph that toggles
+/// Freeze ⇄ Unfreeze: idle (live track) it sits in the neutral `TEXT_3`
+/// like the other idle mini-buttons; when the track is frozen it takes the
+/// **frost treatment** — the snowflake tints to `FROST_ICON` exactly as
+/// `on-solo` / `on-mute` tint their glyph with their semantic colour
+/// (design doc #181). `frozen` is true for both the valid-cache and stale
+/// frozen states, so pressing it then emits `UnfreezeTrack`; otherwise it
+/// emits `FreezeTrack`.
+pub fn freeze_button<'a>(
+    frozen: bool,
+    track_id: TrackId,
+    size: u16,
+) -> iced::widget::Button<'a, Message> {
+    let color = if frozen { theme::FROST_ICON } else { theme::TEXT_3 };
+    button(icon_button(fa::SNOWFLAKE, color, size))
+        .on_press(freeze_toggle_message(frozen, track_id))
+        .style(|_theme, status| theme::small_button_style(status))
+        .padding(0)
+}
+
+/// The message the [`freeze_button`] emits for a track in the given freeze
+/// state: a frozen (or stale-frozen) track toggles back to live with
+/// `UnfreezeTrack`; a live track freezes with `FreezeTrack`. Factored out so
+/// the toggle wiring is unit-testable without driving the widget tree.
+pub fn freeze_toggle_message(frozen: bool, track_id: TrackId) -> Message {
+    if frozen {
+        Message::Freeze(FreezeMessage::UnfreezeTrack(track_id))
+    } else {
+        Message::Freeze(FreezeMessage::FreezeTrack(track_id))
+    }
+}
+
 /// Mute toggle button (speaker-with-X — accent when muted).
 pub fn mute_button<'a>(
     muted: bool,
