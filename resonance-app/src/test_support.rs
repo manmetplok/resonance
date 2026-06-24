@@ -967,4 +967,20 @@ impl Resonance {
     pub fn test_error_message_is_set(&self) -> bool {
         self.error_message.is_some()
     }
+
+    /// Test-only: replay a [`crate::project::ProjectFile`] into this app as
+    /// if it had just been loaded from disk, rebuilding GUI state and
+    /// re-issuing engine commands. `midi_notes` are taken as empty (tests
+    /// that need notes can extend this); the project dir is a placeholder
+    /// since lane/transport replay needs no on-disk files.
+    #[doc(hidden)]
+    pub fn test_replay_loaded_project(&mut self, file: crate::project::ProjectFile) {
+        let loaded = crate::project::LoadedProject {
+            file,
+            project_dir: std::path::PathBuf::from("/tmp/resonance-test-project.rproj"),
+            midi_notes: std::collections::HashMap::new(),
+            plugin_states: std::collections::HashMap::new(),
+        };
+        crate::update::project_io::replay_loaded_project(self, Box::new(loaded));
+    }
 }

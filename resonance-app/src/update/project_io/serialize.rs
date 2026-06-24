@@ -3,6 +3,7 @@
 //! from the runtime model to the on-disk shape.
 
 use resonance_audio::types::*;
+use resonance_common::AutomationLane;
 
 use crate::project::{
     audio_format_tag, fade_curve_tag, ProjectBus, ProjectClip, ProjectExternalInstrument,
@@ -223,6 +224,13 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         })
         .collect();
 
+    // Parameter-automation lanes (one per target). Persist as a list
+    // sorted by lane id so the on-disk order is stable across saves and
+    // doesn't depend on `HashMap` iteration order.
+    let mut automation_lanes: Vec<AutomationLane> =
+        r.automation.lanes.values().cloned().collect();
+    automation_lanes.sort_by_key(|l| l.id);
+
     ProjectFile {
         version: PROJECT_FORMAT_VERSION,
         sample_rate: r.sample_rate,
@@ -269,5 +277,6 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             tuning: r.performance.tuning().name.to_string(),
             capo: r.performance.capo,
         },
+        automation_lanes,
     }
 }

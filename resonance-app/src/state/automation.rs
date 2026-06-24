@@ -41,4 +41,18 @@ impl AutomationState {
         self.next_lane_id += 1;
         self.next_lane_id
     }
+
+    /// Replace every mirrored lane with the set loaded from a project file,
+    /// keyed by target, and bump the id allocator past every loaded lane id
+    /// so app-created lanes after the load never collide with persisted
+    /// ones. Clears the transient live-value tints (they belong to the old
+    /// project). Used by the project-load replay (architecture doc #162 §3).
+    pub fn load_lanes(&mut self, lanes: impl IntoIterator<Item = AutomationLane>) {
+        self.lanes.clear();
+        self.live_values.clear();
+        for lane in lanes {
+            self.next_lane_id = self.next_lane_id.max(lane.id);
+            self.lanes.insert(lane.target.clone(), lane);
+        }
+    }
 }

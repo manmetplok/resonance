@@ -133,6 +133,16 @@ pub struct ProjectFile {
     /// predate Performance mode.
     #[serde(default)]
     pub performance: ProjectPerformance,
+    /// Parameter-automation lanes for every track/bus/master gain-pan-mute
+    /// target and CLAP plugin parameter (architecture doc #162 §3, epic
+    /// #14). One lane per [`AutomationTarget`]; persisted as a list sorted
+    /// by lane id for a stable on-disk order. Empty on legacy projects,
+    /// which then load with no automation (full backwards compatibility —
+    /// absence of a lane means the static value is used unchanged).
+    ///
+    /// [`AutomationTarget`]: resonance_common::AutomationTarget
+    #[serde(default)]
+    pub automation_lanes: Vec<resonance_common::AutomationLane>,
 }
 
 /// An empty project at the current format version with neutral
@@ -176,6 +186,7 @@ impl Default for ProjectFile {
             groove_library: Vec::new(),
             quantize_settings: crate::state::QuantizeSettings::default(),
             performance: ProjectPerformance::default(),
+            automation_lanes: Vec::new(),
         }
     }
 }
