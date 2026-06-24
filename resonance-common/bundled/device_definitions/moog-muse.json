@@ -1,0 +1,3128 @@
+{
+  "id": "moog-muse",
+  "manufacturer": "Moog",
+  "model": "Muse",
+  "schema_version": 1,
+  "params": [
+    {
+      "id": "mod-wheel",
+      "name": "Mod Wheel",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 1
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mute",
+      "name": "Mute",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 3
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "glide-time",
+      "name": "Glide Time",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 5
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "timbre-volume",
+      "name": "Timbre Volume",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 7
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "low-cut",
+      "name": "Low Cut",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 8
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "pan-spread",
+      "name": "Pan Spread",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 9
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "pan",
+      "name": "Pan",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 10
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "expression",
+      "name": "Expression",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 11
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "sustain-pedal",
+      "name": "Sustain Pedal",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 64
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "clipping-level",
+      "name": "Clipping Level",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 65
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "hold",
+      "name": "Hold",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 71
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "voice-detune",
+      "name": "Voice Detune",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 92
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "voice-unison",
+      "name": "Voice Unison",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 108
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "voice-mono",
+      "name": "Voice Mono",
+      "group": "Global",
+      "binding": {
+        "Cc": {
+          "cc": 109
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "lfo1-rate",
+      "name": "LFO 1 Rate",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 12
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "lfo1-amount",
+      "name": "LFO 1 Amount",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 13
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "lfo1-waveform",
+      "name": "LFO 1 Waveform",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 14
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "lfo2-rate",
+      "name": "LFO 2 Rate",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 15
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "lfo2-amount",
+      "name": "LFO 2 Amount",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 16
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "lfo2-waveform",
+      "name": "LFO 2 Waveform",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 17
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "pitch-lfo-rate",
+      "name": "Pitch LFO Rate",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 18
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "pitch-lfo-shape",
+      "name": "Pitch LFO Shape",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 19
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "pitch-lfo-amount",
+      "name": "Pitch LFO Amount",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 20
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "pitch-lfo-osc1",
+      "name": "Pitch LFO OSC 1",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 21
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "pitch-lfo-osc2",
+      "name": "Pitch LFO OSC 2",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 22
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "pitch-lfo-mod-osc",
+      "name": "Pitch LFO Mod Osc",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 23
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "pitch-lfo-detune",
+      "name": "Pitch LFO Detune",
+      "group": "LFO",
+      "binding": {
+        "Cc": {
+          "cc": 24
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-frequency",
+      "name": "Mod Osc Frequency",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 25
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-audio",
+      "name": "Mod Osc Audio",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 26
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-kb-track",
+      "name": "Mod Osc KB Track",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 27
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-waveform",
+      "name": "Mod Osc Waveform",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 28
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-kb-reset",
+      "name": "Mod Osc KB Reset",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 29
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-unipolar",
+      "name": "Mod Osc Unipolar",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 30
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-pitch-amount",
+      "name": "Mod Osc Pitch Amount",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 31
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-pitch-osc1",
+      "name": "Mod Osc Pitch OSC 1",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 33
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-pitch-osc2",
+      "name": "Mod Osc Pitch OSC 2",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 34
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-pwm-amount",
+      "name": "Mod Osc PWM Amount",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 35
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-pwm-osc1",
+      "name": "Mod Osc PWM OSC 1",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 36
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-pwm-osc2",
+      "name": "Mod Osc PWM OSC 2",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 37
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-filter-amount",
+      "name": "Mod Osc Filter Amount",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 39
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-filter1",
+      "name": "Mod Osc Filter 1",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 40
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-filter2",
+      "name": "Mod Osc Filter 2",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 41
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-vca-amount",
+      "name": "Mod Osc VCA Amount",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 42
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-vca-pan",
+      "name": "Mod Osc VCA PAN",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 43
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "mod-osc-level",
+      "name": "Modulation Oscillator Level",
+      "group": "Mod Oscillator",
+      "binding": {
+        "Cc": {
+          "cc": 61
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc1-octave",
+      "name": "Osc 1 Octave",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 44
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc1-frequency",
+      "name": "Osc 1 Frequency",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 45
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc1-tri-saw-mix",
+      "name": "Osc 1 Tri/Saw Mix",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 46
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc1-pw",
+      "name": "Osc 1 PW",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 47
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc1-wave-mix",
+      "name": "Osc 1 Wave Mix",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 48
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc2-octave",
+      "name": "Osc 2 Octave",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 49
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc2-frequency",
+      "name": "Osc 2 Frequency",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 50
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc2-tri-saw-mix",
+      "name": "Osc 2 Tri/Saw Mix",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 51
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc2-pw",
+      "name": "Osc 2 PW",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 52
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc2-wave-mix",
+      "name": "Osc 2 Wave Mix",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 53
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc2-1-sync",
+      "name": "Osc 2>1 SYNC",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 54
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc2-1-fm",
+      "name": "Osc 2>1 FM",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 55
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc1-2-fm",
+      "name": "Osc 1>2 FM",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 56
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "fm-amount",
+      "name": "FM Amount",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 57
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc1-level",
+      "name": "Osc 1 Level",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 58
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "osc2-level",
+      "name": "Osc 2 Level",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 59
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "ring-mod-level",
+      "name": "Ring Mod Level",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 60
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "noise-level",
+      "name": "Noise Level",
+      "group": "Oscillators",
+      "binding": {
+        "Cc": {
+          "cc": 62
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter1-high-pass",
+      "name": "Filter 1 High Pass",
+      "group": "Filter",
+      "binding": {
+        "Cc": {
+          "cc": 66
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter1-cutoff",
+      "name": "Filter 1 Cutoff",
+      "group": "Filter",
+      "binding": {
+        "Cc": {
+          "cc": 67
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter1-resonance",
+      "name": "Filter 1 Resonance",
+      "group": "Filter",
+      "binding": {
+        "Cc": {
+          "cc": 68
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter1-envelope-amount",
+      "name": "Filter 1 Envelope Amount",
+      "group": "Filter",
+      "binding": {
+        "Cc": {
+          "cc": 69
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter1-kb-tracking",
+      "name": "Filter 1 KB Tracking",
+      "group": "Filter",
+      "binding": {
+        "Cc": {
+          "cc": 70
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter2-frequency",
+      "name": "Filter 2 Frequency",
+      "group": "Filter",
+      "binding": {
+        "Cc": {
+          "cc": 72
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter2-resonance",
+      "name": "Filter 2 Resonance",
+      "group": "Filter",
+      "binding": {
+        "Cc": {
+          "cc": 73
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter2-envelope-amount",
+      "name": "Filter 2 Envelope Amount",
+      "group": "Filter",
+      "binding": {
+        "Cc": {
+          "cc": 75
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter2-kb-tracking",
+      "name": "Filter 2 KB Tracking",
+      "group": "Filter",
+      "binding": {
+        "Cc": {
+          "cc": 76
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "link-filters",
+      "name": "Link Filters",
+      "group": "Filter",
+      "binding": {
+        "Cc": {
+          "cc": 77
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filters-order",
+      "name": "Filters Order",
+      "group": "Filter",
+      "binding": {
+        "Cc": {
+          "cc": 78
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter-env-attack",
+      "name": "Filter Env Attack",
+      "group": "Filter Envelope",
+      "binding": {
+        "Cc": {
+          "cc": 79
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter-env-decay",
+      "name": "Filter Env Decay",
+      "group": "Filter Envelope",
+      "binding": {
+        "Cc": {
+          "cc": 80
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter-env-sustain",
+      "name": "Filter Env Sustain",
+      "group": "Filter Envelope",
+      "binding": {
+        "Cc": {
+          "cc": 81
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter-env-release",
+      "name": "Filter Env Release",
+      "group": "Filter Envelope",
+      "binding": {
+        "Cc": {
+          "cc": 82
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter-env-loop",
+      "name": "Filter Env Loop",
+      "group": "Filter Envelope",
+      "binding": {
+        "Cc": {
+          "cc": 83
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "filter-env-velocity",
+      "name": "Filter Env Velocity",
+      "group": "Filter Envelope",
+      "binding": {
+        "Cc": {
+          "cc": 85
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "vca-env-attack",
+      "name": "VCA Env Attack",
+      "group": "Amp Envelope",
+      "binding": {
+        "Cc": {
+          "cc": 86
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "vca-env-decay",
+      "name": "VCA Env Decay",
+      "group": "Amp Envelope",
+      "binding": {
+        "Cc": {
+          "cc": 87
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "vca-env-sustain",
+      "name": "VCA Env Sustain",
+      "group": "Amp Envelope",
+      "binding": {
+        "Cc": {
+          "cc": 88
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "vca-env-release",
+      "name": "VCA Env Release",
+      "group": "Amp Envelope",
+      "binding": {
+        "Cc": {
+          "cc": 89
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "vca-env-loop",
+      "name": "VCA Env Loop",
+      "group": "Amp Envelope",
+      "binding": {
+        "Cc": {
+          "cc": 90
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "vca-env-velocity",
+      "name": "VCA Env Velocity",
+      "group": "Amp Envelope",
+      "binding": {
+        "Cc": {
+          "cc": 91
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "delay-time-left",
+      "name": "Delay Time Left",
+      "group": "Delay/FX",
+      "binding": {
+        "Cc": {
+          "cc": 93
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "delay-time-right",
+      "name": "Delay Time Right",
+      "group": "Delay/FX",
+      "binding": {
+        "Cc": {
+          "cc": 94
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "link-delays",
+      "name": "Link Delays",
+      "group": "Delay/FX",
+      "binding": {
+        "Cc": {
+          "cc": 95
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "delay-clock-sync",
+      "name": "Delay Clock Sync",
+      "group": "Delay/FX",
+      "binding": {
+        "Cc": {
+          "cc": 102
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "delay-feedback",
+      "name": "Delay Feedback",
+      "group": "Delay/FX",
+      "binding": {
+        "Cc": {
+          "cc": 103
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "delay-character",
+      "name": "Delay Character",
+      "group": "Delay/FX",
+      "binding": {
+        "Cc": {
+          "cc": 104
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "delay-mix",
+      "name": "Delay Mix",
+      "group": "Delay/FX",
+      "binding": {
+        "Cc": {
+          "cc": 105
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "delay-timbre-a",
+      "name": "Delay Timbre A",
+      "group": "Delay/FX",
+      "binding": {
+        "Cc": {
+          "cc": 106
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "delay-timbre-b",
+      "name": "Delay Timbre B",
+      "group": "Delay/FX",
+      "binding": {
+        "Cc": {
+          "cc": 107
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "sequencer-clock-div",
+      "name": "Sequencer Clock Div",
+      "group": "Clock/Arp",
+      "binding": {
+        "Cc": {
+          "cc": 110
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "arp-clock-div",
+      "name": "Arpeggiator Clock Div",
+      "group": "Clock/Arp",
+      "binding": {
+        "Cc": {
+          "cc": 111
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "arp-on-off",
+      "name": "Arpeggiator On/Off",
+      "group": "Clock/Arp",
+      "binding": {
+        "Cc": {
+          "cc": 112
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "arp-fw-bk",
+      "name": "Arpeggiator FW/BK",
+      "group": "Clock/Arp",
+      "binding": {
+        "Cc": {
+          "cc": 113
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "arp-direction",
+      "name": "Arpeggiator Direction",
+      "group": "Clock/Arp",
+      "binding": {
+        "Cc": {
+          "cc": 114
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "arp-octave-range",
+      "name": "Arpeggiator Octave Range",
+      "group": "Clock/Arp",
+      "binding": {
+        "Cc": {
+          "cc": 115
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    },
+    {
+      "id": "clock-tempo",
+      "name": "Clock Tempo",
+      "group": "Clock/Arp",
+      "binding": {
+        "Cc": {
+          "cc": 116
+        }
+      },
+      "min": 0,
+      "max": 127,
+      "curve": "Linear"
+    }
+  ],
+  "patches": [
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 0,
+      "name": "Bank 1 · Patch 1",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 1,
+      "name": "Bank 1 · Patch 2",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 2,
+      "name": "Bank 1 · Patch 3",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 3,
+      "name": "Bank 1 · Patch 4",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 4,
+      "name": "Bank 1 · Patch 5",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 5,
+      "name": "Bank 1 · Patch 6",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 6,
+      "name": "Bank 1 · Patch 7",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 7,
+      "name": "Bank 1 · Patch 8",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 8,
+      "name": "Bank 1 · Patch 9",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 9,
+      "name": "Bank 1 · Patch 10",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 10,
+      "name": "Bank 1 · Patch 11",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 11,
+      "name": "Bank 1 · Patch 12",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 12,
+      "name": "Bank 1 · Patch 13",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 13,
+      "name": "Bank 1 · Patch 14",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 14,
+      "name": "Bank 1 · Patch 15",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 0,
+      "program": 15,
+      "name": "Bank 1 · Patch 16",
+      "category": "Bank 1"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 0,
+      "name": "Bank 2 · Patch 1",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 1,
+      "name": "Bank 2 · Patch 2",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 2,
+      "name": "Bank 2 · Patch 3",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 3,
+      "name": "Bank 2 · Patch 4",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 4,
+      "name": "Bank 2 · Patch 5",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 5,
+      "name": "Bank 2 · Patch 6",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 6,
+      "name": "Bank 2 · Patch 7",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 7,
+      "name": "Bank 2 · Patch 8",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 8,
+      "name": "Bank 2 · Patch 9",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 9,
+      "name": "Bank 2 · Patch 10",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 10,
+      "name": "Bank 2 · Patch 11",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 11,
+      "name": "Bank 2 · Patch 12",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 12,
+      "name": "Bank 2 · Patch 13",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 13,
+      "name": "Bank 2 · Patch 14",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 14,
+      "name": "Bank 2 · Patch 15",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 1,
+      "program": 15,
+      "name": "Bank 2 · Patch 16",
+      "category": "Bank 2"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 0,
+      "name": "Bank 3 · Patch 1",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 1,
+      "name": "Bank 3 · Patch 2",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 2,
+      "name": "Bank 3 · Patch 3",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 3,
+      "name": "Bank 3 · Patch 4",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 4,
+      "name": "Bank 3 · Patch 5",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 5,
+      "name": "Bank 3 · Patch 6",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 6,
+      "name": "Bank 3 · Patch 7",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 7,
+      "name": "Bank 3 · Patch 8",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 8,
+      "name": "Bank 3 · Patch 9",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 9,
+      "name": "Bank 3 · Patch 10",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 10,
+      "name": "Bank 3 · Patch 11",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 11,
+      "name": "Bank 3 · Patch 12",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 12,
+      "name": "Bank 3 · Patch 13",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 13,
+      "name": "Bank 3 · Patch 14",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 14,
+      "name": "Bank 3 · Patch 15",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 2,
+      "program": 15,
+      "name": "Bank 3 · Patch 16",
+      "category": "Bank 3"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 0,
+      "name": "Bank 4 · Patch 1",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 1,
+      "name": "Bank 4 · Patch 2",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 2,
+      "name": "Bank 4 · Patch 3",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 3,
+      "name": "Bank 4 · Patch 4",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 4,
+      "name": "Bank 4 · Patch 5",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 5,
+      "name": "Bank 4 · Patch 6",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 6,
+      "name": "Bank 4 · Patch 7",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 7,
+      "name": "Bank 4 · Patch 8",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 8,
+      "name": "Bank 4 · Patch 9",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 9,
+      "name": "Bank 4 · Patch 10",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 10,
+      "name": "Bank 4 · Patch 11",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 11,
+      "name": "Bank 4 · Patch 12",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 12,
+      "name": "Bank 4 · Patch 13",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 13,
+      "name": "Bank 4 · Patch 14",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 14,
+      "name": "Bank 4 · Patch 15",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 3,
+      "program": 15,
+      "name": "Bank 4 · Patch 16",
+      "category": "Bank 4"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 0,
+      "name": "Bank 5 · Patch 1",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 1,
+      "name": "Bank 5 · Patch 2",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 2,
+      "name": "Bank 5 · Patch 3",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 3,
+      "name": "Bank 5 · Patch 4",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 4,
+      "name": "Bank 5 · Patch 5",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 5,
+      "name": "Bank 5 · Patch 6",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 6,
+      "name": "Bank 5 · Patch 7",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 7,
+      "name": "Bank 5 · Patch 8",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 8,
+      "name": "Bank 5 · Patch 9",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 9,
+      "name": "Bank 5 · Patch 10",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 10,
+      "name": "Bank 5 · Patch 11",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 11,
+      "name": "Bank 5 · Patch 12",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 12,
+      "name": "Bank 5 · Patch 13",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 13,
+      "name": "Bank 5 · Patch 14",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 14,
+      "name": "Bank 5 · Patch 15",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 4,
+      "program": 15,
+      "name": "Bank 5 · Patch 16",
+      "category": "Bank 5"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 0,
+      "name": "Bank 6 · Patch 1",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 1,
+      "name": "Bank 6 · Patch 2",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 2,
+      "name": "Bank 6 · Patch 3",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 3,
+      "name": "Bank 6 · Patch 4",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 4,
+      "name": "Bank 6 · Patch 5",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 5,
+      "name": "Bank 6 · Patch 6",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 6,
+      "name": "Bank 6 · Patch 7",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 7,
+      "name": "Bank 6 · Patch 8",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 8,
+      "name": "Bank 6 · Patch 9",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 9,
+      "name": "Bank 6 · Patch 10",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 10,
+      "name": "Bank 6 · Patch 11",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 11,
+      "name": "Bank 6 · Patch 12",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 12,
+      "name": "Bank 6 · Patch 13",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 13,
+      "name": "Bank 6 · Patch 14",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 14,
+      "name": "Bank 6 · Patch 15",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 5,
+      "program": 15,
+      "name": "Bank 6 · Patch 16",
+      "category": "Bank 6"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 0,
+      "name": "Bank 7 · Patch 1",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 1,
+      "name": "Bank 7 · Patch 2",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 2,
+      "name": "Bank 7 · Patch 3",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 3,
+      "name": "Bank 7 · Patch 4",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 4,
+      "name": "Bank 7 · Patch 5",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 5,
+      "name": "Bank 7 · Patch 6",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 6,
+      "name": "Bank 7 · Patch 7",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 7,
+      "name": "Bank 7 · Patch 8",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 8,
+      "name": "Bank 7 · Patch 9",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 9,
+      "name": "Bank 7 · Patch 10",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 10,
+      "name": "Bank 7 · Patch 11",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 11,
+      "name": "Bank 7 · Patch 12",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 12,
+      "name": "Bank 7 · Patch 13",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 13,
+      "name": "Bank 7 · Patch 14",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 14,
+      "name": "Bank 7 · Patch 15",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 6,
+      "program": 15,
+      "name": "Bank 7 · Patch 16",
+      "category": "Bank 7"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 0,
+      "name": "Bank 8 · Patch 1",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 1,
+      "name": "Bank 8 · Patch 2",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 2,
+      "name": "Bank 8 · Patch 3",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 3,
+      "name": "Bank 8 · Patch 4",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 4,
+      "name": "Bank 8 · Patch 5",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 5,
+      "name": "Bank 8 · Patch 6",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 6,
+      "name": "Bank 8 · Patch 7",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 7,
+      "name": "Bank 8 · Patch 8",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 8,
+      "name": "Bank 8 · Patch 9",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 9,
+      "name": "Bank 8 · Patch 10",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 10,
+      "name": "Bank 8 · Patch 11",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 11,
+      "name": "Bank 8 · Patch 12",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 12,
+      "name": "Bank 8 · Patch 13",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 13,
+      "name": "Bank 8 · Patch 14",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 14,
+      "name": "Bank 8 · Patch 15",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 7,
+      "program": 15,
+      "name": "Bank 8 · Patch 16",
+      "category": "Bank 8"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 0,
+      "name": "Bank 9 · Patch 1",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 1,
+      "name": "Bank 9 · Patch 2",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 2,
+      "name": "Bank 9 · Patch 3",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 3,
+      "name": "Bank 9 · Patch 4",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 4,
+      "name": "Bank 9 · Patch 5",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 5,
+      "name": "Bank 9 · Patch 6",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 6,
+      "name": "Bank 9 · Patch 7",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 7,
+      "name": "Bank 9 · Patch 8",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 8,
+      "name": "Bank 9 · Patch 9",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 9,
+      "name": "Bank 9 · Patch 10",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 10,
+      "name": "Bank 9 · Patch 11",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 11,
+      "name": "Bank 9 · Patch 12",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 12,
+      "name": "Bank 9 · Patch 13",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 13,
+      "name": "Bank 9 · Patch 14",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 14,
+      "name": "Bank 9 · Patch 15",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 8,
+      "program": 15,
+      "name": "Bank 9 · Patch 16",
+      "category": "Bank 9"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 0,
+      "name": "Bank 10 · Patch 1",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 1,
+      "name": "Bank 10 · Patch 2",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 2,
+      "name": "Bank 10 · Patch 3",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 3,
+      "name": "Bank 10 · Patch 4",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 4,
+      "name": "Bank 10 · Patch 5",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 5,
+      "name": "Bank 10 · Patch 6",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 6,
+      "name": "Bank 10 · Patch 7",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 7,
+      "name": "Bank 10 · Patch 8",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 8,
+      "name": "Bank 10 · Patch 9",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 9,
+      "name": "Bank 10 · Patch 10",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 10,
+      "name": "Bank 10 · Patch 11",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 11,
+      "name": "Bank 10 · Patch 12",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 12,
+      "name": "Bank 10 · Patch 13",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 13,
+      "name": "Bank 10 · Patch 14",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 14,
+      "name": "Bank 10 · Patch 15",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 9,
+      "program": 15,
+      "name": "Bank 10 · Patch 16",
+      "category": "Bank 10"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 0,
+      "name": "Bank 11 · Patch 1",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 1,
+      "name": "Bank 11 · Patch 2",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 2,
+      "name": "Bank 11 · Patch 3",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 3,
+      "name": "Bank 11 · Patch 4",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 4,
+      "name": "Bank 11 · Patch 5",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 5,
+      "name": "Bank 11 · Patch 6",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 6,
+      "name": "Bank 11 · Patch 7",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 7,
+      "name": "Bank 11 · Patch 8",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 8,
+      "name": "Bank 11 · Patch 9",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 9,
+      "name": "Bank 11 · Patch 10",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 10,
+      "name": "Bank 11 · Patch 11",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 11,
+      "name": "Bank 11 · Patch 12",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 12,
+      "name": "Bank 11 · Patch 13",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 13,
+      "name": "Bank 11 · Patch 14",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 14,
+      "name": "Bank 11 · Patch 15",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 10,
+      "program": 15,
+      "name": "Bank 11 · Patch 16",
+      "category": "Bank 11"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 0,
+      "name": "Bank 12 · Patch 1",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 1,
+      "name": "Bank 12 · Patch 2",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 2,
+      "name": "Bank 12 · Patch 3",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 3,
+      "name": "Bank 12 · Patch 4",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 4,
+      "name": "Bank 12 · Patch 5",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 5,
+      "name": "Bank 12 · Patch 6",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 6,
+      "name": "Bank 12 · Patch 7",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 7,
+      "name": "Bank 12 · Patch 8",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 8,
+      "name": "Bank 12 · Patch 9",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 9,
+      "name": "Bank 12 · Patch 10",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 10,
+      "name": "Bank 12 · Patch 11",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 11,
+      "name": "Bank 12 · Patch 12",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 12,
+      "name": "Bank 12 · Patch 13",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 13,
+      "name": "Bank 12 · Patch 14",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 14,
+      "name": "Bank 12 · Patch 15",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 11,
+      "program": 15,
+      "name": "Bank 12 · Patch 16",
+      "category": "Bank 12"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 0,
+      "name": "Bank 13 · Patch 1",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 1,
+      "name": "Bank 13 · Patch 2",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 2,
+      "name": "Bank 13 · Patch 3",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 3,
+      "name": "Bank 13 · Patch 4",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 4,
+      "name": "Bank 13 · Patch 5",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 5,
+      "name": "Bank 13 · Patch 6",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 6,
+      "name": "Bank 13 · Patch 7",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 7,
+      "name": "Bank 13 · Patch 8",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 8,
+      "name": "Bank 13 · Patch 9",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 9,
+      "name": "Bank 13 · Patch 10",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 10,
+      "name": "Bank 13 · Patch 11",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 11,
+      "name": "Bank 13 · Patch 12",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 12,
+      "name": "Bank 13 · Patch 13",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 13,
+      "name": "Bank 13 · Patch 14",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 14,
+      "name": "Bank 13 · Patch 15",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 12,
+      "program": 15,
+      "name": "Bank 13 · Patch 16",
+      "category": "Bank 13"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 0,
+      "name": "Bank 14 · Patch 1",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 1,
+      "name": "Bank 14 · Patch 2",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 2,
+      "name": "Bank 14 · Patch 3",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 3,
+      "name": "Bank 14 · Patch 4",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 4,
+      "name": "Bank 14 · Patch 5",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 5,
+      "name": "Bank 14 · Patch 6",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 6,
+      "name": "Bank 14 · Patch 7",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 7,
+      "name": "Bank 14 · Patch 8",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 8,
+      "name": "Bank 14 · Patch 9",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 9,
+      "name": "Bank 14 · Patch 10",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 10,
+      "name": "Bank 14 · Patch 11",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 11,
+      "name": "Bank 14 · Patch 12",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 12,
+      "name": "Bank 14 · Patch 13",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 13,
+      "name": "Bank 14 · Patch 14",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 14,
+      "name": "Bank 14 · Patch 15",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 13,
+      "program": 15,
+      "name": "Bank 14 · Patch 16",
+      "category": "Bank 14"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 0,
+      "name": "Bank 15 · Patch 1",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 1,
+      "name": "Bank 15 · Patch 2",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 2,
+      "name": "Bank 15 · Patch 3",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 3,
+      "name": "Bank 15 · Patch 4",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 4,
+      "name": "Bank 15 · Patch 5",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 5,
+      "name": "Bank 15 · Patch 6",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 6,
+      "name": "Bank 15 · Patch 7",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 7,
+      "name": "Bank 15 · Patch 8",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 8,
+      "name": "Bank 15 · Patch 9",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 9,
+      "name": "Bank 15 · Patch 10",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 10,
+      "name": "Bank 15 · Patch 11",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 11,
+      "name": "Bank 15 · Patch 12",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 12,
+      "name": "Bank 15 · Patch 13",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 13,
+      "name": "Bank 15 · Patch 14",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 14,
+      "name": "Bank 15 · Patch 15",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 14,
+      "program": 15,
+      "name": "Bank 15 · Patch 16",
+      "category": "Bank 15"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 0,
+      "name": "Bank 16 · Patch 1",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 1,
+      "name": "Bank 16 · Patch 2",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 2,
+      "name": "Bank 16 · Patch 3",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 3,
+      "name": "Bank 16 · Patch 4",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 4,
+      "name": "Bank 16 · Patch 5",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 5,
+      "name": "Bank 16 · Patch 6",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 6,
+      "name": "Bank 16 · Patch 7",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 7,
+      "name": "Bank 16 · Patch 8",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 8,
+      "name": "Bank 16 · Patch 9",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 9,
+      "name": "Bank 16 · Patch 10",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 10,
+      "name": "Bank 16 · Patch 11",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 11,
+      "name": "Bank 16 · Patch 12",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 12,
+      "name": "Bank 16 · Patch 13",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 13,
+      "name": "Bank 16 · Patch 14",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 14,
+      "name": "Bank 16 · Patch 15",
+      "category": "Bank 16"
+    },
+    {
+      "bank_msb": 0,
+      "bank_lsb": 15,
+      "program": 15,
+      "name": "Bank 16 · Patch 16",
+      "category": "Bank 16"
+    }
+  ]
+}

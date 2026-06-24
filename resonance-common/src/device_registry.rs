@@ -20,6 +20,29 @@ use crate::scan::scan_directory;
 /// On-disk file extension for device-definition files (one definition per file).
 pub const DEVICE_DEFINITION_EXT: &str = "json";
 
+/// The read-only device definitions shipped with the app, embedded into the
+/// binary as JSON so they are always present regardless of the install layout
+/// (the `bundled` source for [`DeviceDefinitionRegistry::scan_bundled`]). Each
+/// entry is the verbatim on-disk JSON of one bundled definition; add a device by
+/// dropping its `.json` next to the others and listing it here.
+const BUNDLED_DEFINITION_JSON: &[&str] =
+    &[include_str!("../bundled/device_definitions/moog-muse.json")];
+
+/// Parse the [`BUNDLED_DEFINITION_JSON`] into definitions — the read-only set
+/// shipped with the app, used to seed a [`DeviceDefinitionRegistry`] before the
+/// user folder is layered on top. The embedded content is our own and is covered
+/// by a load/validate/round-trip test, so a parse failure here is a build bug,
+/// not a runtime condition; it panics rather than silently dropping a device.
+pub fn bundled_definitions() -> Vec<DeviceDefinition> {
+    BUNDLED_DEFINITION_JSON
+        .iter()
+        .map(|json| {
+            DeviceDefinition::from_json(json.as_bytes())
+                .expect("bundled device definition must parse")
+        })
+        .collect()
+}
+
 /// A device-definition file that was skipped during a scan, with the reason.
 ///
 /// Collected rather than fatal: one malformed file never blocks the others (same
@@ -58,6 +81,17 @@ impl DeviceDefinitionRegistry {
         reg.scan_dir(bundled);
         reg.scan_dir(user);
         reg
+    }
+
+    /// Seed the registry with the embedded read-only [`bundled_definitions`].
+    /// Call before [`Self::scan_dir`] on the user folder so a user definition
+    /// shadows a bundled one with the same `id` (last-wins). Unlike
+    /// [`Self::scan`], this needs no on-disk bundled directory — the definitions
+    /// ship inside the binary.
+    pub fn scan_bundled(&mut self) {
+        for def in bundled_definitions() {
+            self.insert(def);
+        }
     }
 
     /// Scan one directory of definition files into the registry, later files

@@ -28,7 +28,8 @@ pub use device_definition::{
     DeviceParam, ParamCurve, PatchEntry, SCHEMA_VERSION,
 };
 pub use device_registry::{
-    user_definitions_dir, DeviceDefinitionRegistry, DeviceScanError, DEVICE_DEFINITION_EXT,
+    bundled_definitions, user_definitions_dir, DeviceDefinitionRegistry, DeviceScanError,
+    DEVICE_DEFINITION_EXT,
 };
 pub use external_instrument::ExternalInstrument;
 pub use midi_map::{
