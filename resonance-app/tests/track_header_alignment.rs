@@ -31,6 +31,7 @@ use iced_test::simulator::Simulator;
 use resonance_app::message::{Message, UiMessage, ViewportMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::{demo, theme, Resonance, STARTUP_TAB};
+use resonance_common::group_identity::GroupIdentityColor;
 
 /// Window size matches the app's default & minimum window per the
 /// design guidelines.
@@ -272,6 +273,62 @@ fn track_header_virtualization_drops_offscreen_tracks() {
              view::track_header::build_track_headers)"
         );
     }
+}
+
+/// Build a demo Arrange view with a group folded over two of the demo
+/// tracks (Synth Bass + Synth Pad, ids 2/3). The shared
+/// `ArrangeRowLayout` places the 60 px group-header row at the position
+/// of the group's first member, so the column should render a "Synths"
+/// header inline between the Drums lane and its members. Returns the app
+/// ready to view at scroll 0.
+fn build_app_with_group() -> Resonance {
+    let _ = STARTUP_TAB.set(ViewMode::Arrange);
+    let (mut app, _task) = Resonance::new();
+    demo::seed_demo_content(&mut app);
+
+    // Fold the two synth tracks into a named group. A high id keeps the
+    // group out of the 1..6 demo track-id range (group ids share the
+    // track-id space).
+    {
+        let groups = app.test_track_groups_mut();
+        groups.add_group_new(200, "Synths", GroupIdentityColor::Keys);
+        groups.add_member(200, 2);
+        groups.add_member(200, 3);
+    }
+
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
+        WINDOW.0 - theme::TRACK_HEADER_WIDTH,
+    )));
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportHeight(
+        WINDOW.1,
+    )));
+    let _ = app.update(Message::Viewport(ViewportMessage::TimelineContentSize(
+        2000.0,
+        WINDOW.1 * 4.0,
+    )));
+    app
+}
+
+/// A group-header row renders *inline* in the track-header column —
+/// not just standalone (`tests/group_header.rs`). The "Synths" group
+/// name text must be present in the live widget tree, proving the
+/// `ArrangeRowKind::GroupHeader` branch of `build_track_headers` fires,
+/// and a golden locks in the 60 px band interleaved above its members.
+#[test]
+fn track_header_group_row_renders_inline() {
+    let app = build_app_with_group();
+
+    let mut ui =
+        Simulator::with_size(sim_settings(), Size::new(WINDOW.0, WINDOW.1), app.view());
+    ui.find("Synths").expect(
+        "the group-header row must render inline in the track-header \
+         column (ArrangeRowKind::GroupHeader branch of build_track_headers)",
+    );
+
+    snapshot_to(
+        &app,
+        "tests/snapshots/track_header_group_row_renders_inline.png",
+    );
 }
 
 /// Scroll the same 100-track session deep into the list and check
