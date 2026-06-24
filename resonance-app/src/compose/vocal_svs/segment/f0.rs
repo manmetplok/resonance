@@ -15,7 +15,10 @@
 
 use resonance_music_theory::VocalParams;
 
+use crate::compose::expression::ExpressionCurve;
+
 use super::duration::PhonemeTrack;
+use super::overlay::overlay_pitch_cents;
 
 /// Sampling interval for the f0 / gender / tension `SampleCurve`s.
 /// The pipeline resamples to its internal frame rate; we just need a
@@ -31,14 +34,42 @@ pub(super) struct F0Curve {
     pub frame_in_note_sec: Vec<f64>,
 }
 
-/// Build the f0 curve and per-frame metadata, then apply portamento
-/// and vibrato in-place.
-pub(super) fn build_f0_curve(track: &PhonemeTrack, params: &VocalParams) -> F0Curve {
+/// Build the f0 curve and per-frame metadata, then apply portamento,
+/// vibrato, and the user pitch-bend overlay in-place.
+///
+/// `pitch_bend` is the lane's editable pitch-bend curve (doc #154); when
+/// the user has shaped an overlay it's folded in as an additive per-frame
+/// cents offset *after* portamento + vibrato, so it bends the final pitch
+/// the singer would otherwise hit. An un-edited curve leaves f0 untouched.
+/// `window` maps frames to clip-normalised time (see [`super::overlay`]).
+pub(super) fn build_f0_curve(
+    track: &PhonemeTrack,
+    params: &VocalParams,
+    pitch_bend: &ExpressionCurve,
+    window: (f32, f32),
+) -> F0Curve {
     let mut curve = sample_piecewise_constant(track);
     fill_unvoiced(&mut curve.samples);
     apply_portamento(&mut curve.samples, params.portamento_ms);
     apply_vibrato(&mut curve, params);
+    apply_pitch_bend(&mut curve.samples, pitch_bend, window);
     curve
+}
+
+/// Step 5: fold the user's pitch-bend overlay into the f0 curve as an
+/// additive cents offset. Applied last so it rides on top of the
+/// portamento slides and vibrato wobble. Voiced frames only (the fill
+/// keeps every frame > 0, but guard anyway); a curve with no overlay is a
+/// no-op, leaving the auto-derived pitch identical.
+fn apply_pitch_bend(samples: &mut [f64], pitch_bend: &ExpressionCurve, window: (f32, f32)) {
+    let Some(cents) = overlay_pitch_cents(pitch_bend, samples.len(), window) else {
+        return;
+    };
+    for (v, c) in samples.iter_mut().zip(cents) {
+        if *v > 0.0 && c != 0.0 {
+            *v *= 2.0_f64.powf(c / 1200.0);
+        }
+    }
 }
 
 /// Step 1: sample the f0 grid + parallel per-frame metadata. Each
