@@ -99,6 +99,8 @@ pub mod fa {
     pub const BACKWARD_STEP: char = '\u{f048}';
     pub const FORWARD_STEP: char = '\u{f051}';
     pub const CIRCLE: char = '\u{f111}';
+    /// Checkmark — filled-checkbox / selected-row treatment.
+    pub const CHECK: char = '\u{f00c}';
     pub const BARS: char = '\u{f0c9}';
     pub const FOLDER_OPEN: char = '\u{f07c}';
     pub const FLOPPY_DISK: char = '\u{f0c7}';

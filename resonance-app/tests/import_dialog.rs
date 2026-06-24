@@ -8,8 +8,8 @@
 
 use resonance_app::message::{ImportMessage, Message};
 use resonance_app::state::{
-    ImportStage, ImportSummary, ParsedImport, PlacementMode, PlacementStart, TempoAlignment,
-    TempoChoice, TrackImportRow,
+    ImportStage, ImportSummary, ImportTrackKind, ParsedImport, PlacementMode, PlacementStart,
+    TempoAlignment, TempoChoice, TrackImportRow,
 };
 use resonance_app::Resonance;
 
@@ -31,6 +31,7 @@ fn row(name: &str, channel: u8, note_count: usize) -> TrackImportRow {
         selected: true,
         name: name.to_string(),
         channel,
+        kind: ImportTrackKind::Instrument,
         note_count,
         pitch_min: Some(48),
         pitch_max: Some(72),
@@ -44,9 +45,14 @@ fn parsed(rows: Vec<TrackImportRow>, tempo_conflict: bool) -> ParsedImport {
     ParsedImport {
         summary: ImportSummary {
             file_name: "song.mid".to_string(),
+            smf_format: Some(1),
             track_count: rows.len(),
+            ppq: Some(480),
+            length_bars: Some(32),
             total_notes,
             file_tempo_bpm: Some(140.0),
+            tempo_bpm_min: Some(120.0),
+            tempo_bpm_max: Some(140.0),
             tempo_conflict,
         },
         rows,
@@ -211,6 +217,44 @@ fn rename_track_updates_the_destination_name() {
         ImportMessage::RenameTrack(0, "Strings".to_string()),
     );
     assert_eq!(app.test_import_dialog().unwrap().rows[0].name, "Strings");
+}
+
+#[test]
+fn selected_and_importable_counts_exclude_the_conductor() {
+    let mut app = app_with_project();
+    send(&mut app, ImportMessage::Open);
+
+    // A conductor/tempo row (no notes) plus two real tracks.
+    let conductor = TrackImportRow {
+        selected: false,
+        name: "Conductor".to_string(),
+        channel: 0,
+        kind: ImportTrackKind::Instrument,
+        note_count: 0,
+        pitch_min: None,
+        pitch_max: None,
+        is_conductor: true,
+        preview: Vec::new(),
+    };
+    send(
+        &mut app,
+        ImportMessage::ParseCompleted(Ok(parsed(
+            vec![conductor, row("Lead", 0, 8), row("Bass", 1, 4)],
+            false,
+        ))),
+    );
+
+    let d = app.test_import_dialog().unwrap();
+    // Both real tracks are selectable + selected; the conductor counts for
+    // neither, even though all three rows exist.
+    assert_eq!(d.importable_count(), 2);
+    assert_eq!(d.selected_count(), 2);
+
+    // Deselecting one real track drops the live selected-count by one.
+    send(&mut app, ImportMessage::ToggleTrack(1));
+    let d = app.test_import_dialog().unwrap();
+    assert_eq!(d.selected_count(), 1);
+    assert_eq!(d.importable_count(), 2);
 }
 
 #[test]
