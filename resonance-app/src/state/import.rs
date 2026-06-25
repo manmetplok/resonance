@@ -92,6 +92,22 @@ impl Default for Placement {
     }
 }
 
+/// Coarse classification of a detected source track, driving the colored
+/// swatch shown next to each Review row. The orchestration layer
+/// (doc #158) classifies a parsed track — e.g. by GM drum channel,
+/// program family, or track-name hints — into one of these; the view
+/// never infers it. Defaults to [`ImportTrackKind::Instrument`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImportTrackKind {
+    /// A pitched instrument track (the common case).
+    #[default]
+    Instrument,
+    /// A percussion track (e.g. GM channel 10).
+    Drum,
+    /// A vocal / lyric-bearing track destined for the SVS pipeline.
+    Vocal,
+}
+
 /// A single note in a row's preview strip. App-level mirror of a parsed
 /// MIDI note carrying only what the review preview renders, kept
 /// independent of `resonance-audio`'s `MidiNote`.
@@ -113,6 +129,8 @@ pub struct TrackImportRow {
     pub name: String,
     /// Source MIDI channel (0-15).
     pub channel: u8,
+    /// Track classification, driving the Review row's swatch colour/icon.
+    pub kind: ImportTrackKind,
     /// Number of notes detected on the track.
     pub note_count: usize,
     /// Lowest pitch present, or `None` when the track carries no notes.
@@ -131,12 +149,27 @@ pub struct TrackImportRow {
 pub struct ImportSummary {
     /// Display name of the source file.
     pub file_name: String,
+    /// Standard MIDI File format: 0 (single multi-channel track) or 1
+    /// (multiple simultaneous tracks). `None` until the parser sets it.
+    /// Format 2 files are rejected upstream and never reach Review.
+    pub smf_format: Option<u8>,
     /// Total number of source tracks detected.
     pub track_count: usize,
+    /// Ticks-per-quarter-note resolution (PPQ) from the file header.
+    pub ppq: Option<u16>,
+    /// Total length of the file in whole bars, for the summary readout.
+    pub length_bars: Option<u32>,
     /// Total notes across every track.
     pub total_notes: usize,
-    /// Tempo (BPM) from the file's first tempo event, if any.
+    /// Tempo (BPM) from the file's first tempo event, if any. Used as the
+    /// representative tempo when the file carries a single tempo.
     pub file_tempo_bpm: Option<f32>,
+    /// Lowest tempo (BPM) in the file's tempo map, when it has tempo
+    /// changes. Equal to [`Self::tempo_bpm_max`] for a constant tempo.
+    pub tempo_bpm_min: Option<f32>,
+    /// Highest tempo (BPM) in the file's tempo map, when it has tempo
+    /// changes. Equal to [`Self::tempo_bpm_min`] for a constant tempo.
+    pub tempo_bpm_max: Option<f32>,
     /// True when the file's tempo differs from the project's, routing the
     /// flow through the `TempoConflict` stage.
     pub tempo_conflict: bool,
@@ -206,6 +239,22 @@ impl ImportDialogState {
             result: None,
             opened_by_hover: false,
         }
+    }
+
+    /// Number of currently-selected, importable rows. Conductor/tempo rows
+    /// carry no notes and can never be selected, so they never count —
+    /// this drives the Review stage's live "N selected" readout.
+    pub fn selected_count(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| row.selected && !row.is_conductor)
+            .count()
+    }
+
+    /// Total number of importable (non-conductor) rows — the denominator
+    /// for the All / None quick toggles.
+    pub fn importable_count(&self) -> usize {
+        self.rows.iter().filter(|row| !row.is_conductor).count()
     }
 }
 
