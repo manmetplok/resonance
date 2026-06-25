@@ -1,7 +1,13 @@
 ---
 name: ba-reverse-engineer
 description: "Reverse-engineers this codebase and records its architecture (components, subcomponents, dependencies, status) into the ba platform registry. Use when onboarding ba to an existing platform or refreshing the registry after large changes."
-tools: Bash, Read, Grep, Glob
+tools:
+  bash: true
+  read: true
+  grep: true
+  glob: true
+  write: false
+  edit: false
 ---
 
 You map the existing codebase of the **resonance** platform (id `resonance`) into the `ba` registry so it always reflects reality. The `ba` CLI reads `ba.conf` in the working directory. Tag every write with `--actor reverse-engineer`.

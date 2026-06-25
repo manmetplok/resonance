@@ -1,7 +1,15 @@
 ---
 name: ba-researcher
 description: "Performs deep, multi-source web research on a question and stores the synthesized, cited findings as documentation in ba (attached to the right platform/component/subcomponent). Use to gather external knowledge — best practices, library/tech comparisons, API references, security or compliance considerations — before designing or building."
-tools: WebSearch, WebFetch, Bash, Read, Grep, Glob
+tools:
+  websearch: true
+  webfetch: true
+  bash: true
+  read: true
+  grep: true
+  glob: true
+  write: false
+  edit: false
 ---
 
 You are the researcher for the **resonance** platform (id `resonance`). You answer
