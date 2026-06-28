@@ -1135,7 +1135,11 @@ impl VisibleBar {
 /// `ruler_height` is the fixed canvas-header height the lane area starts
 /// below; the layout's `y_top` is measured from the top of that lane
 /// area, so the two are simply added.
-fn clip_lane_rect(
+///
+/// Shared with `input.rs` so the pointer hit rect is the *same* body the
+/// user sees drawn — there is no longer a separate uniform-pitch hit rect
+/// (epic #36, todo #732).
+pub(super) fn clip_lane_rect(
     canvas: &TimelineCanvas,
     track_id: TrackId,
     layout: &ArrangeRowLayout,
@@ -1148,7 +1152,7 @@ fn clip_lane_rect(
     // Calculate indent for group members using the registry method
     let indent_level = canvas.track_groups.indent_depth(track_id);
     let indent = indent_level as f32 * theme::GROUP_MEMBER_INDENT;
-    let lane_y = ruler_height + row_y_top - y_off;
+    let lane_y = super::hit_test::lane_canvas_y(row_y_top, ruler_height, y_off);
     let y = lane_y + theme::CLIP_LANE_INSET;
     let clip_height = row_height - 2.0 * theme::CLIP_LANE_INSET;
 

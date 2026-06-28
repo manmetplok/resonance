@@ -12,9 +12,10 @@ use iced::{keyboard, mouse, Point, Rectangle};
 use resonance_audio::types::{bpm_at_bar, TrackId};
 
 use crate::message::*;
-use crate::state::{self, TrackState};
+use crate::state;
 use crate::theme;
-use super::hit_test::{self, track_index, ClipHandles, HitKind};
+use crate::view::arrange_layout::{ArrangeRowKind, ArrangeRowLayout};
+use super::hit_test::{self, ClipHandles, HitKind};
 use super::scrollbar::{scroll_from_thumb_pos, ScrollbarRects};
 use super::snap::snap_sample_to_grid_tempo;
 use super::{TimelineCanvas, TimelineState};
@@ -125,25 +126,41 @@ impl TimelineCanvas<'_> {
 
     /// Hit-test a pointer press against a clip lane (MIDI or audio).
     /// `duration_samples` is already tick-converted for MIDI clips.
+    ///
+    /// The lane Y / height come from the shared [`ArrangeRowLayout`]
+    /// (`layout`), so the hit honours the variable 60/96 px row pitch and
+    /// returns `None` for a clip whose track is hidden (a collapsed
+    /// group's member has no visible lane → `track_row_rect` is `None`).
     fn hit_test_lane(
         &self,
         pos: Point,
-        sorted_tracks: &[&TrackState],
+        layout: &ArrangeRowLayout,
         clip_track_id: TrackId,
         clip_start_sample: u64,
         duration_samples: u64,
     ) -> Option<HitKind> {
         let header_height = self.fixed_header_height();
-        let track_idx = track_index(sorted_tracks, clip_track_id)?;
-        let row_y = hit_test::track_row_y(
-            track_idx,
+        let (body_y, body_height, indent) = super::draw::clip_lane_rect(
+            self,
+            clip_track_id,
+            layout,
             header_height,
             self.scroll_offset_y,
-            theme::TRACK_HEIGHT,
-        );
-        let rect = hit_test::clip_rect(
-            row_y,
-            theme::TRACK_HEIGHT,
+            // Hit-testing should not cull on viewport height: the pointer
+            // that produced `pos` is by definition on-screen. Pass an
+            // unbounded visible height so an off-by-a-pixel partial row at
+            // the bottom edge still resolves.
+            f32::INFINITY,
+        )?;
+        // `clip_lane_rect` returns the clip *body* rect (already inset +
+        // indented); `clip_pixel_rect` just adds the horizontal extent so
+        // the hit rect matches the drawn body exactly.
+        let rect = hit_test::clip_pixel_rect(
+            hit_test::ClipLaneBody {
+                y: body_y,
+                height: body_height,
+                indent,
+            },
             clip_start_sample,
             duration_samples,
             self.zoom,
@@ -158,24 +175,29 @@ impl TimelineCanvas<'_> {
 
     /// Hit-test a pointer against an audio clip, including its fade/gain
     /// handle beads. Returns `None` on a miss so callers can fall through to
-    /// the next clip.
+    /// the next clip. Lane geometry comes from the shared
+    /// [`ArrangeRowLayout`] (see [`hit_test_lane`](Self::hit_test_lane)).
     fn hit_test_audio_lane(
         &self,
         pos: Point,
-        sorted_tracks: &[&TrackState],
+        layout: &ArrangeRowLayout,
         clip: &state::ClipState,
     ) -> Option<HitKind> {
         let header_height = self.fixed_header_height();
-        let track_idx = track_index(sorted_tracks, clip.track_id)?;
-        let row_y = hit_test::track_row_y(
-            track_idx,
+        let (body_y, body_height, indent) = super::draw::clip_lane_rect(
+            self,
+            clip.track_id,
+            layout,
             header_height,
             self.scroll_offset_y,
-            theme::TRACK_HEIGHT,
-        );
-        let rect = hit_test::clip_rect(
-            row_y,
-            theme::TRACK_HEIGHT,
+            f32::INFINITY,
+        )?;
+        let rect = hit_test::clip_pixel_rect(
+            hit_test::ClipLaneBody {
+                y: body_y,
+                height: body_height,
+                indent,
+            },
             clip.start_sample,
             clip.duration_samples,
             self.zoom,
@@ -313,8 +335,11 @@ impl TimelineCanvas<'_> {
             return self.handle_global_track_click(state, pos, bounds);
         }
 
-        // Clip hit-testing (track area)
-        let sorted_tracks = self.visible_tracks_sorted();
+        // Clip hit-testing (track area). Build the shared arrange-row
+        // layout once — every clip-lane hit and the empty-lane fallback
+        // consult it, so the variable 60/96 px pitch and collapsed-member
+        // hiding are honoured (epic #36, doc #203).
+        let layout = self.arrange_layout();
 
         // Check MIDI clips (reverse order so topmost wins)
         for clip in self.midi_clips.iter().rev() {
@@ -326,7 +351,7 @@ impl TimelineCanvas<'_> {
             let duration_samples = clip_end.saturating_sub(clip.start_sample);
             let Some(hit) = self.hit_test_lane(
                 pos,
-                &sorted_tracks,
+                &layout,
                 clip.track_id,
                 clip.start_sample,
                 duration_samples,
@@ -377,7 +402,7 @@ impl TimelineCanvas<'_> {
 
         // Check audio clips in reverse order so topmost clip wins
         for clip in self.clips.iter().rev() {
-            let Some(hit) = self.hit_test_audio_lane(pos, &sorted_tracks, clip) else {
+            let Some(hit) = self.hit_test_audio_lane(pos, &layout, clip) else {
                 continue;
             };
 
@@ -426,15 +451,24 @@ impl TimelineCanvas<'_> {
             };
         }
 
-        // Clicked on empty track area → select the track under the cursor
-        // and deselect any active clip selection.
-        let clicked_track = {
-            let track_idx = ((pos.y - header_height + self.scroll_offset_y) / theme::TRACK_HEIGHT)
-                .floor()
-                .max(0.0) as usize;
-            sorted_tracks.get(track_idx).map(|t| t.id)
-        };
-        captured(Message::Ui(UiMessage::SelectTrack(clicked_track)))
+        // Clicked on empty lane area (no clip hit). Resolve the row under
+        // the cursor through the shared layout so the variable 60/96 px
+        // pitch and collapsed-member hiding are honoured:
+        //   - a press on a GROUP-HEADER lane routes to the group (fold /
+        //     unfold via `ToggleCollapse`) — it is *not* a track row, so it
+        //     must never select a phantom track underneath it;
+        //   - a press on a TRACK lane selects that track (and drops any
+        //     clip selection, as before);
+        //   - a press below the last row clears the selection.
+        match hit_test::row_at_canvas_y(&layout, pos.y, header_height, self.scroll_offset_y) {
+            Some(ArrangeRowKind::GroupHeader(group_id)) => {
+                captured(Message::Group(GroupMessage::ToggleCollapse(group_id)))
+            }
+            Some(ArrangeRowKind::Track(track_id)) => {
+                captured(Message::Ui(UiMessage::SelectTrack(Some(track_id))))
+            }
+            None => captured(Message::Ui(UiMessage::SelectTrack(None))),
+        }
     }
 
     pub(super) fn handle_move(
@@ -559,7 +593,7 @@ impl TimelineCanvas<'_> {
         if pos.y < self.fixed_header_height() {
             return Interaction::default();
         }
-        let sorted_tracks = self.visible_tracks_sorted();
+        let layout = self.arrange_layout();
         // MIDI clips on top, then audio — matching the press hit order.
         for clip in self.midi_clips.iter().rev() {
             let clip_end = self.tempo_map.tick_to_abs_sample(
@@ -570,7 +604,7 @@ impl TimelineCanvas<'_> {
             let duration_samples = clip_end.saturating_sub(clip.start_sample);
             if let Some(hit) = self.hit_test_lane(
                 pos,
-                &sorted_tracks,
+                &layout,
                 clip.track_id,
                 clip.start_sample,
                 duration_samples,
@@ -583,7 +617,7 @@ impl TimelineCanvas<'_> {
             }
         }
         for clip in self.clips.iter().rev() {
-            if let Some(hit) = self.hit_test_audio_lane(pos, &sorted_tracks, clip) {
+            if let Some(hit) = self.hit_test_audio_lane(pos, &layout, clip) {
                 return match hit {
                     HitKind::Trim(_) | HitKind::FadeIn | HitKind::FadeOut => {
                         Interaction::ResizingHorizontally
