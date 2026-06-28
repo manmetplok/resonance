@@ -1,12 +1,21 @@
 //! Pure hit-testing helpers shared between audio and MIDI clip lanes on the
-//! timeline canvas. The caller computes the clip's pixel rect first (via
-//! [`clip_rect`] for audio or the MIDI equivalent with tick→sample
-//! conversion) and then asks [`hit_test`] which part of the clip the pointer
-//! is over.
+//! timeline canvas. The caller computes the clip's pixel rect first (from the
+//! shared [`ArrangeRowLayout`] via the canvas's lane-rect helper, or the MIDI
+//! equivalent with tick→sample conversion) and then asks [`hit_test`] which
+//! part of the clip the pointer is over.
+//!
+//! Vertical row resolution no longer assumes a uniform `index * TRACK_HEIGHT`
+//! pitch: group/folder tracks interleave 60 px group-header rows with the
+//! 96 px track rows and a collapsed group hides its members entirely. The
+//! pointer-Y → row mapping therefore consults the [`ArrangeRowLayout`]
+//! (epic #36, doc #203) through [`row_at_canvas_y`], which is collapse-aware
+//! and routes a press on a group-header lane to the *group* rather than a
+//! phantom track underneath it.
 
 use iced::{Point, Rectangle};
 
 use crate::state::{ClipEdge, TrackState};
+use crate::view::arrange_layout::{ArrangeRowKind, ArrangeRowLayout};
 use resonance_audio::types::TrackId;
 
 /// Outcome of a hit-test against a single clip rectangle.
@@ -82,14 +91,28 @@ pub fn audio_clip_handles(
     }
 }
 
-/// Build the pixel rect for a clip at the given track row.
+/// The lane-resolved **body** geometry of a clip, as produced by
+/// `draw::clip_lane_rect`: the canvas-space top edge, the body height, and
+/// the group-member indent (0 for ungrouped tracks). Bundled so the pixel
+/// rect builder takes the vertical placement as one argument.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipLaneBody {
+    pub y: f32,
+    pub height: f32,
+    pub indent: f32,
+}
+
+/// Build the on-screen pixel rect for a clip body, given its lane-resolved
+/// vertical placement (`body`) and the clip's sample span. Only the
+/// horizontal extent is derived here; the vertical rect is taken verbatim
+/// from `body` so the hit rect is the *same* body the user sees drawn
+/// (`draw::draw_clip`). There is no longer a separate uniform-pitch rect.
 ///
 /// `duration_samples` is the already-converted length of the clip. For MIDI
 /// clips the caller performs the tick→sample conversion (using BPM and
 /// sample rate) before calling this helper.
-pub fn clip_rect(
-    track_row_y: f32,
-    row_height: f32,
+pub fn clip_pixel_rect(
+    body: ClipLaneBody,
     start_sample: u64,
     duration_samples: u64,
     zoom: f32,
@@ -98,13 +121,13 @@ pub fn clip_rect(
 ) -> Rectangle {
     let start_seconds = start_sample as f32 / sample_rate as f32;
     let duration_seconds = duration_samples as f32 / sample_rate as f32;
-    let x = start_seconds * zoom - scroll_offset;
+    let x = start_seconds * zoom - scroll_offset + body.indent;
     let width = duration_seconds * zoom;
     Rectangle {
         x,
-        y: track_row_y + 2.0,
+        y: body.y,
         width,
-        height: row_height - 4.0,
+        height: body.height,
     }
 }
 
@@ -165,10 +188,40 @@ pub fn hit_test_audio(
     hit_test(pos, rect, trim_threshold)
 }
 
-/// Arrange-view row y (top of the row, in canvas coordinates) for a given
-/// track index.
-pub fn track_row_y(index: usize, ruler_height: f32, scroll_offset_y: f32, row_h: f32) -> f32 {
-    ruler_height + index as f32 * row_h - scroll_offset_y
+/// Convert a layout-relative row top (`ArrangeRow::y_top`, measured from the
+/// top of the lane area) into a **canvas** y coordinate: add the fixed header
+/// offset and subtract the vertical scroll. This is the single place the two
+/// offsets are applied, so lane rendering, clip placement and hit-testing all
+/// agree on where a row sits on screen.
+pub fn lane_canvas_y(row_y_top: f32, header_height: f32, scroll_offset_y: f32) -> f32 {
+    header_height + row_y_top - scroll_offset_y
+}
+
+/// Resolve a pointer position's **canvas** y to the arrange row under it,
+/// consulting the shared [`ArrangeRowLayout`] so the variable 60/96 px pitch
+/// and collapsed-member hiding are honoured. `header_height` is the fixed
+/// canvas-header height the lane area starts below; `scroll_offset_y` is the
+/// vertical scroll.
+///
+/// Returns the [`ArrangeRowKind`] of the row whose lane band contains `y`
+/// (a [`ArrangeRowKind::GroupHeader`] for a group-header lane, a
+/// [`ArrangeRowKind::Track`] for a real track lane), or `None` when `y` is
+/// above the first row / below the last / inside the fixed header. Replaces
+/// the old `(y - header + scroll) / TRACK_HEIGHT` index division, which could
+/// only ever name a track and invented phantom tracks under group rows.
+pub fn row_at_canvas_y(
+    layout: &ArrangeRowLayout,
+    y: f32,
+    header_height: f32,
+    scroll_offset_y: f32,
+) -> Option<ArrangeRowKind> {
+    // Map the canvas y back into the layout's lane-relative space before
+    // querying, so the header offset and scroll are undone exactly once.
+    let lane_y = y - header_height + scroll_offset_y;
+    if lane_y < 0.0 {
+        return None;
+    }
+    layout.row_at_y(lane_y).map(|row| row.kind)
 }
 
 /// Tracks visible in the arrange view, sorted by `order`. Sub-tracks are

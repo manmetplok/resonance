@@ -334,4 +334,22 @@ impl Resonance {
     pub fn test_selection_bar_view(&self, count: usize) -> iced::Element<'static, crate::message::Message> {
         crate::view::selection_bar::selection_bar_with_count(count)
     }
+
+    /// Test-only: resolve the arrange-canvas drag-drop target lane under a
+    /// canvas-Y. Drives `tests/timeline_group_hit_test.rs`' coverage that a
+    /// clip dragged over a group-header lane (or a collapsed member's hidden
+    /// row) resolves to no track, while a track lane resolves correctly
+    /// under the mixed 60/96 px pitch (epic #36, doc #203, todo #732).
+    #[doc(hidden)]
+    pub fn test_track_id_at_arrange_y(&self, y: f32) -> Option<resonance_audio::types::TrackId> {
+        self.track_id_at_arrange_y(y)
+    }
+
+    /// Test-only: the fixed arrange-header height (ruler + section band +
+    /// global-tracks shelf) above the first track lane, so tests can build
+    /// canvas-Y coordinates that match the live layout.
+    #[doc(hidden)]
+    pub fn test_arrange_header_offset(&self) -> f32 {
+        self.arrange_header_offset()
+    }
 }
