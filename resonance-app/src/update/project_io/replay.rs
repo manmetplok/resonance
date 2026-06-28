@@ -461,7 +461,7 @@ pub(crate) fn restore_references(r: &mut Resonance, project: &ProjectFile) {
 /// After the bank is hydrated, the project default pattern id is
 /// refreshed and `next_id` is bumped past every saved pattern and group
 /// id so the manager's "+ New" actions never collide with reserved ids.
-pub(super) fn restore_drum_patterns(
+pub(crate) fn restore_drum_patterns(
     compose: &mut ComposeState,
     file: &ProjectFile,
     clear_on_empty: bool,

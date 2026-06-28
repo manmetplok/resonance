@@ -869,6 +869,7 @@ fn build_vocal_songwriting() -> BuiltinProject {
         seventh_chords: false,
         motif_source: Default::default(),
         drum_pattern_id: None,
+        arrangement: Vec::new(),
     };
     let placement = ProjectSectionPlacement {
         id: 30,
