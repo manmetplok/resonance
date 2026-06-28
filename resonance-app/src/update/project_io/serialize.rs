@@ -5,8 +5,9 @@
 use resonance_audio::types::*;
 
 use crate::project::{
-    ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin, ProjectReference,
-    ProjectReferenceMarker, ProjectReferenceSettings, ProjectTrack, PROJECT_FORMAT_VERSION,
+    audio_format_tag, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin,
+    ProjectPoolAsset, ProjectReference, ProjectReferenceMarker, ProjectReferenceSettings,
+    ProjectTrack, PROJECT_FORMAT_VERSION,
 };
 use crate::Resonance;
 
@@ -97,6 +98,9 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             trim_start_frames: c.trim_start_frames,
             trim_end_frames: c.trim_end_frames,
             audio_file: format!("audio/clip_{}.wav", c.id),
+            // Pool-asset provenance (doc #175): persist the link so an
+            // imported+placed clip reconnects to its pool asset on reload.
+            asset_ref: c.asset_ref.map(|r| r.asset_id),
         })
         .collect();
 
@@ -180,6 +184,26 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         loop_to_mix: r.reference.loop_to_mix,
     };
 
+    // Media pool (doc #175). Persist the durable facts about each
+    // imported asset — its project-relative WAV path, source provenance,
+    // and the project-rate duration — in import order. The waveform
+    // thumbnail and live usage counts are runtime-derived and rebuilt on
+    // load, so they're left out of the file.
+    let pool_assets: Vec<ProjectPoolAsset> = r
+        .pool
+        .assets
+        .iter()
+        .map(|a| ProjectPoolAsset {
+            id: a.id,
+            project_relative_path: a.project_relative_path.clone(),
+            original_path: a.original_path.clone(),
+            format: audio_format_tag(a.format).to_string(),
+            channels: a.channels,
+            source_sample_rate: a.source_sample_rate,
+            duration_frames: a.duration_frames,
+        })
+        .collect();
+
     ProjectFile {
         version: PROJECT_FORMAT_VERSION,
         sample_rate: r.sample_rate,
@@ -214,5 +238,6 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         references,
         reference_settings,
         arrangement_markers: r.markers.markers.clone(),
+        pool_assets,
     }
 }

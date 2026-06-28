@@ -223,6 +223,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
         gain_db: 0.0,
         waveform_peaks,
         vocal_tuning: None,
+        asset_ref: None,
     }];
 
     // Place the playhead a bit into the song so it's visible.

@@ -571,4 +571,98 @@ impl Resonance {
         self.io.has_active_project
     }
 
+    // ---- Media pool (doc #175) ---------------------------------------
+
+    /// Test-only: borrow the media pool so persistence / mirror tests can
+    /// assert the restored asset list, missing flags, usage counts, and
+    /// favourite / recent folder lists.
+    #[doc(hidden)]
+    pub fn test_pool(&self) -> &crate::state::MediaPool {
+        &self.pool
+    }
+
+    /// Test-only: add an imported asset to the pool (and refresh usage),
+    /// standing in for the import-to-pool orchestration (ba todo #598)
+    /// so a persistence test can seed a pool before serializing.
+    #[doc(hidden)]
+    pub fn test_add_pool_asset(&mut self, asset: crate::state::PoolAsset) {
+        self.add_pool_asset(asset);
+    }
+
+    /// Test-only: remove an asset from the pool, returning it if present.
+    #[doc(hidden)]
+    pub fn test_remove_pool_asset(
+        &mut self,
+        id: resonance_audio::types::AssetId,
+    ) -> Option<crate::state::PoolAsset> {
+        self.remove_pool_asset(id)
+    }
+
+    /// Test-only: point a clip at a pool asset (or clear the link with
+    /// `None`) and refresh usage, standing in for the placement /
+    /// relink handlers (ba todos #598 / #600).
+    #[doc(hidden)]
+    pub fn test_relink_clip(
+        &mut self,
+        clip_id: resonance_audio::types::ClipId,
+        asset_id: Option<resonance_audio::types::AssetId>,
+    ) {
+        self.relink_clip(clip_id, asset_id);
+    }
+
+    /// Test-only: replay just the media-pool block of a saved
+    /// [`crate::project::ProjectFile`] into this app, resolving relative
+    /// asset paths against `project_dir`. Exercises the same restore path
+    /// a full project load runs (missing-file flagging, usage recompute)
+    /// without constructing a whole `LoadedProject`.
+    #[doc(hidden)]
+    pub fn test_restore_pool(
+        &mut self,
+        file: &crate::project::ProjectFile,
+        project_dir: &std::path::Path,
+    ) {
+        crate::update::project_io::restore_pool(self, file, project_dir);
+    }
+
+    /// Test-only: borrow the persisted app settings so a test can assert
+    /// the media-browser favourites / recent folders that
+    /// [`Self::test_sync_media_browser_settings`] wrote.
+    #[doc(hidden)]
+    pub fn test_settings(&self) -> &crate::settings::AppSettings {
+        &self.settings
+    }
+
+    /// Test-only: mirror the pool's favourites / recent folders into app
+    /// settings *without* writing to disk (doc #175). Pairs with
+    /// [`Self::test_settings`] to assert the synced lists in a hermetic
+    /// test — unlike [`Self::test_persist_media_browser_settings`], this
+    /// never touches the real `config_dir()`.
+    #[doc(hidden)]
+    pub fn test_sync_media_browser_settings(&mut self) {
+        self.sync_media_browser_settings();
+    }
+
+    /// Test-only: mirror the pool's favourites / recent folders into app
+    /// settings and persist them to disk (doc #175), standing in for the
+    /// browser favourite/recent handlers (ba todo #599). Writes to the
+    /// real `config_dir()`, so prefer [`Self::test_sync_media_browser_settings`]
+    /// in tests that only need to assert the in-memory document.
+    #[doc(hidden)]
+    pub fn test_persist_media_browser_settings(&mut self) {
+        self.persist_media_browser_settings();
+    }
+
+    /// Test-only: pin a favourite folder on the pool, standing in for the
+    /// browser's favourite toggle (ba todo #599).
+    #[doc(hidden)]
+    pub fn test_pool_add_favourite(&mut self, path: std::path::PathBuf) {
+        self.pool.add_favourite(path);
+    }
+
+    /// Test-only: record a most-recently-visited folder on the pool,
+    /// standing in for the browser's navigation handler (ba todo #599).
+    #[doc(hidden)]
+    pub fn test_pool_push_recent(&mut self, path: std::path::PathBuf) {
+        self.pool.push_recent_folder(path);
+    }
 }

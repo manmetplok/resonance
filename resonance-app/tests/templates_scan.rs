@@ -45,6 +45,7 @@ fn make_minimal_project() -> ProjectFile {
         references: Vec::new(),
         reference_settings: Default::default(),
         arrangement_markers: Vec::new(),
+        pool_assets: Vec::new(),
     }
 }
 

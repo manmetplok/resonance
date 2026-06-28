@@ -36,6 +36,10 @@ pub(super) fn imported(
             gain_db: 0.0,
             waveform_peaks,
             vocal_tuning: None,
+            // Engine `ClipImported` carries no asset id; the import /
+            // placement orchestration (doc #175) sets this link app-side
+            // once the clip exists. A recorded/bounced clip stays `None`.
+            asset_ref: None,
         });
     }
 }
@@ -130,6 +134,8 @@ pub(super) fn recording_finished(
         gain_db: 0.0,
         waveform_peaks,
         vocal_tuning: None,
+        // A freshly recorded clip isn't a pool import.
+        asset_ref: None,
     });
     r.transport.recording = false;
 }
