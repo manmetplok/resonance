@@ -27,7 +27,10 @@ use resonance_audio::midi_io;
 use resonance_audio::types::{ClipId, MidiNote, PluginInstanceId};
 
 pub mod sections;
-pub use sections::{ProjectSectionChord, ProjectSectionDefinition, ProjectSectionPlacement};
+pub use sections::{
+    ProjectEntryLength, ProjectPatternEntry, ProjectSectionChord, ProjectSectionDefinition,
+    ProjectSectionPlacement,
+};
 
 pub const PROJECT_FORMAT_VERSION: u32 = 2;
 

@@ -496,10 +496,14 @@ impl ComposeState {
                 beats_per_chord: d.beats_per_chord,
                 seventh_chords: d.seventh_chords,
                 motif_source: d.motif_source.clone(),
-                // Persistence still stores a single pattern id; collapse
-                // the arrangement to its primary entry. Richer multi-entry
-                // arrangements are not yet persisted (separate todo).
-                drum_pattern_id: d.primary_pattern_id(),
+                // New shape: persist the full ordered arrangement. The
+                // legacy single `drum_pattern_id` is left `None` so the
+                // arrangement is the sole source of truth — an old project
+                // re-saved here comes back out in the new shape. (Loading
+                // still honours a legacy `drum_pattern_id`; see
+                // `load_from_project`.)
+                drum_pattern_id: None,
+                arrangement: d.arrangement.iter().map(Into::into).collect(),
             })
             .collect()
     }
@@ -548,12 +552,15 @@ impl ComposeState {
                 beats_per_chord: d.beats_per_chord,
                 seventh_chords: d.seventh_chords,
                 motif_source: d.motif_source.clone(),
-                // Persisted single pattern id seeds a single-entry
-                // arrangement (or an empty one for "use the default").
-                arrangement: d
-                    .drum_pattern_id
-                    .map(|id| vec![crate::compose::PatternEntry::once(id)])
-                    .unwrap_or_default(),
+                // Drum arrangement migration (epic #38):
+                //  * new shape — a persisted `arrangement` is used verbatim;
+                //  * legacy `drum_pattern_id: Some(id)` (empty arrangement)
+                //    becomes a single entry tiling the whole section, so an
+                //    old single-pattern section opens as a one-entry
+                //    arrangement covering `length_bars`;
+                //  * neither present — an empty arrangement, meaning "use the
+                //    project default pattern".
+                arrangement: arrangement_from_project(d),
             })
             .collect();
         // Runtime-only state: start each load with an empty derived-clip
@@ -786,5 +793,33 @@ impl ComposeState {
                 }
             }
         }
+    }
+}
+
+/// Reconstruct a section's runtime drum arrangement from its persisted
+/// form, applying the legacy migration (epic #38, acceptance #6):
+///
+/// 1. **New shape** — a non-empty persisted `arrangement` is mapped
+///    entry-for-entry and used as-is.
+/// 2. **Legacy single pattern** — an empty `arrangement` with
+///    `drum_pattern_id: Some(id)` becomes a single entry covering the
+///    whole section: `RepeatN(length_bars.max(1))`. Legacy patterns have
+///    no intrinsic bar length (they load as 1-bar via the
+///    [`DrumPattern::length_bars`](crate::compose::DrumPattern) serde
+///    default), so `length_bars` repeats of a 1-bar pattern tile the
+///    section exactly.
+/// 3. **Empty** — neither present yields an empty arrangement, meaning
+///    "fall through to the project default pattern".
+fn arrangement_from_project(def: &ProjectSectionDefinition) -> Vec<crate::compose::PatternEntry> {
+    if !def.arrangement.is_empty() {
+        return def.arrangement.iter().map(Into::into).collect();
+    }
+    match def.drum_pattern_id {
+        Some(id) => vec![crate::compose::PatternEntry {
+            pattern_id: id,
+            length: crate::compose::EntryLength::RepeatN(def.length_bars.max(1)),
+            fill: None,
+        }],
+        None => Vec::new(),
     }
 }

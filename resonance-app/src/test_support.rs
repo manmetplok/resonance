@@ -306,6 +306,20 @@ impl Resonance {
         crate::update::project_io::restore_references(self, file);
     }
 
+    /// Test-only: replay the compose tab (section definitions + placements,
+    /// then the drum-pattern bank) of a saved
+    /// [`crate::project::ProjectFile`] into this app — the same two steps
+    /// `replay_loaded_project` runs for the Compose tab. Lets a persistence
+    /// test exercise drum-arrangement migration end-to-end (including the
+    /// legacy `drum_groups` → pattern promotion in `restore_drum_patterns`)
+    /// without standing up a whole `LoadedProject`.
+    #[doc(hidden)]
+    pub fn test_replay_compose(&mut self, file: &crate::project::ProjectFile) {
+        self.compose
+            .load_from_project(&file.section_definitions, &file.section_placements);
+        crate::update::project_io::restore_drum_patterns(&mut self.compose, file, false);
+    }
+
     /// Test-only: anchor a project path so `can_record_undo` is satisfied
     /// (it requires `has_active_project` *and* a `project_path`). Pair
     /// with [`Self::test_set_active_project`] to make undo/redo recordable
