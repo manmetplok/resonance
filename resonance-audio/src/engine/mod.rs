@@ -55,11 +55,15 @@ mod bounce_realtime;
 mod busses;
 mod clips;
 mod external_instrument;
+mod external_instrument_ping;
 pub use external_instrument::{
     check_external_instrument_devices_in_place, clear_external_instrument_in_place,
     resend_external_instrument_patch_in_place, set_external_instrument_in_place,
     set_external_instrument_latency_in_place, set_external_instrument_patch_in_place,
     ExternalInstruments,
+};
+pub use external_instrument_ping::{
+    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms, OnsetOutcome,
 };
 pub use clips::transcode_to_wav;
 pub use clips::{

@@ -104,6 +104,16 @@ pub use engine::{
     set_external_instrument_latency_in_place, set_external_instrument_patch_in_place,
     ExternalInstruments,
 };
+
+/// Test surface for the external-instrument round-trip latency ("ping")
+/// detector. Exposed so the integration test in
+/// `tests/external_instrument_ping.rs` can drive the pure onset-detection and
+/// sample-rate conversion math — the heart of the auto-detect — without
+/// opening a real audio device or MIDI port.
+#[doc(hidden)]
+pub use engine::{
+    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms, OnsetOutcome,
+};
 /// Exposed for `tests/external_instrument_handlers.rs` so it can construct an
 /// empty output registry and exercise the patch-send offline branch without
 /// opening a real MIDI port.

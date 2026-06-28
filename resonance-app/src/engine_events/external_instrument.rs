@@ -44,3 +44,28 @@ pub(super) fn return_input_offline(r: &mut Resonance, track_id: TrackId) {
         state.return_input_offline = true;
     }
 }
+
+/// Auto-detect ("ping") measured a round-trip latency for the track: store the
+/// engine's already-applied offset as the track's displayed/applied offset so
+/// the inspector's latency readout reflects the measurement (doc #169, #204).
+///
+/// The engine emits this *after* applying the offset (it is the floored
+/// `max(manual_offset, measured)`), so mirroring `latency_samples` here keeps
+/// the GUI in lock-step without a second round-trip. An event for an unknown
+/// track is a stale race and ignored. The engine also echoes an
+/// `ExternalInstrumentChanged` carrying the same offset; making this handler
+/// authoritative means the displayed offset is correct regardless of the order
+/// the two events arrive in.
+pub(super) fn latency_measured(r: &mut Resonance, track_id: TrackId, latency_samples: i64) {
+    if let Some(state) = r.external_instruments.get_mut(&track_id) {
+        state.latency_offset_samples = latency_samples;
+    }
+}
+
+/// Auto-detect could not measure a round-trip (MIDI out offline, no/silent
+/// return, or nothing came back within the listen window). Nothing in the
+/// mirror changes — the existing offset stands — but reporting it here (rather
+/// than silently dropping the event) is the join point for any future
+/// inspector "auto-detect failed" surfacing. Kept as an explicit no-op so the
+/// dispatch match stays exhaustive and the intent is documented.
+pub(super) fn latency_detect_failed(_r: &mut Resonance, _track_id: TrackId) {}
