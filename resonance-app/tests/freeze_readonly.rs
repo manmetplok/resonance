@@ -24,11 +24,19 @@ const PARAM: u32 = 7;
 
 /// App with a capturing engine + a temp project dir so freeze handlers can
 /// derive a cache path (freeze needs a saved project).
+///
+/// These tests drive messages through the *full* `update()` entry
+/// (`test_update`), which runs the pre-dispatch gates. The startup-modal
+/// gate swallows every project-mutating message while `has_active_project`
+/// is false, so we mark the project active (alongside the path) to lift
+/// the modal — exactly the state the app is in once a project is open and
+/// a track can actually be frozen.
 fn capturing_app() -> (Resonance, Receiver<AudioCommand>, tempfile::TempDir) {
     let (mut app, _task) = Resonance::new();
     let rx = app.test_capture_engine();
     let dir = tempfile::tempdir().expect("temp project dir");
     app.test_set_project_path(dir.path().to_path_buf());
+    app.test_set_active_project(true);
     (app, rx, dir)
 }
 
