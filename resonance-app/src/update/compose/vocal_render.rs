@@ -224,6 +224,15 @@ fn enqueue_vocal_render(
     let bpm = r.transport.bpm;
     let engine_sr = r.sample_rate;
     let dest_dir = vocal_audio_dir(r);
+    // The lane's editable expression overlay (dynamics/tension/breathiness/
+    // pitch bend, doc #154). Cloned out of compose state before the render
+    // moves off-thread; an un-edited lane has no entry, so a default
+    // (all-`Auto`) bundle reproduces the pre-overlay audio exactly.
+    let curves = r
+        .compose
+        .expression_curves(definition_id, track_id)
+        .cloned()
+        .unwrap_or_default();
     Task::perform(
         async move {
             tokio::task::spawn_blocking(move || {
@@ -231,6 +240,7 @@ fn enqueue_vocal_render(
                     &midi_notes,
                     &params,
                     &assigned,
+                    &curves,
                     bpm,
                     engine_sr,
                     &dest_dir,
@@ -587,6 +597,7 @@ fn render_vocal_wav(
     midi_notes: &[resonance_audio::types::MidiNote],
     params: &VocalParams,
     assigned: &[resonance_music_theory::g2p::AssignedSyllable],
+    curves: &crate::compose::ExpressionCurves,
     bpm: f32,
     engine_sample_rate: u32,
     dest_dir: &std::path::Path,
@@ -602,6 +613,7 @@ fn render_vocal_wav(
         midi_notes,
         params,
         assigned,
+        curves,
         TICKS_PER_QUARTER_NOTE as u32,
         bpm,
         engine_sample_rate,

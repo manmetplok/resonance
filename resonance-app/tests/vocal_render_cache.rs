@@ -15,6 +15,7 @@ use std::cell::Cell;
 use resonance_app::compose::vocal_svs::{
     render_units_cached, split_render_units, SvsRenderCache,
 };
+use resonance_app::compose::ExpressionCurves;
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::g2p::{AssignedSyllable, PhonemeProvenance, SyllableStress};
 use resonance_music_theory::{VocalParams, VocalVoicebank};
@@ -72,7 +73,7 @@ fn continuous_phrase_is_a_single_unit() {
     let notes = vec![note(0), note(TICKS_PER_QUARTER_NOTE)];
     let assigned = vec![syl(&["s", "ow"], 0), syl(&["l", "ow"], 1)];
 
-    let units = split_render_units(&notes, &params(), &assigned, TPQ, BPM);
+    let units = split_render_units(&notes, &params(), &assigned, &ExpressionCurves::default(), TPQ, BPM);
 
     assert_eq!(units.len(), 1, "continuous phrase should be one unit");
     assert_eq!(units[0].note_range, 0..2);
@@ -84,7 +85,7 @@ fn continuous_phrase_is_a_single_unit() {
 fn genuine_silence_splits_into_two_units() {
     let (notes, assigned) = two_units_input();
 
-    let units = split_render_units(&notes, &params(), &assigned, TPQ, BPM);
+    let units = split_render_units(&notes, &params(), &assigned, &ExpressionCurves::default(), TPQ, BPM);
 
     assert_eq!(units.len(), 2, "a 2 s gap should split into two units");
     assert_eq!(units[0].note_range, 0..1);
@@ -117,7 +118,7 @@ fn counting_renderer(
 #[test]
 fn first_render_renders_every_unit() {
     let (notes, assigned) = two_units_input();
-    let units = split_render_units(&notes, &params(), &assigned, TPQ, BPM);
+    let units = split_render_units(&notes, &params(), &assigned, &ExpressionCurves::default(), TPQ, BPM);
     let mut cache = SvsRenderCache::new();
     let calls = Cell::new(0);
 
@@ -138,12 +139,12 @@ fn identical_rerender_reuses_all_units() {
     let calls = Cell::new(0);
 
     // Populate.
-    let units = split_render_units(&notes, &params(), &assigned, TPQ, BPM);
+    let units = split_render_units(&notes, &params(), &assigned, &ExpressionCurves::default(), TPQ, BPM);
     render_units_cached(&units, &mut cache, counting_renderer(&calls, 44_100, 64)).unwrap();
     assert_eq!(calls.get(), 2);
 
     // Re-render the very same clip: nothing changed, everything reused.
-    let units2 = split_render_units(&notes, &params(), &assigned, TPQ, BPM);
+    let units2 = split_render_units(&notes, &params(), &assigned, &ExpressionCurves::default(), TPQ, BPM);
     let out = render_units_cached(&units2, &mut cache, counting_renderer(&calls, 44_100, 64)).unwrap();
 
     assert_eq!(out.plan.changed, 0, "no unit changed");
@@ -157,13 +158,13 @@ fn editing_one_syllable_rerenders_only_that_unit() {
     let mut cache = SvsRenderCache::new();
     let calls = Cell::new(0);
 
-    let before = split_render_units(&notes, &params(), &assigned, TPQ, BPM);
+    let before = split_render_units(&notes, &params(), &assigned, &ExpressionCurves::default(), TPQ, BPM);
     render_units_cached(&before, &mut cache, counting_renderer(&calls, 44_100, 64)).unwrap();
     assert_eq!(calls.get(), 2);
 
     // Edit the second syllable's phonemes; the first is untouched.
     let edited = vec![syl(&["s", "ow"], 0), syl(&["m", "iy"], 1)];
-    let after = split_render_units(&notes, &params(), &edited, TPQ, BPM);
+    let after = split_render_units(&notes, &params(), &edited, &ExpressionCurves::default(), TPQ, BPM);
 
     // Only the changed unit's content key moves.
     assert_eq!(before[0].key, after[0].key, "untouched unit key is stable");
@@ -187,7 +188,7 @@ fn editing_one_syllable_rerenders_only_that_unit() {
 #[test]
 fn units_are_stitched_at_their_sample_offsets() {
     let (notes, assigned) = two_units_input();
-    let units = split_render_units(&notes, &params(), &assigned, TPQ, BPM);
+    let units = split_render_units(&notes, &params(), &assigned, &ExpressionCurves::default(), TPQ, BPM);
     let mut cache = SvsRenderCache::new();
     let calls = Cell::new(0);
 

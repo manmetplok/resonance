@@ -62,6 +62,7 @@ fn ph_seq(vb: VocalVoicebank, text: &str, assigned: &[resonance_music_theory::g2
         &one_note(),
         &params(vb, text),
         assigned,
+        &resonance_app::compose::ExpressionCurves::default(),
         TICKS_PER_QUARTER_NOTE as u32,
         120.0,
     )

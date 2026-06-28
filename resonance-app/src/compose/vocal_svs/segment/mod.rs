@@ -22,8 +22,11 @@ use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::{VocalParams, VocalTimbre};
 use resonance_svs::ds::{DsSegment, SampleCurve};
 
+use crate::compose::expression::ExpressionCurves;
+
 mod duration;
 mod f0;
+mod overlay;
 mod tension;
 
 use duration::build_phoneme_track;
@@ -35,17 +38,59 @@ use tension::build_tension_curve;
 /// entry per note). See the module docs for the stage breakdown and
 /// [`super::resolve_clip_pronunciation`] / [`super::validate_for_voicebank`]
 /// for how `assigned` is produced.
+///
+/// `curves` carries the lane's editable expression overlay (doc #154); an
+/// edited curve is layered over the auto-derived baseline and emitted as
+/// the matching per-frame curve (dynamics → energy, breathiness, tension,
+/// pitch bend → f0 cents offset). A curve in its `Auto` state leaves the
+/// auto-derived result untouched. Pass [`ExpressionCurves::default`] for a
+/// lane with no edits.
 pub fn build_segment(
     notes: &[MidiNote],
     params: &VocalParams,
     assigned: &[AssignedSyllable],
+    curves: &ExpressionCurves,
+    ticks_per_quarter: u32,
+    bpm: f32,
+) -> DsSegment {
+    build_segment_windowed(notes, params, assigned, curves, (0.0, 1.0), ticks_per_quarter, bpm)
+}
+
+/// As [`build_segment`], but `window` maps this segment's local frame span
+/// onto the clip-normalised time the overlay breakpoints live in (see
+/// [`overlay::overlay_envelope`]). A whole-clip build passes `(0.0, 1.0)`;
+/// the render-unit splitter passes each unit's clip-relative fraction so a
+/// multi-unit clip doesn't re-stretch the overlay onto every unit.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn build_segment_windowed(
+    notes: &[MidiNote],
+    params: &VocalParams,
+    assigned: &[AssignedSyllable],
+    curves: &ExpressionCurves,
+    window: (f32, f32),
     ticks_per_quarter: u32,
     bpm: f32,
 ) -> DsSegment {
     let track = build_phoneme_track(notes, params, assigned, ticks_per_quarter, bpm);
-    let f0_curve = build_f0_curve(&track, params);
-    let tension = build_tension_curve(&f0_curve, params);
-    let gender = build_gender_curve(params, f0_curve.samples.len());
+    let f0_curve = build_f0_curve(&track, params, &curves.pitch_bend, window);
+    let n_frames = f0_curve.samples.len();
+
+    // Dynamics → energy. Universally supported; emitted only when the
+    // user has shaped an overlay, otherwise left default (today's audio).
+    let energy =
+        overlay::overlay_envelope(&curves.dynamics, params.voicebank, n_frames, window)
+            .unwrap_or_default();
+    // Breathiness → breathiness (TIGER-unsupported, then a clean no-op).
+    let breathiness =
+        overlay::overlay_envelope(&curves.breathiness, params.voicebank, n_frames, window)
+            .unwrap_or_default();
+    // Tension → tension. An edited+supported overlay replaces the
+    // auto-derived velocity/contour tension; otherwise keep the baseline
+    // (which itself no-ops on TIGER).
+    let tension =
+        overlay::overlay_envelope(&curves.tension, params.voicebank, n_frames, window)
+            .unwrap_or_else(|| build_tension_curve(&f0_curve, params));
+    let gender = build_gender_curve(params, n_frames);
 
     DsSegment {
         offset: 0.0,
@@ -72,8 +117,8 @@ pub fn build_segment(
         // parameter (and probably training-set characterisation) than
         // this knob provides.
         velocity: SampleCurve::default(),
-        energy: SampleCurve::default(),
-        breathiness: SampleCurve::default(),
+        energy,
+        breathiness,
         voicing: SampleCurve::default(),
         tension,
         languages: track.languages,
