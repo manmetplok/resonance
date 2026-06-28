@@ -558,6 +558,18 @@ impl Resonance {
         self.apply_freeze_restore(target);
     }
 
+    /// Test-only: drive the clip fade/gain undo re-apply directly with a
+    /// target map, exercising `apply_clip_fade_gain_restore` (the shared
+    /// re-sync used by both restore paths) without the full
+    /// snapshot/replay pipeline. Mirrors `test_apply_freeze_restore`.
+    #[doc(hidden)]
+    pub fn test_apply_clip_fade_gain_restore(
+        &mut self,
+        map: &std::collections::HashMap<resonance_audio::types::ClipId, crate::undo::ClipFadeGain>,
+    ) {
+        self.apply_clip_fade_gain_restore(map);
+    }
+
     /// Test-only: the current project path. `None` for an untitled project
     /// (including one freshly instantiated from a template).
     #[doc(hidden)]

@@ -108,6 +108,13 @@ pub fn try_diff_replay(
     // -- Track freeze status (detach/delete caches no longer frozen) ----
     r.apply_freeze_restore(extras.track_freeze.clone());
 
+    // -- Clip fade / gain ----------------------------------------------
+    // Clip fade/gain isn't in the `ProjectFile` yet (persistence is #321),
+    // so it rides in the snapshot's extras (doc #156 A2/#317) and is
+    // re-applied to the mirror + engine here. Fade/gain edits never alter
+    // the project shape, so they always take this fast path.
+    r.apply_clip_fade_gain_restore(&extras.clip_fade_gain);
+
     // -- Tempo / signature events --------------------------------------
     apply_tempo(r, target_file);
 

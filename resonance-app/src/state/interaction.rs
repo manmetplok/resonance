@@ -5,7 +5,10 @@ use std::collections::BTreeSet;
 
 use resonance_audio::types::*;
 
-use super::clips::{ClipDragState, ClipTrimState, MidiClipDragState, MidiClipTrimState};
+use super::clips::{
+    ClipDragState, ClipTrimState, FadeDragState, GainDragState, MidiClipDragState,
+    MidiClipTrimState,
+};
 use super::global::SelectedGlobalEvent;
 
 /// State for the MIDI piano roll editor.
@@ -83,6 +86,10 @@ pub struct ClipInteractionState {
     pub selected_track: Option<TrackId>,
     pub clip_drag: Option<ClipDragState>,
     pub clip_trim: Option<ClipTrimState>,
+    /// Active fade-handle drag on an audio clip, if any (todo #317).
+    pub clip_fade_drag: Option<FadeDragState>,
+    /// Active clip-gain bead drag, if any (todo #317).
+    pub clip_gain_drag: Option<GainDragState>,
     pub midi_clip_drag: Option<MidiClipDragState>,
     pub midi_clip_trim: Option<MidiClipTrimState>,
     pub editing_midi_clip: Option<MidiEditorState>,

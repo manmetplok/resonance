@@ -29,6 +29,41 @@ pub struct ClipTrimState {
     pub anchor_x: f32,
 }
 
+/// Transient state for an in-progress fade-handle drag on an audio clip.
+///
+/// Mirrors [`ClipTrimState`]: the fade handles ride along the clip's top
+/// edge (`handle x = ramp end`, design doc #153), so the drag converts the
+/// live pointer x into a fade length in frames against the clip's start
+/// (fade-in / [`ClipEdge::Left`]) or end (fade-out / [`ClipEdge::Right`]).
+/// The clip's geometry is anchored at grab time so the conversion is stable
+/// even though the live [`ClipState`] is mutated as the drag progresses.
+#[derive(Debug, Clone)]
+pub struct FadeDragState {
+    pub clip_id: ClipId,
+    /// Which fade is being dragged: `Left` = fade-in, `Right` = fade-out.
+    pub edge: ClipEdge,
+    /// Clip start in samples at grab time (the fade-in anchor edge).
+    pub original_start_sample: SamplePos,
+    /// Clip visible duration in samples at grab time. Bounds the fade
+    /// length (a fade can't be longer than the clip is audible) and gives
+    /// the fade-out anchor edge (`start + duration`).
+    pub original_duration_samples: u64,
+}
+
+/// Transient state for an in-progress clip-gain bead drag.
+///
+/// Gain is a vertical gesture (`ns-resize`): dragging up increases the gain
+/// in dB, down decreases it. `anchor_y` is the pointer y at grab and
+/// `original_gain_db` the clip's gain at that moment, so each move computes
+/// an absolute target from the total vertical delta rather than
+/// accumulating per-frame (which would drift).
+#[derive(Debug, Clone)]
+pub struct GainDragState {
+    pub clip_id: ClipId,
+    pub anchor_y: f32,
+    pub original_gain_db: f32,
+}
+
 /// GUI-side clip state.
 #[derive(Debug, Clone)]
 pub struct ClipState {

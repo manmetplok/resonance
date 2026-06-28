@@ -45,17 +45,55 @@ pub fn handle(r: &mut Resonance, m: ClipMessage) -> Task<Message> {
         ClipMessage::EndClipTrim => {
             end_clip_trim(r);
         }
-        // Fade/gain drag handling (state machine + engine commands + undo)
-        // lands with todo #317. The timeline (todo #318) already emits these
-        // messages on the right hits; until #317 wires them up they are
-        // intentional no-ops so the build stays green and dragging a fade /
-        // gain handle simply does nothing yet.
-        ClipMessage::StartClipFadeDrag { .. }
-        | ClipMessage::UpdateClipFadeDrag(_)
-        | ClipMessage::EndClipFadeDrag
-        | ClipMessage::StartClipGainDrag { .. }
-        | ClipMessage::UpdateClipGainDrag(_)
-        | ClipMessage::EndClipGainDrag => {}
+        // Fade/gain drag handling (state machine + engine commands). The
+        // timeline (todo #318) emits these on the right hits; the undo
+        // snapshot is captured/committed by the `Begin`/`Commit`
+        // classification in `undo::classify` (same as trim/move), so the
+        // handlers below only mutate the live `ClipState` mirror and, on
+        // gesture end, send the matching engine command.
+        ClipMessage::StartClipFadeDrag {
+            clip_id,
+            edge,
+            anchor_x,
+        } => {
+            start_clip_fade_drag(r, clip_id, edge, anchor_x);
+        }
+        ClipMessage::UpdateClipFadeDrag(x) => {
+            update_clip_fade_drag(r, x);
+        }
+        ClipMessage::EndClipFadeDrag => {
+            end_clip_fade_drag(r);
+        }
+        ClipMessage::StartClipGainDrag { clip_id, anchor_y } => {
+            start_clip_gain_drag(r, clip_id, anchor_y);
+        }
+        ClipMessage::UpdateClipGainDrag(y) => {
+            update_clip_gain_drag(r, y);
+        }
+        ClipMessage::EndClipGainDrag => {
+            end_clip_gain_drag(r);
+        }
+        // Inspector flyout edits (emitted by todo #319). Each is a discrete,
+        // atomic edit (`UndoAction::Record` in `undo::classify`): mutate the
+        // live mirror and send the matching engine command.
+        ClipMessage::SetClipFadeInMs { clip_id, ms } => {
+            set_clip_fade_in_ms(r, clip_id, ms);
+        }
+        ClipMessage::SetClipFadeOutMs { clip_id, ms } => {
+            set_clip_fade_out_ms(r, clip_id, ms);
+        }
+        ClipMessage::SetClipGainDb { clip_id, gain_db } => {
+            set_clip_gain_db(r, clip_id, gain_db);
+        }
+        ClipMessage::SetClipFadeInCurve { clip_id, curve } => {
+            set_clip_fade_curve(r, clip_id, ClipEdge::Left, curve);
+        }
+        ClipMessage::SetClipFadeOutCurve { clip_id, curve } => {
+            set_clip_fade_curve(r, clip_id, ClipEdge::Right, curve);
+        }
+        ClipMessage::ResetClipFadeGain { clip_id } => {
+            reset_clip_fade_gain(r, clip_id);
+        }
     }
     Task::none()
 }
@@ -230,6 +268,261 @@ pub fn end_clip_trim(r: &mut Resonance) {
                 trim_end_frames: clip.trim_end_frames,
             });
         }
+    }
+}
+
+// -- Audio clip fade handles -------------------------------------------
+
+/// Begin a fade-handle drag. Snapshots the clip's start + visible length
+/// so the live pointer→fade-length conversion stays stable as the mirror
+/// is mutated mid-drag (mirrors [`start_clip_trim`]). `_anchor_x` is unused
+/// — the fade handle tracks the pointer x directly (handle x = ramp end,
+/// design doc #153) — but kept in the message for symmetry with trim.
+pub fn start_clip_fade_drag(r: &mut Resonance, clip_id: ClipId, edge: ClipEdge, _anchor_x: f32) {
+    if let Some(clip) = r.clips.iter().find(|c| c.id == clip_id) {
+        r.interaction.selected_clip = Some(clip_id);
+        r.interaction.selected_track = Some(clip.track_id);
+        r.interaction.clip_fade_drag = Some(FadeDragState {
+            clip_id,
+            edge,
+            original_start_sample: clip.start_sample,
+            original_duration_samples: clip.duration_samples,
+        });
+    }
+}
+
+/// Update the active fade drag from the pointer x. Converts the pointer
+/// into a fade length in frames against the clip's start (fade-in) or end
+/// (fade-out) edge, clamped to the clip's audible length, and writes it to
+/// the live mirror. No engine command yet — that's sent on `End`.
+pub fn update_clip_fade_drag(r: &mut Resonance, x: f32) {
+    let Some(drag) = r.interaction.clip_fade_drag.clone() else {
+        return;
+    };
+    let zoom = r.viewport.zoom;
+    let scroll = r.viewport.scroll_offset;
+    let sample_rate = r.sample_rate;
+    // Clip edges in canvas pixels (same mapping as `hit_test::clip_rect`).
+    let left_px = drag.original_start_sample as f32 / sample_rate as f32 * zoom - scroll;
+    let right_px = (drag.original_start_sample + drag.original_duration_samples) as f32
+        / sample_rate as f32
+        * zoom
+        - scroll;
+    // Length in pixels of the dragged ramp, then to frames. A fade can't be
+    // longer than the clip is audible (matches the engine's clamp).
+    let len_px = match drag.edge {
+        ClipEdge::Left => (x - left_px).max(0.0),
+        ClipEdge::Right => (right_px - x).max(0.0),
+    };
+    let frames = px_to_frames(len_px, zoom, sample_rate).min(drag.original_duration_samples);
+    if let Some(clip) = r.clips.iter_mut().find(|c| c.id == drag.clip_id) {
+        match drag.edge {
+            ClipEdge::Left => clip.fade_in_frames = frames,
+            ClipEdge::Right => clip.fade_out_frames = frames,
+        }
+    }
+}
+
+/// Commit the fade drag: read the (clamped) fade values back from the live
+/// mirror and push the full `SetClipFade` to the engine. The undo entry is
+/// committed by the `EndClipFadeDrag` → `Commit` classification.
+pub fn end_clip_fade_drag(r: &mut Resonance) {
+    if let Some(drag) = r.interaction.clip_fade_drag.take() {
+        if let Some(clip) = r.clips.iter().find(|c| c.id == drag.clip_id) {
+            send_clip_fade(r, clip_snapshot(clip));
+        }
+    }
+}
+
+// -- Audio clip gain bead ----------------------------------------------
+
+/// dB change per pixel of vertical drag on the clip-gain bead. A small,
+/// precise sensitivity: a full 96px track-height drag moves ~14 dB, so the
+/// whole gain range is reachable without the bead feeling twitchy.
+pub const GAIN_DB_PER_PX: f32 = 0.15;
+
+/// Begin a clip-gain drag. Gain is a vertical gesture, so the anchor y and
+/// the gain at grab time are captured; each move computes an absolute
+/// target from the total delta (no per-frame accumulation drift).
+pub fn start_clip_gain_drag(r: &mut Resonance, clip_id: ClipId, anchor_y: f32) {
+    if let Some(clip) = r.clips.iter().find(|c| c.id == clip_id) {
+        r.interaction.selected_clip = Some(clip_id);
+        r.interaction.selected_track = Some(clip.track_id);
+        r.interaction.clip_gain_drag = Some(GainDragState {
+            clip_id,
+            anchor_y,
+            original_gain_db: clip.gain_db,
+        });
+    }
+}
+
+/// Update the active gain drag from the pointer y. Dragging up (smaller y)
+/// increases gain; the result is clamped to the engine's accepted range
+/// and written to the live mirror.
+pub fn update_clip_gain_drag(r: &mut Resonance, y: f32) {
+    let Some(drag) = r.interaction.clip_gain_drag.clone() else {
+        return;
+    };
+    let delta_db = (drag.anchor_y - y) * GAIN_DB_PER_PX;
+    let new_gain = clamp_gain_db(drag.original_gain_db + delta_db);
+    if let Some(clip) = r.clips.iter_mut().find(|c| c.id == drag.clip_id) {
+        clip.gain_db = new_gain;
+    }
+}
+
+/// Commit the gain drag: push the live mirror's gain to the engine.
+pub fn end_clip_gain_drag(r: &mut Resonance) {
+    if let Some(drag) = r.interaction.clip_gain_drag.take() {
+        if let Some(clip) = r.clips.iter().find(|c| c.id == drag.clip_id) {
+            let gain_db = clip.gain_db;
+            let _ = r.engine.send(AudioCommand::SetClipGain {
+                clip_id: drag.clip_id,
+                gain_db,
+            });
+        }
+    }
+}
+
+// -- Inspector flyout edits (todo #319) --------------------------------
+
+/// Set the fade-in length from a millisecond value (inspector numeric
+/// field). Converts to frames, clamps to the clip's audible length, writes
+/// the mirror, and sends the full `SetClipFade`.
+pub fn set_clip_fade_in_ms(r: &mut Resonance, clip_id: ClipId, ms: f32) {
+    let sample_rate = r.sample_rate;
+    let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) else {
+        return;
+    };
+    let frames = ms_to_frames(ms, sample_rate).min(clip.duration_samples);
+    clip.fade_in_frames = frames;
+    let snap = clip_snapshot(clip);
+    send_clip_fade(r, snap);
+}
+
+/// Set the fade-out length from a millisecond value (inspector numeric
+/// field).
+pub fn set_clip_fade_out_ms(r: &mut Resonance, clip_id: ClipId, ms: f32) {
+    let sample_rate = r.sample_rate;
+    let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) else {
+        return;
+    };
+    let frames = ms_to_frames(ms, sample_rate).min(clip.duration_samples);
+    clip.fade_out_frames = frames;
+    let snap = clip_snapshot(clip);
+    send_clip_fade(r, snap);
+}
+
+/// Set the clip gain from a dB value (inspector numeric field). Clamped to
+/// the engine's range, mirrored, and sent.
+pub fn set_clip_gain_db(r: &mut Resonance, clip_id: ClipId, gain_db: f32) {
+    let gain_db = clamp_gain_db(gain_db);
+    if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {
+        clip.gain_db = gain_db;
+        let _ = r
+            .engine
+            .send(AudioCommand::SetClipGain { clip_id, gain_db });
+    }
+}
+
+/// Choose a fade curve for one edge (inspector curve picker). The fade
+/// lengths are unchanged; the full `SetClipFade` re-sends both lengths and
+/// both curves from the mirror.
+pub fn set_clip_fade_curve(r: &mut Resonance, clip_id: ClipId, edge: ClipEdge, curve: FadeCurve) {
+    let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) else {
+        return;
+    };
+    match edge {
+        ClipEdge::Left => clip.fade_in_curve = curve,
+        ClipEdge::Right => clip.fade_out_curve = curve,
+    }
+    let snap = clip_snapshot(clip);
+    send_clip_fade(r, snap);
+}
+
+/// Reset a clip's fades and gain to defaults — no fade, default curves,
+/// unity gain (inspector "Reset to default"). Sends both `SetClipFade` and
+/// `SetClipGain` so the engine and mirror return to the pristine state.
+pub fn reset_clip_fade_gain(r: &mut Resonance, clip_id: ClipId) {
+    let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) else {
+        return;
+    };
+    clip.fade_in_frames = 0;
+    clip.fade_in_curve = FadeCurve::default();
+    clip.fade_out_frames = 0;
+    clip.fade_out_curve = FadeCurve::default();
+    clip.gain_db = 0.0;
+    let snap = clip_snapshot(clip);
+    send_clip_fade(r, snap);
+    let _ = r.engine.send(AudioCommand::SetClipGain {
+        clip_id,
+        gain_db: 0.0,
+    });
+}
+
+// -- shared helpers ----------------------------------------------------
+
+/// The fade fields of a clip, captured so we can release the `&clip` borrow
+/// before calling `r.engine.send` (which borrows `r`).
+#[derive(Clone, Copy)]
+struct ClipFadeSnapshot {
+    clip_id: ClipId,
+    fade_in_frames: u64,
+    fade_in_curve: FadeCurve,
+    fade_out_frames: u64,
+    fade_out_curve: FadeCurve,
+}
+
+fn clip_snapshot(clip: &ClipState) -> ClipFadeSnapshot {
+    ClipFadeSnapshot {
+        clip_id: clip.id,
+        fade_in_frames: clip.fade_in_frames,
+        fade_in_curve: clip.fade_in_curve,
+        fade_out_frames: clip.fade_out_frames,
+        fade_out_curve: clip.fade_out_curve,
+    }
+}
+
+/// Send the full `SetClipFade` command from a captured fade snapshot. The
+/// engine re-clamps the lengths and echoes `ClipFadeChanged`, keeping the
+/// mirror authoritative.
+fn send_clip_fade(r: &Resonance, snap: ClipFadeSnapshot) {
+    let _ = r.engine.send(AudioCommand::SetClipFade {
+        clip_id: snap.clip_id,
+        fade_in_frames: snap.fade_in_frames,
+        fade_in_curve: snap.fade_in_curve,
+        fade_out_frames: snap.fade_out_frames,
+        fade_out_curve: snap.fade_out_curve,
+    });
+}
+
+/// Convert a pixel length on the timeline to a frame count at the current
+/// zoom and sample rate. Rounds to the nearest frame.
+fn px_to_frames(px: f32, zoom: f32, sample_rate: u32) -> u64 {
+    if px <= 0.0 || zoom <= 0.0 {
+        return 0;
+    }
+    let seconds = px / zoom;
+    (seconds as f64 * sample_rate as f64).round().max(0.0) as u64
+}
+
+/// Convert a millisecond duration to a frame count at the sample rate.
+fn ms_to_frames(ms: f32, sample_rate: u32) -> u64 {
+    if ms <= 0.0 {
+        return 0;
+    }
+    ((ms as f64 / 1000.0) * sample_rate as f64).round().max(0.0) as u64
+}
+
+/// Clamp a gain value to the engine's accepted range. A `NaN` collapses to
+/// unity, matching the engine's own guard so the mirror never diverges.
+fn clamp_gain_db(gain_db: f32) -> f32 {
+    if gain_db.is_nan() {
+        0.0
+    } else {
+        gain_db.clamp(
+            resonance_audio::MIN_CLIP_GAIN_DB,
+            resonance_audio::MAX_CLIP_GAIN_DB,
+        )
     }
 }
 

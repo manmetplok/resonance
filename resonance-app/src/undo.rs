@@ -12,12 +12,27 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use resonance_audio::types::{AudioCommand, ClipId, MidiNote, PluginInstanceId};
+use resonance_audio::types::{AudioCommand, ClipId, FadeCurve, MidiNote, PluginInstanceId};
 
 use crate::project::LoadedProject;
 use resonance_audio::types::TrackId;
 
 pub use resonance_audio::DEFAULT_HISTORY_CAPACITY;
+
+/// Per-clip fade + gain values captured for undo. Mirrors the editable
+/// fields on [`crate::state::ClipState`] (and on the engine's `AudioClip`).
+/// These don't ride the `ProjectFile` snapshot yet — clip fade/gain
+/// persistence is a separate todo (doc #156 A6 / #321) — so, exactly like
+/// `reference` / `chord_track`, the undoable set is captured here and
+/// re-applied (mirror + engine re-sync) by the restore paths.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipFadeGain {
+    pub fade_in_frames: u64,
+    pub fade_in_curve: FadeCurve,
+    pub fade_out_frames: u64,
+    pub fade_out_curve: FadeCurve,
+    pub gain_db: f32,
+}
 
 /// Runtime-only compose state that isn't captured in `ProjectFile` and
 /// therefore can't be rebuilt by `replay_loaded_project` alone. Applied
@@ -55,6 +70,15 @@ pub struct UndoExtras {
     /// cache of any track that is no longer frozen and downgrades a
     /// re-frozen track whose cache file is gone to stale.
     pub track_freeze: HashMap<TrackId, crate::state::FreezeStatus>,
+    /// Per-clip fade + gain at snapshot time (doc #156 A2/#317). Captured
+    /// here because clip fade/gain isn't part of `ProjectFile` yet (the
+    /// persistence slice is #321); the restore paths re-apply each entry to
+    /// the `ClipState` mirror and re-sync the engine via `SetClipFade` /
+    /// `SetClipGain`, making fade/gain edits fully reversible without
+    /// waiting on disk persistence. Only clips present at restore time are
+    /// touched (a clip removed by the same undo is handled by the
+    /// structural replay path).
+    pub clip_fade_gain: HashMap<ClipId, ClipFadeGain>,
 }
 
 /// Re-apply the snapshotted full arrangements onto the compose state after
@@ -289,6 +313,22 @@ impl crate::Resonance {
                 .map(|d| (d.id, d.arrangement.clone()))
                 .collect(),
             track_freeze: self.freeze.statuses.clone(),
+            clip_fade_gain: self
+                .clips
+                .iter()
+                .map(|c| {
+                    (
+                        c.id,
+                        ClipFadeGain {
+                            fade_in_frames: c.fade_in_frames,
+                            fade_in_curve: c.fade_in_curve,
+                            fade_out_frames: c.fade_out_frames,
+                            fade_out_curve: c.fade_out_curve,
+                            gain_db: c.gain_db,
+                        },
+                    )
+                })
+                .collect(),
         };
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
@@ -400,6 +440,49 @@ impl crate::Resonance {
         self.chord_track = extras.chord_track;
         restore_arrangements(&mut self.compose, &extras.compose_arrangements);
         self.apply_freeze_restore(extras.track_freeze);
+        self.apply_clip_fade_gain_restore(&extras.clip_fade_gain);
+    }
+
+    /// Re-apply snapshotted clip fade/gain to the GUI mirror and re-sync the
+    /// engine. Used by both restore paths (the slow `finalize_undo_restore`
+    /// and the fast `try_diff_replay`). For each clip still present, the
+    /// stored fade/gain is written to [`crate::state::ClipState`] and pushed
+    /// to the engine via `SetClipFade` / `SetClipGain` — the same commands
+    /// the live edits use, so undo/redo and direct editing share one code
+    /// path. Clips absent from the map (or absent from the project) are
+    /// left untouched. Reads only app-side state — no engine read-getters.
+    pub(crate) fn apply_clip_fade_gain_restore(&mut self, map: &HashMap<ClipId, ClipFadeGain>) {
+        for clip in self.clips.iter_mut() {
+            let Some(fg) = map.get(&clip.id) else {
+                continue;
+            };
+            // Skip the engine round-trip when nothing changed, so a restore
+            // that didn't touch this clip stays quiet.
+            let unchanged = clip.fade_in_frames == fg.fade_in_frames
+                && clip.fade_in_curve == fg.fade_in_curve
+                && clip.fade_out_frames == fg.fade_out_frames
+                && clip.fade_out_curve == fg.fade_out_curve
+                && clip.gain_db == fg.gain_db;
+            clip.fade_in_frames = fg.fade_in_frames;
+            clip.fade_in_curve = fg.fade_in_curve;
+            clip.fade_out_frames = fg.fade_out_frames;
+            clip.fade_out_curve = fg.fade_out_curve;
+            clip.gain_db = fg.gain_db;
+            if unchanged {
+                continue;
+            }
+            let _ = self.engine.send(AudioCommand::SetClipFade {
+                clip_id: clip.id,
+                fade_in_frames: fg.fade_in_frames,
+                fade_in_curve: fg.fade_in_curve,
+                fade_out_frames: fg.fade_out_frames,
+                fade_out_curve: fg.fade_out_curve,
+            });
+            let _ = self.engine.send(AudioCommand::SetClipGain {
+                clip_id: clip.id,
+                gain_db: fg.gain_db,
+            });
+        }
     }
 
     /// Attempt to undo. No-ops (returning false) if the history is empty
@@ -668,6 +751,16 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
                 UndoAction::Skip
             }
             ClipMessage::DeleteClip(_) => UndoAction::Record,
+            // Inspector flyout edits (todo #319): each is one discrete,
+            // atomic edit — record a single undo entry per change, like the
+            // numeric edits elsewhere. The drag gestures above coalesce via
+            // Begin/Commit; these don't.
+            ClipMessage::SetClipFadeInMs { .. }
+            | ClipMessage::SetClipFadeOutMs { .. }
+            | ClipMessage::SetClipGainDb { .. }
+            | ClipMessage::SetClipFadeInCurve { .. }
+            | ClipMessage::SetClipFadeOutCurve { .. }
+            | ClipMessage::ResetClipFadeGain { .. } => UndoAction::Record,
         },
 
         Message::MidiClip(c) => match c {
