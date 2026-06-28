@@ -12,7 +12,8 @@ use crate::state::{
     PlacementStart, SelectedGlobalEvent, TempoAlignment, TempoChoice, ViewMode,
 };
 use resonance_audio::types::{
-    BusId, ClipId, PluginInstanceId, ScannedPlugin, SendId, SendSource, TrackId, TrackOutput,
+    BusId, ClipId, FadeCurve, PluginInstanceId, ScannedPlugin, SendId, SendSource, TrackId,
+    TrackOutput,
 };
 use resonance_music_theory::Scale;
 
@@ -324,6 +325,47 @@ pub enum ClipMessage {
     UpdateClipGainDrag(f32),
     /// Commit the active gain drag.
     EndClipGainDrag,
+    // -- Inspector flyout edits (emitted by todo #319, handled by #317) --
+    //
+    // Discrete, atomic edits from the clip inspector flyout, complementing
+    // the on-canvas direct manipulation above. Each one mutates the live
+    // `ClipState` mirror and sends the matching engine command
+    // (`SetClipFade` / `SetClipGain`); the undo system records one entry
+    // per edit (see `undo::classify`). The flyout reads the current values
+    // back from the same `ClipState` mirror, so on-canvas drags and the
+    // numeric fields always agree.
+    /// Set the fade-in length from the inspector's numeric field, in
+    /// milliseconds. Converted to frames against the project sample rate
+    /// and clamped to the clip's audible length.
+    SetClipFadeInMs {
+        clip_id: ClipId,
+        ms: f32,
+    },
+    /// Set the fade-out length from the inspector's numeric field, in ms.
+    SetClipFadeOutMs {
+        clip_id: ClipId,
+        ms: f32,
+    },
+    /// Set the clip gain from the inspector's numeric field, in decibels.
+    SetClipGainDb {
+        clip_id: ClipId,
+        gain_db: f32,
+    },
+    /// Choose the fade-in curve from the inspector's curve picker.
+    SetClipFadeInCurve {
+        clip_id: ClipId,
+        curve: FadeCurve,
+    },
+    /// Choose the fade-out curve from the inspector's curve picker.
+    SetClipFadeOutCurve {
+        clip_id: ClipId,
+        curve: FadeCurve,
+    },
+    /// Reset the clip's fades and gain to their defaults (no fade, unity
+    /// gain, default curves) — the inspector's "Reset to default" action.
+    ResetClipFadeGain {
+        clip_id: ClipId,
+    },
 }
 
 #[derive(Debug, Clone)]
