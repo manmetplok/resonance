@@ -111,6 +111,34 @@ pub fn via_group_solo_chip<'a>() -> Element<'a, Message> {
     .into()
 }
 
+/// Small pink "via group" chip shown on a member track whose mute is driven
+/// by its group's macro mute rather than its own (todo #687). It is a
+/// non-interactive status badge — an outlined BAD pill — so it reads as
+/// "muted because the group is" without competing with the mute button.
+pub fn via_group_mute_chip<'a>() -> Element<'a, Message> {
+    container(
+        text("M·grp")
+            .size(8)
+            .font(theme::MONO_FONT)
+            .color(theme::BAD),
+    )
+    .padding(iced::Padding {
+        top: 1.0,
+        right: 4.0,
+        bottom: 1.0,
+        left: 4.0,
+    })
+    .style(|_theme| container::Style {
+        border: iced::Border {
+            color: theme::BAD_LINE,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
 /// Input-monitor toggle button (eye — green when monitoring).
 pub fn monitor_button<'a>(
     enabled: bool,

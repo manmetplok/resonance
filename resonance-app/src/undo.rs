@@ -493,6 +493,11 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         Message::Group(GroupMessage::SetMacroLevel(group_id, _)) => {
             UndoAction::RecordCoalesced(CoalesceKey::GroupMacroLevel(*group_id))
         }
+        // Toggling a group's macro mute likewise mutates the persisted group
+        // registry (macro_mute lives in the project), so it is a single
+        // recordable edit; a member's own mute is left untouched, so undo
+        // restores the exact prior group + per-track mute picture (#687).
+        Message::Group(GroupMessage::ToggleMacroMute(_)) => UndoAction::Record,
         // The remaining group macro/fold reducers are inert placeholders
         // (todo #680) and the membership-drag start/update/cancel phases
         // are transient; their undo classification is a skip.

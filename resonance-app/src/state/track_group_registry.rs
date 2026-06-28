@@ -97,6 +97,22 @@ impl TrackGroupRegistry {
             .any(|group| group.is_collapsed)
     }
 
+    /// Returns true when the track is muted *via a group* — it belongs
+    /// (directly, or through one level of nesting) to at least one group
+    /// whose macro mute is engaged.
+    ///
+    /// This mirrors [`is_track_soloed_via_group`](Self::is_track_soloed_via_group)
+    /// and is deliberately independent of the track's own `muted` flag: the
+    /// macro cascade never touches a member's own mute. The flag drives both
+    /// the "via group" header chip and the *effective* mute the audio engine
+    /// receives, so a group mute and a per-track mute compose instead of
+    /// fighting (todo #687).
+    pub fn is_track_muted_via_group(&self, track_id: TrackId) -> bool {
+        self.get_groups_containing_track(track_id)
+            .iter()
+            .any(|group| group.macro_mute)
+    }
+
     /// Returns the indent depth for a track based on its group membership.
     ///
     /// - Returns 0 for tracks that are not members of any group

@@ -102,3 +102,40 @@ fn group_member_track_header_via_group_solo() {
         "tests/snapshots/group_member_track_header_via_group_solo.png",
     );
 }
+
+/// Snapshot of a group member track header with the "via group" mute chip
+/// (epic #36, doc #200, todo #687). The track's own mute is OFF, but its
+/// containing group has `macro_mute` ON, so the small pink "M·grp" pill
+/// appears to the left of the button row (left of the solo chip's slot).
+#[test]
+fn group_member_track_header_via_group_mute() {
+    let (mut app, _task) = Resonance::new();
+
+    // Create a group with macro_mute enabled.
+    let group_id = 1000;
+    let mut group = TrackGroup::new(group_id, "Drums", GroupIdentityColor::Drum);
+    group.macro_mute = true;
+
+    app.test_track_groups_mut().add_group(group);
+
+    // Create a track that is NOT muted on its own.
+    let mut track = TrackState::new_instrument(1, 0);
+    track.name = "Kick".to_string();
+    track.id = 1001;
+    track.soloed = false;
+    track.muted = false; // Own mute is OFF
+    track.instrument_icon = InstrumentIcon::Drum;
+    track.instrument_type = InstrumentType::Drum;
+
+    app.test_push_track(track);
+    app.test_track_groups_mut().add_member(group_id, 1001);
+
+    // Now the track should show the "via group" mute chip because:
+    // - group.macro_mute = true
+    // - track.muted = false
+    // - track is a member of the group
+    snapshot_track_header(
+        &app,
+        "tests/snapshots/group_member_track_header_via_group_mute.png",
+    );
+}

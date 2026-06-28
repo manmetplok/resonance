@@ -213,6 +213,8 @@ pub const WARM_LINE: Color = rgba(0xe8, 0xc4, 0x7b, 0.34);
 pub const GOOD: Color = rgb(0x6d, 0xd6, 0xa3);
 /// Soft pink — mute, peaking, errors.
 pub const BAD: Color = rgb(0xe8, 0x7b, 0x8b);
+/// Soft-pink border — "via group" mute chip outline.
+pub const BAD_LINE: Color = rgba(0xe8, 0x7b, 0x8b, 0.34);
 
 // ---------------------------------------------------------------------------
 // Group identity palette — muted jewel tones for track grouping (epic #36).

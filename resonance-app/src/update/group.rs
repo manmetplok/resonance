@@ -9,10 +9,10 @@
 //! - macro mute with cascade to members — todo #687
 //! - macro solo with cascade to members — todo #688
 //!
-//! The collapse / fold state (todo #686) and group level trim (todo #689)
-//! are implemented below. Until the remaining macro-mute variant lands its
-//! control routes to a no-op so the header is wired end-to-end (and
-//! snapshot-testable) without pre-empting the reducer todos.
+//! The collapse / fold state (todo #686), group level trim (todo #689) and
+//! both macro cascades (mute #687 / solo #688) are implemented below, each
+//! with its own reducer and tests so the header is wired end-to-end (and
+//! snapshot-testable).
 //!
 //! Two reducer families *are* implemented here: group creation from a
 //! multi-track selection (todo #684) and drag-and-drop membership editing
@@ -29,10 +29,11 @@ pub fn handle(r: &mut Resonance, m: GroupMessage) -> Task<Message> {
     match m {
         // Collapse / fold state in the timeline — todo #686.
         GroupMessage::ToggleCollapse(group_id) => toggle_collapse(r, group_id),
-        // Macro solo implemented (todo #688). Macro mute implemented in
-        // todo #687. Macro level trim below (todo #689).
-        GroupMessage::ToggleMacroMute(_) => {}
+        // Macro solo (todo #688) and macro mute (todo #687) both cascade to
+        // members; the group level trim (todo #689) writes the persisted
+        // macro_level. Each routes to its dedicated reducer below.
         GroupMessage::ToggleMacroSolo(group_id) => toggle_macro_solo(r, group_id),
+        GroupMessage::ToggleMacroMute(group_id) => toggle_macro_mute(r, group_id),
         GroupMessage::SetMacroLevel(group_id, level) => set_macro_level(r, group_id, level),
         GroupMessage::CreateGroupFromSelection => create_group_from_selection(r),
         GroupMessage::StartMembershipDrag(subject, cursor_y) => {
@@ -128,6 +129,43 @@ fn member_effective_solo(r: &Resonance, track_id: TrackId) -> bool {
         .iter()
         .any(|t| t.id == track_id && t.soloed);
     own || r.track_groups.is_track_soloed_via_group(track_id)
+}
+
+/// Toggle a group's macro mute and cascade the *effective* mute to every
+/// member track (todo #687, doc #200).
+///
+/// Macro mute is non-destructive: it never writes a member's own `muted`
+/// flag. Instead the engine receives each member's *effective* mute — its
+/// own mute OR any containing group's macro mute — so a member stays muted
+/// while the group mute holds and reverts to its own state when the group
+/// mute clears. Nested-group members travel with the cascade via the
+/// flattened member list.
+fn toggle_macro_mute(r: &mut Resonance, group_id: TrackId) {
+    if r.track_groups
+        .update_group(group_id, |g| g.macro_mute = !g.macro_mute)
+        .is_none()
+    {
+        return; // no such group — stale message after removal
+    }
+    for member in r.track_groups.get_all_member_ids(group_id) {
+        let muted = member_effective_mute(r, member);
+        let _ = r.engine.send(AudioCommand::SetTrackMute {
+            track_id: member,
+            muted,
+        });
+    }
+}
+
+/// A track's *effective* mute: its own `muted` flag OR membership in any
+/// macro-muted group. This is what the audio engine must see so a group
+/// mute and a per-track mute compose instead of overwriting one another.
+fn member_effective_mute(r: &Resonance, track_id: TrackId) -> bool {
+    let own = r
+        .registry
+        .sorted_tracks()
+        .iter()
+        .any(|t| t.id == track_id && t.muted);
+    own || r.track_groups.is_track_muted_via_group(track_id)
 }
 
 // ---------------------------------------------------------------------
