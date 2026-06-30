@@ -94,6 +94,11 @@ pub struct Resonance {
     pub(crate) clips: Vec<ClipState>,
     /// MIDI clips on the timeline.
     pub(crate) midi_clips: Vec<MidiClipState>,
+    /// App-side groove library: templates extracted from clips via the
+    /// engine's `ExtractGrooveFromClip` command. Populated purely from
+    /// `GrooveExtracted` engine events (ba todo #390) so the Compose /
+    /// quantize UI can later offer them as "apply groove" presets.
+    pub(crate) groove_library: Vec<resonance_audio::quantize::GrooveTemplate>,
     /// Compose tab state: section definitions, placements, chord progressions.
     pub(crate) compose: compose::ComposeState,
 
@@ -444,6 +449,7 @@ impl Resonance {
             pre_performance_view: None,
             clips: Vec::new(),
             midi_clips: Vec::new(),
+            groove_library: Vec::new(),
             compose: compose::ComposeState::default(),
             pool: state::MediaPool::with_user_folders(
                 settings.media.favourites.clone(),
