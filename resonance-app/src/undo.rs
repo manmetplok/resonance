@@ -781,7 +781,19 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MidiEditorMessage::RemoveSelectedNotes { .. }
             | MidiEditorMessage::MoveNote { .. }
             | MidiEditorMessage::ResizeNote { .. }
-            | MidiEditorMessage::ToggleSlur { .. } => UndoAction::Record,
+            | MidiEditorMessage::ToggleSlur { .. }
+            // Bulk timing edits (doc #163): each rewrites the clip's note
+            // array, so the pre-dispatch snapshot of the prior notes is
+            // the single undo step. Humanize draws its seed in the handler,
+            // so re-doing rolls a new feel — undo still restores the exact
+            // prior notes via the snapshot, which is what matters.
+            | MidiEditorMessage::Quantize { .. }
+            | MidiEditorMessage::Humanize { .. }
+            | MidiEditorMessage::ApplyGroove { .. } => UndoAction::Record,
+            // Groove *extraction* reads the clip and produces a template;
+            // it never mutates the notes, so there's nothing to undo here.
+            // Library persistence/undo is a separate slice (#395).
+            MidiEditorMessage::ExtractGroove { .. } => UndoAction::Skip,
             MidiEditorMessage::OpenMidiEditor(_)
             | MidiEditorMessage::OpenSelectedMidiClip
             | MidiEditorMessage::CloseMidiEditor

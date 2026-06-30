@@ -1,5 +1,6 @@
 use iced::Task;
-use resonance_audio::types::{AudioCommand, MidiNote};
+use resonance_audio::quantize::{self, GrooveTemplate};
+use resonance_audio::types::{AudioCommand, ClipId, MidiNote};
 
 use crate::message::{Message, MidiEditorMessage};
 use crate::update::clips;
@@ -125,8 +126,125 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
         MidiEditorMessage::ToggleSlur { clip_id, note_index } => {
             toggle_slur(r, clip_id, note_index);
         }
+        MidiEditorMessage::Quantize {
+            grid,
+            strength,
+            swing,
+            mode,
+            quantize_ends,
+            iterative,
+        } => {
+            if let Some((clip_id, indices)) = bulk_target(r) {
+                let _ = r.engine.send(AudioCommand::QuantizeMidiNotes {
+                    clip_id,
+                    indices,
+                    grid,
+                    strength,
+                    swing,
+                    mode,
+                    quantize_ends,
+                    iterative,
+                });
+            }
+        }
+        MidiEditorMessage::Humanize { timing, vel, seed } => {
+            if let Some((clip_id, indices)) = bulk_target(r) {
+                // One seed per invocation: a fresh draw when the caller
+                // didn't pin one, so the jitter is reproducible within
+                // this single (undoable) edit and a new invocation rolls
+                // again. Tests pin `seed` for determinism.
+                let seed = seed.unwrap_or_else(humanize_seed);
+                let _ = r.engine.send(AudioCommand::HumanizeMidiNotes {
+                    clip_id,
+                    indices,
+                    timing_ticks: timing,
+                    vel_amt: vel,
+                    seed,
+                });
+            }
+        }
+        MidiEditorMessage::ApplyGroove {
+            template_id,
+            strength,
+        } => {
+            if let Some((clip_id, indices)) = bulk_target(r) {
+                // Unknown template id → no-op (no command, no undo entry).
+                if let Some(template) = lookup_groove(&template_id) {
+                    let _ = r.engine.send(AudioCommand::ApplyGrooveToClip {
+                        clip_id,
+                        indices,
+                        template,
+                        strength,
+                    });
+                }
+            }
+        }
+        MidiEditorMessage::ExtractGroove { grid } => {
+            // Extraction reads the whole open clip regardless of selection.
+            if let Some(clip_id) = r.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id) {
+                let _ = r
+                    .engine
+                    .send(AudioCommand::ExtractGrooveFromClip { clip_id, grid });
+            }
+        }
     }
     Task::none()
+}
+
+/// Resolve the target of a bulk timing edit: the open editor clip plus
+/// the note indices to operate on. Uses the current multi-note selection
+/// (#389), or every note in the clip when the selection is empty
+/// ("operate on the whole clip if none"). Out-of-range selection indices
+/// are dropped. Returns `None` — making the op a no-op — when no clip is
+/// open, the clip is empty, or no in-range notes remain.
+fn bulk_target(r: &Resonance) -> Option<(ClipId, Vec<usize>)> {
+    let editor = r.interaction.editing_midi_clip.as_ref()?;
+    let clip_id = editor.clip_id;
+    let note_count = r
+        .midi_clips
+        .iter()
+        .find(|c| c.id == clip_id)
+        .map(|c| c.notes.len())
+        .unwrap_or(0);
+    if note_count == 0 {
+        return None;
+    }
+    let indices: Vec<usize> = if editor.selected_notes.is_empty() {
+        (0..note_count).collect()
+    } else {
+        editor
+            .selected_notes
+            .iter()
+            .copied()
+            .filter(|&i| i < note_count)
+            .collect()
+    };
+    if indices.is_empty() {
+        None
+    } else {
+        Some((clip_id, indices))
+    }
+}
+
+/// Draw one fresh, well-mixed humanize seed. Called once per `Humanize`
+/// invocation (see the handler) so a single bulk edit's jitter is fixed
+/// and reproducible while distinct invocations decorrelate.
+fn humanize_seed() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    crate::util::next_seed(nanos)
+}
+
+/// Resolve a groove `template_id` to its [`GrooveTemplate`]. Matches the
+/// in-code stock grooves by name; the persisted user-groove library is a
+/// later slice (#395), so unknown ids return `None`.
+fn lookup_groove(template_id: &str) -> Option<GrooveTemplate> {
+    quantize::stock_grooves()
+        .into_iter()
+        .find(|(name, _)| name == template_id)
+        .map(|(_, template)| template)
 }
 
 /// Remove every selected note from `clip_id`. Indices are sent to the
