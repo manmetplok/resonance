@@ -3,6 +3,7 @@
 /// mixer, compose, track_header, menus, settings, editor_panel,
 /// timeline_panel, timeline, piano_roll, midi_editor).
 pub(crate) mod bounce_dialog;
+pub(crate) mod clip_inspector;
 pub(crate) mod export_dialog;
 pub(crate) mod bounce_progress;
 pub(crate) mod compose;
@@ -131,18 +132,32 @@ impl crate::Resonance {
 
         let main = row![track_headers, timeline];
 
-        if let Some(editor) = self.view_midi_editor_panel() {
-            return column![
+        let base: Element<'_, Message> = if let Some(editor) = self.view_midi_editor_panel() {
+            column![
                 container(main).width(Length::Fill).height(Length::Fill),
                 editor,
             ]
             .spacing(0)
-            .into();
-        }
-
-        container(main)
-            .width(Length::Fill)
-            .height(Length::Fill)
             .into()
+        } else {
+            container(main)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        };
+
+        // The clip fade/gain inspector floats over the top-right of the
+        // arrange area for the selected editable audio clip (epic #18).
+        if let Some(flyout) = self.view_clip_inspector_flyout() {
+            let overlay = container(flyout)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(alignment::Horizontal::Right)
+                .align_y(alignment::Vertical::Top)
+                .padding(10);
+            stack![base, overlay].into()
+        } else {
+            base
+        }
     }
 }
