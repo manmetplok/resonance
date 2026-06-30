@@ -460,6 +460,19 @@ pub enum AudioCommand {
     /// are skipped; an offline output is reported per track via
     /// `ExternalInstrumentMidiOutOffline` while its route is preserved.
     ResendExternalInstrumentPatches,
+    /// Auto-detect the round-trip latency of an external-instrument track:
+    /// open its audio-return input, fire a short impulse note out its MIDI
+    /// output, and time how long the return takes to come back. The result
+    /// is reported via `AudioEvent::ExternalInstrumentLatencyMeasured`
+    /// (samples + ms), and the engine applies it as the track's offset
+    /// (raising the manual offset, which stays the floor) and republishes the
+    /// plugin-delay-compensation table. Transport must be stopped. If the
+    /// return can't be detected (no/silent input, MIDI output offline) the
+    /// engine emits `ExternalInstrumentLatencyDetectFailed` with a reason and
+    /// changes nothing. No-op when the track is not an external instrument.
+    DetectExternalInstrumentLatency {
+        track_id: TrackId,
+    },
 
     /// Configure the global MIDI clock master (Resonance → device).
     /// When `enabled` is true and `device` is set, the engine emits

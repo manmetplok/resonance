@@ -211,6 +211,62 @@ fn changed_event_marks_unseen_track_external() {
 }
 
 #[test]
+fn latency_measured_event_updates_applied_offset() {
+    // Auto-detect ("ping", todo #453, doc #204): the engine measures the
+    // round-trip, applies the floored offset, then emits the measured event.
+    // The mirror must move the displayed/applied offset to the measured value.
+    let mut app = app_with_track();
+    dispatch(&mut app, Eim::Enable(TRACK));
+    dispatch(&mut app, Eim::SetLatencyOffset(TRACK, 100)); // prior manual offset
+
+    app.test_apply_engine_event(AudioEvent::ExternalInstrumentLatencyMeasured {
+        track_id: TRACK,
+        latency_samples: 2822,
+        latency_ms: 64.0,
+    });
+    assert_eq!(
+        app.test_external_instrument(TRACK)
+            .unwrap()
+            .latency_offset_samples,
+        2822,
+        "inspector reflects the engine-applied measured offset"
+    );
+}
+
+#[test]
+fn latency_measured_for_unknown_track_is_ignored() {
+    // A measured event for a track that isn't external (stale race) must not
+    // resurrect or fabricate a mirror entry.
+    let mut app = app_with_track();
+    app.test_apply_engine_event(AudioEvent::ExternalInstrumentLatencyMeasured {
+        track_id: TRACK,
+        latency_samples: 512,
+        latency_ms: 11.6,
+    });
+    assert!(
+        app.test_external_instrument(TRACK).is_none(),
+        "no mirror entry conjured for a non-external track"
+    );
+}
+
+#[test]
+fn latency_detect_failed_event_leaves_offset_untouched() {
+    // A clean failure (no detectable return) changes nothing in the mirror —
+    // the prior offset stands, the track stays external, and the app doesn't
+    // hang waiting (the event itself is the resolution).
+    let mut app = app_with_track();
+    dispatch(&mut app, Eim::Enable(TRACK));
+    dispatch(&mut app, Eim::SetLatencyOffset(TRACK, 256));
+
+    app.test_apply_engine_event(AudioEvent::ExternalInstrumentLatencyDetectFailed {
+        track_id: TRACK,
+        reason: "No return detected within the listen window.".into(),
+    });
+    let ext = app.test_external_instrument(TRACK).unwrap();
+    assert_eq!(ext.latency_offset_samples, 256, "offset unchanged on failure");
+}
+
+#[test]
 fn cleared_event_drops_external_mode() {
     let mut app = app_with_track();
     dispatch(&mut app, Eim::Enable(TRACK));

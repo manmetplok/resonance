@@ -370,6 +370,28 @@ pub enum AudioEvent {
         track_id: TrackId,
         device: Option<String>,
     },
+    /// Result of `AudioCommand::DetectExternalInstrumentLatency`: the
+    /// round-trip latency the engine measured for `track_id` by pinging the
+    /// hardware (MIDI impulse out → audio return in). `latency_samples` is the
+    /// measured round-trip at the engine sample rate; `latency_ms` is the same
+    /// value in milliseconds for display. The engine has already applied this
+    /// as the track's effective offset (the manual offset is the floor, so the
+    /// applied value is `max(manual_offset, latency_samples)`) and the app
+    /// mirror updates its displayed/applied offset to match.
+    ExternalInstrumentLatencyMeasured {
+        track_id: TrackId,
+        latency_samples: i64,
+        latency_ms: f32,
+    },
+    /// `AudioCommand::DetectExternalInstrumentLatency` could not measure a
+    /// round-trip for `track_id` — the MIDI output was offline, the audio
+    /// return delivered no/silent frames, or no impulse returned within the
+    /// listen window. Nothing is changed (the existing offset stands); the app
+    /// surfaces `reason` instead of leaving the user waiting on a hung ping.
+    ExternalInstrumentLatencyDetectFailed {
+        track_id: TrackId,
+        reason: String,
+    },
 
     /// Incoming MIDI Clock Start (0xFA) — external master started its
     /// transport and the engine is now playing in sync with it.
