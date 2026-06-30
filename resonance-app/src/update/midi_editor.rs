@@ -207,6 +207,13 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
         MidiEditorMessage::SetQuantizeIterative(on) => {
             r.midi_quantize.iterative = on;
         }
+        MidiEditorMessage::SetHumanizeTiming(ticks) => {
+            r.midi_quantize.humanize_timing =
+                ticks.min(crate::state::HUMANIZE_TIMING_MAX_TICKS);
+        }
+        MidiEditorMessage::SetHumanizeVelocity(v) => {
+            r.midi_quantize.humanize_velocity = v.clamp(0.0, 1.0);
+        }
     }
     Task::none()
 }

@@ -520,6 +520,11 @@ pub enum MidiEditorMessage {
     SetQuantizeEnds(bool),
     /// Toggle iterative/soft quantize.
     SetQuantizeIterative(bool),
+    /// Set the Humanize timing-jitter amount, in ticks (clamped to
+    /// `0..=`[`crate::state::HUMANIZE_TIMING_MAX_TICKS`]).
+    SetHumanizeTiming(u32),
+    /// Set the Humanize velocity-jitter fraction, `0.0..=1.0`.
+    SetHumanizeVelocity(f32),
 }
 
 /// Vocal pitch-editor (graphical tuning) messages, doc #160. This todo
