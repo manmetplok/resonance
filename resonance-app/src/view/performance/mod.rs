@@ -23,6 +23,8 @@
 //! fingerprint of their inputs, so the status bar's per-frame telemetry tick
 //! never rebuilds them — no per-frame churn during a take.
 
+pub mod beat_cue;
+
 use crate::message::{Message, UiMessage};
 use crate::theme;
 use crate::Resonance;
@@ -280,28 +282,103 @@ impl Resonance {
     // -- Band 2: center stage (placeholder) ----------------------------------
 
     /// Center stage region. The huge current-chord symbol + fingering
-    /// diagram + beat ring land in todos #308/#310; until then this shows
-    /// the design's empty state (an em-dash with guidance), which is also
-    /// the genuine "no chord under the playhead" fallback.
+    /// diagram land in todo #308; until then the chord area shows the
+    /// design's empty state (an em-dash with guidance), which is also the
+    /// genuine "no chord under the playhead" fallback. The right-hand
+    /// **beat ring / count-in cue** (this todo, #310) is a live `Canvas`
+    /// that only appears while the transport is rolling or counting in.
     ///
-    /// The band's `Length::Fill` container stays *outside* the lazy cache —
-    /// `iced::widget::lazy` doesn't forward a `Fill` size hint, so wrapping
-    /// the whole band collapses the layout. The container is cheap structural
+    /// The chord area's `Length::Fill` container stays *outside* the lazy
+    /// cache — `iced::widget::lazy` doesn't forward a `Fill` size hint, so
+    /// wrapping it collapses the layout. The container is cheap structural
     /// chrome; the (static) empty-state content it centres is what gets
-    /// cached, keyed on [`center_stage_fingerprint`].
+    /// cached, keyed on [`center_stage_fingerprint`]. The beat cue is a
+    /// Canvas (per the view-performance rules: live visuals are Canvas with
+    /// cached static layers), so it sits outside the lazy region and manages
+    /// its own per-beat redraw.
     fn performance_center_stage(&self) -> Element<'_, Message> {
         let content = iced::widget::lazy(
             center_stage_fingerprint(),
             |_: &u64| -> Element<'static, Message> { center_stage_content() },
         );
 
-        container(content)
+        let chord_area = container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(alignment::Horizontal::Center)
+            .align_y(alignment::Vertical::Center);
+
+        // The beat ring / count-in cue only takes a column while the
+        // transport is live — idle, the chord/empty-state stays centred on
+        // the whole stage so the resting view matches the design's empty
+        // state exactly.
+        let cue = self.performance_cue_state();
+        let body: Element<'_, Message> = if cue.rolling || cue.count_in_beats.is_some() {
+            row![
+                chord_area,
+                container(beat_cue::beat_cue(cue))
+                    .width(Length::Fixed(beat_cue::CUE_SIZE))
+                    .height(Length::Fill)
+                    .align_x(alignment::Horizontal::Center)
+                    .align_y(alignment::Vertical::Center),
+            ]
+            .spacing(STAGE_HPAD)
+            .into()
+        } else {
+            chord_area.into()
+        };
+
+        container(body)
             .width(Length::Fill)
             .height(Length::Fill)
             .padding([0, STAGE_HPAD as u16])
             .align_x(alignment::Horizontal::Center)
             .align_y(alignment::Vertical::Center)
             .into()
+    }
+
+    /// Derive the live [`beat_cue::BeatCueState`] from the transport and the
+    /// chord-derivation core ([`crate::engine_events::performance`]).
+    ///
+    /// The pre-count is detected from the transport (rolling + record-armed
+    /// with the primed first-chord sample still ahead of the playhead); the
+    /// primed position is then handed to the derivation core via
+    /// [`ChordQuery::primed_position`] so this view never special-cases the
+    /// count-in — the core returns the primed chord and `priming = true`,
+    /// and the cue shows a mint countdown over it.
+    fn performance_cue_state(&self) -> beat_cue::BeatCueState {
+        use crate::engine_events::performance::{chord_readout, ChordQuery};
+
+        let t = &self.transport;
+        let rolling = t.playing;
+        let primed_position = (t.playing
+            && t.recording
+            && t.recording_start_sample > t.playhead)
+            .then_some(t.recording_start_sample);
+        let loop_region =
+            (t.loop_enabled && t.loop_range_set).then_some((t.loop_in, t.loop_out));
+
+        let query = ChordQuery {
+            playhead: t.playhead,
+            sample_rate: self.sample_rate,
+            primed_position,
+            loop_region,
+        };
+        let readout = chord_readout(
+            &self.compose.placements,
+            &self.compose.definitions,
+            &self.tempo_map,
+            query,
+        );
+
+        beat_cue::BeatCueState::derive(
+            &readout,
+            rolling,
+            &self.tempo_map,
+            self.sample_rate,
+            t.playhead,
+            primed_position,
+        )
     }
 
     // -- Band 3: next-chords lane (placeholder) ------------------------------
