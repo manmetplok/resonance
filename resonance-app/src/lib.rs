@@ -97,6 +97,12 @@ pub struct Resonance {
     /// Compose tab state: section definitions, placements, chord progressions.
     pub(crate) compose: compose::ComposeState,
 
+    /// Media pool: imported audio assets referenced by clips, plus the
+    /// browser's favourite / recent folder lists (doc #175). Asset list
+    /// and clip asset-refs persist in the project file; favourites and
+    /// recent folders persist in user settings. See `state::pool`.
+    pub(crate) pool: state::MediaPool,
+
     /// Reference-track (A/B) comparison state. See `crate::reference`.
     pub(crate) reference: reference::ReferenceState,
     /// Markov table registry for chord generators. Constructed once at
@@ -439,6 +445,10 @@ impl Resonance {
             clips: Vec::new(),
             midi_clips: Vec::new(),
             compose: compose::ComposeState::default(),
+            pool: state::MediaPool::with_user_folders(
+                settings.media.favourites.clone(),
+                settings.media.recent_folders.clone(),
+            ),
             reference: reference::ReferenceState::default(),
             table_registry: TableRegistry::with_builtins(),
 

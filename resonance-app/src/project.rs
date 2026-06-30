@@ -125,6 +125,13 @@ pub struct ProjectFile {
     /// Arrangement markers on the timeline. Empty on legacy projects.
     #[serde(default)]
     pub arrangement_markers: Vec<crate::state::ArrangementMarker>,
+    /// Imported media-pool assets (doc #175). Each entry is an audio file
+    /// transcoded into the project's `audio/` directory that clips
+    /// reference by id via [`ProjectClip::asset_ref`]. Empty on legacy
+    /// projects (which had no media pool); such projects load with an
+    /// empty pool and every clip's `asset_ref` left `None`.
+    #[serde(default)]
+    pub pool_assets: Vec<ProjectPoolAsset>,
 }
 
 /// An empty project at the current format version with neutral
@@ -164,6 +171,7 @@ impl Default for ProjectFile {
             references: Vec::new(),
             reference_settings: ProjectReferenceSettings::default(),
             arrangement_markers: Vec::new(),
+            pool_assets: Vec::new(),
         }
     }
 }
@@ -348,6 +356,77 @@ pub struct ProjectClip {
     /// `"audio/clip_42.wav"`. Absolute paths are resolved against
     /// the project directory at load time.
     pub audio_file: String,
+    /// Id of the media-pool asset this clip was placed from (doc #175),
+    /// or `None` for clips that aren't pool imports (recorded takes,
+    /// bounces) and for legacy projects that predate the media pool.
+    /// Rebuilt onto [`crate::state::ClipState::asset_ref`] on load.
+    #[serde(default)]
+    pub asset_ref: Option<u64>,
+}
+
+/// One persisted media-pool asset (doc #175): an imported audio file
+/// that clips reference by id. The engine transcodes every import to a
+/// project-rate stereo f32 WAV under the project's `audio/` directory;
+/// `project_relative_path` points at it (relocatable with the project),
+/// while the remaining fields describe the original source for display.
+/// The waveform thumbnail and live usage counts are runtime-derived and
+/// deliberately *not* persisted — they're rebuilt on load.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectPoolAsset {
+    /// Stable per-project asset id, matched by [`ProjectClip::asset_ref`].
+    pub id: u64,
+    /// Project-relative path of the engine-format WAV, e.g.
+    /// `"audio/asset_7.wav"`. Resolved against the project directory to
+    /// detect whether the backing file is still present.
+    pub project_relative_path: String,
+    /// Absolute path of the source file the user originally imported
+    /// (provenance / relink hint).
+    pub original_path: String,
+    /// Container/codec family of the original source, stored as a short
+    /// lowercase tag (`"wav"`, `"flac"`, `"mp3"`, `"ogg"`, `"aac"`,
+    /// `"mp4"`, or `"other"`). `resonance_common::AudioFormat` carries no
+    /// serde derive, so it round-trips through this string.
+    pub format: String,
+    /// Channel count of the original source file.
+    pub channels: u16,
+    /// Sample rate of the original source file, in Hz.
+    pub source_sample_rate: u32,
+    /// Per-channel frame count of the imported (project-rate) WAV.
+    pub duration_frames: u64,
+}
+
+/// Serialize an [`AudioFormat`](resonance_common::AudioFormat) to the
+/// short lowercase tag stored in [`ProjectPoolAsset::format`]. The
+/// engine type has no serde derive, so the project layer owns this
+/// round-trip. Kept in sync with [`audio_format_from_tag`].
+pub fn audio_format_tag(format: resonance_common::AudioFormat) -> &'static str {
+    use resonance_common::AudioFormat;
+    match format {
+        AudioFormat::Wav => "wav",
+        AudioFormat::Flac => "flac",
+        AudioFormat::Mp3 => "mp3",
+        AudioFormat::Ogg => "ogg",
+        AudioFormat::Aac => "aac",
+        AudioFormat::Mp4 => "mp4",
+        AudioFormat::Other => "other",
+    }
+}
+
+/// Parse a [`ProjectPoolAsset::format`] tag back into an
+/// [`AudioFormat`](resonance_common::AudioFormat). Unknown / unexpected
+/// tags (including a future build's new variant, or a hand-edited file)
+/// fall back to `Other` so loading never fails on the format label.
+pub fn audio_format_from_tag(tag: &str) -> resonance_common::AudioFormat {
+    use resonance_common::AudioFormat;
+    match tag {
+        "wav" => AudioFormat::Wav,
+        "flac" => AudioFormat::Flac,
+        "mp3" => AudioFormat::Mp3,
+        "ogg" => AudioFormat::Ogg,
+        "aac" => AudioFormat::Aac,
+        "mp4" => AudioFormat::Mp4,
+        _ => AudioFormat::Other,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

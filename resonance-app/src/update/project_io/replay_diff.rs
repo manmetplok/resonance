@@ -91,6 +91,14 @@ pub fn try_diff_replay(
     apply_compose(r, target_file, extras);
     apply_markers(r, target_file);
 
+    // -- Media pool (doc #175) -----------------------------------------
+    // The pool is pure app-side data (no engine instances), so an
+    // undo/redo that added / removed / relinked an asset is restored
+    // verbatim here — the structural check ignores the pool entirely.
+    // Asset-ref changes on clips were already mirrored in
+    // `apply_audio_clips`; this rebuilds the asset list and usage tally.
+    apply_pool(r, target_file);
+
     // -- Reference (A/B) content ---------------------------------------
     // References aren't in the `ProjectFile`, so they ride along in the
     // snapshot's `extras` and are restored verbatim here. Engine re-sync
@@ -653,6 +661,9 @@ fn apply_audio_clips(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
                 .total_frames
                 .saturating_sub(cb.trim_start_frames)
                 .saturating_sub(cb.trim_end_frames);
+            // Pool link (doc #175): restore the clip's asset ref so an
+            // undo/redo that relinked or cleared the link is reflected.
+            cs.asset_ref = cb.asset_ref.map(crate::state::pool::AssetRef::new);
         }
     }
 }
@@ -774,6 +785,41 @@ fn apply_tempo(r: &mut Resonance, b: &ProjectFile) {
 
 fn apply_markers(r: &mut Resonance, b: &ProjectFile) {
     r.markers = crate::state::ArrangementMarkers::from(b.arrangement_markers.clone());
+}
+
+/// Restore the media pool from a snapshot on the fast (diff) path (doc
+/// #175). Mirrors the slow-path [`super::replay::restore_pool`] but uses
+/// `r.io.project_path` as the directory to resolve relative asset paths
+/// against — it's still set during an in-session undo/redo (the slow path
+/// has to thread the dir explicitly because replay clears it). Rebuilds
+/// the asset list (flagging missing files) and recomputes usage from the
+/// clips' already-mirrored asset refs.
+fn apply_pool(r: &mut Resonance, b: &ProjectFile) {
+    use crate::state::pool::PoolAsset;
+
+    r.pool.clear_assets();
+    let project_dir = r.io.project_path.clone();
+    for pa in &b.pool_assets {
+        let missing = match &project_dir {
+            Some(dir) => !dir.join(&pa.project_relative_path).exists(),
+            // No anchored path (shouldn't happen on the undo path, which
+            // only records with a saved project) — assume present rather
+            // than spuriously flag everything missing.
+            None => false,
+        };
+        r.pool.add(PoolAsset {
+            id: pa.id,
+            project_relative_path: pa.project_relative_path.clone(),
+            original_path: pa.original_path.clone(),
+            format: crate::project::audio_format_from_tag(&pa.format),
+            channels: pa.channels,
+            source_sample_rate: pa.source_sample_rate,
+            duration_frames: pa.duration_frames,
+            thumbnail_peaks: Vec::new(),
+            missing,
+        });
+    }
+    r.recompute_pool_usage();
 }
 
 #[cfg(test)]
@@ -950,6 +996,7 @@ mod tests {
             trim_start_frames: 0,
             trim_end_frames: 0,
             audio_file: name.into(),
+            asset_ref: None,
         };
         a.clips = vec![mk(1, "audio/a.wav")];
         b.clips = vec![mk(1, "audio/b.wav")];

@@ -224,6 +224,12 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
             gain_db: 0.0,
             waveform_peaks: Vec::new(), // Will be populated by ClipImported event
             vocal_tuning: None, // Re-derived on demand when the pitch editor opens.
+            // Link to the pool asset this clip was placed from, if any
+            // (doc #175). Persisted on `ProjectClip`; rebuilt here so
+            // imported audio survives reload. `restore_pool` reconciles
+            // it against the pool (and recomputes usage) after every clip
+            // is in place.
+            asset_ref: pc.asset_ref.map(crate::state::pool::AssetRef::new),
         });
     }
 
@@ -325,6 +331,65 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // path (see the engine-side gate in `engine::bounce`), so this never
     // touches the bounced/exported mix.
     restore_references(r, project);
+
+    // Media pool (doc #175): rebuild the imported-asset list, flag any
+    // whose backing WAV is missing, and recompute usage counts from the
+    // clips' restored asset refs. Resolve relative asset paths against
+    // the loaded project's directory — `r.io.project_path` is still
+    // `None` here (replay cleared it; the caller restores it afterwards).
+    restore_pool(r, project, &loaded.project_dir);
+}
+
+/// Restore the media pool from a saved project (doc #175). Wipes the
+/// previous project's assets, then re-adds each persisted asset, marking
+/// it [`PoolAsset::missing`](crate::state::pool::PoolAsset::missing) when
+/// its backing WAV is no longer present in the project's `audio/`
+/// directory — a missing asset is **kept, not dropped**, so its clips
+/// survive offline and can be relinked later. Finally recomputes usage
+/// counts from the clips' asset refs.
+///
+/// `project_dir` is the absolute `.rproj` directory used to resolve each
+/// asset's project-relative WAV path for the existence check.
+///
+/// Favourites and recent folders are *not* touched here: they are
+/// project-independent user state persisted in `settings.json`, loaded
+/// into the pool once at startup.
+pub(crate) fn restore_pool(
+    r: &mut Resonance,
+    project: &ProjectFile,
+    project_dir: &std::path::Path,
+) {
+    use crate::state::pool::PoolAsset;
+
+    // Drop the prior project's assets + usage; keep favourites / recent.
+    r.pool.clear_assets();
+
+    for pa in &project.pool_assets {
+        // Resolve the project-relative WAV path against the project dir.
+        // An absolute `project_relative_path` (shouldn't happen, but be
+        // defensive) is used as-is by `Path::join`.
+        let abs_path = project_dir.join(&pa.project_relative_path);
+        let missing = !abs_path.exists();
+
+        r.pool.add(PoolAsset {
+            id: pa.id,
+            project_relative_path: pa.project_relative_path.clone(),
+            original_path: pa.original_path.clone(),
+            format: crate::project::audio_format_from_tag(&pa.format),
+            channels: pa.channels,
+            source_sample_rate: pa.source_sample_rate,
+            duration_frames: pa.duration_frames,
+            // Thumbnail peaks are rebuilt off-thread when the pool/browser
+            // renders the asset; not persisted, so start empty.
+            thumbnail_peaks: Vec::new(),
+            missing,
+        });
+    }
+
+    // Recompute per-asset usage from the clips loaded above (their
+    // `asset_ref`s were set during the clip replay). A clip pointing at
+    // an asset that didn't load simply isn't counted.
+    r.recompute_pool_usage();
 }
 
 /// Restore the reference A/B block from a saved project. Wipes any prior

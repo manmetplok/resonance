@@ -96,6 +96,13 @@ pub struct ClipState {
     /// read the detected contour / notes (and, later, the per-note and
     /// global edits) without a read-back round-trip.
     pub vocal_tuning: Option<VocalTuning>,
+    /// Link to the media-pool asset this clip was placed from, if any
+    /// (doc #175). `None` for clips that didn't originate from an import
+    /// (recorded takes, bounced/rendered audio, legacy projects). An
+    /// asset's usage count is the number of clips whose `asset_ref`
+    /// points at it; the link is persisted in the project file and
+    /// rebuilt on load so imported audio survives save/reload.
+    pub asset_ref: Option<crate::state::pool::AssetRef>,
 }
 
 /// GUI-side MIDI clip state.
