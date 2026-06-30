@@ -14,6 +14,7 @@ pub(crate) mod import_dialog;
 pub(crate) mod knob;
 pub(crate) mod menus;
 pub mod midi_editor;
+pub(crate) mod midi_quantize;
 pub(crate) mod mixer;
 pub(crate) mod performance;
 pub mod piano_roll;

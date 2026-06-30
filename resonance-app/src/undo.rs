@@ -804,7 +804,15 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MidiEditorMessage::ClearNoteSelection
             | MidiEditorMessage::PreviewNote(_, _)
             | MidiEditorMessage::StopPreview(_, _)
-            | MidiEditorMessage::ScrollY(_) => UndoAction::Skip,
+            | MidiEditorMessage::ScrollY(_)
+            // Quantize-panel control edits (todo #392) just mutate view
+            // state — the actual note edit is the `Quantize` message above.
+            | MidiEditorMessage::SetQuantizeGrid(_)
+            | MidiEditorMessage::SetQuantizeStrength(_)
+            | MidiEditorMessage::SetQuantizeSwing(_)
+            | MidiEditorMessage::SetQuantizeMode(_)
+            | MidiEditorMessage::SetQuantizeEnds(_)
+            | MidiEditorMessage::SetQuantizeIterative(_) => UndoAction::Skip,
         },
 
         // Pitch-editor open/close is editor lifecycle + an analysis

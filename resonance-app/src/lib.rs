@@ -137,6 +137,10 @@ pub struct Resonance {
     pub(crate) viewport: ArrangeViewport,
     pub(crate) markers: state::ArrangementMarkers,
     pub(crate) interaction: ClipInteractionState,
+    /// Settings of the MIDI editor's Quantize panel (todo #392). App-level
+    /// so the chosen grid/strength/swing/mode persist across clip
+    /// open/close; the Apply button reads this to build the bulk quantize.
+    pub(crate) midi_quantize: state::MidiQuantizePanelState,
     pub(crate) io: ProjectIoState,
     pub(crate) mixer: MixerUiState,
     pub(crate) registry: TrackRegistry,
@@ -473,6 +477,7 @@ impl Resonance {
             viewport: ArrangeViewport::default(),
             markers: state::ArrangementMarkers::default(),
             interaction: ClipInteractionState::default(),
+            midi_quantize: state::MidiQuantizePanelState::default(),
             io: ProjectIoState {
                 recent_projects,
                 ..ProjectIoState::default()

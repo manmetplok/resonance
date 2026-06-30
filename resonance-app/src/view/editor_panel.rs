@@ -60,7 +60,9 @@ impl crate::Resonance {
             .find(|c| c.id == editor_state.clip_id)?;
 
         let variant = self.classify_editor_variant(editor_state.track_id);
-        let (body, toolbar_label, toolbar_accent, panel_height) = match variant {
+        // The piano roll carries the Quantize panel (todo #392); the vocal
+        // roll has its own timing affordances, so it gets `None`.
+        let (body, toolbar_label, toolbar_accent, panel_height, quantize_panel) = match variant {
             EditorVariant::Vocal => {
                 let vocal_canvas = vocal_roll::build_canvas(self, clip)?;
                 let label = format!("Vocal: {}  ·  {}", clip.name, vocal_canvas.voice_label);
@@ -80,7 +82,7 @@ impl crate::Resonance {
                 )
                 .width(Length::Fill)
                 .height(Length::Fill);
-                (scrolled.into(), label, theme::WARM, 540)
+                (scrolled.into(), label, theme::WARM, 540, None)
             }
             EditorVariant::Piano => {
                 let label = format!("MIDI: {}", clip.name);
@@ -111,7 +113,13 @@ impl crate::Resonance {
                 .width(Length::Fill)
                 .height(Length::Fill);
                 let element: Element<'_, Message> = scrolled.into();
-                (element, label, theme::ACCENT, 250)
+                let panel = crate::view::midi_quantize::view(
+                    &self.midi_quantize,
+                    editor_state.selected_notes.len(),
+                );
+                // A little extra height to host the quantize toolbar row
+                // without squeezing the piano roll canvas.
+                (element, label, theme::ACCENT, 292, Some(panel))
             }
         };
 
@@ -142,7 +150,10 @@ impl crate::Resonance {
         .width(Length::Fill)
         .style(theme::panel_outlined);
 
-        let editor_panel = column![editor_toolbar, body].spacing(0);
+        let editor_panel = match quantize_panel {
+            Some(panel) => column![editor_toolbar, panel, body].spacing(0),
+            None => column![editor_toolbar, body].spacing(0),
+        };
         Some(
             container(editor_panel)
                 .width(Length::Fill)
