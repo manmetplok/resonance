@@ -122,6 +122,15 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 enabled: r.midi_clock_recv_enabled,
             });
         }
+        UiMessage::SetPerformanceTuning(index) => {
+            // Footer instrument/tuning pill. Pure view state — the diagram
+            // bands re-voice from `r.performance` on the next render.
+            r.performance.set_tuning_index(index);
+        }
+        UiMessage::SetPerformanceCapo(frets) => {
+            // Footer capo stepper. The setter clamps to `0..=MAX_CAPO`.
+            r.performance.set_capo(frets);
+        }
     }
     Task::none()
 }
