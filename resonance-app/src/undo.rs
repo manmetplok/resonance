@@ -812,7 +812,11 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MidiEditorMessage::SetQuantizeSwing(_)
             | MidiEditorMessage::SetQuantizeMode(_)
             | MidiEditorMessage::SetQuantizeEnds(_)
-            | MidiEditorMessage::SetQuantizeIterative(_) => UndoAction::Skip,
+            | MidiEditorMessage::SetQuantizeIterative(_)
+            // Humanize-panel control edits (todo #393) likewise just mutate
+            // view state — the note edit is the `Humanize` message above.
+            | MidiEditorMessage::SetHumanizeTiming(_)
+            | MidiEditorMessage::SetHumanizeVelocity(_) => UndoAction::Skip,
         },
 
         // Pitch-editor open/close is editor lifecycle + an analysis

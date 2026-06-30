@@ -9,7 +9,7 @@
 //! out of the undo history.
 
 use resonance_app::message::{Message, MidiEditorMessage};
-use resonance_app::state::GridChoice;
+use resonance_app::state::{GridChoice, HUMANIZE_TIMING_MAX_TICKS};
 use resonance_app::undo::{classify, UndoAction};
 use resonance_app::Resonance;
 use resonance_audio::quantize::{GridModifier, GridValue, QuantizeMode};
@@ -73,6 +73,9 @@ fn default_panel_state_is_sensible() {
     assert_eq!(s.mode, QuantizeMode::StartOnly);
     assert!(!s.quantize_ends);
     assert!(!s.iterative);
+    // Humanize starts inert (#393): no jitter until the user dials some in.
+    assert_eq!(s.humanize_timing, 0);
+    assert_eq!(s.humanize_velocity, 0.0);
 }
 
 #[test]
@@ -88,6 +91,8 @@ fn setters_update_each_bound_field() {
     );
     dispatch(&mut app, MidiEditorMessage::SetQuantizeEnds(true));
     dispatch(&mut app, MidiEditorMessage::SetQuantizeIterative(true));
+    dispatch(&mut app, MidiEditorMessage::SetHumanizeTiming(60));
+    dispatch(&mut app, MidiEditorMessage::SetHumanizeVelocity(0.4));
 
     let s = app.test_quantize_panel();
     assert_eq!(s.grid, GridChoice::EighthTriplet);
@@ -96,6 +101,8 @@ fn setters_update_each_bound_field() {
     assert_eq!(s.mode, QuantizeMode::StartAndLength);
     assert!(s.quantize_ends);
     assert!(s.iterative);
+    assert_eq!(s.humanize_timing, 60);
+    assert_eq!(s.humanize_velocity, 0.4);
 }
 
 #[test]
@@ -107,6 +114,24 @@ fn strength_and_swing_are_clamped_to_unit_range() {
     let s = app.test_quantize_panel();
     assert_eq!(s.strength, 1.0);
     assert_eq!(s.swing, 0.0);
+}
+
+#[test]
+fn humanize_amounts_are_clamped_to_their_ranges() {
+    let (mut app, _task) = Resonance::new();
+
+    // Timing caps at the panel's max; velocity stays within the unit range.
+    dispatch(
+        &mut app,
+        MidiEditorMessage::SetHumanizeTiming(HUMANIZE_TIMING_MAX_TICKS + 500),
+    );
+    dispatch(&mut app, MidiEditorMessage::SetHumanizeVelocity(3.0));
+    let s = app.test_quantize_panel();
+    assert_eq!(s.humanize_timing, HUMANIZE_TIMING_MAX_TICKS);
+    assert_eq!(s.humanize_velocity, 1.0);
+
+    dispatch(&mut app, MidiEditorMessage::SetHumanizeVelocity(-1.0));
+    assert_eq!(app.test_quantize_panel().humanize_velocity, 0.0);
 }
 
 // ---------------------------------------------------------------------
@@ -122,12 +147,30 @@ fn panel_control_edits_skip_undo() {
         MidiEditorMessage::SetQuantizeMode(QuantizeMode::StartAndLength),
         MidiEditorMessage::SetQuantizeEnds(true),
         MidiEditorMessage::SetQuantizeIterative(true),
+        MidiEditorMessage::SetHumanizeTiming(60),
+        MidiEditorMessage::SetHumanizeVelocity(0.4),
     ] {
         assert!(
             matches!(classify(&Message::MidiEditor(m)), UndoAction::Skip),
             "quantize-panel control edits are pure view state",
         );
     }
+}
+
+#[test]
+fn apply_humanize_records_one_undo_step() {
+    // The Humanize Apply button dispatches the bulk Humanize message; like
+    // Quantize, it must be a single undo step (the note edit), unlike the
+    // pure control setters above.
+    let m = MidiEditorMessage::Humanize {
+        timing: 60,
+        vel: 0.4,
+        seed: None,
+    };
+    assert!(matches!(
+        classify(&Message::MidiEditor(m)),
+        UndoAction::Record
+    ));
 }
 
 #[test]

@@ -22,7 +22,7 @@ use iced::{alignment, Element, Length};
 use resonance_audio::quantize::QuantizeMode;
 
 use crate::message::{Message, MidiEditorMessage};
-use crate::state::{GridChoice, MidiQuantizePanelState};
+use crate::state::{GridChoice, MidiQuantizePanelState, HUMANIZE_TIMING_MAX_TICKS};
 use crate::theme;
 
 /// The grid pick_list option set, built once. Constant for the life of the
@@ -139,10 +139,75 @@ pub(crate) fn view(state: &MidiQuantizePanelState, selected: usize) -> Element<'
     .align_y(alignment::Vertical::Center)
     .padding([4, 8]);
 
-    container(controls)
+    // -- Humanize row (todo #393): bounded, seeded timing + velocity jitter.
+    let humanize = humanize_row(state, selected);
+
+    container(column![controls, humanize].spacing(2))
         .width(Length::Fill)
         .style(theme::panel_outlined)
         .into()
+}
+
+/// Build the Humanize controls row that sits beneath the Quantize toolbar:
+/// a timing-jitter slider (in ticks), a velocity-jitter slider (percent),
+/// and an Apply button that dispatches
+/// [`MidiEditorMessage::Humanize`](crate::message::MidiEditorMessage) over
+/// the current selection (or the whole clip when nothing is selected). The
+/// handler (#391) draws a fresh seed per Apply, so the edit is a single
+/// undo step and re-applying re-rolls the feel.
+fn humanize_row(state: &MidiQuantizePanelState, selected: usize) -> Element<'_, Message> {
+    let header = row![
+        theme::icon(theme::fa::WAVE_SQUARE)
+            .size(12)
+            .color(theme::WARM),
+        text("Humanize").size(12).color(theme::WARM),
+    ]
+    .spacing(6)
+    .align_y(alignment::Vertical::Center);
+
+    // Timing jitter: 0..=max ticks, shown as "±N ticks".
+    let timing = ticks_slider("Timing", state.humanize_timing, |t| {
+        Message::MidiEditor(MidiEditorMessage::SetHumanizeTiming(t))
+    });
+    // Velocity jitter: 0..=1, shown as a percentage.
+    let velocity = labeled_slider("Velocity", state.humanize_velocity, |v| {
+        Message::MidiEditor(MidiEditorMessage::SetHumanizeVelocity(v))
+    });
+
+    // Apply: fresh seed per invocation (handler draws it when `None`).
+    let apply_msg = Message::MidiEditor(MidiEditorMessage::Humanize {
+        timing: state.humanize_timing,
+        vel: state.humanize_velocity,
+        seed: None,
+    });
+    let apply_btn = button(text("Humanize").size(11).color(theme::PANEL_DARK))
+        .padding([4, 12])
+        .on_press(apply_msg)
+        .style(|_t, status| theme::primary_button_style(status));
+
+    let scope = if selected == 0 {
+        "whole clip".to_string()
+    } else {
+        format!("{} selected", selected)
+    };
+    let scope_hint = text(scope)
+        .size(10)
+        .color(theme::TEXT_3)
+        .font(theme::MONO_FONT);
+
+    row![
+        header,
+        Space::new().width(Length::Fixed(6.0)),
+        timing,
+        velocity,
+        Space::new().width(Length::Fill),
+        scope_hint,
+        apply_btn,
+    ]
+    .spacing(10)
+    .align_y(alignment::Vertical::Center)
+    .padding([4, 8])
+    .into()
 }
 
 /// A short caption stacked above a control, keeping the toolbar compact.
@@ -153,6 +218,29 @@ fn labeled<'a>(caption: &'static str, control: Element<'a, Message>) -> Element<
     ]
     .spacing(2)
     .into()
+}
+
+/// A captioned timing-jitter slider over `0..=`[`HUMANIZE_TIMING_MAX_TICKS`]
+/// ticks. The caption shows the bound as a symmetric range (e.g.
+/// "Timing ±60 ticks") since the jitter is applied as `±value`. The slider
+/// works in `f32` and rounds to whole ticks on change, so it composes with
+/// the other percentage sliders without an integer-slider trait bound.
+fn ticks_slider<'a>(
+    caption: &str,
+    value: u32,
+    on_change: impl Fn(u32) -> Message + 'a,
+) -> Element<'a, Message> {
+    let cap = text(format!("{caption} ±{value} ticks"))
+        .size(9)
+        .color(theme::TEXT_3);
+    let s = slider(
+        0.0..=HUMANIZE_TIMING_MAX_TICKS as f32,
+        value as f32,
+        move |v| on_change(v.round() as u32),
+    )
+    .step(1.0f32)
+    .width(Length::Fixed(96.0));
+    column![cap, s].spacing(2).into()
 }
 
 /// A captioned percentage slider over `0.0..=1.0`. The caption shows the

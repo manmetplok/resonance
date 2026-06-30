@@ -217,7 +217,19 @@ pub struct MidiQuantizePanelState {
     pub quantize_ends: bool,
     /// Apply the strength blend iteratively (soft quantize).
     pub iterative: bool,
+    /// Humanize timing jitter — maximum absolute offset, in ticks
+    /// (`0..=`[`HUMANIZE_TIMING_MAX_TICKS`]). Drives the Humanize panel's
+    /// timing slider; the Humanize Apply button reads it.
+    pub humanize_timing: u32,
+    /// Humanize velocity jitter fraction, `0.0..=1.0` (shown as 0–100%).
+    pub humanize_velocity: f32,
 }
+
+/// Upper bound of the Humanize timing slider, in ticks. One eighth note
+/// (`TICKS_PER_QUARTER_NOTE / 2 = 240`): enough loosening to feel human
+/// without smearing notes across the beat. Kept here so the view and the
+/// setter handler agree on the clamp.
+pub const HUMANIZE_TIMING_MAX_TICKS: u32 = 240;
 
 impl Default for MidiQuantizePanelState {
     fn default() -> Self {
@@ -228,6 +240,8 @@ impl Default for MidiQuantizePanelState {
             mode: QuantizeMode::StartOnly,
             quantize_ends: false,
             iterative: false,
+            humanize_timing: 0,
+            humanize_velocity: 0.0,
         }
     }
 }
