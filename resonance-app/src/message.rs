@@ -11,6 +11,7 @@ use crate::state::{
     ClipEdge, ExportMode, LoopDragTarget, MixerInspectorGroup, ParsedImport, PlacementMode,
     PlacementStart, SelectedGlobalEvent, TempoAlignment, TempoChoice, ViewMode,
 };
+use resonance_audio::quantize::{Division, QuantizeMode};
 use resonance_audio::types::{
     BusId, ClipId, FadeCurve, PluginInstanceId, ScannedPlugin, SendId, SendSource, TrackId,
     TrackOutput,
@@ -452,6 +453,54 @@ pub enum MidiEditorMessage {
     ToggleSlur {
         clip_id: ClipId,
         note_index: usize,
+    },
+
+    // -- Bulk timing edits (quantize / humanize / groove), doc #163, epic #25 --
+    // These operate on the *open* MIDI editor clip, so they carry no
+    // `clip_id`: the handler reads the active editor and the current
+    // multi-note selection (#389), falling back to the whole clip when the
+    // selection is empty. Each dispatches one bulk `AudioCommand` (#388)
+    // that the engine applies atomically and mirrors back as a single
+    // `MidiNotesEdited`; the pre-dispatch undo snapshot captures the prior
+    // notes so the whole op is one undo step.
+    /// Quantize the current selection (or whole clip) toward `grid`.
+    Quantize {
+        grid: Division,
+        /// Blend toward the grid, `0.0..=1.0` (`1.0` snaps exactly).
+        strength: f32,
+        /// Swing applied to odd grid steps, `0.0..=1.0`.
+        swing: f32,
+        mode: QuantizeMode,
+        /// Snap note-offs to the grid as well as note-ons.
+        quantize_ends: bool,
+        /// Apply the strength blend repeatedly (soft/iterative quantize).
+        iterative: bool,
+    },
+    /// Humanize the current selection (or whole clip) with bounded,
+    /// seeded timing + velocity jitter. `seed` is `None` for ordinary
+    /// invocations — the handler draws one fresh seed per invocation so a
+    /// single edit is reproducible (and captured as one undo step); a new
+    /// invocation re-rolls. Tests pass `Some(_)` for determinism.
+    Humanize {
+        /// Maximum absolute timing offset in ticks.
+        timing: u32,
+        /// Velocity jitter fraction, `0.0..=1.0`.
+        vel: f32,
+        seed: Option<u64>,
+    },
+    /// Apply the named groove template to the current selection (or whole
+    /// clip). `template_id` names a stock groove today; user/extracted
+    /// grooves land with the library-persistence slice (#395).
+    ApplyGroove {
+        template_id: String,
+        /// Template blend, `0.0..=1.0`.
+        strength: f32,
+    },
+    /// Extract a groove template from the open clip at `grid` resolution.
+    /// Reads the whole clip (selection-independent); emits
+    /// `AudioEvent::GrooveExtracted` and does not modify the notes.
+    ExtractGroove {
+        grid: Division,
     },
 }
 
