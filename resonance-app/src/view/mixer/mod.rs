@@ -3,6 +3,7 @@
 //! The actual strip rendering lives in submodules — `track_strip.rs`,
 //! `bus_strip.rs`, `master_strip.rs`, `plugin_panel.rs`.
 
+mod automation;
 mod bus_strip;
 pub(crate) mod inspector;
 mod master_strip;

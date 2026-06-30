@@ -42,6 +42,20 @@ impl AutomationState {
         self.next_lane_id
     }
 
+    /// The live automated value (normalized `0.0..=1.0`) the mixer should
+    /// tint `target`'s fader/knob with, or `None` when nothing is driving
+    /// it: no lane, the lane's Read flag is off, or no throttled
+    /// `AutomatedValue` has arrived yet (playback isn't currently
+    /// automating it). The view maps the returned normalized value to the
+    /// target's real range for display (todo #383).
+    pub fn live_value(&self, target: AutomationTarget) -> Option<f32> {
+        let lane = self.lanes.get(&target)?;
+        if !lane.enabled {
+            return None;
+        }
+        self.live_values.get(&target).copied()
+    }
+
     /// Replace every mirrored lane with the set loaded from a project file,
     /// keyed by target, and bump the id allocator past every loaded lane id
     /// so app-created lanes after the load never collide with persisted

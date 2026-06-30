@@ -245,9 +245,26 @@ impl crate::Resonance {
         // instrument slot pill, pan, and the fader.
         let _ = available_plugins;
 
+        // Per-channel automation lane header: parameter picker + Read
+        // toggle (todo #383). Sits above the pan/fader block so the
+        // tinted controls read directly under their lane header.
+        let auto_chan = super::automation::AutoChan::Track(track.id);
+        let auto_header =
+            super::automation::automation_header(&self.automation, auto_chan, &track.plugins);
+
         // Pan knob — vertical drag to change, double-click to reset.
+        // Tinted with the live automated pan while a Read-enabled pan
+        // lane drives it during playback.
         let id = track.id;
-        let pan_ctrl = pan_knob(track.pan, move |v| {
+        let pan_live = super::automation::live_value(
+            &self.automation,
+            resonance_common::AutomationTarget::TrackPan(track.id),
+        )
+        .map(|v| resonance_common::lane_value_to_real(
+            resonance_common::AutomationTarget::TrackPan(track.id),
+            v,
+        ));
+        let pan_ctrl = crate::view::knob::pan_knob_automated(track.pan, pan_live, move |v| {
             Message::Track(TrackMessage::SetTrackPan(id, v))
         });
         let pan_label = format_pan(track.pan);
@@ -264,15 +281,25 @@ impl crate::Resonance {
         .spacing(2)
         .align_y(alignment::Vertical::Center);
 
-        // Just the pan row — the FX picker moved to the Inspector.
+        // Automation lane header above the pan row.
         let fx_pan_block = iced::widget::Column::new()
             .width(Length::Fill)
+            .push(auto_header)
             .push(pan_row);
 
         let track_id_for_fader = track.id;
-        let fader_block = fader_section(track.level_l, track.level_r, track.volume, move |v| {
-            Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
-        });
+        let gain_live = super::automation::live_value(
+            &self.automation,
+            resonance_common::AutomationTarget::TrackGain(track.id),
+        )
+        .map(|v| resonance_common::lane_value_to_real(
+            resonance_common::AutomationTarget::TrackGain(track.id),
+            v,
+        ));
+        let fader_block =
+            fader_section(track.level_l, track.level_r, track.volume, gain_live, move |v| {
+                Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
+            });
 
         // Input device + port + MIDI routing all live in the Inspector
         // now. The strip stays compact: head, button rows, instrument
@@ -504,9 +531,21 @@ impl crate::Resonance {
         .align_x(alignment::Horizontal::Center);
 
         let track_id_for_fader = track.id;
-        let fader_block = fader_section(track.level_l, track.level_r, track.volume, move |v| {
-            Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
-        });
+        // Sub-track strips are slim children fed from the parent plugin's
+        // fan-out; they carry no automation lane header. Live gain tint
+        // still applies so a Read-enabled lane on the sub-track shows.
+        let gain_live = super::automation::live_value(
+            &self.automation,
+            resonance_common::AutomationTarget::TrackGain(track.id),
+        )
+        .map(|v| resonance_common::lane_value_to_real(
+            resonance_common::AutomationTarget::TrackGain(track.id),
+            v,
+        ));
+        let fader_block =
+            fader_section(track.level_l, track.level_r, track.volume, gain_live, move |v| {
+                Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
+            });
 
         let is_selected = self.interaction.selected_track == Some(track.id);
 

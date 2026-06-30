@@ -87,10 +87,25 @@ impl crate::Resonance {
             col
         };
 
+        // Master automation lane header (gain only) + live gain tint.
+        let auto_header = super::automation::automation_header(
+            &self.automation,
+            super::automation::AutoChan::Master,
+            &self.master_plugins,
+        );
+        let gain_live = super::automation::live_value(
+            &self.automation,
+            resonance_common::AutomationTarget::MasterGain,
+        )
+        .map(|v| resonance_common::lane_value_to_real(
+            resonance_common::AutomationTarget::MasterGain,
+            v,
+        ));
         let fader_block = fader_section(
             self.master_level_l,
             self.master_level_r,
             self.master_volume,
+            gain_live,
             |v| Message::Track(TrackMessage::SetMasterVolume(v)),
         );
 
@@ -113,6 +128,7 @@ impl crate::Resonance {
             button_row,
             plugin_fill,
             fx_block,
+            auto_header,
             fader_block,
             bounce_row,
         ]
