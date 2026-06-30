@@ -27,7 +27,7 @@ use crate::types::{MidiNote, TempoMap};
 use grid::snap_to_grid;
 
 /// What a quantize pass adjusts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QuantizeMode {
     /// Move note starts only; durations are preserved.
     StartOnly,

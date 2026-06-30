@@ -365,6 +365,21 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // the loaded project's directory — `r.io.project_path` is still
     // `None` here (replay cleared it; the caller restores it afterwards).
     restore_pool(r, project, &loaded.project_dir);
+
+    // Quantize state (ba todo #395): the user's groove library and the
+    // last-used quantize/humanize settings. Pure app-side data — no
+    // engine command — so it's restored verbatim.
+    restore_quantize(r, project);
+}
+
+/// Restore the MIDI quantize state (ba todo #395) from a saved project:
+/// the user-extracted groove library and the last-used quantize/humanize
+/// settings. Pure app-side data with no engine counterpart, so it's a
+/// straight copy. Legacy projects (no fields) restore to an empty library
+/// and neutral default settings via the `#[serde(default)]` on the file.
+pub(crate) fn restore_quantize(r: &mut Resonance, project: &ProjectFile) {
+    r.quantize.groove_library = project.groove_library.clone();
+    r.quantize.settings = project.quantize_settings.clone();
 }
 
 /// Restore the media pool from a saved project (doc #175). Wipes the

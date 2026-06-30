@@ -246,5 +246,9 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         reference_settings,
         arrangement_markers: r.markers.markers.clone(),
         pool_assets,
+        // MIDI quantize state (ba todo #395): the user's groove library
+        // and last-used quantize/humanize settings.
+        groove_library: r.quantize.groove_library.clone(),
+        quantize_settings: r.quantize.settings.clone(),
     }
 }

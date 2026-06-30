@@ -7,7 +7,7 @@ use super::grid::{BarRuler, Division};
 
 /// A per-step groove "feel": timing pushes and velocity accents measured
 /// at each grid step within a bar.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GrooveTemplate {
     /// Number of grid steps per bar (length of both vectors below).
     pub steps_per_bar: u32,

@@ -12,7 +12,7 @@ const TICKS_PER_WHOLE: u64 = 4 * TICKS_PER_QUARTER_NOTE;
 
 /// The base note value of a quantize grid (the denominator side of the
 /// musical fraction, e.g. `Eighth` == 1/8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GridValue {
     Quarter,
     Eighth,
@@ -33,7 +33,7 @@ impl GridValue {
 }
 
 /// A grid modifier applied to a [`GridValue`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GridModifier {
     /// Plain value.
     Straight,
@@ -45,7 +45,7 @@ pub enum GridModifier {
 
 /// A musical grid division (note value + modifier), e.g. dotted eighth
 /// or sixteenth-note triplet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Division {
     pub value: GridValue,
     pub modifier: GridModifier,

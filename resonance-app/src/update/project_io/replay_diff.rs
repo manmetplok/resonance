@@ -99,6 +99,13 @@ pub fn try_diff_replay(
     // `apply_audio_clips`; this rebuilds the asset list and usage tally.
     apply_pool(r, target_file);
 
+    // -- Quantize state (ba todo #395) ---------------------------------
+    // The groove library + last-used quantize settings are pure app-side
+    // data (no engine instances), so an undo/redo that edited them is
+    // restored verbatim. They never alter the project shape, so this
+    // always takes the fast path.
+    super::replay::restore_quantize(r, target_file);
+
     // -- Reference (A/B) content ---------------------------------------
     // References aren't in the `ProjectFile`, so they ride along in the
     // snapshot's `extras` and are restored verbatim here. Engine re-sync

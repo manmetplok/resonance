@@ -313,6 +313,28 @@ impl Resonance {
         crate::update::project_io::restore_references(self, file);
     }
 
+    /// Test-only: read the project's quantize state (groove library +
+    /// last-used quantize/humanize settings, ba todo #395).
+    #[doc(hidden)]
+    pub fn test_quantize(&self) -> &crate::state::QuantizeState {
+        &self.quantize
+    }
+
+    /// Test-only: mutable access to the quantize state, so a persistence
+    /// test can seed a groove library / settings before serializing.
+    #[doc(hidden)]
+    pub fn test_quantize_mut(&mut self) -> &mut crate::state::QuantizeState {
+        &mut self.quantize
+    }
+
+    /// Test-only: replay just the quantize block of a saved
+    /// [`crate::project::ProjectFile`] into this app, exercising the same
+    /// restore path a full project load runs (ba todo #395).
+    #[doc(hidden)]
+    pub fn test_restore_quantize(&mut self, file: &crate::project::ProjectFile) {
+        crate::update::project_io::restore_quantize(self, file);
+    }
+
     /// Test-only: anchor a project path so `can_record_undo` is satisfied
     /// (it requires `has_active_project` *and* a `project_path`). Pair
     /// with [`Self::test_set_active_project`] to make undo/redo recordable
