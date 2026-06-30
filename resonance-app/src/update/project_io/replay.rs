@@ -370,6 +370,36 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // last-used quantize/humanize settings. Pure app-side data — no
     // engine command — so it's restored verbatim.
     restore_quantize(r, project);
+
+    // Performance-mode footer selection (epic #11, todo #312): the
+    // instrument tuning + capo for the live fingering diagrams. Pure
+    // app-side state, restored directly.
+    restore_performance(r, project);
+}
+
+/// Restore the Performance-mode footer selection (epic #11, todo #312):
+/// the instrument tuning and capo offset that drive the live fingering
+/// diagrams. Pure app-side state with no engine counterpart, so it's
+/// applied directly.
+///
+/// The persisted tuning is matched by name against
+/// [`ALL_TUNINGS`](resonance_music_theory::ALL_TUNINGS); an unknown name —
+/// or a legacy project with no `performance` block, which deserializes to
+/// the default Guitar 6 / no-capo selection — falls back to the default
+/// tuning. Both the tuning index and capo go through
+/// [`PerformanceState`](crate::state::PerformanceState)'s setters, so a
+/// stale or out-of-range value can never desync or panic the diagram
+/// renderer.
+pub(crate) fn restore_performance(r: &mut Resonance, project: &ProjectFile) {
+    let mut performance = PerformanceState::default();
+    if let Some(index) = resonance_music_theory::ALL_TUNINGS
+        .iter()
+        .position(|t| t.name == project.performance.tuning)
+    {
+        performance.set_tuning_index(index);
+    }
+    performance.set_capo(project.performance.capo);
+    r.performance = performance;
 }
 
 /// Restore the MIDI quantize state (ba todo #395) from a saved project:

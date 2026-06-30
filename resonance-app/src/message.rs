@@ -680,6 +680,15 @@ pub enum UiMessage {
     ToggleMidiClockRecv,
     /// Pick the hardware port for MIDI clock receive. `None` clears.
     SetMidiClockRecvDevice(Option<String>),
+    /// Select the Performance-mode instrument/tuning by its index into
+    /// `resonance_music_theory::ALL_TUNINGS` (the footer's segmented pill
+    /// selector). Out-of-range indices are ignored. The live fingering
+    /// diagrams re-voice against the new tuning.
+    SetPerformanceTuning(usize),
+    /// Set the Performance-mode capo position in frets (the footer's `Capo`
+    /// stepper). Clamped to `0..=state::performance::MAX_CAPO`; the diagrams
+    /// re-voice with the capo applied.
+    SetPerformanceCapo(u8),
 }
 
 #[derive(Debug, Clone)]

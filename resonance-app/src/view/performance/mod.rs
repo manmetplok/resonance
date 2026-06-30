@@ -8,12 +8,17 @@
 //! 1. **Status bar** (56px) — `PERFORMANCE` pill + project name; centre
 //!    transport state (recording / rehearsal / stopped); right-aligned mono
 //!    telemetry (bar·beat clock, BPM, time signature, key) + `Exit` button.
-//! 2. **Center stage** (fill) — placeholder region; the huge chord symbol +
-//!    fingering diagram + beat ring land in todos #308/#310.
-//! 3. **Next-chords lane** (180px) — placeholder region; the look-ahead
-//!    cards land in todo #309.
-//! 4. **Footer strip** (44px) — instrument/tuning + capo placeholders
-//!    (interactive controls land in todo #311) and the keyboard-hint line.
+//! 2. **Center stage** (fill) — the huge current-chord symbol + chord-tone
+//!    chips and the Canvas fingering diagram (todo #308, see
+//!    [`center_stage`]); the beat-ring column lands in todo #310. Shows the
+//!    em-dash empty state when no chord sits under the playhead.
+//! 3. **Next-chords lane** (180px) — the NEXT 2–3 upcoming chords as cards
+//!    (symbol + mini chord-box + bars-until), the immediate-next emphasised
+//!    (todo #309, see [`next_lane`]); shows `no upcoming chords` at the end
+//!    of a progression or in an empty project.
+//! 4. **Footer strip** (44px) — the interactive instrument/tuning segmented
+//!    selector + `Capo` stepper (todo #311; reads/writes
+//!    `Resonance::performance`) and the keyboard-hint line.
 //!
 //! Only the static chrome (bands 1 and 4 plus the band skeleton) is wired
 //! here; the live Canvas content is added by the follow-up todos. Per the
@@ -22,12 +27,17 @@
 //! fingerprint of their inputs, so the status bar's per-frame telemetry tick
 //! never rebuilds them — no per-frame churn during a take.
 
+pub mod beat_cue;
+pub mod center_stage;
+pub mod next_lane;
+
 use crate::message::{Message, UiMessage};
 use crate::theme;
 use crate::Resonance;
 use iced::widget::text::LineHeight;
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{alignment, Element, Length};
+use resonance_music_theory::ALL_TUNINGS;
 
 /// Band heights, from design #151.
 const STATUS_BAR_HEIGHT: f32 = 56.0;
@@ -40,27 +50,16 @@ const STAGE_HPAD: f32 = 80.0;
 
 // -- Static-band inputs ------------------------------------------------------
 //
-// The centre stage, next-lane skeleton, and footer render no per-frame state
-// in this scaffold, so the values they show are pinned here and fed to both
-// the band builders and their lazy-cache fingerprints below. Each const is the
-// single seam a follow-up todo swaps for real state — at which point the
-// matching lazy region begins invalidating on genuine input changes:
-//   * #308 wires the chord under the playhead    -> `STAGE_HAS_CHORD`
-//   * #309 wires the look-ahead cards            -> `NEXT_LANE_HAS_CHORDS`
-//   * #311 wires the instrument + capo controls  -> `FOOTER_ACTIVE_TUNING` / `FOOTER_CAPO_FRETS`
+// Every band is now live. The footer (instrument + capo) reads
+// `Resonance::performance` and folds that selection into its lazy fingerprint
+// (see `footer_fingerprint`). The centre stage (#308) derives the chord under
+// the playhead from the chord-derivation core and caches on a real
+// fingerprint — see [`Resonance::performance_center_stage`]. The next-chords
+// lane (#309) derives the upcoming chords the same way and keys its lazy cache
+// on [`next_lane::fingerprint`] of those cards, so it rebuilds only on a
+// chord / section / bar change, never per frame.
 
-/// Whether a chord sits under the playhead (centre stage shows the empty
-/// state until #308 lands).
-const STAGE_HAS_CHORD: bool = false;
-/// Whether any upcoming chords exist (next-lane shows the empty card until
-/// #309 lands).
-const NEXT_LANE_HAS_CHORDS: bool = false;
-/// Active instrument tuning cell (Guitar 6); the selector lands in #311.
-const FOOTER_ACTIVE_TUNING: usize = 0;
-/// Capo position in frets; the stepper lands in #311.
-const FOOTER_CAPO_FRETS: u8 = 0;
-
-/// Hash a static band's inputs into a stable fingerprint for its lazy cache.
+/// Hash a band's inputs into a stable fingerprint for its lazy cache.
 /// Matches the `*_fingerprint` convention used by the mixer inspector and
 /// track-header columns.
 fn fingerprint(parts: &[u64]) -> u64 {
@@ -70,19 +69,12 @@ fn fingerprint(parts: &[u64]) -> u64 {
     h.finish()
 }
 
-/// Fingerprint for the centre-stage lazy region.
-fn center_stage_fingerprint() -> u64 {
-    fingerprint(&[STAGE_HAS_CHORD as u64])
-}
-
-/// Fingerprint for the next-chords-lane lazy region.
-fn next_lane_fingerprint() -> u64 {
-    fingerprint(&[NEXT_LANE_HAS_CHORDS as u64])
-}
-
-/// Fingerprint for the footer lazy region.
-fn footer_fingerprint() -> u64 {
-    fingerprint(&[FOOTER_ACTIVE_TUNING as u64, FOOTER_CAPO_FRETS as u64])
+/// Fingerprint for the footer lazy region. Folds in the live
+/// instrument/tuning + capo selection so picking a tuning or stepping the
+/// capo rebuilds the footer (and re-highlights the active pill / updates the
+/// capo readout).
+fn footer_fingerprint(perf: &crate::state::PerformanceState) -> u64 {
+    fingerprint(&[perf.tuning_index as u64, perf.capo as u64])
 }
 
 impl Resonance {
@@ -101,15 +93,16 @@ impl Resonance {
         // are fixed-height, so the whole band wraps; the centre stage is
         // `Length::Fill` (which lazy doesn't forward), so it caches its content
         // internally and keeps its sizing container outside the cache.
-        let next_lane_fp = next_lane_fingerprint();
-        let footer_fp = footer_fingerprint();
+        let next_cards = self.performance_next_cards();
+        let next_lane_fp = next_lane::fingerprint(&next_cards);
+        let footer_fp = footer_fingerprint(&self.performance);
         let body = column![
             self.performance_status_bar(),
             hairline(),
             self.performance_center_stage(),
             hairline(),
             iced::widget::lazy(next_lane_fp, move |_: &u64| -> Element<'static, Message> {
-                self.performance_next_lane()
+                next_lane_band(next_cards.clone())
             }),
             hairline(),
             iced::widget::lazy(footer_fp, move |_: &u64| -> Element<'static, Message> {
@@ -275,23 +268,99 @@ impl Resonance {
 
     // -- Band 2: center stage (placeholder) ----------------------------------
 
-    /// Center stage region. The huge current-chord symbol + fingering
-    /// diagram + beat ring land in todos #308/#310; until then this shows
-    /// the design's empty state (an em-dash with guidance), which is also
-    /// the genuine "no chord under the playhead" fallback.
+    /// Center stage region. Derives the chord under the playhead from the
+    /// chord-derivation core (#304) and renders the design's three-column
+    /// hero — the huge current-chord symbol + chord-tone chips and the Canvas
+    /// fingering diagram (todo #308). The right-hand **beat ring / count-in
+    /// cue** (todo #310) is a live `Canvas` that only takes a column while the
+    /// transport is rolling or counting in. When no chord sits under the
+    /// playhead — a gap, an empty project, or before the transport rolls — it
+    /// shows the design's em-dash empty state.
     ///
     /// The band's `Length::Fill` container stays *outside* the lazy cache —
     /// `iced::widget::lazy` doesn't forward a `Fill` size hint, so wrapping
     /// the whole band collapses the layout. The container is cheap structural
-    /// chrome; the (static) empty-state content it centres is what gets
-    /// cached, keyed on [`center_stage_fingerprint`].
+    /// chrome; the hero / empty-state content it centres is what gets cached,
+    /// keyed on a `(state, chord/tuning/capo)` fingerprint so the status
+    /// bar's per-frame clock never rebuilds the hero. The beat cue is a Canvas
+    /// (live visuals are Canvas with cached static layers per the
+    /// view-performance rules), so it sits outside the lazy region and manages
+    /// its own per-beat redraw (view-performance rule #2).
     fn performance_center_stage(&self) -> Element<'_, Message> {
-        let content = iced::widget::lazy(
-            center_stage_fingerprint(),
-            |_: &u64| -> Element<'static, Message> { center_stage_content() },
+        use crate::engine_events::performance::{chord_readout, ChordQuery};
+        use resonance_music_theory::{ALL_TUNINGS, GUITAR_6};
+
+        // Selected instrument/tuning + capo. The footer controls (#311) are
+        // wired, so these read the live performance selection (falling back to
+        // Guitar 6 if the stored index is ever out of range).
+        let tuning: &'static _ = ALL_TUNINGS
+            .get(self.performance.tuning_index)
+            .copied()
+            .unwrap_or(&GUITAR_6);
+        let capo = self.performance.capo;
+
+        // Chord under the playhead, via the headless chord-derivation core.
+        // Honors the active loop region so a looped take tracks correctly.
+        let loop_region = (self.transport.loop_enabled && self.transport.loop_range_set)
+            .then_some((self.transport.loop_in, self.transport.loop_out));
+        let readout = chord_readout(
+            &self.compose.placements,
+            &self.compose.definitions,
+            &self.tempo_map,
+            ChordQuery {
+                playhead: self.transport.playhead,
+                sample_rate: self.sample_rate,
+                primed_position: None,
+                loop_region,
+            },
         );
 
-        container(content)
+        // Cache key: a `(tag, fingerprint)` pair so the empty state and a
+        // chord whose hash happens to collide with the empty key never share
+        // a cache slot.
+        let content: Element<'static, Message> = match readout.current {
+            Some(slot) => {
+                let chord = slot.chord;
+                let key = (1u8, center_stage::hero_fingerprint(chord, tuning, capo));
+                iced::widget::lazy(key, move |_: &(u8, u64)| -> Element<'static, Message> {
+                    center_stage::hero(chord, tuning, capo)
+                })
+                .into()
+            }
+            None => iced::widget::lazy(
+                (0u8, 0u64),
+                |_: &(u8, u64)| -> Element<'static, Message> { center_stage_content() },
+            )
+            .into(),
+        };
+
+        let chord_area = container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(alignment::Horizontal::Center)
+            .align_y(alignment::Vertical::Center);
+
+        // The beat ring / count-in cue only takes a column while the
+        // transport is live — idle, the chord/empty-state stays centred on
+        // the whole stage so the resting view matches the design's empty
+        // state exactly.
+        let cue = self.performance_cue_state();
+        let body: Element<'_, Message> = if cue.rolling || cue.count_in_beats.is_some() {
+            row![
+                chord_area,
+                container(beat_cue::beat_cue(cue))
+                    .width(Length::Fixed(beat_cue::CUE_SIZE))
+                    .height(Length::Fill)
+                    .align_x(alignment::Horizontal::Center)
+                    .align_y(alignment::Vertical::Center),
+            ]
+            .spacing(STAGE_HPAD)
+            .into()
+        } else {
+            chord_area.into()
+        };
+
+        container(body)
             .width(Length::Fill)
             .height(Length::Fill)
             .padding([0, STAGE_HPAD as u16])
@@ -300,86 +369,148 @@ impl Resonance {
             .into()
     }
 
-    // -- Band 3: next-chords lane (placeholder) ------------------------------
+    /// Derive the live [`beat_cue::BeatCueState`] from the transport and the
+    /// chord-derivation core ([`crate::engine_events::performance`]).
+    ///
+    /// The pre-count is detected from the transport (rolling + record-armed
+    /// with the primed first-chord sample still ahead of the playhead); the
+    /// primed position is then handed to the derivation core via
+    /// [`ChordQuery::primed_position`] so this view never special-cases the
+    /// count-in — the core returns the primed chord and `priming = true`,
+    /// and the cue shows a mint countdown over it.
+    fn performance_cue_state(&self) -> beat_cue::BeatCueState {
+        use crate::engine_events::performance::{chord_readout, ChordQuery};
 
-    /// Next-chords look-ahead lane. The current + upcoming cards with mini
-    /// fingering diagrams land in todo #309; this is the band skeleton with
-    /// its label and an empty-state card. Returns owned (`'static`) content
-    /// so it can live behind the lazy cache in
-    /// [`Resonance::view_performance_shell`].
-    fn performance_next_lane(&self) -> Element<'static, Message> {
-        let label = text("UP NEXT")
-            .size(12)
-            .font(theme::MONO_FONT)
-            .color(theme::TEXT_3)
-            .line_height(LineHeight::Relative(1.0));
+        let t = &self.transport;
+        let rolling = t.playing;
+        let primed_position = (t.playing
+            && t.recording
+            && t.recording_start_sample > t.playhead)
+            .then_some(t.recording_start_sample);
+        let loop_region =
+            (t.loop_enabled && t.loop_range_set).then_some((t.loop_in, t.loop_out));
 
-        let empty_card = container(
-            column![
-                text("\u{2014}")
-                    .size(40)
-                    .font(theme::SERIF_ITALIC_FONT)
-                    .color(theme::TEXT_4)
-                    .line_height(LineHeight::Relative(1.0)),
-                Space::new().height(6),
-                text("no upcoming chords")
-                    .size(11)
-                    .font(theme::MONO_FONT)
-                    .color(theme::TEXT_3),
-            ]
-            .align_x(alignment::Horizontal::Center),
+        let query = ChordQuery {
+            playhead: t.playhead,
+            sample_rate: self.sample_rate,
+            primed_position,
+            loop_region,
+        };
+        let readout = chord_readout(
+            &self.compose.placements,
+            &self.compose.definitions,
+            &self.tempo_map,
+            query,
+        );
+
+        beat_cue::BeatCueState::derive(
+            &readout,
+            rolling,
+            &self.tempo_map,
+            self.sample_rate,
+            t.playhead,
+            primed_position,
         )
-        .padding([14, 22]);
+    }
 
-        let inner = row![label, Space::new().width(22), empty_card]
-            .align_y(alignment::Vertical::Center);
+    // -- Band 3: next-chords lane --------------------------------------------
 
-        container(
-            row![
-                Space::new().width(STAGE_HPAD),
-                inner,
-                Space::new().width(Length::Fill),
-            ]
-            .align_y(alignment::Vertical::Center),
-        )
-        .width(Length::Fill)
-        .height(NEXT_LANE_HEIGHT)
-        .align_y(alignment::Vertical::Center)
-        .style(band_bg(theme::BG_1))
-        .into()
+    /// Derive the look-ahead cards for the next-chords lane from the
+    /// chord-derivation core (#304): the next [`UPCOMING_COUNT`] chords after
+    /// the playhead, each tagged with the live instrument/tuning + capo
+    /// (#311), its bars-until distance, and an emphasis tier (immediate-next
+    /// vs later previews). Honors the active loop region so a looped take's
+    /// look-ahead wraps correctly. Returns an empty `Vec` at the end of a
+    /// progression or in an empty project (the lane then shows its empty
+    /// state).
+    fn performance_next_cards(&self) -> Vec<next_lane::NextCard> {
+        use crate::engine_events::performance::{chord_readout, ChordQuery};
+        use resonance_music_theory::GUITAR_6;
+
+        // Selected instrument/tuning + capo (same live selection the footer +
+        // centre stage read; falls back to Guitar 6 if the index is stale).
+        let tuning: &'static _ = ALL_TUNINGS
+            .get(self.performance.tuning_index)
+            .copied()
+            .unwrap_or(&GUITAR_6);
+        let capo = self.performance.capo;
+
+        let loop_region = (self.transport.loop_enabled && self.transport.loop_range_set)
+            .then_some((self.transport.loop_in, self.transport.loop_out));
+        let readout = chord_readout(
+            &self.compose.placements,
+            &self.compose.definitions,
+            &self.tempo_map,
+            ChordQuery {
+                playhead: self.transport.playhead,
+                sample_rate: self.sample_rate,
+                primed_position: None,
+                loop_region,
+            },
+        );
+
+        // Current bar (0-based) for the bars-until labels.
+        let (current_bar, _) = self
+            .tempo_map
+            .sample_to_bar(self.transport.playhead, self.sample_rate);
+
+        readout
+            .upcoming
+            .iter()
+            .enumerate()
+            .map(|(i, slot)| next_lane::NextCard {
+                chord: slot.chord,
+                tuning,
+                capo,
+                bars_until: next_lane::bars_until(current_bar, slot.start_bar),
+                emphasis: next_lane::emphasis_for(i),
+            })
+            .collect()
     }
 
     // -- Band 4: footer strip ------------------------------------------------
 
-    /// Footer: instrument/tuning + capo placeholders on the left (the
-    /// interactive controls land in todo #311) and the keyboard-hint line
-    /// on the right. Returns owned (`'static`) content so it can live behind
-    /// the lazy cache in [`Resonance::view_performance_shell`]; the active
-    /// tuning + capo are read from the placeholder consts that also feed
-    /// [`footer_fingerprint`].
+    /// Footer: the interactive instrument/tuning selector + `Capo` stepper on
+    /// the left and the keyboard-hint line on the right. Returns owned
+    /// (`'static`) content so it can live behind the lazy cache in
+    /// [`Resonance::view_performance_shell`]; the active tuning + capo are
+    /// read from [`Resonance::performance`] (copied into locals, since the
+    /// `'static` element can't borrow `self`) and also feed
+    /// [`footer_fingerprint`], so the cache rebuilds when the selection
+    /// changes.
     fn performance_footer(&self) -> Element<'static, Message> {
-        // Instrument segmented placeholder (Guitar 6 active by default).
-        let tunings = ["Guitar 6", "Guitar 8", "Bass 4", "Bass 5"];
+        let active = self.performance.tuning_index;
+        let capo = self.performance.capo;
+
+        // Instrument segmented selector over `ALL_TUNINGS` (Guitar 6/8,
+        // Bass 4/5). Each cell is a `mouse_area` over the existing pill so
+        // the chrome renders identically to the scaffold while becoming
+        // clickable; clicking selects that tuning.
         let mut seg = row![].spacing(0).align_y(alignment::Vertical::Center);
-        for (i, t) in tunings.iter().enumerate() {
-            seg = seg.push(segmented_cell(
-                t,
-                i == FOOTER_ACTIVE_TUNING,
-                i + 1 == tunings.len(),
-            ));
+        for (i, t) in ALL_TUNINGS.iter().enumerate() {
+            let cell = segmented_cell(t.short, i == active, i + 1 == ALL_TUNINGS.len());
+            seg = seg.push(
+                mouse_area(cell).on_press(Message::Ui(UiMessage::SetPerformanceTuning(i))),
+            );
         }
         let seg = container(seg).style(segmented_frame);
 
+        // Capo stepper: `−` / `+` decrement / increment the offset (clamped
+        // in the update handler). `saturating_sub` keeps the `−` press a
+        // no-op at zero. The glyphs are `mouse_area`-wrapped so the stepper
+        // looks unchanged from the scaffold.
+        let capo_dec = Message::Ui(UiMessage::SetPerformanceCapo(capo.saturating_sub(1)));
+        let capo_inc = Message::Ui(UiMessage::SetPerformanceCapo(capo.saturating_add(1)));
         let capo = row![
             footer_label("Capo"),
             container(
                 row![
-                    stepper_glyph("\u{2013}"),
-                    text(FOOTER_CAPO_FRETS.to_string())
+                    mouse_area(stepper_glyph("\u{2013}")).on_press(capo_dec),
+                    text(capo.to_string())
                         .size(12)
                         .font(theme::MONO_FONT)
                         .color(theme::TEXT_1),
-                    stepper_glyph("+"),
+                    mouse_area(stepper_glyph("+")).on_press(capo_inc),
                 ]
                 .spacing(12)
                 .align_y(alignment::Vertical::Center)
@@ -439,6 +570,35 @@ fn center_stage_content() -> Element<'static, Message> {
             .color(theme::TEXT_3),
     ]
     .align_x(alignment::Horizontal::Center)
+    .into()
+}
+
+/// The next-chords lane band: the `UP NEXT` label plus the look-ahead cards
+/// (or the empty state) from [`next_lane`]. Returns owned (`'static`) content
+/// so it can live behind the lazy cache in
+/// [`Resonance::view_performance_shell`].
+fn next_lane_band(cards: Vec<next_lane::NextCard>) -> Element<'static, Message> {
+    let label = text("UP NEXT")
+        .size(12)
+        .font(theme::MONO_FONT)
+        .color(theme::TEXT_3)
+        .line_height(LineHeight::Relative(1.0));
+
+    let inner = row![label, Space::new().width(22), next_lane::lane_content(cards)]
+        .align_y(alignment::Vertical::Center);
+
+    container(
+        row![
+            Space::new().width(STAGE_HPAD),
+            inner,
+            Space::new().width(Length::Fill),
+        ]
+        .align_y(alignment::Vertical::Center),
+    )
+    .width(Length::Fill)
+    .height(NEXT_LANE_HEIGHT)
+    .align_y(alignment::Vertical::Center)
+    .style(band_bg(theme::BG_1))
     .into()
 }
 

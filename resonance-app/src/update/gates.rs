@@ -57,7 +57,13 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::ToggleMidiClockSend)
         | Message::Ui(UiMessage::SetMidiClockSendDevice(_))
         | Message::Ui(UiMessage::ToggleMidiClockRecv)
-        | Message::Ui(UiMessage::SetMidiClockRecvDevice(_)) => false,
+        | Message::Ui(UiMessage::SetMidiClockRecvDevice(_))
+        // Performance footer selections are pure view state and only
+        // reachable from within Performance mode (which needs a project),
+        // so they're harmless even if one slips through while the startup
+        // modal is up — allow.
+        | Message::Ui(UiMessage::SetPerformanceTuning(_))
+        | Message::Ui(UiMessage::SetPerformanceCapo(_)) => false,
         // Project I/O drives the modal itself: always allow.
         Message::ProjectIo(_) => false,
         // Export modal drives its own overlay; gated at the open site.
