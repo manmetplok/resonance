@@ -85,13 +85,22 @@ fn freeze_one(r: &mut Resonance, track_id: TrackId) {
 }
 
 /// Unfreeze a single track: detach the cache from the engine, delete the
-/// cache file, and restore live editing. No-op unless the track is frozen.
+/// cache file, and restore live editing. For a frozen (or stale-frozen)
+/// track this tears down the cache; for a `Failed` track — which already fell
+/// back to live with no cache attached — it just clears the failed status,
+/// which is what the freeze-failed banner's "Dismiss" action drives (design
+/// doc #181). No-op for `Idle` / `Freezing`.
 fn unfreeze_one(r: &mut Resonance, track_id: TrackId) {
-    if !r.freeze.status(track_id).is_frozen() {
-        return;
+    match r.freeze.status(track_id) {
+        s if s.is_frozen() => {
+            detach_and_delete_cache(r, track_id);
+            r.freeze.set(track_id, FreezeStatus::Idle);
+        }
+        FreezeStatus::Failed { .. } => {
+            r.freeze.set(track_id, FreezeStatus::Idle);
+        }
+        _ => {}
     }
-    detach_and_delete_cache(r, track_id);
-    r.freeze.set(track_id, FreezeStatus::Idle);
 }
 
 /// Cancel the in-flight freeze render and abandon any active batch. The

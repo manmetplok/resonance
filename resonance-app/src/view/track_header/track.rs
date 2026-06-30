@@ -8,7 +8,7 @@
 //! Freeze is the exception (design doc #181): it leads the button row here
 //! and also appears on the mixer strip, so the bounce-in-place state reads
 //! consistently in both surfaces.
-use iced::widget::{column, container, mouse_area, row, text, Space};
+use iced::widget::{column, container, mouse_area, row, stack, text, Space};
 use iced::{alignment, Color, Element, Length};
 
 use crate::message::*;
@@ -18,6 +18,7 @@ use crate::view::controls::{
     delete_button, freeze_button, monitor_button, monitor_button_locked, mute_button,
     record_arm_button, record_arm_button_locked, solo_button,
 };
+use crate::view::freeze_banner::freeze_banner;
 use crate::util::short;
 use crate::Resonance;
 
@@ -33,7 +34,8 @@ pub(super) fn view_track_header(
     // treatment from design doc #181: frosted substrate + `FROZEN` pill,
     // a "Notes & FX locked" chip, and dimmed/locked arm + monitor controls.
     // Mute / solo / pan / volume stay live (mixing a frozen track is fine).
-    let frozen = r.freeze.status(track.id).is_frozen();
+    let freeze_status = r.freeze.status(track.id);
+    let frozen = freeze_status.is_frozen();
 
     // ---- Glyph (28×28 rounded BG_2 square with the track's instrument icon) ----
     let glyph_char = glyph_for_track(track);
@@ -199,11 +201,36 @@ pub(super) fn view_track_header(
             ..Default::default()
         });
 
+    // A `Stale` (refreeze) or `Failed` (freeze-failed) track surfaces an
+    // actionable banner (design doc #181). It overlays the bottom edge of the
+    // cell via a `stack` so the fixed `TRACK_HEIGHT` row pitch is preserved —
+    // the header column mirrors the canvas lane pitch row-for-row, so the cell
+    // must not grow. Acting on the banner returns the track to a clean state,
+    // after which the underlying mute/solo controls are unobstructed again.
+    let body_layer: Element<'static, Message> =
+        match freeze_banner(&freeze_status, track_id) {
+            Some(banner) => stack![
+                body_with_bg,
+                container(banner)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_y(alignment::Vertical::Bottom)
+                    .padding(iced::Padding {
+                        top: 0.0,
+                        right: 8.0,
+                        bottom: 7.0,
+                        left: 8.0,
+                    }),
+            ]
+            .into(),
+            None => body_with_bg.into(),
+        };
+
     // The cell is `TRACK_HEIGHT - 1` so that `cell + hairline` together
     // sum to exactly `TRACK_HEIGHT` — matching the canvas's per-row
     // pitch. Without this trim, every column row was 1 px taller than
     // the canvas row and headers drifted down 1 px per track.
-    let cell = row![stripe, body_with_bg].height(theme::TRACK_HEIGHT - 1.0);
+    let cell = row![stripe, body_layer].height(theme::TRACK_HEIGHT - 1.0);
 
     // 1px hairline below each cell so rows separate without a heavy border.
     let hairline = container(Space::new().width(Length::Fill))
