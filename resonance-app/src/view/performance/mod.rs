@@ -12,8 +12,10 @@
 //!    chips and the Canvas fingering diagram (todo #308, see
 //!    [`center_stage`]); the beat-ring column lands in todo #310. Shows the
 //!    em-dash empty state when no chord sits under the playhead.
-//! 3. **Next-chords lane** (180px) — placeholder region; the look-ahead
-//!    cards land in todo #309.
+//! 3. **Next-chords lane** (180px) — the NEXT 2–3 upcoming chords as cards
+//!    (symbol + mini chord-box + bars-until), the immediate-next emphasised
+//!    (todo #309, see [`next_lane`]); shows `no upcoming chords` at the end
+//!    of a progression or in an empty project.
 //! 4. **Footer strip** (44px) — the interactive instrument/tuning segmented
 //!    selector + `Capo` stepper (todo #311; reads/writes
 //!    `Resonance::performance`) and the keyboard-hint line.
@@ -27,6 +29,7 @@
 
 pub mod beat_cue;
 pub mod center_stage;
+pub mod next_lane;
 
 use crate::message::{Message, UiMessage};
 use crate::theme;
@@ -47,28 +50,16 @@ const STAGE_HPAD: f32 = 80.0;
 
 // -- Static-band inputs ------------------------------------------------------
 //
-// The next-lane skeleton and footer render no per-frame state in this
-// scaffold, so the values they show are pinned here and fed to both the band
-// builders and their lazy-cache fingerprints below. Each const is the single
-// seam a follow-up todo swaps for real state — at which point the matching
-// lazy region begins invalidating on genuine input changes:
-//   * #309 wires the look-ahead cards            -> `NEXT_LANE_HAS_CHORDS`
-//
-// The footer (instrument + capo) is now live: it reads `Resonance::performance`
-// and its lazy fingerprint folds in that selection (see `footer_fingerprint`),
-// so picking a tuning or stepping the capo invalidates the footer cache.
-//
-// The centre stage (#308) is also live: it derives the chord under the
-// playhead from the chord-derivation core and caches on a real fingerprint —
-// see [`Resonance::performance_center_stage`]. It reads the same live
-// instrument/tuning + capo selection from `Resonance::performance` as the
-// footer (the `FOOTER_*` placeholders are gone now that #311 is wired).
+// Every band is now live. The footer (instrument + capo) reads
+// `Resonance::performance` and folds that selection into its lazy fingerprint
+// (see `footer_fingerprint`). The centre stage (#308) derives the chord under
+// the playhead from the chord-derivation core and caches on a real
+// fingerprint — see [`Resonance::performance_center_stage`]. The next-chords
+// lane (#309) derives the upcoming chords the same way and keys its lazy cache
+// on [`next_lane::fingerprint`] of those cards, so it rebuilds only on a
+// chord / section / bar change, never per frame.
 
-/// Whether any upcoming chords exist (next-lane shows the empty card until
-/// #309 lands).
-const NEXT_LANE_HAS_CHORDS: bool = false;
-
-/// Hash a static band's inputs into a stable fingerprint for its lazy cache.
+/// Hash a band's inputs into a stable fingerprint for its lazy cache.
 /// Matches the `*_fingerprint` convention used by the mixer inspector and
 /// track-header columns.
 fn fingerprint(parts: &[u64]) -> u64 {
@@ -76,11 +67,6 @@ fn fingerprint(parts: &[u64]) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     parts.hash(&mut h);
     h.finish()
-}
-
-/// Fingerprint for the next-chords-lane lazy region.
-fn next_lane_fingerprint() -> u64 {
-    fingerprint(&[NEXT_LANE_HAS_CHORDS as u64])
 }
 
 /// Fingerprint for the footer lazy region. Folds in the live
@@ -107,7 +93,8 @@ impl Resonance {
         // are fixed-height, so the whole band wraps; the centre stage is
         // `Length::Fill` (which lazy doesn't forward), so it caches its content
         // internally and keeps its sizing container outside the cache.
-        let next_lane_fp = next_lane_fingerprint();
+        let next_cards = self.performance_next_cards();
+        let next_lane_fp = next_lane::fingerprint(&next_cards);
         let footer_fp = footer_fingerprint(&self.performance);
         let body = column![
             self.performance_status_bar(),
@@ -115,7 +102,7 @@ impl Resonance {
             self.performance_center_stage(),
             hairline(),
             iced::widget::lazy(next_lane_fp, move |_: &u64| -> Element<'static, Message> {
-                self.performance_next_lane()
+                next_lane_band(next_cards.clone())
             }),
             hairline(),
             iced::widget::lazy(footer_fp, move |_: &u64| -> Element<'static, Message> {
@@ -426,53 +413,59 @@ impl Resonance {
         )
     }
 
-    // -- Band 3: next-chords lane (placeholder) ------------------------------
+    // -- Band 3: next-chords lane --------------------------------------------
 
-    /// Next-chords look-ahead lane. The current + upcoming cards with mini
-    /// fingering diagrams land in todo #309; this is the band skeleton with
-    /// its label and an empty-state card. Returns owned (`'static`) content
-    /// so it can live behind the lazy cache in
-    /// [`Resonance::view_performance_shell`].
-    fn performance_next_lane(&self) -> Element<'static, Message> {
-        let label = text("UP NEXT")
-            .size(12)
-            .font(theme::MONO_FONT)
-            .color(theme::TEXT_3)
-            .line_height(LineHeight::Relative(1.0));
+    /// Derive the look-ahead cards for the next-chords lane from the
+    /// chord-derivation core (#304): the next [`UPCOMING_COUNT`] chords after
+    /// the playhead, each tagged with the live instrument/tuning + capo
+    /// (#311), its bars-until distance, and an emphasis tier (immediate-next
+    /// vs later previews). Honors the active loop region so a looped take's
+    /// look-ahead wraps correctly. Returns an empty `Vec` at the end of a
+    /// progression or in an empty project (the lane then shows its empty
+    /// state).
+    fn performance_next_cards(&self) -> Vec<next_lane::NextCard> {
+        use crate::engine_events::performance::{chord_readout, ChordQuery};
+        use resonance_music_theory::GUITAR_6;
 
-        let empty_card = container(
-            column![
-                text("\u{2014}")
-                    .size(40)
-                    .font(theme::SERIF_ITALIC_FONT)
-                    .color(theme::TEXT_4)
-                    .line_height(LineHeight::Relative(1.0)),
-                Space::new().height(6),
-                text("no upcoming chords")
-                    .size(11)
-                    .font(theme::MONO_FONT)
-                    .color(theme::TEXT_3),
-            ]
-            .align_x(alignment::Horizontal::Center),
-        )
-        .padding([14, 22]);
+        // Selected instrument/tuning + capo (same live selection the footer +
+        // centre stage read; falls back to Guitar 6 if the index is stale).
+        let tuning: &'static _ = ALL_TUNINGS
+            .get(self.performance.tuning_index)
+            .copied()
+            .unwrap_or(&GUITAR_6);
+        let capo = self.performance.capo;
 
-        let inner = row![label, Space::new().width(22), empty_card]
-            .align_y(alignment::Vertical::Center);
+        let loop_region = (self.transport.loop_enabled && self.transport.loop_range_set)
+            .then_some((self.transport.loop_in, self.transport.loop_out));
+        let readout = chord_readout(
+            &self.compose.placements,
+            &self.compose.definitions,
+            &self.tempo_map,
+            ChordQuery {
+                playhead: self.transport.playhead,
+                sample_rate: self.sample_rate,
+                primed_position: None,
+                loop_region,
+            },
+        );
 
-        container(
-            row![
-                Space::new().width(STAGE_HPAD),
-                inner,
-                Space::new().width(Length::Fill),
-            ]
-            .align_y(alignment::Vertical::Center),
-        )
-        .width(Length::Fill)
-        .height(NEXT_LANE_HEIGHT)
-        .align_y(alignment::Vertical::Center)
-        .style(band_bg(theme::BG_1))
-        .into()
+        // Current bar (0-based) for the bars-until labels.
+        let (current_bar, _) = self
+            .tempo_map
+            .sample_to_bar(self.transport.playhead, self.sample_rate);
+
+        readout
+            .upcoming
+            .iter()
+            .enumerate()
+            .map(|(i, slot)| next_lane::NextCard {
+                chord: slot.chord,
+                tuning,
+                capo,
+                bars_until: next_lane::bars_until(current_bar, slot.start_bar),
+                emphasis: next_lane::emphasis_for(i),
+            })
+            .collect()
     }
 
     // -- Band 4: footer strip ------------------------------------------------
@@ -577,6 +570,35 @@ fn center_stage_content() -> Element<'static, Message> {
             .color(theme::TEXT_3),
     ]
     .align_x(alignment::Horizontal::Center)
+    .into()
+}
+
+/// The next-chords lane band: the `UP NEXT` label plus the look-ahead cards
+/// (or the empty state) from [`next_lane`]. Returns owned (`'static`) content
+/// so it can live behind the lazy cache in
+/// [`Resonance::view_performance_shell`].
+fn next_lane_band(cards: Vec<next_lane::NextCard>) -> Element<'static, Message> {
+    let label = text("UP NEXT")
+        .size(12)
+        .font(theme::MONO_FONT)
+        .color(theme::TEXT_3)
+        .line_height(LineHeight::Relative(1.0));
+
+    let inner = row![label, Space::new().width(22), next_lane::lane_content(cards)]
+        .align_y(alignment::Vertical::Center);
+
+    container(
+        row![
+            Space::new().width(STAGE_HPAD),
+            inner,
+            Space::new().width(Length::Fill),
+        ]
+        .align_y(alignment::Vertical::Center),
+    )
+    .width(Length::Fill)
+    .height(NEXT_LANE_HEIGHT)
+    .align_y(alignment::Vertical::Center)
+    .style(band_bg(theme::BG_1))
     .into()
 }
 
