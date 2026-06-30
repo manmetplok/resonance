@@ -146,6 +146,12 @@ pub struct ProjectFile {
     /// defaults on legacy projects.
     #[serde(default)]
     pub quantize_settings: crate::state::QuantizeSettings,
+    /// Performance-mode footer selection (epic #11, todo #312): which
+    /// instrument tuning the live fingering diagrams are drawn for and the
+    /// capo offset. Defaults to Guitar 6 / no capo on legacy projects that
+    /// predate Performance mode.
+    #[serde(default)]
+    pub performance: ProjectPerformance,
 }
 
 /// An empty project at the current format version with neutral
@@ -188,6 +194,47 @@ impl Default for ProjectFile {
             pool_assets: Vec::new(),
             groove_library: Vec::new(),
             quantize_settings: crate::state::QuantizeSettings::default(),
+            performance: ProjectPerformance::default(),
+        }
+    }
+}
+
+/// Persisted Performance-mode footer selection (epic #11, todo #312):
+/// the instrument tuning the live fingering diagrams are drawn for and the
+/// capo offset. Mirrors the durable subset of
+/// [`crate::state::PerformanceState`].
+///
+/// The tuning is stored by its stable display name
+/// ([`Tuning::name`](resonance_music_theory::Tuning::name)) rather than its
+/// `ALL_TUNINGS` index, so a project still resolves to the right instrument
+/// if that list is ever reordered or extended. An unrecognised name (a
+/// future build's tuning, or a hand-edited file) falls back to the default
+/// Guitar 6 on load, mirroring the defensive clamping `PerformanceState`
+/// already applies to a stale index.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectPerformance {
+    /// Display name of the selected tuning, e.g. `"Guitar (6-string)"`.
+    /// Resolved back to an `ALL_TUNINGS` index on load; an unknown name
+    /// falls back to the default (Guitar 6).
+    #[serde(default = "default_performance_tuning")]
+    pub tuning: String,
+    /// Capo position in frets (`0` = no capo).
+    #[serde(default)]
+    pub capo: u8,
+}
+
+/// Default [`ProjectPerformance::tuning`] for projects saved before
+/// Performance mode existed: Guitar 6, the first entry in `ALL_TUNINGS` and
+/// the footer's default selection.
+fn default_performance_tuning() -> String {
+    resonance_music_theory::GUITAR_6.name.to_string()
+}
+
+impl Default for ProjectPerformance {
+    fn default() -> Self {
+        Self {
+            tuning: default_performance_tuning(),
+            capo: 0,
         }
     }
 }

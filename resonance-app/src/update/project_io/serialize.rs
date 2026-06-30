@@ -6,7 +6,7 @@ use resonance_audio::types::*;
 
 use crate::project::{
     audio_format_tag, fade_curve_tag, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip,
-    ProjectPlugin, ProjectPoolAsset, ProjectReference, ProjectReferenceMarker,
+    ProjectPerformance, ProjectPlugin, ProjectPoolAsset, ProjectReference, ProjectReferenceMarker,
     ProjectReferenceSettings, ProjectTrack, PROJECT_FORMAT_VERSION,
 };
 use crate::Resonance;
@@ -250,5 +250,12 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         // and last-used quantize/humanize settings.
         groove_library: r.quantize.groove_library.clone(),
         quantize_settings: r.quantize.settings.clone(),
+        // Performance-mode footer selection (epic #11): the instrument
+        // tuning (stored by stable name) and capo offset for the live
+        // fingering diagrams.
+        performance: ProjectPerformance {
+            tuning: r.performance.tuning().name.to_string(),
+            capo: r.performance.capo,
+        },
     }
 }

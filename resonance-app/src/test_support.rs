@@ -343,6 +343,28 @@ impl Resonance {
         crate::update::project_io::restore_quantize(self, file);
     }
 
+    /// Test-only: read the Performance-mode footer selection (instrument
+    /// tuning + capo, epic #11 / todo #312).
+    #[doc(hidden)]
+    pub fn test_performance(&self) -> &crate::state::PerformanceState {
+        &self.performance
+    }
+
+    /// Test-only: mutable access to the Performance-mode footer selection,
+    /// so a persistence test can seed a tuning / capo before serializing.
+    #[doc(hidden)]
+    pub fn test_performance_mut(&mut self) -> &mut crate::state::PerformanceState {
+        &mut self.performance
+    }
+
+    /// Test-only: replay just the Performance-mode footer block of a saved
+    /// [`crate::project::ProjectFile`] into this app, exercising the same
+    /// restore path a full project load runs (ba todo #312).
+    #[doc(hidden)]
+    pub fn test_restore_performance(&mut self, file: &crate::project::ProjectFile) {
+        crate::update::project_io::restore_performance(self, file);
+    }
+
     /// Test-only: anchor a project path so `can_record_undo` is satisfied
     /// (it requires `has_active_project` *and* a `project_path`). Pair
     /// with [`Self::test_set_active_project`] to make undo/redo recordable
