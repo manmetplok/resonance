@@ -191,6 +191,27 @@ pub(super) fn notes_edited(r: &mut Resonance, clip_id: ClipId, notes: Vec<MidiNo
 /// Add a groove template extracted from a clip to the app-side groove
 /// library. Extraction is read-only on the engine side — no clip is
 /// modified — so this handler only grows the library.
+///
+/// The capture is filed into the **project** groove library
+/// ([`QuantizeState::groove_library`](crate::state::QuantizeState)) as a
+/// named [`UserGroove`](crate::state::UserGroove) so it persists, rides
+/// the undo snapshot, and shows up in the apply picker (#394/#395). The
+/// name is the one the user typed into the Extract field
+/// ([`MidiQuantizePanelState::pending_groove_name`](crate::state::MidiQuantizePanelState)),
+/// or an auto-numbered default when that was blank. The legacy unnamed
+/// list is kept in sync for any older readers.
 pub(super) fn groove_extracted(r: &mut Resonance, template: GrooveTemplate) {
+    let id = r.quantize.next_groove_id();
+    let name = r
+        .midi_quantize
+        .pending_groove_name
+        .take()
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| format!("Groove {}", id + 1));
+    r.quantize.groove_library.push(crate::state::UserGroove {
+        id,
+        name,
+        template: template.clone(),
+    });
     r.groove_library.push(template);
 }

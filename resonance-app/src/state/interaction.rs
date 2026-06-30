@@ -223,6 +223,22 @@ pub struct MidiQuantizePanelState {
     pub humanize_timing: u32,
     /// Humanize velocity jitter fraction, `0.0..=1.0` (shown as 0–100%).
     pub humanize_velocity: f32,
+
+    // -- Groove extract / apply (todo #394, doc #163) --
+    /// Name typed into the "Extract groove" field. When the user extracts,
+    /// this is stashed in [`pending_groove_name`](Self::pending_groove_name)
+    /// and the freshly captured template lands in the project groove library
+    /// under it (a blank name falls back to an auto-numbered default).
+    pub groove_name: String,
+    /// Name awaiting the in-flight `GrooveExtracted` engine event. Set when
+    /// the extract command is dispatched and consumed by the event mirror
+    /// (#390) that creates the named [`UserGroove`](super::quantize::UserGroove).
+    pub pending_groove_name: Option<String>,
+    /// Groove currently selected in the apply picker (stock or user). Drives
+    /// the pick_list value and the Apply button's dispatch.
+    pub groove_selection: super::quantize::GrooveSelection,
+    /// Strength of the groove feel to apply, `0.0..=1.0` (shown as 0–100%).
+    pub groove_strength: f32,
 }
 
 /// Upper bound of the Humanize timing slider, in ticks. One eighth note
@@ -242,6 +258,10 @@ impl Default for MidiQuantizePanelState {
             iterative: false,
             humanize_timing: 0,
             humanize_velocity: 0.0,
+            groove_name: String::new(),
+            pending_groove_name: None,
+            groove_selection: super::quantize::GrooveSelection::None,
+            groove_strength: 1.0,
         }
     }
 }

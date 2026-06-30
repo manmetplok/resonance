@@ -169,7 +169,7 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
         } => {
             if let Some((clip_id, indices)) = bulk_target(r) {
                 // Unknown template id → no-op (no command, no undo entry).
-                if let Some(template) = lookup_groove(&template_id) {
+                if let Some(template) = lookup_groove(r, &template_id) {
                     let _ = r.engine.send(AudioCommand::ApplyGrooveToClip {
                         clip_id,
                         indices,
@@ -182,6 +182,16 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
         MidiEditorMessage::ExtractGroove { grid } => {
             // Extraction reads the whole open clip regardless of selection.
             if let Some(clip_id) = r.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id) {
+                // Stash the user's chosen name so the GrooveExtracted event
+                // mirror (#390) can file the captured template into the
+                // project groove library under it (#394). A blank name
+                // becomes an auto-numbered default at file time.
+                let name = r.midi_quantize.groove_name.trim();
+                r.midi_quantize.pending_groove_name = if name.is_empty() {
+                    None
+                } else {
+                    Some(name.to_string())
+                };
                 let _ = r
                     .engine
                     .send(AudioCommand::ExtractGrooveFromClip { clip_id, grid });
@@ -213,6 +223,17 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
         }
         MidiEditorMessage::SetHumanizeVelocity(v) => {
             r.midi_quantize.humanize_velocity = v.clamp(0.0, 1.0);
+        }
+
+        // -- Groove extract / apply panel controls (todo #394) --
+        MidiEditorMessage::SetGrooveName(name) => {
+            r.midi_quantize.groove_name = name;
+        }
+        MidiEditorMessage::SetGrooveSelection(sel) => {
+            r.midi_quantize.groove_selection = sel;
+        }
+        MidiEditorMessage::SetGrooveStrength(v) => {
+            r.midi_quantize.groove_strength = v.clamp(0.0, 1.0);
         }
     }
     Task::none()
@@ -264,10 +285,15 @@ fn humanize_seed() -> u64 {
     crate::util::next_seed(nanos)
 }
 
-/// Resolve a groove `template_id` to its [`GrooveTemplate`]. Matches the
-/// in-code stock grooves by name; the persisted user-groove library is a
-/// later slice (#395), so unknown ids return `None`.
-fn lookup_groove(template_id: &str) -> Option<GrooveTemplate> {
+/// Resolve a groove `template_id` to its [`GrooveTemplate`]. A
+/// `"user:<id>"` id addresses a user-extracted groove in the project
+/// library (#394/#395); any other id matches an in-code stock groove by
+/// name. Unknown ids return `None` (the apply is then a no-op).
+fn lookup_groove(r: &Resonance, template_id: &str) -> Option<GrooveTemplate> {
+    if let Some(rest) = template_id.strip_prefix("user:") {
+        let id: u64 = rest.parse().ok()?;
+        return r.quantize.user_groove(id).map(|g| g.template.clone());
+    }
     quantize::stock_grooves()
         .into_iter()
         .find(|(name, _)| name == template_id)

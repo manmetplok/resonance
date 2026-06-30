@@ -16,13 +16,17 @@
 
 use std::sync::OnceLock;
 
-use iced::widget::{button, checkbox, column, container, pick_list, row, slider, text, Space};
+use iced::widget::{
+    button, checkbox, column, container, pick_list, row, slider, text, text_input, Space,
+};
 use iced::{alignment, Element, Length};
 
-use resonance_audio::quantize::QuantizeMode;
+use resonance_audio::quantize::{stock_grooves, QuantizeMode};
 
 use crate::message::{Message, MidiEditorMessage};
-use crate::state::{GridChoice, MidiQuantizePanelState, HUMANIZE_TIMING_MAX_TICKS};
+use crate::state::{
+    GridChoice, GrooveSelection, MidiQuantizePanelState, UserGroove, HUMANIZE_TIMING_MAX_TICKS,
+};
 use crate::theme;
 
 /// The grid pick_list option set, built once. Constant for the life of the
@@ -39,7 +43,11 @@ fn grid_options() -> &'static [GridChoice] {
 /// * `selected` — number of currently selected notes, shown as the scope
 ///   hint so the user can see whether Apply hits the selection or the whole
 ///   clip.
-pub(crate) fn view(state: &MidiQuantizePanelState, selected: usize) -> Element<'_, Message> {
+pub(crate) fn view<'a>(
+    state: &'a MidiQuantizePanelState,
+    selected: usize,
+    groove_library: &'a [UserGroove],
+) -> Element<'a, Message> {
     // -- Grid division picker (static, cached options) --
     let grid_picker = pick_list(grid_options(), Some(state.grid), |grid| {
         Message::MidiEditor(MidiEditorMessage::SetQuantizeGrid(grid))
@@ -142,10 +150,172 @@ pub(crate) fn view(state: &MidiQuantizePanelState, selected: usize) -> Element<'
     // -- Humanize row (todo #393): bounded, seeded timing + velocity jitter.
     let humanize = humanize_row(state, selected);
 
-    container(column![controls, humanize].spacing(2))
+    // -- Groove row (todo #394): extract a feel + apply stock/user grooves.
+    let groove = groove_row(state, selected, groove_library);
+
+    container(column![controls, humanize, groove].spacing(2))
         .width(Length::Fill)
         .style(theme::panel_outlined)
         .into()
+}
+
+/// Build the Groove row beneath the Humanize controls (todo #394, doc
+/// #163). Two halves share one row:
+///
+/// * **Extract** — a name field + button that dispatches
+///   [`MidiEditorMessage::ExtractGroove`] at the panel's current grid. The
+///   handler (#391) captures the open clip's feel; the event mirror (#390)
+///   files it into the project groove library under the typed name so it
+///   persists and appears in the picker.
+/// * **Apply** — a picker listing the stock grooves plus every
+///   user-extracted one, a Strength slider, and an Apply button that
+///   dispatches [`MidiEditorMessage::ApplyGroove`] over the selection (or
+///   the whole clip when nothing is selected).
+fn groove_row<'a>(
+    state: &'a MidiQuantizePanelState,
+    selected: usize,
+    groove_library: &'a [UserGroove],
+) -> Element<'a, Message> {
+    let header = row![
+        theme::icon(theme::fa::COMPACT_DISC)
+            .size(12)
+            .color(theme::GOOD),
+        text("Groove").size(12).color(theme::GOOD),
+    ]
+    .spacing(6)
+    .align_y(alignment::Vertical::Center);
+
+    // -- Extract: name the captured feel, then grab it at the active grid. --
+    let name_field = text_input("Groove name", &state.groove_name)
+        .on_input(|s| Message::MidiEditor(MidiEditorMessage::SetGrooveName(s)))
+        .size(12)
+        .padding([3, 6])
+        .width(Length::Fixed(132.0));
+    let extract_btn = button(text("Extract").size(11))
+        .padding([4, 10])
+        .on_press(Message::MidiEditor(MidiEditorMessage::ExtractGroove {
+            grid: state.grid.division(),
+        }))
+        .style(|_t, status| theme::transport_button_style(status));
+    let extract = row![
+        labeled("Name", name_field.into()),
+        Space::new().width(Length::Fixed(2.0)),
+        extract_btn,
+    ]
+    .spacing(6)
+    .align_y(alignment::Vertical::Bottom);
+
+    // -- Apply: pick a groove (stock + extracted) and blend it in. --
+    let options = groove_options(groove_library);
+    let chosen = options
+        .iter()
+        .find(|p| p.selection == state.groove_selection)
+        .cloned();
+    let picker = pick_list(options, chosen, |pick| {
+        Message::MidiEditor(MidiEditorMessage::SetGrooveSelection(pick.selection))
+    })
+    .placeholder("Select groove")
+    .text_size(12)
+    .padding([3, 6]);
+
+    let strength = labeled_slider("Strength", state.groove_strength, |v| {
+        Message::MidiEditor(MidiEditorMessage::SetGrooveStrength(v))
+    });
+
+    // Apply is disabled (no on_press) until a groove is selected.
+    let mut apply_btn = button(text("Apply").size(11).color(theme::PANEL_DARK))
+        .padding([4, 12])
+        .style(|_t, status| theme::primary_button_style(status));
+    if let Some(template_id) = template_id_for(state.groove_selection) {
+        apply_btn = apply_btn.on_press(Message::MidiEditor(MidiEditorMessage::ApplyGroove {
+            template_id,
+            strength: state.groove_strength,
+        }));
+    }
+
+    let scope = if selected == 0 {
+        "whole clip".to_string()
+    } else {
+        format!("{} selected", selected)
+    };
+    let scope_hint = text(scope)
+        .size(10)
+        .color(theme::TEXT_3)
+        .font(theme::MONO_FONT);
+
+    row![
+        header,
+        Space::new().width(Length::Fixed(6.0)),
+        extract,
+        Space::new().width(Length::Fixed(10.0)),
+        labeled("Apply", picker.into()),
+        strength,
+        Space::new().width(Length::Fill),
+        scope_hint,
+        apply_btn,
+    ]
+    .spacing(10)
+    .align_y(alignment::Vertical::Bottom)
+    .padding([4, 8])
+    .into()
+}
+
+/// One entry in the groove apply picker: a [`GrooveSelection`] paired with
+/// its display label. `pick_list` renders the label (via [`Display`]) and
+/// hands the whole pick back on select, so the handler stores the
+/// selection directly without re-deriving it from a string.
+#[derive(Debug, Clone, PartialEq)]
+struct GroovePick {
+    selection: GrooveSelection,
+    label: String,
+}
+
+impl std::fmt::Display for GroovePick {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// Build the picker option list: the in-code stock grooves first, then
+/// every user-extracted groove (prefixed so the two groups read apart).
+fn groove_options(groove_library: &[UserGroove]) -> Vec<GroovePick> {
+    let mut opts: Vec<GroovePick> = stock_names()
+        .iter()
+        .enumerate()
+        .map(|(index, name)| GroovePick {
+            selection: GrooveSelection::Stock { index },
+            label: name.clone(),
+        })
+        .collect();
+    for g in groove_library {
+        opts.push(GroovePick {
+            selection: GrooveSelection::User { id: g.id },
+            label: format!("• {}", g.name),
+        });
+    }
+    opts
+}
+
+/// Resolve a picker selection to the `template_id` string the
+/// [`MidiEditorMessage::ApplyGroove`] handler understands: a stock groove
+/// by name, a user groove as `"user:<id>"`, and `None` for no selection
+/// (which leaves the Apply button disabled).
+fn template_id_for(sel: GrooveSelection) -> Option<String> {
+    match sel {
+        GrooveSelection::None => None,
+        GrooveSelection::Stock { index } => stock_names().get(index).cloned(),
+        GrooveSelection::User { id } => Some(format!("user:{id}")),
+    }
+}
+
+/// Stock-groove display names, cached once. The stock set is constant for
+/// the life of the process, so we read the names a single time rather than
+/// rebuilding the (template-allocating) stock list every paint.
+fn stock_names() -> &'static [String] {
+    static NAMES: OnceLock<Vec<String>> = OnceLock::new();
+    NAMES
+        .get_or_init(|| stock_grooves().into_iter().map(|(name, _)| name).collect())
+        .as_slice()
 }
 
 /// Build the Humanize controls row that sits beneath the Quantize toolbar:
