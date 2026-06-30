@@ -132,6 +132,20 @@ pub struct ProjectFile {
     /// empty pool and every clip's `asset_ref` left `None`.
     #[serde(default)]
     pub pool_assets: Vec<ProjectPoolAsset>,
+    /// Project groove library: user-extracted
+    /// [`GrooveTemplate`](resonance_audio::quantize::GrooveTemplate)s
+    /// (ba todo #395) the user saved for reuse, each with a stable
+    /// per-project id and display name. Stock grooves are *not* duplicated
+    /// here — they live in code and are referenced by index from
+    /// [`quantize_settings`](Self::quantize_settings). Empty on legacy
+    /// projects.
+    #[serde(default)]
+    pub groove_library: Vec<crate::state::UserGroove>,
+    /// Last-used MIDI quantize / humanize settings (ba todo #395),
+    /// restored as the quantize panel's defaults on load. Neutral
+    /// defaults on legacy projects.
+    #[serde(default)]
+    pub quantize_settings: crate::state::QuantizeSettings,
 }
 
 /// An empty project at the current format version with neutral
@@ -172,6 +186,8 @@ impl Default for ProjectFile {
             reference_settings: ProjectReferenceSettings::default(),
             arrangement_markers: Vec::new(),
             pool_assets: Vec::new(),
+            groove_library: Vec::new(),
+            quantize_settings: crate::state::QuantizeSettings::default(),
         }
     }
 }

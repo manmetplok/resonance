@@ -97,6 +97,11 @@ pub struct Resonance {
     /// Compose tab state: section definitions, placements, chord progressions.
     pub(crate) compose: compose::ComposeState,
 
+    /// MIDI quantize state: the project's user-extracted groove library
+    /// and the last-used quantize / humanize settings (ba todo #395).
+    /// Both halves persist in the project file and ride the undo snapshot.
+    pub(crate) quantize: state::QuantizeState,
+
     /// Media pool: imported audio assets referenced by clips, plus the
     /// browser's favourite / recent folder lists (doc #175). Asset list
     /// and clip asset-refs persist in the project file; favourites and
@@ -445,6 +450,7 @@ impl Resonance {
             clips: Vec::new(),
             midi_clips: Vec::new(),
             compose: compose::ComposeState::default(),
+            quantize: state::QuantizeState::default(),
             pool: state::MediaPool::with_user_folders(
                 settings.media.favourites.clone(),
                 settings.media.recent_folders.clone(),
