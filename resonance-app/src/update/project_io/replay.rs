@@ -6,7 +6,9 @@
 use resonance_audio::types::*;
 
 use crate::compose::ComposeState;
-use crate::project::{LoadedProject, ProjectBus, ProjectFile, ProjectPlugin, ProjectTrack};
+use crate::project::{
+    fade_curve_from_tag, LoadedProject, ProjectBus, ProjectFile, ProjectPlugin, ProjectTrack,
+};
 use crate::state::*;
 use crate::util::db_to_gain;
 use crate::Resonance;
@@ -204,6 +206,31 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
             trim_end_frames: pc.trim_end_frames,
         });
 
+        // Fades & per-clip gain (epic #18, doc #156). `LoadClipFromWav`
+        // carries no fade/gain, so push them explicitly after the clip
+        // exists; the engine clamps and echoes them back. Only emit when
+        // non-default to keep legacy/unfaded projects quiet.
+        let fade_in_frames = pc.fade_in_frames;
+        let fade_in_curve = fade_curve_from_tag(&pc.fade_in_curve);
+        let fade_out_frames = pc.fade_out_frames;
+        let fade_out_curve = fade_curve_from_tag(&pc.fade_out_curve);
+        let gain_db = pc.gain_db;
+        if fade_in_frames != 0 || fade_out_frames != 0 {
+            let _ = r.engine.send(AudioCommand::SetClipFade {
+                clip_id: pc.id,
+                fade_in_frames,
+                fade_in_curve,
+                fade_out_frames,
+                fade_out_curve,
+            });
+        }
+        if gain_db != 0.0 {
+            let _ = r.engine.send(AudioCommand::SetClipGain {
+                clip_id: pc.id,
+                gain_db,
+            });
+        }
+
         let duration_samples = pc
             .total_frames
             .saturating_sub(pc.trim_start_frames)
@@ -217,11 +244,11 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
             total_frames: pc.total_frames,
             trim_start_frames: pc.trim_start_frames,
             trim_end_frames: pc.trim_end_frames,
-            fade_in_frames: 0,
-            fade_in_curve: FadeCurve::default(),
-            fade_out_frames: 0,
-            fade_out_curve: FadeCurve::default(),
-            gain_db: 0.0,
+            fade_in_frames,
+            fade_in_curve,
+            fade_out_frames,
+            fade_out_curve,
+            gain_db,
             waveform_peaks: Vec::new(), // Will be populated by ClipImported event
             vocal_tuning: None, // Re-derived on demand when the pitch editor opens.
             // Link to the pool asset this clip was placed from, if any

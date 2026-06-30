@@ -431,6 +431,16 @@ impl Resonance {
         self.snapshot_for_undo()
     }
 
+    /// Test-only: restore a previously captured snapshot, exercising the
+    /// fast (`try_diff_replay`) restore path when the snapshot is
+    /// structure-identical to the current state. Used to prove that an
+    /// undo/redo of a scalar clip edit (e.g. fade/gain) is applied
+    /// surgically without a full reload (todo #321, doc #156).
+    #[doc(hidden)]
+    pub fn test_begin_restore_from_snapshot(&mut self, snapshot: crate::undo::UndoSnapshot) {
+        self.begin_restore_from_snapshot(snapshot);
+    }
+
     /// Test-only: apply the runtime-only undo extras, exercising the
     /// slow-path restore of chord-track state without an engine replay.
     #[doc(hidden)]
