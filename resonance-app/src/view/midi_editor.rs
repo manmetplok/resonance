@@ -12,7 +12,10 @@ use crate::view::piano_roll::{
 use crate::state::MidiClipState;
 use crate::theme;
 
-use resonance_audio::types::{TrackId, TICKS_PER_QUARTER_NOTE};
+use resonance_audio::quantize::{
+    quantize_notes, BarRuler, Division, GridModifier, QuantizeMode,
+};
+use resonance_audio::types::{MidiNote, TempoMap, TrackId, TICKS_PER_QUARTER_NOTE};
 
 /// Width of the piano keyboard area on the left side of the editor.
 pub const KEYBOARD_WIDTH: f32 = 50.0;
@@ -20,6 +23,27 @@ pub const KEYBOARD_WIDTH: f32 = 50.0;
 const VELOCITY_LANE_HEIGHT: f32 = 40.0;
 /// Default velocity for newly created notes.
 const DEFAULT_VELOCITY: f32 = 0.8;
+
+/// The active Quantize-panel settings, projected into the piano roll so it
+/// can draw the live quantize grid and the non-destructive "ghost" target
+/// preview for the current selection (todo #396). A plain `Copy` snapshot of
+/// [`MidiQuantizePanelState`](crate::state::MidiQuantizePanelState) — the
+/// canvas never mutates it.
+#[derive(Debug, Clone, Copy)]
+pub struct QuantizePreview {
+    /// Grid the notes snap to (carries triplet / dotted feel).
+    pub division: Division,
+    /// Blend toward the grid, `0.0..=1.0`.
+    pub strength: f32,
+    /// Swing applied to odd grid steps, `0.0..=1.0`.
+    pub swing: f32,
+    /// Whether starts only, or starts + length, are quantized.
+    pub mode: QuantizeMode,
+    /// Snap note-offs to the grid as well as note-ons.
+    pub quantize_ends: bool,
+    /// Apply the strength blend iteratively (soft quantize).
+    pub iterative: bool,
+}
 
 /// Data passed to the piano roll canvas for rendering.
 #[derive(Debug)]
@@ -33,6 +57,11 @@ pub struct PianoRollCanvas<'a> {
     pub snap_ticks: u64,
     pub selected_notes: &'a BTreeSet<usize>,
     pub time_sig_num: u8,
+    /// Live Quantize-panel settings driving the grid + ghost overlay.
+    pub quantize: QuantizePreview,
+    /// Project tempo / signature map, anchoring the quantize grid lines and
+    /// the ghost-target snap so odd meters land correctly.
+    pub tempo_map: &'a TempoMap,
 }
 
 /// Interaction mode being tracked during a drag operation.
@@ -122,6 +151,10 @@ pub struct PianoRollFingerprint {
     pub time_sig_num: u8,
     pub drag_active: bool,
     pub preview_note: Option<u8>,
+    /// Hash of the active quantize settings (grid / strength / swing /
+    /// mode / ends / iterative) so the cached grid + ghost overlay
+    /// invalidate the moment the user adjusts the Quantize panel.
+    pub quantize_hash: u64,
 }
 
 /// Hash the selection set into a single comparable value for the draw
@@ -135,6 +168,81 @@ fn hash_selection(set: &BTreeSet<usize>) -> u64 {
         i.hash(&mut h);
     }
     h.finish()
+}
+
+/// Small stable discriminant for a grid modifier, used in the cache
+/// fingerprint (the enum doesn't derive `Hash`).
+fn modifier_code(m: GridModifier) -> u8 {
+    match m {
+        GridModifier::Straight => 0,
+        GridModifier::Triplet => 1,
+        GridModifier::Dotted => 2,
+    }
+}
+
+/// Swing delay (ticks) applied to odd grid steps for step size `g`,
+/// mirroring `resonance_audio::quantize`'s private `swing_delay` so the
+/// drawn grid lines land exactly where the ghost preview snaps notes.
+fn swing_delay(g: u64, swing: f32) -> u64 {
+    let s = swing.clamp(0.0, 1.0) as f64;
+    (s * g as f64 / 2.0).round() as u64
+}
+
+/// Local tick offsets (within a bar of `bar_len` ticks) of every quantize
+/// grid line for step size `step_ticks`, swung on odd steps by `swing`.
+///
+/// The returned offsets start at the downbeat (`0`) and never exceed
+/// `bar_len`; odd-indexed steps are delayed by [`swing_delay`] so a triplet
+/// / swing feel reads as the off-beats sliding later. This is the single
+/// source of grid-line geometry — the renderer walks it and its unit tests
+/// assert it — so the drawn lines and the ghost snap can't drift apart.
+pub fn quantize_grid_steps(step_ticks: u64, bar_len: u64, swing: f32) -> Vec<u64> {
+    if step_ticks == 0 || bar_len == 0 {
+        return Vec::new();
+    }
+    let delay = swing_delay(step_ticks, swing);
+    let mut out = Vec::new();
+    let mut k = 0u64;
+    loop {
+        let base = k * step_ticks;
+        if base >= bar_len {
+            break;
+        }
+        let local = if k % 2 == 1 {
+            (base + delay).min(bar_len)
+        } else {
+            base
+        };
+        out.push(local);
+        k += 1;
+    }
+    out
+}
+
+/// Quantized target positions for `selection`, anchored at clip tick 0 so
+/// the ghost preview lands exactly on the grid drawn by
+/// [`quantize_grid_steps`]. A thin wrapper over the pure
+/// [`quantize_notes`] used by the engine's Apply, so the preview and the
+/// committed result agree note-for-note (modulo the clip-start anchoring
+/// the visible grid already assumes).
+pub fn ghost_targets(
+    notes: &[MidiNote],
+    selection: &[usize],
+    q: &QuantizePreview,
+    tempo: &TempoMap,
+) -> Vec<MidiNote> {
+    quantize_notes(
+        notes,
+        selection,
+        q.division,
+        q.strength,
+        q.swing,
+        q.mode,
+        q.quantize_ends,
+        q.iterative,
+        tempo,
+        0,
+    )
 }
 
 impl canvas::Program<Message> for PianoRollCanvas<'_> {
@@ -539,7 +647,29 @@ impl PianoRollCanvas<'_> {
             time_sig_num: self.time_sig_num,
             drag_active: state.drag.is_some(),
             preview_note: state.previewing_note,
+            quantize_hash: self.quantize_hash(),
         }
+    }
+
+    /// Fold the active quantize settings into one comparable value for the
+    /// draw-cache fingerprint. The quantize enums don't derive `Hash`, so
+    /// they're folded in via their tick size / a small discriminant rather
+    /// than `Hash`. Selection already lives in `selected_notes_hash`, so it
+    /// isn't repeated here.
+    fn quantize_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let q = &self.quantize;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        // `division.ticks()` is distinct per (value, modifier) across the
+        // supported grid set, but fold a modifier code in too for safety.
+        q.division.ticks().hash(&mut h);
+        modifier_code(q.division.modifier).hash(&mut h);
+        q.strength.to_bits().hash(&mut h);
+        q.swing.to_bits().hash(&mut h);
+        matches!(q.mode, QuantizeMode::StartAndLength).hash(&mut h);
+        q.quantize_ends.hash(&mut h);
+        q.iterative.hash(&mut h);
+        h.finish()
     }
 
     fn draw_into(&self, frame: &mut canvas::Frame, bounds: Rectangle) {
@@ -558,8 +688,14 @@ impl PianoRollCanvas<'_> {
         // --- Grid lines ---
         self.draw_grid_lines(frame, &viewport, grid_x, grid_w, grid_h);
 
+        // --- Active quantize grid (triplet / dotted / swing) ---
+        self.draw_quantize_grid(frame, &viewport, grid_x, grid_w, grid_h);
+
         // --- Notes ---
         self.draw_notes(frame, &layout, &viewport);
+
+        // --- Ghost-target preview for the current selection ---
+        self.draw_ghost_notes(frame, &layout, &viewport);
 
         // --- Piano keyboard ---
         piano_roll::draw_keyboard(frame, &layout, &viewport);
@@ -684,6 +820,172 @@ impl PianoRollCanvas<'_> {
                     },
                 );
             }
+        }
+    }
+
+    /// Draw the active quantize grid: vertical lines at every step of the
+    /// selected division, swung on odd steps, anchored to bars via the
+    /// project tempo map so triplet / dotted / swing feels read correctly.
+    ///
+    /// These sit on top of the editor's plain beat / bar / snap lines in a
+    /// faint accent tint so the user can see exactly where Apply will pull
+    /// notes — and they shift live as the grid / swing change because the
+    /// whole geometry is keyed on `quantize_hash` in the draw cache.
+    fn draw_quantize_grid(
+        &self,
+        frame: &mut canvas::Frame,
+        viewport: &PianoRollViewport,
+        grid_x: f32,
+        grid_w: f32,
+        grid_h: f32,
+    ) {
+        let g = self.quantize.division.ticks();
+        let step_px = g as f32 * viewport.zoom_x;
+        // Too dense to read (or zero-width) — skip rather than smear the grid.
+        if step_px < 5.0 {
+            return;
+        }
+
+        let swung = self.quantize.swing > f32::EPSILON;
+
+        // Visible absolute-tick span (clip-relative ticks == absolute here:
+        // the grid and the ghost both anchor at clip tick 0, matching how
+        // the editor already draws its bar / beat lines).
+        let start_tick = (viewport.scroll_x / viewport.zoom_x).max(0.0) as u64;
+        let end_tick = ((viewport.scroll_x + grid_w) / viewport.zoom_x) as u64 + g;
+
+        let ruler = BarRuler::new(self.tempo_map);
+        let (mut bar_start, mut bar_len) = ruler.bar_at(start_tick);
+
+        // Walk bar by bar so a mid-project signature change re-anchors the
+        // grid; cap the walk so a degenerate tempo map can't spin forever.
+        let mut guard = 0;
+        while bar_start < end_tick && guard < 4096 {
+            guard += 1;
+            for (k, local) in quantize_grid_steps(g, bar_len, self.quantize.swing)
+                .into_iter()
+                .enumerate()
+            {
+                // Downbeats are already a bold bar line; don't double-draw.
+                if local == 0 {
+                    continue;
+                }
+                let x = grid_x + viewport.tick_to_x_local(bar_start + local);
+                if x < grid_x || x > grid_x + grid_w {
+                    continue;
+                }
+                // Swung off-beats (odd steps) read a touch brighter so the
+                // swing offset is visible against the straight steps.
+                let alpha = if swung && k % 2 == 1 { 0.42 } else { 0.26 };
+                frame.fill_rectangle(
+                    Point::new(x, 0.0),
+                    Size::new(1.0, grid_h),
+                    Color {
+                        a: alpha,
+                        ..theme::ACCENT
+                    },
+                );
+            }
+            bar_start += bar_len;
+            bar_len = ruler.bar_at(bar_start).1;
+        }
+    }
+
+    /// Notes Apply would land on, for the current selection and quantize
+    /// settings. Returns `None` when nothing is selected (the grid alone
+    /// previews the target then) — the ghost is scoped to the selection so
+    /// it stays readable, matching the panel's "selected notes" wording.
+    fn ghost_notes(&self) -> Option<Vec<MidiNote>> {
+        if self.selected_notes.is_empty() || self.quantize.strength <= f32::EPSILON {
+            return None;
+        }
+        let selection: Vec<usize> = self.selected_notes.iter().copied().collect();
+        Some(ghost_targets(
+            &self.clip.notes,
+            &selection,
+            &self.quantize,
+            self.tempo_map,
+        ))
+    }
+
+    /// Draw the non-destructive ghost preview: a dashed, translucent warm
+    /// rectangle at each selected note's quantized target, with a faint
+    /// connector from its current position so the move reads at a glance.
+    /// Targets that don't actually move (already on grid) are skipped.
+    fn draw_ghost_notes(
+        &self,
+        frame: &mut canvas::Frame,
+        layout: &PianoRollLayout,
+        viewport: &PianoRollViewport,
+    ) {
+        let Some(ghosts) = self.ghost_notes() else {
+            return;
+        };
+        const DASH: canvas::LineDash<'static> = canvas::LineDash {
+            segments: &[3.0, 2.0],
+            offset: 0,
+        };
+        for &i in self.selected_notes {
+            let Some(orig) = self.clip.notes.get(i) else {
+                continue;
+            };
+            let Some(ghost) = ghosts.get(i) else { continue };
+            // No movement → nothing to preview.
+            if ghost.start_tick == orig.start_tick
+                && ghost.duration_ticks == orig.duration_ticks
+            {
+                continue;
+            }
+            let rect = self.note_rect(layout, viewport, ghost);
+            // Cull ghosts fully off the grid area.
+            if rect.x + rect.width < layout.grid_x()
+                || rect.x > layout.grid_x() + 2000.0
+                || rect.y + rect.height < 0.0
+                || rect.y > layout.grid_h
+            {
+                continue;
+            }
+
+            let orig_rect = self.note_rect(layout, viewport, orig);
+            // Connector from the current note to its target (mid-height).
+            let mid_y = orig_rect.y + orig_rect.height * 0.5;
+            frame.stroke(
+                &canvas::Path::line(
+                    Point::new(orig_rect.x, mid_y),
+                    Point::new(rect.x, rect.y + rect.height * 0.5),
+                ),
+                canvas::Stroke {
+                    line_dash: DASH,
+                    ..canvas::Stroke::default()
+                        .with_color(Color {
+                            a: 0.5,
+                            ..theme::WARM
+                        })
+                        .with_width(1.0)
+                },
+            );
+
+            let path = canvas::Path::rounded_rectangle(
+                Point::new(rect.x, rect.y),
+                Size::new(rect.width.max(1.0), rect.height),
+                2.0.into(),
+            );
+            frame.fill(
+                &path,
+                Color {
+                    a: 0.16,
+                    ..theme::WARM
+                },
+            );
+            frame.stroke(
+                &path,
+                canvas::Stroke {
+                    line_dash: DASH,
+                    ..canvas::Stroke::default()
+                        .with_color(theme::WARM)
+                        .with_width(1.2)
+                },
+            );
         }
     }
 
