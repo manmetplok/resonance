@@ -12,8 +12,9 @@
 //!    fingering diagram + beat ring land in todos #308/#310.
 //! 3. **Next-chords lane** (180px) — placeholder region; the look-ahead
 //!    cards land in todo #309.
-//! 4. **Footer strip** (44px) — instrument/tuning + capo placeholders
-//!    (interactive controls land in todo #311) and the keyboard-hint line.
+//! 4. **Footer strip** (44px) — the interactive instrument/tuning segmented
+//!    selector + `Capo` stepper (todo #311; reads/writes
+//!    `Resonance::performance`) and the keyboard-hint line.
 //!
 //! Only the static chrome (bands 1 and 4 plus the band skeleton) is wired
 //! here; the live Canvas content is added by the follow-up todos. Per the
@@ -26,8 +27,9 @@ use crate::message::{Message, UiMessage};
 use crate::theme;
 use crate::Resonance;
 use iced::widget::text::LineHeight;
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{alignment, Element, Length};
+use resonance_music_theory::ALL_TUNINGS;
 
 /// Band heights, from design #151.
 const STATUS_BAR_HEIGHT: f32 = 56.0;
@@ -47,7 +49,10 @@ const STAGE_HPAD: f32 = 80.0;
 // matching lazy region begins invalidating on genuine input changes:
 //   * #308 wires the chord under the playhead    -> `STAGE_HAS_CHORD`
 //   * #309 wires the look-ahead cards            -> `NEXT_LANE_HAS_CHORDS`
-//   * #311 wires the instrument + capo controls  -> `FOOTER_ACTIVE_TUNING` / `FOOTER_CAPO_FRETS`
+//
+// The footer (instrument + capo) is now live: it reads `Resonance::performance`
+// and its lazy fingerprint folds in that selection (see `footer_fingerprint`),
+// so picking a tuning or stepping the capo invalidates the footer cache.
 
 /// Whether a chord sits under the playhead (centre stage shows the empty
 /// state until #308 lands).
@@ -55,10 +60,6 @@ const STAGE_HAS_CHORD: bool = false;
 /// Whether any upcoming chords exist (next-lane shows the empty card until
 /// #309 lands).
 const NEXT_LANE_HAS_CHORDS: bool = false;
-/// Active instrument tuning cell (Guitar 6); the selector lands in #311.
-const FOOTER_ACTIVE_TUNING: usize = 0;
-/// Capo position in frets; the stepper lands in #311.
-const FOOTER_CAPO_FRETS: u8 = 0;
 
 /// Hash a static band's inputs into a stable fingerprint for its lazy cache.
 /// Matches the `*_fingerprint` convention used by the mixer inspector and
@@ -80,9 +81,12 @@ fn next_lane_fingerprint() -> u64 {
     fingerprint(&[NEXT_LANE_HAS_CHORDS as u64])
 }
 
-/// Fingerprint for the footer lazy region.
-fn footer_fingerprint() -> u64 {
-    fingerprint(&[FOOTER_ACTIVE_TUNING as u64, FOOTER_CAPO_FRETS as u64])
+/// Fingerprint for the footer lazy region. Folds in the live
+/// instrument/tuning + capo selection so picking a tuning or stepping the
+/// capo rebuilds the footer (and re-highlights the active pill / updates the
+/// capo readout).
+fn footer_fingerprint(perf: &crate::state::PerformanceState) -> u64 {
+    fingerprint(&[perf.tuning_index as u64, perf.capo as u64])
 }
 
 impl Resonance {
@@ -102,7 +106,7 @@ impl Resonance {
         // `Length::Fill` (which lazy doesn't forward), so it caches its content
         // internally and keeps its sizing container outside the cache.
         let next_lane_fp = next_lane_fingerprint();
-        let footer_fp = footer_fingerprint();
+        let footer_fp = footer_fingerprint(&self.performance);
         let body = column![
             self.performance_status_bar(),
             hairline(),
@@ -351,35 +355,47 @@ impl Resonance {
 
     // -- Band 4: footer strip ------------------------------------------------
 
-    /// Footer: instrument/tuning + capo placeholders on the left (the
-    /// interactive controls land in todo #311) and the keyboard-hint line
-    /// on the right. Returns owned (`'static`) content so it can live behind
-    /// the lazy cache in [`Resonance::view_performance_shell`]; the active
-    /// tuning + capo are read from the placeholder consts that also feed
-    /// [`footer_fingerprint`].
+    /// Footer: the interactive instrument/tuning selector + `Capo` stepper on
+    /// the left and the keyboard-hint line on the right. Returns owned
+    /// (`'static`) content so it can live behind the lazy cache in
+    /// [`Resonance::view_performance_shell`]; the active tuning + capo are
+    /// read from [`Resonance::performance`] (copied into locals, since the
+    /// `'static` element can't borrow `self`) and also feed
+    /// [`footer_fingerprint`], so the cache rebuilds when the selection
+    /// changes.
     fn performance_footer(&self) -> Element<'static, Message> {
-        // Instrument segmented placeholder (Guitar 6 active by default).
-        let tunings = ["Guitar 6", "Guitar 8", "Bass 4", "Bass 5"];
+        let active = self.performance.tuning_index;
+        let capo = self.performance.capo;
+
+        // Instrument segmented selector over `ALL_TUNINGS` (Guitar 6/8,
+        // Bass 4/5). Each cell is a `mouse_area` over the existing pill so
+        // the chrome renders identically to the scaffold while becoming
+        // clickable; clicking selects that tuning.
         let mut seg = row![].spacing(0).align_y(alignment::Vertical::Center);
-        for (i, t) in tunings.iter().enumerate() {
-            seg = seg.push(segmented_cell(
-                t,
-                i == FOOTER_ACTIVE_TUNING,
-                i + 1 == tunings.len(),
-            ));
+        for (i, t) in ALL_TUNINGS.iter().enumerate() {
+            let cell = segmented_cell(t.short, i == active, i + 1 == ALL_TUNINGS.len());
+            seg = seg.push(
+                mouse_area(cell).on_press(Message::Ui(UiMessage::SetPerformanceTuning(i))),
+            );
         }
         let seg = container(seg).style(segmented_frame);
 
+        // Capo stepper: `−` / `+` decrement / increment the offset (clamped
+        // in the update handler). `saturating_sub` keeps the `−` press a
+        // no-op at zero. The glyphs are `mouse_area`-wrapped so the stepper
+        // looks unchanged from the scaffold.
+        let capo_dec = Message::Ui(UiMessage::SetPerformanceCapo(capo.saturating_sub(1)));
+        let capo_inc = Message::Ui(UiMessage::SetPerformanceCapo(capo.saturating_add(1)));
         let capo = row![
             footer_label("Capo"),
             container(
                 row![
-                    stepper_glyph("\u{2013}"),
-                    text(FOOTER_CAPO_FRETS.to_string())
+                    mouse_area(stepper_glyph("\u{2013}")).on_press(capo_dec),
+                    text(capo.to_string())
                         .size(12)
                         .font(theme::MONO_FONT)
                         .color(theme::TEXT_1),
-                    stepper_glyph("+"),
+                    mouse_area(stepper_glyph("+")).on_press(capo_inc),
                 ]
                 .spacing(12)
                 .align_y(alignment::Vertical::Center)

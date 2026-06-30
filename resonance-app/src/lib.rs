@@ -90,6 +90,12 @@ pub struct Resonance {
     /// where they were rather than always to Arrange. `None` whenever the
     /// current `view_mode` is not `Performance`.
     pub(crate) pre_performance_view: Option<ViewMode>,
+    /// Performance-mode footer selection: the active instrument/tuning and
+    /// capo position that drive the live fingering diagrams. Mutated by the
+    /// footer controls (`UiMessage::SetPerformanceTuning` /
+    /// `SetPerformanceCapo`) and read by the diagram bands. See
+    /// `state::PerformanceState`.
+    pub(crate) performance: state::PerformanceState,
     /// Audio clips on the timeline.
     pub(crate) clips: Vec<ClipState>,
     /// MIDI clips on the timeline.
@@ -456,6 +462,7 @@ impl Resonance {
             master_fx_bypassed: false,
             view_mode: STARTUP_TAB.get().copied().unwrap_or(ViewMode::Arrange),
             pre_performance_view: None,
+            performance: state::PerformanceState::default(),
             clips: Vec::new(),
             midi_clips: Vec::new(),
             groove_library: Vec::new(),
