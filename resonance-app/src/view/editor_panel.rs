@@ -101,6 +101,15 @@ impl crate::Resonance {
                     snap_ticks: editor_state.snap_ticks,
                     selected_notes: &editor_state.selected_notes,
                     time_sig_num: self.transport.time_sig_num,
+                    quantize: crate::view::midi_editor::QuantizePreview {
+                        division: self.midi_quantize.grid.division(),
+                        strength: self.midi_quantize.strength,
+                        swing: self.midi_quantize.swing,
+                        mode: self.midi_quantize.mode,
+                        quantize_ends: self.midi_quantize.quantize_ends,
+                        iterative: self.midi_quantize.iterative,
+                    },
+                    tempo_map: &self.tempo_map,
                 })
                 .width(Length::Fixed(content_w))
                 .height(Length::Fill);
