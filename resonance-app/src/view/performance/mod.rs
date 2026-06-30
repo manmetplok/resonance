@@ -8,8 +8,10 @@
 //! 1. **Status bar** (56px) — `PERFORMANCE` pill + project name; centre
 //!    transport state (recording / rehearsal / stopped); right-aligned mono
 //!    telemetry (bar·beat clock, BPM, time signature, key) + `Exit` button.
-//! 2. **Center stage** (fill) — placeholder region; the huge chord symbol +
-//!    fingering diagram + beat ring land in todos #308/#310.
+//! 2. **Center stage** (fill) — the huge current-chord symbol + chord-tone
+//!    chips and the Canvas fingering diagram (todo #308, see
+//!    [`center_stage`]); the beat-ring column lands in todo #310. Shows the
+//!    em-dash empty state when no chord sits under the playhead.
 //! 3. **Next-chords lane** (180px) — placeholder region; the look-ahead
 //!    cards land in todo #309.
 //! 4. **Footer strip** (44px) — the interactive instrument/tuning segmented
@@ -24,6 +26,7 @@
 //! never rebuilds them — no per-frame churn during a take.
 
 pub mod beat_cue;
+pub mod center_stage;
 
 use crate::message::{Message, UiMessage};
 use crate::theme;
@@ -44,21 +47,23 @@ const STAGE_HPAD: f32 = 80.0;
 
 // -- Static-band inputs ------------------------------------------------------
 //
-// The centre stage, next-lane skeleton, and footer render no per-frame state
-// in this scaffold, so the values they show are pinned here and fed to both
-// the band builders and their lazy-cache fingerprints below. Each const is the
-// single seam a follow-up todo swaps for real state — at which point the
-// matching lazy region begins invalidating on genuine input changes:
-//   * #308 wires the chord under the playhead    -> `STAGE_HAS_CHORD`
+// The next-lane skeleton and footer render no per-frame state in this
+// scaffold, so the values they show are pinned here and fed to both the band
+// builders and their lazy-cache fingerprints below. Each const is the single
+// seam a follow-up todo swaps for real state — at which point the matching
+// lazy region begins invalidating on genuine input changes:
 //   * #309 wires the look-ahead cards            -> `NEXT_LANE_HAS_CHORDS`
 //
 // The footer (instrument + capo) is now live: it reads `Resonance::performance`
 // and its lazy fingerprint folds in that selection (see `footer_fingerprint`),
 // so picking a tuning or stepping the capo invalidates the footer cache.
+//
+// The centre stage (#308) is also live: it derives the chord under the
+// playhead from the chord-derivation core and caches on a real fingerprint —
+// see [`Resonance::performance_center_stage`]. It reads the same live
+// instrument/tuning + capo selection from `Resonance::performance` as the
+// footer (the `FOOTER_*` placeholders are gone now that #311 is wired).
 
-/// Whether a chord sits under the playhead (centre stage shows the empty
-/// state until #308 lands).
-const STAGE_HAS_CHORD: bool = false;
 /// Whether any upcoming chords exist (next-lane shows the empty card until
 /// #309 lands).
 const NEXT_LANE_HAS_CHORDS: bool = false;
@@ -71,11 +76,6 @@ fn fingerprint(parts: &[u64]) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     parts.hash(&mut h);
     h.finish()
-}
-
-/// Fingerprint for the centre-stage lazy region.
-fn center_stage_fingerprint() -> u64 {
-    fingerprint(&[STAGE_HAS_CHORD as u64])
 }
 
 /// Fingerprint for the next-chords-lane lazy region.
@@ -281,26 +281,71 @@ impl Resonance {
 
     // -- Band 2: center stage (placeholder) ----------------------------------
 
-    /// Center stage region. The huge current-chord symbol + fingering
-    /// diagram land in todo #308; until then the chord area shows the
-    /// design's empty state (an em-dash with guidance), which is also the
-    /// genuine "no chord under the playhead" fallback. The right-hand
-    /// **beat ring / count-in cue** (this todo, #310) is a live `Canvas`
-    /// that only appears while the transport is rolling or counting in.
+    /// Center stage region. Derives the chord under the playhead from the
+    /// chord-derivation core (#304) and renders the design's three-column
+    /// hero — the huge current-chord symbol + chord-tone chips and the Canvas
+    /// fingering diagram (todo #308). The right-hand **beat ring / count-in
+    /// cue** (todo #310) is a live `Canvas` that only takes a column while the
+    /// transport is rolling or counting in. When no chord sits under the
+    /// playhead — a gap, an empty project, or before the transport rolls — it
+    /// shows the design's em-dash empty state.
     ///
-    /// The chord area's `Length::Fill` container stays *outside* the lazy
-    /// cache — `iced::widget::lazy` doesn't forward a `Fill` size hint, so
-    /// wrapping it collapses the layout. The container is cheap structural
-    /// chrome; the (static) empty-state content it centres is what gets
-    /// cached, keyed on [`center_stage_fingerprint`]. The beat cue is a
-    /// Canvas (per the view-performance rules: live visuals are Canvas with
-    /// cached static layers), so it sits outside the lazy region and manages
-    /// its own per-beat redraw.
+    /// The band's `Length::Fill` container stays *outside* the lazy cache —
+    /// `iced::widget::lazy` doesn't forward a `Fill` size hint, so wrapping
+    /// the whole band collapses the layout. The container is cheap structural
+    /// chrome; the hero / empty-state content it centres is what gets cached,
+    /// keyed on a `(state, chord/tuning/capo)` fingerprint so the status
+    /// bar's per-frame clock never rebuilds the hero. The beat cue is a Canvas
+    /// (live visuals are Canvas with cached static layers per the
+    /// view-performance rules), so it sits outside the lazy region and manages
+    /// its own per-beat redraw (view-performance rule #2).
     fn performance_center_stage(&self) -> Element<'_, Message> {
-        let content = iced::widget::lazy(
-            center_stage_fingerprint(),
-            |_: &u64| -> Element<'static, Message> { center_stage_content() },
+        use crate::engine_events::performance::{chord_readout, ChordQuery};
+        use resonance_music_theory::{ALL_TUNINGS, GUITAR_6};
+
+        // Selected instrument/tuning + capo. The footer controls (#311) are
+        // wired, so these read the live performance selection (falling back to
+        // Guitar 6 if the stored index is ever out of range).
+        let tuning: &'static _ = ALL_TUNINGS
+            .get(self.performance.tuning_index)
+            .copied()
+            .unwrap_or(&GUITAR_6);
+        let capo = self.performance.capo;
+
+        // Chord under the playhead, via the headless chord-derivation core.
+        // Honors the active loop region so a looped take tracks correctly.
+        let loop_region = (self.transport.loop_enabled && self.transport.loop_range_set)
+            .then_some((self.transport.loop_in, self.transport.loop_out));
+        let readout = chord_readout(
+            &self.compose.placements,
+            &self.compose.definitions,
+            &self.tempo_map,
+            ChordQuery {
+                playhead: self.transport.playhead,
+                sample_rate: self.sample_rate,
+                primed_position: None,
+                loop_region,
+            },
         );
+
+        // Cache key: a `(tag, fingerprint)` pair so the empty state and a
+        // chord whose hash happens to collide with the empty key never share
+        // a cache slot.
+        let content: Element<'static, Message> = match readout.current {
+            Some(slot) => {
+                let chord = slot.chord;
+                let key = (1u8, center_stage::hero_fingerprint(chord, tuning, capo));
+                iced::widget::lazy(key, move |_: &(u8, u64)| -> Element<'static, Message> {
+                    center_stage::hero(chord, tuning, capo)
+                })
+                .into()
+            }
+            None => iced::widget::lazy(
+                (0u8, 0u64),
+                |_: &(u8, u64)| -> Element<'static, Message> { center_stage_content() },
+            )
+            .into(),
+        };
 
         let chord_area = container(content)
             .width(Length::Fill)
