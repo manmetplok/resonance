@@ -816,7 +816,12 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             // Humanize-panel control edits (todo #393) likewise just mutate
             // view state — the note edit is the `Humanize` message above.
             | MidiEditorMessage::SetHumanizeTiming(_)
-            | MidiEditorMessage::SetHumanizeVelocity(_) => UndoAction::Skip,
+            | MidiEditorMessage::SetHumanizeVelocity(_)
+            // Groove-panel control edits (todo #394) just mutate view state —
+            // the note edit is the `ApplyGroove` message; extract is read-only.
+            | MidiEditorMessage::SetGrooveName(_)
+            | MidiEditorMessage::SetGrooveSelection(_)
+            | MidiEditorMessage::SetGrooveStrength(_) => UndoAction::Skip,
         },
 
         // Pitch-editor open/close is editor lifecycle + an analysis

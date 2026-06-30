@@ -125,10 +125,11 @@ impl crate::Resonance {
                 let panel = crate::view::midi_quantize::view(
                     &self.midi_quantize,
                     editor_state.selected_notes.len(),
+                    &self.quantize.groove_library,
                 );
-                // A little extra height to host the quantize toolbar row
-                // without squeezing the piano roll canvas.
-                (element, label, theme::ACCENT, 292, Some(panel))
+                // A little extra height to host the quantize / humanize /
+                // groove toolbar rows without squeezing the piano roll.
+                (element, label, theme::ACCENT, 330, Some(panel))
             }
         };
 

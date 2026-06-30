@@ -8,8 +8,9 @@ use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
 use crate::reference::ReferenceMessage;
 use crate::state::{
-    ClipEdge, ExportMode, GridChoice, LoopDragTarget, MixerInspectorGroup, ParsedImport,
-    PlacementMode, PlacementStart, SelectedGlobalEvent, TempoAlignment, TempoChoice, ViewMode,
+    ClipEdge, ExportMode, GridChoice, GrooveSelection, LoopDragTarget, MixerInspectorGroup,
+    ParsedImport, PlacementMode, PlacementStart, SelectedGlobalEvent, TempoAlignment, TempoChoice,
+    ViewMode,
 };
 use resonance_audio::quantize::{Division, QuantizeMode};
 use resonance_audio::types::{
@@ -525,6 +526,18 @@ pub enum MidiEditorMessage {
     SetHumanizeTiming(u32),
     /// Set the Humanize velocity-jitter fraction, `0.0..=1.0`.
     SetHumanizeVelocity(f32),
+
+    // -- Groove extract / apply panel controls (todo #394) --
+    // Pure view-state edits to the Quantize panel's groove fields
+    // (`Resonance::midi_quantize`); none touch the notes, so undo skips
+    // them. The Extract / Apply buttons read these to build the bulk
+    // `ExtractGroove` / `ApplyGroove` messages above.
+    /// Set the name for the next "Extract groove" capture.
+    SetGrooveName(String),
+    /// Select a groove (stock or user-extracted) in the apply picker.
+    SetGrooveSelection(GrooveSelection),
+    /// Set the groove apply strength, `0.0..=1.0`.
+    SetGrooveStrength(f32),
 }
 
 /// Vocal pitch-editor (graphical tuning) messages, doc #160. This todo
