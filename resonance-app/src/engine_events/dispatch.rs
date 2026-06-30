@@ -215,12 +215,10 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
 
         // Bulk MIDI edits from quantize/humanize/groove ops (doc #163, epic #25).
         // The engine emits one `MidiNotesEdited` carrying the full resulting note
-        // array, and `GrooveExtracted` for groove extraction. Mirroring these into
-        // `ClipState` (and recording prior notes for undo) is scoped to #390; for
-        // now we accept them without acting so the match stays exhaustive and the
-        // integration branch keeps building.
-        E::MidiNotesEdited { .. } => {}
-        E::GrooveExtracted { .. } => {}
+        // array (replacing the clip's notes wholesale, no per-note churn), and
+        // `GrooveExtracted` for groove extraction (added to the app groove library).
+        E::MidiNotesEdited { clip_id, notes } => midi::notes_edited(r, clip_id, notes),
+        E::GrooveExtracted { template } => midi::groove_extracted(r, template),
 
         // MIDI Learn & hardware control-surface mapping (doc #167 §3 A1).
         // App state is a pure projection of these events; the active

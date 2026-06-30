@@ -168,6 +168,13 @@ impl Resonance {
         self.midi_clips.push(clip);
     }
 
+    /// Test-only: read the app-side groove library populated from
+    /// `GrooveExtracted` engine events (ba todo #390).
+    #[doc(hidden)]
+    pub fn test_groove_library(&self) -> &[resonance_audio::quantize::GrooveTemplate] {
+        &self.groove_library
+    }
+
     /// Test-only: overwrite the sample rate. Tempo-map projections used
     /// by the MIDI clip trim reducer depend on `sample_rate`; integration
     /// tests fix it to a known value so the projection math is

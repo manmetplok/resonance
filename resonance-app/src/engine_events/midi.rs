@@ -1,5 +1,6 @@
 //! App-side handlers for MIDI clip + note events from the engine.
 
+use resonance_audio::quantize::GrooveTemplate;
 use resonance_audio::types::*;
 
 use crate::state::MidiClipState;
@@ -161,4 +162,35 @@ pub(super) fn note_velocity_set(
             clip.notes[note_index].velocity = velocity;
         }
     }
+}
+
+/// Mirror a bulk MIDI edit (quantize / humanize / groove) into app
+/// state. The engine sends one `MidiNotesEdited` carrying the **full
+/// resulting note array** for the clip, so we replace the clip's note
+/// vector wholesale — no per-note event churn.
+///
+/// These operations work by index and never reorder, merge, or drop
+/// notes, so the parallel lyric side-table stays index-aligned. We
+/// nevertheless reconcile its length defensively: if the new note count
+/// differs (a future op that adds/removes notes, or a clip whose lyric
+/// table was never populated), pad with blanks / truncate so
+/// `lyrics.len() == notes.len()` holds afterwards.
+pub(super) fn notes_edited(r: &mut Resonance, clip_id: ClipId, notes: Vec<MidiNote>) {
+    if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
+        let new_len = notes.len();
+        clip.notes = notes;
+        if let Some(lyrics) = r.compose.vocal_audio.clip_lyrics.get_mut(&clip_id) {
+            if lyrics.len() != new_len {
+                lyrics.resize(new_len, String::new());
+            }
+            debug_assert_eq!(lyrics.len(), clip.notes.len());
+        }
+    }
+}
+
+/// Add a groove template extracted from a clip to the app-side groove
+/// library. Extraction is read-only on the engine side — no clip is
+/// modified — so this handler only grows the library.
+pub(super) fn groove_extracted(r: &mut Resonance, template: GrooveTemplate) {
+    r.groove_library.push(template);
 }
