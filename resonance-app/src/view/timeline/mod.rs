@@ -66,6 +66,12 @@ pub struct TimelineCanvas<'a> {
     /// the matching flag / span with the accent (todo #368).
     pub markers: &'a [state::ArrangementMarker],
     pub selected_marker_id: Option<u64>,
+    /// Tracks whose audio is frozen / rendered (no editable sample
+    /// source). Audio clips on these tracks render the "unsupported"
+    /// degradation surface — a diagonal hatch with no fade handles —
+    /// while clip gain still applies (design doc #153). Empty slice =>
+    /// every clip is fadeable.
+    pub frozen_tracks: Vec<TrackId>,
 }
 
 impl TimelineCanvas<'_> {
@@ -282,6 +288,16 @@ pub struct TimelineFingerprint {
     /// edits and leave a stale flag / span on screen.
     pub markers_hash: u64,
     pub selected_marker_id: Option<u64>,
+    /// Hash of every clip's geometry + fade/gain shaping
+    /// (`id, track, start, duration, fade-in/out frames+curve, gain`).
+    /// Without this the static clip layer would hold a stale render
+    /// after a clip is moved, trimmed, or has its fade / gain edited —
+    /// `clips_len` alone misses every in-place change. Keeps the canvas
+    /// to the view-performance rule: repaint on edit, not per frame.
+    pub clips_hash: u64,
+    /// Hash of the frozen-track set so the "unsupported" hatch appears /
+    /// clears the moment a track is frozen or thawed.
+    pub frozen_hash: u64,
 }
 
 impl<'a> TimelineCanvas<'a> {
@@ -318,6 +334,28 @@ impl<'a> TimelineCanvas<'a> {
         }
         let markers_hash = mh.finish();
 
+        // Hash every clip's geometry + fade/gain shaping so the cached
+        // clip layer invalidates on move / trim / fade / gain edits.
+        let mut clip_h = std::collections::hash_map::DefaultHasher::new();
+        for c in self.clips {
+            c.id.hash(&mut clip_h);
+            c.track_id.hash(&mut clip_h);
+            c.start_sample.hash(&mut clip_h);
+            c.duration_samples.hash(&mut clip_h);
+            c.fade_in_frames.hash(&mut clip_h);
+            c.fade_in_curve.hash(&mut clip_h);
+            c.fade_out_frames.hash(&mut clip_h);
+            c.fade_out_curve.hash(&mut clip_h);
+            c.gain_db.to_bits().hash(&mut clip_h);
+        }
+        let clips_hash = clip_h.finish();
+
+        let mut frz = std::collections::hash_map::DefaultHasher::new();
+        for t in &self.frozen_tracks {
+            t.hash(&mut frz);
+        }
+        let frozen_hash = frz.finish();
+
         TimelineFingerprint {
             clips_len: self.clips.len(),
             midi_clips_len: self.midi_clips.len(),
@@ -351,6 +389,8 @@ impl<'a> TimelineCanvas<'a> {
             markers_len: self.markers.len(),
             markers_hash,
             selected_marker_id: self.selected_marker_id,
+            clips_hash,
+            frozen_hash,
         }
     }
 }
@@ -537,6 +577,11 @@ impl<'a> TimelineCanvas<'a> {
                     bounds.height,
                 );
             }
+
+            // Automatic crossfades where two same-track audio clips
+            // overlap — drawn after the clip bodies so the lavender
+            // overlap wash + crossing curves sit on top of both clips.
+            self.draw_crossfades(frame, &sorted_tracks, header_height, y_off, bounds.height);
 
             // Draw MIDI clips
             for clip in self.midi_clips {

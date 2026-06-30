@@ -3,12 +3,13 @@
 //! clips, and MIDI clips. They're in a separate impl block (and file)
 //! so `mod.rs` can stay focused on canvas event handling and state.
 use iced::widget::canvas;
+use iced::widget::text::Alignment as TextAlignment;
 use iced::{Color, Point, Size};
 
 use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
 use super::TimelineCanvas;
-use resonance_audio::types::{avg_bpm_for_bar, TrackId};
+use resonance_audio::types::{avg_bpm_for_bar, FadeCurve, TrackId};
 
 impl TimelineCanvas<'_> {
     /// Render the compose-section pills above the lanes. Each placement
@@ -995,17 +996,19 @@ impl TimelineCanvas<'_> {
         }
 
         // Audio clips: warm/amber wash + tinted border. Name text in
-        // WARM so the kind reads at a glance.
+        // WARM so the kind reads at a glance. A frozen / rendered track
+        // has no editable sample source — its clips are "unsupported":
+        // diagonal hatch, no fade handles (gain still applies). Design #153.
         let is_selected = self.selected_clip == Some(clip.id);
+        let fadeable = !self.frozen_tracks.contains(&clip.track_id);
         let chrome = ClipChrome {
             x,
             y,
             w,
             h: clip_height,
-            body_color: Color {
-                a: 0.10,
-                ..theme::WARM
-            },
+            // Clip-gain tint: louder brightens the warm wash, quieter
+            // darkens it, so level reads at a glance (design #153).
+            body_color: gain_tinted_body(clip.gain_db),
             border_color: if is_selected {
                 theme::ACCENT
             } else {
@@ -1021,8 +1024,86 @@ impl TimelineCanvas<'_> {
         };
 
         chrome.draw(frame, |frame| {
-            self.draw_clip_waveform(frame, clip, x, y, w, clip_height)
+            self.draw_clip_waveform(frame, clip, x, y, w, clip_height);
+            if fadeable {
+                self.draw_clip_fades(frame, clip, x, y, w, clip_height);
+            } else {
+                draw_clip_hatch(frame, x, y, w, clip_height);
+            }
         });
+
+        // Overlays drawn on top of the border: the fade-handle / gain
+        // beads and the mono dB header tag.
+        self.draw_clip_handles(frame, clip, x, y, w, clip_height, fadeable, is_selected);
+        draw_clip_gain_tag(frame, clip, x, y, w);
+    }
+
+    /// Fade-in / fade-out ramps: a darkened wedge over the attenuated
+    /// region (so the waveform under it reads as faded) plus a warm ramp
+    /// line tracing the chosen curve. Drawn inside the clip body, over
+    /// the waveform and under the name / border.
+    fn draw_clip_fades(
+        &self,
+        frame: &mut canvas::Frame,
+        clip: &ClipState,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) {
+        let sr = self.sample_rate as f32;
+        let fade_in_w = ((clip.fade_in_frames as f32 / sr) * self.zoom).clamp(0.0, w);
+        let fade_out_w = ((clip.fade_out_frames as f32 / sr) * self.zoom).clamp(0.0, w);
+
+        if fade_in_w > 0.5 {
+            let env = fade_envelope(clip.fade_in_curve, x, fade_in_w, y, h, true);
+            frame.fill(&fade_wedge_path(&env, x, fade_in_w, y), FADE_WEDGE_COLOR);
+            stroke_polyline(frame, &env, theme::WARM, 1.5);
+        }
+        if fade_out_w > 0.5 {
+            let x0 = x + w - fade_out_w;
+            let env = fade_envelope(clip.fade_out_curve, x0, fade_out_w, y, h, false);
+            frame.fill(&fade_wedge_path(&env, x0, fade_out_w, y), FADE_WEDGE_COLOR);
+            stroke_polyline(frame, &env, theme::WARM, 1.5);
+        }
+    }
+
+    /// Circular fade-handle beads on the two top corners (warm) and the
+    /// clip-gain bead at top-centre (lavender). Fade beads ride inward
+    /// as the fade grows (`handle x = ramp end`); they stay hidden on a
+    /// clean clip until it is selected, but are always shown once a fade
+    /// exists. Gain is available even on frozen clips. Design #153.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_clip_handles(
+        &self,
+        frame: &mut canvas::Frame,
+        clip: &ClipState,
+        x: f32,
+        y: f32,
+        w: f32,
+        _h: f32,
+        fadeable: bool,
+        is_selected: bool,
+    ) {
+        let sr = self.sample_rate as f32;
+        let right = x + w;
+
+        if fadeable {
+            if clip.fade_in_frames > 0 || is_selected {
+                let bx = (x + (clip.fade_in_frames as f32 / sr) * self.zoom).clamp(x, right);
+                draw_bead(frame, bx, y, theme::WARM);
+            }
+            if clip.fade_out_frames > 0 || is_selected {
+                let bx = (right - (clip.fade_out_frames as f32 / sr) * self.zoom).clamp(x, right);
+                draw_bead(frame, bx, y, theme::WARM);
+            }
+        }
+
+        // Gain bead at top-centre. Shown once gain departs unity, or on
+        // selection so an untouched clip stays clean but discoverable.
+        if clip.gain_db.abs() > 0.05 || is_selected {
+            draw_bead(frame, x + w / 2.0, y, theme::ACCENT);
+        }
     }
 
     /// Waveform — warm-tinted bars on top of the wash.
@@ -1074,6 +1155,79 @@ impl TimelineCanvas<'_> {
                     );
                 }
                 px += pixels_per_peak.max(1.0);
+            }
+        }
+    }
+
+    /// Automatic crossfades: wherever two audio clips on the same track
+    /// overlap, the seam gets a lavender overlap wash, two crossing
+    /// equal-power curves (left clip fading out, right clip fading in),
+    /// and an `⤬` badge. Crossfade is derived, never stored — overlap
+    /// implies crossfade regardless of the clips' manual fades (design
+    /// #153 / arch #156).
+    pub(super) fn draw_crossfades(
+        &self,
+        frame: &mut canvas::Frame,
+        sorted_tracks: &[&TrackState],
+        ruler_height: f32,
+        y_off: f32,
+        visible_height: f32,
+    ) {
+        let n = self.clips.len();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let a = &self.clips[i];
+                let b = &self.clips[j];
+                if a.track_id != b.track_id {
+                    continue;
+                }
+                let Some((ov_start, ov_end)) = overlap_range(
+                    a.start_sample,
+                    a.duration_samples,
+                    b.start_sample,
+                    b.duration_samples,
+                ) else {
+                    continue;
+                };
+                let Some((y, h)) = clip_lane_rect(
+                    a.track_id,
+                    sorted_tracks,
+                    ruler_height,
+                    y_off,
+                    visible_height,
+                ) else {
+                    continue;
+                };
+
+                let x0 = self.sample_to_x(ov_start);
+                let x1 = self.sample_to_x(ov_end);
+                let ow = x1 - x0;
+                if ow <= 0.5 {
+                    continue;
+                }
+
+                // Lavender overlap wash.
+                frame.fill_rectangle(
+                    Point::new(x0, y),
+                    Size::new(ow, h),
+                    Color {
+                        a: 0.16,
+                        ..theme::ACCENT
+                    },
+                );
+
+                // Crossing equal-power curves: the earlier clip fades out
+                // across the overlap, the later clip fades in. Their sum
+                // is constant power — a click-free seam. Equal-power is
+                // symmetric, so the same pair of curves serves either
+                // ordering of the overlapping clips.
+                let fade_out = fade_envelope(FadeCurve::EqualPower, x0, ow, y, h, false);
+                let fade_in = fade_envelope(FadeCurve::EqualPower, x0, ow, y, h, true);
+                stroke_polyline(frame, &fade_out, theme::ACCENT_SOFT, 1.5);
+                stroke_polyline(frame, &fade_in, theme::ACCENT_SOFT, 1.5);
+
+                // `⤬` badge centred at the top of the overlap.
+                draw_crossfade_badge(frame, x0 + ow / 2.0, y + 9.0);
             }
         }
     }
@@ -1316,4 +1470,208 @@ impl ClipChrome<'_> {
                 .with_width(border_w),
         );
     }
+}
+
+/// Darkening applied over the attenuated part of a fade ramp so the
+/// waveform under it reads as faded out.
+const FADE_WEDGE_COLOR: Color = Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 0.22,
+};
+
+/// Visual radius of the circular fade / gain handle beads. Smaller than
+/// the 10px hit radius in [`super::hit_test`] so the bead reads as a neat
+/// dot while staying easy to grab.
+const BEAD_RADIUS: f32 = 4.5;
+
+/// Map a clip's gain (dB) to its body wash colour. Unity sits at the
+/// existing warm wash; louder raises the alpha (brighter), quieter lowers
+/// it (darker) so a clip's level is legible without opening anything.
+/// Clamped over ±18 dB so extreme gains stay within a readable band.
+pub fn gain_tinted_body(gain_db: f32) -> Color {
+    let norm = (gain_db / 18.0).clamp(-1.0, 1.0);
+    let a = (0.10 + norm * 0.08).clamp(0.03, 0.20);
+    Color { a, ..theme::WARM }
+}
+
+/// Format a clip-gain value as a signed mono dB tag, e.g. `+3.0 dB`,
+/// `-6.0 dB`. Values within 0.05 dB of unity collapse to `+0.0 dB` so a
+/// `-0.0` never prints.
+pub fn format_gain_db(gain_db: f32) -> String {
+    let g = if gain_db.abs() < 0.05 { 0.0 } else { gain_db };
+    format!("{g:+.1} dB")
+}
+
+/// Sample-overlap of two clips (in samples), or `None` if they don't
+/// overlap. Used to derive the automatic crossfade region.
+pub fn overlap_range(
+    a_start: u64,
+    a_dur: u64,
+    b_start: u64,
+    b_dur: u64,
+) -> Option<(u64, u64)> {
+    let a_end = a_start.saturating_add(a_dur);
+    let b_end = b_start.saturating_add(b_dur);
+    let start = a_start.max(b_start);
+    let end = a_end.min(b_end);
+    if end > start {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
+/// Screen-space points tracing a fade ramp envelope across `[x0, x0+rw]`.
+/// `fade_in` runs silence→unity left→right; otherwise unity→silence. The
+/// curve's [`FadeCurve::coefficient`] maps progress to amplitude, and
+/// amplitude maps to height (unity at the clip top, silence at the
+/// bottom), so the polyline is the ramp line and the area above it is the
+/// attenuated wedge.
+pub fn fade_envelope(
+    curve: FadeCurve,
+    x0: f32,
+    rw: f32,
+    top_y: f32,
+    h: f32,
+    fade_in: bool,
+) -> Vec<Point> {
+    const SEGMENTS: usize = 16;
+    (0..=SEGMENTS)
+        .map(|i| {
+            let t = i as f32 / SEGMENTS as f32;
+            let amp = if fade_in {
+                curve.coefficient(t)
+            } else {
+                curve.coefficient(1.0 - t)
+            };
+            Point::new(x0 + t * rw, top_y + h * (1.0 - amp))
+        })
+        .collect()
+}
+
+/// Polygon for the darkened part of a fade ramp: the region between the
+/// clip's top edge (`[x0, x0+rw]`) and the envelope below it.
+fn fade_wedge_path(env: &[Point], x0: f32, rw: f32, top_y: f32) -> canvas::Path {
+    canvas::Path::new(|b| {
+        if let Some(first) = env.first() {
+            b.move_to(*first);
+            for p in &env[1..] {
+                b.line_to(*p);
+            }
+            b.line_to(Point::new(x0 + rw, top_y));
+            b.line_to(Point::new(x0, top_y));
+            b.close();
+        }
+    })
+}
+
+/// Stroke a polyline through `pts`.
+fn stroke_polyline(frame: &mut canvas::Frame, pts: &[Point], color: Color, width: f32) {
+    if pts.len() < 2 {
+        return;
+    }
+    let path = canvas::Path::new(|b| {
+        b.move_to(pts[0]);
+        for p in &pts[1..] {
+            b.line_to(*p);
+        }
+    });
+    frame.stroke(
+        &path,
+        canvas::Stroke::default().with_color(color).with_width(width),
+    );
+}
+
+/// A circular handle bead centred at `(cx, cy)`: a filled disc in `color`
+/// with a thin dark ring for contrast against the clip wash.
+fn draw_bead(frame: &mut canvas::Frame, cx: f32, cy: f32, color: Color) {
+    let disc = canvas::Path::circle(Point::new(cx, cy), BEAD_RADIUS);
+    frame.fill(&disc, color);
+    frame.stroke(
+        &disc,
+        canvas::Stroke::default()
+            .with_color(Color {
+                a: 0.9,
+                ..theme::BG_1
+            })
+            .with_width(1.0),
+    );
+}
+
+/// Diagonal hatch over an "unsupported" (frozen / rendered) clip — the
+/// degradation surface for clips with no editable sample source. Each
+/// 45° line is clamped to the clip rect by hand (a nested `with_clip`
+/// renders nothing inside the cached timeline frame), so the strokes
+/// never bleed past the body.
+fn draw_clip_hatch(frame: &mut canvas::Frame, x: f32, y: f32, w: f32, h: f32) {
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    let color = Color {
+        a: 0.16,
+        ..theme::TEXT_1
+    };
+    const SPACING: f32 = 7.0;
+    // Each line runs from the bottom edge at `sx` up to the top edge at
+    // `sx + h` (slope -1): point(t) = (sx + t·h, (y+h) − t·h), t ∈ [0, 1].
+    // Clamp t so x stays within [x, x+w]; y then stays within [y, y+h].
+    let mut sx = x - h;
+    while sx < x + w {
+        let t_lo = ((x - sx) / h).clamp(0.0, 1.0);
+        let t_hi = ((x + w - sx) / h).clamp(0.0, 1.0);
+        if t_hi > t_lo {
+            let p = |t: f32| Point::new(sx + t * h, (y + h) - t * h);
+            let line = canvas::Path::new(|b| {
+                b.move_to(p(t_lo));
+                b.line_to(p(t_hi));
+            });
+            frame.stroke(
+                &line,
+                canvas::Stroke::default().with_color(color).with_width(1.0),
+            );
+        }
+        sx += SPACING;
+    }
+}
+
+/// The mono `±N.N dB` gain tag in the clip header, right-aligned. Hidden
+/// at unity and on clips too narrow to fit it, so untouched clips stay
+/// clean (design #153).
+fn draw_clip_gain_tag(frame: &mut canvas::Frame, clip: &ClipState, x: f32, y: f32, w: f32) {
+    if clip.gain_db.abs() <= 0.05 || w < 64.0 {
+        return;
+    }
+    frame.fill_text(canvas::Text {
+        content: format_gain_db(clip.gain_db),
+        position: Point::new(x + w - 7.0, y + 4.0),
+        color: theme::TEXT_2,
+        size: 9.5.into(),
+        font: theme::MONO_FONT,
+        align_x: TextAlignment::Right,
+        ..canvas::Text::default()
+    });
+}
+
+/// The `⤬` crossfade badge: a small lavender disc with a white cross,
+/// centred at `(cx, cy)`. Drawn with strokes rather than a glyph so it
+/// renders identically regardless of font coverage.
+fn draw_crossfade_badge(frame: &mut canvas::Frame, cx: f32, cy: f32) {
+    const R: f32 = 7.0;
+    let disc = canvas::Path::circle(Point::new(cx, cy), R);
+    frame.fill(&disc, theme::ACCENT);
+    let arm = R * 0.5;
+    let cross = canvas::Path::new(|b| {
+        b.move_to(Point::new(cx - arm, cy - arm));
+        b.line_to(Point::new(cx + arm, cy + arm));
+        b.move_to(Point::new(cx + arm, cy - arm));
+        b.line_to(Point::new(cx - arm, cy + arm));
+    });
+    frame.stroke(
+        &cross,
+        canvas::Stroke::default()
+            .with_color(theme::TEXT_1)
+            .with_width(1.5),
+    );
 }
