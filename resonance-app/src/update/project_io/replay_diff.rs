@@ -30,8 +30,8 @@ use resonance_audio::types::*;
 #[cfg(test)]
 use crate::compose::DrumGroup;
 use crate::project::{
-    LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin,
-    ProjectTrack,
+    fade_curve_from_tag, LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip,
+    ProjectPlugin, ProjectTrack,
 };
 use crate::undo::UndoExtras;
 use crate::util::db_to_gain;
@@ -650,6 +650,38 @@ fn apply_audio_clips(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
                 new_track_id: cb.track_id,
             });
         }
+
+        // Fades & per-clip gain (epic #18, doc #156). Independent of the
+        // trim/move fast path above — a snapshot diff (save/load or
+        // undo/redo) that only changes a fade length, curve, or gain must
+        // still reach the engine and the GUI mirror. Curves round-trip as
+        // tags, so compare the parsed `FadeCurve` (normalizing unknown /
+        // legacy tags) rather than the raw strings.
+        let fa_in = fade_curve_from_tag(&ca.fade_in_curve);
+        let fb_in = fade_curve_from_tag(&cb.fade_in_curve);
+        let fa_out = fade_curve_from_tag(&ca.fade_out_curve);
+        let fb_out = fade_curve_from_tag(&cb.fade_out_curve);
+        let fade_changed = ca.fade_in_frames != cb.fade_in_frames
+            || ca.fade_out_frames != cb.fade_out_frames
+            || fa_in != fb_in
+            || fa_out != fb_out;
+        let gain_changed = ca.gain_db != cb.gain_db;
+        if fade_changed {
+            let _ = r.engine.send(AudioCommand::SetClipFade {
+                clip_id: cb.id,
+                fade_in_frames: cb.fade_in_frames,
+                fade_in_curve: fb_in,
+                fade_out_frames: cb.fade_out_frames,
+                fade_out_curve: fb_out,
+            });
+        }
+        if gain_changed {
+            let _ = r.engine.send(AudioCommand::SetClipGain {
+                clip_id: cb.id,
+                gain_db: cb.gain_db,
+            });
+        }
+
         // Mirror onto GUI state.
         if let Some(cs) = r.clips.iter_mut().find(|c| c.id == cb.id) {
             cs.start_sample = cb.start_sample;
@@ -661,6 +693,12 @@ fn apply_audio_clips(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
                 .total_frames
                 .saturating_sub(cb.trim_start_frames)
                 .saturating_sub(cb.trim_end_frames);
+            // Fade/gain mirror (epic #18, doc #156).
+            cs.fade_in_frames = cb.fade_in_frames;
+            cs.fade_in_curve = fb_in;
+            cs.fade_out_frames = cb.fade_out_frames;
+            cs.fade_out_curve = fb_out;
+            cs.gain_db = cb.gain_db;
             // Pool link (doc #175): restore the clip's asset ref so an
             // undo/redo that relinked or cleared the link is reflected.
             cs.asset_ref = cb.asset_ref.map(crate::state::pool::AssetRef::new);
@@ -997,6 +1035,11 @@ mod tests {
             trim_end_frames: 0,
             audio_file: name.into(),
             asset_ref: None,
+            fade_in_frames: 0,
+            fade_in_curve: "equal_power".into(),
+            fade_out_frames: 0,
+            fade_out_curve: "equal_power".into(),
+            gain_db: 0.0,
         };
         a.clips = vec![mk(1, "audio/a.wav")];
         b.clips = vec![mk(1, "audio/b.wav")];

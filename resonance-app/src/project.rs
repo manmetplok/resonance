@@ -24,7 +24,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use resonance_audio::midi_io;
-use resonance_audio::types::{ClipId, MidiNote, PluginInstanceId};
+use resonance_audio::types::{ClipId, FadeCurve, MidiNote, PluginInstanceId};
 
 pub mod sections;
 pub use sections::{ProjectSectionChord, ProjectSectionDefinition, ProjectSectionPlacement};
@@ -362,6 +362,59 @@ pub struct ProjectClip {
     /// Rebuilt onto [`crate::state::ClipState::asset_ref`] on load.
     #[serde(default)]
     pub asset_ref: Option<u64>,
+    /// Fade-in length in frames; `0` = no fade (epic #18, doc #156).
+    /// Defaults to `0` so projects saved before fades existed load with
+    /// no fade-in.
+    #[serde(default)]
+    pub fade_in_frames: u64,
+    /// Curve shaping the fade-in ramp, stored as a short lowercase tag
+    /// (see [`fade_curve_tag`]). [`FadeCurve`] carries no serde derive,
+    /// so the project layer owns this round-trip. Defaults to the
+    /// `EqualPower` tag for older projects.
+    #[serde(default = "default_fade_curve_tag")]
+    pub fade_in_curve: String,
+    /// Fade-out length in frames; `0` = no fade (epic #18, doc #156).
+    #[serde(default)]
+    pub fade_out_frames: u64,
+    /// Curve shaping the fade-out ramp, stored as a tag (see
+    /// [`fade_curve_tag`]). Defaults to the `EqualPower` tag.
+    #[serde(default = "default_fade_curve_tag")]
+    pub fade_out_curve: String,
+    /// Per-clip gain in decibels; `0.0` dB = unity (epic #18, doc #156).
+    /// Defaults to `0.0` so older projects load at unity gain.
+    #[serde(default)]
+    pub gain_db: f32,
+}
+
+/// Default [`ProjectClip::fade_in_curve`] / [`ProjectClip::fade_out_curve`]
+/// tag for projects saved before fade curves existed: the engine default,
+/// `EqualPower`. Kept in sync with [`fade_curve_tag`].
+fn default_fade_curve_tag() -> String {
+    fade_curve_tag(FadeCurve::default()).to_string()
+}
+
+/// Serialize a [`FadeCurve`] to the short lowercase tag stored in
+/// [`ProjectClip::fade_in_curve`] / [`ProjectClip::fade_out_curve`]. The
+/// engine type has no serde derive, so the project layer owns this
+/// round-trip. Kept in sync with [`fade_curve_from_tag`].
+pub fn fade_curve_tag(curve: FadeCurve) -> &'static str {
+    match curve {
+        FadeCurve::Linear => "linear",
+        FadeCurve::EqualPower => "equal_power",
+        FadeCurve::Exp => "exp",
+    }
+}
+
+/// Parse a fade-curve tag back into a [`FadeCurve`]. Unknown / unexpected
+/// tags (a future build's new variant, or a hand-edited file) fall back to
+/// [`FadeCurve::default`] so loading never fails on the curve label.
+pub fn fade_curve_from_tag(tag: &str) -> FadeCurve {
+    match tag {
+        "linear" => FadeCurve::Linear,
+        "equal_power" => FadeCurve::EqualPower,
+        "exp" => FadeCurve::Exp,
+        _ => FadeCurve::default(),
+    }
 }
 
 /// One persisted media-pool asset (doc #175): an imported audio file

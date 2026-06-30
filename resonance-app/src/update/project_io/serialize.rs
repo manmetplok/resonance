@@ -5,9 +5,9 @@
 use resonance_audio::types::*;
 
 use crate::project::{
-    audio_format_tag, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin,
-    ProjectPoolAsset, ProjectReference, ProjectReferenceMarker, ProjectReferenceSettings,
-    ProjectTrack, PROJECT_FORMAT_VERSION,
+    audio_format_tag, fade_curve_tag, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip,
+    ProjectPlugin, ProjectPoolAsset, ProjectReference, ProjectReferenceMarker,
+    ProjectReferenceSettings, ProjectTrack, PROJECT_FORMAT_VERSION,
 };
 use crate::Resonance;
 
@@ -101,6 +101,13 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             // Pool-asset provenance (doc #175): persist the link so an
             // imported+placed clip reconnects to its pool asset on reload.
             asset_ref: c.asset_ref.map(|r| r.asset_id),
+            // Fades & per-clip gain (epic #18, doc #156). Curves are
+            // stored as tags since `FadeCurve` has no serde derive.
+            fade_in_frames: c.fade_in_frames,
+            fade_in_curve: fade_curve_tag(c.fade_in_curve).to_string(),
+            fade_out_frames: c.fade_out_frames,
+            fade_out_curve: fade_curve_tag(c.fade_out_curve).to_string(),
+            gain_db: c.gain_db,
         })
         .collect();
 
