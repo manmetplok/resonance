@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 
+use resonance_audio::quantize::{Division, GridModifier, GridValue, QuantizeMode};
 use resonance_audio::types::*;
 
 use super::clips::{
@@ -104,4 +105,129 @@ pub struct ClipInteractionState {
     /// timeline canvas so the selected flag / region span renders with the
     /// stronger accent (todo #368). Click-to-select wiring lands separately.
     pub selected_marker_id: Option<u64>,
+}
+
+/// A user-selectable quantize grid division for the MIDI editor's
+/// Quantize panel (todo #392). Each variant maps to a resonance-audio
+/// [`Division`] via [`GridChoice::division`]. Twelve entries: 1/4 .. 1/32
+/// each in straight, triplet (`T`) and dotted (`.`) flavours. Used as the
+/// (static, never-changing) option set for the grid pick_list, so the
+/// view caches the option slice once rather than allocating per frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridChoice {
+    Quarter,
+    QuarterTriplet,
+    QuarterDotted,
+    Eighth,
+    EighthTriplet,
+    EighthDotted,
+    Sixteenth,
+    SixteenthTriplet,
+    SixteenthDotted,
+    ThirtySecond,
+    ThirtySecondTriplet,
+    ThirtySecondDotted,
+}
+
+impl GridChoice {
+    /// Every choice, in pick_list display order (coarse → fine, each
+    /// value grouped straight / triplet / dotted).
+    pub const ALL: [GridChoice; 12] = [
+        GridChoice::Quarter,
+        GridChoice::QuarterTriplet,
+        GridChoice::QuarterDotted,
+        GridChoice::Eighth,
+        GridChoice::EighthTriplet,
+        GridChoice::EighthDotted,
+        GridChoice::Sixteenth,
+        GridChoice::SixteenthTriplet,
+        GridChoice::SixteenthDotted,
+        GridChoice::ThirtySecond,
+        GridChoice::ThirtySecondTriplet,
+        GridChoice::ThirtySecondDotted,
+    ];
+
+    /// The base note value and modifier this choice resolves to.
+    fn parts(self) -> (GridValue, GridModifier) {
+        match self {
+            GridChoice::Quarter => (GridValue::Quarter, GridModifier::Straight),
+            GridChoice::QuarterTriplet => (GridValue::Quarter, GridModifier::Triplet),
+            GridChoice::QuarterDotted => (GridValue::Quarter, GridModifier::Dotted),
+            GridChoice::Eighth => (GridValue::Eighth, GridModifier::Straight),
+            GridChoice::EighthTriplet => (GridValue::Eighth, GridModifier::Triplet),
+            GridChoice::EighthDotted => (GridValue::Eighth, GridModifier::Dotted),
+            GridChoice::Sixteenth => (GridValue::Sixteenth, GridModifier::Straight),
+            GridChoice::SixteenthTriplet => (GridValue::Sixteenth, GridModifier::Triplet),
+            GridChoice::SixteenthDotted => (GridValue::Sixteenth, GridModifier::Dotted),
+            GridChoice::ThirtySecond => (GridValue::ThirtySecond, GridModifier::Straight),
+            GridChoice::ThirtySecondTriplet => (GridValue::ThirtySecond, GridModifier::Triplet),
+            GridChoice::ThirtySecondDotted => (GridValue::ThirtySecond, GridModifier::Dotted),
+        }
+    }
+
+    /// The resonance-audio [`Division`] this choice resolves to.
+    pub fn division(self) -> Division {
+        let (value, modifier) = self.parts();
+        Division { value, modifier }
+    }
+
+    /// Short label shown in the pick_list (e.g. `1/8T`, `1/16.`).
+    pub fn label(self) -> &'static str {
+        match self {
+            GridChoice::Quarter => "1/4",
+            GridChoice::QuarterTriplet => "1/4T",
+            GridChoice::QuarterDotted => "1/4.",
+            GridChoice::Eighth => "1/8",
+            GridChoice::EighthTriplet => "1/8T",
+            GridChoice::EighthDotted => "1/8.",
+            GridChoice::Sixteenth => "1/16",
+            GridChoice::SixteenthTriplet => "1/16T",
+            GridChoice::SixteenthDotted => "1/16.",
+            GridChoice::ThirtySecond => "1/32",
+            GridChoice::ThirtySecondTriplet => "1/32T",
+            GridChoice::ThirtySecondDotted => "1/32.",
+        }
+    }
+}
+
+impl std::fmt::Display for GridChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// Current settings of the MIDI editor's Quantize panel (todo #392). The
+/// panel's controls write here; the Apply button reads it to build the
+/// bulk [`MidiEditorMessage::Quantize`](crate::message::MidiEditorMessage)
+/// that operates on the active note selection (or the whole clip when the
+/// selection is empty). Lives at the app level so the chosen settings
+/// persist across clip open/close — and so the groove/settings
+/// persistence slice (todo #395) can serialise the last-used values.
+#[derive(Debug, Clone)]
+pub struct MidiQuantizePanelState {
+    /// Selected grid division.
+    pub grid: GridChoice,
+    /// Quantize strength, `0.0..=1.0` (shown as 0–100%).
+    pub strength: f32,
+    /// Swing amount, `0.0..=1.0` (shown as 0–100%).
+    pub swing: f32,
+    /// Whether to quantize note starts only or starts and lengths.
+    pub mode: QuantizeMode,
+    /// Snap note-offs to the grid as well as note-ons.
+    pub quantize_ends: bool,
+    /// Apply the strength blend iteratively (soft quantize).
+    pub iterative: bool,
+}
+
+impl Default for MidiQuantizePanelState {
+    fn default() -> Self {
+        Self {
+            grid: GridChoice::Sixteenth,
+            strength: 1.0,
+            swing: 0.0,
+            mode: QuantizeMode::StartOnly,
+            quantize_ends: false,
+            iterative: false,
+        }
+    }
 }

@@ -175,6 +175,14 @@ impl Resonance {
         &self.groove_library
     }
 
+    /// Test-only: read the MIDI editor's Quantize panel settings (todo
+    /// #392) so panel-control reducer tests can assert the setter handlers
+    /// updated the bound state.
+    #[doc(hidden)]
+    pub fn test_quantize_panel(&self) -> &state::MidiQuantizePanelState {
+        &self.midi_quantize
+    }
+
     /// Test-only: overwrite the sample rate. Tempo-map projections used
     /// by the MIDI clip trim reducer depend on `sample_rate`; integration
     /// tests fix it to a known value so the projection math is

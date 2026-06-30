@@ -8,8 +8,8 @@ use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
 use crate::reference::ReferenceMessage;
 use crate::state::{
-    ClipEdge, ExportMode, LoopDragTarget, MixerInspectorGroup, ParsedImport, PlacementMode,
-    PlacementStart, SelectedGlobalEvent, TempoAlignment, TempoChoice, ViewMode,
+    ClipEdge, ExportMode, GridChoice, LoopDragTarget, MixerInspectorGroup, ParsedImport,
+    PlacementMode, PlacementStart, SelectedGlobalEvent, TempoAlignment, TempoChoice, ViewMode,
 };
 use resonance_audio::quantize::{Division, QuantizeMode};
 use resonance_audio::types::{
@@ -502,6 +502,24 @@ pub enum MidiEditorMessage {
     ExtractGroove {
         grid: Division,
     },
+
+    // -- Quantize panel controls (todo #392) --
+    // These write the Quantize panel's settings
+    // (`Resonance::midi_quantize`); none of them touch the notes. The
+    // panel's Apply button reads those settings to build the bulk
+    // `Quantize` message above. Pure view-state edits, so undo skips them.
+    /// Set the quantize grid division.
+    SetQuantizeGrid(GridChoice),
+    /// Set the quantize strength, `0.0..=1.0`.
+    SetQuantizeStrength(f32),
+    /// Set the swing amount, `0.0..=1.0`.
+    SetQuantizeSwing(f32),
+    /// Set the quantize mode (start-only vs start+length).
+    SetQuantizeMode(QuantizeMode),
+    /// Toggle snapping note-ends to the grid.
+    SetQuantizeEnds(bool),
+    /// Toggle iterative/soft quantize.
+    SetQuantizeIterative(bool),
 }
 
 /// Vocal pitch-editor (graphical tuning) messages, doc #160. This todo

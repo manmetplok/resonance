@@ -187,6 +187,26 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
                     .send(AudioCommand::ExtractGrooveFromClip { clip_id, grid });
             }
         }
+
+        // -- Quantize panel controls (todo #392): pure view-state edits.
+        MidiEditorMessage::SetQuantizeGrid(grid) => {
+            r.midi_quantize.grid = grid;
+        }
+        MidiEditorMessage::SetQuantizeStrength(v) => {
+            r.midi_quantize.strength = v.clamp(0.0, 1.0);
+        }
+        MidiEditorMessage::SetQuantizeSwing(v) => {
+            r.midi_quantize.swing = v.clamp(0.0, 1.0);
+        }
+        MidiEditorMessage::SetQuantizeMode(mode) => {
+            r.midi_quantize.mode = mode;
+        }
+        MidiEditorMessage::SetQuantizeEnds(on) => {
+            r.midi_quantize.quantize_ends = on;
+        }
+        MidiEditorMessage::SetQuantizeIterative(on) => {
+            r.midi_quantize.iterative = on;
+        }
     }
     Task::none()
 }
