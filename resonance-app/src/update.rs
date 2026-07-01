@@ -10,6 +10,7 @@ pub mod bus;
 pub mod chord_track;
 pub mod clips;
 pub mod compose;
+pub mod drag;
 pub mod export;
 pub mod freeze;
 pub mod gates;
@@ -109,6 +110,7 @@ impl crate::Resonance {
             Message::Relink(m) => relink::handle(self, m),
             Message::Ui(m) => ui::handle(self, m),
             Message::Browser(m) => browser::handle(self, m),
+            Message::Drag(m) => drag::handle(self, m),
             Message::Tick => tick::handle_tick(self),
             Message::WindowCloseRequested(id) => {
                 if self.dirty && self.io.has_active_project {

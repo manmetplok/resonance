@@ -25,6 +25,7 @@ use resonance_audio::types::{ClipId, TempoMap, TrackId};
 pub mod draw;
 pub mod hit_test;
 pub mod input;
+pub mod placement;
 pub mod scrollbar;
 pub mod snap;
 
@@ -72,6 +73,13 @@ pub struct TimelineCanvas<'a> {
     /// while clip gain still applies (design doc #153). Empty slice =>
     /// every clip is fadeable.
     pub frozen_tracks: Vec<TrackId>,
+    /// In-flight drag-to-timeline placement (doc #175, todo #605), or `None`
+    /// when nothing is being dragged. When `Some`, the canvas previews the
+    /// drop (lit lane, dashed ghost clip, drag pill, tooltip) and the
+    /// new-audio-track drop zone below the last lane, and its pointer
+    /// handlers publish `DragMessage::Hover` / `Drop`. Drawn in the uncached
+    /// overlay pass so it repaints as the cursor moves.
+    pub drag: Option<&'a state::DragPlacement>,
 }
 
 impl TimelineCanvas<'_> {
@@ -124,6 +132,26 @@ impl TimelineCanvas<'_> {
     /// Convert a sample position to pixel x coordinate.
     pub(crate) fn sample_to_x(&self, sample: u64) -> f32 {
         (sample as f64 / self.sample_rate as f64) as f32 * self.zoom - self.scroll_offset
+    }
+
+    /// The layout constants a drop resolution needs (see
+    /// [`placement::resolve_drop`]).
+    pub(crate) fn placement_geometry(&self) -> placement::PlacementGeometry {
+        placement::PlacementGeometry {
+            header_height: self.fixed_header_height(),
+            track_height: theme::TRACK_HEIGHT,
+            scroll_offset_y: self.scroll_offset_y,
+            zoom: self.zoom,
+            sample_rate: self.sample_rate,
+            bpm: self.bpm,
+            time_sig_num: self.time_sig_num,
+        }
+    }
+
+    /// Arrange-sorted, arrange-visible track ids — the lane order the canvas
+    /// draws in, and the order a drop resolution indexes.
+    pub(crate) fn arrange_track_ids(&self) -> Vec<TrackId> {
+        self.visible_tracks_sorted().iter().map(|t| t.id).collect()
     }
 
     /// Rightmost pixel needed to show all content (clips + MIDI clips).
@@ -802,6 +830,14 @@ impl<'a> TimelineCanvas<'a> {
             );
             frame.fill(&tab, theme::WARM);
         }
+        // Drag-to-timeline placement affordances (doc #175, todo #605):
+        // the lit target lane, dashed grid-snapped ghost clip, the
+        // new-audio-track drop zone, and the drag pill + drop tooltip. Drawn
+        // in this uncached pass so they track the cursor every frame.
+        if let Some(drag) = self.drag {
+            self.draw_drag_placement(frame, bounds, drag);
+        }
+
         // The ruler-height local is unused if neither overlay fires;
         // keep it so future overlay additions (e.g. selection brushes)
         // can use it without reintroducing the variable.

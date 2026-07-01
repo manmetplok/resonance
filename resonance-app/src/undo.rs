@@ -632,6 +632,12 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // (not the project); the engine's preview transport is outside
         // undo entirely.
         Message::Browser(_) => UndoAction::Skip,
+        // Drag-to-timeline placement preview (doc #175, todo #605) is pure
+        // transient UI: the drag pill, lit lane, ghost clip and tooltip are
+        // never undoable and never in the project file. The one durable
+        // effect — the drop — re-dispatches a `Pool(ImportAndPlace)`, which
+        // records its own single undo entry via the arm below.
+        Message::Drag(_) => UndoAction::Skip,
         // Audio import + placement (doc #175, todo #598) is one undoable
         // action. Recording here — before the import command is even sent —
         // captures the pre-import project (no pool asset, no placed clip, no

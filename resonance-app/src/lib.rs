@@ -132,6 +132,14 @@ pub struct Resonance {
     /// project — same rule as collapse state. See `state::browser`.
     pub(crate) browser: state::BrowserState,
 
+    /// In-flight drag-to-timeline placement (doc #175, todo #605): the file
+    /// being dragged from the media browser, the cursor, and the resolved
+    /// drop target driving the pill / lit lane / ghost clip / tooltip.
+    /// `None` when no drag is happening. Transient — never undoable, never
+    /// persisted; the drop itself fans out into a `Pool(ImportAndPlace)`.
+    /// See `state::drag`.
+    pub(crate) drag_placement: Option<state::DragPlacement>,
+
     /// Session-level state for the missing-file relink flow (doc #175,
     /// todo #600): which missing assets are currently being re-imported,
     /// plus the last relink failure to surface. The durable "missing" flag
@@ -494,6 +502,7 @@ impl Resonance {
             ),
             pool_import: state::PendingImports::default(),
             browser: state::BrowserState::default(),
+            drag_placement: None,
             relink: state::RelinkState::default(),
             reference: reference::ReferenceState::default(),
             table_registry: TableRegistry::with_builtins(),
