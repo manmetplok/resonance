@@ -19,6 +19,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         Message::Compose(_)
         | Message::Transport(_)
         | Message::Marker(_)
+        | Message::MarkerUi(_)
         | Message::Track(_)
         | Message::Bus(_)
         | Message::Mixer(_)
@@ -41,7 +42,13 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::PerformanceToggleResolved { .. })
         | Message::Ui(UiMessage::ExitPerformanceMode)
         | Message::Ui(UiMessage::OpenSettings)
-        | Message::Ui(UiMessage::OpenAddTrackMenu) => true,
+        | Message::Ui(UiMessage::OpenAddTrackMenu)
+        // Markers overview + marker navigation are only meaningful with a
+        // project open — block them while the startup modal owns the screen
+        // (the nav variants would otherwise drive gated `Marker` messages).
+        | Message::Ui(UiMessage::ToggleMarkersOverview)
+        | Message::Ui(UiMessage::RequestMarkerNav { .. })
+        | Message::Ui(UiMessage::MarkerNavResolved { .. }) => true,
         // Benign UI: allow.
         Message::Ui(UiMessage::CloseSettings)
         | Message::Ui(UiMessage::CloseAddTrackMenu)
@@ -53,6 +60,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::CancelQuit)
         | Message::Ui(UiMessage::ToggleGlobalTracks)
         | Message::Ui(UiMessage::ToggleReferencePanel)
+        | Message::Ui(UiMessage::CloseMarkersOverview)
         | Message::Ui(UiMessage::ToggleMixerInspectorGroup(_))
         | Message::Ui(UiMessage::ToggleMidiClockSend)
         | Message::Ui(UiMessage::SetMidiClockSendDevice(_))
@@ -98,6 +106,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         Message::Compose(_)
         | Message::Transport(_)
         | Message::Marker(_)
+        | Message::MarkerUi(_)
         | Message::Track(_)
         | Message::Bus(_)
         | Message::Mixer(_)
@@ -139,6 +148,7 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         Message::Compose(_)
         | Message::Transport(_)
         | Message::Marker(_)
+        | Message::MarkerUi(_)
         | Message::Track(_)
         | Message::Bus(_)
         | Message::Mixer(_)

@@ -26,6 +26,12 @@ pub enum Message {
     ChordTrack(ChordTrackMessage),
     Transport(TransportMessage),
     Marker(MarkerMessage),
+    /// Transient marker interaction state (selection, context menu, inline
+    /// rename) driven by the timeline ruler hit-testing (todo #369). These
+    /// mutate only view state and never the persisted marker set, so they
+    /// carry no undo weight — the actual edits they commit go out as
+    /// [`MarkerMessage`] variants.
+    MarkerUi(MarkerUiMessage),
     Track(TrackMessage),
     Bus(BusMessage),
     Mixer(MixerMessage),
@@ -114,6 +120,32 @@ pub enum MarkerMessage {
     LoopToRegion(u64),
     /// Seek to a marker and start playback.
     PlayFromMarker(u64),
+}
+
+/// Transient marker interaction messages emitted by the timeline ruler
+/// hit-testing (todo #369). Unlike [`MarkerMessage`] these never touch the
+/// persisted marker set: they drive selection highlighting, the right-click
+/// context menu, and the inline rename field. The rename is committed by
+/// re-dispatching [`MarkerMessage::Rename`] (which *is* undoable) once the
+/// user confirms.
+#[derive(Debug, Clone)]
+pub enum MarkerUiMessage {
+    /// Select (highlight) a marker in the ruler, or clear the selection.
+    Select(Option<u64>),
+    /// Open the right-click context menu for a marker. `x` / `y` are the
+    /// window-space anchor (from the cursor) the overlay positions itself at.
+    OpenMenu { id: u64, x: f32, y: f32 },
+    /// Dismiss the context menu without acting.
+    CloseMenu,
+    /// Start an inline rename of a marker, seeded with its current name.
+    /// `x` / `y` are the window-space anchor for the floating text field.
+    BeginRename { id: u64, x: f32, y: f32 },
+    /// The rename text field changed.
+    RenameChanged(String),
+    /// Commit the inline rename (re-dispatches [`MarkerMessage::Rename`]).
+    CommitRename,
+    /// Abandon the inline rename, discarding the edit.
+    CancelRename,
 }
 
 #[derive(Debug, Clone)]
@@ -689,6 +721,30 @@ pub enum UiMessage {
     /// stepper). Clamped to `0..=state::performance::MAX_CAPO`; the diagrams
     /// re-voice with the capo applied.
     SetPerformanceCapo(u8),
+    /// Show / hide the arrangement-markers overview popover anchored under
+    /// the transport bar (the transport "flag" button). Runtime UI state
+    /// only (todo #370).
+    ToggleMarkersOverview,
+    /// Close the markers overview popover — backdrop click, or after an
+    /// overview entry jumps the playhead (todo #370).
+    CloseMarkersOverview,
+    /// Raw next/prev-marker key press (`.` / `,`). Like
+    /// [`RequestPerformanceToggle`], this does not navigate directly: it
+    /// first probes the live widget tree for keyboard focus (see
+    /// [`crate::focus`]) so typing `.`/`,` into a track name / lyrics /
+    /// section field never jumps the playhead. Resolves to
+    /// [`MarkerNavResolved`]. `forward` picks next (`true`) vs prev.
+    RequestMarkerNav {
+        forward: bool,
+    },
+    /// Result of the focus probe started by [`RequestMarkerNav`]. When no
+    /// text field held focus (`editing == false`) the corresponding
+    /// [`crate::message::MarkerMessage::JumpToNext`] /
+    /// [`crate::message::MarkerMessage::JumpToPrev`] is dispatched.
+    MarkerNavResolved {
+        forward: bool,
+        editing: bool,
+    },
 }
 
 #[derive(Debug, Clone)]

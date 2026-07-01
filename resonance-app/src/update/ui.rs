@@ -131,6 +131,33 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             // Footer capo stepper. The setter clamps to `0..=MAX_CAPO`.
             r.performance.set_capo(frets);
         }
+        UiMessage::ToggleMarkersOverview => {
+            r.mixer.markers_overview_open = !r.mixer.markers_overview_open;
+        }
+        UiMessage::CloseMarkersOverview => {
+            r.mixer.markers_overview_open = false;
+        }
+        UiMessage::RequestMarkerNav { forward } => {
+            // The bare `.`/`,` shortcut arrives via the global keyboard
+            // subscription, which fires even while a text field is focused.
+            // Probe for keyboard focus and only navigate once we know no
+            // text input is being edited (see `crate::focus`), mirroring the
+            // `F` performance-toggle gate.
+            return crate::focus::any_text_input_focused()
+                .map(move |editing| Message::Ui(UiMessage::MarkerNavResolved { forward, editing }));
+        }
+        UiMessage::MarkerNavResolved { forward, editing } => {
+            // Suppress navigation when the key was typed into a focused text
+            // field; otherwise jump to the adjacent marker.
+            if !editing {
+                let nav = if forward {
+                    crate::message::MarkerMessage::JumpToNext
+                } else {
+                    crate::message::MarkerMessage::JumpToPrev
+                };
+                return r.update(Message::Marker(nav));
+            }
+        }
     }
     Task::none()
 }
