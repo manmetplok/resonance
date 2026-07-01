@@ -484,6 +484,27 @@ impl TimelineCanvas<'_> {
     ) -> UpdateResult {
         let pos = cursor.position_in(bounds)?;
 
+        // Drag-to-timeline placement in flight (doc #175, todo #605). The
+        // gesture starts in the media browser, so there is no local drag
+        // state to consult — the presence of `self.drag` is the signal.
+        // Resolve the drop target for the current cursor and publish a
+        // Hover so the pill / lit lane / ghost / tooltip follow the pointer.
+        // Capture so the release lands here too.
+        if self.drag.is_some() {
+            let geo = self.placement_geometry();
+            let track_ids = self.arrange_track_ids();
+            let resolved = Some(super::placement::resolve_drop(
+                &geo,
+                self.tempo_map,
+                &track_ids,
+                pos,
+            ));
+            return captured(Message::Drag(DragMessage::Hover {
+                cursor: pos,
+                resolved,
+            }));
+        }
+
         // Horizontal scrollbar drag.
         if let Some(grab) = state.h_scrollbar_grab {
             let (h_rects, _) = self.scrollbar_rects(bounds);
@@ -559,6 +580,12 @@ impl TimelineCanvas<'_> {
     }
 
     pub(super) fn handle_release(&self, state: &mut TimelineState) -> UpdateResult {
+        // Releasing over the timeline while a browser drag is in flight
+        // commits the placement (doc #175, todo #605). The resolved target
+        // was stashed by the last Hover; the update handler reads it.
+        if self.drag.is_some() {
+            return captured(Message::Drag(DragMessage::Drop));
+        }
         if state.h_scrollbar_grab.take().is_some() {
             return Some(canvas::Action::capture());
         }
@@ -891,6 +918,10 @@ impl TimelineCanvas<'_> {
 
     pub(super) fn handle_key(&self, key: &keyboard::Key) -> UpdateResult {
         use keyboard::key::Named;
+        // Esc abandons an in-flight drag-to-timeline placement (todo #605).
+        if self.drag.is_some() && matches!(key, keyboard::Key::Named(Named::Escape)) {
+            return captured(Message::Drag(DragMessage::Cancel));
+        }
         let is_delete = matches!(
             key,
             keyboard::Key::Named(Named::Delete) | keyboard::Key::Named(Named::Backspace)

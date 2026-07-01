@@ -8,9 +8,9 @@ use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
 use crate::reference::ReferenceMessage;
 use crate::state::{
-    BrowserTab, ClipEdge, ExportMode, FolderScan, GridChoice, GrooveSelection, LoopDragTarget,
-    MixerInspectorGroup, ParsedImport, PlacementMode, PlacementStart, SelectedGlobalEvent,
-    TempoAlignment, TempoChoice, ViewMode,
+    BrowserTab, ClipEdge, DraggedAsset, DropResolution, ExportMode, FolderScan, GridChoice,
+    GrooveSelection, LoopDragTarget, MixerInspectorGroup, ParsedImport, PlacementMode,
+    PlacementStart, SelectedGlobalEvent, TempoAlignment, TempoChoice, ViewMode,
 };
 use resonance_audio::quantize::{Division, QuantizeMode};
 use resonance_audio::types::{
@@ -65,6 +65,12 @@ pub enum Message {
     /// persisted in the project (same rule as collapse state, doc #175).
     /// Handled by `update::browser::handle`.
     Browser(BrowserMessage),
+    /// Drag-to-timeline placement gesture (doc #175, todo #605): dragging a
+    /// media-browser row over the arrangement to preview and drop a clip.
+    /// Transient preview — none of it is undoable or persisted; the drop
+    /// fans out into a [`PoolMessage::ImportAndPlace`]. Handled by
+    /// `update::drag::handle`.
+    Drag(DragMessage),
     /// Timer tick driving VU meters and auto-follow. Kept at top level to
     /// avoid wrapping cost on the hot path.
     Tick,
@@ -1002,6 +1008,39 @@ pub enum BrowserMessage {
     ToggleSync,
     /// Toggle Auto-play-on-select. Pure UI state; not sent to the engine.
     ToggleAutoPlay,
+}
+
+/// Drag-to-timeline placement gesture (doc #175, todo #605). The primary
+/// way audio lands on the arrangement: a browser row is dragged over the
+/// timeline, which previews a grid-snapped ghost clip, lights the target
+/// lane, and — on release — drops the file as a clip.
+///
+/// Every variant is **transient** (classified `UndoAction::Skip`): the
+/// pill / ghost / tooltip are pure preview state. Only the drop has a
+/// durable effect, and it borrows the undoable
+/// [`PoolMessage::ImportAndPlace`] path so the whole import + placement is
+/// a single undo entry. Routed through `update::drag::handle`.
+#[derive(Debug, Clone)]
+pub enum DragMessage {
+    /// Begin dragging `asset` (a browser row) onto the timeline. Records the
+    /// in-flight drag so the timeline can start previewing it.
+    Start(DraggedAsset),
+    /// Pointer moved to `cursor` (timeline-canvas content coordinates) with
+    /// a freshly resolved drop target. Published by the timeline canvas each
+    /// move while a drag is active; updates the pill / ghost / tooltip.
+    /// `resolved` is `None` when the cursor is off the lane area.
+    Hover {
+        cursor: iced::Point,
+        resolved: Option<DropResolution>,
+    },
+    /// Release over the timeline: commit the current resolution. Reads the
+    /// resolved [`DropTarget`], clears the drag, and re-dispatches a
+    /// [`PoolMessage::ImportAndPlace`] so the placement is imported +
+    /// undoable. A no-op if the drag never resolved a target.
+    Drop,
+    /// Abandon the drag (released off the timeline, or Esc). Clears the
+    /// preview with no placement.
+    Cancel,
 }
 
 /// Edits to the global chord track (epic #33, doc #168). Routed like

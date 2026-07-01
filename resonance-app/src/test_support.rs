@@ -813,4 +813,22 @@ impl Resonance {
     pub fn test_relink(&self) -> &crate::state::RelinkState {
         &self.relink
     }
+
+    // ---- Drag-to-timeline placement (doc #175, todo #605) ------------
+
+    /// Test-only: borrow the in-flight drag-placement state so gesture /
+    /// render tests can assert the drag pill / lit lane / ghost / tooltip
+    /// inputs (the dragged asset, cursor, and resolved drop target).
+    #[doc(hidden)]
+    pub fn test_drag_placement(&self) -> Option<&crate::state::DragPlacement> {
+        self.drag_placement.as_ref()
+    }
+
+    /// Test-only: install an in-flight drag directly, standing in for the
+    /// browser-row press + pointer moves so a golden-image snapshot can
+    /// render a deterministic drag state without simulating the gesture.
+    #[doc(hidden)]
+    pub fn test_set_drag_placement(&mut self, drag: crate::state::DragPlacement) {
+        self.drag_placement = Some(drag);
+    }
 }
