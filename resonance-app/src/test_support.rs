@@ -517,6 +517,20 @@ impl Resonance {
         self.snapshot_for_undo()
     }
 
+    /// Test-only: borrow the undo history, so the import-placement tests
+    /// can assert a single pre-import entry was recorded (ba todo #598).
+    #[doc(hidden)]
+    pub fn test_undo_history(&self) -> &crate::undo::UndoHistory {
+        &self.undo
+    }
+
+    /// Test-only: number of import placements still awaiting their
+    /// `AssetImported` event (ba todo #598).
+    #[doc(hidden)]
+    pub fn test_pending_import_count(&self) -> usize {
+        self.pool_import.len()
+    }
+
     /// Test-only: restore a previously captured snapshot, exercising the
     /// fast (`try_diff_replay`) restore path when the snapshot is
     /// structure-identical to the current state. Used to prove that an

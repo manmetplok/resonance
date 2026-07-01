@@ -22,6 +22,7 @@ pub mod midi_clip;
 pub mod midi_editor;
 pub mod mixer;
 pub mod plugin;
+pub mod pool;
 pub mod project_io;
 pub mod reference;
 pub mod tick;
@@ -103,6 +104,7 @@ impl crate::Resonance {
             Message::Reference(m) => reference::handle(self, m),
             Message::Export(m) => export::handle(self, m),
             Message::Import(m) => import::handle(self, m),
+            Message::Pool(m) => pool::handle(self, m),
             Message::Ui(m) => ui::handle(self, m),
             Message::Browser(m) => browser::handle(self, m),
             Message::Tick => tick::handle_tick(self),

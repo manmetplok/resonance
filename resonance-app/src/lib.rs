@@ -119,6 +119,13 @@ pub struct Resonance {
     /// recent folders persist in user settings. See `state::pool`.
     pub(crate) pool: state::MediaPool,
 
+    /// In-flight import → placement bookkeeping (doc #175, ba todo #598):
+    /// per queued source file, what to do once its `AssetImported` event
+    /// lands (place a clip on a target track, or nothing for a pool-only
+    /// import). Transient — not persisted, not in the undo snapshot; the
+    /// resulting pool asset + placed clip are what ride persistence/undo.
+    pub(crate) pool_import: state::PendingImports,
+
     /// Transient media-browser interaction state (doc #175): current
     /// folder + cached scan, per-folder filter, Files/Pool tab, and the
     /// audition preview transport. Not undoable, not persisted in the
@@ -478,6 +485,7 @@ impl Resonance {
                 settings.media.favourites.clone(),
                 settings.media.recent_folders.clone(),
             ),
+            pool_import: state::PendingImports::default(),
             browser: state::BrowserState::default(),
             reference: reference::ReferenceState::default(),
             table_registry: TableRegistry::with_builtins(),

@@ -12,6 +12,7 @@ mod midi;
 mod midi_map;
 pub mod performance;
 mod plugins;
+mod pool;
 mod presets;
 mod project_io;
 mod reference;

@@ -14,8 +14,8 @@ use crate::state::{
 };
 use resonance_audio::quantize::{Division, QuantizeMode};
 use resonance_audio::types::{
-    BusId, ClipId, FadeCurve, PluginInstanceId, ScannedPlugin, SendId, SendSource, TrackId,
-    TrackOutput,
+    BusId, ClipId, FadeCurve, PluginInstanceId, SamplePos, ScannedPlugin, SendId, SendSource,
+    TrackId, TrackOutput,
 };
 use resonance_music_theory::Scale;
 
@@ -47,6 +47,10 @@ pub enum Message {
     Reference(ReferenceMessage),
     Export(ExportMessage),
     Import(ImportMessage),
+    /// Audio media-pool import + placement orchestration (doc #175, ba
+    /// todo #598): bring external audio into the project pool and,
+    /// optionally, place it as a clip. See [`PoolMessage`].
+    Pool(PoolMessage),
     Ui(UiMessage),
     /// Docked media-browser interaction: filesystem navigation, per-folder
     /// filter, favourite / recent toggles, Files/Pool tab, and the audition
@@ -828,6 +832,46 @@ pub enum ImportMessage {
     SetConflictAlignment(TempoAlignment),
     /// Confirm and start the import.
     Confirm,
+}
+
+/// Where a drop-import lands its clips (doc #175, ba todo #598). The
+/// sample position is the **raw** drop position; the orchestration snaps
+/// it to the timeline grid (the same snap the clip-drag handlers use)
+/// before placement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropTarget {
+    /// Place each imported file on an existing track at `start_sample`.
+    ExistingTrack {
+        track_id: TrackId,
+        start_sample: SamplePos,
+    },
+    /// Spawn a new audio track (the new-audio-track drop zone below the
+    /// last lane) and place each imported file on it at `start_sample`.
+    NewTrack { start_sample: SamplePos },
+}
+
+/// Audio import + placement orchestration (doc #175, ba todo #598).
+/// Drives the end-to-end flow: a multi-file selection (from the "Import
+/// audio…" dialog or a drag-and-drop) is imported into the project pool
+/// via `AudioCommand::ImportAudioToPool`, and — for a drop — each file is
+/// placed as an audio clip once its `AssetImported` event lands. Routed
+/// through `update::pool::handle`.
+///
+/// Both variants are classified `UndoAction::Record` (see `undo::classify`)
+/// so the whole import + placement is a single undoable action: the undo
+/// snapshot is taken up front, before the import is issued, so one undo
+/// reverts the pool asset(s), any placed clip(s), and a spawned track.
+#[derive(Debug, Clone)]
+pub enum PoolMessage {
+    /// Import one or more files into the pool **without** placing a clip
+    /// (the "Import audio…" dialog / pool-only path).
+    ImportFilesToPool(Vec<std::path::PathBuf>),
+    /// Import one or more files and place them as clips at `target` (a
+    /// drop on an existing lane, or on the new-audio-track zone).
+    ImportAndPlace {
+        paths: Vec<std::path::PathBuf>,
+        target: DropTarget,
+    },
 }
 
 /// Docked media-browser interaction (doc #175, todo #599): filesystem

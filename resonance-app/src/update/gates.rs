@@ -83,6 +83,9 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // a project — block it (like Open Settings / Add Track) so it
         // can't steal focus while the startup modal owns the screen.
         Message::Import(_) => true,
+        // Audio import + placement mutates the project (adds pool assets /
+        // clips / tracks) — block while the startup modal owns the screen.
+        Message::Pool(_) => true,
         // Timer tick: harmless, drives VU meters — allow.
         Message::Tick => false,
         // Window close request: always allow so the app can exit.
@@ -124,6 +127,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::Reference(_)
         | Message::GlobalTrack(_)
         | Message::Import(_)
+        | Message::Pool(_)
         | Message::ChordTrack(_)
         | Message::Ui(_)
         | Message::Export(_)
@@ -169,6 +173,7 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         | Message::Reference(_)
         | Message::GlobalTrack(_)
         | Message::Import(_)
+        | Message::Pool(_)
         | Message::ChordTrack(_)
         | Message::Ui(_)
         | Message::Export(_)

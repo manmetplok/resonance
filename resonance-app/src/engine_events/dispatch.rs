@@ -10,7 +10,9 @@ use resonance_audio::types::*;
 use crate::message::*;
 use crate::Resonance;
 
-use super::{aux_sends, clips, midi, midi_map, plugins, project_io, reference, tracks, transport};
+use super::{
+    aux_sends, clips, midi, midi_map, plugins, pool, project_io, reference, tracks, transport,
+};
 
 pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
     use AudioEvent as E;
@@ -116,11 +118,38 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         // the detected BPM into the app is a follow-up todo, so accept it
         // without acting for now.
         E::ClipTempoDetected { .. } => {}
-        // Media-pool import lifecycle (engine todo #592). Mirroring these
-        // into the app's pool + import-progress state is todo #597; until
-        // it lands these arms accept the events without acting, keeping
-        // the workspace compiling now that the engine emits them.
-        E::ImportProgress { .. } | E::AssetImported { .. } | E::ImportFailed { .. } => {}
+        // Media-pool import lifecycle (engine todo #592). `AssetImported`
+        // mirrors the asset into the pool and, for a drop, places it as a
+        // clip (todo #598, `engine_events::pool`); `ImportFailed` drops the
+        // queued placement and surfaces the error. Per-file progress
+        // *display* (the transcode modal) is mirrored by todo #597, which
+        // owns `ImportProgress` — accept it here without acting for now.
+        E::ImportProgress { .. } => {}
+        E::AssetImported {
+            asset_id,
+            project_relative_path,
+            original_path,
+            format,
+            channels,
+            source_sample_rate,
+            duration_frames,
+            peaks,
+        } => pool::asset_imported(
+            r,
+            asset_id,
+            project_relative_path,
+            original_path,
+            format,
+            channels,
+            source_sample_rate,
+            duration_frames,
+            peaks,
+        ),
+        E::ImportFailed {
+            asset_id,
+            path,
+            reason,
+        } => pool::import_failed(r, asset_id, path, reason),
         // Vocal pitch analysis (todo #357) emits the detected contour/notes
         // here; mirror them into the clip's app-side `VocalTuning` (todo
         // #359) so the pitch editor reads them without a read-back.
