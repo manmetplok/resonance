@@ -211,6 +211,19 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
     let loop_btn = loop_toggle_button(r);
     let metronome_btn = metronome_toggle_button(r);
 
+    // Marker navigation + overview toggle (todo #370). Prev/Next jump the
+    // playhead to the adjacent arrangement marker; the flag button opens the
+    // markers overview popover anchored under the transport bar.
+    let prev_marker_btn = transport_btn(
+        fa::BACKWARD_FAST,
+        Message::Marker(MarkerMessage::JumpToPrev),
+    );
+    let next_marker_btn = transport_btn(
+        fa::FORWARD_FAST,
+        Message::Marker(MarkerMessage::JumpToNext),
+    );
+    let overview_btn = markers_overview_toggle_button(r);
+
     let left = row![
         prev_btn,
         stop_btn,
@@ -220,6 +233,10 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
         vertical_divider(),
         loop_btn,
         metronome_btn,
+        vertical_divider(),
+        prev_marker_btn,
+        overview_btn,
+        next_marker_btn,
     ]
     .spacing(8)
     .align_y(alignment::Vertical::Center);
@@ -433,6 +450,20 @@ fn metronome_toggle_button(r: &Resonance) -> Element<'_, Message> {
     .height(32)
     .style(move |_theme, status| theme::toggle_button_style(active, theme::GOOD, false, status))
     .into()
+}
+
+/// Flag toggle that opens/closes the arrangement-markers overview popover
+/// (todo #370). Lit with the accent tint while the overview is open.
+fn markers_overview_toggle_button(r: &Resonance) -> Element<'_, Message> {
+    let active = r.mixer.markers_overview_open;
+    let color = if active { theme::ACCENT } else { theme::TEXT_2 };
+    button(centered_icon(fa::FLAG, color, 13, 32))
+        .on_press(Message::Ui(UiMessage::ToggleMarkersOverview))
+        .padding(0)
+        .width(32)
+        .height(32)
+        .style(move |_theme, status| theme::toggle_button_style(active, theme::ACCENT, false, status))
+        .into()
 }
 
 fn vertical_divider<'a>() -> iced::widget::Container<'a, Message> {

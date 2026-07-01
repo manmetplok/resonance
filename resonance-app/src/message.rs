@@ -721,6 +721,30 @@ pub enum UiMessage {
     /// stepper). Clamped to `0..=state::performance::MAX_CAPO`; the diagrams
     /// re-voice with the capo applied.
     SetPerformanceCapo(u8),
+    /// Show / hide the arrangement-markers overview popover anchored under
+    /// the transport bar (the transport "flag" button). Runtime UI state
+    /// only (todo #370).
+    ToggleMarkersOverview,
+    /// Close the markers overview popover — backdrop click, or after an
+    /// overview entry jumps the playhead (todo #370).
+    CloseMarkersOverview,
+    /// Raw next/prev-marker key press (`.` / `,`). Like
+    /// [`RequestPerformanceToggle`], this does not navigate directly: it
+    /// first probes the live widget tree for keyboard focus (see
+    /// [`crate::focus`]) so typing `.`/`,` into a track name / lyrics /
+    /// section field never jumps the playhead. Resolves to
+    /// [`MarkerNavResolved`]. `forward` picks next (`true`) vs prev.
+    RequestMarkerNav {
+        forward: bool,
+    },
+    /// Result of the focus probe started by [`RequestMarkerNav`]. When no
+    /// text field held focus (`editing == false`) the corresponding
+    /// [`crate::message::MarkerMessage::JumpToNext`] /
+    /// [`crate::message::MarkerMessage::JumpToPrev`] is dispatched.
+    MarkerNavResolved {
+        forward: bool,
+        editing: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
