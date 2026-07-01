@@ -103,8 +103,34 @@ pub struct ClipInteractionState {
     pub selected_global_event: Option<SelectedGlobalEvent>,
     /// Currently selected arrangement marker, if any. Threaded into the
     /// timeline canvas so the selected flag / region span renders with the
-    /// stronger accent (todo #368). Click-to-select wiring lands separately.
+    /// stronger accent (todo #368). Set by the ruler hit-testing (#369).
     pub selected_marker_id: Option<u64>,
+    /// Open right-click context menu for a marker, if any (todo #369). The
+    /// menu is rendered as a floating overlay anchored at `x` / `y`.
+    pub marker_menu: Option<MarkerMenuState>,
+    /// In-progress inline rename of a marker, if any (todo #369). Holds the
+    /// live edit buffer; committing re-dispatches `MarkerMessage::Rename`.
+    pub marker_rename: Option<MarkerRenameState>,
+}
+
+/// A marker's open right-click context menu. `x` / `y` are the window-space
+/// anchor (cursor position at open time) the overlay positions itself at.
+#[derive(Debug, Clone)]
+pub struct MarkerMenuState {
+    pub marker_id: u64,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// An in-progress inline marker rename. `text` is the live edit buffer,
+/// seeded from the marker's current name; `x` / `y` anchor the floating
+/// text field in window space.
+#[derive(Debug, Clone)]
+pub struct MarkerRenameState {
+    pub marker_id: u64,
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
 }
 
 /// A user-selectable quantize grid division for the MIDI editor's

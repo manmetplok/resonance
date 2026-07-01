@@ -448,6 +448,25 @@ impl Resonance {
         self.transport.playhead
     }
 
+    /// Test-only: the currently selected arrangement-marker id. Driven by
+    /// the ruler hit-testing / `MarkerUiMessage::Select` (todo #369).
+    #[doc(hidden)]
+    pub fn test_selected_marker_id(&self) -> Option<u64> {
+        self.interaction.selected_marker_id
+    }
+
+    /// Test-only: the open marker context menu, if any (todo #369).
+    #[doc(hidden)]
+    pub fn test_marker_menu(&self) -> Option<&state::MarkerMenuState> {
+        self.interaction.marker_menu.as_ref()
+    }
+
+    /// Test-only: the in-progress inline marker rename, if any (todo #369).
+    #[doc(hidden)]
+    pub fn test_marker_rename(&self) -> Option<&state::MarkerRenameState> {
+        self.interaction.marker_rename.as_ref()
+    }
+
     /// Test-only: the transport loop range / enabled flags
     /// `(loop_in, loop_out, loop_enabled)`. `LoopToRegion` sets these in
     /// lockstep with the `SetLoopRange` command sent to the engine.
