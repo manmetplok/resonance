@@ -246,6 +246,36 @@ impl Resonance {
         Some(ext.status(track))
     }
 
+    /// Test-only: compute the Mixer Inspector's lazy-region fingerprint for a
+    /// track, exactly as `view()` does (same collapse state, same track). The
+    /// inspector's onboarding card and device-offline alert render *inside*
+    /// the `lazy(fp, …)` region, so this hash MUST change whenever any state
+    /// those bodies depend on changes — otherwise the retained UI reuses a
+    /// stale tree across an offline/recovery transition and the alert never
+    /// appears (or never clears). Regression guard for ba todo #459.
+    /// `None` when the track doesn't exist.
+    #[doc(hidden)]
+    pub fn test_inspector_fingerprint(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<u64> {
+        let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
+        let routing_collapsed = self
+            .mixer
+            .collapsed_inspector_groups
+            .contains(&state::MixerInspectorGroup::Routing);
+        let chain_collapsed = self
+            .mixer
+            .collapsed_inspector_groups
+            .contains(&state::MixerInspectorGroup::Chain);
+        Some(crate::view::mixer::inspector::inspector_fingerprint(
+            self,
+            track,
+            routing_collapsed,
+            chain_collapsed,
+        ))
+    }
+
     /// Test-only: capture the current undo snapshot's runtime extras (the
     /// part of an undo entry that the `ProjectFile` shape doesn't carry,
     /// including external-instrument config). Lets a reducer test prove the

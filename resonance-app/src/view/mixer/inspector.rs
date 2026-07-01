@@ -167,7 +167,7 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
 /// cached widget tree is reused (which is the resize hot path). The
 /// live level fields are intentionally absent: the SIGNAL group renders
 /// them per-frame *outside* the lazy region.
-fn inspector_fingerprint(
+pub(crate) fn inspector_fingerprint(
     r: &crate::Resonance,
     t: &TrackState,
     routing_collapsed: bool,

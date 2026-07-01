@@ -221,6 +221,80 @@ fn offline_is_recoverable_via_rescan() {
     );
 }
 
+/// Regression guard for the lazy-cache staleness the reviewer flagged: the
+/// onboarding card and the inline "MIDI output unavailable" alert render
+/// *inside* the inspector's `lazy(fp, …)` region, so `inspector_fingerprint`
+/// MUST change across every transition those bodies depend on. The other
+/// tests each build a fresh `Simulator` from a fresh `view()`, which bypasses
+/// the retained lazy cache and so would pass even if the fingerprint were
+/// stale; this one asserts on the fingerprint directly.
+#[test]
+fn inspector_fingerprint_changes_across_lazy_rendered_states() {
+    // Unconfigured (onboarding card visible) → Configuring (card gone).
+    let unconfigured = app_unconfigured();
+    let fp_unconfigured = unconfigured
+        .test_inspector_fingerprint(TRACK)
+        .expect("fingerprint for external track");
+
+    let configuring = app_configuring();
+    let fp_configuring = configuring
+        .test_inspector_fingerprint(TRACK)
+        .expect("fingerprint");
+    assert_ne!(
+        fp_unconfigured, fp_configuring,
+        "picking a device must invalidate the lazy region so the onboarding \
+         card is dropped"
+    );
+
+    // Configuring → Live (monitor toggle; routing/monitor group changes).
+    let live = app_live();
+    let fp_live = live.test_inspector_fingerprint(TRACK).expect("fingerprint");
+    assert_ne!(
+        fp_configuring, fp_live,
+        "enabling monitoring must invalidate the lazy region"
+    );
+
+    // Live → Offline: THE critical transition. The offline flag is set by a
+    // mirrored engine event that touches no `TrackState` field, so if the
+    // fingerprint didn't fold in `midi_out_offline` the retained tree would
+    // never rebuild and the recovery alert would never appear.
+    let mut offline = app_live();
+    offline.test_apply_engine_event(AudioEvent::ExternalInstrumentMidiOutOffline {
+        track_id: TRACK,
+        device: Some("Moog Muse".into()),
+    });
+    let fp_offline = offline
+        .test_inspector_fingerprint(TRACK)
+        .expect("fingerprint");
+    assert_ne!(
+        fp_live, fp_offline,
+        "going offline must invalidate the lazy region so the inline alert \
+         appears (the flag is set purely in the external-instrument mirror)"
+    );
+
+    // Offline → recovered: re-scan clears the flag, so the lazy region must
+    // rebuild and drop the alert from the retained tree.
+    let mut recovered = offline;
+    dispatch(&mut recovered, Eim::CheckDevices(TRACK));
+    let fp_recovered = recovered
+        .test_inspector_fingerprint(TRACK)
+        .expect("fingerprint");
+    assert_ne!(
+        fp_offline, fp_recovered,
+        "re-scan clearing the offline flag must invalidate the lazy region so \
+         the alert disappears"
+    );
+    // …and recovery genuinely happened: the flag is cleared, status is Live
+    // again, so the retained tree rebuilds without the alert. (The fingerprint
+    // won't exactly equal the pre-offline Live value because CheckDevices also
+    // refreshes the hardware device lists, which the fingerprint folds in.)
+    assert_eq!(
+        recovered.test_external_instrument_status(TRACK),
+        Some(ExternalInstrumentStatus::Live),
+        "re-scan restores the live route"
+    );
+}
+
 #[test]
 fn non_external_track_has_no_status_badge() {
     let app = app_with_track(); // never Enable-d
