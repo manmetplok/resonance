@@ -144,7 +144,15 @@ impl Resonance {
         .spacing(14)
         .align_y(alignment::Vertical::Center);
 
-        let centre = self.performance_transport_state();
+        // Centre: transport state with the current/next arrangement section
+        // (song structure) beneath it, so the performer can see where they are
+        // in the arrangement at a glance (todo #372).
+        let centre = column![
+            self.performance_transport_state(),
+            self.performance_section_label(),
+        ]
+        .spacing(3)
+        .align_x(alignment::Horizontal::Center);
         let right = self.performance_telemetry();
 
         let inner = row![
@@ -206,6 +214,84 @@ impl Resonance {
                     .line_height(LineHeight::Relative(1.0)),
             )
             .into()
+    }
+
+    /// Song-structure line beneath the transport state: the arrangement
+    /// section under the playhead and the one coming up (todo #372). Derived
+    /// from the arrangement markers via the headless
+    /// [`section_readout`](crate::engine_events::performance::section_readout),
+    /// honoring the active loop region the same way the chord look-ahead does.
+    ///
+    /// Renders `● Current → Next`: a colour dot tinted to the current marker,
+    /// the current section name (bright), then a recessed arrow + next name.
+    /// When the arrangement has no marker at or after the playhead — an empty
+    /// project — it collapses to nothing so the transport state stays centred.
+    fn performance_section_label(&self) -> Element<'_, Message> {
+        use crate::engine_events::performance::section_readout;
+
+        let loop_region = (self.transport.loop_enabled && self.transport.loop_range_set)
+            .then_some((self.transport.loop_in, self.transport.loop_out));
+        let readout = section_readout(
+            self.markers.as_slice(),
+            self.transport.playhead,
+            loop_region,
+        );
+
+        // Empty arrangement (or before any marker): render nothing so the
+        // centre cluster looks exactly like the pre-markers layout.
+        if readout.current.is_none() && readout.next.is_none() {
+            return Space::new().width(0).height(0).into();
+        }
+
+        let mut cluster = row![].spacing(8).align_y(alignment::Vertical::Center);
+
+        match &readout.current {
+            Some(section) => {
+                let color = iced::Color::from_rgb8(
+                    section.color[0],
+                    section.color[1],
+                    section.color[2],
+                );
+                cluster = cluster.push(section_dot(color));
+                cluster = cluster.push(
+                    text(section.name.clone())
+                        .size(12)
+                        .font(theme::UI_FONT_SEMIBOLD)
+                        .color(theme::TEXT_2)
+                        .line_height(LineHeight::Relative(1.0)),
+                );
+            }
+            // In a gap between regions: no current section, but a "next" still
+            // comes. Show the design's em-dash so the line isn't blank.
+            None => {
+                cluster = cluster.push(
+                    text("\u{2014}")
+                        .size(12)
+                        .font(theme::UI_FONT)
+                        .color(theme::TEXT_4)
+                        .line_height(LineHeight::Relative(1.0)),
+                );
+            }
+        }
+
+        if let Some(next) = &readout.next {
+            cluster = cluster.push(
+                text("\u{2192}")
+                    .size(11)
+                    .font(theme::MONO_FONT)
+                    .color(theme::TEXT_4)
+                    .line_height(LineHeight::Relative(1.0)),
+            );
+            cluster = cluster.push(
+                text(next.name.clone())
+                    .size(12)
+                    .font(theme::MONO_FONT)
+                    .color(theme::TEXT_3)
+                    .line_height(LineHeight::Relative(1.0)),
+            );
+        }
+
+        cluster.into()
     }
 
     /// Right cluster: bar·beat clock (WARM), BPM, time signature, key, and
@@ -622,6 +708,24 @@ fn performance_pill<'a>() -> Element<'a, Message> {
         ..Default::default()
     })
     .into()
+}
+
+/// A small round colour dot tinted to a marker, drawn before the current
+/// section name so the teleprompter label matches the timeline's marker
+/// colour (todo #372).
+fn section_dot<'a>(color: iced::Color) -> Element<'a, Message> {
+    container(Space::new().width(7).height(7))
+        .width(7)
+        .height(7)
+        .style(move |_theme| container::Style {
+            background: Some(iced::Background::Color(color)),
+            border: iced::Border {
+                radius: 999.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
 /// A bright telemetry value token (mono).
