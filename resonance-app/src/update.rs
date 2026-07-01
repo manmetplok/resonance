@@ -25,6 +25,7 @@ pub mod plugin;
 pub mod pool;
 pub mod project_io;
 pub mod reference;
+pub mod relink;
 pub mod tick;
 pub mod track;
 pub mod transport;
@@ -105,6 +106,7 @@ impl crate::Resonance {
             Message::Export(m) => export::handle(self, m),
             Message::Import(m) => import::handle(self, m),
             Message::Pool(m) => pool::handle(self, m),
+            Message::Relink(m) => relink::handle(self, m),
             Message::Ui(m) => ui::handle(self, m),
             Message::Browser(m) => browser::handle(self, m),
             Message::Tick => tick::handle_tick(self),

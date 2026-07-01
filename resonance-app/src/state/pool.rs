@@ -132,6 +132,19 @@ impl MediaPool {
         self.assets.iter().any(|a| a.id == id)
     }
 
+    /// Every asset whose backing WAV is currently flagged missing, in
+    /// import order. Drives the relink flow (doc #175, todo #600): the
+    /// batch "Search a folder…" resolves this whole set by filename, and
+    /// the browser's Pool tab renders a `relink` chip per entry.
+    pub fn missing_assets(&self) -> impl Iterator<Item = &PoolAsset> {
+        self.assets.iter().filter(|a| a.missing)
+    }
+
+    /// True when any pool asset is flagged missing.
+    pub fn has_missing(&self) -> bool {
+        self.assets.iter().any(|a| a.missing)
+    }
+
     /// Add an asset to the pool. If an asset with the same id already
     /// exists it is replaced in place (re-import / metadata refresh),
     /// preserving its position; otherwise the asset is appended.

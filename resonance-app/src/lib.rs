@@ -132,6 +132,13 @@ pub struct Resonance {
     /// project — same rule as collapse state. See `state::browser`.
     pub(crate) browser: state::BrowserState,
 
+    /// Session-level state for the missing-file relink flow (doc #175,
+    /// todo #600): which missing assets are currently being re-imported,
+    /// plus the last relink failure to surface. The durable "missing" flag
+    /// lives on each pool asset; this only tracks the in-flight resolve.
+    /// Not undoable, not persisted. See `state::relink`.
+    pub(crate) relink: state::RelinkState,
+
     /// Reference-track (A/B) comparison state. See `crate::reference`.
     pub(crate) reference: reference::ReferenceState,
     /// Markov table registry for chord generators. Constructed once at
@@ -487,6 +494,7 @@ impl Resonance {
             ),
             pool_import: state::PendingImports::default(),
             browser: state::BrowserState::default(),
+            relink: state::RelinkState::default(),
             reference: reference::ReferenceState::default(),
             table_registry: TableRegistry::with_builtins(),
 
