@@ -14,7 +14,7 @@ use resonance_audio::types::{bpm_at_bar, TrackId};
 use crate::message::*;
 use crate::state::{self, TrackState};
 use crate::theme;
-use super::hit_test::{self, track_index, ClipHandles, HitKind};
+use super::hit_test::{self, track_index, ClipHandles, HitKind, MarkerHit};
 use super::scrollbar::{scroll_from_thumb_pos, ScrollbarRects};
 use super::snap::snap_sample_to_grid_tempo;
 use super::{TimelineCanvas, TimelineState};
@@ -37,6 +37,16 @@ pub(crate) enum ClipInteraction {
     Gain,
     MidiMove,
     MidiTrim,
+}
+
+/// Active drag on an arrangement marker: either the start pole (moves the
+/// marker) or a region's end edge (resizes it). The target sample is
+/// recomputed from the pointer x on every move, so only the marker id and
+/// which handle is grabbed need to persist across the gesture.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MarkerDrag {
+    pub id: u64,
+    pub hit: MarkerHit,
 }
 
 /// Active drag on a tempo event point.
@@ -275,6 +285,35 @@ impl TimelineCanvas<'_> {
             }
         }
 
+        // Arrangement-marker hit-testing in the ruler band. A flag click
+        // selects and begins a start-move drag; a region end-edge click
+        // begins a resize drag; a double-click on a flag opens the inline
+        // rename. Sits ahead of the generic ruler-seek below so clicking a
+        // marker never also moves the playhead.
+        if pos.y < ruler_height {
+            if let Some((id, hit)) = self.marker_at(pos) {
+                let now = Instant::now();
+                let is_double = state
+                    .last_marker_click
+                    .map(|(t, mid)| {
+                        mid == id && now.duration_since(t).as_millis() <= DOUBLE_CLICK_MS
+                    })
+                    .unwrap_or(false);
+                state.last_marker_click = Some((now, id));
+                if is_double && hit == MarkerHit::Flag {
+                    state.last_marker_click = None;
+                    let anchor = cursor.position().unwrap_or(pos);
+                    return captured(Message::MarkerUi(MarkerUiMessage::BeginRename {
+                        id,
+                        x: anchor.x,
+                        y: anchor.y,
+                    }));
+                }
+                state.marker_drag = Some(MarkerDrag { id, hit });
+                return captured(Message::MarkerUi(MarkerUiMessage::Select(Some(id))));
+            }
+        }
+
         // Any other click in the ruler → seek the playhead, snapped
         // to the nearest grid line.
         if pos.y < ruler_height {
@@ -466,6 +505,24 @@ impl TimelineCanvas<'_> {
         if state.dragging_loop {
             return captured(Message::Transport(TransportMessage::UpdateLoopDrag(pos.x)));
         }
+        // Marker drag: move the start pole, or resize a region's end edge.
+        // `MoveStart` snaps in its reducer; the end edge is snapped here so
+        // both handles land on the same grid lines.
+        if let Some(drag) = state.marker_drag {
+            let sample = self.x_to_sample(pos.x);
+            return match drag.hit {
+                MarkerHit::Flag => {
+                    captured(Message::Marker(MarkerMessage::MoveStart(drag.id, sample)))
+                }
+                MarkerHit::EndEdge => {
+                    let snapped = self.snap_sample(sample);
+                    captured(Message::Marker(MarkerMessage::SetRegionEnd(
+                        drag.id,
+                        Some(snapped),
+                    )))
+                }
+            };
+        }
         // Tempo event drag: vertical = BPM (1 px = 1 BPM), horizontal = bar.
         if let Some(drag) = &state.tempo_drag {
             let bar = self.x_to_bar(pos.x);
@@ -515,6 +572,12 @@ impl TimelineCanvas<'_> {
         if state.tempo_drag.take().is_some() {
             return captured(Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag));
         }
+        // Marker drag end: nothing to commit (each move already coalesces
+        // into a single undo entry via the reducer), just drop the drag and
+        // swallow the release so it doesn't fall through to other handlers.
+        if state.marker_drag.take().is_some() {
+            return Some(canvas::Action::capture());
+        }
         if let Some(interaction) = state.clip_interaction.take() {
             return match interaction {
                 ClipInteraction::Move => captured(Message::Clip(ClipMessage::EndClipDrag)),
@@ -543,6 +606,14 @@ impl TimelineCanvas<'_> {
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
         use mouse::Interaction;
+        // An active marker drag holds its cursor regardless of pointer
+        // position: resize for an end-edge drag, grabbing for a start move.
+        if let Some(drag) = state.marker_drag {
+            return match drag.hit {
+                MarkerHit::EndEdge => Interaction::ResizingHorizontally,
+                MarkerHit::Flag => Interaction::Grabbing,
+            };
+        }
         match &state.clip_interaction {
             Some(ClipInteraction::Trim)
             | Some(ClipInteraction::MidiTrim)
@@ -556,6 +627,15 @@ impl TimelineCanvas<'_> {
         let Some(pos) = cursor.position_in(bounds) else {
             return Interaction::default();
         };
+        // Marker hover in the ruler band: resize over a region end edge,
+        // grab over a flag. Checked before the header guard below because
+        // markers live in the ruler (above the lane area).
+        if let Some((_, hit)) = self.marker_at(pos) {
+            return match hit {
+                MarkerHit::EndEdge => Interaction::ResizingHorizontally,
+                MarkerHit::Flag => Interaction::Grab,
+            };
+        }
         if pos.y < self.fixed_header_height() {
             return Interaction::default();
         }
@@ -608,6 +688,67 @@ impl TimelineCanvas<'_> {
         let range = (max_bpm - min_bpm).max(10.0);
         let pad = range * 0.15;
         (min_bpm - pad, max_bpm + pad)
+    }
+
+    /// Map a pixel x-position to an absolute sample position (clamped at 0).
+    /// The inverse of [`Self::sample_to_x`], used by the marker drag handlers.
+    fn x_to_sample(&self, x: f32) -> u64 {
+        let seconds = ((x + self.scroll_offset) / self.zoom).max(0.0);
+        (seconds as f64 * self.sample_rate as f64) as u64
+    }
+
+    /// Snap a raw sample position to the grid using the live tempo / zoom —
+    /// the same helper the transport loop-drag, clip, and marker reducers
+    /// use, so a dragged region edge lands on the same lines as everything
+    /// else.
+    fn snap_sample(&self, sample: u64) -> u64 {
+        snap_sample_to_grid_tempo(
+            sample,
+            self.bpm,
+            self.time_sig_num,
+            self.sample_rate,
+            self.zoom,
+            self.tempo_map,
+        )
+    }
+
+    /// Hit-test a pointer against the arrangement markers in the ruler band.
+    /// Returns the topmost (last-drawn) marker under the pointer and which
+    /// handle was grabbed, or `None` when the pointer misses every marker or
+    /// sits below the ruler. Iterates in reverse so a later marker painted on
+    /// top of an earlier one wins, matching the clip hit-test convention.
+    fn marker_at(&self, pos: Point) -> Option<(u64, MarkerHit)> {
+        if pos.y >= theme::RULER_HEIGHT {
+            return None;
+        }
+        for marker in self.markers.iter().rev() {
+            let start_x = self.sample_to_x(marker.start_sample);
+            let end_x = marker.end_sample.map(|e| self.sample_to_x(e));
+            if let Some(hit) = hit_test::marker_hit(pos.x, start_x, end_x) {
+                return Some((marker.id, hit));
+            }
+        }
+        None
+    }
+
+    /// Right-click press: open the marker context menu when the pointer is
+    /// over a marker in the ruler band. The menu anchor is the cursor's
+    /// window-space position so the floating overlay lands under the pointer
+    /// regardless of horizontal scroll. Misses fall through (`None`) so the
+    /// event keeps propagating.
+    pub(super) fn handle_right_press(
+        &self,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> UpdateResult {
+        let pos = cursor.position_in(bounds)?;
+        let (id, _hit) = self.marker_at(pos)?;
+        let anchor = cursor.position().unwrap_or(pos);
+        captured(Message::MarkerUi(MarkerUiMessage::OpenMenu {
+            id,
+            x: anchor.x,
+            y: anchor.y,
+        }))
     }
 
     /// Map a pixel x-position to a bar number using the tempo map.

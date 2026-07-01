@@ -18,7 +18,7 @@ use iced::{keyboard, mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 use crate::message::*;
 use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
-use self::input::{ClipInteraction, TempoDrag};
+use self::input::{ClipInteraction, MarkerDrag, TempoDrag};
 
 use resonance_audio::types::{ClipId, TempoMap, TrackId};
 
@@ -219,6 +219,10 @@ pub struct TimelineState {
     pub(super) last_global_click: Option<(Instant, state::GlobalTrackKind)>,
     /// Active tempo-event drag.
     pub(super) tempo_drag: Option<TempoDrag>,
+    /// Active arrangement-marker drag (start move or region-edge resize).
+    pub(super) marker_drag: Option<MarkerDrag>,
+    /// Most recent click on a marker flag, for double-click (rename) detection.
+    pub(super) last_marker_click: Option<(Instant, u64)>,
     /// Geometry cache — re-runs the draw closure only when the cached
     /// fingerprint mismatches. Skips a full redraw on every hover /
     /// sibling-update event, which is most of them.
@@ -411,6 +415,9 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             }
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 self.handle_press(state, bounds, cursor)
+            }
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+                self.handle_right_press(bounds, cursor)
             }
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 self.handle_move(state, bounds, cursor)

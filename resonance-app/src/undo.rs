@@ -130,6 +130,10 @@ pub enum CoalesceKey {
     ReferenceTrim,
     /// An aux-send level slider drag, keyed by the send's id.
     SendLevel(u64),
+    /// Dragging a marker's start pole along the ruler, keyed by marker id.
+    MarkerMove(u64),
+    /// Dragging a region marker's end edge, keyed by marker id.
+    MarkerResize(u64),
 }
 
 /// Bounded undo / redo stack with a pending-transaction slot for
@@ -649,10 +653,19 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MarkerMessage::Rename(_, _)
             | MarkerMessage::Recolor(_, _)
             | MarkerMessage::Delete(_)
-            | MarkerMessage::MoveStart(_, _)
-            | MarkerMessage::SetRegionEnd(_, _)
             | MarkerMessage::LoopToRegion(_)
             | MarkerMessage::SeedFromSections => UndoAction::Record,
+            // Drag gestures: a marker move or a region-edge resize fires
+            // one message per pointer step, so coalesce each gesture into a
+            // single undo entry keyed by marker id (mirrors fader / knob
+            // bursts). A one-off convert-to-region / point still records a
+            // lone entry — nothing to coalesce it with.
+            MarkerMessage::MoveStart(id, _) => {
+                UndoAction::RecordCoalesced(CoalesceKey::MarkerMove(*id))
+            }
+            MarkerMessage::SetRegionEnd(id, _) => {
+                UndoAction::RecordCoalesced(CoalesceKey::MarkerResize(*id))
+            }
             // Navigation only — moves the playhead / starts playback,
             // no project mutation, mirroring `SeekToSample` / `Play`.
             MarkerMessage::JumpToNext
@@ -660,6 +673,13 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MarkerMessage::JumpTo(_)
             | MarkerMessage::PlayFromMarker(_) => UndoAction::Skip,
         },
+
+        // Committing an inline rename edits the persisted marker name, so it
+        // records an undo entry exactly like `MarkerMessage::Rename` above.
+        Message::MarkerUi(MarkerUiMessage::CommitRename) => UndoAction::Record,
+        // Every other marker-interaction message (selection, menu open/close,
+        // rename begin/change/cancel) is pure view state — never undoable.
+        Message::MarkerUi(_) => UndoAction::Skip,
 
         Message::Track(t) => match t {
             TrackMessage::SetTrackVolume(id, _) => {

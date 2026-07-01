@@ -121,6 +121,13 @@ impl crate::Resonance {
             && matches!(self.view_mode, ViewMode::Compose)
         {
             stack![base, compose::drum_groups_manager::view(self)].into()
+        } else if self.interaction.marker_menu.is_some()
+            || self.interaction.marker_rename.is_some()
+        {
+            // Arrangement-marker context menu / inline rename float above the
+            // arrange timeline (todo #369). Only reachable from the ruler, so
+            // guarding on the state alone is enough.
+            stack![base, menus::view_marker_overlay(self)].into()
         } else {
             base
         }

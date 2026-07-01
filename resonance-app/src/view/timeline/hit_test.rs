@@ -165,6 +165,51 @@ pub fn hit_test_audio(
     hit_test(pos, rect, trim_threshold)
 }
 
+/// Which part of an arrangement-marker's ruler geometry the pointer is
+/// over. Returned by [`marker_hit`] and consumed by the ruler input
+/// handlers to pick the drag / select behaviour (todo #369).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkerHit {
+    /// The start pole / flag — a click selects, a drag moves the marker
+    /// start (`MoveStart`). Shared by point and region markers.
+    Flag,
+    /// A region marker's end edge — a drag resizes it (`SetRegionEnd`).
+    EndEdge,
+}
+
+/// Flag pennant width in px. Must match the `FLAG_W` constant used by
+/// [`super::draw::TimelineCanvas::draw_markers`] so the grab zone lines up
+/// with the drawn flag.
+pub const MARKER_FLAG_W: f32 = 11.0;
+/// Padding (px) either side of the flag/pole for the start grab zone, so
+/// the thin 1px pole is comfortably clickable.
+pub const MARKER_FLAG_PAD: f32 = 4.0;
+/// Half-width (px) of the region end-edge resize band.
+pub const MARKER_EDGE_THRESHOLD: f32 = 5.0;
+
+/// Hit-test a pointer x against a single marker's ruler geometry.
+///
+/// `start_x` is the marker's start-pole pixel x; `end_x` is `Some` for a
+/// ranged region (its end-edge pixel x). The caller is expected to have
+/// already confirmed the pointer is within the ruler band vertically.
+///
+/// A region's end edge wins over its start when the pointer sits right on
+/// it, so a narrow region can still be resized; otherwise the flag grab
+/// zone — `[start_x - PAD, start_x + FLAG_W + PAD]` — selects / moves. The
+/// translucent region *body* is intentionally not a grab target so ruler
+/// seeking still works underneath a wide section region.
+pub fn marker_hit(pos_x: f32, start_x: f32, end_x: Option<f32>) -> Option<MarkerHit> {
+    if let Some(ex) = end_x {
+        if (pos_x - ex).abs() <= MARKER_EDGE_THRESHOLD {
+            return Some(MarkerHit::EndEdge);
+        }
+    }
+    if pos_x >= start_x - MARKER_FLAG_PAD && pos_x <= start_x + MARKER_FLAG_W + MARKER_FLAG_PAD {
+        return Some(MarkerHit::Flag);
+    }
+    None
+}
+
 /// Arrange-view row y (top of the row, in canvas coordinates) for a given
 /// track index.
 pub fn track_row_y(index: usize, ruler_height: f32, scroll_offset_y: f32, row_h: f32) -> f32 {

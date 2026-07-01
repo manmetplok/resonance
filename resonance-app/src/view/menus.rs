@@ -1,13 +1,26 @@
-//! Overlay menus (add-track popover, etc.)
+//! Overlay menus (add-track popover, marker context menu / rename, etc.)
 use iced::widget::{
-    button, column, container, mouse_area, opaque, row, scrollable, stack, text, Space,
+    button, column, container, mouse_area, opaque, row, scrollable, stack, text, text_input, Space,
 };
 use iced::{alignment, Color, Element, Length};
 
 use crate::message::*;
 use crate::presets::TrackPreset;
+use crate::state::{ArrangementMarker, MarkerMenuState, MarkerRenameState};
 use crate::theme::{self, fa};
 use crate::Resonance;
+
+/// Swatch palette offered by the marker recolor row. Mirrors the
+/// auto-assign palette in `update/marker.rs` so a recolored marker can land
+/// back on any of the default flag colours.
+const MARKER_PALETTE: [[u8; 3]; 6] = [
+    [0xE5, 0x4B, 0x4B], // red
+    [0xE5, 0x9B, 0x33], // orange
+    [0xE5, 0xD0, 0x33], // yellow
+    [0x5C, 0xC4, 0x6B], // green
+    [0x3D, 0x8B, 0xE5], // blue
+    [0x9B, 0x5C, 0xE5], // violet
+];
 
 /// Render a single preset row in the add-track menu.
 fn preset_button(preset: &TrackPreset, is_user: bool) -> Element<'_, Message> {
@@ -178,6 +191,205 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
             right: 0.0,
             bottom: 0.0,
             left: 12.0,
+        });
+
+    stack![backdrop, positioned].into()
+}
+
+/// Render the arrangement-marker overlay — either the right-click context
+/// menu or the inline rename field, whichever is active (todo #369). The
+/// caller mounts this only while `marker_menu` / `marker_rename` is set.
+/// Positioned in window space at the anchor captured when the interaction
+/// began. Falls back to an empty element when the target marker has
+/// vanished (e.g. deleted straight from the menu) so the stack drops away.
+pub(crate) fn view_marker_overlay(r: &Resonance) -> Element<'_, Message> {
+    // Inline rename takes priority — opening it always clears the menu.
+    if let Some(rename) = &r.interaction.marker_rename {
+        return marker_rename_overlay(rename);
+    }
+    if let Some(menu) = &r.interaction.marker_menu {
+        if let Some(marker) = r.markers.get(menu.marker_id) {
+            return marker_menu_overlay(r, menu, marker);
+        }
+    }
+    Space::new().into()
+}
+
+/// A single full-width text row in the marker context menu.
+fn marker_menu_item(label: &str, msg: Message) -> Element<'_, Message> {
+    button(text(label).size(12).color(theme::TEXT))
+        .on_press(msg)
+        .width(Length::Fill)
+        .padding([5, 10])
+        .style(|_theme, status| theme::transport_button_style(status))
+        .into()
+}
+
+/// A thin horizontal separator between marker-menu groups.
+fn marker_menu_sep() -> Element<'static, Message> {
+    container(Space::new().width(Length::Fill).height(1))
+        .style(theme::separator_bg)
+        .into()
+}
+
+/// A colour swatch button in the recolor row.
+fn marker_swatch(id: u64, color: [u8; 3]) -> Element<'static, Message> {
+    let fill = Color::from_rgb8(color[0], color[1], color[2]);
+    button(
+        container(Space::new().width(16).height(14)).style(move |_theme| container::Style {
+            background: Some(iced::Background::Color(fill)),
+            border: iced::Border {
+                color: theme::SEPARATOR,
+                width: 1.0,
+                radius: 3.0.into(),
+            },
+            ..Default::default()
+        }),
+    )
+    .on_press(Message::Marker(MarkerMessage::Recolor(id, color)))
+    .padding(2)
+    .style(|_theme, status| theme::small_button_style(status))
+    .into()
+}
+
+/// The right-click context menu for a marker: Rename, Recolor (palette),
+/// Delete, Loop to section, Play from here, and Convert to region / point.
+fn marker_menu_overlay<'a>(
+    r: &'a Resonance,
+    menu: &'a MarkerMenuState,
+    marker: &'a ArrangementMarker,
+) -> Element<'a, Message> {
+    let id = marker.id;
+
+    let backdrop = mouse_area(
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .on_press(Message::MarkerUi(MarkerUiMessage::CloseMenu));
+
+    // Recolor swatch row.
+    let mut swatches = row![].spacing(4);
+    for color in MARKER_PALETTE {
+        swatches = swatches.push(marker_swatch(id, color));
+    }
+
+    // Convert flips between point <-> region. Promoting to a region spans
+    // the marker's bar to the next bar so the new region is visible and
+    // grid-aligned; demoting drops the end back to a point.
+    let convert_item = if marker.is_region() {
+        marker_menu_item(
+            "Convert to point",
+            Message::Marker(MarkerMessage::SetRegionEnd(id, None)),
+        )
+    } else {
+        let (bar, _) = r.tempo_map.sample_to_bar(marker.start_sample, r.sample_rate);
+        let end = r
+            .tempo_map
+            .bar_to_sample(bar.saturating_add(1))
+            .max(marker.start_sample + 1);
+        marker_menu_item(
+            "Convert to region",
+            Message::Marker(MarkerMessage::SetRegionEnd(id, Some(end))),
+        )
+    };
+
+    let menu_col = column![
+        marker_menu_item(
+            "Rename",
+            Message::MarkerUi(MarkerUiMessage::BeginRename {
+                id,
+                x: menu.x,
+                y: menu.y,
+            }),
+        ),
+        container(
+            column![
+                text("Recolor").size(10).color(theme::TEXT_DIM),
+                Space::new().height(3),
+                swatches,
+            ]
+            .spacing(0),
+        )
+        .padding([5, 10]),
+        marker_menu_sep(),
+        marker_menu_item(
+            "Loop to section",
+            Message::Marker(MarkerMessage::LoopToRegion(id)),
+        ),
+        marker_menu_item(
+            "Play from here",
+            Message::Marker(MarkerMessage::PlayFromMarker(id)),
+        ),
+        convert_item,
+        marker_menu_sep(),
+        marker_menu_item("Delete", Message::Marker(MarkerMessage::Delete(id))),
+    ]
+    .spacing(1)
+    .width(180);
+
+    let menu_box = container(opaque(menu_col)).style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::PANEL)),
+        border: iced::Border {
+            color: theme::SEPARATOR,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..Default::default()
+    });
+
+    let positioned = container(menu_box)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(alignment::Horizontal::Left)
+        .align_y(alignment::Vertical::Top)
+        .padding(iced::Padding {
+            top: menu.y,
+            right: 0.0,
+            bottom: 0.0,
+            left: menu.x,
+        });
+
+    stack![backdrop, positioned].into()
+}
+
+/// The floating inline rename field for a marker. Commits on Enter or
+/// click-away; the edit buffer lives in `marker_rename` state.
+fn marker_rename_overlay(rename: &MarkerRenameState) -> Element<'_, Message> {
+    let backdrop = mouse_area(
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .on_press(Message::MarkerUi(MarkerUiMessage::CommitRename));
+
+    let field = text_input("Marker name", &rename.text)
+        .on_input(|s| Message::MarkerUi(MarkerUiMessage::RenameChanged(s)))
+        .on_submit(Message::MarkerUi(MarkerUiMessage::CommitRename))
+        .size(12)
+        .padding([4, 6])
+        .width(160);
+
+    let boxed = container(opaque(field)).style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::PANEL)),
+        border: iced::Border {
+            color: theme::ACCENT,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    });
+
+    let positioned = container(boxed)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(alignment::Horizontal::Left)
+        .align_y(alignment::Vertical::Top)
+        .padding(iced::Padding {
+            top: rename.y,
+            right: 0.0,
+            bottom: 0.0,
+            left: rename.x,
         });
 
     stack![backdrop, positioned].into()
