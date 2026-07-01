@@ -113,6 +113,15 @@ pub(super) fn all_cleared(r: &mut Resonance) {
         // compose derived-clip cache).
         if let Some(extras) = r.io.pending_undo_extras.take() {
             r.finalize_undo_restore(extras);
+        } else if r.pool.has_missing() {
+            // A genuine project load (not an undo/redo replay) whose media
+            // pool references files that aren't on disk: surface the
+            // missing-files relink modal so the user can locate them (doc
+            // #175, todo #607). Undo/redo replays skip this — reopening the
+            // modal on every history step would be noise.
+            let targets: Vec<resonance_audio::types::AssetId> =
+                r.pool.missing_assets().map(|a| a.id).collect();
+            r.relink.open_modal(targets);
         }
     }
 }

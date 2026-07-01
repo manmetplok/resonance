@@ -148,6 +148,11 @@ pub mod fa {
     /// Counter-clockwise rotating arrow — used for "regenerate / reroll"
     /// affordances next to a primary Generate button.
     pub const ARROW_ROTATE_LEFT: char = '\u{f0e2}';
+    /// Warning triangle with an exclamation — missing-file / error marker
+    /// (e.g. the relink modal's "couldn't be found" rows).
+    pub const TRIANGLE_EXCLAMATION: char = '\u{f071}';
+    /// Circled check — a resolved / restored marker (e.g. a relinked row).
+    pub const CIRCLE_CHECK: char = '\u{f058}';
 }
 
 // ---------------------------------------------------------------------------

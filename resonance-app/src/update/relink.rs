@@ -56,6 +56,14 @@ pub fn handle(r: &mut Resonance, m: RelinkMessage) -> Task<Message> {
             }
         }
         RelinkMessage::Imported(result) => apply_import(r, result),
+        RelinkMessage::ShowModal => {
+            // Snapshot the currently-missing assets so the modal can show
+            // just-relinked rows as resolved instead of making them vanish.
+            let targets: Vec<resonance_audio::types::AssetId> =
+                r.pool.missing_assets().map(|a| a.id).collect();
+            r.relink.open_modal(targets);
+        }
+        RelinkMessage::DismissModal => r.relink.close_modal(),
     }
     Task::none()
 }
