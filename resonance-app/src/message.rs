@@ -918,6 +918,16 @@ pub enum RelinkMessage {
     /// asset's fresh metadata (it now lives in the project folder); `Err`
     /// carries the asset/file/reason of a failed import.
     Imported(Result<PoolImportOutcome, RelinkError>),
+    /// Open the missing-files relink modal (todo #607). Fired on load when
+    /// a project references missing assets, and by the Pool tab's inline
+    /// `relink` chip. Snapshots the currently-missing assets into
+    /// [`RelinkState::modal_targets`](crate::state::RelinkState::modal_targets).
+    /// Presentational only — never undoable.
+    ShowModal,
+    /// Dismiss the relink modal (its "Leave offline" / close action). The
+    /// tracked clips stay offline until relinked later. Presentational
+    /// only — never undoable.
+    DismissModal,
 }
 
 /// A failed relink import: which asset was being relinked, the source

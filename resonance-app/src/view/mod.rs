@@ -18,6 +18,7 @@ pub(crate) mod menus;
 pub mod midi_editor;
 pub(crate) mod midi_quantize;
 pub(crate) mod mixer;
+pub(crate) mod relink_dialog;
 pub mod performance;
 pub mod piano_roll;
 pub(crate) mod settings;
@@ -114,6 +115,11 @@ impl crate::Resonance {
             stack![base, export_dialog::view_export_dialog_overlay(self)].into()
         } else if self.import_dialog.is_some() {
             stack![base, import_dialog::view_import_dialog_overlay(self)].into()
+        } else if self.relink.modal_open && !self.relink.modal_targets.is_empty() {
+            // Missing-files relink modal (doc #175, todo #607): surfaced on
+            // load when the project references audio that's gone, and
+            // re-openable from the Pool tab's inline `relink` chip.
+            stack![base, relink_dialog::view_relink_dialog_overlay(self)].into()
         } else if self.mixer.settings_open {
             stack![base, settings::view_settings_overlay(self)].into()
         } else if self.mixer.add_track_menu_open {
