@@ -46,6 +46,9 @@ fn make_minimal_project() -> ProjectFile {
         reference_settings: Default::default(),
         arrangement_markers: Vec::new(),
         pool_assets: Vec::new(),
+        groove_library: Vec::new(),
+        quantize_settings: Default::default(),
+        performance: Default::default(),
     }
 }
 

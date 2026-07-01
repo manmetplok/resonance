@@ -623,6 +623,15 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // (not the project); the engine's preview transport is outside
         // undo entirely.
         Message::Browser(_) => UndoAction::Skip,
+        // Audio import + placement (doc #175, todo #598) is one undoable
+        // action. Recording here — before the import command is even sent —
+        // captures the pre-import project (no pool asset, no placed clip, no
+        // spawned track); the asset lands asynchronously and mutates state
+        // via the engine-event path, which never records undo. So one undo
+        // of this single snapshot removes the whole import + placement. Both
+        // the pool-only and place variants are reversible (a pool asset
+        // rides the `ProjectFile` snapshot just like a clip does).
+        Message::Pool(_) => UndoAction::Record,
         Message::GlobalTrack(GlobalTrackMessage::SelectEvent(_)) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(_)) => UndoAction::Begin,
         Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag) => UndoAction::Commit,
