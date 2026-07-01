@@ -3,7 +3,6 @@
 //! from the runtime model to the on-disk shape.
 
 use resonance_audio::types::*;
-use resonance_common::AutomationLane;
 
 use crate::project::{
     audio_format_tag, fade_curve_tag, ProjectBus, ProjectClip, ProjectExternalInstrument,
@@ -15,6 +14,17 @@ use crate::Resonance;
 
 /// Serialize current GUI state to the on-disk `ProjectFile` shape.
 pub fn build_project_file(r: &Resonance) -> ProjectFile {
+    // Ids of the read-only devices shipped in the app binary. A selected
+    // *bundled* device is re-resolved from the registry on load, so we never
+    // embed a copy of it; a *user-authored* device (id not in this set) is
+    // embedded verbatim so the project reopens on another machine (doc #201
+    // §5). Computed once so the per-track closure below stays O(1).
+    let bundled_device_ids: std::collections::HashSet<String> =
+        resonance_common::bundled_definitions()
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+
     let tracks = r
         .sorted_tracks()
         .iter()
@@ -65,7 +75,20 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             // track external; the route + monitor/arm already serialize via
             // the track fields above. Runtime offline flags are not saved.
             external_instrument: r.external_instruments.get(&t.id).map(|ext| {
+                // Embed a copy of the selected definition only when it's
+                // user-authored (not bundled) and still resolvable, so a
+                // portable project carries unsupported gear with it while
+                // bundled devices stay lean (re-resolved on load).
+                let device_definition = ext.device_id.as_ref().and_then(|id| {
+                    if bundled_device_ids.contains(id) {
+                        None
+                    } else {
+                        r.device_registry.get(id).cloned()
+                    }
+                });
                 ProjectExternalInstrument {
+                    device_id: ext.device_id.clone(),
+                    device_definition,
                     bank: ext.bank,
                     program: ext.program,
                     latency_offset_samples: ext.latency_offset_samples,
@@ -224,13 +247,6 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         })
         .collect();
 
-    // Parameter-automation lanes (one per target). Persist as a list
-    // sorted by lane id so the on-disk order is stable across saves and
-    // doesn't depend on `HashMap` iteration order.
-    let mut automation_lanes: Vec<AutomationLane> =
-        r.automation.lanes.values().cloned().collect();
-    automation_lanes.sort_by_key(|l| l.id);
-
     ProjectFile {
         version: PROJECT_FORMAT_VERSION,
         sample_rate: r.sample_rate,
@@ -270,6 +286,15 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         // and last-used quantize/humanize settings.
         groove_library: r.quantize.groove_library.clone(),
         quantize_settings: r.quantize.settings.clone(),
+        // Parameter-automation lanes (epic #14 / epic #40). Sorted by lane id
+        // for a stable on-disk order (the mirror is a HashMap). DeviceParam
+        // lanes ride along here and are re-applied on load after the owning
+        // track's `SetTrackDeviceParams`.
+        automation_lanes: {
+            let mut lanes: Vec<_> = r.automation.lanes.values().cloned().collect();
+            lanes.sort_by_key(|l| l.id);
+            lanes
+        },
         // Performance-mode footer selection (epic #11): the instrument
         // tuning (stored by stable name) and capo offset for the live
         // fingering diagrams.
@@ -277,6 +302,5 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             tuning: r.performance.tuning().name.to_string(),
             capo: r.performance.capo,
         },
-        automation_lanes,
     }
 }

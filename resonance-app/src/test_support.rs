@@ -851,6 +851,15 @@ impl Resonance {
         self.external_instruments.get(&track_id).cloned()
     }
 
+    /// Test-only: layer extra device definitions from `dir` into the device
+    /// registry, exactly as the user `device_definitions` folder is scanned at
+    /// startup. Lets a persistence test register a user-authored preset without
+    /// a real user data dir. (epic #40, doc #201 §5.)
+    #[doc(hidden)]
+    pub fn test_scan_device_dir(&mut self, dir: &std::path::Path) {
+        self.device_registry.scan_dir(dir);
+    }
+
     /// Test-only: derive the lifecycle [`state::ExternalInstrumentStatus`] for
     /// a track from its external-instrument state + owning `TrackState`.
     /// `None` when the track isn't external or doesn't exist.

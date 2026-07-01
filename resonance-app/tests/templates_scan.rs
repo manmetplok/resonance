@@ -48,6 +48,7 @@ fn make_minimal_project() -> ProjectFile {
         pool_assets: Vec::new(),
         groove_library: Vec::new(),
         quantize_settings: Default::default(),
+        automation_lanes: Vec::new(),
         performance: Default::default(),
     }
 }

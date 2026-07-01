@@ -133,14 +133,13 @@ pub struct ProjectFile {
     /// predate Performance mode.
     #[serde(default)]
     pub performance: ProjectPerformance,
-    /// Parameter-automation lanes for every track/bus/master gain-pan-mute
-    /// target and CLAP plugin parameter (architecture doc #162 §3, epic
-    /// #14). One lane per [`AutomationTarget`]; persisted as a list sorted
-    /// by lane id for a stable on-disk order. Empty on legacy projects,
-    /// which then load with no automation (full backwards compatibility —
-    /// absence of a lane means the static value is used unchanged).
-    ///
-    /// [`AutomationTarget`]: resonance_common::AutomationTarget
+    /// Parameter-automation lanes (epic #14 / epic #40), one per
+    /// [`AutomationTarget`](resonance_common::AutomationTarget). Persisted so a
+    /// project round-trips its automation — in particular the epic #40
+    /// `DeviceParam` lanes that drive external-synth CC/NRPN, which are
+    /// re-applied on load *after* each track's `SetTrackDeviceParams` so the
+    /// engine knows the bindings. Empty on legacy projects (which then load
+    /// with no automation, exactly as before).
     #[serde(default)]
     pub automation_lanes: Vec<resonance_common::AutomationLane>,
 }
@@ -386,6 +385,24 @@ pub struct ProjectTrack {
 /// by the owning [`ProjectTrack`] and the runtime offline flags are not saved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectExternalInstrument {
+    /// Selected device-preset id (epic #40, doc #201 §5), e.g. `"moog-muse"`,
+    /// or `None` when no preset is chosen. On load this resolves — via the
+    /// [`DeviceDefinitionRegistry`](resonance_common::DeviceDefinitionRegistry)
+    /// or the embedded [`device_definition`](Self::device_definition) — to the
+    /// automatable params re-sent to the engine as `SetTrackDeviceParams`.
+    /// `None` (the default) on legacy projects and tracks with no device
+    /// selected, which load and behave exactly as before.
+    #[serde(default)]
+    pub device_id: Option<String>,
+    /// Embedded copy of a **user-authored** device definition so a project
+    /// referencing a non-bundled device reopens on another machine even when
+    /// the user's `device_definitions` folder isn't present there (doc #201
+    /// §5 — chosen over a project-relative path so the project is
+    /// self-contained). `None` for **bundled** devices — those ship inside the
+    /// app and are re-resolved from the registry on load, so we never bloat
+    /// the file with a copy — and whenever no device is selected.
+    #[serde(default)]
+    pub device_definition: Option<resonance_common::DeviceDefinition>,
     /// Selected MIDI bank (combined 14-bit MSB << 7 | LSB), or `None`.
     #[serde(default)]
     pub bank: Option<u16>,

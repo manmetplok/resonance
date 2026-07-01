@@ -132,6 +132,8 @@ fn external_instrument_struct_round_trips_with_none_fields() {
     // bank/program absent is a valid config (leave the device on its
     // current patch); it must round-trip as None, not as a default.
     let ext = ProjectExternalInstrument {
+        device_id: None,
+        device_definition: None,
         bank: None,
         program: None,
         latency_offset_samples: -128,

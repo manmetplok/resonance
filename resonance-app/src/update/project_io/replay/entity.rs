@@ -189,9 +189,32 @@ pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &Loaded
         state.bank = ext.bank;
         state.program = ext.program;
         state.latency_offset_samples = ext.latency_offset_samples;
+        state.device_id = ext.device_id.clone();
         let _ = r.engine.send(AudioCommand::SetExternalInstrument {
             config: state.config(),
         });
+
+        // Device preset (epic #40, doc #201 §5). Rehydrate the engine's
+        // per-track param bindings so any restored `DeviceParam` automation
+        // lane (re-applied at the tail of the load) maps correctly. Resolve
+        // the params from the embedded user-authored copy first (portable
+        // projects carry it), else the registry (bundled devices, or a user
+        // device installed on this machine). An unresolved id sends an empty
+        // map — harmless, and the selection is kept so a later rescan can
+        // recover it. No selection ⇒ no command (back-compat: identical to a
+        // plain external track).
+        if let Some(device_id) = &ext.device_id {
+            let params = ext
+                .device_definition
+                .as_ref()
+                .map(|def| def.params.clone())
+                .or_else(|| r.device_registry.get(device_id).map(|def| def.params.clone()))
+                .unwrap_or_default();
+            let _ = r
+                .engine
+                .send(AudioCommand::SetTrackDeviceParams { track_id, params });
+        }
+
         r.external_instruments.insert(track_id, state);
     }
 }

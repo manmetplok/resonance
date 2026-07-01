@@ -88,16 +88,25 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     restore_quantize(r, project);
     restore_performance(r, project);
 
-    // Rehydrate parameter-automation lanes (architecture doc #162 §3).
-    // Mirror them into app state and push each to the engine via
-    // `SetAutomationLane` so the authoritative engine lanes round-trip
-    // (the lane carries its own `enabled` Read flag). Done last so the
-    // tracks/busses/plugins the lanes target already exist. Empty on
-    // legacy projects ⇒ no commands, static values stay in effect.
-    r.automation.load_lanes(project.automation_lanes.iter().cloned());
-    for lane in r.automation.lanes.values().cloned().collect::<Vec<_>>() {
-        let _ = r.engine.send(AudioCommand::SetAutomationLane { lane });
-    }
+    // Parameter-automation lanes (epic #14 / epic #40). Reconcile the
+    // engine + app mirror to exactly the saved set: `restore_automation_lanes`
+    // clears any lane left over from a previously-open project (ClearAll does
+    // not touch engine automation) and (re-)sends every saved lane. This runs
+    // last, so `DeviceParam` lanes are (re-)applied *after* each external
+    // track's `SetTrackDeviceParams` (dispatched in `replay_track`) — the
+    // engine already knows the bindings by the time the lane arrives. Legacy
+    // projects carry no lanes, so this reduces to clearing stale ones and is
+    // otherwise a no-op.
+    let lanes: std::collections::HashMap<
+        resonance_common::AutomationTarget,
+        resonance_common::AutomationLane,
+    > = project
+        .automation_lanes
+        .iter()
+        .cloned()
+        .map(|lane| (lane.target.clone(), lane))
+        .collect();
+    r.restore_automation_lanes(&lanes);
 }
 
 // ---------------------------------------------------------------------------
