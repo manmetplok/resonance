@@ -13,6 +13,7 @@ pub(crate) mod controls;
 pub(crate) mod editor_panel;
 pub(crate) mod import_dialog;
 pub(crate) mod knob;
+pub(crate) mod markers_overview;
 pub(crate) mod menus;
 pub mod midi_editor;
 pub(crate) mod midi_quantize;
@@ -117,6 +118,8 @@ impl crate::Resonance {
             stack![base, settings::view_settings_overlay(self)].into()
         } else if self.mixer.add_track_menu_open {
             stack![base, menus::view_add_track_menu(self)].into()
+        } else if self.mixer.markers_overview_open {
+            stack![base, markers_overview::view_markers_overview_overlay(self)].into()
         } else if self.compose.drumroll.manager_open
             && matches!(self.view_mode, ViewMode::Compose)
         {

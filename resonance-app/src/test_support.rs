@@ -460,6 +460,14 @@ impl Resonance {
         )
     }
 
+    /// Test-only: whether the arrangement-markers overview popover is open
+    /// (todo #370). Toggled by `UiMessage::ToggleMarkersOverview` and
+    /// dismissed by `UiMessage::CloseMarkersOverview`.
+    #[doc(hidden)]
+    pub fn test_markers_overview_open(&self) -> bool {
+        self.mixer.markers_overview_open
+    }
+
     /// Test-only: which audio clip's vocal pitch editor is open, if any
     /// (doc #160). Set by the `VocalTuningMessage::OpenPitchEditor`
     /// reducer when opened on a vocal clip.

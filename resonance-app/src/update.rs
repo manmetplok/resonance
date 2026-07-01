@@ -169,6 +169,18 @@ impl crate::Resonance {
                         keyboard::Key::Named(keyboard::key::Named::Escape) => {
                             Some(Message::Ui(UiMessage::ExitPerformanceMode))
                         }
+                        // `.` / `,` jump the playhead to the next / previous
+                        // arrangement marker (todo #370). Routed through the
+                        // focus-probing `RequestMarkerNav` so typing a period
+                        // or comma into a text field (track / section names,
+                        // lyrics, filters) never moves the playhead — the
+                        // same gate the `F` performance toggle uses.
+                        keyboard::Key::Character(ref c) if c.as_str() == "." => {
+                            Some(Message::Ui(UiMessage::RequestMarkerNav { forward: true }))
+                        }
+                        keyboard::Key::Character(ref c) if c.as_str() == "," => {
+                            Some(Message::Ui(UiMessage::RequestMarkerNav { forward: false }))
+                        }
                         _ => None,
                     }
                 }
