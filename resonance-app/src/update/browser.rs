@@ -33,6 +33,10 @@ use crate::Resonance;
 
 pub fn handle(app: &mut Resonance, message: BrowserMessage) -> Task<Message> {
     match message {
+        BrowserMessage::ToggleVisible => {
+            app.browser.visible = !app.browser.visible;
+        }
+
         BrowserMessage::SelectTab(tab) => {
             app.browser.tab = tab;
         }

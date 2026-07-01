@@ -115,6 +115,29 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         .height(28)
         .style(|_theme, status| theme::ghost_button_style(status));
 
+    // "Media" toggle for the docked media-browser left panel. Only
+    // meaningful in the Arrange view (the panel lives there), so it's hidden
+    // elsewhere; a zero-width spacer keeps the right cluster's spacing
+    // identical when absent. Active fill is ACCENT_DIM (design doc #175).
+    let media_toggle: Element<'_, Message> = if matches!(r.view_mode, ViewMode::Arrange) {
+        let active = r.browser.visible;
+        let btn = button(
+            text("Media")
+                .size(12)
+                .font(theme::UI_FONT_MEDIUM)
+                .line_height(LineHeight::Relative(1.0)),
+        )
+        .on_press(Message::Browser(BrowserMessage::ToggleVisible))
+        .padding([7, 14])
+        .height(28)
+        .style(move |_theme, status| {
+            theme::toggle_button_style(active, theme::ACCENT, false, status)
+        });
+        row![btn, Space::new().width(10)].into()
+    } else {
+        Space::new().width(0).into()
+    };
+
     // "REF" toggle for the Reference & A/B right-rail. Only meaningful in
     // the Mix view (the panel lives there), so it's hidden elsewhere; a
     // zero-width spacer keeps the right cluster's spacing identical when
@@ -144,6 +167,7 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         Space::new().width(Length::Fill),
         tabs,
         Space::new().width(Length::Fill),
+        media_toggle,
         ref_toggle,
         import_btn,
         Space::new().width(10),

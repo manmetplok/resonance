@@ -3,6 +3,7 @@
 /// mixer, compose, track_header, menus, settings, editor_panel,
 /// timeline_panel, timeline, piano_roll, midi_editor).
 pub(crate) mod bounce_dialog;
+pub(crate) mod browser;
 pub(crate) mod clip_inspector;
 pub(crate) mod export_dialog;
 pub(crate) mod bounce_progress;
@@ -146,7 +147,19 @@ impl crate::Resonance {
         let track_headers = track_header::view_track_headers(self);
         let timeline = self.view_timeline();
 
-        let main = row![track_headers, timeline];
+        // The docked media browser (design doc #175) sits flush against the
+        // left edge as a peer of the track headers + timeline, so browsing
+        // and auditioning never obscures the arrangement. Hidden by default;
+        // toggled from the "Media" chrome button / the panel's collapse caret.
+        let main = if self.browser.visible {
+            row![
+                browser::view_browser_panel(self),
+                track_headers,
+                timeline
+            ]
+        } else {
+            row![track_headers, timeline]
+        };
 
         let base: Element<'_, Message> = if let Some(editor) = self.view_midi_editor_panel() {
             column![

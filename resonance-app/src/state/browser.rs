@@ -112,6 +112,12 @@ impl AuditionState {
 /// implicitly by dropping the whole struct — nothing here is serialized.
 #[derive(Debug, Clone, Default)]
 pub struct BrowserState {
+    /// Whether the docked media-browser panel is showing in the Arrange
+    /// view. Toggled from the "Media" chrome button and the panel header's
+    /// collapse caret (design doc #175). Defaults closed so the arrange
+    /// area opens full-width; like every other field here it is transient
+    /// UI state — not undoable and not persisted in the project file.
+    pub visible: bool,
     /// Files vs Pool tab.
     pub tab: BrowserTab,
     /// The folder the Files tab is currently showing. `None` before the

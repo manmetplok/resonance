@@ -359,6 +359,10 @@ pub const MIXER_STRIP_GAP: f32 = 16.0;
 pub const MIXER_LANE_HPAD: f32 = 26.0;
 /// Right-rail column width on the Compose view.
 pub const COMPOSE_RAIL_WIDTH: u16 = 324;
+/// Docked media-browser panel width on the Arrange view (design doc #175,
+/// `--browser-w`). Mirrors the Compose rail / Mixer inspector fixed-column
+/// pattern; a peer of the timeline, not an overlay.
+pub const BROWSER_WIDTH: f32 = 312.0;
 
 /// Height of the vertical fader used in mixer strips and master strip.
 pub const FADER_HEIGHT: f32 = 120.0;
