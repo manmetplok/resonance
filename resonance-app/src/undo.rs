@@ -616,6 +616,13 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // import lands (a follow-up todo, doc #158); none of its
         // interactions mutate the project yet, so nothing to record.
         Message::Import(_) => UndoAction::Skip,
+        // Media-browser navigation, filtering, favourite / recent, and
+        // audition preview are all transient session UI state (doc #175) —
+        // never undoable and never in the project file, same rule as the
+        // collapse toggles. Favourites / recent persist to user settings
+        // (not the project); the engine's preview transport is outside
+        // undo entirely.
+        Message::Browser(_) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::SelectEvent(_)) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(_)) => UndoAction::Begin,
         Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag) => UndoAction::Commit,

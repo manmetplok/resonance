@@ -33,7 +33,10 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Viewport(_)
         | Message::Reference(_)
         | Message::GlobalTrack(_)
-        | Message::ChordTrack(_) => true,
+        | Message::ChordTrack(_)
+        // Media-browser navigation / audition is only meaningful with a
+        // project open; block it while the startup modal owns the screen.
+        | Message::Browser(_) => true,
         // Tab switches / auxiliary overlays: block so they can't
         // steal focus from the startup modal.
         Message::Ui(UiMessage::SwitchView(_))
@@ -124,6 +127,9 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::ChordTrack(_)
         | Message::Ui(_)
         | Message::Export(_)
+        // Auditioning a preview through the engine mid-render would
+        // disturb the shared decode path — block it like the rest.
+        | Message::Browser(_)
         | Message::Undo
         | Message::Redo => true,
     }
@@ -166,6 +172,9 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         | Message::ChordTrack(_)
         | Message::Ui(_)
         | Message::Export(_)
+        // Auditioning a preview through the engine mid-render would
+        // disturb the shared decode path — block it like the rest.
+        | Message::Browser(_)
         | Message::Undo
         | Message::Redo => true,
     }
