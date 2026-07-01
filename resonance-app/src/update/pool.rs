@@ -185,6 +185,13 @@ fn import(r: &mut Resonance, paths: Vec<std::path::PathBuf>, placement: Placemen
     let _ = r.engine.send(AudioCommand::ImportAudioToPool {
         paths: path_strings,
     });
+
+    // Open (or re-open) the transcode-progress modal. Clearing the tracker
+    // first means a second import gesture replaces the previous batch's
+    // status rows, so the modal always shows the current import's progress
+    // rather than stale entries from a prior run.
+    r.import_progress.clear();
+    r.import_progress_modal_open = true;
 }
 
 /// Snap a raw drop sample position to the timeline grid, reusing the exact

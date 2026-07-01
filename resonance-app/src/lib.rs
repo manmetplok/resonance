@@ -132,6 +132,12 @@ pub struct Resonance {
     /// modal is dismissed. Transient — not undoable, not persisted.
     pub(crate) import_progress: state::ImportProgressTracker,
 
+    /// Whether the audio-import transcode-progress modal is open (doc #175,
+    /// ba todo #606). Set to `true` when an import batch is kicked off and
+    /// cleared by `UiMessage::DismissImportProgress`. Transient — not
+    /// undoable, not persisted.
+    pub(crate) import_progress_modal_open: bool,
+
     /// Transient media-browser interaction state (doc #175): current
     /// folder + cached scan, per-folder filter, Files/Pool tab, and the
     /// audition preview transport. Not undoable, not persisted in the
@@ -515,6 +521,7 @@ impl Resonance {
             ),
             pool_import: state::PendingImports::default(),
             import_progress: state::ImportProgressTracker::default(),
+            import_progress_modal_open: false,
             browser: state::BrowserState::default(),
             drag_placement: None,
             relink: state::RelinkState::default(),

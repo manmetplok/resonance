@@ -79,7 +79,12 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // so they're harmless even if one slips through while the startup
         // modal is up — allow.
         | Message::Ui(UiMessage::SetPerformanceTuning(_))
-        | Message::Ui(UiMessage::SetPerformanceCapo(_)) => false,
+        | Message::Ui(UiMessage::SetPerformanceCapo(_))
+        // Dismissing the import-progress modal is safe from any state
+        // (nothing has been imported yet when the startup modal is up, so
+        // the tracker is empty); allow it through so the overlay can be
+        // cleared if it somehow appears.
+        | Message::Ui(UiMessage::DismissImportProgress) => false,
         // Project I/O drives the modal itself: always allow.
         Message::ProjectIo(_) => false,
         // Export modal drives its own overlay; gated at the open site.

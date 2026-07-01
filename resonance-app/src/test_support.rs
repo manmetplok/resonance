@@ -904,7 +904,7 @@ impl Resonance {
         self.restore_external_instruments(extras);
     }
 
-    // ---- Import-progress tracker (doc #175, ba todo #597) ----------------
+    // ---- Import-progress tracker (doc #175, ba todo #597 / #606) ----------
 
     /// Test-only: borrow the per-file import-progress tracker so tests can
     /// assert that `ImportProgress` / `ImportFailed` engine events update it
@@ -912,6 +912,22 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_import_progress(&self) -> &state::ImportProgressTracker {
         &self.import_progress
+    }
+
+    /// Test-only: whether the audio-import transcode-progress modal is
+    /// currently open (ba todo #606). Set to `true` when an import batch
+    /// is initiated and cleared by `DismissImportProgress`.
+    #[doc(hidden)]
+    pub fn test_import_progress_modal_open(&self) -> bool {
+        self.import_progress_modal_open
+    }
+
+    /// Test-only: directly open or close the import-progress modal without
+    /// driving a full import, so snapshot and behavioural tests can set up
+    /// a deterministic modal state.
+    #[doc(hidden)]
+    pub fn test_set_import_progress_modal_open(&mut self, open: bool) {
+        self.import_progress_modal_open = open;
     }
 
     /// Test-only: borrow the audition transport state (playing row, scrub

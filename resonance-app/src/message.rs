@@ -812,6 +812,11 @@ pub enum UiMessage {
         forward: bool,
         editing: bool,
     },
+    /// Close the audio-import transcode-progress modal (doc #175, todo
+    /// #606) once all files have reached a terminal state. Presentational
+    /// only — the import already ran; this just hides the overlay and
+    /// clears the transient progress tracker. Never undoable.
+    DismissImportProgress,
 }
 
 #[derive(Debug, Clone)]

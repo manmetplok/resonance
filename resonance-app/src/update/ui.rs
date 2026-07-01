@@ -63,6 +63,10 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         UiMessage::DismissError => {
             r.error_message = None;
         }
+        UiMessage::DismissImportProgress => {
+            r.import_progress_modal_open = false;
+            r.import_progress.clear();
+        }
         UiMessage::StartNewProject => {
             return project_io::save_project_as_dialog();
         }
