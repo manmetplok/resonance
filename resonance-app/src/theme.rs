@@ -206,6 +206,8 @@ pub const ACCENT_LINE: Color = rgba(0x8b, 0x6d, 0xff, 0.34);
 
 /// Warm amber — audio clips, busses, playhead.
 pub const WARM: Color = rgb(0xe8, 0xc4, 0x7b);
+/// Warm wash — fill behind a "warm" badge (Configuring status).
+pub const WARM_DIM: Color = rgba(0xe8, 0xc4, 0x7b, 0.12);
 /// Warm border — bus strip outlines.
 pub const WARM_LINE: Color = rgba(0xe8, 0xc4, 0x7b, 0.34);
 
@@ -213,10 +215,14 @@ pub const WARM_LINE: Color = rgba(0xe8, 0xc4, 0x7b, 0.34);
 pub const GOOD: Color = rgb(0x6d, 0xd6, 0xa3);
 /// Mint wash — fill behind an active "good" toggle (input monitor on).
 pub const GOOD_DIM: Color = rgba(0x6d, 0xd6, 0xa3, 0.14);
+/// Mint border — outline of a "good" badge (Live status).
+pub const GOOD_LINE: Color = rgba(0x6d, 0xd6, 0xa3, 0.34);
 /// Soft pink — mute, peaking, errors.
 pub const BAD: Color = rgb(0xe8, 0x7b, 0x8b);
 /// Pink wash — fill behind an active "bad" toggle (record arm on).
 pub const BAD_DIM: Color = rgba(0xe8, 0x7b, 0x8b, 0.13);
+/// Pink border — outline of a "bad" badge / offline alert / strip glow.
+pub const BAD_LINE: Color = rgba(0xe8, 0x7b, 0x8b, 0.40);
 
 // ---------------------------------------------------------------------------
 // Legacy aliases — keep the rest of the codebase compiling while the views
