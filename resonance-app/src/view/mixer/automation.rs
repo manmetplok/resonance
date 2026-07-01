@@ -140,17 +140,17 @@ fn target_of(chan: AutoChan, kind: &AutoKind) -> Option<AutomationTarget> {
 
 /// Whether `target` drives one of `chan`'s parameters (its own gain/pan/
 /// mute, or a CLAP param on a plugin instance the channel hosts).
-fn belongs(target: AutomationTarget, chan: AutoChan, plugins: &[PluginSlotState]) -> bool {
+fn belongs(target: &AutomationTarget, chan: AutoChan, plugins: &[PluginSlotState]) -> bool {
     let hosts = |instance: u64| plugins.iter().any(|p| p.instance_id == instance);
     match (chan, target) {
         (AutoChan::Track(id), AutomationTarget::TrackGain(t))
         | (AutoChan::Track(id), AutomationTarget::TrackPan(t))
-        | (AutoChan::Track(id), AutomationTarget::TrackMute(t)) => id == t,
+        | (AutoChan::Track(id), AutomationTarget::TrackMute(t)) => id == *t,
         (AutoChan::Bus(id), AutomationTarget::BusGain(t))
         | (AutoChan::Bus(id), AutomationTarget::BusPan(t))
-        | (AutoChan::Bus(id), AutomationTarget::BusMute(t)) => id == t,
+        | (AutoChan::Bus(id), AutomationTarget::BusMute(t)) => id == *t,
         (AutoChan::Master, AutomationTarget::MasterGain) => true,
-        (_, AutomationTarget::PluginParam { instance, .. }) => hosts(instance),
+        (_, AutomationTarget::PluginParam { instance, .. }) => hosts(*instance),
         _ => false,
     }
 }
@@ -160,14 +160,17 @@ fn belongs(target: AutomationTarget, chan: AutoChan, plugins: &[PluginSlotState]
 /// then the lowest plugin-param id. Mirrors the timeline's
 /// `target_priority` so the strip header and the timeline band agree on
 /// which lane is "primary".
-fn priority(target: AutomationTarget) -> u32 {
+fn priority(target: &AutomationTarget) -> u32 {
     match target {
         AutomationTarget::TrackGain(_)
         | AutomationTarget::BusGain(_)
         | AutomationTarget::MasterGain => 0,
         AutomationTarget::TrackPan(_) | AutomationTarget::BusPan(_) => 1,
         AutomationTarget::TrackMute(_) | AutomationTarget::BusMute(_) => 2,
-        AutomationTarget::PluginParam { param_id, .. } => 10u32.saturating_add(param_id),
+        AutomationTarget::PluginParam { param_id, .. } => 10u32.saturating_add(*param_id),
+        // Device params never surface on a mixer strip header (they drive
+        // an external device, not the strip's own controls).
+        AutomationTarget::DeviceParam { .. } => u32::MAX,
     }
 }
 
@@ -182,8 +185,8 @@ fn primary_lane<'a>(
     automation
         .lanes
         .values()
-        .filter(|lane| belongs(lane.target, chan, plugins))
-        .min_by_key(|lane| priority(lane.target))
+        .filter(|lane| belongs(&lane.target, chan, plugins))
+        .min_by_key(|lane| priority(&lane.target))
 }
 
 /// Live automated value (normalized `0.0..=1.0`) for `target`, or `None`
@@ -199,7 +202,7 @@ pub(super) fn live_value(
 }
 
 /// Short human label for a lane target, shown beside the Read toggle.
-fn target_label(target: AutomationTarget) -> &'static str {
+fn target_label(target: &AutomationTarget) -> &'static str {
     match target {
         AutomationTarget::TrackGain(_)
         | AutomationTarget::BusGain(_)
@@ -207,6 +210,7 @@ fn target_label(target: AutomationTarget) -> &'static str {
         AutomationTarget::TrackPan(_) | AutomationTarget::BusPan(_) => "Pan",
         AutomationTarget::TrackMute(_) | AutomationTarget::BusMute(_) => "Mute",
         AutomationTarget::PluginParam { .. } => "Param",
+        AutomationTarget::DeviceParam { .. } => "Device",
     }
 }
 
@@ -235,10 +239,10 @@ pub(super) fn automation_header<'a>(
     let mut col = column![picker].spacing(3).width(Length::Fill);
 
     if let Some(lane) = primary_lane(automation, chan, plugins) {
-        let target = lane.target;
+        let target = lane.target.clone();
         let enabled = lane.enabled;
 
-        let name = text(target_label(target))
+        let name = text(target_label(&target))
             .size(9)
             .color(theme::TEXT_2);
 
@@ -248,7 +252,7 @@ pub(super) fn automation_header<'a>(
                 .font(theme::UI_FONT_SEMIBOLD)
                 .color(if enabled { theme::WARM } else { theme::TEXT_3 }),
         )
-        .on_press(Message::Automation(AutomationMessage::ToggleRead(target)))
+        .on_press(Message::Automation(AutomationMessage::ToggleRead(target.clone())))
         .padding([1, 5])
         .style(move |_theme, status| theme::toggle_button_style(enabled, theme::WARM, true, status));
 

@@ -983,4 +983,43 @@ impl Resonance {
         };
         crate::update::project_io::replay_loaded_project(self, Box::new(loaded));
     }
+
+    /// Test-only: return the `id`s of every definition currently in the
+    /// device-definition registry (bundled + user), in registry order. Used
+    /// to assert that a `RescanDefinitions` dispatch picks up new files.
+    #[doc(hidden)]
+    pub fn test_device_registry_ids(&self) -> Vec<String> {
+        self.device_registry
+            .list()
+            .iter()
+            .map(|d| d.id.clone())
+            .collect()
+    }
+
+    /// Test-only: scan a user-definitions directory directly into the device
+    /// registry and rebuild the cached pick-list options, bypassing
+    /// `user_definitions_dir()` (which depends on `$XDG_DATA_HOME`). Used by
+    /// tests that need to verify re-scan behaviour without touching the real
+    /// user data directory.
+    #[doc(hidden)]
+    pub fn test_rescan_definitions_from(&mut self, user_dir: &std::path::Path) {
+        let mut registry = resonance_common::DeviceDefinitionRegistry::default();
+        registry.scan_bundled();
+        registry.scan_dir(user_dir);
+        self.view_caches.rebuild_device_choices(&registry.list());
+        self.device_registry = registry;
+    }
+
+    /// Test-only: return the ids offered by the device-preset pick-list cache
+    /// (the `device_choices` options), excluding the `None` "(no device)"
+    /// entry. Useful to assert that the cache is in sync with the registry
+    /// after a re-scan.
+    #[doc(hidden)]
+    pub fn test_device_choice_ids(&self) -> Vec<String> {
+        self.view_caches
+            .device_choices
+            .iter()
+            .filter_map(|c| c.id.clone())
+            .collect()
+    }
 }

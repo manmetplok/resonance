@@ -10,7 +10,8 @@
 //! Bank/program, latency and the device re-check use the dedicated
 //! external-instrument commands. The undo classifier (`crate::undo`) records
 //! the config-changing variants; runtime-only variants (`CheckDevices`,
-//! `RescanDevices`) are skipped.
+//! `RescanDevices`, `RevealUserDefinitionsFolder`, `RescanDefinitions`) are
+//! skipped.
 
 use iced::Task;
 use resonance_audio::types::AudioCommand;
@@ -206,6 +207,53 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             let _ = r.engine.send(AudioCommand::ListMidiOutputDevices);
             let _ = r.engine.send(AudioCommand::ListMidiInputDevices);
         }
+        M::RevealUserDefinitionsFolder => {
+            // Ensure the folder exists before opening it so the file manager
+            // doesn't error on a directory that has never been created.
+            if let Some(dir) = resonance_common::user_definitions_dir() {
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    eprintln!(
+                        "RevealUserDefinitionsFolder: could not create {}: {e}",
+                        dir.display()
+                    );
+                    return Task::none();
+                }
+                reveal_path_in_file_manager(&dir);
+            }
+        }
+        M::RescanDefinitions => {
+            // Rebuild the registry from bundled + user folder (last-wins by
+            // id, matching startup behaviour in `lib.rs`). Then refresh the
+            // cached pick-list options so the device-preset picker shows the
+            // new entries on the very next frame.
+            let mut registry = resonance_common::DeviceDefinitionRegistry::default();
+            registry.scan_bundled();
+            if let Some(dir) = resonance_common::user_definitions_dir() {
+                registry.scan_dir(&dir);
+            }
+            r.view_caches
+                .rebuild_device_choices(&registry.list());
+            r.device_registry = registry;
+        }
     }
     Task::none()
+}
+
+/// Open `path` in the OS native file manager (Nautilus / Finder / Explorer).
+/// Uses platform-specific launchers; failures are logged but not fatal — the
+/// user can still navigate there manually.
+fn reveal_path_in_file_manager(path: &std::path::Path) {
+    #[cfg(target_os = "linux")]
+    let cmd = ("xdg-open", &[path.as_os_str()][..]);
+    #[cfg(target_os = "macos")]
+    let cmd = ("open", &[path.as_os_str()][..]);
+    #[cfg(target_os = "windows")]
+    let cmd = ("explorer", &[path.as_os_str()][..]);
+
+    if let Err(e) = std::process::Command::new(cmd.0).args(cmd.1).spawn() {
+        eprintln!(
+            "reveal_path_in_file_manager: failed to open {}: {e}",
+            path.display()
+        );
+    }
 }

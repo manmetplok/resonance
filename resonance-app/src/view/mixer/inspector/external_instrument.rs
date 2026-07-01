@@ -295,6 +295,25 @@ fn ext_patch_block(
         .font(theme::UI_FONT_SEMIBOLD)
         .color(theme::TEXT_3);
 
+    // User-definitions helpers: "Reveal folder" opens the user definitions
+    // directory in the OS file manager so the user can drop in or edit a
+    // `.json` definition file. "Re-scan" rebuilds the registry immediately so
+    // the new file appears in the picker above without restarting.
+    let reveal_btn = super::widgets::alert_action_button(
+        "\u{f07b} Reveal folder",
+        Message::ExternalInstrument(ExternalInstrumentMessage::RevealUserDefinitionsFolder),
+    );
+    let rescan_btn = super::widgets::alert_action_button(
+        "\u{f021} Re-scan",
+        Message::ExternalInstrument(ExternalInstrumentMessage::RescanDefinitions),
+    );
+    let def_actions = row![
+        reveal_btn,
+        Space::new().width(6),
+        rescan_btn,
+    ]
+    .align_y(alignment::Vertical::Center);
+
     let bank_tile = super::widgets::pgnum_tile(match ext.bank {
         Some(bank) => format!("{:03}", bank),
         None => "—".to_string(),
@@ -342,7 +361,9 @@ fn ext_patch_block(
             device_label,
             Space::new().height(6),
             device_picker,
-            Space::new().height(8),
+            Space::new().height(6),
+            def_actions,
+            Space::new().height(10),
             patch_row(bank_tile, bank_picker.into()),
             Space::new().height(8),
             patch_row(program_tile, program_picker.into()),

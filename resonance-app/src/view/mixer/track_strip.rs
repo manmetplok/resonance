@@ -261,7 +261,7 @@ impl crate::Resonance {
             resonance_common::AutomationTarget::TrackPan(track.id),
         )
         .map(|v| resonance_common::lane_value_to_real(
-            resonance_common::AutomationTarget::TrackPan(track.id),
+            &resonance_common::AutomationTarget::TrackPan(track.id),
             v,
         ));
         let pan_ctrl = crate::view::knob::pan_knob_automated(track.pan, pan_live, move |v| {
@@ -293,7 +293,7 @@ impl crate::Resonance {
             resonance_common::AutomationTarget::TrackGain(track.id),
         )
         .map(|v| resonance_common::lane_value_to_real(
-            resonance_common::AutomationTarget::TrackGain(track.id),
+            &resonance_common::AutomationTarget::TrackGain(track.id),
             v,
         ));
         let fader_block =
@@ -539,7 +539,7 @@ impl crate::Resonance {
             resonance_common::AutomationTarget::TrackGain(track.id),
         )
         .map(|v| resonance_common::lane_value_to_real(
-            resonance_common::AutomationTarget::TrackGain(track.id),
+            &resonance_common::AutomationTarget::TrackGain(track.id),
             v,
         ));
         let fader_block =

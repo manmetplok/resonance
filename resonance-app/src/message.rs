@@ -314,6 +314,16 @@ pub enum ExternalInstrumentMessage {
     /// Re-scan the available hardware so the "pick another device" lists are
     /// fresh. Runtime-only — refreshes device lists, mutates no config.
     RescanDevices,
+    /// Open the user device-definitions folder in the OS file manager so the
+    /// user can add or edit `.json` definition files. Creates the folder
+    /// first so the file manager opens something rather than erroring.
+    /// Runtime-only — no undo, no config mutation.
+    RevealUserDefinitionsFolder,
+    /// Re-scan the device-definition registry (bundled + user folder) and
+    /// rebuild the device-preset picker options. Call after the user has
+    /// dropped a new `.json` file into the user definitions folder.
+    /// Runtime-only — no undo.
+    RescanDefinitions,
 }
 
 #[derive(Debug, Clone)]

@@ -177,10 +177,13 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         },
 
         Message::ExternalInstrument(e) => match e {
-            // Runtime-only: re-checking devices / re-scanning hardware
-            // mutates no project state.
+            // Runtime-only: re-checking devices / re-scanning hardware /
+            // revealing the user definitions folder / re-scanning definitions
+            // all mutate no project state.
             ExternalInstrumentMessage::CheckDevices(_)
-            | ExternalInstrumentMessage::RescanDevices => UndoAction::Skip,
+            | ExternalInstrumentMessage::RescanDevices
+            | ExternalInstrumentMessage::RevealUserDefinitionsFolder
+            | ExternalInstrumentMessage::RescanDefinitions => UndoAction::Skip,
             // Every config change (enable/disable, route, patch, latency,
             // monitor, arm) is a user-meaningful, reversible edit.
             _ => UndoAction::Record,

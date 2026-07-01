@@ -98,7 +98,7 @@ impl crate::Resonance {
             resonance_common::AutomationTarget::MasterGain,
         )
         .map(|v| resonance_common::lane_value_to_real(
-            resonance_common::AutomationTarget::MasterGain,
+            &resonance_common::AutomationTarget::MasterGain,
             v,
         ));
         let fader_block = fader_section(

@@ -96,7 +96,7 @@ impl crate::Resonance {
             resonance_common::AutomationTarget::BusPan(bus.id),
         )
         .map(|v| resonance_common::lane_value_to_real(
-            resonance_common::AutomationTarget::BusPan(bus.id),
+            &resonance_common::AutomationTarget::BusPan(bus.id),
             v,
         ));
         let pan_ctrl = crate::view::knob::pan_knob_automated(bus.pan, pan_live, move |v| {
@@ -130,7 +130,7 @@ impl crate::Resonance {
             resonance_common::AutomationTarget::BusGain(bus.id),
         )
         .map(|v| resonance_common::lane_value_to_real(
-            resonance_common::AutomationTarget::BusGain(bus.id),
+            &resonance_common::AutomationTarget::BusGain(bus.id),
             v,
         ));
         let fader_block =
