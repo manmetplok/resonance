@@ -65,7 +65,20 @@ pub fn handle(r: &mut Resonance, message: PoolMessage) -> Task<Message> {
         // to the shared `import()` helper. The resulting `AddTrack` +
         // `ImportAudioToPool` commands reach the engine exactly as a
         // browser drag-to-timeline drop would.
+        //
+        // Guard: check for a saved project **before** calling `resolve_target`
+        // so we never allocate a track id or send `AddTrack` to the engine
+        // for a file that ultimately cannot be imported. (resolve_target's
+        // NewTrack branch is a side-effectful step; reversing it is awkward
+        // and, as of ba todo #608, there is no undo snapshot for this arm.)
         PoolMessage::WindowAudioDrop(path) => {
+            if r.io.project_path.is_none() {
+                r.error_message = Some(
+                    "Save the project before importing audio, so imported files have a home."
+                        .into(),
+                );
+                return Task::none();
+            }
             let target = DropTarget::NewTrack {
                 start_sample: r.transport.playhead,
             };

@@ -935,4 +935,12 @@ impl Resonance {
     pub fn test_error_message(&self) -> Option<&str> {
         self.error_message.as_deref()
     }
+
+    /// Test-only: returns `true` when a user-facing error message has been
+    /// set (i.e. `error_message` is `Some`). Used by import-gate tests that
+    /// need to confirm the app showed an error without reading private fields.
+    #[doc(hidden)]
+    pub fn test_error_message_is_set(&self) -> bool {
+        self.error_message.is_some()
+    }
 }

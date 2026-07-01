@@ -230,17 +230,42 @@ fn pick_files_with_project_dispatches_no_engine_commands() {
 #[test]
 fn window_audio_drop_sets_error_when_project_is_unsaved() {
     // Project active (past the startup gate) but not yet saved — import
-    // must be refused with a user-facing error rather than silently dropped.
+    // must be refused with a user-facing error rather than silently dropped,
+    // AND no engine commands (AddTrack / ImportAudioToPool) must be emitted.
+    // Previously resolve_target was called before the project-path guard,
+    // leaking an orphan AddTrack on every drop onto an unsaved project.
     let (mut app, _task) = Resonance::new();
     app.test_set_active_project(true);
     // No project_path set — io.project_path is None.
+    let rx = app.test_capture_engine();
 
     let _ = app.update(Message::Pool(PoolMessage::WindowAudioDrop(
         PathBuf::from("/samples/loop.wav"),
     )));
 
-    assert!(
-        app.test_pending_import_count() == 0,
+    assert_eq!(
+        app.test_pending_import_count(),
+        0,
         "import refused: no project path"
+    );
+
+    // The critical regression check: no engine commands must have been sent.
+    // In the buggy implementation, resolve_target() was called before the
+    // project-path guard, unconditionally emitting AddTrack for the NewTrack
+    // branch even though the subsequent import() call would refuse.
+    let cmds = drain(&rx);
+    assert!(
+        cmds.iter()
+            .all(|c| !matches!(c, AudioCommand::AddTrack { .. })),
+        "no AddTrack must be sent when project is unsaved (orphan-track bug)"
+    );
+    assert!(
+        cmds.iter()
+            .all(|c| !matches!(c, AudioCommand::ImportAudioToPool { .. })),
+        "no ImportAudioToPool must be sent when project is unsaved"
+    );
+    assert!(
+        app.test_error_message_is_set(),
+        "a user-facing error message must be shown"
     );
 }
