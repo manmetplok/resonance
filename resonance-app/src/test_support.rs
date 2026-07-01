@@ -903,4 +903,36 @@ impl Resonance {
     pub fn test_restore_external_instruments(&mut self, extras: &crate::undo::UndoExtras) {
         self.restore_external_instruments(extras);
     }
+
+    // ---- Import-progress tracker (doc #175, ba todo #597) ----------------
+
+    /// Test-only: borrow the per-file import-progress tracker so tests can
+    /// assert that `ImportProgress` / `ImportFailed` engine events update it
+    /// correctly, without touching the private field directly.
+    #[doc(hidden)]
+    pub fn test_import_progress(&self) -> &state::ImportProgressTracker {
+        &self.import_progress
+    }
+
+    /// Test-only: borrow the audition transport state (playing row, scrub
+    /// playhead position) so tests for `AuditionPosition` / `AuditionStopped`
+    /// mirroring (ba todo #597) can assert without reading the private field.
+    #[doc(hidden)]
+    pub fn test_audition(&self) -> &state::AuditionState {
+        &self.browser.audition
+    }
+
+    /// Test-only: directly set the audition `playing` row, standing in for
+    /// the browser `Play` message handler so `AuditionStopped` mirror tests
+    /// have a pre-existing playing state to clear.
+    #[doc(hidden)]
+    pub fn test_set_audition_playing(&mut self, path: Option<std::path::PathBuf>) {
+        self.browser.audition.playing = path;
+    }
+
+    /// Test-only: read the current error message banner, if any.
+    #[doc(hidden)]
+    pub fn test_error_message(&self) -> Option<&str> {
+        self.error_message.as_deref()
+    }
 }

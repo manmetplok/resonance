@@ -1,5 +1,6 @@
 //! Transient orchestration state for the import → placement flow
-//! (doc #175, ba todo #598).
+//! (doc #175, ba todo #598) and per-file import-progress tracking
+//! (ba todo #597).
 //!
 //! A multi-file import (dialog or drop) fans out into one
 //! `AudioCommand::ImportAudioToPool` and, per file, an ordered lifecycle
@@ -20,7 +21,7 @@
 //! import is initiated (see `undo::classify`), capturing the pre-import
 //! project so one undo removes the whole import + placement.
 
-use resonance_audio::types::{SamplePos, TrackId};
+use resonance_audio::types::{AssetId, SamplePos, TrackId};
 
 /// What to do with an imported asset once the engine reports it landed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +69,10 @@ impl PendingImports {
     /// for the path — e.g. a stray `AssetImported` for a re-import or an
     /// asset that arrived after its entry was already consumed.
     pub fn take_matching(&mut self, source_path: &str) -> Option<PlacementTarget> {
-        let pos = self.entries.iter().position(|e| e.source_path == source_path)?;
+        let pos = self
+            .entries
+            .iter()
+            .position(|e| e.source_path == source_path)?;
         Some(self.entries.remove(pos).target)
     }
 
@@ -80,5 +84,93 @@ impl PendingImports {
     /// Number of queued placements — used by tests and diagnostics.
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-file import-progress tracking (ba todo #597)
+// ---------------------------------------------------------------------------
+
+/// Progress status of a single file in an audio-import batch.
+///
+/// `Queued` / `Working` / `Done` map directly to the engine's
+/// [`resonance_audio::types::ImportStage`] variants; `Failed` is the
+/// terminal error case that arrives via [`AudioEvent::ImportFailed`]
+/// rather than `ImportProgress`. Displayed by the transcode-progress
+/// modal (doc #175, todo #606).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileImportProgress {
+    /// File is in the import queue but the engine hasn't started it yet.
+    Queued,
+    /// The engine is actively transcoding / resampling this file.
+    Working,
+    /// Import succeeded; the asset is now in the pool.
+    Done,
+    /// Import failed with a user-facing error `reason`.
+    Failed { reason: String },
+}
+
+/// One per-file progress row for the audio-import transcode modal.
+/// Keyed by [`AssetId`] (set by the engine at import time and echoed
+/// back via `ImportProgress` / `ImportFailed`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileImportStatus {
+    /// Engine-assigned id for this asset.
+    pub asset_id: AssetId,
+    /// Source path as passed in `AudioCommand::ImportAudioToPool`.
+    pub path: String,
+    /// Current progress / outcome.
+    pub progress: FileImportProgress,
+}
+
+/// Transient per-file progress tracker for the audio-import transcode
+/// modal (doc #175, todo #606).
+///
+/// Populated from `ImportProgress` and `ImportFailed` engine events
+/// (mirrored in ba todo #597) while an import batch is in flight.
+/// Cleared when the modal is dismissed or a new batch starts. Not
+/// undoable and not persisted.
+#[derive(Debug, Clone, Default)]
+pub struct ImportProgressTracker {
+    entries: Vec<FileImportStatus>,
+}
+
+impl ImportProgressTracker {
+    /// Upsert a file's progress entry. Matches by `asset_id` and updates
+    /// in place; appends when the id is not yet tracked.
+    pub fn upsert(&mut self, asset_id: AssetId, path: String, progress: FileImportProgress) {
+        if let Some(slot) = self.entries.iter_mut().find(|e| e.asset_id == asset_id) {
+            slot.path = path;
+            slot.progress = progress;
+        } else {
+            self.entries.push(FileImportStatus {
+                asset_id,
+                path,
+                progress,
+            });
+        }
+    }
+
+    /// All tracked file statuses, in the order they first appeared.
+    pub fn statuses(&self) -> &[FileImportStatus] {
+        &self.entries
+    }
+
+    /// Clear all entries (e.g. when the modal is dismissed or a new
+    /// batch replaces an old one).
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// True when every tracked entry has reached a terminal state
+    /// (`Done` or `Failed`); false while any entry is `Queued` or
+    /// `Working`. Also true when the tracker is empty.
+    pub fn is_complete(&self) -> bool {
+        self.entries.iter().all(|e| {
+            matches!(
+                e.progress,
+                FileImportProgress::Done | FileImportProgress::Failed { .. }
+            )
+        })
     }
 }

@@ -126,6 +126,12 @@ pub struct Resonance {
     /// resulting pool asset + placed clip are what ride persistence/undo.
     pub(crate) pool_import: state::PendingImports,
 
+    /// Per-file import-progress tracking for the audio-import transcode
+    /// modal (doc #175, ba todo #597 / #606). Populated from
+    /// `ImportProgress` / `ImportFailed` engine events; cleared when the
+    /// modal is dismissed. Transient — not undoable, not persisted.
+    pub(crate) import_progress: state::ImportProgressTracker,
+
     /// Transient media-browser interaction state (doc #175): current
     /// folder + cached scan, per-folder filter, Files/Pool tab, and the
     /// audition preview transport. Not undoable, not persisted in the
@@ -508,6 +514,7 @@ impl Resonance {
                 settings.media.recent_folders.clone(),
             ),
             pool_import: state::PendingImports::default(),
+            import_progress: state::ImportProgressTracker::default(),
             browser: state::BrowserState::default(),
             drag_placement: None,
             relink: state::RelinkState::default(),

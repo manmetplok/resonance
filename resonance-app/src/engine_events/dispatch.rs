@@ -121,10 +121,11 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         // Media-pool import lifecycle (engine todo #592). `AssetImported`
         // mirrors the asset into the pool and, for a drop, places it as a
         // clip (todo #598, `engine_events::pool`); `ImportFailed` drops the
-        // queued placement and surfaces the error. Per-file progress
-        // *display* (the transcode modal) is mirrored by todo #597, which
-        // owns `ImportProgress` — accept it here without acting for now.
-        E::ImportProgress { .. } => {}
+        // queued placement and surfaces the error. `ImportProgress` updates
+        // the per-file progress tracker for the transcode modal (todo #597).
+        E::ImportProgress { asset_id, path, stage } => {
+            pool::import_progress(r, asset_id, path, stage)
+        }
         E::AssetImported {
             asset_id,
             project_relative_path,
@@ -390,11 +391,18 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             master_peak_r,
         ),
 
-        // Audition preview position/stopped events round-trip through the
-        // engine, but the app does not hold audition UI state yet (the scrub
-        // playhead + browser preview controls land with the audition app-state
-        // todo, doc #175), so there is nothing to mirror — no-ops for now.
-        E::AuditionPosition { .. } | E::AuditionStopped => {}
+        // Audition preview events: mirror the engine's playhead position into
+        // the browser's scrub bar, and clear the playing row when the engine
+        // naturally stops (end of a non-looping file, or after StopAudition).
+        // Both are transient UI state — not undoable, not persisted (doc #175,
+        // ba todo #597).
+        E::AuditionPosition { frame } => {
+            r.browser.audition.position_frame = frame;
+        }
+        E::AuditionStopped => {
+            r.browser.audition.playing = None;
+            r.browser.audition.position_frame = 0;
+        }
         // Freeze progress / lifecycle. The engine-side command/event
         // plumbing (todo #572) emits these; mirroring them into app state
         // (per-track freeze status, progress modal, attaching the decoded

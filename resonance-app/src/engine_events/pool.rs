@@ -1,5 +1,6 @@
 //! App-side handlers for the media-pool import lifecycle (doc #175, ba
-//! todo #598) — the placement half of the import orchestration.
+//! todos #597 / #598) — the per-file progress mirror and the placement
+//! half of the import orchestration.
 //!
 //! The engine copies/transcodes each imported source file off-thread and
 //! reports back per file: an ordered `ImportProgress` lifecycle, then a
@@ -8,6 +9,10 @@
 //! was a drop with a queued placement (see `state::pool_import`) — place
 //! it as an audio clip on the target track, reusing the engine's
 //! clip-from-WAV load path and tying the new clip to its `AssetRef`.
+//!
+//! The per-file progress state (`Resonance::import_progress`) feeds the
+//! transcode-progress modal (todo #606); it is transient UI state — not
+//! undoable and not persisted (same rule as audition state, doc #175).
 //!
 //! The single-action undo entry for the whole import + placement was
 //! recorded up front when the import was issued (`undo::classify` marks
@@ -20,7 +25,7 @@ use std::path::Path;
 use resonance_audio::types::*;
 use resonance_common::AudioFormat;
 
-use crate::state::{AssetRef, ClipState, PlacementTarget, PoolAsset};
+use crate::state::{AssetRef, ClipState, FileImportProgress, PlacementTarget, PoolAsset};
 use crate::Resonance;
 
 /// Mirror a freshly imported asset into the pool, then place it if a drop
@@ -72,12 +77,37 @@ pub(super) fn asset_imported(
     }
 }
 
+/// Update the per-file progress tracker from an `ImportProgress` engine
+/// event. This drives the transcode modal (todo #606) and is transient UI
+/// state — not undoable, not persisted.
+pub(super) fn import_progress(
+    r: &mut Resonance,
+    asset_id: AssetId,
+    path: String,
+    stage: ImportStage,
+) {
+    let progress = match stage {
+        ImportStage::Queued => FileImportProgress::Queued,
+        ImportStage::Working => FileImportProgress::Working,
+        ImportStage::Done => FileImportProgress::Done,
+    };
+    r.import_progress.upsert(asset_id, path, progress);
+}
+
 /// A source file failed to import (decode/transcode error, missing file,
 /// …). Drop its queued placement so a later stray event can't place a
-/// phantom clip, and surface the reason. The batch's other files are
-/// independent and continue.
-pub(super) fn import_failed(r: &mut Resonance, _asset_id: AssetId, path: String, reason: String) {
+/// phantom clip, update the progress tracker with the failure reason, and
+/// surface the reason. The batch's other files are independent and
+/// continue.
+pub(super) fn import_failed(r: &mut Resonance, asset_id: AssetId, path: String, reason: String) {
     let _ = r.pool_import.take_matching(&path);
+    r.import_progress.upsert(
+        asset_id,
+        path,
+        FileImportProgress::Failed {
+            reason: reason.clone(),
+        },
+    );
     r.error_message = Some(format!("Import failed: {reason}"));
 }
 
