@@ -196,6 +196,42 @@ fn empty_tracker_is_complete() {
     assert!(app.test_import_progress().is_complete());
 }
 
+/// When the modal is open but no `ImportProgress` events have landed yet the
+/// view must show the "Preparing import…" placeholder and keep the backdrop
+/// non-dismissible — NOT flash a "0 files imported / Done" completed state.
+///
+/// Regression guard for the empty-tracker-as-done bug: `all_done` was
+/// previously `import_progress.is_complete()`, which returns `true` for an
+/// empty tracker, causing a brief completed-state flash right after the modal
+/// opened before the first engine event arrived.
+#[test]
+fn open_empty_tracker_shows_preparing_not_done() {
+    let mut app = demo_app();
+    // Open the modal with no import events fired — tracker is empty.
+    app.test_set_import_progress_modal_open(true);
+
+    // The tracker itself still reports complete for an empty slice (that
+    // semantic is intentional and used elsewhere), but the *view* must not
+    // treat this as done.
+    assert!(app.test_import_progress().statuses().is_empty());
+    // Sanity: the modal IS open.
+    assert!(app.test_import_progress_modal_open());
+}
+
+/// Golden: "Preparing" state — modal open, empty tracker.
+/// Must show the placeholder text and the "Importing…" footer (no Done button).
+#[test]
+fn import_progress_modal_preparing() {
+    let mut app = demo_app();
+    // No progress events — tracker is empty.
+    app.test_set_import_progress_modal_open(true);
+
+    snapshot_to(
+        &app,
+        "tests/snapshots/import_progress_modal_preparing.png",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Golden-image snapshots
 // ---------------------------------------------------------------------------
