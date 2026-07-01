@@ -795,4 +795,22 @@ impl Resonance {
     pub fn test_browser(&self) -> &crate::state::BrowserState {
         &self.browser
     }
+
+    /// Test-only: borrow one pool asset by id, so relink tests (ba todo
+    /// #600) can assert an asset's missing flag and refreshed metadata.
+    #[doc(hidden)]
+    pub fn test_pool_asset(
+        &self,
+        id: resonance_audio::types::AssetId,
+    ) -> Option<&crate::state::pool::PoolAsset> {
+        self.pool.asset(id)
+    }
+
+    /// Test-only: borrow the transient relink state so relink handler
+    /// tests (ba todo #600) can assert in-flight bookkeeping and the last
+    /// relink error without poking at the `pub(crate)` field.
+    #[doc(hidden)]
+    pub fn test_relink(&self) -> &crate::state::RelinkState {
+        &self.relink
+    }
 }

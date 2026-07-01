@@ -86,6 +86,10 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // Audio import + placement mutates the project (adds pool assets /
         // clips / tracks) — block while the startup modal owns the screen.
         Message::Pool(_) => true,
+        // Missing-file relink acts on a loaded project's pool — block it
+        // while the startup modal owns the screen (there is no project to
+        // relink into yet).
+        Message::Relink(_) => true,
         // Timer tick: harmless, drives VU meters — allow.
         Message::Tick => false,
         // Window close request: always allow so the app can exit.
@@ -128,6 +132,9 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::GlobalTrack(_)
         | Message::Import(_)
         | Message::Pool(_)
+        // Relinking re-copies audio into the project through the shared
+        // decode path — block it mid-render like the rest.
+        | Message::Relink(_)
         | Message::ChordTrack(_)
         | Message::Ui(_)
         | Message::Export(_)
@@ -174,6 +181,9 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         | Message::GlobalTrack(_)
         | Message::Import(_)
         | Message::Pool(_)
+        // Relinking re-copies audio into the project through the shared
+        // decode path — block it mid-render like the rest.
+        | Message::Relink(_)
         | Message::ChordTrack(_)
         | Message::Ui(_)
         | Message::Export(_)

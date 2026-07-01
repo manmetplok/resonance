@@ -616,6 +616,15 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // import lands (a follow-up todo, doc #158); none of its
         // interactions mutate the project yet, so nothing to record.
         Message::Import(_) => UndoAction::Skip,
+        // Missing-file relink (doc #175, todo #600). Opening the OS
+        // picker, its cancel results, and starting the background import
+        // are transient — they mutate no project state. Only the applied
+        // outcome (`Imported(Ok)`) clears the missing flag, refreshes the
+        // asset's source provenance, and reloads its clips, so that one
+        // records a pre-relink snapshot to make the relink reversible.
+        // `Imported(Err)` only sets a transient error string.
+        Message::Relink(RelinkMessage::Imported(Ok(_))) => UndoAction::Record,
+        Message::Relink(_) => UndoAction::Skip,
         // Media-browser navigation, filtering, favourite / recent, and
         // audition preview are all transient session UI state (doc #175) —
         // never undoable and never in the project file, same rule as the

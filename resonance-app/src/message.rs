@@ -14,9 +14,11 @@ use crate::state::{
 };
 use resonance_audio::quantize::{Division, QuantizeMode};
 use resonance_audio::types::{
-    BusId, ClipId, FadeCurve, PluginInstanceId, SamplePos, ScannedPlugin, SendId, SendSource,
+    AssetId, BusId, ClipId, FadeCurve, PluginInstanceId, SamplePos, ScannedPlugin, SendId,
+    SendSource,
     TrackId, TrackOutput,
 };
+use resonance_audio::PoolImportOutcome;
 use resonance_music_theory::Scale;
 
 #[derive(Debug, Clone)]
@@ -51,6 +53,11 @@ pub enum Message {
     /// todo #598): bring external audio into the project pool and,
     /// optionally, place it as a clip. See [`PoolMessage`].
     Pool(PoolMessage),
+    /// Missing-file relink actions (doc #175, todo #600): locate a single
+    /// missing pool asset, or batch-search a folder to resolve every
+    /// missing asset by filename, then re-copy the audio into the project.
+    /// Handled by `update::relink::handle`.
+    Relink(RelinkMessage),
     Ui(UiMessage),
     /// Docked media-browser interaction: filesystem navigation, per-folder
     /// filter, favourite / recent toggles, Files/Pool tab, and the audition
@@ -872,6 +879,54 @@ pub enum PoolMessage {
         paths: Vec<std::path::PathBuf>,
         target: DropTarget,
     },
+}
+
+/// Missing-file relink actions (doc #175, todo #600). When a project is
+/// loaded whose pool references a WAV that is no longer on disk, that
+/// asset is flagged [`missing`](crate::state::pool::PoolAsset::missing) —
+/// its clips are kept offline so nothing is lost — and these messages
+/// drive resolving the file again:
+///
+/// * per-file [`Locate`](RelinkMessage::Locate) opens an OS file picker so
+///   the user points one missing asset at a replacement file, and
+/// * one-shot [`SearchFolder`](RelinkMessage::SearchFolder) picks a folder
+///   and resolves *every* missing asset whose original filename is found
+///   inside it (recursively).
+///
+/// Either way the resolved source is copied/transcoded back into the
+/// project's `audio/` folder under the asset's stable
+/// `asset_{id}.wav` name (reusing the import-to-pool path), the missing
+/// flag is cleared, and the asset's clips are reloaded so playback
+/// resumes. The metadata change rides the normal project snapshot, so the
+/// relink is undoable. Routed through `update::relink::handle`.
+#[derive(Debug, Clone)]
+pub enum RelinkMessage {
+    /// Open the OS file picker to locate a replacement file for one
+    /// missing asset (the per-file `Locate…` action).
+    Locate(AssetId),
+    /// File-picker result for a single-asset [`Locate`](Self::Locate):
+    /// `Some` with the chosen path, or `None` if the user cancelled.
+    Located(AssetId, Option<std::path::PathBuf>),
+    /// Open the OS folder picker for the one-shot `Search a folder…`
+    /// batch relink.
+    SearchFolder,
+    /// Folder-picker result for [`SearchFolder`](Self::SearchFolder):
+    /// `Some` folder resolves every missing asset whose original filename
+    /// exists inside it; `None` if the user cancelled.
+    FolderChosen(Option<std::path::PathBuf>),
+    /// A background relink import finished. `Ok` carries the transcoded
+    /// asset's fresh metadata (it now lives in the project folder); `Err`
+    /// carries the asset/file/reason of a failed import.
+    Imported(Result<PoolImportOutcome, RelinkError>),
+}
+
+/// A failed relink import: which asset was being relinked, the source
+/// file that was tried, and a user-facing reason.
+#[derive(Debug, Clone)]
+pub struct RelinkError {
+    pub asset_id: AssetId,
+    pub path: String,
+    pub reason: String,
 }
 
 /// Docked media-browser interaction (doc #175, todo #599): filesystem
