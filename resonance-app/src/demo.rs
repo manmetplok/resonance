@@ -537,3 +537,76 @@ pub fn seed_many_synth_tracks(app: &mut Resonance, n: usize) {
     app.compose.refresh_track_count(&app.registry.tracks);
     app.refresh_transport_labels();
 }
+
+/// Seed three pool assets into the browser so the Pool tab renders with
+/// content for snapshot tests (todo #603):
+///
+/// * **Asset 1 — used**: a stereo WAV, 4.5 s, referenced by the first
+///   audio clip already present in the registry (if any — call after
+///   `seed_demo_content`).
+/// * **Asset 2 — unused**: a mono FLAC, 2.0 s, not referenced by any clip.
+/// * **Asset 3 — missing**: a WAV flagged `missing`, representing a file
+///   the project can no longer locate.
+///
+/// Calls `recompute_pool_usage` so usage badges render correctly.
+pub fn seed_pool_assets(app: &mut Resonance) {
+    use resonance_common::AudioFormat;
+
+    // Build a gentle sinusoidal waveform for thumbnail peaks.
+    let make_peaks = |count: usize, phase: f32| -> Vec<(f32, f32)> {
+        (0..count)
+            .map(|i| {
+                let t = i as f32 / count as f32;
+                let amp = 0.3 + 0.5 * (t * std::f32::consts::TAU + phase).sin().abs();
+                (-amp, amp)
+            })
+            .collect()
+    };
+
+    let asset1 = crate::state::PoolAsset {
+        id: 1,
+        project_relative_path: "audio/asset_1.wav".to_string(),
+        original_path: "/sessions/My Project/audio/Kick Loop 120bpm.wav".to_string(),
+        format: AudioFormat::Wav,
+        channels: 2,
+        source_sample_rate: 44_100,
+        duration_frames: (44_100.0 * 4.5) as u64,
+        thumbnail_peaks: make_peaks(48, 0.0),
+        missing: false,
+    };
+
+    let asset2 = crate::state::PoolAsset {
+        id: 2,
+        project_relative_path: "audio/asset_2.wav".to_string(),
+        original_path: "/sessions/My Project/audio/Clap One-Shot.flac".to_string(),
+        format: AudioFormat::Flac,
+        channels: 1,
+        source_sample_rate: 48_000,
+        duration_frames: (44_100.0 * 2.0) as u64,
+        thumbnail_peaks: make_peaks(48, 1.2),
+        missing: false,
+    };
+
+    let asset3 = crate::state::PoolAsset {
+        id: 3,
+        project_relative_path: "audio/asset_3.wav".to_string(),
+        original_path: "/sessions/My Project/audio/Riser FX.wav".to_string(),
+        format: AudioFormat::Wav,
+        channels: 2,
+        source_sample_rate: 44_100,
+        duration_frames: (44_100.0 * 8.0) as u64,
+        thumbnail_peaks: make_peaks(48, 2.5),
+        missing: true,
+    };
+
+    app.pool.add(asset1);
+    app.pool.add(asset2);
+    app.pool.add(asset3);
+
+    // Link the first audio clip to asset 1 so it renders as "used ×1".
+    if let Some(clip) = app.clips.first_mut() {
+        clip.asset_ref = Some(crate::state::AssetRef::new(1));
+    }
+
+    app.recompute_pool_usage();
+}
