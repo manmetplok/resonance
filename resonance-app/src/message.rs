@@ -953,6 +953,12 @@ pub struct RelinkError {
 /// persistence.
 #[derive(Debug, Clone)]
 pub enum BrowserMessage {
+    // -- Panel chrome -------------------------------------------------
+    /// Show / hide the docked media-browser panel in the Arrange view.
+    /// Dispatched by the "Media" chrome toggle and the panel header's
+    /// collapse caret. Pure transient UI state (never persisted / undone).
+    ToggleVisible,
+
     // -- Tabs & navigation --------------------------------------------
     /// Switch between the Files and Pool tabs.
     SelectTab(BrowserTab),
