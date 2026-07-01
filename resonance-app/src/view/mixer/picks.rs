@@ -150,6 +150,78 @@ impl std::fmt::Display for ProgramChoice {
     }
 }
 
+/// Pick-list entry for a **named patch** from a device definition (epic #40,
+/// doc #201 §5). Carries the combined 14-bit `bank` (MSB<<7|LSB) and
+/// `program` a [`resonance_common::PatchEntry`] resolves to, so a pick sets
+/// both the Bank Select and Program Change in one edit. `label` is the
+/// display string (patch name); `group` names the bank/category cluster the
+/// entry belongs to, shown as a leading section prefix so a flat `pick_list`
+/// reads as grouped. Equality compares the resolved bank/program (plus label)
+/// so `pick_list` highlights the row matching the track's current patch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PatchChoice {
+    pub bank: Option<u16>,
+    pub program: Option<u8>,
+    pub label: String,
+    pub group: Option<String>,
+}
+
+impl std::fmt::Display for PatchChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.group {
+            Some(group) => write!(f, "{} \u{2039} {}", group, self.label),
+            None => f.write_str(&self.label),
+        }
+    }
+}
+
+/// Named-patch picker options for a device definition: a leading "(no patch)"
+/// clear entry, then one entry per [`resonance_common::PatchEntry`] grouped by
+/// `category` (falling back to the bank when a patch has no category) and
+/// ordered by group, then bank/program. Each entry resolves to the patch's
+/// combined 14-bit bank (`bank_msb<<7|bank_lsb`) + program, so picking one
+/// drives the existing Bank Select + Program Change path (doc #201 §5).
+pub(crate) fn patch_choices(
+    def: &resonance_common::DeviceDefinition,
+) -> Vec<PatchChoice> {
+    // Group label for a patch: its category, else a "Bank msb:lsb" heading so
+    // named patches without categories still cluster by bank.
+    fn group_of(p: &resonance_common::PatchEntry) -> String {
+        match &p.category {
+            Some(c) if !c.trim().is_empty() => c.clone(),
+            _ => format!("Bank {}:{}", p.bank_msb, p.bank_lsb),
+        }
+    }
+
+    let mut entries: Vec<&resonance_common::PatchEntry> = def.patches.iter().collect();
+    // Stable, human-friendly ordering: by group, then bank (msb, lsb), then
+    // program. `sort_by` is stable so equal keys keep definition order.
+    entries.sort_by(|a, b| {
+        group_of(a)
+            .cmp(&group_of(b))
+            .then(a.bank_msb.cmp(&b.bank_msb))
+            .then(a.bank_lsb.cmp(&b.bank_lsb))
+            .then(a.program.cmp(&b.program))
+    });
+
+    let mut v = Vec::with_capacity(entries.len() + 1);
+    v.push(PatchChoice {
+        bank: None,
+        program: None,
+        label: "(no patch)".to_string(),
+        group: None,
+    });
+    for p in entries {
+        v.push(PatchChoice {
+            bank: Some(((p.bank_msb as u16) << 7) | p.bank_lsb as u16),
+            program: Some(p.program),
+            label: p.name.clone(),
+            group: Some(group_of(p)),
+        });
+    }
+    v
+}
+
 /// Pick-list entry for an external-instrument **device preset** (epic #40,
 /// doc #201 §5). `id` is the [`resonance_common::DeviceDefinition`]'s `id`
 /// (`None` = the "(no device)" clear entry); `label` is the display string

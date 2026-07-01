@@ -147,6 +147,21 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
                 });
             }
         }
+        M::SetPatch(track_id, bank, program) => {
+            // A named-patch pick sets bank + program in one edit and fires a
+            // single Bank Select + Program Change — the same engine path the
+            // numeric Bank/Program pickers use (doc #201 §5). The named patch
+            // persists implicitly via the resolved bank/program.
+            if let Some(state) = r.external_instruments.get_mut(&track_id) {
+                state.bank = bank;
+                state.program = program;
+                let _ = r.engine.send(AudioCommand::SetExternalInstrumentPatch {
+                    track_id,
+                    bank,
+                    program,
+                });
+            }
+        }
         M::SetLatencyOffset(track_id, latency_offset_samples) => {
             if let Some(state) = r.external_instruments.get_mut(&track_id) {
                 state.latency_offset_samples = latency_offset_samples;

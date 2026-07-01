@@ -302,6 +302,13 @@ pub enum ExternalInstrumentMessage {
     /// Set the selected MIDI program (`0..=127`), or `None` to send no
     /// Program Change. Fires the patch send.
     SetProgram(TrackId, Option<u8>),
+    /// Select a **named patch** from the selected device definition (epic
+    /// #40, doc #201 §5): sets the combined 14-bit bank (`MSB<<7|LSB`) and
+    /// the program together, resolved from the chosen `PatchEntry`. `None`
+    /// bank/program clears the corresponding selection (the "(no patch)"
+    /// entry sends both `None`). Fires a single Bank Select + Program Change
+    /// through the same path as `SetBank`/`SetProgram`.
+    SetPatch(TrackId, Option<u16>, Option<u8>),
     /// Set the manual latency offset (samples) aligning the audio return.
     SetLatencyOffset(TrackId, i64),
     /// Toggle input monitoring for the return.

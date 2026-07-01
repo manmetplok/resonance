@@ -7,13 +7,16 @@
 //! live in `widgets`. The audio-return device list helper (`return_device_choices`)
 //! lives in `io`.
 
+use iced::widget::text::Shaping;
 use iced::widget::{button, column, container, pick_list, row, slider, text, Space};
 use iced::{alignment, Element, Length};
 
 use crate::message::{ExternalInstrumentMessage, Message};
 use crate::state::{ExternalInstrumentState, TrackState};
 use crate::theme;
-use crate::view::mixer::picks::{BankChoice, MidiChannelChoice, MidiPickerChoice, PortChoice, ProgramChoice};
+use crate::view::mixer::picks::{
+    patch_choices, BankChoice, MidiChannelChoice, MidiPickerChoice, PortChoice, ProgramChoice,
+};
 use resonance_audio::types::InputDeviceInfo;
 
 /// Fixed width of the numeric bank/program tile beside its picker in the
@@ -318,31 +321,98 @@ fn ext_patch_block(
         Some(bank) => format!("{:03}", bank),
         None => "—".to_string(),
     });
-    let bank_picker = pick_list(
-        r.view_caches.bank_choices.clone(),
-        Some(BankChoice(ext.bank)),
-        move |choice| {
-            Message::ExternalInstrument(ExternalInstrumentMessage::SetBank(track_id, choice.0))
-        },
-    )
-    .text_size(12)
-    .padding([5, 8])
-    .width(Length::Fill);
-
     let program_tile = super::widgets::pgnum_tile(match ext.program {
         Some(program) => format!("{:03}", program),
         None => "—".to_string(),
     });
-    let program_picker = pick_list(
-        r.view_caches.program_choices.clone(),
-        Some(ProgramChoice(ext.program)),
-        move |choice| {
-            Message::ExternalInstrument(ExternalInstrumentMessage::SetProgram(track_id, choice.0))
-        },
-    )
-    .text_size(12)
-    .padding([5, 8])
-    .width(Length::Fill);
+
+    // When the selected preset resolves to a definition that ships named
+    // patches, the two numeric Bank/Program pickers give way to a single
+    // patch-by-name picker (grouped by bank/category); a pick resolves to the
+    // entry's bank_msb/lsb + program and drives the same Bank Select + Program
+    // Change path (doc #201 §5). With no device — or a device that has no
+    // patch list — we fall back to the numeric pickers.
+    let selected_def = ext
+        .device_id
+        .as_ref()
+        .and_then(|id| r.device_registry.get(id));
+    let named_patches = selected_def.map(|d| !d.patches.is_empty()).unwrap_or(false);
+
+    let patch_section: Element<'static, Message> = if let Some(def) =
+        selected_def.filter(|_| named_patches)
+    {
+        let choices = patch_choices(def);
+        // Highlight the entry whose resolved bank/program matches the track's
+        // current patch; when nothing matches (a custom bank/program not in
+        // the definition) the picker shows the "(no patch)" clear entry.
+        let selected = choices
+            .iter()
+            .find(|c| c.bank == ext.bank && c.program == ext.program)
+            .cloned();
+        // The group of the currently-selected named patch, shown as a small
+        // read-out beside the program tile so the bank/category is legible on
+        // the closed card.
+        let selected_group = selected
+            .as_ref()
+            .and_then(|c| c.group.clone())
+            .unwrap_or_else(|| "Named patches".to_string());
+        let patch_picker = pick_list(choices, selected, move |choice| {
+            Message::ExternalInstrument(ExternalInstrumentMessage::SetPatch(
+                track_id,
+                choice.bank,
+                choice.program,
+            ))
+        })
+        .text_size(12)
+        .padding([5, 8])
+        .width(Length::Fill);
+        let group_readout = text(selected_group)
+            .size(11)
+            .color(theme::TEXT_2)
+            .shaping(Shaping::Advanced);
+        column![
+            patch_row(bank_tile, patch_picker.into()),
+            Space::new().height(8),
+            patch_row(
+                program_tile,
+                container(group_readout)
+                    .align_y(alignment::Vertical::Center)
+                    .into()
+            ),
+        ]
+        .spacing(0)
+        .into()
+    } else {
+        let bank_picker = pick_list(
+            r.view_caches.bank_choices.clone(),
+            Some(BankChoice(ext.bank)),
+            move |choice| {
+                Message::ExternalInstrument(ExternalInstrumentMessage::SetBank(track_id, choice.0))
+            },
+        )
+        .text_size(12)
+        .padding([5, 8])
+        .width(Length::Fill);
+        let program_picker = pick_list(
+            r.view_caches.program_choices.clone(),
+            Some(ProgramChoice(ext.program)),
+            move |choice| {
+                Message::ExternalInstrument(ExternalInstrumentMessage::SetProgram(
+                    track_id, choice.0,
+                ))
+            },
+        )
+        .text_size(12)
+        .padding([5, 8])
+        .width(Length::Fill);
+        column![
+            patch_row(bank_tile, bank_picker.into()),
+            Space::new().height(8),
+            patch_row(program_tile, program_picker.into()),
+        ]
+        .spacing(0)
+        .into()
+    };
 
     let note = text(
         "Sends Bank Select (CC0/CC32) + Program Change. Re-sent on project \
@@ -364,9 +434,7 @@ fn ext_patch_block(
             Space::new().height(6),
             def_actions,
             Space::new().height(10),
-            patch_row(bank_tile, bank_picker.into()),
-            Space::new().height(8),
-            patch_row(program_tile, program_picker.into()),
+            patch_section,
             Space::new().height(8),
             note,
         ]
