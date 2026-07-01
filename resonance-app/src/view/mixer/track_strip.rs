@@ -111,8 +111,13 @@ impl crate::Resonance {
         // doc #169. Presence in `external_instruments` is the only marker
         // (these tracks have no track-type discriminant).
         let ext_state = self.external_instruments.get(&track.id);
-        if ext_state.is_some() {
+        if let Some(ext) = ext_state {
             head_row = head_row.push(ext_pill());
+            // Offline flag — a small BAD-pink marker in the head when a
+            // configured device is unreachable (doc #169, todo #459).
+            if ext.midi_out_offline || ext.return_input_offline {
+                head_row = head_row.push(offline_flag());
+            }
         }
         let track_name: Element<'_, Message> = container(head_row)
             .width(Length::Fill)
@@ -275,19 +280,25 @@ impl crate::Resonance {
         // still have no routing pickers anywhere.
 
         let is_selected = self.interaction.selected_track == Some(track.id);
+        // A configured external device that's gone offline gives the strip a
+        // BAD-pink inset glow so the outage reads at a glance from the mixer
+        // (doc #169, todo #459). The route itself is preserved.
+        let ext_offline = ext_state
+            .map(|e| e.midi_out_offline || e.return_input_offline)
+            .unwrap_or(false);
         let bg = if track.record_armed {
             theme::PANEL_ARMED
         } else {
             theme::BG_2
         };
-        let border_color = if track.record_armed {
+        let border_color = if track.record_armed || ext_offline {
             theme::BAD
         } else if is_selected {
             theme::ACCENT_LINE
         } else {
             theme::LINE_2
         };
-        let border_w = if is_selected || track.record_armed {
+        let border_w = if is_selected || track.record_armed || ext_offline {
             1.0
         } else {
             0.5
@@ -658,6 +669,29 @@ fn ext_pill() -> Element<'static, Message> {
         background: Some(iced::Background::Color(theme::ACCENT_DIM)),
         border: iced::Border {
             color: theme::ACCENT_LINE,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+/// Small BAD-pink `offline` flag shown in the strip head when a configured
+/// external device is unreachable (doc #169, todo #459). The route is kept;
+/// this is the at-a-glance outage marker beside the `Ext` pill.
+fn offline_flag() -> Element<'static, Message> {
+    container(
+        text("offline")
+            .size(8)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::BAD),
+    )
+    .padding([2, 5])
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::BAD_DIM)),
+        border: iced::Border {
+            color: theme::BAD_LINE,
             width: 1.0,
             radius: 999.0.into(),
         },

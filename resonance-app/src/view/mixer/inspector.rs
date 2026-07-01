@@ -11,7 +11,9 @@ use iced::{alignment, Element, Length};
 use resonance_audio::types::{InputDeviceInfo, ScannedPlugin, TrackOutput, TrackType};
 
 use crate::message::*;
-use crate::state::{ExternalInstrumentState, MixerInspectorGroup, TrackState};
+use crate::state::{
+    ExternalInstrumentState, ExternalInstrumentStatus, MixerInspectorGroup, TrackState,
+};
 use crate::theme;
 use crate::util::format_pan;
 use crate::view::controls::collapse_caret;
@@ -59,19 +61,6 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
                 .collapsed_inspector_groups
                 .contains(&MixerInspectorGroup::Chain);
 
-            let header = column![
-                text("INSPECTOR")
-                    .size(10)
-                    .font(theme::UI_FONT_SEMIBOLD)
-                    .color(theme::TEXT_3),
-                Space::new().height(2),
-                text(track.name.clone())
-                    .size(17)
-                    .font(theme::UI_FONT_MEDIUM)
-                    .color(theme::TEXT_1),
-            ]
-            .spacing(0);
-
             // An external-instrument track is identified purely by its
             // presence in the `external_instruments` map (todo #454) —
             // there's no track-type discriminant. When present, the
@@ -79,6 +68,38 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
             // the hardware return) and ROUTING becomes the External
             // Instrument group.
             let is_external = r.external_instruments.contains_key(&track.id);
+            // Derived lifecycle status drives the inspector header badge,
+            // the onboarding card, and the device-offline alert (todo
+            // #459). Computed from the config + live device flags so it can
+            // never drift out of sync with the state it renders.
+            let ext_status = r
+                .external_instruments
+                .get(&track.id)
+                .map(|ext| ext.status(track));
+
+            // Title row: the track name, followed by the status badge on
+            // external-instrument tracks (Unconfigured / Configuring /
+            // Live / Offline), mirroring the prototype's inspector badge.
+            let mut title_row = row![text(track.name.clone())
+                .size(17)
+                .font(theme::UI_FONT_MEDIUM)
+                .color(theme::TEXT_1)]
+            .spacing(0)
+            .align_y(alignment::Vertical::Center);
+            if let Some(status) = ext_status {
+                title_row = title_row
+                    .push(Space::new().width(8))
+                    .push(status_badge(status));
+            }
+            let header = column![
+                text("INSPECTOR")
+                    .size(10)
+                    .font(theme::UI_FONT_SEMIBOLD)
+                    .color(theme::TEXT_3),
+                Space::new().height(2),
+                title_row,
+            ]
+            .spacing(0);
 
             // SIGNAL stays outside the lazy region: its PEAK tile reads
             // the per-tick track levels, which the fingerprint below
@@ -93,7 +114,16 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
             let fp = inspector_fingerprint(r, track, routing_collapsed, chain_collapsed);
             let lazy_groups =
                 iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
-                    let mut col = column![routing_group(r, track, routing_collapsed)].spacing(0);
+                    let mut col = column![].spacing(0);
+                    // Fresh external-instrument track (nothing paired yet):
+                    // a dashed onboarding card walks the user through the
+                    // four setup steps before the routing pickers (#459).
+                    if ext_status == Some(ExternalInstrumentStatus::Unconfigured) {
+                        col = col
+                            .push(onboarding_card())
+                            .push(Space::new().height(18));
+                    }
+                    col = col.push(routing_group(r, track, routing_collapsed));
                     col = col
                         .push(Space::new().height(18))
                         .push(chain_group(r, track, chain_collapsed));
@@ -137,7 +167,7 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
 /// cached widget tree is reused (which is the resize hot path). The
 /// live level fields are intentionally absent: the SIGNAL group renders
 /// them per-frame *outside* the lazy region.
-fn inspector_fingerprint(
+pub(crate) fn inspector_fingerprint(
     r: &crate::Resonance,
     t: &TrackState,
     routing_collapsed: bool,
@@ -385,7 +415,7 @@ fn external_instrument_group(
     // 8px inter-field gap matches the generic ROUTING group's rhythm
     // (see `routing_group`) so a normal track and an external one read
     // with the same vertical cadence.
-    column![
+    let mut col = column![
         group_header("EXTERNAL INSTRUMENT", MixerInspectorGroup::Routing, false),
         Space::new().height(10),
         ext_midi_output_block(r, track, ext),
@@ -400,7 +430,223 @@ fn external_instrument_group(
         Space::new().height(8),
         output_block(r, track),
     ]
-    .spacing(0)
+    .spacing(0);
+
+    // Device-offline alert — a configured MIDI-out or audio-return device
+    // went away. The route is preserved (stale-override keeps it selected)
+    // so a replug reconnects; the alert explains the outage and offers the
+    // two recovery actions (todo #459, doc #169).
+    if let Some(alert) = offline_alert(track, ext) {
+        col = col.push(Space::new().height(12)).push(alert);
+    }
+
+    col.into()
+}
+
+/// Inline BAD-pink alert shown when a configured device is offline. Returns
+/// `None` when both endpoints are online. The title/body name the offline
+/// endpoint (MIDI output takes precedence, matching the prototype), and the
+/// two action buttons drive the recovery path: **Re-scan devices** re-checks
+/// this track's endpoints against the live hardware (clearing offline and
+/// restoring the live route when the device is back), and **Pick another
+/// device…** refreshes the hardware lists so the pickers above offer a
+/// working alternative.
+fn offline_alert(
+    track: &TrackState,
+    ext: &ExternalInstrumentState,
+) -> Option<Element<'static, Message>> {
+    if !ext.midi_out_offline && !ext.return_input_offline {
+        return None;
+    }
+    let track_id = track.id;
+    let (title, device) = if ext.midi_out_offline {
+        ("MIDI output unavailable", track.midi_output_device.clone())
+    } else {
+        ("Audio return unavailable", track.input_device_name.clone())
+    };
+    let device_name = device.unwrap_or_else(|| "The device".to_string());
+    let body = format!(
+        "\u{201c}{}\u{201d} isn't connected. Patch changes and automation can't \
+         reach the synth, and the return input is silent. The route is kept, so \
+         reconnecting restores it.",
+        device_name
+    );
+
+    let rescan = alert_action_button(
+        "Re-scan devices",
+        Message::ExternalInstrument(ExternalInstrumentMessage::CheckDevices(track_id)),
+    );
+    let pick_another = alert_action_button(
+        "Pick another device\u{2026}",
+        Message::ExternalInstrument(ExternalInstrumentMessage::RescanDevices),
+    );
+
+    let inner = column![
+        text(title).size(11).font(theme::UI_FONT_SEMIBOLD).color(theme::BAD),
+        Space::new().height(4),
+        text(body).size(11).color(theme::TEXT_1),
+        Space::new().height(7),
+        row![rescan, Space::new().width(7), pick_another]
+            .align_y(alignment::Vertical::Center),
+    ]
+    .spacing(0);
+
+    Some(
+        container(inner)
+            .width(Length::Fill)
+            .padding([10, 12])
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(theme::BAD_DIM)),
+                border: iced::Border {
+                    color: theme::BAD_LINE,
+                    width: 1.0,
+                    radius: theme::RADIUS_MD.into(),
+                },
+                ..Default::default()
+            })
+            .into(),
+    )
+}
+
+/// A small recovery-action button used inside the offline alert (matching
+/// the prototype's `.alert .fix button`).
+fn alert_action_button(label: &'static str, msg: Message) -> Element<'static, Message> {
+    button(text(label).size(10).color(theme::TEXT_2))
+        .padding([4, 10])
+        .on_press(msg)
+        .style(|_theme, status| {
+            let hovered = matches!(status, button::Status::Hovered);
+            button::Style {
+                background: Some(iced::Background::Color(if hovered {
+                    theme::BG_2
+                } else {
+                    theme::BG_1
+                })),
+                text_color: theme::TEXT_2,
+                border: iced::Border {
+                    color: theme::LINE,
+                    width: 1.0,
+                    radius: theme::RADIUS_XS.into(),
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
+/// Dashed onboarding card shown for a fresh (Unconfigured) external
+/// instrument track — an intro line plus four numbered setup steps (MIDI
+/// out → return → patch → latency), mirroring the prototype's `.empty`
+/// guidance block (todo #459, doc #169).
+fn onboarding_card() -> Element<'static, Message> {
+    let intro = text(
+        "External instrument track. Pair a hardware synth's MIDI output with its \
+         audio return so it plays and records in-line like a built-in instrument. \
+         To set it up:",
+    )
+    .size(11)
+    .color(theme::TEXT_2);
+
+    let steps = column![
+        onboarding_step(1, "Pick the synth's MIDI output device + channel below."),
+        Space::new().height(9),
+        onboarding_step(2, "Pick the audio return input the synth is wired into."),
+        Space::new().height(9),
+        onboarding_step(
+            3,
+            "Choose a patch (Bank + Program) — Resonance re-sends it on load & play.",
+        ),
+        Space::new().height(9),
+        onboarding_step(
+            4,
+            "Dial in latency compensation so the return lines up with the grid.",
+        ),
+    ]
+    .spacing(0);
+
+    container(column![intro, Space::new().height(10), steps].spacing(0))
+        .width(Length::Fill)
+        .padding(12)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_2)),
+            border: iced::Border {
+                color: theme::ACCENT_LINE,
+                width: 1.0,
+                radius: theme::RADIUS_MD.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
+/// One numbered onboarding step: a lavender numbered chip beside its label.
+fn onboarding_step(n: u8, label: &'static str) -> Element<'static, Message> {
+    let chip = container(
+        text(n.to_string())
+            .size(9)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::ACCENT_SOFT),
+    )
+    .width(Length::Fixed(16.0))
+    .height(Length::Fixed(16.0))
+    .align_x(alignment::Horizontal::Center)
+    .align_y(alignment::Vertical::Center)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::ACCENT_DIM)),
+        border: iced::Border {
+            color: theme::ACCENT_LINE,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    });
+
+    row![
+        chip,
+        Space::new().width(9),
+        text(label).size(11).color(theme::TEXT_2).width(Length::Fill),
+    ]
+    .align_y(alignment::Vertical::Top)
+    .into()
+}
+
+/// Inspector status badge for an external-instrument track — Unconfigured
+/// (accent), Configuring (warm), Live (good), Offline (bad). Mirrors the
+/// prototype's `.badge` pill styling (todo #459, doc #169).
+fn status_badge(status: ExternalInstrumentStatus) -> Element<'static, Message> {
+    let (label, fg, bg, line) = match status {
+        ExternalInstrumentStatus::Unconfigured => (
+            "Unconfigured",
+            theme::ACCENT_SOFT,
+            theme::ACCENT_DIM,
+            theme::ACCENT_LINE,
+        ),
+        ExternalInstrumentStatus::Configuring => {
+            ("Configuring", theme::WARM, theme::WARM_DIM, theme::WARM_LINE)
+        }
+        ExternalInstrumentStatus::Live => {
+            ("Live", theme::GOOD, theme::GOOD_DIM, theme::GOOD_LINE)
+        }
+        ExternalInstrumentStatus::Offline => {
+            ("Offline", theme::BAD, theme::BAD_DIM, theme::BAD_LINE)
+        }
+    };
+    container(
+        text(label)
+            .size(9)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(fg),
+    )
+    .padding([2, 7])
+    .style(move |_theme| container::Style {
+        background: Some(iced::Background::Color(bg)),
+        border: iced::Border {
+            color: line,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    })
     .into()
 }
 

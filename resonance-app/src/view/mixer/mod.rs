@@ -4,7 +4,7 @@
 //! `bus_strip.rs`, `master_strip.rs`, `plugin_panel.rs`.
 
 mod bus_strip;
-mod inspector;
+pub(crate) mod inspector;
 mod master_strip;
 pub(crate) mod picks;
 mod plugin_panel;
