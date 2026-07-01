@@ -52,7 +52,9 @@ pub mod __test_support {
         export_stems, render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter,
     };
     pub use crate::types::{StemBitDepth, StemSource, StemTarget};
-    pub use crate::latency::{chain_latencies, compensation_delays, LatencyComp};
+    pub use crate::latency::{
+        add_external_offsets, chain_latencies, compensation_delays, LatencyComp,
+    };
     pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
@@ -129,6 +131,45 @@ pub use engine::reference::{
     run_reference_analysis, ABMeterTap, ABMeters, ReferenceMonitor, ReferencePlayer,
     REFERENCE_OVERVIEW_PEAKS,
 };
+
+/// Test surface for the automation-lane handlers. Exposed so the
+/// integration test in `tests/automation_handlers.rs` can drive the
+/// command boundary (store/replace, clear, read-flag toggle, and the
+/// missing-target no-op branches) against a plain lane map without
+/// spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::{
+    clear_automation_lane_in_place, set_automation_lane_in_place,
+    set_automation_read_enabled_in_place, AutomationLanes,
+};
+
+/// Test surface for the external-instrument config handlers. Exposed so the
+/// integration test in `tests/external_instrument_handlers.rs` can drive the
+/// command boundary (store/replace, clear, latency/patch updates, the
+/// device-offline reporting, and the not-an-external-instrument no-op
+/// branches) against a plain config map without spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::{
+    check_external_instrument_devices_in_place, clear_external_instrument_in_place,
+    resend_external_instrument_patch_in_place, set_external_instrument_in_place,
+    set_external_instrument_latency_in_place, set_external_instrument_patch_in_place,
+    ExternalInstruments,
+};
+
+/// Test surface for the external-instrument round-trip latency ("ping")
+/// detector. Exposed so the integration test in
+/// `tests/external_instrument_ping.rs` can drive the pure onset-detection and
+/// sample-rate conversion math — the heart of the auto-detect — without
+/// opening a real audio device or MIDI port.
+#[doc(hidden)]
+pub use engine::{
+    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms, OnsetOutcome,
+};
+/// Exposed for `tests/external_instrument_handlers.rs` so it can construct an
+/// empty output registry and exercise the patch-send offline branch without
+/// opening a real MIDI port.
+#[doc(hidden)]
+pub use midi_hardware::MidiOutputRegistry;
 
 /// Test surface for the audio import-to-pool path. Exposed so the
 /// integration test in `tests/import_audio_to_pool.rs` can drive the

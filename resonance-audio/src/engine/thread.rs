@@ -29,8 +29,8 @@ use resonance_common::{TakeGroupId, TimelineRange};
 
 use super::midi::MidiHardwareState;
 use super::{
-    audition, bounce, bounce_realtime, busses, clips, master, midi, midi_map, plugins, reference,
-    scan, tracks, transport, vocal_analysis, SharedState,
+    audition, automation, bounce, bounce_realtime, busses, clips, external_instrument, master,
+    midi, midi_map, plugins, reference, scan, tracks, transport, vocal_analysis, SharedState,
 };
 
 /// Read-only handle to shared project state and channels. Passed by
@@ -155,6 +155,25 @@ pub(crate) struct HandlerState {
     pub reference: super::reference::ReferencePlayer,
     /// In-flight cycle-record run, or `None` when not loop-recording.
     pub loop_record_session: Option<LoopRecordSession>,
+    /// Parameter-automation lanes, one per [`AutomationTarget`]. Held
+    /// engine-thread-local; written by the `SetAutomationLane` /
+    /// `ClearAutomationLane` / `SetAutomationReadEnabled` handlers.
+    /// Points are kept sorted so a later per-block evaluator can sample
+    /// without sorting or allocating. No audio is applied yet.
+    pub automation_lanes: automation::AutomationLanes,
+    /// External-instrument configs, one per track. Held engine-thread-local;
+    /// written by the `SetExternalInstrument` / `ClearExternalInstrument` /
+    /// `SetExternalInstrumentPatch` / `SetExternalInstrumentLatencyOffset`
+    /// handlers. The presence of an entry marks the track as an external
+    /// instrument; device/channel/monitor/arm live on the `Track` itself.
+    pub external_instruments: external_instrument::ExternalInstruments,
+    /// In-flight round-trip latency auto-detect ("ping"). Owns its own capture
+    /// stream + ring for the duration of the measurement so it never touches
+    /// the recording session. The engine loop's `poll_pending_latency_ping`
+    /// hook drains it each iteration, detects the returned impulse, applies the
+    /// measured offset, and republishes PDC — or reports a clean failure once
+    /// the listen window elapses. `None` outside of an active ping.
+    pub pending_latency_ping: Option<super::external_instrument_ping::PendingLatencyPing>,
 }
 
 /// Hard cap on concurrent clip decode threads. Import commands past this
@@ -210,6 +229,9 @@ pub(crate) fn engine_thread(
         pending_bounce: None,
         reference: super::reference::ReferencePlayer::new(),
         loop_record_session: None,
+        automation_lanes: automation::AutomationLanes::new(),
+        external_instruments: external_instrument::ExternalInstruments::new(),
+        pending_latency_ping: None,
     };
     let ctx = HandlerCtx {
         shared: &shared,
@@ -260,7 +282,7 @@ pub(crate) fn engine_thread(
                 let refresh_latency = plugins::affects_latency(&cmd);
                 dispatch(&ctx, &mut state, cmd);
                 if refresh_latency {
-                    plugins::refresh_latency_comp(&ctx);
+                    plugins::refresh_latency_comp(&ctx, &state.external_instruments);
                 }
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
@@ -317,6 +339,12 @@ pub(crate) fn engine_thread(
         // `TrackBounceCompleted` once the playhead crosses the end of
         // the source track's MIDI plus tail.
         bounce_realtime::poll_pending_bounce(&ctx, &mut state);
+
+        // Advance an in-flight external-instrument latency ping: drain the
+        // capture ring, detect the returned impulse, and apply the measured
+        // round-trip offset — or report a clean failure once the listen
+        // window elapses.
+        super::external_instrument_ping::poll_pending_latency_ping(&ctx, &mut state);
 
         // Sync the stable `bpm` field from the tempo event table so
         // the mixer (audio thread) always sees the correct tempo for
@@ -513,6 +541,28 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
         }
         AudioCommand::AnalyzeClipPitch { clip_id } => {
             vocal_analysis::handle_analyze_clip_pitch(ctx, state, clip_id)
+        }
+        AudioCommand::SetAutomationLane { lane } => {
+            automation::set_automation_lane_in_place(
+                &mut state.automation_lanes,
+                ctx.event_tx,
+                lane,
+            )
+        }
+        AudioCommand::ClearAutomationLane { target } => {
+            automation::clear_automation_lane_in_place(
+                &mut state.automation_lanes,
+                ctx.event_tx,
+                target,
+            )
+        }
+        AudioCommand::SetAutomationReadEnabled { target, enabled } => {
+            automation::set_automation_read_enabled_in_place(
+                &mut state.automation_lanes,
+                ctx.event_tx,
+                target,
+                enabled,
+            )
         }
         AudioCommand::SetProjectDir(dir) => {
             state.project_dir = Some(dir);
@@ -886,6 +936,43 @@ fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
             device,
             channel,
         } => midi::handle_set_track_midi_output(ctx, state, track_id, device, channel),
+        AudioCommand::SetExternalInstrument { config } => {
+            external_instrument::set_external_instrument_in_place(
+                &mut state.external_instruments,
+                ctx.event_tx,
+                config,
+            )
+        }
+        AudioCommand::ClearExternalInstrument { track_id } => {
+            external_instrument::clear_external_instrument_in_place(
+                &mut state.external_instruments,
+                ctx.event_tx,
+                track_id,
+            )
+        }
+        AudioCommand::SetExternalInstrumentPatch {
+            track_id,
+            bank,
+            program,
+        } => external_instrument::handle_set_patch(ctx, state, track_id, bank, program),
+        AudioCommand::SetExternalInstrumentLatencyOffset {
+            track_id,
+            latency_offset_samples,
+        } => external_instrument::set_external_instrument_latency_in_place(
+            &mut state.external_instruments,
+            ctx.event_tx,
+            track_id,
+            latency_offset_samples,
+        ),
+        AudioCommand::CheckExternalInstrumentDevices { track_id } => {
+            external_instrument::handle_check_devices(ctx, state, track_id)
+        }
+        AudioCommand::ResendExternalInstrumentPatches => {
+            external_instrument::handle_resend_patches(ctx, state)
+        }
+        AudioCommand::DetectExternalInstrumentLatency { track_id } => {
+            super::external_instrument_ping::handle_detect_latency(ctx, state, track_id)
+        }
         AudioCommand::SetMidiClockOutput { device, enabled } => {
             midi::handle_set_midi_clock_output(ctx, state, device, enabled)
         }

@@ -8,6 +8,7 @@
 mod aux_sends;
 mod clips;
 mod dispatch;
+mod external_instrument;
 mod midi;
 mod midi_map;
 pub mod performance;

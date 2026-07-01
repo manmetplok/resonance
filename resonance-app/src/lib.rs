@@ -189,6 +189,13 @@ pub struct Resonance {
     pub(crate) aux: state::AuxSendState,
     /// Session-local undo/redo history. Cleared on project load.
     pub(crate) undo: UndoHistory,
+    /// External-instrument tracks: per-track bank/program/latency config plus
+    /// runtime device-offline flags (doc #169, epic #39). Absence means the
+    /// track is a plain track. The MIDI-out / audio-return / monitor / arm
+    /// fields live on the track itself; this map holds only the
+    /// external-specific bits. Config (not the offline flags) round-trips
+    /// undo via `UndoExtras::external_instruments`.
+    pub(crate) external_instruments: crate::state::ExternalInstrumentMap,
     /// When set, the confirmation dialog for deleting a track with
     /// content is shown. Holds the track id that the user wants to remove.
     pub(crate) confirm_delete_track: Option<resonance_audio::types::TrackId>,
@@ -535,6 +542,7 @@ impl Resonance {
             },
             aux: state::AuxSendState::default(),
             undo: UndoHistory::new(),
+            external_instruments: std::collections::HashMap::new(),
             plugin_state_cache: std::collections::HashMap::new(),
             plugin_index: std::collections::HashMap::new(),
             confirm_delete_track: None,

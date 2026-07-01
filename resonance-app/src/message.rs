@@ -35,6 +35,7 @@ pub enum Message {
     /// [`MarkerMessage`] variants.
     MarkerUi(MarkerUiMessage),
     Track(TrackMessage),
+    ExternalInstrument(ExternalInstrumentMessage),
     Bus(BusMessage),
     Mixer(MixerMessage),
     Freeze(FreezeMessage),
@@ -263,6 +264,49 @@ pub enum ExportMessage {
     /// Footer primary action - render the selected sources. Wired here so
     /// the shell is complete; the actual orchestration lands in #330/#331.
     Confirm,
+}
+
+/// User actions on an external-instrument track's inspector / strip
+/// (architecture doc #169, epic #39). Each variant maps to one update
+/// handler that mutates GUI state and dispatches the matching
+/// `AudioCommand`. The MIDI-out / audio-return / monitor / arm controls
+/// reuse the plain-track engine commands (the engine keeps one source of
+/// truth for them); the bank/program, latency and device-check controls
+/// use the external-instrument commands. No view in this todo.
+#[derive(Debug, Clone)]
+pub enum ExternalInstrumentMessage {
+    /// Turn `track` into an external instrument (or re-assert it), storing a
+    /// fresh config when none exists. Dispatches `SetExternalInstrument`.
+    Enable(TrackId),
+    /// Take `track` out of external-instrument mode, dropping its config.
+    /// Dispatches `ClearExternalInstrument`.
+    Disable(TrackId),
+    /// Pick the hardware MIDI output device (`None` disconnects).
+    SetMidiOutDevice(TrackId, Option<String>),
+    /// Pick the MIDI output channel (`None` = channel 1).
+    SetMidiOutChannel(TrackId, Option<u8>),
+    /// Pick the audio-return input device (`None` clears).
+    SetReturnDevice(TrackId, Option<String>),
+    /// Pick the 0-indexed starting audio-return input port.
+    SetReturnPort(TrackId, u16),
+    /// Set the selected MIDI bank (combined 14-bit MSB<<7|LSB), or `None` to
+    /// send no Bank Select. Fires the patch send.
+    SetBank(TrackId, Option<u16>),
+    /// Set the selected MIDI program (`0..=127`), or `None` to send no
+    /// Program Change. Fires the patch send.
+    SetProgram(TrackId, Option<u8>),
+    /// Set the manual latency offset (samples) aligning the audio return.
+    SetLatencyOffset(TrackId, i64),
+    /// Toggle input monitoring for the return.
+    ToggleMonitor(TrackId),
+    /// Toggle record-arm (capture the audio return to the timeline).
+    ToggleRecordArm(TrackId),
+    /// Auto-detect ping: re-check this track's MIDI-out + audio-return
+    /// devices against the live hardware and report any that are offline.
+    CheckDevices(TrackId),
+    /// Re-scan the available hardware so the "pick another device" lists are
+    /// fresh. Runtime-only — refreshes device lists, mutates no config.
+    RescanDevices,
 }
 
 #[derive(Debug, Clone)]

@@ -130,6 +130,9 @@ pub fn try_diff_replay(
     // the project shape, so they always take this fast path.
     r.apply_clip_fade_gain_restore(&extras.clip_fade_gain);
 
+    // -- External-instrument config (not carried by ProjectFile) -------
+    r.restore_external_instruments(extras);
+
     // -- Tempo / signature events --------------------------------------
     apply_tempo(r, target_file);
 
@@ -902,6 +905,7 @@ mod tests {
             midi_input_channel: None,
             midi_output_device: None,
             midi_output_channel: None,
+            external_instrument: None,
         }
     }
 

@@ -5,9 +5,10 @@
 use resonance_audio::types::*;
 
 use crate::project::{
-    audio_format_tag, fade_curve_tag, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip,
-    ProjectPerformance, ProjectPlugin, ProjectPoolAsset, ProjectReference, ProjectReferenceMarker,
-    ProjectReferenceSettings, ProjectTrack, PROJECT_FORMAT_VERSION,
+    audio_format_tag, fade_curve_tag, ProjectBus, ProjectClip, ProjectExternalInstrument,
+    ProjectFile, ProjectMidiClip, ProjectPerformance, ProjectPlugin, ProjectPoolAsset,
+    ProjectReference, ProjectReferenceMarker, ProjectReferenceSettings, ProjectTrack,
+    PROJECT_FORMAT_VERSION,
 };
 use crate::Resonance;
 
@@ -58,6 +59,17 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             midi_input_channel: t.midi_input_channel,
             midi_output_device: t.midi_output_device.clone(),
             midi_output_channel: t.midi_output_channel,
+            // External-instrument extras (bank/program/latency offset). The
+            // *presence* of an entry in `external_instruments` marks the
+            // track external; the route + monitor/arm already serialize via
+            // the track fields above. Runtime offline flags are not saved.
+            external_instrument: r.external_instruments.get(&t.id).map(|ext| {
+                ProjectExternalInstrument {
+                    bank: ext.bank,
+                    program: ext.program,
+                    latency_offset_samples: ext.latency_offset_samples,
+                }
+            }),
         })
         .collect();
 

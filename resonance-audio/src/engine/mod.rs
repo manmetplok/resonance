@@ -56,9 +56,25 @@ pub use audition::{
     compute_sync_ratio, load_audition_source, set_audition_options_in_place,
     start_audition_in_place, stop_audition_in_place, AuditionSource,
 };
+mod automation;
+pub use automation::{
+    clear_automation_lane_in_place, set_automation_lane_in_place,
+    set_automation_read_enabled_in_place, AutomationLanes,
+};
 mod bounce_realtime;
 mod busses;
 mod clips;
+mod external_instrument;
+mod external_instrument_ping;
+pub use external_instrument::{
+    check_external_instrument_devices_in_place, clear_external_instrument_in_place,
+    resend_external_instrument_patch_in_place, set_external_instrument_in_place,
+    set_external_instrument_latency_in_place, set_external_instrument_patch_in_place,
+    ExternalInstruments,
+};
+pub use external_instrument_ping::{
+    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms, OnsetOutcome,
+};
 pub use clips::transcode_to_wav;
 pub use clips::{
     detect_clip_tempo_in_place, set_clip_fade_in_place, set_clip_gain_in_place,

@@ -2,6 +2,7 @@
 pub mod audio_probe;
 pub mod automation;
 mod denormal;
+pub mod external_instrument;
 pub mod drum_map;
 pub mod group_identity;
 pub mod track_group;
@@ -17,6 +18,7 @@ pub use automation::{
     real_to_lane_value, sample_lane, AutomationLane, AutomationTarget, Breakpoint, BusId,
     CurveKind, LaneId, PluginInstanceId, TrackId,
 };
+pub use external_instrument::ExternalInstrument;
 pub use midi_map::{
     apply_delta, cc_to_norm, decode_relative, delete_controller_map, load_controller_maps,
     save_controller_map, takeover_value, BindingId, CcMode, ControlSource, ControllerMap,

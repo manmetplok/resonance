@@ -13,7 +13,10 @@
 //! master with the same total latency.
 //!
 //! Compensated: track chains, sub-track chains (incl. the shared
-//! parent instrument), and bus chains (via the per-track delay).
+//! parent instrument), bus chains (via the per-track delay), and the
+//! manual round-trip offset of external-instrument tracks (their
+//! hardware audio return arrives late, so the rest of the mix is delayed
+//! to meet it — see [`add_external_offsets`]).
 //! Not compensated:
 //! - the master FX chain — it delays every path equally, shifting the
 //!   whole output without misaligning tracks;
@@ -76,6 +79,24 @@ pub fn chain_latencies(
             (track.id, own + parent_instrument + bus)
         })
         .collect()
+}
+
+/// Fold manual external-instrument latency offsets into per-track chain
+/// latencies, in place. An external instrument's audio return arrives a
+/// round-trip late (MIDI out → hardware synth → audio in); its positive
+/// `latency_offset_samples` models that delay, so the track is treated as
+/// that much more latent and [`compensation_delays`] delays the rest of
+/// the mix to meet it. This keeps the live return — and the realtime
+/// bounce that records it through the same mix loop — aligned with the
+/// timeline. A non-positive offset can't advance a live stream and is
+/// ignored; tracks with no offset (`offset_for` returns 0) are untouched.
+pub fn add_external_offsets(chains: &mut [(TrackId, u64)], offset_for: impl Fn(TrackId) -> i64) {
+    for (id, latency) in chains.iter_mut() {
+        let offset = offset_for(*id);
+        if offset > 0 {
+            *latency = latency.saturating_add(offset as u64);
+        }
+    }
 }
 
 /// Pure compensation math: given per-track chain latencies, return the

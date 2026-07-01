@@ -118,6 +118,62 @@ pub(crate) fn output_channel_choices() -> Vec<MidiChannelChoice> {
     (0u8..16).map(|ch| MidiChannelChoice(Some(ch))).collect()
 }
 
+/// Pick-list entry for an external-instrument MIDI **bank**. `None`
+/// clears the Bank Select (the synth stays on its current bank); `Some`
+/// carries the combined 14-bit value sent as CC0 (MSB) + CC32 (LSB).
+/// Epic #39 ships numeric banks only — named banks arrive with the
+/// device-preset epic (#40), at which point the label can resolve a
+/// patch name without changing this shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BankChoice(pub Option<u16>);
+
+impl std::fmt::Display for BankChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            None => f.write_str("(no bank)"),
+            Some(bank) => write!(f, "Bank {}", bank),
+        }
+    }
+}
+
+/// Pick-list entry for an external-instrument MIDI **program**. `None`
+/// sends no Program Change; `Some` carries the `0..=127` program number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProgramChoice(pub Option<u8>);
+
+impl std::fmt::Display for ProgramChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            None => f.write_str("(no program)"),
+            Some(program) => write!(f, "Program {}", program),
+        }
+    }
+}
+
+/// Bank picker options: "(no bank)" plus banks `0..=127`. The combined
+/// 14-bit bank is addressed through its low 7 bits (CC32/LSB) with the
+/// MSB left at 0, covering the common single-byte bank range without a
+/// 16k-entry list. Built once at startup; never invalidates.
+pub(crate) fn bank_choices() -> Vec<BankChoice> {
+    let mut v = Vec::with_capacity(129);
+    v.push(BankChoice(None));
+    for bank in 0u16..=127 {
+        v.push(BankChoice(Some(bank)));
+    }
+    v
+}
+
+/// Program picker options: "(no program)" plus programs `0..=127`.
+/// Built once at startup; never invalidates.
+pub(crate) fn program_choices() -> Vec<ProgramChoice> {
+    let mut v = Vec::with_capacity(129);
+    v.push(ProgramChoice(None));
+    for program in 0u8..=127 {
+        v.push(ProgramChoice(Some(program)));
+    }
+    v
+}
+
 /// Build the output-destination picker options: Master plus every bus.
 /// Cached on `Resonance` and rebuilt only when the bus list changes,
 /// so the inspector clones a refcounted slice instead of allocating

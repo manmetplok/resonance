@@ -12,6 +12,7 @@ pub mod clips;
 pub mod compose;
 pub mod drag;
 pub mod export;
+pub mod external_instrument;
 pub mod freeze;
 pub mod gates;
 pub mod global_track;
@@ -92,6 +93,7 @@ impl crate::Resonance {
             Message::Marker(m) => marker::handle(self, m),
             Message::MarkerUi(m) => marker_ui::handle(self, m),
             Message::Track(m) => track::handle(self, m),
+            Message::ExternalInstrument(m) => external_instrument::handle(self, m),
             Message::Bus(m) => bus::handle(self, m),
             Message::Mixer(m) => mixer::handle(self, m),
             Message::Freeze(m) => freeze::handle(self, m),

@@ -13,6 +13,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use resonance_audio::types::{AudioCommand, ClipId, FadeCurve, MidiNote, PluginInstanceId};
+use resonance_common::ExternalInstrument;
 
 use crate::project::LoadedProject;
 use resonance_audio::types::TrackId;
@@ -79,6 +80,13 @@ pub struct UndoExtras {
     /// touched (a clip removed by the same undo is handled by the
     /// structural replay path).
     pub clip_fade_gain: HashMap<ClipId, ClipFadeGain>,
+    /// External-instrument config per track (bank/program/latency + the
+    /// external-mode marker). Captured here because the `ProjectFile` shape
+    /// doesn't carry it yet (project persistence lands in a later todo), so
+    /// the undo system snapshots it separately — exactly like
+    /// `vocal_clip_lyrics`. The runtime device-offline flags are *not*
+    /// captured: they reflect live hardware, not project state.
+    pub external_instruments: HashMap<TrackId, ExternalInstrument>,
 }
 
 /// Re-apply the snapshotted full arrangements onto the compose state after
@@ -333,6 +341,11 @@ impl crate::Resonance {
                     )
                 })
                 .collect(),
+            external_instruments: self
+                .external_instruments
+                .iter()
+                .map(|(id, st)| (*id, st.config()))
+                .collect(),
         };
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
@@ -437,6 +450,7 @@ impl crate::Resonance {
     /// `replay_loaded_project` runs, only when the pending load came
     /// from an undo/redo (distinguished by `pending_undo_extras.is_some()`).
     pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
+        self.restore_external_instruments(&extras);
         self.compose.derived_clips = extras.compose_derived_clips;
         self.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
         self.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics;
@@ -486,6 +500,44 @@ impl crate::Resonance {
                 clip_id: clip.id,
                 gain_db: fg.gain_db,
             });
+        }
+    }
+
+    /// Drive the engine + GUI external-instrument state back to `extras`.
+    /// Shared by both undo restore paths (the diff replay in
+    /// `try_diff_replay` and the full `AllCleared` replay via
+    /// `finalize_undo_restore`).
+    ///
+    /// Clears tracks that are no longer external, then (re-)asserts every
+    /// target config via `SetExternalInstrument` — idempotent on the engine
+    /// and, unlike a patch send, it never re-fires MIDI to the synth. The
+    /// runtime device-offline flags are preserved for tracks that stay
+    /// external (live hardware status survives an undo); a track returning to
+    /// external mode starts online and is re-checked on the next ping.
+    pub(crate) fn restore_external_instruments(&mut self, extras: &UndoExtras) {
+        // Drop external mode from tracks absent in the target snapshot.
+        let stale: Vec<TrackId> = self
+            .external_instruments
+            .keys()
+            .copied()
+            .filter(|id| !extras.external_instruments.contains_key(id))
+            .collect();
+        for id in stale {
+            self.external_instruments.remove(&id);
+            let _ = self
+                .engine
+                .send(AudioCommand::ClearExternalInstrument { track_id: id });
+        }
+        // Re-assert every target config, keeping live offline flags.
+        for (id, config) in &extras.external_instruments {
+            let _ = self.engine.send(AudioCommand::SetExternalInstrument {
+                config: *config,
+            });
+            let state = self
+                .external_instruments
+                .entry(*id)
+                .or_insert_with(|| crate::state::ExternalInstrumentState::new(*id));
+            state.apply_config(config);
         }
     }
 
@@ -728,6 +780,16 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             TrackMessage::CancelRemoveTrack => UndoAction::Skip,
             // Preset operations that don't mutate project state.
             TrackMessage::DeleteUserPreset(_) => UndoAction::Skip,
+            _ => UndoAction::Record,
+        },
+
+        Message::ExternalInstrument(e) => match e {
+            // Runtime-only: re-checking devices / re-scanning hardware
+            // mutates no project state.
+            ExternalInstrumentMessage::CheckDevices(_)
+            | ExternalInstrumentMessage::RescanDevices => UndoAction::Skip,
+            // Every config change (enable/disable, route, patch, latency,
+            // monitor, arm) is a user-meaningful, reversible edit.
             _ => UndoAction::Record,
         },
 
