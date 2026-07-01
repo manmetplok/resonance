@@ -119,9 +119,15 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
     // meaningful in the Arrange view (the panel lives there), so it's hidden
     // elsewhere; a zero-width spacer keeps the right cluster's spacing
     // identical when absent. Active fill is ACCENT_DIM (design doc #175).
+    //
+    // "Import audio…" button (ba todo #608) lives beside the Media toggle —
+    // both are Arrange-only affordances. It opens the OS multi-file audio
+    // picker; dragging audio files onto the window is the other route
+    // (see `update.rs::arrange_audio_file_drop`). Styled as a ghost button
+    // matching the sibling MIDI Import… button on the right.
     let media_toggle: Element<'_, Message> = if matches!(r.view_mode, ViewMode::Arrange) {
         let active = r.browser.visible;
-        let btn = button(
+        let media_btn = button(
             text("Media")
                 .size(12)
                 .font(theme::UI_FONT_MEDIUM)
@@ -133,7 +139,17 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         .style(move |_theme, status| {
             theme::toggle_button_style(active, theme::ACCENT, false, status)
         });
-        row![btn, Space::new().width(10)].into()
+        let import_audio_btn = button(
+            text("Import audio\u{2026}")
+                .size(12)
+                .font(theme::UI_FONT_MEDIUM)
+                .line_height(LineHeight::Relative(1.0)),
+        )
+        .on_press(Message::Pool(PoolMessage::PickFiles))
+        .padding([7, 14])
+        .height(28)
+        .style(|_theme, status| theme::ghost_button_style(status));
+        row![media_btn, Space::new().width(10), import_audio_btn, Space::new().width(10)].into()
     } else {
         Space::new().width(0).into()
     };

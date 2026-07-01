@@ -698,6 +698,15 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // of this single snapshot removes the whole import + placement. Both
         // the pool-only and place variants are reversible (a pool asset
         // rides the `ProjectFile` snapshot just like a clip does).
+        //
+        // The two entry-point helpers (ba todo #608) are pure intent
+        // signals — no state changes at their dispatch time — so they are
+        // skipped here. `PickFiles` opens the OS dialog and returns a task
+        // that fires `ImportFilesToPool` later (recorded then). `WindowAudioDrop`
+        // re-dispatches `ImportAndPlace` inside the handler (recorded then).
+        Message::Pool(PoolMessage::PickFiles) | Message::Pool(PoolMessage::WindowAudioDrop(_)) => {
+            UndoAction::Skip
+        }
         Message::Pool(_) => UndoAction::Record,
         Message::GlobalTrack(GlobalTrackMessage::SelectEvent(_)) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(_)) => UndoAction::Begin,

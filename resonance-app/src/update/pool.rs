@@ -1,22 +1,26 @@
 //! Update handlers for audio media-pool import + placement (doc #175,
-//! ba todo #598).
+//! ba todo #598 / #608).
 //!
 //! This is the orchestration layer beneath the import entry points (the
-//! "Import audio…" dialog and drag-and-drop, todo #608) and the pool
-//! browser. It turns a multi-file selection into one
-//! `AudioCommand::ImportAudioToPool` and, for a drop, records — per source
-//! file — where the resulting asset should be placed. The placement itself
-//! happens later, when each file's `AssetImported` event lands (see
-//! `engine_events::pool`), because the engine assigns asset ids
-//! asynchronously off-thread.
+//! "Import audio…" chrome button and the window file-drop subscription,
+//! todo #608) and the pool browser drag-to-timeline gesture (todo #605).
+//! It turns a multi-file selection into one `AudioCommand::ImportAudioToPool`
+//! and, for a drop, records — per source file — where the resulting asset
+//! should be placed. The placement itself happens later, when each file's
+//! `AssetImported` event lands (see `engine_events::pool`), because the
+//! engine assigns asset ids asynchronously off-thread.
 //!
-//! **Undo.** Both messages are classified `UndoAction::Record`
-//! (`undo::classify`), so `update()` captures a pre-import project snapshot
-//! *before* this handler runs. That single snapshot is the whole undoable
-//! action: one undo reverts the imported pool asset(s), any placed clip(s),
-//! and a track spawned for a new-track drop — all of which ride the
-//! `ProjectFile` snapshot/replay path. Nothing here records a *second*
-//! undo entry when the asset later lands.
+//! **Undo.** `ImportFilesToPool` and `ImportAndPlace` are classified
+//! `UndoAction::Record` (`undo::classify`), so `update()` captures a
+//! pre-import project snapshot *before* this handler runs. That single
+//! snapshot is the whole undoable action: one undo reverts the imported
+//! pool asset(s), any placed clip(s), and a track spawned for a new-track
+//! drop — all of which ride the `ProjectFile` snapshot/replay path. Nothing
+//! here records a *second* undo entry when the asset later lands. The two
+//! entry-point helpers (`PickFiles` / `WindowAudioDrop`) are classified
+//! `UndoAction::Skip` — they carry no state of their own.
+
+use std::path::Path;
 
 use iced::Task;
 use resonance_audio::types::{AudioCommand, SamplePos};
@@ -25,8 +29,50 @@ use crate::message::{DropTarget, Message, PoolMessage};
 use crate::state::{PendingImport, PlacementTarget};
 use crate::Resonance;
 
+/// Audio container extensions accepted by the import entry points (the
+/// chrome button, the window file-drop subscription, and the browser
+/// drag-to-timeline gesture). Shared by [`is_pool_audio_path`] and the
+/// OS file-picker filter so both honour exactly the same set.
+pub const POOL_AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "mp3", "ogg"];
+
+/// True when `path` looks like an importable audio file by extension
+/// (wav/flac/mp3/ogg, case-insensitive). The window file-drop subscription
+/// uses this to ignore non-audio OS drops so only recognised containers
+/// start an import.
+pub fn is_pool_audio_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            POOL_AUDIO_EXTENSIONS
+                .iter()
+                .any(|accepted| ext.eq_ignore_ascii_case(accepted))
+        })
+}
+
 pub fn handle(r: &mut Resonance, message: PoolMessage) -> Task<Message> {
     match message {
+        // Entry point: "Import audio…" chrome button (ba todo #608).
+        // Opens the OS multi-file picker; the chosen paths come back via
+        // the task as `ImportFilesToPool`. A cancel (empty list) is silently
+        // dropped inside the returned task's map closure.
+        PoolMessage::PickFiles => return pick_audio_files_dialog(),
+
+        // Entry point: audio file dropped onto the arrangement window from
+        // the OS (ba todo #608). One message fires per dropped file (iced
+        // emits one `FileDropped` event per path). The handler resolves the
+        // target to a *new* audio track at the current playhead position —
+        // since OS-level drops carry no cursor coordinates — and delegates
+        // to the shared `import()` helper. The resulting `AddTrack` +
+        // `ImportAudioToPool` commands reach the engine exactly as a
+        // browser drag-to-timeline drop would.
+        PoolMessage::WindowAudioDrop(path) => {
+            let target = DropTarget::NewTrack {
+                start_sample: r.transport.playhead,
+            };
+            let placement = resolve_target(r, target);
+            import(r, vec![path], placement);
+        }
+
         PoolMessage::ImportFilesToPool(paths) => {
             import(r, paths, PlacementTarget::PoolOnly);
         }
@@ -36,6 +82,28 @@ pub fn handle(r: &mut Resonance, message: PoolMessage) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// Open the OS multi-file audio picker. The resolved paths (or an empty
+/// `Vec` on cancel) come back as [`PoolMessage::ImportFilesToPool`].
+fn pick_audio_files_dialog() -> Task<Message> {
+    Task::perform(
+        async move {
+            rfd::AsyncFileDialog::new()
+                .set_title("Import Audio")
+                .add_filter("Audio files", POOL_AUDIO_EXTENSIONS)
+                .pick_files()
+                .await
+                .map(|files| {
+                    files
+                        .into_iter()
+                        .map(|fh| fh.path().to_path_buf())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        },
+        |paths| Message::Pool(PoolMessage::ImportFilesToPool(paths)),
+    )
 }
 
 /// Resolve a drop `target` into a concrete [`PlacementTarget`]: snap the

@@ -220,6 +220,17 @@ impl crate::Resonance {
 
         let mut subs = vec![tick, keys, close_requests, file_drops];
 
+        // Audio file drop for the Arrange view: when an audio file is
+        // dragged from the OS onto the arrangement window, drop it onto a
+        // new audio track at the current playhead position. The listener is
+        // only attached in the Arrange view so a stray drop in Mixer/Compose
+        // never silently imports audio into the pool; iced diffs
+        // subscriptions by recipe, so it attaches/detaches as the view mode
+        // changes.
+        if matches!(self.view_mode, crate::state::ViewMode::Arrange) {
+            subs.push(arrange_audio_file_drop());
+        }
+
         // Reference drag-drop: while the Mix view is showing, forward
         // dropped audio files (wav/flac/mp3/ogg) to the reference loader.
         // The listener is only attached in the Mix view, so a stray drop
@@ -265,6 +276,23 @@ fn reference_momentary_keys() -> Subscription<Message> {
         }
         keyboard::Event::KeyReleased { ref key, .. } if is_momentary_key(key) => {
             Some(Message::Reference(ReferenceMessage::MomentaryAudition(false)))
+        }
+        _ => None,
+    })
+}
+
+/// Listen for window file-drop events while in the Arrange view and forward
+/// any audio file (wav/flac/mp3/ogg) to [`PoolMessage::WindowAudioDrop`] so
+/// the handler can place it on a new audio track at the current playhead.
+/// Non-audio drops are ignored. Only active in the Arrange view so a drop in
+/// the Mixer never silently imports into the pool instead of the reference.
+fn arrange_audio_file_drop() -> Subscription<Message> {
+    use crate::update::pool::is_pool_audio_path;
+
+    iced::event::listen_with(|event, _status, _window| match event {
+        iced::Event::Window(iced::window::Event::FileDropped(path)) => {
+            is_pool_audio_path(&path)
+                .then_some(Message::Pool(PoolMessage::WindowAudioDrop(path)))
         }
         _ => None,
     })
