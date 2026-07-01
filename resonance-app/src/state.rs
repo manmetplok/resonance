@@ -14,6 +14,7 @@ pub mod plugin_index;
 
 // Data types, grouped by domain.
 pub mod aux_sends;
+pub mod browser;
 pub mod clips;
 pub mod export;
 pub mod freeze;
@@ -32,6 +33,7 @@ pub mod transport;
 pub mod viewport;
 
 pub use aux_sends::*;
+pub use browser::*;
 pub use clips::*;
 pub use export::*;
 pub use freeze::*;

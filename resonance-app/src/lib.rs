@@ -119,6 +119,12 @@ pub struct Resonance {
     /// recent folders persist in user settings. See `state::pool`.
     pub(crate) pool: state::MediaPool,
 
+    /// Transient media-browser interaction state (doc #175): current
+    /// folder + cached scan, per-folder filter, Files/Pool tab, and the
+    /// audition preview transport. Not undoable, not persisted in the
+    /// project — same rule as collapse state. See `state::browser`.
+    pub(crate) browser: state::BrowserState,
+
     /// Reference-track (A/B) comparison state. See `crate::reference`.
     pub(crate) reference: reference::ReferenceState,
     /// Markov table registry for chord generators. Constructed once at
@@ -472,6 +478,7 @@ impl Resonance {
                 settings.media.favourites.clone(),
                 settings.media.recent_folders.clone(),
             ),
+            browser: state::BrowserState::default(),
             reference: reference::ReferenceState::default(),
             table_registry: TableRegistry::with_builtins(),
 

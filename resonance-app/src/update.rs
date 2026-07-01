@@ -5,6 +5,7 @@ use iced::{keyboard, Subscription, Task};
 /// Tick interval (ms) for the subscription timer that drains engine events.
 pub const TICK_INTERVAL_MS: u64 = 16;
 
+pub mod browser;
 pub mod bus;
 pub mod chord_track;
 pub mod clips;
@@ -103,6 +104,7 @@ impl crate::Resonance {
             Message::Export(m) => export::handle(self, m),
             Message::Import(m) => import::handle(self, m),
             Message::Ui(m) => ui::handle(self, m),
+            Message::Browser(m) => browser::handle(self, m),
             Message::Tick => tick::handle_tick(self),
             Message::WindowCloseRequested(id) => {
                 if self.dirty && self.io.has_active_project {

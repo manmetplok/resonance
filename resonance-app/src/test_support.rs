@@ -773,4 +773,12 @@ impl Resonance {
     pub fn test_pool_push_recent(&mut self, path: std::path::PathBuf) {
         self.pool.push_recent_folder(path);
     }
+
+    /// Test-only: borrow the transient media-browser state so navigation /
+    /// filter / audition handler tests (ba todo #599) can assert the
+    /// current folder, cached scan, filter, tab, and audition transport.
+    #[doc(hidden)]
+    pub fn test_browser(&self) -> &crate::state::BrowserState {
+        &self.browser
+    }
 }
