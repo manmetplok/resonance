@@ -246,13 +246,14 @@ fn ext_audio_return_block(
     )
 }
 
-/// Patch card — Bank (numeric tile + Bank picker → CC0/CC32) and Program
-/// (numeric tile + Program picker → Program Change) rows, with a note that
-/// the patch is re-sent on load and at transport start. The "Muse
-/// preset →" affordance is a disabled hook for the device-preset epic
-/// (#40); patch-pick flash/MIDI-dot animations need transient state that
-/// #454 doesn't carry, so the card uses a static accent-lit style when a
-/// patch is set.
+/// Patch card — a Device-preset picker (epic #40) on top, then Bank (numeric
+/// tile + Bank picker → CC0/CC32) and Program (numeric tile + Program picker
+/// → Program Change) rows, with a note that the patch is re-sent on load and
+/// at transport start. Selecting a preset stores its `device_id` and dispatches
+/// `SetTrackDeviceParams`; the "<model> preset →" chip lights when a device is
+/// selected. The card uses a static accent-lit style when a device or patch is
+/// set (patch-pick flash/MIDI-dot animations need transient state #454 doesn't
+/// carry).
 fn ext_patch_block(
     r: &crate::Resonance,
     track: &TrackState,
@@ -260,6 +261,39 @@ fn ext_patch_block(
 ) -> Element<'static, Message> {
     let track_id = track.id;
     let has_patch = ext.bank.is_some() || ext.program.is_some();
+
+    // Device-preset picker, fed by the registry-backed cached options. The
+    // selected value is the matching cached choice (so its label renders on
+    // the closed picker); a `None` id is the "(no device)" clear entry.
+    let selected_device = r
+        .view_caches
+        .device_choices
+        .iter()
+        .find(|c| c.id == ext.device_id)
+        .cloned();
+    let has_device = ext.device_id.is_some();
+    // The chip names the device only for a real selection — the "(no device)"
+    // clear entry (id `None`) must read as the inactive hint, not its label.
+    let selected_device_label = selected_device
+        .as_ref()
+        .filter(|c| c.id.is_some())
+        .map(|c| c.label.clone());
+    let device_picker = pick_list(
+        r.view_caches.device_choices.clone(),
+        selected_device,
+        move |choice| {
+            Message::ExternalInstrument(ExternalInstrumentMessage::SetDevice(
+                track_id, choice.id,
+            ))
+        },
+    )
+    .text_size(12)
+    .padding([5, 8])
+    .width(Length::Fill);
+    let device_label = text("DEVICE PRESET")
+        .size(9)
+        .font(theme::UI_FONT_SEMIBOLD)
+        .color(theme::TEXT_3);
 
     let bank_tile = super::widgets::pgnum_tile(match ext.bank {
         Some(bank) => format!("{:03}", bank),
@@ -298,13 +332,17 @@ fn ext_patch_block(
     .size(10)
     .color(theme::TEXT_3);
 
-    let card_border = if has_patch {
+    let card_border = if has_patch || has_device {
         theme::ACCENT_LINE
     } else {
         theme::LINE
     };
     let card = container(
         column![
+            device_label,
+            Space::new().height(6),
+            device_picker,
+            Space::new().height(8),
             patch_row(bank_tile, bank_picker.into()),
             Space::new().height(8),
             patch_row(program_tile, program_picker.into()),
@@ -333,7 +371,7 @@ fn ext_patch_block(
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::TEXT_3),
         Space::new().width(Length::Fill),
-        super::widgets::preset_hint_chip(),
+        super::widgets::preset_hint_chip(selected_device_label),
     ]
     .align_y(alignment::Vertical::Center);
 

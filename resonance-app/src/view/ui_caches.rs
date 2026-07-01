@@ -20,9 +20,9 @@ use resonance_audio::types::{InputDeviceInfo, ScannedPlugin};
 
 use crate::state::BusState;
 use crate::view::mixer::picks::{
-    bank_choices, input_channel_choices, midi_choices_base, output_channel_choices,
-    output_choices_for, program_choices, BankChoice, MidiChannelChoice, MidiPickerChoice,
-    OutputChoice, ProgramChoice,
+    bank_choices, device_choices, input_channel_choices, midi_choices_base,
+    output_channel_choices, output_choices_for, program_choices, BankChoice, DevicePresetChoice,
+    MidiChannelChoice, MidiPickerChoice, OutputChoice, ProgramChoice,
 };
 
 #[derive(Debug, Clone)]
@@ -60,6 +60,10 @@ pub(crate) struct UiViewCaches {
     /// Patch card's Program Change picker. Built once at startup; never
     /// invalidates.
     pub program_choices: Rc<[ProgramChoice]>,
+    /// "(no device)" plus one entry per device definition in the registry —
+    /// the External-Instrument inspector's device-preset picker (epic #40).
+    /// Rebuilt only when the device registry changes (startup today).
+    pub device_choices: Rc<[DevicePresetChoice]>,
 }
 
 impl Default for UiViewCaches {
@@ -83,6 +87,10 @@ impl Default for UiViewCaches {
             input_devices: Rc::from(Vec::<InputDeviceInfo>::new()),
             bank_choices: Rc::from(bank_choices()),
             program_choices: Rc::from(program_choices()),
+            // Seeded with the "(no device)" clear entry so the picker has a
+            // valid option before the registry is scanned; `Resonance::new`
+            // rebuilds it from the bundled + user definitions at startup.
+            device_choices: Rc::from(device_choices(&[])),
         }
     }
 }
@@ -98,6 +106,13 @@ impl UiViewCaches {
     /// Same as `rebuild_midi_input` for the MIDI-out picker.
     pub fn rebuild_midi_output(&mut self, devices: &[MidiDeviceInfo]) {
         self.midi_output_choices = Rc::from(midi_choices_base(devices));
+    }
+
+    /// Rebuild the device-preset picker options off the device registry's
+    /// current `list()`. Call after the registry is (re-)scanned; today the
+    /// registry is built once at startup.
+    pub fn rebuild_device_choices(&mut self, defs: &[&resonance_common::DeviceDefinition]) {
+        self.device_choices = Rc::from(device_choices(defs));
     }
 
     /// Rebuild the Master + every-bus output destination options. Call

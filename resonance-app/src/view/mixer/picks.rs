@@ -150,6 +150,51 @@ impl std::fmt::Display for ProgramChoice {
     }
 }
 
+/// Pick-list entry for an external-instrument **device preset** (epic #40,
+/// doc #201 §5). `id` is the [`resonance_common::DeviceDefinition`]'s `id`
+/// (`None` = the "(no device)" clear entry); `label` is the display string
+/// (manufacturer + model). Equality compares the full value so `pick_list`
+/// highlights the selected row; the view builds the `selected` value by
+/// finding the matching cached choice so its label renders on the closed
+/// picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DevicePresetChoice {
+    pub id: Option<String>,
+    pub label: String,
+}
+
+impl std::fmt::Display for DevicePresetChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// Device-preset picker options: "(no device)" plus one entry per definition
+/// in the registry (in `list()` order), labelled "Manufacturer Model".
+/// Rebuilt only when the device registry changes (startup today); the
+/// inspector clones the cached `Rc<[_]>` each frame.
+pub(crate) fn device_choices(
+    defs: &[&resonance_common::DeviceDefinition],
+) -> Vec<DevicePresetChoice> {
+    let mut v = Vec::with_capacity(defs.len() + 1);
+    v.push(DevicePresetChoice {
+        id: None,
+        label: "(no device)".to_string(),
+    });
+    for def in defs {
+        let label = if def.manufacturer.is_empty() {
+            def.model.clone()
+        } else {
+            format!("{} {}", def.manufacturer, def.model)
+        };
+        v.push(DevicePresetChoice {
+            id: Some(def.id.clone()),
+            label,
+        });
+    }
+    v
+}
+
 /// Bank picker options: "(no bank)" plus banks `0..=127`. The combined
 /// 14-bit bank is addressed through its low 7 bits (CC32/LSB) with the
 /// MSB left at 0, covering the common single-byte bank range without a

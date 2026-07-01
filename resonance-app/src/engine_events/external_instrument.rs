@@ -69,3 +69,21 @@ pub(super) fn latency_measured(r: &mut Resonance, track_id: TrackId, latency_sam
 /// inspector "auto-detect failed" surfacing. Kept as an explicit no-op so the
 /// dispatch match stays exhaustive and the intent is documented.
 pub(super) fn latency_detect_failed(_r: &mut Resonance, _track_id: TrackId) {}
+
+/// The engine confirmed it stored a device-param map for the track
+/// (`AudioCommand::SetTrackDeviceParams` → `TrackDeviceParamsApplied`, epic
+/// #40, doc #201 §4). Mirror the applied param ids onto the GUI state so the
+/// app has an authoritative echo of what the engine actually holds — used to
+/// confirm the dispatch and to reconstruct the mirror after a project-load
+/// command replay. The selected `device_id` stays the app's source of truth;
+/// this only records the engine-side applied set (empty means cleared). An
+/// event for a track that isn't external is a stale race and ignored.
+pub(super) fn device_params_applied(
+    r: &mut Resonance,
+    track_id: TrackId,
+    param_ids: Vec<String>,
+) {
+    if let Some(state) = r.external_instruments.get_mut(&track_id) {
+        state.applied_param_ids = param_ids;
+    }
+}

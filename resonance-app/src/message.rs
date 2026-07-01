@@ -287,6 +287,11 @@ pub enum ExternalInstrumentMessage {
     SetMidiOutDevice(TrackId, Option<String>),
     /// Pick the MIDI output channel (`None` = channel 1).
     SetMidiOutChannel(TrackId, Option<u8>),
+    /// Pick a device preset by id (a `DeviceDefinition::id`), or `None` to
+    /// clear the selection. Stores the id on the track's external-instrument
+    /// state and dispatches `SetTrackDeviceParams` with the definition's
+    /// params (empty on clear / unknown id). Epic #40, doc #201 §5.
+    SetDevice(TrackId, Option<String>),
     /// Pick the audio-return input device (`None` clears).
     SetReturnDevice(TrackId, Option<String>),
     /// Pick the 0-indexed starting audio-return input port.

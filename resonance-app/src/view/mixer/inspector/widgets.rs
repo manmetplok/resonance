@@ -205,20 +205,32 @@ pub(super) fn pgnum_tile(value: String) -> Element<'static, Message> {
     .into()
 }
 
-/// Disabled "Muse preset →" chip — the named-patch affordance reserved
-/// for the device-preset epic (#40).
-pub(super) fn preset_hint_chip() -> Element<'static, Message> {
+/// The "<model> preset →" chip beside the PATCH label (epic #40, doc #201
+/// §5). When a device preset is selected (`Some(label)`) the chip lights
+/// with the accent color + border and names the device; with no selection it
+/// reads as a dim hint ("Select device →").
+pub(super) fn preset_hint_chip(selected_label: Option<String>) -> Element<'static, Message> {
+    let active = selected_label.is_some();
+    let label = match &selected_label {
+        Some(name) => format!("{} \u{2192}", name),
+        None => "Select device \u{2192}".to_string(),
+    };
+    let (text_color, bg, border) = if active {
+        (theme::ACCENT_SOFT, theme::BG_1, theme::ACCENT_LINE)
+    } else {
+        (theme::TEXT_4, theme::BG_2, theme::LINE_2)
+    };
     container(
-        text("Muse preset →")
+        text(label)
             .size(8)
             .font(theme::UI_FONT_SEMIBOLD)
-            .color(theme::TEXT_4),
+            .color(text_color),
     )
     .padding([1, 5])
-    .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(theme::BG_2)),
+    .style(move |_theme| container::Style {
+        background: Some(iced::Background::Color(bg)),
         border: iced::Border {
-            color: theme::LINE_2,
+            color: border,
             width: 1.0,
             radius: 999.0.into(),
         },

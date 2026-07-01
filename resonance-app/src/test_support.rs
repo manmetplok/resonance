@@ -848,7 +848,7 @@ impl Resonance {
         &self,
         track_id: resonance_audio::types::TrackId,
     ) -> Option<state::ExternalInstrumentState> {
-        self.external_instruments.get(&track_id).copied()
+        self.external_instruments.get(&track_id).cloned()
     }
 
     /// Test-only: derive the lifecycle [`state::ExternalInstrumentStatus`] for

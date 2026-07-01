@@ -46,14 +46,23 @@ pub enum ExternalInstrumentStatus {
 ///
 /// `bank` / `program` / `latency_offset_samples` mirror the engine-side
 /// [`ExternalInstrument`] config and are the user-editable, undoable fields.
-/// The two `*_offline` flags are runtime device status reported by the
-/// engine (`ExternalInstrumentMidiOutOffline` / `…ReturnInputOffline`) and
-/// are *not* part of the undo snapshot — they reflect live hardware, not
-/// project state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `device_id` is the selected device-preset id (epic #40): app-side project
+/// state that resolves — via the [`resonance_common::DeviceDefinitionRegistry`]
+/// — to the automatable params handed to the engine. It is undoable but not
+/// part of the engine `ExternalInstrument` config. The two `*_offline` flags
+/// and `applied_param_ids` are runtime status reported by the engine
+/// (`ExternalInstrumentMidiOutOffline` / `…ReturnInputOffline` /
+/// `TrackDeviceParamsApplied`) and are *not* part of the undo snapshot — they
+/// reflect live hardware / the engine echo, not project state.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalInstrumentState {
     /// The track this config belongs to.
     pub track_id: TrackId,
+    /// Selected device-preset id (a [`resonance_common::DeviceDefinition`]'s
+    /// `id`, e.g. `"moog-muse"`), or `None` when no preset is chosen. Drives
+    /// the `SetTrackDeviceParams` dispatch and the inspector's active
+    /// "<model> preset →" affordance (epic #40, doc #201 §5).
+    pub device_id: Option<String>,
     /// Selected MIDI bank as a combined 14-bit value (MSB << 7 | LSB), or
     /// `None` to leave the device on its current bank.
     pub bank: Option<u16>,
@@ -68,6 +77,13 @@ pub struct ExternalInstrumentState {
     pub midi_out_offline: bool,
     /// True when the configured audio-return input device is offline.
     pub return_input_offline: bool,
+    /// The device-param ids the engine last confirmed it stored for this
+    /// track via `AudioEvent::TrackDeviceParamsApplied` (epic #40, doc #201
+    /// §4). Mirrors the engine's applied set so the app can confirm the
+    /// `SetTrackDeviceParams` dispatch (and reconstruct after a project-load
+    /// replay). Runtime echo — not undo-snapshotted; empty means the map was
+    /// cleared or nothing has been applied yet.
+    pub applied_param_ids: Vec<String>,
 }
 
 impl ExternalInstrumentState {
@@ -76,11 +92,13 @@ impl ExternalInstrumentState {
     pub fn new(track_id: TrackId) -> Self {
         Self {
             track_id,
+            device_id: None,
             bank: None,
             program: None,
             latency_offset_samples: 0,
             midi_out_offline: false,
             return_input_offline: false,
+            applied_param_ids: Vec::new(),
         }
     }
 

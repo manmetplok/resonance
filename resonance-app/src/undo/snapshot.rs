@@ -85,6 +85,17 @@ pub struct UndoExtras {
     /// `vocal_clip_lyrics`. The runtime device-offline flags are *not*
     /// captured: they reflect live hardware, not project state.
     pub external_instruments: HashMap<TrackId, ExternalInstrument>,
+    /// Selected device-preset id per external-instrument track (epic #40,
+    /// doc #201 §5). Snapshotted alongside `external_instruments` because the
+    /// selection is app-side project state that isn't part of the engine
+    /// `ExternalInstrument` config (nor the `ProjectFile` shape yet —
+    /// persistence is a later todo). `None` means the track is external but
+    /// has no preset selected. On restore the id is re-applied and the
+    /// resolved params are re-sent via `SetTrackDeviceParams`, so device
+    /// selection is fully reversible. Runtime device-param echoes
+    /// (`applied_param_ids`) are *not* captured — they reflect the engine's
+    /// live state, not project state.
+    pub external_instrument_devices: HashMap<TrackId, Option<String>>,
     /// App-side parameter-automation lanes, one per target. Captured here
     /// so lane and breakpoint edits are reversible. Automation lanes are
     /// currently runtime-only — they aren't written into `ProjectFile`
@@ -202,6 +213,11 @@ impl crate::Resonance {
                 .external_instruments
                 .iter()
                 .map(|(id, st)| (*id, st.config()))
+                .collect(),
+            external_instrument_devices: self
+                .external_instruments
+                .iter()
+                .map(|(id, st)| (*id, st.device_id.clone()))
                 .collect(),
             automation_lanes: self.automation.lanes.clone(),
         };
@@ -410,9 +426,13 @@ impl crate::Resonance {
     /// Clears tracks that are no longer external, then (re-)asserts every
     /// target config via `SetExternalInstrument` — idempotent on the engine
     /// and, unlike a patch send, it never re-fires MIDI to the synth. The
-    /// runtime device-offline flags are preserved for tracks that stay
-    /// external (live hardware status survives an undo); a track returning to
-    /// external mode starts online and is re-checked on the next ping.
+    /// selected device preset (epic #40) is restored too: the id is re-applied
+    /// to the GUI state and the resolved params re-sent via
+    /// `SetTrackDeviceParams`, so device selection reverses with the rest of
+    /// the config. The runtime device-offline flags are preserved for tracks
+    /// that stay external (live hardware status survives an undo); a track
+    /// returning to external mode starts online and is re-checked on the next
+    /// ping.
     pub(crate) fn restore_external_instruments(&mut self, extras: &UndoExtras) {
         // Drop external mode from tracks absent in the target snapshot.
         let stale: Vec<TrackId> = self
@@ -426,17 +446,42 @@ impl crate::Resonance {
             let _ = self
                 .engine
                 .send(AudioCommand::ClearExternalInstrument { track_id: id });
+            let _ = self.engine.send(AudioCommand::SetTrackDeviceParams {
+                track_id: id,
+                params: Vec::new(),
+            });
         }
         // Re-assert every target config, keeping live offline flags.
         for (id, config) in &extras.external_instruments {
             let _ = self.engine.send(AudioCommand::SetExternalInstrument {
                 config: *config,
             });
+            // Restore the selected device preset and re-send its params. The
+            // registry lookup is a temporary immutable borrow whose result is
+            // cloned, so it doesn't overlap the engine send or the map entry.
+            let device_id = extras
+                .external_instrument_devices
+                .get(id)
+                .cloned()
+                .flatten();
+            let params = match &device_id {
+                Some(did) => self
+                    .device_registry
+                    .get(did)
+                    .map(|def| def.params.clone())
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
+            let _ = self.engine.send(AudioCommand::SetTrackDeviceParams {
+                track_id: *id,
+                params,
+            });
             let state = self
                 .external_instruments
                 .entry(*id)
                 .or_insert_with(|| crate::state::ExternalInstrumentState::new(*id));
             state.apply_config(config);
+            state.device_id = device_id;
         }
     }
 

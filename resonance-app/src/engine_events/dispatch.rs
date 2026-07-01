@@ -55,10 +55,12 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::MidiClockStopped => transport::midi_clock_stopped(r),
         E::MidiClockTempoDetected { bpm } => transport::midi_clock_tempo_detected(r, bpm),
         // Confirms the engine stored a track's device-param map
-        // (`SetTrackDeviceParams`, epic #40). The app already holds the
-        // selected device definition, so there is nothing to mirror until
-        // the device-selection app-state lands (epic #40 §5) — no-op for now.
-        E::TrackDeviceParamsApplied { .. } => {}
+        // (`SetTrackDeviceParams`, epic #40, doc #201 §4). Mirror the applied
+        // param ids onto the track's external-instrument state so the app can
+        // confirm the dispatch and reconstruct after a project-load replay.
+        E::TrackDeviceParamsApplied { track_id, param_ids } => {
+            super::external_instrument::device_params_applied(r, track_id, param_ids)
+        }
 
         // Audio clip events
         E::ClipImported {

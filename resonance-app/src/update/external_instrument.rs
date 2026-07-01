@@ -71,6 +71,32 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
                 });
             }
         }
+        M::SetDevice(track_id, device_id) => {
+            // Only meaningful for a track already in external-instrument
+            // mode. Resolve the chosen preset's params up front (immutable
+            // registry borrow), store the id on the track state, then hand
+            // the engine the binding map. An unknown id or `None` clears the
+            // engine map (empty params) and the selection.
+            if r.external_instruments.contains_key(&track_id) {
+                let params = match &device_id {
+                    Some(id) => r
+                        .device_registry
+                        .get(id)
+                        .map(|def| def.params.clone())
+                        .unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                if let Some(state) = r.external_instruments.get_mut(&track_id) {
+                    // Keep the selected id even if it didn't resolve to a
+                    // known definition — the picker only offers real ids, and
+                    // this makes clearing (`None`) unambiguous.
+                    state.device_id = device_id;
+                }
+                let _ = r
+                    .engine
+                    .send(AudioCommand::SetTrackDeviceParams { track_id, params });
+            }
+        }
         M::SetReturnDevice(track_id, device_name) => {
             let updated = r.with_track_mut(track_id, |t| {
                 t.input_device_name = device_name.clone();

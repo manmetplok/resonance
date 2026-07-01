@@ -209,6 +209,10 @@ pub(crate) fn inspector_fingerprint(
     let is_external = r.external_instruments.contains_key(&t.id);
     is_external.hash(&mut h);
     if let Some(ext) = r.external_instruments.get(&t.id) {
+        // Selected device preset drives the device picker + active
+        // "<model> preset →" affordance; without it the lazy region wouldn't
+        // redraw when a preset is picked or cleared.
+        ext.device_id.hash(&mut h);
         ext.bank.hash(&mut h);
         ext.program.hash(&mut h);
         ext.latency_offset_samples.hash(&mut h);

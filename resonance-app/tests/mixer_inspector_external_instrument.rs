@@ -94,10 +94,28 @@ fn external_instrument_group_renders_all_sections() {
     ui.find("031").expect("bank tile shows 031");
     ui.find("012").expect("program tile shows 012");
 
-    // The monitor / arm toggles and the epic-#40 preset affordance.
+    // The monitor / arm toggles and the epic-#40 device-preset controls.
     ui.find("Input monitor").expect("input monitor toggle");
     ui.find("Record arm").expect("record arm toggle");
-    ui.find("Muse preset →").expect("disabled preset affordance");
+    // The device-preset picker (epic #40) and its inactive chip — no preset
+    // is selected in this configuration.
+    ui.find("DEVICE PRESET").expect("device-preset field label");
+    ui.find("Select device →").expect("inactive preset affordance");
+}
+
+/// Selecting a device preset lights the "<model> preset →" chip with the
+/// chosen definition's name (epic #40, doc #201 §5).
+#[test]
+fn selecting_device_activates_preset_affordance() {
+    let mut app = app_with_external_track();
+    dispatch(&mut app, Eim::Enable(TRACK));
+    dispatch(&mut app, Eim::SetDevice(TRACK, Some("moog-muse".into())));
+
+    let mut ui = simulator(&app);
+    // The bundled Moog Muse definition labels as "Moog Muse"; the chip lights
+    // with "<model> preset →" once selected.
+    ui.find("Moog Muse →")
+        .expect("active preset affordance names the selected device");
 }
 
 /// A non-external track keeps the generic ROUTING group — the External

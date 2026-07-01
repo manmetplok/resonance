@@ -212,6 +212,13 @@ pub struct Resonance {
     /// external-specific bits. Config (not the offline flags) round-trips
     /// undo via `UndoExtras::external_instruments`.
     pub(crate) external_instruments: crate::state::ExternalInstrumentMap,
+    /// Device-definition registry (epic #40, doc #201 §2): the bundled
+    /// device presets plus any user-authored ones, scanned once at startup.
+    /// The External-Instrument inspector's device-preset picker reads
+    /// `list()`; selecting a preset resolves its `params` (via `get(id)`)
+    /// into the `SetTrackDeviceParams` command. Read-only after
+    /// construction (a rescan/reload is a later todo).
+    pub(crate) device_registry: resonance_common::DeviceDefinitionRegistry,
     /// When set, the confirmation dialog for deleting a track with
     /// content is shown. Holds the track id that the user wants to remove.
     pub(crate) confirm_delete_track: Option<resonance_audio::types::TrackId>,
@@ -490,6 +497,21 @@ impl Resonance {
             format!("{}-{}", std::process::id(), nanos)
         };
 
+        // Device-definition registry (epic #40): bundled presets first, then
+        // any user-authored definitions (last-wins by id). Built once here so
+        // the External-Instrument inspector's device picker and the
+        // `SetTrackDeviceParams` resolution read a stable list.
+        let mut device_registry = resonance_common::DeviceDefinitionRegistry::default();
+        device_registry.scan_bundled();
+        if let Some(dir) = resonance_common::user_definitions_dir() {
+            device_registry.scan_dir(&dir);
+        }
+        // Seed the cached device-preset pick-list options from the registry so
+        // the inspector clones a refcounted slice instead of rebuilding the
+        // option Vec every frame (view-performance rules).
+        let mut view_caches = view::ui_caches::UiViewCaches::default();
+        view_caches.rebuild_device_choices(&device_registry.list());
+
         let mut app = Self {
             engine,
             sample_rate: 44100, // overwritten by SampleRateDetected event
@@ -503,7 +525,7 @@ impl Resonance {
             midi_clock_recv_enabled: false,
             midi_clock_recv_device: None,
             available_plugins: Vec::new(),
-            view_caches: view::ui_caches::UiViewCaches::default(),
+            view_caches,
             transport_labels: view::transport_labels::TransportLabels::default(),
             error_message: None,
             master_volume: 0.0, // 0 dB = unity gain
@@ -562,6 +584,7 @@ impl Resonance {
             aux: state::AuxSendState::default(),
             undo: UndoHistory::new(),
             external_instruments: std::collections::HashMap::new(),
+            device_registry,
             plugin_state_cache: std::collections::HashMap::new(),
             plugin_index: std::collections::HashMap::new(),
             confirm_delete_track: None,
