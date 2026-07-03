@@ -6,7 +6,7 @@
 mod dialogs;
 mod instantiate;
 mod replay;
-mod replay_diff;
+pub mod replay_diff;
 mod serialize;
 mod templates;
 

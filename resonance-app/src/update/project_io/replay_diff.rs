@@ -27,8 +27,6 @@ use std::collections::HashMap;
 
 use resonance_audio::types::*;
 
-#[cfg(test)]
-use crate::compose::DrumGroup;
 use crate::project::{
     fade_curve_from_tag, LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip,
     ProjectPlugin, ProjectTrack,
@@ -180,7 +178,7 @@ pub fn try_diff_replay(
 /// arranged into the same parent-child shape. Pure ordering of the
 /// outer collections is normalised via id-sort before comparison so a
 /// re-ordering by `.order` alone does NOT force the slow path.
-fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
+pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     // Track set + per-track plugin set, sub-track linkage, track type,
     // and clap plugin identity.
     if !track_set_matches(&a.tracks, &b.tracks) {
@@ -237,7 +235,7 @@ fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     true
 }
 
-fn id_set_eq<I, J>(a: I, b: J) -> bool
+pub fn id_set_eq<I, J>(a: I, b: J) -> bool
 where
     I: IntoIterator<Item = u64>,
     J: IntoIterator<Item = u64>,
@@ -814,7 +812,7 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile, extras: &UndoExtras) {
 /// `PartialEq` (the engine has no need for it). Comparing field-wise
 /// here keeps the diff replay self-contained without touching the
 /// engine crate's public API.
-fn midi_notes_equal(a: &[MidiNote], b: &[MidiNote]) -> bool {
+pub fn midi_notes_equal(a: &[MidiNote], b: &[MidiNote]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -868,242 +866,4 @@ fn apply_pool(r: &mut Resonance, b: &ProjectFile) {
         });
     }
     r.recompute_pool_usage();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::state::{InstrumentIcon, InstrumentType};
-
-    fn empty_file() -> ProjectFile {
-        ProjectFile::default()
-    }
-
-    fn track(id: u64, vol: f32) -> ProjectTrack {
-        ProjectTrack {
-            id,
-            name: format!("T{id}"),
-            order: id as usize,
-            volume: vol,
-            pan: 0.0,
-            muted: false,
-            soloed: false,
-            fx_bypassed: false,
-            record_armed: false,
-            monitor_enabled: false,
-            mono: true,
-            input_device_name: None,
-            input_port_index: Some(0),
-            plugins: Vec::new(),
-            track_type: "audio".to_string(),
-            output_bus: None,
-            instrument_type: InstrumentType::default(),
-            instrument_icon: InstrumentIcon::default(),
-            role: None,
-            sub_track: None,
-            midi_input_device: None,
-            midi_input_channel: None,
-            midi_output_device: None,
-            midi_output_channel: None,
-            external_instrument: None,
-        }
-    }
-
-    fn plugin(id: u64) -> ProjectPlugin {
-        ProjectPlugin {
-            instance_id: id,
-            plugin_name: format!("P{id}"),
-            clap_plugin_id: "com.example.foo".to_string(),
-            clap_file_path: "/x/foo.clap".to_string(),
-            state_file: format!("plugins/plugin_{id}.bin"),
-        }
-    }
-
-    #[test]
-    fn empty_projects_are_structurally_compatible() {
-        let a = empty_file();
-        let b = empty_file();
-        assert!(structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn scalar_only_track_diff_is_compatible() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0)];
-        b.tracks = vec![track(1, -6.0)];
-        assert!(structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn added_track_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0)];
-        b.tracks = vec![track(1, 0.0), track(2, 0.0)];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn removed_track_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0), track(2, 0.0)];
-        b.tracks = vec![track(1, 0.0)];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn renumbered_track_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0)];
-        b.tracks = vec![track(2, 0.0)];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn track_type_change_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0)];
-        let mut t = track(1, 0.0);
-        t.track_type = "instrument".to_string();
-        b.tracks = vec![t];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn added_plugin_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0)];
-        let mut t = track(1, 0.0);
-        t.plugins = vec![plugin(10)];
-        b.tracks = vec![t];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn plugin_reorder_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        let mut t_a = track(1, 0.0);
-        t_a.plugins = vec![plugin(10), plugin(11)];
-        let mut t_b = track(1, 0.0);
-        t_b.plugins = vec![plugin(11), plugin(10)];
-        a.tracks = vec![t_a];
-        b.tracks = vec![t_b];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn plugin_clap_identity_change_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        let mut t_a = track(1, 0.0);
-        t_a.plugins = vec![plugin(10)];
-        let mut p = plugin(10);
-        p.clap_plugin_id = "com.example.bar".to_string();
-        let mut t_b = track(1, 0.0);
-        t_b.plugins = vec![p];
-        a.tracks = vec![t_a];
-        b.tracks = vec![t_b];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn id_set_eq_ignores_order() {
-        assert!(id_set_eq([1u64, 2, 3], [3u64, 2, 1]));
-        assert!(!id_set_eq([1u64, 2], [1u64, 2, 3]));
-    }
-
-    #[test]
-    fn track_reorder_alone_is_compatible() {
-        // Reorder via `.order` field — the actual track set is unchanged.
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0), track(2, 0.0)];
-        let mut t1 = track(1, 0.0);
-        t1.order = 1;
-        let mut t2 = track(2, 0.0);
-        t2.order = 0;
-        b.tracks = vec![t2, t1];
-        assert!(structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn audio_file_path_change_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        let mk = |id: u64, name: &str| ProjectClip {
-            id,
-            track_id: 1,
-            start_sample: 0,
-            name: name.into(),
-            total_frames: 1000,
-            trim_start_frames: 0,
-            trim_end_frames: 0,
-            audio_file: name.into(),
-            asset_ref: None,
-            fade_in_frames: 0,
-            fade_in_curve: "equal_power".into(),
-            fade_out_frames: 0,
-            fade_out_curve: "equal_power".into(),
-            gain_db: 0.0,
-        };
-        a.clips = vec![mk(1, "audio/a.wav")];
-        b.clips = vec![mk(1, "audio/b.wav")];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn midi_notes_equal_field_wise() {
-        let n = |note, vel, start, dur| MidiNote {
-            note,
-            velocity: vel,
-            start_tick: start,
-            duration_ticks: dur,
-        };
-        assert!(midi_notes_equal(&[], &[]));
-        assert!(midi_notes_equal(
-            &[n(60, 0.8, 0, 480)],
-            &[n(60, 0.8, 0, 480)]
-        ));
-        assert!(!midi_notes_equal(
-            &[n(60, 0.8, 0, 480)],
-            &[n(62, 0.8, 0, 480)]
-        ));
-        assert!(!midi_notes_equal(
-            &[n(60, 0.8, 0, 480)],
-            &[n(60, 0.8, 0, 481)]
-        ));
-        // Different lengths are unequal.
-        assert!(!midi_notes_equal(&[n(60, 0.8, 0, 480)], &[]));
-    }
-
-    #[test]
-    fn drum_group_id_set_change_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        let g = |id: u64| DrumGroup {
-            id,
-            name: format!("g{id}"),
-            color: [0, 0, 0],
-            grid: 4,
-            cycle: 16,
-            phase: 0,
-            pads: Vec::new(),
-            density: 0.0,
-            swing: 0.0,
-            accent: 0.0,
-            humanize: 0.0,
-            fills: 0.0,
-            style: String::new(),
-            seed: 0,
-        };
-        a.drum_groups = vec![g(1)];
-        b.drum_groups = vec![g(1), g(2)];
-        assert!(!structurally_compatible(&a, &b));
-    }
 }
