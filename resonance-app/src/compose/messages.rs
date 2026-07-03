@@ -552,6 +552,20 @@ pub enum ArrangementMessage {
         from: usize,
         to: usize,
     },
+    /// Select the arrangement entry at `index` for the right-rail Entry
+    /// inspector (or clear the selection with `None`). Pure UI state — does
+    /// not mutate the arrangement, so it is skipped by the undo machinery.
+    /// Emitted by the arrangement strip's entry chips and (implicitly) when
+    /// a bank pattern is added.
+    SelectEntry { index: Option<usize> },
+    /// Swap the pattern played by the entry at `index`, keeping its length
+    /// mode + fill. Drives the Entry inspector's pattern picker dropdown.
+    /// Ignored if the chosen pattern doesn't exist.
+    SetEntryPattern {
+        definition_id: u64,
+        index: usize,
+        pattern_id: u64,
+    },
     /// Set the length mode + value of the entry at `index`
     /// (`RepeatN(n)` / `Bars(b)`).
     SetEntryLength {

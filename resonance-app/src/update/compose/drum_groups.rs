@@ -386,6 +386,11 @@ pub(super) fn handle_arrangement(
     msg: ArrangementMessage,
 ) -> Task<Message> {
     let changed = match msg {
+        ArrangementMessage::SelectEntry { index } => {
+            // Pure UI selection — no arrangement mutation, no re-materialize.
+            r.compose.drumroll.selected_entry_index = index;
+            false
+        }
         ArrangementMessage::AddEntry {
             definition_id,
             pattern_id,
@@ -394,16 +399,45 @@ pub(super) fn handle_arrangement(
             if r.compose.find_pattern(pattern_id).is_none() {
                 false
             } else {
-                mutate_definition(r, definition_id, |def| {
+                let added = mutate_definition(r, definition_id, |def| {
                     def.add_entry(pattern_id);
                     true
-                })
+                });
+                // Select the freshly-added entry so dropping / clicking a
+                // bank pattern immediately opens its Entry inspector.
+                if added {
+                    if let Some(def) = r.compose.find_definition(definition_id) {
+                        r.compose.drumroll.selected_entry_index =
+                            def.arrangement.len().checked_sub(1);
+                    }
+                }
+                added
             }
         }
         ArrangementMessage::RemoveEntry {
             definition_id,
             index,
-        } => mutate_definition(r, definition_id, |def| def.remove_entry(index)),
+        } => {
+            let removed = mutate_definition(r, definition_id, |def| def.remove_entry(index));
+            if removed {
+                clamp_selected_entry(r, definition_id);
+            }
+            removed
+        }
+        ArrangementMessage::SetEntryPattern {
+            definition_id,
+            index,
+            pattern_id,
+        } => {
+            // The swapped-in pattern must exist in the bank.
+            if r.compose.find_pattern(pattern_id).is_none() {
+                false
+            } else {
+                mutate_definition(r, definition_id, |def| {
+                    def.set_entry_pattern(index, pattern_id)
+                })
+            }
+        }
         ArrangementMessage::MoveEntry {
             definition_id,
             from,
@@ -453,6 +487,23 @@ fn mutate_definition(
         .find_definition_mut(definition_id)
         .map(f)
         .unwrap_or(false)
+}
+
+/// Keep `selected_entry_index` pointing at a real entry after a removal:
+/// clamp it to the last entry, or clear it when the arrangement is now
+/// empty. Leaves an unset selection alone.
+fn clamp_selected_entry(r: &mut crate::Resonance, definition_id: u64) {
+    let len = r
+        .compose
+        .find_definition(definition_id)
+        .map(|def| def.arrangement.len())
+        .unwrap_or(0);
+    let sel = &mut r.compose.drumroll.selected_entry_index;
+    match (*sel, len) {
+        (Some(_), 0) => *sel = None,
+        (Some(i), n) if i >= n => *sel = Some(n - 1),
+        _ => {}
+    }
 }
 
 /// Snapshot the bank's per-pattern bar lengths so the arrangement mutators
