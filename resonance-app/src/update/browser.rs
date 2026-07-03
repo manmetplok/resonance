@@ -195,8 +195,41 @@ pub fn scan_folder(dir: &Path) -> FolderScan {
     let files = resonance_common::scan_audio_folder(dir);
     let mut folders = list_subdirs(dir);
     folders.sort();
-    FolderScan { folders, files }
+
+    // Decode a compact waveform-thumbnail per audio row so the Files-tab
+    // rows (#602) show a real mini silhouette, not a placeholder. This runs
+    // in the same off-thread scan as the metadata probe, so it never blocks
+    // paint; a file that fails to decode is simply omitted (its row falls
+    // back to an idle baseline). The result is cached in `FolderScan` and
+    // only recomputed on navigation — the "cache the file-list" performance
+    // rule (doc #175).
+    let thumbnails = files
+        .iter()
+        .filter_map(|entry| {
+            let thumb =
+                resonance_common::waveform_thumbnail(Path::new(&entry.path), THUMBNAIL_BUCKETS)
+                    .ok()?;
+            let peaks: Vec<(f32, f32)> = thumb
+                .min
+                .iter()
+                .zip(thumb.max.iter())
+                .map(|(&lo, &hi)| (lo, hi))
+                .collect();
+            Some((entry.path.clone(), peaks))
+        })
+        .collect();
+
+    FolderScan {
+        folders,
+        files,
+        thumbnails,
+    }
 }
+
+/// Column count for the Files-tab mini waveform thumbnails. Matches the
+/// thumbnail widget's ~48 px width so each bucket maps to roughly one
+/// pixel column.
+const THUMBNAIL_BUCKETS: usize = 48;
 
 /// List the immediate child directories of `dir` (absolute paths,
 /// unsorted). An unreadable directory yields an empty list, matching the

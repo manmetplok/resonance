@@ -107,9 +107,17 @@ pub mod fa {
     pub const CIRCLE: char = '\u{f111}';
     pub const BARS: char = '\u{f0c9}';
     pub const FOLDER_OPEN: char = '\u{f07c}';
+    /// Closed folder — media-browser subfolder rows (Files tab).
+    pub const FOLDER: char = '\u{f07b}';
     pub const FLOPPY_DISK: char = '\u{f0c7}';
     pub const MAGNIFYING_GLASS_PLUS: char = '\u{f00e}';
     pub const MAGNIFYING_GLASS_MINUS: char = '\u{f010}';
+    /// Magnifying glass — the per-folder filter field (Files tab).
+    pub const MAGNIFYING_GLASS: char = '\u{f002}';
+    /// Solid star — the WARM "favourite folder" toggle + favourite pills.
+    pub const STAR: char = '\u{f005}';
+    /// Clock — the "recent folder" pills in the media-browser shelf.
+    pub const CLOCK: char = '\u{f017}';
     /// Metronome icon (custom glyph added by tools/add_metronome_glyph.py).
     pub const METRONOME: char = '\u{f8db}';
     /// Single hollow circle — mono channel indicator. Custom glyph added

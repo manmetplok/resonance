@@ -610,3 +610,84 @@ pub fn seed_pool_assets(app: &mut Resonance) {
 
     app.recompute_pool_usage();
 }
+
+/// Seed the Files tab of the media browser with a populated folder so it
+/// renders with content for snapshot tests (todo #602): a current folder
+/// (favourited, so the breadcrumb star reads WARM), a favourites / recent
+/// shelf, two subfolders, and four audio rows spanning the format chips
+/// (wav / flac / mp3 / ogg) with decoded-style waveform thumbnails.
+pub fn seed_files_folder(app: &mut Resonance) {
+    use resonance_common::audio_probe::{AudioFileEntry, AudioFormat, AudioInfo};
+    use std::path::PathBuf;
+
+    let root = "/sessions/My Project/samples/Drums";
+    let current = PathBuf::from(root);
+
+    // A gentle sinusoidal silhouette so the thumbnails read as waveforms.
+    let make_peaks = |count: usize, phase: f32| -> Vec<(f32, f32)> {
+        (0..count)
+            .map(|i| {
+                let t = i as f32 / count as f32;
+                let amp = 0.25 + 0.55 * (t * std::f32::consts::TAU + phase).sin().abs();
+                (-amp, amp)
+            })
+            .collect()
+    };
+
+    let entry = |name: &str, format: AudioFormat, channels: u16, sr: u32, secs: f64| {
+        let path = format!("{root}/{name}");
+        AudioFileEntry {
+            path,
+            info: AudioInfo {
+                format,
+                channels,
+                sample_rate: sr,
+                frames: (sr as f64 * secs) as u64,
+                duration_secs: secs,
+            },
+        }
+    };
+
+    let files = vec![
+        entry("Kick 120bpm.wav", AudioFormat::Wav, 2, 44_100, 1.2),
+        entry("Clap One-Shot.flac", AudioFormat::Flac, 1, 48_000, 0.4),
+        entry("Groove Loop.mp3", AudioFormat::Mp3, 2, 44_100, 4.0),
+        entry("Ambient Pad.ogg", AudioFormat::Ogg, 2, 44_100, 8.5),
+    ];
+
+    let mut thumbnails = std::collections::HashMap::new();
+    for (i, f) in files.iter().enumerate() {
+        thumbnails.insert(f.path.clone(), make_peaks(48, i as f32 * 0.9));
+    }
+
+    app.browser.current_folder = Some(current.clone());
+    app.browser.scanning = false;
+    app.browser.filter.clear();
+    app.browser.scan = crate::state::FolderScan {
+        folders: vec![
+            PathBuf::from(format!("{root}/Kicks")),
+            PathBuf::from(format!("{root}/Snares")),
+        ],
+        files,
+        thumbnails,
+    };
+
+    // Favourites (WARM star) + recent (clock) shelf. The current folder is a
+    // favourite so the breadcrumb star reads pinned.
+    app.pool.favourites = vec![PathBuf::from("/Users/me/Loops"), current.clone()];
+    app.pool.recent_folders = vec![current, PathBuf::from("/Users/me/Vocals")];
+}
+
+/// Seed the Files tab on an **empty** folder — one with no audio — so the
+/// empty-folder state renders for snapshot tests (todo #602).
+pub fn seed_empty_files_folder(app: &mut Resonance) {
+    use std::path::PathBuf;
+
+    app.browser.current_folder = Some(PathBuf::from("/sessions/My Project/samples/Empty"));
+    app.browser.scanning = false;
+    app.browser.filter.clear();
+    app.browser.scan = crate::state::FolderScan::default();
+
+    app.pool.favourites = vec![PathBuf::from("/Users/me/Loops")];
+    app.pool.recent_folders = vec![PathBuf::from("/Users/me/Vocals")];
+}

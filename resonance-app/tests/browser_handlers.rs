@@ -140,6 +140,7 @@ fn scan_completed_applies_for_current_folder() {
     let scan = FolderScan {
         folders: vec![PathBuf::from("/tmp/loops/sub")],
         files: vec![audio_entry("/tmp/loops/kick.wav")],
+        ..Default::default()
     };
     send(
         &mut app,
@@ -169,6 +170,7 @@ fn stale_scan_for_a_left_folder_is_dropped() {
             scan: FolderScan {
                 folders: Vec::new(),
                 files: vec![audio_entry("/a/old.wav")],
+                ..Default::default()
             },
         },
     );
@@ -190,6 +192,7 @@ fn filter_matches_file_name_case_insensitively() {
                 audio_entry("/loops/snare.wav"),
                 audio_entry("/loops/HiHat.wav"),
             ],
+            ..Default::default()
         },
         ..BrowserState::default()
     };

@@ -21,6 +21,7 @@
 //! is looking at (a stale scan from a folder they've since left is
 //! dropped).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use resonance_common::audio_probe::AudioFileEntry;
@@ -51,6 +52,24 @@ pub struct FolderScan {
     /// Audio files in the scanned folder with probed metadata, sorted by
     /// path. See [`resonance_common::scan_audio_folder`].
     pub files: Vec<AudioFileEntry>,
+    /// Mini waveform-thumbnail peaks per audio row, keyed by the file's
+    /// absolute path (matching [`AudioFileEntry::path`]). Each value is the
+    /// `(min, max)` peak pairs produced off-thread by
+    /// [`resonance_common::waveform_thumbnail`] and rendered as the row's
+    /// mini waveform silhouette (todo #602). A path with no entry — a file
+    /// that failed to decode — renders an idle baseline instead of a bar
+    /// chart, so the row still appears. Kept out-of-band from `files` so the
+    /// browse navigation / filter contract (todo #599) is unchanged.
+    pub thumbnails: HashMap<String, Vec<(f32, f32)>>,
+}
+
+impl FolderScan {
+    /// The cached thumbnail peaks for `path`, or an empty slice when the
+    /// file's waveform could not be decoded (the row then renders an idle
+    /// baseline). Borrows so the view never clones a row's peaks per frame.
+    pub fn thumbnail(&self, path: &str) -> &[(f32, f32)] {
+        self.thumbnails.get(path).map(Vec::as_slice).unwrap_or(&[])
+    }
 }
 
 /// Audition-preview transport state for the browser's bottom bar.
