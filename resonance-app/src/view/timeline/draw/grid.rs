@@ -9,7 +9,7 @@ use super::TimelineCanvas;
 /// One bar yielded by [`TimelineCanvas::for_each_visible_bar`]: its
 /// index, on-screen x position, pixel width, and the timing context
 /// needed to place beat subdivisions within the bar.
-struct VisibleBar {
+pub(super) struct VisibleBar {
     /// Zero-based bar index.
     bar: u32,
     /// X position of the bar start, in canvas pixels.
