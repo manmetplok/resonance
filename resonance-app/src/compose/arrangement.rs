@@ -42,6 +42,88 @@ impl ArrangementSpan {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Display helpers for the ARRANGEMENT strip (view) — pure string/label logic
+// kept next to the model so they can be unit-tested without a renderer.
+// ---------------------------------------------------------------------------
+
+/// Human-readable bar span of a single arrangement entry, as shown on its
+/// strip chip. A `RepeatN(n)` entry over a `pattern_bars`-bar pattern reads
+/// `"2b ×3 = 6b"`; a `Bars(b)` entry reads `"4b fixed"`. `pattern_bars` is
+/// guarded to at least `1` to mirror [`super::state`]'s resolver.
+pub fn entry_span_label(length: EntryLength, pattern_bars: u32) -> String {
+    let pattern_bars = pattern_bars.max(1);
+    match length {
+        EntryLength::RepeatN(n) => {
+            let total = n.saturating_mul(pattern_bars);
+            format!("{pattern_bars}b ×{n} = {total}b")
+        }
+        EntryLength::Bars(b) => format!("{b}b fixed"),
+    }
+}
+
+/// Compact value shown inside an entry's inline stepper: `"×3"` for a
+/// `RepeatN(3)` entry, `"4b"` for a `Bars(4)` entry.
+pub fn entry_stepper_label(length: EntryLength) -> String {
+    match length {
+        EntryLength::RepeatN(n) => format!("×{n}"),
+        EntryLength::Bars(b) => format!("{b}b"),
+    }
+}
+
+/// Apply a `±1` stepper nudge to an entry length, preserving its mode and
+/// clamping the value to a minimum of `1` (a zero-bar entry contributes
+/// nothing, so the stepper never drives below one). `delta` is typically
+/// `-1` or `+1`.
+pub fn step_entry_length(length: EntryLength, delta: i32) -> EntryLength {
+    fn stepped(v: u32, delta: i32) -> u32 {
+        (i64::from(v) + i64::from(delta)).clamp(1, i64::from(u32::MAX)) as u32
+    }
+    match length {
+        EntryLength::RepeatN(n) => EntryLength::RepeatN(stepped(n, delta)),
+        EntryLength::Bars(b) => EntryLength::Bars(stepped(b, delta)),
+    }
+}
+
+/// The raw stepper value of an entry, used to disable the `−` button at the
+/// `1` floor regardless of length mode.
+pub fn entry_stepper_value(length: EntryLength) -> u32 {
+    match length {
+        EntryLength::RepeatN(n) => n,
+        EntryLength::Bars(b) => b,
+    }
+}
+
+impl ArrangementCoverage {
+    /// Bars actually covered by the entries, reconstructed from the coverage
+    /// delta against `section_bars`: `Exact` covers the whole section,
+    /// `Gap { bars }` falls `bars` short, `Overflow { bars }` exceeds it by
+    /// `bars`.
+    pub fn covered_bars(&self, section_bars: u32) -> u32 {
+        match self {
+            ArrangementCoverage::Exact => section_bars,
+            ArrangementCoverage::Gap { bars } => section_bars.saturating_sub(*bars),
+            ArrangementCoverage::Overflow { bars } => section_bars.saturating_add(*bars),
+        }
+    }
+
+    /// Text for the coverage pill chip: `"8 / 8 bars"` when exact,
+    /// `"4 / 8 · gap 4"` when under-filled, `"10 / 8 · overflow 2"` when
+    /// over-filled. `section_bars` is the denominator (the section length).
+    pub fn chip_label(&self, section_bars: u32) -> String {
+        let covered = self.covered_bars(section_bars);
+        match self {
+            ArrangementCoverage::Exact => format!("{covered} / {section_bars} bars"),
+            ArrangementCoverage::Gap { bars } => {
+                format!("{covered} / {section_bars} · gap {bars}")
+            }
+            ArrangementCoverage::Overflow { bars } => {
+                format!("{covered} / {section_bars} · overflow {bars}")
+            }
+        }
+    }
+}
+
 /// How an arrangement's total bar span lines up with the section length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrangementCoverage {

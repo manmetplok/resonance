@@ -1,14 +1,10 @@
-//! Golden-image snapshots for the Compose drum lane's pattern picker.
+//! Golden-image snapshot for the Compose drum-pattern **bank manager**
+//! modal.
 //!
-//! Three states are locked in:
-//!
-//! 1. **default-pattern** — section uses the default "Main" pattern.
-//!    Picker shows the "Main" chip with the warm-tint border.
-//! 2. **assigned-b-section** — after `AssignPattern` to the second
-//!    bank entry the picker chip switches and the lane underneath
-//!    re-renders against the new pattern's (empty) group list.
-//! 3. **renaming** — `BeginRenamePattern` swaps the chip for a
-//!    `text_input`. Locks in the rename affordance.
+//! The lane-side arrangement editor (the strip that replaced the old
+//! single-pattern picker) is covered by `compose_arrangement_strip.rs`;
+//! this file locks in the pattern-bank manager modal, which is the
+//! cleanest surface for the bank-editing UI.
 //!
 //! Window size matches the app's default 1440×900 per
 //! `ux-guidelines.md`. On first run `matches_image()` writes the
@@ -24,10 +20,6 @@ use resonance_app::state::ViewMode;
 use resonance_app::{demo, theme, Resonance, STARTUP_TAB};
 
 const WINDOW: (f32, f32) = (1440.0, 900.0);
-/// Taller window used for the drum-lane snapshots so the picker chip
-/// row and the drum canvas sit inside the viewport. 1440×900 is too
-/// short to fit all the synth lanes + the drum lane on one screen.
-const TALL_WINDOW: (f32, f32) = (1440.0, 1600.0);
 
 fn sim_settings() -> iced::Settings {
     let mut fonts: Vec<std::borrow::Cow<'static, [u8]>> = Vec::new();
@@ -75,52 +67,13 @@ fn build_compose_app() -> Resonance {
 }
 
 fn snapshot_to(app: &Resonance, path: &str) {
-    snapshot_to_window(app, path, WINDOW);
-}
-
-fn snapshot_to_window(app: &Resonance, path: &str, window: (f32, f32)) {
-    let mut ui =
-        Simulator::with_size(sim_settings(), Size::new(window.0, window.1), app.view());
+    let mut ui = Simulator::with_size(sim_settings(), Size::new(WINDOW.0, WINDOW.1), app.view());
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
     assert!(
         snap.matches_image(path).expect("matches_image i/o"),
         "snapshot diverged from golden: {path}"
-    );
-}
-
-#[test]
-fn drum_pattern_picker_default() {
-    let app = build_compose_app();
-    snapshot_to_window(
-        &app,
-        "tests/snapshots/drum_pattern_picker_default.png",
-        TALL_WINDOW,
-    );
-}
-
-#[test]
-fn drum_pattern_picker_assigned_b_section() {
-    let mut app = build_compose_app();
-    // The seeded bank has two patterns ("Main" + "B section"). Pick the
-    // second so the lane swaps to the empty groups list.
-    let assignment = {
-        let compose = app.compose_state();
-        let definition_id = compose.selected_placement().unwrap().definition_id;
-        let pattern_id = compose.drum_patterns.get(1).expect("two patterns").id;
-        (definition_id, pattern_id)
-    };
-    let _ = app.update(Message::Compose(ComposeMessage::DrumGroups(
-        DrumGroupsMessage::AssignPattern {
-            definition_id: assignment.0,
-            pattern_id: Some(assignment.1),
-        },
-    )));
-    snapshot_to_window(
-        &app,
-        "tests/snapshots/drum_pattern_picker_assigned_b_section.png",
-        TALL_WINDOW,
     );
 }
 
@@ -139,27 +92,5 @@ fn drum_pattern_manager_modal_lists_patterns() {
     snapshot_to(
         &app,
         "tests/snapshots/drum_pattern_manager_modal_lists_patterns.png",
-    );
-}
-
-#[test]
-fn drum_pattern_picker_renaming() {
-    let mut app = build_compose_app();
-    let pattern_id = app
-        .compose_state()
-        .drum_patterns
-        .first()
-        .map(|p| p.id)
-        .expect("demo seeds at least one pattern");
-    let _ = app.update(Message::Compose(ComposeMessage::DrumGroups(
-        DrumGroupsMessage::BeginRenamePattern { pattern_id },
-    )));
-    let _ = app.update(Message::Compose(ComposeMessage::DrumGroups(
-        DrumGroupsMessage::UpdateRenamePatternText("Verse Drums".to_string()),
-    )));
-    snapshot_to_window(
-        &app,
-        "tests/snapshots/drum_pattern_picker_renaming.png",
-        TALL_WINDOW,
     );
 }

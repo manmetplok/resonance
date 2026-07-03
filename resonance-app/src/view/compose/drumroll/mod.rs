@@ -12,7 +12,7 @@ use crate::state::InstrumentType;
 use crate::Resonance;
 
 pub use canvas::{drum_lane_height, sorted_drum_tracks, BarSpanView, ComposeDrumCanvas};
-pub use pattern_picker::pattern_picker;
+pub use pattern_picker::arrangement_strip;
 
 /// Resolve a section's drum arrangement into a `Vec<BarSpanView>` ready for
 /// the canvas.
@@ -117,6 +117,10 @@ pub fn build_bar_spans<'a>(
 /// fall back to the section's primary/default pattern. The bar-span list
 /// is built once here and passed into every per-track canvas so each track
 /// shares the same pre-resolved geometry.
+///
+/// The ARRANGEMENT strip (see [`arrangement_strip`]) sits above the lane
+/// so the user can chain pattern entries — with repeats, fills, and a live
+/// coverage readout — across the section's bars in place.
 pub fn view<'a>(
     app: &'a Resonance,
     placement: &'a SectionPlacementState,
@@ -153,10 +157,10 @@ pub fn view<'a>(
     // unit-tested independently of the Iced widget tree.
     let bar_spans = build_bar_spans(&app.compose, definition);
 
-    let picker = pattern_picker(app, definition, width);
+    let strip = arrangement_strip(app, definition, width);
 
     let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(drum_tracks.len() + 1);
-    rows.push(picker);
+    rows.push(strip);
     for track in &drum_tracks {
         // Each track gets its own canvas but they all share the same
         // resolved bar_spans so the pattern tints + cell data stay in
