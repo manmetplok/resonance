@@ -691,3 +691,41 @@ pub fn seed_empty_files_folder(app: &mut Resonance) {
     app.pool.favourites = vec![PathBuf::from("/Users/me/Loops")];
     app.pool.recent_folders = vec![PathBuf::from("/Users/me/Vocals")];
 }
+
+/// Seed the audition transport in its **idle** state for snapshots (todo
+/// #604): the Files folder is open with a row selected-to-audition but no
+/// preview sounding and the three toggles off. The transport shows the play
+/// button, the selected row's waveform, a `0:00 / M:SS` readout, and the
+/// neutral toggle chips.
+pub fn seed_audition_idle(app: &mut Resonance) {
+    use std::path::PathBuf;
+
+    seed_files_folder(app);
+    let selected = PathBuf::from(app.browser.scan.files[0].path.clone());
+    app.browser.audition.selected = Some(selected);
+    app.browser.audition.playing = None;
+    app.browser.audition.position_frame = 0;
+    app.browser.audition.auto_play = false;
+    app.browser.audition.loop_enabled = false;
+    app.browser.audition.sync_to_tempo = false;
+}
+
+/// Seed the audition transport **playing** a row for snapshots (todo #604):
+/// a preview sounding ~40 % through with Auto-play + Loop + Sync-to-tempo on,
+/// so the playing row reads WARM, the scrub playhead sits mid-strip, the
+/// played span colours WARM, and the readout advances.
+pub fn seed_audition_playing(app: &mut Resonance) {
+    use std::path::PathBuf;
+
+    seed_files_folder(app);
+    // "Groove Loop.mp3" (index 2) is a 4 s row — long enough that a 40 %
+    // playhead reads clearly mid-strip.
+    let entry = app.browser.scan.files[2].clone();
+    let path = PathBuf::from(&entry.path);
+    app.browser.audition.selected = Some(path.clone());
+    app.browser.audition.playing = Some(path);
+    app.browser.audition.position_frame = (entry.info.frames as f64 * 0.4) as u64;
+    app.browser.audition.auto_play = true;
+    app.browser.audition.loop_enabled = true;
+    app.browser.audition.sync_to_tempo = true;
+}
