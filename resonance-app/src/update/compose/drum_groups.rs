@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 use crate::compose::drumroll::{groups, DrumGroup, DrumGroupPad, DrumPattern, GROUP_PALETTE};
 use crate::compose::messages::{ArrangementMessage, DrumGroupsMessage};
-use crate::compose::SectionDefinitionState;
+use crate::compose::{ArrangementSpan, SectionDefinitionState};
 use crate::message::Message;
 use crate::state::InstrumentType;
 use crate::util::{next_seed, seed_from_id};
@@ -686,12 +686,18 @@ pub fn generate_group_pattern(g: &mut DrumGroup) {
 /// Materialise the project's drum-groups state into MIDI clips on every
 /// drum track for every placement of every section definition.
 ///
-/// Each group emits one note per non-zero pattern step per pad; the step
+/// Each section's ordered *arrangement* is resolved into per-bar spans (see
+/// [`spans_with_groups_for_definition`] / the #483 resolver) and rendered
+/// bar-by-bar: each span emits its pattern's groups over its bar range, an
+/// entry's fill pattern takes over the entry's last bar, gap bars stay
+/// silent, and overflow past the section length is clipped away. Within a
+/// span each group emits one note per non-zero pattern step per pad; the step
 /// stride is `TICKS_PER_QUARTER_NOTE / group.grid` so triplet- and
 /// septuplet-grid groups land at sub-beat positions inside the bar. The
-/// pattern repeats every `group.cycle` steps, with `group.phase` shifting
-/// the start. Velocity scales with the pad's articulation weight and the
-/// group's accent knob on beat-start steps.
+/// pattern repeats every `group.cycle` steps (indexed by absolute section
+/// position so phase stays continuous across spans, see [`build_drum_notes`]),
+/// with `group.phase` shifting the start. Velocity scales with the pad's
+/// articulation weight and the group's accent knob on beat-start steps.
 ///
 /// Replaces any prior derived MIDI clip on the (definition, placement,
 /// track) triple so repeated Generate presses don't stack duplicates.
@@ -717,23 +723,26 @@ pub fn materialize_drum_clips(r: &mut crate::Resonance) {
     let samples_per_bar = compose_samples_per_bar(r.sample_rate, r.transport.bpm, time_sig_num);
 
     // Snapshot one tuple per placement so we don't reborrow `r.compose`
-    // inside the engine-send loop. Resolves each section to the groups
-    // of its assigned drum pattern up front — sections with different
-    // patterns produce different note sequences.
-    let placements: Vec<(u64, u64, u32, u32, String, Vec<DrumGroup>)> = r
+    // inside the engine-send loop. Resolves each section's *arrangement*
+    // (via the #483 resolver) into ordered, section-clipped spans up front
+    // and attaches the concrete groups of each span's pattern — so a
+    // chained/repeat/fill arrangement produces distinct notes per bar
+    // range, gap bars stay silent, and overflow past `length_bars` is
+    // already dropped by the resolver.
+    let placements: Vec<(u64, u64, u32, u32, String, Vec<(ArrangementSpan, Vec<DrumGroup>)>)> = r
         .compose
         .placements
         .iter()
         .filter_map(|p| {
             let def = r.compose.find_definition(p.definition_id)?;
-            let groups = r.compose.groups_for_definition(def).to_vec();
+            let spans = spans_with_groups_for_definition(&r.compose, def);
             Some((
                 p.definition_id,
                 p.id,
                 p.start_bar,
                 def.length_bars,
                 def.name.clone(),
-                groups,
+                spans,
             ))
         })
         .collect();
@@ -741,12 +750,12 @@ pub fn materialize_drum_clips(r: &mut crate::Resonance) {
         return;
     }
 
-    for (definition_id, placement_id, start_bar, length_bars, def_name, section_groups)
+    for (definition_id, placement_id, start_bar, length_bars, def_name, section_spans)
         in placements
     {
         let start_sample = start_bar as u64 * samples_per_bar;
         let duration_ticks = length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
-        let notes = build_drum_notes(&section_groups, length_bars, time_sig_num);
+        let notes = build_drum_notes(&section_spans, time_sig_num);
 
         for &track_id in &drum_track_ids {
             // Tear down any prior derived clip on this triple so we don't
@@ -787,16 +796,98 @@ pub fn materialize_drum_clips(r: &mut crate::Resonance) {
     r.compose.last_error = None;
 }
 
-/// Walk every group's pad patterns across `length_bars` and emit a `MidiNote`
-/// for each hit. Step stride respects each group's `grid` (steps per beat)
-/// and pattern wraps every `cycle` steps with optional `phase` offset.
-fn build_drum_notes(
-    groups: &[DrumGroup],
-    length_bars: u32,
+/// Resolve a section's drum arrangement (via the #483 resolver) into the
+/// ordered, section-clipped spans that [`build_drum_notes`] renders, pairing
+/// each span with a snapshot of its pattern's groups so the caller can drop
+/// the `ComposeState` borrow before touching the engine.
+///
+/// An **empty** arrangement (no entries, or every entry zero-length so the
+/// resolver produces no spans) falls back to a single span covering the
+/// whole section with the definition's resolved default pattern — preserving
+/// the pre-arrangement behaviour of "play the default pattern everywhere". A
+/// **partial** arrangement (non-empty but leaving a trailing gap) keeps the
+/// gap silent: only the resolved spans are rendered, exactly per the DoD.
+/// Overflow bars never appear — the resolver already clips spans to
+/// `[0, length_bars)`.
+fn spans_with_groups_for_definition(
+    compose: &crate::compose::ComposeState,
+    def: &SectionDefinitionState,
+) -> Vec<(ArrangementSpan, Vec<DrumGroup>)> {
+    let resolved = compose.resolve_arrangement_for(def);
+    let spans: Vec<ArrangementSpan> = if resolved.spans.is_empty() {
+        // No usable arrangement → whole-section fallback to the default.
+        match compose.pattern_for_definition(def) {
+            Some(p) => vec![ArrangementSpan {
+                bar_start: 0,
+                bar_end: def.length_bars.max(1),
+                pattern_id: p.id,
+                is_fill: false,
+            }],
+            None => Vec::new(),
+        }
+    } else {
+        resolved.spans
+    };
+
+    spans
+        .into_iter()
+        .map(|s| {
+            let groups = compose
+                .find_pattern(s.pattern_id)
+                .map(|p| p.groups.clone())
+                .unwrap_or_default();
+            (s, groups)
+        })
+        .collect()
+}
+
+/// Build the section's `MidiNote` sequence by walking its resolved
+/// arrangement span-by-span. Each `(span, groups)` pair emits notes from
+/// that span's pattern groups across the span's bar range `[bar_start,
+/// bar_end)`; bars not covered by any span (a trailing/interior gap) emit
+/// nothing, and — because spans are already clipped to the section — no note
+/// lands past `length_bars`. Passing a single full-section span reproduces
+/// the pre-arrangement single-pattern rendering exactly.
+///
+/// **Phase / cycle / grid continuity across spans.** Each group's `cycle`
+/// walk (and its `phase` offset and beat-start accent) is indexed by the
+/// **absolute** step position within the section —
+/// `step = bar * steps_per_bar + local_step` — and is *not* reset at span
+/// boundaries. So when a base pattern is interrupted by a one-bar fill and
+/// then resumes, its cycle lands exactly where it would have had the fill
+/// never happened: phase is continuous over the whole section grid. A fill
+/// span renders its own pattern's groups, likewise indexed by absolute
+/// position (its cycle therefore starts partway through if the fill lands on
+/// a non-zero absolute bar). Because the index is a pure function of the
+/// absolute bar, output is fully deterministic for identical inputs.
+pub fn build_drum_notes(
+    spans: &[(ArrangementSpan, Vec<DrumGroup>)],
     time_sig_num: u8,
 ) -> Vec<MidiNote> {
     let mut notes: Vec<MidiNote> = Vec::new();
-    let bars = length_bars.max(1) as u64;
+    for (span, groups) in spans {
+        emit_span_notes(&mut notes, span, groups, time_sig_num);
+    }
+    // Sort by start_tick so the engine sees notes in monotonic order —
+    // some downstream code assumes this for fast playhead lookups.
+    notes.sort_by_key(|n| (n.start_tick, n.note));
+    notes
+}
+
+/// Emit the notes for one span's bar range into `notes`. Walks each group's
+/// pad patterns over `[span.bar_start, span.bar_end)`, indexing the cycle by
+/// absolute section step so continuity is preserved across spans (see
+/// [`build_drum_notes`]). Step stride respects each group's `grid` (steps per
+/// beat) and the pattern wraps every `cycle` steps with the `phase` offset.
+fn emit_span_notes(
+    notes: &mut Vec<MidiNote>,
+    span: &ArrangementSpan,
+    groups: &[DrumGroup],
+    time_sig_num: u8,
+) {
+    if span.bar_end <= span.bar_start {
+        return;
+    }
     for g in groups {
         if g.pads.is_empty() || g.cycle == 0 || g.grid == 0 {
             continue;
@@ -807,18 +898,17 @@ fn build_drum_notes(
         // grids where exact tick alignment isn't expected.
         let step_ticks = (TICKS_PER_QUARTER_NOTE / g.grid as u64).max(1);
         let steps_per_bar = time_sig_num as u64 * g.grid as u64;
-        let total_steps = bars * steps_per_bar;
         let cycle = g.cycle as u64;
         let phase = g.phase as u64 % cycle.max(1);
-        for step in 0..total_steps {
+        // Absolute step bounds for this span's bar range. Indexing by the
+        // absolute bar keeps each group's cycle continuous across spans.
+        let start_step = span.bar_start as u64 * steps_per_bar;
+        let end_step = span.bar_end as u64 * steps_per_bar;
+        for step in start_step..end_step {
             let pattern_idx = ((step + phase) % cycle) as usize;
             let start_tick = step * step_ticks;
             for pad in &g.pads {
-                let cell = pad
-                    .pattern
-                    .get(pattern_idx)
-                    .copied()
-                    .unwrap_or(0);
+                let cell = pad.pattern.get(pattern_idx).copied().unwrap_or(0);
                 if cell == 0 {
                     continue;
                 }
@@ -840,8 +930,4 @@ fn build_drum_notes(
             }
         }
     }
-    // Sort by start_tick so the engine sees notes in monotonic order —
-    // some downstream code assumes this for fast playhead lookups.
-    notes.sort_by_key(|n| (n.start_tick, n.note));
-    notes
 }
