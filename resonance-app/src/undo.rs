@@ -730,6 +730,12 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | ComposeMessage::ExpandedScrollY(_)
             | ComposeMessage::ExpandedZoomY(_) => UndoAction::Skip,
 
+            // Selecting an arrangement entry is pure UI state (the right-rail
+            // inspector focus); it never mutates the project.
+            ComposeMessage::Arrangement(
+                crate::compose::messages::ArrangementMessage::SelectEntry { .. },
+            ) => UndoAction::Skip,
+
             // Everything else in Compose mutates project state.
             _ => UndoAction::Record,
         },

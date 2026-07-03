@@ -5,13 +5,14 @@
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{alignment, Color, Element, Length};
 
-use crate::compose::drumroll::DrumGroup;
+use crate::compose::drumroll::{DrumGroup, DrumPattern};
 use crate::compose::messages::DrumGroupsMessage;
 use crate::compose::{ComposeMessage, DrumrollViewState, SectionDefinitionState};
 use crate::message::Message;
 use crate::state::TrackState;
 use crate::theme;
 
+mod arrangement;
 mod articulation;
 mod common;
 mod generate;
@@ -24,15 +25,33 @@ use generate::generate_panel;
 use meter::meter_panel;
 use rhythm::rhythm_panel;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn drum_body<'a>(
-    _definition: &'a SectionDefinitionState,
+    definition: &'a SectionDefinitionState,
     _track: &'a TrackState,
     drumroll_state: &'a DrumrollViewState,
     drum_groups: &'a [DrumGroup],
+    drum_patterns: &'a [DrumPattern],
     _clip_id: Option<u64>,
     collapsed_panels: &std::collections::HashSet<crate::compose::RailPanelKey>,
 ) -> Element<'a, Message> {
     use crate::compose::RailPanelKey;
+
+    // Drum-arrangement surfaces (doc #170): the project-wide pattern bank as
+    // draggable sources + the inspector for the selected arrangement entry.
+    // These sit above the per-group generator cards because they define what
+    // the drum lane actually plays across the section's bars.
+    let arrangement_block = column![
+        arrangement::pattern_bank_card(definition, drum_patterns),
+        Space::new().height(18),
+        arrangement::entry_inspector_card(
+            definition,
+            drum_patterns,
+            drumroll_state.selected_entry_index,
+        ),
+    ]
+    .spacing(0);
+
     let selected_group_id = drumroll_state
         .selected_group_id
         .or_else(|| drum_groups.first().map(|g| g.id));
@@ -40,10 +59,15 @@ pub(super) fn drum_body<'a>(
         .and_then(|id| drum_groups.iter().find(|g| g.id == id));
 
     let Some(group) = group else {
-        return text("No drum groups — open the manager to add one.")
-            .size(11)
-            .color(theme::TEXT_DIM)
-            .into();
+        return column![
+            arrangement_block,
+            Space::new().height(18),
+            text("No drum groups — open the manager to add one.")
+                .size(11)
+                .color(theme::TEXT_DIM),
+        ]
+        .spacing(0)
+        .into();
     };
 
     let base_grid = drumroll_state.base_grid.max(2);
@@ -54,6 +78,8 @@ pub(super) fn drum_body<'a>(
     // group selector tabs and the Generate action row are navigation /
     // actions, not content: always visible.
     column![
+        arrangement_block,
+        Space::new().height(18),
         group_selector(drum_groups, selected_group_id),
         Space::new().height(18),
         meter_panel(
