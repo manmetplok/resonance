@@ -48,6 +48,13 @@ pub struct DrumrollViewState {
     /// In-progress text for the rename input. Mirrors the picker's
     /// `text_input` content.
     pub renaming_pattern_text: String,
+    /// Which arrangement entry is selected — an index into the focused
+    /// section's `arrangement`. Driven by clicking a span in the tiling
+    /// ribbon; consumed by the right-rail Entry inspector. `None` means no
+    /// entry is selected. Transient view state (never persisted); callers
+    /// must treat a stale index defensively (clamp / re-check against the
+    /// current arrangement length, since entries can be added or removed).
+    pub selected_entry_index: Option<usize>,
 }
 
 impl Default for DrumrollViewState {
@@ -64,6 +71,7 @@ impl Default for DrumrollViewState {
             managing_pattern_id: None,
             renaming_pattern_id: None,
             renaming_pattern_text: String::new(),
+            selected_entry_index: None,
         }
     }
 }

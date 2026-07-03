@@ -28,6 +28,13 @@ pub enum ComposeMessage {
     /// pattern entries (the sequence the drums play across its bars).
     Arrangement(ArrangementMessage),
 
+    /// Select which arrangement entry is focused — an index into the
+    /// focused section's arrangement, or `None` to clear. Emitted by
+    /// clicking a span in the tiling ribbon and consumed by the right-rail
+    /// Entry inspector. Pure runtime UI state — no arrangement mutation, no
+    /// undo entry.
+    SelectArrangementEntry(Option<usize>),
+
     // Create a new MIDI clip that spans the selected section on the given
     // instrument track. Used by the "+" button that appears over empty
     // instrument rows in the Compose track area.

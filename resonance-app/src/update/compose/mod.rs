@@ -33,6 +33,12 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         ComposeMessage::DrumGroups(m) => return drum_groups::handle(r, m),
         ComposeMessage::Arrangement(m) => return drum_groups::handle_arrangement(r, m),
 
+        // Tiling-ribbon span selection — pure view state, drives the
+        // right-rail Entry inspector. No mutation, no undo.
+        ComposeMessage::SelectArrangementEntry(index) => {
+            r.compose.drumroll.selected_entry_index = index;
+        }
+
         ComposeMessage::CreateMidiClipInSection {
             track_id,
             start_sample,

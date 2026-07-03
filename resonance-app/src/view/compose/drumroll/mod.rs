@@ -1,5 +1,6 @@
 pub mod canvas;
 pub mod pattern_picker;
+pub mod ribbon;
 
 use iced::widget::{column, container, Canvas, Space};
 use iced::{Element, Length};
@@ -51,9 +52,14 @@ pub fn view<'a>(
     };
 
     let picker = pattern_picker(app, definition, width);
+    // Tiling ribbon — bar-grid spans (normal / fill / gap / overflow) + legend.
+    // Sits between the arrangement picker strip and the resolved drum grid,
+    // mirroring the three stacked surfaces in design doc #170.
+    let tiling_ribbon = ribbon::ribbon(app, definition, width);
 
-    let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(drum_tracks.len() + 1);
+    let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(drum_tracks.len() + 2);
     rows.push(picker);
+    rows.push(tiling_ribbon);
     for track in &drum_tracks {
         let canvas_prog = ComposeDrumCanvas {
             track,

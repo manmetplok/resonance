@@ -26,6 +26,11 @@ pub(crate) mod transport;
 pub(crate) mod transport_labels;
 pub(crate) mod ui_caches;
 
+// Surgical re-export of the pure tiling-ribbon span builder so integration
+// tests can drive it without widening the whole crate-private `compose`
+// view tree. See `compose/drumroll/ribbon.rs`.
+pub use compose::drumroll::ribbon::{build_ribbon_spans, RibbonSpan, RibbonSpanKind};
+
 use crate::message::*;
 use crate::state::*;
 use crate::theme;
