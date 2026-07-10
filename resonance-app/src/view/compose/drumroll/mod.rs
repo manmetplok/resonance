@@ -6,13 +6,100 @@ use iced::{Element, Length};
 
 use resonance_audio::types::{ClipId, TrackId};
 
-use crate::compose::{ArrangementSpan, SectionDefinitionState, SectionPlacementState};
+use crate::compose::{ArrangementSpan, ComposeState, SectionDefinitionState, SectionPlacementState};
 use crate::message::Message;
 use crate::state::InstrumentType;
 use crate::Resonance;
 
 pub use canvas::{drum_lane_height, sorted_drum_tracks, BarSpanView, ComposeDrumCanvas};
 pub use pattern_picker::pattern_picker;
+
+/// Resolve a section's drum arrangement into a `Vec<BarSpanView>` ready for
+/// the canvas.
+///
+/// This is the pure construction step separated from the Iced view function
+/// so it can be unit-tested. Logic:
+///
+/// - If `resolve_arrangement_for` returns no explicit spans (empty arrangement)
+///   **or** only spans that leave some bars uncovered, gap bars are filled
+///   with the primary pattern's color and groups.
+/// - Each resolved span is mapped to a `BarSpanView` that borrows the
+///   pattern's groups and color directly from `compose`.
+/// - A trailing gap (bars after the last explicit span) is also filled with
+///   the primary pattern.
+///
+/// Single-entry arrangements produce exactly one span identical to the old
+/// single-pattern rendering.
+pub fn build_bar_spans<'a>(
+    compose: &'a ComposeState,
+    definition: &'a SectionDefinitionState,
+) -> Vec<BarSpanView<'a>> {
+    let section_bars = definition.length_bars;
+    let resolved = compose.resolve_arrangement_for(definition);
+    let primary_pattern = compose.pattern_for_definition(definition);
+
+    let raw_spans: Vec<ArrangementSpan> = if resolved.spans.is_empty() {
+        match primary_pattern {
+            Some(p) => vec![ArrangementSpan {
+                bar_start: 0,
+                bar_end: section_bars.max(1),
+                pattern_id: p.id,
+                is_fill: false,
+            }],
+            None => Vec::new(),
+        }
+    } else {
+        resolved.spans
+    };
+
+    let primary_color = primary_pattern
+        .map(|p| p.color)
+        .unwrap_or([0x80, 0x80, 0x80]);
+    let primary_groups_ref = primary_pattern
+        .map(|p| p.groups.as_slice())
+        .unwrap_or(&[]);
+
+    let mut bar_spans: Vec<BarSpanView<'a>> = Vec::with_capacity(raw_spans.len() + 1);
+    let mut cursor = 0u32;
+
+    for span in &raw_spans {
+        // Gap before this span — fill with primary pattern.
+        if cursor < span.bar_start {
+            bar_spans.push(BarSpanView {
+                bar_start: cursor,
+                bar_end: span.bar_start,
+                pattern_color: primary_color,
+                pattern_groups: primary_groups_ref,
+                is_fill: false,
+            });
+        }
+        // Look up the span's own pattern for its color + groups.
+        let (color, groups_ref) = compose
+            .find_pattern(span.pattern_id)
+            .map(|p| (p.color, p.groups.as_slice()))
+            .unwrap_or((primary_color, primary_groups_ref));
+        bar_spans.push(BarSpanView {
+            bar_start: span.bar_start,
+            bar_end: span.bar_end,
+            pattern_color: color,
+            pattern_groups: groups_ref,
+            is_fill: span.is_fill,
+        });
+        cursor = span.bar_end;
+    }
+    // Trailing gap — fill with primary pattern.
+    if cursor < section_bars {
+        bar_spans.push(BarSpanView {
+            bar_start: cursor,
+            bar_end: section_bars,
+            pattern_color: primary_color,
+            pattern_groups: primary_groups_ref,
+            is_fill: false,
+        });
+    }
+
+    bar_spans
+}
 
 /// Build the drumroll block. Returns an empty 0-height container when the
 /// project has no drum tracks so synth-only projects pay no visual cost.
@@ -61,77 +148,10 @@ pub fn view<'a>(
         _ => None,
     };
 
-    // Resolve the section's drum arrangement into per-bar spans using the
-    // #483 resolver. An empty arrangement (or one where all entries resolve
-    // to zero bars) is handled here by synthesising a whole-section span
-    // for the primary/default pattern — identical to the pre-arrangement
-    // single-pattern behaviour.
-    let resolved = app.compose.resolve_arrangement_for(definition);
-    let primary_pattern = app.compose.pattern_for_definition(definition);
-
-    let raw_spans: Vec<ArrangementSpan> = if resolved.spans.is_empty() {
-        match primary_pattern {
-            Some(p) => vec![ArrangementSpan {
-                bar_start: 0,
-                bar_end: section_bars.max(1),
-                pattern_id: p.id,
-                is_fill: false,
-            }],
-            None => Vec::new(),
-        }
-    } else {
-        resolved.spans
-    };
-
-    // Build BarSpanView slice — one entry per contiguous run of a pattern.
-    // Gap bars (before/after the explicit spans) receive the primary
-    // pattern's color + groups so the lane always shows something useful.
-    let primary_color = primary_pattern
-        .map(|p| p.color)
-        .unwrap_or([0x80, 0x80, 0x80]);
-    let primary_groups_ref = primary_pattern
-        .map(|p| p.groups.as_slice())
-        .unwrap_or(section_groups);
-
-    let mut bar_spans: Vec<BarSpanView<'a>> = Vec::with_capacity(raw_spans.len() + 1);
-    let mut cursor = 0u32;
-
-    for span in &raw_spans {
-        // Gap before this span — fill with primary pattern.
-        if cursor < span.bar_start {
-            bar_spans.push(BarSpanView {
-                bar_start: cursor,
-                bar_end: span.bar_start,
-                pattern_color: primary_color,
-                pattern_groups: primary_groups_ref,
-                is_fill: false,
-            });
-        }
-        // Look up the span's own pattern for its color + groups.
-        let (color, groups_ref) = app
-            .compose
-            .find_pattern(span.pattern_id)
-            .map(|p| (p.color, p.groups.as_slice()))
-            .unwrap_or((primary_color, primary_groups_ref));
-        bar_spans.push(BarSpanView {
-            bar_start: span.bar_start,
-            bar_end: span.bar_end,
-            pattern_color: color,
-            pattern_groups: groups_ref,
-            is_fill: span.is_fill,
-        });
-        cursor = span.bar_end;
-    }
-    // Trailing gap — fill with primary pattern.
-    if cursor < section_bars {
-        bar_spans.push(BarSpanView {
-            bar_start: cursor,
-            bar_end: section_bars,
-            pattern_color: primary_color,
-            pattern_groups: primary_groups_ref,
-            is_fill: false,
-        });
-    }
+    // Resolve the section's drum arrangement into per-bar BarSpanViews.
+    // Delegates to the extracted helper so the construction logic can be
+    // unit-tested independently of the Iced widget tree.
+    let bar_spans = build_bar_spans(&app.compose, definition);
 
     let picker = pattern_picker(app, definition, width);
 

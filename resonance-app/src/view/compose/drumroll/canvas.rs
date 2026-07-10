@@ -447,13 +447,36 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
                         let bar_x = step_area_x + bar_idx as f32 * bar_w;
 
                         // Find the span covering this bar to get the
-                        // resolved group for correct cycle length.
+                        // resolved group (positional index gi) so we can
+                        // target the *correct* pattern's group_id and cycle
+                        // length. Clicking a cell in a bar owned by pattern
+                        // B must edit pattern B's group, not the primary
+                        // pattern's group.
                         let span_opt = self.bar_spans.iter().find(|s| {
                             bar_idx as u32 >= s.bar_start && (bar_idx as u32) < s.bar_end
                         });
                         let resolved_group = span_opt
                             .and_then(|s| s.pattern_groups.get(gi))
                             .unwrap_or(group);
+
+                        // Gate: the resolved pattern may have fewer pads
+                        // than the primary (shorter pattern). Only emit if
+                        // pad_index is also valid in the resolved pattern.
+                        if pad_index >= resolved_group.pads.len() {
+                            // Click falls in an empty row for this bar's
+                            // pattern — treat as a SelectGroup action.
+                            return Some(
+                                canvas::Action::publish(Message::Compose(
+                                    ComposeMessage::DrumGroups(
+                                        DrumGroupsMessage::SelectGroup {
+                                            group_id: group.id,
+                                        },
+                                    ),
+                                ))
+                                .and_capture(),
+                            );
+                        }
+
                         let cycle = resolved_group.pattern_len().max(1);
 
                         let cells_in_bar =
@@ -473,7 +496,11 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
                                 canvas::Action::publish(Message::Compose(
                                     ComposeMessage::DrumGroups(
                                         DrumGroupsMessage::TogglePadStep {
-                                            group_id: group.id,
+                                            // Use the resolved group's id so
+                                            // the edit lands on the pattern
+                                            // that actually owns this bar's
+                                            // cells, not the primary pattern.
+                                            group_id: resolved_group.id,
                                             pad_index,
                                             step: pattern_step,
                                         },
