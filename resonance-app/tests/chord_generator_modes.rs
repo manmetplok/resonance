@@ -23,7 +23,7 @@ use resonance_app::state::ViewMode;
 use resonance_app::{demo, theme, Resonance, STARTUP_TAB};
 use resonance_music_theory::SchemaKind;
 
-/// Tall window (same convention as `compose_drum_pattern_picker.rs`) so
+/// Tall window (same convention as `compose_arrangement_strip.rs`) so
 /// the whole Chord generator card sits inside the viewport instead of
 /// behind the rail's scrollbar.
 const TALL_WINDOW: (f32, f32) = (1440.0, 1600.0);

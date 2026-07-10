@@ -33,7 +33,7 @@ use resonance_audio::types::TrackId;
 const WINDOW: (f32, f32) = (1440.0, 900.0);
 /// Taller window used for the drum-rail snapshots so the group
 /// selector, meter, articulation, and rhythm cards all sit inside the
-/// viewport — same convention as `compose_drum_pattern_picker.rs`.
+/// viewport — same convention as `compose_arrangement_strip.rs`.
 const TALL_WINDOW: (f32, f32) = (1440.0, 1600.0);
 
 fn sim_settings() -> iced::Settings {
