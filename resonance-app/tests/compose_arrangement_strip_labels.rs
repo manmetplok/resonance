@@ -4,7 +4,7 @@
 //! renders — coverage pill text, per-entry bar-span readout, the inline
 //! stepper value, and the `±1` stepper clamp — without booting a renderer.
 //! The rendered strip itself is locked in by the golden-image snapshot
-//! tests in `compose_drum_pattern_picker.rs`.
+//! tests in `compose_arrangement_strip.rs`.
 
 use resonance_app::compose::{
     entry_span_label, entry_stepper_label, entry_stepper_value, step_entry_length,
