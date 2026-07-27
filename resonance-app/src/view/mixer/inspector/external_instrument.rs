@@ -48,6 +48,8 @@ pub(super) fn external_instrument_group(
         ext_monitoring_block(track),
         Space::new().height(8),
         super::io::output_block(r, track),
+        Space::new().height(10),
+        disable_external_row(track.id),
     ]
     .spacing(0);
 
@@ -60,6 +62,44 @@ pub(super) fn external_instrument_group(
     }
 
     col.into()
+}
+
+/// Understated "Use built-in instrument" action that takes the track back
+/// out of external mode. Styled like the other destructive-ish inspector
+/// actions (dim text, hairline border, no fill) so it reads as a quiet exit
+/// rather than a primary control — dispatching
+/// `ExternalInstrumentMessage::Disable`, which drops the config and returns
+/// the plain instrument ROUTING view (undo restores the map).
+fn disable_external_row(track_id: resonance_audio::types::TrackId) -> Element<'static, Message> {
+    button(
+        text("Use built-in instrument")
+            .size(11)
+            .align_x(alignment::Horizontal::Center)
+            .width(Length::Fill),
+    )
+    .padding([6, 0])
+    .width(Length::Fill)
+    .on_press(Message::ExternalInstrument(
+        ExternalInstrumentMessage::Disable(track_id),
+    ))
+    .style(|_theme, status| {
+        let hovered = matches!(status, button::Status::Hovered);
+        button::Style {
+            background: Some(iced::Background::Color(if hovered {
+                theme::BG_2
+            } else {
+                theme::BG_1
+            })),
+            text_color: if hovered { theme::TEXT_2 } else { theme::TEXT_3 },
+            border: iced::Border {
+                color: theme::LINE,
+                width: 1.0,
+                radius: theme::RADIUS_SM.into(),
+            },
+            ..Default::default()
+        }
+    })
+    .into()
 }
 
 /// Inline BAD-pink alert shown when a configured device is offline. Returns

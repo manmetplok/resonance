@@ -2,11 +2,11 @@
 //! in / MIDI out / output pickers, plus read-only Send placeholders.
 //! External-instrument tracks delegate to `external_instrument` instead.
 
-use iced::widget::{column, container, row, text, Space};
+use iced::widget::{button, column, container, row, text, Space};
 use iced::{alignment, Element, Length};
 use resonance_audio::types::TrackType;
 
-use crate::message::Message;
+use crate::message::{ExternalInstrumentMessage, Message};
 use crate::state::{MixerInspectorGroup, TrackState};
 use crate::theme;
 
@@ -44,6 +44,23 @@ pub(super) fn routing_group(
             Space::new().height(0).into()
         };
 
+    // Enable affordance — only instrument tracks can become external
+    // hardware instruments. Audio/Vocal never grow the toggle (mirrors the
+    // EXTERNAL INSTRUMENT group's own instrument-only gating); master/bus
+    // strips render their own inspector and never reach this view. Dispatches
+    // `Enable`, which drops the user onto the onboarding ("Unassigned") card.
+    let external_enable: Element<'static, Message> =
+        if matches!(track.track_type, TrackType::Instrument) {
+            column![
+                Space::new().height(8),
+                enable_external_row(track.id),
+            ]
+            .spacing(0)
+            .into()
+        } else {
+            Space::new().height(0).into()
+        };
+
     column![
         super::widgets::group_header("ROUTING", MixerInspectorGroup::Routing, false),
         Space::new().height(10),
@@ -55,8 +72,46 @@ pub(super) fn routing_group(
         Space::new().height(4),
         routing_row("Send A", "(none)", true),
         routing_row("Send B", "(none)", true),
+        external_enable,
     ]
     .spacing(0)
+    .into()
+}
+
+/// Full-width understated action row that converts the (instrument) track
+/// into an external hardware instrument. Styled like the other inspector
+/// routing affordances — a hairline-bordered button that tints toward the
+/// accent on hover — dispatching `ExternalInstrumentMessage::Enable`.
+fn enable_external_row(track_id: resonance_audio::types::TrackId) -> Element<'static, Message> {
+    button(
+        text("External hardware instrument")
+            .size(11)
+            .align_x(alignment::Horizontal::Center)
+            .width(Length::Fill),
+    )
+    .padding([7, 0])
+    .width(Length::Fill)
+    .on_press(Message::ExternalInstrument(ExternalInstrumentMessage::Enable(
+        track_id,
+    )))
+    .style(|_theme, status| {
+        let hovered = matches!(status, button::Status::Hovered);
+        let (bg, border, txt) = if hovered {
+            (theme::BG_3, theme::ACCENT_LINE, theme::TEXT_1)
+        } else {
+            (theme::BG_2, theme::LINE, theme::TEXT_3)
+        };
+        button::Style {
+            background: Some(iced::Background::Color(bg)),
+            text_color: txt,
+            border: iced::Border {
+                color: border,
+                width: 1.0,
+                radius: theme::RADIUS_SM.into(),
+            },
+            ..Default::default()
+        }
+    })
     .into()
 }
 
