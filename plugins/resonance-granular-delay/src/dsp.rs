@@ -165,6 +165,10 @@ impl GranularDsp {
             detune_spread_cents: params.detune_spread_cents,
             reverse_probability: params.reverse_probability,
             anti_alias: params.anti_alias,
+            // Later epic-196 todos grow `GrainParams` (e.g. #1080's
+            // alignment fields); default the rest so this literal stays
+            // source-compatible as the engine evolves.
+            ..GrainParams::default()
         };
 
         let write_pos = self.write_pos as f64;
