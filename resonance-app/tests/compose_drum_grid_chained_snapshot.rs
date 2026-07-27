@@ -13,8 +13,11 @@
 //! - **Correct cell data per bar**: cells in the first half come from
 //!   P1's groups; cells in the second half come from P2's groups.
 //!
-//! On first run `matches_image()` writes the PNG to
-//! `tests/snapshots/`; subsequent runs diff against it.
+//! On first run the golden PNG is written to `tests/snapshots/`;
+//! subsequent runs diff against it via [`common::assert_golden`], which
+//! honours `RESONANCE_SKIP_GOLDENS` in non-conformant environments.
+
+mod common;
 
 use iced::Size;
 use iced_test::simulator::Simulator;
@@ -76,10 +79,7 @@ fn snapshot_to(app: &Resonance, path: &str) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "drum grid chained snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 /// Lock in the drum grid rendering a chained arrangement.
