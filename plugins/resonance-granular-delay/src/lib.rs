@@ -24,6 +24,7 @@ use resonance_plugin::*;
 
 pub mod dsp;
 pub mod params;
+pub mod pitch_sync;
 pub mod quantize;
 pub mod sync;
 
@@ -96,6 +97,38 @@ impl ResonanceGranularDelay {
         self.dsp
             .as_ref()
             .map_or(0.0, GranularDsp::effective_delay_seconds)
+    }
+
+    /// Whether the pitch-synchronous Voice/Mono scheduler was engaged
+    /// on the last processed block (test/metering aid, ba todo #1082).
+    pub fn pitch_sync_engaged(&self) -> bool {
+        self.dsp.as_ref().is_some_and(GranularDsp::pitch_sync_engaged)
+    }
+
+    /// Total PSOLA onsets spawned since activation (test/metering aid).
+    pub fn psola_onsets(&self) -> u64 {
+        self.dsp.as_ref().map_or(0, GranularDsp::psola_onsets)
+    }
+
+    /// Currently sounding PSOLA voices (test/metering aid).
+    pub fn psola_active_voices(&self) -> usize {
+        self.dsp.as_ref().map_or(0, GranularDsp::psola_active_voices)
+    }
+
+    /// Recent PSOLA onset times, absolute output samples, oldest first
+    /// (test aid; allocates — off the audio path).
+    pub fn psola_recent_onsets(&self) -> Vec<f64> {
+        self.dsp
+            .as_ref()
+            .map_or_else(Vec::new, GranularDsp::psola_recent_onsets)
+    }
+
+    /// Last known tracked fundamental period, full-rate samples
+    /// (0 until the first voiced lock; test/metering aid).
+    pub fn tracked_period_samples(&self) -> f32 {
+        self.dsp
+            .as_ref()
+            .map_or(0.0, GranularDsp::tracked_period_samples)
     }
 }
 
@@ -175,10 +208,13 @@ impl ResonancePlugin for ResonanceGranularDelay {
             dsp::MAX_DELAY_SECONDS,
         );
 
-        let scheduler = match self.params.scheduler.value() {
+        // Scheduler 2 = Pitch-Sync (ba todo #1082): the PSOLA voice
+        // path engages in the DSP core while the tracker is voiced; the
+        // engines run Async underneath as the unvoiced/unlocked
+        // fallback (and drain while the voice path is engaged).
+        let scheduler_value = self.params.scheduler.value();
+        let scheduler = match scheduler_value {
             0 => SchedulerMode::Sync,
-            // TODO(epic-196 #1082): 2 = Pitch-Sync (PSOLA-style mono
-            // mode via resonance-dsp's PitchTracker); Async until then.
             _ => SchedulerMode::Async,
         };
 
@@ -189,6 +225,7 @@ impl ResonancePlugin for ResonanceGranularDelay {
                 1 => dsp::TimeMode::Repitch,
                 _ => dsp::TimeMode::PerGrain,
             },
+            pitch_sync: scheduler_value == 2,
             grain_seconds: self.params.grain_size_ms.value() * 0.001,
             density_hz: self.params.density_hz.value(),
             scheduler,

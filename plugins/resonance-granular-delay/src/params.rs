@@ -46,8 +46,12 @@ pub struct GranularDelayParams {
     pub density_hz: FloatParam,
     /// Tempo-synced density (grains per beat division). TODO(epic-196).
     pub density_sync: BoolParam,
-    /// 0 = Sync, 1 = Async, 2 = Pitch-Sync. Pitch-Sync (PSOLA-style
-    /// voice/mono mode) is TODO(epic-196 #1082) and falls back to Async.
+    /// 0 = Sync, 1 = Async, 2 = Pitch-Sync (ba todo #1082, doc #252
+    /// §4): PSOLA-style Voice/Mono mode — the real-time tracker runs on
+    /// the written input; while voiced, grain onsets snap to pitch
+    /// marks (two-period Hann voices, transposition by onset spacing,
+    /// formants preserved); unvoiced spans fall back to Async
+    /// transparently.
     pub scheduler: IntParam,
 
     // --- Pitch ----------------------------------------------------------

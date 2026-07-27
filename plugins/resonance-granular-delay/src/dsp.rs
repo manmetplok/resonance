@@ -20,6 +20,7 @@ use resonance_dsp::{
 use resonance_music_theory::Scale;
 
 use crate::params::GranularSmoothers;
+use crate::pitch_sync::{PitchSyncGranulator, SpawnMode};
 use crate::quantize::{quantize_transpose, PitchQuantize};
 
 /// Maximum delay time the ring buffer is sized for at activation.
@@ -90,6 +91,12 @@ const REPITCH_SNAP_SECONDS: f32 = 1.0e-5;
 /// (± two octaves), bounding the swoop on extreme jumps.
 const REPITCH_RATE_MIN: f64 = 0.25;
 const REPITCH_RATE_MAX: f64 = 4.0;
+
+/// Equal-power crossfade length between the async grain cloud and the
+/// pitch-synchronous PSOLA bus (ba todo #1082), seconds. Long enough
+/// for the fallback cloud to rebuild some overlap, short enough that
+/// voiced/unvoiced handovers feel immediate.
+pub const VOICE_FADE_SECONDS: f32 = 0.05;
 
 /// Delay-time change behaviour (doc #252 §5, ba todo #1076).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +177,11 @@ pub struct BlockParams {
     pub delay_seconds: f32,
     /// How delay-time changes are realized (ba todo #1076).
     pub time_mode: TimeMode,
+    /// Scheduler = Pitch-Sync (ba todo #1082): run the pitch tracker on
+    /// the written input and, while it is voiced, granulate PSOLA-style
+    /// (marker-snapped two-period Hann voices, transposition by onset
+    /// spacing). Unvoiced/unlocked spans fall back to the async cloud.
+    pub pitch_sync: bool,
     pub grain_seconds: f32,
     pub density_hz: f32,
     pub scheduler: SchedulerMode,
@@ -272,6 +284,22 @@ pub struct GranularDsp {
     /// so the Output-only recirc ring keeps its own time axis when the
     /// write head stops (ba todo #1075).
     fb_pos: u64,
+    /// Pitch-synchronous Voice/Mono scheduler (ba todo #1082): tracker,
+    /// marker ring and PSOLA voice pool.
+    psola: PitchSyncGranulator,
+    /// PSOLA wet buses, blended into `wet_l`/`wet_r`.
+    psola_l: Vec<f32>,
+    psola_r: Vec<f32>,
+    /// Mono (mid) scratch of the dry input samples actually written
+    /// this block — what the tracker is fed, so marker positions map
+    /// 1:1 onto write-stream/buffer positions.
+    track_in: Vec<f32>,
+    /// Equal-power crossfade position between the async cloud (0) and
+    /// the PSOLA bus (1); ramps per sample over [`VOICE_FADE_SECONDS`].
+    voice_xf: f32,
+    /// Last block's engage decision (tracker voiced + usable marker
+    /// near the tap) — metering/test aid.
+    psola_engaged: bool,
     /// Fade time mode (ba todo #1076): the dual-tap swap machine. The
     /// payload is the delay value (seconds) the wet path is committed
     /// to; a target change swaps toward the new value through silence.
@@ -335,6 +363,12 @@ impl GranularDsp {
             fb_chain_l: FeedbackChain::new(),
             fb_chain_r: FeedbackChain::new(),
             fb_pos: 0,
+            psola: PitchSyncGranulator::new(sample_rate),
+            psola_l: vec![0.0; max_block],
+            psola_r: vec![0.0; max_block],
+            track_in: vec![0.0; max_block],
+            voice_xf: 0.0,
+            psola_engaged: false,
             time_fade: SwapFader::new(Self::fade_leg_samples(sample_rate)),
             fade_goal: 0.0,
             fade_busy: false,
@@ -420,6 +454,11 @@ impl GranularDsp {
         self.fb_chain_l.reset();
         self.fb_chain_r.reset();
         self.fb_pos = 0;
+        self.psola.reset();
+        self.psola_l.fill(0.0);
+        self.psola_r.fill(0.0);
+        self.voice_xf = 0.0;
+        self.psola_engaged = false;
         // `SwapFader::new` is allocation-free, so rebuilding it here is
         // the cheapest full reset (it has no reset method).
         self.time_fade = SwapFader::new(Self::fade_leg_samples(self.sample_rate));
@@ -436,6 +475,37 @@ impl GranularDsp {
     /// on the (silent) swap sample in Fade mode.
     pub fn effective_delay_seconds(&self) -> f32 {
         self.eff_delay as f32
+    }
+
+    /// Whether the pitch-synchronous scheduler was engaged (tracker
+    /// voiced + usable pitch mark near the tap) on the last block
+    /// (test/metering aid, ba todo #1082).
+    pub fn pitch_sync_engaged(&self) -> bool {
+        self.psola_engaged
+    }
+
+    /// Total PSOLA onsets spawned (test/metering aid).
+    pub fn psola_onsets(&self) -> u64 {
+        self.psola.onsets()
+    }
+
+    /// Currently sounding PSOLA voices (test/metering aid).
+    pub fn psola_active_voices(&self) -> usize {
+        self.psola.active_voices()
+    }
+
+    /// The most recent PSOLA onset times in absolute output samples,
+    /// oldest first (up to 64). Test aid — allocates, keep off the
+    /// audio path.
+    pub fn psola_recent_onsets(&self) -> Vec<f64> {
+        self.psola.recent_onsets()
+    }
+
+    /// Last known tracked fundamental period in full-rate samples
+    /// (0 before the first voiced lock; held across unvoiced spans and
+    /// freeze). Test/metering aid.
+    pub fn tracked_period_samples(&self) -> f32 {
+        self.psola.period_samples() as f32
     }
 
     /// Read-only view of the left grain source ring (test/metering aid:
@@ -470,6 +540,7 @@ impl GranularDsp {
         if frames == 0 {
             return;
         }
+        let sr = f64::from(self.sample_rate);
 
         // Damping cutoff: block-rate coefficient update from the
         // smoothed value, sample-rate application (doc #252 §5).
@@ -514,6 +585,12 @@ impl GranularDsp {
             }
             let idx = (base + advanced) & self.mask;
             let (mut in_l, mut in_r) = (left[i], right[i]);
+            if params.pitch_sync {
+                // The tracker is fed the *dry* mid of exactly the
+                // samples written, so its markers map 1:1 onto
+                // write-stream positions (ba todo #1082).
+                self.track_in[advanced] = 0.5 * (left[i] + right[i]);
+            }
             if wet_to_buffer && i < self.fb_len {
                 in_l += self.fb_l[i];
                 in_r += self.fb_r[i];
@@ -610,6 +687,33 @@ impl GranularDsp {
         }
         let time_varying = fade_varying || repitch_slewing;
 
+        // --- 1c. Pitch-sync scheduler state (ba todo #1082, doc #252
+        // §4): feed the tracker the written input, then decide whether
+        // the Voice/Mono path is engaged this block — the tracker must
+        // be voiced AND a stored pitch mark must lie near the delay
+        // tap (so a freshly engaged mode without marker history simply
+        // stays on the async cloud until the buffer has been analysed).
+        // While frozen nothing is fed: the marker ring holds, the last
+        // known period stands, and spawning continues from it against
+        // the stalled head — the frozen drone keeps its pitch lattice.
+        let mut engaged = false;
+        if params.pitch_sync {
+            self.psola.sync_to(self.write_pos);
+            if advanced > 0 {
+                self.psola.feed(&self.track_in[..advanced]);
+            }
+            let tap_seconds = if time_varying {
+                self.time_delay_buf[0]
+            } else {
+                self.eff_delay as f32
+            };
+            let tap_target = self.write_pos as f64 - f64::from(tap_seconds) * sr;
+            engaged = self.psola.voiced() && self.psola.has_marker_near(tap_target);
+        }
+        self.psola_engaged = engaged;
+        let psola_render =
+            params.pitch_sync || self.voice_xf > 0.0 || self.psola.active_voices() > 0;
+
         // --- 2. Granulate behind the write head into the wet bus. -----
         self.wet_l[..frames].fill(0.0);
         self.wet_r[..frames].fill(0.0);
@@ -617,7 +721,12 @@ impl GranularDsp {
         self.discard[..frames].fill(0.0);
 
         let grain_params = GrainParams {
-            density_hz: params.density_hz,
+            // Voice/Mono engaged (ba todo #1082): the async cloud — and
+            // its decorrelated and feedback-tap companions, which
+            // inherit this density — drains until silent (no new
+            // spawns, live grains finish) while the PSOLA bus takes
+            // over, so a scheduler handover never resumes stale grains.
+            density_hz: if engaged { 0.0 } else { params.density_hz },
             // Bound grain length by the buffer so slow/reversed grains
             // can never be lapped by the write head (doc #252 §5); the
             // engine enforces the exact per-grain collision guard.
@@ -696,7 +805,6 @@ impl GranularDsp {
             self.fbw_r[..frames].fill(0.0);
         }
 
-        let sr = self.sample_rate as f64;
         let mut off = 0usize;
         while off < frames {
             if off == swap_at {
@@ -833,6 +941,52 @@ impl GranularDsp {
             }
         }
 
+        // --- 2c-v. Pitch-synchronous PSOLA bus (ba todo #1082, doc
+        // #252 §4). Engaged: onsets snap to the pitch mark nearest the
+        // tap, voices are two-period Hann segments at unity rate, and
+        // transposition is onset spacing (period / α) — formants
+        // preserved, no AM beating. Disengaging: the granulator keeps
+        // spawning at the nominal tap with the last known period while
+        // the crossfade drains, so the fallback handover never gaps.
+        // Idle with no live voices it costs nothing.
+        if psola_render {
+            self.psola_l[..frames].fill(0.0);
+            self.psola_r[..frames].fill(0.0);
+            let spawn = if engaged {
+                SpawnMode::Marker
+            } else if self.voice_xf > 0.0 {
+                SpawnMode::Nominal
+            } else {
+                SpawnMode::None
+            };
+            // The musical transpose (quantized like the async cloud's)
+            // sets the output marker density; per-grain detune spread
+            // does not apply to the mono voice lattice.
+            let mut semis = params.pitch_semitones;
+            if params.quantize != PitchQuantize::Off {
+                semis = quantize_transpose(semis, params.quantize, params.scale);
+            }
+            let alpha = f64::from(semis / 12.0).exp2();
+            let tap_seconds = if time_varying {
+                self.time_delay_buf[0]
+            } else {
+                self.eff_delay as f32
+            };
+            let delay_samples = f64::from(tap_seconds) * sr;
+            let (psl, psr) = (&mut self.psola_l[..frames], &mut self.psola_r[..frames]);
+            self.psola.render(
+                &self.buf_l,
+                &self.buf_r,
+                self.write_pos,
+                head_adv,
+                delay_samples,
+                alpha,
+                spawn,
+                psl,
+                psr,
+            );
+        }
+
         // --- 2d. Fade time mode (ba todo #1076): the SwapFader's
         // per-sample gain windows the whole granulated wet — audible
         // cloud and feedback tap alike — through the tap swap: out over
@@ -851,6 +1005,37 @@ impl GranularDsp {
                     let g = self.time_gain_buf[i];
                     self.fbw_l[i] *= g;
                     self.fbw_r[i] *= g;
+                }
+            }
+            if psola_render {
+                for i in 0..frames {
+                    let g = self.time_gain_buf[i];
+                    self.psola_l[i] *= g;
+                    self.psola_r[i] *= g;
+                }
+            }
+        }
+
+        // --- 2e. Voice/Mono blend (ba todo #1082): equal-power
+        // crossfade between the async grain cloud and the PSOLA bus,
+        // ramped per sample over [`VOICE_FADE_SECONDS`], so
+        // voiced/unvoiced handovers (and enabling/disabling the mode)
+        // are transparent. Applied before the feedback stage so
+        // recirculations carry the blended wet.
+        if psola_render {
+            let step = 1.0 / (VOICE_FADE_SECONDS * self.sample_rate).max(1.0);
+            let target_xf: f32 = if engaged { 1.0 } else { 0.0 };
+            for i in 0..frames {
+                if self.voice_xf < target_xf {
+                    self.voice_xf = (self.voice_xf + step).min(1.0);
+                } else if self.voice_xf > target_xf {
+                    self.voice_xf = (self.voice_xf - step).max(0.0);
+                }
+                if self.voice_xf > 0.0 {
+                    let phase = std::f32::consts::FRAC_PI_2 * self.voice_xf;
+                    let (g_voice, g_async) = phase.sin_cos();
+                    self.wet_l[i] = self.wet_l[i] * g_async + self.psola_l[i] * g_voice;
+                    self.wet_r[i] = self.wet_r[i] * g_async + self.psola_r[i] * g_voice;
                 }
             }
         }
