@@ -178,12 +178,15 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
 
         Message::ExternalInstrument(e) => match e {
             // Runtime-only: re-checking devices / re-scanning hardware /
-            // revealing the user definitions folder / re-scanning definitions
-            // all mutate no project state.
+            // revealing the user definitions folder / re-scanning definitions /
+            // auto-detecting latency all mutate no project state. The measured
+            // offset a detect eventually produces arrives as a separate engine
+            // event (mirrored into runtime-only state), not this message.
             ExternalInstrumentMessage::CheckDevices(_)
             | ExternalInstrumentMessage::RescanDevices
             | ExternalInstrumentMessage::RevealUserDefinitionsFolder
-            | ExternalInstrumentMessage::RescanDefinitions => UndoAction::Skip,
+            | ExternalInstrumentMessage::RescanDefinitions
+            | ExternalInstrumentMessage::DetectLatency(_) => UndoAction::Skip,
             // Every config change (enable/disable, route, patch, latency,
             // monitor, arm) is a user-meaningful, reversible edit.
             _ => UndoAction::Record,

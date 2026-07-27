@@ -496,8 +496,8 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             latency_samples,
             ..
         } => super::external_instrument::latency_measured(r, track_id, latency_samples),
-        E::ExternalInstrumentLatencyDetectFailed { track_id, .. } => {
-            super::external_instrument::latency_detect_failed(r, track_id)
+        E::ExternalInstrumentLatencyDetectFailed { track_id, reason } => {
+            super::external_instrument::latency_detect_failed(r, track_id, reason)
         }
     }
     Task::none()

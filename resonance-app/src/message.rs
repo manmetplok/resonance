@@ -323,6 +323,14 @@ pub enum ExternalInstrumentMessage {
     /// Auto-detect ping: re-check this track's MIDI-out + audio-return
     /// devices against the live hardware and report any that are offline.
     CheckDevices(TrackId),
+    /// Auto-detect the round-trip latency of this external-instrument track:
+    /// dispatch `DetectExternalInstrumentLatency` so the engine fires a MIDI
+    /// impulse and times the audio return, then reports back via
+    /// `ExternalInstrumentLatencyMeasured` / `…LatencyDetectFailed`. No-op if
+    /// the track isn't external, a detect is already running, or the transport
+    /// is playing (the engine requires a stopped transport). Runtime-only —
+    /// the measured offset arrives as a separate engine event; no undo entry.
+    DetectLatency(TrackId),
     /// Re-scan the available hardware so the "pick another device" lists are
     /// fresh. Runtime-only — refreshes device lists, mutates no config.
     RescanDevices,

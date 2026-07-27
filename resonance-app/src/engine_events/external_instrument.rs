@@ -56,19 +56,30 @@ pub(super) fn return_input_offline(r: &mut Resonance, track_id: TrackId) {
 /// `ExternalInstrumentChanged` carrying the same offset; making this handler
 /// authoritative means the displayed offset is correct regardless of the order
 /// the two events arrive in.
+///
+/// A successful measurement also resolves the in-flight auto-detect: the
+/// `latency_detect_in_progress` guard is cleared and any stale failure reason
+/// from a previous attempt is dropped (todo #1068).
 pub(super) fn latency_measured(r: &mut Resonance, track_id: TrackId, latency_samples: i64) {
     if let Some(state) = r.external_instruments.get_mut(&track_id) {
         state.latency_offset_samples = latency_samples;
+        state.latency_detect_in_progress = false;
+        state.latency_detect_error = None;
     }
 }
 
 /// Auto-detect could not measure a round-trip (MIDI out offline, no/silent
-/// return, or nothing came back within the listen window). Nothing in the
-/// mirror changes — the existing offset stands — but reporting it here (rather
-/// than silently dropping the event) is the join point for any future
-/// inspector "auto-detect failed" surfacing. Kept as an explicit no-op so the
-/// dispatch match stays exhaustive and the intent is documented.
-pub(super) fn latency_detect_failed(_r: &mut Resonance, _track_id: TrackId) {}
+/// return, or nothing came back within the listen window). The stored offset
+/// stands unchanged, but the in-flight guard is cleared and `reason` is stored
+/// so the inspector can surface why the ping failed rather than leaving the
+/// user waiting on a hung detect (todo #1068). An event for an unknown track
+/// is a stale race and ignored.
+pub(super) fn latency_detect_failed(r: &mut Resonance, track_id: TrackId, reason: String) {
+    if let Some(state) = r.external_instruments.get_mut(&track_id) {
+        state.latency_detect_in_progress = false;
+        state.latency_detect_error = Some(reason);
+    }
+}
 
 /// The engine confirmed it stored a device-param map for the track
 /// (`AudioCommand::SetTrackDeviceParams` → `TrackDeviceParamsApplied`, epic
