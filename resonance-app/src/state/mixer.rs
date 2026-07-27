@@ -28,4 +28,10 @@ pub struct MixerUiState {
     /// Inspector groups the user has folded shut. Runtime UI state —
     /// empty by default (everything open), never persisted to projects.
     pub collapsed_inspector_groups: std::collections::HashSet<MixerInspectorGroup>,
+    /// Whether the arrangement-markers overview popover (anchored under the
+    /// transport bar) is open. Runtime UI state — toggled by the transport
+    /// "flag" button and dismissed by a backdrop click; it stays open across
+    /// overview jumps so several sections can be auditioned in a row. Never
+    /// persisted to projects (todo #370).
+    pub markers_overview_open: bool,
 }

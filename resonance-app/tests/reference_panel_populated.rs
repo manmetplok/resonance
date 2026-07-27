@@ -12,6 +12,8 @@
 //! Text selectors assert the controls are present independently of pixels,
 //! then a golden snapshot locks the layout.
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{Message, UiMessage};
@@ -104,11 +106,7 @@ fn reference_panel_populated_mix_active() {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image("tests/snapshots/reference_panel_populated_mix_active.png")
-            .expect("matches_image i/o"),
-        "snapshot diverged from golden"
-    );
+    common::assert_golden(&snap, "tests/snapshots/reference_panel_populated_mix_active.png");
 }
 
 #[test]
@@ -130,9 +128,5 @@ fn reference_panel_populated_reference_active() {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image("tests/snapshots/reference_panel_populated_reference_active.png")
-            .expect("matches_image i/o"),
-        "snapshot diverged from golden"
-    );
+    common::assert_golden(&snap, "tests/snapshots/reference_panel_populated_reference_active.png");
 }

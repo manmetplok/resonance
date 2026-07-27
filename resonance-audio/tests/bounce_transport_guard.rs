@@ -15,7 +15,9 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use parking_lot::{Mutex, RwLock};
 
-use resonance_audio::__test_support::{to_audio_clip, SharedState, SyncClapInstance};
+use resonance_audio::__test_support::{
+    to_audio_clip, AutomationSnapshot, SharedState, SyncClapInstance,
+};
 use resonance_audio::types::*;
 
 struct EngineState {
@@ -57,6 +59,7 @@ fn run_bounce(state: &EngineState) -> AudioEvent {
         &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         48_000,
         &event_tx,
     );

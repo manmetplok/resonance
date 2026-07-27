@@ -109,12 +109,31 @@ fn autosave_and_manual_save_coexist_without_clobbering() {
 
 // ---- Completion routing ----------------------------------------------
 
+/// Point `dirs::config_dir()` at a throwaway directory for the whole test
+/// binary. Booting `Resonance` loads — and a completed save rewrites — the
+/// real `~/.config/resonance/recent.json`; besides polluting the user's
+/// recents with temp paths, a real list already at the MAX_RECENT cap makes
+/// count-based assertions here fail. Set once before any threads read the
+/// environment; every test that constructs `Resonance` must call this first.
+fn isolate_user_config() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dir = std::env::temp_dir().join(format!(
+            "resonance_autosave_config_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create isolated config dir");
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+    });
+}
+
 fn dispatch(app: &mut Resonance, m: ProjectIoMessage) {
     let _ = app.update(Message::ProjectIo(m));
 }
 
 #[test]
 fn autosave_completion_keeps_dirty_and_records_autosave_time() {
+    isolate_user_config();
     let (mut app, _task) = Resonance::new();
 
     // Mark the session as an active project so interactive edits aren't
@@ -154,6 +173,7 @@ fn autosave_completion_keeps_dirty_and_records_autosave_time() {
 
 #[test]
 fn manual_save_completion_clears_dirty_and_records_save_time() {
+    isolate_user_config();
     let (mut app, _task) = Resonance::new();
     assert!(!app.is_dirty());
 
@@ -170,6 +190,7 @@ fn manual_save_completion_clears_dirty_and_records_save_time() {
 
 #[test]
 fn manual_save_with_path_adds_to_recents() {
+    isolate_user_config();
     let (mut app, _task) = Resonance::new();
     let dir = TempDir::new("recents");
     let project = dir.path().join("MyProject");
@@ -203,6 +224,7 @@ fn manual_save_with_path_adds_to_recents() {
 
 #[test]
 fn autosave_of_never_saved_project_targets_a_scratch_dir() {
+    isolate_user_config();
     let (mut app, _task) = Resonance::new();
     assert!(app.last_autosave_at().is_none());
 

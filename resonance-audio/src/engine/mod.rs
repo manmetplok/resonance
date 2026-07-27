@@ -56,9 +56,26 @@ pub use audition::{
     compute_sync_ratio, load_audition_source, set_audition_options_in_place,
     start_audition_in_place, stop_audition_in_place, AuditionSource,
 };
+mod automation;
+pub use automation::{
+    clear_automation_lane_in_place, set_automation_lane_in_place,
+    set_automation_read_enabled_in_place, AutomationLanes, AutomationSnapshot, LiveValueEmitter,
+    ResolvedParamLane, AUTOMATED_VALUE_EPSILON, AUTOMATED_VALUE_THROTTLE,
+};
 mod bounce_realtime;
 mod busses;
 mod clips;
+mod external_instrument;
+mod external_instrument_ping;
+pub use external_instrument::{
+    check_external_instrument_devices_in_place, clear_external_instrument_in_place,
+    resend_external_instrument_patch_in_place, set_external_instrument_in_place,
+    set_external_instrument_latency_in_place, set_external_instrument_patch_in_place,
+    ExternalInstruments,
+};
+pub use external_instrument_ping::{
+    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms, OnsetOutcome,
+};
 pub use clips::transcode_to_wav;
 pub use clips::{
     detect_clip_tempo_in_place, set_clip_fade_in_place, set_clip_gain_in_place,
@@ -399,6 +416,14 @@ impl AudioEngine {
         );
         let latency_comp_audio = Arc::clone(&latency_comp);
 
+        // Parameter-automation snapshot: published by the engine thread
+        // whenever the lane set changes, loaded wait-free by the audio
+        // callback and the offline bounce. Empty until the first lane is
+        // stored. See `engine::automation` for the data model.
+        let automation: Arc<arc_swap::ArcSwap<AutomationSnapshot>> =
+            Arc::new(arc_swap::ArcSwap::from_pointee(AutomationSnapshot::default()));
+        let automation_audio = Arc::clone(&automation);
+
         let mut stream_config: cpal::StreamConfig = config.into();
         stream_config.sample_rate = sample_rate;
         stream_config.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
@@ -424,6 +449,7 @@ impl AudioEngine {
             let plugins_audio = Arc::clone(&plugins_audio);
             let tempo_audio = Arc::clone(&tempo_audio);
             let latency_comp_audio = Arc::clone(&latency_comp_audio);
+            let automation_audio = Arc::clone(&automation_audio);
             let underrun_limiter = Arc::clone(&underrun_limiter);
             let mut track_buf_l = vec![0.0f32; audio_buf_frames];
             let mut track_buf_r = vec![0.0f32; audio_buf_frames];
@@ -508,6 +534,7 @@ impl AudioEngine {
                         &plugins_audio,
                         &tempo_audio,
                         &latency_comp_audio,
+                        &automation_audio,
                         audio_sample_rate,
                         &mut track_buf_l,
                         &mut track_buf_r,
@@ -595,6 +622,7 @@ impl AudioEngine {
         let tempo_ctrl = Arc::clone(&tempo_map);
         let plugins_ctrl = Arc::clone(&plugins);
         let latency_comp_ctrl = Arc::clone(&latency_comp);
+        let automation_ctrl = Arc::clone(&automation);
 
         let cmd_tx_retry = cmd_tx.clone();
         let engine_thread = std::thread::Builder::new()
@@ -613,6 +641,7 @@ impl AudioEngine {
                     tempo_ctrl,
                     plugins_ctrl,
                     latency_comp_ctrl,
+                    automation_ctrl,
                     monitor_prod_audio,
                     live_midi_tx,
                     live_midi_rx,

@@ -1,0 +1,301 @@
+//! Domain-specific restore helpers called at the end of
+//! [`super::replay_loaded_project`]: performance, quantize, media pool,
+//! reference A/B, drum patterns, and tempo events. Each function is a
+//! self-contained side-effecting unit with no cross-dependencies, making
+//! them straightforward to call from the undo diff-replay path as well.
+
+use crate::compose::ComposeState;
+use crate::project::ProjectFile;
+use crate::state::*;
+use crate::Resonance;
+use resonance_audio::types::*;
+
+/// Restore the track-group (folder track) registry from a saved project
+/// file (epic #36, todo #679/#690). Pure app-side state with no engine
+/// counterpart — the macro mute/solo/level cascades re-derive from the
+/// registry — so the registry is rebuilt wholesale from the saved list.
+pub(crate) fn restore_track_groups(r: &mut Resonance, project: &ProjectFile) {
+    r.track_groups = crate::state::TrackGroupRegistry::new();
+    for tg in &project.track_groups {
+        r.track_groups.add_group(tg.clone());
+    }
+}
+
+/// Restore the Performance-mode footer selection (epic #11, todo #312):
+/// the instrument tuning and capo offset that drive the live fingering
+/// diagrams. Pure app-side state with no engine counterpart, so it's
+/// applied directly.
+///
+/// The persisted tuning is matched by name against
+/// [`ALL_TUNINGS`](resonance_music_theory::ALL_TUNINGS); an unknown name —
+/// or a legacy project with no `performance` block, which deserializes to
+/// the default Guitar 6 / no-capo selection — falls back to the default
+/// tuning. Both the tuning index and capo go through
+/// [`PerformanceState`](crate::state::PerformanceState)'s setters, so a
+/// stale or out-of-range value can never desync or panic the diagram
+/// renderer.
+pub(crate) fn restore_performance(r: &mut Resonance, project: &ProjectFile) {
+    let mut performance = PerformanceState::default();
+    if let Some(index) = resonance_music_theory::ALL_TUNINGS
+        .iter()
+        .position(|t| t.name == project.performance.tuning)
+    {
+        performance.set_tuning_index(index);
+    }
+    performance.set_capo(project.performance.capo);
+    r.performance = performance;
+}
+
+/// Restore the MIDI quantize state (ba todo #395) from a saved project:
+/// the user-extracted groove library and the last-used quantize/humanize
+/// settings. Pure app-side data with no engine counterpart, so it's a
+/// straight copy. Legacy projects (no fields) restore to an empty library
+/// and neutral default settings via the `#[serde(default)]` on the file.
+pub(crate) fn restore_quantize(r: &mut Resonance, project: &ProjectFile) {
+    r.quantize.groove_library = project.groove_library.clone();
+    r.quantize.settings = project.quantize_settings.clone();
+}
+
+/// Restore the media pool from a saved project (doc #175). Wipes the
+/// previous project's assets, then re-adds each persisted asset, marking
+/// it [`PoolAsset::missing`](crate::state::pool::PoolAsset::missing) when
+/// its backing WAV is no longer present in the project's `audio/`
+/// directory — a missing asset is **kept, not dropped**, so its clips
+/// survive offline and can be relinked later. Finally recomputes usage
+/// counts from the clips' asset refs.
+///
+/// `project_dir` is the absolute `.rproj` directory used to resolve each
+/// asset's project-relative WAV path for the existence check.
+///
+/// Favourites and recent folders are *not* touched here: they are
+/// project-independent user state persisted in `settings.json`, loaded
+/// into the pool once at startup.
+pub(crate) fn restore_pool(
+    r: &mut Resonance,
+    project: &ProjectFile,
+    project_dir: &std::path::Path,
+) {
+    use crate::state::pool::PoolAsset;
+
+    // Drop the prior project's assets + usage; keep favourites / recent.
+    r.pool.clear_assets();
+
+    for pa in &project.pool_assets {
+        // Resolve the project-relative WAV path against the project dir.
+        // An absolute `project_relative_path` (shouldn't happen, but be
+        // defensive) is used as-is by `Path::join`.
+        let abs_path = project_dir.join(&pa.project_relative_path);
+        let missing = !abs_path.exists();
+
+        r.pool.add(PoolAsset {
+            id: pa.id,
+            project_relative_path: pa.project_relative_path.clone(),
+            original_path: pa.original_path.clone(),
+            format: crate::project::audio_format_from_tag(&pa.format),
+            channels: pa.channels,
+            source_sample_rate: pa.source_sample_rate,
+            duration_frames: pa.duration_frames,
+            // Thumbnail peaks are rebuilt off-thread when the pool/browser
+            // renders the asset; not persisted, so start empty.
+            thumbnail_peaks: Vec::new(),
+            missing,
+        });
+    }
+
+    // Recompute per-asset usage from the clips loaded above (their
+    // `asset_ref`s were set during the clip replay). A clip pointing at
+    // an asset that didn't load simply isn't counted.
+    r.recompute_pool_usage();
+}
+
+/// Restore the reference A/B block from a saved project. Wipes any prior
+/// project's references, then for each saved entry re-issues
+/// `LoadReferenceTrack` (so the PCM / waveform are rebuilt) and re-seeds
+/// the GUI mirror with the durable facts — name, path, cached loudness and
+/// the user's markers — that the re-decode does not itself carry back.
+///
+/// A reference whose file has gone missing is kept as a `Missing` entry
+/// (name + path preserved) and is *not* sent to the engine, so the panel
+/// can show it without crashing or losing the user's markers.
+///
+/// Engine ids are reallocated here: the engine's reference id counter was
+/// reset by `ClearAll`, so present entries take ids `1..=K` in load order,
+/// exactly mirroring what the engine allocates as it registers each
+/// `LoadReferenceTrack`. Missing entries — which the engine never hears
+/// about — take ids from a high, disjoint base so a later in-session load
+/// can never collide with one.
+pub(crate) fn restore_references(r: &mut Resonance, project: &ProjectFile) {
+    use crate::reference::{ReferenceEntry, ReferenceMarkerState, ReferenceStatus};
+
+    /// Base for ids handed to missing (never-registered) references. The
+    /// engine allocates reference ids sequentially from 1, so it would
+    /// take ~1e9 loads in a single session to reach this — i.e. never.
+    const MISSING_ID_BASE: u32 = 1_000_000_000;
+
+    // Drop the previous project's references (entries + settings + any
+    // in-flight load bookkeeping). Nothing here talks to the engine — the
+    // engine's own reference state was already emptied by `ClearAll`.
+    r.reference = crate::reference::ReferenceState::default();
+
+    let settings = &project.reference_settings;
+
+    let mut next_present_id: u32 = 1;
+    let mut next_missing_id: u32 = MISSING_ID_BASE;
+    for pr in &project.references {
+        let exists = std::path::Path::new(&pr.path).exists();
+        let markers: Vec<ReferenceMarkerState> = pr
+            .markers
+            .iter()
+            .map(|m| ReferenceMarkerState {
+                id: m.id,
+                position_samples: m.position_samples,
+                label: m.label.clone(),
+            })
+            .collect();
+
+        let (id, status) = if exists {
+            let id = ReferenceId(next_present_id);
+            next_present_id += 1;
+            // Re-decode: the engine registers the entry under this id
+            // synchronously and streams analysis + `ReferenceLoaded` back,
+            // which the folding layer reconciles onto the entry we seed
+            // below (preserving its markers).
+            let _ = r.engine.send(AudioCommand::LoadReferenceTrack {
+                id_hint: Some(id),
+                path: std::path::PathBuf::from(&pr.path),
+            });
+            (id, ReferenceStatus::Analyzing(ReferenceAnalysisStage::Decoding))
+        } else {
+            let id = ReferenceId(next_missing_id);
+            next_missing_id += 1;
+            r.reference.last_error =
+                Some(format!("Reference file not found: {}", pr.path));
+            (id, ReferenceStatus::Missing)
+        };
+
+        r.reference.entries.push(ReferenceEntry {
+            id,
+            name: pr.name.clone(),
+            path: pr.path.clone(),
+            status,
+            integrated_lufs: pr.integrated_lufs,
+            waveform_peaks: Vec::new(),
+            markers,
+            position_samples: 0,
+            // Filled in by the re-decode's `ReferenceLoaded` echo; a
+            // missing file simply never reports one.
+            length_samples: 0,
+        });
+    }
+
+    // Restore the panel settings. The active selection was saved as an
+    // index into the (ordered) reference list; map it back to the entry's
+    // freshly-allocated id and only engage it on the engine when that
+    // reference actually loaded (a Missing one was never registered).
+    let active = settings
+        .active
+        .and_then(|idx| r.reference.entries.get(idx))
+        .map(|e| (e.id, e.status != ReferenceStatus::Missing));
+    r.reference.active_id = active.map(|(id, _)| id);
+    if let Some((id, present)) = active {
+        if present {
+            let _ = r.engine.send(AudioCommand::SetActiveReference { id });
+        }
+    }
+
+    r.reference.ab_source = if settings.ab_source_is_reference {
+        ABSource::Reference
+    } else {
+        ABSource::Mix
+    };
+    r.reference.loudness_match = settings.loudness_match;
+    r.reference.trim_db = settings.trim_db;
+    r.reference.loop_to_mix = settings.loop_to_mix;
+
+    let _ = r.engine.send(AudioCommand::SetABSource {
+        source: r.reference.ab_source,
+    });
+    let _ = r.engine.send(AudioCommand::SetRefLoudnessMatch {
+        enabled: settings.loudness_match,
+    });
+    let _ = r.engine.send(AudioCommand::SetRefTrim {
+        db: settings.trim_db,
+    });
+    let _ = r.engine.send(AudioCommand::SetRefLoopToMix {
+        enabled: settings.loop_to_mix,
+    });
+}
+
+/// Restore the drum pattern bank from a saved project file (or undo
+/// snapshot). Three legacy paths:
+///
+/// 1. Modern project: `drum_patterns` populated → use it directly.
+/// 2. Legacy v2 project: `drum_groups` populated (single flat list) →
+///    promote into a one-entry pattern bank named "Main", and point any
+///    definition that has no pattern id at it so the lane resolves
+///    identically to how the legacy project rendered.
+/// 3. Pre-grouped legacy: both fields empty → `clear_on_empty` decides:
+///    the full project load keeps the default bank seeded by
+///    `ComposeState::default()` in place, while diff replay clears the
+///    bank to mirror the snapshot exactly.
+///
+/// After the bank is hydrated, the project default pattern id is
+/// refreshed and `next_id` is bumped past every saved pattern and group
+/// id so the manager's "+ New" actions never collide with reserved ids.
+pub(crate) fn restore_drum_patterns(
+    compose: &mut ComposeState,
+    file: &ProjectFile,
+    clear_on_empty: bool,
+) {
+    if !file.drum_patterns.is_empty() {
+        compose.drum_patterns = file.drum_patterns.clone();
+    } else if !file.drum_groups.is_empty() {
+        let (patterns, _id) = crate::compose::drumroll::legacy_groups_to_pattern(
+            file.drum_groups.clone(),
+            &mut compose.next_id,
+        );
+        compose.drum_patterns = patterns;
+        let main_id = compose.drum_patterns.first().map(|p| p.id);
+        for def in &mut compose.definitions {
+            if def.primary_pattern_id().is_none() {
+                def.set_primary_pattern(main_id);
+            }
+        }
+    } else if clear_on_empty {
+        compose.drum_patterns.clear();
+    }
+
+    compose.default_drum_pattern_id = compose.drum_patterns.first().map(|p| p.id);
+    let max_id = compose
+        .drum_patterns
+        .iter()
+        .flat_map(|p| std::iter::once(p.id).chain(p.groups.iter().map(|g| g.id)))
+        .max();
+    if let Some(m) = max_id {
+        compose.next_id = compose.next_id.max(m + 1);
+    }
+}
+
+/// Restore tempo/signature events from a saved project file (or undo
+/// snapshot). If the project has none (legacy), create a single event
+/// at bar 0 from the global BPM/sig. Does not talk to the engine — the
+/// caller is responsible for `rebuild_and_send_tempo`.
+pub(crate) fn restore_tempo_events(r: &mut Resonance, file: &ProjectFile) {
+    if file.tempo_events.is_empty() {
+        r.tempo_events = vec![crate::state::TempoEvent {
+            bar: 0,
+            bpm: file.bpm,
+        }];
+    } else {
+        r.tempo_events = file.tempo_events.clone();
+    }
+    if file.signature_events.is_empty() {
+        r.signature_events = vec![crate::state::SignatureEvent {
+            bar: 0,
+            numerator: file.time_sig_num,
+            denominator: file.time_sig_den,
+        }];
+    } else {
+        r.signature_events = file.signature_events.clone();
+    }
+}

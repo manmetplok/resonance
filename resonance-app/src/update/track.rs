@@ -69,6 +69,28 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             });
             r.mixer.add_track_menu_open = false;
         }
+        TrackMessage::AddExternalInstrumentTrack => {
+            // Same track creation as `AddInstrumentTrack`, but the id is
+            // allocated app-side (like the audio-drop new-track path) so we can
+            // immediately enable external mode on it. The engine echoes
+            // `InstrumentTrackAdded` for this id a beat later, which mirrors the
+            // track into the registry. Enabling external mode here — before the
+            // echo — is safe: `enable_external_instrument` only touches
+            // `r.external_instruments` + the engine, not the registry, and the
+            // engine applies `SetExternalInstrument` after the track exists.
+            //
+            // Both effects (track creation + external state) fall under one undo
+            // snapshot: this message classifies as `UndoAction::Record`, whose
+            // pre-dispatch snapshot has neither the track nor the external entry,
+            // so a single undo removes both and redo restores both.
+            let track_id = r.registry.allocate_sub_track_id();
+            let _ = r.engine.send(AudioCommand::AddInstrumentTrack {
+                id_hint: Some(track_id),
+                name: None,
+            });
+            crate::update::external_instrument::enable_external_instrument(r, track_id);
+            r.mixer.add_track_menu_open = false;
+        }
         TrackMessage::AddVocalTrack => {
             let _ = r.engine.send(AudioCommand::AddVocalTrack {
                 id_hint: None,
@@ -82,9 +104,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             if has_audio || has_midi {
                 r.confirm_delete_track = Some(id);
             } else {
-                if r.interaction.selected_track == Some(id) {
-                    r.interaction.selected_track = None;
-                }
+                r.interaction.deselect_track(id);
                 if r.compose.expanded_track_id == Some(id) {
                     r.compose.expanded_track_id = None;
                 }
@@ -93,9 +113,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
         }
         TrackMessage::ConfirmRemoveTrack => {
             if let Some(id) = r.confirm_delete_track.take() {
-                if r.interaction.selected_track == Some(id) {
-                    r.interaction.selected_track = None;
-                }
+                r.interaction.deselect_track(id);
                 if r.compose.expanded_track_id == Some(id) {
                     r.compose.expanded_track_id = None;
                 }
@@ -128,7 +146,12 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.muted = !t.muted;
                 t.muted
             });
-            if let Some(muted) = new_muted {
+            if let Some(own) = new_muted {
+                // A group's macro mute composes with the track's own mute,
+                // so the engine always receives the *effective* mute: the
+                // track stays muted while its group mute holds even after
+                // its own mute is cleared (todo #687).
+                let muted = own || r.track_groups.is_track_muted_via_group(id);
                 let _ = r.engine.send(AudioCommand::SetTrackMute {
                     track_id: id,
                     muted,
@@ -140,7 +163,12 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.soloed = !t.soloed;
                 t.soloed
             });
-            if let Some(soloed) = new_soloed {
+            if let Some(own) = new_soloed {
+                // A group's macro solo composes with the track's own solo,
+                // so the engine always receives the *effective* solo: the
+                // track stays soloed while its group solo holds even after
+                // its own solo is cleared (todo #688).
+                let soloed = own || r.track_groups.is_track_soloed_via_group(id);
                 let _ = r.engine.send(AudioCommand::SetTrackSolo {
                     track_id: id,
                     soloed,
@@ -294,16 +322,19 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             r.with_track_mut(track_id, |t| t.output = output);
         }
         TrackMessage::AddTrackFromPreset(preset) => {
-            let cmd = if preset.track_type == "instrument" {
-                AudioCommand::AddInstrumentTrack {
+            let cmd = match preset.track_type.as_str() {
+                "instrument" => AudioCommand::AddInstrumentTrack {
                     id_hint: None,
                     name: Some(preset.name.clone()),
-                }
-            } else {
-                AudioCommand::AddTrack {
+                },
+                "vocal" => AudioCommand::AddVocalTrack {
                     id_hint: None,
                     name: Some(preset.name.clone()),
-                }
+                },
+                _ => AudioCommand::AddTrack {
+                    id_hint: None,
+                    name: Some(preset.name.clone()),
+                },
             };
             let _ = r.engine.send(cmd);
             r.pending_track_preset = Some(*preset);

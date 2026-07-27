@@ -50,9 +50,15 @@ pub(crate) use clock::{
     poll_midi_clock_send,
 };
 pub(crate) use hardware::{
-    handle_list_midi_inputs, handle_list_midi_outputs, handle_set_track_midi_input,
-    handle_set_track_midi_output,
+    handle_list_midi_inputs, handle_list_midi_outputs, handle_set_track_device_params,
+    handle_set_track_midi_input, handle_set_track_midi_output,
 };
+/// Test surface for the device-param command boundary. Exposed under
+/// `__test_support` (via `lib.rs`) so the integration test in
+/// `tests/device_params_handler.rs` can drive the mutation + event
+/// emission (including the missing-track no-op branch) without spinning up
+/// the engine thread.
+pub use hardware::set_track_device_params_in_place;
 pub(crate) use live::{
     capture_loop_record_midi_pass, close_open_recordings, flush_live_note_stash,
     handle_live_control_event,
@@ -69,8 +75,10 @@ pub use live::deliver_or_stash;
 /// test in `tests/live_arrival_offset.rs` can drive the pure function
 /// without the engine thread.
 pub use live::live_arrival_sample_offset;
-pub use outbound::{outbound_step_start, OutboundStep};
-pub(crate) use outbound::poll_timeline_to_midi_output;
+pub use outbound::{
+    emit_device_param_automation, outbound_step_start, DeviceParamMidiSink, OutboundStep,
+};
+pub(crate) use outbound::{poll_device_param_automation, poll_timeline_to_midi_output};
 
 use crate::types::TempoMap;
 

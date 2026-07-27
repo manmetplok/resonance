@@ -5,8 +5,15 @@
 //! [`outbound_step_start`] helper classifies discontinuities (loop
 //! wrap, seek) so it can be unit-tested without spinning up the engine.
 
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
+use indexmap::IndexMap;
+use resonance_common::device_definition::MidiBinding;
+use resonance_common::{lane_value_to_binding_value, AutomationTarget};
+
+use crate::engine::AutomationLanes;
+use crate::midi_hardware::MidiOutputRegistry;
 use crate::types::*;
 
 use super::super::thread::{HandlerCtx, HandlerState};
@@ -224,4 +231,155 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
     }
 
     state.midi_hw.midi_outbound_last_playhead = curr;
+}
+
+/// Sink for the CC/NRPN messages emitted by device-parameter automation.
+///
+/// The real [`MidiOutputRegistry`] forwards to its
+/// [`send_control_change`](MidiOutputRegistry::send_control_change) /
+/// [`send_nrpn`](MidiOutputRegistry::send_nrpn) primitives (ba todo #718,
+/// E1). A capturing fake stands in for tests so
+/// [`emit_device_param_automation`] can be exercised without opening a
+/// hardware port — and so the live engine poll and the realtime-bounce
+/// drive, which run the identical core, are provably equal.
+pub trait DeviceParamMidiSink {
+    /// Emit a 7-bit Control Change for `track_id` on `channel`.
+    fn emit_cc(&mut self, track_id: TrackId, channel: u8, cc: u8, value: u8);
+    /// Emit an NRPN (parameter MSB/LSB + data-entry) for `track_id`.
+    fn emit_nrpn(
+        &mut self,
+        track_id: TrackId,
+        channel: u8,
+        msb: u8,
+        lsb: u8,
+        value: u16,
+        fourteen_bit: bool,
+    );
+}
+
+impl DeviceParamMidiSink for MidiOutputRegistry {
+    #[inline]
+    fn emit_cc(&mut self, track_id: TrackId, channel: u8, cc: u8, value: u8) {
+        self.send_control_change(track_id, channel, cc, value);
+    }
+    #[inline]
+    fn emit_nrpn(
+        &mut self,
+        track_id: TrackId,
+        channel: u8,
+        msb: u8,
+        lsb: u8,
+        value: u16,
+        fourteen_bit: bool,
+    ) {
+        self.send_nrpn(track_id, channel, msb, lsb, value, fourteen_bit);
+    }
+}
+
+/// Evaluate every enabled [`AutomationTarget::DeviceParam`] lane at `frame`,
+/// map each normalized lane value onto its parameter's MIDI binding integer
+/// via [`lane_value_to_binding_value`], and emit a CC or NRPN through `sink`
+/// — but only when the binding integer changed against `last_values`, so a
+/// slow sweep doesn't flood the port (architecture doc #201 §4, ba todo
+/// #723; acceptance criterion 4).
+///
+/// This is the single source of device-param MIDI emission, shared by the
+/// live engine poll ([`poll_device_param_automation`]) and the realtime
+/// "bounce in place" drive (both advance the playhead and run the engine
+/// loop). Given the same lane set, track params, and `frame` sequence it
+/// produces an identical ordered message stream, which is the live↔bounce
+/// parity guarantee. (The *offline* bounce path has no hardware output and
+/// never reaches here.)
+///
+/// `last_values` is the per-track, per-`DeviceParam::id` memo of the last
+/// integer sent. The unchanged path touches only `HashMap::get` (no
+/// allocation); a changed value clones the param id once to update the memo
+/// — matching the cadence-throttled, low-churn style of
+/// [`poll_timeline_to_midi_output`].
+pub fn emit_device_param_automation<S: DeviceParamMidiSink>(
+    lanes: &AutomationLanes,
+    tracks: &IndexMap<TrackId, Track>,
+    frame: u64,
+    last_values: &mut HashMap<TrackId, HashMap<String, u16>>,
+    sink: &mut S,
+) {
+    for lane in lanes.values() {
+        if !lane.enabled {
+            continue;
+        }
+        let AutomationTarget::DeviceParam { track, param_id } = &lane.target else {
+            continue;
+        };
+        let Some(track_state) = tracks.get(track) else {
+            continue;
+        };
+        // Resolve the parameter's binding/range/curve from the track's
+        // device-param map (ba todo #722, E2). A lane whose param id is no
+        // longer in the map (preset changed) is skipped until it returns.
+        let Some(param) = track_state.device_param(param_id) else {
+            continue;
+        };
+
+        let value = lane_value_to_binding_value(&param, lane.sample(frame));
+
+        // De-dupe: skip unchanged binding integers. Borrows the param id —
+        // no allocation on the steady-state (unchanged) path.
+        let unchanged = last_values
+            .get(track)
+            .and_then(|m| m.get(param_id.as_str()))
+            == Some(&value);
+        if unchanged {
+            continue;
+        }
+
+        let channel = track_state.midi_output_channel.unwrap_or(0);
+        let emitted = match param.binding {
+            MidiBinding::Cc { cc } => {
+                sink.emit_cc(*track, channel, cc, value as u8);
+                true
+            }
+            MidiBinding::Nrpn {
+                msb,
+                lsb,
+                fourteen_bit,
+            } => {
+                sink.emit_nrpn(*track, channel, msb, lsb, value, fourteen_bit);
+                true
+            }
+            // RPN has no E1 emission primitive yet; #723's scope is CC/NRPN
+            // (the bundled devices bind only those). Left unsent rather than
+            // misrouted through the NRPN address controllers.
+            MidiBinding::Rpn { .. } => false,
+        };
+        if emitted {
+            last_values
+                .entry(*track)
+                .or_default()
+                .insert(param_id.clone(), value);
+        }
+    }
+}
+
+/// Engine-loop hook: once per iteration, emit hardware CC/NRPN for any
+/// device-parameter automation lane whose mapped value moved since the last
+/// poll. Mirrors [`poll_timeline_to_midi_output`]'s throttle (engine
+/// cadence, de-duped writes); runs during both live playback and the
+/// realtime bounce drive, so a bounced render emits the same control stream
+/// as live.
+pub(crate) fn poll_device_param_automation(ctx: &HandlerCtx, state: &mut HandlerState) {
+    if !ctx.shared.playing.load(Ordering::Relaxed) {
+        // Stopped: forget the memo so the next Play re-sends each param's
+        // current value from the (possibly new) playhead position.
+        state.midi_hw.device_param_last.clear();
+        return;
+    }
+    let frame = ctx.shared.playhead.load(Ordering::Relaxed);
+    let tracks = ctx.tracks.read();
+    emit_device_param_automation(
+        &state.automation_lanes,
+        &tracks,
+        frame,
+        &mut state.midi_hw.device_param_last,
+        &mut state.midi_hw.midi_outputs,
+    );
 }

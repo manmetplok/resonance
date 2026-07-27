@@ -8,12 +8,19 @@ use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
 use crate::reference::ReferenceMessage;
 use crate::state::{
-    ClipEdge, ExportMode, LoopDragTarget, MixerInspectorGroup, ParsedImport, PlacementMode,
-    PlacementStart, SelectedGlobalEvent, TempoAlignment, TempoChoice, ViewMode,
+    BrowserTab, ClipEdge, DraggedAsset, DropResolution, ExportMode, FolderScan, GridChoice,
+    GrooveSelection, LoopDragTarget, MembershipDragSubject, MembershipDropTarget,
+    MixerInspectorGroup, ParsedImport, PlacementMode, PlacementStart, SelectedGlobalEvent,
+    TempoAlignment, TempoChoice, ViewMode,
 };
+use resonance_audio::quantize::{Division, QuantizeMode};
 use resonance_audio::types::{
-    BusId, ClipId, PluginInstanceId, ScannedPlugin, SendId, SendSource, TrackId, TrackOutput,
+    AssetId, BusId, ClipId, FadeCurve, PluginInstanceId, SamplePos, ScannedPlugin, SendId,
+    SendSource,
+    TrackId, TrackOutput,
 };
+use resonance_audio::PoolImportOutcome;
+use resonance_common::{AutomationTarget, CurveKind};
 use resonance_music_theory::Scale;
 
 #[derive(Debug, Clone)]
@@ -23,7 +30,14 @@ pub enum Message {
     ChordTrack(ChordTrackMessage),
     Transport(TransportMessage),
     Marker(MarkerMessage),
+    /// Transient marker interaction state (selection, context menu, inline
+    /// rename) driven by the timeline ruler hit-testing (todo #369). These
+    /// mutate only view state and never the persisted marker set, so they
+    /// carry no undo weight — the actual edits they commit go out as
+    /// [`MarkerMessage`] variants.
+    MarkerUi(MarkerUiMessage),
     Track(TrackMessage),
+    ExternalInstrument(ExternalInstrumentMessage),
     Bus(BusMessage),
     Mixer(MixerMessage),
     Freeze(FreezeMessage),
@@ -33,12 +47,35 @@ pub enum Message {
     MidiEditor(MidiEditorMessage),
     VocalTuning(VocalTuningMessage),
     Plugin(PluginMessage),
+    Automation(AutomationMessage),
     Viewport(ViewportMessage),
     ProjectIo(ProjectIoMessage),
+    Group(GroupMessage),
     Reference(ReferenceMessage),
     Export(ExportMessage),
     Import(ImportMessage),
+    /// Audio media-pool import + placement orchestration (doc #175, ba
+    /// todo #598): bring external audio into the project pool and,
+    /// optionally, place it as a clip. See [`PoolMessage`].
+    Pool(PoolMessage),
+    /// Missing-file relink actions (doc #175, todo #600): locate a single
+    /// missing pool asset, or batch-search a folder to resolve every
+    /// missing asset by filename, then re-copy the audio into the project.
+    /// Handled by `update::relink::handle`.
+    Relink(RelinkMessage),
     Ui(UiMessage),
+    /// Docked media-browser interaction: filesystem navigation, per-folder
+    /// filter, favourite / recent toggles, Files/Pool tab, and the audition
+    /// preview transport. All transient — none of it is undoable or
+    /// persisted in the project (same rule as collapse state, doc #175).
+    /// Handled by `update::browser::handle`.
+    Browser(BrowserMessage),
+    /// Drag-to-timeline placement gesture (doc #175, todo #605): dragging a
+    /// media-browser row over the arrangement to preview and drop a clip.
+    /// Transient preview — none of it is undoable or persisted; the drop
+    /// fans out into a [`PoolMessage::ImportAndPlace`]. Handled by
+    /// `update::drag::handle`.
+    Drag(DragMessage),
     /// Timer tick driving VU meters and auto-follow. Kept at top level to
     /// avoid wrapping cost on the hot path.
     Tick,
@@ -48,6 +85,56 @@ pub enum Message {
     Redo,
     /// The window manager requested that the window be closed.
     WindowCloseRequested(iced::window::Id),
+}
+
+/// Track-group (folder-track) messages emitted by the group-header row
+/// (epic #36, doc #200). The header is an organisational + macro-control
+/// strip: caret folds the group, `M`/`S` toggle the macro mute/solo that
+/// cascade to members, and the level trim scales members' contribution.
+///
+/// The header *view* (todo #680) emits the caret / macro / trim variants;
+/// the reducers that apply them — collapse/fold (#686), macro mute (#687),
+/// macro solo (#688) and level trim (#689) — land in their own todos.
+/// Until then they route to the placeholder `update::group::handle`.
+///
+/// The `*MembershipDrag*` / `*Membership*` variants drive drag-and-drop
+/// group membership (todo #685): a track row or group header is dragged
+/// onto a group to join / nest, or onto open space to ungroup / un-nest.
+/// Their reducers live in `update::group` and mutate the registry directly.
+#[derive(Debug, Clone)]
+pub enum GroupMessage {
+    /// Fold / unfold a group, hiding or showing its member lanes.
+    ToggleCollapse(TrackId),
+    /// Toggle the group's macro mute (cascades to members non-destructively).
+    ToggleMacroMute(TrackId),
+    /// Toggle the group's macro solo (cascades to members non-destructively).
+    ToggleMacroSolo(TrackId),
+    /// Set the group's macro level trim — a multiplicative gain scaling
+    /// members' contribution (`1.0` is unity).
+    SetMacroLevel(TrackId, f32),
+    /// Create a new group from the current multi-track selection (the
+    /// "Group selected" floating-bar action and the `Cmd-G` shortcut,
+    /// todo #684). The selected tracks become the new group's members; a
+    /// no-op when fewer than two tracks are selected.
+    CreateGroupFromSelection,
+    /// Begin a drag-and-drop membership edit (todo #685). The subject is the
+    /// track row or group header that was grabbed; `cursor_y` is the pointer
+    /// Y in the header column at grab, for the drag ghost.
+    StartMembershipDrag(MembershipDragSubject, f32),
+    /// The active membership drag's pointer moved. `target` is the drop
+    /// target the view resolved under the cursor (`None` when over nothing
+    /// droppable); `cursor_y` is the latest pointer Y.
+    UpdateMembershipDrag {
+        target: Option<MembershipDropTarget>,
+        cursor_y: f32,
+    },
+    /// Commit the active membership drag, applying the hovered target's
+    /// change to the group registry. A no-op when nothing is dragging or no
+    /// valid target is hovered.
+    DropMembership,
+    /// Abandon the active membership drag with no change (released off any
+    /// target, or `Esc`).
+    CancelMembershipDrag,
 }
 
 #[derive(Debug, Clone)]
@@ -113,10 +200,41 @@ pub enum MarkerMessage {
     PlayFromMarker(u64),
 }
 
+/// Transient marker interaction messages emitted by the timeline ruler
+/// hit-testing (todo #369). Unlike [`MarkerMessage`] these never touch the
+/// persisted marker set: they drive selection highlighting, the right-click
+/// context menu, and the inline rename field. The rename is committed by
+/// re-dispatching [`MarkerMessage::Rename`] (which *is* undoable) once the
+/// user confirms.
+#[derive(Debug, Clone)]
+pub enum MarkerUiMessage {
+    /// Select (highlight) a marker in the ruler, or clear the selection.
+    Select(Option<u64>),
+    /// Open the right-click context menu for a marker. `x` / `y` are the
+    /// window-space anchor (from the cursor) the overlay positions itself at.
+    OpenMenu { id: u64, x: f32, y: f32 },
+    /// Dismiss the context menu without acting.
+    CloseMenu,
+    /// Start an inline rename of a marker, seeded with its current name.
+    /// `x` / `y` are the window-space anchor for the floating text field.
+    BeginRename { id: u64, x: f32, y: f32 },
+    /// The rename text field changed.
+    RenameChanged(String),
+    /// Commit the inline rename (re-dispatches [`MarkerMessage::Rename`]).
+    CommitRename,
+    /// Abandon the inline rename, discarding the edit.
+    CancelRename,
+}
+
 #[derive(Debug, Clone)]
 pub enum TrackMessage {
     AddTrack,
     AddInstrumentTrack,
+    /// Create an instrument track that starts already in external-instrument
+    /// mode (doc #251 gap 1 affordance 2). Allocates the track id app-side so
+    /// the external state lands atomically with the track in one undo step;
+    /// the menu entry that dispatches it is a separate view todo.
+    AddExternalInstrumentTrack,
     AddVocalTrack,
     /// User clicked delete on a track — may require confirmation if it
     /// has content.
@@ -205,6 +323,79 @@ pub enum ExportMessage {
     /// Footer primary action - render the selected sources. Wired here so
     /// the shell is complete; the actual orchestration lands in #330/#331.
     Confirm,
+}
+
+/// User actions on an external-instrument track's inspector / strip
+/// (architecture doc #169, epic #39). Each variant maps to one update
+/// handler that mutates GUI state and dispatches the matching
+/// `AudioCommand`. The MIDI-out / audio-return / monitor / arm controls
+/// reuse the plain-track engine commands (the engine keeps one source of
+/// truth for them); the bank/program, latency and device-check controls
+/// use the external-instrument commands. No view in this todo.
+#[derive(Debug, Clone)]
+pub enum ExternalInstrumentMessage {
+    /// Turn `track` into an external instrument (or re-assert it), storing a
+    /// fresh config when none exists. Dispatches `SetExternalInstrument`.
+    Enable(TrackId),
+    /// Take `track` out of external-instrument mode, dropping its config.
+    /// Dispatches `ClearExternalInstrument`.
+    Disable(TrackId),
+    /// Pick the hardware MIDI output device (`None` disconnects).
+    SetMidiOutDevice(TrackId, Option<String>),
+    /// Pick the MIDI output channel (`None` = channel 1).
+    SetMidiOutChannel(TrackId, Option<u8>),
+    /// Pick a device preset by id (a `DeviceDefinition::id`), or `None` to
+    /// clear the selection. Stores the id on the track's external-instrument
+    /// state and dispatches `SetTrackDeviceParams` with the definition's
+    /// params (empty on clear / unknown id). Epic #40, doc #201 §5.
+    SetDevice(TrackId, Option<String>),
+    /// Pick the audio-return input device (`None` clears).
+    SetReturnDevice(TrackId, Option<String>),
+    /// Pick the 0-indexed starting audio-return input port.
+    SetReturnPort(TrackId, u16),
+    /// Set the selected MIDI bank (combined 14-bit MSB<<7|LSB), or `None` to
+    /// send no Bank Select. Fires the patch send.
+    SetBank(TrackId, Option<u16>),
+    /// Set the selected MIDI program (`0..=127`), or `None` to send no
+    /// Program Change. Fires the patch send.
+    SetProgram(TrackId, Option<u8>),
+    /// Select a **named patch** from the selected device definition (epic
+    /// #40, doc #201 §5): sets the combined 14-bit bank (`MSB<<7|LSB`) and
+    /// the program together, resolved from the chosen `PatchEntry`. `None`
+    /// bank/program clears the corresponding selection (the "(no patch)"
+    /// entry sends both `None`). Fires a single Bank Select + Program Change
+    /// through the same path as `SetBank`/`SetProgram`.
+    SetPatch(TrackId, Option<u16>, Option<u8>),
+    /// Set the manual latency offset (samples) aligning the audio return.
+    SetLatencyOffset(TrackId, i64),
+    /// Toggle input monitoring for the return.
+    ToggleMonitor(TrackId),
+    /// Toggle record-arm (capture the audio return to the timeline).
+    ToggleRecordArm(TrackId),
+    /// Auto-detect ping: re-check this track's MIDI-out + audio-return
+    /// devices against the live hardware and report any that are offline.
+    CheckDevices(TrackId),
+    /// Auto-detect the round-trip latency of this external-instrument track:
+    /// dispatch `DetectExternalInstrumentLatency` so the engine fires a MIDI
+    /// impulse and times the audio return, then reports back via
+    /// `ExternalInstrumentLatencyMeasured` / `…LatencyDetectFailed`. No-op if
+    /// the track isn't external, a detect is already running, or the transport
+    /// is playing (the engine requires a stopped transport). Runtime-only —
+    /// the measured offset arrives as a separate engine event; no undo entry.
+    DetectLatency(TrackId),
+    /// Re-scan the available hardware so the "pick another device" lists are
+    /// fresh. Runtime-only — refreshes device lists, mutates no config.
+    RescanDevices,
+    /// Open the user device-definitions folder in the OS file manager so the
+    /// user can add or edit `.json` definition files. Creates the folder
+    /// first so the file manager opens something rather than erroring.
+    /// Runtime-only — no undo, no config mutation.
+    RevealUserDefinitionsFolder,
+    /// Re-scan the device-definition registry (bundled + user folder) and
+    /// rebuild the device-preset picker options. Call after the user has
+    /// dropped a new `.json` file into the user definitions folder.
+    /// Runtime-only — no undo.
+    RescanDefinitions,
 }
 
 #[derive(Debug, Clone)]
@@ -324,6 +515,47 @@ pub enum ClipMessage {
     UpdateClipGainDrag(f32),
     /// Commit the active gain drag.
     EndClipGainDrag,
+    // -- Inspector flyout edits (emitted by todo #319, handled by #317) --
+    //
+    // Discrete, atomic edits from the clip inspector flyout, complementing
+    // the on-canvas direct manipulation above. Each one mutates the live
+    // `ClipState` mirror and sends the matching engine command
+    // (`SetClipFade` / `SetClipGain`); the undo system records one entry
+    // per edit (see `undo::classify`). The flyout reads the current values
+    // back from the same `ClipState` mirror, so on-canvas drags and the
+    // numeric fields always agree.
+    /// Set the fade-in length from the inspector's numeric field, in
+    /// milliseconds. Converted to frames against the project sample rate
+    /// and clamped to the clip's audible length.
+    SetClipFadeInMs {
+        clip_id: ClipId,
+        ms: f32,
+    },
+    /// Set the fade-out length from the inspector's numeric field, in ms.
+    SetClipFadeOutMs {
+        clip_id: ClipId,
+        ms: f32,
+    },
+    /// Set the clip gain from the inspector's numeric field, in decibels.
+    SetClipGainDb {
+        clip_id: ClipId,
+        gain_db: f32,
+    },
+    /// Choose the fade-in curve from the inspector's curve picker.
+    SetClipFadeInCurve {
+        clip_id: ClipId,
+        curve: FadeCurve,
+    },
+    /// Choose the fade-out curve from the inspector's curve picker.
+    SetClipFadeOutCurve {
+        clip_id: ClipId,
+        curve: FadeCurve,
+    },
+    /// Reset the clip's fades and gain to their defaults (no fade, unity
+    /// gain, default curves) — the inspector's "Reset to default" action.
+    ResetClipFadeGain {
+        clip_id: ClipId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -411,6 +643,89 @@ pub enum MidiEditorMessage {
         clip_id: ClipId,
         note_index: usize,
     },
+
+    // -- Bulk timing edits (quantize / humanize / groove), doc #163, epic #25 --
+    // These operate on the *open* MIDI editor clip, so they carry no
+    // `clip_id`: the handler reads the active editor and the current
+    // multi-note selection (#389), falling back to the whole clip when the
+    // selection is empty. Each dispatches one bulk `AudioCommand` (#388)
+    // that the engine applies atomically and mirrors back as a single
+    // `MidiNotesEdited`; the pre-dispatch undo snapshot captures the prior
+    // notes so the whole op is one undo step.
+    /// Quantize the current selection (or whole clip) toward `grid`.
+    Quantize {
+        grid: Division,
+        /// Blend toward the grid, `0.0..=1.0` (`1.0` snaps exactly).
+        strength: f32,
+        /// Swing applied to odd grid steps, `0.0..=1.0`.
+        swing: f32,
+        mode: QuantizeMode,
+        /// Snap note-offs to the grid as well as note-ons.
+        quantize_ends: bool,
+        /// Apply the strength blend repeatedly (soft/iterative quantize).
+        iterative: bool,
+    },
+    /// Humanize the current selection (or whole clip) with bounded,
+    /// seeded timing + velocity jitter. `seed` is `None` for ordinary
+    /// invocations — the handler draws one fresh seed per invocation so a
+    /// single edit is reproducible (and captured as one undo step); a new
+    /// invocation re-rolls. Tests pass `Some(_)` for determinism.
+    Humanize {
+        /// Maximum absolute timing offset in ticks.
+        timing: u32,
+        /// Velocity jitter fraction, `0.0..=1.0`.
+        vel: f32,
+        seed: Option<u64>,
+    },
+    /// Apply the named groove template to the current selection (or whole
+    /// clip). `template_id` names a stock groove today; user/extracted
+    /// grooves land with the library-persistence slice (#395).
+    ApplyGroove {
+        template_id: String,
+        /// Template blend, `0.0..=1.0`.
+        strength: f32,
+    },
+    /// Extract a groove template from the open clip at `grid` resolution.
+    /// Reads the whole clip (selection-independent); emits
+    /// `AudioEvent::GrooveExtracted` and does not modify the notes.
+    ExtractGroove {
+        grid: Division,
+    },
+
+    // -- Quantize panel controls (todo #392) --
+    // These write the Quantize panel's settings
+    // (`Resonance::midi_quantize`); none of them touch the notes. The
+    // panel's Apply button reads those settings to build the bulk
+    // `Quantize` message above. Pure view-state edits, so undo skips them.
+    /// Set the quantize grid division.
+    SetQuantizeGrid(GridChoice),
+    /// Set the quantize strength, `0.0..=1.0`.
+    SetQuantizeStrength(f32),
+    /// Set the swing amount, `0.0..=1.0`.
+    SetQuantizeSwing(f32),
+    /// Set the quantize mode (start-only vs start+length).
+    SetQuantizeMode(QuantizeMode),
+    /// Toggle snapping note-ends to the grid.
+    SetQuantizeEnds(bool),
+    /// Toggle iterative/soft quantize.
+    SetQuantizeIterative(bool),
+    /// Set the Humanize timing-jitter amount, in ticks (clamped to
+    /// `0..=`[`crate::state::HUMANIZE_TIMING_MAX_TICKS`]).
+    SetHumanizeTiming(u32),
+    /// Set the Humanize velocity-jitter fraction, `0.0..=1.0`.
+    SetHumanizeVelocity(f32),
+
+    // -- Groove extract / apply panel controls (todo #394) --
+    // Pure view-state edits to the Quantize panel's groove fields
+    // (`Resonance::midi_quantize`); none touch the notes, so undo skips
+    // them. The Extract / Apply buttons read these to build the bulk
+    // `ExtractGroove` / `ApplyGroove` messages above.
+    /// Set the name for the next "Extract groove" capture.
+    SetGrooveName(String),
+    /// Select a groove (stock or user-extracted) in the apply picker.
+    SetGrooveSelection(GrooveSelection),
+    /// Set the groove apply strength, `0.0..=1.0`.
+    SetGrooveStrength(f32),
 }
 
 /// Vocal pitch-editor (graphical tuning) messages, doc #160. This todo
@@ -438,6 +753,68 @@ pub enum PluginMessage {
     OpenPluginEditor(PluginInstanceId),
     /// Close the plugin's editor window.
     ClosePluginEditor(PluginInstanceId),
+}
+
+/// Edits to parameter-automation lanes (architecture doc #162 §3, epic
+/// #14). Every variant maps to one mutation of the app-side
+/// [`crate::state::AutomationState`] plus the matching engine command;
+/// the discrete edits are atomic undo entries while the breakpoint drag
+/// coalesces into one (see the `Begin`/`Commit` classification in
+/// `undo.rs`). The `target` identifies which lane is edited; the
+/// parameter-picker UI that *chooses* the target lives in todo #383 and
+/// the canvas hit-testing that emits the breakpoint edits in todo #382 —
+/// this enum is the shared edit vocabulary both dispatch through.
+#[derive(Debug, Clone)]
+pub enum AutomationMessage {
+    /// Create a lane for `target`, seeded with a single breakpoint at
+    /// frame 0 holding the target's current static value so turning Read
+    /// on doesn't jump the parameter. No-op when a lane already exists.
+    AddLane(AutomationTarget),
+    /// Remove the lane for `target` entirely (Read flag, breakpoints and
+    /// any live tint). No-op when no lane exists.
+    RemoveLane(AutomationTarget),
+    /// Flip the lane's Read flag (`AutomationLane::enabled`) without
+    /// discarding its breakpoints. No-op when no lane exists.
+    ToggleRead(AutomationTarget),
+    /// Insert a breakpoint at `time_frames` with normalized `value` and
+    /// `curve`. Creates the lane first when absent.
+    AddBreakpoint {
+        target: AutomationTarget,
+        time_frames: u64,
+        value: f32,
+        curve: CurveKind,
+    },
+    /// Delete the breakpoint at `index` in the lane's time-sorted point
+    /// list. Removing the last point clears the lane (an enabled empty
+    /// lane would otherwise force the value to its floor).
+    DeleteBreakpoint {
+        target: AutomationTarget,
+        index: usize,
+    },
+    /// Set the curve kind on the breakpoint at `index`.
+    SetCurveKind {
+        target: AutomationTarget,
+        index: usize,
+        curve: CurveKind,
+    },
+    /// Begin a breakpoint drag: opens an undo transaction so the whole
+    /// drag collapses into a single entry. Carries the grabbed `index`
+    /// for the caller's drag-state bookkeeping (todo #382).
+    StartBreakpointDrag {
+        target: AutomationTarget,
+        index: usize,
+    },
+    /// Move the dragged breakpoint to a new `time_frames` + `value`
+    /// (mid-gesture; not itself an undo entry). Re-sorts the lane after
+    /// the move so the time invariant holds.
+    DragBreakpoint {
+        target: AutomationTarget,
+        index: usize,
+        time_frames: u64,
+        value: f32,
+    },
+    /// Commit the breakpoint drag opened by [`Self::StartBreakpointDrag`].
+    EndBreakpointDrag,
 }
 
 #[derive(Debug, Clone)]
@@ -533,7 +910,13 @@ pub enum UiMessage {
     /// User clicked "New Project" in the startup modal.
     StartNewProject,
     /// Select (highlight) a track in the arrange view, or deselect all.
+    /// Whether the click replaces or extends the multi-selection is read
+    /// from the live modifier state ([`ModifiersChanged`]).
     SelectTrack(Option<TrackId>),
+    /// Live keyboard modifier state changed. Tracked so a track-header
+    /// click can tell a plain select from an additive (Cmd/Shift) one
+    /// without the mouse event carrying modifiers (todo #684).
+    ModifiersChanged(iced::keyboard::Modifiers),
     /// User confirmed "Save & Quit" in the unsaved-changes dialog.
     ConfirmSaveAndQuit,
     /// User confirmed "Discard & Quit" in the unsaved-changes dialog.
@@ -553,6 +936,44 @@ pub enum UiMessage {
     ToggleMidiClockRecv,
     /// Pick the hardware port for MIDI clock receive. `None` clears.
     SetMidiClockRecvDevice(Option<String>),
+    /// Select the Performance-mode instrument/tuning by its index into
+    /// `resonance_music_theory::ALL_TUNINGS` (the footer's segmented pill
+    /// selector). Out-of-range indices are ignored. The live fingering
+    /// diagrams re-voice against the new tuning.
+    SetPerformanceTuning(usize),
+    /// Set the Performance-mode capo position in frets (the footer's `Capo`
+    /// stepper). Clamped to `0..=state::performance::MAX_CAPO`; the diagrams
+    /// re-voice with the capo applied.
+    SetPerformanceCapo(u8),
+    /// Show / hide the arrangement-markers overview popover anchored under
+    /// the transport bar (the transport "flag" button). Runtime UI state
+    /// only (todo #370).
+    ToggleMarkersOverview,
+    /// Close the markers overview popover — backdrop click, or after an
+    /// overview entry jumps the playhead (todo #370).
+    CloseMarkersOverview,
+    /// Raw next/prev-marker key press (`.` / `,`). Like
+    /// [`RequestPerformanceToggle`], this does not navigate directly: it
+    /// first probes the live widget tree for keyboard focus (see
+    /// [`crate::focus`]) so typing `.`/`,` into a track name / lyrics /
+    /// section field never jumps the playhead. Resolves to
+    /// [`MarkerNavResolved`]. `forward` picks next (`true`) vs prev.
+    RequestMarkerNav {
+        forward: bool,
+    },
+    /// Result of the focus probe started by [`RequestMarkerNav`]. When no
+    /// text field held focus (`editing == false`) the corresponding
+    /// [`crate::message::MarkerMessage::JumpToNext`] /
+    /// [`crate::message::MarkerMessage::JumpToPrev`] is dispatched.
+    MarkerNavResolved {
+        forward: bool,
+        editing: bool,
+    },
+    /// Close the audio-import transcode-progress modal (doc #175, todo
+    /// #606) once all files have reached a terminal state. Presentational
+    /// only — the import already ran; this just hides the overlay and
+    /// clears the transient progress tracker. Never undoable.
+    DismissImportProgress,
 }
 
 #[derive(Debug, Clone)]
@@ -630,6 +1051,221 @@ pub enum ImportMessage {
     SetConflictAlignment(TempoAlignment),
     /// Confirm and start the import.
     Confirm,
+}
+
+/// Where a drop-import lands its clips (doc #175, ba todo #598). The
+/// sample position is the **raw** drop position; the orchestration snaps
+/// it to the timeline grid (the same snap the clip-drag handlers use)
+/// before placement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropTarget {
+    /// Place each imported file on an existing track at `start_sample`.
+    ExistingTrack {
+        track_id: TrackId,
+        start_sample: SamplePos,
+    },
+    /// Spawn a new audio track (the new-audio-track drop zone below the
+    /// last lane) and place each imported file on it at `start_sample`.
+    NewTrack { start_sample: SamplePos },
+}
+
+/// Audio import + placement orchestration (doc #175, ba todo #598).
+/// Drives the end-to-end flow: a multi-file selection (from the "Import
+/// audio…" dialog or a drag-and-drop) is imported into the project pool
+/// via `AudioCommand::ImportAudioToPool`, and — for a drop — each file is
+/// placed as an audio clip once its `AssetImported` event lands. Routed
+/// through `update::pool::handle`.
+///
+/// `ImportFilesToPool` and `ImportAndPlace` are classified
+/// `UndoAction::Record` (see `undo::classify`) so the whole import +
+/// placement is a single undoable action: the undo snapshot is taken up
+/// front, before the import is issued, so one undo reverts the pool
+/// asset(s), any placed clip(s), and a spawned track. `PickFiles` and
+/// `WindowAudioDrop` are entry-point messengers — `PickFiles` opens the
+/// OS dialog (no state change until `ImportFilesToPool` fires back) and
+/// `WindowAudioDrop` resolves to `ImportAndPlace` inside the handler —
+/// so both are classified `UndoAction::Skip`.
+#[derive(Debug, Clone)]
+pub enum PoolMessage {
+    /// Open the OS multi-file audio picker (the "Import audio…" chrome
+    /// button, ba todo #608). The picked paths come back as a
+    /// `ImportFilesToPool` message via `Task::perform`; cancelling the
+    /// dialog yields an empty path list that is silently dropped.
+    /// Classified `UndoAction::Skip` — no state changes at dispatch time.
+    PickFiles,
+    /// An audio file was dropped onto the arrangement window from the OS
+    /// (ba todo #608). The handler resolves the drop to a new audio track
+    /// at the current playhead position and calls through to the shared
+    /// `import()` helper. One message fires per dropped file (iced emits
+    /// one `FileDropped` event per path). Classified `UndoAction::Skip`
+    /// (the resulting `ImportAndPlace` that the handler re-dispatches
+    /// records the actual undo entry).
+    WindowAudioDrop(std::path::PathBuf),
+    /// Import one or more files into the pool **without** placing a clip
+    /// (the "Import audio…" dialog / pool-only path).
+    ImportFilesToPool(Vec<std::path::PathBuf>),
+    /// Import one or more files and place them as clips at `target` (a
+    /// drop on an existing lane, or on the new-audio-track zone).
+    ImportAndPlace {
+        paths: Vec<std::path::PathBuf>,
+        target: DropTarget,
+    },
+}
+
+/// Missing-file relink actions (doc #175, todo #600). When a project is
+/// loaded whose pool references a WAV that is no longer on disk, that
+/// asset is flagged [`missing`](crate::state::pool::PoolAsset::missing) —
+/// its clips are kept offline so nothing is lost — and these messages
+/// drive resolving the file again:
+///
+/// * per-file [`Locate`](RelinkMessage::Locate) opens an OS file picker so
+///   the user points one missing asset at a replacement file, and
+/// * one-shot [`SearchFolder`](RelinkMessage::SearchFolder) picks a folder
+///   and resolves *every* missing asset whose original filename is found
+///   inside it (recursively).
+///
+/// Either way the resolved source is copied/transcoded back into the
+/// project's `audio/` folder under the asset's stable
+/// `asset_{id}.wav` name (reusing the import-to-pool path), the missing
+/// flag is cleared, and the asset's clips are reloaded so playback
+/// resumes. The metadata change rides the normal project snapshot, so the
+/// relink is undoable. Routed through `update::relink::handle`.
+#[derive(Debug, Clone)]
+pub enum RelinkMessage {
+    /// Open the OS file picker to locate a replacement file for one
+    /// missing asset (the per-file `Locate…` action).
+    Locate(AssetId),
+    /// File-picker result for a single-asset [`Locate`](Self::Locate):
+    /// `Some` with the chosen path, or `None` if the user cancelled.
+    Located(AssetId, Option<std::path::PathBuf>),
+    /// Open the OS folder picker for the one-shot `Search a folder…`
+    /// batch relink.
+    SearchFolder,
+    /// Folder-picker result for [`SearchFolder`](Self::SearchFolder):
+    /// `Some` folder resolves every missing asset whose original filename
+    /// exists inside it; `None` if the user cancelled.
+    FolderChosen(Option<std::path::PathBuf>),
+    /// A background relink import finished. `Ok` carries the transcoded
+    /// asset's fresh metadata (it now lives in the project folder); `Err`
+    /// carries the asset/file/reason of a failed import.
+    Imported(Result<PoolImportOutcome, RelinkError>),
+    /// Open the missing-files relink modal (todo #607). Fired on load when
+    /// a project references missing assets, and by the Pool tab's inline
+    /// `relink` chip. Snapshots the currently-missing assets into
+    /// [`RelinkState::modal_targets`](crate::state::RelinkState::modal_targets).
+    /// Presentational only — never undoable.
+    ShowModal,
+    /// Dismiss the relink modal (its "Leave offline" / close action). The
+    /// tracked clips stay offline until relinked later. Presentational
+    /// only — never undoable.
+    DismissModal,
+}
+
+/// A failed relink import: which asset was being relinked, the source
+/// file that was tried, and a user-facing reason.
+#[derive(Debug, Clone)]
+pub struct RelinkError {
+    pub asset_id: AssetId,
+    pub path: String,
+    pub reason: String,
+}
+
+/// Docked media-browser interaction (doc #175, todo #599): filesystem
+/// navigation, filtering, favourite / recent management, tab switching,
+/// and the audition preview transport. Routed through
+/// `update::browser::handle`.
+///
+/// Every variant is **transient** — classified `UndoAction::Skip` (like
+/// the collapse toggles) so none of it lands on the undo stack or in the
+/// project file. The audition variants additionally drive the engine's
+/// preview transport (`AuditionFile` / `StopAudition` /
+/// `SetAuditionOptions`); favourite / recent changes are mirrored into
+/// user settings (`settings.json`), which is user-level state, not project
+/// persistence.
+#[derive(Debug, Clone)]
+pub enum BrowserMessage {
+    // -- Panel chrome -------------------------------------------------
+    /// Show / hide the docked media-browser panel in the Arrange view.
+    /// Dispatched by the "Media" chrome toggle and the panel header's
+    /// collapse caret. Pure transient UI state (never persisted / undone).
+    ToggleVisible,
+
+    // -- Tabs & navigation --------------------------------------------
+    /// Switch between the Files and Pool tabs.
+    SelectTab(BrowserTab),
+    /// Navigate the Files tab into `path` (a folder row, a breadcrumb
+    /// crumb, or a favourite / recent shelf entry). Sets it as the current
+    /// folder, clears the per-folder filter, records it as most-recently
+    /// visited, and kicks off an off-thread scan.
+    OpenFolder(std::path::PathBuf),
+    /// An off-thread folder scan finished. Applied only when `folder`
+    /// still matches the current folder (a scan for a folder the user has
+    /// since left is dropped). Clears the `scanning` flag.
+    ScanCompleted {
+        folder: std::path::PathBuf,
+        scan: FolderScan,
+    },
+    /// Set the current folder's case-insensitive file-name filter.
+    SetFilter(String),
+
+    // -- Favourites / recent ------------------------------------------
+    /// Toggle whether `path` is a pinned favourite folder, persisting the
+    /// updated favourites list to user settings.
+    ToggleFavourite(std::path::PathBuf),
+
+    // -- Audition preview ---------------------------------------------
+    /// Select `path` as the row to audition. Highlights it; when Auto-play
+    /// is on, immediately starts previewing it. `None` clears the
+    /// selection (and stops any preview started from it).
+    Select(Option<std::path::PathBuf>),
+    /// Start previewing `path` from its start through the engine.
+    Play(std::path::PathBuf),
+    /// Stop the current audition preview.
+    Stop,
+    /// Scrub the current preview to `frame` (seek): restarts the engine
+    /// preview of the playing / selected row at that source frame.
+    Scrub(u64),
+    /// Toggle looping of the preview, pushing the new options to the
+    /// engine.
+    ToggleLoop,
+    /// Toggle sync-to-tempo time-stretch of the preview, pushing the new
+    /// options to the engine.
+    ToggleSync,
+    /// Toggle Auto-play-on-select. Pure UI state; not sent to the engine.
+    ToggleAutoPlay,
+}
+
+/// Drag-to-timeline placement gesture (doc #175, todo #605). The primary
+/// way audio lands on the arrangement: a browser row is dragged over the
+/// timeline, which previews a grid-snapped ghost clip, lights the target
+/// lane, and — on release — drops the file as a clip.
+///
+/// Every variant is **transient** (classified `UndoAction::Skip`): the
+/// pill / ghost / tooltip are pure preview state. Only the drop has a
+/// durable effect, and it borrows the undoable
+/// [`PoolMessage::ImportAndPlace`] path so the whole import + placement is
+/// a single undo entry. Routed through `update::drag::handle`.
+#[derive(Debug, Clone)]
+pub enum DragMessage {
+    /// Begin dragging `asset` (a browser row) onto the timeline. Records the
+    /// in-flight drag so the timeline can start previewing it.
+    Start(DraggedAsset),
+    /// Pointer moved to `cursor` (timeline-canvas content coordinates) with
+    /// a freshly resolved drop target. Published by the timeline canvas each
+    /// move while a drag is active; updates the pill / ghost / tooltip.
+    /// `resolved` is `None` when the cursor is off the lane area.
+    Hover {
+        cursor: iced::Point,
+        resolved: Option<DropResolution>,
+    },
+    /// Release over the timeline: commit the current resolution. Reads the
+    /// resolved [`DropTarget`], clears the drag, and re-dispatches a
+    /// [`PoolMessage::ImportAndPlace`] so the placement is imported +
+    /// undoable. A no-op if the drag never resolved a target.
+    Drop,
+    /// Abandon the drag (released off the timeline, or Esc). Clears the
+    /// preview with no placement.
+    Cancel,
 }
 
 /// Edits to the global chord track (epic #33, doc #168). Routed like

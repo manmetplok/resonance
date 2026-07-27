@@ -17,12 +17,17 @@ use crate::view::controls::{
 use crate::util::short;
 use crate::Resonance;
 
-pub(super) fn view_track_header(
-    _r: &Resonance,
+pub(crate) fn view_track_header(
+    r: &Resonance,
     track: &TrackState,
     is_selected: bool,
 ) -> Element<'static, Message> {
     let track_id = track.id;
+
+    // Calculate indent level for group members using the registry method
+    let indent_level = r.track_groups.indent_depth(track_id);
+    let group_colors = r.track_groups.get_group_identity_colors(track_id);
+    let indent_pixels = indent_level as f32 * theme::GROUP_MEMBER_INDENT;
 
     // ---- Glyph (28×28 rounded BG_2 square with the track's instrument icon) ----
     let glyph_char = glyph_for_track(track);
@@ -98,10 +103,41 @@ pub(super) fn view_track_header(
     .spacing(0)
     .align_y(alignment::Vertical::Center);
 
+    // "via group" mute / solo chips: each shown only when this member is
+    // muted / soloed purely because its group's macro mute / solo is engaged
+    // (not by its own flag), so the row reads as "muted/soloed because the
+    // group is" (todos #687 / #688). When absent each collapses to a
+    // zero-size spacer, leaving the layout (and the alignment snapshot)
+    // untouched.
+    let mute_via_group =
+        !track.muted && r.track_groups.is_track_muted_via_group(track_id);
+    let via_group_mute_chip: Element<'static, Message> = if mute_via_group {
+        crate::view::controls::via_group_mute_chip()
+    } else {
+        Space::new().width(0).height(0).into()
+    };
+    let solo_via_group =
+        !track.soloed && r.track_groups.is_track_soloed_via_group(track_id);
+    let via_group_solo_chip: Element<'static, Message> = if solo_via_group {
+        crate::view::controls::via_group_solo_chip()
+    } else {
+        Space::new().width(0).height(0).into()
+    };
+
     // Bottom of the cell: 4-button row, right-aligned to keep the glyph +
-    // name visually the dominant element.
-    let button_row = row![Space::new().width(Length::Fill), buttons]
-        .align_y(alignment::Vertical::Center);
+    // name visually the dominant element. The "via group" chips sit at the
+    // left, before the fill, so they never displace the buttons.
+    // No row spacing: when a chip is absent its zero-size spacer adds
+    // nothing, so a row with only the solo chip renders identically to the
+    // pre-#687 layout (and the solo alignment snapshot stays valid). The
+    // chips' own 4px horizontal padding keeps them legible when both show.
+    let button_row = row![
+        via_group_mute_chip,
+        via_group_solo_chip,
+        Space::new().width(Length::Fill),
+        buttons
+    ]
+    .align_y(alignment::Vertical::Center);
 
     let body_col = column![top_row, Space::new().height(8), button_row,]
         .spacing(0)
@@ -130,7 +166,7 @@ pub(super) fn view_track_header(
             top: 10.0,
             right: 24.0,
             bottom: 10.0,
-            left: 24.0,
+            left: 24.0 + indent_pixels,
         });
 
     let body_with_bg = container(body)
@@ -140,6 +176,22 @@ pub(super) fn view_track_header(
             background: Some(iced::Background::Color(bg)),
             ..Default::default()
         });
+
+    // Create group identity rails (3px each, leftmost first)
+    let group_rails: Vec<_> = group_colors
+        .iter()
+        .map(|&color| {
+            let (base, _, _) = theme::group_identity_colors(color);
+            container(Space::new().height(Length::Fill))
+                .width(theme::GROUP_RAIL_WIDTH)
+                .height(Length::Fill)
+                .style(move |_theme| container::Style {
+                    background: Some(iced::Background::Color(base)),
+                    ..Default::default()
+                })
+                .into()
+        })
+        .collect();
 
     let stripe = container(Space::new().height(Length::Fill))
         .width(2)
@@ -153,7 +205,7 @@ pub(super) fn view_track_header(
     // sum to exactly `TRACK_HEIGHT` — matching the canvas's per-row
     // pitch. Without this trim, every column row was 1 px taller than
     // the canvas row and headers drifted down 1 px per track.
-    let cell = row![stripe, body_with_bg].height(theme::TRACK_HEIGHT - 1.0);
+    let cell = row![row(group_rails).width(Length::Shrink), stripe, body_with_bg].height(theme::TRACK_HEIGHT - 1.0);
 
     // 1px hairline below each cell so rows separate without a heavy border.
     let hairline = container(Space::new().width(Length::Fill))

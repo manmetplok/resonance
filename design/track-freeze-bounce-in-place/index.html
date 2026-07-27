@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — Track freeze / bounce-in-place (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-dim:rgba(232,196,123,.16); --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --bad:#e87b8b;
+    /* Frost = frozen treatment. NOT a new color token: a translucent cool wash
+       layered over BG_2 + a desaturated icy tint borrowed from accent at low sat.
+       Documented as a *visual mode*, not a palette addition. */
+    --frost-wash:rgba(168,182,210,.10);
+    --frost-edge:rgba(168,182,210,.30);
+    --frost-icon:#aeb8cf;
+    --radius-xs:4px; --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+    --track-h:96px; --ruler-h:28px; --section-h:22px; --header-w:280px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+  button{font-family:inherit}
+
+  /* ---- App chrome ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1)}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px;color:var(--text-1)}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .tabs{display:flex;gap:2px;margin-left:8px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+
+  /* CPU readout in the chrome — the whole point of freezing */
+  .cpu{display:flex;align-items:center;gap:9px;padding:5px 12px;border:1px solid var(--line);
+    border-radius:var(--radius-md);background:var(--bg-1)}
+  .cpu .lbl{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3)}
+  .cpu .bar{width:120px;height:7px;border-radius:4px;background:var(--bg-3);overflow:hidden;position:relative}
+  .cpu .fill{position:absolute;inset:0 auto 0 0;border-radius:4px;transition:width .5s ease, background .5s ease}
+  .cpu .pct{font-size:12px;width:38px;text-align:right}
+  .cpu.hot .fill{width:87%;background:var(--bad)} .cpu.hot .pct{color:var(--bad)}
+  .cpu.cool .fill{width:31%;background:var(--good)} .cpu.cool .pct{color:var(--good)}
+
+  /* ---- State switcher (prototype-only scaffolding) ---- */
+  .statebar{
+    height:46px;flex:0 0 auto;display:flex;align-items:center;gap:8px;
+    padding:0 18px;background:var(--bg-1);border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);margin-right:4px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{border:0;background:transparent;color:var(--text-2);padding:7px 13px;font-size:12px;
+    cursor:pointer;border-right:1px solid var(--line-2)}
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .seg button:hover:not(.on){background:var(--bg-3);color:var(--text-1)}
+  .hint{margin-left:auto;color:var(--text-3);font-size:11.5px;max-width:54ch;text-align:right;line-height:1.4}
+
+  /* ---- Arrange surface ---- */
+  .arrange{flex:1;min-height:0;display:flex;position:relative;overflow:hidden}
+  .col-headers{width:var(--header-w);flex:0 0 auto;background:var(--bg-1);border-right:1px solid var(--line)}
+  .col-lanes{flex:1;min-width:0;position:relative;overflow:hidden;background:var(--bg-1)}
+
+  /* Ruler + section band */
+  .ruler{height:var(--ruler-h);display:flex;align-items:flex-end;border-bottom:1px solid var(--line-2);
+    background:var(--bg-1);position:relative}
+  .ruler .bar{flex:1;border-left:1px solid var(--line-2);font-size:10px;color:var(--text-3);padding:0 0 3px 6px}
+  .ruler .bar:first-child{border-left:0}
+  .sectionband{height:var(--section-h);display:flex;gap:3px;align-items:center;padding:0 3px;
+    border-bottom:1px solid var(--line-2);background:var(--bg-1)}
+  .pill{height:16px;border-radius:var(--radius-xs);font-size:10px;display:flex;align-items:center;
+    padding:0 9px;color:var(--text-2);background:var(--bg-3);border:1px solid var(--line)}
+  .header-spacer{height:calc(var(--ruler-h) + var(--section-h));border-bottom:1px solid var(--line-2);
+    display:flex;align-items:center;padding:0 14px;justify-content:space-between}
+  .header-spacer .t{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3)}
+
+  /* batch freeze buttons in the header column top */
+  .batch{display:flex;gap:5px}
+  .batch button{font-size:10.5px;padding:4px 8px;border:1px solid var(--line);border-radius:var(--radius-sm);
+    background:var(--bg-2);color:var(--text-2);cursor:pointer;display:flex;align-items:center;gap:5px}
+  .batch button:hover{background:var(--bg-3);color:var(--text-1)}
+  .batch svg{width:11px;height:11px}
+
+  /* ---- Track header cell ---- */
+  .hcell{height:calc(var(--track-h) - 1px);display:flex;border-bottom:1px solid var(--line-2);position:relative}
+  .hcell .stripe{width:2px;background:transparent;flex:0 0 auto}
+  .hcell.sel .stripe{background:var(--accent)}
+  .hcell .body{flex:1;min-width:0;padding:10px 16px 10px 22px;display:flex;flex-direction:column;justify-content:space-between}
+  .hcell.sel .body{background:var(--bg-2)}
+  .htop{display:flex;align-items:center;gap:12px}
+  .glyph{width:28px;height:28px;flex:0 0 auto;border-radius:var(--radius-md);background:var(--bg-2);
+    border:1px solid var(--line-2);display:flex;align-items:center;justify-content:center;color:var(--text-2)}
+  .glyph svg{width:14px;height:14px}
+  .nm{min-width:0;flex:1}
+  .nm .name{font-size:13px;font-weight:600;color:var(--text-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .nm .kind{font-size:10px;color:var(--text-3);white-space:nowrap}
+  .del{margin-left:auto;color:var(--text-4);width:16px;height:16px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .del:hover{color:var(--bad)}
+  .del svg{width:11px;height:11px}
+
+  /* mini control row */
+  .mini{display:flex;gap:5px;justify-content:flex-end;align-items:center}
+  .mb{width:22px;height:22px;border-radius:var(--radius-xs);border:1px solid var(--line);background:var(--bg-2);
+    color:var(--text-3);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:10px;font-weight:700}
+  .mb:hover{background:var(--bg-3);color:var(--text-1)}
+  .mb svg{width:11px;height:11px}
+  .mb.on-solo{background:var(--warm-dim);color:var(--warm);border-color:var(--warm-line)}
+  .mb.on-mute{background:rgba(232,123,139,.16);color:var(--bad);border-color:rgba(232,123,139,.34)}
+  .mb.freeze{margin-right:2px}
+  .mb.freeze.on{background:var(--frost-wash);color:var(--frost-icon);border-color:var(--frost-edge)}
+  .mb.locked{opacity:.4;cursor:not-allowed;pointer-events:none}
+
+  /* ---- Frozen header treatment ---- */
+  .hcell.frozen .body{
+    background:linear-gradient(var(--frost-wash),var(--frost-wash)), var(--bg-2);
+  }
+  .hcell.frozen .stripe{background:var(--frost-edge)}
+  .frostbadge{display:none;align-items:center;gap:5px;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--frost-icon);background:var(--frost-wash);border:1px solid var(--frost-edge);
+    border-radius:99px;padding:2px 8px}
+  .frostbadge svg{width:10px;height:10px}
+  .hcell.frozen .frostbadge{display:inline-flex}
+  .hcell.frozen .glyph{color:var(--frost-icon);border-color:var(--frost-edge)}
+
+  /* ---- Lanes ---- */
+  .lane{height:calc(var(--track-h) - 1px);border-bottom:1px solid var(--line-2);position:relative;
+    background:repeating-linear-gradient(90deg,transparent,transparent calc(12.5% - 1px),var(--line-2) 12.5%)}
+  .lane.sel{background-color:rgba(139,109,255,.04)}
+  .clip{position:absolute;top:10px;bottom:10px;border-radius:var(--radius-lg);overflow:hidden;
+    display:flex;flex-direction:column;border:1px solid transparent}
+  .clip .clabel{font-size:10.5px;padding:4px 8px 0;font-weight:600;white-space:nowrap}
+  .clip.midi{background:var(--accent-dim);border-color:var(--accent-line)}
+  .clip.midi .clabel{color:var(--accent-soft)}
+  .clip.audio{background:var(--warm-dim);border-color:var(--warm-line)}
+  .clip.audio .clabel{color:var(--warm)}
+  .clip.vocal{background:var(--accent-dim);border-color:var(--accent-line)}
+  .clip.vocal .clabel{color:var(--accent-soft)}
+  /* MIDI note blocks */
+  .notes{position:absolute;inset:18px 6px 6px;}
+  .note{position:absolute;height:5px;border-radius:2px;background:var(--accent);opacity:.85}
+  /* waveform */
+  .wave{flex:1;display:flex;align-items:center;gap:1px;padding:2px 8px 6px}
+  .wave i{flex:1;background:var(--warm);opacity:.55;border-radius:1px;min-width:1px}
+
+  /* frozen lane: live-input clip is dimmed/locked, a rendered audio band sits behind */
+  .lane.frozen{background-color:var(--frost-wash)}
+  .frozenstack{position:absolute;inset:0}
+  .frozenwave{position:absolute;top:10px;bottom:10px;left:1%;right:34%;border-radius:var(--radius-lg);
+    background:linear-gradient(var(--frost-wash),var(--frost-wash)), var(--warm-dim);
+    border:1px solid var(--frost-edge);overflow:hidden;display:flex;flex-direction:column}
+  .frozenwave .clabel{font-size:10.5px;padding:4px 8px 0;font-weight:600;color:var(--frost-icon);
+    display:flex;align-items:center;gap:5px}
+  .frozenwave .clabel svg{width:10px;height:10px}
+  .frozenwave .wave i{background:var(--frost-icon);opacity:.5}
+  .lockchip{position:absolute;top:14px;right:1%;display:flex;align-items:center;gap:6px;
+    font-size:10px;color:var(--text-3);background:var(--bg-2);border:1px solid var(--line);
+    border-radius:99px;padding:3px 9px}
+  .lockchip svg{width:10px;height:10px}
+
+  /* playhead */
+  .playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--warm);left:22%;z-index:5;pointer-events:none}
+
+  /* ---- Per-track banners (stale / error), slot above the lane content ---- */
+  .banner{position:absolute;left:1%;right:1%;top:50%;transform:translateY(-50%);z-index:8;
+    display:none;align-items:center;gap:12px;padding:9px 12px;border-radius:var(--radius-md);font-size:12px}
+  .banner.show{display:flex}
+  .banner svg{width:15px;height:15px;flex:0 0 auto}
+  .banner .msg{flex:1;line-height:1.35}
+  .banner .msg b{font-weight:600}
+  .banner .acts{display:flex;gap:7px}
+  .banner .acts button{font-size:11.5px;padding:5px 12px;border-radius:var(--radius-sm);cursor:pointer;border:1px solid transparent}
+  .banner.stale{background:rgba(232,196,123,.1);border:1px solid var(--warm-line);color:var(--warm)}
+  .banner.stale .pri{background:var(--warm);color:#2a2310;border-color:var(--warm)}
+  .banner.stale .sec{background:transparent;border-color:var(--warm-line);color:var(--warm)}
+  .banner.err{background:rgba(232,123,139,.1);border:1px solid rgba(232,123,139,.34);color:var(--bad)}
+  .banner.err .pri{background:var(--bad);color:#2a1014;border-color:var(--bad)}
+  .banner.err .sec{background:transparent;border-color:rgba(232,123,139,.34);color:var(--bad)}
+
+  /* ---- Freeze progress modal (mirrors view/bounce_progress.rs) ---- */
+  .scrim{position:absolute;inset:0;background:rgba(0,0,0,.7);z-index:30;display:none;
+    align-items:center;justify-content:center}
+  .scrim.show{display:flex}
+  .modal{width:430px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-xl);
+    padding:24px;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+  .modal h3{margin:0;font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px;font-weight:400;
+    color:var(--text-1);display:flex;align-items:center;gap:9px}
+  .modal h3 svg{width:16px;height:16px;color:var(--frost-icon)}
+  .modal p{margin:9px 0 0;font-size:12.5px;color:var(--text-2);line-height:1.45}
+  .pbar{height:14px;border-radius:7px;background:var(--bg-3);overflow:hidden;margin:18px 0 6px;position:relative}
+  .pbar i{position:absolute;inset:0 auto 0 0;width:62%;background:linear-gradient(90deg,var(--frost-edge),var(--frost-icon));border-radius:7px}
+  .modal .pct{font-size:12px;color:var(--text-3)}
+  .modal .row{display:flex;justify-content:flex-end;margin-top:20px}
+  .modal .row button{padding:8px 18px;border-radius:var(--radius-md);border:1px solid var(--line);
+    background:transparent;color:var(--text-1);font-size:13px;cursor:pointer}
+  .modal .row button:hover{background:var(--bg-3)}
+
+  /* ---- Context menu ---- */
+  .ctx{position:absolute;display:none;z-index:40;width:236px;background:var(--bg-2);border:1px solid var(--line);
+    border-radius:var(--radius-lg);padding:5px;box-shadow:0 18px 44px rgba(0,0,0,.55)}
+  .ctx.show{display:block}
+  .ctx .item{display:flex;align-items:center;gap:10px;padding:8px 9px;border-radius:var(--radius-sm);
+    font-size:12.5px;color:var(--text-1);cursor:pointer}
+  .ctx .item:hover{background:var(--bg-3)}
+  .ctx .item .ic{width:15px;display:flex;justify-content:center;color:var(--text-3)}
+  .ctx .item .ic svg{width:13px;height:13px}
+  .ctx .item.cool .ic{color:var(--frost-icon)}
+  .ctx .item .kbd{margin-left:auto;font-size:10.5px;color:var(--text-4)}
+  .ctx .item.disabled{color:var(--text-4);cursor:default}
+  .ctx .item.disabled:hover{background:transparent}
+  .ctx .sep{height:1px;background:var(--line);margin:5px 7px}
+
+  /* small caption strip at bottom */
+  .legend{flex:0 0 auto;height:34px;display:flex;align-items:center;gap:18px;padding:0 18px;
+    background:var(--bg-0);border-top:1px solid var(--line);font-size:11px;color:var(--text-3)}
+  .legend b{color:var(--text-2);font-weight:600}
+  .legend .k{display:inline-flex;align-items:center;gap:6px}
+  .legend .sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- top chrome -->
+  <div class="chrome">
+    <div class="brand">re<b>s</b>onance</div>
+    <div class="tabs">
+      <div class="tab">Compose</div>
+      <div class="tab active">Arrange</div>
+      <div class="tab">Mix</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="cpu hot" id="cpu">
+      <span class="lbl">DSP&nbsp;Load</span>
+      <span class="bar"><span class="fill"></span></span>
+      <span class="pct mono" id="cpupct">87%</span>
+    </div>
+  </div>
+
+  <!-- prototype state switcher -->
+  <div class="statebar">
+    <span class="lbl">State</span>
+    <div class="seg" id="seg">
+      <button data-s="live" class="on">Live editing</button>
+      <button data-s="freezing">Freezing…</button>
+      <button data-s="frozen">Frozen</button>
+      <button data-s="stale">Stale (refreeze)</button>
+      <button data-s="error">Freeze failed</button>
+      <button data-s="menu">Context menu</button>
+    </div>
+    <span class="hint" id="hint">Heavy SVS vocal + FX chain running live. DSP load is in the red.</span>
+  </div>
+
+  <!-- arrange surface -->
+  <div class="arrange" id="arrange">
+    <!-- header column -->
+    <div class="col-headers">
+      <div class="header-spacer">
+        <span class="t">Tracks</span>
+        <div class="batch">
+          <button title="Freeze all tracks">${ICE}<span>Freeze all</span></button>
+        </div>
+      </div>
+
+      <!-- Track 1: Lead Vocal (the freeze target) -->
+      <div class="hcell sel" id="h-vocal">
+        <div class="stripe"></div>
+        <div class="body">
+          <div class="htop">
+            <div class="glyph">${MIC}</div>
+            <div class="nm">
+              <div class="name">Lead Vocal</div>
+              <div class="kind"><span class="kindtxt">SVS · Lilia</span> <span class="frostbadge">${ICE}Frozen</span></div>
+            </div>
+            <div class="del">${X}</div>
+          </div>
+          <div class="mini">
+            <div class="mb freeze" id="freezebtn" title="Freeze track">${ICE}</div>
+            <div class="mb" title="Mute">M</div>
+            <div class="mb" title="Solo">S</div>
+            <div class="mb" title="Record arm">${REC}</div>
+            <div class="mb" title="Input monitor">${HP}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Track 2: Harmony Stack -->
+      <div class="hcell">
+        <div class="stripe"></div>
+        <div class="body">
+          <div class="htop">
+            <div class="glyph">${MIC}</div>
+            <div class="nm"><div class="name">Harmony Stack</div><div class="kind">SVS · 3 voices</div></div>
+            <div class="del">${X}</div>
+          </div>
+          <div class="mini">
+            <div class="mb freeze" title="Freeze track">${ICE}</div>
+            <div class="mb" title="Mute">M</div>
+            <div class="mb" title="Solo">S</div>
+            <div class="mb" title="Record arm">${REC}</div>
+            <div class="mb" title="Input monitor">${HP}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Track 3: Drums -->
+      <div class="hcell">
+        <div class="stripe"></div>
+        <div class="body">
+          <div class="htop">
+            <div class="glyph">${DRUM}</div>
+            <div class="nm"><div class="name">Drums</div><div class="kind">Kit · Resonance Core</div></div>
+            <div class="del">${X}</div>
+          </div>
+          <div class="mini">
+            <div class="mb freeze" title="Freeze track">${ICE}</div>
+            <div class="mb" title="Mute">M</div>
+            <div class="mb on-solo" title="Solo">S</div>
+            <div class="mb" title="Record arm">${REC}</div>
+            <div class="mb" title="Input monitor">${HP}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Track 4: Synth Bass -->
+      <div class="hcell">
+        <div class="stripe"></div>
+        <div class="body">
+          <div class="htop">
+            <div class="glyph">${WAVE}</div>
+            <div class="nm"><div class="name">Synth Bass</div><div class="kind">Instrument · Sub</div></div>
+            <div class="del">${X}</div>
+          </div>
+          <div class="mini">
+            <div class="mb freeze" title="Freeze track">${ICE}</div>
+            <div class="mb on-mute" title="Mute">M</div>
+            <div class="mb" title="Solo">S</div>
+            <div class="mb" title="Record arm">${REC}</div>
+            <div class="mb" title="Input monitor">${HP}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- lanes -->
+    <div class="col-lanes">
+      <div class="ruler">
+        <div class="bar">1</div><div class="bar">3</div><div class="bar">5</div><div class="bar">7</div>
+        <div class="bar">9</div><div class="bar">11</div><div class="bar">13</div><div class="bar">15</div>
+      </div>
+      <div class="sectionband">
+        <div class="pill" style="width:24%">Verse</div>
+        <div class="pill" style="width:30%;background:var(--accent-dim);color:var(--accent-soft);border-color:var(--accent-line)">Chorus</div>
+        <div class="pill" style="width:26%">Verse 2</div>
+      </div>
+
+      <div class="playhead"></div>
+
+      <!-- Lane 1: Lead Vocal -->
+      <div class="lane sel" id="l-vocal">
+        <!-- live (default) clip -->
+        <div class="liveclip">
+          <div class="clip vocal" style="left:1%;width:32%">
+            <div class="clabel">Lead — verse</div>
+            <div class="notes">
+              <div class="note" style="left:4%;top:60%;width:10%"></div>
+              <div class="note" style="left:16%;top:48%;width:8%"></div>
+              <div class="note" style="left:26%;top:52%;width:14%"></div>
+              <div class="note" style="left:42%;top:38%;width:10%"></div>
+              <div class="note" style="left:54%;top:44%;width:18%"></div>
+              <div class="note" style="left:74%;top:30%;width:20%"></div>
+            </div>
+          </div>
+          <div class="clip vocal" style="left:35%;width:30%">
+            <div class="clabel">Lead — chorus</div>
+            <div class="notes">
+              <div class="note" style="left:4%;top:24%;width:14%"></div>
+              <div class="note" style="left:20%;top:30%;width:10%"></div>
+              <div class="note" style="left:32%;top:20%;width:22%"></div>
+              <div class="note" style="left:58%;top:34%;width:12%"></div>
+              <div class="note" style="left:72%;top:26%;width:24%"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- frozen rendered audio (hidden until frozen) -->
+        <div class="frozenstack" style="display:none">
+          <div class="frozenwave" id="fwave">
+            <div class="clabel">${ICE}Lead Vocal — frozen render</div>
+            <div class="wave" id="fwavebars"></div>
+          </div>
+          <div class="lockchip">${LOCK}Notes &amp; FX locked</div>
+        </div>
+
+        <!-- banners -->
+        <div class="banner stale" id="banner-stale">
+          ${WARN}
+          <div class="msg"><b>Frozen audio is out of date.</b> Notes or plugin settings changed since this track was frozen.</div>
+          <div class="acts"><button class="pri">Refreeze</button><button class="sec">Unfreeze to edit</button></div>
+        </div>
+        <div class="banner err" id="banner-err">
+          ${WARN}
+          <div class="msg"><b>Freeze failed</b> — not enough disk space for the render (needs ~180&nbsp;MB). The track is still live.</div>
+          <div class="acts"><button class="pri">Retry</button><button class="sec">Dismiss</button></div>
+        </div>
+      </div>
+
+      <!-- Lane 2: Harmony -->
+      <div class="lane">
+        <div class="clip vocal" style="left:35%;width:30%">
+          <div class="clabel">Harmony — chorus</div>
+          <div class="notes">
+            <div class="note" style="left:6%;top:50%;width:18%"></div>
+            <div class="note" style="left:28%;top:42%;width:14%"></div>
+            <div class="note" style="left:46%;top:56%;width:20%"></div>
+            <div class="note" style="left:70%;top:48%;width:24%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lane 3: Drums (audio waveform) -->
+      <div class="lane">
+        <div class="clip audio" style="left:1%;width:96%">
+          <div class="clabel">Drums — full</div>
+          <div class="wave" id="drumwave"></div>
+        </div>
+      </div>
+
+      <!-- Lane 4: Synth Bass -->
+      <div class="lane">
+        <div class="clip midi" style="left:1%;width:64%">
+          <div class="clabel">Bass</div>
+          <div class="notes">
+            <div class="note" style="left:2%;top:70%;width:12%"></div>
+            <div class="note" style="left:16%;top:70%;width:12%"></div>
+            <div class="note" style="left:30%;top:64%;width:12%"></div>
+            <div class="note" style="left:44%;top:70%;width:12%"></div>
+            <div class="note" style="left:58%;top:66%;width:14%"></div>
+            <div class="note" style="left:74%;top:70%;width:22%"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- freeze progress modal -->
+    <div class="scrim" id="scrim">
+      <div class="modal">
+        <h3>${ICE}Freezing “Lead Vocal”</h3>
+        <p>Rendering the SVS voice and full effect chain offline to a freeze cache. Playback will switch to the rendered audio when complete — editing notes, lyrics and plugins is paused for this track.</p>
+        <div class="pbar"><i id="pbar"></i></div>
+        <div class="pct mono"><span id="pbarpct">62</span>% · bar 19 / 32</div>
+        <div class="row"><button>Cancel</button></div>
+      </div>
+    </div>
+
+    <!-- context menu -->
+    <div class="ctx" id="ctx" style="left:230px;top:150px">
+      <div class="item cool"><span class="ic">${ICE}</span>Freeze track<span class="kbd">⌘F</span></div>
+      <div class="item disabled"><span class="ic">${THAW}</span>Unfreeze track</div>
+      <div class="sep"></div>
+      <div class="item cool"><span class="ic">${ICE}</span>Freeze selected tracks<span class="kbd">2</span></div>
+      <div class="item cool"><span class="ic">${ICE}</span>Freeze all tracks<span class="kbd">⇧⌘F</span></div>
+      <div class="sep"></div>
+      <div class="item"><span class="ic">${REVEAL}</span>Reveal freeze cache…</div>
+    </div>
+  </div>
+
+  <!-- legend -->
+  <div class="legend">
+    <span class="k"><span class="sw" style="background:var(--accent)"></span><b>MIDI / vocal</b> input</span>
+    <span class="k"><span class="sw" style="background:var(--warm)"></span><b>Audio</b> render</span>
+    <span class="k"><span class="sw" style="background:var(--frost-icon)"></span><b>Frozen</b> — playing rendered cache, inputs locked</span>
+    <span style="margin-left:auto">Volume · pan · mute · solo · routing stay live while frozen. Bounce &amp; stem export use the frozen audio identically.</span>
+  </div>
+</div>
+
+<script>
+/* ---- inline SVG icon set (Font Awesome Solid equivalents used in-app) ---- */
+const ICONS = {
+  ICE:'<svg viewBox="0 0 448 512" fill="currentColor"><path d="M224 0c13 0 24 11 24 24v55l37-37c9-9 25-9 34 0s9 25 0 34l-71 71v66l57-33 26-97c3-13 16-20 29-17s20 16 17 29l-14 51 48-28c11-7 26-3 33 9s3 26-9 33l-48 28 51 14c13 3 20 16 17 29s-16 20-29 17l-97-26-57 33 57 33 97-26c13-3 26 4 29 17s-4 26-17 29l-51 14 48 28c11 7 15 22 9 33s-22 15-33 9l-48-28 14 51c3 13-4 26-17 29s-26-4-29-17l-26-97-57-33v66l71 71c9 9 9 25 0 34s-25 9-34 0l-37-37v55c0 13-11 24-24 24s-24-11-24-24v-55l-37 37c-9 9-25 9-34 0s-9-25 0-34l71-71v-66l-57 33-26 97c-3 13-16 20-29 17s-20-16-17-29l14-51-48 28c-11 7-26 3-33-9s-3-26 9-33l48-28-51-14c-13-3-20-16-17-29s16-20 29-17l97 26 57-33-57-33-97 26c-13 3-26-4-29-17s4-26 17-29l51-14-48-28c-11-7-15-22-9-33s22-15 33-9l48 28-14-51c-3-13 4-26 17-29s26 4 29 17l26 97 57 33v-66l-71-71c-9-9-9-25 0-34s25-9 34 0l37 37V24c0-13 11-24 24-24z"/></svg>',
+  THAW:'<svg viewBox="0 0 512 512" fill="currentColor"><path d="M256 48a208 208 0 100 416 208 208 0 000-416zm0-48a256 256 0 110 512 256 256 0 010-512zm-20 116v140l112 66c11 7 15 22 8 33s-22 15-33 8l-124-73c-7-4-11-12-11-20V116c0-13 11-24 24-24s24 11 24 24z"/></svg>',
+  MIC:'<svg viewBox="0 0 384 512" fill="currentColor"><path d="M192 0a96 96 0 00-96 96v160a96 96 0 00192 0V96a96 96 0 00-96-96zM64 216c0-13-11-24-24-24s-24 11-24 24v40c0 89 66 163 152 175v33h-48c-13 0-24 11-24 24s11 24 24 24h144c13 0 24-11 24-24s-11-24-24-24h-48v-33c86-12 152-86 152-175v-40c0-13-11-24-24-24s-24 11-24 24v40a128 128 0 01-256 0z"/></svg>',
+  DRUM:'<svg viewBox="0 0 512 512" fill="currentColor"><path d="M431 100c30 25 49 56 49 92v128c0 53-100 96-224 96S32 473 32 420V292c0-36 19-67 49-92l116 116c4 4 9 6 14 6s10-2 14-6L375 84l24 24-58 58 90-66zM256 256c124 0 224 43 224 96s-100 96-224 96S32 405 32 352s100-96 224-96z"/></svg>',
+  WAVE:'<svg viewBox="0 0 640 512" fill="currentColor"><path d="M320 0c12 0 23 9 24 21l51 357 41-205c2-11 12-19 23-19h133c13 0 24 11 24 24s-11 24-24 24h-113l-63 315c-2 12-13 20-25 20s-22-9-24-21L296 184l-41 205c-2 11-12 19-23 19H24c-13 0-24-11-24-24s11-24 24-24h189l59-339c2-12 13-21 25-21z"/></svg>',
+  HP:'<svg viewBox="0 0 512 512" fill="currentColor"><path d="M256 80C150 80 64 166 64 272v24c18 0 32 14 32 32v96c0 18-14 32-32 32H48c-26 0-48-22-48-48V272C0 131 115 16 256 16s256 115 256 256v136c0 26-22 48-48 48h-16c-18 0-32-14-32-32v-96c0-18 14-32 32-32h32v-16c0-106-86-192-192-192z"/></svg>',
+  REC:'<svg viewBox="0 0 512 512" fill="currentColor"><circle cx="256" cy="256" r="200"/></svg>',
+  X:'<svg viewBox="0 0 384 512" fill="currentColor"><path d="M342 86c9-9 9-24 0-33s-24-9-33 0L192 170 75 53c-9-9-24-9-33 0s-9 24 0 33l117 117L42 320c-9 9-9 24 0 33s24 9 33 0l117-117 117 117c9 9 24 9 33 0s9-24 0-33L225 203 342 86z"/></svg>',
+  LOCK:'<svg viewBox="0 0 448 512" fill="currentColor"><path d="M144 144v48h160v-48a80 80 0 10-160 0zM96 192v-48a128 128 0 11256 0v48h16c35 0 64 29 64 64v160c0 35-29 64-64 64H80c-35 0-64-29-64-64V256c0-35 29-64 64-64h16z"/></svg>',
+  WARN:'<svg viewBox="0 0 512 512" fill="currentColor"><path d="M256 32c11 0 21 6 27 15l216 368c6 10 6 22 0 32s-16 17-27 17H40c-11 0-21-6-27-17s-6-22 0-32L229 47c6-9 16-15 27-15zm0 128c-13 0-24 11-24 24v112c0 13 11 24 24 24s24-11 24-24V184c0-13-11-24-24-24zm0 224a28 28 0 100-56 28 28 0 000 56z"/></svg>',
+  REVEAL:'<svg viewBox="0 0 512 512" fill="currentColor"><path d="M64 96c-35 0-64 29-64 64v224c0 35 29 64 64 64h384c35 0 64-29 64-64V192c0-35-29-64-64-64H288l-43-43c-12-12-28-19-45-19H64z"/></svg>',
+};
+function ico(html){return html.replace(/\$\{(\w+)\}/g,(_,k)=>ICONS[k]||'');}
+document.body.innerHTML = ico(document.body.innerHTML);
+
+/* random-ish waveform bars */
+function fill(el,n,h){if(!el)return;let s='';for(let i=0;i<n;i++){const v=h(i);s+='<i style="height:'+v+'%"></i>';}el.innerHTML=s;}
+fill(document.getElementById('drumwave'),120,i=>20+Math.abs(Math.sin(i*0.7))*60+(i%4===0?20:0));
+fill(document.getElementById('fwavebars'),90,i=>18+Math.abs(Math.sin(i*0.5)*Math.cos(i*0.13))*64);
+
+/* ---- state machine ---- */
+const cpu=document.getElementById('cpu'), cpupct=document.getElementById('cpupct'), hint=document.getElementById('hint');
+const hVocal=document.getElementById('h-vocal'), lVocal=document.getElementById('l-vocal');
+const freezebtn=document.getElementById('freezebtn');
+const liveclip=lVocal.querySelector('.liveclip'), frozenstack=lVocal.querySelector('.frozenstack');
+const scrim=document.getElementById('scrim'), ctx=document.getElementById('ctx');
+const bStale=document.getElementById('banner-stale'), bErr=document.getElementById('banner-err');
+const mini=hVocal.querySelectorAll('.mini .mb');
+const kindtxt=hVocal.querySelector('.kindtxt');
+
+const HINTS={
+  live:'Heavy SVS vocal + FX chain running live. DSP load is in the red — playback may stutter while editing.',
+  freezing:'Offline render in progress. The whole UI gates on the bounce — transport, edits and plugin tweaks are blocked until it finishes or is cancelled.',
+  frozen:'Track plays the rendered cache; SVS + plugins are idle so DSP load drops. Notes / lyrics / plugin params are locked; volume, pan, mute, solo & routing stay live.',
+  stale:'A frozen input would change. Resonance flags the cache as stale and offers a one-click refreeze, or unfreeze to resume live editing.',
+  error:'The offline render failed (disk full). The track falls back to live so no work is lost; the user can retry after freeing space.',
+  menu:'Freeze / Unfreeze live on the track header button, the right-click context menu, and the mixer strip. Batch freeze covers selection or all tracks.',
+};
+
+function reset(){
+  cpu.className='cpu hot';cpupct.textContent='87%';
+  hVocal.classList.remove('frozen');lVocal.classList.remove('frozen');
+  liveclip.style.display='';frozenstack.style.display='none';
+  freezebtn.classList.remove('on');
+  scrim.classList.remove('show');ctx.classList.remove('show');
+  bStale.classList.remove('show');bErr.classList.remove('show');
+  kindtxt.textContent='SVS · Lilia';
+  mini.forEach(b=>b.classList.remove('locked'));
+}
+function setFrozen(){
+  cpu.className='cpu cool';cpupct.textContent='31%';
+  hVocal.classList.add('frozen');lVocal.classList.add('frozen');
+  liveclip.style.display='none';frozenstack.style.display='';
+  freezebtn.classList.add('on');freezebtn.title='Unfreeze track';
+  /* lock the input-bound mini controls (freeze stays active; M/S still live → only arm/monitor lock) */
+  mini.forEach(b=>{if(b.title==='Record arm'||b.title==='Input monitor')b.classList.add('locked');});
+}
+function go(s){
+  reset();
+  if(s==='freezing'){scrim.classList.add('show');}
+  if(s==='frozen'){setFrozen();}
+  if(s==='stale'){setFrozen();bStale.classList.add('show');}
+  if(s==='error'){bErr.classList.add('show');freezebtn.classList.add('on');setTimeout(()=>freezebtn.classList.remove('on'),0);}
+  if(s==='menu'){ctx.classList.add('show');}
+  hint.textContent=HINTS[s];
+  document.querySelectorAll('#seg button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));
+}
+document.getElementById('seg').addEventListener('click',e=>{const b=e.target.closest('button');if(b)go(b.dataset.s);});
+
+/* animate the progress bar while in 'freezing' */
+let pv=20;setInterval(()=>{
+  if(!scrim.classList.contains('show'))return;
+  pv=pv>=96?20:pv+2;
+  document.getElementById('pbar').style.width=pv+'%';
+  document.getElementById('pbarpct').textContent=pv;
+},220);
+
+const initial=(location.hash||'').replace('#','');
+go(['live','freezing','frozen','stale','error','menu'].includes(initial)?initial:'live');
+</script>
+</body>
+</html>
