@@ -88,10 +88,20 @@ fn sanitize_sample(v: f32) -> f32 {
 
 /// Apply master volume, hard clip at [-1.0, 1.0], and update master peak level atomics.
 /// Volume is ramped per sample from the previous block's value
-/// (`master_last_volume_bits`) so fader drags don't zipper.
+/// (`master_last_volume_bits`) so fader drags don't zipper. When
+/// `auto_volume` is `Some` a master-gain automation lane overrides the
+/// static fader for this block (the static `master_volume_bits` atomic is
+/// left untouched, so the user's fader value is preserved); the ramp from
+/// `master_last_volume_bits` still applies, keeping the sweep click-free.
 #[inline]
-pub(super) fn apply_master_volume_and_peaks(data: &mut [f32], channels: usize, shared: &SharedState) {
-    let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
+pub(super) fn apply_master_volume_and_peaks(
+    data: &mut [f32],
+    channels: usize,
+    shared: &SharedState,
+    auto_volume: Option<f32>,
+) {
+    let master_vol = auto_volume
+        .unwrap_or_else(|| f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed)));
     let last_vol = f32::from_bits(shared.master_last_volume_bits.load(Ordering::Relaxed));
     let output_frames = data.len() / channels;
     if output_frames == 0 {

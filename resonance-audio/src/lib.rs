@@ -51,23 +51,27 @@ pub mod __test_support {
     pub use crate::engine::{
         encode_buffer_for_test, freeze_terminal_event, midi_render_range,
         normalize_buffer_for_test, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,
-        try_lock_with_backoff, FREEZE_CANCELLED_MSG, SharedState,
+        try_lock_with_backoff, AutomationSnapshot, ResolvedParamLane, FREEZE_CANCELLED_MSG,
+        SharedState,
     };
     pub use crate::engine::{
         export_stems, render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter,
     };
     pub use crate::types::{StemBitDepth, StemSource, StemTarget};
-    pub use crate::latency::{chain_latencies, compensation_delays, LatencyComp};
+    pub use crate::latency::{
+        add_external_offsets, chain_latencies, compensation_delays, LatencyComp,
+    };
     pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
     pub use crate::midi_hardware::{
-        parse_control_event_for_test, parse_live_event_for_test, LiveControlEvent, LiveMidiEvent,
+        encode_control_change, encode_nrpn, parse_control_event_for_test,
+        parse_live_event_for_test, LiveControlEvent, LiveMidiEvent,
     };
     pub use crate::mixer::{
-        mix_audition_overlay, mix_track_clips, monitor_catchup_skip, monitor_read_len,
-        ramped_gain, render_aux_for_test, sum_to_output, sum_to_stereo, transport_pos_beats,
-        whole_frame_push_len,
+        auto_gain_ramp, auto_master_volume, auto_muted, mix_audition_overlay, mix_track_clips,
+        monitor_catchup_skip, monitor_read_len, ramped_gain, render_aux_for_test, sum_to_output,
+        sum_to_stereo, transport_pos_beats, whole_frame_push_len,
     };
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
@@ -94,11 +98,37 @@ pub use engine::{
 #[doc(hidden)]
 pub use engine::midi::{outbound_step_start, OutboundStep};
 
+/// Test surface for the device-parameter automation → CC/NRPN emission
+/// core (doc #201 §4, todo #723). Exposed so the integration test in
+/// `tests/device_param_automation.rs` can drive the pure emitter with a
+/// capturing fake [`DeviceParamMidiSink`] — asserting the ordered
+/// CC/NRPN sequence and live↔bounce parity — without opening a port.
+#[doc(hidden)]
+pub use engine::midi::{emit_device_param_automation, DeviceParamMidiSink};
+
 /// Test surface for the MIDI clip move/trim handlers. Exposed so the
 /// regression test in `tests/midi_clip_handlers.rs` can drive the
 /// missing-clip no-op branch without spinning up the engine thread.
 #[doc(hidden)]
 pub use engine::midi::{move_midi_clip_in_place, trim_midi_clip_in_place};
+
+/// Test surface for the `SetTrackDeviceParams` command boundary (epic #40,
+/// doc #201 §4). Exposed so the integration test in
+/// `tests/device_params_handler.rs` can drive the engine-side map update +
+/// `TrackDeviceParamsApplied` emission (and the missing-track no-op branch)
+/// without spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::midi::set_track_device_params_in_place;
+
+/// Test surface for the bulk MIDI-edit handlers (quantize / humanize /
+/// groove). Exposed so the engine tests in `tests/midi_bulk_edits.rs` can
+/// drive each bulk command's mutation + event emission (including the
+/// missing-clip no-op branch) without spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::midi::{
+    apply_groove_to_clip_in_place, extract_groove_from_clip_in_place, humanize_midi_notes_in_place,
+    quantize_midi_notes_in_place,
+};
 
 /// Test surface for the audio clip fade/gain/warp handlers. Exposed so
 /// the integration tests in `tests/clip_fade_gain_handlers.rs` and
@@ -124,6 +154,46 @@ pub use engine::reference::{
     run_reference_analysis, ABMeterTap, ABMeters, ReferenceMonitor, ReferencePlayer,
     REFERENCE_OVERVIEW_PEAKS,
 };
+
+/// Test surface for the automation-lane handlers. Exposed so the
+/// integration test in `tests/automation_handlers.rs` can drive the
+/// command boundary (store/replace, clear, read-flag toggle, and the
+/// missing-target no-op branches) against a plain lane map without
+/// spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::{
+    clear_automation_lane_in_place, set_automation_lane_in_place,
+    set_automation_read_enabled_in_place, AutomationLanes, LiveValueEmitter,
+    AUTOMATED_VALUE_EPSILON, AUTOMATED_VALUE_THROTTLE,
+};
+
+/// Test surface for the external-instrument config handlers. Exposed so the
+/// integration test in `tests/external_instrument_handlers.rs` can drive the
+/// command boundary (store/replace, clear, latency/patch updates, the
+/// device-offline reporting, and the not-an-external-instrument no-op
+/// branches) against a plain config map without spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::{
+    check_external_instrument_devices_in_place, clear_external_instrument_in_place,
+    resend_external_instrument_patch_in_place, set_external_instrument_in_place,
+    set_external_instrument_latency_in_place, set_external_instrument_patch_in_place,
+    ExternalInstruments,
+};
+
+/// Test surface for the external-instrument round-trip latency ("ping")
+/// detector. Exposed so the integration test in
+/// `tests/external_instrument_ping.rs` can drive the pure onset-detection and
+/// sample-rate conversion math — the heart of the auto-detect — without
+/// opening a real audio device or MIDI port.
+#[doc(hidden)]
+pub use engine::{
+    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms, OnsetOutcome,
+};
+/// Exposed for `tests/external_instrument_handlers.rs` so it can construct an
+/// empty output registry and exercise the patch-send offline branch without
+/// opening a real MIDI port.
+#[doc(hidden)]
+pub use midi_hardware::MidiOutputRegistry;
 
 /// Test surface for the audio import-to-pool path. Exposed so the
 /// integration test in `tests/import_audio_to_pool.rs` can drive the

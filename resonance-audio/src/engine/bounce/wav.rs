@@ -287,6 +287,7 @@ pub(crate) fn run_export(
     midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &super::super::AutomationSnapshot,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
 ) {
@@ -380,6 +381,7 @@ pub(crate) fn run_export(
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
+        automation,
     };
     let mut scratch = ChunkScratch::new();
 

@@ -118,16 +118,16 @@ fn breakpoint_value_is_clamped() {
 #[test]
 fn gain_maps_normalized_to_db_range() {
     let t = AutomationTarget::TrackGain(0);
-    approx(lane_value_to_real(t, 0.0), GAIN_MIN_DB);
-    approx(lane_value_to_real(t, 1.0), GAIN_MAX_DB);
-    approx(lane_value_to_real(t, 0.5), (GAIN_MIN_DB + GAIN_MAX_DB) / 2.0);
+    approx(lane_value_to_real(&t, 0.0), GAIN_MIN_DB);
+    approx(lane_value_to_real(&t, 1.0), GAIN_MAX_DB);
+    approx(lane_value_to_real(&t, 0.5), (GAIN_MIN_DB + GAIN_MAX_DB) / 2.0);
     // Master and bus gain share the same range.
     approx(
-        lane_value_to_real(AutomationTarget::MasterGain, 1.0),
+        lane_value_to_real(&AutomationTarget::MasterGain, 1.0),
         GAIN_MAX_DB,
     );
     approx(
-        lane_value_to_real(AutomationTarget::BusGain(2), 0.0),
+        lane_value_to_real(&AutomationTarget::BusGain(2), 0.0),
         GAIN_MIN_DB,
     );
 }
@@ -135,18 +135,18 @@ fn gain_maps_normalized_to_db_range() {
 #[test]
 fn pan_maps_normalized_to_minus_one_to_one() {
     let t = AutomationTarget::TrackPan(0);
-    approx(lane_value_to_real(t, 0.0), -1.0);
-    approx(lane_value_to_real(t, 0.5), 0.0);
-    approx(lane_value_to_real(t, 1.0), 1.0);
+    approx(lane_value_to_real(&t, 0.0), -1.0);
+    approx(lane_value_to_real(&t, 0.5), 0.0);
+    approx(lane_value_to_real(&t, 1.0), 1.0);
 }
 
 #[test]
 fn mute_thresholds_at_half() {
     let t = AutomationTarget::TrackMute(0);
-    approx(lane_value_to_real(t, 0.0), 0.0);
-    approx(lane_value_to_real(t, 0.49), 0.0);
-    approx(lane_value_to_real(t, 0.5), 1.0);
-    approx(lane_value_to_real(t, 1.0), 1.0);
+    approx(lane_value_to_real(&t, 0.0), 0.0);
+    approx(lane_value_to_real(&t, 0.49), 0.0);
+    approx(lane_value_to_real(&t, 0.5), 1.0);
+    approx(lane_value_to_real(&t, 1.0), 1.0);
 }
 
 #[test]
@@ -155,15 +155,30 @@ fn plugin_param_target_mapping_is_identity() {
         instance: 4,
         param_id: 12,
     };
-    approx(lane_value_to_real(t, 0.3), 0.3);
-    approx(real_to_lane_value(t, 0.3), 0.3);
+    approx(lane_value_to_real(&t, 0.3), 0.3);
+    approx(real_to_lane_value(&t, 0.3), 0.3);
+}
+
+#[test]
+fn device_param_target_mapping_is_identity() {
+    // The binding integer mapping lives in the device definition, not here, so
+    // `automation.rs` passes a DeviceParam lane value straight through.
+    let t = AutomationTarget::DeviceParam {
+        track: 7,
+        param_id: "cutoff".to_string(),
+    };
+    approx(lane_value_to_real(&t, 0.3), 0.3);
+    approx(real_to_lane_value(&t, 0.3), 0.3);
+    // Still clamped into the normalized range.
+    approx(lane_value_to_real(&t, 1.5), 1.0);
+    approx(real_to_lane_value(&t, -0.2), 0.0);
 }
 
 #[test]
 fn gain_round_trips() {
     let t = AutomationTarget::TrackGain(0);
     for &v in &[0.0f32, 0.25, 0.5, 0.75, 1.0] {
-        approx(real_to_lane_value(t, lane_value_to_real(t, v)), v);
+        approx(real_to_lane_value(&t, lane_value_to_real(&t, v)), v);
     }
 }
 
@@ -171,15 +186,15 @@ fn gain_round_trips() {
 fn pan_round_trips() {
     let t = AutomationTarget::BusPan(1);
     for &v in &[0.0f32, 0.25, 0.5, 0.75, 1.0] {
-        approx(real_to_lane_value(t, lane_value_to_real(t, v)), v);
+        approx(real_to_lane_value(&t, lane_value_to_real(&t, v)), v);
     }
 }
 
 #[test]
 fn real_to_lane_clamps_out_of_range_input() {
     let t = AutomationTarget::TrackGain(0);
-    approx(real_to_lane_value(t, GAIN_MAX_DB + 50.0), 1.0);
-    approx(real_to_lane_value(t, GAIN_MIN_DB - 50.0), 0.0);
+    approx(real_to_lane_value(&t, GAIN_MAX_DB + 50.0), 1.0);
+    approx(real_to_lane_value(&t, GAIN_MIN_DB - 50.0), 0.0);
 }
 
 #[test]
@@ -209,6 +224,21 @@ fn lane_round_trips_through_json() {
             param_id: 3,
         },
         vec![lin(0, 0.0), step(480, 1.0), lin(960, 0.25)],
+    );
+    let json = serde_json::to_string(&lane).expect("serialize");
+    let back: AutomationLane = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(lane, back);
+}
+
+#[test]
+fn device_param_lane_round_trips_through_json() {
+    let lane = AutomationLane::new(
+        77,
+        AutomationTarget::DeviceParam {
+            track: 5,
+            param_id: "filter.cutoff".to_string(),
+        },
+        vec![lin(0, 0.0), step(240, 0.5), lin(720, 1.0)],
     );
     let json = serde_json::to_string(&lane).expect("serialize");
     let back: AutomationLane = serde_json::from_str(&json).expect("deserialize");

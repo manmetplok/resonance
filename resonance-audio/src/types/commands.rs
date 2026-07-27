@@ -4,11 +4,14 @@ use std::sync::Arc;
 
 use resonance_common::{BindingId, ControllerMap, MidiBinding, MidiTarget};
 
+use resonance_common::{AutomationLane, AutomationTarget, DeviceParam};
+
 use super::{
     ABSource, BusId, ClipId, ExportSettings, FadeCurve, FrozenSource, MidiNote, PluginInstanceId,
     ReferenceId, SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth, StemTarget,
     TempoPoint, TrackId, TrackOutput, WarpAlgorithm, WarpMarker,
 };
+use crate::quantize::{Division, GrooveTemplate, QuantizeMode};
 
 /// Commands sent from the GUI to the audio engine.
 #[derive(Debug, Clone)]
@@ -111,6 +114,29 @@ pub enum AudioCommand {
     /// no-op (no event) when the clip no longer exists.
     AnalyzeClipPitch {
         clip_id: ClipId,
+    },
+    /// Store or replace the automation lane for its target. The engine
+    /// holds one lane per [`AutomationTarget`]; sending a lane whose
+    /// `target` already has an entry replaces it wholesale. The engine
+    /// keeps the breakpoints sorted and echoes the stored lane back via
+    /// `AudioEvent::AutomationLaneChanged`. No audio is applied yet — a
+    /// later step samples the lane per block.
+    SetAutomationLane {
+        lane: AutomationLane,
+    },
+    /// Remove the automation lane stored for `target`. When a lane was
+    /// present the engine emits `AudioEvent::AutomationLaneCleared`;
+    /// clearing an absent target is a silent no-op.
+    ClearAutomationLane {
+        target: AutomationTarget,
+    },
+    /// Toggle a lane's "read" flag (`AutomationLane::enabled`) without
+    /// replacing its breakpoints. The engine echoes the updated lane via
+    /// `AudioEvent::AutomationLaneChanged`; toggling an absent target is
+    /// a silent no-op.
+    SetAutomationReadEnabled {
+        target: AutomationTarget,
+        enabled: bool,
     },
     SetTrackVolume {
         track_id: TrackId,
@@ -435,6 +461,55 @@ pub enum AudioCommand {
         velocity: f32,
     },
 
+    // -- Bulk MIDI note edits (quantize / humanize / groove) --
+    /// Quantize the notes at `indices` in `clip_id` toward `grid`, using
+    /// the engine's authoritative tempo map. Applied atomically; emits a
+    /// single `AudioEvent::MidiNotesEdited` carrying the full resulting
+    /// note array.
+    QuantizeMidiNotes {
+        clip_id: ClipId,
+        /// Selected note indices to quantize; out-of-range indices are
+        /// ignored and an empty selection is a no-op.
+        indices: Vec<usize>,
+        grid: Division,
+        /// Blend toward the grid in `0.0..=1.0` (`1.0` snaps exactly).
+        strength: f32,
+        /// Swing applied to odd grid steps, `0.0..=1.0`.
+        swing: f32,
+        mode: QuantizeMode,
+        /// Snap note-offs to the grid as well as note-ons.
+        quantize_ends: bool,
+        /// Apply the strength blend repeatedly (soft/iterative quantize).
+        iterative: bool,
+    },
+    /// Apply seeded timing + velocity jitter to the notes at `indices`.
+    /// Deterministic for a given `seed`; emits one `MidiNotesEdited`.
+    HumanizeMidiNotes {
+        clip_id: ClipId,
+        indices: Vec<usize>,
+        /// Maximum absolute timing offset in ticks.
+        timing_ticks: u32,
+        /// Velocity jitter fraction, `0.0..=1.0`.
+        vel_amt: f32,
+        seed: u64,
+    },
+    /// Apply a groove template to the notes at `indices` at `strength`.
+    /// Emits one `MidiNotesEdited`.
+    ApplyGrooveToClip {
+        clip_id: ClipId,
+        indices: Vec<usize>,
+        template: GrooveTemplate,
+        /// Template blend, `0.0..=1.0`.
+        strength: f32,
+    },
+    /// Extract a groove template from `clip_id` at `grid` resolution.
+    /// Reads the clip but does not modify it; emits
+    /// `AudioEvent::GrooveExtracted` with the derived template.
+    ExtractGrooveFromClip {
+        clip_id: ClipId,
+        grid: Division,
+    },
+
     // -- Live MIDI input --
     SendNoteOn {
         track_id: TrackId,
@@ -472,6 +547,94 @@ pub enum AudioCommand {
         device: Option<String>,
         /// 0-indexed channel (0..=15) the output uses. `None` = channel 1.
         channel: Option<u8>,
+    },
+
+    /// Hand the engine the automatable device parameters of the device
+    /// preset selected on an external-instrument track (architecture doc
+    /// #201 §4, epic #40). The engine stores each [`DeviceParam`] on the
+    /// engine-side track keyed by `DeviceParam::id` so a
+    /// `AutomationTarget::DeviceParam` lane can be mapped to its bound
+    /// CC/NRPN at render time **without reaching back across the
+    /// command/event boundary** (no engine getters). The app sends this
+    /// when a device preset is selected or changed on the track.
+    ///
+    /// An empty `params` vec clears the map (acts as a "no device
+    /// selected" / clear command). The engine replaces the whole map on
+    /// every command — it is not a merge — and confirms with
+    /// [`crate::types::AudioEvent::TrackDeviceParamsApplied`]. Per-block
+    /// lane evaluation that actually emits the MIDI is a later todo (E3);
+    /// this command only plumbs the binding map into the engine.
+    SetTrackDeviceParams {
+        track_id: TrackId,
+        params: Vec<DeviceParam>,
+    },
+
+    // -- External-instrument tracks (doc #169, epic #39) --
+    /// Mark a track as an external instrument (or replace its config). The
+    /// MIDI output device/channel and audio-return device/channels are set
+    /// through the normal `SetTrackMidiOutput` / `SetTrackInputDevice` /
+    /// `SetTrackInputPort` commands; this carries only the bank/program and
+    /// latency offset that have no home on a plain track. The engine echoes
+    /// the stored config via `AudioEvent::ExternalInstrumentChanged`.
+    SetExternalInstrument {
+        config: resonance_common::ExternalInstrument,
+    },
+    /// Take a track out of external-instrument mode, dropping its config. The
+    /// engine emits `AudioEvent::ExternalInstrumentCleared` when a config was
+    /// present; clearing a non-external track is a silent no-op.
+    ClearExternalInstrument {
+        track_id: TrackId,
+    },
+    /// Set the selected bank/program for an external-instrument track and fire
+    /// the patch send (Bank Select + Program Change) on the track's MIDI output
+    /// channel. The engine echoes the updated config via
+    /// `ExternalInstrumentChanged`; if the MIDI output is offline it also emits
+    /// `ExternalInstrumentMidiOutOffline` while preserving the route. No-op when
+    /// the track is not an external instrument.
+    SetExternalInstrumentPatch {
+        track_id: TrackId,
+        /// Combined 14-bit bank (MSB << 7 | LSB), or `None` to send no Bank
+        /// Select.
+        bank: Option<u16>,
+        /// Program number (`0..=127`), or `None` to send no Program Change.
+        program: Option<u8>,
+    },
+    /// Set the manual latency offset (samples) for an external-instrument
+    /// track. The engine echoes the updated config via
+    /// `ExternalInstrumentChanged`. No-op when the track is not an external
+    /// instrument.
+    SetExternalInstrumentLatencyOffset {
+        track_id: TrackId,
+        latency_offset_samples: i64,
+    },
+    /// Re-check an external-instrument track's MIDI output and audio-return
+    /// devices against the currently-available hardware and report any that
+    /// have gone offline (`ExternalInstrumentMidiOutOffline` /
+    /// `ExternalInstrumentReturnInputOffline`). The config is preserved so a
+    /// replug reconnects. No-op when the track is not an external instrument.
+    CheckExternalInstrumentDevices {
+        track_id: TrackId,
+    },
+    /// Re-send Bank Select + Program Change for **every** external-instrument
+    /// track from its stored config, without mutating any config. Sent by the
+    /// app once after a project load has replayed all `SetExternalInstrument`
+    /// configs, so a freshly-powered synth lands on its saved patch; the engine
+    /// also fires this itself at transport start. Tracks with no bank/program
+    /// are skipped; an offline output is reported per track via
+    /// `ExternalInstrumentMidiOutOffline` while its route is preserved.
+    ResendExternalInstrumentPatches,
+    /// Auto-detect the round-trip latency of an external-instrument track:
+    /// open its audio-return input, fire a short impulse note out its MIDI
+    /// output, and time how long the return takes to come back. The result
+    /// is reported via `AudioEvent::ExternalInstrumentLatencyMeasured`
+    /// (samples + ms), and the engine applies it as the track's offset
+    /// (raising the manual offset, which stays the floor) and republishes the
+    /// plugin-delay-compensation table. Transport must be stopped. If the
+    /// return can't be detected (no/silent input, MIDI output offline) the
+    /// engine emits `ExternalInstrumentLatencyDetectFailed` with a reason and
+    /// changes nothing. No-op when the track is not an external instrument.
+    DetectExternalInstrumentLatency {
+        track_id: TrackId,
     },
 
     /// Configure the global MIDI clock master (Resonance → device).

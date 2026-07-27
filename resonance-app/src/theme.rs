@@ -98,12 +98,26 @@ pub mod fa {
     pub const STOP: char = '\u{f04d}';
     pub const BACKWARD_STEP: char = '\u{f048}';
     pub const FORWARD_STEP: char = '\u{f051}';
+    /// Double-triangle-to-bar — "jump to previous marker".
+    pub const BACKWARD_FAST: char = '\u{f049}';
+    /// Double-triangle-to-bar — "jump to next marker".
+    pub const FORWARD_FAST: char = '\u{f050}';
+    /// Flag — the arrangement-markers overview toggle.
+    pub const FLAG: char = '\u{f024}';
     pub const CIRCLE: char = '\u{f111}';
     pub const BARS: char = '\u{f0c9}';
     pub const FOLDER_OPEN: char = '\u{f07c}';
+    /// Closed folder — media-browser subfolder rows (Files tab).
+    pub const FOLDER: char = '\u{f07b}';
     pub const FLOPPY_DISK: char = '\u{f0c7}';
     pub const MAGNIFYING_GLASS_PLUS: char = '\u{f00e}';
     pub const MAGNIFYING_GLASS_MINUS: char = '\u{f010}';
+    /// Magnifying glass — the per-folder filter field (Files tab).
+    pub const MAGNIFYING_GLASS: char = '\u{f002}';
+    /// Solid star — the WARM "favourite folder" toggle + favourite pills.
+    pub const STAR: char = '\u{f005}';
+    /// Clock — the "recent folder" pills in the media-browser shelf.
+    pub const CLOCK: char = '\u{f017}';
     /// Metronome icon (custom glyph added by tools/add_metronome_glyph.py).
     pub const METRONOME: char = '\u{f8db}';
     /// Single hollow circle — mono channel indicator. Custom glyph added
@@ -144,6 +158,11 @@ pub mod fa {
     pub const ARROW_ROTATE_LEFT: char = '\u{f0e2}';
     /// Snowflake — used for the track-header Freeze (bounce-in-place) toggle.
     pub const SNOWFLAKE: char = '\u{f2dc}';
+    /// Warning triangle with an exclamation — missing-file / error marker
+    /// (e.g. the relink modal's "couldn't be found" rows).
+    pub const TRIANGLE_EXCLAMATION: char = '\u{f071}';
+    /// Circled check — a resolved / restored marker (e.g. a relinked row).
+    pub const CIRCLE_CHECK: char = '\u{f058}';
 }
 
 // ---------------------------------------------------------------------------
@@ -208,13 +227,24 @@ pub const ACCENT_LINE: Color = rgba(0x8b, 0x6d, 0xff, 0.34);
 
 /// Warm amber — audio clips, busses, playhead.
 pub const WARM: Color = rgb(0xe8, 0xc4, 0x7b);
+/// Warm wash — fill behind a "warm" badge (Configuring status).
+pub const WARM_DIM: Color = rgba(0xe8, 0xc4, 0x7b, 0.12);
 /// Warm border — bus strip outlines.
 pub const WARM_LINE: Color = rgba(0xe8, 0xc4, 0x7b, 0.34);
 
 /// Mint green — meters, success.
 pub const GOOD: Color = rgb(0x6d, 0xd6, 0xa3);
+/// Mint wash — fill behind an active "good" toggle (input monitor on).
+pub const GOOD_DIM: Color = rgba(0x6d, 0xd6, 0xa3, 0.14);
+/// Mint border — outline of a "good" badge (Live status).
+pub const GOOD_LINE: Color = rgba(0x6d, 0xd6, 0xa3, 0.34);
 /// Soft pink — mute, peaking, errors.
 pub const BAD: Color = rgb(0xe8, 0x7b, 0x8b);
+/// Pink wash — fill behind an active "bad" toggle (record arm on).
+pub const BAD_DIM: Color = rgba(0xe8, 0x7b, 0x8b, 0.13);
+/// Pink border — outline of a "bad" badge / offline alert / strip glow;
+/// also the "via group" mute chip outline.
+pub const BAD_LINE: Color = rgba(0xe8, 0x7b, 0x8b, 0.40);
 
 // ---------------------------------------------------------------------------
 // Frost treatment — frozen (bounce-in-place) tracks.  (design doc #181)
@@ -267,6 +297,57 @@ pub fn frost_over(base: Color) -> Color {
 }
 
 // ---------------------------------------------------------------------------
+// Group identity palette — muted jewel tones for track grouping (epic #36).
+// Each group colour has a 14% wash variant and a 34% line variant for
+// rail and header styling. These are identity colours only, never
+// semantic — do not reuse for status, errors, or other meanings.
+// ---------------------------------------------------------------------------
+
+/// Drums group identity — warm terracotta.
+pub const GRP_DRUM: Color = rgb(0xc9, 0x8f, 0x5f);
+/// Drums group wash — 14% opacity terracotta for header backgrounds.
+pub const GRP_DRUM_WASH: Color = rgba(0xc9, 0x8f, 0x5f, 0.14);
+/// Drums group line — 34% opacity terracotta for rails and borders.
+pub const GRP_DRUM_LINE: Color = rgba(0xc9, 0x8f, 0x5f, 0.34);
+
+/// Vocals group identity — muted magenta.
+pub const GRP_VOX: Color = rgb(0xc9, 0x7b, 0x9c);
+/// Vocals group wash — 14% opacity magenta for header backgrounds.
+pub const GRP_VOX_WASH: Color = rgba(0xc9, 0x7b, 0x9c, 0.14);
+/// Vocals group line — 34% opacity magenta for rails and borders.
+pub const GRP_VOX_LINE: Color = rgba(0xc9, 0x7b, 0x9c, 0.34);
+
+/// Keys group identity — desaturated teal.
+pub const GRP_KEYS: Color = rgb(0x6f, 0xb6, 0xb0);
+/// Keys group wash — 14% opacity teal for header backgrounds.
+pub const GRP_KEYS_WASH: Color = rgba(0x6f, 0xb6, 0xb0, 0.14);
+/// Keys group line — 34% opacity teal for rails and borders.
+pub const GRP_KEYS_LINE: Color = rgba(0x6f, 0xb6, 0xb0, 0.34);
+
+/// Guitar group identity — cool slate blue.
+pub const GRP_GTR: Color = rgb(0x7d, 0x86, 0xc9);
+/// Guitar group wash — 14% opacity slate for header backgrounds.
+pub const GRP_GTR_WASH: Color = rgba(0x7d, 0x86, 0xc9, 0.14);
+/// Guitar group line — 34% opacity slate for rails and borders.
+pub const GRP_GTR_LINE: Color = rgba(0x7d, 0x86, 0xc9, 0.34);
+
+/// Resolve a group's identity colour slot to its (base, wash, line)
+/// theme colours — the swatch/text base, the 14% header-wash, and the
+/// 34% rail/border line. Maps the shared `GroupIdentityColor` palette
+/// (resonance-common) onto the canonical `GRP_*` tokens so views never
+/// inline group colours. Reused by the member rail (#681) and indent (#682).
+pub fn group_identity_colors(
+    c: resonance_common::group_identity::GroupIdentityColor,
+) -> (Color, Color, Color) {
+    use resonance_common::group_identity::GroupIdentityColor as G;
+    match c {
+        G::Drum => (GRP_DRUM, GRP_DRUM_WASH, GRP_DRUM_LINE),
+        G::Vocal => (GRP_VOX, GRP_VOX_WASH, GRP_VOX_LINE),
+        G::Keys => (GRP_KEYS, GRP_KEYS_WASH, GRP_KEYS_LINE),
+        G::Guitar => (GRP_GTR, GRP_GTR_WASH, GRP_GTR_LINE),
+    }
+}
+// ---------------------------------------------------------------------------
 // Legacy aliases — keep the rest of the codebase compiling while the views
 // migrate. New code should use the tokens above directly.
 // ---------------------------------------------------------------------------
@@ -314,6 +395,28 @@ pub const GLOBAL_TRACK_BG: Color = BG_2;
 
 /// Arrange-view track row height — matches the design's "balanced" density.
 pub const TRACK_HEIGHT: f32 = 96.0;
+/// Group/folder-track header row height. A group header is a first-class
+/// inline row (caret · swatch · name · count · macro M/S), deliberately
+/// shorter than a full track row so the hierarchy reads as structure
+/// rather than content. See the track-grouping design (doc #200).
+pub const GROUP_HEADER_HEIGHT: f32 = 60.0;
+/// Indent for tracks that are members of a group. Nested group members
+/// use doubled indent to show hierarchy depth at a glance. See the
+/// track-grouping design (doc #200).
+pub const GROUP_MEMBER_INDENT: f32 = 14.0;
+/// Width of the coloured identity rail shown on group member track headers.
+/// See doc #200.
+pub const GROUP_RAIL_WIDTH: f32 = 3.0;
+/// Side length of the group identity swatch (the rounded colour square in a
+/// group header). Shared by the Arrange group-header row and the Mixer
+/// group-header strip so the identity cue is pixel-identical across both
+/// surfaces. See doc #200.
+pub const GROUP_SWATCH_SIZE: f32 = 14.0;
+/// Vertical inset of the consolidated-overview clip blocks within a
+/// collapsed group's 60 px lane (todo #733). Deeper than `CLIP_LANE_INSET`
+/// so the blocks read as a compact content strip on the band rather than
+/// as real, editable clips.
+pub const GROUP_OVERVIEW_INSET: f32 = 14.0;
 /// Timeline ruler height.
 pub const RULER_HEIGHT: f32 = 28.0;
 /// Section band sitting under the ruler — the section-pill strip on the
@@ -352,6 +455,12 @@ pub const MIXER_SUB_STRIP_WIDTH: f32 = 92.0;
 /// reads a parent → child relationship even before reading the strip's
 /// dimmed name.
 pub const MIXER_SUB_STRIP_RAIL_WIDTH: f32 = 2.0;
+/// Width of a group-header strip on the Mixer — the coloured cluster's
+/// leading strip carrying the caret, identity swatch, name, count and the
+/// macro level / mute / solo controls. Slimmer than a full channel strip:
+/// it hosts controls, not a signal path. See the track-grouping design
+/// (doc #200) — "Mixer reflection".
+pub const MIXER_GROUP_HEADER_WIDTH: f32 = 116.0;
 /// Master strip width.
 pub const MASTER_STRIP_WIDTH: f32 = 156.0;
 /// Inspector column width on the Mixer.
@@ -367,6 +476,10 @@ pub const MIXER_STRIP_GAP: f32 = 16.0;
 pub const MIXER_LANE_HPAD: f32 = 26.0;
 /// Right-rail column width on the Compose view.
 pub const COMPOSE_RAIL_WIDTH: u16 = 324;
+/// Docked media-browser panel width on the Arrange view (design doc #175,
+/// `--browser-w`). Mirrors the Compose rail / Mixer inspector fixed-column
+/// pattern; a peer of the timeline, not an overlay.
+pub const BROWSER_WIDTH: f32 = 312.0;
 
 /// Height of the vertical fader used in mixer strips and master strip.
 pub const FADER_HEIGHT: f32 = 120.0;
@@ -399,6 +512,9 @@ pub const RADIUS_MD: f32 = 7.0;
 pub const RADIUS_LG: f32 = 8.0;
 /// Strip cards, drum grid panel.
 pub const RADIUS_XL: f32 = 12.0;
+/// Fully-rounded pill (count badges, status chips). A radius larger than
+/// any pill's half-height resolves to a stadium shape.
+pub const RADIUS_PILL: f32 = 999.0;
 
 pub fn resonance_theme() -> Theme {
     Theme::Dark

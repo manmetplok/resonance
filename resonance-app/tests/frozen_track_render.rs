@@ -18,6 +18,8 @@
 //! drift in either surface trips the golden diff. On first run
 //! `matches_image()` writes the golden under `tests/snapshots/`.
 
+mod common;
+
 use iced::{Color, Size};
 use iced_test::simulator::Simulator;
 use resonance_app::state::{FreezeStatus, ViewMode};

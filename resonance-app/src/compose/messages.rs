@@ -28,6 +28,13 @@ pub enum ComposeMessage {
     /// pattern entries (the sequence the drums play across its bars).
     Arrangement(ArrangementMessage),
 
+    /// Select which arrangement entry is focused — an index into the
+    /// focused section's arrangement, or `None` to clear. Emitted by
+    /// clicking a span in the tiling ribbon and consumed by the right-rail
+    /// Entry inspector. Pure runtime UI state — no arrangement mutation, no
+    /// undo entry.
+    SelectArrangementEntry(Option<usize>),
+
     // Create a new MIDI clip that spans the selected section on the given
     // instrument track. Used by the "+" button that appears over empty
     // instrument rows in the Compose track area.
@@ -551,6 +558,20 @@ pub enum ArrangementMessage {
         definition_id: u64,
         from: usize,
         to: usize,
+    },
+    /// Select the arrangement entry at `index` for the right-rail Entry
+    /// inspector (or clear the selection with `None`). Pure UI state — does
+    /// not mutate the arrangement, so it is skipped by the undo machinery.
+    /// Emitted by the arrangement strip's entry chips and (implicitly) when
+    /// a bank pattern is added.
+    SelectEntry { index: Option<usize> },
+    /// Swap the pattern played by the entry at `index`, keeping its length
+    /// mode + fill. Drives the Entry inspector's pattern picker dropdown.
+    /// Ignored if the chosen pattern doesn't exist.
+    SetEntryPattern {
+        definition_id: u64,
+        index: usize,
+        pattern_id: u64,
     },
     /// Set the length mode + value of the entry at `index`
     /// (`RepeatN(n)` / `Bars(b)`).

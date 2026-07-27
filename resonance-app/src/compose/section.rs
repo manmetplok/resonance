@@ -188,6 +188,19 @@ impl SectionDefinitionState {
         true
     }
 
+    /// Swap the pattern played by the entry at `index`, preserving its
+    /// length mode and fill. No-op when the index is out of range or the
+    /// pattern is unchanged. Backs the Entry inspector's pattern picker.
+    pub fn set_entry_pattern(&mut self, index: usize, pattern_id: u64) -> bool {
+        match self.arrangement.get_mut(index) {
+            Some(e) if e.pattern_id != pattern_id => {
+                e.pattern_id = pattern_id;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Set the length mode + value of the entry at `index`. No-op when the
     /// index is out of range or the length is unchanged.
     pub fn set_entry_length(&mut self, index: usize, length: EntryLength) -> bool {

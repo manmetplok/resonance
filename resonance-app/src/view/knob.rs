@@ -42,18 +42,42 @@ pub struct KnobState {
     /// The value last drawn into `cache`. When the live value drifts
     /// from this we clear the cache before drawing.
     cached_value: std::cell::Cell<f32>,
+    /// Whether the cache was last drawn in the automated (warm tint)
+    /// state. Flipping Read on/off must re-stroke the knob even when the
+    /// displayed value is unchanged.
+    cached_tinted: std::cell::Cell<bool>,
 }
 
-/// Construct a pan knob element. `value` is the current pan in -1..=1;
-/// `on_change` is called with the new value every time the user drags
-/// or double-clicks to reset.
+/// Construct a pan knob element. `value` is the current static pan in
+/// -1..=1; `on_change` is called with the new value every time the user
+/// drags or double-clicks to reset.
+///
+/// `automated` carries the live automated pan value (-1..=1) when an
+/// enabled automation lane is driving this knob during playback (todo
+/// #383). When present, the indicator + arc are drawn at the automated
+/// position in the warm accent so the user sees the value automation is
+/// applying; dragging still edits the underlying static `value`.
 pub fn pan_knob<'a, Message, F>(value: f32, on_change: F) -> Element<'a, Message>
+where
+    Message: 'a,
+    F: 'a + Fn(f32) -> Message,
+{
+    pan_knob_automated(value, None, on_change)
+}
+
+/// Pan knob with an optional live automated-value tint. See [`pan_knob`].
+pub fn pan_knob_automated<'a, Message, F>(
+    value: f32,
+    automated: Option<f32>,
+    on_change: F,
+) -> Element<'a, Message>
 where
     Message: 'a,
     F: 'a + Fn(f32) -> Message,
 {
     Canvas::new(PanKnob {
         value: value.clamp(-1.0, 1.0),
+        automated: automated.map(|v| v.clamp(-1.0, 1.0)),
         on_change: Box::new(on_change),
     })
     .width(Length::Fixed(PAN_KNOB_SIZE))
@@ -63,6 +87,9 @@ where
 
 struct PanKnob<'a, Message> {
     value: f32,
+    /// Live automated value (-1..=1) when a Read-enabled lane drives the
+    /// knob, else `None`. Display-only — never fed back to `on_change`.
+    automated: Option<f32>,
     on_change: Box<dyn Fn(f32) -> Message + 'a>,
 }
 
@@ -77,15 +104,25 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        // Clear the cache only when the externally-supplied value drifts
-        // from what we last drew. The Cache itself handles bounds
+        // When an enabled lane drives the knob, draw the *automated*
+        // position in the warm accent; otherwise the static value in the
+        // normal accent.
+        let display = self.automated.unwrap_or(self.value);
+        let tinted = self.automated.is_some();
+        let indicator_color = if tinted { theme::WARM } else { theme::ACCENT };
+
+        // Clear the cache only when the displayed value or the tint state
+        // drifts from what we last drew. The Cache itself handles bounds
         // changes; everything else (hover, scroll, sibling redraws)
         // returns the stored geometry without re-stroking the knob.
-        if (state.cached_value.get() - self.value).abs() > f32::EPSILON {
+        if (state.cached_value.get() - display).abs() > f32::EPSILON
+            || state.cached_tinted.get() != tinted
+        {
             state.cache.clear();
-            state.cached_value.set(self.value);
+            state.cached_value.set(display);
+            state.cached_tinted.set(tinted);
         }
-        let value = self.value;
+        let value = display;
         let geometry = state.cache.draw(renderer, bounds.size(), |frame: &mut Frame| {
             let center = Point::new(bounds.width * 0.5, bounds.height * 0.5);
             let radius = (bounds.width.min(bounds.height) * 0.5) - 2.0;
@@ -120,7 +157,7 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
             });
             frame.stroke(
                 &arc_path,
-                Stroke::default().with_width(2.0).with_color(theme::ACCENT),
+                Stroke::default().with_width(2.0).with_color(indicator_color),
             );
 
             for &t in &[0.0f32, 0.5, 1.0] {
@@ -145,7 +182,9 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
             );
             frame.stroke(
                 &Path::line(center, indicator_end),
-                Stroke::default().with_width(2.0).with_color(theme::TEXT),
+                Stroke::default()
+                    .with_width(2.0)
+                    .with_color(if tinted { theme::WARM } else { theme::TEXT }),
             );
         });
         vec![geometry]

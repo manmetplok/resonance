@@ -132,8 +132,34 @@ pub(super) fn all_cleared(r: &mut Resonance) {
         // replays the cache without re-rendering.
         if let Some(extras) = r.io.pending_undo_extras.take() {
             r.finalize_undo_restore(extras);
-        } else if let Some((dir, freezes)) = freeze_rehydrate {
-            r.rehydrate_frozen_tracks(&dir, &freezes);
+        } else {
+            // Disk load (not an undo): re-attach each frozen track's cache
+            // so reopening replays the cache without re-rendering (ba todo
+            // #577).
+            if let Some((dir, freezes)) = freeze_rehydrate {
+                r.rehydrate_frozen_tracks(&dir, &freezes);
+            }
+
+            // Fresh project load (not an undo): re-send Bank Select +
+            // Program Change for every external-instrument track from its
+            // restored config, so a freshly-powered synth lands on its saved
+            // patch and any offline MIDI output is reported. Undo deliberately
+            // skips this (see `restore_external_instruments`) so it never
+            // re-fires MIDI; here, replaying the saved project, we want it.
+            let _ = r
+                .engine
+                .send(AudioCommand::ResendExternalInstrumentPatches);
+
+            // A genuine project load (not an undo/redo replay) whose media
+            // pool references files that aren't on disk: surface the
+            // missing-files relink modal so the user can locate them (doc
+            // #175, todo #607). Undo/redo replays skip this — reopening the
+            // modal on every history step would be noise.
+            if r.pool.has_missing() {
+                let targets: Vec<resonance_audio::types::AssetId> =
+                    r.pool.missing_assets().map(|a| a.id).collect();
+                r.relink.open_modal(targets);
+            }
         }
     }
 }

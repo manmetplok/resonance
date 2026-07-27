@@ -1,4 +1,21 @@
 use resonance_audio::{Bus, Track, TrackOutput};
+use resonance_common::device_definition::MidiBinding;
+use resonance_common::{DeviceParam, ParamCurve};
+
+/// Build a minimal `DeviceParam` bound to a CC, for the device-param
+/// map tests below.
+fn cc_param(id: &str, cc: u8) -> DeviceParam {
+    DeviceParam {
+        id: id.to_string(),
+        name: id.to_string(),
+        group: None,
+        binding: MidiBinding::Cc { cc },
+        min: 0,
+        max: 127,
+        default: None,
+        curve: ParamCurve::Linear,
+    }
+}
 
 #[test]
 fn track_output_defaults_to_master() {
@@ -42,6 +59,68 @@ fn track_output_master_sentinel_is_u64_max() {
     assert_eq!(track.output(), TrackOutput::Bus(5));
     track.set_output(TrackOutput::Master);
     assert_eq!(track.output(), TrackOutput::Master);
+}
+
+#[test]
+fn track_device_params_default_empty() {
+    let track = Track::new(1, "T1".to_string());
+    assert!(track.device_params().is_empty());
+    assert!(track.device_param("cutoff").is_none());
+}
+
+#[test]
+fn track_device_params_set_and_lookup() {
+    let track = Track::new(1, "T1".to_string());
+    let ids = track.set_device_params(vec![cc_param("cutoff", 74), cc_param("reso", 71)]);
+
+    // Returned ids preserve supply order.
+    assert_eq!(ids, vec!["cutoff".to_string(), "reso".to_string()]);
+    // The map is keyed by param id.
+    assert_eq!(track.device_params().len(), 2);
+    assert_eq!(
+        track.device_param("cutoff").unwrap().binding,
+        MidiBinding::Cc { cc: 74 }
+    );
+    assert_eq!(
+        track.device_param("reso").unwrap().binding,
+        MidiBinding::Cc { cc: 71 }
+    );
+    assert!(track.device_param("missing").is_none());
+}
+
+#[test]
+fn track_device_params_replace_is_not_merge() {
+    let track = Track::new(1, "T1".to_string());
+    track.set_device_params(vec![cc_param("a", 1), cc_param("b", 2)]);
+    // A second command replaces the whole map rather than merging.
+    let ids = track.set_device_params(vec![cc_param("c", 3)]);
+    assert_eq!(ids, vec!["c".to_string()]);
+    assert_eq!(track.device_params().len(), 1);
+    assert!(track.device_param("a").is_none());
+    assert!(track.device_param("b").is_none());
+    assert!(track.device_param("c").is_some());
+}
+
+#[test]
+fn track_device_params_empty_clears() {
+    let track = Track::new(1, "T1".to_string());
+    track.set_device_params(vec![cc_param("a", 1)]);
+    let ids = track.set_device_params(vec![]);
+    assert!(ids.is_empty());
+    assert!(track.device_params().is_empty());
+}
+
+#[test]
+fn track_device_params_duplicate_id_last_wins() {
+    let track = Track::new(1, "T1".to_string());
+    // Same id twice: the map keeps the last, the returned ids list it once.
+    let ids = track.set_device_params(vec![cc_param("dup", 10), cc_param("dup", 20)]);
+    assert_eq!(ids, vec!["dup".to_string()]);
+    assert_eq!(track.device_params().len(), 1);
+    assert_eq!(
+        track.device_param("dup").unwrap().binding,
+        MidiBinding::Cc { cc: 20 }
+    );
 }
 
 #[test]

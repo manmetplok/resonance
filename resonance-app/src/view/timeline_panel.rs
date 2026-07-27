@@ -23,8 +23,20 @@ impl crate::Resonance {
             Vec::new()
         };
 
+        // Tracks playing back from a freeze cache have no editable sample
+        // source, so their audio clips render the "unsupported" surface
+        // (hatch, no fade handles) while gain still applies — design #153.
+        let frozen_tracks: std::collections::HashSet<TrackId> = self
+            .registry
+            .tracks
+            .iter()
+            .filter(|t| self.freeze.status(t.id).is_frozen())
+            .map(|t| t.id)
+            .collect();
+
         let timeline_data = TimelineCanvas {
             tracks: &self.registry.tracks,
+            track_groups: &self.track_groups,
             clips: &self.clips,
             playhead: self.transport.playhead,
             sample_rate: self.sample_rate,
@@ -53,17 +65,11 @@ impl crate::Resonance {
             section_placements: &self.compose.placements,
             section_definitions: &self.compose.definitions,
             selected_placement_id: self.compose.selected_placement_id,
+            automation: &self.automation,
             markers: self.markers.as_slice(),
             selected_marker_id: self.interaction.selected_marker_id,
-            // Tracks whose lane should render the frozen-render treatment
-            // (frost wash over a warm waveform, "frozen render" label).
-            frozen_tracks: self
-                .registry
-                .tracks
-                .iter()
-                .filter(|t| self.freeze.status(t.id).is_frozen())
-                .map(|t| t.id)
-                .collect(),
+            frozen_tracks,
+            drag: self.drag_placement.as_ref(),
         };
 
         // Fixed canvas width = full content width. With the canvas no

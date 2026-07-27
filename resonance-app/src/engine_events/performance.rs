@@ -25,6 +25,7 @@ use resonance_audio::types::TempoMap;
 use resonance_music_theory::Chord;
 
 use crate::compose::{SectionDefinitionState, SectionPlacementState};
+use crate::state::ArrangementMarker;
 
 /// How many upcoming chords the readout looks ahead by (design doc #151
 /// calls for "the next 2–3 chords").
@@ -294,4 +295,109 @@ pub fn chord_readout(
 
     readout.upcoming = upcoming;
     readout
+}
+
+// -- Arrangement-marker section readout (todo #372) ---------------------------
+//
+// The Performance teleprompter also wants song *structure*: the section the
+// playhead is inside and the one coming up. That comes straight from the
+// arrangement markers (point flags or ranged section regions) — no engine or
+// tempo math, just the markers' sample positions versus the playhead, with the
+// same loop-aware windowing the chord look-ahead uses (wrap at `loop_out` back
+// to `loop_in`).
+
+/// A marker resolved into a teleprompter label.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionLabel {
+    /// Stable id of the source [`ArrangementMarker`].
+    pub id: u64,
+    /// Section / marker name as shown to the performer.
+    pub name: String,
+    /// Marker colour, so the view can tint the label to match the timeline.
+    pub color: [u8; 3],
+}
+
+impl SectionLabel {
+    fn from_marker(m: &ArrangementMarker) -> Self {
+        Self {
+            id: m.id,
+            name: m.name.clone(),
+            color: m.color,
+        }
+    }
+}
+
+/// The derived section readout for one playhead position: where we are in the
+/// arrangement and what comes next.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SectionReadout {
+    /// Section under the playhead, or `None` in a gap / empty arrangement. A
+    /// point marker stays current until a later-starting marker supersedes it;
+    /// a ranged region is only current within `[start, effective_end]`.
+    pub current: Option<SectionLabel>,
+    /// The next upcoming section, honoring the loop region (wraps at
+    /// `loop_out` back to the first section at/after `loop_in`). `None` when
+    /// nothing comes next.
+    pub next: Option<SectionLabel>,
+}
+
+/// Derive the current/next section labels from arrangement markers.
+///
+/// `markers` is the arrangement's marker list (need not be pre-sorted);
+/// `playhead` is the transport position in samples; `loop_region` is
+/// `(loop_in, loop_out)` in samples when looping is active (`None` disables the
+/// wrap). Mirrors [`chord_readout`]'s loop windowing: the "next" section is the
+/// nearest marker strictly after the playhead and before `loop_out`, falling
+/// back to the first marker at/after `loop_in` when the look-ahead would
+/// otherwise run off the end of the loop.
+pub fn section_readout(
+    markers: &[ArrangementMarker],
+    playhead: u64,
+    loop_region: Option<(u64, u64)>,
+) -> SectionReadout {
+    // Work on references sorted by start position so the windowing is stable
+    // regardless of the caller's ordering.
+    let mut sorted: Vec<&ArrangementMarker> = markers.iter().collect();
+    sorted.sort_by_key(|m| m.start_sample);
+    if sorted.is_empty() {
+        return SectionReadout::default();
+    }
+
+    // Current: the latest marker that has started at or before the playhead.
+    // A ranged region drops to "no section" once the playhead passes its end
+    // (a true gap); a point marker has no extent, so it stays current until a
+    // later marker takes over.
+    let current = sorted
+        .iter()
+        .filter(|m| m.start_sample <= playhead)
+        .next_back()
+        .copied()
+        .filter(|m| !(m.is_region() && playhead > m.effective_end()));
+    let current_id = current.map(|m| m.id);
+
+    // Loop window, only when active and non-empty.
+    let loop_window = loop_region.and_then(|(lo, hi)| (hi > lo).then_some((lo, hi)));
+
+    // Forward look-ahead: nearest marker strictly after the playhead, and —
+    // when looping — strictly before the loop end.
+    let forward = sorted.iter().copied().find(|m| {
+        m.start_sample > playhead && loop_window.map_or(true, |(_, hi)| m.start_sample < hi)
+    });
+
+    // Loop wrap: if the forward pass found nothing left inside the loop,
+    // restart at the top of the loop. The sections that come around again are
+    // those in `[loop_in, playhead]` (the part of the loop already played this
+    // cycle); take the first such section that isn't the one we're already in.
+    let next = forward.or_else(|| {
+        let (lo, _) = loop_window?;
+        sorted
+            .iter()
+            .copied()
+            .find(|m| m.start_sample >= lo && m.start_sample <= playhead && Some(m.id) != current_id)
+    });
+
+    SectionReadout {
+        current: current.map(SectionLabel::from_marker),
+        next: next.map(SectionLabel::from_marker),
+    }
 }

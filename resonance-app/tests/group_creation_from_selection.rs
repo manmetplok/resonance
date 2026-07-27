@@ -1,0 +1,230 @@
+//! "Group selected" action: multi-track selection + group creation
+//! (epic #36, doc #200, todo #684).
+//!
+//! Two layers are pinned here:
+//!   * the registry policy ([`TrackGroupRegistry::create_group_from_selection`])
+//!     — auto-named, colour-cycled, members in click order; and
+//!   * the reducer path through `Resonance::update`: additive (Shift/Cmd)
+//!     clicks build a multi-selection, `CreateGroupFromSelection` folds it
+//!     into a group and clears the selection, and a sub-two selection is a
+//!     no-op.
+
+use iced::keyboard::Modifiers;
+use resonance_app::message::{GroupMessage, Message, UiMessage};
+use resonance_app::state::{TrackGroupRegistry, TrackState};
+use resonance_app::undo::{classify, UndoAction};
+use resonance_app::view::arrange_layout::ArrangeRowKind;
+use resonance_app::Resonance;
+use resonance_common::automation::TrackId;
+use resonance_common::group_identity::GroupIdentityColor;
+
+fn track_id(i: u64) -> TrackId {
+    i
+}
+
+// ---- Registry policy ----------------------------------------------------
+
+#[test]
+fn create_group_from_selection_names_and_colours_by_count() {
+    let mut registry = TrackGroupRegistry::new();
+
+    let g1 = registry.create_group_from_selection(track_id(100), &[track_id(1), track_id(2)]);
+    let g2 = registry.create_group_from_selection(track_id(101), &[track_id(3), track_id(4)]);
+
+    let first = registry.get_group(g1).unwrap();
+    assert_eq!(first.name, "Group 1");
+    assert_eq!(first.identity_color, GroupIdentityColor::Drum);
+
+    let second = registry.get_group(g2).unwrap();
+    assert_eq!(second.name, "Group 2");
+    // Colour cycles to the next palette entry for the second group.
+    assert_eq!(second.identity_color, GroupIdentityColor::Vocal);
+}
+
+#[test]
+fn create_group_from_selection_keeps_member_order() {
+    let mut registry = TrackGroupRegistry::new();
+    let members = [track_id(7), track_id(3), track_id(9)];
+
+    let id = registry.create_group_from_selection(track_id(200), &members);
+
+    let group = registry.get_group(id).unwrap();
+    assert_eq!(group.ordered_members, members);
+}
+
+#[test]
+fn create_group_from_selection_dedupes_members() {
+    let mut registry = TrackGroupRegistry::new();
+
+    let id = registry.create_group_from_selection(
+        track_id(200),
+        &[track_id(5), track_id(5), track_id(6)],
+    );
+
+    let group = registry.get_group(id).unwrap();
+    assert_eq!(group.ordered_members, vec![track_id(5), track_id(6)]);
+}
+
+// ---- Reducer path through Resonance::update -----------------------------
+
+fn active_app() -> Resonance {
+    let (mut app, _task) = Resonance::new();
+    app.test_set_active_project(true);
+    app
+}
+
+fn select(app: &mut Resonance, id: TrackId) {
+    let _ = app.update(Message::Ui(UiMessage::SelectTrack(Some(id))));
+}
+
+fn set_modifiers(app: &mut Resonance, mods: Modifiers) {
+    let _ = app.update(Message::Ui(UiMessage::ModifiersChanged(mods)));
+}
+
+#[test]
+fn additive_clicks_build_multi_selection() {
+    let mut app = active_app();
+
+    // A plain click selects exactly one track.
+    select(&mut app, 1);
+    assert_eq!(app.test_selected_tracks(), &[1]);
+
+    // With a modifier held, further clicks extend the selection.
+    set_modifiers(&mut app, Modifiers::SHIFT);
+    select(&mut app, 2);
+    select(&mut app, 3);
+    assert_eq!(app.test_selected_tracks(), &[1, 2, 3]);
+
+    // Re-clicking a selected track (still additive) toggles it back off.
+    select(&mut app, 2);
+    assert_eq!(app.test_selected_tracks(), &[1, 3]);
+
+    // Releasing the modifier and clicking replaces the whole selection.
+    set_modifiers(&mut app, Modifiers::empty());
+    select(&mut app, 5);
+    assert_eq!(app.test_selected_tracks(), &[5]);
+}
+
+#[test]
+fn create_group_from_selection_groups_and_clears() {
+    let mut app = active_app();
+
+    set_modifiers(&mut app, Modifiers::SHIFT);
+    select(&mut app, 10);
+    select(&mut app, 11);
+    select(&mut app, 12);
+    assert_eq!(app.test_selected_tracks().len(), 3);
+
+    let _ = app.update(Message::Group(GroupMessage::CreateGroupFromSelection));
+
+    // Exactly one group, holding the three selected tracks.
+    let groups = app.test_track_groups();
+    assert_eq!(groups.len(), 1);
+    let group = groups.get_all_groups()[0];
+    assert_eq!(group.ordered_members, vec![10, 11, 12]);
+
+    // The selection is cleared so the floating bar dismisses itself.
+    assert!(app.test_selected_tracks().is_empty());
+}
+
+#[test]
+fn create_group_from_selection_noops_below_two_tracks() {
+    let mut app = active_app();
+
+    select(&mut app, 42);
+    assert_eq!(app.test_selected_tracks(), &[42]);
+
+    let _ = app.update(Message::Group(GroupMessage::CreateGroupFromSelection));
+
+    // No group created, and the single selection is left untouched.
+    assert_eq!(app.test_track_groups().len(), 0);
+    assert_eq!(app.test_selected_tracks(), &[42]);
+}
+
+// ---- Collapse / fold state in the timeline (todo #686) ------------------
+//
+// The group-header caret fires `GroupMessage::ToggleCollapse`; the reducer
+// flips the group's persisted `is_collapsed`, and the shared
+// `ArrangeRowLayout` (the single source both the canvas and the header
+// column render from) then omits the collapsed group's member rows while
+// keeping its own header row, so the group can be re-expanded.
+
+/// Push two real instrument tracks and fold them into a group through the
+/// public reducer path; returns the group id.
+fn grouped_pair(app: &mut Resonance, a: TrackId, b: TrackId) -> TrackId {
+    app.test_push_track(TrackState::new_instrument(a, a as usize));
+    app.test_push_track(TrackState::new_instrument(b, b as usize));
+    app.test_set_selected_tracks(vec![a, b]);
+    let _ = app.update(Message::Group(GroupMessage::CreateGroupFromSelection));
+    app.test_track_groups().get_all_groups()[0].id
+}
+
+/// The ids of the `Track` rows in the current arrange-row layout, in order.
+fn visible_track_rows(app: &Resonance) -> Vec<TrackId> {
+    app.test_arrange_row_layout()
+        .rows()
+        .iter()
+        .filter_map(|row| row.track_id())
+        .collect()
+}
+
+/// Whether the layout still carries the header row for `group_id`.
+fn header_row_present(app: &Resonance, group_id: TrackId) -> bool {
+    app.test_arrange_row_layout()
+        .rows()
+        .iter()
+        .any(|row| row.kind == ArrangeRowKind::GroupHeader(group_id))
+}
+
+#[test]
+fn toggle_collapse_flips_fold_state_and_hides_member_rows() {
+    let mut app = active_app();
+    let gid = grouped_pair(&mut app, 10, 11);
+
+    // Fresh groups start expanded: both member lanes are present, and the
+    // group's own header row sits in the layout.
+    assert!(!app.test_track_groups().get_group(gid).unwrap().is_collapsed);
+    assert!(visible_track_rows(&app).contains(&10));
+    assert!(visible_track_rows(&app).contains(&11));
+    assert!(header_row_present(&app, gid));
+
+    // Firing the caret's message folds the group: the flag flips, the
+    // members read hidden, and their lanes drop out of the layout — while
+    // the header row REMAINS so the group can be re-expanded.
+    let _ = app.update(Message::Group(GroupMessage::ToggleCollapse(gid)));
+    assert!(app.test_track_groups().get_group(gid).unwrap().is_collapsed);
+    assert!(app.test_track_groups().is_track_hidden_by_collapse(10));
+    assert!(app.test_track_groups().is_track_hidden_by_collapse(11));
+    assert!(!visible_track_rows(&app).contains(&10));
+    assert!(!visible_track_rows(&app).contains(&11));
+    assert!(
+        header_row_present(&app, gid),
+        "the group header row must survive collapse so it can be re-expanded"
+    );
+
+    // Toggling again expands it back: members reappear.
+    let _ = app.update(Message::Group(GroupMessage::ToggleCollapse(gid)));
+    assert!(!app.test_track_groups().get_group(gid).unwrap().is_collapsed);
+    assert!(visible_track_rows(&app).contains(&10));
+    assert!(visible_track_rows(&app).contains(&11));
+}
+
+#[test]
+fn toggle_collapse_unknown_group_is_a_noop() {
+    let mut app = active_app();
+    // No group with this id exists — the reducer must not panic.
+    let _ = app.update(Message::Group(GroupMessage::ToggleCollapse(9999)));
+    assert_eq!(app.test_track_groups().len(), 0);
+}
+
+#[test]
+fn toggle_collapse_is_a_recordable_edit_for_undo() {
+    // `is_collapsed` is persisted in the project file (todo #690), so a
+    // fold toggle is a single recordable edit — undo restores the prior
+    // fold state and the hidden member rows reappear. The classifier is the
+    // single decision point, so pinning it here pins the undo round-trip.
+    assert!(matches!(
+        classify(&Message::Group(GroupMessage::ToggleCollapse(7))),
+        UndoAction::Record
+    ));
+}

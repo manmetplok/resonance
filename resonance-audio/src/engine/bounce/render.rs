@@ -137,6 +137,10 @@ pub(super) struct ChunkCtx<'a> {
     pub tempo_map: &'a TempoMap,
     pub sample_rate: u32,
     pub master_vol: f32,
+    /// Parameter-automation snapshot for this bounce run, captured once
+    /// when the bounce was spawned. Drives gain / pan / mute / plugin-
+    /// param automation identically to live playback.
+    pub automation: &'a crate::engine::AutomationSnapshot,
     /// Plugin-delay-compensation table for this bounce run, built once
     /// by [`build_latency_comp`] so the offline render aligns tracks
     /// exactly like live playback. The bounce drivers additionally trim
@@ -259,6 +263,7 @@ pub(super) fn render_chunk(
         &mut scratch.port_scratch,
         &mut scratch.note_buf,
         ctx.latency_comp,
+        ctx.automation,
         &mut strategy,
     );
 
@@ -295,8 +300,22 @@ pub(super) fn render_chunk(
     drop(tracks_guard);
 
     if include_master_fx {
-        for s in &mut scratch.mix_buf[..frames * 2] {
-            *s = (*s * ctx.master_vol).clamp(-1.0, 1.0);
+        // A master-gain automation lane ramps across the chunk (start..end
+        // sampled at the chunk boundaries); otherwise the static master
+        // volume applies as a constant.
+        let auto_start = crate::mixer::auto_master_volume(ctx.automation, pos);
+        let auto_end = crate::mixer::auto_master_volume(ctx.automation, pos + frames as u64);
+        if let (Some(g0), Some(g1)) = (auto_start, auto_end) {
+            let inv = if frames > 0 { 1.0 / frames as f32 } else { 0.0 };
+            for f in 0..frames {
+                let g = g0 + (g1 - g0) * ((f + 1) as f32 * inv);
+                scratch.mix_buf[f * 2] = (scratch.mix_buf[f * 2] * g).clamp(-1.0, 1.0);
+                scratch.mix_buf[f * 2 + 1] = (scratch.mix_buf[f * 2 + 1] * g).clamp(-1.0, 1.0);
+            }
+        } else {
+            for s in &mut scratch.mix_buf[..frames * 2] {
+                *s = (*s * ctx.master_vol).clamp(-1.0, 1.0);
+            }
         }
     }
 }

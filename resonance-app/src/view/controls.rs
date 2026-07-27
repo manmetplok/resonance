@@ -136,6 +136,62 @@ pub fn solo_button<'a>(
         .padding(0)
 }
 
+/// Small amber "via group" chip shown on a member track whose solo is
+/// driven by its group's macro solo rather than its own (todo #688). It is
+/// a non-interactive status badge — an outlined WARM pill — so it reads as
+/// "soloed because the group is" without competing with the solo button.
+pub fn via_group_solo_chip<'a>() -> Element<'a, Message> {
+    container(
+        text("S·grp")
+            .size(8)
+            .font(theme::MONO_FONT)
+            .color(theme::WARM),
+    )
+    .padding(iced::Padding {
+        top: 1.0,
+        right: 4.0,
+        bottom: 1.0,
+        left: 4.0,
+    })
+    .style(|_theme| container::Style {
+        border: iced::Border {
+            color: theme::WARM_LINE,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+/// Small pink "via group" chip shown on a member track whose mute is driven
+/// by its group's macro mute rather than its own (todo #687). It is a
+/// non-interactive status badge — an outlined BAD pill — so it reads as
+/// "muted because the group is" without competing with the mute button.
+pub fn via_group_mute_chip<'a>() -> Element<'a, Message> {
+    container(
+        text("M·grp")
+            .size(8)
+            .font(theme::MONO_FONT)
+            .color(theme::BAD),
+    )
+    .padding(iced::Padding {
+        top: 1.0,
+        right: 4.0,
+        bottom: 1.0,
+        left: 4.0,
+    })
+    .style(|_theme| container::Style {
+        border: iced::Border {
+            color: theme::BAD_LINE,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
 /// Input-monitor toggle button (eye — green when monitoring).
 pub fn monitor_button<'a>(
     enabled: bool,
@@ -353,23 +409,43 @@ pub fn meter_v<'a>(level_l: f32, level_r: f32, height: f32) -> Element<'a, Messa
 /// Render the shared fader + meter + dB label block used by tracks, busses,
 /// and master. The caller supplies the message factory for the slider —
 /// this lets the same widget drive track/bus/master volumes.
+///
+/// `automated` carries the live automated gain (in dB) when an enabled
+/// gain-automation lane is driving this channel during playback (todo
+/// #383). When present the rail/handle take the warm accent and the dB
+/// read-out shows the automated value (the value automation is applying),
+/// not the static fader value — which keeps animating as the playhead
+/// crosses breakpoints. Dragging still edits the underlying static value.
 pub fn fader_section<'a, F>(
     level_l: f32,
     level_r: f32,
     volume_db: f32,
+    automated: Option<f32>,
     on_change: F,
 ) -> Element<'a, Message>
 where
     F: 'a + Fn(f32) -> Message,
 {
-    let fader = vertical_slider(-60.0..=6.0f32, volume_db, on_change)
+    let mut fader = vertical_slider(-60.0..=6.0f32, volume_db, on_change)
         .height(theme::FADER_HEIGHT)
         .step(0.1);
+    if automated.is_some() {
+        fader = fader.style(|theme: &iced::Theme, status| {
+            let mut s = iced::widget::slider::default(theme, status);
+            s.rail.backgrounds.0 = theme::WARM.into();
+            s.handle.background = theme::WARM.into();
+            s
+        });
+    }
     let meters = meter_v(level_l, level_r, theme::FADER_HEIGHT);
-    let label = text(format_db(volume_db))
+    let (label_db, label_color) = match automated {
+        Some(a) => (a, theme::WARM),
+        None => (volume_db, theme::TEXT_DIM),
+    };
+    let label = text(format_db(label_db))
         .size(9)
         .font(Font::MONOSPACE)
-        .color(theme::TEXT_DIM);
+        .color(label_color);
     column![
         container(
             row![meters, fader]

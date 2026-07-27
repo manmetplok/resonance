@@ -6,7 +6,7 @@
 mod dialogs;
 mod instantiate;
 mod replay;
-mod replay_diff;
+pub mod replay_diff;
 mod serialize;
 mod templates;
 
@@ -22,7 +22,11 @@ use crate::Resonance;
 pub use dialogs::save_project_as_dialog;
 pub use instantiate::{begin_instantiate, instantiate_builtin, load_user_template_task};
 pub use replay::replay_loaded_project;
-pub(crate) use replay::restore_references;
+pub use replay::{migrate_auto_name, sort_plugins_by_saved_order};
+pub(crate) use replay::{
+    restore_drum_patterns, restore_performance, restore_pool, restore_quantize,
+    restore_references,
+};
 pub use replay_diff::try_diff_replay;
 pub use serialize::build_project_file;
 pub use templates::{

@@ -5,14 +5,17 @@
 //! dispatch itself stays thin so it's easy to find which file owns a
 //! given event.
 
+mod automation;
 mod aux_sends;
 mod clips;
 mod dispatch;
+mod external_instrument;
 mod freeze;
 mod midi;
 mod midi_map;
 pub mod performance;
 mod plugins;
+mod pool;
 mod presets;
 mod project_io;
 mod reference;

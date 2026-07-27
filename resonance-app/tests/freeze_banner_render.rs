@@ -16,6 +16,8 @@
 //! `tests/snapshots/`). The behavioural tests then drive the exact messages
 //! the banner buttons dispatch through the real update handlers.
 
+mod common;
+
 use iced::widget::container;
 use iced::{Length, Size};
 use iced_test::simulator::Simulator;
@@ -80,12 +82,7 @@ fn stale_refreeze_banner_render() {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image("tests/snapshots/stale_refreeze_banner.png")
-            .expect("matches_image i/o"),
-        "stale refreeze banner diverged from golden — amber tint / copy / \
-         Refreeze + Unfreeze actions changed"
-    );
+    common::assert_golden(&snap, "tests/snapshots/stale_refreeze_banner.png");
 }
 
 #[test]
@@ -99,12 +96,7 @@ fn freeze_failed_banner_render() {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image("tests/snapshots/freeze_failed_banner.png")
-            .expect("matches_image i/o"),
-        "freeze-failed banner diverged from golden — soft-pink tint / reason \
-         copy / Retry + Dismiss actions changed"
-    );
+    common::assert_golden(&snap, "tests/snapshots/freeze_failed_banner.png");
 }
 
 // ---------------------------------------------------------------------

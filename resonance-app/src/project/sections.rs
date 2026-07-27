@@ -54,9 +54,51 @@ pub struct ProjectSectionDefinition {
     )]
     pub motif_source: MotifSource,
     /// Which entry in the project's drum-pattern bank this section uses.
-    /// `None` on legacy projects (loads as "use the project default").
+    /// LEGACY field: written by project files predating the drum
+    /// arrangement (epic #38). New saves leave this `None` and persist the
+    /// full ordered arrangement in [`arrangement`](Self::arrangement)
+    /// instead. On load, a legacy `Some(id)` (with an empty `arrangement`)
+    /// migrates to a single-entry arrangement tiling the whole section —
+    /// see `ComposeState::load_from_project`.
     #[serde(default)]
     pub drum_pattern_id: Option<u64>,
+    /// Ordered drum arrangement for the section: the sequence of pattern
+    /// entries the drums play across its bars (epic #38). Empty on legacy
+    /// projects — the loader then falls back to
+    /// [`drum_pattern_id`](Self::drum_pattern_id) (a single entry) or, if
+    /// that is also absent, an empty arrangement meaning "use the project
+    /// default pattern". Defaulted so older project files load unchanged.
+    #[serde(default)]
+    pub arrangement: Vec<ProjectPatternEntry>,
+}
+
+/// Persisted form of [`crate::compose::PatternEntry`] — one entry in a
+/// section's ordered drum arrangement. A plain serde mirror so the
+/// runtime type stays free of serialization concerns (matching the
+/// `ProjectSectionChord` ↔ `ChordState` split).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectPatternEntry {
+    /// Pattern played for the bulk of this entry.
+    pub pattern_id: u64,
+    /// How long the entry lasts (repeat count or fixed bar span).
+    pub length: ProjectEntryLength,
+    /// Optional fill pattern swapped in on the entry's last bar. Omitted
+    /// from JSON when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<u64>,
+}
+
+/// Persisted form of [`crate::compose::EntryLength`]. Serializes
+/// externally tagged — `{"RepeatN": 3}` / `{"Bars": 4}` — a stable,
+/// self-describing shape that round-trips both length modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProjectEntryLength {
+    /// Repeat the entry's pattern `n` times; concrete span is
+    /// `n * pattern.length_bars`.
+    RepeatN(u32),
+    /// Occupy a fixed number of bars regardless of the pattern's
+    /// intrinsic bar length.
+    Bars(u32),
 }
 
 /// Accept both the historical `motif: { seed, complexity, motif_len,
@@ -82,6 +124,50 @@ where
 
 fn default_beats_per_chord() -> u32 {
     4
+}
+
+// ---- Arrangement <-> persisted form -----------------------------------
+//
+// `From` conversions in both directions so `to_project_definitions` /
+// `load_from_project` can map an arrangement to/from disk without leaking
+// serde onto the runtime `PatternEntry` / `EntryLength` types.
+
+impl From<crate::compose::EntryLength> for ProjectEntryLength {
+    fn from(length: crate::compose::EntryLength) -> Self {
+        match length {
+            crate::compose::EntryLength::RepeatN(n) => ProjectEntryLength::RepeatN(n),
+            crate::compose::EntryLength::Bars(b) => ProjectEntryLength::Bars(b),
+        }
+    }
+}
+
+impl From<ProjectEntryLength> for crate::compose::EntryLength {
+    fn from(length: ProjectEntryLength) -> Self {
+        match length {
+            ProjectEntryLength::RepeatN(n) => crate::compose::EntryLength::RepeatN(n),
+            ProjectEntryLength::Bars(b) => crate::compose::EntryLength::Bars(b),
+        }
+    }
+}
+
+impl From<&crate::compose::PatternEntry> for ProjectPatternEntry {
+    fn from(entry: &crate::compose::PatternEntry) -> Self {
+        ProjectPatternEntry {
+            pattern_id: entry.pattern_id,
+            length: entry.length.into(),
+            fill: entry.fill,
+        }
+    }
+}
+
+impl From<&ProjectPatternEntry> for crate::compose::PatternEntry {
+    fn from(entry: &ProjectPatternEntry) -> Self {
+        crate::compose::PatternEntry {
+            pattern_id: entry.pattern_id,
+            length: entry.length.into(),
+            fill: entry.fill,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

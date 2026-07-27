@@ -50,6 +50,7 @@ pub fn to_audio_clip(
     midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &super::super::AutomationSnapshot,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
 ) {
@@ -146,6 +147,7 @@ pub fn to_audio_clip(
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
+        automation,
     };
     let mut scratch = ChunkScratch::new();
 

@@ -8,6 +8,11 @@
 
 use std::sync::Arc;
 
+use crossbeam_channel::Sender;
+use indexmap::IndexMap;
+use parking_lot::RwLock;
+use resonance_common::DeviceParam;
+
 use crate::midi_hardware::{enumerate_midi_inputs, enumerate_midi_outputs};
 use crate::types::*;
 
@@ -90,5 +95,39 @@ pub(crate) fn handle_set_track_midi_output(
     }
     if let Err(e) = state.midi_hw.midi_outputs.set_track_output(track_id, device) {
         let _ = ctx.event_tx.send(AudioEvent::Error(e));
+    }
+}
+
+pub(crate) fn handle_set_track_device_params(
+    ctx: &HandlerCtx,
+    track_id: TrackId,
+    params: Vec<DeviceParam>,
+) {
+    set_track_device_params_in_place(ctx.tracks, ctx.event_tx, track_id, params);
+}
+
+/// Store the device preset's automatable parameters on the engine-side
+/// track keyed by [`DeviceParam::id`] (architecture doc #201 §4, epic #40)
+/// and confirm with `AudioEvent::TrackDeviceParamsApplied`. Replaces the
+/// whole map; an empty `params` clears it. The mutation and the event both
+/// live inside the `if let Some(track)` branch, so an unknown track id is a
+/// silent no-op that never emits a ghost event (mirroring
+/// [`super::super::clips::set_clip_fade_in_place`] and the other per-track
+/// setters).
+///
+/// Takes only a read guard on the tracks map: [`Track::set_device_params`]
+/// publishes the new map through an `ArcSwap` store on `&self`, so the
+/// audio thread sees it on the next block without ever contending on the
+/// tracks-map write lock.
+pub fn set_track_device_params_in_place(
+    tracks: &RwLock<IndexMap<TrackId, Track>>,
+    event_tx: &Sender<AudioEvent>,
+    track_id: TrackId,
+    params: Vec<DeviceParam>,
+) {
+    let guard = tracks.read();
+    if let Some(track) = guard.get(&track_id) {
+        let param_ids = track.set_device_params(params);
+        let _ = event_tx.send(AudioEvent::TrackDeviceParamsApplied { track_id, param_ids });
     }
 }

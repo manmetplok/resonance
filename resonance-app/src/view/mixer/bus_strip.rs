@@ -11,7 +11,6 @@ use crate::state::*;
 use crate::theme;
 use crate::util::format_pan;
 use crate::view::controls::{bus_remove_button, fader_section, fx_bypass_button, mute_button};
-use crate::view::knob::pan_knob;
 
 use super::picks::PluginOwner;
 
@@ -86,8 +85,23 @@ impl crate::Resonance {
                 )
             };
 
+        // Per-channel automation lane header (todo #383).
+        let auto_chan = super::automation::AutoChan::Bus(bus.id);
+        // Busses have no external-instrument device preset, so no device
+        // params ever appear in their automation picker.
+        let auto_header =
+            super::automation::automation_header(&self.automation, auto_chan, &bus.plugins, &[]);
+
         // Pan knob — vertical drag to change, double-click to reset.
-        let pan_ctrl = pan_knob(bus.pan, move |v| {
+        let pan_live = super::automation::live_value(
+            &self.automation,
+            resonance_common::AutomationTarget::BusPan(bus.id),
+        )
+        .map(|v| resonance_common::lane_value_to_real(
+            &resonance_common::AutomationTarget::BusPan(bus.id),
+            v,
+        ));
+        let pan_ctrl = crate::view::knob::pan_knob_automated(bus.pan, pan_live, move |v| {
             Message::Bus(BusMessage::SetBusPan(bus_id, v))
         });
         let pan_label = format_pan(bus.pan);
@@ -109,12 +123,22 @@ impl crate::Resonance {
             if let Some(fx) = fx_picker_element {
                 col = col.push(fx);
             }
+            col = col.push(auto_header);
             col.push(pan_row)
         };
 
-        let fader_block = fader_section(bus.level_l, bus.level_r, bus.volume, move |v| {
-            Message::Bus(BusMessage::SetBusVolume(bus_id, v))
-        });
+        let gain_live = super::automation::live_value(
+            &self.automation,
+            resonance_common::AutomationTarget::BusGain(bus.id),
+        )
+        .map(|v| resonance_common::lane_value_to_real(
+            &resonance_common::AutomationTarget::BusGain(bus.id),
+            v,
+        ));
+        let fader_block =
+            fader_section(bus.level_l, bus.level_r, bus.volume, gain_live, move |v| {
+                Message::Bus(BusMessage::SetBusVolume(bus_id, v))
+            });
 
         // FX list scrolls inside its own area between the buttons and
         // the pan/fader block so adding plugins never pushes the fader

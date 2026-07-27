@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Resonance — Third-party plugin hosting (design prototype)</title>
+<style>
+  /* ---- Resonance design tokens (mirrored from resonance-app/src/theme.rs) ---- */
+  :root{
+    --bg-0:#0f1013; --bg-1:#15161b; --bg-2:#1b1d23; --bg-3:#23262e;
+    --line:#272a31; --line-2:#1f2229;
+    --text-1:#e8e7e3; --text-2:#9aa0ac; --text-3:#5d626d; --text-4:#3f434c;
+    --accent:#8b6dff; --accent-soft:#a892ff;
+    --accent-dim:rgba(139,109,255,.16); --accent-line:rgba(139,109,255,.34);
+    --warm:#e8c47b; --warm-dim:rgba(232,196,123,.12); --warm-line:rgba(232,196,123,.34);
+    --good:#6dd6a3; --good-dim:rgba(109,214,163,.14); --good-line:rgba(109,214,163,.34);
+    --bad:#e87b8b; --bad-dim:rgba(232,123,139,.13); --bad-line:rgba(232,123,139,.40);
+    --radius-xs:4px; --radius-sm:6px; --radius-md:7px; --radius-lg:8px; --radius-xl:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg-0); color:var(--text-1);
+    font-family:"Geist","Inter",system-ui,-apple-system,sans-serif;
+    font-size:13px; -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+  button{font-family:inherit}
+
+  /* ---- App chrome ---- */
+  .app{height:100vh;display:flex;flex-direction:column;background:var(--bg-1)}
+  .chrome{
+    height:50px;flex:0 0 auto;display:flex;align-items:center;gap:14px;
+    padding:0 18px;background:var(--bg-0);border-bottom:1px solid var(--line);
+  }
+  .brand{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-size:19px}
+  .brand b{color:var(--accent-soft);font-style:italic;font-weight:400}
+  .tabs{display:flex;gap:2px;margin-left:8px}
+  .tab{padding:5px 12px;border-radius:var(--radius-sm);color:var(--text-2);cursor:default;font-size:12.5px}
+  .tab.active{background:var(--bg-3);color:var(--text-1)}
+  .spacer{flex:1}
+  .gear{width:30px;height:30px;border-radius:var(--radius-md);background:var(--bg-3);
+    display:flex;align-items:center;justify-content:center;color:var(--accent-soft);border:1px solid var(--accent-line)}
+  .clock{font-size:12px;color:var(--text-2);display:flex;gap:14px;align-items:center}
+  .clock b{color:var(--text-1);font-weight:500}
+
+  /* ---- State switcher (prototype scaffolding, not part of the product) ---- */
+  .statebar{
+    min-height:46px;flex:0 0 auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+    padding:7px 18px;background:var(--bg-1);border-bottom:1px solid var(--line-2);
+  }
+  .statebar .lbl{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);margin-right:2px}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .seg button{
+    border:0;background:transparent;color:var(--text-2);padding:6px 12px;font-size:12px;
+    cursor:pointer;border-right:1px solid var(--line-2);
+  }
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .hint{margin-left:auto;color:var(--text-3);font-size:11.5px;max-width:620px;text-align:right;line-height:1.45}
+
+  /* ---- Stage ---- */
+  .stage{flex:1;min-height:0;position:relative;overflow:hidden;background:var(--bg-1)}
+  .screen{position:absolute;inset:0;display:none;overflow:auto}
+  .screen.show{display:block}
+
+  /* ===== Settings overlay ===== */
+  .settings{height:100%;display:flex;background:var(--bg-0)}
+  .set-nav{width:208px;flex:0 0 auto;background:var(--bg-1);border-right:1px solid var(--line);padding:16px 10px;display:flex;flex-direction:column;gap:2px}
+  .set-nav h4{margin:6px 8px 8px;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);font-weight:600}
+  .set-nav .item{padding:7px 10px;border-radius:var(--radius-md);color:var(--text-2);font-size:12.5px;cursor:default;display:flex;align-items:center;gap:9px}
+  .set-nav .item .ic{width:14px;text-align:center;color:var(--text-3)}
+  .set-nav .item.active{background:var(--bg-3);color:var(--text-1)}
+  .set-nav .item.active .ic{color:var(--accent-soft)}
+
+  .set-main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .set-head{padding:20px 26px 14px;border-bottom:1px solid var(--line);display:flex;align-items:flex-end;gap:14px}
+  .set-head h2{margin:0;font-size:18px;font-weight:600}
+  .set-head p{margin:4px 0 0;color:var(--text-2);font-size:12px;max-width:520px;line-height:1.5}
+  .set-head .right{margin-left:auto;display:flex;gap:8px}
+  .set-body{flex:1;min-height:0;overflow:auto;padding:20px 26px 40px}
+
+  /* generic buttons */
+  .btn{border:1px solid var(--line);background:var(--bg-2);color:var(--text-1);padding:7px 13px;border-radius:var(--radius-md);font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+  .btn:hover{background:var(--bg-3)}
+  .btn.primary{background:var(--accent-dim);border-color:var(--accent-line);color:var(--accent-soft)}
+  .btn.ghost{background:transparent}
+  .btn.sm{padding:5px 9px;font-size:11px}
+  .btn .gl{font-size:11px}
+
+  /* Section block */
+  .block{margin-bottom:26px}
+  .block-h{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .block-h h3{margin:0;font-size:12.5px;font-weight:600}
+  .block-h .sub{color:var(--text-3);font-size:11.5px}
+  .block-h .right{margin-left:auto;display:flex;gap:7px}
+
+  /* Folder list */
+  .folders{display:flex;flex-direction:column;gap:6px}
+  .folder{display:flex;align-items:center;gap:11px;padding:10px 12px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md)}
+  .folder .fic{color:var(--warm);font-size:13px;width:16px;text-align:center}
+  .folder .fpath{flex:1;min-width:0}
+  .folder .fpath .p{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .folder .fpath .m{font-size:11px;color:var(--text-3);margin-top:2px}
+  .folder .badge{font-size:10px;color:var(--text-2);background:var(--bg-1);border:1px solid var(--line-2);border-radius:999px;padding:2px 8px}
+  .folder .x{color:var(--text-3);cursor:pointer;padding:4px 6px;border-radius:var(--radius-xs)}
+  .folder .x:hover{color:var(--bad);background:var(--bad-dim)}
+  .folder.sys .fic{color:var(--text-3)}
+  .folder.sys .lock{font-size:10px;color:var(--text-3)}
+
+  /* Toolbar above catalog */
+  .cat-tools{display:flex;align-items:center;gap:9px;margin-bottom:11px}
+  .search{flex:1;max-width:300px;display:flex;align-items:center;gap:8px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);padding:7px 11px}
+  .search input{flex:1;background:transparent;border:0;color:var(--text-1);font-size:12.5px;outline:none}
+  .search .gl{color:var(--text-3);font-size:12px}
+  .filters{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+  .filters button{border:0;background:transparent;color:var(--text-2);padding:6px 11px;font-size:11.5px;cursor:pointer;border-right:1px solid var(--line-2)}
+  .filters button:last-child{border-right:0}
+  .filters button.on{background:var(--accent-dim);color:var(--accent-soft)}
+  .count{margin-left:auto;font-size:11.5px;color:var(--text-3)}
+
+  /* Catalog table */
+  .cat{border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden}
+  .cat .row{display:grid;grid-template-columns:1.7fr 1fr 84px 96px 1.4fr;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line-2);font-size:12px}
+  .cat .row:last-child{border-bottom:0}
+  .cat .row.head{background:var(--bg-2);color:var(--text-3);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;padding:8px 14px}
+  .cat .row.plugin:hover{background:var(--bg-2)}
+  .cat .name{display:flex;align-items:center;gap:9px;min-width:0}
+  .cat .name .pi{width:22px;height:22px;border-radius:var(--radius-xs);background:var(--bg-3);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--accent-soft);flex:0 0 auto}
+  .cat .name .pi.fx{color:var(--warm)}
+  .cat .name .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cat .vendor{color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cat .path{color:var(--text-3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tag{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;padding:2px 7px;border-radius:999px;border:1px solid var(--line);color:var(--text-2);white-space:nowrap;display:inline-block}
+  .tag.inst{color:var(--accent-soft);background:var(--accent-dim);border-color:var(--accent-line)}
+  .tag.fx{color:var(--warm);background:var(--warm-dim);border-color:var(--warm-line)}
+  .tag.bundled{color:var(--text-3)}
+  .st{display:inline-flex;align-items:center;gap:6px;font-size:11px}
+  .st .d{width:7px;height:7px;border-radius:2px;flex:0 0 auto}
+  .st.ok .d{background:var(--good)} .st.ok{color:var(--good)}
+  .st.warn .d{background:var(--warm)} .st.warn{color:var(--warm)}
+  .st.err .d{background:var(--bad)} .st.err{color:var(--bad)}
+  .row.failed{background:rgba(232,123,139,.05)}
+
+  /* Scan progress */
+  .scanning{display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;padding:70px 20px;text-align:center}
+  .scan-ic{width:46px;height:46px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .scanning h3{margin:0;font-size:14px}
+  .scanning p{margin:0;color:var(--text-2);font-size:12px}
+  .scanning .bar{width:340px;height:5px;background:var(--bg-2);border:1px solid var(--line-2);border-radius:999px;overflow:hidden}
+  .scanning .bar i{display:block;height:100%;width:62%;background:linear-gradient(90deg,var(--accent),var(--accent-soft))}
+  .scanning .file{font-size:11px;color:var(--text-3)}
+
+  /* Empty state */
+  .empty{display:flex;flex-direction:column;gap:13px;align-items:center;justify-content:center;padding:64px 20px;text-align:center}
+  .empty .eg{width:54px;height:54px;border-radius:var(--radius-xl);background:var(--bg-2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--text-3)}
+  .empty h3{margin:0;font-size:15px}
+  .empty p{margin:0;color:var(--text-2);font-size:12.5px;max-width:380px;line-height:1.55}
+
+  /* banner */
+  .banner{display:flex;align-items:center;gap:11px;padding:11px 14px;border-radius:var(--radius-md);font-size:12px;margin-bottom:18px}
+  .banner.warn{background:var(--warm-dim);border:1px solid var(--warm-line);color:var(--warm)}
+  .banner .bx{margin-left:auto;cursor:pointer;color:inherit;opacity:.7}
+  .banner b{font-weight:600}
+
+  /* ===== Picker modal ===== */
+  .scrim{position:absolute;inset:0;background:rgba(10,10,13,.6);display:flex;align-items:center;justify-content:center}
+  .modal{width:760px;max-width:92%;max-height:84%;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-xl);box-shadow:0 30px 80px rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden}
+  .modal-h{padding:15px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px}
+  .modal-h h3{margin:0;font-size:14px}
+  .modal-h .ctx{font-size:11.5px;color:var(--text-3)}
+  .modal-h .x{margin-left:auto;color:var(--text-3);cursor:pointer;font-size:14px;padding:2px 6px}
+  .modal-tools{padding:12px 18px;display:flex;gap:9px;align-items:center;border-bottom:1px solid var(--line-2)}
+  .modal-body{flex:1;min-height:0;display:flex;overflow:hidden}
+  .pk-side{width:170px;flex:0 0 auto;border-right:1px solid var(--line-2);padding:10px;display:flex;flex-direction:column;gap:1px;overflow:auto}
+  .pk-side .grp{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);padding:9px 8px 5px}
+  .pk-side .cat-item{padding:7px 9px;border-radius:var(--radius-sm);font-size:12px;color:var(--text-2);cursor:pointer;display:flex;align-items:center;gap:8px}
+  .pk-side .cat-item .n{flex:1}
+  .pk-side .cat-item .c{font-size:10.5px;color:var(--text-4)}
+  .pk-side .cat-item.on{background:var(--bg-3);color:var(--text-1)}
+  .pk-list{flex:1;min-width:0;overflow:auto;padding:8px}
+  .pk-item{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:var(--radius-md);cursor:pointer;border:1px solid transparent}
+  .pk-item:hover{background:var(--bg-2)}
+  .pk-item.sel{background:var(--accent-dim);border-color:var(--accent-line)}
+  .pk-item .pi{width:30px;height:30px;border-radius:var(--radius-sm);background:var(--bg-3);display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--accent-soft);flex:0 0 auto}
+  .pk-item .pi.fx{color:var(--warm)}
+  .pk-item .meta{flex:1;min-width:0}
+  .pk-item .meta .n{font-size:12.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pk-item .meta .v{font-size:11px;color:var(--text-3);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .modal-f{padding:12px 18px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .modal-f .info{font-size:11.5px;color:var(--text-3)}
+  .modal-f .right{margin-left:auto;display:flex;gap:9px}
+  .noresult{padding:50px 20px;text-align:center;color:var(--text-3);font-size:12.5px}
+
+  /* ===== Mixer + generic param panel ===== */
+  .mix{height:100%;display:flex}
+  .mix-strips{flex:1;min-width:0;background:var(--bg-1);display:flex;align-items:flex-end;gap:16px;padding:26px;overflow:hidden}
+  .strip{width:140px;height:452px;flex:0 0 auto;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-xl);display:flex;flex-direction:column;overflow:hidden}
+  .strip.selected{border-color:var(--accent-line);box-shadow:0 0 0 1px var(--accent-line)}
+  .s-head{padding:9px 11px;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--line-2)}
+  .s-dot{width:8px;height:8px;border-radius:2px;background:var(--accent);flex:0 0 auto}
+  .s-name{font-size:12.5px;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .s-sec{padding:8px 10px;border-bottom:1px solid var(--line-2)}
+  .s-sec .lab{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);margin-bottom:6px}
+  .slot{display:flex;align-items:center;gap:7px;padding:6px 8px;border-radius:var(--radius-xs);background:var(--bg-1);border:1px solid var(--line-2);font-size:11px;margin-bottom:5px}
+  .slot .sd{width:6px;height:6px;border-radius:50%;background:var(--good);flex:0 0 auto}
+  .slot.ext .sd{background:var(--accent)}
+  .slot.bypassed{opacity:.5}
+  .slot.bypassed .sd{background:var(--text-4)}
+  .slot.missing{border-color:var(--bad-line);background:var(--bad-dim)}
+  .slot.missing .sd{background:var(--bad)}
+  .slot .sn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .slot .badge3p{font-size:8px;color:var(--accent-soft);border:1px solid var(--accent-line);border-radius:999px;padding:1px 5px}
+  .slot.add{justify-content:center;color:var(--text-3);border-style:dashed;cursor:pointer}
+  .slot.add:hover{color:var(--accent-soft);border-color:var(--accent-line)}
+  .s-fader{flex:1;display:flex;align-items:center;justify-content:center;gap:14px;padding:14px}
+  .fader{width:6px;height:120px;background:var(--bg-1);border-radius:999px;position:relative;border:1px solid var(--line-2)}
+  .fader .cap{position:absolute;left:50%;transform:translateX(-50%);width:22px;height:11px;background:var(--bg-3);border:1px solid var(--line);border-radius:3px;top:40px}
+  .vu{width:5px;height:120px;background:var(--bg-1);border-radius:2px;overflow:hidden;display:flex;flex-direction:column-reverse}
+  .vu i{display:block;background:linear-gradient(0deg,var(--good),var(--warm));width:100%;height:58%}
+
+  /* Inspector with generic param panel */
+  .insp{width:340px;flex:0 0 auto;background:var(--bg-2);border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+  .insp-h{padding:13px 15px;border-bottom:1px solid var(--line)}
+  .insp-h .t{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:8px}
+  .insp-h .s{font-size:11px;color:var(--text-3);margin-top:3px}
+  .insp-tabs{display:flex;gap:6px;padding:10px 15px 0}
+  .insp-tabs button{border:0;background:transparent;color:var(--text-3);font-size:11.5px;padding:6px 2px;cursor:pointer;border-bottom:2px solid transparent}
+  .insp-tabs button.on{color:var(--text-1);border-bottom-color:var(--accent)}
+  .gp-note{margin:12px 15px 0;padding:9px 11px;background:var(--bg-1);border:1px solid var(--line-2);border-radius:var(--radius-md);font-size:11px;color:var(--text-2);line-height:1.5;display:flex;gap:9px}
+  .gp-note .gl{color:var(--text-3)}
+  .params{flex:1;overflow:auto;padding:12px 15px}
+  .pgrp{font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);margin:14px 0 8px}
+  .pgrp:first-child{margin-top:0}
+  .prow{display:flex;align-items:center;gap:12px;margin-bottom:13px}
+  .prow .pl{width:96px;flex:0 0 auto;font-size:11.5px;color:var(--text-2)}
+  .prow .track{flex:1;height:5px;background:var(--bg-1);border:1px solid var(--line-2);border-radius:999px;position:relative}
+  .prow .track i{position:absolute;top:-3px;width:11px;height:11px;border-radius:50%;background:var(--accent-soft);box-shadow:0 0 0 3px var(--accent-dim)}
+  .prow .pv{width:62px;text-align:right;font-size:11px;color:var(--text-1)}
+  .insp-foot{padding:11px 15px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center}
+  .insp-foot .info{font-size:11px;color:var(--text-3)}
+
+  /* Missing-plugin dialog body */
+  .miss-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+  .miss-item{display:flex;align-items:center;gap:11px;padding:11px 13px;background:var(--bg-2);border:1px solid var(--bad-line);border-radius:var(--radius-md)}
+  .miss-item .mi{color:var(--bad);font-size:14px;width:18px;text-align:center}
+  .miss-item .body{flex:1;min-width:0}
+  .miss-item .body .n{font-size:12.5px;font-weight:500}
+  .miss-item .body .d{font-size:11px;color:var(--text-3);margin-top:2px}
+  .miss-item .act{display:flex;gap:6px}
+
+  .footnote{padding:14px 18px;color:var(--text-4);font-size:10.5px;border-top:1px solid var(--line-2);background:var(--bg-0)}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- top chrome -->
+  <div class="chrome">
+    <div class="brand"><b>resonance</b></div>
+    <div class="tabs"><span class="tab">Arrange</span><span class="tab active">Mixer</span><span class="tab">Compose</span></div>
+    <div class="spacer"></div>
+    <div class="clock"><span>120.0 <b>BPM</b></span><span>4/4</span></div>
+    <div class="gear">⚙</div>
+  </div>
+
+  <!-- prototype state switcher -->
+  <div class="statebar">
+    <span class="lbl">Prototype state</span>
+    <div class="seg" id="seg">
+      <button data-s="empty">Settings · empty</button>
+      <button data-s="scanning">Settings · scanning</button>
+      <button class="on" data-s="catalog">Settings · catalog</button>
+      <button data-s="errors">Settings · scan errors</button>
+      <button data-s="picker">Plugin picker</button>
+      <button data-s="picker-empty">Picker · no results</button>
+      <button data-s="generic">Hosted · generic params</button>
+      <button data-s="missing">Project load · missing</button>
+    </div>
+    <span class="hint" id="hint"></span>
+  </div>
+
+  <div class="stage">
+
+    <!-- ============ SETTINGS: shared shell rendered per-state ============ -->
+    <!-- EMPTY -->
+    <div class="screen" data-screen="empty">
+      <div class="settings">
+        <div class="set-nav">
+          <h4>Settings</h4>
+          <div class="item"><span class="ic">🎚</span>Audio &amp; MIDI</div>
+          <div class="item"><span class="ic">⌨</span>Shortcuts</div>
+          <div class="item active"><span class="ic">🔌</span>Plugins</div>
+          <div class="item"><span class="ic">🎙</span>Vocal synthesis</div>
+          <div class="item"><span class="ic">🎨</span>Appearance</div>
+        </div>
+        <div class="set-main">
+          <div class="set-head">
+            <div>
+              <h2>Plugins</h2>
+              <p>Resonance hosts CLAP plugins. Bundled effects and instruments are always available; add folders below to scan your third-party CLAP plugins.</p>
+            </div>
+            <div class="right">
+              <button class="btn"><span class="gl">＋</span>Add folder…</button>
+              <button class="btn primary"><span class="gl">⟳</span>Rescan</button>
+            </div>
+          </div>
+          <div class="set-body">
+            <div class="block">
+              <div class="block-h"><h3>Scan folders</h3><span class="sub">Searched for <span class="mono">.clap</span> bundles</span></div>
+              <div class="folders">
+                <div class="folder sys">
+                  <span class="fic">📦</span>
+                  <div class="fpath"><div class="p mono">Bundled (in-app)</div><div class="m">9 plugins · ships with Resonance</div></div>
+                  <span class="lock">🔒</span>
+                </div>
+                <div class="folder sys">
+                  <span class="fic">📁</span>
+                  <div class="fpath"><div class="p mono">~/.clap</div><div class="m">User default · standard CLAP location</div></div>
+                  <span class="badge">empty</span>
+                  <span class="x" title="Cannot remove default">🔒</span>
+                </div>
+                <div class="folder sys">
+                  <span class="fic">📁</span>
+                  <div class="fpath"><div class="p mono">/usr/lib/clap</div><div class="m">System default · standard CLAP location</div></div>
+                  <span class="badge">empty</span>
+                  <span class="x" title="Cannot remove default">🔒</span>
+                </div>
+              </div>
+            </div>
+            <div class="empty">
+              <div class="eg">🔌</div>
+              <h3>No third-party plugins yet</h3>
+              <p>The default CLAP folders are empty. Add a folder that contains your <span class="mono">.clap</span> plugins, then rescan to build your catalog.</p>
+              <button class="btn primary"><span class="gl">＋</span>Add plugin folder…</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCANNING -->
+    <div class="screen" data-screen="scanning">
+      <div class="settings">
+        <div class="set-nav">
+          <h4>Settings</h4>
+          <div class="item"><span class="ic">🎚</span>Audio &amp; MIDI</div>
+          <div class="item"><span class="ic">⌨</span>Shortcuts</div>
+          <div class="item active"><span class="ic">🔌</span>Plugins</div>
+          <div class="item"><span class="ic">🎙</span>Vocal synthesis</div>
+          <div class="item"><span class="ic">🎨</span>Appearance</div>
+        </div>
+        <div class="set-main">
+          <div class="set-head">
+            <div><h2>Plugins</h2><p>Scanning your plugin folders. You can keep working — the catalog updates when the scan completes.</p></div>
+            <div class="right"><button class="btn ghost">Cancel scan</button></div>
+          </div>
+          <div class="set-body">
+            <div class="scanning">
+              <div class="scan-ic"></div>
+              <h3>Scanning for CLAP plugins…</h3>
+              <p>34 of ~55 bundles · 28 plugins found</p>
+              <div class="bar"><i></i></div>
+              <div class="file mono">/home/jorrit/.clap/Vital.clap</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CATALOG (populated) -->
+    <div class="screen show" data-screen="catalog">
+      <div class="settings">
+        <div class="set-nav">
+          <h4>Settings</h4>
+          <div class="item"><span class="ic">🎚</span>Audio &amp; MIDI</div>
+          <div class="item"><span class="ic">⌨</span>Shortcuts</div>
+          <div class="item active"><span class="ic">🔌</span>Plugins</div>
+          <div class="item"><span class="ic">🎙</span>Vocal synthesis</div>
+          <div class="item"><span class="ic">🎨</span>Appearance</div>
+        </div>
+        <div class="set-main">
+          <div class="set-head">
+            <div><h2>Plugins</h2><p>Bundled and third-party CLAP plugins available to insert on tracks. Last scan completed 2 min ago.</p></div>
+            <div class="right">
+              <button class="btn"><span class="gl">＋</span>Add folder…</button>
+              <button class="btn primary"><span class="gl">⟳</span>Rescan</button>
+            </div>
+          </div>
+          <div class="set-body">
+            <div class="block">
+              <div class="block-h"><h3>Scan folders</h3><div class="right"></div></div>
+              <div class="folders">
+                <div class="folder sys"><span class="fic">📦</span><div class="fpath"><div class="p mono">Bundled (in-app)</div><div class="m">9 plugins</div></div><span class="badge">9</span><span class="lock">🔒</span></div>
+                <div class="folder"><span class="fic">📁</span><div class="fpath"><div class="p mono">~/.clap</div><div class="m">User folder</div></div><span class="badge">6</span><span class="x">✕</span></div>
+                <div class="folder"><span class="fic">📁</span><div class="fpath"><div class="p mono">/usr/lib/clap</div><div class="m">System folder</div></div><span class="badge">3</span><span class="x">✕</span></div>
+                <div class="folder"><span class="fic">📁</span><div class="fpath"><div class="p mono">~/Audio/Plugins/CLAP</div><div class="m">Custom · added by you</div></div><span class="badge">4</span><span class="x">✕</span></div>
+              </div>
+            </div>
+
+            <div class="block">
+              <div class="block-h"><h3>Plugin catalog</h3></div>
+              <div class="cat-tools">
+                <div class="search"><span class="gl">⌕</span><input placeholder="Search plugins or vendors…" /></div>
+                <div class="filters">
+                  <button class="on">All</button><button>Instruments</button><button>Effects</button><button>Third-party</button>
+                </div>
+                <span class="count">22 plugins</span>
+              </div>
+              <div class="cat">
+                <div class="row head"><span>Name</span><span>Vendor</span><span>Type</span><span>Source</span><span>Status</span></div>
+                <div class="row plugin"><div class="name"><span class="pi">⌁</span><span class="nm">Vital</span></div><span class="vendor">Vital Audio</span><span><span class="tag inst">Instrument</span></span><span class="path">~/.clap</span><span class="st ok"><span class="d"></span>Ready</span></div>
+                <div class="row plugin"><div class="name"><span class="pi">⌁</span><span class="nm">Surge XT</span></div><span class="vendor">Surge Synth Team</span><span><span class="tag inst">Instrument</span></span><span class="path">~/.clap</span><span class="st ok"><span class="d"></span>Ready</span></div>
+                <div class="row plugin"><div class="name"><span class="pi fx">⎍</span><span class="nm">Valhalla Supermassive</span></div><span class="vendor">Valhalla DSP</span><span><span class="tag fx">Effect</span></span><span class="path">~/Audio/…/CLAP</span><span class="st ok"><span class="d"></span>Ready</span></div>
+                <div class="row plugin"><div class="name"><span class="pi fx">⎍</span><span class="nm">Pro-Q 3</span></div><span class="vendor">FabFilter</span><span><span class="tag fx">Effect</span></span><span class="path">/usr/lib/clap</span><span class="st ok"><span class="d"></span>Ready</span></div>
+                <div class="row plugin failed"><div class="name"><span class="pi fx">⎍</span><span class="nm">OldVerb 1.2</span></div><span class="vendor">Unknown</span><span><span class="tag fx">Effect</span></span><span class="path">~/Audio/…/CLAP</span><span class="st err"><span class="d"></span>Failed to load</span></div>
+                <div class="row plugin"><div class="name"><span class="pi">⌁</span><span class="nm">Resonance Wavetable</span></div><span class="vendor">Resonance</span><span><span class="tag inst">Instrument</span></span><span class="path"><span class="tag bundled">Bundled</span></span><span class="st ok"><span class="d"></span>Ready</span></div>
+                <div class="row plugin"><div class="name"><span class="pi fx">⎍</span><span class="nm">Resonance Mastering</span></div><span class="vendor">Resonance</span><span><span class="tag fx">Effect</span></span><span class="path"><span class="tag bundled">Bundled</span></span><span class="st ok"><span class="d"></span>Ready</span></div>
+                <div class="row plugin"><div class="name"><span class="pi fx">⎍</span><span class="nm">Resonance Reverb</span></div><span class="vendor">Resonance</span><span><span class="tag fx">Effect</span></span><span class="path"><span class="tag bundled">Bundled</span></span><span class="st ok"><span class="d"></span>Ready</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCAN ERRORS -->
+    <div class="screen" data-screen="errors">
+      <div class="settings">
+        <div class="set-nav">
+          <h4>Settings</h4>
+          <div class="item"><span class="ic">🎚</span>Audio &amp; MIDI</div>
+          <div class="item"><span class="ic">⌨</span>Shortcuts</div>
+          <div class="item active"><span class="ic">🔌</span>Plugins</div>
+          <div class="item"><span class="ic">🎙</span>Vocal synthesis</div>
+          <div class="item"><span class="ic">🎨</span>Appearance</div>
+        </div>
+        <div class="set-main">
+          <div class="set-head">
+            <div><h2>Plugins</h2><p>Scan finished with warnings. Working plugins are listed; failed bundles are flagged so you can fix or remove them.</p></div>
+            <div class="right"><button class="btn"><span class="gl">＋</span>Add folder…</button><button class="btn primary"><span class="gl">⟳</span>Rescan</button></div>
+          </div>
+          <div class="set-body">
+            <div class="banner warn"><span>⚠</span><span><b>3 plugins could not be loaded.</b> They may be 32-bit, a different format, or incompatible with this CLAP version. The rest of your catalog is ready to use.</span><span class="bx">✕</span></div>
+            <div class="block">
+              <div class="block-h"><h3>Plugin catalog</h3></div>
+              <div class="cat-tools">
+                <div class="search"><span class="gl">⌕</span><input placeholder="Search plugins or vendors…" /></div>
+                <div class="filters"><button>All</button><button>Instruments</button><button>Effects</button><button class="on">Failed only</button></div>
+                <span class="count">3 failed</span>
+              </div>
+              <div class="cat">
+                <div class="row head"><span>Name</span><span>Vendor</span><span>Type</span><span>Source</span><span>Status</span></div>
+                <div class="row plugin failed"><div class="name"><span class="pi fx">⎍</span><span class="nm">OldVerb 1.2</span></div><span class="vendor">Unknown</span><span><span class="tag fx">Effect</span></span><span class="path">~/Audio/…/CLAP</span><span class="st err"><span class="d"></span>Bad entry point</span></div>
+                <div class="row plugin failed"><div class="name"><span class="pi">⌁</span><span class="nm">LegacySynth</span></div><span class="vendor">—</span><span><span class="tag inst">Instrument</span></span><span class="path">~/.clap</span><span class="st err"><span class="d"></span>Unsupported CLAP 0.x</span></div>
+                <div class="row plugin failed"><div class="name"><span class="pi fx">⎍</span><span class="nm">crash_test.clap</span></div><span class="vendor">—</span><span><span class="tag">Unknown</span></span><span class="path">/usr/lib/clap</span><span class="st err"><span class="d"></span>Scan timed out (skipped)</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ PLUGIN PICKER MODAL ============ -->
+    <div class="screen" data-screen="picker">
+      <div class="mix" aria-hidden="true">
+        <div class="mix-strips">
+          <div class="strip selected"><div class="s-head"><span class="s-dot"></span><span class="s-name">Lead Vocal</span></div><div class="s-sec"><div class="lab">Inserts</div><div class="slot"><span class="sd"></span><span class="sn">Resonance EQ</span></div><div class="slot add">＋ Add plugin</div></div><div class="s-fader"><span class="vu"><i></i></span><span class="fader"><span class="cap"></span></span></div></div>
+          <div class="strip"><div class="s-head"><span class="s-dot"></span><span class="s-name">Synth Bass</span></div><div class="s-fader"><span class="vu"><i></i></span><span class="fader"><span class="cap"></span></span></div></div>
+        </div>
+      </div>
+      <div class="scrim">
+        <div class="modal">
+          <div class="modal-h"><h3>Add plugin</h3><span class="ctx">→ Lead Vocal · Insert slot 2</span><span class="x">✕</span></div>
+          <div class="modal-tools">
+            <div class="search" style="max-width:none;flex:1"><span class="gl">⌕</span><input placeholder="Search instruments &amp; effects…" /></div>
+          </div>
+          <div class="modal-body">
+            <div class="pk-side">
+              <div class="grp">Source</div>
+              <div class="cat-item on"><span class="n">All plugins</span><span class="c">22</span></div>
+              <div class="cat-item"><span class="n">Bundled</span><span class="c">9</span></div>
+              <div class="cat-item"><span class="n">Third-party</span><span class="c">13</span></div>
+              <div class="grp">Type</div>
+              <div class="cat-item"><span class="n">Instruments</span><span class="c">7</span></div>
+              <div class="cat-item"><span class="n">Effects</span><span class="c">15</span></div>
+              <div class="grp">Vendor</div>
+              <div class="cat-item"><span class="n">FabFilter</span><span class="c">3</span></div>
+              <div class="cat-item"><span class="n">Valhalla DSP</span><span class="c">2</span></div>
+              <div class="cat-item"><span class="n">Resonance</span><span class="c">9</span></div>
+            </div>
+            <div class="pk-list">
+              <div class="pk-item sel"><span class="pi fx">⎍</span><div class="meta"><div class="n">Pro-Q 3</div><div class="v">FabFilter · Effect · /usr/lib/clap</div></div><span class="tag fx">Effect</span></div>
+              <div class="pk-item"><span class="pi fx">⎍</span><div class="meta"><div class="n">Valhalla Supermassive</div><div class="v">Valhalla DSP · Effect</div></div><span class="tag fx">Effect</span></div>
+              <div class="pk-item"><span class="pi">⌁</span><div class="meta"><div class="n">Vital</div><div class="v">Vital Audio · Instrument</div></div><span class="tag inst">Instrument</span></div>
+              <div class="pk-item"><span class="pi">⌁</span><div class="meta"><div class="n">Surge XT</div><div class="v">Surge Synth Team · Instrument</div></div><span class="tag inst">Instrument</span></div>
+              <div class="pk-item"><span class="pi fx">⎍</span><div class="meta"><div class="n">Resonance Reverb</div><div class="v">Resonance · Effect · Bundled</div></div><span class="tag fx">Effect</span></div>
+              <div class="pk-item"><span class="pi fx">⎍</span><div class="meta"><div class="n">Resonance Compressor</div><div class="v">Resonance · Effect · Bundled</div></div><span class="tag fx">Effect</span></div>
+            </div>
+          </div>
+          <div class="modal-f"><span class="info">Selected: <b style="color:var(--text-1)">Pro-Q 3</b> — opens its own editor</span><div class="right"><button class="btn ghost">Cancel</button><button class="btn primary">Add to track</button></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PICKER NO RESULTS -->
+    <div class="screen" data-screen="picker-empty">
+      <div class="mix" aria-hidden="true"><div class="mix-strips"><div class="strip selected"><div class="s-head"><span class="s-dot"></span><span class="s-name">Lead Vocal</span></div><div class="s-fader"><span class="vu"><i></i></span><span class="fader"><span class="cap"></span></span></div></div></div></div>
+      <div class="scrim">
+        <div class="modal">
+          <div class="modal-h"><h3>Add plugin</h3><span class="ctx">→ Lead Vocal · Insert slot 2</span><span class="x">✕</span></div>
+          <div class="modal-tools"><div class="search" style="max-width:none;flex:1"><span class="gl">⌕</span><input value="granular freeze" /></div></div>
+          <div class="modal-body">
+            <div class="pk-side">
+              <div class="grp">Source</div>
+              <div class="cat-item on"><span class="n">All plugins</span><span class="c">22</span></div>
+              <div class="cat-item"><span class="n">Bundled</span><span class="c">9</span></div>
+              <div class="cat-item"><span class="n">Third-party</span><span class="c">13</span></div>
+            </div>
+            <div class="pk-list">
+              <div class="noresult">
+                <div style="font-size:26px;margin-bottom:10px;color:var(--text-4)">⌕</div>
+                No plugins match “<b style="color:var(--text-2)">granular freeze</b>”.<br/>
+                <div style="margin-top:12px"><button class="btn sm">Clear search</button> <button class="btn sm primary"><span class="gl">⟳</span>Rescan folders</button></div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-f"><span class="info">Tip: add the plugin’s folder in <b style="color:var(--text-1)">Settings → Plugins</b> if it isn’t scanned yet.</span><div class="right"><button class="btn ghost">Cancel</button><button class="btn" disabled style="opacity:.5">Add to track</button></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ HOSTED — GENERIC PARAM PANEL ============ -->
+    <div class="screen" data-screen="generic">
+      <div class="mix">
+        <div class="mix-strips">
+          <div class="strip selected">
+            <div class="s-head"><span class="s-dot"></span><span class="s-name">Lead Vocal</span></div>
+            <div class="s-sec"><div class="lab">Inserts</div>
+              <div class="slot"><span class="sd"></span><span class="sn">Resonance EQ</span></div>
+              <div class="slot ext"><span class="sd"></span><span class="sn">Supermassive</span><span class="badge3p">3P</span></div>
+              <div class="slot bypassed"><span class="sd"></span><span class="sn">Pro-Q 3</span><span class="badge3p">3P</span></div>
+              <div class="slot add">＋ Add plugin</div>
+            </div>
+            <div class="s-fader"><span class="vu"><i></i></span><span class="fader"><span class="cap"></span></span></div>
+          </div>
+          <div class="strip"><div class="s-head"><span class="s-dot"></span><span class="s-name">Synth Bass</span></div><div class="s-fader"><span class="vu"><i></i></span><span class="fader"><span class="cap"></span></span></div></div>
+        </div>
+        <div class="insp">
+          <div class="insp-h">
+            <div class="t"><span class="pi" style="width:20px;height:20px;border-radius:4px;background:var(--bg-3);display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:var(--warm)">⎍</span>Valhalla Supermassive <span class="badge3p" style="margin-left:auto">3RD-PARTY</span></div>
+            <div class="s">Valhalla DSP · CLAP Effect · Lead Vocal, slot 2</div>
+          </div>
+          <div class="insp-tabs">
+            <button class="on">Parameters</button>
+            <button>Plugin editor</button>
+          </div>
+          <div class="gp-note"><span class="gl">ⓘ</span><span>This plugin doesn’t ship a native editor on Linux/Wayland. Resonance shows a generic panel for every parameter — fully automatable. Use <b>Plugin editor</b> when a native GUI is available.</span></div>
+          <div class="params">
+            <div class="pgrp">Main</div>
+            <div class="prow"><span class="pl">Mix</span><span class="track"><i style="left:62%"></i></span><span class="pv mono">62 %</span></div>
+            <div class="prow"><span class="pl">Density</span><span class="track"><i style="left:48%"></i></span><span class="pv mono">0.48</span></div>
+            <div class="prow"><span class="pl">Delay</span><span class="track"><i style="left:33%"></i></span><span class="pv mono">220 ms</span></div>
+            <div class="pgrp">Tone</div>
+            <div class="prow"><span class="pl">Warp</span><span class="track"><i style="left:55%"></i></span><span class="pv mono">+5.0</span></div>
+            <div class="prow"><span class="pl">Low cut</span><span class="track"><i style="left:18%"></i></span><span class="pv mono">90 Hz</span></div>
+            <div class="prow"><span class="pl">High cut</span><span class="track"><i style="left:80%"></i></span><span class="pv mono">12.4 k</span></div>
+            <div class="pgrp">Modulation</div>
+            <div class="prow"><span class="pl">Mod rate</span><span class="track"><i style="left:40%"></i></span><span class="pv mono">0.35 Hz</span></div>
+            <div class="prow"><span class="pl">Mod depth</span><span class="track"><i style="left:25%"></i></span><span class="pv mono">25 %</span></div>
+          </div>
+          <div class="insp-foot">
+            <button class="btn sm ghost">Bypass</button>
+            <button class="btn sm">Presets ▾</button>
+            <span class="info" style="margin-left:auto">Latency <b style="color:var(--text-2)">512 smp</b> · compensated</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ PROJECT LOAD — MISSING PLUGINS ============ -->
+    <div class="screen" data-screen="missing">
+      <div class="mix" aria-hidden="true">
+        <div class="mix-strips">
+          <div class="strip"><div class="s-head"><span class="s-dot"></span><span class="s-name">Lead Vocal</span></div><div class="s-sec"><div class="lab">Inserts</div><div class="slot"><span class="sd"></span><span class="sn">Resonance EQ</span></div><div class="slot missing"><span class="sd"></span><span class="sn">Pro-Q 3 (missing)</span></div></div><div class="s-fader"><span class="vu"><i></i></span><span class="fader"><span class="cap"></span></span></div></div>
+          <div class="strip"><div class="s-head"><span class="s-dot"></span><span class="s-name">Synth Bass</span></div><div class="s-sec"><div class="lab">Instrument</div><div class="slot missing"><span class="sd"></span><span class="sn">Vital (missing)</span></div></div><div class="s-fader"><span class="vu"><i></i></span><span class="fader"><span class="cap"></span></span></div></div>
+        </div>
+      </div>
+      <div class="scrim">
+        <div class="modal" style="width:560px">
+          <div class="modal-h"><h3>Some plugins are missing</h3><span class="x">✕</span></div>
+          <div class="modal-body" style="display:block;overflow:auto;padding:18px">
+            <p style="margin:0 0 6px;color:var(--text-2);font-size:12.5px;line-height:1.55">This project uses plugins that aren’t installed on this machine. The tracks loaded fine — Resonance kept each missing plugin as a placeholder so your routing, automation and saved state stay intact. Install the plugins and reload, or remove the placeholders.</p>
+            <div class="miss-list">
+              <div class="miss-item"><span class="mi">⚠</span><div class="body"><div class="n">FabFilter Pro-Q 3 <span class="tag" style="margin-left:4px">Effect</span></div><div class="d mono">Lead Vocal · insert 2 · state preserved (4.2 KB)</div></div><div class="act"><button class="btn sm">Locate…</button><button class="btn sm ghost">Remove</button></div></div>
+              <div class="miss-item"><span class="mi">⚠</span><div class="body"><div class="n">Vital <span class="tag" style="margin-left:4px">Instrument</span></div><div class="d mono">Synth Bass · instrument · state preserved (61 KB)</div></div><div class="act"><button class="btn sm">Locate…</button><button class="btn sm ghost">Remove</button></div></div>
+            </div>
+            <p style="margin:14px 0 0;color:var(--text-3);font-size:11px;line-height:1.5">Placeholders pass audio through silently and never crash playback. Volume, pan, mute, solo and routing on these tracks remain fully live.</p>
+          </div>
+          <div class="modal-f"><span class="info">2 of 14 plugins unavailable</span><div class="right"><button class="btn ghost">Keep placeholders</button><button class="btn primary"><span class="gl">⟳</span>Rescan &amp; retry</button></div></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footnote">Design prototype — Resonance · Epic #45 Third-party plugin hosting. Tokens mirror <span class="mono">resonance-app/src/theme.rs</span>. Not the shipped implementation.</div>
+</div>
+
+<script>
+  var hints = {
+    'empty':'Settings → Plugins with no third-party plugins found yet. Default CLAP folders shown, add-folder CTA.',
+    'scanning':'Loading state: background scan with progress, current file, and a cancel affordance.',
+    'catalog':'Populated catalog: scan folders + sortable plugin table (name/vendor/type/source/status), search & type filters.',
+    'errors':'Scan-with-warnings: dismissible banner + “Failed only” filter listing incompatible bundles with reasons.',
+    'picker':'Plugin picker modal launched from an insert slot — source/type/vendor rail, search, live selection.',
+    'picker-empty':'Picker empty-result state with clear-search and rescan recovery actions.',
+    'generic':'Hosted third-party plugin: generic auto-built parameter panel + native-editor tab + latency readout.',
+    'missing':'Project load with missing plugins — graceful placeholders, locate/remove, state preserved, no crash.'
+  };
+  var seg = document.getElementById('seg');
+  var screens = document.querySelectorAll('.screen');
+  var hint = document.getElementById('hint');
+  function show(s){
+    screens.forEach(function(el){ el.classList.toggle('show', el.getAttribute('data-screen')===s); });
+    seg.querySelectorAll('button').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-s')===s); });
+    hint.textContent = hints[s] || '';
+  }
+  seg.addEventListener('click', function(e){ var b=e.target.closest('button'); if(b) show(b.getAttribute('data-s')); });
+  show('catalog');
+</script>
+</body>
+</html>

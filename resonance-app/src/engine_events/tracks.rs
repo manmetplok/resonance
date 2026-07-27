@@ -147,6 +147,8 @@ pub(super) fn bounce_completed(
                 gain_db: 0.0,
                 waveform_peaks: c.waveform_peaks,
                 vocal_tuning: None,
+                // A bounced-in-place clip is engine-rendered, not a pool import.
+                asset_ref: None,
             });
         }
     } else {
