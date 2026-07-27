@@ -115,7 +115,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
 
     app.registry.tracks = vec![drums, bass, pad, lead, audio, vocal];
     app.registry.next_track_order = 6;
-    app.interaction.selected_track = Some(2);
+    app.interaction.select_single_track(Some(2));
     // Demo seed bypasses the engine-event handlers that normally keep
     // this cache fresh, so refresh by hand.
     app.compose.refresh_track_count(&app.registry.tracks);
@@ -223,6 +223,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
         gain_db: 0.0,
         waveform_peaks,
         vocal_tuning: None,
+        asset_ref: None,
     }];
 
     // Place the playhead a bit into the song so it's visible.
@@ -477,7 +478,7 @@ pub fn seed_demo_with_drum_subtracks(app: &mut Resonance) {
     app.registry.tracks = vec![drums, bass, pad, lead, kick, snare, hh, tom];
     app.registry.next_track_order = 8;
     app.registry.next_sub_track_id = 14;
-    app.interaction.selected_track = Some(1);
+    app.interaction.select_single_track(Some(1));
 
     // Expand the drum parent so the mixer renders its sub-strips —
     // the whole point of the visual is verified in that state.
@@ -511,7 +512,7 @@ pub fn seed_minimal_drum_track_no_busses(app: &mut Resonance) {
 
     app.registry.tracks = vec![drums];
     app.registry.next_track_order = 1;
-    app.interaction.selected_track = Some(1);
+    app.interaction.select_single_track(Some(1));
     app.compose.refresh_track_count(&app.registry.tracks);
     app.refresh_transport_labels();
 
@@ -535,4 +536,196 @@ pub fn seed_many_synth_tracks(app: &mut Resonance, n: usize) {
     app.registry.next_track_order = n;
     app.compose.refresh_track_count(&app.registry.tracks);
     app.refresh_transport_labels();
+}
+
+/// Seed three pool assets into the browser so the Pool tab renders with
+/// content for snapshot tests (todo #603):
+///
+/// * **Asset 1 — used**: a stereo WAV, 4.5 s, referenced by the first
+///   audio clip already present in the registry (if any — call after
+///   `seed_demo_content`).
+/// * **Asset 2 — unused**: a mono FLAC, 2.0 s, not referenced by any clip.
+/// * **Asset 3 — missing**: a WAV flagged `missing`, representing a file
+///   the project can no longer locate.
+///
+/// Calls `recompute_pool_usage` so usage badges render correctly.
+pub fn seed_pool_assets(app: &mut Resonance) {
+    use resonance_common::AudioFormat;
+
+    // Build a gentle sinusoidal waveform for thumbnail peaks.
+    let make_peaks = |count: usize, phase: f32| -> Vec<(f32, f32)> {
+        (0..count)
+            .map(|i| {
+                let t = i as f32 / count as f32;
+                let amp = 0.3 + 0.5 * (t * std::f32::consts::TAU + phase).sin().abs();
+                (-amp, amp)
+            })
+            .collect()
+    };
+
+    let asset1 = crate::state::PoolAsset {
+        id: 1,
+        project_relative_path: "audio/asset_1.wav".to_string(),
+        original_path: "/sessions/My Project/audio/Kick Loop 120bpm.wav".to_string(),
+        format: AudioFormat::Wav,
+        channels: 2,
+        source_sample_rate: 44_100,
+        duration_frames: (44_100.0 * 4.5) as u64,
+        thumbnail_peaks: make_peaks(48, 0.0),
+        missing: false,
+    };
+
+    let asset2 = crate::state::PoolAsset {
+        id: 2,
+        project_relative_path: "audio/asset_2.wav".to_string(),
+        original_path: "/sessions/My Project/audio/Clap One-Shot.flac".to_string(),
+        format: AudioFormat::Flac,
+        channels: 1,
+        source_sample_rate: 48_000,
+        duration_frames: (44_100.0 * 2.0) as u64,
+        thumbnail_peaks: make_peaks(48, 1.2),
+        missing: false,
+    };
+
+    let asset3 = crate::state::PoolAsset {
+        id: 3,
+        project_relative_path: "audio/asset_3.wav".to_string(),
+        original_path: "/sessions/My Project/audio/Riser FX.wav".to_string(),
+        format: AudioFormat::Wav,
+        channels: 2,
+        source_sample_rate: 44_100,
+        duration_frames: (44_100.0 * 8.0) as u64,
+        thumbnail_peaks: make_peaks(48, 2.5),
+        missing: true,
+    };
+
+    app.pool.add(asset1);
+    app.pool.add(asset2);
+    app.pool.add(asset3);
+
+    // Link the first audio clip to asset 1 so it renders as "used ×1".
+    if let Some(clip) = app.clips.first_mut() {
+        clip.asset_ref = Some(crate::state::AssetRef::new(1));
+    }
+
+    app.recompute_pool_usage();
+}
+
+/// Seed the Files tab of the media browser with a populated folder so it
+/// renders with content for snapshot tests (todo #602): a current folder
+/// (favourited, so the breadcrumb star reads WARM), a favourites / recent
+/// shelf, two subfolders, and four audio rows spanning the format chips
+/// (wav / flac / mp3 / ogg) with decoded-style waveform thumbnails.
+pub fn seed_files_folder(app: &mut Resonance) {
+    use resonance_common::audio_probe::{AudioFileEntry, AudioFormat, AudioInfo};
+    use std::path::PathBuf;
+
+    let root = "/sessions/My Project/samples/Drums";
+    let current = PathBuf::from(root);
+
+    // A gentle sinusoidal silhouette so the thumbnails read as waveforms.
+    let make_peaks = |count: usize, phase: f32| -> Vec<(f32, f32)> {
+        (0..count)
+            .map(|i| {
+                let t = i as f32 / count as f32;
+                let amp = 0.25 + 0.55 * (t * std::f32::consts::TAU + phase).sin().abs();
+                (-amp, amp)
+            })
+            .collect()
+    };
+
+    let entry = |name: &str, format: AudioFormat, channels: u16, sr: u32, secs: f64| {
+        let path = format!("{root}/{name}");
+        AudioFileEntry {
+            path,
+            info: AudioInfo {
+                format,
+                channels,
+                sample_rate: sr,
+                frames: (sr as f64 * secs) as u64,
+                duration_secs: secs,
+            },
+        }
+    };
+
+    let files = vec![
+        entry("Kick 120bpm.wav", AudioFormat::Wav, 2, 44_100, 1.2),
+        entry("Clap One-Shot.flac", AudioFormat::Flac, 1, 48_000, 0.4),
+        entry("Groove Loop.mp3", AudioFormat::Mp3, 2, 44_100, 4.0),
+        entry("Ambient Pad.ogg", AudioFormat::Ogg, 2, 44_100, 8.5),
+    ];
+
+    let mut thumbnails = std::collections::HashMap::new();
+    for (i, f) in files.iter().enumerate() {
+        thumbnails.insert(f.path.clone(), make_peaks(48, i as f32 * 0.9));
+    }
+
+    app.browser.current_folder = Some(current.clone());
+    app.browser.scanning = false;
+    app.browser.filter.clear();
+    app.browser.scan = crate::state::FolderScan {
+        folders: vec![
+            PathBuf::from(format!("{root}/Kicks")),
+            PathBuf::from(format!("{root}/Snares")),
+        ],
+        files,
+        thumbnails,
+    };
+
+    // Favourites (WARM star) + recent (clock) shelf. The current folder is a
+    // favourite so the breadcrumb star reads pinned.
+    app.pool.favourites = vec![PathBuf::from("/Users/me/Loops"), current.clone()];
+    app.pool.recent_folders = vec![current, PathBuf::from("/Users/me/Vocals")];
+}
+
+/// Seed the Files tab on an **empty** folder — one with no audio — so the
+/// empty-folder state renders for snapshot tests (todo #602).
+pub fn seed_empty_files_folder(app: &mut Resonance) {
+    use std::path::PathBuf;
+
+    app.browser.current_folder = Some(PathBuf::from("/sessions/My Project/samples/Empty"));
+    app.browser.scanning = false;
+    app.browser.filter.clear();
+    app.browser.scan = crate::state::FolderScan::default();
+
+    app.pool.favourites = vec![PathBuf::from("/Users/me/Loops")];
+    app.pool.recent_folders = vec![PathBuf::from("/Users/me/Vocals")];
+}
+
+/// Seed the audition transport in its **idle** state for snapshots (todo
+/// #604): the Files folder is open with a row selected-to-audition but no
+/// preview sounding and the three toggles off. The transport shows the play
+/// button, the selected row's waveform, a `0:00 / M:SS` readout, and the
+/// neutral toggle chips.
+pub fn seed_audition_idle(app: &mut Resonance) {
+    use std::path::PathBuf;
+
+    seed_files_folder(app);
+    let selected = PathBuf::from(app.browser.scan.files[0].path.clone());
+    app.browser.audition.selected = Some(selected);
+    app.browser.audition.playing = None;
+    app.browser.audition.position_frame = 0;
+    app.browser.audition.auto_play = false;
+    app.browser.audition.loop_enabled = false;
+    app.browser.audition.sync_to_tempo = false;
+}
+
+/// Seed the audition transport **playing** a row for snapshots (todo #604):
+/// a preview sounding ~40 % through with Auto-play + Loop + Sync-to-tempo on,
+/// so the playing row reads WARM, the scrub playhead sits mid-strip, the
+/// played span colours WARM, and the readout advances.
+pub fn seed_audition_playing(app: &mut Resonance) {
+    use std::path::PathBuf;
+
+    seed_files_folder(app);
+    // "Groove Loop.mp3" (index 2) is a 4 s row — long enough that a 40 %
+    // playhead reads clearly mid-strip.
+    let entry = app.browser.scan.files[2].clone();
+    let path = PathBuf::from(&entry.path);
+    app.browser.audition.selected = Some(path.clone());
+    app.browser.audition.playing = Some(path);
+    app.browser.audition.position_frame = (entry.info.frames as f64 * 0.4) as u64;
+    app.browser.audition.auto_play = true;
+    app.browser.audition.loop_enabled = true;
+    app.browser.audition.sync_to_tempo = true;
 }

@@ -1,0 +1,523 @@
+//! Undo snapshot data model and the `Resonance` methods that build, restore,
+//! and apply snapshots.
+//!
+//! Three kinds of types live here:
+//! - Capture types that shadow fields not yet covered by `ProjectFile`
+//!   (`ClipFadeGain`, `UndoExtras`, `UndoSnapshot`).
+//! - The `CoalesceKey` discriminator used by the history stack to merge a
+//!   burst of fader/knob messages into one undo entry.
+//! - The `impl crate::Resonance` blocks for building a snapshot
+//!   (`snapshot_for_undo`), checking preconditions, driving undo/redo, and
+//!   applying a restored snapshot back to the live engine.
+
+use std::collections::HashMap;
+
+use resonance_audio::types::{AudioCommand, ClipId, FadeCurve, MidiNote, PluginInstanceId};
+use resonance_common::{AutomationLane, AutomationTarget, ExternalInstrument};
+
+use crate::project::LoadedProject;
+use resonance_audio::types::TrackId;
+
+/// Per-clip fade + gain values captured for undo. Mirrors the editable
+/// fields on [`crate::state::ClipState`] (and on the engine's `AudioClip`).
+/// These don't ride the `ProjectFile` snapshot yet — clip fade/gain
+/// persistence is a separate todo (doc #156 A6 / #321) — so, exactly like
+/// `reference` / `chord_track`, the undoable set is captured here and
+/// re-applied (mirror + engine re-sync) by the restore paths.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipFadeGain {
+    pub fade_in_frames: u64,
+    pub fade_in_curve: FadeCurve,
+    pub fade_out_frames: u64,
+    pub fade_out_curve: FadeCurve,
+    pub gain_db: f32,
+}
+
+/// Runtime-only compose state that isn't captured in `ProjectFile` and
+/// therefore can't be rebuilt by `replay_loaded_project` alone. Applied
+/// to `Resonance::compose` after the replay completes.
+#[derive(Debug, Clone, Default)]
+pub struct UndoExtras {
+    pub compose_derived_clips: HashMap<(u64, u64, TrackId), ClipId>,
+    pub compose_next_derived_clip_id: u64,
+    /// Per-clip vocal lyric annotations. Captured so `ToggleSlur` and
+    /// any future per-note lyric override edit are reversible. The
+    /// `ProjectMidiClip` round-trip writes these on save, but during
+    /// a session the undo system snapshots them separately because
+    /// the project-file form of a clip isn't rebuilt on each edit.
+    pub vocal_clip_lyrics: HashMap<ClipId, Vec<String>>,
+    /// App-side parameter-automation lanes, one per target. Captured here
+    /// so lane and breakpoint edits are reversible. Automation lanes are
+    /// currently runtime-only — they aren't written into `ProjectFile`
+    /// yet (project persistence lands in todo #379), so they ride in the
+    /// extras like the other state the replay path can't rebuild on its
+    /// own. `restore_automation_lanes` reconciles the engine to this set
+    /// on undo/redo.
+    pub automation_lanes: HashMap<AutomationTarget, AutomationLane>,
+    /// Reference-track (A/B) content. References aren't part of the
+    /// `ProjectFile` yet, so `replay_loaded_project` can't rebuild them;
+    /// the undoable subset is snapshotted here and reapplied after the
+    /// replay (both the fast diff path and the full-clear path).
+    pub reference: crate::reference::ReferenceUndo,
+    /// The global chord track (epic #33). Captured here rather than in
+    /// `ProjectFile` because chord-track persistence is a later todo;
+    /// until then the track is declarative app state that the replay
+    /// path can't rebuild, so undo snapshots it directly.
+    pub chord_track: crate::chord_track::ChordTrack,
+    /// Full drum arrangement per section definition. The project-file
+    /// form still flattens each arrangement to its primary pattern id
+    /// (multi-entry persistence is a separate todo), so the snapshot
+    /// captures the complete `Vec<PatternEntry>` here to make
+    /// arrangement edits — reorder, fills, length modes, multi-entry —
+    /// fully reversible without waiting on disk persistence.
+    pub compose_arrangements: HashMap<u64, Vec<crate::compose::PatternEntry>>,
+    /// Per-track freeze status at snapshot time. The rendered cache is not
+    /// part of undo history, so on restore
+    /// [`crate::Resonance::apply_freeze_restore`] detaches + deletes the
+    /// cache of any track that is no longer frozen and downgrades a
+    /// re-frozen track whose cache file is gone to stale.
+    pub track_freeze: HashMap<TrackId, crate::state::FreezeStatus>,
+    /// Per-clip fade + gain at snapshot time (doc #156 A2/#317). Captured
+    /// here because clip fade/gain isn't part of `ProjectFile` yet (the
+    /// persistence slice is #321); the restore paths re-apply each entry to
+    /// the `ClipState` mirror and re-sync the engine via `SetClipFade` /
+    /// `SetClipGain`, making fade/gain edits fully reversible without
+    /// waiting on disk persistence. Only clips present at restore time are
+    /// touched (a clip removed by the same undo is handled by the
+    /// structural replay path).
+    pub clip_fade_gain: HashMap<ClipId, ClipFadeGain>,
+    /// External-instrument config per track (bank/program/latency + the
+    /// external-mode marker). Captured here because the `ProjectFile` shape
+    /// doesn't carry it yet (project persistence lands in a later todo), so
+    /// the undo system snapshots it separately — exactly like
+    /// `vocal_clip_lyrics`. The runtime device-offline flags are *not*
+    /// captured: they reflect live hardware, not project state.
+    pub external_instruments: HashMap<TrackId, ExternalInstrument>,
+    /// Selected device-preset id per external-instrument track (epic #40,
+    /// doc #201 §5). Snapshotted alongside `external_instruments` because the
+    /// selection is app-side project state that isn't part of the engine
+    /// `ExternalInstrument` config (nor the `ProjectFile` shape yet —
+    /// persistence is a later todo). `None` means the track is external but
+    /// has no preset selected. On restore the id is re-applied and the
+    /// resolved params are re-sent via `SetTrackDeviceParams`, so device
+    /// selection is fully reversible. Runtime device-param echoes
+    /// (`applied_param_ids`) are *not* captured — they reflect the engine's
+    /// live state, not project state.
+    pub external_instrument_devices: HashMap<TrackId, Option<String>>,
+}
+
+/// Re-apply the snapshotted full arrangements onto the compose state after
+/// a project replay. The replay path rebuilds each section's arrangement
+/// from the persisted (flattened) primary pattern id; this overwrites it
+/// with the captured `Vec<PatternEntry>` so multi-entry arrangements,
+/// fills, and `Bars` length modes survive an undo/redo. Sections present
+/// in the live state but missing from the snapshot are left untouched.
+pub(crate) fn restore_arrangements(
+    compose: &mut crate::compose::ComposeState,
+    arrangements: &HashMap<u64, Vec<crate::compose::PatternEntry>>,
+) {
+    for (id, arrangement) in arrangements {
+        if let Some(def) = compose.find_definition_mut(*id) {
+            def.arrangement = arrangement.clone();
+        }
+    }
+}
+
+/// One point in the undo/redo history. Wraps the `LoadedProject` shape
+/// so snapshots can be fed straight into the existing
+/// `replay_loaded_project` path, plus `extras` for runtime-only state.
+#[derive(Debug, Clone)]
+pub struct UndoSnapshot {
+    /// Declarative project state in the exact shape the replay path
+    /// expects. `plugin_states` is populated from
+    /// `Resonance::plugin_state_cache` at snapshot time; missing entries
+    /// cause the restore path to reinstantiate the plugin with default
+    /// internal state and rely on the replayed parameter values.
+    pub project: LoadedProject,
+    /// Runtime-only state rebuilt after the replay — currently just the
+    /// compose tab's derived-clip cache.
+    pub extras: UndoExtras,
+}
+
+/// Identifies a continuous-edit source so that a stream of messages
+/// targeting the same control (a fader drag, a knob twist) collapses into
+/// a single undo entry. Any interaction that isn't the same source — a
+/// different control, a gesture, a pop, a clear — breaks the run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoalesceKey {
+    TrackVolume(u64),
+    TrackPan(u64),
+    BusVolume(u64),
+    BusPan(u64),
+    MasterVolume,
+    PluginParam { instance_id: u64, param_id: u32 },
+    /// The reference-track manual trim fader.
+    ReferenceTrim,
+    /// An aux-send level slider drag, keyed by the send's id.
+    SendLevel(u64),
+    /// Dragging a marker's start pole along the ruler, keyed by marker id.
+    MarkerMove(u64),
+    /// Dragging a region marker's end edge, keyed by marker id.
+    MarkerResize(u64),
+    /// A group macro level-trim slider drag, keyed by group id (epic #36).
+    GroupMacroLevel(u64),
+}
+
+// -------------------------------------------------------------------------
+// Resonance snapshot-building and restore methods
+// -------------------------------------------------------------------------
+
+impl crate::Resonance {
+    /// Build an undo snapshot of the current declarative project state.
+    ///
+    /// Parameter values come from live GUI state (via
+    /// `build_project_file`), so they are always exact. Opaque CLAP state
+    /// blobs come from `plugin_state_cache`, which refreshes at natural
+    /// resting points — plugin add, editor close, project save — and is
+    /// therefore slightly stale between those points.
+    pub(crate) fn snapshot_for_undo(&self) -> UndoSnapshot {
+        let file = crate::update::build_project_file(self);
+        let midi_notes: HashMap<ClipId, Vec<MidiNote>> = self
+            .midi_clips
+            .iter()
+            .map(|mc| (mc.id, mc.notes.clone()))
+            .collect();
+        let extras = UndoExtras {
+            compose_derived_clips: self.compose.derived_clips.clone(),
+            compose_next_derived_clip_id: self.compose.next_derived_clip_id,
+            vocal_clip_lyrics: self.compose.vocal_audio.clip_lyrics.clone(),
+            automation_lanes: self.automation.lanes.clone(),
+            reference: self.reference.undo_snapshot(),
+            chord_track: self.chord_track.clone(),
+            compose_arrangements: self
+                .compose
+                .definitions
+                .iter()
+                .map(|d| (d.id, d.arrangement.clone()))
+                .collect(),
+            track_freeze: self.freeze.statuses.clone(),
+            clip_fade_gain: self
+                .clips
+                .iter()
+                .map(|c| {
+                    (
+                        c.id,
+                        ClipFadeGain {
+                            fade_in_frames: c.fade_in_frames,
+                            fade_in_curve: c.fade_in_curve,
+                            fade_out_frames: c.fade_out_frames,
+                            fade_out_curve: c.fade_out_curve,
+                            gain_db: c.gain_db,
+                        },
+                    )
+                })
+                .collect(),
+            external_instruments: self
+                .external_instruments
+                .iter()
+                .map(|(id, st)| (*id, st.config()))
+                .collect(),
+            external_instrument_devices: self
+                .external_instruments
+                .iter()
+                .map(|(id, st)| (*id, st.device_id.clone()))
+                .collect(),
+        };
+        // Only snapshot blobs for plugins that currently exist — stale
+        // entries for removed plugins would bloat the snapshot and are
+        // never consumed anyway.
+        let mut plugin_states: HashMap<PluginInstanceId, Vec<u8>> = HashMap::new();
+        let collect = |slots: &[crate::state::PluginSlotState],
+                       out: &mut HashMap<PluginInstanceId, Vec<u8>>,
+                       cache: &HashMap<PluginInstanceId, Vec<u8>>| {
+            for slot in slots {
+                if let Some(blob) = cache.get(&slot.instance_id) {
+                    out.insert(slot.instance_id, blob.clone());
+                }
+            }
+        };
+        for track in &self.registry.tracks {
+            collect(&track.plugins, &mut plugin_states, &self.plugin_state_cache);
+        }
+        for bus in &self.registry.busses {
+            collect(&bus.plugins, &mut plugin_states, &self.plugin_state_cache);
+        }
+        collect(
+            &self.master_plugins,
+            &mut plugin_states,
+            &self.plugin_state_cache,
+        );
+
+        UndoSnapshot {
+            project: LoadedProject {
+                file,
+                project_dir: self.io.project_path.clone().unwrap_or_default(),
+                midi_notes,
+                plugin_states,
+            },
+            extras,
+        }
+    }
+
+    /// True when the app is in a state where recording a new undo
+    /// snapshot would be meaningful. Unsaved projects don't have a
+    /// `project_dir` to anchor audio clip paths against, so their
+    /// snapshots could never be replayed — there's no point recording
+    /// them. Also false during an in-flight restore so intermediate
+    /// states mid-replay don't end up in the history.
+    pub(crate) fn can_record_undo(&self) -> bool {
+        self.io.has_active_project && self.io.project_path.is_some() && !self.io.loading
+    }
+
+    /// True when an undo or redo would be safe to start right now. The
+    /// recording gate plus: no offline bounce, no in-flight save, no
+    /// active recording, and no pending drag/trim transaction (which
+    /// would otherwise be silently discarded by the restore).
+    pub(crate) fn can_undo_redo_now(&self) -> bool {
+        self.can_record_undo()
+            && !self.io.bouncing
+            && self.io.save_state.is_none()
+            && !self.transport.recording
+            && !self.undo.has_pending()
+            && !self.freeze.any_in_flight()
+    }
+
+    /// Drive the engine and GUI back to `snapshot`. Tries a structure-
+    /// preserving diff replay first — when the snapshot has the same set
+    /// of tracks, busses, plugins, and clips as the current state, only
+    /// the changed scalars (volumes, mutes, BPM, plugin state blobs,
+    /// MIDI notes, etc.) are pushed to the engine, keeping every plugin
+    /// instance alive. When the structural shape differs, falls back to
+    /// the full `ClearAll → AllCleared → replay_loaded_project` pipeline
+    /// that `ProjectLoaded(Ok)` uses. Playback is stopped either way
+    /// (per v1 policy).
+    pub(crate) fn begin_restore_from_snapshot(&mut self, snapshot: UndoSnapshot) {
+        // Pause playback and stop recording. Recording should already be
+        // blocked by `can_undo_redo_now`, but belt-and-braces.
+        let _ = self.engine.send(AudioCommand::Stop);
+        self.transport.playing = false;
+        self.transport.recording = false;
+
+        let UndoSnapshot {
+            project: loaded,
+            extras,
+        } = snapshot;
+
+        // Fast path: structure-identical undo (the common case for
+        // fader/knob/transport edits). Drives the engine surgically
+        // without tearing down plugin instances.
+        if crate::update::try_diff_replay(self, &loaded, &extras) {
+            return;
+        }
+
+        // Slow path: structural change. Stash both halves so the
+        // `AllCleared` handler can run the full replay. The handler
+        // re-establishes `project_path` from the snapshot's project_dir
+        // because `replay_loaded_project` clears it on entry.
+        self.io.loading = true;
+        self.io.pending_load = Some(Box::new(loaded));
+        self.io.pending_undo_extras = Some(extras);
+
+        let _ = self.engine.send(AudioCommand::ClearAll);
+    }
+
+    /// Apply the runtime-only extras captured in the snapshot. Called
+    /// from the `AllCleared` engine-event handler immediately after
+    /// `replay_loaded_project` runs, only when the pending load came
+    /// from an undo/redo (distinguished by `pending_undo_extras.is_some()`).
+    pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
+        self.restore_automation_lanes(&extras.automation_lanes);
+        self.restore_external_instruments(&extras);
+        self.compose.derived_clips = extras.compose_derived_clips;
+        self.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
+        self.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics;
+        self.reference.restore_undo(extras.reference);
+        self.chord_track = extras.chord_track;
+        restore_arrangements(&mut self.compose, &extras.compose_arrangements);
+        self.apply_freeze_restore(extras.track_freeze);
+        self.apply_clip_fade_gain_restore(&extras.clip_fade_gain);
+    }
+
+    /// Re-apply snapshotted clip fade/gain to the GUI mirror and re-sync the
+    /// engine. Used by both restore paths (the slow `finalize_undo_restore`
+    /// and the fast `try_diff_replay`). For each clip still present, the
+    /// stored fade/gain is written to [`crate::state::ClipState`] and pushed
+    /// to the engine via `SetClipFade` / `SetClipGain` — the same commands
+    /// the live edits use, so undo/redo and direct editing share one code
+    /// path. Clips absent from the map (or absent from the project) are
+    /// left untouched. Reads only app-side state — no engine read-getters.
+    pub(crate) fn apply_clip_fade_gain_restore(&mut self, map: &HashMap<ClipId, ClipFadeGain>) {
+        for clip in self.clips.iter_mut() {
+            let Some(fg) = map.get(&clip.id) else {
+                continue;
+            };
+            // Skip the engine round-trip when nothing changed, so a restore
+            // that didn't touch this clip stays quiet.
+            let unchanged = clip.fade_in_frames == fg.fade_in_frames
+                && clip.fade_in_curve == fg.fade_in_curve
+                && clip.fade_out_frames == fg.fade_out_frames
+                && clip.fade_out_curve == fg.fade_out_curve
+                && clip.gain_db == fg.gain_db;
+            clip.fade_in_frames = fg.fade_in_frames;
+            clip.fade_in_curve = fg.fade_in_curve;
+            clip.fade_out_frames = fg.fade_out_frames;
+            clip.fade_out_curve = fg.fade_out_curve;
+            clip.gain_db = fg.gain_db;
+            if unchanged {
+                continue;
+            }
+            let _ = self.engine.send(AudioCommand::SetClipFade {
+                clip_id: clip.id,
+                fade_in_frames: fg.fade_in_frames,
+                fade_in_curve: fg.fade_in_curve,
+                fade_out_frames: fg.fade_out_frames,
+                fade_out_curve: fg.fade_out_curve,
+            });
+            let _ = self.engine.send(AudioCommand::SetClipGain {
+                clip_id: clip.id,
+                gain_db: fg.gain_db,
+            });
+        }
+    }
+
+    /// Drive the engine + GUI external-instrument state back to `extras`.
+    /// Shared by both undo restore paths (the diff replay in
+    /// `try_diff_replay` and the full `AllCleared` replay via
+    /// `finalize_undo_restore`).
+    ///
+    /// Clears tracks that are no longer external, then (re-)asserts every
+    /// target config via `SetExternalInstrument` — idempotent on the engine
+    /// and, unlike a patch send, it never re-fires MIDI to the synth. The
+    /// selected device preset (epic #40) is restored too: the id is re-applied
+    /// to the GUI state and the resolved params re-sent via
+    /// `SetTrackDeviceParams`, so device selection reverses with the rest of
+    /// the config. The runtime device-offline flags are preserved for tracks
+    /// that stay external (live hardware status survives an undo); a track
+    /// returning to external mode starts online and is re-checked on the next
+    /// ping.
+    pub(crate) fn restore_external_instruments(&mut self, extras: &UndoExtras) {
+        // Drop external mode from tracks absent in the target snapshot. Clear
+        // their engine device-param map too, so a track leaving external mode
+        // doesn't leave stale bindings behind on the engine side.
+        let stale: Vec<TrackId> = self
+            .external_instruments
+            .keys()
+            .copied()
+            .filter(|id| !extras.external_instruments.contains_key(id))
+            .collect();
+        for id in stale {
+            self.external_instruments.remove(&id);
+            let _ = self
+                .engine
+                .send(AudioCommand::ClearExternalInstrument { track_id: id });
+            let _ = self.engine.send(AudioCommand::SetTrackDeviceParams {
+                track_id: id,
+                params: Vec::new(),
+            });
+        }
+        // Re-assert every target config, keeping live offline flags.
+        for (id, config) in &extras.external_instruments {
+            let _ = self.engine.send(AudioCommand::SetExternalInstrument {
+                config: *config,
+            });
+            // Restore the selected device preset and re-send its params. The
+            // registry lookup is a temporary immutable borrow whose result is
+            // cloned, so it doesn't overlap the engine send or the map entry.
+            let device_id = extras
+                .external_instrument_devices
+                .get(id)
+                .cloned()
+                .flatten();
+            let params = match &device_id {
+                Some(did) => self
+                    .device_registry
+                    .get(did)
+                    .map(|def| def.params.clone())
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
+            let _ = self.engine.send(AudioCommand::SetTrackDeviceParams {
+                track_id: *id,
+                params,
+            });
+            let state = self
+                .external_instruments
+                .entry(*id)
+                .or_insert_with(|| crate::state::ExternalInstrumentState::new(*id));
+            state.apply_config(config);
+            state.device_id = device_id;
+        }
+    }
+
+    /// Reconcile the engine's automation lanes to `target` and overwrite
+    /// the app-side mirror to match. Shared by both undo/redo restore
+    /// paths (the structure-preserving diff replay and the full
+    /// clear-and-replay), and correct for either because the engine's
+    /// lane set always equals the current mirror at call time: the diff
+    /// path never touches lanes, and `ClearAll` deliberately leaves the
+    /// engine's automation lanes intact (they are re-keyed per target,
+    /// not by track/clip identity).
+    ///
+    /// Lanes present now but absent from `target` are cleared; lanes that
+    /// are new or whose breakpoints/Read flag changed are re-sent
+    /// whole-lane. Transient live-value tints for dropped targets are
+    /// discarded so a stale fader/knob tint can't outlive its lane.
+    pub(crate) fn restore_automation_lanes(
+        &mut self,
+        target: &HashMap<AutomationTarget, AutomationLane>,
+    ) {
+        let stale: Vec<AutomationTarget> = self
+            .automation
+            .lanes
+            .keys()
+            .filter(|t| !target.contains_key(t))
+            .cloned()
+            .collect();
+        for t in stale {
+            let _ = self.engine.send(AudioCommand::ClearAutomationLane { target: t });
+        }
+        for (t, lane) in target {
+            if self.automation.lanes.get(t) != Some(lane) {
+                let _ = self
+                    .engine
+                    .send(AudioCommand::SetAutomationLane { lane: lane.clone() });
+            }
+        }
+        self.automation.lanes = target.clone();
+        self.automation.bump_allocator_past_lanes();
+        self.automation
+            .live_values
+            .retain(|t, _| target.contains_key(t));
+    }
+
+    /// Attempt to undo. No-ops (returning false) if the history is empty
+    /// or an in-flight operation blocks undo/redo. On success the current
+    /// state is pushed onto the redo stack before the snapshot is
+    /// restored.
+    pub(crate) fn try_undo(&mut self) -> bool {
+        if !self.can_undo_redo_now() || !self.undo.can_undo() {
+            return false;
+        }
+        let Some(snapshot) = self.undo.pop_undo() else {
+            return false;
+        };
+        let current = self.snapshot_for_undo();
+        self.undo.push_redo(current);
+        self.begin_restore_from_snapshot(snapshot);
+        true
+    }
+
+    /// Symmetric counterpart to `try_undo`.
+    pub(crate) fn try_redo(&mut self) -> bool {
+        if !self.can_undo_redo_now() || !self.undo.can_redo() {
+            return false;
+        }
+        let Some(snapshot) = self.undo.pop_redo() else {
+            return false;
+        };
+        let current = self.snapshot_for_undo();
+        self.undo.push_undo(current);
+        self.begin_restore_from_snapshot(snapshot);
+        true
+    }
+}

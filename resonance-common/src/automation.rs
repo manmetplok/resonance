@@ -36,8 +36,15 @@ pub const GAIN_MAX_DB: f32 = 6.0;
 /// ranges; `PluginParam` carries only the addressing (instance + CLAP param id)
 /// — its `min..=max` lives in the plugin's `ParamInfo` and is applied by the
 /// engine, so the generic [`lane_value_to_plugin_param`] helper takes the range
-/// explicitly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// explicitly. `DeviceParam` addresses a parameter on an external MIDI device
+/// definition (see [`crate::device_definition`]); its normalized lane value is
+/// mapped to the binding's integer domain by the engine via the definition's
+/// `lane_value_to_binding_value` — `automation.rs` has no access to the
+/// definition, so [`lane_value_to_real`] leaves a `DeviceParam` value untouched
+/// (like `PluginParam`).
+///
+/// Carrying a `String` `param_id`, this enum is `Clone` but not `Copy`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AutomationTarget {
     TrackGain(TrackId),
     TrackPan(TrackId),
@@ -49,6 +56,14 @@ pub enum AutomationTarget {
     PluginParam {
         instance: PluginInstanceId,
         param_id: u32,
+    },
+    /// A parameter on an external MIDI device definition. `param_id` is the
+    /// [`crate::device_definition::DeviceParam::id`] string. The normalized
+    /// `0.0..=1.0` lane value is mapped to the binding's integer value by the
+    /// engine via the definition's `lane_value_to_binding_value`, **not** here.
+    DeviceParam {
+        track: TrackId,
+        param_id: String,
     },
 }
 
@@ -138,7 +153,7 @@ impl AutomationLane {
     /// For `PluginParam` this returns the raw normalized value — the engine
     /// scales it with the plugin's `min..=max` via [`lane_value_to_plugin_param`].
     pub fn real_value_at(&self, frame: u64) -> f32 {
-        lane_value_to_real(self.target, self.sample(frame))
+        lane_value_to_real(&self.target, self.sample(frame))
     }
 }
 
@@ -189,8 +204,11 @@ pub fn sample_lane(points: &[Breakpoint], frame: u64) -> f32 {
 /// - pan targets ⇒ `-1.0..=1.0`,
 /// - mute targets ⇒ `0.0` or `1.0` (threshold at `0.5`),
 /// - `PluginParam` ⇒ the value unchanged (the engine applies the plugin's
-///   own range via [`lane_value_to_plugin_param`]).
-pub fn lane_value_to_real(target: AutomationTarget, value: f32) -> f32 {
+///   own range via [`lane_value_to_plugin_param`]),
+/// - `DeviceParam` ⇒ the value unchanged (the engine maps it to the binding's
+///   integer domain via the device definition's `lane_value_to_binding_value`;
+///   `automation.rs` has no access to the definition).
+pub fn lane_value_to_real(target: &AutomationTarget, value: f32) -> f32 {
     let v = value.clamp(0.0, 1.0);
     match target {
         AutomationTarget::TrackGain(_)
@@ -204,14 +222,16 @@ pub fn lane_value_to_real(target: AutomationTarget, value: f32) -> f32 {
                 0.0
             }
         }
-        AutomationTarget::PluginParam { .. } => v,
+        AutomationTarget::PluginParam { .. } | AutomationTarget::DeviceParam { .. } => v,
     }
 }
 
 /// Inverse of [`lane_value_to_real`]: map a target's real value back to a
 /// normalized `0.0..=1.0` lane value. Round-trips with `lane_value_to_real`
-/// for continuous targets; mute snaps to `0.0`/`1.0`.
-pub fn real_to_lane_value(target: AutomationTarget, real: f32) -> f32 {
+/// for continuous targets; mute snaps to `0.0`/`1.0`. `PluginParam` and
+/// `DeviceParam` pass `real` through unchanged (their real range lives outside
+/// `automation.rs`).
+pub fn real_to_lane_value(target: &AutomationTarget, real: f32) -> f32 {
     let v = match target {
         AutomationTarget::TrackGain(_)
         | AutomationTarget::BusGain(_)
@@ -226,7 +246,7 @@ pub fn real_to_lane_value(target: AutomationTarget, real: f32) -> f32 {
                 0.0
             }
         }
-        AutomationTarget::PluginParam { .. } => real,
+        AutomationTarget::PluginParam { .. } | AutomationTarget::DeviceParam { .. } => real,
     };
     v.clamp(0.0, 1.0)
 }

@@ -42,9 +42,15 @@ fn make_minimal_project() -> ProjectFile {
         midi_clock_recv_device: None,
         drum_groups: Vec::new(),
         drum_patterns: Vec::new(),
+        track_groups: Vec::new(),
         references: Vec::new(),
         reference_settings: Default::default(),
         arrangement_markers: Vec::new(),
+        pool_assets: Vec::new(),
+        groove_library: Vec::new(),
+        quantize_settings: Default::default(),
+        automation_lanes: Vec::new(),
+        performance: Default::default(),
     }
 }
 
@@ -85,6 +91,7 @@ fn make_project_with_content() -> ProjectFile {
         midi_input_channel: None,
         midi_output_device: None,
         midi_output_channel: None,
+        external_instrument: None,
     }];
 
     // Add a bus with a plugin

@@ -10,6 +10,7 @@
 use indexmap::IndexMap;
 
 use crate::clap_host::SyncClapInstance;
+use crate::engine::AutomationSnapshot;
 use crate::latency::LatencyComp;
 use crate::types::*;
 
@@ -57,6 +58,7 @@ pub(super) fn render_timeline_block(
     input_channels: usize,
     transport_snap: Option<TransportSnap>,
     latency_comp: &LatencyComp,
+    automation: &AutomationSnapshot,
 ) {
     let mut strategy = RenderStrategy::Live {
         midi_stash,
@@ -86,6 +88,7 @@ pub(super) fn render_timeline_block(
         port_scratch,
         note_event_buf,
         latency_comp,
+        automation,
         &mut strategy,
     );
 }

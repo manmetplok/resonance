@@ -44,6 +44,23 @@ impl Default for AutosaveSettings {
     }
 }
 
+/// Media-browser user state that is *project-independent* and therefore
+/// belongs in the app's settings rather than any project file (doc #175):
+/// the favourite folders pinned to the top of the browser and the
+/// recently-visited folders shelf. Persisted here so they survive across
+/// sessions and follow the user from one project to the next. The live
+/// working copies are held on `state::MediaPool`; this is the durable
+/// store synced to/from it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MediaBrowserSettings {
+    /// User-pinned favourite folder paths, in pin order.
+    pub favourites: Vec<PathBuf>,
+    /// Recently-visited folder paths, most-recent first (the pool caps
+    /// this list when pushing; persisted verbatim).
+    pub recent_folders: Vec<PathBuf>,
+}
+
 /// Root persisted settings document. Wrapping each section (rather than
 /// persisting [`AutosaveSettings`] at the top level) leaves room for
 /// future settings groups without a format migration.
@@ -51,6 +68,10 @@ impl Default for AutosaveSettings {
 #[serde(default)]
 pub struct AppSettings {
     pub autosave: AutosaveSettings,
+    /// Media-browser favourites + recent folders (doc #175). Absent on
+    /// settings files written before this section existed; `#[serde(default)]`
+    /// fills it with empty lists.
+    pub media: MediaBrowserSettings,
 }
 
 fn settings_file_path() -> Option<PathBuf> {

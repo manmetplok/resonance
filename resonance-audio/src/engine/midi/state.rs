@@ -45,6 +45,12 @@ pub struct MidiHardwareState {
     /// `(midi_outbound_last_playhead .. current_playhead]` and emits
     /// NoteOn/NoteOff for them.
     pub midi_outbound_last_playhead: u64,
+    /// Last binding integer emitted for each automated device parameter,
+    /// keyed by track then `DeviceParam::id`. The device-param automation
+    /// poll only writes a CC/NRPN when the mapped value changed against
+    /// this memo, so a slow lane sweep doesn't flood the port. Cleared on
+    /// transport stop so the next Play re-sends from the new position.
+    pub device_param_last: HashMap<TrackId, HashMap<String, u16>>,
     /// Last MIDI input device list sent to the GUI. Compared against
     /// the next enumeration so a steady-state poll (no plug events)
     /// doesn't trigger a redundant `MidiInputDevicesListed` round-trip.
@@ -64,6 +70,7 @@ impl MidiHardwareState {
             midi_outputs: MidiOutputRegistry::new(),
             midi_outbound_held: HashMap::new(),
             midi_outbound_last_playhead: 0,
+            device_param_last: HashMap::new(),
             last_midi_input_devices: Vec::new(),
             last_midi_output_devices: Vec::new(),
         }

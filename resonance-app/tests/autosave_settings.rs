@@ -28,6 +28,7 @@ fn round_trip_preserves_custom_values() {
             interval_secs: 120,
             backup_retention: 3,
         },
+        ..AppSettings::default()
     };
     let json = serde_json::to_string(&original).expect("serialize");
     let restored: AppSettings = serde_json::from_str(&json).expect("deserialize");

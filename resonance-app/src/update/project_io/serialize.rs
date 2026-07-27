@@ -5,13 +5,26 @@
 use resonance_audio::types::*;
 
 use crate::project::{
-    ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin, ProjectReference,
-    ProjectReferenceMarker, ProjectReferenceSettings, ProjectTrack, PROJECT_FORMAT_VERSION,
+    audio_format_tag, fade_curve_tag, ProjectBus, ProjectClip, ProjectExternalInstrument,
+    ProjectFile, ProjectMidiClip, ProjectPerformance, ProjectPlugin, ProjectPoolAsset,
+    ProjectReference, ProjectReferenceMarker, ProjectReferenceSettings, ProjectTrack,
+    PROJECT_FORMAT_VERSION,
 };
 use crate::Resonance;
 
 /// Serialize current GUI state to the on-disk `ProjectFile` shape.
 pub fn build_project_file(r: &Resonance) -> ProjectFile {
+    // Ids of the read-only devices shipped in the app binary. A selected
+    // *bundled* device is re-resolved from the registry on load, so we never
+    // embed a copy of it; a *user-authored* device (id not in this set) is
+    // embedded verbatim so the project reopens on another machine (doc #201
+    // §5). Computed once so the per-track closure below stays O(1).
+    let bundled_device_ids: std::collections::HashSet<String> =
+        resonance_common::bundled_definitions()
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+
     let tracks = r
         .sorted_tracks()
         .iter()
@@ -57,6 +70,30 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             midi_input_channel: t.midi_input_channel,
             midi_output_device: t.midi_output_device.clone(),
             midi_output_channel: t.midi_output_channel,
+            // External-instrument extras (bank/program/latency offset). The
+            // *presence* of an entry in `external_instruments` marks the
+            // track external; the route + monitor/arm already serialize via
+            // the track fields above. Runtime offline flags are not saved.
+            external_instrument: r.external_instruments.get(&t.id).map(|ext| {
+                // Embed a copy of the selected definition only when it's
+                // user-authored (not bundled) and still resolvable, so a
+                // portable project carries unsupported gear with it while
+                // bundled devices stay lean (re-resolved on load).
+                let device_definition = ext.device_id.as_ref().and_then(|id| {
+                    if bundled_device_ids.contains(id) {
+                        None
+                    } else {
+                        r.device_registry.get(id).cloned()
+                    }
+                });
+                ProjectExternalInstrument {
+                    device_id: ext.device_id.clone(),
+                    device_definition,
+                    bank: ext.bank,
+                    program: ext.program,
+                    latency_offset_samples: ext.latency_offset_samples,
+                }
+            }),
         })
         .collect();
 
@@ -97,6 +134,16 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             trim_start_frames: c.trim_start_frames,
             trim_end_frames: c.trim_end_frames,
             audio_file: format!("audio/clip_{}.wav", c.id),
+            // Pool-asset provenance (doc #175): persist the link so an
+            // imported+placed clip reconnects to its pool asset on reload.
+            asset_ref: c.asset_ref.map(|r| r.asset_id),
+            // Fades & per-clip gain (epic #18, doc #156). Curves are
+            // stored as tags since `FadeCurve` has no serde derive.
+            fade_in_frames: c.fade_in_frames,
+            fade_in_curve: fade_curve_tag(c.fade_in_curve).to_string(),
+            fade_out_frames: c.fade_out_frames,
+            fade_out_curve: fade_curve_tag(c.fade_out_curve).to_string(),
+            gain_db: c.gain_db,
         })
         .collect();
 
@@ -180,6 +227,26 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         loop_to_mix: r.reference.loop_to_mix,
     };
 
+    // Media pool (doc #175). Persist the durable facts about each
+    // imported asset — its project-relative WAV path, source provenance,
+    // and the project-rate duration — in import order. The waveform
+    // thumbnail and live usage counts are runtime-derived and rebuilt on
+    // load, so they're left out of the file.
+    let pool_assets: Vec<ProjectPoolAsset> = r
+        .pool
+        .assets
+        .iter()
+        .map(|a| ProjectPoolAsset {
+            id: a.id,
+            project_relative_path: a.project_relative_path.clone(),
+            original_path: a.original_path.clone(),
+            format: audio_format_tag(a.format).to_string(),
+            channels: a.channels,
+            source_sample_rate: a.source_sample_rate,
+            duration_frames: a.duration_frames,
+        })
+        .collect();
+
     ProjectFile {
         version: PROJECT_FORMAT_VERSION,
         sample_rate: r.sample_rate,
@@ -211,8 +278,35 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         // for files written by older builds.
         drum_groups: Vec::new(),
         drum_patterns: r.compose.drum_patterns.clone(),
+        track_groups: r
+            .track_groups
+            .get_all_groups_sorted()
+            .into_iter()
+            .cloned()
+            .collect(),
         references,
         reference_settings,
         arrangement_markers: r.markers.markers.clone(),
+        pool_assets,
+        // MIDI quantize state (ba todo #395): the user's groove library
+        // and last-used quantize/humanize settings.
+        groove_library: r.quantize.groove_library.clone(),
+        quantize_settings: r.quantize.settings.clone(),
+        // Parameter-automation lanes (epic #14 / epic #40). Sorted by lane id
+        // for a stable on-disk order (the mirror is a HashMap). DeviceParam
+        // lanes ride along here and are re-applied on load after the owning
+        // track's `SetTrackDeviceParams`.
+        automation_lanes: {
+            let mut lanes: Vec<_> = r.automation.lanes.values().cloned().collect();
+            lanes.sort_by_key(|l| l.id);
+            lanes
+        },
+        // Performance-mode footer selection (epic #11): the instrument
+        // tuning (stored by stable name) and capo offset for the live
+        // fingering diagrams.
+        performance: ProjectPerformance {
+            tuning: r.performance.tuning().name.to_string(),
+            capo: r.performance.capo,
+        },
     }
 }

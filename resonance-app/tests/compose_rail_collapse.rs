@@ -17,6 +17,8 @@
 //!    header row, so it must remain findable while the card is folded —
 //!    asserted via a text selector, not just pixels.
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::compose::messages::DrumGroupsMessage;
@@ -33,7 +35,7 @@ use resonance_audio::types::TrackId;
 const WINDOW: (f32, f32) = (1440.0, 900.0);
 /// Taller window used for the drum-rail snapshots so the group
 /// selector, meter, articulation, and rhythm cards all sit inside the
-/// viewport — same convention as `compose_drum_pattern_picker.rs`.
+/// viewport — same convention as `compose_arrangement_strip.rs`.
 const TALL_WINDOW: (f32, f32) = (1440.0, 1600.0);
 
 fn sim_settings() -> iced::Settings {
@@ -71,10 +73,7 @@ fn snapshot_to_window(app: &Resonance, path: &str, window: (f32, f32)) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 /// Chord rail with the Scale and Chord generator cards folded — only

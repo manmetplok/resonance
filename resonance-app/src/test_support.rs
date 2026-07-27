@@ -152,6 +152,24 @@ impl Resonance {
         self.mixer.expanded_sub_track_parents.remove(&parent_id);
     }
 
+    /// Test-only: the mixer's top-level strip order as `(is_group, id)`
+    /// pairs — exactly the sequence `view_mixer` renders. A group cluster
+    /// reports `(true, group_id)` at its first member's slot; ungrouped
+    /// tracks report `(false, track_id)`. Drives
+    /// `tests/mixer_group_clustering.rs` so the group-clustering order is
+    /// asserted without parsing the rendered widget tree.
+    #[doc(hidden)]
+    pub fn test_mixer_top_level(&self) -> Vec<(bool, resonance_audio::types::TrackId)> {
+        use crate::view::mixer::MixerTopItem;
+        self.mixer_top_level_items()
+            .into_iter()
+            .map(|item| match item {
+                MixerTopItem::Track(id) => (false, id),
+                MixerTopItem::Group(id) => (true, id),
+            })
+            .collect()
+    }
+
     /// Test-only: read the GUI-side MIDI clip list. Used by reducer
     /// tests under `tests/` that need to inspect post-drag/trim clip
     /// geometry without poking at the engine round-trip.
@@ -166,6 +184,21 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_push_midi_clip(&mut self, clip: state::MidiClipState) {
         self.midi_clips.push(clip);
+    }
+
+    /// Test-only: read the app-side groove library populated from
+    /// `GrooveExtracted` engine events (ba todo #390).
+    #[doc(hidden)]
+    pub fn test_groove_library(&self) -> &[resonance_audio::quantize::GrooveTemplate] {
+        &self.groove_library
+    }
+
+    /// Test-only: read the MIDI editor's Quantize panel settings (todo
+    /// #392) so panel-control reducer tests can assert the setter handlers
+    /// updated the bound state.
+    #[doc(hidden)]
+    pub fn test_quantize_panel(&self) -> &state::MidiQuantizePanelState {
+        &self.midi_quantize
     }
 
     /// Test-only: overwrite the sample rate. Tempo-map projections used
@@ -234,6 +267,15 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_set_active_project(&mut self, active: bool) {
         self.io.has_active_project = active;
+    }
+
+    /// Test-only: anchor the project at `path` so `can_record_undo`
+    /// (which needs a saved-path to replay snapshots against) is true.
+    /// Lets reducer tests exercise undo/redo round-trips without going
+    /// through a real save dialog.
+    #[doc(hidden)]
+    pub fn test_set_project_path(&mut self, path: std::path::PathBuf) {
+        self.io.project_path = Some(path);
     }
 
     /// Test-only: the currently active top-level [`ViewMode`].
@@ -320,13 +362,48 @@ impl Resonance {
         crate::update::project_io::restore_drum_patterns(&mut self.compose, file, false);
     }
 
-    /// Test-only: anchor a project path so `can_record_undo` is satisfied
-    /// (it requires `has_active_project` *and* a `project_path`). Pair
-    /// with [`Self::test_set_active_project`] to make undo/redo recordable
-    /// in a reducer test without a real save.
+    /// Test-only: read the project's quantize state (groove library +
+    /// last-used quantize/humanize settings, ba todo #395).
     #[doc(hidden)]
-    pub fn test_set_project_path(&mut self, path: std::path::PathBuf) {
-        self.io.project_path = Some(path);
+    pub fn test_quantize(&self) -> &crate::state::QuantizeState {
+        &self.quantize
+    }
+
+    /// Test-only: mutable access to the quantize state, so a persistence
+    /// test can seed a groove library / settings before serializing.
+    #[doc(hidden)]
+    pub fn test_quantize_mut(&mut self) -> &mut crate::state::QuantizeState {
+        &mut self.quantize
+    }
+
+    /// Test-only: replay just the quantize block of a saved
+    /// [`crate::project::ProjectFile`] into this app, exercising the same
+    /// restore path a full project load runs (ba todo #395).
+    #[doc(hidden)]
+    pub fn test_restore_quantize(&mut self, file: &crate::project::ProjectFile) {
+        crate::update::project_io::restore_quantize(self, file);
+    }
+
+    /// Test-only: read the Performance-mode footer selection (instrument
+    /// tuning + capo, epic #11 / todo #312).
+    #[doc(hidden)]
+    pub fn test_performance(&self) -> &crate::state::PerformanceState {
+        &self.performance
+    }
+
+    /// Test-only: mutable access to the Performance-mode footer selection,
+    /// so a persistence test can seed a tuning / capo before serializing.
+    #[doc(hidden)]
+    pub fn test_performance_mut(&mut self) -> &mut crate::state::PerformanceState {
+        &mut self.performance
+    }
+
+    /// Test-only: replay just the Performance-mode footer block of a saved
+    /// [`crate::project::ProjectFile`] into this app, exercising the same
+    /// restore path a full project load runs (ba todo #312).
+    #[doc(hidden)]
+    pub fn test_restore_performance(&mut self, file: &crate::project::ProjectFile) {
+        crate::update::project_io::restore_performance(self, file);
     }
 
     /// Test-only: fold an engine event into app state, exercising the same
@@ -354,6 +431,14 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_push_clip(&mut self, clip: state::ClipState) {
         self.clips.push(clip);
+    }
+
+    /// Test-only: read the GUI-side automation state (mirrored lanes +
+    /// transient live values). Used by the engine-event mirroring tests
+    /// to assert lane reconstruction and live-value tracking.
+    #[doc(hidden)]
+    pub fn test_automation(&self) -> &state::AutomationState {
+        &self.automation
     }
 
     /// Test-only: force the transport's recording flag so a test can render
@@ -403,6 +488,25 @@ impl Resonance {
         self.transport.playhead
     }
 
+    /// Test-only: the currently selected arrangement-marker id. Driven by
+    /// the ruler hit-testing / `MarkerUiMessage::Select` (todo #369).
+    #[doc(hidden)]
+    pub fn test_selected_marker_id(&self) -> Option<u64> {
+        self.interaction.selected_marker_id
+    }
+
+    /// Test-only: the open marker context menu, if any (todo #369).
+    #[doc(hidden)]
+    pub fn test_marker_menu(&self) -> Option<&state::MarkerMenuState> {
+        self.interaction.marker_menu.as_ref()
+    }
+
+    /// Test-only: the in-progress inline marker rename, if any (todo #369).
+    #[doc(hidden)]
+    pub fn test_marker_rename(&self) -> Option<&state::MarkerRenameState> {
+        self.interaction.marker_rename.as_ref()
+    }
+
     /// Test-only: the transport loop range / enabled flags
     /// `(loop_in, loop_out, loop_enabled)`. `LoopToRegion` sets these in
     /// lockstep with the `SetLoopRange` command sent to the engine.
@@ -413,6 +517,14 @@ impl Resonance {
             self.transport.loop_out,
             self.transport.loop_enabled,
         )
+    }
+
+    /// Test-only: whether the arrangement-markers overview popover is open
+    /// (todo #370). Toggled by `UiMessage::ToggleMarkersOverview` and
+    /// dismissed by `UiMessage::CloseMarkersOverview`.
+    #[doc(hidden)]
+    pub fn test_markers_overview_open(&self) -> bool {
+        self.mixer.markers_overview_open
     }
 
     /// Test-only: which audio clip's vocal pitch editor is open, if any
@@ -443,6 +555,30 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_snapshot_for_undo(&self) -> crate::undo::UndoSnapshot {
         self.snapshot_for_undo()
+    }
+
+    /// Test-only: borrow the undo history, so the import-placement tests
+    /// can assert a single pre-import entry was recorded (ba todo #598).
+    #[doc(hidden)]
+    pub fn test_undo_history(&self) -> &crate::undo::UndoHistory {
+        &self.undo
+    }
+
+    /// Test-only: number of import placements still awaiting their
+    /// `AssetImported` event (ba todo #598).
+    #[doc(hidden)]
+    pub fn test_pending_import_count(&self) -> usize {
+        self.pool_import.len()
+    }
+
+    /// Test-only: restore a previously captured snapshot, exercising the
+    /// fast (`try_diff_replay`) restore path when the snapshot is
+    /// structure-identical to the current state. Used to prove that an
+    /// undo/redo of a scalar clip edit (e.g. fade/gain) is applied
+    /// surgically without a full reload (todo #321, doc #156).
+    #[doc(hidden)]
+    pub fn test_begin_restore_from_snapshot(&mut self, snapshot: crate::undo::UndoSnapshot) {
+        self.begin_restore_from_snapshot(snapshot);
     }
 
     /// Test-only: apply the runtime-only undo extras, exercising the
@@ -572,6 +708,18 @@ impl Resonance {
         self.apply_freeze_restore(target);
     }
 
+    /// Test-only: drive the clip fade/gain undo re-apply directly with a
+    /// target map, exercising `apply_clip_fade_gain_restore` (the shared
+    /// re-sync used by both restore paths) without the full
+    /// snapshot/replay pipeline. Mirrors `test_apply_freeze_restore`.
+    #[doc(hidden)]
+    pub fn test_apply_clip_fade_gain_restore(
+        &mut self,
+        map: &std::collections::HashMap<resonance_audio::types::ClipId, crate::undo::ClipFadeGain>,
+    ) {
+        self.apply_clip_fade_gain_restore(map);
+    }
+
     /// Test-only: the current project path. `None` for an untitled project
     /// (including one freshly instantiated from a template).
     #[doc(hidden)]
@@ -585,4 +733,476 @@ impl Resonance {
         self.io.has_active_project
     }
 
+    // ---- Media pool (doc #175) ---------------------------------------
+
+    /// Test-only: borrow the media pool so persistence / mirror tests can
+    /// assert the restored asset list, missing flags, usage counts, and
+    /// favourite / recent folder lists.
+    #[doc(hidden)]
+    pub fn test_pool(&self) -> &crate::state::MediaPool {
+        &self.pool
+    }
+
+    /// Test-only: add an imported asset to the pool (and refresh usage),
+    /// standing in for the import-to-pool orchestration (ba todo #598)
+    /// so a persistence test can seed a pool before serializing.
+    #[doc(hidden)]
+    pub fn test_add_pool_asset(&mut self, asset: crate::state::PoolAsset) {
+        self.add_pool_asset(asset);
+    }
+
+    /// Test-only: remove an asset from the pool, returning it if present.
+    #[doc(hidden)]
+    pub fn test_remove_pool_asset(
+        &mut self,
+        id: resonance_audio::types::AssetId,
+    ) -> Option<crate::state::PoolAsset> {
+        self.remove_pool_asset(id)
+    }
+
+    /// Test-only: point a clip at a pool asset (or clear the link with
+    /// `None`) and refresh usage, standing in for the placement /
+    /// relink handlers (ba todos #598 / #600).
+    #[doc(hidden)]
+    pub fn test_relink_clip(
+        &mut self,
+        clip_id: resonance_audio::types::ClipId,
+        asset_id: Option<resonance_audio::types::AssetId>,
+    ) {
+        self.relink_clip(clip_id, asset_id);
+    }
+
+    /// Test-only: replay just the media-pool block of a saved
+    /// [`crate::project::ProjectFile`] into this app, resolving relative
+    /// asset paths against `project_dir`. Exercises the same restore path
+    /// a full project load runs (missing-file flagging, usage recompute)
+    /// without constructing a whole `LoadedProject`.
+    #[doc(hidden)]
+    pub fn test_restore_pool(
+        &mut self,
+        file: &crate::project::ProjectFile,
+        project_dir: &std::path::Path,
+    ) {
+        crate::update::project_io::restore_pool(self, file, project_dir);
+    }
+
+    /// Test-only: borrow the persisted app settings so a test can assert
+    /// the media-browser favourites / recent folders that
+    /// [`Self::test_sync_media_browser_settings`] wrote.
+    #[doc(hidden)]
+    pub fn test_settings(&self) -> &crate::settings::AppSettings {
+        &self.settings
+    }
+
+    /// Test-only: mirror the pool's favourites / recent folders into app
+    /// settings *without* writing to disk (doc #175). Pairs with
+    /// [`Self::test_settings`] to assert the synced lists in a hermetic
+    /// test — unlike [`Self::test_persist_media_browser_settings`], this
+    /// never touches the real `config_dir()`.
+    #[doc(hidden)]
+    pub fn test_sync_media_browser_settings(&mut self) {
+        self.sync_media_browser_settings();
+    }
+
+    /// Test-only: mirror the pool's favourites / recent folders into app
+    /// settings and persist them to disk (doc #175), standing in for the
+    /// browser favourite/recent handlers (ba todo #599). Writes to the
+    /// real `config_dir()`, so prefer [`Self::test_sync_media_browser_settings`]
+    /// in tests that only need to assert the in-memory document.
+    #[doc(hidden)]
+    pub fn test_persist_media_browser_settings(&mut self) {
+        self.persist_media_browser_settings();
+    }
+
+    /// Test-only: pin a favourite folder on the pool, standing in for the
+    /// browser's favourite toggle (ba todo #599).
+    #[doc(hidden)]
+    pub fn test_pool_add_favourite(&mut self, path: std::path::PathBuf) {
+        self.pool.add_favourite(path);
+    }
+
+    /// Test-only: record a most-recently-visited folder on the pool,
+    /// standing in for the browser's navigation handler (ba todo #599).
+    #[doc(hidden)]
+    pub fn test_pool_push_recent(&mut self, path: std::path::PathBuf) {
+        self.pool.push_recent_folder(path);
+    }
+
+    /// Test-only: borrow the transient media-browser state so navigation /
+    /// filter / audition handler tests (ba todo #599) can assert the
+    /// current folder, cached scan, filter, tab, and audition transport.
+    #[doc(hidden)]
+    pub fn test_browser(&self) -> &crate::state::BrowserState {
+        &self.browser
+    }
+
+    /// Test-only: borrow one pool asset by id, so relink tests (ba todo
+    /// #600) can assert an asset's missing flag and refreshed metadata.
+    #[doc(hidden)]
+    pub fn test_pool_asset(
+        &self,
+        id: resonance_audio::types::AssetId,
+    ) -> Option<&crate::state::pool::PoolAsset> {
+        self.pool.asset(id)
+    }
+
+    /// Test-only: borrow the transient relink state so relink handler
+    /// tests (ba todo #600) can assert in-flight bookkeeping and the last
+    /// relink error without poking at the `pub(crate)` field.
+    #[doc(hidden)]
+    pub fn test_relink(&self) -> &crate::state::RelinkState {
+        &self.relink
+    }
+
+    // ---- Drag-to-timeline placement (doc #175, todo #605) ------------
+
+    /// Test-only: borrow the in-flight drag-placement state so gesture /
+    /// render tests can assert the drag pill / lit lane / ghost / tooltip
+    /// inputs (the dragged asset, cursor, and resolved drop target).
+    #[doc(hidden)]
+    pub fn test_drag_placement(&self) -> Option<&crate::state::DragPlacement> {
+        self.drag_placement.as_ref()
+    }
+
+    /// Test-only: install an in-flight drag directly, standing in for the
+    /// browser-row press + pointer moves so a golden-image snapshot can
+    /// render a deterministic drag state without simulating the gesture.
+    #[doc(hidden)]
+    pub fn test_set_drag_placement(&mut self, drag: crate::state::DragPlacement) {
+        self.drag_placement = Some(drag);
+    }
+
+    /// Test-only: read the external-instrument state mirror for a track, if
+    /// it's in external-instrument mode. Used by the external-instrument
+    /// reducer tests to assert config + offline-flag mutations.
+    #[doc(hidden)]
+    pub fn test_external_instrument(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<state::ExternalInstrumentState> {
+        self.external_instruments.get(&track_id).cloned()
+    }
+
+    /// Test-only: layer extra device definitions from `dir` into the device
+    /// registry, exactly as the user `device_definitions` folder is scanned at
+    /// startup. Lets a persistence test register a user-authored preset without
+    /// a real user data dir. (epic #40, doc #201 §5.)
+    #[doc(hidden)]
+    pub fn test_scan_device_dir(&mut self, dir: &std::path::Path) {
+        self.device_registry.scan_dir(dir);
+    }
+
+    /// Test-only: derive the lifecycle [`state::ExternalInstrumentStatus`] for
+    /// a track from its external-instrument state + owning `TrackState`.
+    /// `None` when the track isn't external or doesn't exist.
+    #[doc(hidden)]
+    pub fn test_external_instrument_status(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<state::ExternalInstrumentStatus> {
+        let ext = self.external_instruments.get(&track_id)?;
+        let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
+        Some(ext.status(track))
+    }
+
+    /// Test-only: compute the Mixer Inspector's lazy-region fingerprint for a
+    /// track, exactly as `view()` does (same collapse state, same track). The
+    /// inspector's onboarding card and device-offline alert render *inside*
+    /// the `lazy(fp, …)` region, so this hash MUST change whenever any state
+    /// those bodies depend on changes — otherwise the retained UI reuses a
+    /// stale tree across an offline/recovery transition and the alert never
+    /// appears (or never clears). Regression guard for ba todo #459.
+    /// `None` when the track doesn't exist.
+    #[doc(hidden)]
+    pub fn test_inspector_fingerprint(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<u64> {
+        let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
+        let routing_collapsed = self
+            .mixer
+            .collapsed_inspector_groups
+            .contains(&state::MixerInspectorGroup::Routing);
+        let chain_collapsed = self
+            .mixer
+            .collapsed_inspector_groups
+            .contains(&state::MixerInspectorGroup::Chain);
+        Some(crate::view::mixer::inspector::inspector_fingerprint(
+            self,
+            track,
+            routing_collapsed,
+            chain_collapsed,
+        ))
+    }
+
+    /// Test-only: capture the current undo snapshot's runtime extras (the
+    /// part of an undo entry that the `ProjectFile` shape doesn't carry,
+    /// including external-instrument config). Lets a reducer test prove the
+    /// external-instrument config is captured for undo without standing up
+    /// the async engine replay loop.
+    #[doc(hidden)]
+    pub fn test_snapshot_undo_extras(&self) -> crate::undo::UndoExtras {
+        self.snapshot_for_undo().extras
+    }
+
+    /// Test-only: drive the GUI external-instrument map (and engine) back to
+    /// `extras`, the same restore path both undo replays use. Pairs with
+    /// [`Self::test_snapshot_undo_extras`] to exercise a config round-trip.
+    #[doc(hidden)]
+    pub fn test_restore_external_instruments(&mut self, extras: &crate::undo::UndoExtras) {
+        self.restore_external_instruments(extras);
+    }
+
+    // ---- Import-progress tracker (doc #175, ba todo #597 / #606) ----------
+
+    /// Test-only: borrow the per-file import-progress tracker so tests can
+    /// assert that `ImportProgress` / `ImportFailed` engine events update it
+    /// correctly, without touching the private field directly.
+    #[doc(hidden)]
+    pub fn test_import_progress(&self) -> &state::ImportProgressTracker {
+        &self.import_progress
+    }
+
+    /// Test-only: whether the audio-import transcode-progress modal is
+    /// currently open (ba todo #606). Set to `true` when an import batch
+    /// is initiated and cleared by `DismissImportProgress`.
+    #[doc(hidden)]
+    pub fn test_import_progress_modal_open(&self) -> bool {
+        self.import_progress_modal_open
+    }
+
+    /// Test-only: directly open or close the import-progress modal without
+    /// driving a full import, so snapshot and behavioural tests can set up
+    /// a deterministic modal state.
+    #[doc(hidden)]
+    pub fn test_set_import_progress_modal_open(&mut self, open: bool) {
+        self.import_progress_modal_open = open;
+    }
+
+    /// Test-only: borrow the audition transport state (playing row, scrub
+    /// playhead position) so tests for `AuditionPosition` / `AuditionStopped`
+    /// mirroring (ba todo #597) can assert without reading the private field.
+    #[doc(hidden)]
+    pub fn test_audition(&self) -> &state::AuditionState {
+        &self.browser.audition
+    }
+
+    /// Test-only: directly set the audition `playing` row, standing in for
+    /// the browser `Play` message handler so `AuditionStopped` mirror tests
+    /// have a pre-existing playing state to clear.
+    #[doc(hidden)]
+    pub fn test_set_audition_playing(&mut self, path: Option<std::path::PathBuf>) {
+        self.browser.audition.playing = path;
+    }
+
+    /// Test-only: read the current error message banner, if any.
+    #[doc(hidden)]
+    pub fn test_error_message(&self) -> Option<&str> {
+        self.error_message.as_deref()
+    }
+
+    /// Test-only: returns `true` when a user-facing error message has been
+    /// set (i.e. `error_message` is `Some`). Used by import-gate tests that
+    /// need to confirm the app showed an error without reading private fields.
+    #[doc(hidden)]
+    pub fn test_error_message_is_set(&self) -> bool {
+        self.error_message.is_some()
+    }
+
+    /// Test-only: the ordered automation-parameter-picker labels the mixer
+    /// strip for `track_id` would show (epic #40, doc #201 §5). Resolves the
+    /// track's selected external-instrument device preset to its definition's
+    /// named params exactly as the strip view does, so a test can assert the
+    /// device params appear (grouped) only when a preset is selected and are
+    /// hidden otherwise. A closed `pick_list` renders only its placeholder,
+    /// so this mirrors the option list the dropdown would present.
+    #[doc(hidden)]
+    pub fn test_automation_picker_labels(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Vec<String> {
+        let device_params: &[resonance_common::DeviceParam] = self
+            .external_instruments
+            .get(&track_id)
+            .and_then(|ext| ext.device_id.as_deref())
+            .and_then(|id| self.device_registry.get(id))
+            .map(|def| def.params.as_slice())
+            .unwrap_or(&[]);
+        let plugins = self
+            .registry
+            .tracks
+            .iter()
+            .find(|t| t.id == track_id)
+            .map(|t| t.plugins.as_slice())
+            .unwrap_or(&[]);
+        crate::view::mixer::automation::track_choice_labels(track_id, plugins, device_params)
+    }
+
+    /// Test-only: replay a [`crate::project::ProjectFile`] into this app as
+    /// if it had just been loaded from disk, rebuilding GUI state and
+    /// re-issuing engine commands. `midi_notes` are taken as empty (tests
+    /// that need notes can extend this); the project dir is a placeholder
+    /// since lane/transport replay needs no on-disk files.
+    #[doc(hidden)]
+    pub fn test_replay_loaded_project(&mut self, file: crate::project::ProjectFile) {
+        let loaded = crate::project::LoadedProject {
+            file,
+            project_dir: std::path::PathBuf::from("/tmp/resonance-test-project.rproj"),
+            midi_notes: std::collections::HashMap::new(),
+            plugin_states: std::collections::HashMap::new(),
+        };
+        crate::update::project_io::replay_loaded_project(self, Box::new(loaded));
+    }
+
+    /// Test-only: return the `id`s of every definition currently in the
+    /// device-definition registry (bundled + user), in registry order. Used
+    /// to assert that a `RescanDefinitions` dispatch picks up new files.
+    #[doc(hidden)]
+    pub fn test_device_registry_ids(&self) -> Vec<String> {
+        self.device_registry
+            .list()
+            .iter()
+            .map(|d| d.id.clone())
+            .collect()
+    }
+
+    /// Test-only: scan a user-definitions directory directly into the device
+    /// registry and rebuild the cached pick-list options, bypassing
+    /// `user_definitions_dir()` (which depends on `$XDG_DATA_HOME`). Used by
+    /// tests that need to verify re-scan behaviour without touching the real
+    /// user data directory.
+    #[doc(hidden)]
+    pub fn test_rescan_definitions_from(&mut self, user_dir: &std::path::Path) {
+        let mut registry = resonance_common::DeviceDefinitionRegistry::default();
+        registry.scan_bundled();
+        registry.scan_dir(user_dir);
+        self.view_caches.rebuild_device_choices(&registry.list());
+        self.device_registry = registry;
+    }
+
+    /// Test-only: return the ids offered by the device-preset pick-list cache
+    /// (the `device_choices` options), excluding the `None` "(no device)"
+    /// entry. Useful to assert that the cache is in sync with the registry
+    /// after a re-scan.
+    #[doc(hidden)]
+    pub fn test_device_choice_ids(&self) -> Vec<String> {
+        self.view_caches
+            .device_choices
+            .iter()
+            .filter_map(|c| c.id.clone())
+            .collect()
+    }
+
+    /// Test-only: read the Arrange multi-track selection set, in click
+    /// order. Drives `tests/group_creation_from_selection.rs`.
+    #[doc(hidden)]
+    pub fn test_selected_tracks(&self) -> &[resonance_audio::types::TrackId] {
+        &self.interaction.selected_tracks
+    }
+
+    /// Test-only: borrow the track-group registry so a reducer test can
+    /// assert that "Group selected" created the expected group.
+    #[doc(hidden)]
+    pub fn test_track_groups(&self) -> &state::TrackGroupRegistry {
+        &self.track_groups
+    }
+
+    /// Test-only: the root group id a track resolves to for mixer
+    /// clustering (walking up one level of nesting), or `None` when the
+    /// track is ungrouped. Drives `tests/mixer_group_clustering.rs`.
+    #[doc(hidden)]
+    pub fn test_mixer_root_group_of(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<resonance_audio::types::TrackId> {
+        self.mixer_root_group_of(track_id).map(|g| g.id)
+    }
+
+    /// Test-only: borrow the active drag-and-drop membership drag (todo
+    /// #685), so a reducer test can assert it opens on a grab, tracks the
+    /// hovered target, and clears on drop / cancel.
+    #[doc(hidden)]
+    pub fn test_membership_drag(&self) -> Option<&state::MembershipDragState> {
+        self.interaction.membership_drag.as_ref()
+    }
+
+    /// Test-only: seed the Arrange multi-track selection directly, bypassing
+    /// the per-click `SelectTrack` plumbing.
+    #[doc(hidden)]
+    pub fn test_set_selected_tracks(&mut self, ids: Vec<resonance_audio::types::TrackId>) {
+        self.interaction.selected_track = ids.last().copied();
+        self.interaction.selected_tracks = ids;
+    }
+
+    /// Test-only: render the standalone group-header row component
+    /// (todo #680) so `tests/group_header.rs` can snapshot it without the
+    /// component being wired into the live timeline column yet (#681/#686).
+    #[doc(hidden)]
+    pub fn test_group_header_view(
+        &self,
+        group: &resonance_common::track_group::TrackGroup,
+        member_count: usize,
+    ) -> iced::Element<'static, crate::message::Message> {
+        crate::view::track_header::group_header::view_group_header(group, member_count)
+    }
+
+
+    /// Test-only: mutable borrow of the track-group registry so tests can
+    /// set up group state (todo #688).
+    #[doc(hidden)]
+    pub fn test_track_groups_mut(&mut self) -> &mut state::TrackGroupRegistry {
+        &mut self.track_groups
+    }
+
+    /// Test-only: build the shared arrange-row layout exactly as the
+    /// track-header column does (sorted arrange tracks + the collapse-aware
+    /// registry). Drives `tests/group_creation_from_selection.rs`'
+    /// end-to-end fold check: after a `ToggleCollapse` the collapsed
+    /// group's member rows must vanish from the layout while its header row
+    /// remains, since both the column and the canvas render from this one
+    /// layout (todo #686, doc #203).
+    #[doc(hidden)]
+    pub fn test_arrange_row_layout(&self) -> crate::view::arrange_layout::ArrangeRowLayout {
+        let sorted: Vec<&state::TrackState> = self
+            .sorted_tracks()
+            .iter()
+            .filter(|t| t.sub_track.is_none())
+            .collect();
+        crate::view::arrange_layout::ArrangeRowLayout::build(&sorted, &self.track_groups)
+    }
+
+    /// Test-only: render a standalone track-header cell for a member
+    /// track (todo #688) so tests can snapshot the "via group" solo chip.
+    #[doc(hidden)]
+    pub fn test_track_header_view(
+        &self,
+        track: &state::TrackState,
+    ) -> iced::Element<'static, crate::message::Message> {
+        crate::view::track_header::track::view_track_header(self, track, false)
+    }
+
+    /// Test-only: render the floating "N tracks selected · Group ⌘G" bar
+    /// (todo #684) so `tests/selection_bar.rs` can snapshot it standalone.
+    #[doc(hidden)]
+    pub fn test_selection_bar_view(&self, count: usize) -> iced::Element<'static, crate::message::Message> {
+        crate::view::selection_bar::selection_bar_with_count(count)
+    }
+
+    /// Test-only: resolve the arrange-canvas drag-drop target lane under a
+    /// canvas-Y. Drives `tests/timeline_group_hit_test.rs`' coverage that a
+    /// clip dragged over a group-header lane (or a collapsed member's hidden
+    /// row) resolves to no track, while a track lane resolves correctly
+    /// under the mixed 60/96 px pitch (epic #36, doc #203, todo #732).
+    #[doc(hidden)]
+    pub fn test_track_id_at_arrange_y(&self, y: f32) -> Option<resonance_audio::types::TrackId> {
+        self.track_id_at_arrange_y(y)
+    }
+
+    /// Test-only: the fixed arrange-header height (ruler + section band +
+    /// global-tracks shelf) above the first track lane, so tests can build
+    /// canvas-Y coordinates that match the live layout.
+    #[doc(hidden)]
+    pub fn test_arrange_header_offset(&self) -> f32 {
+        self.arrange_header_offset()
+    }
 }

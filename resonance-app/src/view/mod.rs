@@ -2,21 +2,29 @@
 /// lives here; concrete surfaces are in sibling modules (transport,
 /// mixer, compose, track_header, menus, settings, editor_panel,
 /// timeline_panel, timeline, piano_roll, midi_editor).
+pub mod arrange_layout;
 pub(crate) mod bounce_dialog;
+pub(crate) mod browser;
+pub(crate) mod clip_inspector;
 pub(crate) mod export_dialog;
 pub(crate) mod bounce_progress;
-pub(crate) mod compose;
+pub mod compose;
 pub(crate) mod confirm_delete_track;
 pub(crate) mod confirm_quit;
 pub(crate) mod controls;
 pub(crate) mod editor_panel;
 pub(crate) mod import_dialog;
+pub(crate) mod import_progress_dialog;
 pub(crate) mod knob;
+pub(crate) mod markers_overview;
 pub(crate) mod menus;
 pub mod midi_editor;
+pub(crate) mod midi_quantize;
 pub(crate) mod mixer;
-pub(crate) mod performance;
+pub(crate) mod relink_dialog;
+pub mod performance;
 pub mod piano_roll;
+pub(crate) mod selection_bar;
 pub(crate) mod settings;
 pub(crate) mod startup;
 pub mod timeline;
@@ -116,14 +124,43 @@ impl crate::Resonance {
             stack![base, export_dialog::view_export_dialog_overlay(self)].into()
         } else if self.import_dialog.is_some() {
             stack![base, import_dialog::view_import_dialog_overlay(self)].into()
+        } else if self.import_progress_modal_open {
+            // Audio-import transcode-progress modal (doc #175, todo #606):
+            // shown while the engine copies / transcodes the selected audio
+            // files into the project folder. Dismissed once all files settle.
+            stack![
+                base,
+                import_progress_dialog::view_import_progress_overlay(self)
+            ]
+            .into()
+        } else if self.relink.modal_open && !self.relink.modal_targets.is_empty() {
+            // Missing-files relink modal (doc #175, todo #607): surfaced on
+            // load when the project references audio that's gone, and
+            // re-openable from the Pool tab's inline `relink` chip.
+            stack![base, relink_dialog::view_relink_dialog_overlay(self)].into()
         } else if self.mixer.settings_open {
             stack![base, settings::view_settings_overlay(self)].into()
         } else if self.mixer.add_track_menu_open {
             stack![base, menus::view_add_track_menu(self)].into()
+        } else if self.mixer.markers_overview_open {
+            stack![base, markers_overview::view_markers_overview_overlay(self)].into()
         } else if self.compose.drumroll.manager_open
             && matches!(self.view_mode, ViewMode::Compose)
         {
             stack![base, compose::drum_groups_manager::view(self)].into()
+        } else if self.interaction.marker_menu.is_some()
+            || self.interaction.marker_rename.is_some()
+        {
+            // Arrangement-marker context menu / inline rename float above the
+            // arrange timeline (todo #369). Only reachable from the ruler, so
+            // guarding on the state alone is enough.
+            stack![base, menus::view_marker_overlay(self)].into()
+        } else if matches!(self.view_mode, ViewMode::Arrange)
+            && self.interaction.selected_tracks.len() >= 2
+        {
+            // Floating "Group selected" bar — non-modal, so it layers over
+            // the arrange view without blocking it (todo #684).
+            stack![base, selection_bar::view_selection_bar(self)].into()
         } else {
             base
         }
@@ -133,20 +170,46 @@ impl crate::Resonance {
         let track_headers = track_header::view_track_headers(self);
         let timeline = self.view_timeline();
 
-        let main = row![track_headers, timeline];
+        // The docked media browser (design doc #175) sits flush against the
+        // left edge as a peer of the track headers + timeline, so browsing
+        // and auditioning never obscures the arrangement. Hidden by default;
+        // toggled from the "Media" chrome button / the panel's collapse caret.
+        let main = if self.browser.visible {
+            row![
+                browser::view_browser_panel(self),
+                track_headers,
+                timeline
+            ]
+        } else {
+            row![track_headers, timeline]
+        };
 
-        if let Some(editor) = self.view_midi_editor_panel() {
-            return column![
+        let base: Element<'_, Message> = if let Some(editor) = self.view_midi_editor_panel() {
+            column![
                 container(main).width(Length::Fill).height(Length::Fill),
                 editor,
             ]
             .spacing(0)
-            .into();
-        }
-
-        container(main)
-            .width(Length::Fill)
-            .height(Length::Fill)
             .into()
+        } else {
+            container(main)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        };
+
+        // The clip fade/gain inspector floats over the top-right of the
+        // arrange area for the selected editable audio clip (epic #18).
+        if let Some(flyout) = self.view_clip_inspector_flyout() {
+            let overlay = container(flyout)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(alignment::Horizontal::Right)
+                .align_y(alignment::Vertical::Top)
+                .padding(10);
+            stack![base, overlay].into()
+        } else {
+            base
+        }
     }
 }

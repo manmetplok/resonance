@@ -275,17 +275,22 @@ impl Default for ComposeState {
 
 impl ComposeState {
     /// Recompute the cached [`Self::track_count`] from the track
-    /// registry. Call this whenever tracks are added to / removed from
-    /// `registry.tracks`. Sub-tracks never count (they always carry
-    /// `sub_track`), so plugin-driven sub-track creation doesn't need
-    /// to refresh.
+    /// registry. The count matches exactly what [`sorted_tracks`] in the
+    /// Compose track canvas renders: top-level `Instrument` tracks that
+    /// are NOT drum tracks (those go to the drumroll canvas). Vocal tracks
+    /// are also excluded — they render in the dedicated vocal lane. Call
+    /// this whenever tracks are added to / removed from `registry.tracks`.
+    ///
+    /// [`sorted_tracks`]: crate::view::compose::tracks::ComposeTrackCanvas::sorted_tracks
     pub fn refresh_track_count(&mut self, tracks: &[crate::state::TrackState]) {
         use resonance_audio::types::TrackType;
+        use crate::state::InstrumentType;
         self.track_count = tracks
             .iter()
             .filter(|t| {
-                matches!(t.track_type, TrackType::Instrument | TrackType::Vocal)
+                matches!(t.track_type, TrackType::Instrument)
                     && t.sub_track.is_none()
+                    && t.instrument_type != InstrumentType::Drum
             })
             .count();
     }

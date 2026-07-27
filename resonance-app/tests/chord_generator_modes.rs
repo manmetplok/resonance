@@ -14,6 +14,8 @@
 //!    rotation preview labels are elided with `…` and must still fit
 //!    the 324px rail; the substitution value is echoed in its label.
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::compose::messages::{ChordInspectorMsg, GeneratorKind};
@@ -23,7 +25,7 @@ use resonance_app::state::ViewMode;
 use resonance_app::{demo, theme, Resonance, STARTUP_TAB};
 use resonance_music_theory::SchemaKind;
 
-/// Tall window (same convention as `compose_drum_pattern_picker.rs`) so
+/// Tall window (same convention as `compose_arrangement_strip.rs`) so
 /// the whole Chord generator card sits inside the viewport instead of
 /// behind the rail's scrollbar.
 const TALL_WINDOW: (f32, f32) = (1440.0, 1600.0);
@@ -74,10 +76,7 @@ fn snapshot(app: &Resonance, path: &str) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 /// Default (Markov) state: the GENERATOR dropdown reads "Style table"

@@ -48,10 +48,14 @@ pub struct DrumrollViewState {
     /// In-progress text for the rename input. Mirrors the picker's
     /// `text_input` content.
     pub renaming_pattern_text: String,
-    /// Which arrangement entry is selected — an index into the focused
-    /// section's `arrangement`. Driven by clicking a span in the tiling
-    /// ribbon; consumed by the right-rail Entry inspector. `None` means no
-    /// entry is selected. Transient view state (never persisted); callers
+    /// Selected drum-arrangement entry (index into the focused section's
+    /// [`arrangement`](crate::compose::SectionDefinitionState::arrangement))
+    /// for the right-rail Entry inspector. Set when the user picks an entry
+    /// chip in the arrangement strip, clicks a span in the tiling ribbon,
+    /// or drops a bank pattern (which selects the freshly-added entry).
+    /// `None` means nothing is explicitly selected; the inspector then
+    /// falls back to the first entry so it is never blank while the section
+    /// has an arrangement. Purely editor state — never persisted; callers
     /// must treat a stale index defensively (clamp / re-check against the
     /// current arrangement length, since entries can be added or removed).
     pub selected_entry_index: Option<usize>,

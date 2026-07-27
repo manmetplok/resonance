@@ -52,7 +52,6 @@ fn next_cycles_through_all_and_wraps() {
         seen.push(c);
     }
     assert_eq!(seen, GroupIdentityColor::all());
-    // wraps back to the start
     assert_eq!(c.next(), GroupIdentityColor::default());
 }
 

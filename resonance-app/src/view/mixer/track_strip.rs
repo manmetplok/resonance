@@ -43,6 +43,10 @@ impl crate::Resonance {
         let is_collapsed =
             has_sub_tracks && !self.mixer.expanded_sub_track_parents.contains(&track.id);
 
+        // Calculate indent level for group members using the registry method
+        let indent_level = self.track_groups.indent_depth(track.id);
+        let indent_pixels = indent_level as f32 * theme::GROUP_MEMBER_INDENT;
+
         // Track names that overflow the 140 px strip get an ellipsis so
         // they don't push onto a second line. Wrapping::None alone isn't
         // enough — Iced still wraps when the parent has finite width.
@@ -105,9 +109,23 @@ impl crate::Resonance {
         }
         head_row = head_row.push(head_glyph);
         head_row = head_row.push(name_text);
+        // External-instrument tracks carry a lavender `Ext` pill where a
+        // plain track would (notionally) show its Inst/Audio tag — the
+        // at-a-glance "this strip drives outboard gear" cue from design
+        // doc #169. Presence in `external_instruments` is the only marker
+        // (these tracks have no track-type discriminant).
+        let ext_state = self.external_instruments.get(&track.id);
+        if let Some(ext) = ext_state {
+            head_row = head_row.push(ext_pill());
+            // Offline flag — a small BAD-pink marker in the head when a
+            // configured device is unreachable (doc #169, todo #459).
+            if ext.midi_out_offline || ext.return_input_offline {
+                head_row = head_row.push(offline_flag());
+            }
+        }
         let track_name: Element<'_, Message> = container(head_row)
             .width(Length::Fill)
-            .padding([6, 10])
+            .padding([6.0, 10.0 + indent_pixels])
             .style(strip_head_bg)
             .into();
 
@@ -231,9 +249,42 @@ impl crate::Resonance {
         // instrument slot pill, pan, and the fader.
         let _ = available_plugins;
 
+        // Per-channel automation lane header: parameter picker + Read
+        // toggle (todo #383). Sits above the pan/fader block so the
+        // tinted controls read directly under their lane header.
+        let auto_chan = super::automation::AutoChan::Track(track.id);
+        // Named device params for the automation picker (epic #40, doc #201
+        // §5): resolve the track's selected external-instrument device preset
+        // to its definition's params. Empty (so the picker hides device
+        // params) unless this is an external-instrument track with a preset
+        // selected whose id resolves in the registry.
+        let device_params: &[resonance_common::DeviceParam] = self
+            .external_instruments
+            .get(&track.id)
+            .and_then(|ext| ext.device_id.as_deref())
+            .and_then(|id| self.device_registry.get(id))
+            .map(|def| def.params.as_slice())
+            .unwrap_or(&[]);
+        let auto_header = super::automation::automation_header(
+            &self.automation,
+            auto_chan,
+            &track.plugins,
+            device_params,
+        );
+
         // Pan knob — vertical drag to change, double-click to reset.
+        // Tinted with the live automated pan while a Read-enabled pan
+        // lane drives it during playback.
         let id = track.id;
-        let pan_ctrl = pan_knob(track.pan, move |v| {
+        let pan_live = super::automation::live_value(
+            &self.automation,
+            resonance_common::AutomationTarget::TrackPan(track.id),
+        )
+        .map(|v| resonance_common::lane_value_to_real(
+            &resonance_common::AutomationTarget::TrackPan(track.id),
+            v,
+        ));
+        let pan_ctrl = crate::view::knob::pan_knob_automated(track.pan, pan_live, move |v| {
             Message::Track(TrackMessage::SetTrackPan(id, v))
         });
         let pan_label = format_pan(track.pan);
@@ -250,15 +301,25 @@ impl crate::Resonance {
         .spacing(2)
         .align_y(alignment::Vertical::Center);
 
-        // Just the pan row — the FX picker moved to the Inspector.
+        // Automation lane header above the pan row.
         let fx_pan_block = iced::widget::Column::new()
             .width(Length::Fill)
+            .push(auto_header)
             .push(pan_row);
 
         let track_id_for_fader = track.id;
-        let fader_block = fader_section(track.level_l, track.level_r, track.volume, move |v| {
-            Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
-        });
+        let gain_live = super::automation::live_value(
+            &self.automation,
+            resonance_common::AutomationTarget::TrackGain(track.id),
+        )
+        .map(|v| resonance_common::lane_value_to_real(
+            &resonance_common::AutomationTarget::TrackGain(track.id),
+            v,
+        ));
+        let fader_block =
+            fader_section(track.level_l, track.level_r, track.volume, gain_live, move |v| {
+                Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
+            });
 
         // Input device + port + MIDI routing all live in the Inspector
         // now. The strip stays compact: head, button rows, instrument
@@ -266,19 +327,25 @@ impl crate::Resonance {
         // still have no routing pickers anywhere.
 
         let is_selected = self.interaction.selected_track == Some(track.id);
+        // A configured external device that's gone offline gives the strip a
+        // BAD-pink inset glow so the outage reads at a glance from the mixer
+        // (doc #169, todo #459). The route itself is preserved.
+        let ext_offline = ext_state
+            .map(|e| e.midi_out_offline || e.return_input_offline)
+            .unwrap_or(false);
         let bg = if track.record_armed {
             theme::PANEL_ARMED
         } else {
             theme::BG_2
         };
-        let border_color = if track.record_armed {
+        let border_color = if track.record_armed || ext_offline {
             theme::BAD
         } else if is_selected {
             theme::ACCENT_LINE
         } else {
             theme::LINE_2
         };
-        let border_w = if is_selected || track.record_armed {
+        let border_w = if is_selected || track.record_armed || ext_offline {
             1.0
         } else {
             0.5
@@ -333,16 +400,18 @@ impl crate::Resonance {
                 .count() as u32;
             let right_col_w: f32 = ((subtrack_count.max(1) * 30) + 8) as f32;
 
-            let left_col = column![
-                track_name,
-                button_row,
-                plugin_fill,
-                fx_pan_block,
-                fader_block,
-            ]
-            .spacing(6)
-            .width(theme::MIXER_STRIP_WIDTH - 20.0)
-            .height(Length::Fill);
+            let mut left_col = column![track_name]
+                .spacing(6)
+                .width(theme::MIXER_STRIP_WIDTH - 20.0)
+                .height(Length::Fill);
+            if let Some(ext) = ext_state {
+                left_col = left_col.push(ext_summary_chips(track, ext));
+            }
+            let left_col = left_col
+                .push(button_row)
+                .push(plugin_fill)
+                .push(fx_pan_block)
+                .push(fader_block);
 
             let v_sep = container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
 
@@ -364,17 +433,18 @@ impl crate::Resonance {
             .on_press(Message::Ui(UiMessage::SelectTrack(Some(track_id_for_select))))
             .into()
         } else {
-            let strip_content = column![
-                track_name,
-                button_row,
-                plugin_fill,
-                fx_pan_block,
-                fader_block,
-            ]
-            .spacing(6)
-            .padding([12, 10])
-            .width(theme::MIXER_STRIP_WIDTH)
-            .height(Length::Fill);
+            let mut strip_col = column![track_name].spacing(6);
+            if let Some(ext) = ext_state {
+                strip_col = strip_col.push(ext_summary_chips(track, ext));
+            }
+            let strip_content = strip_col
+                .push(button_row)
+                .push(plugin_fill)
+                .push(fx_pan_block)
+                .push(fader_block)
+                .padding([12, 10])
+                .width(theme::MIXER_STRIP_WIDTH)
+                .height(Length::Fill);
 
             mouse_area(
                 container(strip_content)
@@ -481,9 +551,21 @@ impl crate::Resonance {
         .align_x(alignment::Horizontal::Center);
 
         let track_id_for_fader = track.id;
-        let fader_block = fader_section(track.level_l, track.level_r, track.volume, move |v| {
-            Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
-        });
+        // Sub-track strips are slim children fed from the parent plugin's
+        // fan-out; they carry no automation lane header. Live gain tint
+        // still applies so a Read-enabled lane on the sub-track shows.
+        let gain_live = super::automation::live_value(
+            &self.automation,
+            resonance_common::AutomationTarget::TrackGain(track.id),
+        )
+        .map(|v| resonance_common::lane_value_to_real(
+            &resonance_common::AutomationTarget::TrackGain(track.id),
+            v,
+        ));
+        let fader_block =
+            fader_section(track.level_l, track.level_r, track.volume, gain_live, move |v| {
+                Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
+            });
 
         let is_selected = self.interaction.selected_track == Some(track.id);
 
@@ -629,4 +711,173 @@ fn strip_head_bg(_theme: &iced::Theme) -> container::Style {
         },
         ..Default::default()
     }
+}
+
+/// Lavender `Ext` pill shown in the strip head of an external-instrument
+/// track — the MIDI-domain accent tag from design doc #169 (mirrors the
+/// inspector's `External` badge).
+fn ext_pill() -> Element<'static, Message> {
+    container(
+        text("Ext")
+            .size(8)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::ACCENT_SOFT),
+    )
+    .padding([2, 5])
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::ACCENT_DIM)),
+        border: iced::Border {
+            color: theme::ACCENT_LINE,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+/// Small BAD-pink `offline` flag shown in the strip head when a configured
+/// external device is unreachable (doc #169, todo #459). The route is kept;
+/// this is the at-a-glance outage marker beside the `Ext` pill.
+fn offline_flag() -> Element<'static, Message> {
+    container(
+        text("offline")
+            .size(8)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::BAD),
+    )
+    .padding([2, 5])
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::BAD_DIM)),
+        border: iced::Border {
+            color: theme::BAD_LINE,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+/// The three external-instrument summary chips under the strip head:
+/// **MIDI** (device · channel + activity dot), **Return** (input device ·
+/// channels) and **Patch** (bank/program). Pure function of `TrackState`
+/// (MIDI out / audio return live there) plus the external config — the
+/// same single source of truth the inspector reads, so the two surfaces
+/// can never disagree.
+fn ext_summary_chips(track: &TrackState, ext: &ExternalInstrumentState) -> Element<'static, Message> {
+    // MIDI — device · channel. While the device is offline the route is
+    // preserved (still shown) but flagged, mirroring the inspector.
+    let midi_value = match track.midi_output_device.as_deref() {
+        Some(dev) if ext.midi_out_offline => {
+            format!("{} \u{b7} offline", crate::util::short(dev, 9))
+        }
+        Some(dev) => {
+            let ch = u16::from(track.midi_output_channel.unwrap_or(0)) + 1;
+            format!("{} \u{b7} Ch {}", crate::util::short(dev, 9), ch)
+        }
+        None => "\u{2014}".to_string(),
+    };
+    // Activity dot — the design's pulsing MIDI indicator. #454 carries no
+    // transient MIDI-activity state, so the dot reflects the derived
+    // lifecycle status statically (bright when live, faint when idle,
+    // BAD-pink when the device is offline) rather than animating.
+    let dot_color = match ext.status(track) {
+        ExternalInstrumentStatus::Offline => theme::BAD,
+        ExternalInstrumentStatus::Live => theme::ACCENT,
+        _ => iced::Color {
+            a: 0.35,
+            ..theme::ACCENT
+        },
+    };
+    let midi_chip = strip_chip("MIDI", midi_value, false, Some(dot_color));
+
+    // Return — input device · port label ("In N/N+1"), reusing the
+    // inspector's `PortChoice` formatting.
+    let return_value = match track.input_device_name.as_deref() {
+        Some(dev) => {
+            let port = super::picks::PortChoice {
+                index: track.input_port_index,
+                mono: track.mono,
+            };
+            format!("{} {}", crate::util::short(dev, 8), port)
+        }
+        None => "\u{2014}".to_string(),
+    };
+    let return_chip = strip_chip("Return", return_value, false, None);
+
+    // Patch — bank/program by number (named patches arrive with the
+    // device-preset epic #40).
+    let patch_value = match (ext.bank, ext.program) {
+        (Some(bank), Some(program)) => format!("Bank {} \u{b7} Prog {}", bank, program),
+        (Some(bank), None) => format!("Bank {}", bank),
+        (None, Some(program)) => format!("Prog {}", program),
+        (None, None) => "not set".to_string(),
+    };
+    let patch_chip = strip_chip("Patch", patch_value, true, None);
+
+    column![midi_chip, return_chip, patch_chip]
+        .spacing(5)
+        .width(Length::Fill)
+        .into()
+}
+
+/// One summary chip: a fixed-width uppercase key, an ellipsised value, and
+/// an optional trailing dot (the MIDI-activity indicator). `value_accent`
+/// tints the value lavender for the Patch chip.
+fn strip_chip(
+    key: &'static str,
+    value: String,
+    value_accent: bool,
+    dot: Option<iced::Color>,
+) -> Element<'static, Message> {
+    let value_color = if value_accent {
+        theme::ACCENT_SOFT
+    } else {
+        theme::TEXT_1
+    };
+    let mut inner = row![
+        container(
+            text(key)
+                .size(8)
+                .font(theme::UI_FONT_SEMIBOLD)
+                .color(theme::TEXT_3),
+        )
+        .width(Length::Fixed(30.0)),
+        container(
+            text(value)
+                .size(10)
+                .color(value_color)
+                .wrapping(iced::widget::text::Wrapping::None),
+        )
+        .width(Length::Fill)
+        .clip(true),
+    ]
+    .spacing(6)
+    .align_y(alignment::Vertical::Center);
+    if let Some(color) = dot {
+        inner = inner.push(
+            container(Space::new().width(7).height(7)).style(move |_theme| container::Style {
+                background: Some(iced::Background::Color(color)),
+                border: iced::Border {
+                    radius: 999.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        );
+    }
+    container(inner)
+        .width(Length::Fill)
+        .padding([5, 7])
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_1)),
+            border: iced::Border {
+                color: theme::LINE_2,
+                width: 1.0,
+                radius: theme::RADIUS_XS.into(),
+            },
+            ..Default::default()
+        })
+        .into()
 }
