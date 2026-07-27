@@ -5,7 +5,12 @@
 //! #252 (§2, §5, §8) and the epic #196 architecture doc #253, plus
 //! per-grain pitch (doc #252 §3): playback-rate transposition on an
 //! `f64` phase accumulator, symmetric ± detune spread, an optional
-//! rate-tracked anti-alias lowpass and reverse (negative-rate) grains.
+//! rate-tracked anti-alias lowpass and reverse (negative-rate) grains,
+//! and optional WSOLA-style correlation-aligned grain onsets (doc #252
+//! §4–5): before a grain spawns, a bounded window around its nominal
+//! read position is searched for the lag maximizing normalized
+//! cross-correlation with the natural continuation of the previous
+//! onset, so splices stay phase-coherent with the sounding material.
 //!
 //! The engine is framework-agnostic so it can be shared by the granular
 //! delay (epic #196) and a future granular instrument (epic #75):
@@ -55,6 +60,25 @@ const MIN_GRAIN_SECONDS: f32 = 0.004;
 /// Floor for the expected-overlap compensation so very sparse clouds do
 /// not receive an unbounded gain boost.
 const MIN_EXPECTED_OVERLAP: f32 = 0.05;
+
+/// Hard cap on the onset-alignment search half-window, seconds per
+/// side, bounding the per-spawn correlation cost regardless of
+/// parameter values (doc #252 §4-5: "a small window (a few ms)").
+const MAX_ALIGN_WINDOW_SECONDS: f32 = 0.01;
+
+/// Length of the alignment comparison window, seconds — long enough to
+/// span at least one period of typical pitched material (≥ 250 Hz at
+/// full coverage), short enough to keep the correlator cheap.
+const ALIGN_COMPARE_SECONDS: f32 = 0.004;
+
+/// Coarse-search decimation for the alignment correlator: the first
+/// pass scores every `ALIGN_DECIM`-th lag using every `ALIGN_DECIM`-th
+/// comparison sample; a full-rate pass then refines around the winner.
+const ALIGN_DECIM: usize = 4;
+
+/// Reference-energy floor below which the correlator treats the
+/// sounding material as silence and keeps the nominal onset.
+const ALIGN_ENERGY_FLOOR: f32 = 1e-9;
 
 /// Grain-onset scheduling mode (doc #252 §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -126,6 +150,23 @@ pub struct GrainParams {
     /// quality tier turns this on). The one-pole runs on the resampled
     /// grain stream, attenuating the folded images (doc #252 §3).
     pub anti_alias: bool,
+    /// Enable WSOLA-style correlation-aligned grain onsets (doc #252
+    /// §4-5). Before a grain spawns, the engine searches
+    /// `±align_window_seconds` around its nominal read position for the
+    /// lag maximizing normalized cross-correlation between the
+    /// candidate onset region (read along the new grain's rate) and the
+    /// natural continuation of the previously spawned grain, then snaps
+    /// the onset there. Splices become phase-coherent with the sounding
+    /// material — most of the pitch-synchronous quality benefit with no
+    /// pitch tracker, and it works on polyphonic material. Default off;
+    /// when off, the render path is unchanged (bit-identical output, no
+    /// correlation cost).
+    pub align: bool,
+    /// Half-width of the alignment search window, seconds (clamped to
+    /// `0 ..= 10 ms`). The aligned onset never deviates from the
+    /// nominal position by more than this, and never into the
+    /// write-head collision guard. Only read when `align` is true.
+    pub align_window_seconds: f32,
 }
 
 impl Default for GrainParams {
@@ -145,6 +186,8 @@ impl Default for GrainParams {
             detune_spread_cents: 0.0,
             reverse_probability: 0.0,
             anti_alias: false,
+            align: false,
+            align_window_seconds: 0.005,
         }
     }
 }
@@ -228,6 +271,26 @@ pub struct GrainEngine {
     /// Sign of the next detune offset; alternates per spawned grain so
     /// the detune cloud stays symmetric around the centre pitch.
     detune_sign: f32,
+    /// Full-rate correlation template scratch, pre-allocated in
+    /// [`GrainEngine::new`]: the previous onset's continuation, read
+    /// along its own playback rate. Never resized on the render path.
+    align_template: Vec<f32>,
+    /// Total output samples processed; drives the continuation
+    /// projection of the previous onset to the current onset time.
+    time_samples: f64,
+    /// True once a grain has spawned since construction/reset, i.e. the
+    /// `align_prev_*` fields describe a real onset.
+    align_armed: bool,
+    /// Read position of the most recently spawned grain at its onset.
+    align_prev_pos: f64,
+    /// Playback rate of the most recently spawned grain.
+    align_prev_rate: f64,
+    /// Absolute output-sample time of the most recent onset.
+    align_prev_time: f64,
+    /// Largest |lag| the aligner has applied since construction/reset.
+    max_abs_align_lag: f64,
+    /// Spawns the aligner moved off their nominal onset (nonzero lag).
+    aligned_spawns: u64,
 }
 
 impl GrainEngine {
@@ -246,6 +309,8 @@ impl GrainEngine {
         for (i, slot) in free.iter_mut().enumerate() {
             *slot = i;
         }
+        let compare_len =
+            ((ALIGN_COMPARE_SECONDS * sample_rate).ceil() as usize).max(2 * ALIGN_DECIM);
         Self {
             window: WindowMorph::new(),
             grains: [Grain::INACTIVE; MAX_GRAINS],
@@ -256,6 +321,14 @@ impl GrainEngine {
             next_onset: 0.0,
             spawned: 0,
             detune_sign: 1.0,
+            align_template: vec![0.0; compare_len],
+            time_samples: 0.0,
+            align_armed: false,
+            align_prev_pos: 0.0,
+            align_prev_rate: 1.0,
+            align_prev_time: 0.0,
+            max_abs_align_lag: 0.0,
+            aligned_spawns: 0,
         }
     }
 
@@ -269,6 +342,13 @@ impl GrainEngine {
         self.free_len = MAX_GRAINS;
         self.next_onset = 0.0;
         self.detune_sign = 1.0;
+        self.time_samples = 0.0;
+        self.align_armed = false;
+        self.align_prev_pos = 0.0;
+        self.align_prev_rate = 1.0;
+        self.align_prev_time = 0.0;
+        self.max_abs_align_lag = 0.0;
+        self.aligned_spawns = 0;
     }
 
     /// Number of currently sounding grains (never exceeds
@@ -287,6 +367,20 @@ impl GrainEngine {
     /// Allocation-free inspection aid for metering and tests.
     pub fn active_rates(&self) -> impl Iterator<Item = f64> + '_ {
         self.grains.iter().filter(|g| g.active).map(|g| g.rate)
+    }
+
+    /// Largest onset-alignment lag magnitude applied since
+    /// construction/reset, in samples (0 until the aligner moves a
+    /// grain). Never exceeds the clamped `align_window_seconds` in
+    /// samples — metering/testing aid for the alignment bound.
+    pub fn max_abs_align_lag_samples(&self) -> f64 {
+        self.max_abs_align_lag
+    }
+
+    /// Number of grain onsets the aligner has moved off their nominal
+    /// position since construction/reset (metering/testing aid).
+    pub fn aligned_spawns(&self) -> u64 {
+        self.aligned_spawns
     }
 
     /// Granulate `source` into `out_left` / `out_right` (accumulating).
@@ -330,7 +424,7 @@ impl GrainEngine {
             let base_iot = (self.sample_rate as f64 / params.density_hz as f64).max(1.0);
             while self.next_onset < block_len as f64 {
                 let onset = self.next_onset;
-                self.spawn(source.len(), write_pos, onset, params);
+                self.spawn(source, write_pos, onset, params);
                 let iot = match params.mode {
                     SchedulerMode::Sync => base_iot,
                     SchedulerMode::Async => (base_iot * (0.5 + self.unit() as f64)).max(1.0),
@@ -389,13 +483,15 @@ impl GrainEngine {
                 *free_len += 1;
             }
         }
+        self.time_samples += block_len as f64;
     }
 
     /// Latch a new grain at fractional block offset `onset`. Claims a
     /// free slot; with the pool full it instead steals (see
     /// [`Self::steal`]) and drops this onset.
-    fn spawn(&mut self, source_len: usize, write_pos: f64, onset: f64, params: &GrainParams) {
+    fn spawn(&mut self, source: &[f32], write_pos: f64, onset: f64, params: &GrainParams) {
         let sr = self.sample_rate as f64;
+        let source_len = source.len();
 
         // Grain-latched draws happen unconditionally so the RNG stream
         // does not depend on pool occupancy.
@@ -458,6 +554,31 @@ impl GrainEngine {
         }
         let position = (params.position_seconds as f64 + position_jitter as f64) * sr;
         let offset = position.clamp(d_min, d_max);
+        let head_at_onset = write_pos + onset * advance;
+        let now = self.time_samples + onset;
+
+        // WSOLA-style onset alignment (doc #252 §4-5): snap the read
+        // position to the lag, within the bounded search window, that
+        // maximizes normalized cross-correlation with the natural
+        // continuation of the previous onset. The lag range is
+        // intersected with the head-collision guard, so alignment can
+        // never move a grain into the unsafe region.
+        let mut align_lag = 0.0_f64;
+        if params.align && self.align_armed {
+            let window = (params.align_window_seconds.clamp(0.0, MAX_ALIGN_WINDOW_SECONDS) as f64
+                * sr)
+                .floor();
+            let lo = (-window).max(offset - d_max);
+            let hi = window.min(offset - d_min);
+            if window >= 1.0 && lo <= hi {
+                align_lag = self.correlate_lag(source, head_at_onset - offset, rate, now, lo, hi);
+                self.max_abs_align_lag = self.max_abs_align_lag.max(align_lag.abs());
+                if align_lag != 0.0 {
+                    self.aligned_spawns += 1;
+                }
+            }
+        }
+        let read_pos = head_at_onset - offset + align_lag;
 
         // Equal-power overlap compensation (doc #252 §2): uncorrelated
         // grain loudness grows with sqrt(overlap), so scale each grain
@@ -475,10 +596,9 @@ impl GrainEngine {
         // The fractional part of the onset refines the read position
         // (Beads-style fractional grain starts); the envelope starts at
         // the integer sample `onset as u32`.
-        let head_at_onset = write_pos + onset * advance;
         self.grains[slot] = Grain {
             active: true,
-            read_pos: head_at_onset - offset,
+            read_pos,
             rate,
             dur,
             inv_dur: 1.0 / dur,
@@ -496,6 +616,109 @@ impl GrainEngine {
             aa_state: 0.0,
         };
         self.spawned += 1;
+
+        // Record this onset as the alignment reference for the next
+        // spawn. Kept up to date even with alignment off (pure state,
+        // no RNG draw, no output effect), so enabling it mid-stream
+        // aligns immediately.
+        self.align_prev_pos = read_pos;
+        self.align_prev_rate = rate;
+        self.align_prev_time = now;
+        self.align_armed = true;
+    }
+
+    /// Score integer lags `lo ..= hi` (samples, relative to `cand_pos`)
+    /// and return the one maximizing normalized cross-correlation
+    /// between the candidate onset region — read along the new grain's
+    /// `rate` — and the previous onset's natural continuation projected
+    /// to `now` along its own rate (WSOLA: compare what will sound
+    /// against what is sounding). Two passes bound the cost: a coarse
+    /// pass on every [`ALIGN_DECIM`]-th lag using every
+    /// [`ALIGN_DECIM`]-th comparison sample, then a full-rate
+    /// refinement around the coarse winner. The coarse grid passes
+    /// through lag 0, which is scored first, so an already coherent
+    /// nominal onset (or a silent/degenerate reference) keeps its
+    /// nominal position. Runs entirely on the pre-allocated template
+    /// scratch — no allocation.
+    fn correlate_lag(
+        &mut self,
+        source: &[f32],
+        cand_pos: f64,
+        rate: f64,
+        now: f64,
+        lo: f64,
+        hi: f64,
+    ) -> f64 {
+        let mask = (source.len() - 1) as i64;
+        let n = self.align_template.len();
+
+        // Template: the previously spawned grain's read trajectory,
+        // advanced to this onset time.
+        let t_pos = self.align_prev_pos + self.align_prev_rate * (now - self.align_prev_time);
+        let mut t_energy_full = 0.0_f32;
+        for (j, slot) in self.align_template.iter_mut().enumerate() {
+            let idx = ((t_pos + self.align_prev_rate * j as f64).round() as i64 & mask) as usize;
+            let s = source[idx];
+            *slot = s;
+            t_energy_full += s * s;
+        }
+        if t_energy_full <= ALIGN_ENERGY_FLOOR {
+            return 0.0;
+        }
+        let template: &[f32] = &self.align_template;
+        let mut t_energy_coarse = 0.0_f32;
+        let mut j = 0;
+        while j < n {
+            t_energy_coarse += template[j] * template[j];
+            j += ALIGN_DECIM;
+        }
+
+        // Normalized cross-correlation at an integer lag, evaluated on
+        // every `step`-th comparison sample.
+        let ncc = |lag: i64, step: usize, t_energy: f32| -> f32 {
+            let mut dot = 0.0_f32;
+            let mut c_energy = 0.0_f32;
+            let mut j = 0;
+            while j < n {
+                let idx =
+                    (((cand_pos + lag as f64 + rate * j as f64).round() as i64) & mask) as usize;
+                let c = source[idx];
+                dot += c * template[j];
+                c_energy += c * c;
+                j += step;
+            }
+            dot / (c_energy * t_energy).sqrt().max(1e-12)
+        };
+
+        let lo_i = lo.ceil() as i64;
+        let hi_i = hi.floor() as i64;
+        let step = ALIGN_DECIM as i64;
+        let zero = 0_i64.clamp(lo_i, hi_i);
+        let mut best_lag = zero;
+        let mut best = ncc(zero, ALIGN_DECIM, t_energy_coarse);
+        let mut lag = zero - ((zero - lo_i) / step) * step;
+        while lag <= hi_i {
+            if lag != zero {
+                let s = ncc(lag, ALIGN_DECIM, t_energy_coarse);
+                if s > best {
+                    best = s;
+                    best_lag = lag;
+                }
+            }
+            lag += step;
+        }
+        let mut refined_lag = best_lag;
+        let mut refined = ncc(best_lag, 1, t_energy_full);
+        for lag in (best_lag - step + 1).max(lo_i)..=(best_lag + step - 1).min(hi_i) {
+            if lag != best_lag {
+                let s = ncc(lag, 1, t_energy_full);
+                if s > refined {
+                    refined = s;
+                    refined_lag = lag;
+                }
+            }
+        }
+        refined_lag as f64
     }
 
     /// Pool-full policy: force the live grain nearest completion into
