@@ -5166,10 +5166,12 @@ dependencies = [
 name = "resonance-granular-delay"
 version = "0.1.0"
 dependencies = [
+ "egui",
  "resonance-common",
  "resonance-dsp",
  "resonance-music-theory",
  "resonance-plugin",
+ "wayland-plugin-gui",
 ]
 
 [[package]]

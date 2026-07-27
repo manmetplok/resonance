@@ -9,12 +9,13 @@ crate-type = ["cdylib", "lib"]
 
 [features]
 default = ["editor"]
-# Editor stub only for now — the real editor ships with ba todo #1079
-# (epic #196) and will add the wayland-plugin-gui / egui dependencies.
-editor = []
+editor = ["dep:wayland-plugin-gui", "dep:egui"]
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
 resonance-music-theory = { path = "../../resonance-music-theory" }
+
+wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+egui = { workspace = true, optional = true }

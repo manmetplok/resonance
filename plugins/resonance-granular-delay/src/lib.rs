@@ -27,23 +27,35 @@ pub mod params;
 pub mod pitch_sync;
 pub mod quantize;
 pub mod sync;
+pub mod viz;
 
+// Public so the group/label tables get unit tests
+// (tests/editor_groups.rs); the factory is only consumed through
+// `editor_factory` below.
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 
 use dsp::GranularDsp;
 use params::{GranularDelayParams, GranularSmoothers, PARAM_COUNT};
+use viz::GranularViz;
 
 pub struct ResonanceGranularDelay {
     pub params: Arc<GranularDelayParams>,
     smoothers: GranularSmoothers,
+    viz: Arc<GranularViz>,
     dsp: Option<GranularDsp>,
     sample_rate: f32,
 }
 
 impl ResonanceGranularDelay {
+    /// Shared editor metering state (read by the editor each frame;
+    /// exposed for tests, ba todo #1079).
+    pub fn viz(&self) -> &GranularViz {
+        &self.viz
+    }
+
     /// Total grains spawned since activation (metering aid; exposed for
-    /// tests and the future editor, ba todo #1079).
+    /// tests and the editor, ba todo #1079).
     pub fn grains_spawned(&self) -> u64 {
         self.dsp.as_ref().map_or(0, GranularDsp::grains_spawned)
     }
@@ -147,6 +159,7 @@ impl ResonancePlugin for ResonanceGranularDelay {
         Self {
             params: Arc::new(GranularDelayParams::default()),
             smoothers: GranularSmoothers::new(),
+            viz: GranularViz::new(),
             dsp: None,
             sample_rate: 48_000.0,
         }
@@ -262,6 +275,32 @@ impl ResonancePlugin for ResonanceGranularDelay {
         };
 
         dsp.process_block(left, right, frames, &mut self.smoothers, &block);
+
+        // Block-rate editor metering (ba todo #1079): relaxed atomic
+        // stores only — allocation-free, covered by the audio-path
+        // no-allocation guards.
+        let period = dsp.tracked_period_samples();
+        let period_hz = if period > 0.0 {
+            self.sample_rate / period
+        } else {
+            0.0
+        };
+        self.viz.store_block(
+            dsp.effective_delay_seconds() * 1000.0,
+            tempo.map_or(0.0, |t| t.bpm),
+            period_hz,
+            dsp.pitch_sync_engaged(),
+            dsp.active_grains(),
+            dsp.psola_active_voices(),
+        );
+    }
+
+    #[cfg(feature = "editor")]
+    fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
+        Some(Arc::new(editor::GranularEditorFactory::new(
+            self.params.clone(),
+            self.viz.clone(),
+        )))
     }
 }
 
