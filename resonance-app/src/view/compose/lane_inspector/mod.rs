@@ -13,6 +13,7 @@ use resonance_music_theory::TableRegistry;
 
 use std::collections::HashSet;
 
+use crate::compose::drumroll::DrumPattern;
 use crate::compose::{
     ComposeMessage, DrumGroup, DrumrollViewState, RailPanelKey, SectionDefinitionState,
     SelectedLane,
@@ -128,6 +129,7 @@ pub fn view<'a>(
     tracks: &'a [TrackState],
     drumroll_state: &'a DrumrollViewState,
     drum_groups: &'a [DrumGroup],
+    drum_patterns: &'a [DrumPattern],
     clip_id_for_drum: Option<u64>,
     table_registry: &'a TableRegistry,
     vocal_bulk_lyrics: &'a HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
@@ -178,6 +180,7 @@ pub fn view<'a>(
                     t,
                     drumroll_state,
                     drum_groups,
+                    drum_patterns,
                     clip_id_for_drum,
                     collapsed_panels,
                 ),

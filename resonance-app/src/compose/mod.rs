@@ -20,9 +20,10 @@ mod state;
 mod tests;
 
 pub use arrangement::{
-    resolve_arrangement, ArrangementCoverage, ArrangementSpan, ResolvedArrangement,
+    entry_span_label, entry_stepper_label, entry_stepper_value, resolve_arrangement,
+    step_entry_length, ArrangementCoverage, ArrangementSpan, ResolvedArrangement,
 };
-pub use drumroll::{DrumGroup, DrumPattern, DrumrollViewState};
+pub use drumroll::{DrumGroup, DrumGroupPad, DrumPattern, DrumrollViewState};
 pub use expression::{Breakpoint, CurveStatus, ExpressionCurve, ExpressionCurves};
 pub use generate::{DeriveKind, GenerateParams};
 pub use lane_generator::{

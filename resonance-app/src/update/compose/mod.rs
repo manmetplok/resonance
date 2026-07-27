@@ -26,12 +26,23 @@ mod section;
 mod vocal_lyrics;
 mod vocal_render;
 
+/// Pure drum-note builder — exposed so integration tests in `tests/` can
+/// assert the materialized `MidiNote` sequence for an arrangement's
+/// resolved spans without booting a whole `Resonance`.
+pub use drum_groups::build_drum_notes;
+
 pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
     let time_sig_num = r.transport.time_sig_num;
 
     match msg {
         ComposeMessage::DrumGroups(m) => return drum_groups::handle(r, m),
         ComposeMessage::Arrangement(m) => return drum_groups::handle_arrangement(r, m),
+
+        // Tiling-ribbon span selection — pure view state, drives the
+        // right-rail Entry inspector. No mutation, no undo.
+        ComposeMessage::SelectArrangementEntry(index) => {
+            r.compose.drumroll.selected_entry_index = index;
+        }
 
         ComposeMessage::CreateMidiClipInSection {
             track_id,

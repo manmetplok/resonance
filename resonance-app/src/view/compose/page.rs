@@ -178,6 +178,7 @@ impl crate::Resonance {
                     &self.registry.tracks,
                     &self.compose.drumroll,
                     section_drum_groups,
+                    &self.compose.drum_patterns,
                     clip_id_for_drum,
                     &self.table_registry,
                     &self.compose.vocal_bulk_lyrics,
