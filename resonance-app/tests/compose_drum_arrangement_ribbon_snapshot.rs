@@ -22,15 +22,15 @@
 //!    message highlights its span (the affordance that drives the inspector).
 //!
 //! Each state renders the static legend (Pattern / Fill / Gap / Overflow)
-//! under the ribbon. Window size mirrors `compose_drum_pattern_picker.rs`'s
-//! tall viewport so the whole drum lane sits on screen. On first run
-//! `matches_image()` writes the goldens under `tests/snapshots/`; subsequent
-//! runs diff against them. NOTE: the ribbon paints translucent `Canvas`
-//! fills, which the local non-conformant software Vulkan rasterizer renders
-//! imprecisely — the goldens are meant to be blessed in CI (see the
-//! project's "snapshot goldens diverge in this env" note), so the semantic
-//! `assert`s on the ribbon spans below are the authoritative, env-independent
-//! proof that the four span types are present and distinct.
+//! under the ribbon. Window size mirrors `compose_arrangement_strip.rs`'s
+//! tall viewport so the whole drum lane sits on screen. On first run the
+//! goldens are written under `tests/snapshots/`; subsequent runs diff
+//! against them via [`common::assert_golden`], which honours
+//! `RESONANCE_SKIP_GOLDENS` in non-conformant rasterizer environments. The
+//! semantic `assert`s on the ribbon spans below remain the authoritative,
+//! env-independent proof that the four span types are present and distinct.
+
+mod common;
 
 use iced::Size;
 use iced_test::simulator::Simulator;
@@ -189,10 +189,7 @@ fn snapshot(app: &Resonance, path: &str) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 #[test]
