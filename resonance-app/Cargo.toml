@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 resonance-audio = { path = "../resonance-audio" }
 resonance-common = { path = "../resonance-common" }
+resonance-metering = { path = "../resonance-metering" }
 resonance-music-theory = { path = "../resonance-music-theory" }
 resonance-plugin = { path = "../resonance-plugin", features = ["ui"] }
 resonance-svs = { path = "../resonance-svs" }
@@ -17,6 +18,8 @@ serde_json.workspace = true
 dirs.workspace = true
 bytemuck.workspace = true
 printpdf = "0.9"
+time = { workspace = true, features = ["formatting", "parsing"] }
 
 [dev-dependencies]
 iced_test = "0.14"
+tempfile = "3"

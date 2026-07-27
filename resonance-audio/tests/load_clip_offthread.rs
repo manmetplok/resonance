@@ -143,6 +143,11 @@ fn worker_publish_does_not_stall_concurrent_reads() {
             fade_out_curve: FadeCurve::default(),
             gain_db: 0.0,
             vocal_tuning: None,
+            warp_enabled: false,
+            original_bpm: None,
+            transpose_semitones: 0.0,
+            warp_algorithm: Default::default(),
+            warp_markers: Vec::new(),
         };
         worker_clips.write().push(clip);
         total_frames
@@ -211,6 +216,11 @@ fn concurrent_loads_all_publish_without_deadlock() {
                 fade_out_curve: FadeCurve::default(),
                 gain_db: 0.0,
                 vocal_tuning: None,
+                warp_enabled: false,
+                original_bpm: None,
+                transpose_semitones: 0.0,
+                warp_algorithm: Default::default(),
+                warp_markers: Vec::new(),
             };
             clips_arc.write().push(clip);
         }));

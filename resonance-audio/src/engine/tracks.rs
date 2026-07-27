@@ -38,6 +38,33 @@ pub(crate) fn handle_set_track_fx_bypass(ctx: &HandlerCtx, track_id: TrackId, by
         .send(AudioEvent::TrackFxBypassChanged { track_id, bypassed });
 }
 
+/// Attach or detach a track's decoded freeze-cache buffer.
+///
+/// `Some(source)` makes the track frozen — the mixer can replay the cached
+/// audio instead of the live instrument + FX chain. `None` detaches it,
+/// restoring live playback. Used on project load to rehydrate frozen tracks
+/// without re-rendering, and by `UnfreezeTrack` to clear the cache. The
+/// field is an `ArcSwapOption`, so a read lock on `tracks` is enough — the
+/// audio thread reads it wait-free.
+pub(crate) fn handle_set_track_frozen_source(
+    ctx: &HandlerCtx,
+    track_id: TrackId,
+    source: Option<FrozenSource>,
+) {
+    if let Some(track) = ctx.tracks.read().get(&track_id) {
+        track.frozen_source.store(source.map(Arc::new));
+    }
+}
+
+/// Detach a track's frozen source so playback resumes through the live
+/// instrument + FX chain. Equivalent to `SetTrackFrozenSource { source: None }`,
+/// kept as a distinct command so the intent reads clearly at the call site.
+pub(crate) fn handle_unfreeze_track(ctx: &HandlerCtx, track_id: TrackId) {
+    if let Some(track) = ctx.tracks.read().get(&track_id) {
+        track.frozen_source.store(None);
+    }
+}
+
 pub(crate) fn handle_set_master_volume(ctx: &HandlerCtx, volume: f32) {
     ctx.shared
         .master_volume_bits
@@ -360,6 +387,10 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // Clear busses
     ctx.busses.write().clear();
 
+    // Clear aux sends (and publish the now-empty table to the render path)
+    state.aux_sends.clear();
+    super::busses::publish_aux_sends(ctx, state);
+
     // Clear master FX chain
     ctx.master.write().plugin_ids.clear();
     ctx.shared
@@ -376,11 +407,19 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // Clear bundles
     state.bundles.clear();
 
+    // Drop loaded A/B references and reset their controls, then publish so
+    // the audio-thread monitor stops reading the dropped reference's PCM.
+    // (References are monitor-only and never in any render, but a stale one
+    // would otherwise linger across a project load.)
+    state.reference.clear();
+    state.reference.publish(&ctx.shared.reference, true);
+
     // Reset ID counters
     state.next_track_id = 1;
     state.next_bus_id = 1;
     state.next_clip_id = 1;
     state.next_plugin_id = 1;
+    state.next_send_id = 1;
 
     let _ = ctx.event_tx.send(AudioEvent::AllCleared);
 }

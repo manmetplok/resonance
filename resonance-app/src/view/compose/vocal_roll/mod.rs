@@ -149,7 +149,9 @@ pub fn build_canvas<'a>(
         zoom_x: editor_state.zoom_x,
         zoom_y: editor_state.zoom_y,
         snap_ticks: editor_state.snap_ticks,
-        selected_note: editor_state.selected_note,
+        // The vocal roll still works one note at a time; take the single
+        // representative from the piano-roll multi-selection set.
+        selected_note: editor_state.primary_selected(),
         time_sig_num: app.transport.time_sig_num,
         bpm: app.transport.bpm,
         voice_label,

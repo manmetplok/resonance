@@ -14,6 +14,8 @@
 //! 1. **2 tracks selected** — the minimum threshold for showing the bar.
 //! 2. **N tracks selected** — a larger selection (5 tracks).
 
+mod common;
+
 use iced::widget::container;
 use iced::{Length, Size};
 use iced_test::simulator::Simulator;
@@ -54,10 +56,7 @@ fn snapshot_to(app: &Resonance, count: usize, path: &str) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 /// 2 tracks selected — the minimum threshold for showing the bar.

@@ -1,5 +1,6 @@
 use iced::Task;
-use resonance_audio::types::{AudioCommand, MidiNote};
+use resonance_audio::quantize::{self, GrooveTemplate};
+use resonance_audio::types::{AudioCommand, ClipId, MidiNote};
 
 use crate::message::{Message, MidiEditorMessage};
 use crate::update::clips;
@@ -43,6 +44,12 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
                 clip_id,
                 note_index,
             });
+            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+                editor.clear_selection();
+            }
+        }
+        MidiEditorMessage::RemoveSelectedNotes { clip_id } => {
+            remove_selected_notes(r, clip_id);
         }
         MidiEditorMessage::MoveNote {
             clip_id,
@@ -70,7 +77,35 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
         }
         MidiEditorMessage::SelectNote { note_index } => {
             if let Some(ref mut editor) = r.interaction.editing_midi_clip {
-                editor.selected_note = note_index;
+                editor.select_single(note_index);
+            }
+        }
+        MidiEditorMessage::ToggleNoteSelection { note_index } => {
+            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+                editor.toggle_note(note_index);
+            }
+        }
+        MidiEditorMessage::SelectNotesInRect { indices, additive } => {
+            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+                editor.apply_marquee(indices, additive);
+            }
+        }
+        MidiEditorMessage::SelectAllNotes => {
+            if let Some(clip_id) = r.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id) {
+                let len = r
+                    .midi_clips
+                    .iter()
+                    .find(|c| c.id == clip_id)
+                    .map(|c| c.notes.len())
+                    .unwrap_or(0);
+                if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+                    editor.select_all(len);
+                }
+            }
+        }
+        MidiEditorMessage::ClearNoteSelection => {
+            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+                editor.clear_selection();
             }
         }
         MidiEditorMessage::PreviewNote(track_id, note) => {
@@ -91,8 +126,213 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
         MidiEditorMessage::ToggleSlur { clip_id, note_index } => {
             toggle_slur(r, clip_id, note_index);
         }
+        MidiEditorMessage::Quantize {
+            grid,
+            strength,
+            swing,
+            mode,
+            quantize_ends,
+            iterative,
+        } => {
+            if let Some((clip_id, indices)) = bulk_target(r) {
+                let _ = r.engine.send(AudioCommand::QuantizeMidiNotes {
+                    clip_id,
+                    indices,
+                    grid,
+                    strength,
+                    swing,
+                    mode,
+                    quantize_ends,
+                    iterative,
+                });
+            }
+        }
+        MidiEditorMessage::Humanize { timing, vel, seed } => {
+            if let Some((clip_id, indices)) = bulk_target(r) {
+                // One seed per invocation: a fresh draw when the caller
+                // didn't pin one, so the jitter is reproducible within
+                // this single (undoable) edit and a new invocation rolls
+                // again. Tests pin `seed` for determinism.
+                let seed = seed.unwrap_or_else(humanize_seed);
+                let _ = r.engine.send(AudioCommand::HumanizeMidiNotes {
+                    clip_id,
+                    indices,
+                    timing_ticks: timing,
+                    vel_amt: vel,
+                    seed,
+                });
+            }
+        }
+        MidiEditorMessage::ApplyGroove {
+            template_id,
+            strength,
+        } => {
+            if let Some((clip_id, indices)) = bulk_target(r) {
+                // Unknown template id → no-op (no command, no undo entry).
+                if let Some(template) = lookup_groove(r, &template_id) {
+                    let _ = r.engine.send(AudioCommand::ApplyGrooveToClip {
+                        clip_id,
+                        indices,
+                        template,
+                        strength,
+                    });
+                }
+            }
+        }
+        MidiEditorMessage::ExtractGroove { grid } => {
+            // Extraction reads the whole open clip regardless of selection.
+            if let Some(clip_id) = r.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id) {
+                // Stash the user's chosen name so the GrooveExtracted event
+                // mirror (#390) can file the captured template into the
+                // project groove library under it (#394). A blank name
+                // becomes an auto-numbered default at file time.
+                let name = r.midi_quantize.groove_name.trim();
+                r.midi_quantize.pending_groove_name = if name.is_empty() {
+                    None
+                } else {
+                    Some(name.to_string())
+                };
+                let _ = r
+                    .engine
+                    .send(AudioCommand::ExtractGrooveFromClip { clip_id, grid });
+            }
+        }
+
+        // -- Quantize panel controls (todo #392): pure view-state edits.
+        MidiEditorMessage::SetQuantizeGrid(grid) => {
+            r.midi_quantize.grid = grid;
+        }
+        MidiEditorMessage::SetQuantizeStrength(v) => {
+            r.midi_quantize.strength = v.clamp(0.0, 1.0);
+        }
+        MidiEditorMessage::SetQuantizeSwing(v) => {
+            r.midi_quantize.swing = v.clamp(0.0, 1.0);
+        }
+        MidiEditorMessage::SetQuantizeMode(mode) => {
+            r.midi_quantize.mode = mode;
+        }
+        MidiEditorMessage::SetQuantizeEnds(on) => {
+            r.midi_quantize.quantize_ends = on;
+        }
+        MidiEditorMessage::SetQuantizeIterative(on) => {
+            r.midi_quantize.iterative = on;
+        }
+        MidiEditorMessage::SetHumanizeTiming(ticks) => {
+            r.midi_quantize.humanize_timing =
+                ticks.min(crate::state::HUMANIZE_TIMING_MAX_TICKS);
+        }
+        MidiEditorMessage::SetHumanizeVelocity(v) => {
+            r.midi_quantize.humanize_velocity = v.clamp(0.0, 1.0);
+        }
+
+        // -- Groove extract / apply panel controls (todo #394) --
+        MidiEditorMessage::SetGrooveName(name) => {
+            r.midi_quantize.groove_name = name;
+        }
+        MidiEditorMessage::SetGrooveSelection(sel) => {
+            r.midi_quantize.groove_selection = sel;
+        }
+        MidiEditorMessage::SetGrooveStrength(v) => {
+            r.midi_quantize.groove_strength = v.clamp(0.0, 1.0);
+        }
     }
     Task::none()
+}
+
+/// Resolve the target of a bulk timing edit: the open editor clip plus
+/// the note indices to operate on. Uses the current multi-note selection
+/// (#389), or every note in the clip when the selection is empty
+/// ("operate on the whole clip if none"). Out-of-range selection indices
+/// are dropped. Returns `None` — making the op a no-op — when no clip is
+/// open, the clip is empty, or no in-range notes remain.
+fn bulk_target(r: &Resonance) -> Option<(ClipId, Vec<usize>)> {
+    let editor = r.interaction.editing_midi_clip.as_ref()?;
+    let clip_id = editor.clip_id;
+    let note_count = r
+        .midi_clips
+        .iter()
+        .find(|c| c.id == clip_id)
+        .map(|c| c.notes.len())
+        .unwrap_or(0);
+    if note_count == 0 {
+        return None;
+    }
+    let indices: Vec<usize> = if editor.selected_notes.is_empty() {
+        (0..note_count).collect()
+    } else {
+        editor
+            .selected_notes
+            .iter()
+            .copied()
+            .filter(|&i| i < note_count)
+            .collect()
+    };
+    if indices.is_empty() {
+        None
+    } else {
+        Some((clip_id, indices))
+    }
+}
+
+/// Draw one fresh, well-mixed humanize seed. Called once per `Humanize`
+/// invocation (see the handler) so a single bulk edit's jitter is fixed
+/// and reproducible while distinct invocations decorrelate.
+fn humanize_seed() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    crate::util::next_seed(nanos)
+}
+
+/// Resolve a groove `template_id` to its [`GrooveTemplate`]. A
+/// `"user:<id>"` id addresses a user-extracted groove in the project
+/// library (#394/#395); any other id matches an in-code stock groove by
+/// name. Unknown ids return `None` (the apply is then a no-op).
+fn lookup_groove(r: &Resonance, template_id: &str) -> Option<GrooveTemplate> {
+    if let Some(rest) = template_id.strip_prefix("user:") {
+        let id: u64 = rest.parse().ok()?;
+        return r.quantize.user_groove(id).map(|g| g.template.clone());
+    }
+    quantize::stock_grooves()
+        .into_iter()
+        .find(|(name, _)| name == template_id)
+        .map(|(_, template)| template)
+}
+
+/// Remove every selected note from `clip_id`. Indices are sent to the
+/// engine in descending order so each removal can't invalidate the
+/// indices of the not-yet-removed notes below it. Selection is cleared
+/// afterwards since the indices no longer refer to anything.
+fn remove_selected_notes(r: &mut crate::Resonance, clip_id: resonance_audio::types::ClipId) {
+    let Some(editor) = r.interaction.editing_midi_clip.as_ref() else {
+        return;
+    };
+    let note_count = r
+        .midi_clips
+        .iter()
+        .find(|c| c.id == clip_id)
+        .map(|c| c.notes.len())
+        .unwrap_or(0);
+    // Descending order: removing a higher index never shifts a lower one.
+    let mut indices: Vec<usize> = editor
+        .selected_notes
+        .iter()
+        .copied()
+        .filter(|&i| i < note_count)
+        .collect();
+    indices.sort_unstable_by(|a, b| b.cmp(a));
+
+    for note_index in indices {
+        let _ = r.engine.send(AudioCommand::RemoveMidiNote {
+            clip_id,
+            note_index,
+        });
+    }
+
+    if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+        editor.clear_selection();
+    }
 }
 
 /// Toggle the OpenUtau slur marker on the i-th note of `clip_id`. The

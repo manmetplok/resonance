@@ -16,6 +16,8 @@ use resonance_music_theory::TableRegistry;
 
 pub mod chord_box;
 pub mod chord_sheet_pdf;
+pub mod commands;
+pub mod chord_track;
 pub mod compose;
 pub mod demo;
 pub mod engine_events;
@@ -24,6 +26,8 @@ pub mod message;
 pub mod presets;
 pub mod project;
 pub mod recent;
+pub mod reference;
+pub mod settings;
 pub mod state;
 mod test_support;
 pub mod theme;
@@ -86,12 +90,80 @@ pub struct Resonance {
     /// where they were rather than always to Arrange. `None` whenever the
     /// current `view_mode` is not `Performance`.
     pub(crate) pre_performance_view: Option<ViewMode>,
+    /// Performance-mode footer selection: the active instrument/tuning and
+    /// capo position that drive the live fingering diagrams. Mutated by the
+    /// footer controls (`UiMessage::SetPerformanceTuning` /
+    /// `SetPerformanceCapo`) and read by the diagram bands. See
+    /// `state::PerformanceState`.
+    pub(crate) performance: state::PerformanceState,
     /// Audio clips on the timeline.
     pub(crate) clips: Vec<ClipState>,
     /// MIDI clips on the timeline.
     pub(crate) midi_clips: Vec<MidiClipState>,
+    /// App-side groove library: templates extracted from clips via the
+    /// engine's `ExtractGrooveFromClip` command. Populated purely from
+    /// `GrooveExtracted` engine events (ba todo #390) so the Compose /
+    /// quantize UI can later offer them as "apply groove" presets.
+    pub(crate) groove_library: Vec<resonance_audio::quantize::GrooveTemplate>,
     /// Compose tab state: section definitions, placements, chord progressions.
     pub(crate) compose: compose::ComposeState,
+    /// Parameter-automation lanes, mirrored one-way from engine events,
+    /// plus the transient live automated values. See `state::automation`.
+    pub(crate) automation: state::AutomationState,
+
+    /// MIDI quantize state: the project's user-extracted groove library
+    /// and the last-used quantize / humanize settings (ba todo #395).
+    /// Both halves persist in the project file and ride the undo snapshot.
+    pub(crate) quantize: state::QuantizeState,
+
+    /// Media pool: imported audio assets referenced by clips, plus the
+    /// browser's favourite / recent folder lists (doc #175). Asset list
+    /// and clip asset-refs persist in the project file; favourites and
+    /// recent folders persist in user settings. See `state::pool`.
+    pub(crate) pool: state::MediaPool,
+
+    /// In-flight import → placement bookkeeping (doc #175, ba todo #598):
+    /// per queued source file, what to do once its `AssetImported` event
+    /// lands (place a clip on a target track, or nothing for a pool-only
+    /// import). Transient — not persisted, not in the undo snapshot; the
+    /// resulting pool asset + placed clip are what ride persistence/undo.
+    pub(crate) pool_import: state::PendingImports,
+
+    /// Per-file import-progress tracking for the audio-import transcode
+    /// modal (doc #175, ba todo #597 / #606). Populated from
+    /// `ImportProgress` / `ImportFailed` engine events; cleared when the
+    /// modal is dismissed. Transient — not undoable, not persisted.
+    pub(crate) import_progress: state::ImportProgressTracker,
+
+    /// Whether the audio-import transcode-progress modal is open (doc #175,
+    /// ba todo #606). Set to `true` when an import batch is kicked off and
+    /// cleared by `UiMessage::DismissImportProgress`. Transient — not
+    /// undoable, not persisted.
+    pub(crate) import_progress_modal_open: bool,
+
+    /// Transient media-browser interaction state (doc #175): current
+    /// folder + cached scan, per-folder filter, Files/Pool tab, and the
+    /// audition preview transport. Not undoable, not persisted in the
+    /// project — same rule as collapse state. See `state::browser`.
+    pub(crate) browser: state::BrowserState,
+
+    /// In-flight drag-to-timeline placement (doc #175, todo #605): the file
+    /// being dragged from the media browser, the cursor, and the resolved
+    /// drop target driving the pill / lit lane / ghost clip / tooltip.
+    /// `None` when no drag is happening. Transient — never undoable, never
+    /// persisted; the drop itself fans out into a `Pool(ImportAndPlace)`.
+    /// See `state::drag`.
+    pub(crate) drag_placement: Option<state::DragPlacement>,
+
+    /// Session-level state for the missing-file relink flow (doc #175,
+    /// todo #600): which missing assets are currently being re-imported,
+    /// plus the last relink failure to surface. The durable "missing" flag
+    /// lives on each pool asset; this only tracks the in-flight resolve.
+    /// Not undoable, not persisted. See `state::relink`.
+    pub(crate) relink: state::RelinkState,
+
+    /// Reference-track (A/B) comparison state. See `crate::reference`.
+    pub(crate) reference: reference::ReferenceState,
     /// Markov table registry for chord generators. Constructed once at
     /// startup with all built-in tables.
     pub(crate) table_registry: TableRegistry,
@@ -103,18 +175,51 @@ pub struct Resonance {
     /// GUI-side tempo map — shared implementation with the audio engine.
     /// Rebuilt from `tempo_events` / `signature_events` whenever they change.
     pub(crate) tempo_map: TempoMap,
+    /// Global chord track — song-wide harmonic backbone (chord regions +
+    /// key context), timeline metadata owned by the app alongside the
+    /// tempo/signature tracks. Pure metadata: nothing is sent to the
+    /// realtime engine. See `chord_track`.
+    pub(crate) chord_track: chord_track::ChordTrack,
+
+    /// MIDI Learn / hardware control-surface mapping, mirrored from the
+    /// engine's active binding set. A pure projection of `MidiBinding*` /
+    /// `ControlSurface*` events — see `state::MidiMapState`.
+    pub(crate) midi_map: MidiMapState,
 
     // Sub-state groupings. See `state.rs` for definitions.
     pub(crate) transport: TransportState,
     pub(crate) viewport: ArrangeViewport,
+    pub(crate) markers: state::ArrangementMarkers,
     pub(crate) interaction: ClipInteractionState,
+    /// Settings of the MIDI editor's Quantize panel (todo #392). App-level
+    /// so the chosen grid/strength/swing/mode persist across clip
+    /// open/close; the Apply button reads this to build the bulk quantize.
+    pub(crate) midi_quantize: state::MidiQuantizePanelState,
     pub(crate) io: ProjectIoState,
     pub(crate) mixer: MixerUiState,
     pub(crate) registry: TrackRegistry,
     /// Track group (folder track) registry for group state management.
     pub(crate) track_groups: state::TrackGroupRegistry,
+    /// GUI-side mirror of the engine's aux-send graph, reconstructed
+    /// purely from `AuxSendChanged` / `AuxSendRemoved` / `AuxSendRejected`
+    /// events. Bus return-role rides on `BusState::is_return`.
+    pub(crate) aux: state::AuxSendState,
     /// Session-local undo/redo history. Cleared on project load.
     pub(crate) undo: UndoHistory,
+    /// External-instrument tracks: per-track bank/program/latency config plus
+    /// runtime device-offline flags (doc #169, epic #39). Absence means the
+    /// track is a plain track. The MIDI-out / audio-return / monitor / arm
+    /// fields live on the track itself; this map holds only the
+    /// external-specific bits. Config (not the offline flags) round-trips
+    /// undo via `UndoExtras::external_instruments`.
+    pub(crate) external_instruments: crate::state::ExternalInstrumentMap,
+    /// Device-definition registry (epic #40, doc #201 §2): the bundled
+    /// device presets plus any user-authored ones, scanned once at startup.
+    /// The External-Instrument inspector's device-preset picker reads
+    /// `list()`; selecting a preset resolves its `params` (via `get(id)`)
+    /// into the `SetTrackDeviceParams` command. Read-only after
+    /// construction (a rescan/reload is a later todo).
+    pub(crate) device_registry: resonance_common::DeviceDefinitionRegistry,
     /// When set, the confirmation dialog for deleting a track with
     /// content is shown. Holds the track id that the user wants to remove.
     pub(crate) confirm_delete_track: Option<resonance_audio::types::TrackId>,
@@ -122,12 +227,25 @@ pub struct Resonance {
     /// MIDI track. Holds the source track id plus the user's current
     /// device/port selection.
     pub(crate) bounce_dialog: Option<crate::state::BounceDialogState>,
+    /// When set, the "Import MIDI" modal is shown. Holds the import
+    /// flow's stage, the parsed per-track rows, and the user's tempo /
+    /// placement choices. `None` when the modal is closed.
+    pub(crate) import_dialog: Option<crate::state::ImportDialogState>,
     /// When set, a bounce-in-place run is in flight. Drives the modal
     /// progress overlay and gates transport / mutating UI so the user
     /// can't disturb the render mid-flight. Cleared by
     /// `TrackBounceCompleted`, `TrackBounceError`, or
     /// `TrackBounceCancelled`.
     pub(crate) bounce_in_progress: Option<crate::state::BounceProgressState>,
+    /// When set, the Export modal is open. Holds the shared shell state
+    /// (mode tab, source selection, range, format, destination) - see
+    /// `state::ExportDialogState` and `view::export_dialog`.
+    pub(crate) export_dialog: Option<crate::state::ExportDialogState>,
+    /// App-side track-freeze orchestration: per-track freeze status plus
+    /// the active "freeze selected / all" batch queue. Driven by the
+    /// `FreezeMessage` handlers (ba todo #574) and the engine freeze-event
+    /// mirror (ba todo #575). Cleared on project load.
+    pub(crate) freeze: crate::state::FreezeState,
     /// True when the project has been modified since the last save.
     pub(crate) dirty: bool,
     /// When set, the "unsaved changes" quit-confirmation dialog is shown.
@@ -156,6 +274,17 @@ pub struct Resonance {
         resonance_audio::types::PluginInstanceId,
         crate::state::PluginLocator,
     >,
+
+    /// Persistent application settings (autosave config, …), loaded from
+    /// `config_dir()/resonance/settings.json` on startup. Read via
+    /// [`Resonance::autosave_settings`]; re-persisted with
+    /// `settings::persist` whenever the user changes them.
+    pub(crate) settings: settings::AppSettings,
+
+    /// Stable per-process identifier (pid + startup timestamp). Used to
+    /// namespace the autosave scratch dir for a never-saved project so
+    /// concurrent app instances never collide (epic #32 / doc #171).
+    pub(crate) session_id: String,
 
     // ---- Track presets ----
     /// Built-in default track presets (baked into the binary).
@@ -221,6 +350,50 @@ impl Resonance {
     /// hard-coding it.
     pub fn track_registry(&self) -> &state::TrackRegistry {
         &self.registry
+    }
+
+    /// Read-only view onto the persisted autosave settings. The autosave
+    /// timer (epic #32) and the settings UI read these; surfaced so the
+    /// view layer and tests can interrogate the live config.
+    pub fn autosave_settings(&self) -> &settings::AutosaveSettings {
+        &self.settings.autosave
+    }
+
+    /// Stable per-process session id, used to namespace the autosave
+    /// scratch dir for a never-saved project.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    // ---- Save/autosave status surface ----
+    // Read-only views onto the save lifecycle, surfaced so the window
+    // chrome (todo #470) and the autosave integration tests can observe
+    // routing without reaching into `pub(crate)` state.
+
+    /// Whether the project has unsaved changes since the last *manual*
+    /// save. Autosaves deliberately leave this set.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Whether a manual save or autosave is currently writing to disk.
+    pub fn is_saving(&self) -> bool {
+        self.io.saving
+    }
+
+    /// Wall-clock time of the last successful manual save, if any.
+    pub fn last_saved_at(&self) -> Option<std::time::SystemTime> {
+        self.io.last_saved_at
+    }
+
+    /// Wall-clock time of the last successful autosave snapshot, if any.
+    pub fn last_autosave_at(&self) -> Option<std::time::SystemTime> {
+        self.io.last_autosave_at
+    }
+
+    /// Number of entries currently in the recent-projects list.
+    pub fn recent_project_count(&self) -> usize {
+        self.io.recent_projects.len()
     }
 
     // Tempo / signature mutators live in `update/global_track.rs` —
@@ -314,6 +487,31 @@ impl Resonance {
         let _ = engine.send(AudioCommand::ScanPlugins);
 
         let recent_projects = recent::load();
+        let settings = settings::load();
+        // Per-process session id: pid + startup nanos. Cheap, dependency
+        // free, and unique enough to namespace the autosave scratch dir.
+        let session_id = {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            format!("{}-{}", std::process::id(), nanos)
+        };
+
+        // Device-definition registry (epic #40): bundled presets first, then
+        // any user-authored definitions (last-wins by id). Built once here so
+        // the External-Instrument inspector's device picker and the
+        // `SetTrackDeviceParams` resolution read a stable list.
+        let mut device_registry = resonance_common::DeviceDefinitionRegistry::default();
+        device_registry.scan_bundled();
+        if let Some(dir) = resonance_common::user_definitions_dir() {
+            device_registry.scan_dir(&dir);
+        }
+        // Seed the cached device-preset pick-list options from the registry so
+        // the inspector clones a refcounted slice instead of rebuilding the
+        // option Vec every frame (view-performance rules).
+        let mut view_caches = view::ui_caches::UiViewCaches::default();
+        view_caches.rebuild_device_choices(&device_registry.list());
 
         let mut app = Self {
             engine,
@@ -328,7 +526,7 @@ impl Resonance {
             midi_clock_recv_enabled: false,
             midi_clock_recv_device: None,
             available_plugins: Vec::new(),
-            view_caches: view::ui_caches::UiViewCaches::default(),
+            view_caches,
             transport_labels: view::transport_labels::TransportLabels::default(),
             error_message: None,
             master_volume: 0.0, // 0 dB = unity gain
@@ -338,9 +536,24 @@ impl Resonance {
             master_fx_bypassed: false,
             view_mode: STARTUP_TAB.get().copied().unwrap_or(ViewMode::Arrange),
             pre_performance_view: None,
+            performance: state::PerformanceState::default(),
             clips: Vec::new(),
             midi_clips: Vec::new(),
+            groove_library: Vec::new(),
             compose: compose::ComposeState::default(),
+            automation: state::AutomationState::default(),
+            quantize: state::QuantizeState::default(),
+            pool: state::MediaPool::with_user_folders(
+                settings.media.favourites.clone(),
+                settings.media.recent_folders.clone(),
+            ),
+            pool_import: state::PendingImports::default(),
+            import_progress: state::ImportProgressTracker::default(),
+            import_progress_modal_open: false,
+            browser: state::BrowserState::default(),
+            drag_placement: None,
+            relink: state::RelinkState::default(),
+            reference: reference::ReferenceState::default(),
             table_registry: TableRegistry::with_builtins(),
 
             tempo_events: vec![state::TempoEvent { bar: 0, bpm: 120.0 }],
@@ -350,10 +563,15 @@ impl Resonance {
                 denominator: 4,
             }],
             tempo_map: TempoMap::default(),
+            chord_track: chord_track::ChordTrack::new(),
+
+            midi_map: MidiMapState::default(),
 
             transport: TransportState::default(),
             viewport: ArrangeViewport::default(),
+            markers: state::ArrangementMarkers::default(),
             interaction: ClipInteractionState::default(),
+            midi_quantize: state::MidiQuantizePanelState::default(),
             io: ProjectIoState {
                 recent_projects,
                 ..ProjectIoState::default()
@@ -361,18 +579,27 @@ impl Resonance {
             mixer: MixerUiState::default(),
             registry: TrackRegistry {
                 next_sub_track_id: 1_000_000_000,
+                next_return_bus_id: 2_000_000_000,
                 ..TrackRegistry::default()
             },
             track_groups: state::TrackGroupRegistry::new(),
+            aux: state::AuxSendState::default(),
             undo: UndoHistory::new(),
+            external_instruments: std::collections::HashMap::new(),
+            device_registry,
             plugin_state_cache: std::collections::HashMap::new(),
             plugin_index: std::collections::HashMap::new(),
             confirm_delete_track: None,
             bounce_dialog: None,
+            import_dialog: None,
             bounce_in_progress: None,
+            export_dialog: None,
+            freeze: crate::state::FreezeState::default(),
             dirty: false,
             confirm_quit: None,
             quit_after_save: None,
+            settings,
+            session_id,
             default_presets: presets::default_presets(),
             user_presets: presets::load_user_presets(),
             pending_track_preset: None,

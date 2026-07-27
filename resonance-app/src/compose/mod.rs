@@ -1,7 +1,9 @@
 //! Compose-tab state and behaviour. Owns sections, placements, the chord
 //! lane, drumroll editor state, and the table of derived MIDI clips.
 
+pub mod arrangement;
 pub mod drumroll;
+pub mod expression;
 pub mod generate;
 pub mod invariants;
 pub mod messages;
@@ -17,14 +19,18 @@ mod state;
 #[cfg(test)]
 mod tests;
 
+pub use arrangement::{
+    resolve_arrangement, ArrangementCoverage, ArrangementSpan, ResolvedArrangement,
+};
 pub use drumroll::{DrumGroup, DrumPattern, DrumrollViewState};
+pub use expression::{Breakpoint, CurveStatus, ExpressionCurve, ExpressionCurves};
 pub use generate::{DeriveKind, GenerateParams};
 pub use lane_generator::{
     DrumVoiceMode, LaneGeneratorConfig, LaneGeneratorKind, LaneGeneratorKindTag,
 };
 pub use messages::{ComposeMessage, WorkspaceGroup};
 pub use section::{
-    ChordState, EditSectionForm, NewSectionForm, SectionDefinitionState, SectionPlacementState,
-    SelectedLane,
+    ChordState, EditSectionForm, EntryLength, NewSectionForm, PatternEntry, SectionDefinitionState,
+    SectionPlacementState, SelectedLane,
 };
 pub use state::{ComposeState, RailPanelKey};

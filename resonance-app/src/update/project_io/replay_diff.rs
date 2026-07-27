@@ -27,11 +27,9 @@ use std::collections::HashMap;
 
 use resonance_audio::types::*;
 
-#[cfg(test)]
-use crate::compose::DrumGroup;
 use crate::project::{
-    LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin,
-    ProjectTrack,
+    fade_curve_from_tag, LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip,
+    ProjectPlugin, ProjectTrack,
 };
 use crate::undo::UndoExtras;
 use crate::util::db_to_gain;
@@ -90,9 +88,58 @@ pub fn try_diff_replay(
     // -- Compose state (definitions, placements, drum groups, lyrics) --
     apply_compose(r, target_file, extras);
     apply_track_groups(r, target_file);
+    apply_markers(r, target_file);
+
+    // -- Media pool (doc #175) -----------------------------------------
+    // The pool is pure app-side data (no engine instances), so an
+    // undo/redo that added / removed / relinked an asset is restored
+    // verbatim here — the structural check ignores the pool entirely.
+    // Asset-ref changes on clips were already mirrored in
+    // `apply_audio_clips`; this rebuilds the asset list and usage tally.
+    apply_pool(r, target_file);
+
+    // -- Quantize state (ba todo #395) ---------------------------------
+    // The groove library + last-used quantize settings are pure app-side
+    // data (no engine instances), so an undo/redo that edited them is
+    // restored verbatim. They never alter the project shape, so this
+    // always takes the fast path.
+    super::replay::restore_quantize(r, target_file);
+
+    // -- Reference (A/B) content ---------------------------------------
+    // References aren't in the `ProjectFile`, so they ride along in the
+    // snapshot's `extras` and are restored verbatim here. Engine re-sync
+    // of references across undo lands with the A/B playback work; the
+    // engine reference handlers are stubs until then.
+    r.reference.restore_undo(extras.reference.clone());
+
+    // -- Global chord track --------------------------------------------
+    // Declarative app state that isn't part of `ProjectFile` yet, so it
+    // rides in the snapshot's extras and is restored wholesale here (the
+    // structural check ignores it — chord edits never alter the project
+    // shape, so they always take this fast path).
+    r.chord_track = extras.chord_track.clone();
+
+    // -- Track freeze status (detach/delete caches no longer frozen) ----
+    r.apply_freeze_restore(extras.track_freeze.clone());
+
+    // -- Clip fade / gain ----------------------------------------------
+    // Clip fade/gain isn't in the `ProjectFile` yet (persistence is #321),
+    // so it rides in the snapshot's extras (doc #156 A2/#317) and is
+    // re-applied to the mirror + engine here. Fade/gain edits never alter
+    // the project shape, so they always take this fast path.
+    r.apply_clip_fade_gain_restore(&extras.clip_fade_gain);
+
+    // -- External-instrument config (not carried by ProjectFile) -------
+    r.restore_external_instruments(extras);
 
     // -- Tempo / signature events --------------------------------------
     apply_tempo(r, target_file);
+
+    // -- Automation lanes ----------------------------------------------
+    // Lanes aren't part of `ProjectFile` (and so don't affect the
+    // structural check), so reconcile them straight from the snapshot's
+    // extras: clear lanes that went away, re-send those that changed.
+    r.restore_automation_lanes(&extras.automation_lanes);
 
     // -- Sort track / bus registry so view-layer invariant holds -------
     r.registry.resort_tracks();
@@ -138,7 +185,7 @@ pub fn try_diff_replay(
 /// arranged into the same parent-child shape. Pure ordering of the
 /// outer collections is normalised via id-sort before comparison so a
 /// re-ordering by `.order` alone does NOT force the slow path.
-fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
+pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     // Track set + per-track plugin set, sub-track linkage, track type,
     // and clap plugin identity.
     if !track_set_matches(&a.tracks, &b.tracks) {
@@ -192,10 +239,16 @@ fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     ) {
         return false;
     }
+    if !id_set_eq(
+        a.arrangement_markers.iter().map(|m| m.id),
+        b.arrangement_markers.iter().map(|m| m.id),
+    ) {
+        return false;
+    }
     true
 }
 
-fn id_set_eq<I, J>(a: I, b: J) -> bool
+pub fn id_set_eq<I, J>(a: I, b: J) -> bool
 where
     I: IntoIterator<Item = u64>,
     J: IntoIterator<Item = u64>,
@@ -618,6 +671,38 @@ fn apply_audio_clips(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
                 new_track_id: cb.track_id,
             });
         }
+
+        // Fades & per-clip gain (epic #18, doc #156). Independent of the
+        // trim/move fast path above — a snapshot diff (save/load or
+        // undo/redo) that only changes a fade length, curve, or gain must
+        // still reach the engine and the GUI mirror. Curves round-trip as
+        // tags, so compare the parsed `FadeCurve` (normalizing unknown /
+        // legacy tags) rather than the raw strings.
+        let fa_in = fade_curve_from_tag(&ca.fade_in_curve);
+        let fb_in = fade_curve_from_tag(&cb.fade_in_curve);
+        let fa_out = fade_curve_from_tag(&ca.fade_out_curve);
+        let fb_out = fade_curve_from_tag(&cb.fade_out_curve);
+        let fade_changed = ca.fade_in_frames != cb.fade_in_frames
+            || ca.fade_out_frames != cb.fade_out_frames
+            || fa_in != fb_in
+            || fa_out != fb_out;
+        let gain_changed = ca.gain_db != cb.gain_db;
+        if fade_changed {
+            let _ = r.engine.send(AudioCommand::SetClipFade {
+                clip_id: cb.id,
+                fade_in_frames: cb.fade_in_frames,
+                fade_in_curve: fb_in,
+                fade_out_frames: cb.fade_out_frames,
+                fade_out_curve: fb_out,
+            });
+        }
+        if gain_changed {
+            let _ = r.engine.send(AudioCommand::SetClipGain {
+                clip_id: cb.id,
+                gain_db: cb.gain_db,
+            });
+        }
+
         // Mirror onto GUI state.
         if let Some(cs) = r.clips.iter_mut().find(|c| c.id == cb.id) {
             cs.start_sample = cb.start_sample;
@@ -629,6 +714,15 @@ fn apply_audio_clips(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
                 .total_frames
                 .saturating_sub(cb.trim_start_frames)
                 .saturating_sub(cb.trim_end_frames);
+            // Fade/gain mirror (epic #18, doc #156).
+            cs.fade_in_frames = cb.fade_in_frames;
+            cs.fade_in_curve = fb_in;
+            cs.fade_out_frames = cb.fade_out_frames;
+            cs.fade_out_curve = fb_out;
+            cs.gain_db = cb.gain_db;
+            // Pool link (doc #175): restore the clip's asset ref so an
+            // undo/redo that relinked or cleared the link is reflected.
+            cs.asset_ref = cb.asset_ref.map(crate::state::pool::AssetRef::new);
         }
     }
 }
@@ -720,13 +814,18 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile, extras: &UndoExtras) {
     r.compose.derived_clips = extras.compose_derived_clips.clone();
     r.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
     r.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics.clone();
+    // Overwrite the (flattened) arrangements rebuilt by `load_from_project`
+    // with the full snapshotted entries so undo/redo restores multi-entry
+    // arrangements, fills, and `Bars` lengths that the project file can't
+    // yet persist.
+    crate::undo::restore_arrangements(&mut r.compose, &extras.compose_arrangements);
 }
 
 /// `MidiNote` is a plain bag of `u8/f32/u64` fields but does not derive
 /// `PartialEq` (the engine has no need for it). Comparing field-wise
 /// here keeps the diff replay self-contained without touching the
 /// engine crate's public API.
-fn midi_notes_equal(a: &[MidiNote], b: &[MidiNote]) -> bool {
+pub fn midi_notes_equal(a: &[MidiNote], b: &[MidiNote]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -754,233 +853,41 @@ fn apply_track_groups(r: &mut Resonance, b: &ProjectFile) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::state::{InstrumentIcon, InstrumentType};
+fn apply_markers(r: &mut Resonance, b: &ProjectFile) {
+    r.markers = crate::state::ArrangementMarkers::from(b.arrangement_markers.clone());
+}
 
-    fn empty_file() -> ProjectFile {
-        ProjectFile::default()
-    }
+/// Restore the media pool from a snapshot on the fast (diff) path (doc
+/// #175). Mirrors the slow-path [`super::replay::restore_pool`] but uses
+/// `r.io.project_path` as the directory to resolve relative asset paths
+/// against — it's still set during an in-session undo/redo (the slow path
+/// has to thread the dir explicitly because replay clears it). Rebuilds
+/// the asset list (flagging missing files) and recomputes usage from the
+/// clips' already-mirrored asset refs.
+fn apply_pool(r: &mut Resonance, b: &ProjectFile) {
+    use crate::state::pool::PoolAsset;
 
-    fn track(id: u64, vol: f32) -> ProjectTrack {
-        ProjectTrack {
-            id,
-            name: format!("T{id}"),
-            order: id as usize,
-            volume: vol,
-            pan: 0.0,
-            muted: false,
-            soloed: false,
-            fx_bypassed: false,
-            record_armed: false,
-            monitor_enabled: false,
-            mono: true,
-            input_device_name: None,
-            input_port_index: Some(0),
-            plugins: Vec::new(),
-            track_type: "audio".to_string(),
-            output_bus: None,
-            instrument_type: InstrumentType::default(),
-            instrument_icon: InstrumentIcon::default(),
-            role: None,
-            sub_track: None,
-            midi_input_device: None,
-            midi_input_channel: None,
-            midi_output_device: None,
-            midi_output_channel: None,
-        }
-    }
-
-    fn plugin(id: u64) -> ProjectPlugin {
-        ProjectPlugin {
-            instance_id: id,
-            plugin_name: format!("P{id}"),
-            clap_plugin_id: "com.example.foo".to_string(),
-            clap_file_path: "/x/foo.clap".to_string(),
-            state_file: format!("plugins/plugin_{id}.bin"),
-        }
-    }
-
-    #[test]
-    fn empty_projects_are_structurally_compatible() {
-        let a = empty_file();
-        let b = empty_file();
-        assert!(structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn scalar_only_track_diff_is_compatible() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0)];
-        b.tracks = vec![track(1, -6.0)];
-        assert!(structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn added_track_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0)];
-        b.tracks = vec![track(1, 0.0), track(2, 0.0)];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn removed_track_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0), track(2, 0.0)];
-        b.tracks = vec![track(1, 0.0)];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn renumbered_track_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0)];
-        b.tracks = vec![track(2, 0.0)];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn track_type_change_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0)];
-        let mut t = track(1, 0.0);
-        t.track_type = "instrument".to_string();
-        b.tracks = vec![t];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn added_plugin_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0)];
-        let mut t = track(1, 0.0);
-        t.plugins = vec![plugin(10)];
-        b.tracks = vec![t];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn plugin_reorder_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        let mut t_a = track(1, 0.0);
-        t_a.plugins = vec![plugin(10), plugin(11)];
-        let mut t_b = track(1, 0.0);
-        t_b.plugins = vec![plugin(11), plugin(10)];
-        a.tracks = vec![t_a];
-        b.tracks = vec![t_b];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn plugin_clap_identity_change_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        let mut t_a = track(1, 0.0);
-        t_a.plugins = vec![plugin(10)];
-        let mut p = plugin(10);
-        p.clap_plugin_id = "com.example.bar".to_string();
-        let mut t_b = track(1, 0.0);
-        t_b.plugins = vec![p];
-        a.tracks = vec![t_a];
-        b.tracks = vec![t_b];
-        assert!(!structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn id_set_eq_ignores_order() {
-        assert!(id_set_eq([1u64, 2, 3], [3u64, 2, 1]));
-        assert!(!id_set_eq([1u64, 2], [1u64, 2, 3]));
-    }
-
-    #[test]
-    fn track_reorder_alone_is_compatible() {
-        // Reorder via `.order` field — the actual track set is unchanged.
-        let mut a = empty_file();
-        let mut b = empty_file();
-        a.tracks = vec![track(1, 0.0), track(2, 0.0)];
-        let mut t1 = track(1, 0.0);
-        t1.order = 1;
-        let mut t2 = track(2, 0.0);
-        t2.order = 0;
-        b.tracks = vec![t2, t1];
-        assert!(structurally_compatible(&a, &b));
-    }
-
-    #[test]
-    fn audio_file_path_change_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        let mk = |id: u64, name: &str| ProjectClip {
-            id,
-            track_id: 1,
-            start_sample: 0,
-            name: name.into(),
-            total_frames: 1000,
-            trim_start_frames: 0,
-            trim_end_frames: 0,
-            audio_file: name.into(),
+    r.pool.clear_assets();
+    let project_dir = r.io.project_path.clone();
+    for pa in &b.pool_assets {
+        let missing = match &project_dir {
+            Some(dir) => !dir.join(&pa.project_relative_path).exists(),
+            // No anchored path (shouldn't happen on the undo path, which
+            // only records with a saved project) — assume present rather
+            // than spuriously flag everything missing.
+            None => false,
         };
-        a.clips = vec![mk(1, "audio/a.wav")];
-        b.clips = vec![mk(1, "audio/b.wav")];
-        assert!(!structurally_compatible(&a, &b));
+        r.pool.add(PoolAsset {
+            id: pa.id,
+            project_relative_path: pa.project_relative_path.clone(),
+            original_path: pa.original_path.clone(),
+            format: crate::project::audio_format_from_tag(&pa.format),
+            channels: pa.channels,
+            source_sample_rate: pa.source_sample_rate,
+            duration_frames: pa.duration_frames,
+            thumbnail_peaks: Vec::new(),
+            missing,
+        });
     }
-
-    #[test]
-    fn midi_notes_equal_field_wise() {
-        let n = |note, vel, start, dur| MidiNote {
-            note,
-            velocity: vel,
-            start_tick: start,
-            duration_ticks: dur,
-        };
-        assert!(midi_notes_equal(&[], &[]));
-        assert!(midi_notes_equal(
-            &[n(60, 0.8, 0, 480)],
-            &[n(60, 0.8, 0, 480)]
-        ));
-        assert!(!midi_notes_equal(
-            &[n(60, 0.8, 0, 480)],
-            &[n(62, 0.8, 0, 480)]
-        ));
-        assert!(!midi_notes_equal(
-            &[n(60, 0.8, 0, 480)],
-            &[n(60, 0.8, 0, 481)]
-        ));
-        // Different lengths are unequal.
-        assert!(!midi_notes_equal(&[n(60, 0.8, 0, 480)], &[]));
-    }
-
-    #[test]
-    fn drum_group_id_set_change_forces_fallback() {
-        let mut a = empty_file();
-        let mut b = empty_file();
-        let g = |id: u64| DrumGroup {
-            id,
-            name: format!("g{id}"),
-            color: [0, 0, 0],
-            grid: 4,
-            cycle: 16,
-            phase: 0,
-            pads: Vec::new(),
-            density: 0.0,
-            swing: 0.0,
-            accent: 0.0,
-            humanize: 0.0,
-            fills: 0.0,
-            style: String::new(),
-            seed: 0,
-        };
-        a.drum_groups = vec![g(1)];
-        b.drum_groups = vec![g(1), g(2)];
-        assert!(!structurally_compatible(&a, &b));
-    }
+    r.recompute_pool_usage();
 }

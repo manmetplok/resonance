@@ -29,6 +29,7 @@
 pub mod degree;
 mod inversion;
 pub mod markov;
+pub mod pentatonic;
 pub mod schema;
 pub mod table;
 
@@ -36,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use degree::Degree;
+pub use pentatonic::PentatonicFlavour;
 pub use schema::SchemaKind;
 pub use table::{HarmonicFunction, MarkovTable, TableRegistry};
 
@@ -85,6 +87,20 @@ pub enum GeneratorSpec {
         #[serde(default)]
         substitution: f32,
     },
+    /// Harmonize a pentatonic scale: chord roots are drawn from a
+    /// five-note pentatonic scale (major or minor flavour) by a weighted
+    /// random walk, with free, non-functional chord qualities. See
+    /// [`pentatonic::PentatonicFlavour`].
+    Pentatonic {
+        /// Which pentatonic scale supplies the chord roots.
+        flavour: PentatonicFlavour,
+        /// Number of chords to produce.
+        length: u8,
+        /// Per-position probability (0..=1) of using a colour quality
+        /// (sus2/sus4/add9 …) instead of the flavour's plain triad.
+        #[serde(default)]
+        color: f32,
+    },
 }
 
 /// Pure generation interface. Implementations must be deterministic:
@@ -110,6 +126,11 @@ impl Generator for GeneratorSpec {
                 rotation,
                 substitution,
             } => schema::generate(*schema, *length, *rotation, *substitution, seed, ctx),
+            GeneratorSpec::Pentatonic {
+                flavour,
+                length,
+                color,
+            } => pentatonic::generate(*flavour, *length, *color, seed, ctx),
         }
     }
 }

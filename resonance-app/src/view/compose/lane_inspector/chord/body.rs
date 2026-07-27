@@ -67,7 +67,8 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
 
     let current_length = match &definition.generator_spec {
         Some(GeneratorSpec::MarkovProgression { length, .. })
-        | Some(GeneratorSpec::Schema { length, .. }) => *length,
+        | Some(GeneratorSpec::Schema { length, .. })
+        | Some(GeneratorSpec::Pentatonic { length, .. }) => *length,
         None => definition.generate_params.chord_count as u8,
     };
     let count_picker = pick_list(count_options(), Some(current_length), move |n| {

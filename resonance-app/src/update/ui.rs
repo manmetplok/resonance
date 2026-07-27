@@ -57,8 +57,15 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         UiMessage::CloseAddTrackMenu => {
             r.mixer.add_track_menu_open = false;
         }
+        UiMessage::ToggleReferencePanel => {
+            r.mixer.reference_panel_open = !r.mixer.reference_panel_open;
+        }
         UiMessage::DismissError => {
             r.error_message = None;
+        }
+        UiMessage::DismissImportProgress => {
+            r.import_progress_modal_open = false;
+            r.import_progress.clear();
         }
         UiMessage::StartNewProject => {
             return project_io::save_project_as_dialog();
@@ -135,6 +142,42 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 device,
                 enabled: r.midi_clock_recv_enabled,
             });
+        }
+        UiMessage::SetPerformanceTuning(index) => {
+            // Footer instrument/tuning pill. Pure view state — the diagram
+            // bands re-voice from `r.performance` on the next render.
+            r.performance.set_tuning_index(index);
+        }
+        UiMessage::SetPerformanceCapo(frets) => {
+            // Footer capo stepper. The setter clamps to `0..=MAX_CAPO`.
+            r.performance.set_capo(frets);
+        }
+        UiMessage::ToggleMarkersOverview => {
+            r.mixer.markers_overview_open = !r.mixer.markers_overview_open;
+        }
+        UiMessage::CloseMarkersOverview => {
+            r.mixer.markers_overview_open = false;
+        }
+        UiMessage::RequestMarkerNav { forward } => {
+            // The bare `.`/`,` shortcut arrives via the global keyboard
+            // subscription, which fires even while a text field is focused.
+            // Probe for keyboard focus and only navigate once we know no
+            // text input is being edited (see `crate::focus`), mirroring the
+            // `F` performance-toggle gate.
+            return crate::focus::any_text_input_focused()
+                .map(move |editing| Message::Ui(UiMessage::MarkerNavResolved { forward, editing }));
+        }
+        UiMessage::MarkerNavResolved { forward, editing } => {
+            // Suppress navigation when the key was typed into a focused text
+            // field; otherwise jump to the adjacent marker.
+            if !editing {
+                let nav = if forward {
+                    crate::message::MarkerMessage::JumpToNext
+                } else {
+                    crate::message::MarkerMessage::JumpToPrev
+                };
+                return r.update(Message::Marker(nav));
+            }
         }
     }
     Task::none()

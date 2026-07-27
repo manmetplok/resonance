@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::clap_host::{ClapBundle, SyncClapInstance};
 use crate::types::*;
 
+use super::external_instrument::ExternalInstruments;
 use super::thread::{HandlerCtx, HandlerState};
 
 /// True for commands that can change a track's or bus's chain latency
@@ -32,6 +33,12 @@ pub(crate) fn affects_latency(cmd: &AudioCommand) -> bool {
             | AudioCommand::AddBus { .. }
             | AudioCommand::RemoveBus { .. }
             | AudioCommand::ClearAll
+            // External-instrument config carries a manual round-trip
+            // latency offset folded into the comp table; setting,
+            // clearing or re-dialling it changes per-track compensation.
+            | AudioCommand::SetExternalInstrument { .. }
+            | AudioCommand::ClearExternalInstrument { .. }
+            | AudioCommand::SetExternalInstrumentLatencyOffset { .. }
     )
 }
 
@@ -40,8 +47,8 @@ pub(crate) fn affects_latency(cmd: &AudioCommand) -> bool {
 /// (and thus the delay-line reset) when no delay actually changed.
 /// Runs on the engine thread; delay lines are allocated here, never on
 /// the audio callback.
-pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx) {
-    let chains = {
+pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstruments) {
+    let mut chains = {
         let tracks_guard = ctx.tracks.read();
         let busses_guard = ctx.busses.read();
         let plugins_guard = ctx.plugins.read();
@@ -52,6 +59,15 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx) {
                 .unwrap_or(0)
         })
     };
+    // External-instrument tracks add a manual round-trip latency offset on
+    // top of their plugin chain so the rest of the mix is delayed to align
+    // with the late hardware audio return.
+    crate::latency::add_external_offsets(&mut chains, |id| {
+        external
+            .get(&id)
+            .map(|c| c.latency_offset_samples)
+            .unwrap_or(0)
+    });
     let (max, delays) = crate::latency::compensation_delays(&chains);
     if ctx.latency_comp.load().delays_match(&delays) {
         return;

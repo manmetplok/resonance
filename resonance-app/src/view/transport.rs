@@ -94,6 +94,20 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         ..Default::default()
     });
 
+    // Window-chrome import affordance — the inbound sibling of the
+    // (forthcoming) Export… entry. Opens the MIDI Import modal; dragging a
+    // `.mid` onto the window is the other route (see `update.rs`).
+    let import_btn = button(
+        text("Import\u{2026}")
+            .size(12)
+            .font(theme::UI_FONT_MEDIUM)
+            .line_height(LineHeight::Relative(1.0)),
+    )
+    .on_press(Message::Import(ImportMessage::Open))
+    .padding([7, 14])
+    .height(28)
+    .style(|_theme, status| theme::ghost_button_style(status));
+
     let settings_btn = button(centered_icon(fa::BARS, theme::TEXT_2, 13, 28))
         .on_press(Message::Ui(UiMessage::OpenSettings))
         .padding(0)
@@ -101,12 +115,78 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         .height(28)
         .style(|_theme, status| theme::ghost_button_style(status));
 
+    // "Media" toggle for the docked media-browser left panel. Only
+    // meaningful in the Arrange view (the panel lives there), so it's hidden
+    // elsewhere; a zero-width spacer keeps the right cluster's spacing
+    // identical when absent. Active fill is ACCENT_DIM (design doc #175).
+    //
+    // "Import audio…" button (ba todo #608) lives beside the Media toggle —
+    // both are Arrange-only affordances. It opens the OS multi-file audio
+    // picker; dragging audio files onto the window is the other route
+    // (see `update.rs::arrange_audio_file_drop`). Styled as a ghost button
+    // matching the sibling MIDI Import… button on the right.
+    let media_toggle: Element<'_, Message> = if matches!(r.view_mode, ViewMode::Arrange) {
+        let active = r.browser.visible;
+        let media_btn = button(
+            text("Media")
+                .size(12)
+                .font(theme::UI_FONT_MEDIUM)
+                .line_height(LineHeight::Relative(1.0)),
+        )
+        .on_press(Message::Browser(BrowserMessage::ToggleVisible))
+        .padding([7, 14])
+        .height(28)
+        .style(move |_theme, status| {
+            theme::toggle_button_style(active, theme::ACCENT, false, status)
+        });
+        let import_audio_btn = button(
+            text("Import audio\u{2026}")
+                .size(12)
+                .font(theme::UI_FONT_MEDIUM)
+                .line_height(LineHeight::Relative(1.0)),
+        )
+        .on_press(Message::Pool(PoolMessage::PickFiles))
+        .padding([7, 14])
+        .height(28)
+        .style(|_theme, status| theme::ghost_button_style(status));
+        row![media_btn, Space::new().width(10), import_audio_btn, Space::new().width(10)].into()
+    } else {
+        Space::new().width(0).into()
+    };
+
+    // "REF" toggle for the Reference & A/B right-rail. Only meaningful in
+    // the Mix view (the panel lives there), so it's hidden elsewhere; a
+    // zero-width spacer keeps the right cluster's spacing identical when
+    // absent.
+    let ref_toggle: Element<'_, Message> = if matches!(r.view_mode, ViewMode::Mixer) {
+        let active = r.mixer.reference_panel_open;
+        let btn = button(
+            text("REF")
+                .size(11)
+                .font(theme::UI_FONT_SEMIBOLD)
+                .line_height(LineHeight::Relative(1.0)),
+        )
+        .on_press(Message::Ui(UiMessage::ToggleReferencePanel))
+        .padding([6, 12])
+        .height(28)
+        .style(move |_theme, status| theme::toggle_button_style(active, theme::ACCENT, true, status));
+        // Trailing gap rides inside the element so the right cluster keeps
+        // identical spacing in views that hide the toggle.
+        row![btn, Space::new().width(10)].into()
+    } else {
+        Space::new().width(0).into()
+    };
+
     let chrome_row = row![
         Space::new().width(SHELL_HPAD),
         left,
         Space::new().width(Length::Fill),
         tabs,
         Space::new().width(Length::Fill),
+        media_toggle,
+        ref_toggle,
+        import_btn,
+        Space::new().width(10),
         settings_btn,
         Space::new().width(SHELL_HPAD),
     ]
@@ -171,6 +251,19 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
     let loop_btn = loop_toggle_button(r);
     let metronome_btn = metronome_toggle_button(r);
 
+    // Marker navigation + overview toggle (todo #370). Prev/Next jump the
+    // playhead to the adjacent arrangement marker; the flag button opens the
+    // markers overview popover anchored under the transport bar.
+    let prev_marker_btn = transport_btn(
+        fa::BACKWARD_FAST,
+        Message::Marker(MarkerMessage::JumpToPrev),
+    );
+    let next_marker_btn = transport_btn(
+        fa::FORWARD_FAST,
+        Message::Marker(MarkerMessage::JumpToNext),
+    );
+    let overview_btn = markers_overview_toggle_button(r);
+
     let left = row![
         prev_btn,
         stop_btn,
@@ -180,6 +273,10 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
         vertical_divider(),
         loop_btn,
         metronome_btn,
+        vertical_divider(),
+        prev_marker_btn,
+        overview_btn,
+        next_marker_btn,
     ]
     .spacing(8)
     .align_y(alignment::Vertical::Center);
@@ -393,6 +490,20 @@ fn metronome_toggle_button(r: &Resonance) -> Element<'_, Message> {
     .height(32)
     .style(move |_theme, status| theme::toggle_button_style(active, theme::GOOD, false, status))
     .into()
+}
+
+/// Flag toggle that opens/closes the arrangement-markers overview popover
+/// (todo #370). Lit with the accent tint while the overview is open.
+fn markers_overview_toggle_button(r: &Resonance) -> Element<'_, Message> {
+    let active = r.mixer.markers_overview_open;
+    let color = if active { theme::ACCENT } else { theme::TEXT_2 };
+    button(centered_icon(fa::FLAG, color, 13, 32))
+        .on_press(Message::Ui(UiMessage::ToggleMarkersOverview))
+        .padding(0)
+        .width(32)
+        .height(32)
+        .style(move |_theme, status| theme::toggle_button_style(active, theme::ACCENT, false, status))
+        .into()
 }
 
 fn vertical_divider<'a>() -> iced::widget::Container<'a, Message> {

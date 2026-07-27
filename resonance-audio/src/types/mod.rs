@@ -6,6 +6,7 @@ pub type ClipId = u64;
 pub type SamplePos = u64;
 pub type PluginInstanceId = u64;
 pub type BusId = u64;
+pub type SendId = u64;
 /// Identifier for an imported media-pool asset. Allocated by the engine
 /// on `AudioCommand::ImportAudioToPool` and carried by the
 /// import-lifecycle events. Independent of [`ClipId`]: an asset lives in
@@ -46,20 +47,35 @@ impl TrackType {
     }
 }
 
+mod aux_send;
 mod clip;
 mod commands;
 mod events;
+mod reference;
+mod stem;
+mod freeze;
+mod export;
 mod tempo;
 mod track;
 mod vocal_tuning;
 
+pub use aux_send::{aux_send_would_cycle, AuxSend, SendSource};
 pub use clip::{
     compute_waveform_peaks, AudioClip, ClipSource, FadeCurve, MidiClip, MidiNote,
-    PendingNoteEvent, WAVEFORM_PEAK_FRAMES,
+    PendingNoteEvent, WarpAlgorithm, WarpMarker, WAVEFORM_PEAK_FRAMES,
 };
+pub use freeze::FrozenSource;
 pub use vocal_tuning::{F0Frame, GlobalTuning, NoteBlob, NoteEdit, TuningScale, VocalTuning};
 pub use commands::AudioCommand;
-pub use events::{AudioEvent, BouncedClipData, ImportStage};
+pub use events::{
+    AudioEvent, BouncedClipData, ExportErrorKind, ExportPhase, ImportStage,
+};
+pub use reference::{ABSource, ReferenceAnalysisStage, ReferenceId, ReferenceMarker};
+pub use stem::{StemBitDepth, StemSource, StemTarget};
+pub use export::{
+    BitDepth, ExportFormat, ExportMetadata, ExportSettings, FlacLevel, Mp3Rate, NormalizeMode,
+    NormalizeSpec, OpusOptimize,
+};
 pub use tempo::{
     arrival_bpm_at_bar, avg_bpm_for_bar, bpm_at_bar, sample_frac_to_tick_frac,
     tick_frac_to_sample_frac, InputDeviceInfo, ParamInfo, PluginDescInfo, ScannedPlugin,

@@ -17,6 +17,8 @@
 //! play / lock-contended branches, and stitches the per-block render
 //! across the loop seam.
 
+mod audition;
+mod automation_apply;
 mod click;
 mod common;
 mod master;
@@ -33,12 +35,91 @@ pub(crate) use midi_events::MAX_MIDI_EVENTS_PER_BUFFER;
 pub use midi_stash::{MidiStash, NoteSink};
 pub(crate) use render_core::{render_block, RenderStrategy};
 pub use render_core::mix_track_clips;
+pub use automation_apply::{auto_gain_ramp, auto_master_volume, auto_muted};
 
 use ringbuf::traits::{Consumer, Observer};
 use std::sync::atomic::Ordering;
 
-use crate::engine::SharedState;
+use crate::engine::reference::ABMeters;
+use crate::engine::{AutomationSnapshot, SharedState};
 use crate::types::*;
+
+pub use audition::mix_audition_overlay;
+
+/// Test-only harness around [`render_block`]: assembles the `IndexMap` /
+/// scratch-buffer plumbing from plain vecs, renders one offline (Bounce)
+/// block at playhead 0, and returns the interleaved-stereo master output
+/// plus the per-bus summing buffers. After the call each bus buffer still
+/// holds that bus's accumulated signal *before* its own fader — for a
+/// return bus that is exactly the summed aux-send contribution, so an
+/// integration test can assert the tap in isolation. Keeps `indexmap` and
+/// the render scaffolding out of the `tests/` crate.
+#[doc(hidden)]
+#[allow(clippy::type_complexity)]
+pub fn render_aux_for_test(
+    tracks: Vec<Track>,
+    busses: Vec<Bus>,
+    clips: Vec<AudioClip>,
+    aux_sends: Vec<AuxSend>,
+    frames: usize,
+    sample_rate: u32,
+) -> (Vec<f32>, Vec<(Vec<f32>, Vec<f32>)>) {
+    use indexmap::IndexMap;
+
+    let tracks_guard: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
+    let busses_guard: IndexMap<BusId, Bus> = busses.into_iter().map(|b| (b.id, b)).collect();
+    let plugins_guard: IndexMap<
+        PluginInstanceId,
+        parking_lot::Mutex<crate::clap_host::SyncClapInstance>,
+    > = IndexMap::new();
+    let midi_clips: Vec<MidiClip> = Vec::new();
+    let tempo_map = TempoMap::default();
+    let latency = crate::latency::LatencyComp::empty();
+    let active_busses = busses_guard.len();
+
+    let mut data = vec![0.0f32; frames * 2];
+    let mut track_buf_l = vec![0.0f32; frames];
+    let mut track_buf_r = vec![0.0f32; frames];
+    let mut bus_bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..active_busses)
+        .map(|_| (vec![0.0f32; frames], vec![0.0f32; frames]))
+        .collect();
+    let mut port_scratch: Vec<(Vec<f32>, Vec<f32>)> = Vec::new();
+    let mut note_buf: Vec<PendingNoteEvent> = Vec::new();
+
+    let in_filter = |_id: TrackId| true;
+    let mut strategy = RenderStrategy::Bounce {
+        in_filter: &in_filter,
+        respect_mute_solo: false,
+    };
+    let automation = crate::engine::AutomationSnapshot::default();
+
+    render_block(
+        &mut data,
+        2,
+        &tracks_guard,
+        &busses_guard,
+        &clips,
+        &midi_clips,
+        &plugins_guard,
+        &tempo_map,
+        sample_rate,
+        false,
+        active_busses,
+        &aux_sends,
+        0,
+        frames,
+        &mut track_buf_l,
+        &mut track_buf_r,
+        &mut bus_bufs,
+        &mut port_scratch,
+        &mut note_buf,
+        &latency,
+        &automation,
+        &mut strategy,
+    );
+
+    (data, bus_bufs)
+}
 
 use click::{render_count_in_clicks, render_metronome_clicks};
 use common::{advance_playhead_silent, panic_instrument_tracks, TransportSnap};
@@ -122,6 +203,7 @@ pub(crate) fn mix_audio(
     >,
     tempo_map: &arc_swap::ArcSwap<TempoMap>,
     latency_comp: &arc_swap::ArcSwap<crate::latency::LatencyComp>,
+    automation: &arc_swap::ArcSwap<AutomationSnapshot>,
     sample_rate: u32,
     track_buf_l: &mut [f32],
     track_buf_r: &mut [f32],
@@ -138,6 +220,11 @@ pub(crate) fn mix_audio(
     monitor_temp: &mut [f32],
     buf_frames: usize,
     quantum: usize,
+    // A/B metering taps: the mix tap is fed the processed-mix output at the
+    // end of a playing block; the reference tap is fed the reference PCM
+    // when the monitored source is a reference. Both publish their snapshot
+    // into `shared` for the control thread's `PollABMeters` reply.
+    ab_meters: &mut ABMeters,
 ) {
     resonance_common::flush_denormals();
 
@@ -156,6 +243,43 @@ pub(crate) fn mix_audio(
         log_oversize_buffer(raw_output_frames, buf_frames);
     }
     let output_frames = frames;
+
+    // Reference A/B monitor: when the user has switched the monitored
+    // source to a loaded reference, replace the entire output with the
+    // reference PCM, bypassing the mix + master/mastering chain (this is
+    // the post-master monitor tap). Suppressed while recording or
+    // counting in so a realtime bounce / punch-in monitors the live
+    // signal, not the reference. The offline/realtime bounce render
+    // paths never consult `shared.reference`, so exports stay the
+    // processed mix regardless of this selection.
+    if !shared.recording.load(Ordering::Relaxed)
+        && !shared.count_in_active.load(Ordering::Relaxed)
+    {
+        let playhead = shared.playhead.load(Ordering::Relaxed);
+        if shared.reference.render(
+            &mut data[..output_frames * channels],
+            channels,
+            output_frames,
+            playhead,
+        ) {
+            // Meter the reference exactly as monitored — post loudness-match
+            // / trim gain — so the panel's Delta against the mix is honest.
+            ab_meters
+                .reference
+                .feed_interleaved(&data[..output_frames * channels], channels, output_frames);
+            shared.ref_meter.store(&ab_meters.reference.snapshot());
+            // Keep the transport rolling while playing so loop-to-mix
+            // tracking and a later switch back to the mix resume at the
+            // right spot; when stopped the reference free-runs (audition)
+            // and the playhead stays put.
+            if shared.playing.load(Ordering::Relaxed) {
+                let new_playhead =
+                    advance_playhead_silent(shared, playhead, output_frames as u64);
+                shared.playhead.store(new_playhead, Ordering::Relaxed);
+            }
+            return;
+        }
+    }
 
     // Snapshot tempo once per block. Hold the ArcSwap guard so the bar
     // table is available for tempo-map-aware MIDI tick→sample conversion
@@ -198,6 +322,11 @@ pub(crate) fn mix_audio(
     let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);
     let monitor_frames = monitor_samples / frame_stride;
 
+    // The arrangement render below has several early-exit branches (count-in,
+    // not-playing, lock-contended). Wrap them in a labeled block so each one
+    // `break`s to a common tail that mixes the audition preview overlay — the
+    // preview must be audible regardless of which branch the arrangement took.
+    'arrangement: {
     // Count-in branch: hold the playhead, skip track/clip rendering,
     // and emit metronome ticks from a count-in-local elapsed counter
     // so the last click lands exactly one beat before the punch-in
@@ -252,7 +381,7 @@ pub(crate) fn mix_audio(
 
         // Master volume + peaks so the count-in audio hits meters the
         // same way normal playback does.
-        apply_master_volume_and_peaks(data, channels, shared);
+        apply_master_volume_and_peaks(data, channels, shared, None);
 
         // Decrement the remaining-clicks counter. Once it hits zero
         // the metronome goes quiet, but `count_in_active` keeps the
@@ -264,7 +393,7 @@ pub(crate) fn mix_audio(
         shared
             .count_in_remaining
             .store(new_remaining, Ordering::Relaxed);
-        return;
+        break 'arrangement;
     }
 
     if !shared.playing.load(Ordering::Relaxed) {
@@ -272,7 +401,7 @@ pub(crate) fn mix_audio(
         if monitor_frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
             let (Some(tracks_guard), Some(plugins_guard)) = (tracks.try_read(), plugins.try_read())
             else {
-                return;
+                break 'arrangement;
             };
             let any_monitor = mix_monitor_passthrough(
                 data,
@@ -288,10 +417,10 @@ pub(crate) fn mix_audio(
             );
             if any_monitor {
                 // Apply master volume and compute master peak levels
-                apply_master_volume_and_peaks(data, channels, shared);
+                apply_master_volume_and_peaks(data, channels, shared, None);
             }
         }
-        return;
+        break 'arrangement;
     }
 
     let playhead = shared.playhead.load(Ordering::Relaxed);
@@ -313,7 +442,7 @@ pub(crate) fn mix_audio(
         // Lock contended -- advance playhead to avoid desync, output silence this buffer
         let new_playhead = advance_playhead_silent(shared, playhead, output_frames as u64);
         shared.playhead.store(new_playhead, Ordering::Relaxed);
-        return;
+        break 'arrangement;
     };
 
     let active_busses = busses_guard.len().min(bus_bufs.len());
@@ -326,6 +455,17 @@ pub(crate) fn mix_audio(
     // the track/bus/plugin topology changes.
     let comp_guard = latency_comp.load();
     let comp_ref: &crate::latency::LatencyComp = &comp_guard;
+
+    // Snapshot the aux-send table once per buffer (wait-free; the engine
+    // thread republishes it on every send add/remove/clear).
+    let aux_guard = shared.aux_sends.load();
+    let aux_ref: &[AuxSend] = &aux_guard;
+
+    // Snapshot the parameter-automation lanes once per buffer (wait-free,
+    // published by the engine thread on lane edits). Held across both
+    // seam sub-blocks and the master pass so the whole buffer agrees.
+    let auto_guard = automation.load();
+    let auto_ref: &AutomationSnapshot = &auto_guard;
 
     let any_solo = any_top_level_solo(tracks_guard.values());
 
@@ -372,6 +512,7 @@ pub(crate) fn mix_audio(
             sample_rate,
             any_solo,
             active_busses,
+            aux_ref,
             playhead,
             head_frames,
             track_buf_l,
@@ -385,6 +526,7 @@ pub(crate) fn mix_audio(
             input_channels,
             transport_snap,
             comp_ref,
+            auto_ref,
         );
 
         // Flush instrument voices at the seam.
@@ -406,6 +548,7 @@ pub(crate) fn mix_audio(
             sample_rate,
             any_solo,
             active_busses,
+            aux_ref,
             loop_in,
             tail_frames,
             track_buf_l,
@@ -420,6 +563,7 @@ pub(crate) fn mix_audio(
             input_channels,
             transport_snap,
             comp_ref,
+            auto_ref,
         );
 
         loop_in + tail_frames as u64
@@ -436,6 +580,7 @@ pub(crate) fn mix_audio(
             sample_rate,
             any_solo,
             active_busses,
+            aux_ref,
             playhead,
             frames,
             track_buf_l,
@@ -449,6 +594,7 @@ pub(crate) fn mix_audio(
             input_channels,
             transport_snap,
             comp_ref,
+            auto_ref,
         );
         playhead + output_frames as u64
     };
@@ -488,8 +634,25 @@ pub(crate) fn mix_audio(
         );
     }
 
-    // Apply master volume, hard clip, and compute master peak levels
-    apply_master_volume_and_peaks(data, channels, shared);
+    // Apply master volume, hard clip, and compute master peak levels.
+    // A master-gain automation lane (evaluated at the buffer's end frame)
+    // overrides the static fader; the pass ramps from the previous
+    // block's value so the sweep stays click-free.
+    let auto_master = auto_master_volume(auto_ref, playhead + output_frames as u64);
+    apply_master_volume_and_peaks(data, channels, shared, auto_master);
+
+    // Meter the processed mix (post master FX + volume) for the A/B panel.
+    ab_meters
+        .mix
+        .feed_interleaved(&data[..output_frames * channels], channels, output_frames);
+    shared.mix_meter.store(&ab_meters.mix.snapshot());
 
     shared.playhead.store(new_playhead, Ordering::Relaxed);
+    } // 'arrangement
+
+    // Audition preview overlay: summed in after the arrangement + master pass,
+    // independent of transport, so a sample audition is audible whether or not
+    // the project is rolling. Bypasses the master fader/FX by design — it's a
+    // monitor-style preview, not part of the mix.
+    mix_audition_overlay(data, channels, shared);
 }

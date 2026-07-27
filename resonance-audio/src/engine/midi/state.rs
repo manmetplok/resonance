@@ -9,7 +9,10 @@ use std::collections::HashMap;
 
 use crossbeam_channel::Sender;
 
-use crate::midi_hardware::{LiveMidiEvent, MidiDeviceInfo, MidiInputRegistry, MidiOutputRegistry};
+use crate::midi_hardware::{
+    ControlSurfaceInput, LiveControlEvent, LiveMidiEvent, MidiDeviceInfo, MidiInputRegistry,
+    MidiOutputRegistry,
+};
 use crate::types::TrackId;
 
 /// Aggregated hardware-MIDI bookkeeping for the engine control thread.
@@ -24,6 +27,11 @@ pub struct MidiHardwareState {
     /// callback runs on a midir-spawned thread and feeds
     /// [`LiveMidiEvent`]s into the engine thread via a bounded channel.
     pub midi_inputs: MidiInputRegistry,
+    /// Dedicated control-surface MIDI input, independent of tracks. Its
+    /// midir-spawned callback feeds [`LiveControlEvent`]s into the engine
+    /// thread via a separate bounded channel, drained alongside
+    /// [`Self::midi_inputs`].
+    pub control_surface: ControlSurfaceInput,
     /// Hardware MIDI output registry. Refcounts midir output
     /// connections across tracks that share the same physical port.
     pub midi_outputs: MidiOutputRegistry,
@@ -37,6 +45,12 @@ pub struct MidiHardwareState {
     /// `(midi_outbound_last_playhead .. current_playhead]` and emits
     /// NoteOn/NoteOff for them.
     pub midi_outbound_last_playhead: u64,
+    /// Last binding integer emitted for each automated device parameter,
+    /// keyed by track then `DeviceParam::id`. The device-param automation
+    /// poll only writes a CC/NRPN when the mapped value changed against
+    /// this memo, so a slow lane sweep doesn't flood the port. Cleared on
+    /// transport stop so the next Play re-sends from the new position.
+    pub device_param_last: HashMap<TrackId, HashMap<String, u16>>,
     /// Last MIDI input device list sent to the GUI. Compared against
     /// the next enumeration so a steady-state poll (no plug events)
     /// doesn't trigger a redundant `MidiInputDevicesListed` round-trip.
@@ -46,12 +60,17 @@ pub struct MidiHardwareState {
 }
 
 impl MidiHardwareState {
-    pub fn new(live_midi_tx: Sender<LiveMidiEvent>) -> Self {
+    pub fn new(
+        live_midi_tx: Sender<LiveMidiEvent>,
+        live_control_tx: Sender<LiveControlEvent>,
+    ) -> Self {
         Self {
             midi_inputs: MidiInputRegistry::new(live_midi_tx),
+            control_surface: ControlSurfaceInput::new(live_control_tx),
             midi_outputs: MidiOutputRegistry::new(),
             midi_outbound_held: HashMap::new(),
             midi_outbound_last_playhead: 0,
+            device_param_last: HashMap::new(),
             last_midi_input_devices: Vec::new(),
             last_midi_output_devices: Vec::new(),
         }

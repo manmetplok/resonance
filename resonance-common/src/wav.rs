@@ -160,6 +160,11 @@ fn decode_source_to_interleaved(
         .first_track_known_codec(TrackType::Audio)
         .ok_or_else(|| format!("{kind} has no decodable track"))?;
     let track_id = track.id;
+    // The container's declared length, when present. The final FLAC frame is
+    // padded to a full block by some encoders (see resonance-audio's export
+    // sink), so the decoder can emit a few silent samples past this count;
+    // honoring it trims that padding, matching spec-compliant decoders.
+    let declared_frames = track.num_frames;
     let audio_params = track
         .codec_params
         .as_ref()
@@ -213,6 +218,15 @@ fn decode_source_to_interleaved(
 
     if samples.is_empty() {
         return Err(format!("{kind} decoded 0 samples"));
+    }
+
+    // Drop any samples past the container's declared frame count (encoder
+    // block-padding on the last frame). Never extends the buffer.
+    if let Some(frames) = declared_frames {
+        let limit = frames as usize * channels;
+        if limit > 0 && limit < samples.len() {
+            samples.truncate(limit);
+        }
     }
 
     Ok(Decoded {

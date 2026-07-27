@@ -8,7 +8,7 @@
 //! the codebase keeps compiling while it migrates piece by piece.
 use iced::font::{Family, Weight};
 use iced::widget::text::{Shaping, Text};
-use iced::widget::{button, container, text, text_input};
+use iced::widget::{button, container, text, text_input, Container, Row};
 use iced::{Color, Font, Theme};
 
 /// Raw bytes of the bundled Font Awesome Solid font, extended with a custom
@@ -98,12 +98,26 @@ pub mod fa {
     pub const STOP: char = '\u{f04d}';
     pub const BACKWARD_STEP: char = '\u{f048}';
     pub const FORWARD_STEP: char = '\u{f051}';
+    /// Double-triangle-to-bar — "jump to previous marker".
+    pub const BACKWARD_FAST: char = '\u{f049}';
+    /// Double-triangle-to-bar — "jump to next marker".
+    pub const FORWARD_FAST: char = '\u{f050}';
+    /// Flag — the arrangement-markers overview toggle.
+    pub const FLAG: char = '\u{f024}';
     pub const CIRCLE: char = '\u{f111}';
     pub const BARS: char = '\u{f0c9}';
     pub const FOLDER_OPEN: char = '\u{f07c}';
+    /// Closed folder — media-browser subfolder rows (Files tab).
+    pub const FOLDER: char = '\u{f07b}';
     pub const FLOPPY_DISK: char = '\u{f0c7}';
     pub const MAGNIFYING_GLASS_PLUS: char = '\u{f00e}';
     pub const MAGNIFYING_GLASS_MINUS: char = '\u{f010}';
+    /// Magnifying glass — the per-folder filter field (Files tab).
+    pub const MAGNIFYING_GLASS: char = '\u{f002}';
+    /// Solid star — the WARM "favourite folder" toggle + favourite pills.
+    pub const STAR: char = '\u{f005}';
+    /// Clock — the "recent folder" pills in the media-browser shelf.
+    pub const CLOCK: char = '\u{f017}';
     /// Metronome icon (custom glyph added by tools/add_metronome_glyph.py).
     pub const METRONOME: char = '\u{f8db}';
     /// Single hollow circle — mono channel indicator. Custom glyph added
@@ -142,6 +156,11 @@ pub mod fa {
     /// Counter-clockwise rotating arrow — used for "regenerate / reroll"
     /// affordances next to a primary Generate button.
     pub const ARROW_ROTATE_LEFT: char = '\u{f0e2}';
+    /// Warning triangle with an exclamation — missing-file / error marker
+    /// (e.g. the relink modal's "couldn't be found" rows).
+    pub const TRIANGLE_EXCLAMATION: char = '\u{f071}';
+    /// Circled check — a resolved / restored marker (e.g. a relinked row).
+    pub const CIRCLE_CHECK: char = '\u{f058}';
 }
 
 // ---------------------------------------------------------------------------
@@ -206,15 +225,57 @@ pub const ACCENT_LINE: Color = rgba(0x8b, 0x6d, 0xff, 0.34);
 
 /// Warm amber — audio clips, busses, playhead.
 pub const WARM: Color = rgb(0xe8, 0xc4, 0x7b);
+/// Warm wash — fill behind a "warm" badge (Configuring status).
+pub const WARM_DIM: Color = rgba(0xe8, 0xc4, 0x7b, 0.12);
 /// Warm border — bus strip outlines.
 pub const WARM_LINE: Color = rgba(0xe8, 0xc4, 0x7b, 0.34);
 
 /// Mint green — meters, success.
 pub const GOOD: Color = rgb(0x6d, 0xd6, 0xa3);
+/// Mint wash — fill behind an active "good" toggle (input monitor on).
+pub const GOOD_DIM: Color = rgba(0x6d, 0xd6, 0xa3, 0.14);
+/// Mint border — outline of a "good" badge (Live status).
+pub const GOOD_LINE: Color = rgba(0x6d, 0xd6, 0xa3, 0.34);
 /// Soft pink — mute, peaking, errors.
 pub const BAD: Color = rgb(0xe8, 0x7b, 0x8b);
-/// Soft-pink border — "via group" mute chip outline.
-pub const BAD_LINE: Color = rgba(0xe8, 0x7b, 0x8b, 0.34);
+/// Pink wash — fill behind an active "bad" toggle (record arm on).
+pub const BAD_DIM: Color = rgba(0xe8, 0x7b, 0x8b, 0.13);
+/// Pink border — outline of a "bad" badge / offline alert / strip glow;
+/// also the "via group" mute chip outline.
+pub const BAD_LINE: Color = rgba(0xe8, 0x7b, 0x8b, 0.40);
+
+// ---------------------------------------------------------------------------
+// Frost treatment — frozen (bounce-in-place) tracks.  (design doc #181)
+//
+// IMPORTANT: this is NOT a new palette hue. Resonance's palette is
+// deliberately constrained and has no "cold" colour. Frozen state is a
+// visual *mode*, rendered as a treatment derived from existing tokens:
+// a translucent cool wash over `BG_2`, a desaturated icy edge, and a
+// tinted snowflake glyph. The three constants below are the single
+// source of truth for that treatment — freeze styling must reference
+// them rather than spelling out inline colours, exactly as `on-solo` /
+// `on-mute` reference their semantic tints.
+//
+// They share the same alpha conventions as the accent treatment
+// (`ACCENT_DIM` at 0.16 for the wash, `ACCENT_LINE` at 0.34 for the
+// edge) so the frost mode reads as part of the existing system rather
+// than a bolt-on. The icy hue is the one cool tone the design admits,
+// and only ever as this mode — never as a standalone fill.
+
+/// Icy base tone the frost treatment is derived from — a soft,
+/// desaturated steel-blue. Not used directly; the three public frost
+/// constants below carry the actual treatment values.
+const FROST_BASE: (u8, u8, u8) = (0x9d, 0xb8, 0xd4);
+
+/// Translucent cool wash layered over `BG_2` to "frost" a frozen
+/// track's header / lane. Low alpha so the surface beneath still reads.
+pub const FROST_WASH: Color = rgba(FROST_BASE.0, FROST_BASE.1, FROST_BASE.2, 0.16);
+/// Desaturated icy edge — the hairline outline / left-rail tint that
+/// marks a frozen channel. Mirrors `ACCENT_LINE`'s 0.34 edge alpha.
+pub const FROST_EDGE: Color = rgba(FROST_BASE.0, FROST_BASE.1, FROST_BASE.2, 0.34);
+/// Snowflake glyph tint for the freeze affordance. The solid icy tone
+/// so the glyph reads cleanly against the frosted header.
+pub const FROST_ICON: Color = rgb(FROST_BASE.0, FROST_BASE.1, FROST_BASE.2);
 
 // ---------------------------------------------------------------------------
 // Group identity palette — muted jewel tones for track grouping (epic #36).
@@ -380,6 +441,10 @@ pub const MIXER_GROUP_HEADER_WIDTH: f32 = 116.0;
 pub const MASTER_STRIP_WIDTH: f32 = 156.0;
 /// Inspector column width on the Mixer.
 pub const INSPECTOR_WIDTH: f32 = 320.0;
+/// Reference & A/B right-rail width on the Mixer (design doc #184/#198).
+pub const REFERENCE_PANEL_WIDTH: f32 = 360.0;
+/// Inner padding shared by the Mixer's right rails (inspector, reference).
+pub const RAIL_PADDING: f32 = 26.0;
 /// Horizontal gap between unrelated strips in a mixer strip lane.
 /// Parent + sub-track clusters stay flush (0 px) inside this gap.
 pub const MIXER_STRIP_GAP: f32 = 16.0;
@@ -387,6 +452,10 @@ pub const MIXER_STRIP_GAP: f32 = 16.0;
 pub const MIXER_LANE_HPAD: f32 = 26.0;
 /// Right-rail column width on the Compose view.
 pub const COMPOSE_RAIL_WIDTH: u16 = 324;
+/// Docked media-browser panel width on the Arrange view (design doc #175,
+/// `--browser-w`). Mirrors the Compose rail / Mixer inspector fixed-column
+/// pattern; a peer of the timeline, not an overlay.
+pub const BROWSER_WIDTH: f32 = 312.0;
 
 /// Height of the vertical fader used in mixer strips and master strip.
 pub const FADER_HEIGHT: f32 = 120.0;
@@ -865,6 +934,148 @@ pub fn card_warm(_theme: &Theme) -> container::Style {
             color: WARM_LINE,
             width: 1.0,
             radius: RADIUS_XL.into(),
+        },
+        ..Default::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard-shortcut presentation — keycaps + nav / edited / conflict states.
+//
+// Foundations for the command palette and the Preferences › Keyboard panel
+// (epic #58). Shortcuts read as physical keycaps rendered in `MONO_FONT`;
+// modifiers show as glyphs (⌘ ⌥ ⇧ ↵) so a chord like ⌘⇧M reads as one
+// compact row. Selection / edited / conflict states reuse the existing
+// semantic tokens (`ACCENT_*`, `WARM*`, `BAD`) so nothing looks bolted on.
+// ---------------------------------------------------------------------------
+
+/// Modifier- and special-key glyphs used to render a key chord as keycaps.
+/// Centralised here so call sites never hardcode the codepoints.
+pub mod kbd {
+    /// Command / Super (⌘).
+    pub const CMD: char = '\u{2318}';
+    /// Option / Alt (⌥).
+    pub const OPTION: char = '\u{2325}';
+    /// Shift (⇧).
+    pub const SHIFT: char = '\u{21e7}';
+    /// Control (⌃).
+    pub const CONTROL: char = '\u{2303}';
+    /// Return / Enter (↵).
+    pub const ENTER: char = '\u{21b5}';
+    /// Up arrow (↑) — palette navigation footer.
+    pub const ARROW_UP: char = '\u{2191}';
+    /// Down arrow (↓) — palette navigation footer.
+    pub const ARROW_DOWN: char = '\u{2193}';
+}
+
+/// Visual tone of a keycap. `Neutral` is the resting state; `Active` lifts
+/// the caps inside a selected palette row (accent-soft text + accent ring);
+/// `Conflict` flags the offending chord on a binding clash (`BAD`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeycapTone {
+    Neutral,
+    Active,
+    Conflict,
+}
+
+/// Keycap fill — one step below the panel so caps read as inset tiles.
+pub const KEYCAP_BG: Color = BG_1;
+/// Keycap label size (mono).
+pub const KEYCAP_TEXT_SIZE: f32 = 11.0;
+/// Inner padding of a keycap as `[vertical, horizontal]`.
+pub const KEYCAP_PADDING: [f32; 2] = [2.0, 6.0];
+/// Gap between adjacent keycaps in a chord row.
+pub const KEYCAP_GAP: f32 = 4.0;
+
+/// Container style for a single keycap: `BG_1` fill, hairline outline, and a
+/// small radius — the `kbd` tile look from the design. `tone` recolours the
+/// text and border to match the surrounding row state.
+///
+/// Note: the design calls for a bottom-weighted (2 px) lower border to mimic
+/// a physical key. iced 0.14's `Border` carries a single uniform width, so
+/// the cap uses a uniform 1 px outline; the mono font + inset fill still read
+/// unmistakably as a keycap.
+pub fn keycap_style(tone: KeycapTone) -> impl Fn(&Theme) -> container::Style {
+    move |_theme| {
+        let (text_color, border_color) = match tone {
+            KeycapTone::Neutral => (TEXT_2, LINE),
+            KeycapTone::Active => (ACCENT_SOFT, ACCENT_LINE),
+            KeycapTone::Conflict => (BAD, BAD),
+        };
+        container::Style {
+            text_color: Some(text_color),
+            background: Some(iced::Background::Color(KEYCAP_BG)),
+            border: iced::Border {
+                color: border_color,
+                width: 1.0,
+                radius: RADIUS_XS.into(),
+            },
+            ..Default::default()
+        }
+    }
+}
+
+/// One keycap tile: a mono-font label inside an outlined cap. `label` is the
+/// rendered glyph(s) — a single key (`"M"`), a modifier glyph (`kbd::CMD`),
+/// or a short name (`"Esc"`).
+pub fn keycap<'a, Message: 'a>(label: &str, tone: KeycapTone) -> Container<'a, Message> {
+    container(
+        text(label.to_string())
+            .font(MONO_FONT)
+            .size(KEYCAP_TEXT_SIZE)
+            // Advanced shaping so the modifier glyphs (⌘ ⌥ ⇧ ↵) resolve
+            // through font fallback rather than rendering as tofu.
+            .shaping(Shaping::Advanced),
+    )
+    .padding(KEYCAP_PADDING)
+    .style(keycap_style(tone))
+}
+
+/// A chord rendered as a row of keycaps — e.g. `&["⌘", "⇧", "M"]`. Caps lay
+/// out left-to-right with `KEYCAP_GAP` spacing and share one `tone`.
+pub fn keycap_row<'a, Message: 'a>(labels: &[&str], tone: KeycapTone) -> Row<'a, Message> {
+    let mut row = Row::new()
+        .spacing(KEYCAP_GAP)
+        .align_y(iced::alignment::Vertical::Center);
+    for label in labels {
+        row = row.push(keycap(label, tone));
+    }
+    row
+}
+
+/// Active-row wash for the palette's selected result and the Preferences
+/// nav-rail's current item: `ACCENT_DIM` fill with an `ACCENT_LINE` inset
+/// ring (iced paints the 1 px border inside the bounds, matching the
+/// prototype's `box-shadow: inset 0 0 0 1px`). Same selection language as
+/// `card_selected`.
+pub fn active_row_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(ACCENT_DIM)),
+        border: iced::Border {
+            color: ACCENT_LINE,
+            width: 1.0,
+            radius: RADIUS_MD.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Small "edited" pill shown on a binding row whose chord diverges from its
+/// default — warm amber wash + border. Reuses the `WARM` tokens (and the
+/// lane-inspector pill treatment) so "customised" reads the same everywhere.
+pub fn edited_pill_style(theme: &Theme) -> container::Style {
+    editing_pill_warm_style(theme)
+}
+
+/// Conflict outline for a binding row whose captured chord collides with an
+/// existing binding: a `BAD` ring with no fill, pairing with the conflict
+/// banner that names the current owner.
+pub fn conflict_ring_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        border: iced::Border {
+            color: BAD,
+            width: 1.0,
+            radius: RADIUS_LG.into(),
         },
         ..Default::default()
     }

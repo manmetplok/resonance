@@ -10,7 +10,10 @@ use resonance_audio::types::*;
 use crate::message::*;
 use crate::Resonance;
 
-use super::{clips, midi, plugins, project_io, tracks, transport};
+use super::{
+    automation, aux_sends, clips, midi, midi_map, plugins, pool, project_io, reference, tracks,
+    transport,
+};
 
 pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
     use AudioEvent as E;
@@ -33,12 +36,31 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::BounceProgress { fraction } => {
             transport::bounce_progress(r, fraction)
         }
+        // Stem-export plumbing (ba todo #325): the engine emits this
+        // multi-target queue; wiring it into the export modal's progress
+        // UI is a follow-up todo, so consume the events here for now.
+        E::StemExportError(_)
+        | E::StemExportProgress { .. }
+        | E::StemExportTargetDone { .. }
+        | E::StemExportTargetError { .. }
+        | E::StemExportComplete { .. }
+        | E::StemExportCancelled { .. } => {}
+        E::ExportProgress { phase, fraction } => transport::export_progress(r, phase, fraction),
+        E::ExportComplete { path, bytes, .. } => transport::export_complete(r, path, bytes),
+        E::ExportError { kind, message } => transport::export_error(r, kind, message),
         E::MidiInputDevicesListed { devices } => transport::midi_input_devices(r, devices),
         E::MidiOutputDevicesListed { devices } => transport::midi_output_devices(r, devices),
         E::MidiClockStarted => transport::midi_clock_started(r),
         E::MidiClockContinued => transport::midi_clock_continued(r),
         E::MidiClockStopped => transport::midi_clock_stopped(r),
         E::MidiClockTempoDetected { bpm } => transport::midi_clock_tempo_detected(r, bpm),
+        // Confirms the engine stored a track's device-param map
+        // (`SetTrackDeviceParams`, epic #40, doc #201 §4). Mirror the applied
+        // param ids onto the track's external-instrument state so the app can
+        // confirm the dispatch and reconstruct after a project-load replay.
+        E::TrackDeviceParamsApplied { track_id, param_ids } => {
+            super::external_instrument::device_params_applied(r, track_id, param_ids)
+        }
 
         // Audio clip events
         E::ClipImported {
@@ -94,11 +116,57 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             fade_out_curve,
         ),
         E::ClipGainChanged { clip_id, gain_db } => clips::gain_changed(r, clip_id, gain_db),
-        // Media-pool import lifecycle (engine todo #592). Mirroring these
-        // into the app's pool + import-progress state is todo #597; until
-        // it lands these arms accept the events without acting, keeping
-        // the workspace compiling now that the engine emits them.
-        E::ImportProgress { .. } | E::AssetImported { .. } | E::ImportFailed { .. } => {}
+        // Clip warp / follow-tempo events (engine todo #418). Mirroring
+        // these into `ClipState` is todo #421; until it lands these arms
+        // accept the events without acting, keeping the workspace
+        // compiling now that the engine emits them.
+        E::ClipWarpChanged { .. } | E::ClipWarpMarkersChanged { .. } => {}
+        // Clip tempo/BPM detection reply (engine todo #420). The detector
+        // emits this so the command/event boundary is complete; mirroring
+        // the detected BPM into the app is a follow-up todo, so accept it
+        // without acting for now.
+        E::ClipTempoDetected { .. } => {}
+        // Media-pool import lifecycle (engine todo #592). `AssetImported`
+        // mirrors the asset into the pool and, for a drop, places it as a
+        // clip (todo #598, `engine_events::pool`); `ImportFailed` drops the
+        // queued placement and surfaces the error. `ImportProgress` updates
+        // the per-file progress tracker for the transcode modal (todo #597).
+        E::ImportProgress { asset_id, path, stage } => {
+            pool::import_progress(r, asset_id, path, stage)
+        }
+        E::AssetImported {
+            asset_id,
+            project_relative_path,
+            original_path,
+            format,
+            channels,
+            source_sample_rate,
+            duration_frames,
+            peaks,
+        } => pool::asset_imported(
+            r,
+            asset_id,
+            project_relative_path,
+            original_path,
+            format,
+            channels,
+            source_sample_rate,
+            duration_frames,
+            peaks,
+        ),
+        E::ImportFailed {
+            asset_id,
+            path,
+            reason,
+        } => pool::import_failed(r, asset_id, path, reason),
+        // Vocal pitch analysis (todo #357) emits the detected contour/notes
+        // here; mirror them into the clip's app-side `VocalTuning` (todo
+        // #359) so the pitch editor reads them without a read-back.
+        E::ClipPitchDetected {
+            clip_id,
+            notes,
+            contour,
+        } => clips::pitch_detected(r, clip_id, notes, contour),
         E::RecordingFinished {
             clip_id,
             track_id,
@@ -115,6 +183,12 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             name,
             waveform_peaks,
         ),
+        // Cycle-record take capture (epic #15). The engine emits one
+        // `TakeCaptured` per loop pass with its take-group/slot id; the
+        // recorded clips themselves arrive via `RecordingFinished`. GUI
+        // take-lane mirroring/comping is a follow-up todo, so for now we
+        // accept the event without acting — keeping the match exhaustive.
+        E::TakeCaptured { .. } => {}
 
         // MIDI clip + note events
         E::MidiClipCreated {
@@ -177,6 +251,24 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             velocity,
         } => midi::note_velocity_set(r, clip_id, note_index, velocity),
 
+        // Bulk MIDI edits from quantize/humanize/groove ops (doc #163, epic #25).
+        // The engine emits one `MidiNotesEdited` carrying the full resulting note
+        // array (replacing the clip's notes wholesale, no per-note churn), and
+        // `GrooveExtracted` for groove extraction (added to the app groove library).
+        E::MidiNotesEdited { clip_id, notes } => midi::notes_edited(r, clip_id, notes),
+        E::GrooveExtracted { template } => midi::groove_extracted(r, template),
+
+        // MIDI Learn & hardware control-surface mapping (doc #167 §3 A1).
+        // App state is a pure projection of these events; the active
+        // binding set is rebuilt from MidiBindingChanged / Cleared alone.
+        E::MidiLearnCaptured { target, source } => midi_map::learn_captured(r, target, source),
+        E::MidiBindingChanged { binding } => midi_map::binding_changed(r, binding),
+        E::MidiBindingCleared { id } => midi_map::binding_cleared(r, id),
+        E::ControlSurfaceParamChanged { target, value_norm } => {
+            midi_map::param_changed(r, target, value_norm)
+        }
+        E::ControlSurfaceDevicesChanged { inputs } => midi_map::devices_changed(r, inputs),
+
         // Track / bus lifecycle
         E::TrackAdded { track_id } => tracks::added(r, track_id),
         E::InstrumentTrackAdded { track_id } => tracks::instrument_added(r, track_id),
@@ -195,6 +287,28 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::BusFxBypassChanged { bus_id, bypassed } => {
             tracks::bus_fx_bypass_changed(r, bus_id, bypassed)
         }
+
+        // Aux send / return-bus events. Mirrored into app state purely
+        // from these events (todo #478) — the engine-side data model,
+        // commands, and cyclic-route validation landed in todo #475. The
+        // mixer view that surfaces sends/returns is a separate follow-up.
+        E::BusRoleChanged { bus_id, is_return } => {
+            aux_sends::bus_role_changed(r, bus_id, is_return)
+        }
+        E::AuxSendChanged {
+            send_id,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+            enabled,
+        } => aux_sends::send_changed(r, send_id, source, dest, level_db, pre_fader, enabled),
+        E::AuxSendRemoved { send_id } => aux_sends::send_removed(r, send_id),
+        E::AuxSendRejected {
+            source,
+            dest,
+            reason,
+        } => aux_sends::send_rejected(r, source, dest, reason),
 
         // Plugin lifecycle
         E::PluginAdded {
@@ -285,6 +399,29 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             master_peak_r,
         ),
 
+        // Audition preview events: mirror the engine's playhead position into
+        // the browser's scrub bar, and clear the playing row when the engine
+        // naturally stops (end of a non-looping file, or after StopAudition).
+        // Both are transient UI state — not undoable, not persisted (doc #175,
+        // ba todo #597).
+        E::AuditionPosition { frame } => {
+            r.browser.audition.position_frame = frame;
+        }
+        E::AuditionStopped => {
+            r.browser.audition.playing = None;
+            r.browser.audition.position_frame = 0;
+        }
+        // Freeze progress / lifecycle. The engine-side command/event
+        // plumbing (todo #572) emits these; mirroring them into app state
+        // (per-track freeze status, progress modal, attaching the decoded
+        // cache on load) lands with the app-side freeze work later in this
+        // epic. Until then the events are accepted but not yet mirrored,
+        // mirroring the placeholder approach used for clip fade/gain above.
+        E::FreezeProgress { .. }
+        | E::FreezeCompleted { .. }
+        | E::FreezeError { .. }
+        | E::FreezeCancelled { .. } => {}
+
         // Project save / load — these return a Task<Message>.
         E::ClipsSavedToProjectDir { clip_files } => {
             return project_io::clips_saved(r, clip_files)
@@ -293,6 +430,75 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             return project_io::all_plugin_states_saved(r, states)
         }
         E::AllCleared => project_io::all_cleared(r),
+
+        // Automation lanes (doc #162 §3, todo #378): one-way engine→app
+        // mirror of lane state into `AutomationState`, plus the throttled
+        // live automated value into the transient live-value map.
+        E::AutomationLaneChanged { lane } => automation::lane_changed(r, lane),
+        E::AutomationLaneCleared { target } => automation::lane_cleared(r, target),
+        E::AutomatedValue { target, value_norm } => {
+            automation::automated_value(r, target, value_norm)
+        }
+
+        // Reference-track (A/B) events fold into `Resonance::reference`.
+        E::ReferenceAnalysisProgress { id, stage } => reference::analysis_progress(r, id, stage),
+        E::ReferenceLoaded {
+            id,
+            name,
+            path,
+            integrated_lufs,
+            waveform_peaks,
+            length_samples,
+        } => reference::loaded(r, id, name, path, integrated_lufs, waveform_peaks, length_samples),
+        E::ReferenceLoadFailed { path, reason } => reference::load_failed(r, path, reason),
+        E::ReferenceRemoved { id } => reference::removed(r, id),
+        E::ActiveReferenceChanged { id } => reference::active_changed(r, id),
+        E::ABSourceChanged { source } => reference::ab_source_changed(r, source),
+        E::RefLoudnessMatchChanged { enabled, offset_db } => {
+            reference::loudness_match_changed(r, enabled, offset_db)
+        }
+        E::RefTrimChanged { db } => reference::trim_changed(r, db),
+        E::RefMarkerAdded {
+            ref_id,
+            marker_id,
+            position_samples,
+            label,
+        } => reference::marker_added(r, ref_id, marker_id, position_samples, label),
+        E::RefMarkerRemoved { ref_id, marker_id } => {
+            reference::marker_removed(r, ref_id, marker_id)
+        }
+        E::RefPositionChanged {
+            ref_id,
+            position_samples,
+        } => reference::position_changed(r, ref_id, position_samples),
+        E::RefLoopToMixChanged { enabled } => reference::loop_to_mix_changed(r, enabled),
+        E::ABMeterSnapshot { mix, reference: ref_meter } => {
+            reference::ab_meter_snapshot(r, mix, ref_meter)
+        }
+
+        // External-instrument config + device-offline events: mirror the
+        // engine's stored config and device status into the app's
+        // `external_instruments` map (doc #169, epic #39).
+        E::ExternalInstrumentChanged { config } => {
+            super::external_instrument::changed(r, config)
+        }
+        E::ExternalInstrumentCleared { track_id } => {
+            super::external_instrument::cleared(r, track_id)
+        }
+        E::ExternalInstrumentMidiOutOffline { track_id, .. } => {
+            super::external_instrument::midi_out_offline(r, track_id)
+        }
+        E::ExternalInstrumentReturnInputOffline { track_id, .. } => {
+            super::external_instrument::return_input_offline(r, track_id)
+        }
+        E::ExternalInstrumentLatencyMeasured {
+            track_id,
+            latency_samples,
+            ..
+        } => super::external_instrument::latency_measured(r, track_id, latency_samples),
+        E::ExternalInstrumentLatencyDetectFailed { track_id, reason } => {
+            super::external_instrument::latency_detect_failed(r, track_id, reason)
+        }
     }
     Task::none()
 }

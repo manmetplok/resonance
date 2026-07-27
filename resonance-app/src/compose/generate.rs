@@ -47,6 +47,45 @@ impl Default for GenerateParams {
     }
 }
 
+/// Overlay the global chord track's user-pinned regions onto a section's
+/// chord progression (doc #168, todo #445). The section keeps its chord
+/// *rhythm* — each [`ChordState`]'s `start_beat` / `duration_beats` is
+/// untouched — but any chord whose grid position falls inside a pinned
+/// region is re-symboled to that region's chord, so regenerated parts
+/// follow the user's pinned harmony. Chords with no covering pinned
+/// region keep their generated symbol, and non-pinned regions never
+/// override (only explicit user pins constrain regeneration).
+///
+/// `section_start_sample` is where the section sits on the timeline and
+/// `samples_per_beat` is the compose grid's fixed samples-per-beat (the
+/// same constant `compose_samples_per_bar` is built from). Together they
+/// map each section beat onto the absolute sample axis the chord track is
+/// positioned on, so a pinned region is matched against the very beat the
+/// generator will voice.
+pub fn overlay_pinned_chords(
+    section_chords: &[ChordState],
+    chord_track: &crate::chord_track::ChordTrack,
+    section_start_sample: u64,
+    samples_per_beat: f64,
+) -> Vec<ChordState> {
+    section_chords
+        .iter()
+        .map(|c| {
+            let beat_sample =
+                section_start_sample + (c.start_beat as f64 * samples_per_beat) as u64;
+            match chord_track.regions.iter().find(|r| {
+                r.pinned && r.start_sample <= beat_sample && beat_sample < r.end_sample
+            }) {
+                Some(region) => ChordState {
+                    chord: region.chord,
+                    ..c.clone()
+                },
+                None => c.clone(),
+            }
+        })
+        .collect()
+}
+
 /// Convert the app's `ChordState`s into the music-theory crate's input type.
 pub fn to_timed_chords(chords: &[ChordState]) -> Vec<TimedChord> {
     chords

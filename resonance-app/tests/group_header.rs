@@ -18,6 +18,8 @@
 //! 2. **collapsed_macros** — a collapsed Vocals group with both macros
 //!    engaged and a non-unity (−6 dB) level trim.
 
+mod common;
+
 use iced::widget::container;
 use iced::{Length, Size};
 use iced_test::simulator::Simulator;
@@ -63,10 +65,7 @@ fn snapshot_to(app: &Resonance, group: &TrackGroup, member_count: usize, path: &
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 /// Expanded Drums group: unity level, macros off, 4 members.

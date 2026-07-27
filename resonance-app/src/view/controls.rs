@@ -356,23 +356,43 @@ pub fn meter_v<'a>(level_l: f32, level_r: f32, height: f32) -> Element<'a, Messa
 /// Render the shared fader + meter + dB label block used by tracks, busses,
 /// and master. The caller supplies the message factory for the slider —
 /// this lets the same widget drive track/bus/master volumes.
+///
+/// `automated` carries the live automated gain (in dB) when an enabled
+/// gain-automation lane is driving this channel during playback (todo
+/// #383). When present the rail/handle take the warm accent and the dB
+/// read-out shows the automated value (the value automation is applying),
+/// not the static fader value — which keeps animating as the playhead
+/// crosses breakpoints. Dragging still edits the underlying static value.
 pub fn fader_section<'a, F>(
     level_l: f32,
     level_r: f32,
     volume_db: f32,
+    automated: Option<f32>,
     on_change: F,
 ) -> Element<'a, Message>
 where
     F: 'a + Fn(f32) -> Message,
 {
-    let fader = vertical_slider(-60.0..=6.0f32, volume_db, on_change)
+    let mut fader = vertical_slider(-60.0..=6.0f32, volume_db, on_change)
         .height(theme::FADER_HEIGHT)
         .step(0.1);
+    if automated.is_some() {
+        fader = fader.style(|theme: &iced::Theme, status| {
+            let mut s = iced::widget::slider::default(theme, status);
+            s.rail.backgrounds.0 = theme::WARM.into();
+            s.handle.background = theme::WARM.into();
+            s
+        });
+    }
     let meters = meter_v(level_l, level_r, theme::FADER_HEIGHT);
-    let label = text(format_db(volume_db))
+    let (label_db, label_color) = match automated {
+        Some(a) => (a, theme::WARM),
+        None => (volume_db, theme::TEXT_DIM),
+    };
+    let label = text(format_db(label_db))
         .size(9)
         .font(Font::MONOSPACE)
-        .color(theme::TEXT_DIM);
+        .color(label_color);
     column![
         container(
             row![meters, fader]

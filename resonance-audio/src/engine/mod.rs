@@ -22,14 +22,19 @@ use ringbuf::traits::Split;
 
 use crate::clap_host::SyncClapInstance;
 use crate::midi_clock::MidiClockEvent;
-use crate::midi_hardware::LiveMidiEvent;
+use crate::midi_hardware::{LiveControlEvent, LiveMidiEvent};
 use crate::mixer;
 use crate::platform::{self, DeviceDirection};
 use crate::stream_errors::{format_underrun_line, UnderrunRateLimiter};
 use crate::types::*;
 
 mod bounce;
-pub use bounce::{to_audio_clip, try_lock_with_backoff};
+pub use bounce::{
+    encode_buffer_for_test, export_stems, freeze_terminal_event, normalize_buffer_for_test,
+    render_stem, stem_filter, stem_project_range, to_audio_clip, to_freeze_cache,
+    to_freeze_cache_spawn, to_wav, try_lock_with_backoff, write_stem_wav, FREEZE_CANCELLED_MSG,
+    StemFilter,
+};
 mod bounce_common;
 pub use bounce_common::midi_render_range;
 
@@ -46,22 +51,49 @@ pub(crate) fn rcu_tempo<F: FnOnce(&mut TempoMap)>(
     map.store(Arc::new(new));
 }
 
+pub(crate) mod audition;
+pub use audition::{
+    compute_sync_ratio, load_audition_source, set_audition_options_in_place,
+    start_audition_in_place, stop_audition_in_place, AuditionSource,
+};
+mod automation;
+pub use automation::{
+    clear_automation_lane_in_place, set_automation_lane_in_place,
+    set_automation_read_enabled_in_place, AutomationLanes, AutomationSnapshot, LiveValueEmitter,
+    ResolvedParamLane, AUTOMATED_VALUE_EPSILON, AUTOMATED_VALUE_THROTTLE,
+};
 mod bounce_realtime;
 mod busses;
 mod clips;
+mod external_instrument;
+mod external_instrument_ping;
+pub use external_instrument::{
+    check_external_instrument_devices_in_place, clear_external_instrument_in_place,
+    resend_external_instrument_patch_in_place, set_external_instrument_in_place,
+    set_external_instrument_latency_in_place, set_external_instrument_patch_in_place,
+    ExternalInstruments,
+};
+pub use external_instrument_ping::{
+    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms, OnsetOutcome,
+};
 pub use clips::transcode_to_wav;
 pub use clips::{
-    set_clip_fade_in_place, set_clip_gain_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
+    detect_clip_tempo_in_place, set_clip_fade_in_place, set_clip_gain_in_place,
+    set_clip_warp_in_place, set_clip_warp_markers_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
 };
 mod import_pool;
 pub use import_pool::{import_one_to_pool, run_pool_import, PoolImportOutcome};
 mod master;
 pub(crate) mod midi;
+mod midi_map;
 mod plugins;
+pub(crate) mod reference;
 mod scan;
 mod thread;
 mod tracks;
 mod transport;
+mod vocal_analysis;
+pub use vocal_analysis::{analyze_clip_pitch_in_place, analyze_pitch};
 
 /// Shared state between the engine control thread and the audio callback.
 /// `pub` (not `pub(crate)`) only so `__test_support` can re-export it for
@@ -123,6 +155,54 @@ pub struct SharedState {
     /// running on their worker threads can be aborted from the same
     /// `CancelBounce` command without threading another channel.
     pub bounce_cancel: AtomicBool,
+    /// Reference A/B monitor snapshot. Published by the control thread
+    /// (`reference::ReferencePlayer::publish`) and read lock-free by the
+    /// audio callback to replace the post-master output with the active
+    /// reference's PCM. Never consulted by any offline/realtime bounce
+    /// path, so exports always render the processed mix.
+    pub reference: reference::ReferenceMonitor,
+    /// Latest processed-mix loudness/peak/range snapshot, published by the
+    /// audio callback's mix metering tap each block and read lock-free by
+    /// the control thread to answer `PollABMeters`. Holds its last value
+    /// while the mix isn't playing (e.g. while auditioning a reference).
+    pub mix_meter: resonance_metering::AtomicMeterSnapshot,
+    /// Latest active-reference loudness/peak/range snapshot, published by
+    /// the audio callback's reference metering tap while a reference is
+    /// auditioned (post loudness-match/trim gain). Forwarded to the UI only
+    /// when a reference is active; see `reference::handle_poll_ab_meters`.
+    pub ref_meter: resonance_metering::AtomicMeterSnapshot,
+    /// Lock-free snapshot of the engine's aux-send table, published by
+    /// the control thread on every send add/remove/clear and read once
+    /// per block by the live mixer and the offline bounce renderer. The
+    /// authoritative table lives on the control thread
+    /// (`HandlerState::aux_sends`); this is the audio-thread-visible copy
+    /// so the render path needs no lock. Empty until the first send is
+    /// created, so projects without sends pay nothing.
+    pub aux_sends: arc_swap::ArcSwap<Vec<AuxSend>>,
+
+    // -- Audition preview (doc #175) --
+    /// Decoded preview source, published wait-free by the engine thread and
+    /// read by the audio callback. `None` when no preview is loaded. See
+    /// [`audition`].
+    pub audition_source: arc_swap::ArcSwapOption<audition::AuditionSource>,
+    /// Whether a preview is currently playing. The audio callback checks this
+    /// first each block; it clears the flag itself when a non-looping preview
+    /// reaches the end.
+    pub audition_playing: AtomicBool,
+    /// Audition playhead in source frames, stored as bit-punned `f64` (it can
+    /// be fractional under sync-to-tempo varispeed). Sole writer is the audio
+    /// callback; the engine thread reads it for `AuditionPosition` events.
+    pub audition_pos_bits: AtomicU64,
+    /// Loop the preview when it reaches the end (vs. stopping).
+    pub audition_loop: AtomicBool,
+    /// Sync-to-tempo (varispeed) enabled for the preview.
+    pub audition_sync: AtomicBool,
+    /// Playback ratio (source frames per output frame) as bit-punned `f32`,
+    /// computed by the engine thread; `1.0` is natural speed.
+    pub audition_ratio_bits: AtomicU32,
+    /// Latched by the audio callback when a non-looping preview reaches its
+    /// end; consumed by the engine thread to emit `AuditionStopped` once.
+    pub audition_finished: AtomicBool,
 }
 
 impl Default for SharedState {
@@ -146,6 +226,17 @@ impl Default for SharedState {
             count_in_remaining: AtomicU64::new(0),
             count_in_total: AtomicU64::new(0),
             bounce_cancel: AtomicBool::new(false),
+            reference: reference::ReferenceMonitor::default(),
+            mix_meter: resonance_metering::AtomicMeterSnapshot::new(),
+            ref_meter: resonance_metering::AtomicMeterSnapshot::new(),
+            aux_sends: arc_swap::ArcSwap::from_pointee(Vec::new()),
+            audition_source: arc_swap::ArcSwapOption::empty(),
+            audition_playing: AtomicBool::new(false),
+            audition_pos_bits: AtomicU64::new(0),
+            audition_loop: AtomicBool::new(false),
+            audition_sync: AtomicBool::new(false),
+            audition_ratio_bits: AtomicU32::new(1.0f32.to_bits()),
+            audition_finished: AtomicBool::new(false),
         }
     }
 }
@@ -277,6 +368,10 @@ impl AudioEngine {
         // MIDI events queue without bound. 1024 fits a comfortable
         // burst at typical engine-thread cadence (~60 Hz wakeups).
         let (live_midi_tx, live_midi_rx) = crossbeam_channel::bounded::<LiveMidiEvent>(1024);
+        // Separate channel for the dedicated control-surface input. Same
+        // bound + rationale as the per-track live MIDI channel above.
+        let (live_control_tx, live_control_rx) =
+            crossbeam_channel::bounded::<LiveControlEvent>(1024);
         // MIDI clock arrives at 24 PPQN (≈48 msgs/sec at 120 BPM)
         // plus Start/Stop/Continue. 4096 covers seconds of bursty
         // input even if the engine thread stalls.
@@ -321,6 +416,14 @@ impl AudioEngine {
         );
         let latency_comp_audio = Arc::clone(&latency_comp);
 
+        // Parameter-automation snapshot: published by the engine thread
+        // whenever the lane set changes, loaded wait-free by the audio
+        // callback and the offline bounce. Empty until the first lane is
+        // stored. See `engine::automation` for the data model.
+        let automation: Arc<arc_swap::ArcSwap<AutomationSnapshot>> =
+            Arc::new(arc_swap::ArcSwap::from_pointee(AutomationSnapshot::default()));
+        let automation_audio = Arc::clone(&automation);
+
         let mut stream_config: cpal::StreamConfig = config.into();
         stream_config.sample_rate = sample_rate;
         stream_config.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
@@ -346,6 +449,7 @@ impl AudioEngine {
             let plugins_audio = Arc::clone(&plugins_audio);
             let tempo_audio = Arc::clone(&tempo_audio);
             let latency_comp_audio = Arc::clone(&latency_comp_audio);
+            let automation_audio = Arc::clone(&automation_audio);
             let underrun_limiter = Arc::clone(&underrun_limiter);
             let mut track_buf_l = vec![0.0f32; audio_buf_frames];
             let mut track_buf_r = vec![0.0f32; audio_buf_frames];
@@ -386,6 +490,11 @@ impl AudioEngine {
             let mut monitor_temp = vec![0.0f32; audio_buf_frames * MAX_INPUT_CHANNELS];
             let monitor_ring = ringbuf::HeapRb::<f32>::new(audio_quantum * MAX_INPUT_CHANNELS * 4);
             let (prod, mut monitor_cons) = monitor_ring.split();
+            // A/B metering taps (mix + reference). Pre-size their
+            // de-interleave scratch to the callback buffer so the realtime
+            // feed path never allocates.
+            let mut ab_meters = reference::ABMeters::new(audio_sample_rate as f32);
+            ab_meters.reserve(audio_buf_frames);
 
             // Pre-fault every page of the audio-thread scratch so the cpal
             // callback isn't the first writer. `vec![0.0f32; N]` and
@@ -425,6 +534,7 @@ impl AudioEngine {
                         &plugins_audio,
                         &tempo_audio,
                         &latency_comp_audio,
+                        &automation_audio,
                         audio_sample_rate,
                         &mut track_buf_l,
                         &mut track_buf_r,
@@ -436,6 +546,7 @@ impl AudioEngine {
                         &mut monitor_temp,
                         audio_buf_frames,
                         audio_quantum,
+                        &mut ab_meters,
                     );
                 },
                 move |err| match err {
@@ -511,6 +622,7 @@ impl AudioEngine {
         let tempo_ctrl = Arc::clone(&tempo_map);
         let plugins_ctrl = Arc::clone(&plugins);
         let latency_comp_ctrl = Arc::clone(&latency_comp);
+        let automation_ctrl = Arc::clone(&automation);
 
         let cmd_tx_retry = cmd_tx.clone();
         let engine_thread = std::thread::Builder::new()
@@ -529,9 +641,12 @@ impl AudioEngine {
                     tempo_ctrl,
                     plugins_ctrl,
                     latency_comp_ctrl,
+                    automation_ctrl,
                     monitor_prod_audio,
                     live_midi_tx,
                     live_midi_rx,
+                    live_control_tx,
+                    live_control_rx,
                     clock_tx,
                     clock_rx,
                     sample_rate,
@@ -673,6 +788,47 @@ impl AudioEngine {
             channels: 2,
             quantum: 128,
         }
+    }
+
+    /// Test-only constructor that builds an `AudioEngine` with no spawned
+    /// engine thread and no cpal stream, but whose command channel's
+    /// receiver is handed back to the caller. Commands sent via
+    /// [`AudioEngine::send`] therefore queue on the returned `Receiver`
+    /// instead of being processed, so a test can assert *exactly* which
+    /// commands an update handler emitted — without bringing up a real
+    /// audio device or racing an engine thread.
+    ///
+    /// The engine never processes the queued commands, so it emits no
+    /// echo events: a test simulating a round trip feeds the resulting
+    /// `AudioEvent`s back in itself (mirroring the live engine's echo).
+    #[doc(hidden)]
+    pub fn for_test_capture() -> (Self, Receiver<AudioCommand>) {
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<AudioCommand>();
+        let (_event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
+
+        let shared = Arc::new(SharedState::default());
+        let monitor_ring = ringbuf::HeapRb::<f32>::new(1);
+        let (prod, _cons) = monitor_ring.split();
+
+        let engine = Self {
+            cmd_tx,
+            event_rx,
+            _stream: None,
+            engine_thread: None,
+            shared,
+            tracks: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
+            busses: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
+            master: Arc::new(parking_lot::RwLock::new(MasterBus::new())),
+            clips: Arc::new(parking_lot::RwLock::new(Vec::new())),
+            midi_clips: Arc::new(parking_lot::RwLock::new(Vec::new())),
+            plugins: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
+            tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
+            monitor_prod: Arc::new(parking_lot::Mutex::new(prod)),
+            sample_rate: 48_000,
+            channels: 2,
+            quantum: 128,
+        };
+        (engine, cmd_rx)
     }
 }
 

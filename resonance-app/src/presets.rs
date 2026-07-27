@@ -51,7 +51,7 @@ pub fn default_presets() -> Vec<TrackPreset> {
     vec![
         TrackPreset {
             name: "Bass Guitar".into(),
-            track_type: "audio".into(),
+            track_type: "instrument".into(),
             volume: 0.0,
             pan: 0.0,
             mono: true,
@@ -62,7 +62,7 @@ pub fn default_presets() -> Vec<TrackPreset> {
         },
         TrackPreset {
             name: "Rhythm Guitar".into(),
-            track_type: "audio".into(),
+            track_type: "instrument".into(),
             volume: 0.0,
             pan: 0.0,
             mono: true,
@@ -73,7 +73,7 @@ pub fn default_presets() -> Vec<TrackPreset> {
         },
         TrackPreset {
             name: "Solo Guitar".into(),
-            track_type: "audio".into(),
+            track_type: "instrument".into(),
             volume: 0.0,
             pan: 0.0,
             mono: true,
@@ -84,7 +84,7 @@ pub fn default_presets() -> Vec<TrackPreset> {
         },
         TrackPreset {
             name: "Acoustic Guitar".into(),
-            track_type: "audio".into(),
+            track_type: "instrument".into(),
             volume: 0.0,
             pan: 0.0,
             mono: true,
@@ -95,7 +95,7 @@ pub fn default_presets() -> Vec<TrackPreset> {
         },
         TrackPreset {
             name: "Vocal".into(),
-            track_type: "audio".into(),
+            track_type: "vocal".into(),
             volume: 0.0,
             pan: 0.0,
             mono: true,
@@ -106,7 +106,7 @@ pub fn default_presets() -> Vec<TrackPreset> {
         },
         TrackPreset {
             name: "Backing Vocal".into(),
-            track_type: "audio".into(),
+            track_type: "vocal".into(),
             volume: 0.0,
             pan: 0.0,
             mono: true,

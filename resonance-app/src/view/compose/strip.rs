@@ -5,7 +5,7 @@ use crate::compose::{
     ComposeMessage, ComposeState, EditSectionForm, NewSectionForm, SectionDefinitionState,
     SectionPlacementState,
 };
-use crate::message::{Message, ProjectIoMessage};
+use crate::message::{MarkerMessage, Message, ProjectIoMessage};
 use crate::theme;
 
 /// Fixed height of the Compose section bar. Tall enough for a three-line
@@ -102,6 +102,13 @@ fn chips_row(state: &ComposeState) -> Element<'_, Message> {
             .padding([6, 11])
             .style(|_theme, status| theme::ghost_button_style(status));
         tools = tools.push(edit_btn);
+    }
+    if !state.placements.is_empty() {
+        let seed_btn = button(text("Seed markers").size(12))
+            .on_press(Message::Marker(MarkerMessage::SeedFromSections))
+            .padding([6, 11])
+            .style(|_theme, status| theme::ghost_button_style(status));
+        tools = tools.push(seed_btn);
     }
     if !state.definitions.is_empty() {
         let export_btn = button(text("Export chords").size(12))

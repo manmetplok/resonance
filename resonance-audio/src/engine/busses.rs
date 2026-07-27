@@ -191,3 +191,144 @@ pub(crate) fn handle_remove_plugin_from_bus(
         instance_id,
     });
 }
+
+/// Lower / upper bound on aux-send level in dB. Mirrors the spirit of
+/// `handle_set_clip_gain`'s clamp: keep stored values finite and sane so
+/// a stray `NaN`/`inf` from the GUI can never poison engine state.
+const AUX_SEND_MIN_DB: f32 = -120.0;
+const AUX_SEND_MAX_DB: f32 = 24.0;
+
+/// Republish the control-thread aux-send table into the lock-free
+/// snapshot the audio callback and bounce renderer read each block (see
+/// [`SharedState::aux_sends`](crate::engine::SharedState)). Called after
+/// every mutation of `state.aux_sends` so the render path never sees a
+/// stale or partially-updated table.
+pub(crate) fn publish_aux_sends(ctx: &HandlerCtx, state: &HandlerState) {
+    let snapshot: Vec<AuxSend> = state.aux_sends.values().copied().collect();
+    ctx.shared.aux_sends.store(std::sync::Arc::new(snapshot));
+}
+
+pub(crate) fn handle_set_bus_role(ctx: &HandlerCtx, bus_id: BusId, is_return: bool) {
+    // Silently no-op on an unknown bus, matching the other bus setters.
+    if let Some(bus) = ctx.busses.read().get(&bus_id) {
+        bus.set_is_return(is_return);
+    } else {
+        return;
+    }
+    let _ = ctx
+        .event_tx
+        .send(AudioEvent::BusRoleChanged { bus_id, is_return });
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_set_aux_send(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    id_hint: Option<SendId>,
+    source: SendSource,
+    dest: BusId,
+    level_db: f32,
+    pre_fader: bool,
+    enabled: bool,
+) {
+    // Reject up front with a plain-language reason; never store an
+    // invalid send. The app surfaces `reason` to the user.
+    let reject = |reason: String| {
+        let _ = ctx.event_tx.send(AudioEvent::AuxSendRejected {
+            source,
+            dest,
+            reason,
+        });
+    };
+
+    // Destination must be a real bus.
+    if !ctx.busses.read().contains_key(&dest) {
+        reject(format!("Aux send destination bus {dest} does not exist"));
+        return;
+    }
+    // Source must exist (a track or a bus, depending on the variant).
+    match source {
+        SendSource::Track(tid) => {
+            if !ctx.tracks.read().contains_key(&tid) {
+                reject(format!("Aux send source track {tid} does not exist"));
+                return;
+            }
+        }
+        SendSource::Bus(bid) => {
+            if !ctx.busses.read().contains_key(&bid) {
+                reject(format!("Aux send source bus {bid} does not exist"));
+                return;
+            }
+        }
+    }
+
+    // An upsert on an existing id must not count its own current edge
+    // when checking for cycles.
+    let updating = id_hint.filter(|id| state.aux_sends.contains_key(id));
+    if aux_send_would_cycle(state.aux_sends.values(), source, dest, updating) {
+        reject(match source {
+            SendSource::Bus(b) if b == dest => {
+                format!("A bus cannot send to itself (bus {dest})")
+            }
+            SendSource::Bus(b) => format!(
+                "Aux send from bus {b} to bus {dest} would create a feedback loop"
+            ),
+            // Unreachable: track sources never cycle.
+            SendSource::Track(t) => format!("Aux send from track {t} is invalid"),
+        });
+        return;
+    }
+
+    let level_db = if level_db.is_finite() {
+        level_db.clamp(AUX_SEND_MIN_DB, AUX_SEND_MAX_DB)
+    } else {
+        0.0
+    };
+
+    // Resolve the id: honour `id_hint` (update in place, or a project-
+    // load hint), else allocate a fresh monotonic id.
+    let send_id = match id_hint {
+        Some(id) => {
+            // Bump the allocator past any hinted id so a later fresh send
+            // can't collide with it.
+            state.next_send_id = state.next_send_id.max(id + 1);
+            id
+        }
+        None => {
+            let id = state.next_send_id;
+            state.next_send_id += 1;
+            id
+        }
+    };
+
+    state.aux_sends.insert(
+        send_id,
+        AuxSend {
+            id: send_id,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+            enabled,
+        },
+    );
+    // Make the new/updated send visible to the audio + bounce render
+    // paths before confirming the change to the app.
+    publish_aux_sends(ctx, state);
+
+    let _ = ctx.event_tx.send(AudioEvent::AuxSendChanged {
+        send_id,
+        source,
+        dest,
+        level_db,
+        pre_fader,
+        enabled,
+    });
+}
+
+pub(crate) fn handle_remove_aux_send(ctx: &HandlerCtx, state: &mut HandlerState, send_id: SendId) {
+    if state.aux_sends.shift_remove(&send_id).is_some() {
+        publish_aux_sends(ctx, state);
+        let _ = ctx.event_tx.send(AudioEvent::AuxSendRemoved { send_id });
+    }
+}

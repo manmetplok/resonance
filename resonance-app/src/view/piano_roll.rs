@@ -139,6 +139,59 @@ pub fn hit_test_note(rect: Rectangle, pos: Point) -> Option<NoteEdge> {
     }
 }
 
+/// Canvas-local pixel rectangle for `note`, given the layout and
+/// viewport. Shared by the draw routine and marquee hit testing so both
+/// agree on where a note actually sits on screen.
+pub fn note_rect(
+    layout: &PianoRollLayout,
+    viewport: &PianoRollViewport,
+    note: &resonance_audio::types::MidiNote,
+) -> Rectangle {
+    Rectangle {
+        x: layout.grid_x() + viewport.tick_to_x_local(note.start_tick),
+        y: layout.grid_top + viewport.note_to_y_local(note.note),
+        width: viewport.duration_to_w(note.duration_ticks),
+        height: viewport.zoom_y,
+    }
+}
+
+/// Axis-aligned rectangle overlap test (touching edges don't count).
+pub fn rects_intersect(a: Rectangle, b: Rectangle) -> bool {
+    a.x < b.x + b.width
+        && a.x + a.width > b.x
+        && a.y < b.y + b.height
+        && a.y + a.height > b.y
+}
+
+/// Normalised rectangle spanning the two corner points, so a marquee
+/// dragged in any direction yields a positive-size rect.
+pub fn rect_from_points(a: Point, b: Point) -> Rectangle {
+    let x = a.x.min(b.x);
+    let y = a.y.min(b.y);
+    Rectangle {
+        x,
+        y,
+        width: (a.x - b.x).abs(),
+        height: (a.y - b.y).abs(),
+    }
+}
+
+/// Indices of the notes whose on-screen rectangle intersects `marquee`
+/// (all in canvas-local coordinates). Used by the rubber-band select.
+pub fn notes_in_marquee(
+    notes: &[resonance_audio::types::MidiNote],
+    layout: &PianoRollLayout,
+    viewport: &PianoRollViewport,
+    marquee: Rectangle,
+) -> Vec<usize> {
+    notes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| rects_intersect(note_rect(layout, viewport, n), marquee))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Styling for a single note rectangle.
 pub struct NoteStyle {
     /// Stroke colour applied to the rounded-rect outline.

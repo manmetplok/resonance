@@ -118,32 +118,6 @@ fn default_models_dir() -> PathBuf {
         .join("../resonance-svs/models")
 }
 
-/// Replace any G2P-emitted phonemes that are missing from the chosen
-/// voicebank's phoneme dict with the closest acceptable substitute.
-/// Sending an unknown phoneme would land on token-id 0 (the `<PAD>`
-/// reservation), which produces a downstream tensor-shape mismatch in
-/// some voicebanks (Lilia's FastSpeech2 graph throws `Mul` broadcast
-/// errors when PADs appear mid-sequence).
-pub(super) fn substitute_phoneme(voicebank: VocalVoicebank, ph: &'static str) -> &'static str {
-    match voicebank {
-        VocalVoicebank::Tiger => ph,
-        VocalVoicebank::Lilia => match ph {
-            // Lilia's MM phoneme set covers all of ARPAbet *except* the
-            // voiced labiodental fricative `v`. Substitute its closest
-            // English equivalent: the voiceless `f` (same place + manner
-            // of articulation, just unvoiced). Singers won't notice in
-            // most words; the alternative `b` would change place and
-            // sound more obviously wrong.
-            "v" => "f",
-            other => other,
-        },
-        // Meiji uses language-prefixed ARPAbet. Substitution happens
-        // *before* prefixing in build_segment, so we don't need to
-        // touch any symbols here — the full English set is present.
-        VocalVoicebank::Meiji => ph,
-    }
-}
-
 /// Apply the voicebank's per-symbol naming convention. Meiji namespaces
 /// every English phoneme with `en/` (e.g. `ah` → `en/ah`) but a small
 /// shared inventory (`AP`, `SP`, `hh`, `cl`, ...) is left unprefixed so
@@ -188,7 +162,7 @@ pub(super) fn voicebank_language_id(voicebank: VocalVoicebank, ph: &str) -> Opti
 /// to a per-frame curve fed into the SVS segment builder and is shaped
 /// by the user in the vocal-roll Expression dock. Not every voicebank's
 /// acoustic model accepts every curve — see [`curve_supported`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum CurveKind {
     /// Dynamics / energy (loudness envelope). Universally supported.
     Dynamics,
@@ -211,6 +185,19 @@ impl CurveKind {
         CurveKind::Breathiness,
         CurveKind::PitchBend,
     ];
+
+    /// Inclusive `(min, max)` range a curve's values live in (doc #154).
+    ///
+    /// Dynamics, tension and breathiness are normalised `0..=1` envelopes;
+    /// pitch bend is an f0 offset in cents, drawn on a `-50..=+50` axis.
+    /// Used to clamp both auto-derived baselines and user overlay edits so
+    /// no curve can carry an out-of-range value.
+    pub fn value_range(self) -> (f32, f32) {
+        match self {
+            CurveKind::Dynamics | CurveKind::Tension | CurveKind::Breathiness => (0.0, 1.0),
+            CurveKind::PitchBend => (-50.0, 50.0),
+        }
+    }
 }
 
 /// Whether `voicebank`'s pipeline accepts the given expression `curve`.

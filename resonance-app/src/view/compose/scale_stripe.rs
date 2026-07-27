@@ -132,6 +132,7 @@ fn pretty_pitch(pc: PitchClass) -> String {
 
 fn mode_word(mode: Mode) -> &'static str {
     match mode {
+        Mode::Chromatic => "chromatic",
         Mode::Major => "major",
         Mode::Minor => "minor",
         Mode::Dorian => "dorian",
@@ -148,6 +149,7 @@ fn mode_word(mode: Mode) -> &'static str {
 /// major/minor, the mode name otherwise.
 fn mode_descriptor(mode: Mode) -> &'static str {
     match mode {
+        Mode::Chromatic => "chromatic",
         Mode::Major | Mode::Minor => "natural",
         Mode::Dorian => "modal",
         Mode::Phrygian => "modal",

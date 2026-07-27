@@ -11,6 +11,7 @@
 //! - [`CorrelationMeter`], [`CrestMeter`], [`PlrMeter`]
 //! - [`MeterSnapshot`] — aggregate for lock-free publication to a UI thread
 
+pub mod atomic_snapshot;
 pub mod correlation;
 pub mod crest;
 pub mod k_weighting;
@@ -21,6 +22,7 @@ pub mod snapshot;
 pub mod spectrum;
 pub mod true_peak;
 
+pub use atomic_snapshot::AtomicMeterSnapshot;
 pub use correlation::CorrelationMeter;
 pub use crest::CrestMeter;
 pub use k_weighting::KWeightingFilter;

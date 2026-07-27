@@ -51,7 +51,7 @@ fn def(id: u64, length_bars: u32, chords: Vec<ChordState>) -> SectionDefinitionS
         beats_per_chord: 4,
         seventh_chords: false,
         motif_source: MotifSource::default(),
-        drum_pattern_id: None,
+        arrangement: Vec::new(),
     }
 }
 

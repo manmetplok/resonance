@@ -6,9 +6,10 @@
 //! stages downstream consume.
 
 use resonance_audio::types::MidiNote;
+use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::{g2p, VocalParams};
 
-use super::super::paths::{substitute_phoneme, voicebank_language_id, voicebank_phoneme_name};
+use super::super::paths::{voicebank_language_id, voicebank_phoneme_name};
 use super::super::SEGMENT_PAD_SEC;
 
 /// Output of [`build_phoneme_track`]: every parallel array the
@@ -30,15 +31,20 @@ pub(super) struct PhonemeTrack {
     pub entry_note_start_offset: Vec<f64>,
 }
 
-/// Build the phoneme + note duration track for one section. Each
-/// note's syllable text (drawn from `params.draft`) is run through G2P
-/// to produce ARPAbet phonemes; the note's duration is split between
-/// them with consonants getting a short slice and the vowel(s)
-/// absorbing the remainder.
+/// Build the phoneme + note duration track for one section.
+///
+/// `assigned` is the per-note resolved + voicebank-validated syllable
+/// stream (override > project-dict > global-dict > CMU-auto, with the
+/// active voicebank's substitutions already applied — see
+/// [`super::super::resolve_clip_pronunciation`] and
+/// [`super::super::validate_for_voicebank`]). It carries exactly one
+/// entry per note; the note's duration is split across its phonemes with
+/// consonants getting a short slice and the vowel(s) absorbing the
+/// remainder.
 pub(super) fn build_phoneme_track(
     notes: &[MidiNote],
     params: &VocalParams,
-    lyrics: &[String],
+    assigned: &[AssignedSyllable],
     ticks_per_quarter: u32,
     bpm: f32,
 ) -> PhonemeTrack {
@@ -47,21 +53,15 @@ pub(super) fn build_phoneme_track(
     // in the app.
     let seconds_per_tick = 60.0 / (bpm.max(1.0) as f64 * ticks_per_quarter as f64);
 
-    // Resolve every note's (label, phonemes, is_slur, is_word_end)
-    // via the shared cursor walker in music-theory. Same helper drives
-    // the on-note lyric labels and the phoneme strip in the vocal
-    // roll, so what the user sees and what the model sings can never
-    // disagree on syllable-to-note assignment.
-    let resolved = g2p::resolve_draft(&params.draft);
-    let mut assigned = g2p::assign_syllables_to_notes(&resolved, lyrics, notes.len());
-    // Apply voicebank-specific phoneme substitutions (e.g. Lilia's
-    // `aa` → `a`). The resolver returns the canonical ARPAbet form;
-    // each voicebank rewrites a small set of names at the SVS boundary.
-    for a in assigned.iter_mut() {
-        for p in a.phonemes.iter_mut() {
-            *p = substitute_phoneme(params.voicebank, p);
-        }
-    }
+    // Number of distinct resolved syllables behind these notes, used only
+    // for the optional word-boundary SP gate below. Slur notes share the
+    // previous note's `syllable_index`, so the max + 1 is the syllable
+    // count regardless of how many notes hold each syllable.
+    let syllable_count = assigned
+        .iter()
+        .map(|a| a.syllable_index + 1)
+        .max()
+        .unwrap_or(0);
     // Optional word-boundary SP injection. Off by default (the
     // reference DiffSinger fixtures intentionally flow phonemes
     // continuously). Set RESONANCE_WORD_BOUNDARY_SP_MS=N to insert
@@ -134,7 +134,7 @@ pub(super) fn build_phoneme_track(
         // chosen so half-bar pauses become rests but typical syllable
         // spacing doesn't.
         let sing_sec_cap = (n.duration_ticks as f64 * seconds_per_tick).max(0.05);
-        let (sing_sec, ap_sec) = if slot_sec > sing_sec_cap + 0.4 {
+        let (sing_sec, ap_sec) = if slot_sec > sing_sec_cap + super::super::SILENCE_GAP_SEC {
             (sing_sec_cap, slot_sec - sing_sec_cap)
         } else {
             (slot_sec, 0.0)
@@ -170,7 +170,7 @@ pub(super) fn build_phoneme_track(
         // for slur notes, so no extra check needed here.
         let inject_sp = word_boundary_sp_sec > 0.0
             && assignment.is_word_end
-            && assignment.syllable_index + 1 < resolved.len();
+            && assignment.syllable_index + 1 < syllable_count;
         let sp_sec = if inject_sp {
             word_boundary_sp_sec.min(sing_sec * 0.3)
         } else {

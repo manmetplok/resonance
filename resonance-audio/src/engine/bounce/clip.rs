@@ -3,6 +3,10 @@
 //! Excludes master FX and master volume because the bounced clip will
 //! play back through master on the next playback (which would otherwise
 //! double those processors).
+//!
+//! Reference A/B is excluded too: the render goes through `render_chunk`,
+//! which never reads `shared.reference`, so a bounce captures the mix
+//! regardless of the live A/B monitor selection.
 
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -46,6 +50,7 @@ pub fn to_audio_clip(
     midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &super::super::AutomationSnapshot,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
 ) {
@@ -142,6 +147,7 @@ pub fn to_audio_clip(
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
+        automation,
     };
     let mut scratch = ChunkScratch::new();
 
@@ -215,6 +221,11 @@ pub fn to_audio_clip(
         fade_out_curve: FadeCurve::default(),
         gain_db: 0.0,
         vocal_tuning: None,
+        warp_enabled: false,
+        original_bpm: None,
+        transpose_semitones: 0.0,
+        warp_algorithm: Default::default(),
+        warp_markers: Vec::new(),
     };
     clips.write().push(clip);
 

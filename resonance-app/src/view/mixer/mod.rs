@@ -3,12 +3,14 @@
 //! The actual strip rendering lives in submodules — `track_strip.rs`,
 //! `bus_strip.rs`, `master_strip.rs`, `plugin_panel.rs`.
 
+pub(crate) mod automation;
 mod bus_strip;
 mod group_strip;
-mod inspector;
+pub(crate) mod inspector;
 mod master_strip;
 pub(crate) mod picks;
 mod plugin_panel;
+mod reference_panel;
 mod track_strip;
 
 use iced::widget::{button, column, container, row, scrollable, text, Space};
@@ -122,12 +124,23 @@ impl crate::Resonance {
         let v_sep_inspector =
             container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
 
-        let body = row![
+        let mut body = row![
             container(mixer_col).width(Length::Fill).height(Length::Fill),
             v_sep_inspector,
             inspector_panel,
         ]
         .height(Length::Fill);
+
+        // The Reference & A/B rail is the outermost right rail, shown only
+        // when the chrome "REF" toggle is on. A hairline separates it from
+        // the inspector.
+        if self.mixer.reference_panel_open {
+            let v_sep_reference =
+                container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
+            body = body
+                .push(v_sep_reference)
+                .push(reference_panel::view(self));
+        }
 
         container(body)
             .width(Length::Fill)

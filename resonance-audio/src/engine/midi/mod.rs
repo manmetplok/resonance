@@ -21,9 +21,22 @@ pub(crate) use state::MidiHardwareState;
 
 pub(crate) use clips::{
     handle_add_instrument_track, handle_add_midi_note, handle_add_vocal_track,
-    handle_create_midi_clip, handle_delete_midi_clip, handle_load_midi_clip_direct,
-    handle_move_midi_clip, handle_move_midi_note, handle_remove_midi_note, handle_resize_midi_note,
-    handle_set_midi_note_velocity, handle_trim_midi_clip,
+    handle_apply_groove_to_clip, handle_create_midi_clip, handle_delete_midi_clip,
+    handle_extract_groove_from_clip, handle_humanize_midi_notes, handle_load_midi_clip_direct,
+    handle_move_midi_clip, handle_move_midi_note, handle_quantize_midi_notes,
+    handle_remove_midi_note, handle_resize_midi_note, handle_set_midi_note_velocity,
+    handle_trim_midi_clip,
+};
+
+/// Test surface for the bulk MIDI-edit handlers (quantize / humanize /
+/// groove). Exposed under `__test_support` (via `lib.rs`) so the
+/// engine tests in `tests/midi_bulk_edits.rs` can drive each code path —
+/// missing-clip no-op, atomic apply, selection-respecting, and the bulk
+/// `MidiNotesEdited` / `GrooveExtracted` event emission — without bringing
+/// up the engine thread.
+pub use clips::{
+    apply_groove_to_clip_in_place, extract_groove_from_clip_in_place,
+    humanize_midi_notes_in_place, quantize_midi_notes_in_place,
 };
 
 /// Test surface for the MIDI clip move/trim handlers. Exposed under
@@ -37,12 +50,19 @@ pub(crate) use clock::{
     poll_midi_clock_send,
 };
 pub(crate) use hardware::{
-    handle_list_midi_inputs, handle_list_midi_outputs, handle_set_track_midi_input,
-    handle_set_track_midi_output,
+    handle_list_midi_inputs, handle_list_midi_outputs, handle_set_track_device_params,
+    handle_set_track_midi_input, handle_set_track_midi_output,
 };
+/// Test surface for the device-param command boundary. Exposed under
+/// `__test_support` (via `lib.rs`) so the integration test in
+/// `tests/device_params_handler.rs` can drive the mutation + event
+/// emission (including the missing-track no-op branch) without spinning up
+/// the engine thread.
+pub use hardware::set_track_device_params_in_place;
 pub(crate) use live::{
-    close_open_recordings, flush_live_note_stash, handle_live_midi_event, handle_send_note_off,
-    handle_send_note_on,
+    capture_loop_record_midi_pass, close_open_recordings, flush_live_note_stash,
+    handle_live_control_event,
+    handle_live_midi_event, handle_send_note_off, handle_send_note_on,
 };
 /// Test surface for the live-note contention path. Exposed under
 /// `__test_support` (via `lib.rs`) so the regression test in
@@ -55,8 +75,10 @@ pub use live::deliver_or_stash;
 /// test in `tests/live_arrival_offset.rs` can drive the pure function
 /// without the engine thread.
 pub use live::live_arrival_sample_offset;
-pub use outbound::{outbound_step_start, OutboundStep};
-pub(crate) use outbound::poll_timeline_to_midi_output;
+pub use outbound::{
+    emit_device_param_automation, outbound_step_start, DeviceParamMidiSink, OutboundStep,
+};
+pub(crate) use outbound::{poll_device_param_automation, poll_timeline_to_midi_output};
 
 use crate::types::TempoMap;
 

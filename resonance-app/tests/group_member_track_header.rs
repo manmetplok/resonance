@@ -11,6 +11,8 @@
 //! 2. the M/S/monitor button row stays in place (chip sits left of the
 //!    Fill spacer, layout unchanged vs the chip-absent case)
 
+mod common;
+
 use iced::widget::container;
 use iced::{Length, Size};
 use iced_test::simulator::Simulator;
@@ -57,10 +59,7 @@ fn snapshot_track_header(app: &Resonance, path: &str) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 /// Snapshot of a group member track header with the "via group" solo chip.

@@ -35,6 +35,11 @@ pub(super) fn imported(
             fade_out_curve: FadeCurve::default(),
             gain_db: 0.0,
             waveform_peaks,
+            vocal_tuning: None,
+            // Engine `ClipImported` carries no asset id; the import /
+            // placement orchestration (doc #175) sets this link app-side
+            // once the clip exists. A recorded/bounced clip stays `None`.
+            asset_ref: None,
         });
     }
 }
@@ -128,6 +133,32 @@ pub(super) fn recording_finished(
         fade_out_curve: FadeCurve::default(),
         gain_db: 0.0,
         waveform_peaks,
+        vocal_tuning: None,
+        // A freshly recorded clip isn't a pool import.
+        asset_ref: None,
     });
     r.transport.recording = false;
+}
+
+/// Mirror a finished vocal pitch analysis (`AudioEvent::ClipPitchDetected`,
+/// todo #357) into the matching clip's GUI-side [`ClipState::vocal_tuning`].
+///
+/// The detected `contour` and `notes` replace whatever the previous
+/// analysis stored, exactly as the engine replaced its own cache. The
+/// global key / scale / correction parameters are app-side user settings
+/// that analysis never derives, so they are preserved across re-analysis
+/// by inserting into the existing model rather than overwriting it. A
+/// no-op when no clip matches `clip_id` (e.g. the clip was deleted while
+/// analysis was running off-thread).
+pub(super) fn pitch_detected(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    notes: Vec<NoteBlob>,
+    contour: Vec<F0Frame>,
+) {
+    if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {
+        let tuning = clip.vocal_tuning.get_or_insert_with(VocalTuning::default);
+        tuning.contour = contour;
+        tuning.notes = notes;
+    }
 }

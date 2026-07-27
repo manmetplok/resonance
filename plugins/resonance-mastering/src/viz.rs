@@ -16,90 +16,9 @@
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use resonance_metering::{MeterSnapshot, SpectrumHandle};
+use resonance_metering::{AtomicMeterSnapshot, MeterSnapshot, SpectrumHandle};
 
 use crate::assistant::Assistant;
-
-/// Lock-free, allocation-free aggregate of every scalar meter readout.
-///
-/// Replaces an earlier `ArcSwap<MeterSnapshot>` whose `store(Arc::new(...))`
-/// allocated on every block on the audio thread. Each field is a
-/// bit-punned `AtomicU32`; the editor may observe a torn snapshot
-/// (different fields from different blocks) but values change at ~17 Hz
-/// so the visual error is at most one frame of mixed readouts — the
-/// same trade-off the per-channel TP/LUFS history rings already accept.
-pub struct AtomicMeterSnapshot {
-    momentary_lufs_bits: AtomicU32,
-    short_term_lufs_bits: AtomicU32,
-    integrated_lufs_bits: AtomicU32,
-    true_peak_left_dbtp_bits: AtomicU32,
-    true_peak_right_dbtp_bits: AtomicU32,
-    true_peak_max_dbtp_bits: AtomicU32,
-    correlation_bits: AtomicU32,
-    crest_db_bits: AtomicU32,
-    plr_db_bits: AtomicU32,
-    psr_db_bits: AtomicU32,
-    lra_lu_bits: AtomicU32,
-}
-
-impl AtomicMeterSnapshot {
-    pub fn new() -> Self {
-        let init = MeterSnapshot::default();
-        Self {
-            momentary_lufs_bits: AtomicU32::new(init.momentary_lufs.to_bits()),
-            short_term_lufs_bits: AtomicU32::new(init.short_term_lufs.to_bits()),
-            integrated_lufs_bits: AtomicU32::new(init.integrated_lufs.to_bits()),
-            true_peak_left_dbtp_bits: AtomicU32::new(init.true_peak_left_dbtp.to_bits()),
-            true_peak_right_dbtp_bits: AtomicU32::new(init.true_peak_right_dbtp.to_bits()),
-            true_peak_max_dbtp_bits: AtomicU32::new(init.true_peak_max_dbtp.to_bits()),
-            correlation_bits: AtomicU32::new(init.correlation.to_bits()),
-            crest_db_bits: AtomicU32::new(init.crest_db.to_bits()),
-            plr_db_bits: AtomicU32::new(init.plr_db.to_bits()),
-            psr_db_bits: AtomicU32::new(init.psr_db.to_bits()),
-            lra_lu_bits: AtomicU32::new(init.lra_lu.to_bits()),
-        }
-    }
-
-    /// Audio-thread store. Eleven `AtomicU32` Relaxed stores, no allocation.
-    pub fn store(&self, s: &MeterSnapshot) {
-        self.momentary_lufs_bits.store(s.momentary_lufs.to_bits(), Ordering::Relaxed);
-        self.short_term_lufs_bits.store(s.short_term_lufs.to_bits(), Ordering::Relaxed);
-        self.integrated_lufs_bits.store(s.integrated_lufs.to_bits(), Ordering::Relaxed);
-        self.true_peak_left_dbtp_bits.store(s.true_peak_left_dbtp.to_bits(), Ordering::Relaxed);
-        self.true_peak_right_dbtp_bits.store(s.true_peak_right_dbtp.to_bits(), Ordering::Relaxed);
-        self.true_peak_max_dbtp_bits.store(s.true_peak_max_dbtp.to_bits(), Ordering::Relaxed);
-        self.correlation_bits.store(s.correlation.to_bits(), Ordering::Relaxed);
-        self.crest_db_bits.store(s.crest_db.to_bits(), Ordering::Relaxed);
-        self.plr_db_bits.store(s.plr_db.to_bits(), Ordering::Relaxed);
-        self.psr_db_bits.store(s.psr_db.to_bits(), Ordering::Relaxed);
-        self.lra_lu_bits.store(s.lra_lu.to_bits(), Ordering::Relaxed);
-    }
-
-    /// Editor-thread load. Returns a coherent struct (each field is
-    /// individually fresh; cross-field tearing is possible but visually
-    /// harmless at meter update rates).
-    pub fn load(&self) -> MeterSnapshot {
-        MeterSnapshot {
-            momentary_lufs: f32::from_bits(self.momentary_lufs_bits.load(Ordering::Relaxed)),
-            short_term_lufs: f32::from_bits(self.short_term_lufs_bits.load(Ordering::Relaxed)),
-            integrated_lufs: f32::from_bits(self.integrated_lufs_bits.load(Ordering::Relaxed)),
-            true_peak_left_dbtp: f32::from_bits(self.true_peak_left_dbtp_bits.load(Ordering::Relaxed)),
-            true_peak_right_dbtp: f32::from_bits(self.true_peak_right_dbtp_bits.load(Ordering::Relaxed)),
-            true_peak_max_dbtp: f32::from_bits(self.true_peak_max_dbtp_bits.load(Ordering::Relaxed)),
-            correlation: f32::from_bits(self.correlation_bits.load(Ordering::Relaxed)),
-            crest_db: f32::from_bits(self.crest_db_bits.load(Ordering::Relaxed)),
-            plr_db: f32::from_bits(self.plr_db_bits.load(Ordering::Relaxed)),
-            psr_db: f32::from_bits(self.psr_db_bits.load(Ordering::Relaxed)),
-            lra_lu: f32::from_bits(self.lra_lu_bits.load(Ordering::Relaxed)),
-        }
-    }
-}
-
-impl Default for AtomicMeterSnapshot {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 /// How many LUFS-momentary history samples to keep. 512 at ~17 Hz
 /// (block pushes, configurable via the feed rate) ≈ 30 s trace.

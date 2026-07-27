@@ -260,6 +260,13 @@
     padding:11px 13px;margin:12px 0 4px;display:flex;align-items:center;gap:10px;font-size:12.5px}
   .done-file .ic{color:var(--accent-soft)} .done-file .sz{margin-left:auto;color:var(--text-3);font-size:11.5px}
 
+  /* mode-aware: sections that don't apply to the current export mode */
+  .block.na{opacity:.34;pointer-events:none;filter:grayscale(.5)}
+  .mode-note{display:flex;gap:9px;align-items:flex-start;background:var(--bg-1);border:1px solid var(--line-2);
+    border-radius:var(--radius-md);padding:10px 13px;font-size:11.5px;color:var(--text-2);line-height:1.5;margin-bottom:18px}
+  .mode-note .ic{color:var(--accent-soft);flex:0 0 auto;margin-top:1px}
+  .mode-note b{color:var(--text-1);font-weight:500}
+
   .hidden{display:none !important}
 </style>
 </head>
@@ -328,8 +335,11 @@
             <button class="mini accent" title="Save as new preset">+ New</button>
           </div>
 
+          <!-- mode context banner (Stems / MIDI) -->
+          <div class="mode-note hidden" id="mode-note"><span class="ic">ⓘ</span><span id="mode-note-txt"></span></div>
+
           <!-- ---- FORMAT & QUALITY ---- -->
-          <div class="block">
+          <div class="block" id="block-format">
             <div class="section-lbl">Format &amp; quality <span class="ln"></span></div>
             <div class="fmtgrid" id="fmtgrid">
               <button class="fmt" data-fmt="wav">
@@ -412,7 +422,7 @@
           </div>
 
           <!-- ---- LOUDNESS & NORMALIZATION ---- -->
-          <div class="block">
+          <div class="block" id="block-loudness">
             <div class="section-lbl">Loudness &amp; normalization <span class="ln"></span></div>
             <div class="lhead">
               <div class="toggle on" id="normToggle" onclick="toggleNorm()"><i></i></div>
@@ -470,7 +480,7 @@
           </div>
 
           <!-- ---- METADATA ---- -->
-          <div class="block">
+          <div class="block" id="block-meta">
             <div class="section-lbl">Metadata <span class="ln"></span></div>
             <div class="frow">
               <span class="k">Title</span>
@@ -507,7 +517,7 @@
           <span class="foot-info" id="foot-est"><b>MP3 320</b> · ~8.2 MB · normalize on · est. 0:12</span>
           <span class="spacer"></span>
           <button class="btn ghost" onclick="setState('done',true)">Cancel</button>
-          <button class="btn primary" onclick="setState('render')">Export mixdown</button>
+          <button class="btn primary" id="exportBtn" onclick="setState('render')">Export mixdown</button>
         </div>
       </div>
     </div>
@@ -686,15 +696,38 @@
   }
 
   // ---- mode tabs ----
-  document.querySelectorAll('#view-setup .mode').forEach(m=>m.onclick=()=>{
-    document.querySelectorAll('#view-setup .mode').forEach(x=>x.classList.toggle('on',x===m));
-    const mode=m.dataset.mode;
-    document.getElementById('setup-sub').textContent = mode==='mix'
-      ? "Bounce the full master mix to a file. Pick a format and, for streaming, normalize to a target loudness verified on the meters."
-      : mode==='stems'
-      ? "Render per-track and bus stems. Format, normalization and metadata below apply to every stem; see the Stems & MIDI export design for source selection."
-      : "Export generated and recorded MIDI as Standard MIDI Files (format & loudness options don't apply).";
-  });
+  const modeCopy={
+    mix:{
+      sub:"Bounce the full master mix to a file. Pick a format and, for streaming, normalize to a target loudness verified on the meters.",
+      btn:"Export mixdown", note:null, na:[]
+    },
+    stems:{
+      sub:"Render per-track and bus stems. The format, normalization and metadata settings below apply to every stem — source selection lives in the Stems & MIDI export design.",
+      btn:"Export stems",
+      note:"Settings apply to <b>every stem</b>. Loudness normalization runs <b>per stem independently</b>, so relative balance between stems is not preserved — leave it off to keep the mix balance for reimport.",
+      na:[]
+    },
+    midi:{
+      sub:"Export generated and recorded MIDI as Standard MIDI Files. Audio format, loudness and metadata don't apply to MIDI.",
+      btn:"Export MIDI",
+      note:"MIDI is written as note/CC data, not audio — <b>format, loudness and metadata are disabled</b> for this mode. SMF track and channel options live in the Stems &amp; MIDI export design.",
+      na:['block-format','block-loudness','block-meta']
+    }
+  };
+  function setMode(mode){
+    document.querySelectorAll('#view-setup .mode').forEach(x=>x.classList.toggle('on',x.dataset.mode===mode));
+    const c=modeCopy[mode];
+    document.getElementById('setup-sub').textContent=c.sub;
+    document.getElementById('exportBtn').textContent=c.btn;
+    // dim sections that don't apply to this mode
+    ['block-format','block-loudness','block-meta'].forEach(id=>
+      document.getElementById(id).classList.toggle('na',c.na.includes(id)));
+    // mode context banner
+    const mn=document.getElementById('mode-note');
+    if(c.note){document.getElementById('mode-note-txt').innerHTML=c.note; mn.classList.remove('hidden');}
+    else{mn.classList.add('hidden');}
+  }
+  document.querySelectorAll('#view-setup .mode').forEach(m=>m.onclick=()=>setMode(m.dataset.mode));
 
   // init
   renderTarget(); refreshPreviewMore(); refreshFoot();

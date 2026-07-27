@@ -57,4 +57,17 @@ pub struct ProjectIoState {
     /// Recent-projects list, loaded from disk on startup and
     /// refreshed whenever an entry is added.
     pub recent_projects: Vec<crate::recent::RecentEntry>,
+    /// Wall-clock time of the last successful clean (manual) save,
+    /// driving the "last saved" chrome indicator. `None` until the
+    /// first save of this session.
+    pub last_saved_at: Option<std::time::SystemTime>,
+    /// Wall-clock time of the last successful autosave snapshot. Tracked
+    /// separately from [`Self::last_saved_at`] because an autosave does
+    /// not clear `dirty` and the UI distinguishes the two.
+    pub last_autosave_at: Option<std::time::SystemTime>,
+    /// True while a manual save or autosave is writing to disk. Distinct
+    /// from the `dirty` flag: a project can be dirty with no save in
+    /// flight, and a save can be in flight on a project that is no longer
+    /// dirty. Drives the in-progress spinner/affordance in the chrome.
+    pub saving: bool,
 }

@@ -163,6 +163,7 @@ impl TransportLabels {
 
 fn mode_short_label(mode: Mode) -> &'static str {
     match mode {
+        Mode::Chromatic => "chrom",
         Mode::Major => "maj",
         Mode::Minor => "min",
         Mode::Dorian => "dor",
