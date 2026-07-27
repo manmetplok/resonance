@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use resonance_common::{AutomationLane, AutomationTarget, LaneId};
+use resonance_common::{AutomationLane, AutomationTarget, LaneId, TrackId};
 
 /// GUI-side automation state, mirrored one-way from engine events.
 #[derive(Debug, Clone, Default)]
@@ -26,6 +26,14 @@ pub struct AutomationState {
     /// target when its lane is removed so a stale tint can't outlive the
     /// lane.
     pub live_values: HashMap<AutomationTarget, f32>,
+    /// Transient per-track override of which lane the Arrange overlay
+    /// draws (todo #1095): the chip click cycles this through every lane
+    /// that targets the track. Pure view state — never persisted, never
+    /// sent to the engine, and not part of undo (the undo snapshot
+    /// captures only [`Self::lanes`]). A stale entry (its lane removed or
+    /// re-homed) is ignored by the view, which falls back to the
+    /// priority-based default silently.
+    pub lane_selection: HashMap<TrackId, LaneId>,
     /// Monotonic source of [`LaneId`]s for lanes the *app* creates (a
     /// "pick parameter → add lane" edit). The engine stores lanes keyed by
     /// target and echoes the id back unchanged, so the app owns id
@@ -64,6 +72,9 @@ impl AutomationState {
     pub fn load_lanes(&mut self, lanes: impl IntoIterator<Item = AutomationLane>) {
         self.lanes.clear();
         self.live_values.clear();
+        // The chip-cycle lane selection belongs to the old project's lanes;
+        // a fresh load starts from the priority-based defaults again.
+        self.lane_selection.clear();
         for lane in lanes {
             self.next_lane_id = self.next_lane_id.max(lane.id);
             self.lanes.insert(lane.target.clone(), lane);

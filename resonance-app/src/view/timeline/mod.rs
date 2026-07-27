@@ -422,6 +422,18 @@ impl<'a> TimelineCanvas<'a> {
             name.hash(&mut lh);
             automation_hash ^= lh.finish();
         }
+        // The per-track chip-cycle lane selection (todo #1095) decides
+        // *which* lane the cached band draws, so switching lanes must
+        // repaint even though no lane data changed. Same order-independent
+        // xor fold; the leading tag keeps a selection entry from ever
+        // cancelling a lane or label hash.
+        for (track, lane_id) in &self.automation.lane_selection {
+            let mut lh = std::collections::hash_map::DefaultHasher::new();
+            0x1095_u16.hash(&mut lh);
+            track.hash(&mut lh);
+            lane_id.hash(&mut lh);
+            automation_hash ^= lh.finish();
+        }
 
         // Hash the full marker content so any in-place edit (move, rename,
         // recolor, region resize) invalidates the cache and the flag / span

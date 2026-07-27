@@ -54,8 +54,28 @@ pub fn handle(r: &mut Resonance, m: AutomationMessage) -> Task<Message> {
         // taken by the undo classifier; the handler has nothing to mutate
         // at the gesture boundaries.
         AutomationMessage::StartBreakpointDrag { .. } | AutomationMessage::EndBreakpointDrag => {}
+        AutomationMessage::CycleTrackLane(track_id) => cycle_track_lane(r, track_id),
     }
     Task::none()
+}
+
+/// Advance which of `track_id`'s lanes the Arrange overlay shows (todo
+/// #1095): the next lane in `(target_priority, param-id)` order after the
+/// currently shown one, wrapping. Pure view state — writes only the
+/// transient `AutomationState::lane_selection` map (no engine command, no
+/// undo, not persisted). No-op when the track is gone or has no lanes.
+fn cycle_track_lane(r: &mut Resonance, track_id: resonance_audio::types::TrackId) {
+    let next = r
+        .registry
+        .tracks
+        .iter()
+        .find(|t| t.id == track_id)
+        .and_then(|track| {
+            crate::view::timeline::automation::next_lane_id_for_track(&r.automation, track)
+        });
+    if let Some(next) = next {
+        r.automation.lane_selection.insert(track_id, next);
+    }
 }
 
 // ---------------------------------------------------------------------

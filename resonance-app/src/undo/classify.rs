@@ -297,6 +297,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             AutomationMessage::StartBreakpointDrag { .. } => UndoAction::Begin,
             AutomationMessage::EndBreakpointDrag => UndoAction::Commit,
             AutomationMessage::DragBreakpoint { .. } => UndoAction::Skip,
+            // Chip-cycle of the shown lane is transient view state (todo
+            // #1095) — never an undo entry.
+            AutomationMessage::CycleTrackLane(_) => UndoAction::Skip,
             // Every discrete lane / breakpoint edit is atomic.
             AutomationMessage::AddLane(_)
             | AutomationMessage::RemoveLane(_)

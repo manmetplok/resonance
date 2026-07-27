@@ -219,29 +219,112 @@ pub fn target_belongs_to_track(target: &AutomationTarget, track: &TrackState) ->
     }
 }
 
-/// The lane drawn for `track`, if any — the highest-priority target that
-/// belongs to the track, with ties (several device-param lanes share one
-/// priority tier) broken by the lexicographically smallest `param_id` so the
-/// pick is deterministic. `None` hides the lane (the common case: tracks have
-/// no automation).
+/// Every lane that belongs to `track`, sorted by `(target_priority,
+/// device-param id)` — gain, pan, mute, device params (lexicographic by
+/// param id), then plugin params. This is both the order the default pick
+/// scans (the first entry is the "primary" lane) and the cycle order of the
+/// chip click (todo #1095), so the two can never disagree.
+pub fn track_lanes_sorted<'l>(
+    automation: &'l crate::state::AutomationState,
+    track: &TrackState,
+) -> Vec<&'l AutomationLane> {
+    let mut lanes: Vec<&'l AutomationLane> = automation
+        .lanes
+        .values()
+        .filter(|lane| target_belongs_to_track(&lane.target, track))
+        .collect();
+    lanes.sort_by_key(|lane| {
+        // Copy the inner `&'l` ref out so the tie-break `&str` borrows
+        // from the lane itself, not the closure-local double reference.
+        let lane: &'l AutomationLane = lane;
+        let tie = match &lane.target {
+            AutomationTarget::DeviceParam { param_id, .. } => param_id.as_str(),
+            _ => "",
+        };
+        (target_priority(lane.target.clone()), tie)
+    });
+    lanes
+}
+
+/// The lane drawn for `track` by default, if any — the highest-priority
+/// target that belongs to the track, with ties (several device-param lanes
+/// share one priority tier) broken by the lexicographically smallest
+/// `param_id` so the pick is deterministic. `None` hides the lane (the
+/// common case: tracks have no automation). The chip click can override
+/// this via [`shown_lane_for_track`].
 pub fn primary_lane_for_track<'l>(
     automation: &'l crate::state::AutomationState,
     track: &TrackState,
 ) -> Option<&'l AutomationLane> {
-    automation
-        .lanes
-        .values()
-        .filter(|lane| target_belongs_to_track(&lane.target, track))
-        .min_by_key(|lane: &&'l AutomationLane| {
-            // Copy the inner `&'l` ref out so the tie-break `&str` borrows
-            // from the lane itself, not the closure-local double reference.
-            let lane: &'l AutomationLane = lane;
-            let tie = match &lane.target {
-                AutomationTarget::DeviceParam { param_id, .. } => param_id.as_str(),
-                _ => "",
-            };
-            (target_priority(lane.target.clone()), tie)
-        })
+    track_lanes_sorted(automation, track).into_iter().next()
+}
+
+/// The lane the Arrange overlay actually shows for `track`: the transient
+/// chip-cycle selection (`AutomationState::lane_selection`, todo #1095)
+/// when it still resolves to one of the track's lanes, else the
+/// priority-based [`primary_lane_for_track`] default. A stale selection —
+/// the lane was removed, or the id belongs to another track's lane — falls
+/// back to the default silently.
+pub fn shown_lane_for_track<'l>(
+    automation: &'l crate::state::AutomationState,
+    track: &TrackState,
+) -> Option<&'l AutomationLane> {
+    if let Some(selected) = automation.lane_selection.get(&track.id) {
+        let lane = automation
+            .lanes
+            .values()
+            .find(|l| l.id == *selected && target_belongs_to_track(&l.target, track));
+        if lane.is_some() {
+            return lane;
+        }
+    }
+    primary_lane_for_track(automation, track)
+}
+
+/// The lane id a chip click should switch `track` to: the lane after the
+/// currently shown one in [`track_lanes_sorted`] order, wrapping past the
+/// end. `None` when the track has no lanes at all. With a single lane this
+/// wraps straight back to it (a no-op cycle).
+pub fn next_lane_id_for_track(
+    automation: &crate::state::AutomationState,
+    track: &TrackState,
+) -> Option<resonance_common::LaneId> {
+    let lanes = track_lanes_sorted(automation, track);
+    let shown = shown_lane_for_track(automation, track)?.id;
+    // `shown` always comes from `lanes` (both filter by
+    // `target_belongs_to_track`), so the position lookup can only miss if
+    // the two ever diverge — fall back to cycling from the front.
+    let idx = lanes.iter().position(|l| l.id == shown).unwrap_or(0);
+    Some(lanes[(idx + 1) % lanes.len()].id)
+}
+
+/// Left edge of the parameter-label chip.
+const CHIP_X: f32 = 2.0;
+/// Horizontal padding between the chip edge and the label text (the text
+/// itself is drawn at `CHIP_X + CHIP_PAD_X`).
+const CHIP_PAD_X: f32 = 2.0;
+/// Estimated advance width of one label character at the 9 px chip font.
+/// Canvas text has no measure API, so the chip width is estimated from the
+/// character count — slightly generous so the drawn label always sits
+/// inside the clickable rect.
+const CHIP_CHAR_WIDTH: f32 = 5.6;
+/// Chip height; covers the 9 px label plus a little breathing room.
+const CHIP_HEIGHT: f32 = 12.0;
+/// Vertical offset of the chip's top edge above the value band's top.
+const CHIP_RISE: f32 = 15.0;
+
+/// The parameter-label chip rect for a band whose top edge is `band_top`.
+/// This is the single source of chip geometry: the draw pass fills it (and
+/// positions the label / "N lanes" count relative to it) and the pointer
+/// hit-test checks it, so what you click is exactly what you see (the #732
+/// draw/hit-test rule).
+pub fn lane_chip_rect(band_top: f32, label: &str) -> Rectangle {
+    Rectangle {
+        x: CHIP_X,
+        y: band_top - CHIP_RISE,
+        width: CHIP_PAD_X * 2.0 + label.chars().count() as f32 * CHIP_CHAR_WIDTH,
+        height: CHIP_HEIGHT,
+    }
 }
 
 impl TimelineCanvas<'_> {
@@ -270,18 +353,28 @@ impl TimelineCanvas<'_> {
             if row_y + row_height < header_height || row_y > bounds.height {
                 continue;
             }
-            let Some(lane) = primary_lane_for_track(self.automation, track) else {
+            let lanes = track_lanes_sorted(self.automation, track);
+            if lanes.is_empty() {
+                continue;
+            }
+            let Some(lane) = shown_lane_for_track(self.automation, track) else {
                 continue;
             };
-            self.draw_one_automation_lane(frame, lane, row_y, row_height, bounds.width);
+            self.draw_one_automation_lane(frame, lane, lanes.len(), row_y, row_height, bounds.width);
         }
     }
 
     /// Draw a single lane's axis, segments and breakpoints within its row.
+    /// `lane_count` is how many lanes target the row's track: when more
+    /// than one, the label chip gets a background (it is clickable — a
+    /// click cycles which lane shows, todo #1095) and a small "N lanes"
+    /// count so the hidden lanes are discoverable. Single-lane tracks
+    /// render exactly as before.
     fn draw_one_automation_lane(
         &self,
         frame: &mut canvas::Frame,
         lane: &AutomationLane,
+        lane_count: usize,
         row_y: f32,
         row_height: f32,
         width: f32,
@@ -304,9 +397,27 @@ impl TimelineCanvas<'_> {
         // ---- Parameter label chip (top-left of the band) ----
         let label = target_label(&lane.target, &self.device_param_labels);
         if !label.is_empty() {
+            let chip = lane_chip_rect(band_top, &label);
+            if lane_count > 1 {
+                // The chip is clickable (cycles the shown lane), so give
+                // it a faint plate the pointer can visibly target. The
+                // fill uses the exact hit-test rect (#732 rule).
+                let plate = canvas::Path::rounded_rectangle(
+                    Point::new(chip.x, chip.y),
+                    Size::new(chip.width, chip.height),
+                    3.0.into(),
+                );
+                frame.fill(
+                    &plate,
+                    Color {
+                        a: 0.35 * dim,
+                        ..theme::LINE
+                    },
+                );
+            }
             frame.fill_text(canvas::Text {
                 content: label,
-                position: Point::new(4.0, band_top - 13.0),
+                position: Point::new(chip.x + CHIP_PAD_X, band_top - 13.0),
                 color: Color {
                     a: 0.85 * dim,
                     ..theme::TEXT_DIM
@@ -314,6 +425,19 @@ impl TimelineCanvas<'_> {
                 size: 9.0.into(),
                 ..canvas::Text::default()
             });
+            if lane_count > 1 {
+                // Hidden-lane count, just right of the chip.
+                frame.fill_text(canvas::Text {
+                    content: format!("{lane_count} lanes"),
+                    position: Point::new(chip.x + chip.width + 4.0, band_top - 13.0),
+                    color: Color {
+                        a: 0.6 * dim,
+                        ..theme::TEXT_DIM
+                    },
+                    size: 9.0.into(),
+                    ..canvas::Text::default()
+                });
+            }
         }
 
         let line_color = Color {
@@ -402,7 +526,7 @@ impl TimelineCanvas<'_> {
                 if row_y + row_height < header_height || row_y > bounds.height {
                     continue;
                 }
-                let Some(lane) = primary_lane_for_track(self.automation, track) else {
+                let Some(lane) = shown_lane_for_track(self.automation, track) else {
                     continue;
                 };
                 if lane.points.is_empty() {
@@ -471,7 +595,8 @@ impl TimelineCanvas<'_> {
         )
     }
 
-    /// The primary lane plus its row's top y / height for the visible track
+    /// The *shown* lane (chip-cycle selection or priority default), its
+    /// owning track, and the row's top y / height for the visible track
     /// row whose vertical span contains `y`. `None` when `y` isn't over an
     /// automated track row (no lanes, a group-header band, a hidden
     /// collapsed-group member, or the row under `y` has no lane).
@@ -479,7 +604,7 @@ impl TimelineCanvas<'_> {
     /// Resolves the row through the same [`ArrangeRowLayout`] the draw pass
     /// consumes, so the pointer hits exactly the band the user sees drawn
     /// under the mixed 60/96 px row pitch (the #732 rule).
-    fn automation_row_at(&self, y: f32) -> Option<(&AutomationLane, f32, f32)> {
+    fn automation_row_at(&self, y: f32) -> Option<(&TrackState, &AutomationLane, f32, f32)> {
         if self.automation.lanes.is_empty() {
             return None;
         }
@@ -494,8 +619,28 @@ impl TimelineCanvas<'_> {
             .visible_tracks_sorted()
             .into_iter()
             .find(|t| t.id == track_id)?;
-        let lane = primary_lane_for_track(self.automation, track)?;
-        Some((lane, row_y, row_height))
+        let lane = shown_lane_for_track(self.automation, track)?;
+        Some((track, lane, row_y, row_height))
+    }
+
+    /// The track whose clickable parameter chip is under `pos`, or `None`.
+    /// The chip only exists (and is only clickable) when more than one lane
+    /// targets the track — single-lane tracks keep their plain label and
+    /// every pre-#1095 click behavior. Geometry comes from the same
+    /// [`lane_chip_rect`] the draw pass fills (#732 rule).
+    pub(super) fn lane_chip_hit(&self, pos: Point) -> Option<resonance_common::TrackId> {
+        let (track, lane, row_y, row_height) = self.automation_row_at(pos.y)?;
+        if track_lanes_sorted(self.automation, track).len() < 2 {
+            return None;
+        }
+        let label = target_label(&lane.target, &self.device_param_labels);
+        if label.is_empty() {
+            return None;
+        }
+        let (band_top, _) = automation_band(row_y, row_height);
+        lane_chip_rect(band_top, &label)
+            .contains(pos)
+            .then_some(track.id)
     }
 
     /// Value-band geometry (`band_top`, `band_height`) for the row owning
@@ -509,7 +654,7 @@ impl TimelineCanvas<'_> {
         let layout = self.arrange_layout();
         for track in self.visible_tracks_sorted() {
             let owns =
-                primary_lane_for_track(self.automation, track).map(|l| &l.target) == Some(target);
+                shown_lane_for_track(self.automation, track).map(|l| &l.target) == Some(target);
             if owns {
                 let (row_y_top, row_height) = layout.track_row_rect(track.id)?;
                 let row_y = header_height + row_y_top - y_off;
@@ -522,7 +667,7 @@ impl TimelineCanvas<'_> {
     /// The breakpoint dot under the pointer, if any. Used to start a
     /// drag / curve-toggle (left) or delete (right).
     pub(super) fn breakpoint_hit(&self, pos: Point) -> Option<BreakpointHit> {
-        let (lane, row_y, row_height) = self.automation_row_at(pos.y)?;
+        let (_track, lane, row_y, row_height) = self.automation_row_at(pos.y)?;
         let (band_top, band_height) = automation_band(row_y, row_height);
         let idx = nearest_breakpoint(
             &lane.points,
@@ -544,7 +689,7 @@ impl TimelineCanvas<'_> {
     /// row's value band — the row's top/bottom insets stay free for clip
     /// grabbing on automated tracks.
     pub(super) fn band_add_at(&self, pos: Point) -> Option<(AutomationTarget, u64, f32)> {
-        let (lane, row_y, row_height) = self.automation_row_at(pos.y)?;
+        let (_track, lane, row_y, row_height) = self.automation_row_at(pos.y)?;
         let (band_top, band_height) = automation_band(row_y, row_height);
         if pos.y < band_top - BREAKPOINT_HIT_RADIUS
             || pos.y > band_top + band_height + BREAKPOINT_HIT_RADIUS

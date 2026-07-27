@@ -827,6 +827,13 @@ pub enum AutomationMessage {
     },
     /// Commit the breakpoint drag opened by [`Self::StartBreakpointDrag`].
     EndBreakpointDrag,
+    /// Cycle which of `track`'s lanes the Arrange overlay band shows: the
+    /// lane after the currently shown one in `(target_priority, param-id)`
+    /// order, wrapping (todo #1095). Emitted by a click on the band's
+    /// parameter-label chip. Mutates only the transient
+    /// `AutomationState::lane_selection` view state — no engine command,
+    /// no persistence, no undo entry.
+    CycleTrackLane(TrackId),
 }
 
 #[derive(Debug, Clone)]

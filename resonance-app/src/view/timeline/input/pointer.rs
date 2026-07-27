@@ -310,6 +310,20 @@ impl TimelineCanvas<'_> {
             return self.handle_global_track_click(state, pos, bounds);
         }
 
+        // Parameter-label chip on a multi-lane automation band: a click
+        // cycles which lane the band shows (todo #1095). Checked ahead of
+        // the breakpoint dots — the chip is a discrete control drawn on top
+        // of the band, and a breakpoint pinned at value 1.0 can reach into
+        // the chip zone with its pick radius. Single-lane tracks have no
+        // clickable chip (`lane_chip_hit` returns `None`), so their clicks
+        // fall through unchanged.
+        if let Some(track_id) = self.lane_chip_hit(pos) {
+            state.selected_breakpoint = None;
+            return captured(Message::Automation(AutomationMessage::CycleTrackLane(
+                track_id,
+            )));
+        }
+
         // Automation breakpoint dots win over clips (they're small targets
         // drawn on top of the lane band). A dot hit selects + starts a drag,
         // or — on a double-click — toggles its curve kind.
