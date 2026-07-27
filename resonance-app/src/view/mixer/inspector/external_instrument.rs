@@ -521,8 +521,8 @@ fn patch_row(
 }
 
 /// Latency Compensation — ms + sample readout, a manual offset slider,
-/// and a disabled Auto-detect (ping) button (the ping command itself is
-/// todo #453).
+/// and the Auto-detect (ping) button that kicks off an engine latency
+/// measurement (todo #453 engine, #1068 state, #1069 view).
 fn ext_latency_block(
     r: &crate::Resonance,
     track: &TrackState,
@@ -560,30 +560,60 @@ fn ext_latency_block(
     .step(0.1f32)
     .width(Length::Fill);
 
-    // Disabled until the auto-detect ping command lands (#453). It has
-    // no `on_press`, and a flat hover-less style so it never implies it
-    // is clickable.
-    let ping_button = button(
-        text("Auto-detect (ping)")
+    // Auto-detect (ping): fires an engine latency measurement for this
+    // track. It's clickable only when a measurement can actually start —
+    // no ping is in flight and the transport is stopped (the engine
+    // requires a stopped transport). While measuring, the label becomes
+    // "Measuring…" and the button is disabled so a double-press is
+    // impossible; during playback it stays labelled but has no `on_press`.
+    let measuring = ext.latency_detect_in_progress;
+    let interactive = !measuring && !r.transport.playing;
+    let ping_label = if measuring {
+        "Measuring…"
+    } else {
+        "Auto-detect (ping)"
+    };
+    let mut ping_button = button(
+        text(ping_label)
             .size(11)
-            .color(theme::TEXT_4)
+            .color(if interactive {
+                theme::TEXT_2
+            } else {
+                theme::TEXT_4
+            })
             .align_x(alignment::Horizontal::Center)
             .width(Length::Fill),
     )
     .padding([6, 0])
     .width(Length::Fill)
-    .style(|_theme, _status| button::Style {
-        background: Some(iced::Background::Color(theme::BG_1)),
-        text_color: theme::TEXT_4,
-        border: iced::Border {
-            color: theme::LINE,
-            width: 1.0,
-            radius: theme::RADIUS_SM.into(),
-        },
-        ..Default::default()
+    .style(move |_theme, status| {
+        let hovered = interactive && matches!(status, button::Status::Hovered);
+        button::Style {
+            background: Some(iced::Background::Color(if hovered {
+                theme::BG_2
+            } else {
+                theme::BG_1
+            })),
+            text_color: if interactive {
+                theme::TEXT_2
+            } else {
+                theme::TEXT_4
+            },
+            border: iced::Border {
+                color: theme::LINE,
+                width: 1.0,
+                radius: theme::RADIUS_SM.into(),
+            },
+            ..Default::default()
+        }
     });
+    if interactive {
+        ping_button = ping_button.on_press(Message::ExternalInstrument(
+            ExternalInstrumentMessage::DetectLatency(track_id),
+        ));
+    }
 
-    let box_inner = column![
+    let mut box_inner = column![
         readout,
         Space::new().height(10),
         slider_widget,
@@ -591,6 +621,18 @@ fn ext_latency_block(
         ping_button,
     ]
     .spacing(0);
+
+    // A failed auto-detect surfaces its reason as a small caption under
+    // the button (TEXT_4 / size 10, matching the panel's readout text).
+    if let Some(reason) = ext.latency_detect_error.as_deref() {
+        box_inner = box_inner.push(Space::new().height(6));
+        box_inner = box_inner.push(
+            text(reason.to_string())
+                .size(10)
+                .color(theme::TEXT_4)
+                .width(Length::Fill),
+        );
+    }
 
     super::widgets::field(
         "LATENCY COMPENSATION",
