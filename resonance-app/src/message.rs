@@ -827,6 +827,11 @@ pub enum AutomationMessage {
     },
     /// Commit the breakpoint drag opened by [`Self::StartBreakpointDrag`].
     EndBreakpointDrag,
+    /// Expand / collapse a track's automation lanes into dedicated slim
+    /// arrange sub-rows (doc #256, todo #1096). Pure transient view state
+    /// (`ClipInteractionState::automation_expanded_tracks`): no engine
+    /// command, no undo entry, no persistence.
+    ToggleTrackExpanded(TrackId),
 }
 
 #[derive(Debug, Clone)]

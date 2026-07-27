@@ -265,7 +265,8 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
         .iter()
         .filter(|t| t.sub_track.is_none())
         .collect();
-    let layout = ArrangeRowLayout::build(&sorted_tracks, &r.track_groups);
+    let automation_rows = r.arrange_automation_rows();
+    let layout = ArrangeRowLayout::build(&sorted_tracks, &r.track_groups, &automation_rows);
 
     let scroll_y = r.viewport.scroll_offset_y.max(0.0);
 
@@ -352,6 +353,14 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
                         (menu_x, menu_y),
                     ));
                 }
+            }
+            // TODO(#1098): emit the matching slim parameter-label header
+            // cell for the lane row. Until then a fixed-height spacer
+            // keeps the column row-for-row aligned with the canvas (the
+            // row cannot be produced yet — no UI emits the expansion
+            // toggle before #1098 adds the caret).
+            ArrangeRowKind::AutomationLane { .. } => {
+                lane_col = lane_col.push(Space::new().height(row.height).width(Length::Fill));
             }
         }
     }

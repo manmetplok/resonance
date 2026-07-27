@@ -26,7 +26,7 @@ use resonance_app::state::{TrackGroupRegistry, TrackState, ViewMode};
 use resonance_app::theme::{
     self, CLIP_EDGE_THRESHOLD, CLIP_LANE_INSET, GROUP_HEADER_HEIGHT, TRACK_HEIGHT,
 };
-use resonance_app::view::arrange_layout::{ArrangeRowKind, ArrangeRowLayout};
+use resonance_app::view::arrange_layout::{ArrangeAutomationRows, ArrangeRowKind, ArrangeRowLayout};
 use resonance_app::view::timeline::hit_test::{
     clip_pixel_rect, hit_test, lane_canvas_y, row_at_canvas_y, ClipLaneBody, HitKind,
 };
@@ -58,7 +58,10 @@ fn layout_with_group() -> (ArrangeRowLayout, TrackId) {
     groups.add_group_new(10, "Drums", GroupIdentityColor::Drum);
     groups.add_member(10, 1);
     groups.add_member(10, 2);
-    (ArrangeRowLayout::build(&refs(&tracks), &groups), 10)
+    (
+        ArrangeRowLayout::build(&refs(&tracks), &groups, &ArrangeAutomationRows::default()),
+        10,
+    )
 }
 
 const HEADER: f32 = 120.0; // a representative fixed-header height
@@ -157,7 +160,8 @@ fn collapsed_group_hides_member_rows_from_resolution() {
     groups.add_member(10, 1);
     groups.add_member(10, 2);
     assert!(groups.set_collapse_state(10, true));
-    let layout = ArrangeRowLayout::build(&refs(&tracks), &groups);
+    let layout =
+        ArrangeRowLayout::build(&refs(&tracks), &groups, &ArrangeAutomationRows::default());
 
     // The header band still routes to the group.
     assert_eq!(
@@ -349,7 +353,7 @@ fn drag_drop_skips_collapsed_members() {
         .iter()
         .find_map(|r| match r.kind {
             ArrangeRowKind::Track(id) => Some((r.y_top, r.height, id)),
-            ArrangeRowKind::GroupHeader(_) => None,
+            ArrangeRowKind::GroupHeader(_) | ArrangeRowKind::AutomationLane { .. } => None,
         })
         .expect("at least one visible track row remains");
     let (y_top, h, id) = first_track_row;

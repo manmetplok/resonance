@@ -297,6 +297,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             AutomationMessage::StartBreakpointDrag { .. } => UndoAction::Begin,
             AutomationMessage::EndBreakpointDrag => UndoAction::Commit,
             AutomationMessage::DragBreakpoint { .. } => UndoAction::Skip,
+            // Expanding a track's lane sub-rows is transient view state
+            // (doc #256, todo #1096) — never an undo entry.
+            AutomationMessage::ToggleTrackExpanded(_) => UndoAction::Skip,
             // Every discrete lane / breakpoint edit is atomic.
             AutomationMessage::AddLane(_)
             | AutomationMessage::RemoveLane(_)

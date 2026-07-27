@@ -400,6 +400,12 @@ pub const TRACK_HEIGHT: f32 = 96.0;
 /// shorter than a full track row so the hierarchy reads as structure
 /// rather than content. See the track-grouping design (doc #200).
 pub const GROUP_HEADER_HEIGHT: f32 = 60.0;
+/// Arrange-view automation-lane sub-row height (doc #256). A slim row —
+/// roughly half a track lane — emitted beneath a track's row for each of
+/// its automation lanes while the track's automation is expanded, so a
+/// stack of parameter lanes reads as detail under the track rather than
+/// competing with full 96 px lanes.
+pub const AUTOMATION_LANE_ROW_HEIGHT: f32 = 44.0;
 /// Indent for tracks that are members of a group. Nested group members
 /// use doubled indent to show hierarchy depth at a glance. See the
 /// track-grouping design (doc #200).

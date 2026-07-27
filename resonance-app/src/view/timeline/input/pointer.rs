@@ -385,6 +385,13 @@ impl TimelineCanvas<'_> {
             Some(ArrangeRowKind::Track(track_id)) => {
                 captured(Message::Ui(UiMessage::SelectTrack(Some(track_id))))
             }
+            // TODO(#1097): breakpoint gestures resolve their target lane
+            // from this row. Until then a press on an automation sub-row
+            // just selects the owning track (the row cannot be produced
+            // yet — no UI emits the expansion toggle).
+            Some(ArrangeRowKind::AutomationLane { track, .. }) => {
+                captured(Message::Ui(UiMessage::SelectTrack(Some(track))))
+            }
             None => captured(Message::Ui(UiMessage::SelectTrack(None))),
         }
     }

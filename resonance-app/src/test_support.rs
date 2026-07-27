@@ -1278,7 +1278,11 @@ impl Resonance {
             .iter()
             .filter(|t| t.sub_track.is_none())
             .collect();
-        crate::view::arrange_layout::ArrangeRowLayout::build(&sorted, &self.track_groups)
+        crate::view::arrange_layout::ArrangeRowLayout::build(
+            &sorted,
+            &self.track_groups,
+            &self.arrange_automation_rows(),
+        )
     }
 
     /// Test-only: render a standalone track-header cell for a member

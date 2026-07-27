@@ -54,6 +54,15 @@ pub fn handle(r: &mut Resonance, m: AutomationMessage) -> Task<Message> {
         // taken by the undo classifier; the handler has nothing to mutate
         // at the gesture boundaries.
         AutomationMessage::StartBreakpointDrag { .. } | AutomationMessage::EndBreakpointDrag => {}
+        // Transient view state only (doc #256, todo #1096): flips whether
+        // the track's automation lanes show as dedicated arrange sub-rows.
+        // No engine command, no undo (classified `Skip`), no persistence.
+        AutomationMessage::ToggleTrackExpanded(track_id) => {
+            let expanded = &mut r.interaction.automation_expanded_tracks;
+            if !expanded.remove(&track_id) {
+                expanded.insert(track_id);
+            }
+        }
     }
     Task::none()
 }

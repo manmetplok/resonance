@@ -95,6 +95,13 @@ pub struct TimelineCanvas<'a> {
     /// handlers publish `DragMessage::Hover` / `Drop`. Drawn in the uncached
     /// overlay pass so it repaints as the cursor moves.
     pub drag: Option<&'a state::DragPlacement>,
+    /// Tracks whose automation lanes are expanded into dedicated slim
+    /// arrange sub-rows (doc #256, todo #1096) — the transient
+    /// `ClipInteractionState::automation_expanded_tracks` set, threaded
+    /// in so the canvas builds the same automation-aware
+    /// [`ArrangeRowLayout`] as the header column and hit-testing.
+    /// Rendering of the sub-rows themselves lands in todo #1097.
+    pub automation_expanded_tracks: &'a std::collections::HashSet<TrackId>,
 }
 
 impl TimelineCanvas<'_> {
@@ -250,7 +257,12 @@ impl TimelineCanvas<'_> {
     /// and clip placement consume it instead of `index * TRACK_HEIGHT`.
     pub(super) fn arrange_layout(&self) -> ArrangeRowLayout {
         let sorted = self.visible_tracks_sorted();
-        ArrangeRowLayout::build(&sorted, self.track_groups)
+        let automation_rows = crate::view::arrange_layout::ArrangeAutomationRows::collect(
+            self.automation,
+            &sorted,
+            self.automation_expanded_tracks,
+        );
+        ArrangeRowLayout::build(&sorted, self.track_groups, &automation_rows)
     }
 }
 
@@ -702,6 +714,12 @@ impl<'a> TimelineCanvas<'a> {
                         );
                         zebra += 1;
                     }
+                    // TODO(#1097): render the lane's band (axis, segments,
+                    // breakpoints) inside this dedicated sub-row and
+                    // suppress the in-track overlay for expanded tracks.
+                    // Until then the row is a blank spacer — it cannot be
+                    // produced yet, since no UI emits the expansion toggle.
+                    ArrangeRowKind::AutomationLane { .. } => {}
                 }
             }
 

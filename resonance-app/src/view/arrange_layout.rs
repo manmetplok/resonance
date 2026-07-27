@@ -19,12 +19,14 @@
 //! the model + helpers; wiring the two surfaces onto it lands in the
 //! follow-up todos (#730–#733).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use resonance_common::automation::TrackId;
+use resonance_common::automation::{LaneId, TrackId};
+use resonance_common::AutomationTarget;
 
-use crate::state::{TrackGroupRegistry, TrackState};
-use crate::theme::{GROUP_HEADER_HEIGHT, TRACK_HEIGHT};
+use crate::state::{AutomationState, TrackGroupRegistry, TrackState};
+use crate::theme::{AUTOMATION_LANE_ROW_HEIGHT, GROUP_HEADER_HEIGHT, TRACK_HEIGHT};
+use crate::view::timeline::automation::{target_belongs_to_track, target_priority};
 
 /// What a single arrange row represents.
 ///
@@ -38,6 +40,13 @@ pub enum ArrangeRowKind {
     GroupHeader(TrackId),
     /// A `TRACK_HEIGHT` (96 px) lane for the track with this id.
     Track(TrackId),
+    /// A slim `AUTOMATION_LANE_ROW_HEIGHT` (44 px) automation sub-row for
+    /// one of `track`'s lanes (doc #256). Emitted directly beneath the
+    /// owning [`Track`](Self::Track) row — one per lane, in
+    /// `target_priority` order — while that track's automation is expanded
+    /// (see [`ArrangeAutomationRows`]). Rendering/editing of these rows
+    /// lands in todos #1097/#1098.
+    AutomationLane { track: TrackId, lane: LaneId },
 }
 
 /// One row in the arrange layout: its kind plus the cumulative vertical
@@ -57,10 +66,14 @@ impl ArrangeRow {
     }
 
     /// The track id if this row is a [`ArrangeRowKind::Track`], else `None`.
+    ///
+    /// Deliberately `None` for [`ArrangeRowKind::AutomationLane`] rows: an
+    /// automation sub-row belongs to a track but is *not* the track's clip
+    /// lane, and every current consumer of this accessor means the latter.
     pub fn track_id(&self) -> Option<TrackId> {
         match self.kind {
             ArrangeRowKind::Track(id) => Some(id),
-            ArrangeRowKind::GroupHeader(_) => None,
+            ArrangeRowKind::GroupHeader(_) | ArrangeRowKind::AutomationLane { .. } => None,
         }
     }
 
@@ -69,7 +82,67 @@ impl ArrangeRow {
     pub fn group_id(&self) -> Option<TrackId> {
         match self.kind {
             ArrangeRowKind::GroupHeader(id) => Some(id),
-            ArrangeRowKind::Track(_) => None,
+            ArrangeRowKind::Track(_) | ArrangeRowKind::AutomationLane { .. } => None,
+        }
+    }
+}
+
+/// The automation inputs to [`ArrangeRowLayout::build`] (doc #256): which
+/// lanes each track owns (in display order) and which tracks currently show
+/// them as dedicated sub-rows.
+///
+/// The default value (`no lanes, nothing expanded`) yields a layout
+/// byte-identical to the pre-automation-row one, which is what every
+/// consumer gets while no track is expanded.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ArrangeAutomationRows {
+    /// Per track, its automation-lane ids in display order — sorted by
+    /// [`target_priority`], ties broken by the `DeviceParam` param id and
+    /// finally the lane id, mirroring `primary_lane_for_track`'s
+    /// deterministic pick. Tracks without lanes are simply absent.
+    pub lanes_by_track: HashMap<TrackId, Vec<LaneId>>,
+    /// Tracks whose automation sub-rows are expanded. Transient UI state
+    /// (not project data): see
+    /// `ClipInteractionState::automation_expanded_tracks`.
+    pub expanded: HashSet<TrackId>,
+}
+
+impl ArrangeAutomationRows {
+    /// Collect the per-track sorted lane lists from the live
+    /// [`AutomationState`] mirror for the given arrange tracks, together
+    /// with the expanded-track set. Membership follows
+    /// [`target_belongs_to_track`] (gain/pan/mute, hosted plugin params,
+    /// device params); ordering follows [`target_priority`] with the same
+    /// tie-breaks as `primary_lane_for_track`, so the first row of an
+    /// expanded stack is exactly the lane the collapsed overlay shows.
+    pub fn collect(
+        automation: &AutomationState,
+        sorted_tracks: &[&TrackState],
+        expanded: &HashSet<TrackId>,
+    ) -> Self {
+        let mut lanes_by_track: HashMap<TrackId, Vec<LaneId>> = HashMap::new();
+        for track in sorted_tracks {
+            let mut lanes: Vec<(u32, String, LaneId)> = automation
+                .lanes
+                .values()
+                .filter(|lane| target_belongs_to_track(&lane.target, track))
+                .map(|lane| {
+                    let tie = match &lane.target {
+                        AutomationTarget::DeviceParam { param_id, .. } => param_id.clone(),
+                        _ => String::new(),
+                    };
+                    (target_priority(lane.target.clone()), tie, lane.id)
+                })
+                .collect();
+            if lanes.is_empty() {
+                continue;
+            }
+            lanes.sort();
+            lanes_by_track.insert(track.id, lanes.into_iter().map(|(_, _, id)| id).collect());
+        }
+        Self {
+            lanes_by_track,
+            expanded: expanded.clone(),
         }
     }
 }
@@ -104,9 +177,21 @@ impl ArrangeRowLayout {
     ///
     /// A collapsed group emits **only** its header row — its members are
     /// omitted, which is exactly what makes "collapse hides members" and
-    /// keeps virtualization happy. `y_top` accumulates across the mixed
-    /// 60/96 px row pitches.
-    pub fn build(sorted_tracks: &[&TrackState], groups: &TrackGroupRegistry) -> Self {
+    /// keeps virtualization happy (a hidden member's automation sub-rows
+    /// vanish with it, since they only ever ride along with its track
+    /// row). `y_top` accumulates across the mixed 44/60/96 px row pitches.
+    ///
+    /// `automation` adds the per-lane sub-rows (doc #256): every track in
+    /// `automation.expanded` gets one 44 px
+    /// [`ArrangeRowKind::AutomationLane`] row per entry of its
+    /// `lanes_by_track` list, directly beneath its track row, in list
+    /// order. With `ArrangeAutomationRows::default()` (or nothing
+    /// expanded) the layout is identical to the automation-unaware one.
+    pub fn build(
+        sorted_tracks: &[&TrackState],
+        groups: &TrackGroupRegistry,
+        automation: &ArrangeAutomationRows,
+    ) -> Self {
         let present: HashSet<TrackId> = sorted_tracks.iter().map(|t| t.id).collect();
         let mut builder = Builder {
             rows: Vec::new(),
@@ -114,6 +199,7 @@ impl ArrangeRowLayout {
             emitted: HashSet::new(),
             present,
             groups,
+            automation,
         };
 
         for track in sorted_tracks {
@@ -180,6 +266,19 @@ impl ArrangeRowLayout {
             .map(|row| (row.y_top, row.height))
     }
 
+    /// The `(y_top, height)` rectangle of the automation sub-row for
+    /// `track`'s lane `lane`, or `None` when that row is not visible —
+    /// the track's automation is collapsed, the track itself is hidden
+    /// inside a collapsed group, or the lane doesn't belong to it.
+    /// Sibling of [`track_row_rect`](Self::track_row_rect) for the
+    /// #1097/#1098 render + input surfaces.
+    pub fn automation_row_rect(&self, track: TrackId, lane: LaneId) -> Option<(f32, f32)> {
+        self.rows
+            .iter()
+            .find(|row| row.kind == ArrangeRowKind::AutomationLane { track, lane })
+            .map(|row| (row.y_top, row.height))
+    }
+
     /// Number of rows in the layout.
     pub fn len(&self) -> usize {
         self.rows.len()
@@ -222,9 +321,15 @@ struct Builder<'a> {
     /// against stale member references producing phantom rows.
     present: HashSet<TrackId>,
     groups: &'a TrackGroupRegistry,
+    automation: &'a ArrangeAutomationRows,
 }
 
 impl Builder<'_> {
+    /// Push a track's 96 px row, followed — when its automation is
+    /// expanded — by one 44 px [`ArrangeRowKind::AutomationLane`] row per
+    /// lane, in the pre-sorted `lanes_by_track` order. Lane rows only
+    /// ever ride along with their track row, so a track hidden inside a
+    /// collapsed group (which never reaches here) hides them too.
     fn push_track(&mut self, id: TrackId) {
         self.rows.push(ArrangeRow {
             kind: ArrangeRowKind::Track(id),
@@ -232,6 +337,21 @@ impl Builder<'_> {
             height: TRACK_HEIGHT,
         });
         self.y += TRACK_HEIGHT;
+
+        if !self.automation.expanded.contains(&id) {
+            return;
+        }
+        let Some(lanes) = self.automation.lanes_by_track.get(&id) else {
+            return;
+        };
+        for &lane in lanes {
+            self.rows.push(ArrangeRow {
+                kind: ArrangeRowKind::AutomationLane { track: id, lane },
+                y_top: self.y,
+                height: AUTOMATION_LANE_ROW_HEIGHT,
+            });
+            self.y += AUTOMATION_LANE_ROW_HEIGHT;
+        }
     }
 
     /// Emit a group's header and (when expanded) its members, recursing one
