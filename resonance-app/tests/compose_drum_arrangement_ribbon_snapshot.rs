@@ -43,8 +43,7 @@ use resonance_app::{demo, theme, Resonance, STARTUP_TAB};
 use resonance_audio::types::TrackType;
 
 /// Tall window so the synth lanes + drum lane (with the ribbon + legend
-/// under the picker) all fit inside the viewport. Mirrors
-/// `compose_drum_pattern_picker.rs`.
+/// under the arrangement strip) all fit inside the viewport.
 const TALL_WINDOW: (f32, f32) = (1440.0, 1600.0);
 
 fn sim_settings() -> iced::Settings {
