@@ -130,6 +130,14 @@ pub struct TrackState {
     pub order: usize,
     pub record_armed: bool,
     pub monitor_enabled: bool,
+    /// External-instrument playback source (doc #257): `Live` re-drives
+    /// the hardware from timeline MIDI; `Recorded` plays recorded takes
+    /// where they cover the timeline (gating MIDI-out + monitor there)
+    /// with live fallback elsewhere. Engine-owned like monitor/arm —
+    /// this mirrors `AudioEvent::TrackPlaybackSourceChanged`. Only
+    /// meaningful on external-instrument tracks; plain tracks keep the
+    /// `Live` default.
+    pub playback_source: resonance_common::PlaybackSource,
     pub mono: bool,
     pub input_device_name: Option<String>,
     /// 0-indexed starting input channel on the track's input device.
@@ -190,6 +198,7 @@ impl TrackState {
             order,
             record_armed: false,
             monitor_enabled: false,
+            playback_source: resonance_common::PlaybackSource::Live,
             mono: true,
             input_device_name: None,
             input_port_index: 0,
@@ -222,6 +231,7 @@ impl TrackState {
             order,
             record_armed: false,
             monitor_enabled: false,
+            playback_source: resonance_common::PlaybackSource::Live,
             mono: false,
             input_device_name: None,
             input_port_index: 0,
@@ -257,6 +267,7 @@ impl TrackState {
             order,
             record_armed: false,
             monitor_enabled: false,
+            playback_source: resonance_common::PlaybackSource::Live,
             mono: true,
             input_device_name: None,
             input_port_index: 0,

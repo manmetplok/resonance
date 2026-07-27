@@ -466,6 +466,12 @@ fn apply_track(r: &mut Resonance, a: &ProjectTrack, b: &ProjectTrack) {
             enabled: b.monitor_enabled,
         });
     }
+    if a.playback_source != b.playback_source {
+        let _ = r.engine.send(AudioCommand::SetTrackPlaybackSource {
+            track_id,
+            source: b.playback_source,
+        });
+    }
     if a.mono != b.mono {
         let _ = r.engine.send(AudioCommand::SetTrackMono {
             track_id,
@@ -530,6 +536,7 @@ fn apply_track(r: &mut Resonance, a: &ProjectTrack, b: &ProjectTrack) {
         t.fx_bypassed = b.fx_bypassed;
         t.record_armed = b.record_armed;
         t.monitor_enabled = b.monitor_enabled;
+        t.playback_source = b.playback_source;
         t.mono = b.mono;
         t.input_device_name = b.input_device_name.clone();
         t.input_port_index = b.input_port_index.unwrap_or(0);

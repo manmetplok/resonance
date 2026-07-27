@@ -29,6 +29,36 @@ pub(crate) fn handle_set_track_mute(ctx: &HandlerCtx, track_id: TrackId, muted: 
     }
 }
 
+/// Switch a track's external-instrument playback source between `Live`
+/// and `Recorded` (doc #257) and echo the applied value back to the app.
+///
+/// Pure in-place core of `AudioCommand::SetTrackPlaybackSource`, split
+/// out (like the `external_instrument.rs` `*_in_place` handlers) so the
+/// command/event boundary is testable without spinning up the engine
+/// thread. Follows the "missing lookup ⇒ no event" convention: an
+/// unknown track changes nothing and echoes nothing, so the app mirror
+/// never records a mode the engine didn't apply.
+pub fn set_track_playback_source_in_place(
+    tracks: &indexmap::IndexMap<TrackId, Track>,
+    event_tx: &crossbeam_channel::Sender<AudioEvent>,
+    track_id: TrackId,
+    source: resonance_common::PlaybackSource,
+) {
+    let Some(track) = tracks.get(&track_id) else {
+        return;
+    };
+    track.set_playback_source(source);
+    let _ = event_tx.send(AudioEvent::TrackPlaybackSourceChanged { track_id, source });
+}
+
+pub(crate) fn handle_set_track_playback_source(
+    ctx: &HandlerCtx,
+    track_id: TrackId,
+    source: resonance_common::PlaybackSource,
+) {
+    set_track_playback_source_in_place(&ctx.tracks.read(), ctx.event_tx, track_id, source);
+}
+
 pub(crate) fn handle_set_track_fx_bypass(ctx: &HandlerCtx, track_id: TrackId, bypassed: bool) {
     if let Some(track) = ctx.tracks.read().get(&track_id) {
         track.set_fx_bypassed(bypassed);

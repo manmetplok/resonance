@@ -18,6 +18,33 @@ use serde::{Deserialize, Serialize};
 
 use crate::automation::TrackId;
 
+/// What an external-instrument track plays back during transport playback
+/// (design doc #257).
+///
+/// - [`Live`](Self::Live) (the default): timeline MIDI is sent to the
+///   hardware and the audio return is monitored — exactly the behaviour
+///   before this mode existed.
+/// - [`Recorded`](Self::Recorded): wherever a recorded take (an audio clip
+///   on the track) covers the playhead, the captured audio plays through the
+///   normal clip path while the MIDI-out and the monitor mix are gated so
+///   the synth is not re-driven on top of its own recording. Outside covered
+///   spans the track falls back to fully live behaviour, and a record-armed
+///   track stays fully live so a punch-in still drives and monitors the
+///   hardware.
+///
+/// Engine-owned per-track state (same pattern as monitor / record-arm), set
+/// via `AudioCommand::SetTrackPlaybackSource` and echoed back through
+/// `AudioEvent::TrackPlaybackSourceChanged`. Lives here so the engine, the
+/// app mirror and project persistence agree on the shape.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PlaybackSource {
+    /// Drive the hardware live from timeline MIDI and monitor its return.
+    #[default]
+    Live,
+    /// Play recorded takes where they exist; live fallback elsewhere.
+    Recorded,
+}
+
 /// The per-track extra config that turns a track into an external instrument.
 ///
 /// The MIDI output device + channel and the audio-return device + channels are

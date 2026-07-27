@@ -282,6 +282,12 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::TrackFxBypassChanged { track_id, bypassed } => {
             tracks::fx_bypass_changed(r, track_id, bypassed)
         }
+        // External-instrument playback source echo (doc #257): mirror
+        // the engine-owned mode into the track state, whether it came
+        // from the inspector toggle or the auto-switch after a take.
+        E::TrackPlaybackSourceChanged { track_id, source } => {
+            tracks::playback_source_changed(r, track_id, source)
+        }
         E::BusAdded { bus_id, name } => tracks::bus_added(r, bus_id, name),
         E::BusRemoved { bus_id } => tracks::bus_removed(r, bus_id),
         E::BusFxBypassChanged { bus_id, bypassed } => {

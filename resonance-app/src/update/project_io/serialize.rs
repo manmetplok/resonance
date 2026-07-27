@@ -39,6 +39,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             fx_bypassed: t.fx_bypassed,
             record_armed: t.record_armed,
             monitor_enabled: t.monitor_enabled,
+            playback_source: t.playback_source,
             mono: t.mono,
             input_device_name: t.input_device_name.clone(),
             plugins: t

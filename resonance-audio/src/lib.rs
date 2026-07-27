@@ -70,8 +70,9 @@ pub mod __test_support {
     };
     pub use crate::mixer::{
         auto_gain_ramp, auto_master_volume, auto_muted, mix_audition_overlay, mix_track_clips,
-        monitor_catchup_skip, monitor_read_len, ramped_gain, render_aux_for_test, sum_to_output,
-        sum_to_stereo, transport_pos_beats, whole_frame_push_len,
+        monitor_catchup_skip, monitor_read_len, ramped_gain, recorded_monitor_gate,
+        render_aux_for_test, sum_to_output, sum_to_stereo, transport_pos_beats,
+        whole_frame_push_len,
     };
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
@@ -97,6 +98,24 @@ pub use engine::{
 /// without bringing up the engine thread.
 #[doc(hidden)]
 pub use engine::midi::{outbound_step_start, OutboundStep};
+
+/// Test surface for the timeline → hardware note emission core and its
+/// Recorded-playback span gating (doc #257, todo #1099). Exposed so
+/// `tests/recorded_outbound_gating.rs` can drive the pure emitter with a
+/// capturing fake [`OutboundNoteSink`] — covered-span NoteOn suppression,
+/// held-note release at span entry, live fallback in gaps — without
+/// opening a hardware port or spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::midi::{
+    emit_outbound_notes, outbound_track_snapshot, OutboundNoteSink, OutboundTrack,
+};
+
+/// Test surface for the `SetTrackPlaybackSource` command boundary
+/// (doc #257, todo #1099): engine-side track-field update +
+/// `TrackPlaybackSourceChanged` echo (and the missing-track no-op
+/// branch), testable without spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::set_track_playback_source_in_place;
 
 /// Test surface for the device-parameter automation → CC/NRPN emission
 /// core (doc #201 §4, todo #723). Exposed so the integration test in

@@ -425,6 +425,31 @@ fn process_multi_port(
     }
 }
 
+/// Recorded-playback monitor gate (doc #257): `true` when the track's
+/// live input monitor must be *skipped* for the block `[playhead,
+/// playhead + frames)` because the track's playback source is
+/// `Recorded` and a recorded take (an audio clip on the track) covers
+/// the block — the take plays through the normal clip mix and the
+/// hardware return must not be layered on top of it.
+///
+/// A record-armed track is never gated, so a punch-in still monitors
+/// the hardware while re-recording over an existing take. The stopped
+/// transport never reaches this path at all (`monitor.rs`'s
+/// passthrough handles stopped monitoring), so monitoring while
+/// preparing a take is untouched. Block granularity matches the
+/// monitor stream itself (~a few ms). Cheap: two relaxed atomic loads,
+/// and the `O(clips)` span scan only runs for `Recorded` tracks.
+pub fn recorded_monitor_gate(
+    track: &Track,
+    clips: &[AudioClip],
+    playhead: u64,
+    frames: usize,
+) -> bool {
+    track.playback_source() == resonance_common::PlaybackSource::Recorded
+        && !track.record_armed()
+        && audio_clip_covers(clips, track.id, playhead, playhead + frames as u64)
+}
+
 /// Fill the de-interleaved track buffers from a track's [`FrozenSource`]
 /// cache for the timeline window `[playhead, playhead + frames)`,
 /// replacing the live instrument + insert-FX render (doc #187, todo
@@ -898,8 +923,13 @@ pub(crate) fn render_block(
             // -- Audio track: mix clips + monitor input + plugin chain --
 
             // Mix monitor input for all tracks with monitoring enabled
-            // (live path only).
-            if strategy.mix_monitor(track, track_buf_l, track_buf_r, frames) {
+            // (live path only) — unless the Recorded playback source
+            // gates it because a recorded take covers this block
+            // (doc #257); the take itself arrives via the clip mix
+            // just below.
+            if !recorded_monitor_gate(track, clips_guard, playhead, frames)
+                && strategy.mix_monitor(track, track_buf_l, track_buf_r, frames)
+            {
                 has_audio = true;
             }
 

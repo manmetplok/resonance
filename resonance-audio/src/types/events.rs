@@ -1,7 +1,7 @@
 //! Engine → GUI event enum.
 use resonance_common::{
     AudioFormat, AutomationLane, AutomationTarget, BindingId, ControlSource, ExternalInstrument,
-    MidiBinding, MidiTarget, TakeContent, TakeGroupId, TimelineRange,
+    MidiBinding, MidiTarget, PlaybackSource, TakeContent, TakeGroupId, TimelineRange,
 };
 use resonance_metering::MeterSnapshot;
 
@@ -540,6 +540,14 @@ pub enum AudioEvent {
     TrackFxBypassChanged {
         track_id: TrackId,
         bypassed: bool,
+    },
+    /// Echo of `AudioCommand::SetTrackPlaybackSource` (doc #257): the
+    /// track's external-instrument playback source changed. Emitted only
+    /// when the track exists, so the app mirror never records a mode for
+    /// a track the engine doesn't know.
+    TrackPlaybackSourceChanged {
+        track_id: TrackId,
+        source: PlaybackSource,
     },
     BusFxBypassChanged {
         bus_id: BusId,

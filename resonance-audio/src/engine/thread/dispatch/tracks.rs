@@ -52,6 +52,9 @@ pub(super) fn dispatch_tracks(
         AudioCommand::SetTrackMonitor { track_id, enabled } => {
             tracks::handle_set_track_monitor(ctx, state, track_id, enabled)
         }
+        AudioCommand::SetTrackPlaybackSource { track_id, source } => {
+            tracks::handle_set_track_playback_source(ctx, track_id, source)
+        }
         AudioCommand::SetTrackInputDevice {
             track_id,
             device_name,

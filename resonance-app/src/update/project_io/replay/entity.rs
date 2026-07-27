@@ -78,6 +78,10 @@ pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &Loaded
         track_id,
         enabled: pt.monitor_enabled,
     });
+    let _ = r.engine.send(AudioCommand::SetTrackPlaybackSource {
+        track_id,
+        source: pt.playback_source,
+    });
     let _ = r.engine.send(AudioCommand::SetTrackMono {
         track_id,
         mono: pt.mono,
@@ -155,6 +159,7 @@ pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &Loaded
     track.fx_bypassed = pt.fx_bypassed;
     track.record_armed = pt.record_armed;
     track.monitor_enabled = pt.monitor_enabled;
+    track.playback_source = pt.playback_source;
     track.mono = pt.mono;
     track.input_device_name = pt.input_device_name.clone();
     track.plugins = gui_plugins;

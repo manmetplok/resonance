@@ -329,6 +329,13 @@ pub struct ProjectTrack {
     pub fx_bypassed: bool,
     pub record_armed: bool,
     pub monitor_enabled: bool,
+    /// External-instrument playback source (doc #257): whether the track
+    /// plays recorded takes (`Recorded`) or re-drives the hardware live
+    /// (`Live`). Persisted beside monitor/record-arm since it shares
+    /// their engine-owned lifecycle. Default `Live` keeps legacy
+    /// projects loadable and is exactly the pre-mode behaviour.
+    #[serde(default)]
+    pub playback_source: resonance_common::PlaybackSource,
     pub mono: bool,
     pub input_device_name: Option<String>,
     /// 0-indexed starting input channel on the track's input device.

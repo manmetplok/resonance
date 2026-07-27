@@ -372,6 +372,13 @@ pub enum ExternalInstrumentMessage {
     ToggleMonitor(TrackId),
     /// Toggle record-arm (capture the audio return to the timeline).
     ToggleRecordArm(TrackId),
+    /// Pick what the track plays back: `Live` re-drives the hardware from
+    /// timeline MIDI, `Recorded` plays recorded takes over the spans they
+    /// cover (doc #257). Engine-owned like monitor/arm — dispatches
+    /// `SetTrackPlaybackSource`; the engine echoes
+    /// `TrackPlaybackSourceChanged`. Auto-switched to `Recorded` when a
+    /// take finishes recording on an external-instrument track.
+    SetPlaybackSource(TrackId, resonance_common::PlaybackSource),
     /// Auto-detect ping: re-check this track's MIDI-out + audio-return
     /// devices against the live hardware and report any that are offline.
     CheckDevices(TrackId),

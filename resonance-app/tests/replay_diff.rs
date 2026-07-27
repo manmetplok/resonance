@@ -35,6 +35,7 @@ fn track(id: u64, vol: f32) -> ProjectTrack {
         fx_bypassed: false,
         record_armed: false,
         monitor_enabled: false,
+        playback_source: resonance_common::PlaybackSource::Live,
         mono: true,
         input_device_name: None,
         input_port_index: Some(0),

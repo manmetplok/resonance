@@ -87,6 +87,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::SetTrackRecordArm { .. }
         | AudioCommand::SetTrackMono { .. }
         | AudioCommand::SetTrackMonitor { .. }
+        | AudioCommand::SetTrackPlaybackSource { .. }
         | AudioCommand::SetTrackInputDevice { .. }
         | AudioCommand::SetTrackInputPort { .. }
         | AudioCommand::ListInputDevices
