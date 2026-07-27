@@ -261,6 +261,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // transient abort, not a project mutation — skip it.
         Message::Freeze(f) => match f {
             FreezeMessage::CancelFreeze => UndoAction::Skip,
+            // Opening the cache directory in the file manager reads state
+            // only — never a project mutation (ba todo #581).
+            FreezeMessage::RevealFreezeCache => UndoAction::Skip,
             FreezeMessage::FreezeTrack(_)
             | FreezeMessage::UnfreezeTrack(_)
             | FreezeMessage::RefreezeTrack(_)

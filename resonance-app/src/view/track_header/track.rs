@@ -26,6 +26,7 @@ pub(crate) fn view_track_header(
     r: &Resonance,
     track: &TrackState,
     is_selected: bool,
+    menu_anchor: (f32, f32),
 ) -> Element<'static, Message> {
     let track_id = track.id;
 
@@ -298,8 +299,16 @@ pub(crate) fn view_track_header(
 
     let stack = column![cell, hairline].spacing(0);
 
+    // Right-click opens the track context menu (design doc #181, todo
+    // #581), anchored at this row (the press carries no cursor position;
+    // `menu_anchor` was computed from the row layout by the caller).
     mouse_area(stack)
         .on_press(Message::Ui(UiMessage::SelectTrack(Some(track_id))))
+        .on_right_press(Message::Ui(UiMessage::OpenTrackMenu {
+            id: track_id,
+            x: menu_anchor.0,
+            y: menu_anchor.1,
+        }))
         .into()
 }
 

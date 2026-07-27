@@ -201,7 +201,7 @@ impl crate::Resonance {
 
         // The clip fade/gain inspector floats over the top-right of the
         // arrange area for the selected editable audio clip (epic #18).
-        if let Some(flyout) = self.view_clip_inspector_flyout() {
+        let base: Element<'_, Message> = if let Some(flyout) = self.view_clip_inspector_flyout() {
             let overlay = container(flyout)
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -209,6 +209,18 @@ impl crate::Resonance {
                 .align_y(alignment::Vertical::Top)
                 .padding(10);
             stack![base, overlay].into()
+        } else {
+            base
+        };
+
+        // The right-click track context menu (design doc #181, todo #581)
+        // floats over the arrange main area. It stacks *here* — not in the
+        // window-root overlay chain — because its anchor coordinates are
+        // computed in arrange-area space from the track-header row layout
+        // (a widget `mouse_area` press carries no cursor position), so the
+        // overlay must share that coordinate origin.
+        if self.interaction.track_menu.is_some() {
+            stack![base, menus::view_track_menu_overlay(self)].into()
         } else {
             base
         }

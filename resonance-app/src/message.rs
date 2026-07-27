@@ -466,6 +466,11 @@ pub enum FreezeMessage {
     FreezeSelectedTracks,
     /// Freeze every freezable track in the project, sequentially.
     FreezeAllTracks,
+    /// Open the project's freeze-cache directory in the OS file manager
+    /// (the context menu's "Reveal freeze cache…" entry, design doc #181).
+    /// Surfaces an error when the project has never been saved (no cache
+    /// directory exists yet in that case).
+    RevealFreezeCache,
 }
 
 #[derive(Debug, Clone)]
@@ -974,6 +979,17 @@ pub enum UiMessage {
     /// only — the import already ran; this just hides the overlay and
     /// clears the transient progress tracker. Never undoable.
     DismissImportProgress,
+    /// Open the right-click track context menu (design doc #181, ba todo
+    /// #581), anchored at `x` / `y` in arrange-area space. Also selects the
+    /// track so the "Freeze selected tracks" entry targets what was clicked.
+    OpenTrackMenu {
+        id: TrackId,
+        x: f32,
+        y: f32,
+    },
+    /// Close the track context menu (backdrop click, or after an entry
+    /// dispatched its action).
+    CloseTrackMenu,
 }
 
 #[derive(Debug, Clone)]

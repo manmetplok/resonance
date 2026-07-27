@@ -33,6 +33,11 @@ use crate::state::{FreezeQueue, FreezeStatus, MidiClipState, TrackState};
 use crate::Resonance;
 
 pub fn handle(r: &mut Resonance, m: FreezeMessage) -> Task<Message> {
+    // Every freeze action is reachable from the track context menu (ba
+    // todo #581); acting on an entry closes the menu, and the messages
+    // arriving from other surfaces (header toggle, shortcuts) are no-ops
+    // on an already-`None` menu.
+    r.interaction.track_menu = None;
     match m {
         FreezeMessage::FreezeTrack(track_id) => {
             freeze_one(r, track_id);
@@ -57,8 +62,29 @@ pub fn handle(r: &mut Resonance, m: FreezeMessage) -> Task<Message> {
             let tracks = freezable_tracks(r);
             start_batch(r, tracks);
         }
+        FreezeMessage::RevealFreezeCache => {
+            reveal_freeze_cache(r);
+        }
     }
     Task::none()
+}
+
+/// Open the project's freeze-cache directory in the OS file manager (the
+/// context menu's "Reveal freeze cache…" entry, ba todo #581). Creates the
+/// directory first so the file manager never errors on a project that has
+/// simply not frozen anything yet; an unsaved project (no cache location)
+/// surfaces a user-facing error instead.
+fn reveal_freeze_cache(r: &mut Resonance) {
+    let Some(dir) = freeze_dir(r) else {
+        r.error_message = Some("Save the project before revealing the freeze cache".into());
+        return;
+    };
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        r.error_message = Some(format!("Could not open freeze cache directory: {e}"));
+        return;
+    }
+    write_cache_gitignore(&dir);
+    crate::update::external_instrument::reveal_path_in_file_manager(&dir);
 }
 
 /// Freeze a single track: validate, switch its status to `Freezing`, and
@@ -267,7 +293,9 @@ fn write_cache_gitignore(dir: &Path) {
 /// A track can be frozen when it has a live render to capture: instrument
 /// and vocal tracks that aren't sub-tracks (sub-tracks are frozen as part
 /// of their parent's render). Audio tracks have no synth to freeze.
-fn freezable(track: &TrackState) -> Result<(), &'static str> {
+/// `pub(crate)` so the track context menu (ba todo #581) can derive its
+/// enabled / disabled item states from the same predicate.
+pub(crate) fn freezable(track: &TrackState) -> Result<(), &'static str> {
     if track.sub_track.is_some() {
         return Err("Freeze the parent track to capture its sub-tracks, not a sub-track itself");
     }
@@ -277,8 +305,9 @@ fn freezable(track: &TrackState) -> Result<(), &'static str> {
     }
 }
 
-/// All freezable tracks in display order.
-fn freezable_tracks(r: &Resonance) -> Vec<TrackId> {
+/// All freezable tracks in display order. `pub(crate)` so the context
+/// menu / header-cap button (ba todo #581) can compute enabled states.
+pub(crate) fn freezable_tracks(r: &Resonance) -> Vec<TrackId> {
     r.sorted_tracks()
         .iter()
         .filter(|t| freezable(t).is_ok())
@@ -289,7 +318,7 @@ fn freezable_tracks(r: &Resonance) -> Vec<TrackId> {
 /// The selected track(s) that are freezable. The app currently models a
 /// single track selection, so this yields at most one id; the batch path
 /// still works unchanged once multi-select lands.
-fn selected_freezable_tracks(r: &Resonance) -> Vec<TrackId> {
+pub(crate) fn selected_freezable_tracks(r: &Resonance) -> Vec<TrackId> {
     r.interaction
         .selected_track
         .and_then(|id| r.registry.tracks.iter().find(|t| t.id == id))

@@ -46,10 +46,18 @@ fn denominator_options() -> &'static [Denominator] {
 }
 
 /// Build the always-visible 32 px global-shelf header strip on the
-/// column side. Contains the caret toggle, `GLOBAL` tag, and a small
-/// count badge ("3" = chords + tempo + sig). Clicking anywhere on the
-/// strip toggles the shelf open / closed.
-pub(super) fn build_global_shelf_header(expanded: bool) -> Element<'static, Message> {
+/// column side — the Tracks column's "header cap". Contains the caret
+/// toggle, `GLOBAL` tag, a small count badge ("3" = chords + tempo +
+/// sig), the "Freeze all" button (design doc #181, todo #581), and the
+/// add-track `+` button. Clicking anywhere else on the strip toggles the
+/// shelf open / closed.
+///
+/// `freeze_all_enabled` — whether any freezable track is still live;
+/// when `false` the snowflake pill renders disabled (dimmed, no press).
+pub(super) fn build_global_shelf_header(
+    expanded: bool,
+    freeze_all_enabled: bool,
+) -> Element<'static, Message> {
     let caret_el = crate::view::controls::collapse_caret(expanded);
 
     let global_tag = text("GLOBAL")
@@ -97,6 +105,35 @@ pub(super) fn build_global_shelf_header(expanded: bool) -> Element<'static, Mess
         .width(22)
         .height(22);
 
+    // "Freeze all" header-cap button (design doc #181, todo #581): a
+    // compact snowflake + label pill that batch-freezes every freezable
+    // track, sequentially, via the same queue the context-menu entry
+    // drives. Disabled (dimmed, no press) when nothing is left to freeze.
+    let freeze_color = if freeze_all_enabled {
+        theme::TEXT_3
+    } else {
+        theme::TEXT_4
+    };
+    let mut freeze_all_btn = button(
+        row![
+            theme::icon(fa::SNOWFLAKE).size(10).color(freeze_color),
+            Space::new().width(4),
+            text("Freeze all").size(10).color(freeze_color),
+        ]
+        .align_y(alignment::Vertical::Center),
+    )
+    .style(|_theme, status| theme::ghost_button_style(status))
+    .padding(iced::Padding {
+        top: 2.0,
+        right: 7.0,
+        bottom: 2.0,
+        left: 7.0,
+    })
+    .height(22);
+    if freeze_all_enabled {
+        freeze_all_btn = freeze_all_btn.on_press(Message::Freeze(FreezeMessage::FreezeAllTracks));
+    }
+
     let inner = row![
         Space::new().width(10),
         caret_el,
@@ -105,6 +142,8 @@ pub(super) fn build_global_shelf_header(expanded: bool) -> Element<'static, Mess
         Space::new().width(6),
         count_pill,
         Space::new().width(Length::Fill),
+        freeze_all_btn,
+        Space::new().width(4),
         add_btn,
         Space::new().width(8),
     ]

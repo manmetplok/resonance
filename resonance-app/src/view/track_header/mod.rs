@@ -55,6 +55,23 @@ use crate::theme;
 use crate::view::arrange_layout::{ArrangeRowKind, ArrangeRowLayout};
 use crate::Resonance;
 
+/// Approximate height of the open track context menu (todo #581): six
+/// ~23 px rows + two separators + border. Used only to clamp the menu's
+/// anchor so a menu opened on a bottom-edge row stays fully visible.
+const TRACK_MENU_HEIGHT: f32 = 160.0;
+
+/// Whether the header-cap "Freeze all" button (todo #581) has anything to
+/// do: some freezable track is still live (idle or failed) — the same
+/// filter `FreezeMessage::FreezeAllTracks` applies when building its batch.
+fn freeze_all_enabled(r: &Resonance) -> bool {
+    crate::update::freeze::freezable_tracks(r).iter().any(|id| {
+        matches!(
+            r.freeze.status(*id),
+            crate::state::FreezeStatus::Idle | crate::state::FreezeStatus::Failed { .. }
+        )
+    })
+}
+
 pub(crate) fn view_track_headers(r: &Resonance) -> Element<'_, Message> {
     let fp = track_headers_fingerprint(r);
     // Lazy-cache the entire column: nothing in the arrange track-header
@@ -76,6 +93,10 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     r.viewport.global_tracks_expanded.hash(&mut h);
     r.viewport.scroll_offset_y.to_bits().hash(&mut h);
+    // The browser panel offsets the arrange-area x of the whole column;
+    // the per-row context-menu anchor (todo #581) is baked into each row's
+    // `OpenTrackMenu` message, so a browser toggle must rebuild the tree.
+    r.browser.visible.hash(&mut h);
     // Manual track-list virtualization (`build_track_headers`) drops
     // tracks below `scroll_offset_y + viewport_height` from the widget
     // tree; the cache must invalidate on window resize so previously-
@@ -131,6 +152,10 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
         .map(|d| d.chords.len())
         .sum();
     chord_total.hash(&mut h);
+    // The header-cap "Freeze all" button's enabled state (todo #581) folds
+    // in freeze statuses beyond the per-track `is_frozen` bit below (e.g.
+    // `Freezing` vs `Idle`), so hash the derived bool directly.
+    freeze_all_enabled(r).hash(&mut h);
     for t in &r.registry.tracks {
         if t.sub_track.is_some() {
             continue;
@@ -210,7 +235,10 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
                 .style(theme::base_bg),
         );
     }
-    chrome = chrome.push(shelf::build_global_shelf_header(expanded));
+    chrome = chrome.push(shelf::build_global_shelf_header(
+        expanded,
+        freeze_all_enabled(r),
+    ));
     if expanded {
         chrome = chrome.push(shelf::view_chord_lane_header(r));
         chrome = chrome.push(shelf::view_tempo_lane_header(r));
@@ -301,7 +329,28 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
             ArrangeRowKind::Track(track_id) => {
                 if let Some(track) = by_id.get(&track_id) {
                     let is_selected = selected_tracks.contains(&track_id);
-                    lane_col = lane_col.push(track::view_track_header(r, track, is_selected));
+                    // Context-menu anchor for this row (todo #581), in
+                    // arrange-area space: a widget `mouse_area` press has no
+                    // cursor position, so the menu anchors a fixed inset into
+                    // the row instead. The y is clamped so a menu opened near
+                    // the bottom edge stays fully on screen.
+                    let menu_x = if r.browser.visible {
+                        theme::BROWSER_WIDTH
+                    } else {
+                        0.0
+                    } + 56.0;
+                    let mut menu_y = chrome_h + (row.y_top - scroll_y) + 30.0;
+                    if r.viewport.viewport_height > 0.0 {
+                        menu_y = menu_y
+                            .min(r.viewport.viewport_height - TRACK_MENU_HEIGHT)
+                            .max(chrome_h);
+                    }
+                    lane_col = lane_col.push(track::view_track_header(
+                        r,
+                        track,
+                        is_selected,
+                        (menu_x, menu_y),
+                    ));
                 }
             }
         }

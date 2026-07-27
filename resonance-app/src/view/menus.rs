@@ -6,7 +6,10 @@ use iced::{alignment, Color, Element, Length};
 
 use crate::message::*;
 use crate::presets::TrackPreset;
-use crate::state::{ArrangementMarker, MarkerMenuState, MarkerRenameState};
+use crate::state::{
+    ArrangementMarker, FreezeStatus, MarkerMenuState, MarkerRenameState, TrackMenuState,
+    TrackState,
+};
 use crate::theme::{self, fa};
 use crate::Resonance;
 
@@ -408,6 +411,164 @@ fn marker_rename_overlay(rename: &MarkerRenameState) -> Element<'_, Message> {
             right: 0.0,
             bottom: 0.0,
             left: rename.x,
+        });
+
+    stack![backdrop, positioned].into()
+}
+
+// ---------------------------------------------------------------------
+// Track context menu (design doc #181, ba todo #581)
+// ---------------------------------------------------------------------
+
+/// The right-click context menu for an arrange track: the freeze surface's
+/// convenience entries — Freeze track (⌘F) / Unfreeze track / Freeze
+/// selected tracks / Freeze all tracks (⇧⌘F) / Reveal freeze cache….
+/// Renders nothing when no menu is open (or its track is gone).
+pub(crate) fn view_track_menu_overlay(r: &Resonance) -> Element<'_, Message> {
+    if let Some(menu) = &r.interaction.track_menu {
+        if let Some(track) = r.registry.tracks.iter().find(|t| t.id == menu.track_id) {
+            return track_menu_overlay(r, menu, track);
+        }
+    }
+    Space::new().into()
+}
+
+/// A single full-width row in the track context menu: label on the left,
+/// optional keyboard-shortcut hint right-aligned in the mono font. A
+/// disabled entry renders dimmed with no `on_press` (iced then feeds the
+/// style closure `Status::Disabled`).
+fn track_menu_item(
+    label: &'static str,
+    shortcut: Option<&'static str>,
+    msg: Message,
+    enabled: bool,
+) -> Element<'static, Message> {
+    let label_color = if enabled { theme::TEXT } else { theme::TEXT_DIM };
+    let mut inner = row![text(label).size(12).color(label_color)]
+        .align_y(alignment::Vertical::Center);
+    if let Some(hint) = shortcut {
+        inner = inner.push(Space::new().width(Length::Fill)).push(
+            text(hint)
+                .size(10)
+                .font(theme::MONO_FONT)
+                .color(theme::TEXT_DIM),
+        );
+    }
+    let mut btn = button(inner)
+        .width(Length::Fill)
+        .padding([5, 10])
+        .style(|_theme, status| theme::transport_button_style(status));
+    if enabled {
+        btn = btn.on_press(msg);
+    }
+    btn.into()
+}
+
+/// Build the open track context menu overlay: click-away backdrop plus the
+/// floating menu box anchored at the row that was right-clicked.
+///
+/// Enabled / disabled states (design doc #181):
+/// - **Freeze track** — freezable (instrument / vocal, not a sub-track)
+///   and currently live (idle or failed);
+/// - **Unfreeze track** — disabled when live: only a frozen / stale track
+///   has a cache to detach;
+/// - **Freeze selected tracks** — some selected track is freezable;
+/// - **Freeze all tracks** — some freezable track is still live;
+/// - **Reveal freeze cache…** — the project has been saved (an unsaved
+///   project has no cache directory yet).
+fn track_menu_overlay<'a>(
+    r: &'a Resonance,
+    menu: &'a TrackMenuState,
+    track: &'a TrackState,
+) -> Element<'a, Message> {
+    use crate::update::freeze as freeze_logic;
+
+    let id = track.id;
+    let status = r.freeze.status(id);
+    let is_live = matches!(status, FreezeStatus::Idle | FreezeStatus::Failed { .. });
+    let can_freeze = freeze_logic::freezable(track).is_ok() && is_live;
+    let can_unfreeze = status.is_frozen();
+    // Both batch entries require something the queue would actually
+    // render: a freezable track that is still live (`start_batch` skips
+    // frozen / mid-render tracks).
+    let batch_would_freeze = |tid: &resonance_audio::types::TrackId| {
+        matches!(
+            r.freeze.status(*tid),
+            FreezeStatus::Idle | FreezeStatus::Failed { .. }
+        )
+    };
+    let can_freeze_selected = freeze_logic::selected_freezable_tracks(r)
+        .iter()
+        .any(batch_would_freeze);
+    let can_freeze_all = freeze_logic::freezable_tracks(r)
+        .iter()
+        .any(batch_would_freeze);
+    let can_reveal = r.io.project_path.is_some();
+
+    let backdrop = mouse_area(
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .on_press(Message::Ui(UiMessage::CloseTrackMenu));
+
+    let menu_col = column![
+        track_menu_item(
+            "Freeze track",
+            Some("\u{2318}F"),
+            Message::Freeze(FreezeMessage::FreezeTrack(id)),
+            can_freeze,
+        ),
+        track_menu_item(
+            "Unfreeze track",
+            None,
+            Message::Freeze(FreezeMessage::UnfreezeTrack(id)),
+            can_unfreeze,
+        ),
+        marker_menu_sep(),
+        track_menu_item(
+            "Freeze selected tracks",
+            None,
+            Message::Freeze(FreezeMessage::FreezeSelectedTracks),
+            can_freeze_selected,
+        ),
+        track_menu_item(
+            "Freeze all tracks",
+            Some("\u{21e7}\u{2318}F"),
+            Message::Freeze(FreezeMessage::FreezeAllTracks),
+            can_freeze_all,
+        ),
+        marker_menu_sep(),
+        track_menu_item(
+            "Reveal freeze cache\u{2026}",
+            None,
+            Message::Freeze(FreezeMessage::RevealFreezeCache),
+            can_reveal,
+        ),
+    ]
+    .spacing(1)
+    .width(210);
+
+    let menu_box = container(opaque(menu_col)).style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::PANEL)),
+        border: iced::Border {
+            color: theme::SEPARATOR,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..Default::default()
+    });
+
+    let positioned = container(menu_box)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(alignment::Horizontal::Left)
+        .align_y(alignment::Vertical::Top)
+        .padding(iced::Padding {
+            top: menu.y,
+            right: 0.0,
+            bottom: 0.0,
+            left: menu.x,
         });
 
     stack![backdrop, positioned].into()

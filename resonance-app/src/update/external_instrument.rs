@@ -290,8 +290,9 @@ pub(crate) fn enable_external_instrument(r: &mut Resonance, track_id: TrackId) {
 
 /// Open `path` in the OS native file manager (Nautilus / Finder / Explorer).
 /// Uses platform-specific launchers; failures are logged but not fatal — the
-/// user can still navigate there manually.
-fn reveal_path_in_file_manager(path: &std::path::Path) {
+/// user can still navigate there manually. `pub(crate)` so the freeze slice
+/// ("Reveal freeze cache…", ba todo #581) can reuse the launcher.
+pub(crate) fn reveal_path_in_file_manager(path: &std::path::Path) {
     #[cfg(target_os = "linux")]
     let cmd = ("xdg-open", &[path.as_os_str()][..]);
     #[cfg(target_os = "macos")]

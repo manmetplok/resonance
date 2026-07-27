@@ -178,6 +178,20 @@ impl crate::Resonance {
                         keyboard::Key::Character(ref c) if c.as_str() == "g" => {
                             Some(Message::Group(GroupMessage::CreateGroupFromSelection))
                         }
+                        // `Cmd-F` freezes the selected track(s); `Shift-Cmd-F`
+                        // freezes every freezable track (design doc #181, todo
+                        // #581). Both no-op in the reducer when nothing is
+                        // freezable, and are gated while a render is in flight
+                        // (see `update::gates::freeze_blocks_message`).
+                        keyboard::Key::Character(ref c)
+                            if c.as_str().eq_ignore_ascii_case("f") =>
+                        {
+                            if modifiers.shift() {
+                                Some(Message::Freeze(FreezeMessage::FreezeAllTracks))
+                            } else {
+                                Some(Message::Freeze(FreezeMessage::FreezeSelectedTracks))
+                            }
+                        }
                         _ => None,
                     }
                 } else {

@@ -1288,7 +1288,14 @@ impl Resonance {
         &self,
         track: &state::TrackState,
     ) -> iced::Element<'static, crate::message::Message> {
-        crate::view::track_header::track::view_track_header(self, track, false)
+        crate::view::track_header::track::view_track_header(self, track, false, (56.0, 30.0))
+    }
+
+    /// Test-only: read the open track context menu state, if any (ba todo
+    /// #581).
+    #[doc(hidden)]
+    pub fn test_track_menu(&self) -> Option<&crate::state::TrackMenuState> {
+        self.interaction.track_menu.as_ref()
     }
 
     /// Test-only: render the floating "N tracks selected · Group ⌘G" bar

@@ -86,6 +86,20 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 }
             }
         }
+        UiMessage::OpenTrackMenu { id, x, y } => {
+            // Right-click selects the track (so the menu's "Freeze selected
+            // tracks" entry targets what was clicked) and opens the context
+            // menu anchored at the row (design doc #181, todo #581).
+            r.interaction.select_single_track(Some(id));
+            r.interaction.track_menu = Some(crate::state::TrackMenuState {
+                track_id: id,
+                x,
+                y,
+            });
+        }
+        UiMessage::CloseTrackMenu => {
+            r.interaction.track_menu = None;
+        }
         UiMessage::ModifiersChanged(mods) => {
             // Cmd (macOS) / Ctrl (other platforms) and Shift both extend the
             // track selection. Mirroring the live state here lets the

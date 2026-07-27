@@ -171,6 +171,10 @@ pub struct ClipInteractionState {
     /// In-progress inline rename of a marker, if any (todo #369). Holds the
     /// live edit buffer; committing re-dispatches `MarkerMessage::Rename`.
     pub marker_rename: Option<MarkerRenameState>,
+    /// Open right-click context menu for an arrange track, if any (design
+    /// doc #181, todo #581). Rendered as a floating overlay over the
+    /// arrange main area, anchored at `x` / `y`.
+    pub track_menu: Option<TrackMenuState>,
 }
 
 impl ClipInteractionState {
@@ -210,6 +214,17 @@ impl ClipInteractionState {
 #[derive(Debug, Clone)]
 pub struct MarkerMenuState {
     pub marker_id: u64,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// A track's open right-click context menu (design doc #181, todo #581).
+/// `x` / `y` anchor the floating overlay in arrange-area space — computed
+/// from the row layout at open time, since a widget `mouse_area` press
+/// carries no cursor position.
+#[derive(Debug, Clone)]
+pub struct TrackMenuState {
+    pub track_id: TrackId,
     pub x: f32,
     pub y: f32,
 }

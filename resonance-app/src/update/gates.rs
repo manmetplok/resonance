@@ -58,10 +58,15 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // (the nav variants would otherwise drive gated `Marker` messages).
         | Message::Ui(UiMessage::ToggleMarkersOverview)
         | Message::Ui(UiMessage::RequestMarkerNav { .. })
-        | Message::Ui(UiMessage::MarkerNavResolved { .. }) => true,
+        | Message::Ui(UiMessage::MarkerNavResolved { .. })
+        // The track context menu acts on a project's tracks — block it
+        // while the startup modal owns the screen (there are no tracks to
+        // act on yet), like the other auxiliary overlays.
+        | Message::Ui(UiMessage::OpenTrackMenu { .. }) => true,
         // Benign UI: allow.
         Message::Ui(UiMessage::CloseSettings)
         | Message::Ui(UiMessage::CloseAddTrackMenu)
+        | Message::Ui(UiMessage::CloseTrackMenu)
         | Message::Ui(UiMessage::DismissError)
         | Message::Ui(UiMessage::StartNewProject)
         | Message::Ui(UiMessage::SelectTrack(_))
