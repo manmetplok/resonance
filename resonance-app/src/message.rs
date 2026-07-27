@@ -178,6 +178,11 @@ pub enum MarkerUiMessage {
 pub enum TrackMessage {
     AddTrack,
     AddInstrumentTrack,
+    /// Create an instrument track that starts already in external-instrument
+    /// mode (doc #251 gap 1 affordance 2). Allocates the track id app-side so
+    /// the external state lands atomically with the track in one undo step;
+    /// the menu entry that dispatches it is a separate view todo.
+    AddExternalInstrumentTrack,
     AddVocalTrack,
     /// User clicked delete on a track — may require confirmation if it
     /// has content.

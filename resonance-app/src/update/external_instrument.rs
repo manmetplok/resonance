@@ -14,7 +14,7 @@
 //! skipped.
 
 use iced::Task;
-use resonance_audio::types::AudioCommand;
+use resonance_audio::types::{AudioCommand, TrackId};
 
 use crate::message::{ExternalInstrumentMessage, Message};
 use crate::state::ExternalInstrumentState;
@@ -26,12 +26,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
         M::Enable(track_id) => {
             // Only meaningful for an existing track; ignore stray ids.
             if r.registry.tracks.iter().any(|t| t.id == track_id) {
-                let state = r
-                    .external_instruments
-                    .entry(track_id)
-                    .or_insert_with(|| ExternalInstrumentState::new(track_id));
-                let config = state.config();
-                let _ = r.engine.send(AudioCommand::SetExternalInstrument { config });
+                enable_external_instrument(r, track_id);
             }
         }
         M::Disable(track_id) => {
@@ -252,6 +247,26 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
         }
     }
     Task::none()
+}
+
+/// Put `track_id` into external-instrument mode: insert a fresh
+/// [`ExternalInstrumentState`] (idempotent — an existing entry is reused) and
+/// hand the engine the matching `SetExternalInstrument` config.
+///
+/// This is the core of `ExternalInstrumentMessage::Enable` minus its
+/// "track must already exist" guard, factored out so track creation can enable
+/// external mode on a freshly-allocated id in the same undo step
+/// (`TrackMessage::AddExternalInstrumentTrack`) without duplicating the logic.
+/// Callers that operate on user-supplied ids should keep the existence guard;
+/// callers that just allocated the id (and are about to create the track) skip
+/// it because the engine echo lands the track a beat later.
+pub(crate) fn enable_external_instrument(r: &mut Resonance, track_id: TrackId) {
+    let state = r
+        .external_instruments
+        .entry(track_id)
+        .or_insert_with(|| ExternalInstrumentState::new(track_id));
+    let config = state.config();
+    let _ = r.engine.send(AudioCommand::SetExternalInstrument { config });
 }
 
 /// Open `path` in the OS native file manager (Nautilus / Finder / Explorer).
