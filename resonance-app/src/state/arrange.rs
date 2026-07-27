@@ -104,8 +104,8 @@ impl Resonance {
             ArrangeRowKind::GroupHeader(_) => None,
             // An automation sub-row is not a clip drop target — like a
             // group header, dropping over it keeps the clip on its
-            // original lane. TODO(#1097): revisit alongside the dedicated
-            // lane-row editing surface.
+            // original lane (confirmed with the dedicated lane-row editing
+            // surface, todo #1097: lane rows carry envelopes, not clips).
             ArrangeRowKind::AutomationLane { .. } => None,
         }
     }

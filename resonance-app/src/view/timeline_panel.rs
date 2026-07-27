@@ -11,7 +11,11 @@ use iced::{Element, Length};
 use resonance_audio::types::*;
 
 impl crate::Resonance {
-    pub(crate) fn view_timeline(&self) -> Element<'_, Message> {
+    /// The fully-populated [`TimelineCanvas`] view-model for the current
+    /// app state. Split from [`view_timeline`](Self::view_timeline) so the
+    /// canvas the user sees and the test-support event / fingerprint hooks
+    /// (`test_support.rs`) are built from the exact same data.
+    pub(crate) fn timeline_canvas_data(&self) -> TimelineCanvas<'_> {
         let recording_tracks: Vec<TrackId> = if self.transport.recording {
             self.registry
                 .tracks
@@ -34,7 +38,7 @@ impl crate::Resonance {
             .map(|t| t.id)
             .collect();
 
-        let timeline_data = TimelineCanvas {
+        TimelineCanvas {
             tracks: &self.registry.tracks,
             track_groups: &self.track_groups,
             clips: &self.clips,
@@ -76,7 +80,11 @@ impl crate::Resonance {
             frozen_tracks,
             drag: self.drag_placement.as_ref(),
             automation_expanded_tracks: &self.interaction.automation_expanded_tracks,
-        };
+        }
+    }
+
+    pub(crate) fn view_timeline(&self) -> Element<'_, Message> {
+        let timeline_data = self.timeline_canvas_data();
 
         // Fixed canvas width = full content width. With the canvas no
         // longer set to `Length::Fill`, its `bounds.size()` stays

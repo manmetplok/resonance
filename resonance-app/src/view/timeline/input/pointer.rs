@@ -399,10 +399,12 @@ impl TimelineCanvas<'_> {
             Some(ArrangeRowKind::Track(track_id)) => {
                 captured(Message::Ui(UiMessage::SelectTrack(Some(track_id))))
             }
-            // TODO(#1097): breakpoint gestures resolve their target lane
-            // from this row. Until then a press on an automation sub-row
-            // just selects the owning track (the row cannot be produced
-            // yet — no UI emits the expansion toggle).
+            // A press on an automation sub-row that missed every band
+            // gesture (the chip is suppressed on lane rows; the breakpoint
+            // dots and band-add were checked above via `automation_row_at`,
+            // which resolves the lane directly from this row — todo #1097)
+            // falls back to selecting the owning track, so the label strip
+            // above the band still behaves like track chrome.
             Some(ArrangeRowKind::AutomationLane { track, .. }) => {
                 captured(Message::Ui(UiMessage::SelectTrack(Some(track))))
             }

@@ -26,7 +26,7 @@ use iced::{Color, Point, Rectangle, Size};
 
 use crate::state::TrackState;
 use crate::theme;
-use crate::view::arrange_layout::ArrangeRowLayout;
+use crate::view::arrange_layout::{ArrangeRowKind, ArrangeRowLayout};
 use resonance_common::{
     lane_value_to_real, sample_lane, AutomationLane, AutomationTarget, Breakpoint, CurveKind,
 };
@@ -45,6 +45,16 @@ const LIVE_DOT_RADIUS: f32 = 4.0;
 /// Pixel pick radius for clicking a breakpoint dot (todo #382). A touch
 /// larger than [`DOT_RADIUS`] so the small dots are easy to grab.
 pub const BREAKPOINT_HIT_RADIUS: f32 = 7.0;
+/// Top inset of the value band inside a dedicated 44 px automation
+/// sub-row (doc #256, todo #1097). Leaves exactly enough headroom for the
+/// parameter-label chip, which rises [`CHIP_RISE`] px above the band top:
+/// `LANE_ROW_BAND_TOP_INSET - CHIP_RISE = 1`, so the chip's top edge sits
+/// 1 px inside the row instead of bleeding into the row above.
+const LANE_ROW_BAND_TOP_INSET: f32 = 16.0;
+/// Bottom inset of the value band inside a dedicated automation sub-row.
+/// Slimmer than the top inset (no chip below the band) — together they
+/// leave a 22 px editable band in the 44 px row.
+const LANE_ROW_BAND_BOTTOM_INSET: f32 = 6.0;
 
 /// The value-band rect (top-left + height) inside a track row whose top edge
 /// is `row_y` and whose height is `row_height`. Normalized lane value `1.0`
@@ -55,6 +65,19 @@ pub const BREAKPOINT_HIT_RADIUS: f32 = 7.0;
 pub fn automation_band(row_y: f32, row_height: f32) -> (f32, f32) {
     let band_top = row_y + BAND_INSET;
     let band_height = (row_height - 2.0 * BAND_INSET).max(1.0);
+    (band_top, band_height)
+}
+
+/// The value-band rect inside a dedicated 44 px automation sub-row (doc
+/// #256, todo #1097). Same contract as [`automation_band`], but with the
+/// slimmer lane-row insets: the label chip fills the strip above the band
+/// (inside the row) and only a hairline margin remains below. Shared by the
+/// row draw pass and the pointer hit-testing so gestures land exactly on
+/// the band the user sees (the #732 rule).
+pub fn lane_row_band(row_y: f32, row_height: f32) -> (f32, f32) {
+    let band_top = row_y + LANE_ROW_BAND_TOP_INSET;
+    let band_height =
+        (row_height - LANE_ROW_BAND_TOP_INSET - LANE_ROW_BAND_BOTTOM_INSET).max(1.0);
     (band_top, band_height)
 }
 
@@ -352,6 +375,46 @@ impl TimelineCanvas<'_> {
             return;
         }
         for track in self.visible_tracks_sorted() {
+            let lanes = track_lanes_sorted(self.automation, track);
+            if lanes.is_empty() {
+                continue;
+            }
+
+            // Expanded track (doc #256, todo #1097): every lane draws as a
+            // full band inside its own dedicated sub-row, and the in-track
+            // overlay band below is suppressed entirely. A track hidden
+            // inside a collapsed group emits no lane rows
+            // (`automation_row_rect` -> `None`), so nothing draws — the
+            // sub-rows vanish with their track.
+            if self.automation_expanded_tracks.contains(&track.id) {
+                for lane in lanes {
+                    let Some((row_y_top, row_height)) =
+                        layout.automation_row_rect(track.id, lane.id)
+                    else {
+                        continue;
+                    };
+                    let row_y = header_height + row_y_top - y_off;
+                    if row_y + row_height < header_height || row_y > bounds.height {
+                        continue;
+                    }
+                    let (band_top, band_height) = lane_row_band(row_y, row_height);
+                    // `lane_count` 1: a dedicated row shows exactly one
+                    // lane, so it gets the plain label — no clickable
+                    // cycle chip, no "N lanes" count.
+                    self.draw_one_automation_lane(
+                        frame,
+                        lane,
+                        1,
+                        band_top,
+                        band_height,
+                        bounds.width,
+                    );
+                }
+                continue;
+            }
+
+            // Collapsed track: the pre-#1097 overlay band, including the
+            // selector chip when several lanes target the track.
             let Some((row_y_top, row_height)) = layout.track_row_rect(track.id) else {
                 continue;
             };
@@ -359,33 +422,38 @@ impl TimelineCanvas<'_> {
             if row_y + row_height < header_height || row_y > bounds.height {
                 continue;
             }
-            let lanes = track_lanes_sorted(self.automation, track);
-            if lanes.is_empty() {
-                continue;
-            }
             let Some(lane) = shown_lane_for_track(self.automation, track) else {
                 continue;
             };
-            self.draw_one_automation_lane(frame, lane, lanes.len(), row_y, row_height, bounds.width);
+            let (band_top, band_height) = automation_band(row_y, row_height);
+            self.draw_one_automation_lane(
+                frame,
+                lane,
+                lanes.len(),
+                band_top,
+                band_height,
+                bounds.width,
+            );
         }
     }
 
-    /// Draw a single lane's axis, segments and breakpoints within its row.
-    /// `lane_count` is how many lanes target the row's track: when more
-    /// than one, the label chip gets a background (it is clickable — a
-    /// click cycles which lane shows, todo #1095) and a small "N lanes"
-    /// count so the hidden lanes are discoverable. Single-lane tracks
-    /// render exactly as before.
+    /// Draw a single lane's axis, segments and breakpoints within the
+    /// given value band. `lane_count` is how many lanes the band can show:
+    /// when more than one, the label chip gets a background (it is
+    /// clickable — a click cycles which lane shows, todo #1095) and a
+    /// small "N lanes" count so the hidden lanes are discoverable.
+    /// Single-lane bands render the plain label. Callers derive the band
+    /// from their row rect — [`automation_band`] for the in-track overlay,
+    /// [`lane_row_band`] for a dedicated automation sub-row (todo #1097).
     fn draw_one_automation_lane(
         &self,
         frame: &mut canvas::Frame,
         lane: &AutomationLane,
         lane_count: usize,
-        row_y: f32,
-        row_height: f32,
+        band_top: f32,
+        band_height: f32,
         width: f32,
     ) {
-        let (band_top, band_height) = automation_band(row_y, row_height);
         // Read-disabled lanes keep their points but use the static value, so
         // dim them to read as "not playing back".
         let dim = if lane.enabled { 1.0 } else { 0.45 };
@@ -525,6 +593,29 @@ impl TimelineCanvas<'_> {
         };
         frame.with_clip(lane_clip, |frame| {
             for track in self.visible_tracks_sorted() {
+                // Expanded track (todo #1097): one live dot per lane, each
+                // riding its own dedicated sub-row; the suppressed in-track
+                // overlay draws no dot at all — matching the static pass.
+                if self.automation_expanded_tracks.contains(&track.id) {
+                    for lane in track_lanes_sorted(self.automation, track) {
+                        if lane.points.is_empty() {
+                            continue;
+                        }
+                        let Some((row_y_top, row_height)) =
+                            layout.automation_row_rect(track.id, lane.id)
+                        else {
+                            continue;
+                        };
+                        let row_y = header_height + row_y_top - y_off;
+                        if row_y + row_height < header_height || row_y > bounds.height {
+                            continue;
+                        }
+                        let (band_top, band_height) = lane_row_band(row_y, row_height);
+                        self.draw_live_value_dot(frame, lane, playhead_x, band_top, band_height);
+                    }
+                    continue;
+                }
+
                 let Some((row_y_top, row_height)) = layout.track_row_rect(track.id) else {
                     continue;
                 };
@@ -539,32 +630,46 @@ impl TimelineCanvas<'_> {
                     continue;
                 }
                 let (band_top, band_height) = automation_band(row_y, row_height);
-                let value = sample_lane(&lane.points, self.playhead);
-                let py = value_to_y(value, band_top, band_height);
-
-                // Warm dot tying the read-out to the playhead colour.
-                let dot = canvas::Path::circle(Point::new(playhead_x, py), LIVE_DOT_RADIUS);
-                frame.fill(&dot, theme::WARM);
-                let ring = canvas::Path::circle(Point::new(playhead_x, py), LIVE_DOT_RADIUS);
-                frame.stroke(
-                    &ring,
-                    canvas::Stroke::default().with_width(1.0).with_color(Color {
-                        a: 0.9,
-                        ..theme::BG_1
-                    }),
-                );
-
-                // Real-value read-out (dB / pan / 0-1) just right of the dot.
-                let real = lane_value_to_real(&lane.target, value);
-                let text = format_real_value(lane.target.clone(), real);
-                frame.fill_text(canvas::Text {
-                    content: text,
-                    position: Point::new(playhead_x + 7.0, py - 5.0),
-                    color: theme::WARM,
-                    size: 9.0.into(),
-                    ..canvas::Text::default()
-                });
+                self.draw_live_value_dot(frame, lane, playhead_x, band_top, band_height);
             }
+        });
+    }
+
+    /// One lane's live playhead-value indicator: the warm dot on the
+    /// envelope plus the real-value read-out just right of it. Shared by
+    /// the in-track overlay band and the dedicated lane rows (todo #1097).
+    fn draw_live_value_dot(
+        &self,
+        frame: &mut canvas::Frame,
+        lane: &AutomationLane,
+        playhead_x: f32,
+        band_top: f32,
+        band_height: f32,
+    ) {
+        let value = sample_lane(&lane.points, self.playhead);
+        let py = value_to_y(value, band_top, band_height);
+
+        // Warm dot tying the read-out to the playhead colour.
+        let dot = canvas::Path::circle(Point::new(playhead_x, py), LIVE_DOT_RADIUS);
+        frame.fill(&dot, theme::WARM);
+        let ring = canvas::Path::circle(Point::new(playhead_x, py), LIVE_DOT_RADIUS);
+        frame.stroke(
+            &ring,
+            canvas::Stroke::default().with_width(1.0).with_color(Color {
+                a: 0.9,
+                ..theme::BG_1
+            }),
+        );
+
+        // Real-value read-out (dB / pan / 0-1) just right of the dot.
+        let real = lane_value_to_real(&lane.target, value);
+        let text = format_real_value(lane.target.clone(), real);
+        frame.fill_text(canvas::Text {
+            content: text,
+            position: Point::new(playhead_x + 7.0, py - 5.0),
+            color: theme::WARM,
+            size: 9.0.into(),
+            ..canvas::Text::default()
         });
     }
 }
@@ -575,6 +680,21 @@ impl TimelineCanvas<'_> {
 pub(crate) struct BreakpointHit {
     pub target: AutomationTarget,
     pub index: usize,
+}
+
+/// The automation band the pointer's y lands in (see
+/// [`TimelineCanvas::automation_row_at`]): the owning track, the lane the
+/// band edits, the band's screen-space geometry, and whether the band is a
+/// dedicated `AutomationLane` sub-row (todo #1097) rather than the
+/// collapsed in-track overlay.
+struct AutomationBandHit<'l> {
+    track: &'l TrackState,
+    lane: &'l AutomationLane,
+    band_top: f32,
+    band_height: f32,
+    /// `true` for a dedicated 44 px lane sub-row; `false` for the
+    /// in-track overlay band of a collapsed (non-expanded) track.
+    dedicated_row: bool,
 }
 
 /// Breakpoint hit-testing and edit-geometry for the timeline canvas
@@ -601,16 +721,23 @@ impl TimelineCanvas<'_> {
         )
     }
 
-    /// The *shown* lane (chip-cycle selection or priority default), its
-    /// owning track, and the row's top y / height for the visible track
-    /// row whose vertical span contains `y`. `None` when `y` isn't over an
-    /// automated track row (no lanes, a group-header band, a hidden
-    /// collapsed-group member, or the row under `y` has no lane).
+    /// The automation band under `y`, resolved through the same
+    /// [`ArrangeRowLayout`] the draw pass consumes so the pointer hits
+    /// exactly the band the user sees drawn under the mixed 44/60/96 px
+    /// row pitch (the #732 rule). Two kinds of row carry a band:
     ///
-    /// Resolves the row through the same [`ArrangeRowLayout`] the draw pass
-    /// consumes, so the pointer hits exactly the band the user sees drawn
-    /// under the mixed 60/96 px row pitch (the #732 rule).
-    fn automation_row_at(&self, y: f32) -> Option<(&TrackState, &AutomationLane, f32, f32)> {
+    /// * a **dedicated `AutomationLane` sub-row** (doc #256, todo #1097):
+    ///   the lane is resolved directly from the row kind — every lane of
+    ///   an expanded track is editable in its own row;
+    /// * a collapsed **track row**: the *shown* lane (chip-cycle selection
+    ///   or priority default) in the in-track overlay band, as before.
+    ///
+    /// A track in `automation_expanded_tracks` returns `None` for its
+    /// track row — the overlay band is suppressed while its lanes show as
+    /// sub-rows, so no overlay gesture (chip, dot, band-add) can land on
+    /// the clip lane. Group-header rows and hidden collapsed-group members
+    /// resolve to `None` as always.
+    fn automation_row_at(&self, y: f32) -> Option<AutomationBandHit<'_>> {
         if self.automation.lanes.is_empty() {
             return None;
         }
@@ -618,50 +745,100 @@ impl TimelineCanvas<'_> {
         let y_off = self.scroll_offset_y;
         let layout = self.arrange_layout();
         let row = layout.row_at_y(y - header_height + y_off)?;
-        let track_id = row.track_id()?;
         let row_y = header_height + row.y_top - y_off;
-        let row_height = row.height;
-        let track = self
-            .visible_tracks_sorted()
-            .into_iter()
-            .find(|t| t.id == track_id)?;
-        let lane = shown_lane_for_track(self.automation, track)?;
-        Some((track, lane, row_y, row_height))
+        match row.kind {
+            ArrangeRowKind::Track(track_id) => {
+                // Expanded: the in-track overlay is suppressed — its lanes
+                // live in the sub-rows below (drawn there, hit there).
+                if self.automation_expanded_tracks.contains(&track_id) {
+                    return None;
+                }
+                let track = self
+                    .visible_tracks_sorted()
+                    .into_iter()
+                    .find(|t| t.id == track_id)?;
+                let lane = shown_lane_for_track(self.automation, track)?;
+                let (band_top, band_height) = automation_band(row_y, row.height);
+                Some(AutomationBandHit {
+                    track,
+                    lane,
+                    band_top,
+                    band_height,
+                    dedicated_row: false,
+                })
+            }
+            ArrangeRowKind::AutomationLane { track, lane } => {
+                let track = self
+                    .visible_tracks_sorted()
+                    .into_iter()
+                    .find(|t| t.id == track)?;
+                let lane = self
+                    .automation
+                    .lanes
+                    .values()
+                    .find(|l| l.id == lane && target_belongs_to_track(&l.target, track))?;
+                let (band_top, band_height) = lane_row_band(row_y, row.height);
+                Some(AutomationBandHit {
+                    track,
+                    lane,
+                    band_top,
+                    band_height,
+                    dedicated_row: true,
+                })
+            }
+            ArrangeRowKind::GroupHeader(_) => None,
+        }
     }
 
     /// The track whose clickable parameter chip is under `pos`, or `None`.
     /// The chip only exists (and is only clickable) when more than one lane
     /// targets the track — single-lane tracks keep their plain label and
-    /// every pre-#1095 click behavior. Geometry comes from the same
+    /// every pre-#1095 click behavior. Dedicated lane rows (todo #1097)
+    /// have no cycle chip either: every lane is already visible, so their
+    /// plain label never captures a click. Geometry comes from the same
     /// [`lane_chip_rect`] the draw pass fills (#732 rule).
     pub(super) fn lane_chip_hit(&self, pos: Point) -> Option<resonance_common::TrackId> {
-        let (track, lane, row_y, row_height) = self.automation_row_at(pos.y)?;
-        if track_lanes_sorted(self.automation, track).len() < 2 {
+        let hit = self.automation_row_at(pos.y)?;
+        if hit.dedicated_row {
             return None;
         }
-        let label = target_label(&lane.target, &self.device_param_labels);
+        if track_lanes_sorted(self.automation, hit.track).len() < 2 {
+            return None;
+        }
+        let label = target_label(&hit.lane.target, &self.device_param_labels);
         if label.is_empty() {
             return None;
         }
-        let (band_top, _) = automation_band(row_y, row_height);
-        lane_chip_rect(band_top, &label)
+        lane_chip_rect(hit.band_top, &label)
             .contains(pos)
-            .then_some(track.id)
+            .then_some(hit.track.id)
     }
 
-    /// Value-band geometry (`band_top`, `band_height`) for the row owning
+    /// Value-band geometry (`band_top`, `band_height`) for the band owning
     /// `target`'s lane. Used mid-drag, where the pointer y may leave the
     /// band but the value still maps against the band that owns the point.
-    /// `None` when the owning track has no visible row (e.g. it folded
+    /// For an expanded track the band is the lane's own dedicated sub-row
+    /// (todo #1097); for a collapsed track it is the in-track overlay —
+    /// but only while the lane is the *shown* one, matching what's drawn.
+    /// `None` when the owning track has no visible band (e.g. it folded
     /// into a collapsed group mid-gesture).
     fn target_band(&self, target: &AutomationTarget) -> Option<(f32, f32)> {
         let header_height = self.fixed_header_height();
         let y_off = self.scroll_offset_y;
         let layout = self.arrange_layout();
         for track in self.visible_tracks_sorted() {
-            let owns =
+            if !target_belongs_to_track(target, track) {
+                continue;
+            }
+            if self.automation_expanded_tracks.contains(&track.id) {
+                let lane = self.automation.lanes.get(target)?;
+                let (row_y_top, row_height) = layout.automation_row_rect(track.id, lane.id)?;
+                let row_y = header_height + row_y_top - y_off;
+                return Some(lane_row_band(row_y, row_height));
+            }
+            let shown =
                 shown_lane_for_track(self.automation, track).map(|l| &l.target) == Some(target);
-            if owns {
+            if shown {
                 let (row_y_top, row_height) = layout.track_row_rect(track.id)?;
                 let row_y = header_height + row_y_top - y_off;
                 return Some(automation_band(row_y, row_height));
@@ -671,20 +848,21 @@ impl TimelineCanvas<'_> {
     }
 
     /// The breakpoint dot under the pointer, if any. Used to start a
-    /// drag / curve-toggle (left) or delete (right).
-    pub(super) fn breakpoint_hit(&self, pos: Point) -> Option<BreakpointHit> {
-        let (_track, lane, row_y, row_height) = self.automation_row_at(pos.y)?;
-        let (band_top, band_height) = automation_band(row_y, row_height);
+    /// drag / curve-toggle (left) or delete (right). Resolves through
+    /// [`Self::automation_row_at`], so on an expanded track each lane's
+    /// dots are hit inside that lane's own sub-row (todo #1097).
+    pub(crate) fn breakpoint_hit(&self, pos: Point) -> Option<BreakpointHit> {
+        let hit = self.automation_row_at(pos.y)?;
         let idx = nearest_breakpoint(
-            &lane.points,
+            &hit.lane.points,
             pos,
-            band_top,
-            band_height,
+            hit.band_top,
+            hit.band_height,
             |frames| self.sample_to_x(frames),
             BREAKPOINT_HIT_RADIUS,
         )?;
         Some(BreakpointHit {
-            target: lane.target.clone(),
+            target: hit.lane.target.clone(),
             index: idx,
         })
     }
@@ -692,18 +870,22 @@ impl TimelineCanvas<'_> {
     /// An "add a breakpoint here" target for a press on empty band space:
     /// the lane target, the grid-snapped frame, and the value mapped from
     /// the pointer y. `None` unless the pointer is inside an automated
-    /// row's value band — the row's top/bottom insets stay free for clip
-    /// grabbing on automated tracks.
-    pub(super) fn band_add_at(&self, pos: Point) -> Option<(AutomationTarget, u64, f32)> {
-        let (_track, lane, row_y, row_height) = self.automation_row_at(pos.y)?;
-        let (band_top, band_height) = automation_band(row_y, row_height);
-        if pos.y < band_top - BREAKPOINT_HIT_RADIUS
-            || pos.y > band_top + band_height + BREAKPOINT_HIT_RADIUS
+    /// band — the overlay band of a collapsed track (the row's top/bottom
+    /// insets stay free for clip grabbing), or a dedicated lane row's band
+    /// on an expanded track, which adds to exactly that row's lane.
+    pub(crate) fn band_add_at(&self, pos: Point) -> Option<(AutomationTarget, u64, f32)> {
+        let hit = self.automation_row_at(pos.y)?;
+        if pos.y < hit.band_top - BREAKPOINT_HIT_RADIUS
+            || pos.y > hit.band_top + hit.band_height + BREAKPOINT_HIT_RADIUS
         {
             return None;
         }
-        let value = value_from_y(pos.y, band_top, band_height);
-        Some((lane.target.clone(), self.x_to_frames_snapped(pos.x), value))
+        let value = value_from_y(pos.y, hit.band_top, hit.band_height);
+        Some((
+            hit.lane.target.clone(),
+            self.x_to_frames_snapped(pos.x),
+            value,
+        ))
     }
 
     /// New `(frame, value)` for a breakpoint drag to `pos`: value from the

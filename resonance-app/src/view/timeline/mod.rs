@@ -384,10 +384,17 @@ pub struct TimelineFingerprint {
     /// / unfreezes so its lane repaints with (or without) the frozen-render
     /// treatment and the "unsupported" hatch.
     pub frozen_hash: u64,
+    /// Order-independent hash of the automation-expanded-track set (doc
+    /// #256, todo #1097). Expanding / collapsing a track's lane sub-rows
+    /// reshapes the whole `ArrangeRowLayout` under the cached layer (rows
+    /// shift, the overlay band is suppressed, lane rows appear), so the
+    /// toggle must repaint the canvas — without this the cached geometry
+    /// goes stale the moment the caret is clicked.
+    pub automation_expanded_hash: u64,
 }
 
 impl<'a> TimelineCanvas<'a> {
-    fn fingerprint(&self) -> TimelineFingerprint {
+    pub(crate) fn fingerprint(&self) -> TimelineFingerprint {
         // Hash the full tempo + signature event content so any
         // *in-place* edit (drag, pick_list change, transport-bar
         // commit) invalidates the cache and the curve / pill markers
@@ -483,6 +490,17 @@ impl<'a> TimelineCanvas<'a> {
             .iter()
             .fold(0u64, |acc, id| acc ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15));
 
+        // Same order-independent fold for the automation-expanded set
+        // (todo #1097): a toggle restructures the arrange rows, so the
+        // cached layer must repaint. Fold the count in too so the empty
+        // set can never collide with a set whose ids XOR to zero.
+        let automation_expanded_hash = self
+            .automation_expanded_tracks
+            .iter()
+            .fold(self.automation_expanded_tracks.len() as u64, |acc, id| {
+                acc ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            });
+
         TimelineFingerprint {
             clips_len: self.clips.len(),
             midi_clips_len: self.midi_clips.len(),
@@ -519,6 +537,7 @@ impl<'a> TimelineCanvas<'a> {
             selected_marker_id: self.selected_marker_id,
             clips_hash,
             frozen_hash,
+            automation_expanded_hash,
         }
     }
 }
@@ -726,12 +745,27 @@ impl<'a> TimelineCanvas<'a> {
                         );
                         zebra += 1;
                     }
-                    // TODO(#1097): render the lane's band (axis, segments,
-                    // breakpoints) inside this dedicated sub-row and
-                    // suppress the in-track overlay for expanded tracks.
-                    // Until then the row is a blank spacer — it cannot be
-                    // produced yet, since no UI emits the expansion toggle.
-                    ArrangeRowKind::AutomationLane { .. } => {}
+                    // Dedicated automation sub-row (doc #256, todo #1097):
+                    // a slightly recessed band background so the lane rows
+                    // read subordinate to their track, plus the same
+                    // bottom hairline as track rows. The lane's envelope,
+                    // breakpoints and label are drawn by
+                    // `draw_automation_lanes` below (after clips), sharing
+                    // this row's geometry through the layout. Zebra parity
+                    // deliberately doesn't advance — lane rows ride along
+                    // with their track.
+                    ArrangeRowKind::AutomationLane { .. } => {
+                        frame.fill_rectangle(
+                            Point::new(0.0, y),
+                            Size::new(bounds.width, row.height),
+                            theme::BG_2,
+                        );
+                        frame.fill_rectangle(
+                            Point::new(0.0, y + row.height - 1.0),
+                            Size::new(bounds.width, 1.0),
+                            theme::LINE_2,
+                        );
+                    }
                 }
             }
 

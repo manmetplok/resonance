@@ -1326,4 +1326,77 @@ impl Resonance {
     pub fn test_arrange_header_offset(&self) -> f32 {
         self.arrange_header_offset()
     }
+
+    /// Test-only: run one iced event through the timeline canvas's real
+    /// `canvas::Program::update` input path — the same code the live
+    /// pointer flows through — and return the `Message` it publishes, if
+    /// any. `state` is the canvas-local `TimelineState` a test threads
+    /// across a multi-step gesture (press → move → release); `(x, y)` is
+    /// the cursor position in canvas space. Drives the per-row automation
+    /// gesture-routing coverage of doc #256 / todo #1097.
+    #[doc(hidden)]
+    pub fn test_timeline_canvas_event(
+        &self,
+        state: &mut crate::view::timeline::TimelineState,
+        event: &iced::Event,
+        x: f32,
+        y: f32,
+    ) -> Option<crate::message::Message> {
+        use iced::widget::canvas::Program as _;
+        let width = if self.viewport.viewport_width > 0.0 {
+            self.viewport.viewport_width
+        } else {
+            1200.0
+        };
+        let height = if self.viewport.viewport_height > 0.0 {
+            self.viewport.viewport_height
+        } else {
+            900.0
+        };
+        let bounds = iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::new(width, height));
+        let cursor = iced::mouse::Cursor::Available(iced::Point::new(x, y));
+        let canvas = self.timeline_canvas_data();
+        let action = canvas.update(state, event, bounds, cursor)?;
+        action.into_inner().0
+    }
+
+    /// Test-only: the timeline canvas's "add a breakpoint here" resolution
+    /// for a canvas-space position — `Some((target, snapped_frame, value))`
+    /// when the position lands in an editable automation band (an overlay
+    /// band on a collapsed track, or a dedicated lane row on an expanded
+    /// one), `None` otherwise. Pins the todo #1097 overlay-suppression /
+    /// per-row routing rules without a live canvas.
+    #[doc(hidden)]
+    pub fn test_timeline_band_add_at(
+        &self,
+        x: f32,
+        y: f32,
+    ) -> Option<(resonance_common::AutomationTarget, u64, f32)> {
+        self.timeline_canvas_data()
+            .band_add_at(iced::Point::new(x, y))
+    }
+
+    /// Test-only: the breakpoint dot under a canvas-space position, as
+    /// `(lane target, point index)` — resolved per-row on expanded tracks
+    /// (todo #1097).
+    #[doc(hidden)]
+    pub fn test_timeline_breakpoint_hit(
+        &self,
+        x: f32,
+        y: f32,
+    ) -> Option<(resonance_common::AutomationTarget, usize)> {
+        self.timeline_canvas_data()
+            .breakpoint_hit(iced::Point::new(x, y))
+            .map(|hit| (hit.target, hit.index))
+    }
+
+    /// Test-only: the timeline canvas's cache fingerprint for the current
+    /// app state. Two states whose fingerprints differ repaint the cached
+    /// geometry layer; equal fingerprints reuse it. Pins that transient
+    /// view state which reshapes the canvas (e.g. the automation
+    /// lane-row expansion set, todo #1097) invalidates the cache.
+    #[doc(hidden)]
+    pub fn test_timeline_fingerprint(&self) -> crate::view::timeline::TimelineFingerprint {
+        self.timeline_canvas_data().fingerprint()
+    }
 }
