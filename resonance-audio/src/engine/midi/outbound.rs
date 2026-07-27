@@ -72,6 +72,182 @@ pub fn outbound_step_start(
     }
 }
 
+/// Sink for the NoteOn/NoteOff messages emitted by the timeline →
+/// hardware scheduler. The real [`MidiOutputRegistry`] forwards to its
+/// note primitives; a capturing fake stands in for tests so
+/// [`emit_outbound_notes`] — including the Recorded-span gating (doc
+/// #257) — can be exercised without opening a hardware port.
+pub trait OutboundNoteSink {
+    /// Emit a NoteOn for `track_id` on `channel`.
+    fn note_on(&mut self, track_id: TrackId, channel: u8, note: u8, velocity: u8);
+    /// Emit a NoteOff for `track_id` on `channel`.
+    fn note_off(&mut self, track_id: TrackId, channel: u8, note: u8);
+}
+
+impl OutboundNoteSink for MidiOutputRegistry {
+    #[inline]
+    fn note_on(&mut self, track_id: TrackId, channel: u8, note: u8, velocity: u8) {
+        self.send_note_on(track_id, channel, note, velocity);
+    }
+    #[inline]
+    fn note_off(&mut self, track_id: TrackId, channel: u8, note: u8) {
+        self.send_note_off(track_id, channel, note);
+    }
+}
+
+/// Per-track snapshot entry for one outbound poll step: which channel
+/// the track emits on and whether the Recorded playback source gates
+/// its notes over take-covered spans (doc #257).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutboundTrack {
+    pub track_id: TrackId,
+    pub channel: u8,
+    /// `true` when the track's playback source is `Recorded` and it is
+    /// not record-armed: notes starting inside a take-covered span are
+    /// skipped and held notes are released on span entry. A record-armed
+    /// track stays fully live so a punch-in still drives the hardware.
+    pub gate_recorded: bool,
+}
+
+/// Snapshot the tracks with hardware MIDI output configured, resolving
+/// each one's Recorded-span gating flag. Muted tracks are skipped so the
+/// user can silence an external instrument by muting its track — and so
+/// a "bounce in place" run can isolate the source by muting the others.
+/// Pure over the tracks map so the flag derivation (`Recorded` + not
+/// armed ⇒ gated) is unit-testable.
+pub fn outbound_track_snapshot(tracks: &IndexMap<TrackId, Track>) -> Vec<OutboundTrack> {
+    tracks
+        .values()
+        .filter(|t| t.midi_output_device.load_full().is_some() && !t.muted())
+        .map(|t| OutboundTrack {
+            track_id: t.id,
+            channel: t.midi_output_channel.unwrap_or(0),
+            gate_recorded: t.playback_source() == resonance_common::PlaybackSource::Recorded
+                && !t.record_armed(),
+        })
+        .collect()
+}
+
+/// Emit the hardware NoteOn/NoteOff messages for one forward poll window
+/// `[last, curr)`. Pure core of [`poll_timeline_to_midi_output`] —
+/// discontinuity classification (loop wrap / seek / stop) stays with the
+/// caller, which drains `held` before calling this for a fresh segment.
+///
+/// Recorded-span gating (doc #257), per track with `gate_recorded`:
+///
+/// 1. **Span entry releases held notes.** When the window overlaps any
+///    take-covered span ([`audio_clip_covers`]), every note held on that
+///    track is NoteOff'd *before* this window's NoteOns are considered —
+///    a note sustained across the span boundary must not keep ringing on
+///    the hardware over the take. Running the drain first means a note
+///    that starts later in the same window, past the span's end, still
+///    fires and survives. (While the playhead travels inside a span the
+///    overlap keeps holding, but the held map stays empty, so the drain
+///    is a no-op.)
+/// 2. **Covered NoteOns are skipped.** A note whose start position lies
+///    inside a covered span never fires — including when the window has
+///    already moved past the span's end (no stale NoteOns on exit).
+/// 3. Everything not covered behaves exactly live (the defined fallback
+///    for "no take exists here"), and `gate_recorded: false` tracks are
+///    byte-identical to the pre-mode behaviour.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_outbound_notes<S: OutboundNoteSink>(
+    output_tracks: &[OutboundTrack],
+    midi_clips: &[MidiClip],
+    audio_clips: &[AudioClip],
+    tempo: &TempoMap,
+    sample_rate: u32,
+    last: u64,
+    curr: u64,
+    held: &mut HashMap<(TrackId, u8), (u64, u8)>,
+    sink: &mut S,
+) {
+    // 1) Recorded gating: entering (or being inside) a covered span
+    // releases the track's held notes before any new NoteOns fire.
+    for ot in output_tracks.iter().filter(|ot| ot.gate_recorded) {
+        if !audio_clip_covers(audio_clips, ot.track_id, last, curr) {
+            continue;
+        }
+        let to_release: Vec<((TrackId, u8), u8)> = held
+            .iter()
+            .filter(|((tid, _), _)| *tid == ot.track_id)
+            .map(|(k, (_end, channel))| (*k, *channel))
+            .collect();
+        for ((tid, note), channel) in to_release {
+            held.remove(&(tid, note));
+            sink.note_off(tid, channel, note);
+        }
+    }
+
+    // 2) NoteOn for any timeline note that starts in `[last, curr)`.
+    for ot in output_tracks {
+        for clip in midi_clips.iter().filter(|c| c.track_id == ot.track_id) {
+            // Trim is in tick space relative to the clip; the
+            // visible portion is `[trim_start, duration - trim_end]`.
+            let visible_end_tick = clip.duration_ticks.saturating_sub(clip.trim_end_ticks);
+            for note in &clip.notes {
+                if note.start_tick < clip.trim_start_ticks || note.start_tick >= visible_end_tick
+                {
+                    continue;
+                }
+                // Notes are stored in tick space relative to the
+                // clip, but `tick_to_abs_sample` projects from
+                // `clip.start_sample`. Subtract `trim_start_ticks`
+                // so a trimmed clip's first audible note lands
+                // exactly at `clip.start_sample`.
+                let rel_start = note.start_tick - clip.trim_start_ticks;
+                let rel_end =
+                    (note.start_tick + note.duration_ticks).min(visible_end_tick)
+                        - clip.trim_start_ticks;
+                let note_start =
+                    tempo.tick_to_abs_sample(clip.start_sample, rel_start, sample_rate);
+                let note_end = tempo.tick_to_abs_sample(clip.start_sample, rel_end, sample_rate);
+                // Half-open interval `[last, curr)`: each
+                // sample-position is owned by exactly one poll
+                // step, so a note at the very first playhead
+                // value (e.g. sample 0 on the first poll after
+                // play) fires, and no note ever fires twice.
+                if note_start < last || note_start >= curr {
+                    continue;
+                }
+                // Recorded gating: a note starting inside a covered
+                // span is played by the take, not re-sent to the
+                // hardware.
+                if ot.gate_recorded
+                    && audio_clip_covers(
+                        audio_clips,
+                        ot.track_id,
+                        note_start,
+                        note_start + 1,
+                    )
+                {
+                    continue;
+                }
+                let velocity_u8 = (note.velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
+                sink.note_on(ot.track_id, ot.channel, note.note, velocity_u8);
+                // If the same pitch is already held (e.g.
+                // overlapping notes on the same track), the
+                // earlier NoteOff time gets clobbered. Most
+                // hardware synths handle a second NoteOn on a
+                // held pitch as "retrigger", which matches
+                // what the user sees on the timeline.
+                held.insert((ot.track_id, note.note), (note_end, ot.channel));
+            }
+        }
+    }
+
+    // 3) NoteOff for held notes whose end fell in `[last, curr)`.
+    let to_off: Vec<((TrackId, u8), (u64, u8))> = held
+        .iter()
+        .filter(|(_, (end, _))| *end >= last && *end < curr)
+        .map(|(k, v)| (*k, *v))
+        .collect();
+    for ((tid, note), (_end, channel)) in to_off {
+        held.remove(&(tid, note));
+        sink.note_off(tid, channel, note);
+    }
+}
+
 /// Send hardware MIDI for any timeline note whose start/end fell in
 /// `(last_playhead .. current_playhead]`, on tracks configured with
 /// a MIDI output device. Runs once per engine-thread iteration
@@ -137,98 +313,31 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
         return;
     }
 
-    // Snapshot the tracks with hardware output configured. Cheap
-    // scan; typical projects have a handful of instrument tracks.
-    // Muted tracks are skipped so the user can silence an external
-    // instrument by muting its track — and so a "bounce in place" run
-    // can isolate the source by muting the others. Any held notes on a
+    // Snapshot the tracks with hardware output configured (cheap scan;
+    // typical projects have a handful of instrument tracks) and resolve
+    // each one's Recorded-span gating flag. Any held notes on a
     // newly-muted track still get their NoteOff because the held-notes
-    // map is consulted unconditionally at the bottom of this function.
-    let output_tracks: Vec<(TrackId, u8)> = {
-        let tracks = ctx.tracks.read();
-        tracks
-            .values()
-            .filter(|t| t.midi_output_device.load_full().is_some() && !t.muted())
-            .map(|t| (t.id, t.midi_output_channel.unwrap_or(0)))
-            .collect()
-    };
+    // map is consulted unconditionally inside `emit_outbound_notes`.
+    let output_tracks = outbound_track_snapshot(&ctx.tracks.read());
     if output_tracks.is_empty() {
         state.midi_hw.midi_outbound_last_playhead = curr;
         return;
     }
 
-    // First: NoteOn for any timeline note that starts in (last..curr].
-    {
-        let tempo = ctx.tempo_map.load();
-        let clips = ctx.midi_clips.read();
-        for (track_id, channel) in &output_tracks {
-            for clip in clips.iter().filter(|c| c.track_id == *track_id) {
-                // Trim is in tick space relative to the clip; the
-                // visible portion is `[trim_start, duration - trim_end]`.
-                let visible_end_tick = clip
-                    .duration_ticks
-                    .saturating_sub(clip.trim_end_ticks);
-                for note in &clip.notes {
-                    if note.start_tick < clip.trim_start_ticks
-                        || note.start_tick >= visible_end_tick
-                    {
-                        continue;
-                    }
-                    // Notes are stored in tick space relative to the
-                    // clip, but `tick_to_abs_sample` projects from
-                    // `clip.start_sample`. Subtract `trim_start_ticks`
-                    // so a trimmed clip's first audible note lands
-                    // exactly at `clip.start_sample`.
-                    let rel_start = note.start_tick - clip.trim_start_ticks;
-                    let rel_end = (note.start_tick + note.duration_ticks)
-                        .min(visible_end_tick)
-                        - clip.trim_start_ticks;
-                    let note_start =
-                        tempo.tick_to_abs_sample(clip.start_sample, rel_start, ctx.sample_rate);
-                    let note_end =
-                        tempo.tick_to_abs_sample(clip.start_sample, rel_end, ctx.sample_rate);
-                    // Half-open interval `[last, curr)`: each
-                    // sample-position is owned by exactly one poll
-                    // step, so a note at the very first playhead
-                    // value (e.g. sample 0 on the first poll after
-                    // play) fires, and no note ever fires twice.
-                    if note_start >= last && note_start < curr {
-                        let velocity_u8 =
-                            (note.velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
-                        state.midi_hw.midi_outputs.send_note_on(
-                            *track_id,
-                            *channel,
-                            note.note,
-                            velocity_u8,
-                        );
-                        // If the same pitch is already held (e.g.
-                        // overlapping notes on the same track), the
-                        // earlier NoteOff time gets clobbered. Most
-                        // hardware synths handle a second NoteOn on a
-                        // held pitch as "retrigger", which matches
-                        // what the user sees on the timeline.
-                        state
-                            .midi_hw
-                            .midi_outbound_held
-                            .insert((*track_id, note.note), (note_end, *channel));
-                    }
-                }
-            }
-        }
-    }
-
-    // Second: NoteOff for held notes whose end fell in `[last, curr)`.
-    let to_off: Vec<((TrackId, u8), (u64, u8))> = state
-        .midi_hw
-        .midi_outbound_held
-        .iter()
-        .filter(|(_, (end, _))| *end >= last && *end < curr)
-        .map(|(k, v)| (*k, *v))
-        .collect();
-    for ((tid, note), (_end, channel)) in to_off {
-        state.midi_hw.midi_outbound_held.remove(&(tid, note));
-        state.midi_hw.midi_outputs.send_note_off(tid, channel, note);
-    }
+    let tempo = ctx.tempo_map.load();
+    let midi_clips = ctx.midi_clips.read();
+    let audio_clips = ctx.clips.read();
+    emit_outbound_notes(
+        &output_tracks,
+        &midi_clips,
+        &audio_clips,
+        &tempo,
+        ctx.sample_rate,
+        last,
+        curr,
+        &mut state.midi_hw.midi_outbound_held,
+        &mut state.midi_hw.midi_outputs,
+    );
 
     state.midi_hw.midi_outbound_last_playhead = curr;
 }

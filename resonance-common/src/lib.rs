@@ -31,7 +31,7 @@ pub use device_registry::{
     bundled_definitions, user_definitions_dir, DeviceDefinitionRegistry, DeviceScanError,
     DEVICE_DEFINITION_EXT,
 };
-pub use external_instrument::ExternalInstrument;
+pub use external_instrument::{ExternalInstrument, PlaybackSource};
 pub use midi_map::{
     apply_delta, cc_to_norm, decode_relative, delete_controller_map, load_controller_maps,
     save_controller_map, takeover_value, BindingId, CcMode, ControlSource, ControllerMap,

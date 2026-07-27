@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use arc_swap::{ArcSwap, ArcSwapOption, Guard};
-use resonance_common::DeviceParam;
+use resonance_common::{DeviceParam, PlaybackSource};
 
 use super::{BusId, FrozenSource, PluginInstanceId, TrackId, TrackOutput, TrackType};
 
@@ -33,6 +33,15 @@ pub struct Track {
     pub name: String,
     record_armed: AtomicBool,
     monitor_enabled: AtomicBool,
+    /// External-instrument playback source (doc #257): `false` = `Live`
+    /// (default, exactly the pre-mode behaviour), `true` = `Recorded` —
+    /// recorded takes gate the MIDI-out and monitor mix over the spans they
+    /// cover. Stored as an atomic bool so both the audio callback (monitor
+    /// gate) and the engine control thread (outbound MIDI gate) read it
+    /// lock-free; accessed through the typed
+    /// [`playback_source`](Self::playback_source) /
+    /// [`set_playback_source`](Self::set_playback_source) pair.
+    playback_source_recorded: AtomicBool,
     /// If true, track captures a single input channel (duplicated to both L/R).
     /// If false, track captures a stereo pair.
     mono: AtomicBool,
@@ -133,6 +142,7 @@ impl Track {
             name,
             record_armed: AtomicBool::new(false),
             monitor_enabled: AtomicBool::new(false),
+            playback_source_recorded: AtomicBool::new(false),
             mono: AtomicBool::new(true),
             peak_l_bits: AtomicU32::new(0),
             peak_r_bits: AtomicU32::new(0),
@@ -245,6 +255,21 @@ impl Track {
 
     pub fn set_monitor_enabled(&self, v: bool) {
         self.monitor_enabled.store(v, Ordering::Relaxed);
+    }
+
+    /// External-instrument playback source (doc #257). `Live` is the
+    /// default and means exactly the pre-mode behaviour.
+    pub fn playback_source(&self) -> PlaybackSource {
+        if self.playback_source_recorded.load(Ordering::Relaxed) {
+            PlaybackSource::Recorded
+        } else {
+            PlaybackSource::Live
+        }
+    }
+
+    pub fn set_playback_source(&self, source: PlaybackSource) {
+        self.playback_source_recorded
+            .store(source == PlaybackSource::Recorded, Ordering::Relaxed);
     }
 
     pub fn mono(&self) -> bool {

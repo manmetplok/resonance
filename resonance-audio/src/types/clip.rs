@@ -478,6 +478,23 @@ pub fn compute_waveform_peaks(data: &[f32]) -> Vec<(f32, f32)> {
     peaks
 }
 
+/// True when any audio clip on `track_id` overlaps the half-open timeline
+/// window `[start, end)` (sample frames). This is the "covered span" test
+/// of the external-instrument Recorded playback mode (doc #257): over
+/// covered spans the recorded take plays and the MIDI-out / monitor mix
+/// are gated; outside them the track falls back to live. A clip's extent
+/// is its visible (post-trim) `[start_sample, end_sample())`, matching
+/// exactly what `mix_track_clips` will audibly play. Zero-length windows
+/// and empty (fully trimmed) clips cover nothing. `O(clips)`,
+/// allocation-free — safe on both the audio callback and the engine
+/// control thread.
+pub fn audio_clip_covers(clips: &[AudioClip], track_id: TrackId, start: u64, end: u64) -> bool {
+    start < end
+        && clips.iter().any(|clip| {
+            clip.track_id == track_id && clip.start_sample < end && clip.end_sample() > start
+        })
+}
+
 impl AudioClip {
     /// Total number of frames in the raw audio data.
     pub fn total_frames(&self) -> u64 {

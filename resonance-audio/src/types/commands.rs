@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use resonance_common::{BindingId, ControllerMap, MidiBinding, MidiTarget};
 
-use resonance_common::{AutomationLane, AutomationTarget, DeviceParam};
+use resonance_common::{AutomationLane, AutomationTarget, DeviceParam, PlaybackSource};
 
 use super::{
     ABSource, BusId, ClipId, ExportSettings, FadeCurve, FrozenSource, MidiNote, PluginInstanceId,
@@ -186,6 +186,14 @@ pub enum AudioCommand {
     SetTrackMonitor {
         track_id: TrackId,
         enabled: bool,
+    },
+    /// Switch an external-instrument track between playing its recorded
+    /// takes and re-driving the hardware live (doc #257). Engine-owned
+    /// state like monitor/record-arm; echoed back via
+    /// `AudioEvent::TrackPlaybackSourceChanged`.
+    SetTrackPlaybackSource {
+        track_id: TrackId,
+        source: PlaybackSource,
     },
     SetTrackMono {
         track_id: TrackId,

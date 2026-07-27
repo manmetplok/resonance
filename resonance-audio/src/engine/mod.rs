@@ -93,6 +93,7 @@ mod thread;
 mod tracks;
 mod transport;
 mod vocal_analysis;
+pub use tracks::set_track_playback_source_in_place;
 pub use vocal_analysis::{analyze_clip_pitch_in_place, analyze_pitch};
 
 /// Shared state between the engine control thread and the audio callback.

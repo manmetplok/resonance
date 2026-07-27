@@ -282,6 +282,12 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::TrackFxBypassChanged { track_id, bypassed } => {
             tracks::fx_bypass_changed(r, track_id, bypassed)
         }
+        // External-instrument playback source echo (doc #257). The
+        // engine-side mode landed with todo #1099; the app mirror,
+        // auto-switch after a take, and the inspector toggle are todo
+        // #1100 — until then accept the event without acting, keeping
+        // the match exhaustive (same staging as `TakeCaptured`).
+        E::TrackPlaybackSourceChanged { .. } => {}
         E::BusAdded { bus_id, name } => tracks::bus_added(r, bus_id, name),
         E::BusRemoved { bus_id } => tracks::bus_removed(r, bus_id),
         E::BusFxBypassChanged { bus_id, bypassed } => {

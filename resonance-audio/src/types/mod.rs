@@ -61,8 +61,8 @@ mod vocal_tuning;
 
 pub use aux_send::{aux_send_would_cycle, AuxSend, SendSource};
 pub use clip::{
-    compute_waveform_peaks, AudioClip, ClipSource, FadeCurve, MidiClip, MidiNote,
-    PendingNoteEvent, WarpAlgorithm, WarpMarker, WAVEFORM_PEAK_FRAMES,
+    audio_clip_covers, compute_waveform_peaks, AudioClip, ClipSource, FadeCurve, MidiClip,
+    MidiNote, PendingNoteEvent, WarpAlgorithm, WarpMarker, WAVEFORM_PEAK_FRAMES,
 };
 pub use freeze::FrozenSource;
 pub use vocal_tuning::{F0Frame, GlobalTuning, NoteBlob, NoteEdit, TuningScale, VocalTuning};

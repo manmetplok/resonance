@@ -76,7 +76,8 @@ pub use live::deliver_or_stash;
 /// without the engine thread.
 pub use live::live_arrival_sample_offset;
 pub use outbound::{
-    emit_device_param_automation, outbound_step_start, DeviceParamMidiSink, OutboundStep,
+    emit_device_param_automation, emit_outbound_notes, outbound_step_start,
+    outbound_track_snapshot, DeviceParamMidiSink, OutboundNoteSink, OutboundStep, OutboundTrack,
 };
 pub(crate) use outbound::{poll_device_param_automation, poll_timeline_to_midi_output};
 
