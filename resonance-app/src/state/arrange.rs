@@ -17,7 +17,7 @@
 use resonance_audio::types::TrackId;
 
 use crate::state::TrackState;
-use crate::view::arrange_layout::{ArrangeRowKind, ArrangeRowLayout};
+use crate::view::arrange_layout::{ArrangeAutomationRows, ArrangeRowKind, ArrangeRowLayout};
 use crate::{theme, Resonance};
 
 impl Resonance {
@@ -59,10 +59,28 @@ impl Resonance {
             + lane_labels_h
     }
 
-    /// Build the shared arrange-row layout (group-header rows + track rows,
-    /// collapse-aware) from the live registry + group state.
+    /// The automation inputs to the shared arrange-row layout (doc #256):
+    /// each arrange track's sorted lane ids from the live automation
+    /// mirror, plus the transient expanded-track set. Shared by every
+    /// layout build site so the canvas, header column and hit-testing
+    /// always agree on the automation sub-rows.
+    pub(crate) fn arrange_automation_rows(&self) -> ArrangeAutomationRows {
+        ArrangeAutomationRows::collect(
+            &self.automation,
+            &self.arrange_sorted_tracks(),
+            &self.interaction.automation_expanded_tracks,
+        )
+    }
+
+    /// Build the shared arrange-row layout (group-header rows + track rows
+    /// + expanded automation sub-rows, collapse-aware) from the live
+    /// registry + group + automation state.
     pub(crate) fn arrange_row_layout(&self) -> ArrangeRowLayout {
-        ArrangeRowLayout::build(&self.arrange_sorted_tracks(), &self.track_groups)
+        ArrangeRowLayout::build(
+            &self.arrange_sorted_tracks(),
+            &self.track_groups,
+            &self.arrange_automation_rows(),
+        )
     }
 
     /// Find the visible track lane at the given y coordinate in the arrange
@@ -84,6 +102,11 @@ impl Resonance {
         match self.arrange_row_layout().row_at_y(lane_y)?.kind {
             ArrangeRowKind::Track(track_id) => Some(track_id),
             ArrangeRowKind::GroupHeader(_) => None,
+            // An automation sub-row is not a clip drop target — like a
+            // group header, dropping over it keeps the clip on its
+            // original lane. TODO(#1097): revisit alongside the dedicated
+            // lane-row editing surface.
+            ArrangeRowKind::AutomationLane { .. } => None,
         }
     }
 }

@@ -241,7 +241,13 @@ pub fn track_lanes_sorted<'l>(
             AutomationTarget::DeviceParam { param_id, .. } => param_id.as_str(),
             _ => "",
         };
-        (target_priority(lane.target.clone()), tie)
+        // Final lane-id tie-break: two plugin-param lanes with the same
+        // param id on different instances would otherwise inherit the
+        // HashMap's nondeterministic iteration order — and the arrange
+        // lane-row stacking (`ArrangeAutomationRows::collect`) delegates
+        // here, so the cycle order, the default pick, and row 0 of an
+        // expanded stack all agree.
+        (target_priority(lane.target.clone()), tie, lane.id)
     });
     lanes
 }

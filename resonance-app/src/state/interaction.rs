@@ -175,6 +175,13 @@ pub struct ClipInteractionState {
     /// doc #181, todo #581). Rendered as a floating overlay over the
     /// arrange main area, anchored at `x` / `y`.
     pub track_menu: Option<TrackMenuState>,
+    /// Tracks whose automation lanes are expanded into dedicated slim
+    /// arrange sub-rows (doc #256, todo #1096). Transient view state —
+    /// not project data, not undoable, not persisted. Toggled by
+    /// `AutomationMessage::ToggleTrackExpanded`; consumed by the shared
+    /// `ArrangeRowLayout` build so the canvas, track-header column and
+    /// hit-testing all agree on the extra rows.
+    pub automation_expanded_tracks: std::collections::HashSet<TrackId>,
 }
 
 impl ClipInteractionState {

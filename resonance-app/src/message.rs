@@ -834,6 +834,11 @@ pub enum AutomationMessage {
     /// `AutomationState::lane_selection` view state — no engine command,
     /// no persistence, no undo entry.
     CycleTrackLane(TrackId),
+    /// Expand / collapse a track's automation lanes into dedicated slim
+    /// arrange sub-rows (doc #256, todo #1096). Pure transient view state
+    /// (`ClipInteractionState::automation_expanded_tracks`): no engine
+    /// command, no undo entry, no persistence.
+    ToggleTrackExpanded(TrackId),
 }
 
 #[derive(Debug, Clone)]
