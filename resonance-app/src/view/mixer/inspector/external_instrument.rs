@@ -47,6 +47,8 @@ pub(super) fn external_instrument_group(
         Space::new().height(8),
         ext_monitoring_block(track),
         Space::new().height(8),
+        ext_playback_source_block(r, track),
+        Space::new().height(8),
         super::io::output_block(r, track),
         Space::new().height(10),
         disable_external_row(track.id),
@@ -650,6 +652,88 @@ fn ext_latency_block(
             })
             .into(),
     )
+}
+
+/// Playback Source — Live / Recorded segmented toggle (doc #257, todo
+/// #1100). `Live` re-drives the hardware from timeline MIDI (mint, the
+/// pre-mode behaviour); `Recorded` plays recorded takes over the spans
+/// they cover, gating MIDI-out + monitor there, with live fallback in
+/// gaps. Engine-owned like monitor/arm; auto-switched to `Recorded`
+/// when a take finishes recording. When `Recorded` and at least one
+/// take exists on the track, a frost "Playing the recorded take" chip
+/// (the freeze UI language, #579/#580) confirms the take has taken over.
+fn ext_playback_source_block(
+    r: &crate::Resonance,
+    track: &TrackState,
+) -> Element<'static, Message> {
+    use resonance_common::PlaybackSource;
+
+    let track_id = track.id;
+    let recorded = track.playback_source == PlaybackSource::Recorded;
+    let live_btn = super::widgets::toggle_button(
+        "Live",
+        !recorded,
+        theme::GOOD,
+        theme::GOOD_DIM,
+        Message::ExternalInstrument(ExternalInstrumentMessage::SetPlaybackSource(
+            track_id,
+            PlaybackSource::Live,
+        )),
+    );
+    let rec_btn = super::widgets::toggle_button(
+        "Recorded",
+        recorded,
+        theme::FROST_ICON,
+        theme::FROST_WASH,
+        Message::ExternalInstrument(ExternalInstrumentMessage::SetPlaybackSource(
+            track_id,
+            PlaybackSource::Recorded,
+        )),
+    );
+    let mut col = column![super::widgets::field(
+        "PLAYBACK SOURCE",
+        row![
+            container(live_btn).width(Length::FillPortion(1)),
+            Space::new().width(8),
+            container(rec_btn).width(Length::FillPortion(1)),
+        ]
+        .into(),
+    )]
+    .spacing(0);
+
+    // Frost confirmation chip: only meaningful once a take exists —
+    // without one, `Recorded` falls back to fully live everywhere and
+    // the toggle alone tells that story.
+    let has_take = r.clips.iter().any(|c| c.track_id == track_id);
+    if recorded && has_take {
+        col = col.push(Space::new().height(6)).push(
+            container(
+                row![
+                    text(theme::fa::SNOWFLAKE)
+                        .font(theme::ICON_FONT)
+                        .size(10)
+                        .color(theme::FROST_ICON),
+                    Space::new().width(6),
+                    text("Playing the recorded take")
+                        .size(10)
+                        .color(theme::FROST_ICON),
+                ]
+                .align_y(alignment::Vertical::Center),
+            )
+            .width(Length::Fill)
+            .padding([5, 8])
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(theme::FROST_WASH)),
+                border: iced::Border {
+                    color: theme::FROST_EDGE,
+                    width: 1.0,
+                    radius: theme::RADIUS_SM.into(),
+                },
+                ..Default::default()
+            }),
+        );
+    }
+    col.into()
 }
 
 /// Return Monitoring — Input monitor (mint when on) + Record arm

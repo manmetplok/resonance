@@ -53,6 +53,7 @@ fn project_track(id: u64, freeze: TrackFreezeState) -> resonance_app::project::P
         fx_bypassed: false,
         record_armed: false,
         monitor_enabled: false,
+        playback_source: resonance_common::PlaybackSource::Live,
         mono: false,
         input_device_name: None,
         input_port_index: None,

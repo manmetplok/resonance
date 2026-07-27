@@ -224,7 +224,11 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | ExternalInstrumentMessage::RescanDefinitions
             | ExternalInstrumentMessage::DetectLatency(_) => UndoAction::Skip,
             // Every config change (enable/disable, route, patch, latency,
-            // monitor, arm) is a user-meaningful, reversible edit.
+            // monitor, arm, playback source) is a user-meaningful,
+            // reversible edit. The playback-source *auto-switch* after a
+            // recorded take is event-driven (`RecordingFinished`), not a
+            // message, so it never lands an undo entry of its own — only
+            // the explicit inspector toggle does.
             _ => UndoAction::Record,
         },
 

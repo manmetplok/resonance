@@ -230,6 +230,21 @@ pub(super) fn fx_bypass_changed(r: &mut Resonance, track_id: TrackId, bypassed: 
     }
 }
 
+/// Mirror the engine's echo of `SetTrackPlaybackSource` (doc #257, todo
+/// #1100): the track's external-instrument playback source changed —
+/// either from the inspector toggle or from the auto-switch after a
+/// recorded take lands. Engine-owned state like monitor/arm; the mirror
+/// simply follows.
+pub(super) fn playback_source_changed(
+    r: &mut Resonance,
+    track_id: TrackId,
+    source: resonance_common::PlaybackSource,
+) {
+    if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
+        track.playback_source = source;
+    }
+}
+
 pub(super) fn bus_added(r: &mut Resonance, bus_id: BusId, name: String) {
     if r.registry.busses.iter().any(|b| b.id == bus_id) {
         return;

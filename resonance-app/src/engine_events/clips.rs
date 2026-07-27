@@ -138,6 +138,24 @@ pub(super) fn recording_finished(
         asset_ref: None,
     });
     r.transport.recording = false;
+
+    // Auto-switch to Recorded playback after a take lands on an
+    // external-instrument track (doc #257, todo #1100): the user just
+    // captured the hardware — playback should now play the take instead
+    // of re-driving the synth over it. External tracks have no
+    // track-type discriminant; presence in the `external_instruments`
+    // map is the marker (cf. todo #457). Engine-owned, non-undoable
+    // toggle like monitor/arm: mirror optimistically and dispatch; the
+    // engine echoes `TrackPlaybackSourceChanged`.
+    if r.external_instruments.contains_key(&track_id) {
+        let source = resonance_common::PlaybackSource::Recorded;
+        if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
+            track.playback_source = source;
+        }
+        let _ = r
+            .engine
+            .send(AudioCommand::SetTrackPlaybackSource { track_id, source });
+    }
 }
 
 /// Mirror a finished vocal pitch analysis (`AudioEvent::ClipPitchDetected`,

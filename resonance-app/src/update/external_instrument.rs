@@ -168,6 +168,20 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
                     });
             }
         }
+        M::SetPlaybackSource(track_id, source) => {
+            // Engine-owned like monitor/arm: mutate the mirror
+            // optimistically and dispatch; the engine echoes
+            // `TrackPlaybackSourceChanged`, which re-asserts the same
+            // value (idempotent).
+            let applied = r.with_track_mut(track_id, |t| {
+                t.playback_source = source;
+            });
+            if applied.is_some() {
+                let _ = r
+                    .engine
+                    .send(AudioCommand::SetTrackPlaybackSource { track_id, source });
+            }
+        }
         M::ToggleMonitor(track_id) => {
             let enabled = r.with_track_mut(track_id, |t| {
                 t.monitor_enabled = !t.monitor_enabled;
