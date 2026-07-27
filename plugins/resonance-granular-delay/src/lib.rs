@@ -5,11 +5,13 @@
 //! This crate is the plugin skeleton (ba todo #1073) — ring buffer,
 //! write head, grain engines and the full §9 parameter surface — plus
 //! the feedback path (#1074: in-loop damping, tanh soft clip, DC
-//! blocker, Wet→Buffer / Output-only topologies, 0–110 %) and
-//! freeze/hold with crossfaded resume (#1075).
-//! Time modes (#1076), stereo width (#1077), shimmer/quantize (#1078),
-//! the editor (#1079), pitch-sync scheduling (#1082) and quality tiers
-//! (#1083) land on top of the seams marked `TODO(epic-196 #...)`.
+//! blocker, Wet→Buffer / Output-only topologies, 0–110 %),
+//! freeze/hold with crossfaded resume (#1075) and the stereo stage
+//! (#1077: per-grain pan, decorrelated L/R scheduling behind Pan
+//! Spread, smoothed M/S width on the wet sum, ping-pong feedback).
+//! Time modes (#1076), shimmer/quantize (#1078), the editor (#1079),
+//! pitch-sync scheduling (#1082) and quality tiers (#1083) land on top
+//! of the seams marked `TODO(epic-196 #...)`.
 
 use std::sync::Arc;
 
@@ -162,6 +164,7 @@ impl ResonancePlugin for ResonanceGranularDelay {
             anti_alias: self.params.quality.value() == 2,
             fb_route: match self.params.fb_route.value() {
                 0 => dsp::FbRoute::WetToBuffer,
+                2 => dsp::FbRoute::PingPong,
                 _ => dsp::FbRoute::OutputOnly,
             },
             filter_is_highpass: self.params.filter_type.value() == 1,

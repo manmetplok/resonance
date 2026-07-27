@@ -25,7 +25,9 @@ pub struct GranularDelayParams {
     /// over-unity range bounded).
     pub feedback: FloatParam,
     /// 0 = Wet->Buffer (recirculations are re-granulated), 1 =
-    /// Output-only (clean repeats; the buffer keeps the dry input).
+    /// Output-only (clean repeats; the buffer keeps the dry input),
+    /// 2 = Ping-pong (Wet->Buffer with the channels crossed at the
+    /// feedback write tap, ba todo #1077).
     pub fb_route: IntParam,
     /// Shimmer: transpose inside the feedback loop. TODO(epic-196 #1078).
     pub fb_pitch: BoolParam,
@@ -69,7 +71,7 @@ pub struct GranularDelayParams {
     /// #1074's feedback DoD.
     pub diffusion: FloatParam,
     pub pan_spread: FloatParam,
-    /// M/S width on the wet sum. TODO(epic-196 #1077).
+    /// M/S width on the wet sum, 0–150 % (smoothed; ba todo #1077).
     pub width: FloatParam,
     pub mix: FloatParam,
     /// 0 = Lo-fi, 1 = Normal, 2 = HQ. The HQ tier already engages the
@@ -159,7 +161,7 @@ impl Default for GranularDelayParams {
                 "fb_route",
                 "FB Route",
                 0, // Wet -> Buffer
-                IntRange::Linear { min: 0, max: 1 },
+                IntRange::Linear { min: 0, max: 2 },
             ),
 
             fb_pitch: BoolParam::new("fb_pitch", "FB Pitch", false),
@@ -362,8 +364,9 @@ impl Default for GranularDelayParams {
 /// texture, jitters, pan) need no smoothing: they are latched per grain
 /// at spawn and the grain cloud itself interpolates (doc #252 §5).
 /// Delay time is likewise latched per grain (Per-Grain time mode).
-/// Smoothed today: wet/dry mix, feedback amount and damping cutoff
-/// (ba todo #1074); width joins here when #1077 lands.
+/// Smoothed: wet/dry mix, feedback amount, damping cutoff (ba todo
+/// #1074), M/S width and the lock-stepped ↔ decorrelated crossfade
+/// (ba todo #1077).
 pub struct GranularSmoothers {
     pub mix: Smoother,
     /// Loop gain (per-sample application in the feedback stage).
@@ -371,6 +374,13 @@ pub struct GranularSmoothers {
     /// Damping cutoff in Hz; consumed at block rate (`skip` + `current`)
     /// because the one-pole coefficient update costs an `exp`.
     pub filter_hz: Smoother,
+    /// M/S width on the wet sum (per-sample application).
+    pub width: Smoother,
+    /// Equal-power crossfade position between the lock-stepped right
+    /// engine (0) and the decorrelated one (1); the target is the
+    /// binary gate `pan_spread > 0`, smoothed so toggling the spread
+    /// across zero never clicks.
+    pub decor: Smoother,
 }
 
 impl Default for GranularSmoothers {
@@ -385,6 +395,18 @@ impl GranularSmoothers {
             mix: Smoother::new(SmoothingStyle::Linear(50.0)),
             feedback: Smoother::new(SmoothingStyle::Linear(50.0)),
             filter_hz: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
+            width: Smoother::new(SmoothingStyle::Linear(50.0)),
+            decor: Smoother::new(SmoothingStyle::Linear(crate::dsp::DECOR_FADE_MS)),
+        }
+    }
+
+    /// Crossfade gate for the decorrelated right engine: fully engaged
+    /// whenever the pan spread is non-zero.
+    fn decor_gate(params: &GranularDelayParams) -> f32 {
+        if params.pan_spread.value() > 0.0 {
+            1.0
+        } else {
+            0.0
         }
     }
 
@@ -395,11 +417,17 @@ impl GranularSmoothers {
         self.feedback.reset(params.feedback.value());
         self.filter_hz.set_sample_rate(sample_rate);
         self.filter_hz.reset(params.filter_hz.value());
+        self.width.set_sample_rate(sample_rate);
+        self.width.reset(params.width.value());
+        self.decor.set_sample_rate(sample_rate);
+        self.decor.reset(Self::decor_gate(params));
     }
 
     pub fn retarget_from(&mut self, params: &GranularDelayParams) {
         self.mix.set_target(params.mix.value());
         self.feedback.set_target(params.feedback.value());
         self.filter_hz.set_target(params.filter_hz.value());
+        self.width.set_target(params.width.value());
+        self.decor.set_target(Self::decor_gate(params));
     }
 }

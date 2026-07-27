@@ -1,6 +1,9 @@
 //! Granular-delay DSP core: a power-of-two stereo circular buffer, one
 //! write head, and lock-stepped left/right grain engines granulating
-//! behind it (doc #252 §1/§5/§8, doc #253).
+//! behind it (doc #252 §1/§5/§8, doc #253), plus the stereo stage
+//! (ba todo #1077): a decorrelated right-channel engine that fades in
+//! whenever Pan Spread is non-zero, M/S width on the wet sum and a
+//! ping-pong feedback route.
 //!
 //! Everything is pre-allocated at construction; `process_block` performs
 //! no allocation and takes no locks.
@@ -20,9 +23,20 @@ pub const FREEZE_RAMP_SECONDS: f32 = 0.005;
 /// Shared seed for the two lock-stepped grain engines. Both engines
 /// must consume identical RNG streams so left and right render the
 /// *same* grain cloud over their respective channels (stereo balance
-/// per grain). TODO(epic-196 #1077): decorrelated L/R scheduling will
-/// deliberately split these seeds and add M/S width.
+/// per grain) — the mono-compatible mode, active while Pan Spread is 0.
 const ENGINE_SEED: u64 = 0x5EED_6417;
+
+/// Independent seed for the decorrelated right-channel engine (ba todo
+/// #1077, doc #252 §5): with Pan Spread > 0 the right wet bus crossfades
+/// to a grain cloud whose jitter/scheduling stream is split from
+/// [`ENGINE_SEED`], so left and right content genuinely decorrelates.
+/// Pan Spread = 0 fades back to the lock-stepped pair, keeping the
+/// mono-compatible mode reachable.
+const DECOR_SEED: u64 = 0xD3C0_44E1;
+
+/// Length of the lock-stepped ↔ decorrelated crossfade, milliseconds
+/// (equal-power, applied per sample off a smoother).
+pub const DECOR_FADE_MS: f32 = 50.0;
 
 /// Feedback topology (doc #252 §1, ba todo #1074).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +50,11 @@ pub enum FbRoute {
     /// feedback recirculates in the *output* mix through a dedicated
     /// wet-recirculation ring read at the delay time.
     OutputOnly,
+    /// Wet→Buffer with the channels crossed at the feedback write tap
+    /// (ba todo #1077, doc #252 §5): each recirculation the conditioned
+    /// left wet feeds the right buffer input and vice versa, so repeats
+    /// alternate sides.
+    PingPong,
 }
 
 /// One channel of the in-loop feedback conditioning chain (doc #252 §5):
@@ -115,9 +134,15 @@ pub struct GranularDsp {
     /// reads L and R at the same position (see [`ENGINE_SEED`]).
     engine_l: GrainEngine,
     engine_r: GrainEngine,
+    /// Decorrelated right-channel engine (see [`DECOR_SEED`]): rendered
+    /// whenever Pan Spread > 0 (or while its tail drains) and blended
+    /// into the right wet bus with an equal-power crossfade.
+    engine_r_decor: GrainEngine,
     /// Wet accumulation buses (pre-allocated to the max block size).
     wet_l: Vec<f32>,
     wet_r: Vec<f32>,
+    /// Decorrelated right-channel wet bus, blended into `wet_r`.
+    wet_r_decor: Vec<f32>,
     /// Sink for the pan-opposite engine outputs (each engine renders a
     /// stereo pair; only its own channel's side is kept).
     discard: Vec<f32>,
@@ -167,8 +192,10 @@ impl GranularDsp {
             write_pos: 0,
             engine_l: GrainEngine::new(sample_rate, ENGINE_SEED),
             engine_r: GrainEngine::new(sample_rate, ENGINE_SEED),
+            engine_r_decor: GrainEngine::new(sample_rate, DECOR_SEED),
             wet_l: vec![0.0; max_block],
             wet_r: vec![0.0; max_block],
+            wet_r_decor: vec![0.0; max_block],
             discard: vec![0.0; max_block],
             fb_l: vec![0.0; max_block],
             fb_r: vec![0.0; max_block],
@@ -207,6 +234,8 @@ impl GranularDsp {
         self.write_pos = 0;
         self.engine_l.reset();
         self.engine_r.reset();
+        self.engine_r_decor.reset();
+        self.wet_r_decor.fill(0.0);
         self.fb_l.fill(0.0);
         self.fb_r.fill(0.0);
         self.fb_len = 0;
@@ -276,7 +305,10 @@ impl GranularDsp {
         // static, grain read origins (`write_pos - delay`) become
         // absolute buffer offsets — grains do not chase a stopped head.
         let base = self.write_pos as usize;
-        let wet_to_buffer = params.fb_route == FbRoute::WetToBuffer;
+        let wet_to_buffer = matches!(
+            params.fb_route,
+            FbRoute::WetToBuffer | FbRoute::PingPong
+        );
         let freeze_target: f32 = if params.freeze { 1.0 } else { 0.0 };
         let freeze_step = 1.0 / (FREEZE_RAMP_SECONDS * self.sample_rate).max(1.0);
         let mut advanced = 0usize;
@@ -312,6 +344,7 @@ impl GranularDsp {
         // --- 2. Granulate behind the write head into the wet bus. -----
         self.wet_l[..frames].fill(0.0);
         self.wet_r[..frames].fill(0.0);
+        self.wet_r_decor[..frames].fill(0.0);
         self.discard[..frames].fill(0.0);
 
         let grain_params = GrainParams {
@@ -362,6 +395,46 @@ impl GranularDsp {
                 .process(&self.buf_r, write_pos, &grain_params, discard, wet_r);
         }
 
+        // --- 2b. Decorrelated right channel (ba todo #1077): with Pan
+        // Spread > 0 an independently seeded engine renders its own
+        // cloud over the right buffer, and the right wet bus crossfades
+        // (equal-power, smoothed) from the lock-stepped cloud to it.
+        // When the spread returns to 0 the engine stops spawning but
+        // keeps rendering (density 0) until its live grains finish, so
+        // re-engaging never resumes stale grains; once drained and the
+        // fade has settled it costs nothing.
+        let decor_gate = params.pan_spread > 0.0;
+        if decor_gate
+            || smoothers.decor.current() > 0.0
+            || self.engine_r_decor.active_grains() > 0
+        {
+            let drain_params;
+            let gp = if decor_gate {
+                &grain_params
+            } else {
+                drain_params = GrainParams {
+                    density_hz: 0.0,
+                    ..grain_params.clone()
+                };
+                &drain_params
+            };
+            let (discard, wet_dec) =
+                (&mut self.discard[..frames], &mut self.wet_r_decor[..frames]);
+            self.engine_r_decor
+                .process(&self.buf_r, write_pos, gp, discard, wet_dec);
+        }
+        if !decor_gate && smoothers.decor.current() == 0.0 {
+            // Fully settled in lock-stepped mode: no blend work.
+            smoothers.decor.skip(frames as u32);
+        } else {
+            for i in 0..frames {
+                let d = smoothers.decor.next().clamp(0.0, 1.0);
+                let phase = std::f32::consts::FRAC_PI_2 * d;
+                let (g_decor, g_lock) = phase.sin_cos();
+                self.wet_r[i] = self.wet_r[i] * g_lock + self.wet_r_decor[i] * g_decor;
+            }
+        }
+
         // --- 3. Feedback conditioning (ba todo #1074): wet × feedback →
         // damping filter → tanh soft clip → DC blocker. The tanh bounds
         // the recirculated signal regardless of loop gain, which is what
@@ -373,18 +446,27 @@ impl GranularDsp {
         // instead of stalling with the stopped head (ba todo #1075).
         let fb_base = self.fb_pos as usize;
         match params.fb_route {
-            FbRoute::WetToBuffer => {
+            FbRoute::WetToBuffer | FbRoute::PingPong => {
                 // Condition this block's wet bus into the feedback bus
                 // consumed at the next block's write point, and keep the
                 // recirculation ring warm so a route switch is seamless.
+                // Ping-pong (ba todo #1077) swaps the channels right
+                // here at the feedback write tap, so every
+                // recirculation crosses sides.
+                let cross = params.fb_route == FbRoute::PingPong;
                 for i in 0..frames {
                     let g = smoothers.feedback.next().clamp(0.0, 1.1);
+                    let (src_l, src_r) = if cross {
+                        (self.wet_r[i], self.wet_l[i])
+                    } else {
+                        (self.wet_l[i], self.wet_r[i])
+                    };
                     self.fb_l[i] = self
                         .fb_chain_l
-                        .process(self.wet_l[i] * g, params.filter_is_highpass);
+                        .process(src_l * g, params.filter_is_highpass);
                     self.fb_r[i] = self
                         .fb_chain_r
-                        .process(self.wet_r[i] * g, params.filter_is_highpass);
+                        .process(src_r * g, params.filter_is_highpass);
                     let idx = (fb_base + i) & self.mask;
                     self.fb_ring_l[idx] = self.wet_l[i];
                     self.fb_ring_r[idx] = self.wet_r[i];
@@ -417,15 +499,21 @@ impl GranularDsp {
             }
         }
 
-        // --- 4. Equal-power dry/wet mix (doc #252 §9), dry untouched
-        // otherwise. TODO(epic-196 #1077): M/S width goes here, on the
-        // wet bus only.
+        // --- 4. M/S width on the wet sum only (ba todo #1077, doc #252
+        // §5), then the equal-power dry/wet mix (doc #252 §9); the dry
+        // path stays bit-exact regardless of the stereo processing.
+        // Width sits *after* the feedback tap, so the loop recirculates
+        // the un-widened wet and the width control cannot destabilise
+        // it. Width 0 collapses the wet to its mid signal (L == R).
         for i in 0..frames {
+            let width = smoothers.width.next().clamp(0.0, 1.5);
+            let mid = 0.5 * (self.wet_l[i] + self.wet_r[i]);
+            let side = 0.5 * (self.wet_l[i] - self.wet_r[i]) * width;
             let mix = smoothers.mix.next().clamp(0.0, 1.0);
             let dry_gain = (1.0 - mix).sqrt();
             let wet_gain = mix.sqrt();
-            left[i] = left[i] * dry_gain + self.wet_l[i] * wet_gain;
-            right[i] = right[i] * dry_gain + self.wet_r[i] * wet_gain;
+            left[i] = left[i] * dry_gain + (mid + side) * wet_gain;
+            right[i] = right[i] * dry_gain + (mid - side) * wet_gain;
         }
 
         // The write head advances only by the samples actually written
