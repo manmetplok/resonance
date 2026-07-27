@@ -3,14 +3,21 @@
 //! behind it (doc #252 §1/§5/§8, doc #253), plus the stereo stage
 //! (ba todo #1077): a decorrelated right-channel engine that fades in
 //! whenever Pan Spread is non-zero, M/S width on the wet sum and a
-//! ping-pong feedback route.
+//! ping-pong feedback route; plus shimmer and pitch quantization
+//! (ba todo #1078): FB Pitch selects whether the granulated-feedback
+//! tap carries the transposed wet (cumulative octave-climb repeats) or
+//! an un-transposed re-granulation (constant-pitch repeats), and the
+//! per-grain effective transpose can be quantized to semitones or a
+//! scale at spawn (see `crate::quantize`).
 //!
 //! Everything is pre-allocated at construction; `process_block` performs
 //! no allocation and takes no locks.
 
-use resonance_dsp::{DcBlocker, GrainEngine, GrainParams, OnePole, SchedulerMode};
+use resonance_dsp::{DcBlocker, GrainEngine, GrainParams, OnePole, SchedulerMode, SimpleRng};
+use resonance_music_theory::Scale;
 
 use crate::params::GranularSmoothers;
+use crate::quantize::{quantize_transpose, PitchQuantize};
 
 /// Maximum delay time the ring buffer is sized for at activation.
 pub const MAX_DELAY_SECONDS: f32 = 4.0;
@@ -37,6 +44,26 @@ const DECOR_SEED: u64 = 0xD3C0_44E1;
 /// Length of the lock-stepped ↔ decorrelated crossfade, milliseconds
 /// (equal-power, applied per sample off a smoother).
 pub const DECOR_FADE_MS: f32 = 50.0;
+
+/// Shared seed for the lock-stepped feedback-tap engine pair (ba todo
+/// #1078): with FB Pitch off, these render the *un-transposed*
+/// re-granulation that recirculates, so repeats keep a constant pitch
+/// while the audible wet stays transposed.
+const FB_TAP_SEED: u64 = 0xFBFB_7A93;
+
+/// Seed for the plugin-side quantized-transpose draws (ba todo #1078).
+const QUANT_SEED: u64 = 0x0AB5_C41E;
+
+/// Engine-render slice length while pitch quantization is active, in
+/// samples: the block is processed in slices no longer than this, each
+/// with its own independently drawn, quantized effective transpose, so
+/// grains latch (near-)independent quantized values at spawn. The
+/// slice is far shorter than the minimum inter-onset time at maximum
+/// density (480 samples at 100 grains/s, 48 kHz), so two grains almost
+/// never share a draw. Engine output is slice-invariant (onset
+/// scheduling carries across process calls), so quantize-off behaviour
+/// is untouched.
+const QUANT_SLICE: usize = 64;
 
 /// Feedback topology (doc #252 §1, ba todo #1074).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +144,15 @@ pub struct BlockParams {
     /// buffer; grains keep reading the static content. Engage and
     /// resume are equal-power crossfades on the write gain.
     pub freeze: bool,
+    /// Shimmer switch (ba todo #1078): true = the transposed wet
+    /// recirculates (each pass compounds the transpose); false = the
+    /// feedback tap re-granulates without transpose (constant-pitch
+    /// repeats).
+    pub fb_pitch: bool,
+    /// Per-grain transpose quantization at spawn (ba todo #1078).
+    pub quantize: PitchQuantize,
+    /// Root/mode for [`PitchQuantize::Scale`].
+    pub scale: Scale,
 }
 
 pub struct GranularDsp {
@@ -143,6 +179,22 @@ pub struct GranularDsp {
     wet_r: Vec<f32>,
     /// Decorrelated right-channel wet bus, blended into `wet_r`.
     wet_r_decor: Vec<f32>,
+    /// Lock-stepped feedback-tap engines (ba todo #1078, see
+    /// [`FB_TAP_SEED`]): render the un-transposed re-granulation that
+    /// recirculates while FB Pitch is off and a transpose is engaged.
+    fb_engine_l: GrainEngine,
+    fb_engine_r: GrainEngine,
+    /// Feedback-tap buses for the un-transposed re-granulation.
+    fbw_l: Vec<f32>,
+    fbw_r: Vec<f32>,
+    /// RNG for the plugin-side quantized-transpose draws (ba todo
+    /// #1078): while quantization is on, the engines' own detune draw
+    /// is bypassed (spread passed as 0) and the effective transpose is
+    /// drawn and quantized here, per render slice.
+    quant_rng: SimpleRng,
+    /// Sign of the next quantized-spread draw; alternates like the
+    /// engine's detune sign so the quantized cloud stays symmetric.
+    quant_sign: f32,
     /// Sink for the pan-opposite engine outputs (each engine renders a
     /// stereo pair; only its own channel's side is kept).
     discard: Vec<f32>,
@@ -196,6 +248,12 @@ impl GranularDsp {
             wet_l: vec![0.0; max_block],
             wet_r: vec![0.0; max_block],
             wet_r_decor: vec![0.0; max_block],
+            fb_engine_l: GrainEngine::new(sample_rate, FB_TAP_SEED),
+            fb_engine_r: GrainEngine::new(sample_rate, FB_TAP_SEED),
+            fbw_l: vec![0.0; max_block],
+            fbw_r: vec![0.0; max_block],
+            quant_rng: SimpleRng::new(QUANT_SEED),
+            quant_sign: 1.0,
             discard: vec![0.0; max_block],
             fb_l: vec![0.0; max_block],
             fb_r: vec![0.0; max_block],
@@ -226,6 +284,33 @@ impl GranularDsp {
         self.engine_l.active_grains()
     }
 
+    /// Playback rates of the currently sounding audible grains (left
+    /// lock-stepped engine; test/metering aid). With pitch quantization
+    /// on, every rate sits on the quantized semitone/scale lattice
+    /// (ba todo #1078).
+    pub fn active_rates(&self) -> impl Iterator<Item = f64> + '_ {
+        self.engine_l.active_rates()
+    }
+
+    /// Playback rates of the decorrelated right engine's grains
+    /// (test/metering aid; ba todos #1077/#1078).
+    pub fn active_rates_decor(&self) -> impl Iterator<Item = f64> + '_ {
+        self.engine_r_decor.active_rates()
+    }
+
+    /// Playback rates of the feedback-tap engine's grains — all ±1
+    /// while the un-transposed tap is active (test/metering aid,
+    /// ba todo #1078).
+    pub fn active_rates_fb(&self) -> impl Iterator<Item = f64> + '_ {
+        self.fb_engine_l.active_rates()
+    }
+
+    /// Uniform draw in `[0, 1)` for the plugin-side quantized-spread
+    /// magnitude (same mapping as the engine's own RNG draws).
+    fn quant_unit(&mut self) -> f32 {
+        (self.quant_rng.next_u32() >> 8) as f32 * (1.0 / (1 << 24) as f32)
+    }
+
     /// Silence the buffer and all grains; allocation-free apart from the
     /// buffer zeroing (called from `reset`, off the steady-state path).
     pub fn clear(&mut self) {
@@ -236,6 +321,12 @@ impl GranularDsp {
         self.engine_r.reset();
         self.engine_r_decor.reset();
         self.wet_r_decor.fill(0.0);
+        self.fb_engine_l.reset();
+        self.fb_engine_r.reset();
+        self.fbw_l.fill(0.0);
+        self.fbw_r.fill(0.0);
+        self.quant_rng = SimpleRng::new(QUANT_SEED);
+        self.quant_sign = 1.0;
         self.fb_l.fill(0.0);
         self.fb_r.fill(0.0);
         self.fb_len = 0;
@@ -381,47 +472,83 @@ impl GranularDsp {
         };
 
         let write_pos = self.write_pos as f64;
-        // Each engine renders the full stereo pan pair for its channel;
-        // keeping engine L's left and engine R's right applies the
-        // per-grain constant-power pan as a stereo balance.
-        {
-            let (wet_l, discard) = (&mut self.wet_l[..frames], &mut self.discard[..frames]);
-            self.engine_l
-                .process(&self.buf_l, write_pos, &grain_params, wet_l, discard);
-        }
-        {
-            let (discard, wet_r) = (&mut self.discard[..frames], &mut self.wet_r[..frames]);
-            self.engine_r
-                .process(&self.buf_r, write_pos, &grain_params, discard, wet_r);
-        }
+        let head_adv = grain_params.head_advance as f64;
 
-        // --- 2b. Decorrelated right channel (ba todo #1077): with Pan
-        // Spread > 0 an independently seeded engine renders its own
-        // cloud over the right buffer, and the right wet bus crossfades
-        // (equal-power, smoothed) from the lock-stepped cloud to it.
-        // When the spread returns to 0 the engine stops spawning but
-        // keeps rendering (density 0) until its live grains finish, so
-        // re-engaging never resumes stale grains; once drained and the
-        // fade has settled it costs nothing.
+        // Decorrelated-engine disposition (ba todo #1077), fixed before
+        // rendering: engaged while Pan Spread > 0; draining (no new
+        // spawns, live grains finish) while the fade or its tail is
+        // still audible; otherwise skipped entirely.
         let decor_gate = params.pan_spread > 0.0;
-        if decor_gate
+        let decor_render = decor_gate
             || smoothers.decor.current() > 0.0
-            || self.engine_r_decor.active_grains() > 0
-        {
-            let drain_params;
-            let gp = if decor_gate {
-                &grain_params
-            } else {
-                drain_params = GrainParams {
-                    density_hz: 0.0,
-                    ..grain_params.clone()
+            || self.engine_r_decor.active_grains() > 0;
+
+        // Per-grain transpose quantization (ba todo #1078): with
+        // quantization on, the engines' own detune draw is bypassed
+        // (spread passed as 0) and the block renders in short slices,
+        // each with its own plugin-side drawn and quantized effective
+        // transpose (base Pitch + alternating-sign random Spread), so
+        // grains latch (near-)independent quantized values at spawn.
+        // Quantize off renders the whole block as one slice; engine
+        // output is slice-invariant (onset scheduling carries across
+        // process calls), so behaviour is then unchanged.
+        let quantize_on = params.quantize != PitchQuantize::Off;
+        let slice_len = if quantize_on { QUANT_SLICE } else { frames };
+        let mut off = 0usize;
+        while off < frames {
+            let n = (frames - off).min(slice_len);
+            let mut gp = grain_params.clone();
+            if quantize_on {
+                let mut semitones = params.pitch_semitones;
+                if params.detune_spread_cents > 0.0 {
+                    let magnitude = self.quant_unit() * params.detune_spread_cents;
+                    semitones += self.quant_sign * magnitude * (1.0 / 100.0);
+                    self.quant_sign = -self.quant_sign;
+                }
+                gp.pitch_semitones =
+                    quantize_transpose(semitones, params.quantize, params.scale);
+                gp.detune_spread_cents = 0.0;
+            }
+            let wp = write_pos + off as f64 * head_adv;
+            // Each engine renders the full stereo pan pair for its
+            // channel; keeping engine L's left and engine R's right
+            // applies the per-grain constant-power pan as a stereo
+            // balance.
+            {
+                let (wet_l, discard) =
+                    (&mut self.wet_l[off..off + n], &mut self.discard[off..off + n]);
+                self.engine_l.process(&self.buf_l, wp, &gp, wet_l, discard);
+            }
+            {
+                let (discard, wet_r) =
+                    (&mut self.discard[off..off + n], &mut self.wet_r[off..off + n]);
+                self.engine_r.process(&self.buf_r, wp, &gp, discard, wet_r);
+            }
+            // --- 2b. Decorrelated right channel (ba todo #1077): with
+            // Pan Spread > 0 an independently seeded engine renders its
+            // own cloud over the right buffer, and the right wet bus
+            // crossfades (equal-power, smoothed) from the lock-stepped
+            // cloud to it. Once drained and the fade has settled it
+            // costs nothing.
+            if decor_render {
+                let drain_params;
+                let dgp = if decor_gate {
+                    &gp
+                } else {
+                    drain_params = GrainParams {
+                        density_hz: 0.0,
+                        ..gp.clone()
+                    };
+                    &drain_params
                 };
-                &drain_params
-            };
-            let (discard, wet_dec) =
-                (&mut self.discard[..frames], &mut self.wet_r_decor[..frames]);
-            self.engine_r_decor
-                .process(&self.buf_r, write_pos, gp, discard, wet_dec);
+                let (discard, wet_dec) = (
+                    &mut self.discard[off..off + n],
+                    &mut self.wet_r_decor[off..off + n],
+                );
+                self.engine_r_decor
+                    .process(&self.buf_r, wp, dgp, discard, wet_dec);
+            }
+            off += n;
         }
         if !decor_gate && smoothers.decor.current() == 0.0 {
             // Fully settled in lock-stepped mode: no blend work.
@@ -432,6 +559,46 @@ impl GranularDsp {
                 let phase = std::f32::consts::FRAC_PI_2 * d;
                 let (g_decor, g_lock) = phase.sin_cos();
                 self.wet_r[i] = self.wet_r[i] * g_lock + self.wet_r_decor[i] * g_decor;
+            }
+        }
+
+        // --- 2c. Feedback-tap re-granulation (ba todo #1078, doc #252
+        // §3): with FB Pitch off on a granulated-feedback route while a
+        // transpose is engaged, the signal written back is a separate,
+        // *un-transposed* granulation of the same buffer, so
+        // recirculations keep a constant pitch and the transpose is
+        // heard exactly once. With FB Pitch on the transposed wet bus
+        // itself is the tap — each recirculation compounds the
+        // transpose (the Eno/Lanois shimmer). When the tap engines are
+        // not in use they drain (density 0) until silent, so a toggle
+        // never resumes stale grains and the settled state costs
+        // nothing.
+        let transpose_engaged =
+            params.pitch_semitones != 0.0 || params.detune_spread_cents > 0.0;
+        let unity_tap = wet_to_buffer && !params.fb_pitch && transpose_engaged;
+        if unity_tap
+            || self.fb_engine_l.active_grains() > 0
+            || self.fb_engine_r.active_grains() > 0
+        {
+            self.fbw_l[..frames].fill(0.0);
+            self.fbw_r[..frames].fill(0.0);
+            let mut gp = grain_params.clone();
+            gp.pitch_semitones = 0.0;
+            gp.detune_spread_cents = 0.0;
+            if !unity_tap {
+                gp.density_hz = 0.0; // drain, output unused
+            }
+            {
+                let (fbw_l, discard) =
+                    (&mut self.fbw_l[..frames], &mut self.discard[..frames]);
+                self.fb_engine_l
+                    .process(&self.buf_l, write_pos, &gp, fbw_l, discard);
+            }
+            {
+                let (discard, fbw_r) =
+                    (&mut self.discard[..frames], &mut self.fbw_r[..frames]);
+                self.fb_engine_r
+                    .process(&self.buf_r, write_pos, &gp, discard, fbw_r);
             }
         }
 
@@ -452,15 +619,18 @@ impl GranularDsp {
                 // recirculation ring warm so a route switch is seamless.
                 // Ping-pong (ba todo #1077) swaps the channels right
                 // here at the feedback write tap, so every
-                // recirculation crosses sides.
+                // recirculation crosses sides. With FB Pitch off the
+                // tap carries the un-transposed re-granulation instead
+                // of the transposed wet (ba todo #1078).
                 let cross = params.fb_route == FbRoute::PingPong;
                 for i in 0..frames {
                     let g = smoothers.feedback.next().clamp(0.0, 1.1);
-                    let (src_l, src_r) = if cross {
-                        (self.wet_r[i], self.wet_l[i])
+                    let (tap_l, tap_r) = if unity_tap {
+                        (self.fbw_l[i], self.fbw_r[i])
                     } else {
                         (self.wet_l[i], self.wet_r[i])
                     };
+                    let (src_l, src_r) = if cross { (tap_r, tap_l) } else { (tap_l, tap_r) };
                     self.fb_l[i] = self
                         .fb_chain_l
                         .process(src_l * g, params.filter_is_highpass);

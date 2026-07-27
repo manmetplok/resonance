@@ -7,7 +7,7 @@
 
 use resonance_plugin::*;
 
-pub const PARAM_COUNT: usize = 27;
+pub const PARAM_COUNT: usize = 29;
 
 pub struct GranularDelayParams {
     // --- Time -----------------------------------------------------------
@@ -29,7 +29,13 @@ pub struct GranularDelayParams {
     /// 2 = Ping-pong (Wet->Buffer with the channels crossed at the
     /// feedback write tap, ba todo #1077).
     pub fb_route: IntParam,
-    /// Shimmer: transpose inside the feedback loop. TODO(epic-196 #1078).
+    /// Shimmer (ba todo #1078, doc #252 §3): on = the transposed
+    /// granulated wet is what recirculates, so each pass transposes
+    /// cumulatively (+12 st climbs octaves); off = the feedback tap
+    /// carries an un-transposed re-granulation, so recirculations keep
+    /// a constant pitch. Only meaningful on the granulated-feedback
+    /// routes (Wet→Buffer / Ping-pong); Output-only recirculates the
+    /// once-transposed wet unchanged either way.
     pub fb_pitch: BoolParam,
 
     // --- Grains ---------------------------------------------------------
@@ -43,9 +49,18 @@ pub struct GranularDelayParams {
 
     // --- Pitch ----------------------------------------------------------
     pub pitch: FloatParam,
-    /// 0 = Off, 1 = Semitones, 2 = Scale. TODO(epic-196 #1078).
+    /// 0 = Off, 1 = Semitones, 2 = Scale (ba todo #1078): the per-grain
+    /// effective transpose (base Pitch + random Spread) is quantized at
+    /// spawn; Scale mode snaps to degrees of `root`/`scale` via
+    /// resonance-music-theory (see `crate::quantize`).
     pub pitch_quantize: IntParam,
     pub spread_cents: FloatParam,
+    /// Scale root for Pitch Quantize = Scale: 0–11 = C..B.
+    pub root: IntParam,
+    /// Scale mode for Pitch Quantize = Scale: indexes
+    /// `resonance_music_theory::Mode::ALL` (0 = Chromatic, 1 = Major,
+    /// 2 = Minor, ... 9 = Melodic Minor).
+    pub scale: IntParam,
 
     // --- Texture / randomization ----------------------------------------
     pub texture: FloatParam,
@@ -110,6 +125,10 @@ impl GranularDelayParams {
             24 => &self.width,
             25 => &self.mix,
             26 => &self.quality,
+            // Appended after the initial 27 so the P1 CLAP index space
+            // stays stable (ba todo #1078).
+            27 => &self.root,
+            28 => &self.scale,
             _ => &self.sync,
         }
     }
@@ -220,6 +239,20 @@ impl Default for GranularDelayParams {
                 "Pitch Quantize",
                 0, // Off
                 IntRange::Linear { min: 0, max: 2 },
+            ),
+
+            root: IntParam::new(
+                "root",
+                "Root",
+                0, // C
+                IntRange::Linear { min: 0, max: 11 },
+            ),
+
+            scale: IntParam::new(
+                "scale",
+                "Scale",
+                1, // Major (Mode::ALL[1])
+                IntRange::Linear { min: 0, max: 9 },
             ),
 
             spread_cents: FloatParam::new(

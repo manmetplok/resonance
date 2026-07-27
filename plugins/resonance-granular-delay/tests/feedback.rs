@@ -293,17 +293,20 @@ fn output_only_route_keeps_the_buffer_clean() {
 }
 
 /// The two topologies measurably differ in re-granulation: with +12 st
-/// grains and a sine burst, Wet→Buffer re-granulates every
-/// recirculation so the second repeat climbs another octave, while
-/// Output-only recirculates the once-granulated wet unchanged. The
-/// dominant frequency of repeat 2 (zero-crossing rate) proves it, and
-/// the Wet→Buffer buffer visibly contains written-back wet material.
+/// grains, FB Pitch on and a sine burst, Wet→Buffer re-granulates
+/// every recirculation so the second repeat climbs another octave,
+/// while Output-only recirculates the once-granulated wet unchanged.
+/// The dominant frequency of repeat 2 (zero-crossing rate) proves it,
+/// and the Wet→Buffer buffer visibly contains written-back wet
+/// material. (Since ba todo #1078 the cumulative climb is gated behind
+/// FB Pitch; tests/shimmer.rs covers the constant-pitch off state.)
 #[test]
 fn topologies_differ_in_recirculated_regranulation() {
     let render = |route: i32| -> (Vec<f32>, Vec<f32>) {
         let mut plugin = feedback_plugin(400.0, 0.9);
         plugin.params.fb_route.set_value(route);
         plugin.params.pitch.set_value(12.0); // each granulation pass: +1 octave
+        plugin.params.fb_pitch.set_plain(1.0); // shimmer: transpose recirculates
         plugin.initialize(SR, 512);
 
         let frames = 2 * SR as usize;

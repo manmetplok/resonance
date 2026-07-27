@@ -9,9 +9,13 @@
 //! freeze/hold with crossfaded resume (#1075) and the stereo stage
 //! (#1077: per-grain pan, decorrelated L/R scheduling behind Pan
 //! Spread, smoothed M/S width on the wet sum, ping-pong feedback).
-//! Time modes (#1076), shimmer/quantize (#1078), the editor (#1079),
-//! pitch-sync scheduling (#1082) and quality tiers (#1083) land on top
-//! of the seams marked `TODO(epic-196 #...)`.
+//! Shimmer and musical pitch land in #1078: FB Pitch selects
+//! cumulative (octave-climb) vs constant-pitch recirculation, and the
+//! per-grain effective transpose can be quantized to semitones or a
+//! resonance-music-theory scale at spawn (`quantize` module).
+//! Time modes (#1076), the editor (#1079), pitch-sync scheduling
+//! (#1082) and quality tiers (#1083) land on top of the seams marked
+//! `TODO(epic-196 #...)`.
 
 use std::sync::Arc;
 
@@ -20,6 +24,7 @@ use resonance_plugin::*;
 
 pub mod dsp;
 pub mod params;
+pub mod quantize;
 pub mod sync;
 
 #[cfg(feature = "editor")]
@@ -61,6 +66,26 @@ impl ResonanceGranularDelay {
     /// Absolute write-head position in samples (test/metering aid).
     pub fn write_head(&self) -> u64 {
         self.dsp.as_ref().map_or(0, GranularDsp::write_head)
+    }
+
+    /// Playback rates of the currently sounding audible grains
+    /// (test/metering aid; empty before activation). With pitch
+    /// quantization on, every rate sits on the quantized lattice
+    /// (ba todo #1078).
+    pub fn active_rates(&self) -> impl Iterator<Item = f64> + '_ {
+        self.dsp.iter().flat_map(GranularDsp::active_rates)
+    }
+
+    /// Playback rates of the decorrelated right engine's grains
+    /// (test/metering aid).
+    pub fn active_rates_decor(&self) -> impl Iterator<Item = f64> + '_ {
+        self.dsp.iter().flat_map(GranularDsp::active_rates_decor)
+    }
+
+    /// Playback rates of the feedback-tap engine's grains
+    /// (test/metering aid; all ±1 while the un-transposed tap runs).
+    pub fn active_rates_fb(&self) -> impl Iterator<Item = f64> + '_ {
+        self.dsp.iter().flat_map(GranularDsp::active_rates_fb)
     }
 }
 
@@ -169,6 +194,12 @@ impl ResonancePlugin for ResonanceGranularDelay {
             },
             filter_is_highpass: self.params.filter_type.value() == 1,
             freeze: self.params.freeze.value(),
+            fb_pitch: self.params.fb_pitch.value(),
+            quantize: quantize::PitchQuantize::from_index(self.params.pitch_quantize.value()),
+            scale: resonance_music_theory::Scale::new(
+                quantize::root_from_index(self.params.root.value()),
+                quantize::mode_from_index(self.params.scale.value()),
+            ),
         };
 
         dsp.process_block(left, right, frames, &mut self.smoothers, &block);

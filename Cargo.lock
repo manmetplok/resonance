@@ -5168,6 +5168,7 @@ version = "0.1.0"
 dependencies = [
  "resonance-common",
  "resonance-dsp",
+ "resonance-music-theory",
  "resonance-plugin",
 ]
 

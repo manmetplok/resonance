@@ -17,3 +17,4 @@ editor = []
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
+resonance-music-theory = { path = "../../resonance-music-theory" }
