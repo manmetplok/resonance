@@ -5163,6 +5163,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "resonance-granular-delay"
+version = "0.1.0"
+dependencies = [
+ "resonance-common",
+ "resonance-dsp",
+ "resonance-plugin",
+]
+
+[[package]]
 name = "resonance-ir"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,19 @@
+[package]
+name = "resonance-granular-delay"
+version = "0.1.0"
+edition = "2021"
+description = "A granular delay: circular-buffer granulation with per-grain pitch, texture and jitter"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = ["editor"]
+# Editor stub only for now — the real editor ships with ba todo #1079
+# (epic #196) and will add the wayland-plugin-gui / egui dependencies.
+editor = []
+
+[dependencies]
+resonance-plugin = { path = "../../resonance-plugin" }
+resonance-common = { path = "../../resonance-common" }
+resonance-dsp = { path = "../../resonance-dsp" }

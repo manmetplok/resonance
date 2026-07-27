@@ -1,0 +1,384 @@
+//! Full parameter set for the granular delay (doc #252 §9).
+//!
+//! Every parameter from the §9 table is declared here so the CLAP id
+//! space is stable from the first release; parameters owned by later
+//! todos in epic #196 are *inert* (declared, saved/restored, but not yet
+//! read by the DSP) and are marked `TODO(epic-196 #...)` below.
+
+use resonance_plugin::*;
+
+pub const PARAM_COUNT: usize = 27;
+
+pub struct GranularDelayParams {
+    // --- Time -----------------------------------------------------------
+    pub sync: BoolParam,
+    pub division: IntParam,
+    pub time_ms: FloatParam,
+    /// 0 = Fade, 1 = Repitch, 2 = Per-Grain. TODO(epic-196 #1076): only
+    /// the granular-native Per-Grain behaviour exists today (new grains
+    /// latch the new time at spawn); Fade/Repitch are inert.
+    pub time_mode: IntParam,
+
+    // --- Feedback -------------------------------------------------------
+    /// TODO(epic-196 #1074): feedback path (damping, soft clip, DC block).
+    pub feedback: FloatParam,
+    /// 0 = Wet->Buffer, 1 = Output-only. TODO(epic-196 #1074).
+    pub fb_route: IntParam,
+    /// Shimmer: transpose inside the feedback loop. TODO(epic-196 #1078).
+    pub fb_pitch: BoolParam,
+
+    // --- Grains ---------------------------------------------------------
+    pub grain_size_ms: FloatParam,
+    pub density_hz: FloatParam,
+    /// Tempo-synced density (grains per beat division). TODO(epic-196).
+    pub density_sync: BoolParam,
+    /// 0 = Sync, 1 = Async, 2 = Pitch-Sync. Pitch-Sync (PSOLA-style
+    /// voice/mono mode) is TODO(epic-196 #1082) and falls back to Async.
+    pub scheduler: IntParam,
+
+    // --- Pitch ----------------------------------------------------------
+    pub pitch: FloatParam,
+    /// 0 = Off, 1 = Semitones, 2 = Scale. TODO(epic-196 #1078).
+    pub pitch_quantize: IntParam,
+    pub spread_cents: FloatParam,
+
+    // --- Texture / randomization ----------------------------------------
+    pub texture: FloatParam,
+    pub spray_ms: FloatParam,
+    pub size_jitter: FloatParam,
+    pub level_jitter: FloatParam,
+    pub reverse_prob: FloatParam,
+
+    // --- Buffer ---------------------------------------------------------
+    /// TODO(epic-196 #1075): freeze/hold with crossfaded resume.
+    pub freeze: BoolParam,
+
+    // --- Wet path -------------------------------------------------------
+    /// 0 = LP, 1 = HP, in the feedback loop. TODO(epic-196 #1074).
+    pub filter_type: IntParam,
+    /// TODO(epic-196 #1074).
+    pub filter_hz: FloatParam,
+    /// Allpass smear of the wet path. TODO(epic-196 #1074).
+    pub diffusion: FloatParam,
+    pub pan_spread: FloatParam,
+    /// M/S width on the wet sum. TODO(epic-196 #1077).
+    pub width: FloatParam,
+    pub mix: FloatParam,
+    /// 0 = Lo-fi, 1 = Normal, 2 = HQ. The HQ tier already engages the
+    /// grain engine's rate-tracked anti-alias lowpass; the full tier
+    /// treatment (interp order, lo-fi µ-law) is TODO(epic-196 #1083).
+    pub quality: IntParam,
+}
+
+impl GranularDelayParams {
+    pub fn param_at(&self, index: usize) -> &dyn Param {
+        match index {
+            0 => &self.sync,
+            1 => &self.division,
+            2 => &self.time_ms,
+            3 => &self.time_mode,
+            4 => &self.feedback,
+            5 => &self.fb_route,
+            6 => &self.fb_pitch,
+            7 => &self.grain_size_ms,
+            8 => &self.density_hz,
+            9 => &self.density_sync,
+            10 => &self.scheduler,
+            11 => &self.pitch,
+            12 => &self.pitch_quantize,
+            13 => &self.spread_cents,
+            14 => &self.texture,
+            15 => &self.spray_ms,
+            16 => &self.size_jitter,
+            17 => &self.level_jitter,
+            18 => &self.reverse_prob,
+            19 => &self.freeze,
+            20 => &self.filter_type,
+            21 => &self.filter_hz,
+            22 => &self.diffusion,
+            23 => &self.pan_spread,
+            24 => &self.width,
+            25 => &self.mix,
+            26 => &self.quality,
+            _ => &self.sync,
+        }
+    }
+}
+
+impl Default for GranularDelayParams {
+    fn default() -> Self {
+        Self {
+            sync: BoolParam::new("sync", "Sync", true),
+
+            division: IntParam::new(
+                "division",
+                "Division",
+                4, // 1/4 (doc #252 §9 default)
+                IntRange::Linear { min: 0, max: 11 },
+            ),
+
+            time_ms: FloatParam::new(
+                "time_ms",
+                "Time",
+                500.0,
+                FloatRange::Skewed {
+                    min: 10.0,
+                    max: 4000.0,
+                    factor: FloatRange::skew_factor(-1.5),
+                },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
+
+            time_mode: IntParam::new(
+                "time_mode",
+                "Time Mode",
+                2, // Per-Grain
+                IntRange::Linear { min: 0, max: 2 },
+            ),
+
+            feedback: FloatParam::new(
+                "feedback",
+                "Feedback",
+                0.35,
+                FloatRange::Linear { min: 0.0, max: 1.1 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            fb_route: IntParam::new(
+                "fb_route",
+                "FB Route",
+                0, // Wet -> Buffer
+                IntRange::Linear { min: 0, max: 1 },
+            ),
+
+            fb_pitch: BoolParam::new("fb_pitch", "FB Pitch", false),
+
+            grain_size_ms: FloatParam::new(
+                "grain_size_ms",
+                "Grain Size",
+                90.0,
+                FloatRange::Skewed {
+                    min: 10.0,
+                    max: 500.0,
+                    factor: FloatRange::skew_factor(-1.5),
+                },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
+
+            // Default ≈ overlap 2x at the 90 ms default grain size
+            // (doc #252 §9: density default "overlap 2x").
+            density_hz: FloatParam::new(
+                "density_hz",
+                "Density",
+                22.0,
+                FloatRange::Skewed {
+                    min: 0.5,
+                    max: 100.0,
+                    factor: FloatRange::skew_factor(-1.0),
+                },
+            )
+            .with_unit(" /s")
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
+
+            density_sync: BoolParam::new("density_sync", "Density Sync", false),
+
+            scheduler: IntParam::new(
+                "scheduler",
+                "Scheduler",
+                1, // Async (doc #252 §9 default)
+                IntRange::Linear { min: 0, max: 2 },
+            ),
+
+            pitch: FloatParam::new(
+                "pitch",
+                "Pitch",
+                0.0,
+                FloatRange::Linear {
+                    min: -24.0,
+                    max: 24.0,
+                },
+            )
+            .with_unit(" st")
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
+
+            pitch_quantize: IntParam::new(
+                "pitch_quantize",
+                "Pitch Quantize",
+                0, // Off
+                IntRange::Linear { min: 0, max: 2 },
+            ),
+
+            spread_cents: FloatParam::new(
+                "spread_cents",
+                "Spread",
+                0.0,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 100.0,
+                },
+            )
+            .with_unit(" ct")
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
+
+            texture: FloatParam::new(
+                "texture",
+                "Texture",
+                0.5,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            spray_ms: FloatParam::new(
+                "spray_ms",
+                "Spray",
+                20.0,
+                FloatRange::Skewed {
+                    min: 0.0,
+                    max: 2000.0,
+                    factor: FloatRange::skew_factor(-1.5),
+                },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
+
+            size_jitter: FloatParam::new(
+                "size_jitter",
+                "Size Jitter",
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            level_jitter: FloatParam::new(
+                "level_jitter",
+                "Level Jitter",
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            reverse_prob: FloatParam::new(
+                "reverse_prob",
+                "Reverse",
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            freeze: BoolParam::new("freeze", "Freeze", false),
+
+            filter_type: IntParam::new(
+                "filter_type",
+                "Filter Type",
+                0, // LP
+                IntRange::Linear { min: 0, max: 1 },
+            ),
+
+            filter_hz: FloatParam::new(
+                "filter_hz",
+                "Filter",
+                8000.0,
+                FloatRange::Skewed {
+                    min: 20.0,
+                    max: 20000.0,
+                    factor: FloatRange::skew_factor(-2.0),
+                },
+            )
+            .with_unit(" Hz")
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
+
+            diffusion: FloatParam::new(
+                "diffusion",
+                "Diffusion",
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            pan_spread: FloatParam::new(
+                "pan_spread",
+                "Pan Spread",
+                0.4,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            width: FloatParam::new(
+                "width",
+                "Width",
+                1.0,
+                FloatRange::Linear { min: 0.0, max: 1.5 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            mix: FloatParam::new(
+                "mix",
+                "Mix",
+                0.3,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            quality: IntParam::new(
+                "quality",
+                "Quality",
+                1, // Normal
+                IntRange::Linear { min: 0, max: 2 },
+            ),
+        }
+    }
+}
+
+/// Block-rate smoothers for the global continuous parameters that are
+/// *not* grain-latched. Grain-level parameters (size, pitch, spread,
+/// texture, jitters, pan) need no smoothing: they are latched per grain
+/// at spawn and the grain cloud itself interpolates (doc #252 §5).
+/// Delay time is likewise latched per grain (Per-Grain time mode), so
+/// only the wet/dry mix is smoothed today; feedback/width/filter join
+/// here when their todos land.
+pub struct GranularSmoothers {
+    pub mix: Smoother,
+}
+
+impl Default for GranularSmoothers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GranularSmoothers {
+    pub fn new() -> Self {
+        Self {
+            mix: Smoother::new(SmoothingStyle::Linear(50.0)),
+        }
+    }
+
+    pub fn prepare(&mut self, sample_rate: f32, params: &GranularDelayParams) {
+        self.mix.set_sample_rate(sample_rate);
+        self.mix.reset(params.mix.value());
+    }
+
+    pub fn retarget_from(&mut self, params: &GranularDelayParams) {
+        self.mix.set_target(params.mix.value());
+    }
+}
