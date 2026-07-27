@@ -10,8 +10,8 @@
 //! Bank/program, latency and the device re-check use the dedicated
 //! external-instrument commands. The undo classifier (`crate::undo`) records
 //! the config-changing variants; runtime-only variants (`CheckDevices`,
-//! `RescanDevices`, `RevealUserDefinitionsFolder`, `RescanDefinitions`) are
-//! skipped.
+//! `DetectLatency`, `RescanDevices`, `RevealUserDefinitionsFolder`,
+//! `RescanDefinitions`) are skipped.
 
 use iced::Task;
 use resonance_audio::types::{AudioCommand, TrackId};
@@ -210,6 +210,25 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
                 let _ = r
                     .engine
                     .send(AudioCommand::CheckExternalInstrumentDevices { track_id });
+            }
+        }
+        M::DetectLatency(track_id) => {
+            // Auto-detect ("ping") the round-trip latency. No-op unless the
+            // track is external, no detect is already running, and the
+            // transport is stopped (the engine rejects a ping mid-playback).
+            let can_detect = !r.transport.playing
+                && r.external_instruments
+                    .get(&track_id)
+                    .is_some_and(|state| !state.latency_detect_in_progress);
+            if can_detect {
+                if let Some(state) = r.external_instruments.get_mut(&track_id) {
+                    state.latency_detect_in_progress = true;
+                    // A fresh attempt supersedes any stale failure reason.
+                    state.latency_detect_error = None;
+                }
+                let _ = r
+                    .engine
+                    .send(AudioCommand::DetectExternalInstrumentLatency { track_id });
             }
         }
         M::RescanDevices => {

@@ -84,6 +84,20 @@ pub struct ExternalInstrumentState {
     /// replay). Runtime echo — not undo-snapshotted; empty means the map was
     /// cleared or nothing has been applied yet.
     pub applied_param_ids: Vec<String>,
+    /// True while an auto-detect latency ping is in flight: set when the app
+    /// dispatches `DetectExternalInstrumentLatency`, cleared when the engine
+    /// reports back (`ExternalInstrumentLatencyMeasured` /
+    /// `…LatencyDetectFailed`). Transient runtime state — guards against
+    /// firing a second ping over a running one and drives the inspector's
+    /// "measuring…" affordance (view lands in todo #1069). Never serialized;
+    /// not part of `config()` nor the undo snapshot.
+    pub latency_detect_in_progress: bool,
+    /// The reason the last auto-detect ping failed (MIDI out offline, no/silent
+    /// return, or nothing came back in the listen window), or `None` after a
+    /// success or before any attempt. Transient runtime state surfaced by the
+    /// inspector; never serialized, not part of `config()` nor the undo
+    /// snapshot.
+    pub latency_detect_error: Option<String>,
 }
 
 impl ExternalInstrumentState {
@@ -99,6 +113,8 @@ impl ExternalInstrumentState {
             midi_out_offline: false,
             return_input_offline: false,
             applied_param_ids: Vec::new(),
+            latency_detect_in_progress: false,
+            latency_detect_error: None,
         }
     }
 
