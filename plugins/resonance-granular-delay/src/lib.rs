@@ -2,12 +2,14 @@
 //! many enveloped, independently transposed read heads behind the write
 //! head (doc #252, doc #253; epic #196).
 //!
-//! This crate is the plugin skeleton (ba todo #1073): ring buffer,
-//! write head, grain engines and the full §9 parameter surface.
-//! Feedback (#1074), freeze (#1075), time modes (#1076), stereo width
-//! (#1077), shimmer/quantize (#1078), the editor (#1079), pitch-sync
-//! scheduling (#1082) and quality tiers (#1083) land on top of the
-//! seams marked `TODO(epic-196 #...)`.
+//! This crate is the plugin skeleton (ba todo #1073) — ring buffer,
+//! write head, grain engines and the full §9 parameter surface — plus
+//! the feedback path (#1074: in-loop damping, tanh soft clip, DC
+//! blocker, Wet→Buffer / Output-only topologies, 0–110 %).
+//! Freeze (#1075), time modes (#1076), stereo width (#1077),
+//! shimmer/quantize (#1078), the editor (#1079), pitch-sync scheduling
+//! (#1082) and quality tiers (#1083) land on top of the seams marked
+//! `TODO(epic-196 #...)`.
 
 use std::sync::Arc;
 
@@ -41,6 +43,22 @@ impl ResonanceGranularDelay {
     /// Currently sounding grains (metering aid).
     pub fn active_grains(&self) -> usize {
         self.dsp.as_ref().map_or(0, GranularDsp::active_grains)
+    }
+
+    /// Left grain source ring (test/metering aid; empty before
+    /// activation). See [`GranularDsp::ring_l`] for the indexing rule.
+    pub fn ring_l(&self) -> &[f32] {
+        self.dsp.as_ref().map_or(&[], GranularDsp::ring_l)
+    }
+
+    /// Right grain source ring (test/metering aid).
+    pub fn ring_r(&self) -> &[f32] {
+        self.dsp.as_ref().map_or(&[], GranularDsp::ring_r)
+    }
+
+    /// Absolute write-head position in samples (test/metering aid).
+    pub fn write_head(&self) -> u64 {
+        self.dsp.as_ref().map_or(0, GranularDsp::write_head)
     }
 }
 
@@ -142,6 +160,11 @@ impl ResonancePlugin for ResonanceGranularDelay {
             // TODO(epic-196 #1083): full Lo-fi/Normal/HQ tier treatment;
             // HQ already engages the engine's tracked anti-alias filter.
             anti_alias: self.params.quality.value() == 2,
+            fb_route: match self.params.fb_route.value() {
+                0 => dsp::FbRoute::WetToBuffer,
+                _ => dsp::FbRoute::OutputOnly,
+            },
+            filter_is_highpass: self.params.filter_type.value() == 1,
         };
 
         dsp.process_block(left, right, frames, &mut self.smoothers, &block);

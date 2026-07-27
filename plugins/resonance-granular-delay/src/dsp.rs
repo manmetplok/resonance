@@ -5,7 +5,7 @@
 //! Everything is pre-allocated at construction; `process_block` performs
 //! no allocation and takes no locks.
 
-use resonance_dsp::{GrainEngine, GrainParams, SchedulerMode};
+use resonance_dsp::{DcBlocker, GrainEngine, GrainParams, OnePole, SchedulerMode};
 
 use crate::params::GranularSmoothers;
 
@@ -19,9 +19,55 @@ pub const MAX_DELAY_SECONDS: f32 = 4.0;
 /// deliberately split these seeds and add M/S width.
 const ENGINE_SEED: u64 = 0x5EED_6417;
 
+/// Feedback topology (doc #252 §1, ba todo #1074).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FbRoute {
+    /// Default: the granulated wet output is filtered, soft-clipped,
+    /// DC-blocked and summed with the dry input at the buffer write
+    /// point, so every recirculation is re-granulated (the defining
+    /// granular-delay sound).
+    WetToBuffer,
+    /// "Clean repeats": the buffer receives the dry input only; the
+    /// feedback recirculates in the *output* mix through a dedicated
+    /// wet-recirculation ring read at the delay time.
+    OutputOnly,
+}
+
+/// One channel of the in-loop feedback conditioning chain (doc #252 §5):
+/// damping filter (LP, or HP as input-minus-LP so the one-pole state
+/// stays valid across type switches) → tanh soft clip → DC blocker.
+/// The tanh bounds the recirculated signal to ±1 no matter the loop
+/// gain, which is what keeps over-unity (>100 %) feedback stable.
+struct FeedbackChain {
+    filter: OnePole,
+    dc: DcBlocker,
+}
+
+impl FeedbackChain {
+    fn new() -> Self {
+        Self {
+            filter: OnePole::new(),
+            dc: DcBlocker::default(),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.filter.clear();
+        self.dc.reset();
+    }
+
+    #[inline(always)]
+    fn process(&mut self, x: f32, highpass: bool) -> f32 {
+        let lp = self.filter.process(x);
+        let damped = if highpass { x - lp } else { lp };
+        self.dc.process(damped.tanh())
+    }
+}
+
 /// Block-level parameters resolved once per process call in `lib.rs`.
 /// Grain-latched values need no smoothing (latched per grain at spawn);
-/// the smoothed wet/dry mix comes off [`GranularSmoothers`].
+/// the smoothed wet/dry mix, feedback amount and damping cutoff come
+/// off [`GranularSmoothers`].
 pub struct BlockParams {
     /// Nominal grain read position behind the write head, seconds.
     pub delay_seconds: f32,
@@ -39,6 +85,10 @@ pub struct BlockParams {
     pub pan_spread: f32,
     /// HQ tier: engage the engine's rate-tracked anti-alias lowpass.
     pub anti_alias: bool,
+    /// Feedback topology (ba todo #1074).
+    pub fb_route: FbRoute,
+    /// Damping filter type in the feedback loop: LP (false) or HP.
+    pub filter_is_highpass: bool,
 }
 
 pub struct GranularDsp {
@@ -62,6 +112,27 @@ pub struct GranularDsp {
     /// Sink for the pan-opposite engine outputs (each engine renders a
     /// stereo pair; only its own channel's side is kept).
     discard: Vec<f32>,
+    /// Wet→Buffer feedback bus: the conditioned (damped, soft-clipped,
+    /// DC-blocked) wet output of the *previous* block, summed with the
+    /// dry input at the write point of the current block. The one-block
+    /// loop latency is far below the minimum grain delay (10 ms), so it
+    /// is inaudible in the repeat spacing (ba todo #1074).
+    fb_l: Vec<f32>,
+    fb_r: Vec<f32>,
+    /// Valid prefix of `fb_l`/`fb_r` (0 when the previous block ran the
+    /// Output-only route; shrinks safely if the host varies block size).
+    fb_len: usize,
+    /// Output-only recirculation rings (same length/mask as the source
+    /// buffers): hold the wet-path output so "clean repeats" can
+    /// recirculate at the delay time without touching the grain source
+    /// buffer. Written every block regardless of route so switching
+    /// topologies is seamless.
+    fb_ring_l: Vec<f32>,
+    fb_ring_r: Vec<f32>,
+    /// In-loop conditioning (shared by both topologies; only one route
+    /// runs per block).
+    fb_chain_l: FeedbackChain,
+    fb_chain_r: FeedbackChain,
 }
 
 impl GranularDsp {
@@ -79,6 +150,13 @@ impl GranularDsp {
             wet_l: vec![0.0; max_block],
             wet_r: vec![0.0; max_block],
             discard: vec![0.0; max_block],
+            fb_l: vec![0.0; max_block],
+            fb_r: vec![0.0; max_block],
+            fb_len: 0,
+            fb_ring_l: vec![0.0; ring_len],
+            fb_ring_r: vec![0.0; ring_len],
+            fb_chain_l: FeedbackChain::new(),
+            fb_chain_r: FeedbackChain::new(),
         }
     }
 
@@ -107,6 +185,31 @@ impl GranularDsp {
         self.write_pos = 0;
         self.engine_l.reset();
         self.engine_r.reset();
+        self.fb_l.fill(0.0);
+        self.fb_r.fill(0.0);
+        self.fb_len = 0;
+        self.fb_ring_l.fill(0.0);
+        self.fb_ring_r.fill(0.0);
+        self.fb_chain_l.reset();
+        self.fb_chain_r.reset();
+    }
+
+    /// Read-only view of the left grain source ring (test/metering aid:
+    /// the Output-only route must keep this identical to the dry input,
+    /// and freeze must hold it bit-stable). Sample `n` of the stream
+    /// lives at index `n & (ring_len - 1)` while it remains in range.
+    pub fn ring_l(&self) -> &[f32] {
+        &self.buf_l
+    }
+
+    /// Read-only view of the right grain source ring (see [`Self::ring_l`]).
+    pub fn ring_r(&self) -> &[f32] {
+        &self.buf_r
+    }
+
+    /// Absolute write-head position in samples (test/metering aid).
+    pub fn write_head(&self) -> u64 {
+        self.write_pos
     }
 
     /// Render one block in place. `left`/`right` arrive carrying the dry
@@ -124,17 +227,29 @@ impl GranularDsp {
             return;
         }
 
-        // --- 1. Write the dry input into the circular buffer. ---------
-        // TODO(epic-196 #1074): the feedback loop taps in here — the
-        // (filtered, soft-clipped, DC-blocked) wet bus from the previous
-        // block is summed with the dry input before the write, or routed
-        // to the output mix only, per `fb_route`.
+        // Damping cutoff: block-rate coefficient update from the
+        // smoothed value, sample-rate application (doc #252 §5).
+        smoothers.filter_hz.skip(frames as u32);
+        let cutoff = smoothers.filter_hz.current().clamp(20.0, 20_000.0);
+        self.fb_chain_l.filter.set_cutoff(cutoff, self.sample_rate);
+        self.fb_chain_r.filter.set_cutoff(cutoff, self.sample_rate);
+
+        // --- 1. Write into the circular buffer (ba todo #1074): the
+        // dry input, plus — on the Wet→Buffer route — the conditioned
+        // wet bus of the previous block, so each recirculation is
+        // re-granulated. The Output-only route keeps the buffer clean.
         // TODO(epic-196 #1075): freeze gates this write (crossfaded).
         let base = self.write_pos as usize;
+        let wet_to_buffer = params.fb_route == FbRoute::WetToBuffer;
         for i in 0..frames {
             let idx = (base + i) & self.mask;
-            self.buf_l[idx] = left[i];
-            self.buf_r[idx] = right[i];
+            if wet_to_buffer && i < self.fb_len {
+                self.buf_l[idx] = left[i] + self.fb_l[i];
+                self.buf_r[idx] = right[i] + self.fb_r[i];
+            } else {
+                self.buf_l[idx] = left[i];
+                self.buf_r[idx] = right[i];
+            }
         }
 
         // --- 2. Granulate behind the write head into the wet bus. -----
@@ -186,7 +301,56 @@ impl GranularDsp {
                 .process(&self.buf_r, write_pos, &grain_params, discard, wet_r);
         }
 
-        // --- 3. Equal-power dry/wet mix (doc #252 §9), dry untouched
+        // --- 3. Feedback conditioning (ba todo #1074): wet × feedback →
+        // damping filter → tanh soft clip → DC blocker. The tanh bounds
+        // the recirculated signal regardless of loop gain, which is what
+        // keeps the over-unity (up to 110 %) range stable; the DC
+        // blocker stops offset accumulating across recirculations.
+        match params.fb_route {
+            FbRoute::WetToBuffer => {
+                // Condition this block's wet bus into the feedback bus
+                // consumed at the next block's write point, and keep the
+                // recirculation ring warm so a route switch is seamless.
+                for i in 0..frames {
+                    let g = smoothers.feedback.next().clamp(0.0, 1.1);
+                    self.fb_l[i] = self
+                        .fb_chain_l
+                        .process(self.wet_l[i] * g, params.filter_is_highpass);
+                    self.fb_r[i] = self
+                        .fb_chain_r
+                        .process(self.wet_r[i] * g, params.filter_is_highpass);
+                    let idx = (base + i) & self.mask;
+                    self.fb_ring_l[idx] = self.wet_l[i];
+                    self.fb_ring_r[idx] = self.wet_r[i];
+                }
+                self.fb_len = frames;
+            }
+            FbRoute::OutputOnly => {
+                // Clean repeats: recirculate the wet-path output through
+                // a dedicated ring read at the delay time; the grain
+                // source buffer never sees wet material.
+                let delay_samples = ((params.delay_seconds * self.sample_rate) as usize)
+                    .clamp(1, self.mask);
+                for i in 0..frames {
+                    let g = smoothers.feedback.next().clamp(0.0, 1.1);
+                    let idx = (base + i) & self.mask;
+                    let ridx = (base + i).wrapping_sub(delay_samples) & self.mask;
+                    let fl = self
+                        .fb_chain_l
+                        .process(self.fb_ring_l[ridx] * g, params.filter_is_highpass);
+                    let fr = self
+                        .fb_chain_r
+                        .process(self.fb_ring_r[ridx] * g, params.filter_is_highpass);
+                    self.fb_ring_l[idx] = self.wet_l[i] + fl;
+                    self.fb_ring_r[idx] = self.wet_r[i] + fr;
+                    self.wet_l[i] += fl;
+                    self.wet_r[i] += fr;
+                }
+                self.fb_len = 0;
+            }
+        }
+
+        // --- 4. Equal-power dry/wet mix (doc #252 §9), dry untouched
         // otherwise. TODO(epic-196 #1077): M/S width goes here, on the
         // wet bus only.
         for i in 0..frames {

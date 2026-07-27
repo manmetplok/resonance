@@ -54,6 +54,9 @@ fn wet_only_plugin(time_ms: f32, grain_ms: f32, density_hz: f32) -> ResonanceGra
     plugin.params.pan_spread.set_value(0.0);
     plugin.params.reverse_prob.set_value(0.0);
     plugin.params.spread_cents.set_value(0.0);
+    // Single-pass granulation: the feedback path (ba todo #1074) is
+    // live now, so pin it off to keep these renders one-pass.
+    plugin.params.feedback.set_value(0.0);
     plugin.params.mix.set_value(1.0); // wet only
     plugin
 }

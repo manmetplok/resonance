@@ -20,9 +20,12 @@ pub struct GranularDelayParams {
     pub time_mode: IntParam,
 
     // --- Feedback -------------------------------------------------------
-    /// TODO(epic-196 #1074): feedback path (damping, soft clip, DC block).
+    /// Loop gain, 0–110 %: wet × feedback → damping filter → tanh soft
+    /// clip → DC blocker (doc #252 §1/§5; the soft clip keeps the
+    /// over-unity range bounded).
     pub feedback: FloatParam,
-    /// 0 = Wet->Buffer, 1 = Output-only. TODO(epic-196 #1074).
+    /// 0 = Wet->Buffer (recirculations are re-granulated), 1 =
+    /// Output-only (clean repeats; the buffer keeps the dry input).
     pub fb_route: IntParam,
     /// Shimmer: transpose inside the feedback loop. TODO(epic-196 #1078).
     pub fb_pitch: BoolParam,
@@ -54,11 +57,13 @@ pub struct GranularDelayParams {
     pub freeze: BoolParam,
 
     // --- Wet path -------------------------------------------------------
-    /// 0 = LP, 1 = HP, in the feedback loop. TODO(epic-196 #1074).
+    /// Damping filter type in the feedback loop: 0 = LP, 1 = HP.
     pub filter_type: IntParam,
-    /// TODO(epic-196 #1074).
+    /// Damping filter cutoff in the feedback loop (smoothed; the
+    /// coefficient updates at block rate).
     pub filter_hz: FloatParam,
-    /// Allpass smear of the wet path. TODO(epic-196 #1074).
+    /// Allpass smear of the wet path. TODO(epic-196): follow-up; not in
+    /// #1074's feedback DoD.
     pub diffusion: FloatParam,
     pub pan_spread: FloatParam,
     /// M/S width on the wet sum. TODO(epic-196 #1077).
@@ -353,11 +358,16 @@ impl Default for GranularDelayParams {
 /// *not* grain-latched. Grain-level parameters (size, pitch, spread,
 /// texture, jitters, pan) need no smoothing: they are latched per grain
 /// at spawn and the grain cloud itself interpolates (doc #252 §5).
-/// Delay time is likewise latched per grain (Per-Grain time mode), so
-/// only the wet/dry mix is smoothed today; feedback/width/filter join
-/// here when their todos land.
+/// Delay time is likewise latched per grain (Per-Grain time mode).
+/// Smoothed today: wet/dry mix, feedback amount and damping cutoff
+/// (ba todo #1074); width joins here when #1077 lands.
 pub struct GranularSmoothers {
     pub mix: Smoother,
+    /// Loop gain (per-sample application in the feedback stage).
+    pub feedback: Smoother,
+    /// Damping cutoff in Hz; consumed at block rate (`skip` + `current`)
+    /// because the one-pole coefficient update costs an `exp`.
+    pub filter_hz: Smoother,
 }
 
 impl Default for GranularSmoothers {
@@ -370,15 +380,23 @@ impl GranularSmoothers {
     pub fn new() -> Self {
         Self {
             mix: Smoother::new(SmoothingStyle::Linear(50.0)),
+            feedback: Smoother::new(SmoothingStyle::Linear(50.0)),
+            filter_hz: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
         }
     }
 
     pub fn prepare(&mut self, sample_rate: f32, params: &GranularDelayParams) {
         self.mix.set_sample_rate(sample_rate);
         self.mix.reset(params.mix.value());
+        self.feedback.set_sample_rate(sample_rate);
+        self.feedback.reset(params.feedback.value());
+        self.filter_hz.set_sample_rate(sample_rate);
+        self.filter_hz.reset(params.filter_hz.value());
     }
 
     pub fn retarget_from(&mut self, params: &GranularDelayParams) {
         self.mix.set_target(params.mix.value());
+        self.feedback.set_target(params.feedback.value());
+        self.filter_hz.set_target(params.filter_hz.value());
     }
 }
