@@ -30,6 +30,8 @@
 //! interleave — that's the structural guarantee, not just a pixel
 //! check.
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{Message, UiMessage};
@@ -83,10 +85,7 @@ fn snapshot_to(app: &Resonance, path: &str) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 /// Expanded state — the drum parent's four sub-tracks render as a

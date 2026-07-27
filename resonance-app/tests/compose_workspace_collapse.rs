@@ -15,6 +15,8 @@
 //! 3. **both collapsed** — just the two banner rows above the
 //!    (now-empty) workspace.
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::compose::{ComposeMessage, WorkspaceGroup};
@@ -62,10 +64,7 @@ fn snapshot_to(app: &Resonance, path: &str) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 /// SECTION banner collapsed — scale stripe + chord lane hidden, banner

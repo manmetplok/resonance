@@ -13,6 +13,8 @@
 //! `tests/drag_placement_handlers.rs`. Window size matches the app's
 //! default 1440×900; on first run `matches_image()` writes the golden.
 
+mod common;
+
 use iced::{Point, Size};
 use iced_test::simulator::Simulator;
 use resonance_app::message::DropTarget;
@@ -95,9 +97,5 @@ fn drag_placement_over_lane_render() {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image("tests/snapshots/drag_placement_over_lane_render.png")
-            .expect("matches_image i/o"),
-        "snapshot diverged from golden"
-    );
+    common::assert_golden(&snap, "tests/snapshots/drag_placement_over_lane_render.png");
 }

@@ -19,6 +19,8 @@
 //!   1. **In-progress** — one queued and one working file, backdrop is live.
 //!   2. **Complete** — one done and one failed file, "Done" button visible.
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{Message, UiMessage};
@@ -76,10 +78,7 @@ fn snapshot_to(app: &Resonance, path: &str) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 // ---------------------------------------------------------------------------

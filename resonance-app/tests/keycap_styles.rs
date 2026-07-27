@@ -8,6 +8,8 @@
 //! On first run `matches_image()` writes the golden under
 //! `tests/snapshots/`; subsequent runs diff against the committed PNG.
 
+mod common;
+
 use iced::widget::{column, container, row, text, Space};
 use iced::{alignment, Element, Length, Size};
 use iced_test::simulator::Simulator;
@@ -108,9 +110,5 @@ fn keycap_styles_sample_matches_golden() {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image("tests/snapshots/keycap_styles_sample.png")
-            .expect("matches_image i/o"),
-        "keycap sample diverged from golden: tests/snapshots/keycap_styles_sample.png"
-    );
+    common::assert_golden(&snap, "tests/snapshots/keycap_styles_sample.png");
 }

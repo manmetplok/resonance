@@ -16,6 +16,8 @@
 //!
 //! **Snapshot file**: `tests/snapshots/pool_tab_populated.png`
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{BrowserMessage, Message};
@@ -60,10 +62,7 @@ fn snapshot_to(app: &Resonance, path: &str) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 /// Pool tab populated with all three asset variants (used / unused / missing).
