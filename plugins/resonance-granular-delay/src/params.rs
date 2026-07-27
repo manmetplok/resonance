@@ -53,7 +53,10 @@ pub struct GranularDelayParams {
     pub reverse_prob: FloatParam,
 
     // --- Buffer ---------------------------------------------------------
-    /// TODO(epic-196 #1075): freeze/hold with crossfaded resume.
+    /// Freeze/hold (latching; usable momentarily via host automation):
+    /// stops the write head and holds the buffer while grains keep
+    /// reading it; engage/resume crossfade the write gain over a few ms
+    /// so there is no splice click (doc #252 §1).
     pub freeze: BoolParam,
 
     // --- Wet path -------------------------------------------------------

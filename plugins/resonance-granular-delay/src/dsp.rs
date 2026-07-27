@@ -12,6 +12,11 @@ use crate::params::GranularSmoothers;
 /// Maximum delay time the ring buffer is sized for at activation.
 pub const MAX_DELAY_SECONDS: f32 = 4.0;
 
+/// Freeze engage/resume ramp length (ba todo #1075, doc #252 §1): the
+/// write gain crossfades over this many seconds so stopping/restarting
+/// the write head never splices a discontinuity into the buffer.
+pub const FREEZE_RAMP_SECONDS: f32 = 0.005;
+
 /// Shared seed for the two lock-stepped grain engines. Both engines
 /// must consume identical RNG streams so left and right render the
 /// *same* grain cloud over their respective channels (stereo balance
@@ -89,6 +94,10 @@ pub struct BlockParams {
     pub fb_route: FbRoute,
     /// Damping filter type in the feedback loop: LP (false) or HP.
     pub filter_is_highpass: bool,
+    /// Freeze/hold (ba todo #1075): stop the write head and hold the
+    /// buffer; grains keep reading the static content. Engage and
+    /// resume are equal-power crossfades on the write gain.
+    pub freeze: bool,
 }
 
 pub struct GranularDsp {
@@ -133,6 +142,17 @@ pub struct GranularDsp {
     /// runs per block).
     fb_chain_l: FeedbackChain,
     fb_chain_r: FeedbackChain,
+    /// Recirculation-time counter for the feedback stage: identical to
+    /// `write_pos` while streaming, but it keeps advancing while frozen
+    /// so the Output-only recirc ring keeps its own time axis when the
+    /// write head stops (ba todo #1075).
+    fb_pos: u64,
+    /// Freeze crossfade position: 0 = live (writes at full gain), 1 =
+    /// fully frozen (write head stopped, buffer untouched). Ramps by
+    /// one sample step per input sample toward the freeze target, and
+    /// the write is an equal-power blend of held content and incoming
+    /// signal while in between (ba todo #1075).
+    freeze_xf: f32,
 }
 
 impl GranularDsp {
@@ -157,6 +177,8 @@ impl GranularDsp {
             fb_ring_r: vec![0.0; ring_len],
             fb_chain_l: FeedbackChain::new(),
             fb_chain_r: FeedbackChain::new(),
+            fb_pos: 0,
+            freeze_xf: 0.0,
         }
     }
 
@@ -192,6 +214,8 @@ impl GranularDsp {
         self.fb_ring_r.fill(0.0);
         self.fb_chain_l.reset();
         self.fb_chain_r.reset();
+        self.fb_pos = 0;
+        self.freeze_xf = 0.0;
     }
 
     /// Read-only view of the left grain source ring (test/metering aid:
@@ -238,18 +262,51 @@ impl GranularDsp {
         // dry input, plus — on the Wet→Buffer route — the conditioned
         // wet bus of the previous block, so each recirculation is
         // re-granulated. The Output-only route keeps the buffer clean.
-        // TODO(epic-196 #1075): freeze gates this write (crossfaded).
+        //
+        // Freeze (ba todo #1075) gates this whole write — dry *and*
+        // feedback, so a frozen buffer cannot run away no matter the
+        // loop gain. `freeze_xf` ramps per sample; while in between the
+        // write is an equal-power blend of the held content and the
+        // incoming signal (the engage ramp thereby morphs the recorded
+        // stream into the lap-old material ahead of the stop point, and
+        // resume morphs back out of it, so the boundary is always
+        // splice-free), and once fully frozen the write head stops
+        // (samples are neither written nor consumed for head advance)
+        // and the buffer is left bit-untouched. Because the head is
+        // static, grain read origins (`write_pos - delay`) become
+        // absolute buffer offsets — grains do not chase a stopped head.
         let base = self.write_pos as usize;
         let wet_to_buffer = params.fb_route == FbRoute::WetToBuffer;
+        let freeze_target: f32 = if params.freeze { 1.0 } else { 0.0 };
+        let freeze_step = 1.0 / (FREEZE_RAMP_SECONDS * self.sample_rate).max(1.0);
+        let mut advanced = 0usize;
         for i in 0..frames {
-            let idx = (base + i) & self.mask;
-            if wet_to_buffer && i < self.fb_len {
-                self.buf_l[idx] = left[i] + self.fb_l[i];
-                self.buf_r[idx] = right[i] + self.fb_r[i];
-            } else {
-                self.buf_l[idx] = left[i];
-                self.buf_r[idx] = right[i];
+            if self.freeze_xf < freeze_target {
+                self.freeze_xf = (self.freeze_xf + freeze_step).min(1.0);
+            } else if self.freeze_xf > freeze_target {
+                self.freeze_xf = (self.freeze_xf - freeze_step).max(0.0);
             }
+            if self.freeze_xf >= 1.0 {
+                continue; // fully frozen: hold the buffer, stop the head
+            }
+            let idx = (base + advanced) & self.mask;
+            let (mut in_l, mut in_r) = (left[i], right[i]);
+            if wet_to_buffer && i < self.fb_len {
+                in_l += self.fb_l[i];
+                in_r += self.fb_r[i];
+            }
+            if self.freeze_xf > 0.0 {
+                // Engage/resume ramp: equal-power blend of held content
+                // and the incoming stream, click-free at both ends.
+                let phase = std::f32::consts::FRAC_PI_2 * self.freeze_xf;
+                let (keep_g, write_g) = phase.sin_cos();
+                self.buf_l[idx] = self.buf_l[idx] * keep_g + in_l * write_g;
+                self.buf_r[idx] = self.buf_r[idx] * keep_g + in_r * write_g;
+            } else {
+                self.buf_l[idx] = in_l;
+                self.buf_r[idx] = in_r;
+            }
+            advanced += 1;
         }
 
         // --- 2. Granulate behind the write head into the wet bus. -----
@@ -275,7 +332,11 @@ impl GranularDsp {
             pan_spread: params.pan_spread,
             texture: params.texture,
             mode: params.scheduler,
-            head_advance: 1.0, // streaming delay buffer
+            // Streaming: 1.0. Frozen: 0.0 — the engine's static-corpus
+            // mode, so spawn guards and read origins track the stopped
+            // head (ba todo #1075). Transitional blocks pass the actual
+            // fraction the head moved.
+            head_advance: advanced as f32 / frames as f32,
             pitch_semitones: params.pitch_semitones,
             detune_spread_cents: params.detune_spread_cents,
             reverse_probability: params.reverse_probability,
@@ -306,6 +367,11 @@ impl GranularDsp {
         // the recirculated signal regardless of loop gain, which is what
         // keeps the over-unity (up to 110 %) range stable; the DC
         // blocker stops offset accumulating across recirculations.
+        // The recirc ring runs on its own clock (`fb_pos`): identical
+        // to the write head while streaming, but it keeps ticking while
+        // frozen so Output-only repeats stay on their own time axis
+        // instead of stalling with the stopped head (ba todo #1075).
+        let fb_base = self.fb_pos as usize;
         match params.fb_route {
             FbRoute::WetToBuffer => {
                 // Condition this block's wet bus into the feedback bus
@@ -319,7 +385,7 @@ impl GranularDsp {
                     self.fb_r[i] = self
                         .fb_chain_r
                         .process(self.wet_r[i] * g, params.filter_is_highpass);
-                    let idx = (base + i) & self.mask;
+                    let idx = (fb_base + i) & self.mask;
                     self.fb_ring_l[idx] = self.wet_l[i];
                     self.fb_ring_r[idx] = self.wet_r[i];
                 }
@@ -328,13 +394,14 @@ impl GranularDsp {
             FbRoute::OutputOnly => {
                 // Clean repeats: recirculate the wet-path output through
                 // a dedicated ring read at the delay time; the grain
-                // source buffer never sees wet material.
+                // source buffer never sees wet material. Bounded even
+                // while frozen: the loop still passes through the tanh.
                 let delay_samples = ((params.delay_seconds * self.sample_rate) as usize)
                     .clamp(1, self.mask);
                 for i in 0..frames {
                     let g = smoothers.feedback.next().clamp(0.0, 1.1);
-                    let idx = (base + i) & self.mask;
-                    let ridx = (base + i).wrapping_sub(delay_samples) & self.mask;
+                    let idx = (fb_base + i) & self.mask;
+                    let ridx = (fb_base + i).wrapping_sub(delay_samples) & self.mask;
                     let fl = self
                         .fb_chain_l
                         .process(self.fb_ring_l[ridx] * g, params.filter_is_highpass);
@@ -361,6 +428,9 @@ impl GranularDsp {
             right[i] = right[i] * dry_gain + self.wet_r[i] * wet_gain;
         }
 
-        self.write_pos += frames as u64;
+        // The write head advances only by the samples actually written
+        // (it stops while frozen); the recirc clock always advances.
+        self.write_pos += advanced as u64;
+        self.fb_pos += frames as u64;
     }
 }
