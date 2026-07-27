@@ -70,6 +70,11 @@ pub struct TimelineCanvas<'a> {
     /// timeline renders the primary lane for each track as an overlay band
     /// (doc #162 §3); empty => no lanes drawn.
     pub automation: &'a crate::state::AutomationState,
+    /// Display names for `DeviceParam` lane targets, resolved at view-model
+    /// build time via [`automation::device_param_labels`] (todo #1094) so the
+    /// canvas needs no device-registry access. Lanes absent from the map fall
+    /// back to their raw param id in the band's label chip.
+    pub device_param_labels: std::collections::HashMap<AutomationTarget, String>,
     /// Arrangement markers (flags + region spans) rendered in the ruler
     /// band. Empty slice => nothing drawn. `selected_marker_id` recolors
     /// the matching flag / span with the accent (todo #368).
@@ -405,6 +410,16 @@ impl<'a> TimelineCanvas<'a> {
                 p.value.to_bits().hash(&mut lh);
                 p.curve.hash(&mut lh);
             }
+            automation_hash ^= lh.finish();
+        }
+        // The band's label chip renders resolved device-param names (todo
+        // #1094), so a preset change that renames a lane's label must also
+        // invalidate the cached lane layer even though the lane itself is
+        // untouched. Same order-independent xor fold.
+        for (target, name) in &self.device_param_labels {
+            let mut lh = std::collections::hash_map::DefaultHasher::new();
+            target.hash(&mut lh);
+            name.hash(&mut lh);
             automation_hash ^= lh.finish();
         }
 

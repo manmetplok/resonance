@@ -66,6 +66,11 @@ impl crate::Resonance {
             section_definitions: &self.compose.definitions,
             selected_placement_id: self.compose.selected_placement_id,
             automation: &self.automation,
+            device_param_labels: crate::view::timeline::automation::device_param_labels(
+                &self.automation,
+                &self.external_instruments,
+                &self.device_registry,
+            ),
             markers: self.markers.as_slice(),
             selected_marker_id: self.interaction.selected_marker_id,
             frozen_tracks,

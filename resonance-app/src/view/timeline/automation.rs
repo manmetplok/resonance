@@ -19,6 +19,8 @@
 //! live playhead value rides the uncached overlay frame so it follows the
 //! playhead without invalidating the rest of the timeline.
 
+use std::collections::HashMap;
+
 use iced::widget::canvas;
 use iced::{Color, Point, Rectangle, Size};
 
@@ -132,14 +134,21 @@ pub fn lane_segments_polyline(
 }
 
 /// Priority used to pick the single lane drawn for a track when several
-/// targets it (gain, then pan, then mute, then the lowest plugin-param id).
-/// The parameter picker (#383) will let the user override which lane shows;
-/// until then this gives a stable, predictable choice.
+/// targets it (gain, then pan, then mute, then device params, then the lowest
+/// plugin-param id). The parameter picker (#383) will let the user override
+/// which lane shows; until then this gives a stable, predictable choice.
+/// Mirrors the mixer strip's `priority` (view/mixer/automation.rs) so the
+/// strip header and the timeline band agree on which lane is "primary".
 pub fn target_priority(target: AutomationTarget) -> u32 {
     match target {
         AutomationTarget::TrackGain(_) => 0,
         AutomationTarget::TrackPan(_) => 1,
         AutomationTarget::TrackMute(_) => 2,
+        // Device params are what the user automated deliberately on an
+        // external-instrument track, so they outrank generic plugin params.
+        // Ties between several device lanes are broken deterministically by
+        // `param_id` in [`primary_lane_for_track`].
+        AutomationTarget::DeviceParam { .. } => 5,
         AutomationTarget::PluginParam { param_id, .. } => 10u32.saturating_add(param_id),
         // Bus/master targets never belong to an arrange track row.
         _ => u32::MAX,
@@ -147,46 +156,95 @@ pub fn target_priority(target: AutomationTarget) -> u32 {
 }
 
 /// Short human label for a lane's target, shown as a chip on the band.
-fn target_label(target: &AutomationTarget) -> String {
+/// `DeviceParam` lanes resolve through `device_labels` (built once per view
+/// pass by [`device_param_labels`]), falling back to the raw param id when the
+/// preset no longer resolves (e.g. it changed while the lane survives).
+pub fn target_label(
+    target: &AutomationTarget,
+    device_labels: &HashMap<AutomationTarget, String>,
+) -> String {
     match target {
         AutomationTarget::TrackGain(_) => "Volume".to_string(),
         AutomationTarget::TrackPan(_) => "Pan".to_string(),
         AutomationTarget::TrackMute(_) => "Mute".to_string(),
         AutomationTarget::PluginParam { param_id, .. } => format!("Param {param_id}"),
+        AutomationTarget::DeviceParam { param_id, .. } => device_labels
+            .get(target)
+            .cloned()
+            .unwrap_or_else(|| param_id.clone()),
         _ => String::new(),
     }
 }
 
-impl TimelineCanvas<'_> {
-    /// Whether `target` drives one of `track`'s parameters (its own gain/pan/
-    /// mute, or a CLAP param on a plugin instance hosted by the track).
-    fn target_belongs_to_track(&self, target: &AutomationTarget, track: &TrackState) -> bool {
-        match target {
-            AutomationTarget::TrackGain(id)
-            | AutomationTarget::TrackPan(id)
-            | AutomationTarget::TrackMute(id) => *id == track.id,
-            AutomationTarget::PluginParam { instance, .. } => {
-                track.plugins.iter().any(|p| p.instance_id == *instance)
-            }
-            _ => false,
+/// Resolved display names for every `DeviceParam` lane in `automation`, keyed
+/// by the lane's target: the track's selected external-instrument device
+/// preset is looked up in the definition registry and the param id resolved to
+/// its named [`resonance_common::DeviceParam::name`] — the same resolution the
+/// mixer strip's picker uses (view/mixer/automation.rs). Built at view-model
+/// build time (timeline_panel.rs) so the canvas needs no registry access;
+/// exposed for reuse by the track-header work (doc #256). Unresolvable lanes
+/// are simply absent — [`target_label`] falls back to the raw param id.
+pub fn device_param_labels(
+    automation: &crate::state::AutomationState,
+    external_instruments: &crate::state::ExternalInstrumentMap,
+    registry: &resonance_common::DeviceDefinitionRegistry,
+) -> HashMap<AutomationTarget, String> {
+    automation
+        .lanes
+        .keys()
+        .filter_map(|target| {
+            let AutomationTarget::DeviceParam { track, param_id } = target else {
+                return None;
+            };
+            let def_id = external_instruments.get(track)?.device_id.as_deref()?;
+            let name = registry.get(def_id)?.param(param_id)?.name.clone();
+            Some((target.clone(), name))
+        })
+        .collect()
+}
+
+/// Whether `target` drives one of `track`'s parameters: its own gain/pan/
+/// mute, a CLAP param on a plugin instance hosted by the track, or a device
+/// param on the track's external instrument.
+pub fn target_belongs_to_track(target: &AutomationTarget, track: &TrackState) -> bool {
+    match target {
+        AutomationTarget::TrackGain(id)
+        | AutomationTarget::TrackPan(id)
+        | AutomationTarget::TrackMute(id) => *id == track.id,
+        AutomationTarget::PluginParam { instance, .. } => {
+            track.plugins.iter().any(|p| p.instance_id == *instance)
         }
+        AutomationTarget::DeviceParam { track: id, .. } => *id == track.id,
+        _ => false,
     }
+}
 
-    /// The lane drawn for `track`, if any — the highest-priority target that
-    /// belongs to the track. `None` hides the lane (the common case: tracks
-    /// have no automation).
-    pub(super) fn primary_lane_for_track<'l>(
-        &self,
-        automation: &'l crate::state::AutomationState,
-        track: &TrackState,
-    ) -> Option<&'l AutomationLane> {
-        automation
-            .lanes
-            .values()
-            .filter(|lane| self.target_belongs_to_track(&lane.target, track))
-            .min_by_key(|lane| target_priority(lane.target.clone()))
-    }
+/// The lane drawn for `track`, if any — the highest-priority target that
+/// belongs to the track, with ties (several device-param lanes share one
+/// priority tier) broken by the lexicographically smallest `param_id` so the
+/// pick is deterministic. `None` hides the lane (the common case: tracks have
+/// no automation).
+pub fn primary_lane_for_track<'l>(
+    automation: &'l crate::state::AutomationState,
+    track: &TrackState,
+) -> Option<&'l AutomationLane> {
+    automation
+        .lanes
+        .values()
+        .filter(|lane| target_belongs_to_track(&lane.target, track))
+        .min_by_key(|lane: &&'l AutomationLane| {
+            // Copy the inner `&'l` ref out so the tie-break `&str` borrows
+            // from the lane itself, not the closure-local double reference.
+            let lane: &'l AutomationLane = lane;
+            let tie = match &lane.target {
+                AutomationTarget::DeviceParam { param_id, .. } => param_id.as_str(),
+                _ => "",
+            };
+            (target_priority(lane.target.clone()), tie)
+        })
+}
 
+impl TimelineCanvas<'_> {
     /// Draw the static automation layer for every visible track. Called from
     /// the cached `draw_into` pass, after clips, inside the lane clip. Lane
     /// Y / height come from the shared [`ArrangeRowLayout`] (doc #203), so
@@ -212,7 +270,7 @@ impl TimelineCanvas<'_> {
             if row_y + row_height < header_height || row_y > bounds.height {
                 continue;
             }
-            let Some(lane) = self.primary_lane_for_track(self.automation, track) else {
+            let Some(lane) = primary_lane_for_track(self.automation, track) else {
                 continue;
             };
             self.draw_one_automation_lane(frame, lane, row_y, row_height, bounds.width);
@@ -244,7 +302,7 @@ impl TimelineCanvas<'_> {
         }
 
         // ---- Parameter label chip (top-left of the band) ----
-        let label = target_label(&lane.target);
+        let label = target_label(&lane.target, &self.device_param_labels);
         if !label.is_empty() {
             frame.fill_text(canvas::Text {
                 content: label,
@@ -344,7 +402,7 @@ impl TimelineCanvas<'_> {
                 if row_y + row_height < header_height || row_y > bounds.height {
                     continue;
                 }
-                let Some(lane) = self.primary_lane_for_track(self.automation, track) else {
+                let Some(lane) = primary_lane_for_track(self.automation, track) else {
                     continue;
                 };
                 if lane.points.is_empty() {
@@ -436,7 +494,7 @@ impl TimelineCanvas<'_> {
             .visible_tracks_sorted()
             .into_iter()
             .find(|t| t.id == track_id)?;
-        let lane = self.primary_lane_for_track(self.automation, track)?;
+        let lane = primary_lane_for_track(self.automation, track)?;
         Some((lane, row_y, row_height))
     }
 
@@ -450,10 +508,8 @@ impl TimelineCanvas<'_> {
         let y_off = self.scroll_offset_y;
         let layout = self.arrange_layout();
         for track in self.visible_tracks_sorted() {
-            let owns = self
-                .primary_lane_for_track(self.automation, track)
-                .map(|l| &l.target)
-                == Some(target);
+            let owns =
+                primary_lane_for_track(self.automation, track).map(|l| &l.target) == Some(target);
             if owns {
                 let (row_y_top, row_height) = layout.track_row_rect(track.id)?;
                 let row_y = header_height + row_y_top - y_off;
