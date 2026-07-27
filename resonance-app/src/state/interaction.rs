@@ -3,10 +3,62 @@
 
 use std::collections::BTreeSet;
 
+use resonance_audio::quantize::{Division, GridModifier, GridValue, QuantizeMode};
 use resonance_audio::types::*;
 
-use super::clips::{ClipDragState, ClipTrimState, MidiClipDragState, MidiClipTrimState};
+use super::clips::{
+    ClipDragState, ClipTrimState, FadeDragState, GainDragState, MidiClipDragState,
+    MidiClipTrimState,
+};
 use super::global::SelectedGlobalEvent;
+
+/// What is being dragged during a drag-and-drop group-membership edit
+/// (epic #36, doc #200, todo #685). A track row joins / leaves a group; a
+/// group header nests under / un-nests from another group (members travel
+/// with it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MembershipDragSubject {
+    /// A track row being dragged to change which group it belongs to.
+    Track(TrackId),
+    /// A group header being dragged to nest under / detach from a parent
+    /// group. The id is the group's own id.
+    Group(TrackId),
+}
+
+/// Where a membership drag currently hovers, already resolved to a drop
+/// intent by the view's hit-test (a hover over a group's header *or* any
+/// of its members both resolve to [`IntoGroup`](Self::IntoGroup)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MembershipDropTarget {
+    /// Over a group — the dragged subject joins this group (a track) or
+    /// nests under it (a group). The id is the destination group's id.
+    IntoGroup(TrackId),
+    /// Over open, ungrouped space — the dragged subject leaves its group
+    /// (a track) or un-nests back to the top level (a group).
+    Ungrouped,
+}
+
+/// Live state of an in-progress drag-and-drop group-membership edit
+/// (todo #685). Opened when a track row or group header starts dragging,
+/// updated as the pointer moves over candidate drop targets, and consumed
+/// on drop. Purely transient: it is never persisted and never enters the
+/// undo snapshot — only the committed membership change is recorded.
+#[derive(Debug, Clone)]
+pub struct MembershipDragState {
+    /// The track or group being dragged.
+    pub subject: MembershipDragSubject,
+    /// The group the subject currently sits in — a track's parent group or
+    /// a group's nesting parent — so a drop onto open space knows what to
+    /// detach from. `None` when the subject is already at the top level.
+    pub origin_group: Option<TrackId>,
+    /// The drop target under the pointer, if any. Drives the drop-target
+    /// highlight, insertion line and destination chip while dragging, and
+    /// selects the membership change applied on drop. `None` means "no
+    /// valid target here" — dropping is then a no-op.
+    pub hover: Option<MembershipDropTarget>,
+    /// Latest pointer Y within the track-header column, for the drag ghost.
+    pub cursor_y: f32,
+}
 
 /// State for the MIDI piano roll editor.
 #[derive(Debug, Clone)]
@@ -79,10 +131,24 @@ impl MidiEditorState {
 pub struct ClipInteractionState {
     pub selected_clip: Option<ClipId>,
     pub selected_midi_clip: Option<ClipId>,
-    /// Currently selected (highlighted) track in the arrange view.
+    /// Primary (last-clicked) selected track. Drives the single-selection
+    /// highlight the timeline canvas, mixer strip and inspector read.
     pub selected_track: Option<TrackId>,
+    /// Multi-track selection set for the Arrange track-header column, in
+    /// click order. A plain click resets this to the one clicked track; an
+    /// additive (Cmd/Shift) click toggles membership. The "Group selected"
+    /// floating bar appears while this holds two or more tracks (todo #684).
+    pub selected_tracks: Vec<TrackId>,
+    /// Whether the next track-header click should extend the multi-selection
+    /// rather than replace it. Mirrors the live Cmd/Shift modifier state,
+    /// kept in sync from `keyboard::Event::ModifiersChanged`.
+    pub select_additive: bool,
     pub clip_drag: Option<ClipDragState>,
     pub clip_trim: Option<ClipTrimState>,
+    /// Active fade-handle drag on an audio clip, if any (todo #317).
+    pub clip_fade_drag: Option<FadeDragState>,
+    /// Active clip-gain bead drag, if any (todo #317).
+    pub clip_gain_drag: Option<GainDragState>,
     pub midi_clip_drag: Option<MidiClipDragState>,
     pub midi_clip_trim: Option<MidiClipTrimState>,
     pub editing_midi_clip: Option<MidiEditorState>,
@@ -93,8 +159,227 @@ pub struct ClipInteractionState {
     pub editing_pitch_clip: Option<ClipId>,
     /// Currently selected event on a global track (tempo or signature).
     pub selected_global_event: Option<SelectedGlobalEvent>,
+    /// Active drag-and-drop group-membership edit, if any (todo #685).
+    pub membership_drag: Option<MembershipDragState>,
     /// Currently selected arrangement marker, if any. Threaded into the
     /// timeline canvas so the selected flag / region span renders with the
-    /// stronger accent (todo #368). Click-to-select wiring lands separately.
+    /// stronger accent (todo #368). Set by the ruler hit-testing (#369).
     pub selected_marker_id: Option<u64>,
+    /// Open right-click context menu for a marker, if any (todo #369). The
+    /// menu is rendered as a floating overlay anchored at `x` / `y`.
+    pub marker_menu: Option<MarkerMenuState>,
+    /// In-progress inline rename of a marker, if any (todo #369). Holds the
+    /// live edit buffer; committing re-dispatches `MarkerMessage::Rename`.
+    pub marker_rename: Option<MarkerRenameState>,
+}
+
+impl ClipInteractionState {
+    /// Select a single track, replacing any existing multi-selection. Passing
+    /// `None` clears the selection entirely. Keeps `selected_track` (the
+    /// primary highlight) and `selected_tracks` (the Arrange multi-selection)
+    /// in agreement so a normal click never leaves a stale group highlighted.
+    pub fn select_single_track(&mut self, id: Option<TrackId>) {
+        self.selected_track = id;
+        self.selected_tracks = id.into_iter().collect();
+    }
+
+    /// Toggle a track in the multi-selection (an additive Cmd/Shift click).
+    /// The primary `selected_track` follows the most recent member, or clears
+    /// when the set empties.
+    pub fn toggle_track_selection(&mut self, id: TrackId) {
+        if let Some(pos) = self.selected_tracks.iter().position(|&t| t == id) {
+            self.selected_tracks.remove(pos);
+        } else {
+            self.selected_tracks.push(id);
+        }
+        self.selected_track = self.selected_tracks.last().copied();
+    }
+
+    /// Drop a track from the selection (e.g. when it is removed). Clears the
+    /// primary highlight when it pointed at the gone track.
+    pub fn deselect_track(&mut self, id: TrackId) {
+        self.selected_tracks.retain(|&t| t != id);
+        if self.selected_track == Some(id) {
+            self.selected_track = None;
+        }
+    }
+}
+
+/// A marker's open right-click context menu. `x` / `y` are the window-space
+/// anchor (cursor position at open time) the overlay positions itself at.
+#[derive(Debug, Clone)]
+pub struct MarkerMenuState {
+    pub marker_id: u64,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// An in-progress inline marker rename. `text` is the live edit buffer,
+/// seeded from the marker's current name; `x` / `y` anchor the floating
+/// text field in window space.
+#[derive(Debug, Clone)]
+pub struct MarkerRenameState {
+    pub marker_id: u64,
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// A user-selectable quantize grid division for the MIDI editor's
+/// Quantize panel (todo #392). Each variant maps to a resonance-audio
+/// [`Division`] via [`GridChoice::division`]. Twelve entries: 1/4 .. 1/32
+/// each in straight, triplet (`T`) and dotted (`.`) flavours. Used as the
+/// (static, never-changing) option set for the grid pick_list, so the
+/// view caches the option slice once rather than allocating per frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridChoice {
+    Quarter,
+    QuarterTriplet,
+    QuarterDotted,
+    Eighth,
+    EighthTriplet,
+    EighthDotted,
+    Sixteenth,
+    SixteenthTriplet,
+    SixteenthDotted,
+    ThirtySecond,
+    ThirtySecondTriplet,
+    ThirtySecondDotted,
+}
+
+impl GridChoice {
+    /// Every choice, in pick_list display order (coarse → fine, each
+    /// value grouped straight / triplet / dotted).
+    pub const ALL: [GridChoice; 12] = [
+        GridChoice::Quarter,
+        GridChoice::QuarterTriplet,
+        GridChoice::QuarterDotted,
+        GridChoice::Eighth,
+        GridChoice::EighthTriplet,
+        GridChoice::EighthDotted,
+        GridChoice::Sixteenth,
+        GridChoice::SixteenthTriplet,
+        GridChoice::SixteenthDotted,
+        GridChoice::ThirtySecond,
+        GridChoice::ThirtySecondTriplet,
+        GridChoice::ThirtySecondDotted,
+    ];
+
+    /// The base note value and modifier this choice resolves to.
+    fn parts(self) -> (GridValue, GridModifier) {
+        match self {
+            GridChoice::Quarter => (GridValue::Quarter, GridModifier::Straight),
+            GridChoice::QuarterTriplet => (GridValue::Quarter, GridModifier::Triplet),
+            GridChoice::QuarterDotted => (GridValue::Quarter, GridModifier::Dotted),
+            GridChoice::Eighth => (GridValue::Eighth, GridModifier::Straight),
+            GridChoice::EighthTriplet => (GridValue::Eighth, GridModifier::Triplet),
+            GridChoice::EighthDotted => (GridValue::Eighth, GridModifier::Dotted),
+            GridChoice::Sixteenth => (GridValue::Sixteenth, GridModifier::Straight),
+            GridChoice::SixteenthTriplet => (GridValue::Sixteenth, GridModifier::Triplet),
+            GridChoice::SixteenthDotted => (GridValue::Sixteenth, GridModifier::Dotted),
+            GridChoice::ThirtySecond => (GridValue::ThirtySecond, GridModifier::Straight),
+            GridChoice::ThirtySecondTriplet => (GridValue::ThirtySecond, GridModifier::Triplet),
+            GridChoice::ThirtySecondDotted => (GridValue::ThirtySecond, GridModifier::Dotted),
+        }
+    }
+
+    /// The resonance-audio [`Division`] this choice resolves to.
+    pub fn division(self) -> Division {
+        let (value, modifier) = self.parts();
+        Division { value, modifier }
+    }
+
+    /// Short label shown in the pick_list (e.g. `1/8T`, `1/16.`).
+    pub fn label(self) -> &'static str {
+        match self {
+            GridChoice::Quarter => "1/4",
+            GridChoice::QuarterTriplet => "1/4T",
+            GridChoice::QuarterDotted => "1/4.",
+            GridChoice::Eighth => "1/8",
+            GridChoice::EighthTriplet => "1/8T",
+            GridChoice::EighthDotted => "1/8.",
+            GridChoice::Sixteenth => "1/16",
+            GridChoice::SixteenthTriplet => "1/16T",
+            GridChoice::SixteenthDotted => "1/16.",
+            GridChoice::ThirtySecond => "1/32",
+            GridChoice::ThirtySecondTriplet => "1/32T",
+            GridChoice::ThirtySecondDotted => "1/32.",
+        }
+    }
+}
+
+impl std::fmt::Display for GridChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// Current settings of the MIDI editor's Quantize panel (todo #392). The
+/// panel's controls write here; the Apply button reads it to build the
+/// bulk [`MidiEditorMessage::Quantize`](crate::message::MidiEditorMessage)
+/// that operates on the active note selection (or the whole clip when the
+/// selection is empty). Lives at the app level so the chosen settings
+/// persist across clip open/close — and so the groove/settings
+/// persistence slice (todo #395) can serialise the last-used values.
+#[derive(Debug, Clone)]
+pub struct MidiQuantizePanelState {
+    /// Selected grid division.
+    pub grid: GridChoice,
+    /// Quantize strength, `0.0..=1.0` (shown as 0–100%).
+    pub strength: f32,
+    /// Swing amount, `0.0..=1.0` (shown as 0–100%).
+    pub swing: f32,
+    /// Whether to quantize note starts only or starts and lengths.
+    pub mode: QuantizeMode,
+    /// Snap note-offs to the grid as well as note-ons.
+    pub quantize_ends: bool,
+    /// Apply the strength blend iteratively (soft quantize).
+    pub iterative: bool,
+    /// Humanize timing jitter — maximum absolute offset, in ticks
+    /// (`0..=`[`HUMANIZE_TIMING_MAX_TICKS`]). Drives the Humanize panel's
+    /// timing slider; the Humanize Apply button reads it.
+    pub humanize_timing: u32,
+    /// Humanize velocity jitter fraction, `0.0..=1.0` (shown as 0–100%).
+    pub humanize_velocity: f32,
+
+    // -- Groove extract / apply (todo #394, doc #163) --
+    /// Name typed into the "Extract groove" field. When the user extracts,
+    /// this is stashed in [`pending_groove_name`](Self::pending_groove_name)
+    /// and the freshly captured template lands in the project groove library
+    /// under it (a blank name falls back to an auto-numbered default).
+    pub groove_name: String,
+    /// Name awaiting the in-flight `GrooveExtracted` engine event. Set when
+    /// the extract command is dispatched and consumed by the event mirror
+    /// (#390) that creates the named [`UserGroove`](super::quantize::UserGroove).
+    pub pending_groove_name: Option<String>,
+    /// Groove currently selected in the apply picker (stock or user). Drives
+    /// the pick_list value and the Apply button's dispatch.
+    pub groove_selection: super::quantize::GrooveSelection,
+    /// Strength of the groove feel to apply, `0.0..=1.0` (shown as 0–100%).
+    pub groove_strength: f32,
+}
+
+/// Upper bound of the Humanize timing slider, in ticks. One eighth note
+/// (`TICKS_PER_QUARTER_NOTE / 2 = 240`): enough loosening to feel human
+/// without smearing notes across the beat. Kept here so the view and the
+/// setter handler agree on the clamp.
+pub const HUMANIZE_TIMING_MAX_TICKS: u32 = 240;
+
+impl Default for MidiQuantizePanelState {
+    fn default() -> Self {
+        Self {
+            grid: GridChoice::Sixteenth,
+            strength: 1.0,
+            swing: 0.0,
+            mode: QuantizeMode::StartOnly,
+            quantize_ends: false,
+            iterative: false,
+            humanize_timing: 0,
+            humanize_velocity: 0.0,
+            groove_name: String::new(),
+            pending_groove_name: None,
+            groove_selection: super::quantize::GrooveSelection::None,
+            groove_strength: 1.0,
+        }
+    }
 }

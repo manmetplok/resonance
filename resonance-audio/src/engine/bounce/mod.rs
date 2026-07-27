@@ -89,6 +89,9 @@ pub fn to_wav(
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
 ) {
+    // Test-only shim with no automation snapshot to thread; render with an
+    // empty one (the automation-aware paths go through `export_spawn`).
+    let automation = super::AutomationSnapshot::default();
     run_export(
         path,
         &crate::types::ExportSettings::default_wav(),
@@ -101,6 +104,7 @@ pub fn to_wav(
         midi_clips,
         plugins,
         tempo_map,
+        &automation,
         sample_rate,
         event_tx,
     );
@@ -129,6 +133,7 @@ pub(crate) fn export_spawn(
     midi_clips: Arc<RwLock<Vec<MidiClip>>>,
     plugins: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
 ) {
@@ -147,6 +152,7 @@ pub(crate) fn export_spawn(
                 &midi_clips,
                 &plugins,
                 &tempo_map,
+                &automation,
                 sample_rate,
                 &event_tx,
             );
@@ -174,6 +180,7 @@ pub(crate) fn to_audio_clip_spawn(
     midi_clips: Arc<RwLock<Vec<MidiClip>>>,
     plugins: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
 ) {
@@ -193,6 +200,7 @@ pub(crate) fn to_audio_clip_spawn(
                 &midi_clips,
                 &plugins,
                 &tempo_map,
+                &automation,
                 sample_rate,
                 &event_tx,
             );

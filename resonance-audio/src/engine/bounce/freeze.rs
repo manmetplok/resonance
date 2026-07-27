@@ -160,6 +160,11 @@ pub fn to_freeze_cache(
     let comp_latency = latency_comp.max_latency();
     let render_stop = render_end + comp_latency;
     let mut skip_frames = comp_latency as usize;
+    // Freeze predates parameter automation (epic #40) and has no lane
+    // snapshot threaded through its command path, so render with an empty
+    // one — matching the pre-merge freeze behaviour exactly. Automated
+    // device/param lanes still apply on the live/bounce/export paths.
+    let automation = crate::engine::AutomationSnapshot::default();
     let ctx = ChunkCtx {
         shared,
         tracks,
@@ -169,6 +174,7 @@ pub fn to_freeze_cache(
         midi_clips,
         plugins,
         tempo_map: &bounce_tm,
+        automation: &automation,
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,

@@ -22,6 +22,8 @@
 //!    removed; the stack must still render the placeholder rather than
 //!    collapsing to 0 height.
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::compose::{ComposeMessage, SelectedLane};
@@ -75,10 +77,7 @@ fn snapshot_to(app: &Resonance, path: &str) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 /// Unselected placeholder — compact row below the configured Lead

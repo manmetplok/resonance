@@ -7,6 +7,8 @@
 //! bar, and the Cancel action. Text selectors lock the body's presence
 //! independently of pixels, then a golden snapshot locks its layout.
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{Message, UiMessage};
@@ -72,9 +74,5 @@ fn reference_panel_analyzing() {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image("tests/snapshots/reference_panel_analyzing.png")
-            .expect("matches_image i/o"),
-        "snapshot diverged from golden"
-    );
+    common::assert_golden(&snap, "tests/snapshots/reference_panel_analyzing.png");
 }

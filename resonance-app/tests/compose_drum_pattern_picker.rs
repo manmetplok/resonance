@@ -15,6 +15,8 @@
 //! goldens under `tests/snapshots/`; subsequent runs diff against the
 //! committed PNGs.
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::compose::messages::DrumGroupsMessage;
@@ -84,10 +86,7 @@ fn snapshot_to_window(app: &Resonance, path: &str, window: (f32, f32)) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 #[test]

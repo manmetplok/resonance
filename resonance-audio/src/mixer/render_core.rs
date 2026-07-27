@@ -22,15 +22,38 @@
 use indexmap::IndexMap;
 use parking_lot::{Mutex, MutexGuard};
 
+use resonance_common::AutomationTarget;
+
 use crate::clap_host::{StereoBufMut, SyncClapInstance};
+use crate::engine::AutomationSnapshot;
 use crate::latency::LatencyComp;
 use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
 use crate::types::*;
 
+use super::automation_apply::{apply_plugin_params, auto_gain_ramp, auto_muted};
 use super::common::{
     bus_stereo_gains, latch_transport, ramped_stereo_peaks, sum_to_output, sum_to_stereo,
     track_stereo_gains, TransportSnap,
 };
+
+/// Automated stereo-gain ramp endpoints `((l_start, l_end), (r_start,
+/// r_end))` for one block, or `None` when no gain/pan lane targets the
+/// track/bus.
+type AutoGain = Option<((f32, f32), (f32, f32))>;
+
+/// Bounce gain ramp endpoints: the automated `start..end` ramp when a
+/// lane is present, else the static gains collapsed to a constant
+/// (`from == to`, which the ramp helpers reduce to a plain multiply).
+#[inline]
+fn bounce_gain_endpoints(static_gains: (f32, f32), auto: AutoGain) -> ((f32, f32), (f32, f32)) {
+    match auto {
+        Some(endpoints) => endpoints,
+        None => {
+            let (l, r) = static_gains;
+            ((l, l), (r, r))
+        }
+    }
+}
 use super::midi_events::collect_midi_events;
 use super::midi_stash::MidiStash;
 
@@ -130,7 +153,21 @@ impl RenderStrategy<'_> {
     }
 
     /// Decide whether and how a top-level track renders this block.
-    fn track_disposition(&self, track: &Track, any_solo: bool) -> Option<TrackDisposition> {
+    /// `auto_gain` / `auto_mute` carry this block's automation overrides
+    /// (already resolved against the lane snapshot); both are `None` when
+    /// nothing automates the track, in which case the static fader / pan
+    /// / mute apply exactly as before.
+    fn track_disposition(
+        &self,
+        track: &Track,
+        any_solo: bool,
+        auto_gain: AutoGain,
+        auto_mute: Option<bool>,
+    ) -> Option<TrackDisposition> {
+        // Automation mute is OR-ed into the static mute so a muted track
+        // stays muted regardless, and an unmute lane can't override a
+        // hard mute. Solo handling is unchanged.
+        let muted = track.muted() || auto_mute.unwrap_or(false);
         match self {
             Self::Live { .. } => {
                 // Muted / solo-suppressed instrument tracks still run
@@ -139,14 +176,20 @@ impl RenderStrategy<'_> {
                 // except for one extra block after silencing, which
                 // renders normally with a target gain of 0.0 so the
                 // mute ramps out instead of hard-cutting.
-                let silenced = track.muted() || (any_solo && !track.soloed());
+                let silenced = muted || (any_solo && !track.soloed());
                 let (last_gain_l, last_gain_r) = track.last_gains();
                 let faded_out = last_gain_l == 0.0 && last_gain_r == 0.0;
                 if silenced && faded_out && track.track_type != TrackType::Instrument {
                     return None;
                 }
+                // Live ramps from the previous block's gain to this
+                // block's target; the automated end value becomes the
+                // target, so consecutive blocks chain into one smooth
+                // sweep (last block's end == this block's start).
                 let (target_gain_l, target_gain_r) = if silenced {
                     (0.0, 0.0)
+                } else if let Some(((_, gl_end), (_, gr_end))) = auto_gain {
+                    (gl_end, gr_end)
                 } else {
                     track_stereo_gains(track)
                 };
@@ -167,16 +210,19 @@ impl RenderStrategy<'_> {
                 // — and the source is explicitly muted by
                 // `finalize_bounce` after every successful bounce, so
                 // respecting `muted` would silence every re-bounce.
-                if *respect_mute_solo && (track.muted() || (any_solo && !track.soloed())) {
+                if *respect_mute_solo && (muted || (any_solo && !track.soloed())) {
                     return None;
                 }
                 if !in_filter(track.id) {
                     return None;
                 }
-                let (gain_l, gain_r) = track_stereo_gains(track);
+                // Bounce has no previous-block gain to ramp from, so the
+                // automated start..end endpoints drive the per-chunk ramp
+                // directly (a static track collapses to a constant).
+                let (gain_l, gain_r) = bounce_gain_endpoints(track_stereo_gains(track), auto_gain);
                 Some(TrackDisposition {
-                    gain_l: (gain_l, gain_l),
-                    gain_r: (gain_r, gain_r),
+                    gain_l,
+                    gain_r,
                     silenced: false,
                     discard_after_instrument: false,
                 })
@@ -191,19 +237,24 @@ impl RenderStrategy<'_> {
         sub_track: &Track,
         any_solo: bool,
         parent_silenced: bool,
+        auto_gain: AutoGain,
+        auto_mute: Option<bool>,
     ) -> Option<((f32, f32), (f32, f32))> {
+        let muted = sub_track.muted() || auto_mute.unwrap_or(false);
         match self {
             Self::Live { .. } => {
                 // A silenced parent fades its sub-tracks out in the same
                 // block; once fully faded the fan-out stops running and
                 // the subs stay at zero.
-                let sub_silenced = sub_track.muted() || parent_silenced;
+                let sub_silenced = muted || parent_silenced;
                 let (sub_last_l, sub_last_r) = sub_track.last_gains();
                 if sub_silenced && sub_last_l == 0.0 && sub_last_r == 0.0 {
                     return None;
                 }
                 let (sub_target_l, sub_target_r) = if sub_silenced {
                     (0.0, 0.0)
+                } else if let Some(((_, gl_end), (_, gr_end))) = auto_gain {
+                    (gl_end, gr_end)
                 } else {
                     track_stereo_gains(sub_track)
                 };
@@ -213,16 +264,13 @@ impl RenderStrategy<'_> {
                 in_filter,
                 respect_mute_solo,
             } => {
-                if *respect_mute_solo
-                    && (sub_track.muted() || (any_solo && !sub_track.soloed()))
-                {
+                if *respect_mute_solo && (muted || (any_solo && !sub_track.soloed())) {
                     return None;
                 }
                 if !in_filter(sub_track.id) {
                     return None;
                 }
-                let (gain_l, gain_r) = track_stereo_gains(sub_track);
-                Some(((gain_l, gain_l), (gain_r, gain_r)))
+                Some(bounce_gain_endpoints(track_stereo_gains(sub_track), auto_gain))
             }
         }
     }
@@ -230,27 +278,33 @@ impl RenderStrategy<'_> {
     /// Decide whether and how a bus renders. Live fades a muted bus out
     /// (its FX keep running until the ramp lands on zero); bounce skips
     /// muted busses outright.
-    fn bus_disposition(&self, bus: &Bus) -> Option<((f32, f32), (f32, f32))> {
+    fn bus_disposition(
+        &self,
+        bus: &Bus,
+        auto_gain: AutoGain,
+        auto_mute: Option<bool>,
+    ) -> Option<((f32, f32), (f32, f32))> {
+        let muted = bus.muted() || auto_mute.unwrap_or(false);
         match self {
             Self::Live { .. } => {
-                let bus_silenced = bus.muted();
                 let (bus_last_l, bus_last_r) = bus.last_gains();
-                if bus_silenced && bus_last_l == 0.0 && bus_last_r == 0.0 {
+                if muted && bus_last_l == 0.0 && bus_last_r == 0.0 {
                     return None;
                 }
-                let (bus_target_l, bus_target_r) = if bus_silenced {
+                let (bus_target_l, bus_target_r) = if muted {
                     (0.0, 0.0)
+                } else if let Some(((_, gl_end), (_, gr_end))) = auto_gain {
+                    (gl_end, gr_end)
                 } else {
                     bus_stereo_gains(bus)
                 };
                 Some(((bus_last_l, bus_target_l), (bus_last_r, bus_target_r)))
             }
             Self::Bounce { .. } => {
-                if bus.muted() {
+                if muted {
                     return None;
                 }
-                let (gain_l, gain_r) = bus_stereo_gains(bus);
-                Some(((gain_l, gain_l), (gain_r, gain_r)))
+                Some(bounce_gain_endpoints(bus_stereo_gains(bus), auto_gain))
             }
         }
     }
@@ -562,8 +616,17 @@ pub(crate) fn render_block(
     port_scratch: &mut [(Vec<f32>, Vec<f32>)],
     note_event_buf: &mut Vec<PendingNoteEvent>,
     latency_comp: &LatencyComp,
+    automation: &AutomationSnapshot,
     strategy: &mut RenderStrategy<'_>,
 ) {
+    // Automation is evaluated at the block's first frame and at the
+    // next-block-start frame (`eval_end`); the gain ramp sweeps between
+    // them. Because `eval_end` of one block equals `eval_start` of the
+    // next, consecutive blocks chain into one continuous sweep. Plugin
+    // params and the mute gate are evaluated at the block start.
+    let eval_start = playhead;
+    let eval_end = playhead + frames as u64;
+
     // Zero every active bus summing buffer at the start of the block so
     // tracks can accumulate into them.
     for (buf_l, buf_r) in bus_bufs.iter_mut().take(active_busses) {
@@ -578,12 +641,26 @@ pub(crate) fn render_block(
         if track.sub_track_of.is_some() {
             continue;
         }
+        let auto_gain = auto_gain_ramp(
+            automation,
+            AutomationTarget::TrackGain(track.id),
+            AutomationTarget::TrackPan(track.id),
+            track.volume(),
+            track.pan(),
+            eval_start,
+            eval_end,
+        );
+        let auto_mute = auto_muted(
+            automation,
+            AutomationTarget::TrackMute(track.id),
+            eval_start,
+        );
         let Some(TrackDisposition {
             gain_l,
             gain_r,
             silenced,
             discard_after_instrument,
-        }) = strategy.track_disposition(track, any_solo)
+        }) = strategy.track_disposition(track, any_solo, auto_gain, auto_mute)
         else {
             continue;
         };
@@ -617,6 +694,7 @@ pub(crate) fn render_block(
             if let Some(&instrument_id) = plugin_iter.next() {
                 if let Some(mutex) = plugins_guard.get(&instrument_id) {
                     if let Some(mut inst) = strategy.lock_instrument(mutex, instrument_id) {
+                        apply_plugin_params(&mut inst, automation, instrument_id, eval_start);
                         for event in note_event_buf.iter() {
                             if event.is_note_on {
                                 inst.0.queue_note_on(
@@ -667,6 +745,7 @@ pub(crate) fn render_block(
                 for &plugin_id in plugin_iter {
                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
                         if let Some(mut inst) = strategy.lock_fx(mutex) {
+                            apply_plugin_params(&mut inst, automation, plugin_id, eval_start);
                             inst.0.process(
                                 &mut track_buf_l[..frames],
                                 &mut track_buf_r[..frames],
@@ -699,6 +778,7 @@ pub(crate) fn render_block(
                 for &plugin_id in track_plugins.iter() {
                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
                         if let Some(mut inst) = strategy.lock_fx(mutex) {
+                            apply_plugin_params(&mut inst, automation, plugin_id, eval_start);
                             inst.0.process(
                                 &mut track_buf_l[..frames],
                                 &mut track_buf_r[..frames],
@@ -825,9 +905,27 @@ pub(crate) fn render_block(
                 if port_idx == 0 || port_idx >= extra_ports_filled {
                     continue;
                 }
-                let Some((sub_gain_l, sub_gain_r)) =
-                    strategy.sub_track_disposition(sub_track, any_solo, silenced)
-                else {
+                let sub_auto_gain = auto_gain_ramp(
+                    automation,
+                    AutomationTarget::TrackGain(sub_track.id),
+                    AutomationTarget::TrackPan(sub_track.id),
+                    sub_track.volume(),
+                    sub_track.pan(),
+                    eval_start,
+                    eval_end,
+                );
+                let sub_auto_mute = auto_muted(
+                    automation,
+                    AutomationTarget::TrackMute(sub_track.id),
+                    eval_start,
+                );
+                let Some((sub_gain_l, sub_gain_r)) = strategy.sub_track_disposition(
+                    sub_track,
+                    any_solo,
+                    silenced,
+                    sub_auto_gain,
+                    sub_auto_mute,
+                ) else {
                     continue;
                 };
 
@@ -842,6 +940,7 @@ pub(crate) fn render_block(
                     for &plugin_id in sub_plugins.iter() {
                         if let Some(mutex) = plugins_guard.get(&plugin_id) {
                             if let Some(mut inst) = strategy.lock_fx(mutex) {
+                                apply_plugin_params(&mut inst, automation, plugin_id, eval_start);
                                 inst.0.process(&mut pl[..frames], &mut pr[..frames], frames);
                             }
                         }
@@ -892,7 +991,20 @@ pub(crate) fn render_block(
 
     // Per-bus processing: plugin chain, volume/pan, peaks, sum to master.
     for (bus_idx, bus) in busses_guard.values().enumerate().take(active_busses) {
-        let Some((bus_gain_l, bus_gain_r)) = strategy.bus_disposition(bus) else {
+        let bus_auto_gain = auto_gain_ramp(
+            automation,
+            AutomationTarget::BusGain(bus.id),
+            AutomationTarget::BusPan(bus.id),
+            bus.volume(),
+            bus.pan(),
+            eval_start,
+            eval_end,
+        );
+        let bus_auto_mute =
+            auto_muted(automation, AutomationTarget::BusMute(bus.id), eval_start);
+        let Some((bus_gain_l, bus_gain_r)) =
+            strategy.bus_disposition(bus, bus_auto_gain, bus_auto_mute)
+        else {
             continue;
         };
         let (bus_buf_l, bus_buf_r) = &mut bus_bufs[bus_idx];
@@ -903,6 +1015,7 @@ pub(crate) fn render_block(
             for &plugin_id in &bus.plugin_ids {
                 if let Some(mutex) = plugins_guard.get(&plugin_id) {
                     if let Some(mut inst) = strategy.lock_fx(mutex) {
+                        apply_plugin_params(&mut inst, automation, plugin_id, eval_start);
                         inst.0
                             .process(&mut bus_buf_l[..frames], &mut bus_buf_r[..frames], frames);
                     }

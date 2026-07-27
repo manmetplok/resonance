@@ -1,7 +1,7 @@
 //! Engine → GUI event enum.
 use resonance_common::{
-    AudioFormat, BindingId, ControlSource, MidiBinding, MidiTarget, TakeContent, TakeGroupId,
-    TimelineRange,
+    AudioFormat, AutomationLane, AutomationTarget, BindingId, ControlSource, ExternalInstrument,
+    MidiBinding, MidiTarget, TakeContent, TakeGroupId, TimelineRange,
 };
 use resonance_metering::MeterSnapshot;
 
@@ -198,6 +198,27 @@ pub enum AudioEvent {
         clip_id: ClipId,
         notes: Vec<NoteBlob>,
         contour: Vec<F0Frame>,
+    },
+    /// An automation lane was stored or replaced (or its read flag
+    /// toggled). Carries the lane exactly as the engine holds it — points
+    /// sorted, `enabled` reflecting the current read state — so the app
+    /// mirror matches engine state.
+    AutomationLaneChanged {
+        lane: AutomationLane,
+    },
+    /// The automation lane for `target` was removed from engine state.
+    AutomationLaneCleared {
+        target: AutomationTarget,
+    },
+    /// Throttled (control-rate) automated value for `target` during
+    /// playback, so the app can tint the fader/knob with the live lane
+    /// value while Read is on. `value_norm` is the normalized `0.0..=1.0`
+    /// lane value. The throttled engine-side emission lands in todo #377;
+    /// the variant is defined here so the app-side live-value mirror
+    /// (todo #378) can consume it.
+    AutomatedValue {
+        target: AutomationTarget,
+        value_norm: f32,
     },
     Stopped,
     Error(String),
@@ -537,6 +558,56 @@ pub enum AudioEvent {
     MidiOutputDevicesListed {
         devices: Vec<MidiDeviceInfo>,
     },
+    // -- External-instrument tracks (doc #169, epic #39) --
+    /// An external-instrument config was stored, replaced, or one of its
+    /// fields changed (bank/program, latency offset). Carries the config
+    /// exactly as the engine holds it so the app mirror matches engine state.
+    ExternalInstrumentChanged {
+        config: ExternalInstrument,
+    },
+    /// The external-instrument config for `track_id` was removed — the track
+    /// is no longer an external instrument.
+    ExternalInstrumentCleared {
+        track_id: TrackId,
+    },
+    /// The external-instrument track's MIDI output device is offline: a patch
+    /// send found no live connection, or a device re-check found it gone. The
+    /// route is preserved (config untouched) so a replug reconnects. `device`
+    /// is the configured MIDI output name, if any.
+    ExternalInstrumentMidiOutOffline {
+        track_id: TrackId,
+        device: Option<String>,
+    },
+    /// The external-instrument track's audio-return input device is offline —
+    /// a device re-check found it gone. The route is preserved so a replug
+    /// reconnects. `device` is the configured return input name, if any.
+    ExternalInstrumentReturnInputOffline {
+        track_id: TrackId,
+        device: Option<String>,
+    },
+    /// Result of `AudioCommand::DetectExternalInstrumentLatency`: the
+    /// round-trip latency the engine measured for `track_id` by pinging the
+    /// hardware (MIDI impulse out → audio return in). `latency_samples` is the
+    /// measured round-trip at the engine sample rate; `latency_ms` is the same
+    /// value in milliseconds for display. The engine has already applied this
+    /// as the track's effective offset (the manual offset is the floor, so the
+    /// applied value is `max(manual_offset, latency_samples)`) and the app
+    /// mirror updates its displayed/applied offset to match.
+    ExternalInstrumentLatencyMeasured {
+        track_id: TrackId,
+        latency_samples: i64,
+        latency_ms: f32,
+    },
+    /// `AudioCommand::DetectExternalInstrumentLatency` could not measure a
+    /// round-trip for `track_id` — the MIDI output was offline, the audio
+    /// return delivered no/silent frames, or no impulse returned within the
+    /// listen window. Nothing is changed (the existing offset stands); the app
+    /// surfaces `reason` instead of leaving the user waiting on a hung ping.
+    ExternalInstrumentLatencyDetectFailed {
+        track_id: TrackId,
+        reason: String,
+    },
+
     /// Incoming MIDI Clock Start (0xFA) — external master started its
     /// transport and the engine is now playing in sync with it.
     MidiClockStarted,
@@ -549,6 +620,19 @@ pub enum AudioEvent {
     /// stabilises so the GUI BPM display can mirror the master.
     MidiClockTempoDetected {
         bpm: f32,
+    },
+    /// Confirms the engine applied `AudioCommand::SetTrackDeviceParams`
+    /// (architecture doc #201 §4, epic #40): the resolved param ids now
+    /// stored on the engine-side track, in the order they were supplied
+    /// (deduplicated by id, last-wins). Because the command/event boundary
+    /// is one-way — the app cannot query the engine's device-param map —
+    /// the app uses this echo to reconstruct/confirm its mirror of the
+    /// engine state after a project-load command replay. An empty
+    /// `param_ids` means the track's map was cleared. Not emitted for an
+    /// unknown track id.
+    TrackDeviceParamsApplied {
+        track_id: TrackId,
+        param_ids: Vec<String>,
     },
 
     // -- Freeze events --

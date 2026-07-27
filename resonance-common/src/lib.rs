@@ -2,21 +2,36 @@
 pub mod audio_probe;
 pub mod automation;
 mod denormal;
+pub mod device_definition;
+pub mod device_registry;
+pub mod external_instrument;
 pub mod drum_map;
 pub mod group_identity;
-pub mod track_group;
 pub mod midi_map;
 pub mod freeze;
 pub mod registry;
 mod scan;
 pub mod take;
+pub mod track_group;
 mod wav;
 
 pub use automation::{
     lane_value_to_plugin_param, lane_value_to_real, plugin_param_to_lane_value,
     real_to_lane_value, sample_lane, AutomationLane, AutomationTarget, Breakpoint, BusId,
-    CurveKind, LaneId, PluginInstanceId, TrackId,
+    CurveKind, LaneId, PluginInstanceId, TrackId, GAIN_MAX_DB, GAIN_MIN_DB,
 };
+// `device_definition::MidiBinding` (a device parameter's CC/NRPN address) is a
+// distinct concept from `midi_map::MidiBinding` (a MIDI-Learn control mapping);
+// it stays reachable as `device_definition::MidiBinding` to avoid the name clash.
+pub use device_definition::{
+    binding_value_to_lane, lane_value_to_binding_value, DeviceDefinition, DeviceDefinitionError,
+    DeviceParam, ParamCurve, PatchEntry, SCHEMA_VERSION,
+};
+pub use device_registry::{
+    bundled_definitions, user_definitions_dir, DeviceDefinitionRegistry, DeviceScanError,
+    DEVICE_DEFINITION_EXT,
+};
+pub use external_instrument::ExternalInstrument;
 pub use midi_map::{
     apply_delta, cc_to_norm, decode_relative, delete_controller_map, load_controller_maps,
     save_controller_map, takeover_value, BindingId, CcMode, ControlSource, ControllerMap,
@@ -28,12 +43,12 @@ pub use audio_probe::{
 };
 pub use denormal::flush_denormals;
 pub use group_identity::{GroupColor, GroupIdentityColor};
-pub use track_group::{GroupId, TrackGroup};
 pub use scan::scan_directory;
 pub use take::{
     ClipId, Comp, CompSegment, Take, TakeContent, TakeGroup, TakeGroupId, TakeId, TakeNote,
     TimelineRange,
 };
+pub use track_group::{MACRO_LEVEL_UNITY, TrackGroup};
 pub use wav::{
     decode_file, decode_wav_channels, decode_wav_stereo, linear_resample_mono,
     linear_resample_stereo, StreamingLinearResampler, WavChannels,

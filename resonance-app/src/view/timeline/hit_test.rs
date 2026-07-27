@@ -1,12 +1,21 @@
 //! Pure hit-testing helpers shared between audio and MIDI clip lanes on the
-//! timeline canvas. The caller computes the clip's pixel rect first (via
-//! [`clip_rect`] for audio or the MIDI equivalent with tick→sample
-//! conversion) and then asks [`hit_test`] which part of the clip the pointer
-//! is over.
+//! timeline canvas. The caller computes the clip's pixel rect first (from the
+//! shared [`ArrangeRowLayout`] via the canvas's lane-rect helper, or the MIDI
+//! equivalent with tick→sample conversion) and then asks [`hit_test`] which
+//! part of the clip the pointer is over.
+//!
+//! Vertical row resolution no longer assumes a uniform `index * TRACK_HEIGHT`
+//! pitch: group/folder tracks interleave 60 px group-header rows with the
+//! 96 px track rows and a collapsed group hides its members entirely. The
+//! pointer-Y → row mapping therefore consults the [`ArrangeRowLayout`]
+//! (epic #36, doc #203) through [`row_at_canvas_y`], which is collapse-aware
+//! and routes a press on a group-header lane to the *group* rather than a
+//! phantom track underneath it.
 
 use iced::{Point, Rectangle};
 
 use crate::state::{ClipEdge, TrackState};
+use crate::view::arrange_layout::{ArrangeRowKind, ArrangeRowLayout};
 use resonance_audio::types::TrackId;
 
 /// Outcome of a hit-test against a single clip rectangle.
@@ -82,14 +91,28 @@ pub fn audio_clip_handles(
     }
 }
 
-/// Build the pixel rect for a clip at the given track row.
+/// The lane-resolved **body** geometry of a clip, as produced by
+/// `draw::clip_lane_rect`: the canvas-space top edge, the body height, and
+/// the group-member indent (0 for ungrouped tracks). Bundled so the pixel
+/// rect builder takes the vertical placement as one argument.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipLaneBody {
+    pub y: f32,
+    pub height: f32,
+    pub indent: f32,
+}
+
+/// Build the on-screen pixel rect for a clip body, given its lane-resolved
+/// vertical placement (`body`) and the clip's sample span. Only the
+/// horizontal extent is derived here; the vertical rect is taken verbatim
+/// from `body` so the hit rect is the *same* body the user sees drawn
+/// (`draw::draw_clip`). There is no longer a separate uniform-pitch rect.
 ///
 /// `duration_samples` is the already-converted length of the clip. For MIDI
 /// clips the caller performs the tick→sample conversion (using BPM and
 /// sample rate) before calling this helper.
-pub fn clip_rect(
-    track_row_y: f32,
-    row_height: f32,
+pub fn clip_pixel_rect(
+    body: ClipLaneBody,
     start_sample: u64,
     duration_samples: u64,
     zoom: f32,
@@ -98,13 +121,13 @@ pub fn clip_rect(
 ) -> Rectangle {
     let start_seconds = start_sample as f32 / sample_rate as f32;
     let duration_seconds = duration_samples as f32 / sample_rate as f32;
-    let x = start_seconds * zoom - scroll_offset;
+    let x = start_seconds * zoom - scroll_offset + body.indent;
     let width = duration_seconds * zoom;
     Rectangle {
         x,
-        y: track_row_y + 2.0,
+        y: body.y,
         width,
-        height: row_height - 4.0,
+        height: body.height,
     }
 }
 
@@ -163,6 +186,87 @@ pub fn hit_test_audio(
         return HitKind::Gain;
     }
     hit_test(pos, rect, trim_threshold)
+}
+
+/// Convert a layout-relative row top (`ArrangeRow::y_top`, measured from the
+/// top of the lane area) into a **canvas** y coordinate: add the fixed header
+/// offset and subtract the vertical scroll. This is the single place the two
+/// offsets are applied, so lane rendering, clip placement and hit-testing all
+/// agree on where a row sits on screen.
+pub fn lane_canvas_y(row_y_top: f32, header_height: f32, scroll_offset_y: f32) -> f32 {
+    header_height + row_y_top - scroll_offset_y
+}
+
+/// Resolve a pointer position's **canvas** y to the arrange row under it,
+/// consulting the shared [`ArrangeRowLayout`] so the variable 60/96 px pitch
+/// and collapsed-member hiding are honoured. `header_height` is the fixed
+/// canvas-header height the lane area starts below; `scroll_offset_y` is the
+/// vertical scroll.
+///
+/// Returns the [`ArrangeRowKind`] of the row whose lane band contains `y`
+/// (a [`ArrangeRowKind::GroupHeader`] for a group-header lane, a
+/// [`ArrangeRowKind::Track`] for a real track lane), or `None` when `y` is
+/// above the first row / below the last / inside the fixed header. Replaces
+/// the old `(y - header + scroll) / TRACK_HEIGHT` index division, which could
+/// only ever name a track and invented phantom tracks under group rows.
+pub fn row_at_canvas_y(
+    layout: &ArrangeRowLayout,
+    y: f32,
+    header_height: f32,
+    scroll_offset_y: f32,
+) -> Option<ArrangeRowKind> {
+    // Map the canvas y back into the layout's lane-relative space before
+    // querying, so the header offset and scroll are undone exactly once.
+    let lane_y = y - header_height + scroll_offset_y;
+    if lane_y < 0.0 {
+        return None;
+    }
+    layout.row_at_y(lane_y).map(|row| row.kind)
+}
+
+/// Which part of an arrangement-marker's ruler geometry the pointer is
+/// over. Returned by [`marker_hit`] and consumed by the ruler input
+/// handlers to pick the drag / select behaviour (todo #369).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkerHit {
+    /// The start pole / flag — a click selects, a drag moves the marker
+    /// start (`MoveStart`). Shared by point and region markers.
+    Flag,
+    /// A region marker's end edge — a drag resizes it (`SetRegionEnd`).
+    EndEdge,
+}
+
+/// Flag pennant width in px. Must match the `FLAG_W` constant used by
+/// [`super::draw::TimelineCanvas::draw_markers`] so the grab zone lines up
+/// with the drawn flag.
+pub const MARKER_FLAG_W: f32 = 11.0;
+/// Padding (px) either side of the flag/pole for the start grab zone, so
+/// the thin 1px pole is comfortably clickable.
+pub const MARKER_FLAG_PAD: f32 = 4.0;
+/// Half-width (px) of the region end-edge resize band.
+pub const MARKER_EDGE_THRESHOLD: f32 = 5.0;
+
+/// Hit-test a pointer x against a single marker's ruler geometry.
+///
+/// `start_x` is the marker's start-pole pixel x; `end_x` is `Some` for a
+/// ranged region (its end-edge pixel x). The caller is expected to have
+/// already confirmed the pointer is within the ruler band vertically.
+///
+/// A region's end edge wins over its start when the pointer sits right on
+/// it, so a narrow region can still be resized; otherwise the flag grab
+/// zone — `[start_x - PAD, start_x + FLAG_W + PAD]` — selects / moves. The
+/// translucent region *body* is intentionally not a grab target so ruler
+/// seeking still works underneath a wide section region.
+pub fn marker_hit(pos_x: f32, start_x: f32, end_x: Option<f32>) -> Option<MarkerHit> {
+    if let Some(ex) = end_x {
+        if (pos_x - ex).abs() <= MARKER_EDGE_THRESHOLD {
+            return Some(MarkerHit::EndEdge);
+        }
+    }
+    if pos_x >= start_x - MARKER_FLAG_PAD && pos_x <= start_x + MARKER_FLAG_W + MARKER_FLAG_PAD {
+        return Some(MarkerHit::Flag);
+    }
+    None
 }
 
 /// Arrange-view row y (top of the row, in canvas coordinates) for a given

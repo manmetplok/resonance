@@ -1,2 +1,5 @@
 target/
 .claude/
+.vibe/
+.opencode/
+.ba-worktrees/

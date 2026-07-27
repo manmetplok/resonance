@@ -250,13 +250,30 @@ fn mutating_marker_messages_record_undo() {
         MarkerMessage::Rename(1, "x".into()),
         MarkerMessage::Recolor(1, [0, 0, 0]),
         MarkerMessage::Delete(1),
-        MarkerMessage::MoveStart(1, 0),
-        MarkerMessage::SetRegionEnd(1, Some(10)),
         MarkerMessage::LoopToRegion(1),
     ] {
         assert!(
             matches!(classify(&Message::Marker(m.clone())), UndoAction::Record),
             "{m:?} should record an undo entry"
+        );
+    }
+}
+
+#[test]
+fn drag_marker_messages_coalesce_undo() {
+    // A marker move / region-edge resize fires one message per pointer
+    // step, so each gesture coalesces into a single undo entry keyed by
+    // marker id (todo #369), rather than one entry per pixel dragged.
+    for m in [
+        MarkerMessage::MoveStart(1, 0),
+        MarkerMessage::SetRegionEnd(1, Some(10)),
+    ] {
+        assert!(
+            matches!(
+                classify(&Message::Marker(m.clone())),
+                UndoAction::RecordCoalesced(_)
+            ),
+            "{m:?} should coalesce into a single undo entry"
         );
     }
 }

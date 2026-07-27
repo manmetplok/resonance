@@ -19,7 +19,9 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         Message::Compose(_)
         | Message::Transport(_)
         | Message::Marker(_)
+        | Message::MarkerUi(_)
         | Message::Track(_)
+        | Message::ExternalInstrument(_)
         | Message::Bus(_)
         | Message::Mixer(_)
         | Message::Freeze(_)
@@ -29,10 +31,19 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::MidiEditor(_)
         | Message::VocalTuning(_)
         | Message::Plugin(_)
+        | Message::Automation(_)
         | Message::Viewport(_)
         | Message::Reference(_)
         | Message::GlobalTrack(_)
-        | Message::ChordTrack(_) => true,
+        | Message::Group(_)
+        | Message::ChordTrack(_)
+        // Media-browser navigation / audition is only meaningful with a
+        // project open; block it while the startup modal owns the screen.
+        | Message::Browser(_)
+        // A drag-to-timeline placement can only start once the arrangement
+        // is on screen (i.e. a project is open); block it while the startup
+        // modal owns the screen, like the other project-mutating gestures.
+        | Message::Drag(_) => true,
         // Tab switches / auxiliary overlays: block so they can't
         // steal focus from the startup modal.
         Message::Ui(UiMessage::SwitchView(_))
@@ -41,23 +52,42 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::PerformanceToggleResolved { .. })
         | Message::Ui(UiMessage::ExitPerformanceMode)
         | Message::Ui(UiMessage::OpenSettings)
-        | Message::Ui(UiMessage::OpenAddTrackMenu) => true,
+        | Message::Ui(UiMessage::OpenAddTrackMenu)
+        // Markers overview + marker navigation are only meaningful with a
+        // project open — block them while the startup modal owns the screen
+        // (the nav variants would otherwise drive gated `Marker` messages).
+        | Message::Ui(UiMessage::ToggleMarkersOverview)
+        | Message::Ui(UiMessage::RequestMarkerNav { .. })
+        | Message::Ui(UiMessage::MarkerNavResolved { .. }) => true,
         // Benign UI: allow.
         Message::Ui(UiMessage::CloseSettings)
         | Message::Ui(UiMessage::CloseAddTrackMenu)
         | Message::Ui(UiMessage::DismissError)
         | Message::Ui(UiMessage::StartNewProject)
         | Message::Ui(UiMessage::SelectTrack(_))
+        | Message::Ui(UiMessage::ModifiersChanged(_))
         | Message::Ui(UiMessage::ConfirmSaveAndQuit)
         | Message::Ui(UiMessage::ConfirmDiscardAndQuit)
         | Message::Ui(UiMessage::CancelQuit)
         | Message::Ui(UiMessage::ToggleGlobalTracks)
         | Message::Ui(UiMessage::ToggleReferencePanel)
+        | Message::Ui(UiMessage::CloseMarkersOverview)
         | Message::Ui(UiMessage::ToggleMixerInspectorGroup(_))
         | Message::Ui(UiMessage::ToggleMidiClockSend)
         | Message::Ui(UiMessage::SetMidiClockSendDevice(_))
         | Message::Ui(UiMessage::ToggleMidiClockRecv)
-        | Message::Ui(UiMessage::SetMidiClockRecvDevice(_)) => false,
+        | Message::Ui(UiMessage::SetMidiClockRecvDevice(_))
+        // Performance footer selections are pure view state and only
+        // reachable from within Performance mode (which needs a project),
+        // so they're harmless even if one slips through while the startup
+        // modal is up — allow.
+        | Message::Ui(UiMessage::SetPerformanceTuning(_))
+        | Message::Ui(UiMessage::SetPerformanceCapo(_))
+        // Dismissing the import-progress modal is safe from any state
+        // (nothing has been imported yet when the startup modal is up, so
+        // the tracker is empty); allow it through so the overlay can be
+        // cleared if it somehow appears.
+        | Message::Ui(UiMessage::DismissImportProgress) => false,
         // Project I/O drives the modal itself: always allow.
         Message::ProjectIo(_) => false,
         // Export modal drives its own overlay; gated at the open site.
@@ -66,6 +96,13 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // a project — block it (like Open Settings / Add Track) so it
         // can't steal focus while the startup modal owns the screen.
         Message::Import(_) => true,
+        // Audio import + placement mutates the project (adds pool assets /
+        // clips / tracks) — block while the startup modal owns the screen.
+        Message::Pool(_) => true,
+        // Missing-file relink acts on a loaded project's pool — block it
+        // while the startup modal owns the screen (there is no project to
+        // relink into yet).
+        Message::Relink(_) => true,
         // Timer tick: harmless, drives VU meters — allow.
         Message::Tick => false,
         // Window close request: always allow so the app can exit.
@@ -92,7 +129,9 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         Message::Compose(_)
         | Message::Transport(_)
         | Message::Marker(_)
+        | Message::MarkerUi(_)
         | Message::Track(_)
+        | Message::ExternalInstrument(_)
         | Message::Bus(_)
         | Message::Mixer(_)
         | Message::Freeze(_)
@@ -102,13 +141,25 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::MidiEditor(_)
         | Message::VocalTuning(_)
         | Message::Plugin(_)
+        | Message::Automation(_)
+        | Message::Group(_)
         | Message::Viewport(_)
         | Message::Reference(_)
         | Message::GlobalTrack(_)
         | Message::Import(_)
+        | Message::Pool(_)
+        // Relinking re-copies audio into the project through the shared
+        // decode path — block it mid-render like the rest.
+        | Message::Relink(_)
         | Message::ChordTrack(_)
         | Message::Ui(_)
         | Message::Export(_)
+        // Auditioning a preview through the engine mid-render would
+        // disturb the shared decode path — block it like the rest.
+        | Message::Browser(_)
+        // A drop mutates the project (imports + places audio); block the
+        // whole drag gesture mid-render like the rest.
+        | Message::Drag(_)
         | Message::Undo
         | Message::Redo => true,
     }
@@ -133,7 +184,9 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         Message::Compose(_)
         | Message::Transport(_)
         | Message::Marker(_)
+        | Message::MarkerUi(_)
         | Message::Track(_)
+        | Message::ExternalInstrument(_)
         | Message::Bus(_)
         | Message::Mixer(_)
         | Message::Freeze(_)
@@ -143,13 +196,25 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         | Message::MidiEditor(_)
         | Message::VocalTuning(_)
         | Message::Plugin(_)
+        | Message::Automation(_)
+        | Message::Group(_)
         | Message::Viewport(_)
         | Message::Reference(_)
         | Message::GlobalTrack(_)
         | Message::Import(_)
+        | Message::Pool(_)
+        // Relinking re-copies audio into the project through the shared
+        // decode path — block it mid-render like the rest.
+        | Message::Relink(_)
         | Message::ChordTrack(_)
         | Message::Ui(_)
         | Message::Export(_)
+        // Auditioning a preview through the engine mid-render would
+        // disturb the shared decode path — block it like the rest.
+        | Message::Browser(_)
+        // A drop mutates the project (imports + places audio); block the
+        // whole drag gesture mid-render like the rest.
+        | Message::Drag(_)
         | Message::Undo
         | Message::Redo => true,
     }

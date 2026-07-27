@@ -63,13 +63,34 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         UiMessage::DismissError => {
             r.error_message = None;
         }
+        UiMessage::DismissImportProgress => {
+            r.import_progress_modal_open = false;
+            r.import_progress.clear();
+        }
         UiMessage::StartNewProject => {
             return project_io::save_project_as_dialog();
         }
         UiMessage::SelectTrack(id) => {
-            r.interaction.selected_track = id;
-            r.interaction.selected_clip = None;
-            r.interaction.selected_midi_clip = None;
+            match id {
+                // An additive (Cmd/Shift) click on a track toggles it in the
+                // multi-selection and leaves any clip selection alone.
+                Some(track_id) if r.interaction.select_additive => {
+                    r.interaction.toggle_track_selection(track_id);
+                }
+                // A plain click (or an explicit deselect-all) replaces the
+                // selection and drops the clip selection, as before.
+                _ => {
+                    r.interaction.select_single_track(id);
+                    r.interaction.selected_clip = None;
+                    r.interaction.selected_midi_clip = None;
+                }
+            }
+        }
+        UiMessage::ModifiersChanged(mods) => {
+            // Cmd (macOS) / Ctrl (other platforms) and Shift both extend the
+            // track selection. Mirroring the live state here lets the
+            // modifier-less mouse press decide single vs additive.
+            r.interaction.select_additive = mods.command() || mods.shift();
         }
         UiMessage::ConfirmSaveAndQuit => {
             let window_id = r.confirm_quit.take();
@@ -121,6 +142,42 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 device,
                 enabled: r.midi_clock_recv_enabled,
             });
+        }
+        UiMessage::SetPerformanceTuning(index) => {
+            // Footer instrument/tuning pill. Pure view state — the diagram
+            // bands re-voice from `r.performance` on the next render.
+            r.performance.set_tuning_index(index);
+        }
+        UiMessage::SetPerformanceCapo(frets) => {
+            // Footer capo stepper. The setter clamps to `0..=MAX_CAPO`.
+            r.performance.set_capo(frets);
+        }
+        UiMessage::ToggleMarkersOverview => {
+            r.mixer.markers_overview_open = !r.mixer.markers_overview_open;
+        }
+        UiMessage::CloseMarkersOverview => {
+            r.mixer.markers_overview_open = false;
+        }
+        UiMessage::RequestMarkerNav { forward } => {
+            // The bare `.`/`,` shortcut arrives via the global keyboard
+            // subscription, which fires even while a text field is focused.
+            // Probe for keyboard focus and only navigate once we know no
+            // text input is being edited (see `crate::focus`), mirroring the
+            // `F` performance-toggle gate.
+            return crate::focus::any_text_input_focused()
+                .map(move |editing| Message::Ui(UiMessage::MarkerNavResolved { forward, editing }));
+        }
+        UiMessage::MarkerNavResolved { forward, editing } => {
+            // Suppress navigation when the key was typed into a focused text
+            // field; otherwise jump to the adjacent marker.
+            if !editing {
+                let nav = if forward {
+                    crate::message::MarkerMessage::JumpToNext
+                } else {
+                    crate::message::MarkerMessage::JumpToPrev
+                };
+                return r.update(Message::Marker(nav));
+            }
         }
     }
     Task::none()

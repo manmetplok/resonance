@@ -37,6 +37,7 @@ fn clip(id: u64, track_id: u64) -> ClipState {
         gain_db: 0.0,
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
+        asset_ref: None,
     }
 }
 
