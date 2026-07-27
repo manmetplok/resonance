@@ -14,8 +14,8 @@
 //! no allocation and takes no locks.
 
 use resonance_dsp::{
-    read_hermite_wrapped, DcBlocker, GrainEngine, GrainParams, OnePole, SchedulerMode, SimpleRng,
-    SwapFader,
+    read_hermite_wrapped, DcBlocker, GrainEngine, GrainParams, InterpQuality, OnePole,
+    SchedulerMode, SimpleRng, SwapFader, MAX_GRAINS,
 };
 use resonance_music_theory::Scale;
 
@@ -97,6 +97,36 @@ const REPITCH_RATE_MAX: f64 = 4.0;
 /// for the fallback cloud to rebuild some overlap, short enough that
 /// voiced/unvoiced handovers feel immediate.
 pub const VOICE_FADE_SECONDS: f32 = 0.05;
+
+/// Reduced grain-pool cap of the Lo-fi tier (ba todo #1083; doc #252
+/// §2 — Clouds' grain count shrinks on its low-quality modes). Half
+/// the [`MAX_GRAINS`] pool: sparse enough to be part of the lo-fi
+/// character, dense enough to stay a cloud.
+pub const LOFI_MAX_GRAINS: usize = MAX_GRAINS / 2;
+
+/// Quality tier (ba todo #1083, doc #252 §3/§9): interpolation order,
+/// anti-aliasing, µ-law lo-fi character and grain-pool size.
+///
+/// Every tier ingredient is grain-latched at spawn (kernel, µ-law
+/// flag) or click-free by construction (the pool cap steals through
+/// the release ramp; the AA one-pole is per grain), so switching tiers
+/// mid-stream produces no discontinuity — sounding grains finish
+/// exactly as they spawned, and no buffer format ever changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QualityTier {
+    /// 2-point linear reads, 8-bit µ-law quantization of every grain
+    /// stream, pool capped at [`LOFI_MAX_GRAINS`] — the Clouds-style
+    /// lo-fi character.
+    LoFi,
+    /// 4-point Hermite reads, no anti-aliasing — the pre-#1083
+    /// behaviour, bit-identical.
+    #[default]
+    Normal,
+    /// 6-point B-spline reads (best polynomial image rejection, see
+    /// `resonance_dsp::bspline6`) plus the rate-tracked per-grain
+    /// anti-alias lowpass forced on for upward transposition.
+    Hq,
+}
 
 /// Delay-time change behaviour (doc #252 §5, ba todo #1076).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,8 +224,10 @@ pub struct BlockParams {
     pub level_jitter: f32,
     pub reverse_probability: f32,
     pub pan_spread: f32,
-    /// HQ tier: engage the engine's rate-tracked anti-alias lowpass.
-    pub anti_alias: bool,
+    /// Quality tier (ba todo #1083): resolves to the per-grain
+    /// interpolation kernel, µ-law lo-fi quantization, pool cap and
+    /// anti-alias engagement of every grain engine.
+    pub quality: QualityTier,
     /// Feedback topology (ba todo #1074).
     pub fb_route: FbRoute,
     /// Damping filter type in the feedback loop: LP (false) or HP.
@@ -720,6 +752,20 @@ impl GranularDsp {
         self.wet_r_decor[..frames].fill(0.0);
         self.discard[..frames].fill(0.0);
 
+        // Quality-tier resolution (ba todo #1083): all four ingredients
+        // are engine-side and grain-latched (or click-free by
+        // construction), so a tier switch only affects grains spawned
+        // from here on. Every engine — audible pair, decorrelated
+        // right, feedback tap — inherits the tier, so the whole cloud
+        // shares one character; the PSOLA voice pool deliberately does
+        // not (unity-rate marker-snapped reads neither alias nor
+        // resample, so tiers have nothing to improve there).
+        let (interp, lofi_quantize, max_polyphony, anti_alias) = match params.quality {
+            QualityTier::LoFi => (InterpQuality::Linear, true, LOFI_MAX_GRAINS, false),
+            QualityTier::Normal => (InterpQuality::Hermite4, false, MAX_GRAINS, false),
+            QualityTier::Hq => (InterpQuality::Bspline6, false, MAX_GRAINS, true),
+        };
+
         let grain_params = GrainParams {
             // Voice/Mono engaged (ba todo #1082): the async cloud — and
             // its decorrelated and feedback-tap companions, which
@@ -751,7 +797,10 @@ impl GranularDsp {
             pitch_semitones: params.pitch_semitones,
             detune_spread_cents: params.detune_spread_cents,
             reverse_probability: params.reverse_probability,
-            anti_alias: params.anti_alias,
+            anti_alias,
+            interp,
+            lofi_quantize,
+            max_polyphony,
             // Later epic-196 todos grow `GrainParams` (e.g. #1080's
             // alignment fields); default the rest so this literal stays
             // source-compatible as the engine evolves.

@@ -31,7 +31,7 @@
 //! itself interpolates parameter changes, so per-grain values need no
 //! smoothing).
 
-use crate::interp::read_hermite_wrapped;
+use crate::interp::{read_bspline6_wrapped, read_hermite_wrapped, read_linear_wrapped};
 use crate::pan::constant_power_pan;
 use crate::rng::SimpleRng;
 use crate::window::WindowMorph;
@@ -79,6 +79,35 @@ const ALIGN_DECIM: usize = 4;
 /// Reference-energy floor below which the correlator treats the
 /// sounding material as silence and keeps the nominal onset.
 const ALIGN_ENERGY_FLOOR: f32 = 1e-9;
+
+/// Magnitude levels of the 8-bit µ-law quantizer: sign + 7 magnitude
+/// bits (ba todo #1083, doc #252 §9 "optional µ-law lo-fi tier").
+const MU_LAW_LEVELS: usize = 128;
+
+/// µ-law companding constant (µ = 255, the telephony standard — 8-bit
+/// µ-law is the format Clouds stores its buffer in on the lo-fi
+/// quality settings).
+const MU_LAW_MU: f32 = 255.0;
+
+/// Per-grain read interpolation quality (ba todo #1083, doc #252 §3).
+///
+/// Latched per grain at spawn — switching quality tiers mid-stream
+/// never changes the kernel under a sounding grain, so tier switches
+/// are click-free by construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InterpQuality {
+    /// 2-point linear: audibly dull, poor image rejection (the Lo-fi
+    /// tier's character).
+    Linear,
+    /// 4-point cubic Hermite (Catmull-Rom): the standard sampler
+    /// compromise; the Normal tier.
+    #[default]
+    Hermite4,
+    /// 6-point, 5th-order B-spline: best-in-class image rejection of
+    /// the polynomial family (Niemitalo deip.pdf); the HQ tier. See
+    /// [`crate::interp::bspline6`] for the full justification.
+    Bspline6,
+}
 
 /// Grain-onset scheduling mode (doc #252 §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -167,6 +196,27 @@ pub struct GrainParams {
     /// nominal position by more than this, and never into the
     /// write-head collision guard. Only read when `align` is true.
     pub align_window_seconds: f32,
+    /// Read-interpolation kernel, latched per grain at spawn (ba todo
+    /// #1083): sounding grains keep the kernel they spawned with, so
+    /// quality-tier switches are click-free by construction.
+    pub interp: InterpQuality,
+    /// Lo-fi tier (ba todo #1083): pass each grain's resampled stream
+    /// through an 8-bit µ-law quantizer (Clouds-style lo-fi buffer
+    /// character). Latched per grain at spawn, and applied *before* the
+    /// window/gain so the quantization noise is enveloped with the
+    /// grain — no buffer format ever changes, hence nothing to
+    /// crossfade. Quantizing at the read instead of in the buffer
+    /// keeps the stored audio pristine, so leaving the tier is
+    /// instantly clean.
+    pub lofi_quantize: bool,
+    /// Cap on simultaneously sounding grains (clamped to `1 ..=`
+    /// [`MAX_GRAINS`]): the Lo-fi tier's reduced grain count (ba todo
+    /// #1083; doc #252 §2 — Clouds' pool shrinks on low-quality
+    /// modes). At the cap a new onset behaves exactly like a full
+    /// pool: the grain nearest completion is stolen (release-ramped,
+    /// click-free) and the onset is dropped, so lowering the cap
+    /// mid-stream drains the excess gracefully.
+    pub max_polyphony: usize,
 }
 
 impl Default for GrainParams {
@@ -188,6 +238,9 @@ impl Default for GrainParams {
             anti_alias: false,
             align: false,
             align_window_seconds: 0.005,
+            interp: InterpQuality::Hermite4,
+            lofi_quantize: false,
+            max_polyphony: MAX_GRAINS,
         }
     }
 }
@@ -231,6 +284,11 @@ struct Grain {
     aa_coeff: f32,
     /// One-pole state (per grain, reset at spawn).
     aa_state: f32,
+    /// Read-interpolation kernel, latched at spawn (ba todo #1083).
+    interp: InterpQuality,
+    /// 8-bit µ-law quantization of the resampled stream, latched at
+    /// spawn (Lo-fi tier, ba todo #1083).
+    lofi: bool,
 }
 
 impl Grain {
@@ -252,6 +310,8 @@ impl Grain {
         aa_active: false,
         aa_coeff: 0.0,
         aa_state: 0.0,
+        interp: InterpQuality::Hermite4,
+        lofi: false,
     };
 }
 
@@ -291,6 +351,12 @@ pub struct GrainEngine {
     max_abs_align_lag: f64,
     /// Spawns the aligner moved off their nominal onset (nonzero lag).
     aligned_spawns: u64,
+    /// Decode table of the 8-bit µ-law quantizer (ba todo #1083):
+    /// `mu_law_decode[n]` is the magnitude decoded from companded
+    /// level `n` of [`MU_LAW_LEVELS`]. Built once in
+    /// [`GrainEngine::new`] so the per-sample Lo-fi path is a
+    /// log + round + table read — no `powf` on the render path.
+    mu_law_decode: [f32; MU_LAW_LEVELS],
 }
 
 impl GrainEngine {
@@ -311,6 +377,13 @@ impl GrainEngine {
         }
         let compare_len =
             ((ALIGN_COMPARE_SECONDS * sample_rate).ceil() as usize).max(2 * ALIGN_DECIM);
+        // µ-law decode table: level n of the companded magnitude maps
+        // back to ((1+µ)^(n/(N-1)) − 1) / µ.
+        let mut mu_law_decode = [0.0f32; MU_LAW_LEVELS];
+        for (n, slot) in mu_law_decode.iter_mut().enumerate() {
+            let y = n as f32 / (MU_LAW_LEVELS - 1) as f32;
+            *slot = ((1.0 + MU_LAW_MU).powf(y) - 1.0) / MU_LAW_MU;
+        }
         Self {
             window: WindowMorph::new(),
             grains: [Grain::INACTIVE; MAX_GRAINS],
@@ -329,6 +402,7 @@ impl GrainEngine {
             align_prev_time: 0.0,
             max_abs_align_lag: 0.0,
             aligned_spawns: 0,
+            mu_law_decode,
         }
     }
 
@@ -441,8 +515,18 @@ impl GrainEngine {
             ref mut grains,
             ref mut free,
             ref mut free_len,
+            ref mu_law_decode,
             ..
         } = *self;
+        // 8-bit µ-law quantizer for Lo-fi grains: compand, round to one
+        // of [`MU_LAW_LEVELS`] magnitude levels, decode via the table.
+        let inv_log_mu = 1.0 / (1.0 + MU_LAW_MU).ln();
+        let mu_law = |s: f32| -> f32 {
+            let mag = s.abs().min(1.0);
+            let y = (1.0 + MU_LAW_MU * mag).ln() * inv_log_mu;
+            let n = (y * (MU_LAW_LEVELS - 1) as f32).round() as usize;
+            mu_law_decode[n.min(MU_LAW_LEVELS - 1)].copysign(s)
+        };
         for (idx, grain) in grains.iter_mut().enumerate() {
             if !grain.active {
                 continue;
@@ -455,7 +539,18 @@ impl GrainEngine {
                     grain.releasing = true;
                 }
                 let w = window.evaluate((grain.env_phase * grain.inv_dur) as f32, grain.texture);
-                let mut s = read_hermite_wrapped(source, grain.read_pos);
+                // Per-grain kernel, latched at spawn (ba todo #1083).
+                let mut s = match grain.interp {
+                    InterpQuality::Linear => read_linear_wrapped(source, grain.read_pos),
+                    InterpQuality::Hermite4 => read_hermite_wrapped(source, grain.read_pos),
+                    InterpQuality::Bspline6 => read_bspline6_wrapped(source, grain.read_pos),
+                };
+                if grain.lofi {
+                    // Applied before window/gain so the quantization
+                    // noise is enveloped with the grain (click-free at
+                    // the grain edges).
+                    s = mu_law(s);
+                }
                 if grain.aa_active {
                     grain.aa_state = s + grain.aa_coeff * (grain.aa_state - s);
                     s = grain.aa_state;
@@ -504,7 +599,13 @@ impl GrainEngine {
         let dur = (dur_seconds as f64 * sr).max(4.0);
         let advance = params.head_advance as f64;
 
-        let slot = if self.free_len > 0 {
+        // Polyphony cap (ba todo #1083): at (or above, after a
+        // mid-stream cap reduction) the cap, a new onset behaves
+        // exactly like a full pool — steal the grain nearest
+        // completion (release-ramped) and drop this onset.
+        let cap = params.max_polyphony.clamp(1, MAX_GRAINS);
+        let in_use = MAX_GRAINS - self.free_len;
+        let slot = if self.free_len > 0 && in_use < cap {
             self.free_len -= 1;
             self.free[self.free_len]
         } else {
@@ -614,6 +715,8 @@ impl GrainEngine {
             aa_active,
             aa_coeff,
             aa_state: 0.0,
+            interp: params.interp,
+            lofi: params.lofi_quantize,
         };
         self.spawned += 1;
 

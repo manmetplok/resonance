@@ -30,8 +30,10 @@ pub use dynamics::{soft_knee_gain_reduction_db, Ballistics};
 pub use eq::BandType;
 pub use filter::OnePole;
 pub use formant::{formant_pitch_shift, FormantShifter};
-pub use granular::{GrainEngine, GrainParams, SchedulerMode, MAX_GRAINS};
-pub use interp::{hermite4, read_hermite_wrapped};
+pub use granular::{GrainEngine, GrainParams, InterpQuality, SchedulerMode, MAX_GRAINS};
+pub use interp::{
+    bspline6, hermite4, read_bspline6_wrapped, read_hermite_wrapped, read_linear_wrapped,
+};
 pub use lfo::Lfo;
 pub use pan::{constant_power_pan, stereo_balance};
 pub use pitch::{detect_f0, F0Config, F0Frame, YinDetector};

@@ -237,9 +237,15 @@ impl ResonancePlugin for ResonanceGranularDelay {
             level_jitter: self.params.level_jitter.value(),
             reverse_probability: self.params.reverse_prob.value(),
             pan_spread: self.params.pan_spread.value(),
-            // TODO(epic-196 #1083): full Lo-fi/Normal/HQ tier treatment;
-            // HQ already engages the engine's tracked anti-alias filter.
-            anti_alias: self.params.quality.value() == 2,
+            // Quality tiers (ba todo #1083): Lo-fi = linear reads +
+            // µ-law + reduced pool, Normal = Hermite, HQ = 6-pt
+            // B-spline + forced anti-alias. Grain-latched, so tier
+            // switches are click-free.
+            quality: match self.params.quality.value() {
+                0 => dsp::QualityTier::LoFi,
+                2 => dsp::QualityTier::Hq,
+                _ => dsp::QualityTier::Normal,
+            },
             fb_route: match self.params.fb_route.value() {
                 0 => dsp::FbRoute::WetToBuffer,
                 2 => dsp::FbRoute::PingPong,
