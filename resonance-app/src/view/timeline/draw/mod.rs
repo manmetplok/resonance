@@ -16,6 +16,7 @@ pub(in crate::view::timeline) use chrome::clip_lane_rect;
 use super::TimelineCanvas;
 
 mod chrome;
+mod group_overview;
 mod grid;
 mod chord_lane;
 mod global_tracks;

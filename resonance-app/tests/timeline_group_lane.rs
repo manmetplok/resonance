@@ -14,10 +14,12 @@
 //!    96); and
 //! 3. drives the vertical scrollbar from `layout.total_height()`.
 //!
-//! Two states are pinned: an **expanded** group (header band + indented
-//! members visible) and a **collapsed** group (header band only, members
-//! hidden so their clips are not drawn — the consolidated-overview strip
-//! is a separate follow-up, #733).
+//! Three states are pinned: an **expanded** group (header band + indented
+//! members visible), a **collapsed** group (member lanes hidden, the 60 px
+//! band repainted as the #733 consolidated overview — every member clip
+//! flattened onto the lane as a tinted identity-colour block), and a
+//! collapsed group with a **nested** sub-group (the overview flattens the
+//! nested members' clips too).
 //!
 //! Window size is the app's 1440×900 minimum (per `ux-guidelines.md`).
 //! On first run `matches_image()` writes the goldens under
@@ -99,18 +101,49 @@ fn timeline_group_lane_expanded() {
     snapshot_to(&app, "tests/snapshots/timeline_group_lane_expanded.png");
 }
 
-/// Collapsed group: the member lanes drop out of the layout, so only the
-/// group-header band remains and the member clips are not drawn. (The
-/// consolidated-overview repaint of the collapsed band is a follow-up,
-/// todo #733 — for now it is a plain band.)
-///
-/// Collapse state is set directly on the registry: the live
-/// `GroupMessage::ToggleCollapse` reducer is still a no-op on this branch
-/// (the fold-state wiring is owned by todo #686), so the canvas-side
-/// rendering is exercised by toggling the persisted flag itself.
+/// Collapsed group: the member lanes drop out of the layout and the group
+/// lane is repainted as the consolidated overview (todo #733) — the two
+/// members' demo MIDI clips ("Bm progression", "Pad") appear as short
+/// tinted blocks at their bar spans on the single 60 px band, no labels.
 #[test]
 fn timeline_group_lane_collapsed() {
     let (mut app, group_id) = build_app_with_group();
     app.test_track_groups_mut().set_collapse_state(group_id, true);
     snapshot_to(&app, "tests/snapshots/timeline_group_lane_collapsed.png");
+}
+
+/// Collapsed group with a **nested** sub-group: the consolidated overview
+/// flattens recursively, so clips on the nested group's members (tracks 2
+/// and 3) surface on the outer group's lane alongside the outer group's
+/// own direct member (track 4). Locks in the `get_all_member_ids`
+/// recursion of todo #733's DoD.
+#[test]
+fn timeline_group_lane_collapsed_nested_overview() {
+    let _ = STARTUP_TAB.set(ViewMode::Arrange);
+
+    let (mut app, _task) = Resonance::new();
+    demo::seed_demo_content(&mut app);
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
+        WINDOW.0 - theme::TRACK_HEADER_WIDTH,
+    )));
+    let _ = app.update(Message::Viewport(ViewportMessage::ViewportHeight(WINDOW.1)));
+    let _ = app.update(Message::Viewport(ViewportMessage::TimelineContentSize(
+        2000.0,
+        WINDOW.1 * 4.0,
+    )));
+
+    // Inner group folds tracks 2 + 3; the outer group holds the inner
+    // group plus track 4 directly. Ids sit well clear of the demo tracks.
+    let inner: TrackId = 9001;
+    let outer: TrackId = 9000;
+    let registry = app.test_track_groups_mut();
+    registry.create_group_from_selection(inner, &[2, 3]);
+    registry.create_group_from_selection(outer, &[inner, 4]);
+    assert!(registry.set_nesting_parent(inner, Some(outer)));
+    assert!(registry.set_collapse_state(outer, true));
+
+    snapshot_to(
+        &app,
+        "tests/snapshots/timeline_group_lane_collapsed_nested_overview.png",
+    );
 }

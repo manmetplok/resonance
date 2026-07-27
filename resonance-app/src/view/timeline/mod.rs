@@ -635,9 +635,10 @@ impl<'a> TimelineCanvas<'a> {
                     ArrangeRowKind::GroupHeader(group_id) => {
                         // Group-colour lane band. When the group is
                         // expanded this is the faint "spans all members"
-                        // identity tint; a collapsed group keeps a plain
-                        // band for now (the consolidated-overview strip is
-                        // a separate follow-up — todo #733).
+                        // identity tint; a collapsed group gets a plain
+                        // band repainted as the consolidated overview —
+                        // every member clip flattened onto the lane as a
+                        // tinted block (todo #733).
                         if let Some(group) = self.track_groups.get_group(group_id) {
                             let (_base, wash, line) =
                                 theme::group_identity_colors(group.identity_color);
@@ -695,6 +696,21 @@ impl<'a> TimelineCanvas<'a> {
                 track_area_height,
                 y_off,
             );
+
+            // Consolidated overviews for collapsed groups (todo #733) sit
+            // above the grid, like the real clip bodies they stand in for.
+            for row in layout.rows() {
+                let ArrangeRowKind::GroupHeader(group_id) = row.kind else {
+                    continue;
+                };
+                let Some(group) = self.track_groups.get_group(group_id) else {
+                    continue;
+                };
+                if group.is_collapsed {
+                    let y = header_height + row.y_top - y_off;
+                    self.draw_collapsed_group_overview(frame, group, y, row.height);
+                }
+            }
 
             // Draw audio clips
             for clip in self.clips {

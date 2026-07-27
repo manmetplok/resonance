@@ -393,6 +393,11 @@ pub const GROUP_RAIL_WIDTH: f32 = 3.0;
 /// group-header strip so the identity cue is pixel-identical across both
 /// surfaces. See doc #200.
 pub const GROUP_SWATCH_SIZE: f32 = 14.0;
+/// Vertical inset of the consolidated-overview clip blocks within a
+/// collapsed group's 60 px lane (todo #733). Deeper than `CLIP_LANE_INSET`
+/// so the blocks read as a compact content strip on the band rather than
+/// as real, editable clips.
+pub const GROUP_OVERVIEW_INSET: f32 = 14.0;
 /// Timeline ruler height.
 pub const RULER_HEIGHT: f32 = 28.0;
 /// Section band sitting under the ruler — the section-pill strip on the
