@@ -69,6 +69,28 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             });
             r.mixer.add_track_menu_open = false;
         }
+        TrackMessage::AddExternalInstrumentTrack => {
+            // Same track creation as `AddInstrumentTrack`, but the id is
+            // allocated app-side (like the audio-drop new-track path) so we can
+            // immediately enable external mode on it. The engine echoes
+            // `InstrumentTrackAdded` for this id a beat later, which mirrors the
+            // track into the registry. Enabling external mode here — before the
+            // echo — is safe: `enable_external_instrument` only touches
+            // `r.external_instruments` + the engine, not the registry, and the
+            // engine applies `SetExternalInstrument` after the track exists.
+            //
+            // Both effects (track creation + external state) fall under one undo
+            // snapshot: this message classifies as `UndoAction::Record`, whose
+            // pre-dispatch snapshot has neither the track nor the external entry,
+            // so a single undo removes both and redo restores both.
+            let track_id = r.registry.allocate_sub_track_id();
+            let _ = r.engine.send(AudioCommand::AddInstrumentTrack {
+                id_hint: Some(track_id),
+                name: None,
+            });
+            crate::update::external_instrument::enable_external_instrument(r, track_id);
+            r.mixer.add_track_menu_open = false;
+        }
         TrackMessage::AddVocalTrack => {
             let _ = r.engine.send(AudioCommand::AddVocalTrack {
                 id_hint: None,
