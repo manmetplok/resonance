@@ -26,7 +26,7 @@ fn bp(time_frames: u64, value: f32, curve: CurveKind) -> Breakpoint {
 
 #[test]
 fn value_axis_maps_top_and_bottom() {
-    let (band_top, band_height) = automation_band(100.0);
+    let (band_top, band_height) = automation_band(100.0, theme::TRACK_HEIGHT);
     // 1.0 sits at the band top, 0.0 at the bottom (axis grows downward).
     assert_eq!(value_to_y(1.0, band_top, band_height), band_top);
     assert_eq!(
@@ -42,7 +42,7 @@ fn value_axis_maps_top_and_bottom() {
 
 #[test]
 fn value_to_y_clamps_out_of_range() {
-    let (band_top, band_height) = automation_band(0.0);
+    let (band_top, band_height) = automation_band(0.0, theme::TRACK_HEIGHT);
     assert_eq!(value_to_y(2.0, band_top, band_height), band_top);
     assert_eq!(
         value_to_y(-1.0, band_top, band_height),

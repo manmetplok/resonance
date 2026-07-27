@@ -24,6 +24,7 @@ use iced::{Color, Point, Rectangle, Size};
 
 use crate::state::TrackState;
 use crate::theme;
+use crate::view::arrange_layout::ArrangeRowLayout;
 use resonance_common::{
     lane_value_to_real, sample_lane, AutomationLane, AutomationTarget, Breakpoint, CurveKind,
 };
@@ -43,12 +44,15 @@ const LIVE_DOT_RADIUS: f32 = 4.0;
 /// larger than [`DOT_RADIUS`] so the small dots are easy to grab.
 pub const BREAKPOINT_HIT_RADIUS: f32 = 7.0;
 
-/// The value-band rect (top-left + height) inside a track row whose top edge is
-/// `row_y`. Normalized lane value `1.0` maps to `band_top`, `0.0` to the band
-/// bottom (axis grows downward like the rest of the canvas).
-pub fn automation_band(row_y: f32) -> (f32, f32) {
+/// The value-band rect (top-left + height) inside a track row whose top edge
+/// is `row_y` and whose height is `row_height`. Normalized lane value `1.0`
+/// maps to `band_top`, `0.0` to the band bottom (axis grows downward like the
+/// rest of the canvas). The band is derived from the row's *actual* height —
+/// rows come from the shared [`ArrangeRowLayout`] (doc #203), not a fixed
+/// `TRACK_HEIGHT` pitch.
+pub fn automation_band(row_y: f32, row_height: f32) -> (f32, f32) {
     let band_top = row_y + BAND_INSET;
-    let band_height = (theme::TRACK_HEIGHT - 2.0 * BAND_INSET).max(1.0);
+    let band_height = (row_height - 2.0 * BAND_INSET).max(1.0);
     (band_top, band_height)
 }
 
@@ -184,11 +188,15 @@ impl TimelineCanvas<'_> {
     }
 
     /// Draw the static automation layer for every visible track. Called from
-    /// the cached `draw_into` pass, after clips, inside the lane clip.
+    /// the cached `draw_into` pass, after clips, inside the lane clip. Lane
+    /// Y / height come from the shared [`ArrangeRowLayout`] (doc #203), so
+    /// bands sit correctly under the mixed 60/96 px row pitch and tracks
+    /// hidden inside a collapsed group (`track_row_rect` -> `None`) draw
+    /// nothing — mirroring clip behaviour.
     pub(super) fn draw_automation_lanes(
         &self,
         frame: &mut canvas::Frame,
-        sorted_tracks: &[&TrackState],
+        layout: &ArrangeRowLayout,
         header_height: f32,
         y_off: f32,
         bounds: Rectangle,
@@ -196,15 +204,18 @@ impl TimelineCanvas<'_> {
         if self.automation.lanes.is_empty() {
             return;
         }
-        for (i, track) in sorted_tracks.iter().enumerate() {
-            let row_y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
-            if row_y + theme::TRACK_HEIGHT < header_height || row_y > bounds.height {
+        for track in self.visible_tracks_sorted() {
+            let Some((row_y_top, row_height)) = layout.track_row_rect(track.id) else {
+                continue;
+            };
+            let row_y = header_height + row_y_top - y_off;
+            if row_y + row_height < header_height || row_y > bounds.height {
                 continue;
             }
             let Some(lane) = self.primary_lane_for_track(self.automation, track) else {
                 continue;
             };
-            self.draw_one_automation_lane(frame, lane, row_y, bounds.width);
+            self.draw_one_automation_lane(frame, lane, row_y, row_height, bounds.width);
         }
     }
 
@@ -214,9 +225,10 @@ impl TimelineCanvas<'_> {
         frame: &mut canvas::Frame,
         lane: &AutomationLane,
         row_y: f32,
+        row_height: f32,
         width: f32,
     ) {
-        let (band_top, band_height) = automation_band(row_y);
+        let (band_top, band_height) = automation_band(row_y, row_height);
         // Read-disabled lanes keep their points but use the static value, so
         // dim them to read as "not playing back".
         let dim = if lane.enabled { 1.0 } else { 0.45 };
@@ -305,7 +317,7 @@ impl TimelineCanvas<'_> {
     pub(super) fn draw_automation_live_values(
         &self,
         frame: &mut canvas::Frame,
-        sorted_tracks: &[&TrackState],
+        layout: &ArrangeRowLayout,
         header_height: f32,
         y_off: f32,
         bounds: Rectangle,
@@ -324,9 +336,12 @@ impl TimelineCanvas<'_> {
             height: (bounds.height - header_height).max(0.0),
         };
         frame.with_clip(lane_clip, |frame| {
-            for (i, track) in sorted_tracks.iter().enumerate() {
-                let row_y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
-                if row_y + theme::TRACK_HEIGHT < header_height || row_y > bounds.height {
+            for track in self.visible_tracks_sorted() {
+                let Some((row_y_top, row_height)) = layout.track_row_rect(track.id) else {
+                    continue;
+                };
+                let row_y = header_height + row_y_top - y_off;
+                if row_y + row_height < header_height || row_y > bounds.height {
                     continue;
                 }
                 let Some(lane) = self.primary_lane_for_track(self.automation, track) else {
@@ -335,7 +350,7 @@ impl TimelineCanvas<'_> {
                 if lane.points.is_empty() {
                     continue;
                 }
-                let (band_top, band_height) = automation_band(row_y);
+                let (band_top, band_height) = automation_band(row_y, row_height);
                 let value = sample_lane(&lane.points, self.playhead);
                 let py = value_to_y(value, band_top, band_height);
 
@@ -398,39 +413,51 @@ impl TimelineCanvas<'_> {
         )
     }
 
-    /// The primary lane and its row's top y for the visible track row whose
-    /// vertical span contains `y`. `None` when `y` isn't over an automated
-    /// track row (no lanes, or the row under `y` has none).
-    fn automation_row_at(&self, y: f32) -> Option<(&AutomationLane, f32)> {
+    /// The primary lane plus its row's top y / height for the visible track
+    /// row whose vertical span contains `y`. `None` when `y` isn't over an
+    /// automated track row (no lanes, a group-header band, a hidden
+    /// collapsed-group member, or the row under `y` has no lane).
+    ///
+    /// Resolves the row through the same [`ArrangeRowLayout`] the draw pass
+    /// consumes, so the pointer hits exactly the band the user sees drawn
+    /// under the mixed 60/96 px row pitch (the #732 rule).
+    fn automation_row_at(&self, y: f32) -> Option<(&AutomationLane, f32, f32)> {
         if self.automation.lanes.is_empty() {
             return None;
         }
         let header_height = self.fixed_header_height();
         let y_off = self.scroll_offset_y;
-        for (i, track) in self.visible_tracks_sorted().iter().enumerate() {
-            let row_y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
-            if y >= row_y && y <= row_y + theme::TRACK_HEIGHT {
-                let lane = self.primary_lane_for_track(self.automation, track)?;
-                return Some((lane, row_y));
-            }
-        }
-        None
+        let layout = self.arrange_layout();
+        let row = layout.row_at_y(y - header_height + y_off)?;
+        let track_id = row.track_id()?;
+        let row_y = header_height + row.y_top - y_off;
+        let row_height = row.height;
+        let track = self
+            .visible_tracks_sorted()
+            .into_iter()
+            .find(|t| t.id == track_id)?;
+        let lane = self.primary_lane_for_track(self.automation, track)?;
+        Some((lane, row_y, row_height))
     }
 
     /// Value-band geometry (`band_top`, `band_height`) for the row owning
     /// `target`'s lane. Used mid-drag, where the pointer y may leave the
     /// band but the value still maps against the band that owns the point.
+    /// `None` when the owning track has no visible row (e.g. it folded
+    /// into a collapsed group mid-gesture).
     fn target_band(&self, target: &AutomationTarget) -> Option<(f32, f32)> {
         let header_height = self.fixed_header_height();
         let y_off = self.scroll_offset_y;
-        for (i, track) in self.visible_tracks_sorted().iter().enumerate() {
+        let layout = self.arrange_layout();
+        for track in self.visible_tracks_sorted() {
             let owns = self
                 .primary_lane_for_track(self.automation, track)
                 .map(|l| &l.target)
                 == Some(target);
             if owns {
-                let row_y = header_height + i as f32 * theme::TRACK_HEIGHT - y_off;
-                return Some(automation_band(row_y));
+                let (row_y_top, row_height) = layout.track_row_rect(track.id)?;
+                let row_y = header_height + row_y_top - y_off;
+                return Some(automation_band(row_y, row_height));
             }
         }
         None
@@ -439,8 +466,8 @@ impl TimelineCanvas<'_> {
     /// The breakpoint dot under the pointer, if any. Used to start a
     /// drag / curve-toggle (left) or delete (right).
     pub(super) fn breakpoint_hit(&self, pos: Point) -> Option<BreakpointHit> {
-        let (lane, row_y) = self.automation_row_at(pos.y)?;
-        let (band_top, band_height) = automation_band(row_y);
+        let (lane, row_y, row_height) = self.automation_row_at(pos.y)?;
+        let (band_top, band_height) = automation_band(row_y, row_height);
         let idx = nearest_breakpoint(
             &lane.points,
             pos,
@@ -461,8 +488,8 @@ impl TimelineCanvas<'_> {
     /// row's value band — the row's top/bottom insets stay free for clip
     /// grabbing on automated tracks.
     pub(super) fn band_add_at(&self, pos: Point) -> Option<(AutomationTarget, u64, f32)> {
-        let (lane, row_y) = self.automation_row_at(pos.y)?;
-        let (band_top, band_height) = automation_band(row_y);
+        let (lane, row_y, row_height) = self.automation_row_at(pos.y)?;
+        let (band_top, band_height) = automation_band(row_y, row_height);
         if pos.y < band_top - BREAKPOINT_HIT_RADIUS
             || pos.y > band_top + band_height + BREAKPOINT_HIT_RADIUS
         {

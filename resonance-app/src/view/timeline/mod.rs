@@ -592,9 +592,6 @@ impl<'a> TimelineCanvas<'a> {
         // `index * TRACK_HEIGHT` pitch (doc #203).
         let layout = self.arrange_layout();
         let track_area_height = layout.total_height();
-        // The automation overlay still resolves its lane bands from the
-        // uniform sorted track list (its layout port is follow-up work).
-        let sorted_tracks = self.visible_tracks_sorted();
 
         // Everything inside the lane region — track rows, grid lines,
         // clips, and the loop in/out dim overlays — is clipped to the
@@ -744,7 +741,7 @@ impl<'a> TimelineCanvas<'a> {
             // Automation lane overlay (static layer: axis, segments, dots).
             // Drawn over the clips so the envelope reads on top of them; the
             // live playhead value rides the uncached overlay pass below.
-            self.draw_automation_lanes(frame, &sorted_tracks, header_height, y_off, bounds);
+            self.draw_automation_lanes(frame, &layout, header_height, y_off, bounds);
 
             // Lane-area portion of the loop in/out markers — the dim
             // overlays. The vertical loop lines, amber range fill, and
@@ -953,10 +950,7 @@ impl<'a> TimelineCanvas<'a> {
 
         // Live automated-value indicators ride the uncached overlay so they
         // follow the playhead without invalidating the cached lane geometry.
-        // (Uniform sorted list — the automation overlay's layout port is
-        // follow-up work.)
-        let sorted_tracks = self.visible_tracks_sorted();
-        self.draw_automation_live_values(frame, &sorted_tracks, header_height, y_off, bounds);
+        self.draw_automation_live_values(frame, &layout, header_height, y_off, bounds);
 
         // Drag-to-timeline placement affordances (doc #175, todo #605):
         // the lit target lane, dashed grid-snapped ghost clip, the
