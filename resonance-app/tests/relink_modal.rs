@@ -19,6 +19,8 @@
 //!    `RelinkMessage::Imported(Ok)` path: that row flips to `Relinked`
 //!    and the footer reads `1 of 2 relinked`.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use iced::Size;
@@ -78,10 +80,7 @@ fn snapshot_to(app: &Resonance, path: &str) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 /// A unique temp dir for one test, plus its `audio/` subfolder.

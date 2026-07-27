@@ -12,6 +12,8 @@
 //! the golden diff. On first run `matches_image()` writes the golden
 //! under `tests/snapshots/`; subsequent runs diff against it.
 
+mod common;
+
 use iced::widget::{column, container, row, text, Space};
 use iced::{Color, Length, Size};
 use iced_test::simulator::Simulator;
@@ -85,10 +87,5 @@ fn frost_treatment_swatch() {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image("tests/snapshots/frost_treatment_swatch.png")
-            .expect("matches_image i/o"),
-        "frost swatch diverged from golden — the freeze treatment \
-         (FROST_WASH / FROST_EDGE / FROST_ICON) changed"
-    );
+    common::assert_golden(&snap, "tests/snapshots/frost_treatment_swatch.png");
 }

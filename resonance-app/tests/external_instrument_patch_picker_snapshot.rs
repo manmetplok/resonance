@@ -11,6 +11,8 @@
 //! `matches_image()` writes the golden under `tests/snapshots/`; subsequent
 //! runs diff against the committed PNG.
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{ExternalInstrumentMessage as Eim, Message, UiMessage};
@@ -68,9 +70,5 @@ fn named_patch_picker_render() {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image("tests/snapshots/external_instrument_named_patch_picker.png")
-            .expect("matches_image i/o"),
-        "snapshot diverged from golden"
-    );
+    common::assert_golden(&snap, "tests/snapshots/external_instrument_named_patch_picker.png");
 }

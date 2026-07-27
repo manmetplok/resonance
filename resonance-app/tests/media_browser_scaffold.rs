@@ -12,6 +12,8 @@
 //! 2. **Files tab** — panel open, Files selected (breadcrumb strip shown).
 //! 3. **Pool tab** — panel open, Pool selected (breadcrumb hidden).
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{BrowserMessage, Message};
@@ -56,10 +58,7 @@ fn snapshot_to(app: &Resonance, path: &str) {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image(path).expect("matches_image i/o"),
-        "snapshot diverged from golden: {path}"
-    );
+    common::assert_golden(&snap, path);
 }
 
 /// Baseline: browser hidden (the default), "Media" chrome toggle unlit.

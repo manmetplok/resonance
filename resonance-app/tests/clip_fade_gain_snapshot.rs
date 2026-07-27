@@ -11,6 +11,8 @@
 //! `matches_image()` writes the golden under `tests/snapshots/`;
 //! subsequent runs diff against the committed PNG.
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::state::{ClipState, FreezeStatus, TrackState, ViewMode};
@@ -135,9 +137,5 @@ fn clip_fades_gain_crossfade_render() {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image("tests/snapshots/clip_fades_gain_crossfade_render.png")
-            .expect("matches_image i/o"),
-        "snapshot diverged from golden"
-    );
+    common::assert_golden(&snap, "tests/snapshots/clip_fades_gain_crossfade_render.png");
 }
