@@ -1,0 +1,21 @@
+[package]
+name = "resonance-granular-delay"
+version = "0.1.0"
+edition = "2021"
+description = "A granular delay: circular-buffer granulation with per-grain pitch, texture and jitter"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = ["editor"]
+editor = ["dep:wayland-plugin-gui", "dep:egui"]
+
+[dependencies]
+resonance-plugin = { path = "../../resonance-plugin" }
+resonance-common = { path = "../../resonance-common" }
+resonance-dsp = { path = "../../resonance-dsp" }
+resonance-music-theory = { path = "../../resonance-music-theory" }
+
+wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+egui = { workspace = true, optional = true }
