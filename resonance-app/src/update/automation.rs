@@ -111,7 +111,7 @@ fn add_breakpoint(
     value: f32,
     curve: CurveKind,
 ) {
-    ensure_lane(r, target.clone());
+    ensure_lane(r, &target);
     // `ensure_lane` guarantees the entry exists.
     let lane = r.automation.lanes.get_mut(&target).expect("lane ensured");
     lane.insert_point(Breakpoint::new(time_frames, value, curve));
@@ -188,12 +188,13 @@ fn drag_breakpoint(
 /// Insert an empty lane for `target` when none exists yet (the caller
 /// immediately adds a breakpoint, so the transient empty state never
 /// reaches the engine).
-fn ensure_lane(r: &mut Resonance, target: AutomationTarget) {
-    if !r.automation.lanes.contains_key(&target) {
+fn ensure_lane(r: &mut Resonance, target: &AutomationTarget) {
+    if !r.automation.lanes.contains_key(target) {
         let id = r.automation.alloc_lane_id();
-        r.automation
-            .lanes
-            .insert(target.clone(), AutomationLane::new(id, target, Vec::new()));
+        r.automation.lanes.insert(
+            target.clone(),
+            AutomationLane::new(id, target.clone(), Vec::new()),
+        );
     }
 }
 
@@ -224,11 +225,10 @@ fn current_static_lane_value(r: &Resonance, target: &AutomationTarget) -> f32 {
         PluginParam { instance, param_id } => {
             return current_plugin_param_lane_value(r, *instance, *param_id)
         }
-        // Device params carry their normalized value straight through the
-        // lane (the engine maps it to the bound CC/NRPN range). There is
-        // no app-side mirror of the device's current value yet (epic #40
-        // E3 adds the lane UI), so seed mid-range.
-        DeviceParam { .. } => return 0.5,
+        // Device params are normalized by the engine via the device
+        // definition's binding mapping (not the fixed ranges here), so seed
+        // a freshly-added lane at its floor — the engine corrects on replay.
+        DeviceParam { .. } => 0.0,
     };
     real_to_lane_value(target, real)
 }

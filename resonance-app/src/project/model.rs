@@ -127,12 +127,6 @@ pub struct ProjectFile {
     /// defaults on legacy projects.
     #[serde(default)]
     pub quantize_settings: crate::state::QuantizeSettings,
-    /// Performance-mode footer selection (epic #11, todo #312): which
-    /// instrument tuning the live fingering diagrams are drawn for and the
-    /// capo offset. Defaults to Guitar 6 / no capo on legacy projects that
-    /// predate Performance mode.
-    #[serde(default)]
-    pub performance: ProjectPerformance,
     /// Parameter-automation lanes (epic #14 / epic #40), one per
     /// [`AutomationTarget`](resonance_common::AutomationTarget). Persisted so a
     /// project round-trips its automation — in particular the epic #40
@@ -142,6 +136,12 @@ pub struct ProjectFile {
     /// with no automation, exactly as before).
     #[serde(default)]
     pub automation_lanes: Vec<resonance_common::AutomationLane>,
+    /// Performance-mode footer selection (epic #11, todo #312): which
+    /// instrument tuning the live fingering diagrams are drawn for and the
+    /// capo offset. Defaults to Guitar 6 / no capo on legacy projects that
+    /// predate Performance mode.
+    #[serde(default)]
+    pub performance: ProjectPerformance,
 }
 
 /// An empty project at the current format version with neutral
@@ -184,8 +184,8 @@ impl Default for ProjectFile {
             pool_assets: Vec::new(),
             groove_library: Vec::new(),
             quantize_settings: crate::state::QuantizeSettings::default(),
-            performance: ProjectPerformance::default(),
             automation_lanes: Vec::new(),
+            performance: ProjectPerformance::default(),
         }
     }
 }

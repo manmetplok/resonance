@@ -96,11 +96,6 @@ pub struct Track {
     /// Channel that hardware MIDI output uses. None = channel 1.
     /// Only read on the engine control thread.
     pub midi_output_channel: Option<u8>,
-    /// Optional frozen source buffer for this track. When set, the mixer
-    /// plays the cached audio instead of running the live synth/FX chain.
-    /// Wrapped in `ArcSwapOption` so the audio thread can read without
-    /// blocking on the engine control thread's edits.
-    pub frozen_source: ArcSwapOption<FrozenSource>,
     /// Automatable device parameters of the device preset selected on this
     /// external-instrument track, keyed by [`DeviceParam::id`]. Set via
     /// `AudioCommand::SetTrackDeviceParams` when a preset is selected
@@ -114,6 +109,11 @@ pub struct Track {
     /// swaps in a fresh one — readers see either the pre- or post-edit
     /// map, never a torn one. Empty when no device is selected.
     device_params: ArcSwap<HashMap<String, DeviceParam>>,
+    /// Optional frozen source buffer for this track. When set, the mixer
+    /// plays the cached audio instead of running the live synth/FX chain.
+    /// Wrapped in `ArcSwapOption` so the audio thread can read without
+    /// blocking on the engine control thread's edits.
+    pub frozen_source: ArcSwapOption<FrozenSource>,
 }
 
 impl Track {
@@ -147,8 +147,8 @@ impl Track {
             midi_input_channel: None,
             midi_output_device: ArcSwapOption::const_empty(),
             midi_output_channel: None,
-            frozen_source: ArcSwapOption::const_empty(),
             device_params: ArcSwap::from_pointee(HashMap::new()),
+            frozen_source: ArcSwapOption::const_empty(),
         }
     }
 

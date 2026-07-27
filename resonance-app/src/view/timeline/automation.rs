@@ -131,12 +131,12 @@ pub fn lane_segments_polyline(
 /// targets it (gain, then pan, then mute, then the lowest plugin-param id).
 /// The parameter picker (#383) will let the user override which lane shows;
 /// until then this gives a stable, predictable choice.
-pub fn target_priority(target: &AutomationTarget) -> u32 {
+pub fn target_priority(target: AutomationTarget) -> u32 {
     match target {
         AutomationTarget::TrackGain(_) => 0,
         AutomationTarget::TrackPan(_) => 1,
         AutomationTarget::TrackMute(_) => 2,
-        AutomationTarget::PluginParam { param_id, .. } => 10u32.saturating_add(*param_id),
+        AutomationTarget::PluginParam { param_id, .. } => 10u32.saturating_add(param_id),
         // Bus/master targets never belong to an arrange track row.
         _ => u32::MAX,
     }
@@ -180,7 +180,7 @@ impl TimelineCanvas<'_> {
             .lanes
             .values()
             .filter(|lane| self.target_belongs_to_track(&lane.target, track))
-            .min_by_key(|lane| target_priority(&lane.target))
+            .min_by_key(|lane| target_priority(lane.target.clone()))
     }
 
     /// Draw the static automation layer for every visible track. Called from
@@ -353,7 +353,7 @@ impl TimelineCanvas<'_> {
 
                 // Real-value read-out (dB / pan / 0-1) just right of the dot.
                 let real = lane_value_to_real(&lane.target, value);
-                let text = format_real_value(&lane.target, real);
+                let text = format_real_value(lane.target.clone(), real);
                 frame.fill_text(canvas::Text {
                     content: text,
                     position: Point::new(playhead_x + 7.0, py - 5.0),
@@ -480,13 +480,13 @@ impl TimelineCanvas<'_> {
     /// for the sort).
     pub(super) fn breakpoint_drag_to(
         &self,
-        target: &AutomationTarget,
+        target: AutomationTarget,
         index: usize,
         pos: Point,
     ) -> Option<(u64, f32)> {
-        let (band_top, band_height) = self.target_band(target)?;
+        let (band_top, band_height) = self.target_band(&target)?;
         let value = value_from_y(pos.y, band_top, band_height);
-        let lane = self.automation.lanes.get(target)?;
+        let lane = self.automation.lanes.get(&target)?;
         if index >= lane.points.len() {
             return None;
         }
@@ -509,13 +509,13 @@ impl TimelineCanvas<'_> {
     /// to flipping the default when the point is gone.
     pub(super) fn toggled_breakpoint_curve(
         &self,
-        target: &AutomationTarget,
+        target: AutomationTarget,
         index: usize,
     ) -> CurveKind {
         let current = self
             .automation
             .lanes
-            .get(target)
+            .get(&target)
             .and_then(|l| l.points.get(index))
             .map(|p| p.curve)
             .unwrap_or_default();
@@ -528,7 +528,7 @@ impl TimelineCanvas<'_> {
 
 /// Format a target's real value for the live read-out: dB for gain, a signed
 /// pan position, On/Off for mute, two decimals for a plugin param.
-pub fn format_real_value(target: &AutomationTarget, real: f32) -> String {
+pub fn format_real_value(target: AutomationTarget, real: f32) -> String {
     match target {
         AutomationTarget::TrackGain(_)
         | AutomationTarget::BusGain(_)

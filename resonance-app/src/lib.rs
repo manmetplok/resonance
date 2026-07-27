@@ -107,6 +107,9 @@ pub struct Resonance {
     pub(crate) groove_library: Vec<resonance_audio::quantize::GrooveTemplate>,
     /// Compose tab state: section definitions, placements, chord progressions.
     pub(crate) compose: compose::ComposeState,
+    /// Parameter-automation lanes, mirrored one-way from engine events,
+    /// plus the transient live automated values. See `state::automation`.
+    pub(crate) automation: state::AutomationState,
 
     /// MIDI quantize state: the project's user-extracted groove library
     /// and the last-used quantize / humanize settings (ba todo #395).
@@ -161,10 +164,6 @@ pub struct Resonance {
 
     /// Reference-track (A/B) comparison state. See `crate::reference`.
     pub(crate) reference: reference::ReferenceState,
-
-    /// Parameter-automation lanes, mirrored one-way from engine events,
-    /// plus the transient live automated values. See `state::automation`.
-    pub(crate) automation: state::AutomationState,
     /// Markov table registry for chord generators. Constructed once at
     /// startup with all built-in tables.
     pub(crate) table_registry: TableRegistry,
@@ -540,6 +539,7 @@ impl Resonance {
             midi_clips: Vec::new(),
             groove_library: Vec::new(),
             compose: compose::ComposeState::default(),
+            automation: state::AutomationState::default(),
             quantize: state::QuantizeState::default(),
             pool: state::MediaPool::with_user_folders(
                 settings.media.favourites.clone(),
@@ -552,7 +552,6 @@ impl Resonance {
             drag_placement: None,
             relink: state::RelinkState::default(),
             reference: reference::ReferenceState::default(),
-            automation: state::AutomationState::default(),
             table_registry: TableRegistry::with_builtins(),
 
             tempo_events: vec![state::TempoEvent { bar: 0, bpm: 120.0 }],

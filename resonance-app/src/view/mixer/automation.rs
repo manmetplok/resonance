@@ -28,7 +28,7 @@ use iced::{alignment, Element, Length};
 use crate::message::{AutomationMessage, Message};
 use crate::state::{AutomationState, PluginSlotState};
 use crate::theme;
-use resonance_common::{AutomationLane, AutomationTarget};
+use resonance_common::{AutomationLane, AutomationTarget, DeviceParam};
 
 /// The channel a strip's automation header belongs to. Resolves an
 /// [`AutoChoice`] kind into the concrete [`AutomationTarget`].
@@ -54,6 +54,12 @@ enum AutoKind {
     Pan,
     Mute,
     Param { instance: u64, param_id: u32 },
+    /// A named parameter on the track's selected external-instrument device
+    /// definition (epic #40, doc #201 §5). Only ever built for a
+    /// [`AutoChan::Track`] whose track has a device preset selected; resolves
+    /// to [`AutomationTarget::DeviceParam`]. `param_id` is the
+    /// [`DeviceParam::id`].
+    Device { param_id: String },
 }
 
 impl std::fmt::Display for AutoChoice {
@@ -96,9 +102,17 @@ fn master_base() -> Rc<[AutoChoice]> {
     BASE.with(Rc::clone)
 }
 
-/// Build the picker option list for `chan`: the cached gain/pan/mute base
-/// plus one entry per exposed param on each hosted plugin instance.
-fn choices_for(chan: AutoChan, plugins: &[PluginSlotState]) -> Vec<AutoChoice> {
+/// Build the picker option list for `chan`: the cached gain/pan/mute base,
+/// one entry per exposed param on each hosted plugin instance, and — for a
+/// track with an external-instrument device preset selected — one entry per
+/// named [`DeviceParam`], clustered by [`DeviceParam::group`] (epic #40, doc
+/// #201 §5). `device_params` is empty when no preset is selected (or the
+/// channel is a bus/master), so the picker hides device params exactly then.
+fn choices_for(
+    chan: AutoChan,
+    plugins: &[PluginSlotState],
+    device_params: &[DeviceParam],
+) -> Vec<AutoChoice> {
     let base = match chan {
         AutoChan::Master => master_base(),
         _ => full_base(),
@@ -115,7 +129,42 @@ fn choices_for(chan: AutoChan, plugins: &[PluginSlotState]) -> Vec<AutoChoice> {
             });
         }
     }
+    // Device params, clustered by group so related controls (Filter,
+    // Envelope, …) sit together in the dropdown. The group prefixes the
+    // label ("Filter: Cutoff") the same way plugin params prefix with the
+    // plugin name; ungrouped params show their bare name. The definition
+    // lists params already grouped, so file order preserves the clustering.
+    for param in device_params {
+        let label = match &param.group {
+            Some(group) => format!("{}: {}", group, param.name),
+            None => param.name.clone(),
+        };
+        out.push(AutoChoice {
+            kind: AutoKind::Device {
+                param_id: param.id.clone(),
+            },
+            label: Rc::from(label),
+        });
+    }
     out
+}
+
+/// Test-only: the ordered picker option labels a *track* strip would show,
+/// given its hosted `plugins` and any resolved `device_params`. Mirrors
+/// [`choices_for`] exactly (a closed `pick_list` renders only its
+/// placeholder, so an integration test can't read the dropdown items off the
+/// rendered tree) — used by `tests/automation_device_params.rs` to assert the
+/// named device params appear, grouped, only when a preset is selected.
+#[doc(hidden)]
+pub(crate) fn track_choice_labels(
+    track_id: u64,
+    plugins: &[PluginSlotState],
+    device_params: &[DeviceParam],
+) -> Vec<String> {
+    choices_for(AutoChan::Track(track_id), plugins, device_params)
+        .into_iter()
+        .map(|c| c.label.to_string())
+        .collect()
 }
 
 /// Resolve a picked [`AutoChoice`] into the concrete target for `chan`.
@@ -132,9 +181,17 @@ fn target_of(chan: AutoChan, kind: &AutoKind) -> Option<AutomationTarget> {
             instance: *instance,
             param_id: *param_id,
         },
-        // Master has no pan/mute target; those choices are never built for
-        // a master strip, so this arm is unreachable in practice.
-        (AutoChan::Master, _) => return None,
+        // Device params only exist on a track channel (they're built solely
+        // for `AutoChan::Track` with a selected preset). The lane addresses
+        // the track directly.
+        (AutoChan::Track(id), AutoKind::Device { param_id }) => AutomationTarget::DeviceParam {
+            track: id,
+            param_id: param_id.clone(),
+        },
+        // Master has no pan/mute target, and no channel other than a track
+        // builds a device choice; those choices are never built here, so
+        // these arms are unreachable in practice.
+        (AutoChan::Master, _) | (_, AutoKind::Device { .. }) => return None,
     })
 }
 
@@ -151,6 +208,7 @@ fn belongs(target: &AutomationTarget, chan: AutoChan, plugins: &[PluginSlotState
         | (AutoChan::Bus(id), AutomationTarget::BusMute(t)) => id == *t,
         (AutoChan::Master, AutomationTarget::MasterGain) => true,
         (_, AutomationTarget::PluginParam { instance, .. }) => hosts(*instance),
+        (AutoChan::Track(id), AutomationTarget::DeviceParam { track, .. }) => id == *track,
         _ => false,
     }
 }
@@ -167,10 +225,11 @@ fn priority(target: &AutomationTarget) -> u32 {
         | AutomationTarget::MasterGain => 0,
         AutomationTarget::TrackPan(_) | AutomationTarget::BusPan(_) => 1,
         AutomationTarget::TrackMute(_) | AutomationTarget::BusMute(_) => 2,
+        // Device params sit below plugin params; several device lanes tie at
+        // this tier, and `min_by_key` surfaces one of them as the header's
+        // primary lane (the exact one among ties is unimportant).
+        AutomationTarget::DeviceParam { .. } => 5,
         AutomationTarget::PluginParam { param_id, .. } => 10u32.saturating_add(*param_id),
-        // Device params never surface on a mixer strip header (they drive
-        // an external device, not the strip's own controls).
-        AutomationTarget::DeviceParam { .. } => u32::MAX,
     }
 }
 
@@ -201,16 +260,24 @@ pub(super) fn live_value(
     automation.live_value(target)
 }
 
-/// Short human label for a lane target, shown beside the Read toggle.
-fn target_label(target: &AutomationTarget) -> &'static str {
+/// Short human label for a lane target, shown beside the Read toggle. A
+/// `DeviceParam` lane resolves to its named [`DeviceParam::name`] from
+/// `device_params` (the track's selected device definition), falling back to
+/// a generic label if the param id is unknown (e.g. the preset changed while
+/// a lane survives).
+fn target_label(target: &AutomationTarget, device_params: &[DeviceParam]) -> String {
     match target {
         AutomationTarget::TrackGain(_)
         | AutomationTarget::BusGain(_)
-        | AutomationTarget::MasterGain => "Volume",
-        AutomationTarget::TrackPan(_) | AutomationTarget::BusPan(_) => "Pan",
-        AutomationTarget::TrackMute(_) | AutomationTarget::BusMute(_) => "Mute",
-        AutomationTarget::PluginParam { .. } => "Param",
-        AutomationTarget::DeviceParam { .. } => "Device",
+        | AutomationTarget::MasterGain => "Volume".to_string(),
+        AutomationTarget::TrackPan(_) | AutomationTarget::BusPan(_) => "Pan".to_string(),
+        AutomationTarget::TrackMute(_) | AutomationTarget::BusMute(_) => "Mute".to_string(),
+        AutomationTarget::PluginParam { .. } => "Param".to_string(),
+        AutomationTarget::DeviceParam { param_id, .. } => device_params
+            .iter()
+            .find(|p| &p.id == param_id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "Device".to_string()),
     }
 }
 
@@ -221,8 +288,9 @@ pub(super) fn automation_header<'a>(
     automation: &AutomationState,
     chan: AutoChan,
     plugins: &[PluginSlotState],
+    device_params: &[DeviceParam],
 ) -> Element<'a, Message> {
-    let options = choices_for(chan, plugins);
+    let options = choices_for(chan, plugins, device_params);
     let picker = pick_list(options, None::<AutoChoice>, move |choice: AutoChoice| {
         match target_of(chan, &choice.kind) {
             Some(target) => Message::Automation(AutomationMessage::AddLane(target)),
@@ -242,7 +310,7 @@ pub(super) fn automation_header<'a>(
         let target = lane.target.clone();
         let enabled = lane.enabled;
 
-        let name = text(target_label(&target))
+        let name = text(target_label(&target, device_params))
             .size(9)
             .color(theme::TEXT_2);
 
@@ -252,7 +320,9 @@ pub(super) fn automation_header<'a>(
                 .font(theme::UI_FONT_SEMIBOLD)
                 .color(if enabled { theme::WARM } else { theme::TEXT_3 }),
         )
-        .on_press(Message::Automation(AutomationMessage::ToggleRead(target.clone())))
+        .on_press(Message::Automation(AutomationMessage::ToggleRead(
+            target.clone(),
+        )))
         .padding([1, 5])
         .style(move |_theme, status| theme::toggle_button_style(enabled, theme::WARM, true, status));
 

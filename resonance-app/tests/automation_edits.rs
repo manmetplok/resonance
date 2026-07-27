@@ -33,13 +33,13 @@ fn add_lane_seeds_one_breakpoint_at_current_value() {
     let mut app = app_with_track(1, -6.0);
     let target = AutomationTarget::TrackGain(1);
 
-    send(&mut app, AutomationMessage::AddLane(target));
+    send(&mut app, AutomationMessage::AddLane(target.clone()));
 
     let lane = app.test_automation().lanes.get(&target).expect("lane added");
     assert!(lane.enabled, "a freshly-added lane reads by default");
     assert_eq!(lane.points.len(), 1, "seeded with exactly one breakpoint");
     assert_eq!(lane.points[0].time_frames, 0);
-    let expected = real_to_lane_value(target, -6.0);
+    let expected = real_to_lane_value(&target, -6.0);
     assert!((lane.points[0].value - expected).abs() < 1e-6);
     // The seeded value round-trips back to the static dB it came from.
     let real = GAIN_MIN_DB + lane.points[0].value * (GAIN_MAX_DB - GAIN_MIN_DB);
@@ -50,11 +50,11 @@ fn add_lane_seeds_one_breakpoint_at_current_value() {
 fn add_lane_is_noop_when_lane_exists() {
     let mut app = app_with_track(1, 0.0);
     let target = AutomationTarget::TrackGain(1);
-    send(&mut app, AutomationMessage::AddLane(target));
+    send(&mut app, AutomationMessage::AddLane(target.clone()));
     let id = app.test_automation().lanes[&target].id;
 
     // A second add must not replace or duplicate the lane.
-    send(&mut app, AutomationMessage::AddLane(target));
+    send(&mut app, AutomationMessage::AddLane(target.clone()));
     assert_eq!(app.test_automation().lanes.len(), 1);
     assert_eq!(app.test_automation().lanes[&target].id, id);
 }
@@ -63,10 +63,10 @@ fn add_lane_is_noop_when_lane_exists() {
 fn remove_lane_drops_lane_and_live_value() {
     let mut app = app_with_track(1, 0.0);
     let target = AutomationTarget::TrackPan(1);
-    send(&mut app, AutomationMessage::AddLane(target));
+    send(&mut app, AutomationMessage::AddLane(target.clone()));
     assert!(app.test_automation().lanes.contains_key(&target));
 
-    send(&mut app, AutomationMessage::RemoveLane(target));
+    send(&mut app, AutomationMessage::RemoveLane(target.clone()));
     assert!(!app.test_automation().lanes.contains_key(&target));
 }
 
@@ -74,12 +74,12 @@ fn remove_lane_drops_lane_and_live_value() {
 fn toggle_read_flips_enabled() {
     let mut app = app_with_track(1, 0.0);
     let target = AutomationTarget::TrackGain(1);
-    send(&mut app, AutomationMessage::AddLane(target));
+    send(&mut app, AutomationMessage::AddLane(target.clone()));
     assert!(app.test_automation().lanes[&target].enabled);
 
-    send(&mut app, AutomationMessage::ToggleRead(target));
+    send(&mut app, AutomationMessage::ToggleRead(target.clone()));
     assert!(!app.test_automation().lanes[&target].enabled);
-    send(&mut app, AutomationMessage::ToggleRead(target));
+    send(&mut app, AutomationMessage::ToggleRead(target.clone()));
     assert!(app.test_automation().lanes[&target].enabled);
 }
 
@@ -92,7 +92,7 @@ fn add_breakpoint_creates_lane_and_keeps_points_sorted() {
     send(
         &mut app,
         AutomationMessage::AddBreakpoint {
-            target,
+            target: target.clone(),
             time_frames: 48_000,
             value: 1.0,
             curve: CurveKind::Linear,
@@ -101,7 +101,7 @@ fn add_breakpoint_creates_lane_and_keeps_points_sorted() {
     send(
         &mut app,
         AutomationMessage::AddBreakpoint {
-            target,
+            target: target.clone(),
             time_frames: 0,
             value: 0.0,
             curve: CurveKind::Linear,
@@ -118,11 +118,11 @@ fn delete_last_breakpoint_clears_the_lane() {
     let mut app = app_with_track(1, 0.0);
     let target = AutomationTarget::TrackGain(1);
     // Seeded lane has exactly one breakpoint.
-    send(&mut app, AutomationMessage::AddLane(target));
+    send(&mut app, AutomationMessage::AddLane(target.clone()));
 
     send(
         &mut app,
-        AutomationMessage::DeleteBreakpoint { target, index: 0 },
+        AutomationMessage::DeleteBreakpoint { target: target.clone(), index: 0 },
     );
     // An enabled empty lane would silence the target, so it's cleared.
     assert!(!app.test_automation().lanes.contains_key(&target));
@@ -136,7 +136,7 @@ fn delete_breakpoint_keeps_remaining_points() {
         send(
             &mut app,
             AutomationMessage::AddBreakpoint {
-                target,
+                target: target.clone(),
                 time_frames: t,
                 value: v,
                 curve: CurveKind::Linear,
@@ -146,7 +146,7 @@ fn delete_breakpoint_keeps_remaining_points() {
 
     send(
         &mut app,
-        AutomationMessage::DeleteBreakpoint { target, index: 1 },
+        AutomationMessage::DeleteBreakpoint { target: target.clone(), index: 1 },
     );
     let lane = app.test_automation().lanes.get(&target).expect("lane");
     let times: Vec<u64> = lane.points.iter().map(|p| p.time_frames).collect();
@@ -160,7 +160,7 @@ fn set_curve_kind_updates_the_point() {
     send(
         &mut app,
         AutomationMessage::AddBreakpoint {
-            target,
+            target: target.clone(),
             time_frames: 0,
             value: 1.0,
             curve: CurveKind::Linear,
@@ -170,7 +170,7 @@ fn set_curve_kind_updates_the_point() {
     send(
         &mut app,
         AutomationMessage::SetCurveKind {
-            target,
+            target: target.clone(),
             index: 0,
             curve: CurveKind::Stepped,
         },
@@ -189,7 +189,7 @@ fn drag_breakpoint_moves_and_resorts() {
         send(
             &mut app,
             AutomationMessage::AddBreakpoint {
-                target,
+                target: target.clone(),
                 time_frames: t,
                 value: v,
                 curve: CurveKind::Linear,
@@ -201,7 +201,7 @@ fn drag_breakpoint_moves_and_resorts() {
     send(
         &mut app,
         AutomationMessage::DragBreakpoint {
-            target,
+            target: target.clone(),
             index: 0,
             time_frames: 96_000,
             value: 0.25,
@@ -222,21 +222,21 @@ fn classify_undo_actions() {
     let is_record = |m: AutomationMessage| {
         matches!(classify(&Message::Automation(m)), UndoAction::Record)
     };
-    assert!(is_record(AutomationMessage::AddLane(target)));
-    assert!(is_record(AutomationMessage::RemoveLane(target)));
-    assert!(is_record(AutomationMessage::ToggleRead(target)));
-    assert!(is_record(AutomationMessage::DeleteBreakpoint { target, index: 0 }));
+    assert!(is_record(AutomationMessage::AddLane(target.clone())));
+    assert!(is_record(AutomationMessage::RemoveLane(target.clone())));
+    assert!(is_record(AutomationMessage::ToggleRead(target.clone())));
+    assert!(is_record(AutomationMessage::DeleteBreakpoint { target: target.clone(), index: 0 }));
 
     assert!(matches!(
         classify(&Message::Automation(AutomationMessage::StartBreakpointDrag {
-            target,
+            target: target.clone(),
             index: 0
         })),
         UndoAction::Begin
     ));
     assert!(matches!(
         classify(&Message::Automation(AutomationMessage::DragBreakpoint {
-            target,
+            target: target.clone(),
             index: 0,
             time_frames: 0,
             value: 0.0
@@ -255,7 +255,7 @@ fn undo_redo_round_trips_an_added_lane() {
     app.test_set_project_path(std::path::PathBuf::from("/tmp/resonance-test"));
     let target = AutomationTarget::TrackGain(1);
 
-    send(&mut app, AutomationMessage::AddLane(target));
+    send(&mut app, AutomationMessage::AddLane(target.clone()));
     assert!(app.test_automation().lanes.contains_key(&target));
 
     // Undo removes the lane (structure-preserving diff replay reconciles

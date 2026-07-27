@@ -87,8 +87,10 @@ impl crate::Resonance {
 
         // Per-channel automation lane header (todo #383).
         let auto_chan = super::automation::AutoChan::Bus(bus.id);
+        // Busses have no external-instrument device preset, so no device
+        // params ever appear in their automation picker.
         let auto_header =
-            super::automation::automation_header(&self.automation, auto_chan, &bus.plugins);
+            super::automation::automation_header(&self.automation, auto_chan, &bus.plugins, &[]);
 
         // Pan knob — vertical drag to change, double-click to reset.
         let pan_live = super::automation::live_value(

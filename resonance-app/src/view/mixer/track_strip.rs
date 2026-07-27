@@ -249,8 +249,24 @@ impl crate::Resonance {
         // toggle (todo #383). Sits above the pan/fader block so the
         // tinted controls read directly under their lane header.
         let auto_chan = super::automation::AutoChan::Track(track.id);
-        let auto_header =
-            super::automation::automation_header(&self.automation, auto_chan, &track.plugins);
+        // Named device params for the automation picker (epic #40, doc #201
+        // §5): resolve the track's selected external-instrument device preset
+        // to its definition's params. Empty (so the picker hides device
+        // params) unless this is an external-instrument track with a preset
+        // selected whose id resolves in the registry.
+        let device_params: &[resonance_common::DeviceParam] = self
+            .external_instruments
+            .get(&track.id)
+            .and_then(|ext| ext.device_id.as_deref())
+            .and_then(|id| self.device_registry.get(id))
+            .map(|def| def.params.as_slice())
+            .unwrap_or(&[]);
+        let auto_header = super::automation::automation_header(
+            &self.automation,
+            auto_chan,
+            &track.plugins,
+            device_params,
+        );
 
         // Pan knob — vertical drag to change, double-click to reset.
         // Tinted with the live automated pan while a Read-enabled pan

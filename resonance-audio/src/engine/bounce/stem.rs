@@ -229,9 +229,11 @@ pub fn render_stem(
     let render_stop = render_end + comp_latency;
     let mut skip_frames = comp_latency as usize;
 
-    // Stem export renders the static mix; parameter-automation lanes are
-    // not threaded through the stem spawn path yet.
-    let automation = super::super::AutomationSnapshot::default();
+    // Stem export predates parameter automation (epic #40) and threads no
+    // lane snapshot through its command path, so render with an empty one —
+    // matching the pre-merge stem behaviour. Automated lanes still apply on
+    // the live/bounce/export paths.
+    let automation = crate::engine::AutomationSnapshot::default();
     let ctx = ChunkCtx {
         shared,
         tracks,
@@ -241,10 +243,10 @@ pub fn render_stem(
         midi_clips,
         plugins,
         tempo_map: &bounce_tm,
+        automation: &automation,
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
-        automation: &automation,
     };
     let mut scratch = ChunkScratch::new();
 

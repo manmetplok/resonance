@@ -46,6 +46,14 @@ pub struct UndoExtras {
     /// a session the undo system snapshots them separately because
     /// the project-file form of a clip isn't rebuilt on each edit.
     pub vocal_clip_lyrics: HashMap<ClipId, Vec<String>>,
+    /// App-side parameter-automation lanes, one per target. Captured here
+    /// so lane and breakpoint edits are reversible. Automation lanes are
+    /// currently runtime-only — they aren't written into `ProjectFile`
+    /// yet (project persistence lands in todo #379), so they ride in the
+    /// extras like the other state the replay path can't rebuild on its
+    /// own. `restore_automation_lanes` reconciles the engine to this set
+    /// on undo/redo.
+    pub automation_lanes: HashMap<AutomationTarget, AutomationLane>,
     /// Reference-track (A/B) content. References aren't part of the
     /// `ProjectFile` yet, so `replay_loaded_project` can't rebuild them;
     /// the undoable subset is snapshotted here and reapplied after the
@@ -96,14 +104,6 @@ pub struct UndoExtras {
     /// (`applied_param_ids`) are *not* captured — they reflect the engine's
     /// live state, not project state.
     pub external_instrument_devices: HashMap<TrackId, Option<String>>,
-    /// App-side parameter-automation lanes, one per target. Captured here
-    /// so lane and breakpoint edits are reversible. Automation lanes are
-    /// currently runtime-only — they aren't written into `ProjectFile`
-    /// yet (project persistence lands in todo #379), so they ride in the
-    /// extras like the other state the replay path can't rebuild on its
-    /// own. `restore_automation_lanes` reconciles the engine to this set
-    /// on undo/redo.
-    pub automation_lanes: HashMap<AutomationTarget, AutomationLane>,
 }
 
 /// Re-apply the snapshotted full arrangements onto the compose state after
@@ -184,6 +184,7 @@ impl crate::Resonance {
             compose_derived_clips: self.compose.derived_clips.clone(),
             compose_next_derived_clip_id: self.compose.next_derived_clip_id,
             vocal_clip_lyrics: self.compose.vocal_audio.clip_lyrics.clone(),
+            automation_lanes: self.automation.lanes.clone(),
             reference: self.reference.undo_snapshot(),
             chord_track: self.chord_track.clone(),
             compose_arrangements: self
@@ -219,7 +220,6 @@ impl crate::Resonance {
                 .iter()
                 .map(|(id, st)| (*id, st.device_id.clone()))
                 .collect(),
-            automation_lanes: self.automation.lanes.clone(),
         };
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
@@ -336,46 +336,6 @@ impl crate::Resonance {
         self.apply_clip_fade_gain_restore(&extras.clip_fade_gain);
     }
 
-    /// Reconcile the engine's automation lanes to `target` and overwrite
-    /// the app-side mirror to match. Shared by both undo/redo restore
-    /// paths (the structure-preserving diff replay and the full
-    /// clear-and-replay), and correct for either because the engine's
-    /// lane set always equals the current mirror at call time: the diff
-    /// path never touches lanes, and `ClearAll` deliberately leaves the
-    /// engine's automation lanes intact (they are re-keyed per target,
-    /// not by track/clip identity).
-    ///
-    /// Lanes present now but absent from `target` are cleared; lanes that
-    /// are new or whose breakpoints/Read flag changed are re-sent
-    /// whole-lane. Transient live-value tints for dropped targets are
-    /// discarded so a stale fader/knob tint can't outlive its lane.
-    pub(crate) fn restore_automation_lanes(
-        &mut self,
-        target: &HashMap<AutomationTarget, AutomationLane>,
-    ) {
-        let stale: Vec<AutomationTarget> = self
-            .automation
-            .lanes
-            .keys()
-            .filter(|t| !target.contains_key(t))
-            .cloned()
-            .collect();
-        for t in stale {
-            let _ = self.engine.send(AudioCommand::ClearAutomationLane { target: t });
-        }
-        for (t, lane) in target {
-            if self.automation.lanes.get(t) != Some(lane) {
-                let _ = self
-                    .engine
-                    .send(AudioCommand::SetAutomationLane { lane: lane.clone() });
-            }
-        }
-        self.automation.lanes = target.clone();
-        self.automation
-            .live_values
-            .retain(|t, _| target.contains_key(t));
-    }
-
     /// Re-apply snapshotted clip fade/gain to the GUI mirror and re-sync the
     /// engine. Used by both restore paths (the slow `finalize_undo_restore`
     /// and the fast `try_diff_replay`). For each clip still present, the
@@ -434,7 +394,9 @@ impl crate::Resonance {
     /// returning to external mode starts online and is re-checked on the next
     /// ping.
     pub(crate) fn restore_external_instruments(&mut self, extras: &UndoExtras) {
-        // Drop external mode from tracks absent in the target snapshot.
+        // Drop external mode from tracks absent in the target snapshot. Clear
+        // their engine device-param map too, so a track leaving external mode
+        // doesn't leave stale bindings behind on the engine side.
         let stale: Vec<TrackId> = self
             .external_instruments
             .keys()
@@ -483,6 +445,47 @@ impl crate::Resonance {
             state.apply_config(config);
             state.device_id = device_id;
         }
+    }
+
+    /// Reconcile the engine's automation lanes to `target` and overwrite
+    /// the app-side mirror to match. Shared by both undo/redo restore
+    /// paths (the structure-preserving diff replay and the full
+    /// clear-and-replay), and correct for either because the engine's
+    /// lane set always equals the current mirror at call time: the diff
+    /// path never touches lanes, and `ClearAll` deliberately leaves the
+    /// engine's automation lanes intact (they are re-keyed per target,
+    /// not by track/clip identity).
+    ///
+    /// Lanes present now but absent from `target` are cleared; lanes that
+    /// are new or whose breakpoints/Read flag changed are re-sent
+    /// whole-lane. Transient live-value tints for dropped targets are
+    /// discarded so a stale fader/knob tint can't outlive its lane.
+    pub(crate) fn restore_automation_lanes(
+        &mut self,
+        target: &HashMap<AutomationTarget, AutomationLane>,
+    ) {
+        let stale: Vec<AutomationTarget> = self
+            .automation
+            .lanes
+            .keys()
+            .filter(|t| !target.contains_key(t))
+            .cloned()
+            .collect();
+        for t in stale {
+            let _ = self.engine.send(AudioCommand::ClearAutomationLane { target: t });
+        }
+        for (t, lane) in target {
+            if self.automation.lanes.get(t) != Some(lane) {
+                let _ = self
+                    .engine
+                    .send(AudioCommand::SetAutomationLane { lane: lane.clone() });
+            }
+        }
+        self.automation.lanes = target.clone();
+        self.automation.bump_allocator_past_lanes();
+        self.automation
+            .live_values
+            .retain(|t, _| target.contains_key(t));
     }
 
     /// Attempt to undo. No-ops (returning false) if the history is empty

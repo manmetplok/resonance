@@ -64,6 +64,10 @@ pub struct TimelineCanvas<'a> {
     pub section_placements: &'a [crate::compose::SectionPlacementState],
     pub section_definitions: &'a [crate::compose::SectionDefinitionState],
     pub selected_placement_id: Option<u64>,
+    /// App-side mirror of the engine's parameter-automation lanes. The
+    /// timeline renders the primary lane for each track as an overlay band
+    /// (doc #162 §3); empty => no lanes drawn.
+    pub automation: &'a crate::state::AutomationState,
     /// Arrangement markers (flags + region spans) rendered in the ruler
     /// band. Empty slice => nothing drawn. `selected_marker_id` recolors
     /// the matching flag / span with the accent (todo #368).
@@ -82,10 +86,6 @@ pub struct TimelineCanvas<'a> {
     /// handlers publish `DragMessage::Hover` / `Drop`. Drawn in the uncached
     /// overlay pass so it repaints as the cursor moves.
     pub drag: Option<&'a state::DragPlacement>,
-    /// App-side mirror of the engine's parameter-automation lanes. The
-    /// timeline renders the primary lane for each track as an overlay band
-    /// (doc #162 §3); empty => no lanes drawn.
-    pub automation: &'a crate::state::AutomationState,
 }
 
 impl TimelineCanvas<'_> {
@@ -253,10 +253,6 @@ pub struct TimelineState {
     pub(super) last_global_click: Option<(Instant, state::GlobalTrackKind)>,
     /// Active tempo-event drag.
     pub(super) tempo_drag: Option<TempoDrag>,
-    /// Active arrangement-marker drag (start move or region-edge resize).
-    pub(super) marker_drag: Option<MarkerDrag>,
-    /// Most recent click on a marker flag, for double-click (rename) detection.
-    pub(super) last_marker_click: Option<(Instant, u64)>,
     /// Active automation-breakpoint drag (todo #382).
     pub(super) breakpoint_drag: Option<BreakpointDrag>,
     /// The breakpoint the last press landed on, kept for keyboard delete.
@@ -265,6 +261,10 @@ pub struct TimelineState {
     pub(super) selected_breakpoint: Option<(AutomationTarget, usize)>,
     /// Last breakpoint press, for double-click (curve-kind toggle) detection.
     pub(super) last_breakpoint_click: Option<(Instant, AutomationTarget, usize)>,
+    /// Active arrangement-marker drag (start move or region-edge resize).
+    pub(super) marker_drag: Option<MarkerDrag>,
+    /// Most recent click on a marker flag, for double-click (rename) detection.
+    pub(super) last_marker_click: Option<(Instant, u64)>,
     /// Geometry cache — re-runs the draw closure only when the cached
     /// fingerprint mismatches. Skips a full redraw on every hover /
     /// sibling-update event, which is most of them.
@@ -327,6 +327,11 @@ pub struct TimelineFingerprint {
     /// canvas cache would hold a stale chord layout after a chord is
     /// added / removed / re-rolled inside Compose.
     pub section_chord_total: usize,
+    /// Hash of every automation lane's target, Read state and breakpoints.
+    /// Repaints the cached lane geometry when a lane is added, cleared, or
+    /// edited. The *live* playhead value is drawn uncached, so it is
+    /// intentionally excluded here (same discipline as `playhead`).
+    pub automation_hash: u64,
     pub markers_len: usize,
     /// Hash of every marker's `(id, start, end, name, color)` so the cache
     /// invalidates when a marker is added, moved, renamed, recolored or
@@ -344,11 +349,6 @@ pub struct TimelineFingerprint {
     /// Hash of the frozen-track set so the "unsupported" hatch appears /
     /// clears the moment a track is frozen or thawed.
     pub frozen_hash: u64,
-    /// Hash of every automation lane's target, Read state and breakpoints.
-    /// Repaints the cached lane geometry when a lane is added, cleared, or
-    /// edited. The *live* playhead value is drawn uncached, so it is
-    /// intentionally excluded here (same discipline as `playhead`).
-    pub automation_hash: u64,
 }
 
 impl<'a> TimelineCanvas<'a> {
@@ -371,6 +371,24 @@ impl<'a> TimelineCanvas<'a> {
             e.denominator.hash(&mut sh);
         }
         let signature_events_hash = sh.finish();
+
+        // Hash lane geometry so an add / clear / breakpoint edit invalidates
+        // the cached lane layer. Iterating the HashMap in arbitrary order is
+        // fine: equal lane sets must hash equal, so fold each lane's hash into
+        // an order-independent xor accumulator.
+        let mut automation_hash: u64 = self.automation.lanes.len() as u64;
+        for lane in self.automation.lanes.values() {
+            let mut lh = std::collections::hash_map::DefaultHasher::new();
+            lane.target.hash(&mut lh);
+            lane.id.hash(&mut lh);
+            lane.enabled.hash(&mut lh);
+            for p in &lane.points {
+                p.time_frames.hash(&mut lh);
+                p.value.to_bits().hash(&mut lh);
+                p.curve.hash(&mut lh);
+            }
+            automation_hash ^= lh.finish();
+        }
 
         // Hash the full marker content so any in-place edit (move, rename,
         // recolor, region resize) invalidates the cache and the flag / span
@@ -407,24 +425,6 @@ impl<'a> TimelineCanvas<'a> {
         }
         let frozen_hash = frz.finish();
 
-        // Hash lane geometry so an add / clear / breakpoint edit invalidates
-        // the cached lane layer. Iterating the HashMap in arbitrary order is
-        // fine: equal lane sets must hash equal, so fold each lane's hash into
-        // an order-independent xor accumulator.
-        let mut automation_hash: u64 = self.automation.lanes.len() as u64;
-        for lane in self.automation.lanes.values() {
-            let mut lh = std::collections::hash_map::DefaultHasher::new();
-            lane.target.hash(&mut lh);
-            lane.id.hash(&mut lh);
-            lane.enabled.hash(&mut lh);
-            for p in &lane.points {
-                p.time_frames.hash(&mut lh);
-                p.value.to_bits().hash(&mut lh);
-                p.curve.hash(&mut lh);
-            }
-            automation_hash ^= lh.finish();
-        }
-
         TimelineFingerprint {
             clips_len: self.clips.len(),
             midi_clips_len: self.midi_clips.len(),
@@ -455,12 +455,12 @@ impl<'a> TimelineCanvas<'a> {
                 .iter()
                 .map(|d| d.chords.len())
                 .sum(),
+            automation_hash,
             markers_len: self.markers.len(),
             markers_hash,
             selected_marker_id: self.selected_marker_id,
             clips_hash,
             frozen_hash,
-            automation_hash,
         }
     }
 }
@@ -873,6 +873,11 @@ impl<'a> TimelineCanvas<'a> {
             );
             frame.fill(&tab, theme::WARM);
         }
+
+        // Live automated-value indicators ride the uncached overlay so they
+        // follow the playhead without invalidating the cached lane geometry.
+        self.draw_automation_live_values(frame, &sorted_tracks, header_height, y_off, bounds);
+
         // Drag-to-timeline placement affordances (doc #175, todo #605):
         // the lit target lane, dashed grid-snapped ghost clip, the
         // new-audio-track drop zone, and the drag pill + drop tooltip. Drawn
@@ -880,10 +885,6 @@ impl<'a> TimelineCanvas<'a> {
         if let Some(drag) = self.drag {
             self.draw_drag_placement(frame, bounds, drag);
         }
-
-        // Live automated-value indicators ride the uncached overlay so they
-        // follow the playhead without invalidating the cached lane geometry.
-        self.draw_automation_live_values(frame, &sorted_tracks, header_height, y_off, bounds);
 
         // The ruler-height local is unused if neither overlay fires;
         // keep it so future overlay additions (e.g. selection brushes)

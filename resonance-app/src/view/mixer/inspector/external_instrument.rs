@@ -7,7 +7,6 @@
 //! live in `widgets`. The audio-return device list helper (`return_device_choices`)
 //! lives in `io`.
 
-use iced::widget::text::Shaping;
 use iced::widget::{button, column, container, pick_list, row, slider, text, Space};
 use iced::{alignment, Element, Length};
 
@@ -369,7 +368,7 @@ fn ext_patch_block(
         let group_readout = text(selected_group)
             .size(11)
             .color(theme::TEXT_2)
-            .shaping(Shaping::Advanced);
+            .shaping(iced::widget::text::Shaping::Advanced);
         column![
             patch_row(bank_tile, patch_picker.into()),
             Space::new().height(8),
@@ -452,8 +451,8 @@ fn ext_patch_block(
         ..Default::default()
     });
 
-    // The "Muse preset →" chip is a disabled affordance for epic #40 —
-    // when device presets land, patch names replace the raw numbers.
+    // The preset chip lights (accent) and names the selected device once a
+    // preset is chosen (epic #40); until then it reads as a dim hint.
     let label = row![
         text("PATCH")
             .size(9)

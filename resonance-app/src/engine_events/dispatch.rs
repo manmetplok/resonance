@@ -431,6 +431,15 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         }
         E::AllCleared => project_io::all_cleared(r),
 
+        // Automation lanes (doc #162 §3, todo #378): one-way engine→app
+        // mirror of lane state into `AutomationState`, plus the throttled
+        // live automated value into the transient live-value map.
+        E::AutomationLaneChanged { lane } => automation::lane_changed(r, lane),
+        E::AutomationLaneCleared { target } => automation::lane_cleared(r, target),
+        E::AutomatedValue { target, value_norm } => {
+            automation::automated_value(r, target, value_norm)
+        }
+
         // Reference-track (A/B) events fold into `Resonance::reference`.
         E::ReferenceAnalysisProgress { id, stage } => reference::analysis_progress(r, id, stage),
         E::ReferenceLoaded {
@@ -465,14 +474,6 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::RefLoopToMixChanged { enabled } => reference::loop_to_mix_changed(r, enabled),
         E::ABMeterSnapshot { mix, reference: ref_meter } => {
             reference::ab_meter_snapshot(r, mix, ref_meter)
-        }
-        // Automation lanes (doc #162 §3, todo #378): one-way engine→app
-        // mirror of lane state into `AutomationState`, plus the throttled
-        // live automated value into the transient live-value map.
-        E::AutomationLaneChanged { lane } => automation::lane_changed(r, lane),
-        E::AutomationLaneCleared { target } => automation::lane_cleared(r, target),
-        E::AutomatedValue { target, value_norm } => {
-            automation::automated_value(r, target, value_norm)
         }
 
         // External-instrument config + device-offline events: mirror the

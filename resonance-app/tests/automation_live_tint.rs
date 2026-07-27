@@ -9,10 +9,10 @@ use resonance_app::Resonance;
 use resonance_audio::types::AudioEvent;
 use resonance_common::{AutomationLane, AutomationTarget, Breakpoint, CurveKind};
 
-fn flat_lane(id: u64, target: AutomationTarget, enabled: bool) -> AutomationLane {
+fn flat_lane(id: u64, target: &AutomationTarget, enabled: bool) -> AutomationLane {
     let mut lane = AutomationLane::new(
         id,
-        target,
+        target.clone(),
         vec![Breakpoint::new(0, 0.5, CurveKind::Linear)],
     );
     lane.enabled = enabled;
@@ -26,10 +26,10 @@ fn live_value_present_only_when_enabled_lane_is_driven() {
 
     // A Read-enabled lane with a throttled value → tint shows that value.
     app.test_apply_engine_event(AudioEvent::AutomationLaneChanged {
-        lane: flat_lane(10, target, true),
+        lane: flat_lane(10, &target, true),
     });
     app.test_apply_engine_event(AudioEvent::AutomatedValue {
-        target,
+        target: target.clone(),
         value_norm: 0.8,
     });
     assert_eq!(app.test_automation().live_value(target), Some(0.8));
@@ -43,7 +43,7 @@ fn live_value_none_without_a_throttled_value() {
     // Lane exists and is enabled but no AutomatedValue has arrived yet
     // (e.g. transport stopped) — nothing to tint.
     app.test_apply_engine_event(AudioEvent::AutomationLaneChanged {
-        lane: flat_lane(11, target, true),
+        lane: flat_lane(11, &target, true),
     });
     assert_eq!(app.test_automation().live_value(target), None);
 }
@@ -56,11 +56,11 @@ fn live_value_none_when_read_disabled() {
     // A Read-disabled lane keeps its points but uses the static value, so
     // the fader must stay un-tinted even if a stale live value lingers.
     app.test_apply_engine_event(AudioEvent::AutomatedValue {
-        target,
+        target: target.clone(),
         value_norm: 0.9,
     });
     app.test_apply_engine_event(AudioEvent::AutomationLaneChanged {
-        lane: flat_lane(12, target, false),
+        lane: flat_lane(12, &target, false),
     });
     assert_eq!(app.test_automation().live_value(target), None);
 }

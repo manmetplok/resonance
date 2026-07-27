@@ -276,15 +276,14 @@ pub(crate) fn engine_thread(
 
     let mut last_playhead_report = std::time::Instant::now();
     let mut last_audition_report = std::time::Instant::now();
-    // Previous-iteration playhead, used to detect a loop wrap so the
-    // cycle-record seam handler can roll the just-finished pass into a take.
-    let mut last_playhead: SamplePos = 0;
-
     // Live automated-value emission (todo #377): throttle clock + the
     // per-target "last value sent" memo. Reset whenever the transport
     // isn't rolling so a fresh play re-tints the controls.
     let mut last_automated_value_emit = std::time::Instant::now();
     let mut live_value_emitter = automation::LiveValueEmitter::default();
+    // Previous-iteration playhead, used to detect a loop wrap so the
+    // cycle-record seam handler can roll the just-finished pass into a take.
+    let mut last_playhead: SamplePos = 0;
 
     // Report actual sample rate to GUI
     let _ = ctx

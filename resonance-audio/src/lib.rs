@@ -66,8 +66,7 @@ pub mod __test_support {
     pub use crate::mixer::{
         auto_gain_ramp, auto_master_volume, auto_muted, mix_audition_overlay, mix_track_clips,
         monitor_catchup_skip, monitor_read_len, ramped_gain, render_aux_for_test, sum_to_output,
-        sum_to_stereo, transport_pos_beats,
-        whole_frame_push_len,
+        sum_to_stereo, transport_pos_beats, whole_frame_push_len,
     };
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
@@ -108,6 +107,14 @@ pub use engine::midi::{emit_device_param_automation, DeviceParamMidiSink};
 #[doc(hidden)]
 pub use engine::midi::{move_midi_clip_in_place, trim_midi_clip_in_place};
 
+/// Test surface for the `SetTrackDeviceParams` command boundary (epic #40,
+/// doc #201 §4). Exposed so the integration test in
+/// `tests/device_params_handler.rs` can drive the engine-side map update +
+/// `TrackDeviceParamsApplied` emission (and the missing-track no-op branch)
+/// without spinning up the engine thread.
+#[doc(hidden)]
+pub use engine::midi::set_track_device_params_in_place;
+
 /// Test surface for the bulk MIDI-edit handlers (quantize / humanize /
 /// groove). Exposed so the engine tests in `tests/midi_bulk_edits.rs` can
 /// drive each bulk command's mutation + event emission (including the
@@ -117,14 +124,6 @@ pub use engine::midi::{
     apply_groove_to_clip_in_place, extract_groove_from_clip_in_place, humanize_midi_notes_in_place,
     quantize_midi_notes_in_place,
 };
-
-/// Test surface for the `SetTrackDeviceParams` command boundary (epic #40,
-/// doc #201 §4). Exposed so the integration test in
-/// `tests/device_params_handler.rs` can drive the engine-side map update +
-/// `TrackDeviceParamsApplied` emission (and the missing-track no-op branch)
-/// without spinning up the engine thread.
-#[doc(hidden)]
-pub use engine::midi::set_track_device_params_in_place;
 
 /// Test surface for the audio clip fade/gain/warp handlers. Exposed so
 /// the integration tests in `tests/clip_fade_gain_handlers.rs` and

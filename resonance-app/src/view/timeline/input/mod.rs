@@ -9,7 +9,6 @@
 use iced::widget::canvas;
 
 use crate::message::Message;
-use resonance_common::AutomationTarget;
 
 pub(in crate::view::timeline) mod hit_test;
 mod global_tracks;
@@ -37,17 +36,6 @@ pub(crate) enum ClipInteraction {
     MidiTrim,
 }
 
-/// Active drag on an automation breakpoint (todo #382). Holds which lane
-/// and which point (by time-sorted index) is moving. The index stays valid
-/// for the whole gesture because [`TimelineCanvas::breakpoint_drag_to`]
-/// clamps the point between its time-neighbors, so the lane never reorders
-/// mid-drag.
-#[derive(Debug, Clone)]
-pub(crate) struct BreakpointDrag {
-    pub target: AutomationTarget,
-    pub index: usize,
-}
-
 /// Active drag on an arrangement marker: either the start pole (moves the
 /// marker) or a region's end edge (resizes it). The target sample is
 /// recomputed from the pointer x on every move, so only the marker id and
@@ -67,6 +55,17 @@ pub(crate) struct TempoDrag {
     pub original_bpm: f32,
     /// Mouse y at drag start.
     pub anchor_y: f32,
+}
+
+/// Active drag on an automation breakpoint (todo #382). Holds which lane
+/// and which point (by time-sorted index) is moving. The index stays valid
+/// for the whole gesture because `TimelineCanvas::breakpoint_drag_to`
+/// clamps the point between its time-neighbors, so the lane never reorders
+/// mid-drag.
+#[derive(Debug, Clone)]
+pub(crate) struct BreakpointDrag {
+    pub target: resonance_common::AutomationTarget,
+    pub index: usize,
 }
 
 pub(super) type UpdateResult = Option<canvas::Action<Message>>;

@@ -16,7 +16,6 @@ use super::super::hit_test::{HitKind, MarkerHit};
 use super::super::scrollbar::scroll_from_thumb_pos;
 use super::super::{TimelineCanvas, TimelineState};
 use super::{captured, BreakpointDrag, ClipInteraction, MarkerDrag, UpdateResult, DOUBLE_CLICK_MS};
-
 use resonance_common::CurveKind;
 
 /// Is `pos` inside `rect`?
@@ -328,7 +327,7 @@ impl TimelineCanvas<'_> {
             state.selected_breakpoint = Some((hit.target.clone(), hit.index));
             if is_double {
                 state.last_breakpoint_click = None;
-                let curve = self.toggled_breakpoint_curve(&hit.target, hit.index);
+                let curve = self.toggled_breakpoint_curve(hit.target.clone(), hit.index);
                 return captured(Message::Automation(AutomationMessage::SetCurveKind {
                     target: hit.target,
                     index: hit.index,
@@ -460,7 +459,8 @@ impl TimelineCanvas<'_> {
         // Automation breakpoint drag: x → time (clamped between neighbors),
         // y → value.
         if let Some(drag) = &state.breakpoint_drag {
-            let (time_frames, value) = self.breakpoint_drag_to(&drag.target, drag.index, pos)?;
+            let (time_frames, value) =
+                self.breakpoint_drag_to(drag.target.clone(), drag.index, pos)?;
             return captured(Message::Automation(AutomationMessage::DragBreakpoint {
                 target: drag.target.clone(),
                 index: drag.index,
@@ -514,14 +514,14 @@ impl TimelineCanvas<'_> {
         if state.tempo_drag.take().is_some() {
             return captured(Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag));
         }
+        if state.breakpoint_drag.take().is_some() {
+            return captured(Message::Automation(AutomationMessage::EndBreakpointDrag));
+        }
         // Marker drag end: nothing to commit (each move already coalesces
         // into a single undo entry via the reducer), just drop the drag and
         // swallow the release so it doesn't fall through to other handlers.
         if state.marker_drag.take().is_some() {
             return Some(canvas::Action::capture());
-        }
-        if state.breakpoint_drag.take().is_some() {
-            return captured(Message::Automation(AutomationMessage::EndBreakpointDrag));
         }
         if let Some(interaction) = state.clip_interaction.take() {
             return match interaction {

@@ -977,6 +977,35 @@ impl Resonance {
         self.error_message.is_some()
     }
 
+    /// Test-only: the ordered automation-parameter-picker labels the mixer
+    /// strip for `track_id` would show (epic #40, doc #201 §5). Resolves the
+    /// track's selected external-instrument device preset to its definition's
+    /// named params exactly as the strip view does, so a test can assert the
+    /// device params appear (grouped) only when a preset is selected and are
+    /// hidden otherwise. A closed `pick_list` renders only its placeholder,
+    /// so this mirrors the option list the dropdown would present.
+    #[doc(hidden)]
+    pub fn test_automation_picker_labels(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Vec<String> {
+        let device_params: &[resonance_common::DeviceParam] = self
+            .external_instruments
+            .get(&track_id)
+            .and_then(|ext| ext.device_id.as_deref())
+            .and_then(|id| self.device_registry.get(id))
+            .map(|def| def.params.as_slice())
+            .unwrap_or(&[]);
+        let plugins = self
+            .registry
+            .tracks
+            .iter()
+            .find(|t| t.id == track_id)
+            .map(|t| t.plugins.as_slice())
+            .unwrap_or(&[]);
+        crate::view::mixer::automation::track_choice_labels(track_id, plugins, device_params)
+    }
+
     /// Test-only: replay a [`crate::project::ProjectFile`] into this app as
     /// if it had just been loaded from disk, rebuilding GUI state and
     /// re-issuing engine commands. `midi_notes` are taken as empty (tests

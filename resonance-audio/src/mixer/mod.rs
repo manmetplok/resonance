@@ -91,6 +91,7 @@ pub fn render_aux_for_test(
         in_filter: &in_filter,
         respect_mute_solo: false,
     };
+    let automation = crate::engine::AutomationSnapshot::default();
 
     render_block(
         &mut data,
@@ -113,7 +114,7 @@ pub fn render_aux_for_test(
         &mut port_scratch,
         &mut note_buf,
         &latency,
-        &AutomationSnapshot::default(),
+        &automation,
         &mut strategy,
     );
 

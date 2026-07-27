@@ -27,7 +27,7 @@ fn lane_changed_inserts_keyed_by_target() {
     let target = AutomationTarget::TrackGain(1);
 
     app.test_apply_engine_event(AudioEvent::AutomationLaneChanged {
-        lane: lane(10, target),
+        lane: lane(10, target.clone()),
     });
 
     let stored = app.test_automation().lanes.get(&target).unwrap();
@@ -42,11 +42,11 @@ fn lane_changed_replaces_whole_lane_for_same_target() {
     let target = AutomationTarget::TrackPan(2);
 
     app.test_apply_engine_event(AudioEvent::AutomationLaneChanged {
-        lane: lane(10, target),
+        lane: lane(10, target.clone()),
     });
     // A later store for the same target replaces, not appends — there is
     // one lane per target.
-    let mut replacement = lane(10, target);
+    let mut replacement = lane(10, target.clone());
     replacement.enabled = false;
     replacement.points.truncate(1);
     app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane: replacement });
@@ -63,8 +63,8 @@ fn distinct_targets_coexist() {
     let gain = AutomationTarget::TrackGain(1);
     let pan = AutomationTarget::TrackPan(1);
 
-    app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane: lane(10, gain) });
-    app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane: lane(11, pan) });
+    app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane: lane(10, gain.clone()) });
+    app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane: lane(11, pan.clone()) });
 
     assert_eq!(app.test_automation().lanes.len(), 2);
     assert!(app.test_automation().lanes.contains_key(&gain));
@@ -76,15 +76,15 @@ fn lane_cleared_removes_lane_and_live_value() {
     let mut app = Resonance::new().0;
     let target = AutomationTarget::MasterGain;
 
-    app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane: lane(10, target) });
+    app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane: lane(10, target.clone()) });
     app.test_apply_engine_event(AudioEvent::AutomatedValue {
-        target,
+        target: target.clone(),
         value_norm: 0.75,
     });
     assert!(app.test_automation().lanes.contains_key(&target));
     assert_eq!(app.test_automation().live_values.get(&target), Some(&0.75));
 
-    app.test_apply_engine_event(AudioEvent::AutomationLaneCleared { target });
+    app.test_apply_engine_event(AudioEvent::AutomationLaneCleared { target: target.clone() });
 
     // Both the lane and its transient live value are gone.
     assert!(!app.test_automation().lanes.contains_key(&target));
@@ -100,11 +100,11 @@ fn automated_value_tracks_latest_per_target() {
     };
 
     app.test_apply_engine_event(AudioEvent::AutomatedValue {
-        target,
+        target: target.clone(),
         value_norm: 0.2,
     });
     app.test_apply_engine_event(AudioEvent::AutomatedValue {
-        target,
+        target: target.clone(),
         value_norm: 0.6,
     });
 
@@ -117,7 +117,7 @@ fn automated_value_tracks_latest_per_target() {
 fn clearing_unknown_target_is_a_no_op() {
     let mut app = Resonance::new().0;
     let present = AutomationTarget::TrackGain(1);
-    app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane: lane(10, present) });
+    app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane: lane(10, present.clone()) });
 
     // No lane for this target — must not panic or disturb the present one.
     app.test_apply_engine_event(AudioEvent::AutomationLaneCleared {

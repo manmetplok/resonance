@@ -69,4 +69,15 @@ impl AutomationState {
             self.lanes.insert(lane.target.clone(), lane);
         }
     }
+
+    /// Bump the id allocator past every id currently in `lanes` so an
+    /// app-created lane after a wholesale install (project-load replay or
+    /// undo restore, both of which set `lanes` directly rather than via
+    /// [`load_lanes`]) never reissues a persisted id. Monotonic and
+    /// idempotent — `next_lane_id` only ever grows.
+    pub fn bump_allocator_past_lanes(&mut self) {
+        if let Some(max) = self.lanes.values().map(|l| l.id).max() {
+            self.next_lane_id = self.next_lane_id.max(max);
+        }
+    }
 }

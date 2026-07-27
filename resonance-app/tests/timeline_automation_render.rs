@@ -214,7 +214,7 @@ fn arrange_view_renders_with_a_seeded_automation_lane() {
     send(
         &mut app,
         AutomationMessage::AddBreakpoint {
-            target,
+            target: target.clone(),
             time_frames: 0,
             value: 0.2,
             curve: CurveKind::Linear,
@@ -223,7 +223,7 @@ fn arrange_view_renders_with_a_seeded_automation_lane() {
     send(
         &mut app,
         AutomationMessage::AddBreakpoint {
-            target,
+            target: target.clone(),
             time_frames: sr, // ~1s in
             value: 0.9,
             curve: CurveKind::Stepped,
@@ -232,7 +232,7 @@ fn arrange_view_renders_with_a_seeded_automation_lane() {
     send(
         &mut app,
         AutomationMessage::AddBreakpoint {
-            target,
+            target: target.clone(),
             time_frames: sr * 2,
             value: 0.5,
             curve: CurveKind::Linear,

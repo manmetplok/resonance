@@ -35,7 +35,7 @@ fn seed_lanes(app: &mut Resonance) {
         send(
             app,
             AutomationMessage::AddBreakpoint {
-                target: gain,
+                target: gain.clone(),
                 time_frames: t,
                 value: v,
                 curve,
@@ -44,7 +44,7 @@ fn seed_lanes(app: &mut Resonance) {
     }
 
     let pan = AutomationTarget::TrackPan(1);
-    send(app, AutomationMessage::AddLane(pan));
+    send(app, AutomationMessage::AddLane(pan.clone()));
     // Read off — the disabled flag must survive the round-trip.
     send(app, AutomationMessage::ToggleRead(pan));
 }
@@ -112,7 +112,7 @@ fn loading_lanes_bumps_id_allocator_past_persisted_ids() {
     // A lane created after the load must get a fresh id, never colliding
     // with a persisted one.
     let master = AutomationTarget::MasterGain;
-    send(&mut loaded, AutomationMessage::AddLane(master));
+    send(&mut loaded, AutomationMessage::AddLane(master.clone()));
     let new_id = loaded.test_automation().lanes[&master].id;
     assert!(
         new_id > max_id,
@@ -162,14 +162,14 @@ fn undo_restores_prior_lane_state() {
     let mut app = app_with_track(1, 0.0);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/resonance-test"));
     let target = AutomationTarget::TrackGain(1);
-    send(&mut app, AutomationMessage::AddLane(target));
+    send(&mut app, AutomationMessage::AddLane(target.clone()));
     let before = app.test_automation().lanes[&target].clone();
 
     // Mutate the lane: add a breakpoint.
     send(
         &mut app,
         AutomationMessage::AddBreakpoint {
-            target,
+            target: target.clone(),
             time_frames: 48_000,
             value: 1.0,
             curve: CurveKind::Linear,

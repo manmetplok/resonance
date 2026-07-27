@@ -89,7 +89,8 @@ pub fn to_wav(
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
 ) {
-    // Legacy shim: no automation lanes in play for these tests.
+    // Test-only shim with no automation snapshot to thread; render with an
+    // empty one (the automation-aware paths go through `export_spawn`).
     let automation = super::AutomationSnapshot::default();
     run_export(
         path,

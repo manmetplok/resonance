@@ -138,13 +138,19 @@ impl TimelineCanvas<'_> {
         Interaction::default()
     }
 
-    /// Right-click press: delete the automation breakpoint under the cursor
-    /// (the repo convention is right-click = delete — chord lane, MIDI
-    /// editor, vocal roll), or open the marker context menu when the pointer
-    /// is over a marker in the ruler band. The menu anchor is the cursor's
-    /// window-space position so the floating overlay lands under the pointer
-    /// regardless of horizontal scroll. Misses fall through (`None`) so the
-    /// event keeps propagating.
+    /// Right-click press. Two behaviours share the gesture, keyed by where
+    /// the pointer lands:
+    ///
+    /// * over a marker in the ruler band → open the marker context menu,
+    ///   anchored at the cursor's window-space position so the floating
+    ///   overlay lands under the pointer regardless of horizontal scroll;
+    /// * over an automation breakpoint in a track lane → delete it (the
+    ///   codebase convention is right-click = delete, as in the chord lane /
+    ///   MIDI editor / vocal roll).
+    ///
+    /// The two regions don't overlap (markers live in the ruler, breakpoints
+    /// below the fixed header), so the marker check runs first. Misses fall
+    /// through (`None`) so the event keeps propagating.
     pub(in crate::view::timeline) fn handle_right_press(
         &self,
         state: &mut TimelineState,
@@ -152,22 +158,23 @@ impl TimelineCanvas<'_> {
         cursor: mouse::Cursor,
     ) -> UpdateResult {
         let pos = cursor.position_in(bounds)?;
-        if pos.y >= self.fixed_header_height() {
-            if let Some(hit) = self.breakpoint_hit(pos) {
-                state.selected_breakpoint = None;
-                state.breakpoint_drag = None;
-                return captured(Message::Automation(AutomationMessage::DeleteBreakpoint {
-                    target: hit.target,
-                    index: hit.index,
-                }));
-            }
+        if let Some((id, _hit)) = self.marker_at(pos) {
+            let anchor = cursor.position().unwrap_or(pos);
+            return captured(Message::MarkerUi(MarkerUiMessage::OpenMenu {
+                id,
+                x: anchor.x,
+                y: anchor.y,
+            }));
         }
-        let (id, _hit) = self.marker_at(pos)?;
-        let anchor = cursor.position().unwrap_or(pos);
-        captured(Message::MarkerUi(MarkerUiMessage::OpenMenu {
-            id,
-            x: anchor.x,
-            y: anchor.y,
+        if pos.y < self.fixed_header_height() {
+            return None;
+        }
+        let hit = self.breakpoint_hit(pos)?;
+        state.selected_breakpoint = None;
+        state.breakpoint_drag = None;
+        captured(Message::Automation(AutomationMessage::DeleteBreakpoint {
+            target: hit.target,
+            index: hit.index,
         }))
     }
 

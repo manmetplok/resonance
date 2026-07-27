@@ -88,10 +88,13 @@ impl crate::Resonance {
         };
 
         // Master automation lane header (gain only) + live gain tint.
+        // The master bus has no external-instrument device preset, so no
+        // device params ever appear in its automation picker.
         let auto_header = super::automation::automation_header(
             &self.automation,
             super::automation::AutoChan::Master,
             &self.master_plugins,
+            &[],
         );
         let gain_live = super::automation::live_value(
             &self.automation,
