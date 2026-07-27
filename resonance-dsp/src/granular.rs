@@ -2,7 +2,10 @@
 //!
 //! Fixed pre-allocated grain pool, sync/async scheduler, equal-power
 //! overlap compensation and click-free voice stealing per research doc
-//! #252 (§2, §5, §8) and the epic #196 architecture doc #253.
+//! #252 (§2, §5, §8) and the epic #196 architecture doc #253, plus
+//! per-grain pitch (doc #252 §3): playback-rate transposition on an
+//! `f64` phase accumulator, symmetric ± detune spread, an optional
+//! rate-tracked anti-alias lowpass and reverse (negative-rate) grains.
 //!
 //! The engine is framework-agnostic so it can be shared by the granular
 //! delay (epic #196) and a future granular instrument (epic #75):
@@ -105,6 +108,24 @@ pub struct GrainParams {
     /// sample: `1.0` for a streaming delay buffer, `0.0` for a frozen
     /// buffer or a static sample corpus (epic #75).
     pub head_advance: f32,
+    /// Grain transposition in semitones; the per-grain playback rate is
+    /// `2^(semitones / 12)` (doc #252 §3).
+    pub pitch_semitones: f32,
+    /// Detune spread in cents: each grain adds a random offset with
+    /// magnitude uniform in `[0, spread]` cents whose *sign alternates*
+    /// between consecutive grains (symmetric detune), keeping the
+    /// perceived centre pitch stable (doc #252 §3).
+    pub detune_spread_cents: f32,
+    /// Probability (`0..=1`) that a grain plays in reverse (negative
+    /// playback rate). Reversed grains still window to zero at both
+    /// ends and respect the write-head collision guard.
+    pub reverse_probability: f32,
+    /// Enable the per-grain anti-alias one-pole lowpass, tracked to
+    /// `0.45 · fs / |rate|` and engaged only when `|rate| > 1` (upward
+    /// transposition folds content above `Nyquist / rate`; the HQ
+    /// quality tier turns this on). The one-pole runs on the resampled
+    /// grain stream, attenuating the folded images (doc #252 §3).
+    pub anti_alias: bool,
 }
 
 impl Default for GrainParams {
@@ -120,6 +141,10 @@ impl Default for GrainParams {
             texture: 0.5,
             mode: SchedulerMode::Sync,
             head_advance: 1.0,
+            pitch_semitones: 0.0,
+            detune_spread_cents: 0.0,
+            reverse_probability: 0.0,
+            anti_alias: false,
         }
     }
 }
@@ -157,6 +182,12 @@ struct Grain {
     /// Block offset at which a pending steal starts the release ramp;
     /// `u32::MAX` = no steal pending.
     release_at: u32,
+    /// True when the anti-alias one-pole is engaged for this grain.
+    aa_active: bool,
+    /// One-pole coefficient `e^(-2π·fc/fs)` with `fc = 0.45·fs/|rate|`.
+    aa_coeff: f32,
+    /// One-pole state (per grain, reset at spawn).
+    aa_state: f32,
 }
 
 impl Grain {
@@ -175,6 +206,9 @@ impl Grain {
         release_gain: 0.0,
         start_offset: 0,
         release_at: u32::MAX,
+        aa_active: false,
+        aa_coeff: 0.0,
+        aa_state: 0.0,
     };
 }
 
@@ -191,6 +225,9 @@ pub struct GrainEngine {
     /// Samples from the start of the next block to the next grain onset.
     next_onset: f64,
     spawned: u64,
+    /// Sign of the next detune offset; alternates per spawned grain so
+    /// the detune cloud stays symmetric around the centre pitch.
+    detune_sign: f32,
 }
 
 impl GrainEngine {
@@ -218,6 +255,7 @@ impl GrainEngine {
             sample_rate,
             next_onset: 0.0,
             spawned: 0,
+            detune_sign: 1.0,
         }
     }
 
@@ -230,6 +268,7 @@ impl GrainEngine {
         }
         self.free_len = MAX_GRAINS;
         self.next_onset = 0.0;
+        self.detune_sign = 1.0;
     }
 
     /// Number of currently sounding grains (never exceeds
@@ -241,6 +280,13 @@ impl GrainEngine {
     /// Total grains spawned since construction (metering/testing aid).
     pub fn grains_spawned(&self) -> u64 {
         self.spawned
+    }
+
+    /// Playback rates of the currently sounding grains, in source
+    /// samples per output sample (negative for reversed grains).
+    /// Allocation-free inspection aid for metering and tests.
+    pub fn active_rates(&self) -> impl Iterator<Item = f64> + '_ {
+        self.grains.iter().filter(|g| g.active).map(|g| g.rate)
     }
 
     /// Granulate `source` into `out_left` / `out_right` (accumulating).
@@ -315,7 +361,11 @@ impl GrainEngine {
                     grain.releasing = true;
                 }
                 let w = window.evaluate((grain.env_phase * grain.inv_dur) as f32, grain.texture);
-                let s = read_hermite_wrapped(source, grain.read_pos);
+                let mut s = read_hermite_wrapped(source, grain.read_pos);
+                if grain.aa_active {
+                    grain.aa_state = s + grain.aa_coeff * (grain.aa_state - s);
+                    s = grain.aa_state;
+                }
                 let v = s * w * grain.gain * grain.release_gain;
                 out_left[k] += v * grain.gain_l;
                 out_right[k] += v * grain.gain_r;
@@ -356,21 +406,7 @@ impl GrainEngine {
 
         let dur_seconds = (params.grain_seconds * (1.0 + size_jitter)).max(MIN_GRAIN_SECONDS);
         let dur = (dur_seconds as f64 * sr).max(4.0);
-        let rate = 1.0_f64;
         let advance = params.head_advance as f64;
-
-        // Write-head collision guard (doc #252 §5): over the grain's
-        // lifetime the reader must neither overtake the head (fast
-        // grains) nor be lapped by it (slow/frozen heads on long
-        // buffers). `d` is the start offset behind the head.
-        let d_min = HEAD_MARGIN_SAMPLES + dur * (rate - advance).max(0.0);
-        let d_max = source_len as f64 - HEAD_MARGIN_SAMPLES - dur * (advance - rate).max(0.0);
-        if d_max < d_min {
-            // The buffer cannot hold a grain of this length/rate at all.
-            return;
-        }
-        let position = (params.position_seconds as f64 + position_jitter as f64) * sr;
-        let offset = position.clamp(d_min, d_max);
 
         let slot = if self.free_len > 0 {
             self.free_len -= 1;
@@ -379,6 +415,49 @@ impl GrainEngine {
             self.steal(onset as u32);
             return;
         };
+
+        // Per-grain playback rate (doc #252 §3): transpose plus a
+        // symmetric detune whose sign alternates between consecutive
+        // spawned grains, so the detune cloud has ~zero mean and the
+        // perceived centre pitch stays put.
+        let mut semitones = params.pitch_semitones;
+        if params.detune_spread_cents > 0.0 {
+            let magnitude_cents = self.unit() * params.detune_spread_cents;
+            semitones += self.detune_sign * magnitude_cents * (1.0 / 100.0);
+            self.detune_sign = -self.detune_sign;
+        }
+        let mut rate = (semitones as f64 / 12.0).exp2();
+        if params.reverse_probability > 0.0
+            && self.unit() < params.reverse_probability.min(1.0)
+        {
+            rate = -rate;
+        }
+
+        // Optional rate-tracked anti-alias one-pole: only upward
+        // transposition (`|rate| > 1`) folds content past Nyquist/rate.
+        let abs_rate = rate.abs();
+        let aa_active = params.anti_alias && abs_rate > 1.0;
+        let aa_coeff = if aa_active {
+            let fc = 0.45 * self.sample_rate / abs_rate as f32;
+            (-(std::f32::consts::TAU * fc / self.sample_rate)).exp()
+        } else {
+            0.0
+        };
+
+        // Write-head collision guard (doc #252 §5): over the grain's
+        // lifetime the reader must neither overtake the head (fast
+        // grains) nor be lapped by it (slow, frozen or reversed grains
+        // on long buffers). `d` is the start offset behind the head.
+        let d_min = HEAD_MARGIN_SAMPLES + dur * (rate - advance).max(0.0);
+        let d_max = source_len as f64 - HEAD_MARGIN_SAMPLES - dur * (advance - rate).max(0.0);
+        if d_max < d_min {
+            // The buffer cannot hold a grain of this length/rate at all.
+            self.free[self.free_len] = slot;
+            self.free_len += 1;
+            return;
+        }
+        let position = (params.position_seconds as f64 + position_jitter as f64) * sr;
+        let offset = position.clamp(d_min, d_max);
 
         // Equal-power overlap compensation (doc #252 §2): uncorrelated
         // grain loudness grows with sqrt(overlap), so scale each grain
@@ -412,6 +491,9 @@ impl GrainEngine {
             release_gain: 1.0,
             start_offset: onset as u32,
             release_at: u32::MAX,
+            aa_active,
+            aa_coeff,
+            aa_state: 0.0,
         };
         self.spawned += 1;
     }
