@@ -87,6 +87,16 @@ impl ResonanceGranularDelay {
     pub fn active_rates_fb(&self) -> impl Iterator<Item = f64> + '_ {
         self.dsp.iter().flat_map(GranularDsp::active_rates_fb)
     }
+
+    /// Current effective delay-tap position in seconds (test/metering
+    /// aid, ba todo #1076): the resolved target in Per-Grain mode, the
+    /// glide value in Repitch mode, the committed tap in Fade mode.
+    /// 0 before activation.
+    pub fn effective_delay_seconds(&self) -> f32 {
+        self.dsp
+            .as_ref()
+            .map_or(0.0, GranularDsp::effective_delay_seconds)
+    }
 }
 
 impl ResonancePlugin for ResonanceGranularDelay {
@@ -152,10 +162,11 @@ impl ResonancePlugin for ResonanceGranularDelay {
 
         self.smoothers.retarget_from(&self.params);
 
-        // Delay time is *grain-latched*: each grain reads the position
-        // current at its spawn, so time changes granulate over per the
-        // default Per-Grain time mode. TODO(epic-196 #1076): Fade and
-        // Repitch modes.
+        // Time-change behaviour (ba todo #1076): the resolved target
+        // routes through the selected Time Mode in the DSP core —
+        // Per-Grain (default; grain-latched, in-flight grains keep
+        // their origin), Fade (dual-tap swap through silence, ~20 ms)
+        // or Repitch (one-pole slew with the tape-style pitch swoop).
         let delay_seconds = sync::delay_seconds(
             self.params.sync.value(),
             self.params.division.value() as usize,
@@ -173,6 +184,11 @@ impl ResonancePlugin for ResonanceGranularDelay {
 
         let block = dsp::BlockParams {
             delay_seconds,
+            time_mode: match self.params.time_mode.value() {
+                0 => dsp::TimeMode::Fade,
+                1 => dsp::TimeMode::Repitch,
+                _ => dsp::TimeMode::PerGrain,
+            },
             grain_seconds: self.params.grain_size_ms.value() * 0.001,
             density_hz: self.params.density_hz.value(),
             scheduler,

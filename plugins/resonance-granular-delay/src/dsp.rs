@@ -13,7 +13,10 @@
 //! Everything is pre-allocated at construction; `process_block` performs
 //! no allocation and takes no locks.
 
-use resonance_dsp::{DcBlocker, GrainEngine, GrainParams, OnePole, SchedulerMode, SimpleRng};
+use resonance_dsp::{
+    read_hermite_wrapped, DcBlocker, GrainEngine, GrainParams, OnePole, SchedulerMode, SimpleRng,
+    SwapFader,
+};
 use resonance_music_theory::Scale;
 
 use crate::params::GranularSmoothers;
@@ -64,6 +67,49 @@ const QUANT_SEED: u64 = 0x0AB5_C41E;
 /// scheduling carries across process calls), so quantize-off behaviour
 /// is untouched.
 const QUANT_SLICE: usize = 64;
+
+/// Fade time mode (ba todo #1076): length of each `SwapFader` leg,
+/// seconds. The full transition — wet fades out, the tap swaps on the
+/// silent sample, the new origin fades back in — takes twice this,
+/// ~20 ms (doc #252 §5: too-long fades color, too-short ones glitch).
+pub const FADE_LEG_SECONDS: f32 = 0.010;
+
+/// Repitch time mode (ba todo #1076): one-pole slew time constant of
+/// the effective delay, seconds (tape/BBD-style glide).
+pub const REPITCH_TAU_SECONDS: f32 = 0.100;
+
+/// Delay-target changes below this are ignored by the Fade swap
+/// trigger, seconds — keeps host tempo jitter from re-arming fades.
+const TIME_EPSILON_SECONDS: f32 = 1.0e-4;
+
+/// Once the Repitch slew is within this of the target it snaps,
+/// seconds (sub-sample at any supported rate).
+const REPITCH_SNAP_SECONDS: f32 = 1.0e-5;
+
+/// Clamp on the Repitch playback-rate multiplier `1 − d(delay)/dt`
+/// (± two octaves), bounding the swoop on extreme jumps.
+const REPITCH_RATE_MIN: f64 = 0.25;
+const REPITCH_RATE_MAX: f64 = 4.0;
+
+/// Delay-time change behaviour (doc #252 §5, ba todo #1076).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeMode {
+    /// Dual-tap swap via [`SwapFader`]: on a time change the whole
+    /// granulated wet fades out over [`FADE_LEG_SECONDS`], the tap
+    /// jumps on the silent sample (every in-flight grain is retired
+    /// there, click-free by construction) and the new origin fades
+    /// back in.
+    Fade,
+    /// Tape/BBD: the effective delay slews toward the target (one-pole,
+    /// [`REPITCH_TAU_SECONDS`]) and grains spawned during the slew take
+    /// the matching playback-rate offset `1 − d(delay)/dt` — the
+    /// tape-style momentary pitch swoop, settling back to unity.
+    Repitch,
+    /// Default, uniquely granular: a time change affects only newly
+    /// spawned grains; in-flight grains finish at their old origin —
+    /// artifact-free by construction.
+    PerGrain,
+}
 
 /// Feedback topology (doc #252 §1, ba todo #1074).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +168,8 @@ impl FeedbackChain {
 pub struct BlockParams {
     /// Nominal grain read position behind the write head, seconds.
     pub delay_seconds: f32,
+    /// How delay-time changes are realized (ba todo #1076).
+    pub time_mode: TimeMode,
     pub grain_seconds: f32,
     pub density_hz: f32,
     pub scheduler: SchedulerMode,
@@ -224,6 +272,30 @@ pub struct GranularDsp {
     /// so the Output-only recirc ring keeps its own time axis when the
     /// write head stops (ba todo #1075).
     fb_pos: u64,
+    /// Fade time mode (ba todo #1076): the dual-tap swap machine. The
+    /// payload is the delay value (seconds) the wet path is committed
+    /// to; a target change swaps toward the new value through silence.
+    time_fade: SwapFader<f32>,
+    /// Most recent value handed to the fader (active or pending) — the
+    /// swap re-trigger reference.
+    fade_goal: f32,
+    /// True while a Fade transition (either leg) is still in flight.
+    fade_busy: bool,
+    /// Per-sample effective delay for the block, seconds (filled by the
+    /// Fade/Repitch pre-pass; unused in Per-Grain mode).
+    time_delay_buf: Vec<f32>,
+    /// Per-sample wet gain from the Fade swap (1.0 outside fades).
+    time_gain_buf: Vec<f32>,
+    /// Current effective delay, seconds: the resolved target in
+    /// Per-Grain mode, the slewed value in Repitch, the fader's active
+    /// payload in Fade. `f64` so the one-pole slew increment never
+    /// stalls below the mantissa step of the value itself.
+    eff_delay: f64,
+    /// False until the first block latches the initial delay target
+    /// (so activation never fades/slews from an arbitrary value).
+    time_primed: bool,
+    /// Per-sample one-pole coefficient of the Repitch slew.
+    repitch_coeff: f64,
     /// Freeze crossfade position: 0 = live (writes at full gain), 1 =
     /// fully frozen (write head stopped, buffer untouched). Ramps by
     /// one sample step per input sample toward the freeze target, and
@@ -263,8 +335,21 @@ impl GranularDsp {
             fb_chain_l: FeedbackChain::new(),
             fb_chain_r: FeedbackChain::new(),
             fb_pos: 0,
+            time_fade: SwapFader::new(Self::fade_leg_samples(sample_rate)),
+            fade_goal: 0.0,
+            fade_busy: false,
+            time_delay_buf: vec![0.0; max_block],
+            time_gain_buf: vec![1.0; max_block],
+            eff_delay: 0.0,
+            time_primed: false,
+            repitch_coeff: 1.0 - (-1.0 / f64::from(REPITCH_TAU_SECONDS * sample_rate)).exp(),
             freeze_xf: 0.0,
         }
+    }
+
+    /// Samples per Fade leg at `sample_rate` (never zero).
+    fn fade_leg_samples(sample_rate: f32) -> u32 {
+        ((FADE_LEG_SECONDS * sample_rate) as u32).max(1)
     }
 
     /// Ring-buffer length in seconds (>= [`MAX_DELAY_SECONDS`]).
@@ -335,7 +420,22 @@ impl GranularDsp {
         self.fb_chain_l.reset();
         self.fb_chain_r.reset();
         self.fb_pos = 0;
+        // `SwapFader::new` is allocation-free, so rebuilding it here is
+        // the cheapest full reset (it has no reset method).
+        self.time_fade = SwapFader::new(Self::fade_leg_samples(self.sample_rate));
+        self.fade_goal = 0.0;
+        self.fade_busy = false;
+        self.eff_delay = 0.0;
+        self.time_primed = false;
         self.freeze_xf = 0.0;
+    }
+
+    /// Current effective delay-tap position, seconds (test/metering
+    /// aid, ba todo #1076): equals the resolved target in Per-Grain
+    /// mode, glides monotonically toward it in Repitch mode and steps
+    /// on the (silent) swap sample in Fade mode.
+    pub fn effective_delay_seconds(&self) -> f32 {
+        self.eff_delay as f32
     }
 
     /// Read-only view of the left grain source ring (test/metering aid:
@@ -432,6 +532,84 @@ impl GranularDsp {
             advanced += 1;
         }
 
+        // --- 1b. Time-mode resolution (ba todo #1076, doc #252 §5):
+        // decide the per-sample effective delay (and, in Fade mode, the
+        // per-sample wet gain) this block renders with. Per-Grain
+        // passes the target straight through — bit-identical to the
+        // pre-#1076 behaviour.
+        let target = params.delay_seconds;
+        let target64 = f64::from(target);
+        if !self.time_primed {
+            self.time_primed = true;
+            self.eff_delay = target64;
+            self.time_fade.install(target);
+            self.fade_goal = target;
+            self.fade_busy = false;
+        }
+        // Sample index where a Fade swap lands this block (the silent
+        // sample; every engine is hard-reset there so the old tap's
+        // in-flight grains are retired without a click).
+        let mut swap_at = usize::MAX;
+        let mut fade_varying = false;
+        let mut repitch_slewing = false;
+        match params.time_mode {
+            TimeMode::PerGrain => {
+                // A time change affects only newly spawned grains;
+                // in-flight grains finish at their old origin. Keep the
+                // fader in sync so entering Fade mode later starts from
+                // the current value instead of a stale one.
+                self.eff_delay = target64;
+                self.time_fade.install(target);
+                self.fade_goal = target;
+                self.fade_busy = false;
+            }
+            TimeMode::Repitch => {
+                if (self.eff_delay - target64).abs() > f64::from(REPITCH_SNAP_SECONDS) {
+                    repitch_slewing = true;
+                    for slot in self.time_delay_buf[..frames].iter_mut() {
+                        self.eff_delay += (target64 - self.eff_delay) * self.repitch_coeff;
+                        *slot = self.eff_delay as f32;
+                    }
+                } else {
+                    self.eff_delay = target64;
+                }
+                let eff = self.eff_delay as f32;
+                self.time_fade.install(eff);
+                self.fade_goal = eff;
+                self.fade_busy = false;
+            }
+            TimeMode::Fade => {
+                if (target - self.fade_goal).abs() > TIME_EPSILON_SECONDS {
+                    self.time_fade.begin_swap(target);
+                    self.fade_goal = target;
+                    self.fade_busy = true;
+                }
+                if self.fade_busy {
+                    fade_varying = true;
+                    let mut active = self.eff_delay as f32;
+                    let mut settled = true;
+                    for i in 0..frames {
+                        let (g, value) = self.time_fade.next();
+                        let v = value.map_or(target, |v| *v);
+                        if v != active {
+                            swap_at = i;
+                            active = v;
+                        }
+                        if g < 1.0 {
+                            settled = false;
+                        }
+                        self.time_gain_buf[i] = g;
+                        self.time_delay_buf[i] = v;
+                    }
+                    self.eff_delay = f64::from(active);
+                    self.fade_busy = !settled;
+                } else {
+                    self.eff_delay = target64;
+                }
+            }
+        }
+        let time_varying = fade_varying || repitch_slewing;
+
         // --- 2. Granulate behind the write head into the wet bus. -----
         self.wet_l[..frames].fill(0.0);
         self.wet_r[..frames].fill(0.0);
@@ -489,15 +667,74 @@ impl GranularDsp {
         // each with its own plugin-side drawn and quantized effective
         // transpose (base Pitch + alternating-sign random Spread), so
         // grains latch (near-)independent quantized values at spawn.
-        // Quantize off renders the whole block as one slice; engine
-        // output is slice-invariant (onset scheduling carries across
-        // process calls), so behaviour is then unchanged.
+        // The Repitch slew (ba todo #1076) uses the same short slices
+        // so the gliding origin and rate offset stay smooth; a Fade
+        // swap splits the block at the (silent) swap sample. Otherwise
+        // the whole block is one slice; engine output is
+        // slice-invariant (onset scheduling carries across process
+        // calls), so behaviour is then unchanged.
         let quantize_on = params.quantize != PitchQuantize::Off;
-        let slice_len = if quantize_on { QUANT_SLICE } else { frames };
+        let slice_len = if quantize_on || repitch_slewing {
+            QUANT_SLICE
+        } else {
+            frames
+        };
+
+        // Feedback-tap disposition (ba todo #1078), fixed before the
+        // loop like the decorrelated engine's: rendered while the
+        // un-transposed tap is engaged or while stale grains drain
+        // (density 0) — a toggle never resumes stale grains and the
+        // settled state costs nothing.
+        let transpose_engaged =
+            params.pitch_semitones != 0.0 || params.detune_spread_cents > 0.0;
+        let unity_tap = wet_to_buffer && !params.fb_pitch && transpose_engaged;
+        let fb_render = unity_tap
+            || self.fb_engine_l.active_grains() > 0
+            || self.fb_engine_r.active_grains() > 0;
+        if fb_render {
+            self.fbw_l[..frames].fill(0.0);
+            self.fbw_r[..frames].fill(0.0);
+        }
+
+        let sr = self.sample_rate as f64;
         let mut off = 0usize;
         while off < frames {
-            let n = (frames - off).min(slice_len);
+            if off == swap_at {
+                // The Fade swap lands here, on the silent sample: hard-
+                // retire the old tap's in-flight grains (click-free —
+                // the wet gain is exactly 0 at this sample) so the new
+                // origin fades in from a clean pool. The lock-stepped
+                // pairs reset together, so they stay in lockstep.
+                self.engine_l.reset();
+                self.engine_r.reset();
+                self.engine_r_decor.reset();
+                self.fb_engine_l.reset();
+                self.fb_engine_r.reset();
+            }
+            let mut n = (frames - off).min(slice_len);
+            if swap_at > off && swap_at < off + n {
+                n = swap_at - off;
+            }
+            let slice_delay = if time_varying {
+                self.time_delay_buf[off]
+            } else {
+                self.eff_delay as f32
+            };
+            // Repitch (ba todo #1076): grains spawned during the slew
+            // glide with the moving read origin, so they take the
+            // matching playback-rate multiplier `1 − d(delay)/dt`
+            // (delay growing ⇒ rate < 1 ⇒ pitch down, and vice versa).
+            let repitch_semis = if repitch_slewing {
+                let step_samples =
+                    (target64 - f64::from(slice_delay)) * self.repitch_coeff * sr;
+                let m = (1.0 - step_samples).clamp(REPITCH_RATE_MIN, REPITCH_RATE_MAX);
+                (12.0 * m.log2()) as f32
+            } else {
+                0.0
+            };
             let mut gp = grain_params.clone();
+            gp.position_seconds = slice_delay;
+            gp.position_jitter_seconds = params.spray_seconds.min(slice_delay);
             if quantize_on {
                 let mut semitones = params.pitch_semitones;
                 if params.detune_spread_cents > 0.0 {
@@ -509,6 +746,9 @@ impl GranularDsp {
                     quantize_transpose(semitones, params.quantize, params.scale);
                 gp.detune_spread_cents = 0.0;
             }
+            // The physical tape glide sits outside the musical
+            // transpose, so it applies after quantization.
+            gp.pitch_semitones += repitch_semis;
             let wp = write_pos + off as f64 * head_adv;
             // Each engine renders the full stereo pan pair for its
             // channel; keeping engine L's left and engine R's right
@@ -548,6 +788,37 @@ impl GranularDsp {
                 self.engine_r_decor
                     .process(&self.buf_r, wp, dgp, discard, wet_dec);
             }
+            // --- 2c. Feedback-tap re-granulation (ba todo #1078, doc
+            // #252 §3): with FB Pitch off on a granulated-feedback
+            // route while a transpose is engaged, the signal written
+            // back is a separate, *un-transposed* granulation of the
+            // same buffer, so recirculations keep a constant pitch and
+            // the transpose is heard exactly once. With FB Pitch on the
+            // transposed wet bus itself is the tap. Rendered inside the
+            // slice loop (slice-invariant) so the tap follows the
+            // per-slice time-mode position and the Fade swap reset
+            // (ba todo #1076).
+            if fb_render {
+                let mut fgp = gp.clone();
+                // Zero the musical transpose (and any quantized draw)
+                // but keep the physical Repitch glide — the tap rides
+                // the same moving origin as the audible cloud.
+                fgp.pitch_semitones = repitch_semis;
+                fgp.detune_spread_cents = 0.0;
+                if !unity_tap {
+                    fgp.density_hz = 0.0; // drain, output unused
+                }
+                {
+                    let (fbw_l, discard) =
+                        (&mut self.fbw_l[off..off + n], &mut self.discard[off..off + n]);
+                    self.fb_engine_l.process(&self.buf_l, wp, &fgp, fbw_l, discard);
+                }
+                {
+                    let (discard, fbw_r) =
+                        (&mut self.discard[off..off + n], &mut self.fbw_r[off..off + n]);
+                    self.fb_engine_r.process(&self.buf_r, wp, &fgp, discard, fbw_r);
+                }
+            }
             off += n;
         }
         if !decor_gate && smoothers.decor.current() == 0.0 {
@@ -562,43 +833,25 @@ impl GranularDsp {
             }
         }
 
-        // --- 2c. Feedback-tap re-granulation (ba todo #1078, doc #252
-        // §3): with FB Pitch off on a granulated-feedback route while a
-        // transpose is engaged, the signal written back is a separate,
-        // *un-transposed* granulation of the same buffer, so
-        // recirculations keep a constant pitch and the transpose is
-        // heard exactly once. With FB Pitch on the transposed wet bus
-        // itself is the tap — each recirculation compounds the
-        // transpose (the Eno/Lanois shimmer). When the tap engines are
-        // not in use they drain (density 0) until silent, so a toggle
-        // never resumes stale grains and the settled state costs
-        // nothing.
-        let transpose_engaged =
-            params.pitch_semitones != 0.0 || params.detune_spread_cents > 0.0;
-        let unity_tap = wet_to_buffer && !params.fb_pitch && transpose_engaged;
-        if unity_tap
-            || self.fb_engine_l.active_grains() > 0
-            || self.fb_engine_r.active_grains() > 0
-        {
-            self.fbw_l[..frames].fill(0.0);
-            self.fbw_r[..frames].fill(0.0);
-            let mut gp = grain_params.clone();
-            gp.pitch_semitones = 0.0;
-            gp.detune_spread_cents = 0.0;
-            if !unity_tap {
-                gp.density_hz = 0.0; // drain, output unused
+        // --- 2d. Fade time mode (ba todo #1076): the SwapFader's
+        // per-sample gain windows the whole granulated wet — audible
+        // cloud and feedback tap alike — through the tap swap: out over
+        // ~10 ms, swap on the silent sample (where the engines were
+        // hard-reset), back in over ~10 ms at the new origin. Applied
+        // before the feedback stage so recirculations carry the faded
+        // wet coherently.
+        if fade_varying {
+            for i in 0..frames {
+                let g = self.time_gain_buf[i];
+                self.wet_l[i] *= g;
+                self.wet_r[i] *= g;
             }
-            {
-                let (fbw_l, discard) =
-                    (&mut self.fbw_l[..frames], &mut self.discard[..frames]);
-                self.fb_engine_l
-                    .process(&self.buf_l, write_pos, &gp, fbw_l, discard);
-            }
-            {
-                let (discard, fbw_r) =
-                    (&mut self.discard[..frames], &mut self.fbw_r[..frames]);
-                self.fb_engine_r
-                    .process(&self.buf_r, write_pos, &gp, discard, fbw_r);
+            if fb_render {
+                for i in 0..frames {
+                    let g = self.time_gain_buf[i];
+                    self.fbw_l[i] *= g;
+                    self.fbw_r[i] *= g;
+                }
             }
         }
 
@@ -643,12 +896,42 @@ impl GranularDsp {
                 }
                 self.fb_len = frames;
             }
+            FbRoute::OutputOnly if time_varying => {
+                // Clean repeats with the recirc read tap following the
+                // time mode too (ba todo #1076): the tap reads the ring
+                // at the per-sample effective delay with a fractional
+                // Hermite read. Repitch thereby glides — the tape swoop
+                // also repitches the repeats — and Fade jumps on the
+                // silent sample with the read masked by the swap gain,
+                // so the tap jump cannot click (in the output or in
+                // what recirculates).
+                for i in 0..frames {
+                    let g = smoothers.feedback.next().clamp(0.0, 1.1);
+                    let idx = (fb_base + i) & self.mask;
+                    let d = (f64::from(self.time_delay_buf[i]) * sr).max(1.0);
+                    let pos = (fb_base + i) as f64 - d;
+                    let tap_gain = if fade_varying { self.time_gain_buf[i] } else { 1.0 };
+                    let fl = self.fb_chain_l.process(
+                        read_hermite_wrapped(&self.fb_ring_l, pos) * tap_gain * g,
+                        params.filter_is_highpass,
+                    );
+                    let fr = self.fb_chain_r.process(
+                        read_hermite_wrapped(&self.fb_ring_r, pos) * tap_gain * g,
+                        params.filter_is_highpass,
+                    );
+                    self.fb_ring_l[idx] = self.wet_l[i] + fl;
+                    self.fb_ring_r[idx] = self.wet_r[i] + fr;
+                    self.wet_l[i] += fl;
+                    self.wet_r[i] += fr;
+                }
+                self.fb_len = 0;
+            }
             FbRoute::OutputOnly => {
                 // Clean repeats: recirculate the wet-path output through
                 // a dedicated ring read at the delay time; the grain
                 // source buffer never sees wet material. Bounded even
                 // while frozen: the loop still passes through the tanh.
-                let delay_samples = ((params.delay_seconds * self.sample_rate) as usize)
+                let delay_samples = ((self.eff_delay as f32 * self.sample_rate) as usize)
                     .clamp(1, self.mask);
                 for i in 0..frames {
                     let g = smoothers.feedback.next().clamp(0.0, 1.1);

@@ -14,9 +14,12 @@ pub struct GranularDelayParams {
     pub sync: BoolParam,
     pub division: IntParam,
     pub time_ms: FloatParam,
-    /// 0 = Fade, 1 = Repitch, 2 = Per-Grain. TODO(epic-196 #1076): only
-    /// the granular-native Per-Grain behaviour exists today (new grains
-    /// latch the new time at spawn); Fade/Repitch are inert.
+    /// 0 = Fade, 1 = Repitch, 2 = Per-Grain (ba todo #1076, doc #252
+    /// §5). All Time changes (ms and tempo-sync division) route through
+    /// the selected mode: Fade swaps the tap through silence (~20 ms,
+    /// dual-tap SwapFader), Repitch slews the effective delay with the
+    /// tape-style pitch swoop, Per-Grain latches the time per grain at
+    /// spawn (in-flight grains finish at their old origin).
     pub time_mode: IntParam,
 
     // --- Feedback -------------------------------------------------------
