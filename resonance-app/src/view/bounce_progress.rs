@@ -6,13 +6,24 @@
 //! aborts cooperatively between chunks, for the realtime path it
 //! pauses the transport, restores the mute snapshot, and removes the
 //! freshly-added empty target track.
+//!
+//! The **freeze** progress modal (design doc #181, ba todo #582) reuses
+//! this exact overlay — freeze *is* a bounce-in-place run — relabelled
+//! with the snowflake title and, for freeze-all / freeze-selected
+//! batches, a "track N / M" counter fed from the sequential
+//! [`FreezeQueue`](crate::state::FreezeQueue). Input gating happens in
+//! `update/gates.rs` (`freeze_blocks_message`), mirroring the bounce
+//! gate; the Cancel button dispatches `FreezeMessage::CancelFreeze`,
+//! the one whitelisted carve-out.
 
-use iced::widget::{button, column, container, mouse_area, opaque, progress_bar, row, stack, text, Space};
+use iced::widget::{
+    button, column, container, mouse_area, opaque, progress_bar, row, stack, text, Space,
+};
 use iced::{alignment, Element, Length};
 
 use crate::message::*;
-use crate::state::BounceMode;
-use crate::theme;
+use crate::state::{BounceMode, FreezeStatus};
+use crate::theme::{self, fa};
 use crate::Resonance;
 
 pub(crate) fn view_bounce_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, Message> {
@@ -20,6 +31,118 @@ pub(crate) fn view_bounce_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, 
         return Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(0.0)).into();
     };
 
+    let title_str = match state.mode {
+        BounceMode::Offline => format!("Bouncing \"{}\"", state.source_name),
+        BounceMode::Realtime => format!("Recording \"{}\"", state.source_name),
+    };
+    let title = text(title_str)
+        .size(18)
+        .font(theme::SERIF_ITALIC_FONT)
+        .color(theme::TEXT_1)
+        .into();
+
+    let detail = match state.mode {
+        BounceMode::Offline => "Rendering through the instrument and effect chain offline.",
+        BounceMode::Realtime => {
+            "Playing the timeline and capturing the external instrument's audio return."
+        }
+    };
+
+    let pct = (state.fraction * 100.0).round() as u32;
+    progress_dialog(
+        title,
+        detail,
+        state.fraction,
+        format!("{pct}%"),
+        Message::Track(TrackMessage::Bounce(BounceMessage::CancelInProgress)),
+    )
+}
+
+/// The freeze progress modal (design doc #181, ba todo #582): the bounce
+/// overlay relabelled for the freeze render. Shows the snowflake +
+/// serif-italic "Freezing "name"" title, the live progress bar fed from
+/// the engine's `FreezeProgress` fractions (mirrored by ba todo #575),
+/// and — during a freeze-all / freeze-selected batch — a mono
+/// "track N / M" counter from the queue. Cancel dispatches
+/// [`FreezeMessage::CancelFreeze`], the one message the freeze gate lets
+/// through, aborting the render cooperatively and abandoning the batch.
+pub(crate) fn view_freeze_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, Message> {
+    // The track currently rendering and its progress fraction. Between
+    // batch items (completion handled, next not yet started) no status is
+    // `Freezing`; fall back to the queue's current entry at 0%.
+    let freezing = r
+        .freeze
+        .statuses
+        .iter()
+        .find_map(|(id, s)| match s {
+            FreezeStatus::Freezing { fraction } => Some((*id, *fraction)),
+            _ => None,
+        })
+        .or_else(|| {
+            r.freeze
+                .queue
+                .as_ref()
+                .and_then(|q| q.current)
+                .map(|id| (id, 0.0))
+        });
+    let Some((track_id, fraction)) = freezing else {
+        return Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(0.0)).into();
+    };
+
+    let name = r
+        .registry
+        .tracks
+        .iter()
+        .find(|t| t.id == track_id)
+        .map(|t| t.name.as_str())
+        .unwrap_or("track");
+
+    let title = row![
+        theme::icon(fa::SNOWFLAKE).size(16).color(theme::FROST_ICON),
+        Space::new().width(9),
+        text(format!("Freezing \"{name}\""))
+            .size(18)
+            .font(theme::SERIF_ITALIC_FONT)
+            .color(theme::TEXT_1),
+    ]
+    .align_y(alignment::Vertical::Center)
+    .into();
+
+    let detail = "Rendering through the instrument and effect chain into the freeze cache.";
+
+    // Mono caption: percent, plus the batch counter ("track N / M") when a
+    // freeze-all / freeze-selected queue is driving this run. `completed`
+    // counts finished tracks, so the one rendering now is `completed + 1`.
+    let pct = (fraction * 100.0).round() as u32;
+    let caption = match r.freeze.queue.as_ref() {
+        Some(q) if q.total > 1 => {
+            let n = (q.completed + 1).min(q.total);
+            format!("{pct}% \u{00b7} track {n} / {}", q.total)
+        }
+        _ => format!("{pct}%"),
+    };
+
+    progress_dialog(
+        title,
+        detail,
+        fraction,
+        caption,
+        Message::Freeze(FreezeMessage::CancelFreeze),
+    )
+}
+
+/// The shared blocking progress dialog: dimmed click-swallowing backdrop,
+/// centered panel with title / detail / 14 px progress bar / mono caption,
+/// and a ghost Cancel that dispatches `cancel_msg`. Bounce and freeze
+/// (ba todo #582) render the identical scaffold — only the labels, the
+/// progress source, and the cancel message differ.
+fn progress_dialog<'a>(
+    title: Element<'a, Message>,
+    detail: &'a str,
+    fraction: f32,
+    caption: String,
+    cancel_msg: Message,
+) -> Element<'a, Message> {
     // Backdrop: an opaque mouse_area that swallows clicks so nothing
     // behind it can be interacted with. No on_press — clicking the
     // backdrop must NOT close the modal (cancel is intentional).
@@ -35,29 +158,10 @@ pub(crate) fn view_bounce_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, 
             }),
     );
 
-    let title_str = match state.mode {
-        BounceMode::Offline => format!("Bouncing \"{}\"", state.source_name),
-        BounceMode::Realtime => format!("Recording \"{}\"", state.source_name),
-    };
-    let title = text(title_str)
-        .size(18)
-        .font(theme::SERIF_ITALIC_FONT)
-        .color(theme::TEXT_1);
-
-    let detail = match state.mode {
-        BounceMode::Offline => "Rendering through the instrument and effect chain offline.",
-        BounceMode::Realtime => {
-            "Playing the timeline and capturing the external instrument's audio return."
-        }
-    };
-
-    let pct = (state.fraction * 100.0).round() as u32;
-    let bar = progress_bar(0.0..=1.0, state.fraction).girth(Length::Fixed(14.0));
+    let bar = progress_bar(0.0..=1.0, fraction).girth(Length::Fixed(14.0));
 
     let cancel = button(text("Cancel").size(13).color(theme::TEXT_1))
-        .on_press(Message::Track(TrackMessage::Bounce(
-            BounceMessage::CancelInProgress,
-        )))
+        .on_press(cancel_msg)
         .padding([8, 18])
         .style(|_t, status| theme::ghost_button_style(status));
 
@@ -68,7 +172,7 @@ pub(crate) fn view_bounce_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, 
         Space::new().height(16),
         bar,
         Space::new().height(6),
-        text(format!("{pct}%"))
+        text(caption)
             .size(12)
             .font(theme::MONO_FONT)
             .color(theme::TEXT_3),

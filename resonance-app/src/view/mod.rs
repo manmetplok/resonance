@@ -111,6 +111,17 @@ impl crate::Resonance {
                 bounce_progress::view_bounce_progress_overlay(self)
             ]
             .into()
+        } else if self.freeze.any_in_flight() {
+            // The freeze progress modal (design doc #181, todo #582) is the
+            // same blocking overlay — a freeze IS a bounce-in-place run.
+            // It sits at the same priority: every message except Cancel is
+            // gated while the render is in flight (`freeze_blocks_message`),
+            // so no other overlay may appear above it.
+            stack![
+                base,
+                bounce_progress::view_freeze_progress_overlay(self)
+            ]
+            .into()
         } else if self.confirm_quit.is_some() {
             stack![base, confirm_quit::view_confirm_quit_overlay(self)].into()
         } else if let Some(track_id) = self.confirm_delete_track {
