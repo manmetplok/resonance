@@ -42,6 +42,7 @@
 //! - [`track`] — the per-track header cells in the lane area.
 //! - [`shelf`] — the global-shelf header strip + the lane labels
 //!   (chords / tempo / signature) in the chrome.
+mod automation_lane;
 pub(crate) mod group_header;
 mod shelf;
 pub(crate) mod track;
@@ -156,6 +157,38 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
     // in freeze statuses beyond the per-track `is_frozen` bit below (e.g.
     // `Freezing` vs `Idle`), so hash the derived bool directly.
     freeze_all_enabled(r).hash(&mut h);
+    // Automation lane rows (doc #256, todo #1098): the column mirrors the
+    // canvas's `AutomationLane` rows with label cells and shows a caret +
+    // lane count on automated tracks, so lane membership / order per
+    // track, the transient expanded set, and the resolved device-param
+    // names must all invalidate the lazy cache. Sort the map/set walks so
+    // the hash is independent of `HashMap`/`HashSet` iteration order.
+    let automation_rows = r.arrange_automation_rows();
+    let mut lane_tracks: Vec<_> = automation_rows.lanes_by_track.iter().collect();
+    lane_tracks.sort_unstable_by_key(|(track_id, _)| **track_id);
+    for (track_id, lane_ids) in lane_tracks {
+        track_id.hash(&mut h);
+        lane_ids.hash(&mut h);
+    }
+    let mut expanded: Vec<_> = automation_rows.expanded.iter().copied().collect();
+    expanded.sort_unstable();
+    expanded.hash(&mut h);
+    let device_labels = crate::view::timeline::automation::device_param_labels(
+        &r.automation,
+        &r.external_instruments,
+        &r.device_registry,
+    );
+    // Order-independent XOR fold (same discipline as the canvas
+    // fingerprint): equal label maps must hash equal regardless of the
+    // HashMap's iteration order.
+    let mut label_fold: u64 = device_labels.len() as u64;
+    for (target, name) in &device_labels {
+        let mut lh = std::collections::hash_map::DefaultHasher::new();
+        target.hash(&mut lh);
+        name.hash(&mut lh);
+        label_fold ^= lh.finish();
+    }
+    label_fold.hash(&mut h);
     for t in &r.registry.tracks {
         if t.sub_track.is_some() {
             continue;
@@ -314,6 +347,15 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
 
     let by_id: std::collections::HashMap<_, _> =
         sorted_tracks.iter().map(|t| (t.id, *t)).collect();
+    // Resolved display names for `DeviceParam` lane targets, built once
+    // per column rebuild — the same resolution the timeline canvas uses
+    // (todo #1094), so the lane cells and the canvas bands always agree
+    // on a parameter's name (raw-id fallback included).
+    let device_labels = crate::view::timeline::automation::device_param_labels(
+        &r.automation,
+        &r.external_instruments,
+        &r.device_registry,
+    );
     let selected_tracks = &r.interaction.selected_tracks;
     let mut lane_col = column![].spacing(0);
     for row in visible_rows {
@@ -354,13 +396,29 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
                     ));
                 }
             }
-            // TODO(#1098): emit the matching slim parameter-label header
-            // cell for the lane row. Until then a fixed-height spacer
-            // keeps the column row-for-row aligned with the canvas (the
-            // row cannot be produced yet — no UI emits the expansion
-            // toggle before #1098 adds the caret).
-            ArrangeRowKind::AutomationLane { .. } => {
-                lane_col = lane_col.push(Space::new().height(row.height).width(Length::Fill));
+            // Slim parameter-label cell mirroring the canvas's dedicated
+            // automation sub-row (doc #256, todo #1098). The lane resolves
+            // by id from the live automation mirror — the same source the
+            // layout's `ArrangeAutomationRows` was collected from, so
+            // label order can never diverge from the canvas rows. A lane
+            // that vanished mid-frame (edited between layout build and
+            // cell build is impossible within one view pass, but stay
+            // defensive) degrades to an empty label, not a missing row.
+            ArrangeRowKind::AutomationLane { lane, .. } => {
+                let label = r
+                    .automation
+                    .lanes
+                    .values()
+                    .find(|l| l.id == lane)
+                    .map(|l| {
+                        crate::view::timeline::automation::target_label(
+                            &l.target,
+                            &device_labels,
+                        )
+                    })
+                    .unwrap_or_default();
+                lane_col = lane_col
+                    .push(automation_lane::view_automation_lane_header(label, row.height));
             }
         }
     }

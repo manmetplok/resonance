@@ -160,17 +160,56 @@ pub(crate) fn view_track_header(
         Space::new().width(0).height(0).into()
     };
 
+    // ---- Automation expand/collapse caret + lane count (doc #256, todo
+    // #1098) ----
+    // Shown whenever the track has at least one automation lane: the
+    // caret follows the group-header fold affordance (`collapse_caret`:
+    // ▾ expanded / ▸ collapsed) and dispatches the transient
+    // `ToggleTrackExpanded`, flipping whether the track's lanes show as
+    // dedicated 44 px arrange sub-rows (todos #1096/#1097). The count
+    // mirrors the overlay chip's "N lanes" discoverability hint. Laneless
+    // tracks collapse the cluster to a zero-size spacer, leaving the
+    // pre-#1098 layout (and its alignment snapshots) untouched.
+    let lane_count =
+        crate::view::timeline::automation::track_lanes_sorted(&r.automation, track).len();
+    let automation_expanded = r
+        .interaction
+        .automation_expanded_tracks
+        .contains(&track_id);
+    let automation_caret: Element<'static, Message> = if lane_count > 0 {
+        mouse_area(
+            row![
+                crate::view::controls::collapse_caret(automation_expanded),
+                Space::new().width(2),
+                text(format!("{lane_count} auto"))
+                    .size(9)
+                    .font(theme::MONO_FONT)
+                    .color(theme::TEXT_3),
+                Space::new().width(6),
+            ]
+            .align_y(alignment::Vertical::Center),
+        )
+        .on_press(Message::Automation(AutomationMessage::ToggleTrackExpanded(
+            track_id,
+        )))
+        .into()
+    } else {
+        Space::new().width(0).height(0).into()
+    };
+
     // Bottom of the cell: 4-button row, right-aligned to keep the glyph +
-    // name visually the dominant element. The "via group" chips sit at the
-    // left, before the fill, so they never displace the buttons; on a
-    // frozen track a "Notes & FX locked" chip leads the row, marking that
-    // the frozen inputs are read-only until the track is unfrozen.
+    // name visually the dominant element. The automation caret cluster
+    // leads the row, then the "via group" chips, before the fill, so they
+    // never displace the buttons; on a frozen track a "Notes & FX locked"
+    // chip marks that the frozen inputs are read-only until the track is
+    // unfrozen.
     // No row spacing: when a chip is absent its zero-size spacer adds
     // nothing, so a row with only the solo chip renders identically to the
     // pre-#687 layout (and the solo alignment snapshot stays valid). The
     // chips' own 4px horizontal padding keeps them legible when both show.
     let button_row = if frozen {
         row![
+            automation_caret,
             locked_chip(),
             via_group_mute_chip,
             via_group_solo_chip,
@@ -179,6 +218,7 @@ pub(crate) fn view_track_header(
         ]
     } else {
         row![
+            automation_caret,
             via_group_mute_chip,
             via_group_solo_chip,
             Space::new().width(Length::Fill),
